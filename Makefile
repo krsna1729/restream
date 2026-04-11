@@ -45,7 +45,7 @@ start-input:
 #
 down:
 	APP_PORT="$(APP_PORT)" bash scripts/down.sh
-	rm -f data.db
+	rm -f data.db data.db-journal data.db-wal data.db-shm
 
 probe-output:
 	ffprobe -v error -rw_timeout 5000000 -probesize 65536 -analyzeduration 500000 -show_entries stream=index,codec_type,codec_name,width,height -of json $(OUTPUT_URL)
