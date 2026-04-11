@@ -75,7 +75,7 @@ fi
 echo "== Step 1: Configure 4x3 copy test setup =="
 bash test/artifacts/setup-4x3-copy.sh
 
-echo "== Step 2: Start RTMP input publishers =="
+echo "== Step 2: Start mixed-protocol input publishers (RTMP/RTSP/SRT) =="
 bash test/artifacts/start-inputs-from-manifest.sh "$MANIFEST_PATH"
 
 echo "== Step 3: Start outputs from manifest =="
