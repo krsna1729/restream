@@ -11,6 +11,7 @@ function parseArgs(argv) {
     width: 1920,
     height: 1080,
     pipelineDwellMs: 500,
+    initialWaitMs: 5000,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -20,6 +21,7 @@ function parseArgs(argv) {
     else if (a === '--width') args.width = Number(argv[++i]);
     else if (a === '--height') args.height = Number(argv[++i]);
     else if (a === '--pipeline-dwell-ms') args.pipelineDwellMs = Number(argv[++i]);
+    else if (a === '--initial-wait-ms') args.initialWaitMs = Number(argv[++i]);
   }
 
   return args;
@@ -56,6 +58,7 @@ async function main() {
   const page = await context.newPage();
   await page.goto(args.url, { waitUntil: 'networkidle' });
   await page.waitForSelector('#pipelines', { timeout: 10000 });
+  await page.waitForTimeout(args.initialWaitMs);
 
   const rows = page.locator('#pipelines li > div[onclick]');
   const count = await rows.count();
