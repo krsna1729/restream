@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en" data-theme="dim">
+  <head>
+    <meta charset="UTF-8" />
+    <title data-name="Dashboard">Dashboard</title>
+    <link rel="icon" type="image/png" href="logo.png" />
+    <link rel="stylesheet" type="text/css" href="output.css" />
+    <script type="text/javascript" src="utils.js"></script>
+    <script type="text/javascript" src="pipeline.js"></script>
+    <script type="text/javascript" src="api.js"></script>
+    <script type="text/javascript" src="render.js" defer></script>
+    <script type="text/javascript" src="dashboard.js" defer></script>
+  </head>
+  <body class="bg-base-100 text-base-content flex h-screen flex-col">
+    <div class="navbar bg-base-100 shrink-0">
+      <!-- LEFT -->
+      <div class="flex-1">
+        <button class="btn btn-ghost text-xl" id="server-name" onclick="selectPipeline(null)">Restream</button>
+      </div>
+
+      <!-- CENTER -->
+      <div class="flex-none">
+        <label class="swap">
+          <input id="saving-badge" type="checkbox" disabled />
+          <div class="swap-off"></div>
+          <div class="swap-on flex items-center gap-2">
+            <span class="loading loading-infinity loading-xs"></span>
+            Saving
+          </div>
+        </label>
+      </div>
+
+      <!-- RIGHT -->
+      <div class="flex flex-1 justify-end">
+        <ul class="menu menu-horizontal px-1">
+          <li><a href="/stream-keys.html" class="dynamic-params">Keys</a></li>
+          <li><a href="https://github.com/live-miracles/restream">GitHub </a></li>
+        </ul>
+      </div>
+    </div>
+
+
+    <div id="copied-notification" role="alert" class="alert alert-success fixed bottom-3 left-1/2 z-60 hidden w-fit -translate-x-1/2 transform">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 shrink-0 stroke-current" fill="none" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <span>Copied</span>
+    </div>
+
+    <div role="alert" id="error-alert" class="alert alert-error fixed top-3 left-1/2 z-999 hidden max-w-175 -translate-x-1/2 transform opacity-90">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 shrink-0 stroke-current" fill="none" viewBox="0 0 24 24">
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <span id="error-msg"></span>
+    </div>
+
+    <dialog id="edit-pipe-modal" class="modal">
+      <div class="modal-box max-w-120">
+        <input type="text" id="pipe-id-input" class="hidden" />
+
+        <div class="focus mx-auto mt-2 w-full max-w-120 space-y-3 px-4">
+          <h2 class="text-xl font-bold" id="pipe-modal-title">Add Pipeline</h2>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Pipeline Name</legend>
+            <input type="text" id="pipe-name-input" class="input w-full" placeholder="Type here" />
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Stream Key</legend>
+            <select class="select w-full" id="pipe-stream-key-input"></select>
+          </fieldset>
+        </div>
+
+        <div class="modal-action">
+          <form method="dialog">
+            <button class="btn mx-2">Cancel</button>
+            <button type="button" class="btn btn-accent" id="pipe-submit-btn" onclick="pipeFormBtn(event)">Save</button>
+          </form>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="edit-out-modal" class="modal">
+      <div class="modal-box max-w-200">
+        <input type="text" id="out-mode-input" class="hidden" />
+        <input type="text" id="out-pipe-id-input" class="hidden" />
+        <input type="text" id="out-id-input" class="hidden" />
+
+        <div class="focus mx-auto mt-2 w-full max-w-200 space-y-3 px-4">
+          <h2 class="text-xl font-bold" id="out-modal-title">Edit Output</h2>
+
+          <fieldset class="fieldset inline-block w-64">
+            <legend class="fieldset-legend">Output Name</legend>
+            <input type="text" id="out-name-input" class="input" placeholder="Type here" />
+          </fieldset>
+
+          <fieldset class="fieldset ml-2 inline-block w-40">
+            <legend class="fieldset-legend">Encoding</legend>
+
+            <select class="select" id="out-encoding-input">
+              <option selected="" value="source">Source</option>
+              <option value="vertical">Vertical</option>
+              <option value="720p">720p</option>
+              <option value="720p">1080p</option>
+            </select>
+          </fieldset>
+
+          <fieldset class="fieldset ml-2 inline-block w-40">
+            <legend class="fieldset-legend">Server URL</legend>
+
+            <select class="select" id="out-server-url-input">
+              <option selected="" value="">Custom</option>
+              <option value="rtmp://a.rtmp.youtube.com/live2/">YouTube</option>
+              <option value="rtmp://b.rtmp.youtube.com/live2?backup=1/">YT Backup</option>
+              <option value="rtmps://live-api-s.facebook.com:443/rtmp/">Facebook</option>
+              <option value="rtmps://edgetee-upload-${s_prp}.xx.fbcdn.net:443/rtmp/">Instagram</option>
+              <option value="rtmp://live-ingest-01.vd0.co:1935/livestream/">VDO Cipher</option>
+              <option value="rtmp://ovsu.okcdn.ru/input/">VK Video</option>
+            </select>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Stream Key or Custom URL</legend>
+            <input type="text" id="out-rtmp-key-input" class="input w-full" placeholder="Type here" />
+          </fieldset>
+        </div>
+
+        <div class="modal-action">
+          <form method="dialog">
+            <button class="btn mx-2">Cancel</button>
+            <button type="button" class="btn btn-accent" id="out-submit-btn" onclick="editOutFormBtn(event)">Update</button>
+          </form>
+        </div>
+      </div>
+    </dialog>
+
+    <div class="grid h-screen min-h-0 flex-1 gap-4 p-4 pt-0 grid-cols-[auto_1fr_auto]">
+      <!-- Left Column -->
+      <div class="bg-base-300 rounded-box w-full overflow-y-auto">
+        <div id="pipe-overwiew" class="p-4">
+          <div>
+            <span id="pipe-cnt"></span> Inputs
+            <div class="badge badge-sm badge-success ml-1 px-2" id="pipe-oks"></div>
+            <div class="badge badge-sm badge-warning ml-1 px-2" id="pipe-warnings"></div>
+            <div class="badge badge-sm badge-error ml-1 px-2" id="pipe-errors"></div>
+          </div>
+          <div class="mt-1">
+            <span id="out-cnt"></span> Outputs
+            <div class="badge badge-sm badge-success ml-1 px-2" id="out-oks"></div>
+            <div class="badge badge-sm badge-warning ml-1 px-2" id="out-warnings"></div>
+            <div class="badge badge-sm badge-error ml-1 px-2" id="out-errors"></div>
+          </div>
+        </div>
+        <ul class="menu rounded-box w-full" id="pipelines"></ul>
+        <div class="mt-3 w-full text-center">
+          <button class="btn btn-xs btn-accent btn-outline" id="add-pipe-btn" onclick="addPipeBtn()">Add Pipeline</button>
+        </div>
+      </div>
+
+      <!-- Middle Column -->
+      <div class="bg-base-200 hidden overflow-y-auto rounded-xl p-4 shadow" id="pipe-info-col">
+        <div class="stats shadow">
+          <div class="stats shadow">
+            <div class="stat p-3">
+              <div class="stat-title">CPU</div>
+              <div class="stat-value cpu-metric text-sm">...</div>
+            </div>
+            <div class="stat p-3">
+              <div class="stat-title">RAM</div>
+              <div class="stat-value ram-metric text-sm">...</div>
+            </div>
+            <div class="stat p-3">
+              <div class="stat-title">Disk</div>
+              <div class="stat-value disk-metric text-sm">...</div>
+            </div>
+            <div class="stat p-3">
+              <div class="stat-title">Download</div>
+              <div class="stat-value downlink-metric text-sm">...</div>
+            </div>
+            <div class="stat p-3">
+              <div class="stat-title">Upload</div>
+              <div class="stat-value uplink-metric text-sm">...</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div>
+          <div class="mb-3 flex items-center gap-2 text-xl font-bold">
+            <span id="pipe-name"></span>
+            <button class="btn btn-xs btn-accent btn-outline" id="edit-pipe-btn" onclick="editPipeBtn()">✎</button>
+            <button class="btn btn-xs btn-accent btn-outline" id="delete-pipe-btn" onclick="deletePipeBtn()">✖</button>
+            <span class="badge" id="input-time"></span>
+          </div>
+
+          <div class="text-center" id="video-player">
+            <!-- TODO: add player -->
+          </div>
+
+          <div id="input-stats">
+            <h2 class="text-lg">Video</h2>
+            <div class="stats mt-1 shadow">
+              <div class="stat p-3">
+                <div class="stat-title">Codec</div>
+                <div class="stat-value text-sm" id="input-video-codec"></div>
+              </div>
+
+              <div class="stat p-3">
+                <div class="stat-title">Resolution</div>
+                <div class="stat-value text-sm" id="input-video-resolution"></div>
+              </div>
+
+              <div class="stat p-3">
+                <div class="stat-title">FPS</div>
+                <div class="stat-value text-sm" id="input-video-fps"></div>
+              </div>
+
+              <div class="stat p-3">
+                <div class="stat-title">Level</div>
+                <div class="stat-value text-sm" id="input-video-level"></div>
+              </div>
+
+              <div class="stat p-3">
+                <div class="stat-title">Profile</div>
+                <div class="stat-value text-sm" id="input-video-profile"></div>
+              </div>
+            </div>
+
+            <h2 class="mt-3 text-lg">Audio</h2>
+            <div class="stats mt-1 shadow">
+              <div class="stat p-3">
+                <div class="stat-title">Codec</div>
+                <div class="stat-value text-sm" id="input-audio-codec"></div>
+              </div>
+
+              <div class="stat p-3">
+                <div class="stat-title">Channels</div>
+                <div class="stat-value text-sm" id="input-audio-channels"></div>
+              </div>
+
+              <div class="stat p-3">
+                <div class="stat-title">Sample Rate</div>
+                <div class="stat-value text-sm" id="input-audio-sample-rate"></div>
+              </div>
+
+              <div class="stat p-3">
+                <div class="stat-title">Profile</div>
+                <div class="stat-value text-sm" id="input-audio-profile"></div>
+              </div>
+            </div>
+
+            <h2 class="mt-3 text-lg">Stats</h2>
+            <div class="stats mt-1 shadow">
+              <div class="stat p-3">
+                <div class="stat-title">Input Kb/s</div>
+                <div class="stat-value text-sm" id="input-total-bw"></div>
+              </div>
+
+              <div class="stat p-3">
+                <div class="stat-title">Output Kb/s</div>
+                <div class="stat-value text-sm" id="output-total-bw"></div>
+              </div>
+
+              <div class="stat p-3">
+                <div class="stat-title">Readers</div>
+                <div class="stat-value text-sm" id="input-reader-count"></div>
+              </div>
+
+              <div class="stat p-3">
+                <div class="stat-title">Outputs</div>
+                <div class="stat-value text-sm" id="input-output-count"></div>
+              </div>
+            </div>
+          </div>
+          <div class="divider"></div>
+            <div class="mt-2 space-y-2">
+              <div class="flex items-center gap-2 text-sm">
+                <span class="min-w-24 font-semibold">Stream Key:</span>
+                <code class="flex-1 overflow-x-auto whitespace-nowrap" id="stream-key" data-copy=""></code>
+                <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('stream-key')">📋</button>
+              </div>
+
+              <details class="collapse-arrow collapse rounded-lg bg-base-300/40" id="ingest-urls-panel">
+                <summary class="collapse-title py-2 text-sm font-semibold">Ingest URLs</summary>
+                <div class="collapse-content space-y-2 text-sm">
+                  <div class="flex items-center gap-2">
+                    <span class="badge badge-outline min-w-14 justify-center">RTMP</span>
+                    <code class="flex-1 overflow-x-auto whitespace-nowrap" id="rtmp-url" data-copy=""></code>
+                    <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('rtmp-url')">📋</button>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="badge badge-outline min-w-14 justify-center">RTSP</span>
+                    <code class="flex-1 overflow-x-auto whitespace-nowrap" id="rtsp-url" data-copy=""></code>
+                    <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('rtsp-url')">📋</button>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="badge badge-outline min-w-14 justify-center">SRT</span>
+                    <code class="flex-1 overflow-x-auto whitespace-nowrap" id="srt-url" data-copy=""></code>
+                    <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('srt-url')">📋</button>
+                  </div>
+                </div>
+              </details>
+            </div>
+        </div>
+      </div>
+
+      <!-- Right Column -->
+      <div class="bg-base-200 hidden overflow-y-auto rounded-xl p-4 shadow" id="outs-col">
+        <h2 class="mb-3 text-xl font-bold">Outputs</h2>
+        <div class="space-y-3" id="outputs-list"></div>
+        <div class="mt-3 w-full text-center">
+          <button class="btn btn-xs btn-accent btn-outline" id="add-out-btn" onclick="addOutBtn()">Add Output</button>
+        </div>
+      </div>
+
+      <!-- Stats Column -->
+      <div class="bg-base-200 hidden overflow-y-auto rounded-xl p-4 shadow" id="stats-col">
+        <div class="stats server-stats shadow"></div>
+
+        <div class="divider"></div>
+
+        <div class="overflow-x-auto">
+          <table class="table">
+            <!-- head -->
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Name</th>
+                <th>Kb/s</th>
+                <th>Codec</th>
+                <th>Size</th>
+                <th>FPS</th>
+                <th>Codec</th>
+                <th>Ch</th>
+                <th>Freq</th>
+              </tr>
+            </thead>
+            <tbody id="stats-table">
+              <tr>
+                <th>1</th>
+                <td>Cy Ganderton</td>
+                <td>Quality Control Specialist</td>
+                <td>Blue</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

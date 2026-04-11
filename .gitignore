@@ -1,5 +1,23 @@
-node_modules
+# Dependencies
+node_modules/
+
+# Local OS/editor files
 .DS_Store
-mediamtx.exe
-/data.db
-.idea
+.idea/
+.vscode/
+
+# Local/runtime files
+data.db
+.deps-stamp
+*.log
+*.pid
+
+# Environment files
+.env
+.env.*
+
+# Generated test artifacts
+test/artifacts/runs/
+
+# Database files
+*.db

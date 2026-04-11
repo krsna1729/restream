@@ -1,13 +1,17 @@
 services:
-    node-app:
-        build: .
-        container_name: node-app
+    app:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: restream-app
+        environment:
+            NODE_ENV: production
+            PORT: 3030
+            MEDIAMTX_INTERNAL_HOST: mediamtx
         ports:
             - '3030:3030'
-        command: ['npm', 'start']
         volumes:
-            - .:/app
-            - /app/node_modules
+            - ./src/config/restream.json:/app/src/config/restream.json:ro
         depends_on:
             - mediamtx
 
@@ -16,32 +20,21 @@ services:
         container_name: mediamtx
         ports:
             - '1935:1935' # RTMP ingest
-            - '8554:8554' # RTSP
+            - '8554:8554' # RTSP ingest and read
+            - '8890:8890/udp' # SRT ingest
             - '8888:8888' # HTTP interface / HLS
-            - '8889:8889' # WebRTC
-            - '8189:8189/udp'
-            - '8189:8189/tcp'
+            - '8889:8889' # WebRTC HTTP
+            - '8189:8189/udp' # WebRTC ICE
+            - '8189:8189/tcp' # WebRTC ICE
             - '9997:9997' # API
         volumes:
-            - ./mediamtx.yml:/mediamtx.yml
+            - ./infra/mediamtx.yml:/mediamtx.yml
 
-    rtmp-ingest:
-        image: jrottenberg/ffmpeg:4.1-ubuntu
-        container_name: rtmp-ingest
-        # restart: unless-stopped
-        depends_on:
-            - mediamtx
+    nginx-rtmp:
+        image: tiangolo/nginx-rtmp:latest
+        container_name: nginx-rtmp
+        ports:
+            - '1936:1935'
+            - '8081:80'
         volumes:
-            - ./test:/test
-        # command: >
-        #     -re -f lavfi -i testsrc=size=1280x720:rate=30
-        #     -f lavfi -i sine=frequency=1000
-        #     -c:v libx264 -preset veryfast -b:v 2500k
-        #     -c:a aac -b:a 128k
-        #     -f flv rtmp://mediamtx:1935/mystream
-        entrypoint: >
-            sh -c "
-            ffmpeg -re -stream_loop -1 -i /test/colorbar-timer.mp4
-            -c:v libx264 -preset veryfast -b:v 2500k
-            -c:a aac -b:a 128k -ac 2
-            -f flv rtmp://mediamtx:1935/mystream"
+            - ./infra/nginx-rtmp.conf:/etc/nginx/nginx.conf:ro
