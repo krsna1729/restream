@@ -11,6 +11,7 @@ process.chdir(rootDir);
 
 const defaults = {
   apiUrl: 'http://localhost:3030',
+  rtmpStatUrl: 'http://localhost:8081/stat',
   manifestPath: 'test/artifacts/session-4x3-manifest.json',
   logDir: 'test/artifacts/logs',
   appLogPath: 'test/artifacts/logs/app-under-test.log',
@@ -31,6 +32,7 @@ const defaults = {
 
 const config = {
   apiUrl: process.env.API_URL || defaults.apiUrl,
+  rtmpStatUrl: process.env.RTMP_STAT_URL || defaults.rtmpStatUrl,
   manifestPath: resolvePath(process.env.MANIFEST_PATH || defaults.manifestPath),
   logDir: resolvePath(process.env.LOG_DIR || defaults.logDir),
   appLogPath: resolvePath(process.env.APP_LOG_PATH || defaults.appLogPath),
@@ -91,8 +93,11 @@ async function main() {
   console.log('== Step 4: Wait for all manifest inputs/outputs active ==');
   await waitForActive(resolved);
 
-  console.log('== Step 5: Capture health snapshot ==');
-  await captureHealthSnapshot();
+  console.log('== Step 5: Capture health + stat snapshots ==');
+  await captureHealthSnapshot(resolved);
+
+  console.log('== Step 6: Correlate nginx-rtmp /stat with expected outputs (final check) ==');
+  await verifyRtmpStat(resolved);
 
   console.log('== 4x3 run complete ==');
 }
@@ -114,7 +119,7 @@ function readBooleanEnv(name, defaultValue) {
 }
 
 function printHelp() {
-  console.log(`Usage: node test/artifacts/run-4x3.mjs\n\nEnvironment flags:\n  CLEAN_START=1    Tear down stale state and launch a fresh stack (default)\n  KEEP_RUNNING=1   Leave backend and publishers running after the run\n  MANIFEST_PATH    Path to the tracked 4x3 manifest\n  API_URL          Backend base URL (default: ${defaults.apiUrl})`);
+  console.log(`Usage: node test/artifacts/run-4x3.mjs\n\nEnvironment flags:\n  CLEAN_START=1    Tear down stale state and launch a fresh stack (default)\n  KEEP_RUNNING=1   Leave backend and publishers running after the run\n  MANIFEST_PATH    Path to the tracked 4x3 manifest\n  API_URL          Backend base URL (default: ${defaults.apiUrl})\n  RTMP_STAT_URL    nginx-rtmp stat URL (default: ${defaults.rtmpStatUrl})`);
 }
 
 function registerSignalHandlers() {
@@ -489,7 +494,133 @@ async function waitForActive(resolved) {
   throw new Error('Timed out waiting for all manifest streams to become green');
 }
 
-async function captureHealthSnapshot() {
+async function verifyRtmpStat(resolved) {
+  const fetchRtmpStatXml = async () => {
+    try {
+      return await requestText(config.rtmpStatUrl, { timeoutMs: 8000 });
+    } catch {
+      return '';
+    }
+  };
+
+  const summarizeRtmpStatXml = (xml, expectedOutputs) => ({
+    expectedOutputs,
+    streamBlocks: (xml.match(/<stream>/g) || []).length,
+    streamMetaVideo: (xml.match(/<meta>[\s\S]*?<video>/g) || []).length,
+    streamMetaAudio: (xml.match(/<meta>[\s\S]*?<audio>/g) || []).length,
+  });
+
+  const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const findStreamBlock = (xml, streamName) => {
+    const escaped = escapeRegExp(streamName);
+    const re = new RegExp(`<stream>[\\s\\S]*?<name>${escaped}<\\/name>[\\s\\S]*?<\\/stream>`, 'i');
+    const match = xml.match(re);
+    return match ? match[0] : null;
+  };
+
+  const hasMetaTrack = (streamBlock, track) => {
+    const escapedTrack = escapeRegExp(track);
+    const re = new RegExp(`<meta>[\\s\\S]*?<${escapedTrack}>[\\s\\S]*?<\\/${escapedTrack}>[\\s\\S]*?<\\/meta>`);
+    return re.test(streamBlock);
+  };
+
+  const writeNginxStatSummary = async (statSummary) => {
+    await mkdir(config.outDir, { recursive: true });
+    const statOutFile = path.join(config.outDir, `nginx-stat-summary-${timestampUtc()}.json`);
+    await writeFile(statOutFile, `${JSON.stringify(statSummary, null, 2)}\n`, 'utf8');
+    console.log(`Saved nginx stat summary: ${relativePath(statOutFile)}`);
+  };
+
+  const expected = resolved.outputs.map((output) => ({
+    streamName: extractStreamName(output.outputUrl),
+    pipelineId: output.pipelineId,
+    outputId: output.outputId,
+  }));
+
+  let lastIssues = [];
+  let lastStreamBlocks = 0;
+  let bestStatSummary = {
+    expectedOutputs: expected.length,
+    streamBlocks: 0,
+    streamMetaVideo: 0,
+    streamMetaAudio: 0,
+  };
+
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    const xml = await fetchRtmpStatXml();
+
+    if (!xml.includes('<rtmp>')) {
+      await sleep(1000);
+      continue;
+    }
+
+    const issues = [];
+    const summary = summarizeRtmpStatXml(xml, expected.length);
+    const { streamBlocks } = summary;
+
+    bestStatSummary = {
+      expectedOutputs: expected.length,
+      streamBlocks: Math.max(bestStatSummary.streamBlocks, summary.streamBlocks),
+      streamMetaVideo: Math.max(bestStatSummary.streamMetaVideo, summary.streamMetaVideo),
+      streamMetaAudio: Math.max(bestStatSummary.streamMetaAudio, summary.streamMetaAudio),
+    };
+
+    if (streamBlocks < expected.length) {
+      lastStreamBlocks = streamBlocks;
+      lastIssues = [`stream blocks in /stat (${streamBlocks}) are less than expected outputs (${expected.length})`];
+      console.log(`nginx /stat correlation (attempt ${attempt}/10): expected_streams=${expected.length} stream_blocks=${streamBlocks} issues=1`);
+      await sleep(1000);
+      continue;
+    }
+
+    for (const target of expected) {
+      if (!target.streamName) {
+        issues.push(`${target.pipelineId}/${target.outputId}: could not derive stream name from output URL`);
+        continue;
+      }
+
+      const block = findStreamBlock(xml, target.streamName);
+      if (!block) {
+        issues.push(`${target.pipelineId}/${target.outputId} (${target.streamName}): missing from nginx /stat`);
+        continue;
+      }
+
+      const hasVideoMeta = hasMetaTrack(block, 'video');
+      const hasAudioMeta = hasMetaTrack(block, 'audio');
+
+      if (!hasVideoMeta) {
+        issues.push(`${target.pipelineId}/${target.outputId} (${target.streamName}): missing video meta in /stat`);
+      }
+      if (!hasAudioMeta) {
+        issues.push(`${target.pipelineId}/${target.outputId} (${target.streamName}): missing audio meta in /stat`);
+      }
+    }
+
+    lastIssues = issues;
+    lastStreamBlocks = streamBlocks;
+
+    console.log(`nginx /stat correlation (attempt ${attempt}/10): expected_streams=${expected.length} stream_blocks=${streamBlocks} issues=${issues.length}`);
+
+    if (issues.length === 0) {
+      await writeNginxStatSummary(summary);
+      console.log('nginx /stat correlation passed: expected stream blocks present and each output has video+audio meta');
+      return;
+    }
+
+    await sleep(1000);
+  }
+
+  console.log(`nginx /stat correlation: expected_streams=${expected.length} stream_blocks=${lastStreamBlocks}`);
+  console.log('---- nginx /stat issues ----');
+  for (const issue of lastIssues) {
+    console.log(issue);
+  }
+  await writeNginxStatSummary(bestStatSummary);
+  throw new Error(`nginx /stat correlation failed with ${lastIssues.length} issue(s)`);
+}
+
+async function captureHealthSnapshot(resolved) {
   await mkdir(config.outDir, { recursive: true });
   let health = null;
 
@@ -552,6 +683,34 @@ async function requestJson(route, options = {}) {
   }
 
   return { status: response.status, text, json };
+}
+
+async function requestText(url, options = {}) {
+  const response = await fetch(url, {
+    method: 'GET',
+    signal: AbortSignal.timeout(options.timeoutMs || 8000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`GET ${url} failed: HTTP ${response.status}`);
+  }
+
+  return response.text();
+}
+
+function extractStreamName(outputUrl) {
+  if (!outputUrl || typeof outputUrl !== 'string') {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(outputUrl);
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    return segments.length > 0 ? segments[segments.length - 1] : null;
+  } catch {
+    const parts = outputUrl.split('/').filter(Boolean);
+    return parts.length > 0 ? parts[parts.length - 1] : null;
+  }
 }
 
 function spawnDetachedProcess({ name, command, args, logPath }) {
