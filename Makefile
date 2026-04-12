@@ -1,17 +1,15 @@
 .PHONY: run-host run-docker down deps format css security security-strict start-input probe-output run-4x3
 
-OUTPUT_URL ?= rtmp://localhost:1936/live/test
-APP_PORT ?= 3030
-APP_HEALTH_URL ?= http://localhost:3030/healthz
 INGEST_ARGS ?= -f flv # -f rtsp -rtsp_transport tcp # -f mpegts
 INGEST_URL ?= rtmp://localhost:1935/mystream
-VERIFY_APP_RETRIES ?= 30
+OUTPUT_URL ?= rtmp://localhost:1936/live/test
 
-run-host:
-	APP_HEALTH_URL="$(APP_HEALTH_URL)" VERIFY_APP_RETRIES="$(VERIFY_APP_RETRIES)" bash scripts/run-host.sh
+run-host: deps
+	docker compose --profile host up -d mediamtx nginx-rtmp
+	npm run dev
 
 run-docker:
-	APP_HEALTH_URL="$(APP_HEALTH_URL)" VERIFY_APP_RETRIES="$(VERIFY_APP_RETRIES)" bash scripts/run-container.sh
+	docker compose --profile container up -d --build --force-recreate --renew-anon-volumes pause mediamtx-pod nginx-rtmp app
 
 deps: .deps-stamp
 
@@ -41,8 +39,7 @@ start-input:
 		$(INGEST_ARGS) "$(INGEST_URL)"
 #
 down:
-	APP_PORT="$(APP_PORT)" bash scripts/down.sh
-	rm -f data.db data.db-journal data.db-wal data.db-shm
+	bash scripts/down.sh
 
 probe-output:
 	ffprobe -v error -show_entries stream=index,codec_type,codec_name,width,height -of json \
