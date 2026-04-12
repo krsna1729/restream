@@ -1,3 +1,8 @@
+const HEALTH_RECOVERY_BANNER_MS = 6000;
+let previousHealthStatus = null;
+let recoveryBannerVisible = false;
+let recoveryBannerTimer = null;
+
 function renderPipelinesList(selectedPipe) {
     setInnerText('pipe-cnt', pipelines.length);
     setInnerText('pipe-oks', pipelines.filter((p) => p.input.status === 'on').length);
@@ -231,15 +236,15 @@ function renderStatsColumn(selectedPipe) {
         document.getElementById('stats-col').classList.remove('hidden');
     }
 
-        const activeInputs = pipelines.filter((p) => p.input.video);
+    const activeInputs = pipelines;
     const inputStatsHtml = activeInputs
         .map((p) => {
-                        const inputBw = p.input.bitrateKbps;
-                        const video = p.input.video || {};
-                        const audio = p.input.audio || {};
+            const inputBw = p.input.bitrateKbps;
+            const video = p.input.video || {};
+            const audio = p.input.audio || {};
             return `
-      <tr class="${p.status === 'warning' ? 'bg-warning/10' : ''}">
-        <td>${msToHHMMSS(p.input.time)}</td>
+      <tr class="${p.input.status === 'warning' ? 'bg-warning/10' : ''}">
+        <td>${p.input.time !== null && p.input.time !== undefined ? msToHHMMSS(p.input.time) : '--'}</td>
         <td>${p.name}</td>
                 <td>${inputBw !== null && inputBw !== undefined ? Number(inputBw).toFixed(1) : '--'}</td>
                 <td>${video.codec || '--'}</td>
@@ -251,12 +256,12 @@ function renderStatsColumn(selectedPipe) {
       </tr>`;
         })
         .join('');
-        const activeOuts = pipelines.flatMap((p) => p.outs);
+    const activeOuts = pipelines.flatMap((p) => p.outs);
     const outputStatsHtml = activeOuts
         .map((o) => {
-                        const outputBw = o.bitrateKbps;
-                        const video = o.video || {};
-                        const audio = o.audio || {};
+            const outputBw = o.bitrateKbps;
+            const video = o.video || {};
+            const audio = o.audio || {};
             return `
       <tr class="${o.status === 'warning' ? 'bg-warning/10' : ''}">
                 <td>${o.time !== null && o.time !== undefined ? msToHHMMSS(o.time) : '--'}</td>
@@ -323,6 +328,49 @@ function renderServerMetrics() {
     setAll('.uplink-metric', upText);
 }
 
+function renderHealthBanner() {
+    const banner = document.getElementById('health-banner');
+    const text = document.getElementById('health-banner-text');
+    if (!banner || !text) return;
+
+    const currentStatus = health?.status || null;
+
+    if (currentStatus === 'degraded') {
+        recoveryBannerVisible = false;
+        if (recoveryBannerTimer) {
+            clearTimeout(recoveryBannerTimer);
+            recoveryBannerTimer = null;
+        }
+
+        banner.classList.remove('alert-success');
+        banner.classList.add('alert-warning');
+        text.innerText = 'Service is degraded: runtime telemetry is temporarily unavailable.';
+        banner.classList.remove('hidden');
+        previousHealthStatus = currentStatus;
+        return;
+    }
+
+    if (previousHealthStatus === 'degraded') {
+        banner.classList.remove('alert-warning');
+        banner.classList.add('alert-success');
+        text.innerText = 'Service recovered: runtime telemetry is available again.';
+        banner.classList.remove('hidden');
+
+        recoveryBannerVisible = true;
+        if (recoveryBannerTimer) clearTimeout(recoveryBannerTimer);
+        recoveryBannerTimer = setTimeout(() => {
+            recoveryBannerVisible = false;
+            banner.classList.add('hidden');
+        }, HEALTH_RECOVERY_BANNER_MS);
+    }
+
+    if (!recoveryBannerVisible) {
+        banner.classList.add('hidden');
+    }
+
+    previousHealthStatus = currentStatus;
+}
+
 function renderPipelines() {
     const selectedPipe = getUrlParam('p');
 
@@ -342,6 +390,7 @@ function renderPipelines() {
 }
 
 function renderMetrics() {
+    renderHealthBanner();
     renderServerMetrics();
 }
 

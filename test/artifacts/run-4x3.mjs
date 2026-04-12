@@ -15,8 +15,6 @@ const defaults = {
   manifestPath: 'test/artifacts/session-4x3-manifest.json',
   logDir: 'test/artifacts/logs',
   appLogPath: 'test/artifacts/logs/app-under-test.log',
-  mediamtxApiUrl: 'http://localhost:9997',
-  verifyMediamtxRetries: 15,
   verifyAppRetries: 30,
   inputFile: 'test/colorbar-timer.mp4',
   rtmpIngestBase: 'rtmp://localhost:1935',
@@ -36,8 +34,6 @@ const config = {
   manifestPath: resolvePath(process.env.MANIFEST_PATH || defaults.manifestPath),
   logDir: resolvePath(process.env.LOG_DIR || defaults.logDir),
   appLogPath: resolvePath(process.env.APP_LOG_PATH || defaults.appLogPath),
-  mediamtxApiUrl: process.env.MEDIAMTX_API_URL || defaults.mediamtxApiUrl,
-  verifyMediamtxRetries: Number(process.env.VERIFY_MEDIAMTX_RETRIES || defaults.verifyMediamtxRetries),
   verifyAppRetries: Number(process.env.VERIFY_APP_RETRIES || defaults.verifyAppRetries),
   inputFile: resolvePath(process.env.INPUT_FILE || defaults.inputFile),
   rtmpIngestBase: process.env.RTMP_INGEST_BASE || defaults.rtmpIngestBase,
@@ -160,7 +156,6 @@ async function cleanStart() {
   await rm(resolvePath('data.db-shm'), { force: true });
 
   await runCommand('docker', ['compose', 'up', '-d', 'mediamtx', 'nginx-rtmp'], { stdio: 'inherit' });
-  await waitForMediamtxReady();
 
   await mkdir(config.logDir, { recursive: true });
   await writeFile(config.appLogPath, '', 'utf8');
@@ -175,24 +170,6 @@ async function cleanStart() {
   console.log(`Started backend pid=${appPid} log=${relativePath(config.appLogPath)}`);
 
   await waitForApiHealth();
-}
-
-async function waitForMediamtxReady() {
-  for (let attempt = 1; attempt <= config.verifyMediamtxRetries; attempt += 1) {
-    try {
-      const response = await fetch(`${config.mediamtxApiUrl}/v3/config/global/get`, {
-        signal: AbortSignal.timeout(5000),
-      });
-      if (response.ok) {
-        console.log(`MediaMTX is ready: ${config.mediamtxApiUrl}`);
-        return;
-      }
-    } catch {
-      // Retry.
-    }
-    await sleep(1000);
-  }
-  throw new Error(`MediaMTX API did not become ready in time: ${config.mediamtxApiUrl}`);
 }
 
 async function waitForApiHealth() {

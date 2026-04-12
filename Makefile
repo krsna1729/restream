@@ -2,17 +2,16 @@
 
 OUTPUT_URL ?= rtmp://localhost:1936/live/test
 APP_PORT ?= 3030
-MEDIAMTX_API_URL ?= http://localhost:9997
-INGEST_ARGS ?= "-f flv" # "-f rtsp -rtsp_transport tcp" # "-f mpegts"
+APP_HEALTH_URL ?= http://localhost:3030/healthz
+INGEST_ARGS ?= -f flv # -f rtsp -rtsp_transport tcp # -f mpegts
 INGEST_URL ?= rtmp://localhost:1935/mystream
-VERIFY_MEDIAMTX_RETRIES ?= 15
 VERIFY_APP_RETRIES ?= 30
 
 run-host:
-	MEDIAMTX_API_URL="$(MEDIAMTX_API_URL)" bash scripts/run-host.sh
+	APP_HEALTH_URL="$(APP_HEALTH_URL)" VERIFY_APP_RETRIES="$(VERIFY_APP_RETRIES)" bash scripts/run-host.sh
 
 run-docker:
-	MEDIAMTX_API_URL="$(MEDIAMTX_API_URL)" bash scripts/run-container.sh
+	APP_HEALTH_URL="$(APP_HEALTH_URL)" VERIFY_APP_RETRIES="$(VERIFY_APP_RETRIES)" bash scripts/run-container.sh
 
 deps: .deps-stamp
 

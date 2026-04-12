@@ -12,7 +12,7 @@ services:
             - '8889:8889' # WebRTC HTTP (mediamtx)
             - '8189:8189/udp' # WebRTC ICE (mediamtx)
             - '8189:8189/tcp' # WebRTC ICE (mediamtx)
-            - '9997:9997' # MediaMTX API
+            - '127.0.0.1:9997:9997' # MediaMTX API (host-local only)
         volumes:
             - ./infra/mediamtx.yml:/mediamtx.yml
 
@@ -30,7 +30,6 @@ services:
             - '8889:8889' # WebRTC HTTP (mediamtx)
             - '8189:8189/udp' # WebRTC ICE (mediamtx)
             - '8189:8189/tcp' # WebRTC ICE (mediamtx)
-            - '9997:9997' # MediaMTX API
 
     # App uses pause network namespace so MediaMTX is reachable on localhost.
     app:

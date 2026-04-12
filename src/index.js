@@ -33,6 +33,13 @@ let systemMetricsSample = {
 };
 
 const levelOrder = { error: 0, warn: 1, info: 2, debug: 3 };
+const mediamtxReadiness = {
+    ready: false,
+    checkedAt: null,
+    readyAt: null,
+    error: null,
+};
+let mediamtxReadinessTimer = null;
 
 function shouldLog(level) {
     const current = levelOrder[logLevel] ?? levelOrder.info;
@@ -65,6 +72,52 @@ function buildCommandPreview(cmd, args) {
 function getMediamtxApiBaseUrl() {
     // MediaMTX internal API is always available on localhost:9997
     return 'http://localhost:9997';
+}
+
+async function checkMediamtxReadiness() {
+    const checkedAt = new Date().toISOString();
+    const wasReady = mediamtxReadiness.ready;
+    const previousError = mediamtxReadiness.error;
+    try {
+        const response = await fetch(`${getMediamtxApiBaseUrl()}/v3/config/global/get`, {
+            signal: AbortSignal.timeout(5000),
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        mediamtxReadiness.ready = true;
+        mediamtxReadiness.checkedAt = checkedAt;
+        mediamtxReadiness.readyAt = mediamtxReadiness.readyAt || checkedAt;
+        mediamtxReadiness.error = null;
+        if (!wasReady) {
+            log('info', 'MediaMTX readiness check recovered', {
+                checkedAt,
+                readyAt: mediamtxReadiness.readyAt,
+            });
+        }
+    } catch (err) {
+        const errorMessage = String(err);
+        mediamtxReadiness.ready = false;
+        mediamtxReadiness.checkedAt = checkedAt;
+        mediamtxReadiness.error = errorMessage;
+        if (wasReady || previousError !== errorMessage) {
+            log('warn', 'MediaMTX readiness check failed', {
+                checkedAt,
+                error: errorMessage,
+            });
+        }
+    }
+}
+
+function startMediamtxReadinessChecks() {
+    void checkMediamtxReadiness();
+    if (mediamtxReadinessTimer) return;
+    mediamtxReadinessTimer = setInterval(() => {
+        void checkMediamtxReadiness();
+    }, 5000);
+    mediamtxReadinessTimer.unref?.();
 }
 
 function getMediamtxRtspBaseUrl() {
@@ -1076,6 +1129,14 @@ app.get('/metrics/system', (req, res) => {
 });
 
 app.get('/health', async (req, res) => {
+    if (!mediamtxReadiness.ready) {
+        return res.json({
+            generatedAt: new Date().toISOString(),
+            status: 'degraded',
+            pipelines: {},
+        });
+    }
+
     try {
         const [paths, rtspConns, rtspSessions] = await Promise.all([
             fetchMediamtxJson('/v3/paths/list'),
@@ -1260,15 +1321,31 @@ app.get('/health', async (req, res) => {
 
         return res.json({
             generatedAt: new Date().toISOString(),
+            status: 'ready',
             mediamtx: {
                 pathCount: paths.itemCount || 0,
                 rtspConnCount: rtspConns.itemCount || 0,
+                ready: mediamtxReadiness.ready,
             },
             ...health,
         });
     } catch (err) {
-        return res.status(500).json({ error: String(err) });
+        log('error', 'Failed to build health response', {
+            error: String(err),
+        });
+        return res.json({
+            generatedAt: new Date().toISOString(),
+            status: 'degraded',
+            pipelines: {},
+        });
     }
+});
+
+app.get('/healthz', (req, res) => {
+    if (!mediamtxReadiness.ready) {
+        return res.status(503).json({ status: 'not_ready' });
+    }
+    return res.json({ status: 'ok' });
 });
 
 /* ======================
@@ -1277,7 +1354,10 @@ app.get('/health', async (req, res) => {
 
 app.use('/', express.static(path.join(__dirname, '..', 'public')));
 
-app.listen(appPort, () => console.log(`Controller running on ${appPort}`));
+app.listen(appPort, () => {
+    startMediamtxReadinessChecks();
+    console.log(`Controller running on ${appPort}`);
+});
 
 // Etag-related, for the FE to check the last modified time of the entire config.
 
