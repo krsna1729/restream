@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Checks all external binaries required by this repository's make targets,
-# scripts, npm scripts, git hooks, and runtime spawning paths.
+# Checks external binaries required by this repository's make targets,
+# scripts, npm scripts, and runtime spawning paths.
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -91,22 +91,17 @@ echo
 
 # Core CLI and runtime dependencies.
 check_cmd make make
-check_cmd bash bash
-check_cmd sh dash
 check_cmd node nodejs "project requires Node >=20.19.0"
 check_cmd npm npm "project requires npm >=10"
 check_cmd npx npm
 check_cmd curl curl
-check_cmd jq jq
 check_cmd ffmpeg ffmpeg
-check_cmd ffprobe ffmpeg "provided by ffmpeg package"
+check_cmd ffprobe ffmpeg
 
-# Used by scripts for retries and process cleanup.
+# Used by shell scripts and host cleanup paths.
 check_cmd pkill procps
 check_cmd xargs findutils
-check_cmd mktemp coreutils
 check_cmd seq coreutils
-check_cmd date coreutils
 
 # Docker + compose plugin are required for run-host/run-docker/verify/run-4x3.
 if have_cmd docker; then
@@ -161,7 +156,9 @@ if [[ "${#missing[@]}" -eq 0 ]]; then
   exit 0
 fi
 
-printf "%bMissing binaries:%b %s\n" "$RED" "$NC" "${missing[*]}"
+if [[ "${#missing[@]}" -gt 0 ]]; then
+  printf "%bMissing binaries:%b %s\n" "$RED" "$NC" "${missing[*]}"
+fi
 
 # Deduplicate package hints while preserving first-seen order.
 seen='|'
@@ -182,7 +179,7 @@ for pkg in "${uniq_pkgs[@]}"; do
 done
 printf "\n"
 
-if [[ "$INSTALL_MISSING" == "1" ]]; then
+if [[ "$INSTALL_MISSING" == "1" && "${#missing[@]}" -gt 0 ]]; then
   echo
   warn "Installing missing packages..."
   if [[ "$(id -u)" -eq 0 ]]; then
