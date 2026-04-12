@@ -228,10 +228,10 @@ Starts an FFmpeg job for this output. The full call flow is:
 
 1. Validate pipeline + output exist.
 2. Check for an existing running job — 409 if found.
-3. Resolve probe URL: `rtsp://<MEDIAMTX_RTSP>/<streamKey>` (or `inputUrl` from body if no stream key).
+3. Resolve probe URL: `rtsp://localhost:8554/<streamKey>` (or `inputUrl` from body if no stream key).
 4. Run `ffprobe -rtsp_transport tcp <probeUrl>` with 8 s timeout.
-5. Build tagged pull URL: `rtsp://<MEDIAMTX_RTSP>/<streamKey>?reader_id=reader_<pipelineId>_<outputId>`.
-6. Spawn FFmpeg: `ffmpeg -nostdin -rtsp_transport tcp -i <taggedUrl> -c:v copy -c:a copy -flvflags no_duration_filesize -rtmp_live live -f flv <outputUrl>`.
+5. Build tagged pull URL: `rtsp://localhost:8554/<streamKey>?reader_id=reader_<pipelineId>_<outputId>`.
+6. Spawn FFmpeg: `ffmpeg -nostdin -rtsp_transport tcp -i <taggedUrl> -map 0:v:0 -map 0:a:0 -c:v copy -c:a copy -flvflags no_duration_filesize -rtmp_live live -f flv <outputUrl>`.
 7. Persist job row in DB, return after 250 ms stability check.
 
 **Request body:** (optional)
@@ -317,7 +317,7 @@ ETag: "abc123def456..."
 
 **Response 304:** ETag matches — no body, no change.
 
-> The ETag is a SHA-256 hash of the deterministic JSON snapshot of `streamKeys + pipelines + jobs`. It is recomputed on every state change and persisted in the `meta` table.
+> The ETag is a SHA-256 hash of a deterministic state snapshot, persisted in the `meta` table.
 
 ---
 
@@ -339,9 +339,11 @@ Aggregates MediaMTX runtime state with DB job state. Calls three MediaMTX endpoi
 ```json
 {
   "generatedAt": "2026-04-10T11:31:36.879Z",
+  "status": "ready",
   "mediamtx": {
     "pathCount": 2,
-    "rtspConnCount": 3
+    "rtspConnCount": 3,
+    "ready": true
   },
   "pipelines": {
     "<pipelineId>": {
@@ -386,6 +388,16 @@ Aggregates MediaMTX runtime state with DB job state. Calls three MediaMTX endpoi
 }
 ```
 
+When MediaMTX is unavailable, `/health` returns a degraded payload:
+
+```json
+{
+  "generatedAt": "2026-04-10T11:31:36.879Z",
+  "status": "degraded",
+  "pipelines": {}
+}
+```
+
 **Input status values:**
 | Status | Meaning                                                |
 |--------|--------------------------------------------------------|
@@ -402,9 +414,18 @@ Aggregates MediaMTX runtime state with DB job state. Calls three MediaMTX endpoi
 
 ---
 
+### `GET /healthz`
+
+Readiness endpoint used by launch scripts and infra probes.
+
+- `200` with `{ "status": "ok" }` when MediaMTX is reachable.
+- `503` with `{ "status": "not_ready" }` when MediaMTX is not ready.
+
+---
+
 ### `GET /metrics/system`
 
-Returns host system metrics. Values are computed against the previous sample; first call returns null for derived rates.
+Returns host system metrics. Throughput and CPU values are computed against the previous sample.
 
 **Response 200:**
 ```json
@@ -457,8 +478,6 @@ All errors return:
 ## 8. Response ETag Lifecycle
 
 ```
-POST /stream-keys          → recomputeEtag()
-DELETE /stream-keys/:key   → recomputeEtag()
 POST /pipelines            → recomputeEtag()
 POST /pipelines/:id        → recomputeEtag()
 DELETE /pipelines/:id      → recomputeEtag()

@@ -1,5 +1,7 @@
 # PRD v0.2 (English Version – Frozen)
 
+> Historical product planning document. For current implemented behavior, use `README.md` and runtime docs (`api-reference.md`, `architecture.md`, `configuration.md`, `health-mapping.md`).
+
 ## 1. Background / Motivation
 
 - The existing Nginx-based streaming system has pain points: repository structure is messy and difficult to maintain.

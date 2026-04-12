@@ -14,7 +14,7 @@ A streaming control plane built on [MediaMTX](https://github.com/bluenviron/medi
 ```
 src/
   index.js          — Express REST API + FFmpeg lifecycle management
-  db.js             — SQLite schema, migrations, and query helpers (data.db)
+  db.js             — SQLite schema, migrations, and query helpers (data/data.db)
   config/
     index.js        — Config loader with sanitization
     restream.json   — App config: server-name, pipelines-limit, out-limit
@@ -33,6 +33,8 @@ infra/              — Deployment/runtime configs (MediaMTX, nginx-rtmp test si
 test/artifacts/     — Reproducible test scripts and session recordings
 docker-compose.yml  — Full-stack compose (app + mediamtx + nginx-rtmp test sink)
 ```
+
+SQLite runtime files are stored under `data/` (for example `data/data.db`).
 
 The compose file uses profiles:
 - `host`: MediaMTX in Docker with app on host (`make run-host`)

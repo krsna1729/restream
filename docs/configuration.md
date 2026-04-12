@@ -109,12 +109,17 @@ Starts `mediamtx` + `nginx-rtmp` in Docker and runs Node on host.
 docker compose --profile host up -d mediamtx nginx-rtmp
 ```
 
+MediaMTX config binds API to localhost by default (`apiAddress: 127.0.0.1:9997`). Compose however overrides with
+`MTX_APIADDRESS=0.0.0.0:9997` inside the mediamtx container (`host` profile) so that `localhost:9997` from host works.
+Without this Node will not be able to access the MediaMTX API. Host exposure remains local-only via
+`127.0.0.1:9997:9997` port mapping. Container mode does not have this issue.
+
 ### Container mode (`make run-docker`)
 
 Starts app + MediaMTX in a shared namespace through `pause`.
 
 ```sh
-docker compose --profile container up -d pause mediamtx-pod nginx-rtmp app
+docker compose --profile container up -d --build --force-recreate --renew-anon-volumes pause mediamtx-pod nginx-rtmp app
 ```
 
 ### app container environment

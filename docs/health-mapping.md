@@ -51,7 +51,7 @@ flowchart TD
 
 **ffprobe caching:**
 
-When a path is online, the backend calls `ffprobe -rtsp_transport tcp rtsp://<host>/<streamKey>` and caches the result in `streamProbeCache` for `PROBE_CACHE_TTL_MS` (default 30 s). This supplements track metadata with accurate FPS and audio codec details.
+When a path is online, the backend calls `ffprobe -rtsp_transport tcp rtsp://localhost:8554/<streamKey>` and caches the result in `streamProbeCache` for `PROBE_CACHE_TTL_MS` (default 30 s). This supplements track metadata with accurate FPS and audio codec details.
 
 ---
 
@@ -169,7 +169,7 @@ The left half shows input status (`on` / `off`); the right half shows the aggreg
 A running output stuck at `warning` means MediaMTX has no RTSP connection with the expected `reader_id`. Common causes:
 
 1. **MediaMTX version does not expose `query` on RTSP connections.** Check `/v3/rtspconns/list` manually — if `conn.query` is always empty, the query-param approach will not work. The server logs a `warn`-level entry if RTSP connections exist but `rtspByReaderTag` is empty.
-2. **FFmpeg failed to connect to RTSP.** Check `GET /pipelines/:pipelineId/outputs/:outputId/logs` or read `job_logs` from DB directly.
+2. **FFmpeg failed to connect to RTSP.** Check `job_logs` in SQLite for the latest output job details.
 3. **FFmpeg is running but using a different path.** Verify MediaMTX is listening on `localhost:8554`.
 4. **Race condition at startup.** Status may briefly be `warning` for 1–2 poll cycles while MediaMTX registers the RTSP session.
 

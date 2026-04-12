@@ -1,5 +1,7 @@
 # RFC-0001: MediaMTX-based Streaming Pipeline Management System
 
+> Historical design RFC (draft-era). Some routes and deployment assumptions may differ from the current implementation. For source-of-truth behavior, use `docs/api-reference.md`, `docs/architecture.md`, and code under `src/`.
+
 ## Status
 
 - Status: Draft

@@ -15,7 +15,7 @@ RTMP Publisher ──► MediaMTX (RTMP :1935)
                        ▼
                    FFmpeg Job(s) ──► External Platforms (YouTube, Facebook, etc.)
 
-Browser ──► Node API :3030 ──► SQLite (data.db)
+Browser ──► Node API :3030 ──► SQLite (data/data.db)
                     │
                     └──► MediaMTX API :9997 (health, path config, connection stats)
 ```
@@ -25,7 +25,7 @@ Browser ──► Node API :3030 ──► SQLite (data.db)
 | Component          | Role                                      | Default port(s)         |
 |--------------------|-------------------------------------------|-------------------------|
 | Node API server    | REST control plane + static UI            | `3030`                  |
-| SQLite (`data.db`) | Persistent state (keys, pipelines, jobs)  | —                       |
+| SQLite (`data/data.db`) | Persistent state (keys, pipelines, jobs)  | —                       |
 | MediaMTX           | RTMP ingest, RTSP relay, path management  | `1935`, `8554`, `9997`  |
 | FFmpeg             | Per-output RTSP→RTMP push process         | spawned on demand       |
 | nginx-rtmp         | Local test RTMP sink (docker-compose only)| `1936` RTMP, `8081` HTTP|
@@ -114,13 +114,15 @@ ffprobe -rtsp_transport tcp <probeUrl>   (8 s timeout)
   │ ok  → cache probe result in streamProbeCache (TTL: PROBE_CACHE_TTL_MS)
   ▼
 Build tagged RTSP URL:
-  rtsp://<host>/<streamKey>?reader_id=reader_<pipelineId>_<outputId>
+  rtsp://localhost:8554/<streamKey>?reader_id=reader_<pipelineId>_<outputId>
   │
   ▼
 Build FFmpeg args:
   ffmpeg -nostdin
          -rtsp_transport tcp
          -i <taggedRtspUrl>
+         -map 0:v:0
+         -map 0:a:0
          -c:v copy -c:a copy
          -flvflags no_duration_filesize
          -rtmp_live live
@@ -198,7 +200,9 @@ For each pipeline:
                = 'on'      if running AND rtspByReaderTag has reader_<pid>_<oid>
                = 'warning' if running AND no reader tag match
 
-200 { generatedAt, mediamtx: { pathCount, rtspConnCount }, pipelines: {...} }
+200 { generatedAt, status: 'ready', mediamtx: { pathCount, rtspConnCount, ready }, pipelines: {...} }
+When MediaMTX is unavailable:
+{ generatedAt, status: 'degraded', pipelines: {} }
 ```
 
 ### 4.4 Config Snapshot (`GET /config`)
@@ -254,7 +258,7 @@ Check key exists in DB (404 if not)
   │
   ▼
 DELETE MediaMTX /v3/config/paths/delete/<key>
-  │ (MediaMTX error logged but not fatal — key still deleted from DB)
+  │ error → 500 (DB row is not deleted)
   ▼
 db.deleteStreamKey(key)
 200 { message }
@@ -330,7 +334,7 @@ Values are `.toFixed(1)` Kbps strings displayed in the stats panel.
 Each FFmpeg output is identified in MediaMTX by a `reader_id` query parameter appended to its RTSP pull URL:
 
 ```
-rtsp://<host>/<streamKey>?reader_id=reader_<pipelineId>_<outputId>
+rtsp://localhost:8554/<streamKey>?reader_id=reader_<pipelineId>_<outputId>
 ```
 
 MediaMTX surfaces this query string in `/v3/rtspconns/list` as `conn.query`. The health endpoint parses `reader_id` from each connection's query and builds a `rtspByReaderTag` map. An output's status becomes `on` when its expected tag is found in this map.
@@ -374,7 +378,7 @@ This allows the app to use hardcoded `localhost:9997` (MediaMTX API) and `localh
 |-----------------------|------------------------------------------------------|
 | `make run-host`       | Start docker services + node on host (dev)           |
 | `make run-docker`     | Full docker-compose stack                            |
-| `make down`           | Stop and remove docker containers                    |
+| `make down`           | Stop docker services and clean local database files  |
 | `make css`            | Rebuild `public/output.css` from `input.css`         |
 | `make format`         | Run prettier over all files                          |
 | `make security`       | npm audit + outdated packages                        |
@@ -390,4 +394,4 @@ This allows the app to use hardcoded `localhost:9997` (MediaMTX API) and `localh
 - `ffprobe` is run against the RTSP input before each output start. On intermittent networks or MediaMTX restarts this may produce false 409 "input not available" errors.
 - The probe cache (`streamProbeCache`) is in-memory; it is lost on server restart, adding ~1-2 s latency to the first `/health` call after restart.
 - Audio metrics may be absent when the RTMP source publishes without audio metadata in the initial announce.
-- `data.db` is local SQLite. No built-in replication or backup mechanism.
+- `data/data.db` is local SQLite. No built-in replication or backup mechanism.
