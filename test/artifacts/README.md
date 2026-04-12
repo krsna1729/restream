@@ -8,8 +8,7 @@ This folder stores reusable test artifacts captured from ad-hoc testing sessions
 - start-inputs-from-manifest.sh
 - start-outputs-from-manifest.sh
 - health-snapshot.sh
-- capture-dashboard-screenshots.mjs
-- run-4x3-capture.sh
+- run-4x3.sh
 - session-2026-04-10-4x3.json
 
 ## What Each Script Does
@@ -33,19 +32,12 @@ This folder stores reusable test artifacts captured from ad-hoc testing sessions
 - Captures /health payload to test/artifacts/runs.
 - Prints quick ON counts for input/output.
 
-5. capture-dashboard-screenshots.mjs
-- Captures dashboard screenshots (PNG) using Playwright.
-- Selects each pipeline row and saves a full-page screenshot.
-- Writes a `summary.json` with file paths for the run.
-
-6. run-4x3-capture.sh
+5. run-4x3.sh
 - Runs full 4x3 test flow end-to-end.
 - Waits for all expected inputs and outputs to reach active state.
 - Captures health snapshot.
-- Captures one screenshot per pipeline before cleanup.
-- Prints final screenshot run directory.
 
-7. wait-all-active.sh
+6. wait-all-active.sh
 - Polls `/health` until all manifest inputs and outputs are `on`.
 - Treats output `warning` as active (running but reader correlation pending), so readiness reflects actual running outputs.
 - Fails if readiness timeout is reached.
@@ -71,19 +63,6 @@ This folder stores reusable test artifacts captured from ad-hoc testing sessions
 
 After app + media services are up, run:
 - make run-4x3
-
-## Browser Screenshot Capture
-
-One-time setup:
-- npm i -D playwright
-- npx playwright install chromium
-
-Capture one screenshot per pipeline:
-- node test/artifacts/capture-dashboard-screenshots.mjs
-
-Output:
-- PNG screenshots are written to test/artifacts/runs/screenshots/dashboard-screenshots-<timestamp>/.
-- `summary.json` is written alongside each screenshot set.
 
 ## Notes
 

@@ -79,9 +79,6 @@ For continuous integration and testing pipelines:
 npm ci
 ```
 
-This additionally installs everything above plus:
-- Browser tooling for dashboard screenshot capture tests (if enabled in your CI setup)
-
 ## Run Modes
 
 ### 1) Host Node + Docker MediaMTX

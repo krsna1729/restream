@@ -87,12 +87,4 @@ bash test/artifacts/wait-all-active.sh
 echo "== Step 5: Capture health snapshot =="
 bash test/artifacts/health-snapshot.sh
 
-echo "== Step 6: Capture dashboard screenshots for each pipeline =="
-node test/artifacts/capture-dashboard-screenshots.mjs \
-    --width 1920 \
-    --height 1080
-
-latest_run="$(ls -1dt test/artifacts/runs/screenshots/dashboard-screenshots-* | head -n 1)"
-
-echo "== Screenshot capture complete =="
-echo "Run directory: $latest_run"
+echo "== 4x3 run complete =="
