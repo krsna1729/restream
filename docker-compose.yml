@@ -4,6 +4,9 @@ services:
         profiles: ['host']
         image: bluenviron/mediamtx:1
         container_name: mediamtx
+        environment:
+            # Override mediamtx.yml setting for app to reach MTX
+            MTX_APIADDRESS: "0.0.0.0:9997"
         ports:
             - '1935:1935' # RTMP ingest (mediamtx)
             - '8554:8554' # RTSP ingest and read (mediamtx)

@@ -20,7 +20,10 @@ webrtc: yes        # HTTP signaling on port 8889, media on port 8189
 # webrtcAdditionalHosts: ['<your-host-ip>']
 
 # ── Backend API ─────────────────────────────────────────────────────────────
-api: yes           # port 9997 — used by restream for /v3/paths and /v3/*conns
+api: yes
+# Bind the control API to localhost so it remains available to the local
+# restream backend without being exposed on external interfaces by default.
+apiAddress: 127.0.0.1:9997   # used by restream for /v3/paths and /v3/*conns
 
 # ── Access control ──────────────────────────────────────────────────────────
 # Allow any client to publish, read, and use the API without authentication.
