@@ -94,11 +94,18 @@ function renderPipelineInfoColumn(selectedPipe) {
         deletePipeBtn.title = '';
     }
 
+    const maskSecret = (value) => {
+        if (!value) return value;
+        if (value.length <= 6) return value;
+        return `${value.slice(0, 2)}...${value.slice(-2)}`;
+    };
+
     const ingestConfig = config?.mediamtx?.ingest || {};
     const streamKey = pipe.key || 'Unassigned';
+    const maskedStreamKey = pipe.key ? maskSecret(pipe.key) : streamKey;
 
     // Display stream key
-    document.getElementById('stream-key').innerHTML = streamKey;
+    document.getElementById('stream-key').innerHTML = maskedStreamKey;
     document.getElementById('stream-key').dataset.copy = pipe.key || '';
 
     // Build and display all three ingest URLs
@@ -109,17 +116,17 @@ function renderPipelineInfoColumn(selectedPipe) {
 
     const rtmpBaseUrl = `rtmp://${ingestHost}:${rtmpPort}/`;
     const rtmpUrl = pipe.key ? rtmpBaseUrl + pipe.key : 'Assign a stream key to enable ingest';
-    document.getElementById('rtmp-url').innerHTML = rtmpUrl;
+    document.getElementById('rtmp-url').innerHTML = pipe.key ? rtmpBaseUrl + maskedStreamKey : rtmpUrl;
     document.getElementById('rtmp-url').dataset.copy = pipe.key ? rtmpBaseUrl + pipe.key : '';
 
     const rtspBaseUrl = `rtsp://${ingestHost}:${rtspPort}/`;
     const rtspUrl = pipe.key ? rtspBaseUrl + pipe.key : 'Assign a stream key to enable ingest';
-    document.getElementById('rtsp-url').innerHTML = rtspUrl;
+    document.getElementById('rtsp-url').innerHTML = pipe.key ? rtspBaseUrl + maskedStreamKey : rtspUrl;
     document.getElementById('rtsp-url').dataset.copy = pipe.key ? rtspBaseUrl + pipe.key : '';
 
     const srtBaseUrl = `srt://${ingestHost}:${srtPort}?streamid=publish:`;
     const srtUrl = pipe.key ? srtBaseUrl + pipe.key : 'Assign a stream key to enable ingest';
-    document.getElementById('srt-url').innerHTML = srtUrl;
+    document.getElementById('srt-url').innerHTML = pipe.key ? srtBaseUrl + maskedStreamKey : srtUrl;
     document.getElementById('srt-url').dataset.copy = pipe.key ? srtBaseUrl + pipe.key : '';
 
     const playerElem = document.getElementById('video-player');
