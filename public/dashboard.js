@@ -77,6 +77,7 @@ async function pipeFormBtn(event) {
 
     modal.close();
     await refreshDashboard();
+    userEtag = etag;
 }
 
 async function openOutModal(mode, pipe, output = null) {
@@ -170,6 +171,7 @@ async function editOutFormBtn(event) {
 
     document.getElementById('edit-out-modal').close();
     await refreshDashboard();
+    userEtag = etag;
 }
 
 async function deleteOutBtn(pipeId, outId) {
@@ -196,6 +198,7 @@ async function deleteOutBtn(pipeId, outId) {
     }
 
     await refreshDashboard();
+    userEtag = etag;
 }
 
 async function addOutBtn() {
@@ -267,7 +270,27 @@ async function deletePipeBtn() {
 
     setUrlParam('p', null);
     await refreshDashboard();
+    userEtag = etag;
     renderPipelines();
+}
+
+async function checkStreamingConfigs(secondTime = false, baselineEtag = userEtag) {
+    const alertElem = document.getElementById('streaming-config-changed-alert');
+    if (!alertElem) return;
+
+    const res = await getConfig(baselineEtag);
+
+    if (res === null || res.notModified) {
+        alertElem.classList.add('hidden');
+        return;
+    }
+
+    if (secondTime) {
+        alertElem.classList.remove('hidden');
+        return;
+    }
+
+    setTimeout(() => checkStreamingConfigs(true, baselineEtag), 5000);
 }
 
 async function fetchAndRerender() {
@@ -297,6 +320,7 @@ async function fetchSystemMetrics() {
 }
 
 let etag = null;
+let userEtag = null;
 let config = {};
 let metrics = {};
 let pipelines = [];
@@ -304,7 +328,9 @@ let health = {};
 
 (async () => {
     await fetchConfig();
+    userEtag = etag;
     setServerConfig(config?.['server-name']);
     await fetchAndRerender();
     setInterval(() => fetchAndRerender(), 5000);
+    setInterval(() => checkStreamingConfigs(), 30000);
 })();

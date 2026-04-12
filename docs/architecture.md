@@ -315,7 +315,19 @@ renderMetrics()        DOM update for system metrics (CPU, mem, disk, net)
   │
   ▼
 setInterval(fetchAndRerender, <pollInterval>)   repeats above on interval
+setInterval(checkStreamingConfigs, 30000)       external-change detection (see below)
 ```
+
+#### External-change detection (`checkStreamingConfigs`)
+
+The dashboard tracks two ETag variables:
+
+| Variable | Updated by | Purpose |
+|---|---|---|
+| `etag` | every `fetchConfig()` (background poll) | keeps conditional GET efficient |
+| `userEtag` | only after this tab successfully mutates config | marks last change *this user* made |
+
+Every 30 s, `checkStreamingConfigs` calls `GET /config` with `If-None-Match: userEtag`. If the server returns 200 (current ETag differs from `userEtag`), a mutation happened that this tab did not initiate. After a 5 s confirmation re-check, the `#streaming-config-changed-alert` warning banner is shown, prompting the user to refresh. A 304 keeps the banner hidden.
 
 ### 5.3 Throughput Computation (client-side)
 
