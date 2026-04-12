@@ -25,14 +25,21 @@ async function populatePipelineKeySelect(selectedKey = '') {
     const keySelect = document.getElementById('pipe-stream-key-input');
     const keys = (await getStreamKeys()) || [];
 
-    keySelect.innerHTML =
-        `<option value="">Unassigned</option>` +
-        keys
-            .map(
-                (key) =>
-                    `<option value="${key.key}" ${key.key === selectedKey ? 'selected' : ''}>${key.label} (${key.key})</option>`,
-            )
-            .join('');
+    keySelect.replaceChildren();
+
+    const unassignedOption = document.createElement('option');
+    unassignedOption.value = '';
+    unassignedOption.textContent = 'Unassigned';
+    unassignedOption.selected = selectedKey === '';
+    keySelect.appendChild(unassignedOption);
+
+    keys.forEach((key) => {
+        const option = document.createElement('option');
+        option.value = key.key;
+        option.selected = key.key === selectedKey;
+        option.textContent = `${key.label} (${key.key})`;
+        keySelect.appendChild(option);
+    });
 }
 
 async function openPipeModal(mode, pipe = null, suggestedName = '') {
