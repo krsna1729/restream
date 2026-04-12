@@ -46,7 +46,8 @@ down:
 	rm -f data.db data.db-journal data.db-wal data.db-shm
 
 probe-output:
-	ffprobe -v error -rw_timeout 5000000 -probesize 65536 -analyzeduration 500000 -show_entries stream=index,codec_type,codec_name,width,height -of json $(OUTPUT_URL)
+	ffprobe -v error -show_entries stream=index,codec_type,codec_name,width,height -of json \
+	-probesize 10M -analyzeduration 10M $(OUTPUT_URL)
 
 run-4x3: deps
 	node test/artifacts/run-4x3.mjs
