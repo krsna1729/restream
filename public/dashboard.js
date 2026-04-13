@@ -37,7 +37,8 @@ async function populatePipelineKeySelect(selectedKey = '') {
         const option = document.createElement('option');
         option.value = key.key;
         option.selected = key.key === selectedKey;
-        option.textContent = `${key.label} (${key.key})`;
+        const label = typeof key.label === 'string' ? key.label.trim() : '';
+        option.textContent = `${label || 'Unnamed'} (${key.key})`;
         keySelect.appendChild(option);
     });
 }
