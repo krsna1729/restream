@@ -296,7 +296,9 @@ function getLatestJobByOutput(pipelineId, outputId) {
 
 async function fetchMediamtxJson(endpoint) {
     const url = `${getMediamtxApiBaseUrl()}${endpoint}`;
-    const resp = await fetch(url);
+    const resp = await fetch(url, {
+        signal: AbortSignal.timeout(5000),
+    });
     let data = null;
     try {
         data = await resp.json();
