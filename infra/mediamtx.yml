@@ -2,7 +2,7 @@
 #
 # Ingestion:  RTMP  rtmp://<host>:1935/<streamKey>
 #             RTSP  rtsp://<host>:8554/<streamKey>
-#             SRT   srt://<host>:8890?streamid=<streamKey>
+#             SRT   srt://<host>:8890?streamid=publish:<streamKey>
 #
 # Viewing:    WebRTC  http://<host>:8889/<streamKey>
 #             RTSP    rtsp://<host>:8554/<streamKey>

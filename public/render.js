@@ -6,8 +6,8 @@ let recoveryBannerTimer = null;
 function renderPipelinesList(selectedPipe) {
     setInnerText('pipe-cnt', pipelines.length);
     setInnerText('pipe-oks', pipelines.filter((p) => p.input.status === 'on').length);
-    setInnerText('pipe-errors', pipelines.filter((p) => p.input.status === 'errors').length);
-    setInnerText('pipe-warnings', pipelines.filter((p) => p.input.status === 'warning').length);
+    setInnerText('pipe-errors', pipelines.filter((p) => p.input.status === 'off').length);
+    setInnerText('pipe-warnings', 0);
 
     setInnerText(
         'out-cnt',
@@ -27,8 +27,10 @@ function renderPipelinesList(selectedPipe) {
     );
 
     const sortedPipelines = [...pipelines].sort((a, b) => a.name.localeCompare(b.name));
-    const html = sortedPipelines
-        .map((p, pipelineIndex) => {
+    const pipelinesList = document.getElementById('pipelines');
+    pipelinesList.replaceChildren();
+
+    sortedPipelines.forEach((p, pipelineIndex) => {
             let outStatus = 'off';
             if (p.outs.some((o) => o.status === 'error')) {
                 outStatus = 'error';
@@ -46,28 +48,44 @@ function renderPipelinesList(selectedPipe) {
             const outErrors = p.outs.filter((o) => o.status === 'error').length;
             const outOffs = p.outs.filter((o) => o.status === 'off').length;
 
-            return `
-          <li>
-                        <div class="flex items-center gap-2 ${style} js-select-pipeline" data-pipeline-index="${pipelineIndex}">
-              <div class="rounded-box h-5 w-5"
-                style="background: linear-gradient(90deg, ${inputColor}, ${inputColor} 45%, #242933 45%, #242933 55%, ${outColor} 55%)"></div>
-              <div class="badge badge-sm badge-success px-2 ${outOks ? '' : 'hidden'}">${outOks}</div>
-              <div class="badge badge-sm badge-warning px-2 ${outWarnings ? '' : 'hidden'}">${outWarnings}</div>
-              <div class="badge badge-sm badge-error px-2 ${outErrors ? '' : 'hidden'}">${outErrors}</div>
-              <div class="badge badge-sm px-2 ${outOffs ? '' : 'hidden'}">${outOffs}</div>
-              <a class="active">${escapeHtml(p.name)}</a>
-            </div>
-          </li>`;
-        })
-        .join('');
-    const pipelinesList = document.getElementById('pipelines');
-    pipelinesList.innerHTML = html;
-    pipelinesList.querySelectorAll('.js-select-pipeline').forEach((el) => {
-        el.addEventListener('click', () => {
-            const idx = Number(el.dataset.pipelineIndex);
-            if (!Number.isInteger(idx) || idx < 0 || idx >= sortedPipelines.length) return;
-            selectPipeline(sortedPipelines[idx].id);
-        });
+                        const li = document.createElement('li');
+                        const row = document.createElement('div');
+                        row.className = `flex items-center gap-2 ${style} js-select-pipeline`;
+                        row.dataset.pipelineIndex = String(pipelineIndex);
+
+                        const statusTile = document.createElement('div');
+                        statusTile.className = 'rounded-box h-5 w-5';
+                        statusTile.style.background = `linear-gradient(90deg, ${inputColor}, ${inputColor} 45%, #242933 45%, #242933 55%, ${outColor} 55%)`;
+                        row.appendChild(statusTile);
+
+                        const badges = [
+                                { value: outOks, className: 'badge badge-sm badge-success px-2' },
+                                { value: outWarnings, className: 'badge badge-sm badge-warning px-2' },
+                                { value: outErrors, className: 'badge badge-sm badge-error px-2' },
+                                { value: outOffs, className: 'badge badge-sm px-2' },
+                        ];
+
+                        badges.forEach(({ value, className }) => {
+                                const badge = document.createElement('div');
+                                badge.className = className;
+                                if (!value) badge.classList.add('hidden');
+                                badge.textContent = String(value);
+                                row.appendChild(badge);
+                        });
+
+                        const name = document.createElement('a');
+                        name.className = 'active';
+                        name.textContent = p.name;
+                        row.appendChild(name);
+
+                        row.addEventListener('click', () => {
+                                const idx = Number(row.dataset.pipelineIndex);
+                                if (!Number.isInteger(idx) || idx < 0 || idx >= sortedPipelines.length) return;
+                                selectPipeline(sortedPipelines[idx].id);
+                        });
+
+                        li.appendChild(row);
+                        pipelinesList.appendChild(li);
     });
 }
 
@@ -197,8 +215,10 @@ function renderOutsColumn(selectedPipe) {
         return;
     }
 
-    const outsHtml = pipe.outs
-        .map((o, outputIndex) => {
+    const outputsList = document.getElementById('outputs-list');
+    outputsList.replaceChildren();
+
+    pipe.outs.forEach((o, outputIndex) => {
             const statusColor =
                 o.status === 'on'
                     ? 'status-primary'
@@ -209,72 +229,96 @@ function renderOutsColumn(selectedPipe) {
                         : 'status-neutral';
 
             const isRunning = o.status === 'on' || o.status === 'warning';
-            const throughputBadge = isRunning
-                ? `<span class="badge badge-sm">${o.bitrateKbps !== null && o.bitrateKbps !== undefined ? `${Number(o.bitrateKbps).toFixed(1)} kb/s` : 'warming...'}</span>`
-                : '';
-            const volumeBadge = o.bytesSent
-                ? `<span class="badge badge-sm">${(o.bytesSent / (1024 * 1024)).toFixed(1)} MB</span>`
-                : '';
 
-            return `
-          <div class="bg-base-100 px-3 py-2 shadow rounded-box grid grid-cols-[1fr_auto] gap-2 w-full">
-            <div class="min-w-0">
-                <div class="font-semibold mr-3">
-                    <div aria-label="status" class="status status-lg ${statusColor} mx-1"></div>
-                    <button class="btn btn-xs ${isRunning ? 'btn-accent btn-outline' : 'btn-accent'} js-toggle-output"
-                        data-output-index="${outputIndex}">
-                        ${isRunning ? 'stop' : 'start'}</button>
-                    ${escapeHtml(o.name)}
-                    ${o.time !== null ? `<span class="badge badge-sm">${msToHHMMSS(o.time)}</span>` : ''}
-                    ${throughputBadge}
-                    ${volumeBadge}
-                </div>
-                <code title="${escapeHtml(o.url)}" class="text-sm opacity-70 truncate block">${escapeHtml(o.url)}</code>
-            </div>
-            <div class="flex items-center gap-2 w-fit">
-                <button class="btn btn-xs btn-accent btn-outline ${isRunning ? 'btn-disabled' : ''} js-edit-output"
-                    data-output-index="${outputIndex}">✎</button>
-                <button class="btn btn-xs btn-accent btn-outline ${isRunning ? 'btn-disabled' : ''} js-delete-output"
-                    data-output-index="${outputIndex}">✖</button>
-            </div>
-          </div>`;
-        })
-        .join('');
-    const outputsList = document.getElementById('outputs-list');
-    outputsList.innerHTML = outsHtml;
+            const row = document.createElement('div');
+            row.className = 'bg-base-100 px-3 py-2 shadow rounded-box grid grid-cols-[1fr_auto] gap-2 w-full';
 
-    outputsList.querySelectorAll('.js-toggle-output').forEach((btn) => {
-        btn.addEventListener('click', () => {
-            const idx = Number(btn.dataset.outputIndex);
-            if (!Number.isInteger(idx) || idx < 0 || idx >= pipe.outs.length) return;
-            const out = pipe.outs[idx];
-            const isRunning = out.status === 'on' || out.status === 'warning';
-            if (isRunning) {
-                stopOutBtn(pipe.id, out.id);
-            } else {
-                startOutBtn(pipe.id, out.id);
+            const content = document.createElement('div');
+            content.className = 'min-w-0';
+
+            const heading = document.createElement('div');
+            heading.className = 'font-semibold mr-3';
+
+            const status = document.createElement('div');
+            status.setAttribute('aria-label', 'status');
+            status.className = `status status-lg ${statusColor} mx-1`;
+            heading.appendChild(status);
+
+            const toggleBtn = document.createElement('button');
+            toggleBtn.className = `btn btn-xs ${isRunning ? 'btn-accent btn-outline' : 'btn-accent'}`;
+            toggleBtn.dataset.outputIndex = String(outputIndex);
+            toggleBtn.textContent = isRunning ? 'stop' : 'start';
+            toggleBtn.addEventListener('click', () => {
+                const out = pipe.outs[outputIndex];
+                if (!out) return;
+                const running = out.status === 'on' || out.status === 'warning';
+                if (running) {
+                    stopOutBtn(pipe.id, out.id, toggleBtn);
+                } else {
+                    startOutBtn(pipe.id, out.id, toggleBtn);
+                }
+            });
+            heading.appendChild(toggleBtn);
+
+            const outputName = document.createTextNode(` ${o.name}`);
+            heading.appendChild(outputName);
+
+            if (o.time !== null) {
+                const timeBadge = document.createElement('span');
+                timeBadge.className = 'badge badge-sm';
+                timeBadge.textContent = msToHHMMSS(o.time);
+                heading.appendChild(timeBadge);
             }
-        });
-    });
 
-    outputsList.querySelectorAll('.js-edit-output').forEach((btn) => {
-        btn.addEventListener('click', () => {
-            if (btn.classList.contains('btn-disabled')) return;
-            const idx = Number(btn.dataset.outputIndex);
-            if (!Number.isInteger(idx) || idx < 0 || idx >= pipe.outs.length) return;
-            const out = pipe.outs[idx];
-            editOutBtn(pipe.id, out.id);
-        });
-    });
+            if (isRunning) {
+                const throughputBadge = document.createElement('span');
+                throughputBadge.className = 'badge badge-sm';
+                throughputBadge.textContent =
+                    o.bitrateKbps !== null && o.bitrateKbps !== undefined
+                        ? `${Number(o.bitrateKbps).toFixed(1)} kb/s`
+                        : 'warming...';
+                heading.appendChild(throughputBadge);
+            }
 
-    outputsList.querySelectorAll('.js-delete-output').forEach((btn) => {
-        btn.addEventListener('click', () => {
-            if (btn.classList.contains('btn-disabled')) return;
-            const idx = Number(btn.dataset.outputIndex);
-            if (!Number.isInteger(idx) || idx < 0 || idx >= pipe.outs.length) return;
-            const out = pipe.outs[idx];
-            deleteOutBtn(pipe.id, out.id);
-        });
+            if (o.bytesSent) {
+                const volumeBadge = document.createElement('span');
+                volumeBadge.className = 'badge badge-sm';
+                volumeBadge.textContent = `${(o.bytesSent / (1024 * 1024)).toFixed(1)} MB`;
+                heading.appendChild(volumeBadge);
+            }
+
+            const outputUrl = document.createElement('code');
+            outputUrl.className = 'text-sm opacity-70 truncate block';
+            outputUrl.title = o.url;
+            outputUrl.textContent = o.url;
+
+            content.appendChild(heading);
+            content.appendChild(outputUrl);
+            row.appendChild(content);
+
+            const actions = document.createElement('div');
+            actions.className = 'flex items-center gap-2 w-fit';
+
+            const editBtn = document.createElement('button');
+            editBtn.className = `btn btn-xs btn-accent btn-outline ${isRunning ? 'btn-disabled' : ''}`;
+            editBtn.textContent = '✎';
+            editBtn.addEventListener('click', () => {
+                if (editBtn.classList.contains('btn-disabled')) return;
+                editOutBtn(pipe.id, o.id);
+            });
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = `btn btn-xs btn-accent btn-outline ${isRunning ? 'btn-disabled' : ''}`;
+            deleteBtn.textContent = '✖';
+            deleteBtn.addEventListener('click', () => {
+                if (deleteBtn.classList.contains('btn-disabled')) return;
+                deleteOutBtn(pipe.id, o.id);
+            });
+
+            actions.appendChild(editBtn);
+            actions.appendChild(deleteBtn);
+            row.appendChild(actions);
+            outputsList.appendChild(row);
     });
 }
 
@@ -287,50 +331,76 @@ function renderStatsColumn(selectedPipe) {
     }
 
     const activeInputs = pipelines;
-    const inputStatsHtml = activeInputs
-        .map((p) => {
-            const inputBw = p.input.bitrateKbps;
-            const video = p.input.video || {};
-            const audio = p.input.audio || {};
-            return `
-      <tr class="${p.input.status === 'warning' ? 'bg-warning/10' : ''}">
-        <td>${p.input.time !== null && p.input.time !== undefined ? msToHHMMSS(p.input.time) : '--'}</td>
-        <td>${escapeHtml(p.name)}</td>
-                <td>${inputBw !== null && inputBw !== undefined ? Number(inputBw).toFixed(1) : '--'}</td>
-                <td>${escapeHtml(video.codec || '--')}</td>
-                <td>${video.width && video.height ? `${video.width}x${video.height}` : '--'}</td>
-                <td>${video.fps !== null && video.fps !== undefined ? video.fps : '--'}</td>
-                <td>${escapeHtml(audio.codec || '--')}</td>
-                <td>${audio.channels || '--'}</td>
-                <td>${audio.sample_rate || '--'}</td>
-      </tr>`;
-        })
-        .join('');
     const activeOuts = pipelines.flatMap((p) => p.outs);
-    const outputStatsHtml = activeOuts
-        .map((o) => {
-            const outputBw = o.bitrateKbps;
-            const video = o.video || {};
-            const audio = o.audio || {};
-            return `
-      <tr class="${o.status === 'warning' ? 'bg-warning/10' : ''}">
-                <td>${o.time !== null && o.time !== undefined ? msToHHMMSS(o.time) : '--'}</td>
-        <td>${escapeHtml(o.pipe)}: ${escapeHtml(o.name)}</td>
-                <td>${outputBw !== null && outputBw !== undefined ? Number(outputBw).toFixed(1) : '--'}</td>
-                <td>${escapeHtml(video.codec || '--')}</td>
-                <td>${video.width && video.height ? `${video.width}x${video.height}` : '--'}</td>
-                <td>${video.fps !== null && video.fps !== undefined ? video.fps : '--'}</td>
-                <td>${escapeHtml(audio.codec || '--')}</td>
-                <td>${audio.channels || '--'}</td>
-                <td>${audio.sample_rate || '--'}</td>
-      </tr>`;
-        })
-        .join('');
-    document.getElementById('stats-table').innerHTML =
-        `<tr class="bg-base-100"><th colspan="9">Inputs <span class="badge mx-1">${activeInputs.length}</span></th></tr>` +
-        inputStatsHtml +
-        `<tr class="bg-base-100"><th colspan="9">Outputs <span class="badge mx-1">${activeOuts.length}</span></th></tr>` +
-        outputStatsHtml;
+    const statsTable = document.getElementById('stats-table');
+    statsTable.replaceChildren();
+
+    const addSectionHeader = (label, count) => {
+        const row = document.createElement('tr');
+        row.className = 'bg-base-100';
+        const header = document.createElement('th');
+        header.colSpan = 9;
+        header.textContent = `${label} `;
+        const badge = document.createElement('span');
+        badge.className = 'badge mx-1';
+        badge.textContent = String(count);
+        header.appendChild(badge);
+        row.appendChild(header);
+        statsTable.appendChild(row);
+    };
+
+    const appendRow = (values, warning = false) => {
+        const row = document.createElement('tr');
+        if (warning) row.className = 'bg-warning/10';
+        values.forEach((value) => {
+            const cell = document.createElement('td');
+            cell.textContent = value;
+            row.appendChild(cell);
+        });
+        statsTable.appendChild(row);
+    };
+
+    addSectionHeader('Inputs', activeInputs.length);
+    activeInputs.forEach((p) => {
+        const inputBw = p.input.bitrateKbps;
+        const video = p.input.video || {};
+        const audio = p.input.audio || {};
+        appendRow(
+            [
+                p.input.time !== null && p.input.time !== undefined ? msToHHMMSS(p.input.time) : '--',
+                p.name,
+                inputBw !== null && inputBw !== undefined ? Number(inputBw).toFixed(1) : '--',
+                video.codec || '--',
+                video.width && video.height ? `${video.width}x${video.height}` : '--',
+                video.fps !== null && video.fps !== undefined ? String(video.fps) : '--',
+                audio.codec || '--',
+                audio.channels ? String(audio.channels) : '--',
+                audio.sample_rate ? String(audio.sample_rate) : '--',
+            ],
+            p.input.status === 'warning',
+        );
+    });
+
+    addSectionHeader('Outputs', activeOuts.length);
+    activeOuts.forEach((o) => {
+        const outputBw = o.bitrateKbps;
+        const video = o.video || {};
+        const audio = o.audio || {};
+        appendRow(
+            [
+                o.time !== null && o.time !== undefined ? msToHHMMSS(o.time) : '--',
+                `${o.pipe}: ${o.name}`,
+                outputBw !== null && outputBw !== undefined ? Number(outputBw).toFixed(1) : '--',
+                video.codec || '--',
+                video.width && video.height ? `${video.width}x${video.height}` : '--',
+                video.fps !== null && video.fps !== undefined ? String(video.fps) : '--',
+                audio.codec || '--',
+                audio.channels ? String(audio.channels) : '--',
+                audio.sample_rate ? String(audio.sample_rate) : '--',
+            ],
+            o.status === 'warning',
+        );
+    });
 }
 
 function renderServerMetrics() {

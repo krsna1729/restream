@@ -1381,10 +1381,16 @@ async function recomputeEtag() {
             createdAt: p.createdAt,
         }));
 
-        // for each pipeline fetch outputs
+        // fetch outputs once and group by pipeline for deterministic snapshots
+        const outputsByPipeline = db.listOutputs().reduce((acc, output) => {
+            const pipelineId = output.pipelineId;
+            if (!acc[pipelineId]) acc[pipelineId] = [];
+            acc[pipelineId].push(output);
+            return acc;
+        }, {});
+
         for (const p of pipelines) {
-            const outs = db
-                .listOutputs(p.id)
+            const outs = (outputsByPipeline[p.id] || [])
                 .map((o) => ({
                     id: o.id,
                     name: o.name,

@@ -3,22 +3,30 @@ async function refreshDashboard() {
     await fetchAndRerender();
 }
 
-async function startOutBtn(pipeId, outId) {
-    const button = document.getElementById(`pipe${pipeId}-out${outId}-btn`);
-    if (button) button.classList.add('btn-disabled');
-
-    const res = await startOut(pipeId, outId);
-    if (res !== null) await refreshDashboard();
-    if (button) button.classList.remove('btn-disabled');
+function setOutputToggleBusy(button, busy) {
+    if (!button) return;
+    button.disabled = busy;
+    button.classList.toggle('btn-disabled', busy);
 }
 
-async function stopOutBtn(pipeId, outId) {
-    const button = document.getElementById(`pipe${pipeId}-out${outId}-btn`);
-    if (button) button.classList.add('btn-disabled');
+async function startOutBtn(pipeId, outId, button = null) {
+    setOutputToggleBusy(button, true);
+    try {
+        const res = await startOut(pipeId, outId);
+        if (res !== null) await refreshDashboard();
+    } finally {
+        setOutputToggleBusy(button, false);
+    }
+}
 
-    const res = await stopOut(pipeId, outId);
-    if (res !== null) await refreshDashboard();
-    if (button) button.classList.remove('btn-disabled');
+async function stopOutBtn(pipeId, outId, button = null) {
+    setOutputToggleBusy(button, true);
+    try {
+        const res = await stopOut(pipeId, outId);
+        if (res !== null) await refreshDashboard();
+    } finally {
+        setOutputToggleBusy(button, false);
+    }
 }
 
 async function populatePipelineKeySelect(selectedKey = '') {
