@@ -11,43 +11,116 @@ function maskKey(key) {
     return key.substring(0, 3) + '...' + key.substring(key.length - 3);
 }
 
-async function createStreamKeyBtn() {
-    let name = prompt('Enter stream key name:');
-    if (name === null) return; // user cancelled
+let currentEditingKey = null;
+let pendingDeleteKey = null;
 
-    // Trim + sanitize: allow only letters, numbers, hyphens, underscores
-    name = name.trim().replace(/[^a-zA-Z0-9 _-]/g, '');
+function openAddKeyModal() {
+    currentEditingKey = null;
+    const modal = document.querySelector('#key-modal');
+    const title = document.querySelector('#key-modal-title');
+    const input = document.querySelector('#key-label-input');
+    const btn = document.querySelector('#key-submit-btn');
 
-    if (!name) {
-        showErrorAlert('Invalid stream key name');
+    title.textContent = 'Add Stream Key';
+    input.value = '';
+    input.placeholder = 'e.g., Event 2026 - Team A';
+    btn.textContent = 'Create Key';
+    btn.onclick = submitKeyForm;
+
+    modal.showModal();
+    input.focus();
+}
+
+function openEditKeyModal(key, label) {
+    currentEditingKey = key;
+    const modal = document.querySelector('#key-modal');
+    const title = document.querySelector('#key-modal-title');
+    const input = document.querySelector('#key-label-input');
+    const btn = document.querySelector('#key-submit-btn');
+
+    title.textContent = 'Edit Stream Key';
+    input.value = label || '';
+    input.placeholder = 'Enter new label';
+    btn.textContent = 'Update Label';
+    btn.onclick = submitKeyForm;
+
+    modal.showModal();
+    input.focus();
+    input.select();
+}
+
+function openDeleteKeyModal(key, label) {
+    pendingDeleteKey = key;
+    const modal = document.querySelector('#delete-key-modal');
+    const labelSpan = document.querySelector('#delete-key-label');
+    const btn = document.querySelector('#delete-confirm-btn');
+
+    labelSpan.textContent = `"${escapeHtml(label || '(untitled)')}"`;
+    btn.onclick = confirmDeleteKey;
+
+    modal.showModal();
+}
+
+async function confirmDeleteKey() {
+    if (!pendingDeleteKey) return;
+    const key = pendingDeleteKey;
+    pendingDeleteKey = null;
+
+    const res = await deleteStreamKey(key);
+    if (res) {
+        document.querySelector('#delete-key-modal').close();
+        renderKeysTable();
+    }
+}
+
+async function submitKeyForm() {
+    const input = document.querySelector('#key-label-input');
+    let label = input.value.trim().replace(/[^a-zA-Z0-9 _-]/g, '');
+
+    if (!label || label.length === 0) {
+        showErrorAlert('Label is required. Please enter a descriptive name.');
+        input.focus();
         return;
     }
 
-    const res = await createStreamKey(name);
-    if (res === null) return;
-    renderKeysTable();
+    if (label.length < 2) {
+        showErrorAlert('Label must be at least 2 characters.');
+        input.focus();
+        return;
+    }
+
+    if (currentEditingKey === null) {
+        // Creating new key
+        const res = await createStreamKey(label);
+        if (res) {
+            document.querySelector('#key-modal').close();
+            renderKeysTable();
+        }
+    } else {
+        // Updating existing key
+        const res = await updateStreamKey(currentEditingKey, label);
+        if (res) {
+            document.querySelector('#key-modal').close();
+            renderKeysTable();
+        }
+    }
+}
+
+function openDeleteConfirmModal(key, label) {
+    openDeleteKeyModal(key, label);
+}
+
+async function createStreamKeyBtn() {
+    // Legacy: called from HTML but now just opens modal
+    openAddKeyModal();
 }
 
 async function updateStreamKeyBtn(key, name) {
-    let newName = prompt('Enter new stream key name:', name);
-    if (newName === null) return; // user cancelled
-
-    // Trim + sanitize: allow only letters, numbers, hyphens, underscores
-    newName = newName.trim().replace(/[^a-zA-Z0-9 _-]/g, '');
-
-    if (!newName) {
-        showErrorAlert('Invalid stream key name');
-        return;
-    }
-
-    const res = await updateStreamKey(key, newName);
-    if (res === null) return;
-    renderKeysTable();
+    // Legacy: called from event handlers
+    openEditKeyModal(key, name);
 }
 
-async function deleteStreamKeyBtn(key, name) {
-    if (!confirm(`Are you sure you want to delete key "${name}"`)) return;
-
+async function deleteStreamKeyBtn(key) {
     const res = await deleteStreamKey(key);
     if (res === null) return;
     renderKeysTable();
@@ -98,7 +171,7 @@ async function renderKeysTable() {
         btn.addEventListener('click', () => {
             const row = getKeyAt(btn);
             if (!row) return;
-            updateStreamKeyBtn(row.key, row.label || '');
+            openEditKeyModal(row.key, row.label);
         });
     });
 
@@ -106,7 +179,8 @@ async function renderKeysTable() {
         btn.addEventListener('click', () => {
             const row = getKeyAt(btn);
             if (!row) return;
-            deleteStreamKeyBtn(row.key, row.label || '');
+            openDeleteConfirmModal(row.key, row.label || '(untitled)');
+
         });
     });
 }

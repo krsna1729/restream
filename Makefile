@@ -37,7 +37,7 @@ start-input:
 		-c:v libx264 -preset veryfast -b:v 2500k -bf 0 -g 50 -pix_fmt yuv420p -tune zerolatency \
 		-c:a aac -b:a 128k -ac 2 \
 		$(INGEST_ARGS) "$(INGEST_URL)"
-#
+
 down:
 	bash scripts/down.sh
 

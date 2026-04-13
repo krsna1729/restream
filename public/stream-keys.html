@@ -71,6 +71,52 @@
       </table>
     </div>
 
-    <button class="btn btn-accent mx-auto my-10 w-fit" onclick="createStreamKeyBtn()">Add Key</button>
-  </body>
-</html>
+    <button class="btn btn-accent mx-auto my-10 w-fit" onclick="openAddKeyModal()">Add Key</button>
+
+    <dialog id="key-modal" class="modal">
+      <div class="modal-box max-w-md">
+        <h2 class="text-xl font-bold mb-4" id="key-modal-title">Add Stream Key</h2>
+
+        <div class="space-y-4">
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Label</legend>
+            <input type="text" id="key-label-input" class="input w-full" placeholder="e.g., Event 2026 - Team A" required />
+          </fieldset>
+
+          <div class="text-xs text-base-content/60">
+            Give a descriptive name for easy identification.
+          </div>
+        </div>
+
+        <div class="modal-action mt-6">
+          <form method="dialog">
+            <button class="btn">Cancel</button>
+            <button type="button" class="btn btn-accent" id="key-submit-btn">Create Key</button>
+          </form>
+        </div>
+      </div>
+      <form method="dialog" class="modal-backdrop"><button></button></form>
+    </dialog>
+
+    <dialog id="delete-key-modal" class="modal">
+      <div class="modal-box max-w-md">
+        <h2 class="text-xl font-bold mb-4">Delete Stream Key?</h2>
+
+        <div class="space-y-4">
+          <p class="text-base-content/80">
+            Are you sure you want to delete <span id="delete-key-label" class="font-semibold"></span>?
+          </p>
+          <p class="text-sm text-base-content/60">
+            This action cannot be undone. Any pipelines using this key will be orphaned.
+          </p>
+        </div>
+
+        <div class="modal-action mt-6">
+          <form method="dialog">
+            <button class="btn">Cancel</button>
+            <button type="button" class="btn btn-error" id="delete-confirm-btn">Delete Key</button>
+          </form>
+        </div>
+      </div>
+      <form method="dialog" class="modal-backdrop"><button></button></form>
+    </dialog>
