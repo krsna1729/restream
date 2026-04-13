@@ -86,7 +86,7 @@ async function pipeFormBtn(event) {
 
     modal.close();
     await refreshDashboard();
-    userEtag = etag;
+    userConfigEtag = configEtag;
 }
 
 async function openOutModal(mode, pipe, output = null) {
@@ -180,7 +180,7 @@ async function editOutFormBtn(event) {
 
     document.getElementById('edit-out-modal').close();
     await refreshDashboard();
-    userEtag = etag;
+    userConfigEtag = configEtag;
 }
 
 async function deleteOutBtn(pipeId, outId) {
@@ -207,7 +207,7 @@ async function deleteOutBtn(pipeId, outId) {
     }
 
     await refreshDashboard();
-    userEtag = etag;
+    userConfigEtag = configEtag;
 }
 
 async function addOutBtn() {
@@ -279,15 +279,20 @@ async function deletePipeBtn() {
 
     setUrlParam('p', null);
     await refreshDashboard();
-    userEtag = etag;
+    userConfigEtag = configEtag;
     renderPipelines();
 }
 
-async function checkStreamingConfigs(secondTime = false, baselineEtag = userEtag) {
+async function checkStreamingConfigs(secondTime = false, baselineEtag = userConfigEtag) {
     const alertElem = document.getElementById('streaming-config-changed-alert');
     if (!alertElem) return;
 
-    const res = await getConfig(baselineEtag);
+    if (!baselineEtag) {
+        alertElem.classList.add('hidden');
+        return;
+    }
+
+    const res = await getConfigVersion(baselineEtag);
 
     if (res === null || res.notModified) {
         alertElem.classList.add('hidden');
@@ -313,6 +318,7 @@ async function fetchConfig() {
     const res = await getConfig(etag);
     if (res === null || res.notModified) return;
     etag = res.etag;
+    configEtag = res.configEtag;
     config = res.data;
 }
 
@@ -329,7 +335,8 @@ async function fetchSystemMetrics() {
 }
 
 let etag = null;
-let userEtag = null;
+let configEtag = null;
+let userConfigEtag = null;
 let config = {};
 let metrics = {};
 let pipelines = [];
@@ -337,7 +344,7 @@ let health = {};
 
 (async () => {
     await fetchConfig();
-    userEtag = etag;
+    userConfigEtag = configEtag;
     setServerConfig(config?.['server-name']);
     await fetchAndRerender();
     setInterval(() => fetchAndRerender(), 5000);

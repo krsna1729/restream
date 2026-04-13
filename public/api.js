@@ -49,8 +49,25 @@ async function getConfig(etag = null) {
     }
 
     const newEtag = normalizeEtag(response.headers.get('ETag'));
+    const configEtag = normalizeEtag(response.headers.get('X-Config-ETag'));
 
-    return { notModified: false, etag: newEtag, data };
+    return { notModified: false, etag: newEtag, configEtag: configEtag || newEtag, data };
+}
+
+async function getConfigVersion(etag = null) {
+    const headers = {};
+
+    if (etag) headers['If-None-Match'] = `"${etag}"`;
+    const response = await fetch('/config/version', { method: 'HEAD', headers, cache: 'no-store' });
+
+    if (response.status === 304) return { notModified: true, etag };
+    if (!response.ok) {
+        showErrorAlert(`Request failed with ${response.status}`);
+        return null;
+    }
+
+    const newEtag = normalizeEtag(response.headers.get('ETag'));
+    return { notModified: false, etag: newEtag };
 }
 
 async function getHealth() {

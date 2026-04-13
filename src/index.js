@@ -608,6 +608,8 @@ app.post('/stream-keys', async (req, res) => {
         }
 
         const sk = db.createStreamKey({ key, label, createdAt: new Date().toISOString() });
+        recomputeConfigEtag();
+        recomputeEtag();
         return res.status(201).json({
             message: 'Stream key created',
             streamKey: sk,
@@ -629,6 +631,8 @@ app.post('/stream-keys/:key', (req, res) => {
         }
 
         const updated = db.updateStreamKey(key, label ?? null);
+        recomputeConfigEtag();
+        recomputeEtag();
         return res.json({ message: 'Stream key updated', streamKey: updated });
     } catch (err) {
         return res.status(500).json({ error: err.toString() });
@@ -671,6 +675,8 @@ app.delete('/stream-keys/:key', async (req, res) => {
             return res.status(500).json({ error: 'Failed to remove stream key from DB' });
         }
 
+        recomputeConfigEtag();
+        recomputeEtag();
         return res.json({ message: 'Stream key deleted' });
     } catch (err) {
         return res.status(500).json({ error: err.toString() });
@@ -706,6 +712,7 @@ app.post('/pipelines', (req, res) => {
 
         const pipeline = db.createPipeline({ name, streamKey, encoding });
         // recompute global etag if available
+        recomputeConfigEtag();
         recomputeEtag();
         return res.status(201).json({ message: 'Pipeline created', pipeline });
     } catch (err) {
@@ -727,6 +734,7 @@ app.post('/pipelines/:id', (req, res) => {
         const updated = db.updatePipeline(id, { name, streamKey, encoding });
         if (!updated) return res.status(500).json({ error: 'Failed to update pipeline' });
 
+        recomputeConfigEtag();
         recomputeEtag();
         return res.json({ message: 'Pipeline updated', pipeline: updated });
     } catch (err) {
@@ -750,6 +758,7 @@ app.delete('/pipelines/:id', (req, res) => {
         const ok = db.deletePipeline(id);
         if (!ok) return res.status(500).json({ error: 'Failed to delete pipeline' });
 
+        recomputeConfigEtag();
         recomputeEtag();
         return res.json({ message: `Pipeline ${id} deleted` });
     } catch (err) {
@@ -790,6 +799,7 @@ app.post('/pipelines/:pipelineId/outputs', (req, res) => {
         const encoding = req.body?.encoding ?? 'source';
 
         const output = db.createOutput({ pipelineId: pid, name, url, encoding });
+        recomputeConfigEtag();
         recomputeEtag();
 
         return res.status(201).json({ message: 'Output created', output });
@@ -816,6 +826,7 @@ app.post('/pipelines/:pipelineId/outputs/:outputId', (req, res) => {
         const updated = db.updateOutput(pid, oid, { name, url, encoding });
         if (!updated) return res.status(500).json({ error: 'Failed to update output' });
 
+        recomputeConfigEtag();
         recomputeEtag();
         return res.json({ message: 'Output updated', output: updated });
     } catch (err) {
@@ -840,6 +851,7 @@ app.delete('/pipelines/:pipelineId/outputs/:outputId', (req, res) => {
         const ok = db.deleteOutput(pid, oid);
         if (!ok) return res.status(500).json({ error: 'Failed to delete output' });
 
+        recomputeConfigEtag();
         recomputeEtag();
         return res.json({ message: `Output ${oid} from pipeline ${pid} deleted` });
     } catch (err) {
@@ -1367,66 +1379,82 @@ function normalizeEtag(s) {
     return s.replace(/^"(.*)"$/, '$1');
 }
 
+function buildConfigSnapshot() {
+    const streamKeys = db
+        .listStreamKeys()
+        .map((sk) => ({ key: sk.key, label: sk.label, createdAt: sk.createdAt }));
+    const pipelines = db.listPipelines().map((p) => ({
+        id: p.id,
+        name: p.name,
+        streamKey: p.streamKey,
+        encoding: p.encoding,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+    }));
+
+    const outputsByPipeline = db.listOutputs().reduce((acc, output) => {
+        const pipelineId = output.pipelineId;
+        if (!acc[pipelineId]) acc[pipelineId] = [];
+        acc[pipelineId].push(output);
+        return acc;
+    }, {});
+
+    for (const pipeline of pipelines) {
+        const outs = (outputsByPipeline[pipeline.id] || []).map((output) => ({
+            id: output.id,
+            name: output.name,
+            url: output.url,
+            encoding: output.encoding,
+            createdAt: output.createdAt,
+        }));
+        outs.sort((a, b) => a.id.localeCompare(b.id));
+        pipeline.outputs = outs;
+    }
+
+    streamKeys.sort((a, b) => (a.key || '').localeCompare(b.key || ''));
+    pipelines.sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+
+    return { streamKeys, pipelines };
+}
+
+function buildJobsSnapshot() {
+    const jobs = db.listJobs().map((job) => ({
+        id: job.id,
+        pipelineId: job.pipelineId,
+        outputId: job.outputId,
+        status: job.status,
+        startedAt: job.startedAt,
+        endedAt: job.endedAt,
+        exitCode: job.exitCode,
+        exitSignal: job.exitSignal,
+    }));
+
+    jobs.sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+    return jobs;
+}
+
+function hashSnapshot(snapshot) {
+    return createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+}
+
+function recomputeConfigEtag() {
+    try {
+        const etag = hashSnapshot(buildConfigSnapshot());
+        db.setConfigEtag(etag);
+        return etag;
+    } catch (err) {
+        console.error('recomputeConfigEtag error:', err);
+        return null;
+    }
+}
+
 // recomputeEtag: deterministic snapshot -> sha256 hex -> persist via db.setEtag
 async function recomputeEtag() {
     try {
-        // read everything from DB using existing helpers
-        const streamKeys = db
-            .listStreamKeys()
-            .map((sk) => ({ key: sk.key, label: sk.label, createdAt: sk.createdAt }));
-        const pipelines = db.listPipelines().map((p) => ({
-            id: p.id,
-            name: p.name,
-            streamKey: p.streamKey,
-            createdAt: p.createdAt,
-        }));
-
-        // fetch outputs once and group by pipeline for deterministic snapshots
-        const outputsByPipeline = db.listOutputs().reduce((acc, output) => {
-            const pipelineId = output.pipelineId;
-            if (!acc[pipelineId]) acc[pipelineId] = [];
-            acc[pipelineId].push(output);
-            return acc;
-        }, {});
-
-        for (const p of pipelines) {
-            const outs = (outputsByPipeline[p.id] || [])
-                .map((o) => ({
-                    id: o.id,
-                    name: o.name,
-                    url: o.url,
-                    encoding: o.encoding,
-                    createdAt: o.createdAt,
-                }));
-            // sort outputs by id for deterministic ordering
-            outs.sort((a, b) => a.id.localeCompare(b.id));
-            p.outputs = outs;
-        }
-
-        // sort arrays deterministically
-        streamKeys.sort((a, b) => (a.key || '').localeCompare(b.key || ''));
-        pipelines.sort((a, b) => (a.id || '').localeCompare(b.id || ''));
-
-        const jobs = db.listJobs().map((job) => ({
-            id: job.id,
-            pipelineId: job.pipelineId,
-            outputId: job.outputId,
-            status: job.status,
-            startedAt: job.startedAt,
-            endedAt: job.endedAt,
-            exitCode: job.exitCode,
-            exitSignal: job.exitSignal,
-        }));
-
-        jobs.sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
-
-        const snapshot = { streamKeys, pipelines, jobs };
-
-        // stable stringify: we already sorted arrays and keys are consistent
-        const json = JSON.stringify(snapshot);
-
-        const hash = createHash('sha256').update(json).digest('hex');
-        const etag = hash; // store unquoted value, server will quote when sending
+        const etag = hashSnapshot({
+            ...buildConfigSnapshot(),
+            jobs: buildJobsSnapshot(),
+        });
 
         db.setEtag(etag);
         return etag;
@@ -1439,6 +1467,7 @@ async function recomputeEtag() {
 // Initialize etag at startup (best-effort)
 (async () => {
     try {
+        if (!db.getConfigEtag()) recomputeConfigEtag();
         if (!db.getEtag()) await recomputeEtag();
     } catch (e) {
         /* ignore */
@@ -1450,12 +1479,15 @@ app.get('/config', async (req, res) => {
     try {
         // ensure etag is up-to-date
         let etag = db.getEtag();
+        let configEtag = db.getConfigEtag();
+        if (!configEtag) configEtag = recomputeConfigEtag();
         if (!etag) etag = await recomputeEtag();
 
         const ifNoneMatch = normalizeEtag(req.get('If-None-Match'));
         if (ifNoneMatch && etag && ifNoneMatch === etag) {
             // Not modified
             res.set('ETag', `"${etag}"`);
+            if (configEtag) res.set('X-Config-ETag', `"${configEtag}"`);
             return res.status(304).end();
         }
 
@@ -1476,9 +1508,28 @@ app.get('/config', async (req, res) => {
 
         // send ETag header (quoted per spec)
         if (etag) res.set('ETag', `"${etag}"`);
+        if (configEtag) res.set('X-Config-ETag', `"${configEtag}"`);
         return res.json(snapshot);
     } catch (err) {
         return res.status(500).json({ error: String(err) });
+    }
+});
+
+app.head('/config/version', (req, res) => {
+    try {
+        let configEtag = db.getConfigEtag();
+        if (!configEtag) configEtag = recomputeConfigEtag();
+
+        const ifNoneMatch = normalizeEtag(req.get('If-None-Match'));
+        if (ifNoneMatch && configEtag && ifNoneMatch === configEtag) {
+            res.set('ETag', `"${configEtag}"`);
+            return res.status(304).end();
+        }
+
+        if (configEtag) res.set('ETag', `"${configEtag}"`);
+        return res.status(200).end();
+    } catch (err) {
+        return res.status(500).end();
     }
 });
 
@@ -1486,7 +1537,9 @@ app.get('/config', async (req, res) => {
 app.head('/config', (req, res) => {
     try {
         const etag = db.getEtag();
+        const configEtag = db.getConfigEtag();
         if (etag) res.set('ETag', `"${etag}"`);
+        if (configEtag) res.set('X-Config-ETag', `"${configEtag}"`);
         return res.status(200).end();
     } catch (err) {
         return res.status(500).end();

@@ -357,4 +357,12 @@ module.exports = {
     setEtag(v) {
         return module.exports.setMeta('etag', v);
     },
+
+    getConfigEtag() {
+        return module.exports.getMeta('config_etag');
+    },
+
+    setConfigEtag(v) {
+        return module.exports.setMeta('config_etag', v);
+    },
 };
