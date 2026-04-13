@@ -903,11 +903,10 @@ app.post('/pipelines/:pipelineId/outputs/:outputId/start', async (req, res) => {
                 .status(409)
                 .json({ error: 'Output already has a running job', job: existingRunning });
 
-        const probeInputUrl = pipeline.streamKey ? getPipelineRtspUrl(pipeline.streamKey) : req.body?.inputUrl;
-        if (!probeInputUrl)
-            return res.status(400).json({
-                error: 'No inputUrl available (pipeline.streamKey missing and no inputUrl provided)',
-            });
+        if (!pipeline.streamKey)
+            return res.status(400).json({ error: 'Pipeline has no stream key assigned' });
+
+        const probeInputUrl = getPipelineRtspUrl(pipeline.streamKey);
 
         const probe = await probeRtspInput(probeInputUrl);
         if (!probe.ok) {
@@ -917,16 +916,12 @@ app.post('/pipelines/:pipelineId/outputs/:outputId/start', async (req, res) => {
                 inputUrl: probeInputUrl,
             });
         }
-        if (pipeline.streamKey && probe.info) {
+        if (probe.info) {
             streamProbeCache.set(pipeline.streamKey, { ts: Date.now(), info: probe.info });
         }
 
-        const inputUrl = pipeline.streamKey
-            ? getPipelineTaggedRtspUrl(pipeline.streamKey, pid, oid)
-            : probeInputUrl;
-        const expectedReaderTag = pipeline.streamKey
-            ? getExpectedReaderTag(pid, oid)
-            : null;
+        const inputUrl = getPipelineTaggedRtspUrl(pipeline.streamKey, pid, oid);
+        const expectedReaderTag = getExpectedReaderTag(pid, oid);
 
         const outputUrl = output.url;
         if (!outputUrl) return res.status(400).json({ error: 'Output URL is empty' });
