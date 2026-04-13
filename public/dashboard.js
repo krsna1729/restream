@@ -3,6 +3,19 @@ async function refreshDashboard() {
     await fetchAndRerender();
 }
 
+function markUserConfigBaseline() {
+    userConfigEtag = configEtag;
+    dismissedStreamingConfigEtag = null;
+}
+
+function dismissStreamingConfigAlert() {
+    const alertElem = document.getElementById('streaming-config-changed-alert');
+    if (!alertElem) return;
+
+    dismissedStreamingConfigEtag = alertElem.dataset.configVersion || configEtag || null;
+    alertElem.classList.add('hidden');
+}
+
 function setOutputToggleBusy(button, busy) {
     if (!button) return;
     button.disabled = busy;
@@ -86,7 +99,7 @@ async function pipeFormBtn(event) {
 
     modal.close();
     await refreshDashboard();
-    userConfigEtag = configEtag;
+    markUserConfigBaseline();
 }
 
 async function openOutModal(mode, pipe, output = null) {
@@ -180,7 +193,7 @@ async function editOutFormBtn(event) {
 
     document.getElementById('edit-out-modal').close();
     await refreshDashboard();
-    userConfigEtag = configEtag;
+    markUserConfigBaseline();
 }
 
 async function deleteOutBtn(pipeId, outId) {
@@ -207,7 +220,7 @@ async function deleteOutBtn(pipeId, outId) {
     }
 
     await refreshDashboard();
-    userConfigEtag = configEtag;
+    markUserConfigBaseline();
 }
 
 async function addOutBtn() {
@@ -279,7 +292,7 @@ async function deletePipeBtn() {
 
     setUrlParam('p', null);
     await refreshDashboard();
-    userConfigEtag = configEtag;
+    markUserConfigBaseline();
     renderPipelines();
 }
 
@@ -296,10 +309,18 @@ async function checkStreamingConfigs(secondTime = false, baselineEtag = userConf
 
     if (res === null || res.notModified) {
         alertElem.classList.add('hidden');
+        alertElem.dataset.configVersion = '';
+        return;
+    }
+
+    if (dismissedStreamingConfigEtag && dismissedStreamingConfigEtag === res.etag) {
+        alertElem.classList.add('hidden');
+        alertElem.dataset.configVersion = res.etag || '';
         return;
     }
 
     if (secondTime) {
+        alertElem.dataset.configVersion = res.etag || '';
         alertElem.classList.remove('hidden');
         return;
     }
@@ -337,6 +358,7 @@ async function fetchSystemMetrics() {
 let etag = null;
 let configEtag = null;
 let userConfigEtag = null;
+let dismissedStreamingConfigEtag = null;
 let config = {};
 let metrics = {};
 let pipelines = [];
@@ -344,9 +366,13 @@ let health = {};
 
 (async () => {
     await fetchConfig();
-    userConfigEtag = configEtag;
+    markUserConfigBaseline();
     setServerConfig(config?.['server-name']);
     await fetchAndRerender();
     setInterval(() => fetchAndRerender(), 5000);
     setInterval(() => checkStreamingConfigs(), 30000);
 })();
+
+document
+    .getElementById('dismiss-streaming-config-alert-btn')
+    ?.addEventListener('click', dismissStreamingConfigAlert);
