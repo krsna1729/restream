@@ -45,7 +45,7 @@ db.prepare(
     pipeline_id TEXT NOT NULL,
     name TEXT NOT NULL,
     url TEXT NOT NULL,
-        encoding TEXT,
+    encoding TEXT,
     created_at TEXT,
     FOREIGN KEY(pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
   )
@@ -54,7 +54,7 @@ db.prepare(
 
 const outputColumns = db.prepare(`PRAGMA table_info(outputs)`).all();
 if (!outputColumns.some((column) => column.name === 'encoding')) {
-        db.prepare(`ALTER TABLE outputs ADD COLUMN encoding TEXT`).run();
+    db.prepare(`ALTER TABLE outputs ADD COLUMN encoding TEXT`).run();
 }
 
 db.prepare(`CREATE INDEX IF NOT EXISTS idx_outputs_pipeline ON outputs(pipeline_id)`).run();
