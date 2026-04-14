@@ -24,6 +24,9 @@ const execFileAsync = promisify(execFile);
 const logLevel = (process.env.LOG_LEVEL || 'info').toLowerCase();
 const probeCacheTtlMs = Number(process.env.PROBE_CACHE_TTL_MS || 30000);
 const streamProbeCache = new Map(); // streamKey -> { ts, info }
+// Runtime-only progress state from ffmpeg "-progress pipe:3" (never persisted to DB).
+// NOTE: This is intentionally internal for now; a future API/WS endpoint can expose it.
+const ffmpegProgressByJobId = new Map(); // jobId -> latest ffmpeg progress block
 
 let systemMetricsSample = {
     ts: Date.now(),
@@ -799,6 +802,15 @@ app.post('/pipelines/:pipelineId/outputs/:outputId/start', async (req, res) => {
 
         const ffArgs = [
             '-nostdin',
+            '-hide_banner',
+            '-loglevel',
+            'info',
+            // Disable legacy stderr progress lines; progress is emitted as key=value on fd3.
+            '-nostats',
+            '-stats_period',
+            '1',
+            '-progress',
+            'pipe:3',
             '-rtsp_transport',
             'tcp',
             '-i',
@@ -832,7 +844,8 @@ app.post('/pipelines/:pipelineId/outputs/:outputId/start', async (req, res) => {
         let child;
         try {
             child = spawn(ffmpegCmd, ffArgs, {
-                stdio: ['ignore', 'pipe', 'pipe'],
+                // fd3 is dedicated ffmpeg progress output (pipe:3), stderr remains persistent logs.
+                stdio: ['ignore', 'ignore', 'pipe', 'pipe'],
                 env: process.env,
             });
         } catch (err) {
@@ -858,6 +871,7 @@ app.post('/pipelines/:pipelineId/outputs/:outputId/start', async (req, res) => {
 
         // keep only process ref in-memory
         processes.set(job.id, child);
+        ffmpegProgressByJobId.set(job.id, {});
 
         const pushLog = (msg) => {
             db.appendJobLog(job.id, msg);
@@ -881,13 +895,32 @@ app.post('/pipelines/:pipelineId/outputs/:outputId/start', async (req, res) => {
             });
             recomputeEtag();
             processes.delete(job.id);
+            ffmpegProgressByJobId.delete(job.id);
         });
 
-        if (child.stdout)
-            child.stdout.on('data', (d) => {
-                const s = d.toString();
-                pushLog(`[stdout] ${s}`);
+        const progressStream = child.stdio[3];
+        let progressBuffer = '';
+        if (progressStream)
+            progressStream.on('data', (d) => {
+                progressBuffer += d.toString();
+                // A data chunk may end mid-line, so keep the trailing fragment for next chunk.
+                const lines = progressBuffer.split('\n');
+                progressBuffer = lines.pop() || '';
+
+                const latest = ffmpegProgressByJobId.get(job.id) || {};
+                for (const rawLine of lines) {
+                    const line = rawLine.trim();
+                    if (!line) continue;
+                    const idx = line.indexOf('=');
+                    if (idx <= 0) continue;
+                    const key = line.slice(0, idx).trim();
+                    const value = line.slice(idx + 1).trim();
+                    latest[key] = value;
+                }
+                ffmpegProgressByJobId.set(job.id, latest);
             });
+
+        // Persist stderr/error/exit for diagnostics; skip progress stream to avoid DB bloat.
         if (child.stderr)
             child.stderr.on('data', (d) => {
                 const s = d.toString();
@@ -914,6 +947,7 @@ app.post('/pipelines/:pipelineId/outputs/:outputId/start', async (req, res) => {
             pushLog(`[exit] code=${code} signal=${signal}`);
             recomputeEtag();
             processes.delete(job.id);
+            ffmpegProgressByJobId.delete(job.id);
         });
 
         // short delay to detect immediate exit/err

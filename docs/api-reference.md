@@ -228,16 +228,13 @@ Starts an FFmpeg job for this output. The full call flow is:
 
 1. Validate pipeline + output exist.
 2. Check for an existing running job — 409 if found.
-3. Resolve probe URL: `rtsp://localhost:8554/<streamKey>` (or `inputUrl` from body if no stream key).
+3. Require `pipeline.streamKey`; resolve probe URL `rtsp://localhost:8554/<streamKey>`.
 4. Run `ffprobe -rtsp_transport tcp <probeUrl>` with 8 s timeout.
 5. Build tagged pull URL: `rtsp://localhost:8554/<streamKey>?reader_id=reader_<pipelineId>_<outputId>`.
-6. Spawn FFmpeg: `ffmpeg -nostdin -rtsp_transport tcp -i <taggedUrl> -map 0:v:0 -map 0:a:0 -c:v copy -c:a copy -flvflags no_duration_filesize -rtmp_live live -f flv <outputUrl>`.
+6. Spawn FFmpeg: `ffmpeg -nostdin -hide_banner -loglevel info -nostats -stats_period 1 -progress pipe:3 -rtsp_transport tcp -i <taggedUrl> -c:v copy -c:a copy -flvflags no_duration_filesize -rtmp_live live -f flv <outputUrl>`.
 7. Persist job row in DB, return after 250 ms stability check.
 
-**Request body:** (optional)
-```json
-{ "inputUrl": "rtsp://..." }  // only needed if pipeline has no streamKey
-```
+**Request body:** none
 
 **Response 201:**
 ```json
