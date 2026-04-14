@@ -55,7 +55,7 @@ function openDeleteKeyModal(key, label) {
     const labelSpan = document.querySelector('#delete-key-label');
     const btn = document.querySelector('#delete-confirm-btn');
 
-    labelSpan.textContent = `"${escapeHtml(label || '(untitled)')}"`;
+    labelSpan.textContent = `"${label || '(untitled)'}"`;
     btn.onclick = confirmDeleteKey;
 
     modal.showModal();
