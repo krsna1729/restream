@@ -188,10 +188,11 @@ Load from DB:
 For each pipeline:
   ├── Input health:
   │     pathInfo = pathByName.get(streamKey)
-  │     status = 'on'  if pathInfo.online || pathInfo.ready
-  │            = 'off' otherwise
-  │     publishStartedAt = pathInfo.readyTime   (protocol-agnostic)
-  │     video/audio = from pathInfo.tracks2 + ffprobe cache (if online)
+  │     status = 'on'      if pathInfo.available (fallback: deprecated pathInfo.ready)
+  │            = 'warning' if pathInfo.online && !pathInfo.available
+  │            = 'off'     otherwise
+  │     publishStartedAt = pathInfo.availableTime || pathInfo.readyTime   (protocol-agnostic)
+  │     video/audio = from pathInfo.tracks2 + ffprobe cache (if available)
   │
   └── For each output:
         latestJob = latestJobByOutputId.get(outputId)
@@ -331,13 +332,17 @@ Every 30 s, `checkStreamingConfigs` calls `GET /config` with `If-None-Match: use
 
 ### 5.3 Throughput Computation (client-side)
 
-`pipeline.js` maintains `throughputState.inputBytes` and `throughputState.outputBytes` maps. On each poll cycle, `computeKbps(stateMap, key, totalBytes, nowMs)` computes instantaneous bitrate from the delta of `bytesReceived`/`bytesSent` between cycles:
+`pipeline.js` maintains `throughputState.inputBytes` for input throughput only. On each poll cycle, `computeKbps(stateMap, key, totalBytes, nowMs)` computes input bitrate from the delta of `input.bytesReceived` between cycles:
 
 ```
 kbps = (deltaBytes × 8) / (deltaMs / 1000) / 1000
 ```
 
-Values are `.toFixed(1)` Kbps strings displayed in the stats panel.
+These values are stored as numeric Kbps in the dashboard model. At render time, the UI formats bitrate display with adaptive units (`kb/s`, `mb/s`, `gb/s`) while preserving Kbps as the transport unit in API/model fields.
+
+For outputs, bitrate is server-provided from ffmpeg progress (`bitrate`) in raw ffmpeg format (for example `1842.5kbits/s`) and is not delta-computed in the browser.
+
+The backend also emits `outputs[*].bitrateKbps` (numeric Kbps) by parsing ffmpeg progress once on the server. The frontend uses `bitrateKbps` for per-output and aggregate output bitrate, keeping UI logic agnostic of ffmpeg-specific string formats.
 
 ---
 

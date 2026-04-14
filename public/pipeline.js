@@ -1,6 +1,5 @@
 const throughputState = {
     inputBytes: new Map(),
-    outputBytes: new Map(),
 };
 
 
@@ -85,10 +84,7 @@ function parsePipelinesInfo() {
         let pipe = newPipelines.find((p) => p.id === out.pipelineId);
         const latestJob = latestJobsByOutput.get(`${out.pipelineId}:${out.id}`);
         const outHealth = healthByPipeline[out.pipelineId]?.outputs?.[out.id] || null;
-        let status = 'off';
-        if (latestJob?.status === 'running') status = 'on';
-        if (latestJob?.status === 'failed') status = 'error';
-        if (outHealth?.status) status = outHealth.status;
+        const status = outHealth?.status || 'off';
 
         if (!pipe) {
             console.error('Not found pipeline for output: ', out);
@@ -109,13 +105,8 @@ function parsePipelinesInfo() {
             newPipelines.push(pipe);
         }
 
-        const outputBytesSent = outHealth?.bytesSent || 0;
-        const outputKbps = computeKbps(
-            throughputState.outputBytes,
-            `${out.pipelineId}:${out.id}`,
-            outputBytesSent,
-            nowMs,
-        );
+        const outputTotalSize = outHealth?.totalSize || null;
+        const outputBitrateKbps = outHealth?.bitrateKbps ?? null;
 
         const encoding = out.encoding || 'source';
         const isCopy = encoding === 'copy' || encoding === 'source';
@@ -138,22 +129,21 @@ function parsePipelinesInfo() {
             video: outVideo,
             audio: outAudio,
             job: latestJob || null,
-            bytesSent: outputBytesSent,
-            bytesReceived: outHealth?.bytesReceived || 0,
-            bitrateKbps: outputKbps,
+            totalSize: outputTotalSize,
+            bitrateKbps: outputBitrateKbps,
         });
     });
 
     newPipelines.forEach((pipe) => {
-        const outputBitrates = pipe.outs
-            .map((out) => out.bitrateKbps)
-            .filter((value) => value !== null && value !== undefined)
-            .map((value) => Number(value));
-        const outputBitrateKbps = outputBitrates.length
-            ? Number(outputBitrates.reduce((sum, value) => sum + value, 0).toFixed(1))
-            : null;
         const outputCount = pipe.outs.length;
         const readerCount = pipe.input.readers || 0;
+        const activeOutputBitratesKbps = pipe.outs
+            .map((out) => out.bitrateKbps)
+            .filter((value) => Number.isFinite(value));
+        const outputBitrateKbps =
+            activeOutputBitratesKbps.length > 0
+                ? Number(activeOutputBitratesKbps.reduce((sum, value) => sum + value, 0).toFixed(1))
+                : null;
 
         pipe.stats = {
             inputBitrateKbps: pipe.input.bitrateKbps,

@@ -1366,6 +1366,56 @@
       border-radius: var(--radius-box);
     }
   }
+  .progress {
+    @layer daisyui.l1.l2.l3 {
+      position: relative;
+      height: calc(0.25rem * 2);
+      width: 100%;
+      appearance: none;
+      overflow: hidden;
+      border-radius: var(--radius-box);
+      background-color: currentcolor;
+      @supports (color: color-mix(in lab, red, red)) {
+        background-color: color-mix(in oklab, currentcolor 20%, transparent);
+      }
+      color: var(--color-base-content);
+      &:indeterminate {
+        background-image: repeating-linear-gradient( 90deg, currentColor -1%, currentColor 10%, #0000 10%, #0000 90% );
+        background-size: 200%;
+        background-position-x: 15%;
+        @media (prefers-reduced-motion: no-preference) {
+          animation: progress 5s ease-in-out infinite;
+        }
+        @supports (-moz-appearance: none) {
+          &::-moz-progress-bar {
+            background-color: transparent;
+            @media (prefers-reduced-motion: no-preference) {
+              animation: progress 5s ease-in-out infinite;
+              background-image: repeating-linear-gradient( 90deg, currentColor -1%, currentColor 10%, #0000 10%, #0000 90% );
+              background-size: 200%;
+              background-position-x: 15%;
+            }
+          }
+        }
+      }
+      @supports (-moz-appearance: none) {
+        &::-moz-progress-bar {
+          border-radius: var(--radius-box);
+          background-color: currentcolor;
+        }
+      }
+      @supports (-webkit-appearance: none) {
+        &::-webkit-progress-bar {
+          border-radius: var(--radius-box);
+          background-color: transparent;
+        }
+        &::-webkit-progress-value {
+          border-radius: var(--radius-box);
+          background-color: currentColor;
+        }
+      }
+    }
+  }
   .fixed {
     position: fixed;
   }
@@ -1553,9 +1603,6 @@
         cursor: pointer;
       }
     }
-  }
-  .z-50 {
-    z-index: 50;
   }
   .z-60 {
     z-index: 60;
@@ -1954,24 +2001,6 @@
   .transform {
     transform: var(--tw-rotate-x,) var(--tw-rotate-y,) var(--tw-rotate-z,) var(--tw-skew-x,) var(--tw-skew-y,);
   }
-  .link {
-    @layer daisyui.l1.l2.l3 {
-      cursor: pointer;
-      text-decoration-line: underline;
-      &:focus {
-        --tw-outline-style: none;
-        outline-style: none;
-        @media (forced-colors: active) {
-          outline: 2px solid transparent;
-          outline-offset: 2px;
-        }
-      }
-      &:focus-visible {
-        outline: 2px solid currentColor;
-        outline-offset: 2px;
-      }
-    }
-  }
   .grid-cols-\[1fr_auto\] {
     grid-template-columns: 1fr auto;
   }
@@ -2215,6 +2244,9 @@
     @supports (color: color-mix(in lab, red, red)) {
       color: color-mix(in oklab, var(--color-base-content) 80%, transparent);
     }
+  }
+  .text-error {
+    color: var(--color-error);
   }
   .ordinal {
     --tw-ordinal: ordinal;

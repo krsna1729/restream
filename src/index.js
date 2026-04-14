@@ -9,8 +9,7 @@ const os = require('os');
 const app = express();
 app.use(express.json());
 
-const { spawn, execFile } = require('child_process');
-const { promisify } = require('util');
+const { spawn } = require('child_process');
 const path = require('path');
 const crypto = require('crypto');
 const { createHash } = require('crypto');
@@ -20,7 +19,6 @@ const ffmpegCmd = process.env.FFMPEG_PATH || 'ffmpeg';
 const ffprobeCmd = process.env.FFPROBE_PATH || 'ffprobe';
 const appPort = Number(process.env.PORT || 3030);
 const appHost = getConfig().host;
-const execFileAsync = promisify(execFile);
 const logLevel = (process.env.LOG_LEVEL || 'info').toLowerCase();
 const probeCacheTtlMs = Number(process.env.PROBE_CACHE_TTL_MS || 30000);
 const streamProbeCache = new Map(); // streamKey -> { ts, info }
@@ -260,6 +258,26 @@ function parseFrameRate(rateValue) {
     return Number.isFinite(asNumber) ? asNumber : null;
 }
 
+function parseFfmpegBitrateToKbps(rateValue) {
+    if (rateValue === null || rateValue === undefined) return null;
+    const raw = String(rateValue).trim();
+    if (!raw || raw.toUpperCase() === 'N/A') return null;
+
+    const match = raw.match(/^([0-9]+(?:\.[0-9]+)?)\s*([kKmMgG]?)\s*(?:bits\/s)?$/);
+    if (!match) return null;
+
+    const value = Number(match[1]);
+    if (!Number.isFinite(value) || value < 0) return null;
+
+    const unit = (match[2] || '').toLowerCase();
+    let bps = value;
+    if (unit === 'k') bps = value * 1000;
+    else if (unit === 'm') bps = value * 1000 * 1000;
+    else if (unit === 'g') bps = value * 1000 * 1000 * 1000;
+
+    return Number((bps / 1000).toFixed(1));
+}
+
 function extractProbeMediaInfo(stdout) {
     if (!stdout) return null;
     let parsed = null;
@@ -276,11 +294,6 @@ function extractProbeMediaInfo(stdout) {
     return {
         video: video
             ? {
-                  codec: video.codec_name || null,
-                  width: video.width || null,
-                  height: video.height || null,
-                  profile: video.profile || null,
-                  level: video.level || null,
                   fps: parseFrameRate(video.avg_frame_rate) || parseFrameRate(video.r_frame_rate),
               }
             : null,
@@ -391,7 +404,7 @@ async function probeRtspInput(inputUrl) {
             '-rtsp_transport',
             'tcp',
             '-show_entries',
-            'stream=codec_type,codec_name,width,height,profile,level,avg_frame_rate,r_frame_rate,channels,sample_rate',
+            'stream=codec_type,codec_name,profile,avg_frame_rate,r_frame_rate,channels,sample_rate',
             '-of',
             'json',
             inputUrl,
@@ -1146,11 +1159,17 @@ app.get('/health', async (req, res) => {
             const key = pipeline.streamKey || '';
             const pathInfo = key ? pathByName.get(key) : null;
             const readers = pathInfo?.readers || [];
-            const probeInfo =
-                key && pathInfo?.online ? await getCachedRtspProbeInfo(key, getPipelineRtspUrl(key)) : null;
-
+            // MediaMTX marks `ready` as deprecated; prefer `available` and fall back to `ready` for older versions.
+            // `available` (stream != nil): stream is ready and readable by consumers — the signal we care about.
+            // `online` (source != nil): a publisher is attached but stream may not be initialised yet.
+            const pathAvailable = !!(pathInfo?.available || pathInfo?.ready);
+            const pathOnline = !!pathInfo?.online;
             let inputStatus = 'off';
-            if (key && (pathInfo?.online || pathInfo?.ready)) inputStatus = 'on';
+            if (key && pathAvailable) inputStatus = 'on';
+            else if (key && pathOnline) inputStatus = 'warning'; // publisher connecting, stream not yet ready
+
+            const probeInfo =
+                key && pathAvailable ? await getCachedRtspProbeInfo(key, getPipelineRtspUrl(key)) : null;
 
             const firstVideoTrack = (pathInfo?.tracks2 || []).find((track) =>
                 String(track.codec || '').toLowerCase().includes('264'),
@@ -1164,10 +1183,8 @@ app.get('/health', async (req, res) => {
             const pipelineHealth = {
                 input: {
                     status: inputStatus,
-                    publishStartedAt: pathInfo?.readyTime || null,
+                    publishStartedAt: pathInfo?.availableTime || pathInfo?.readyTime || null,
                     streamKey: key || null,
-                    online: !!pathInfo?.online,
-                    ready: !!pathInfo?.ready,
                     readers: readers.length,
                     bytesReceived: pathInfo?.bytesReceived || 0,
                     bytesSent: pathInfo?.bytesSent || 0,
@@ -1187,7 +1204,6 @@ app.get('/health', async (req, res) => {
                               codec: probeInfo?.audio?.codec || firstAudioTrack?.codec || null,
                               channels:
                                   probeInfo?.audio?.channels ||
-                                  firstAudioTrack?.codecProps?.channels ||
                                   firstAudioTrack?.codecProps?.channelCount ||
                                   null,
                               sample_rate: probeInfo?.audio?.sampleRate || firstAudioTrack?.codecProps?.sampleRate || null,
@@ -1205,6 +1221,7 @@ app.get('/health', async (req, res) => {
                 const latest = latestJobByOutputId.get(output.id) || null;
                 let readerConn = null;
                 let status = 'off';
+                const ffmpegProgress = latest?.id ? ffmpegProgressByJobId.get(latest.id) || null : null;
 
                 if (latest?.status === 'failed') status = 'error';
                 if (latest?.status === 'running') {
@@ -1229,11 +1246,10 @@ app.get('/health', async (req, res) => {
 
                 pipelineHealth.outputs[output.id] = {
                     status,
-                    jobStatus: latest?.status || null,
                     jobId: latest?.id || null,
-                    bytesReceived: readerConn?.bytesReceived || 0,
-                    bytesSent: readerConn?.bytesSent || 0,
-                    remoteAddr: readerConn?.remoteAddr || null,
+                    totalSize: ffmpegProgress?.total_size || null,
+                    bitrate: ffmpegProgress?.bitrate || null,
+                    bitrateKbps: parseFfmpegBitrateToKbps(ffmpegProgress?.bitrate),
                 };
             }
 

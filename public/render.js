@@ -24,11 +24,77 @@ function getHealthBannerState(currentStatus) {
     return 'hidden';
 }
 
+function formatBitrateKbpsParts(kbps) {
+    const value = Number(kbps);
+    if (!Number.isFinite(value) || value < 0) return null;
+    if (value >= 1000 * 1000) {
+        return { valueText: (value / (1000 * 1000)).toFixed(2), unitText: 'gb/s' };
+    }
+    if (value >= 1000) {
+        return { valueText: (value / 1000).toFixed(1), unitText: 'mb/s' };
+    }
+    return { valueText: value.toFixed(1), unitText: 'kb/s' };
+}
+
+function setBitrateWithSubtleUnit(elemId, kbps, fallback = '--') {
+    const target = document.getElementById(elemId);
+    if (!target) return;
+
+    const parts = formatBitrateKbpsParts(kbps);
+    if (!parts) {
+        target.textContent = fallback;
+        return;
+    }
+
+    const valueSpan = document.createElement('span');
+    valueSpan.textContent = parts.valueText;
+
+    const unitSpan = document.createElement('span');
+    unitSpan.className = 'ml-1 text-xs opacity-70';
+    unitSpan.textContent = parts.unitText;
+
+    target.replaceChildren(valueSpan, unitSpan);
+}
+
+function setBadgeBitrateWithSubtleUnit(badgeElem, kbps, fallback = 'warming...') {
+    if (!badgeElem) return;
+
+    const parts = formatBitrateKbpsParts(kbps);
+    if (!parts) {
+        badgeElem.textContent = fallback;
+        return;
+    }
+
+    // For per-output badges, keep unit typography identical to value.
+    badgeElem.textContent = `${parts.valueText} ${parts.unitText}`;
+}
+
+function setMetricsBitrateWithSubtleUnit(selector, kbps, fallback = '--') {
+    const targets = document.querySelectorAll(selector);
+    const parts = formatBitrateKbpsParts(kbps);
+
+    targets.forEach((target) => {
+        if (!parts) {
+            target.textContent = fallback;
+            return;
+        }
+
+        const valueSpan = document.createElement('span');
+        valueSpan.textContent = parts.valueText;
+
+        const unitSpan = document.createElement('span');
+        unitSpan.className = 'ml-1 text-xs opacity-70';
+        unitSpan.textContent = parts.unitText;
+
+        target.replaceChildren(valueSpan, unitSpan);
+    });
+}
+
 function renderPipelinesList(selectedPipe) {
     setInnerText('pipe-cnt', pipelines.length);
     setInnerText('pipe-oks', pipelines.filter((p) => p.input.status === 'on').length);
     setInnerText('pipe-errors', pipelines.filter((p) => p.input.status === 'off').length);
-    setInnerText('pipe-warnings', 0);
+    setInnerText('pipe-warnings', pipelines.filter((p) => p.input.status === 'warning').length);
 
     setInnerText(
         'out-cnt',
@@ -207,14 +273,8 @@ function renderPipelineInfoColumn(selectedPipe) {
         document.getElementById('input-audio-profile').textContent =
             hasAudioTrack ? audio.profile || '--' : '--';
 
-        document.getElementById('input-total-bw').textContent =
-            stats.inputBitrateKbps !== null && stats.inputBitrateKbps !== undefined
-                ? Number(stats.inputBitrateKbps).toFixed(1)
-                : '--';
-        document.getElementById('output-total-bw').textContent =
-            stats.outputBitrateKbps !== null && stats.outputBitrateKbps !== undefined
-                ? Number(stats.outputBitrateKbps).toFixed(1)
-                : '--';
+        setBitrateWithSubtleUnit('input-total-bw', stats.inputBitrateKbps);
+        setBitrateWithSubtleUnit('output-total-bw', stats.outputBitrateKbps);
         document.getElementById('input-reader-count').textContent =
             stats.readerCount !== null && stats.readerCount !== undefined ? stats.readerCount : '--';
         document.getElementById('input-output-count').textContent =
@@ -294,17 +354,14 @@ function renderOutsColumn(selectedPipe) {
             if (isRunning) {
                 const throughputBadge = document.createElement('span');
                 throughputBadge.className = 'badge badge-sm';
-                throughputBadge.textContent =
-                    o.bitrateKbps !== null && o.bitrateKbps !== undefined
-                        ? `${Number(o.bitrateKbps).toFixed(1)} kb/s`
-                        : 'warming...';
+                setBadgeBitrateWithSubtleUnit(throughputBadge, o.bitrateKbps);
                 heading.appendChild(throughputBadge);
             }
 
-            if (o.bytesSent) {
+            if (o.totalSize) {
                 const volumeBadge = document.createElement('span');
                 volumeBadge.className = 'badge badge-sm';
-                volumeBadge.textContent = `${(o.bytesSent / (1024 * 1024)).toFixed(1)} MB`;
+                volumeBadge.textContent = `${(Number(o.totalSize) / (1024 * 1024)).toFixed(1)} MB`;
                 heading.appendChild(volumeBadge);
             }
 
@@ -453,20 +510,14 @@ function renderServerMetrics() {
         metrics?.disk?.usedPercent !== null && metrics?.disk?.usedPercent !== undefined
             ? `${metrics.disk.usedPercent.toFixed(1)}%`
             : '--';
-    const downText =
-        metrics?.network?.downloadKbps !== null && metrics?.network?.downloadKbps !== undefined
-            ? `${Math.round(metrics.network.downloadKbps)} kb/s`
-            : '--';
-    const upText =
-        metrics?.network?.uploadKbps !== null && metrics?.network?.uploadKbps !== undefined
-            ? `${Math.round(metrics.network.uploadKbps)} kb/s`
-            : '--';
+    const downKbps = metrics?.network?.downloadKbps;
+    const upKbps = metrics?.network?.uploadKbps;
 
     setAll('.cpu-metric', cpuText);
     setAll('.ram-metric', ramText);
     setAll('.disk-metric', diskText);
-    setAll('.downlink-metric', downText);
-    setAll('.uplink-metric', upText);
+    setMetricsBitrateWithSubtleUnit('.downlink-metric', downKbps);
+    setMetricsBitrateWithSubtleUnit('.uplink-metric', upKbps);
 }
 
 function renderHealthBanner() {

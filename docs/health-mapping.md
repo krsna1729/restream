@@ -10,7 +10,7 @@ The `/health` endpoint fetches three MediaMTX APIs in parallel, then merges with
 
 | Source                      | What it provides                                         |
 |-----------------------------|----------------------------------------------------------|
-| `GET /v3/paths/list`        | Per-path: online, ready, readyTime, bytesReceived, bytesSent, tracks2, readers list |
+| `GET /v3/paths/list`        | Per-path: online, available, availableTime (plus deprecated ready/readyTime), bytesReceived, bytesSent, tracks2, readers list |
 | `GET /v3/rtspconns/list`    | All RTSP connections including `query` field (contains `reader_id`) |
 | `GET /v3/rtspsessions/list` | RTSP sessions for fallback field lookup                  |
 | DB: `listPipelines()`       | Pipeline ↔ stream key mapping                            |
@@ -29,29 +29,32 @@ flowchart TD
 
     B --> C{pathInfo exists?}
     C -->|no| OFF["status = 'off'"]
-    C -->|yes| D{"pathInfo.online\nOR pathInfo.ready?"}
-    D -->|no| OFF
-    D -->|yes| ON["status = 'on'\npublishStartedAt = pathInfo.readyTime"]
+    C -->|yes| D{"pathInfo.available?"}
+    D -->|yes| ON["status = 'on'\npublishStartedAt = pathInfo.availableTime"]
+    D -->|no| E{"pathInfo.online?"}
+    E -->|yes| WARN["status = 'warning'"]
+    E -->|no| OFF
 ```
 
 **Input status values:**
 
 | Value | Condition                                                            |
 |-------|----------------------------------------------------------------------|
-| `on`  | Path exists AND (`pathInfo.online === true` OR `pathInfo.ready === true`) |
-| `off` | No path info, or path neither online nor ready                        |
+| `on`  | Path exists AND `pathInfo.available === true` *(fallback to deprecated `ready` for older MediaMTX versions)* |
+| `warning` | Path exists, `pathInfo.online === true`, but not yet `available` |
+| `off` | No path info, or path is neither online nor available |
 
 **Additional input fields from MediaMTX:**
 
-- `publishStartedAt` — `pathInfo.readyTime` (ISO timestamp when the path became ready, covers all publisher protocols: RTMP, RTSP, SRT, WebRTC)
-- `video` — from `pathInfo.tracks2` (first H264 track) + `ffprobe` cache for FPS
-- `audio` — from `pathInfo.tracks2` (first non-video codec) + `ffprobe` cache
+- `publishStartedAt` — `pathInfo.availableTime` (fallback `readyTime`) ISO timestamp when input became available, across publisher protocols (RTMP, RTSP, SRT, WebRTC)
+- `video` — from `pathInfo.tracks2` (first H264 track) + `ffprobe` cache for FPS only
+- `audio` — from `pathInfo.tracks2` (first non-video codec) + `ffprobe` cache for codec/profile, with fallback for channels/sample rate
 - `readers` — `pathInfo.readers.length`
 - `bytesReceived` / `bytesSent` — from `pathInfo`
 
 **ffprobe caching:**
 
-When a path is online, the backend calls `ffprobe -rtsp_transport tcp rtsp://localhost:8554/<streamKey>` and caches the result in `streamProbeCache` for `PROBE_CACHE_TTL_MS` (default 30 s). This supplements track metadata with accurate FPS and audio codec details.
+When a path is available, the backend calls `ffprobe -rtsp_transport tcp rtsp://localhost:8554/<streamKey>` and caches the result in `streamProbeCache` for `PROBE_CACHE_TTL_MS` (default 30 s). The probe is intentionally narrow: it supplements MediaMTX with video FPS plus audio codec/profile details, while MediaMTX remains the primary source for video dimensions/profile/level and audio channel count/sample rate.
 
 ---
 
@@ -101,7 +104,7 @@ generateReaderTag(pipelineId, outputId)
   → "reader_" + (pipelineId + "_" + outputId).replace(/[^a-zA-Z0-9_-]/g, '_')
 ```
 
-If `rtspByReaderTag.get(expectedTag)` returns at least one connection, status is `on` and metrics (`bytesReceived`, `bytesSent`, `remoteAddr`) come from that connection.
+If `rtspByReaderTag.get(expectedTag)` returns at least one connection, status is `on`. Output counters and bitrate are sourced from ffmpeg progress keyed by `jobId`: `total_size` (raw), `bitrate` (raw), and `bitrateKbps` (server-normalized numeric Kbps).
 
 ```mermaid
 flowchart LR
@@ -156,11 +159,11 @@ The split badge on each pipeline card in the dashboard maps statuses to colors:
 | Status    | Badge color | Applies to      |
 |-----------|-------------|-----------------|
 | `on`      | Green       | input + output  |
-| `warning` | Yellow      | output only     |
+| `warning` | Yellow      | input + output  |
 | `error`   | Red         | output only     |
 | `off`     | Grey        | input + output  |
 
-The left half shows input status (`on` / `off`); the right half shows the aggregate of all output statuses for that pipeline (worst-case wins: `error` > `warning` > `on` > `off`).
+The left half shows input status (`on` / `warning` / `off`); the right half shows the aggregate of all output statuses for that pipeline (worst-case wins: `error` > `warning` > `on` > `off`).
 
 ---
 
@@ -180,3 +183,56 @@ A running output stuck at `warning` means MediaMTX has no RTSP connection with t
 - If `conn.query` exposure is lost in a future MediaMTX release, fall back to user-agent based correlation by parsing `conn.useragent`.
 - Add timestamps to reader tags for audit trails.
 - Validate output existence server-side on job start to enforce 1:1 output→reader invariant.
+
+---
+
+## 8. Field Source Matrix (MediaMTX vs ffprobe)
+
+This section lists where each input/output field is sourced from in the current implementation.
+
+### 8.1 Input Fields
+
+| Field | Source | Notes |
+|---|---|---|
+| `input.status` | MediaMTX | `on` when `pathInfo.available`; `warning` when `pathInfo.online && !pathInfo.available`; fallback to deprecated `ready` for older MediaMTX versions. |
+| `input.publishStartedAt` | MediaMTX | `pathInfo.availableTime` (fallback `readyTime`). |
+| `input.streamKey` | DB/config | Pipeline `streamKey` from DB-backed pipeline config. |
+| `input.readers` | MediaMTX | `pathInfo.readers.length`. |
+| `input.bytesReceived` | MediaMTX | `pathInfo.bytesReceived`. |
+| `input.bytesSent` | MediaMTX | `pathInfo.bytesSent`. |
+| `input.video.codec` | MediaMTX | First H264-like track in `pathInfo.tracks2`. |
+| `input.video.width` | MediaMTX | `firstVideoTrack.codecProps.width`. |
+| `input.video.height` | MediaMTX | `firstVideoTrack.codecProps.height`. |
+| `input.video.profile` | MediaMTX | `firstVideoTrack.codecProps.profile`. |
+| `input.video.level` | MediaMTX | `firstVideoTrack.codecProps.level`. |
+| `input.video.fps` | ffprobe | `probeInfo.video.fps` from cached RTSP probe; MediaMTX does not expose FPS. |
+| `input.audio.codec` | Mixed | Prefer `probeInfo.audio.codec` (for example `aac`), fallback to MediaMTX track codec (for example `MPEG-4 Audio`). |
+| `input.audio.channels` | Mixed | Prefer `probeInfo.audio.channels`, fallback to `firstAudioTrack.codecProps.channelCount`. |
+| `input.audio.sample_rate` | Mixed | Prefer `probeInfo.audio.sampleRate`, fallback to `firstAudioTrack.codecProps.sampleRate`. |
+| `input.audio.profile` | Mixed | Prefer `probeInfo.audio.profile`; MediaMTX often does not expose audio profile. |
+
+Frontend-only derived input stats:
+
+| Field | Source | Notes |
+|---|---|---|
+| `input.bitrateKbps` | Computed in UI | Calculated from deltas of `input.bytesReceived` across poll intervals. |
+| `input.time` | Computed in UI | Derived from `publishStartedAt` to now. |
+
+### 8.2 Output Fields
+
+| Field | Source | Notes |
+|---|---|---|
+| `outputs[outputId].status` (backend `/health`) | Mixed | Base from latest DB job status, then runtime `on/warning` from MediaMTX reader-tag match. |
+| `outputs[outputId].jobId` | DB | Latest job row ID for this output. |
+| `outputs[outputId].totalSize` | ffmpeg progress | Raw ffmpeg `total_size` from in-memory progress map for the running `jobId`. |
+| `outputs[outputId].bitrate` | ffmpeg progress | Raw ffmpeg `bitrate` string from in-memory progress map for the running `jobId`. |
+| `outputs[outputId].bitrateKbps` | Server-normalized | Parsed from ffmpeg `bitrate` into numeric Kbps in backend health aggregation. |
+
+Frontend-only derived output stats and display values:
+
+| Field | Source | Notes |
+|---|---|---|
+| `out.status` (dashboard model) | Backend `/health` | UI treats backend `outputs[outputId].status` as source of truth. |
+| `out.bitrateKbps` | Backend `/health` | Direct passthrough from `outputs[outputId].bitrateKbps` (numeric). |
+| `pipe.stats.outputBitrateKbps` | Computed in UI | Sum of active `out.bitrateKbps` values for display. |
+| `out.video`, `out.audio` for `copy/source` | Reused from input | Output display reuses input media metadata; ffprobe influence is indirect via input fields. |

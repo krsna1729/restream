@@ -348,8 +348,6 @@ Aggregates MediaMTX runtime state with DB job state. Calls three MediaMTX endpoi
         "status": "on",
         "publishStartedAt": "2026-04-10T09:00:00.000Z",
         "streamKey": "c1518f5ef0d917ef1b6547d7",
-        "online": true,
-        "ready": true,
         "readers": 3,
         "bytesReceived": 358000000,
         "bytesSent": 320000000,
@@ -373,11 +371,10 @@ Aggregates MediaMTX runtime state with DB job state. Calls three MediaMTX endpoi
       "outputs": {
         "<outputId>": {
           "status": "on",
-          "jobStatus": "running",
           "jobId": "3f2e1d0c9b8a7f6e",
-          "bytesReceived": 0,
-          "bytesSent": 120000000,
-          "remoteAddr": "172.19.0.1:52001"
+          "totalSize": "120000000",
+          "bitrate": "1842.5kbits/s",
+          "bitrateKbps": 1842.5
         }
       }
     }
@@ -396,10 +393,11 @@ When MediaMTX is unavailable, `/health` returns a degraded payload:
 ```
 
 **Input status values:**
-| Status | Meaning                                                |
-|--------|--------------------------------------------------------|
-| `on`   | `pathInfo.online === true` OR `pathInfo.ready === true` |
-| `off`  | No path info, or path neither online nor ready          |
+| Status | Meaning                                                          |
+|--------|------------------------------------------------------------------|
+| `on`   | `pathInfo.available === true` (fallback: deprecated `ready`) |
+| `warning` | `pathInfo.online === true` but path is not yet `available` |
+| `off`  | No path info, or path is neither online nor available |
 
 **Output status values:**
 | Status    | Meaning                                              |
@@ -408,6 +406,12 @@ When MediaMTX is unavailable, `/health` returns a degraded payload:
 | `warning` | Job running but no matching RTSP reader tag          |
 | `error`   | Latest job status is `failed`                        |
 | `off`     | No running job                                       |
+
+For each output, ffmpeg runtime progress contributes:
+
+- `totalSize` from ffmpeg `total_size` (raw cumulative bytes written)
+- `bitrate` from ffmpeg `bitrate` (raw ffmpeg rate string, for example `1842.5kbits/s`, kept for debugging)
+- `bitrateKbps` server-normalized numeric bitrate in Kbps for UI consumption
 
 ---
 
