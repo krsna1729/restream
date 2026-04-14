@@ -15,8 +15,6 @@ const path = require('path');
 const crypto = require('crypto');
 const { createHash } = require('crypto');
 
-app.use(express.json());
-
 const processes = new Map(); // runtime only: jobId -> ChildProcess
 const ffmpegCmd = process.env.FFMPEG_PATH || 'ffmpeg';
 const ffprobeCmd = process.env.FFPROBE_PATH || 'ffprobe';
@@ -339,12 +337,6 @@ function getReaderIdFromQuery(query) {
     }
 }
 
-function getLatestJobByOutput(pipelineId, outputId) {
-    return db.listJobsForOutput(pipelineId, outputId)[0] || null;
-}
-
-
-
 async function fetchMediamtxJson(endpoint) {
     const url = `${getMediamtxApiBaseUrl()}${endpoint}`;
     const resp = await fetch(url, {
@@ -360,179 +352,6 @@ async function fetchMediamtxJson(endpoint) {
         throw new Error(`MediaMTX ${endpoint} failed with status ${resp.status}`);
     }
     return data;
-}
-
-function parseHostPort(endpoint) {
-    if (!endpoint || typeof endpoint !== 'string') return null;
-    const s = endpoint.trim();
-    if (!s) return null;
-
-    if (s.startsWith('[')) {
-        const idx = s.indexOf(']');
-        if (idx < 0 || s[idx + 1] !== ':') return null;
-        const host = s.slice(1, idx);
-        const port = Number(s.slice(idx + 2));
-        if (!Number.isFinite(port)) return null;
-        return { host, port };
-    }
-
-    const idx = s.lastIndexOf(':');
-    if (idx < 0) return null;
-    const host = s.slice(0, idx);
-    const port = Number(s.slice(idx + 1));
-    if (!host || !Number.isFinite(port)) return null;
-    return { host, port };
-}
-
-function getRtspPort(baseUrl) {
-    try {
-        const parsed = new URL(baseUrl);
-        if (parsed.port) return Number(parsed.port);
-    } catch (err) {
-        /* ignore */
-    }
-    return 554;
-}
-
-function parseProcNetAddrPort(v) {
-    if (!v || typeof v !== 'string') return null;
-    const [addrHex, portHex] = v.split(':');
-    if (!addrHex || !portHex) return null;
-    const port = Number.parseInt(portHex, 16);
-    if (!Number.isFinite(port)) return null;
-    return { addrHex, port };
-}
-
-function listEstablishedTcpEntriesFromProc() {
-    const files = ['/proc/net/tcp', '/proc/net/tcp6'];
-    const entries = [];
-
-    for (const file of files) {
-        let content = '';
-        try {
-            content = fs.readFileSync(file, 'utf8');
-        } catch (err) {
-            continue;
-        }
-
-        const lines = content.split('\n').slice(1).filter(Boolean);
-        for (const line of lines) {
-            const cols = line.trim().split(/\s+/);
-            if (cols.length < 10) continue;
-
-            // state 01 = ESTABLISHED
-            if (cols[3] !== '01') continue;
-
-            const local = parseProcNetAddrPort(cols[1]);
-            const remote = parseProcNetAddrPort(cols[2]);
-            const inode = cols[9];
-            if (!local || !remote || !inode) continue;
-
-            entries.push({ inode, localPort: local.port, remotePort: remote.port });
-        }
-    }
-
-    return entries;
-}
-
-function listSocketInodesForPid(pid) {
-    const inodes = new Set();
-    let fds = [];
-    try {
-        fds = fs.readdirSync(`/proc/${pid}/fd`);
-    } catch (err) {
-        return inodes;
-    }
-
-    for (const fd of fds) {
-        try {
-            const link = fs.readlinkSync(`/proc/${pid}/fd/${fd}`);
-            const match = link.match(/^socket:\[(\d+)\]$/);
-            if (match) inodes.add(match[1]);
-        } catch (err) {
-            /* ignore per-fd race */
-        }
-    }
-
-    return inodes;
-}
-
-function getRtspPullSocketsByPidFromProc(targetPids, rtspPort) {
-    const pids = new Set((targetPids || []).map((pid) => Number(pid)).filter(Number.isFinite));
-    const result = new Map();
-    if (!pids.size) return result;
-
-    const entries = listEstablishedTcpEntriesFromProc().filter((entry) => entry.remotePort === rtspPort);
-    const entryByInode = new Map(entries.map((entry) => [entry.inode, entry]));
-
-    for (const pid of pids) {
-        const inodes = listSocketInodesForPid(pid);
-        if (!inodes.size) continue;
-
-        for (const inode of inodes) {
-            const entry = entryByInode.get(inode);
-            if (!entry) continue;
-            if (!result.has(pid)) result.set(pid, []);
-            result.get(pid).push({
-                localHost: null,
-                localPort: entry.localPort,
-                remoteHost: null,
-                remotePort: entry.remotePort,
-            });
-        }
-    }
-
-    return result;
-}
-
-async function getRtspPullSocketsByPid(targetPids, rtspPort) {
-    const pids = new Set((targetPids || []).map((pid) => Number(pid)).filter(Number.isFinite));
-    const result = new Map();
-    if (!pids.size) return result;
-
-    let stdout = '';
-    try {
-        const execResult = await execFileAsync('ss', ['-H', '-tnp']);
-        stdout = execResult.stdout || '';
-    } catch (err) {
-        return result;
-    }
-
-    const lines = stdout.split('\n').filter(Boolean);
-    for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length < 6 || parts[0] !== 'ESTAB') continue;
-
-        const local = parseHostPort(parts[3]);
-        const remote = parseHostPort(parts[4]);
-        if (!local || !remote || remote.port !== rtspPort) continue;
-
-        const details = parts.slice(5).join(' ');
-        const pidMatch = details.match(/pid=(\d+)/);
-        if (!pidMatch) continue;
-
-        const pid = Number(pidMatch[1]);
-        if (!pids.has(pid)) continue;
-
-        if (!result.has(pid)) result.set(pid, []);
-        result.get(pid).push({
-            localHost: local.host,
-            localPort: local.port,
-            remoteHost: remote.host,
-            remotePort: remote.port,
-        });
-    }
-
-    const unresolvedPids = Array.from(pids).filter((pid) => !result.has(pid));
-    if (unresolvedPids.length) {
-        const procResult = getRtspPullSocketsByPidFromProc(unresolvedPids, rtspPort);
-        for (const [pid, sockets] of procResult.entries()) {
-            if (!result.has(pid)) result.set(pid, []);
-            result.get(pid).push(...sockets);
-        }
-    }
-
-    return result;
 }
 
 function stopRunningJob(job, signal = 'SIGTERM') {
@@ -1295,11 +1114,6 @@ app.get('/health', async (req, res) => {
             const probeInfo =
                 key && pathInfo?.online ? await getCachedRtspProbeInfo(key, getPipelineRtspUrl(key)) : null;
 
-            const readerConns = readers
-                .filter((reader) => reader.type === 'rtspSession')
-                .map((reader) => rtspSessionById.get(reader.id))
-                .filter(Boolean);
-
             let inputStatus = 'off';
             if (key && (pathInfo?.online || pathInfo?.ready)) inputStatus = 'on';
 
@@ -1351,10 +1165,6 @@ app.get('/health', async (req, res) => {
             };
 
             const pipelineOutputs = outputs.filter((output) => output.pipelineId === pipeline.id);
-            const runningOutputIds = pipelineOutputs
-                .filter((output) => latestJobByOutputId.get(output.id)?.status === 'running')
-                .sort((a, b) => a.id.localeCompare(b.id))
-                .map((output) => output.id);
 
             for (const output of pipelineOutputs) {
                 const latest = latestJobByOutputId.get(output.id) || null;

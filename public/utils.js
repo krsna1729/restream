@@ -104,7 +104,7 @@ function setServerConfig(serverName) {
 }
 
 let alertCount = 0;
-function showErrorAlert(error, log = true) {
+function showErrorAlert(error) {
     const errorAlertElem = document.getElementById('error-alert');
     const errorMsgElem = document.getElementById('error-msg');
     if (!errorAlertElem) return;
