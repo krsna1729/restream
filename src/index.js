@@ -34,6 +34,12 @@ const appPort = Number(process.env.PORT || 3030);
 const appHost = getConfig().host;
 const logLevel = (process.env.LOG_LEVEL || 'info').toLowerCase();
 const probeCacheTtlMs = Number(process.env.PROBE_CACHE_TTL_MS || 30000);
+
+// ── Timing constants ──────────────────────────────────
+const MEDIAMTX_CHECK_INTERVAL_MS = 5000;
+const FFPROBE_TIMEOUT_MS = 8000;
+const JOB_STABILITY_CHECK_MS = 250;
+
 const streamProbeCache = new Map(); // streamKey -> { ts, info }
 // Runtime-only progress state from ffmpeg "-progress pipe:3" (never persisted to DB).
 // NOTE: This is intentionally internal for now; a future API/WS endpoint can expose it.
@@ -176,7 +182,7 @@ async function checkMediamtxReadiness() {
     const previousError = mediamtxReadiness.error;
     try {
         const response = await fetch(`${getMediamtxApiBaseUrl()}/v3/config/global/get`, {
-            signal: AbortSignal.timeout(5000),
+            signal: AbortSignal.timeout(MEDIAMTX_CHECK_INTERVAL_MS),
         });
 
         if (!response.ok) {
@@ -212,7 +218,7 @@ function startMediamtxReadinessChecks() {
     if (mediamtxReadinessTimer) return;
     mediamtxReadinessTimer = setInterval(() => {
         void checkMediamtxReadiness();
-    }, 5000);
+    }, MEDIAMTX_CHECK_INTERVAL_MS);
     mediamtxReadinessTimer.unref?.();
 }
 
@@ -402,7 +408,7 @@ function getReaderIdFromQuery(query) {
 async function fetchMediamtxJson(endpoint) {
     const url = `${getMediamtxApiBaseUrl()}${endpoint}`;
     const resp = await fetch(url, {
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(MEDIAMTX_CHECK_INTERVAL_MS),
     });
     let data = null;
     try {
@@ -492,7 +498,7 @@ async function probeRtspInput(inputUrl) {
                 /* ignore */
             }
             resolve({ ok: false, error: 'Timed out waiting for RTSP input to become readable' });
-        }, 8000);
+        }, FFPROBE_TIMEOUT_MS);
 
         child.stdout.on('data', (chunk) => {
             stdout += chunk.toString();
@@ -1038,7 +1044,7 @@ app.post('/pipelines/:pipelineId/outputs/:outputId/start', async (req, res) => {
         });
 
         // short delay to detect immediate exit/err
-        await new Promise((r) => setTimeout(r, 250));
+        await new Promise((r) => setTimeout(r, JOB_STABILITY_CHECK_MS));
         const fresh = db.getJob(job.id);
         if (fresh.status !== 'running') {
             // return logs if failed immediately
@@ -1076,7 +1082,7 @@ app.post('/pipelines/:pipelineId/outputs/:outputId/stop', (req, res) => {
                 } catch (e) {
                     /* ignore */
                 }
-            }, 5000);
+            }, MEDIAMTX_CHECK_INTERVAL_MS);
             proc.once('exit', () => clearTimeout(killTimeout));
         }
         recomputeEtag();
