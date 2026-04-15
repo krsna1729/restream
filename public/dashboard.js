@@ -46,7 +46,11 @@ const outputHistoryState = {
     redacted: true,
     playing: false,
     pollTimer: null,
+    pollEveryMs: null,
 };
+
+const OUTPUT_HISTORY_POLL_INTERVAL_MS = 5000;
+const OUTPUT_HISTORY_HIDDEN_POLL_INTERVAL_MS = 30000;
 
 function formatHistoryTime(ts) {
     if (!ts) return '--';
@@ -233,8 +237,16 @@ function stopHistoryPoll() {
         clearInterval(outputHistoryState.pollTimer);
         outputHistoryState.pollTimer = null;
     }
+    outputHistoryState.pollEveryMs = null;
     outputHistoryState.playing = false;
     updateHistoryPlayPauseBtn();
+}
+
+function startHistoryPolling(intervalMs) {
+    if (outputHistoryState.pollTimer && outputHistoryState.pollEveryMs === intervalMs) return;
+    if (outputHistoryState.pollTimer) clearInterval(outputHistoryState.pollTimer);
+    outputHistoryState.pollEveryMs = intervalMs;
+    outputHistoryState.pollTimer = setInterval(pollHistoryOnce, intervalMs);
 }
 
 function updateHistoryPlayPauseBtn() {
@@ -261,7 +273,7 @@ function toggleHistoryPlayPause() {
         outputHistoryState.playing = true;
         updateHistoryPlayPauseBtn();
         pollHistoryOnce();
-        outputHistoryState.pollTimer = setInterval(pollHistoryOnce, 5000);
+        startHistoryPolling(document.hidden ? OUTPUT_HISTORY_HIDDEN_POLL_INTERVAL_MS : OUTPUT_HISTORY_POLL_INTERVAL_MS);
     }
 }
 
@@ -678,9 +690,16 @@ function startStreamingConfigPolling() {
 async function onVisibilityChange() {
     if (document.hidden) {
         startDashboardPolling(DASHBOARD_HIDDEN_POLL_INTERVAL_MS);
+        if (outputHistoryState.playing) {
+            startHistoryPolling(OUTPUT_HISTORY_HIDDEN_POLL_INTERVAL_MS);
+        }
         return;
     }
     startDashboardPolling(DASHBOARD_POLL_INTERVAL_MS);
+    if (outputHistoryState.playing) {
+        startHistoryPolling(OUTPUT_HISTORY_POLL_INTERVAL_MS);
+        await pollHistoryOnce();
+    }
     await fetchAndRerender();
     await checkStreamingConfigs();
 }

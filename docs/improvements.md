@@ -815,7 +815,7 @@ For production, use fingerprinted filenames (e.g., `output.abc123.css`) with `ma
 
 3. **`/metrics/system` never returns 304**: Always returns 200 with fresh CPU/network data. This is expected for real-time metrics, but could use a short max-age.
 
-4. **✅ FIXED: Hidden-tab polling backoff**: Polling no longer runs at full 5s cadence in background tabs. The dashboard now uses Page Visibility to back off refreshes when hidden and restore fast polling + immediate refresh when visible.
+4. **✅ FIXED: Hidden-tab polling backoff**: Polling no longer runs at full 5s cadence in background tabs. Both dashboard refresh polling and output history live polling now use Page Visibility to back off when hidden and restore fast polling + immediate refresh when visible.
 
 <details><summary><strong>Implementation</strong></summary>
 
@@ -862,6 +862,8 @@ document.addEventListener('visibilitychange', async () => {
 ```
 
 Also, `checkStreamingConfigs()` now exits early while hidden to avoid background checks.
+
+`outputHistoryState` live polling now follows the same rule: 5s while visible, 30s while hidden, immediate poll when tab becomes visible again.
 
 **Effort:** ~35 lines in `public/dashboard.js`.
 
