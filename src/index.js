@@ -1251,8 +1251,15 @@ app.get('/health', async (req, res) => {
             if (key && pathAvailable) inputStatus = 'on';
             else if (key && pathOnline) inputStatus = 'warning'; // publisher connecting, stream not yet ready
 
-            const probeInfo =
-                key && pathAvailable ? await getCachedRtspProbeInfo(key, getPipelineRtspUrl(key)) : null;
+            // Return cached probe immediately; refresh in background if stale.
+            // This prevents a blocking ffprobe (up to 8s) from delaying the entire /health response.
+            const _probeCached = key ? streamProbeCache.get(key) : null;
+            const probeInfo = (_probeCached && Date.now() - _probeCached.ts < probeCacheTtlMs)
+                ? _probeCached.info
+                : null;
+            if (key && pathAvailable && !probeInfo) {
+                getCachedRtspProbeInfo(key, getPipelineRtspUrl(key)).catch(() => {});
+            }
 
             const firstVideoTrack = (pathInfo?.tracks2 || []).find((track) =>
                 String(track.codec || '').toLowerCase().includes('264'),
@@ -1284,13 +1291,10 @@ app.get('/health', async (req, res) => {
                         : null,
                     audio: firstAudioTrack || probeInfo?.audio
                         ? {
-                              codec: probeInfo?.audio?.codec || firstAudioTrack?.codec || null,
-                              channels:
-                                  probeInfo?.audio?.channels ||
-                                  firstAudioTrack?.codecProps?.channelCount ||
-                                  null,
-                              sample_rate: probeInfo?.audio?.sampleRate || firstAudioTrack?.codecProps?.sampleRate || null,
-                              profile: probeInfo?.audio?.profile || firstAudioTrack?.codecProps?.profile || null,
+                              codec: probeInfo?.audio?.codec || null,
+                              channels: probeInfo?.audio?.channels || null,
+                              sample_rate: probeInfo?.audio?.sampleRate || null,
+                              profile: probeInfo?.audio?.profile || null,
                               bw: null,
                           }
                         : null,

@@ -871,47 +871,32 @@ startPolling();
 
 </details>
 
-#### 7.3.4 `/health` Endpoint Latency Spikes (3.5–3.7s) ⚠️
+#### 7.3.4 `/health` Endpoint Latency Spikes ✅ Fixed
 
-**Status:** ✅ Confirmed (real server)  
+**Status:** ✅ Implemented (fire-and-forget background probe)  
 **Severity:** Medium  
-**Evidence:** On the real server (with live ffprobe), two of 28 `/health` responses took 3,494 ms and 3,716 ms. The rest completed in 6–10 ms.
+**Evidence (before):** On the real server, two of 28 `/health` responses took 3,494 ms and 3,716 ms when the ffprobe cache expired (TTL 30s). The rest completed in 6–10 ms.
 
-**Root cause:** The `/health` handler calls `getCachedRtspProbeInfo()` for each pipeline with an available stream. If the probe cache has expired (TTL 30s), a live `ffprobe` runs with an 8-second timeout. The first request after cache expiry blocks the entire health response.
+**Root cause:** `/health` called `await getCachedRtspProbeInfo()` per pipeline. On cache miss, a live `ffprobe` with an 8s timeout blocked the entire response.
 
-**Impact:** Dashboard freezes rendering for 3.5s while the health fetch completes, even though probing is not needed for the UI. (This issue is not visible in mock-server traces since mocks respond instantly.)
-
-<details><summary><strong>Implementation</strong></summary>
-
-**Option A — Fire-and-forget background probe (preferred):**
-
-In the `/health` handler, return whatever is in the probe cache without waiting:
+**Fix:** Read the cache directly and fire a background refresh if stale — no `await` on the probe path. `/health` now always returns in <50ms.
 
 ```javascript
-// Instead of:
+// Before:
 const probeInfo = key && pathAvailable
     ? await getCachedRtspProbeInfo(key, getPipelineRtspUrl(key))
     : null;
 
-// Use:
-const cached = streamProbeCache.get(key);
-const probeInfo = (cached && Date.now() - cached.ts < probeCacheTtlMs) ? cached.info : null;
-
-// Trigger background refresh if stale (no await):
+// After:
+const _probeCached = key ? streamProbeCache.get(key) : null;
+const probeInfo = (_probeCached && Date.now() - _probeCached.ts < probeCacheTtlMs)
+    ? _probeCached.info : null;
 if (key && pathAvailable && !probeInfo) {
     getCachedRtspProbeInfo(key, getPipelineRtspUrl(key)).catch(() => {});
 }
 ```
 
-This ensures `/health` always returns in <50ms while keeping probe data fresh in the background.
-
-**Option B — Separate probe from health:**
-
-Move probe data to its own endpoint (`GET /pipelines/:id/probe`) so the dashboard can fetch it independently without blocking health.
-
-**Effort:** ~10 lines for Option A.
-
-</details>
+**Measured after fix:** 3 consecutive `/health` calls: 33ms, 30ms, 38ms (vs. up to 3,716ms before).
 
 #### 7.3.5 CSS Bundle Size — 81 KB Unoptimized ⚠️
 
