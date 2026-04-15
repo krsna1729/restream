@@ -360,6 +360,32 @@ function extractProbeMediaInfo(stdout) {
     };
 }
 
+function mergeProbeMediaInfo(previousInfo, nextInfo) {
+    const prev = previousInfo || {};
+    const next = nextInfo || {};
+
+    const mergedVideo = {
+        fps: next?.video?.fps ?? prev?.video?.fps ?? null,
+    };
+    const mergedAudio = {
+        codec: next?.audio?.codec ?? prev?.audio?.codec ?? null,
+        channels: next?.audio?.channels ?? prev?.audio?.channels ?? null,
+        sampleRate: next?.audio?.sampleRate ?? prev?.audio?.sampleRate ?? null,
+        profile: next?.audio?.profile ?? prev?.audio?.profile ?? null,
+    };
+
+    const hasVideo = mergedVideo.fps !== null && mergedVideo.fps !== undefined;
+    const hasAudio = mergedAudio.codec !== null && mergedAudio.codec !== undefined
+        || mergedAudio.channels !== null && mergedAudio.channels !== undefined
+        || mergedAudio.sampleRate !== null && mergedAudio.sampleRate !== undefined
+        || mergedAudio.profile !== null && mergedAudio.profile !== undefined;
+
+    return {
+        video: hasVideo ? mergedVideo : null,
+        audio: hasAudio ? mergedAudio : null,
+    };
+}
+
 async function getCachedRtspProbeInfo(streamKey, inputUrl) {
     if (!streamKey || !inputUrl) return null;
     const now = Date.now();
@@ -372,8 +398,9 @@ async function getCachedRtspProbeInfo(streamKey, inputUrl) {
         return null;
     }
 
-    streamProbeCache.set(streamKey, { ts: now, info: probe.info });
-    return probe.info;
+    const mergedProbeInfo = mergeProbeMediaInfo(cached?.info || null, probe.info);
+    streamProbeCache.set(streamKey, { ts: now, info: mergedProbeInfo });
+    return mergedProbeInfo;
 }
 
 function getPipelineRtspUrl(streamKey) {
@@ -863,18 +890,25 @@ app.post('/pipelines/:pipelineId/outputs/:outputId/start', async (req, res) => {
         if (!pipeline.streamKey)
             return res.status(400).json({ error: 'Pipeline has no stream key assigned' });
 
-        const probeInputUrl = getPipelineRtspUrl(pipeline.streamKey);
-
-        const probe = await probeRtspInput(probeInputUrl);
-        if (!probe.ok) {
-            return res.status(409).json({
-                error: 'Pipeline input is not available yet',
-                detail: probe.error,
-                inputUrl: probeInputUrl,
+        let pathInfo = null;
+        try {
+            const paths = await fetchMediamtxJson('/v3/paths/list');
+            pathInfo = (paths.items || []).find((path) => path?.name === pipeline.streamKey) || null;
+        } catch (err) {
+            return res.status(503).json({
+                error: 'MediaMTX API unavailable',
+                detail: errMsg(err),
             });
         }
-        if (probe.info) {
-            streamProbeCache.set(pipeline.streamKey, { ts: Date.now(), info: probe.info });
+
+        const pathAvailable = !!(pathInfo?.available || pathInfo?.ready);
+        if (!pathAvailable) {
+            return res.status(409).json({
+                error: 'Pipeline input is not available yet',
+                detail: pathInfo?.online
+                    ? 'Publisher connected, stream not ready yet'
+                    : 'No active publisher for this stream key',
+            });
         }
 
         const inputUrl = getPipelineTaggedRtspUrl(pipeline.streamKey, pid, oid);
@@ -915,7 +949,6 @@ app.post('/pipelines/:pipelineId/outputs/:outputId/start', async (req, res) => {
         log('debug', 'Crafted ffmpeg output command', {
             pipelineId: pid,
             outputId: oid,
-            probeInputUrl: redactSensitiveUrl(probeInputUrl),
             inputUrl: redactSensitiveUrl(inputUrl),
             expectedReaderTag,
             outputUrl: redactSensitiveUrl(outputUrl),
@@ -1279,20 +1312,21 @@ app.get('/health', async (req, res) => {
             const nowMs = Date.now();
             const probeCacheAgeMs = _probeCached ? (nowMs - _probeCached.ts) : Number.POSITIVE_INFINITY;
             const probeCacheExpired = probeCacheAgeMs >= probeCacheTtlMs;
-            const refreshStartedAt = key ? probeRefreshStartedAt.get(key) : null;
-            const withinRefreshGraceWindow = refreshStartedAt !== undefined && refreshStartedAt !== null
-                && (nowMs - refreshStartedAt) < FFPROBE_TIMEOUT_MS;
-            const probeInfo = _probeCached && (!probeCacheExpired || withinRefreshGraceWindow)
-                ? _probeCached.info
-                : null;
-            if (key && pathAvailable && probeCacheExpired && !probeRefreshStartedAt.has(key)) {
+            let refreshStartedAt = key ? probeRefreshStartedAt.get(key) : null;
+            if (key && pathAvailable && probeCacheExpired && (refreshStartedAt === undefined || refreshStartedAt === null)) {
                 probeRefreshStartedAt.set(key, nowMs);
+                refreshStartedAt = nowMs;
                 getCachedRtspProbeInfo(key, getPipelineRtspUrl(key))
                     .catch(() => {})
                     .finally(() => {
                         probeRefreshStartedAt.delete(key);
                     });
             }
+            const withinRefreshGraceWindow = refreshStartedAt !== undefined && refreshStartedAt !== null
+                && (nowMs - refreshStartedAt) < FFPROBE_TIMEOUT_MS;
+            const probeInfo = _probeCached && (!probeCacheExpired || withinRefreshGraceWindow)
+                ? _probeCached.info
+                : null;
 
             const firstVideoTrack = (pathInfo?.tracks2 || []).find((track) =>
                 String(track.codec || '').toLowerCase().includes('264'),
@@ -1318,16 +1352,16 @@ app.get('/health', async (req, res) => {
                               height: firstVideoTrack.codecProps?.height || null,
                               profile: firstVideoTrack.codecProps?.profile || null,
                               level: firstVideoTrack.codecProps?.level || null,
-                              fps: probeInfo?.video?.fps || null,
+                              fps: probeInfo?.video?.fps ?? firstVideoTrack.codecProps?.fps ?? null,
                               bw: null,
                           }
                         : null,
                     audio: firstAudioTrack || probeInfo?.audio
                         ? {
-                              codec: probeInfo?.audio?.codec || null,
-                              channels: probeInfo?.audio?.channels || null,
-                              sample_rate: probeInfo?.audio?.sampleRate || null,
-                              profile: probeInfo?.audio?.profile || null,
+                              codec: probeInfo?.audio?.codec ?? firstAudioTrack?.codec ?? null,
+                              channels: probeInfo?.audio?.channels ?? firstAudioTrack?.codecProps?.channels ?? null,
+                              sample_rate: probeInfo?.audio?.sampleRate ?? firstAudioTrack?.codecProps?.sampleRate ?? null,
+                              profile: probeInfo?.audio?.profile ?? firstAudioTrack?.codecProps?.profile ?? null,
                               bw: null,
                           }
                         : null,
