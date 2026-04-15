@@ -41,6 +41,7 @@ const FFPROBE_TIMEOUT_MS = 8000;
 const JOB_STABILITY_CHECK_MS = 250;
 
 const streamProbeCache = new Map(); // streamKey -> { ts, info }
+const probeRefreshStartedAt = new Map(); // streamKey -> refresh start timestamp
 // Runtime-only progress state from ffmpeg "-progress pipe:3" (never persisted to DB).
 // NOTE: This is intentionally internal for now; a future API/WS endpoint can expose it.
 const ffmpegProgressByJobId = new Map(); // jobId -> latest ffmpeg progress block
@@ -1272,14 +1273,25 @@ app.get('/health', async (req, res) => {
             if (key && pathAvailable) inputStatus = 'on';
             else if (key && pathOnline) inputStatus = 'warning'; // publisher connecting, stream not yet ready
 
-            // Return cached probe immediately; refresh in background if stale.
-            // This prevents a blocking ffprobe (up to 8s) from delaying the entire /health response.
+            // Stale-while-revalidate for probe info: return cached data while fresh, or while
+            // a post-expiry refresh is actively in flight and still within the probe timeout window.
             const _probeCached = key ? streamProbeCache.get(key) : null;
-            const probeInfo = (_probeCached && Date.now() - _probeCached.ts < probeCacheTtlMs)
+            const nowMs = Date.now();
+            const probeCacheAgeMs = _probeCached ? (nowMs - _probeCached.ts) : Number.POSITIVE_INFINITY;
+            const probeCacheExpired = probeCacheAgeMs >= probeCacheTtlMs;
+            const refreshStartedAt = key ? probeRefreshStartedAt.get(key) : null;
+            const withinRefreshGraceWindow = refreshStartedAt !== undefined && refreshStartedAt !== null
+                && (nowMs - refreshStartedAt) < FFPROBE_TIMEOUT_MS;
+            const probeInfo = _probeCached && (!probeCacheExpired || withinRefreshGraceWindow)
                 ? _probeCached.info
                 : null;
-            if (key && pathAvailable && !probeInfo) {
-                getCachedRtspProbeInfo(key, getPipelineRtspUrl(key)).catch(() => {});
+            if (key && pathAvailable && probeCacheExpired && !probeRefreshStartedAt.has(key)) {
+                probeRefreshStartedAt.set(key, nowMs);
+                getCachedRtspProbeInfo(key, getPipelineRtspUrl(key))
+                    .catch(() => {})
+                    .finally(() => {
+                        probeRefreshStartedAt.delete(key);
+                    });
             }
 
             const firstVideoTrack = (pathInfo?.tracks2 || []).find((track) =>

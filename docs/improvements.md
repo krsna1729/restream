@@ -876,13 +876,15 @@ Also, `checkStreamingConfigs()` now exits early while hidden to avoid background
 
 #### 7.3.4 `/health` Endpoint Latency Spikes ✅ Fixed
 
-**Status:** ✅ Implemented (fire-and-forget background probe)  
+**Status:** ✅ Implemented (fire-and-forget background probe with in-flight refresh grace window)  
 **Severity:** Medium  
 **Evidence (before):** On the real server, two of 28 `/health` responses took 3,494 ms and 3,716 ms when the ffprobe cache expired (TTL 30s). The rest completed in 6–10 ms.
 
 **Root cause:** `/health` called `await getCachedRtspProbeInfo()` per pipeline. On cache miss, a live `ffprobe` with an 8s timeout blocked the entire response.
 
 **Fix:** Read the cache directly and fire a background refresh if stale — no `await` on the probe path. `/health` now always returns in <50ms.
+
+**Final behavior refinement:** If probe cache is expired, reuse stale probe data only while a refresh is actively in flight and still within `FFPROBE_TIMEOUT_MS` from refresh start. This avoids UI flipping immediately on TTL expiry without keeping stale metadata indefinitely.
 
 ```javascript
 // Before:
@@ -892,10 +894,19 @@ const probeInfo = key && pathAvailable
 
 // After:
 const _probeCached = key ? streamProbeCache.get(key) : null;
-const probeInfo = (_probeCached && Date.now() - _probeCached.ts < probeCacheTtlMs)
-    ? _probeCached.info : null;
-if (key && pathAvailable && !probeInfo) {
-    getCachedRtspProbeInfo(key, getPipelineRtspUrl(key)).catch(() => {});
+const nowMs = Date.now();
+const probeCacheExpired = !_probeCached || (nowMs - _probeCached.ts) >= probeCacheTtlMs;
+const refreshStartedAt = key ? probeRefreshStartedAt.get(key) : null;
+const withinRefreshGraceWindow = refreshStartedAt != null
+    && (nowMs - refreshStartedAt) < FFPROBE_TIMEOUT_MS;
+const probeInfo = _probeCached && (!probeCacheExpired || withinRefreshGraceWindow)
+    ? _probeCached.info
+    : null;
+if (key && pathAvailable && probeCacheExpired && !probeRefreshStartedAt.has(key)) {
+    probeRefreshStartedAt.set(key, nowMs);
+    getCachedRtspProbeInfo(key, getPipelineRtspUrl(key))
+        .catch(() => {})
+        .finally(() => probeRefreshStartedAt.delete(key));
 }
 ```
 
