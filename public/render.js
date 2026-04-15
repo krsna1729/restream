@@ -329,7 +329,12 @@ function renderOutsColumn(selectedPipe) {
             toggleBtn.className = `btn btn-xs ${isRunning ? 'btn-accent btn-outline' : 'btn-accent'}`;
             toggleBtn.dataset.outputIndex = String(outputIndex);
             toggleBtn.textContent = isRunning ? 'stop' : 'start';
+            const toggleBusy =
+                typeof isOutputToggleBusy === 'function' && isOutputToggleBusy(pipe.id, o.id);
+            toggleBtn.disabled = !!toggleBusy;
+            toggleBtn.classList.toggle('btn-disabled', !!toggleBusy);
             toggleBtn.addEventListener('click', () => {
+                if (toggleBtn.disabled) return;
                 const out = pipe.outs[outputIndex];
                 if (!out) return;
                 const running = out.status === 'on' || out.status === 'warning';

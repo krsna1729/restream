@@ -22,22 +22,44 @@ function setOutputToggleBusy(button, busy) {
     button.classList.toggle('btn-disabled', busy);
 }
 
+const pendingOutputToggles = new Set();
+
+function outputToggleKey(pipeId, outId) {
+    return `${pipeId}:${outId}`;
+}
+
+function isOutputToggleBusy(pipeId, outId) {
+    return pendingOutputToggles.has(outputToggleKey(pipeId, outId));
+}
+
+function setOutputTogglePending(pipeId, outId, busy) {
+    const key = outputToggleKey(pipeId, outId);
+    if (busy) pendingOutputToggles.add(key);
+    else pendingOutputToggles.delete(key);
+}
+
 async function startOutBtn(pipeId, outId, button = null) {
+    if (isOutputToggleBusy(pipeId, outId)) return;
+    setOutputTogglePending(pipeId, outId, true);
     setOutputToggleBusy(button, true);
     try {
         const res = await startOut(pipeId, outId);
         if (res !== null) await refreshDashboard();
     } finally {
+        setOutputTogglePending(pipeId, outId, false);
         setOutputToggleBusy(button, false);
     }
 }
 
 async function stopOutBtn(pipeId, outId, button = null) {
+    if (isOutputToggleBusy(pipeId, outId)) return;
+    setOutputTogglePending(pipeId, outId, true);
     setOutputToggleBusy(button, true);
     try {
         const res = await stopOut(pipeId, outId);
         if (res !== null) await refreshDashboard();
     } finally {
+        setOutputTogglePending(pipeId, outId, false);
         setOutputToggleBusy(button, false);
     }
 }
