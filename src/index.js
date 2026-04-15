@@ -25,7 +25,7 @@ app.use(compression({
 const { spawn } = require('child_process');
 const path = require('path');
 const crypto = require('crypto');
-const { createHash } = require('crypto');
+const { createHash } = crypto;
 
 const processes = new Map(); // runtime only: jobId -> ChildProcess
 const ffmpegCmd = process.env.FFMPEG_PATH || 'ffmpeg';

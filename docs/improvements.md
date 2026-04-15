@@ -287,8 +287,8 @@ function maskSecret(value) {
 
 | Issue                    | Location                | Status | Description                                               |
 | ------------------------ | ----------------------- | ------ | --------------------------------------------------------- |
-| Duplicate `1080p` option | `public/index.html:152` | ✅ Confirmed | `<option value="720p">1080p</option>` — value should be `1080p` |
-| Redundant `crypto` import (NEW) | `src/index.js:14` | ✅ New finding | `const crypto = require('crypto')` on line 14 is not used anywhere in `src/index.js`. The destructured `createHash` on line 15 is what is actually used. |
+| Duplicate `1080p` option | `public/index.html:152` | ✅ Fixed | `value="720p"` corrected to `value="1080p"` |
+| Redundant `crypto` import | `src/index.js:27-28` | ✅ Fixed | Deduplicated to `const crypto = require('crypto'); const { createHash } = crypto;` |
 
 <details><summary><strong>Implementation — Fix Unused Code</strong></summary>
 
@@ -300,12 +300,14 @@ function maskSecret(value) {
 <option value="1080p">1080p</option>
 ```
 
-**2. Remove `src/index.js:14`:**
+**2. Deduplicate `src/index.js` crypto import:**
 ```javascript
-// Delete this line:
+// Before (two separate requires):
 const crypto = require('crypto');
-// Keep line 15:
 const { createHash } = require('crypto');
+// After (single require, destructure from it):
+const crypto = require('crypto');
+const { createHash } = crypto;
 ```
 
 **Effort:** 2 one-line changes.
@@ -606,14 +608,10 @@ This eliminates the race window entirely — the DB enforces at most one running
 
 ### 5.2 Duplicate Output Option in HTML
 
-**Status:** ✅ Confirmed  
+**Status:** ✅ Fixed  
 **Location:** `public/index.html:152`
 
-```html
-<option value="720p">1080p</option>
-```
-
-Should be `<option value="1080p">1080p</option>`.
+Corrected `value="720p"` to `value="1080p"` — selecting "1080p" was silently submitting `720p` to the server.
 
 ---
 
@@ -622,7 +620,7 @@ Should be `<option value="1080p">1080p</option>`.
 | Opportunity              | Location                 | Status | Description                                              |
 | ------------------------ | ------------------------ | ------ | -------------------------------------------------------- |
 | Extract FFmpeg args      | `src/index.js:815-842`   | ✅ Valid | 28-element array inline in route handler; could be a builder function |
-| Remove redundant `crypto` import (NEW) | `src/index.js:14` | ✅ New | `const crypto = require('crypto')` is unused; only the destructured `createHash` on line 15 is needed |
+| Remove redundant `crypto` import | `src/index.js:27-28` | ✅ Fixed | Deduplicated to single `require('crypto')` with `const { createHash } = crypto` |
 
 <details><summary><strong>Implementation — Extract FFmpeg Args Builder</strong></summary>
 
