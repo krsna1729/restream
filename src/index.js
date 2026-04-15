@@ -41,6 +41,17 @@ const ffmpegProgressByJobId = new Map(); // jobId -> latest ffmpeg progress bloc
 const stopRequestedJobIds = new Set(); // jobId values with user-initiated stop requests
 const outputStartLocks = new Set(); // pipelineId:outputId currently starting
 
+// Periodic cleanup of stale probe cache entries to prevent memory leak
+const _probeEvictionTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of streamProbeCache) {
+        if (now - entry.ts > probeCacheTtlMs * 2) {
+            streamProbeCache.delete(key);
+        }
+    }
+}, probeCacheTtlMs * 4);
+_probeEvictionTimer.unref?.();
+
 function outputStartKey(pipelineId, outputId) {
     return `${pipelineId}:${outputId}`;
 }
