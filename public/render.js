@@ -28,19 +28,17 @@ function formatBitrateKbpsParts(kbps) {
     const value = Number(kbps);
     if (!Number.isFinite(value) || value < 0) return null;
     if (value >= 1000 * 1000) {
-        return { valueText: (value / (1000 * 1000)).toFixed(2), unitText: 'gb/s' };
+        return { valueText: (value / (1000 * 1000)).toFixed(2), unitText: 'Gb/s' };
     }
     if (value >= 1000) {
-        return { valueText: (value / 1000).toFixed(1), unitText: 'mb/s' };
+        return { valueText: (value / 1000).toFixed(1), unitText: 'Mb/s' };
     }
-    return { valueText: value.toFixed(1), unitText: 'kb/s' };
+    return { valueText: value.toFixed(1), unitText: 'Kb/s' };
 }
 
-function setBitrateWithSubtleUnit(elemId, kbps, fallback = '--') {
-    const target = document.getElementById(elemId);
+function setMetricValueWithSubtleUnit(target, parts, fallback = '--') {
     if (!target) return;
 
-    const parts = formatBitrateKbpsParts(kbps);
     if (!parts) {
         target.textContent = fallback;
         return;
@@ -54,6 +52,14 @@ function setBitrateWithSubtleUnit(elemId, kbps, fallback = '--') {
     unitSpan.textContent = parts.unitText;
 
     target.replaceChildren(valueSpan, unitSpan);
+}
+
+function setBitrateWithSubtleUnit(elemId, kbps, fallback = '--') {
+    const target = document.getElementById(elemId);
+    if (!target) return;
+
+    const parts = formatBitrateKbpsParts(kbps);
+    setMetricValueWithSubtleUnit(target, parts, fallback);
 }
 
 function setBadgeBitrateWithSubtleUnit(badgeElem, kbps, fallback = 'warming...') {
@@ -74,19 +80,13 @@ function setMetricsBitrateWithSubtleUnit(selector, kbps, fallback = '--') {
     const parts = formatBitrateKbpsParts(kbps);
 
     targets.forEach((target) => {
-        if (!parts) {
-            target.textContent = fallback;
-            return;
-        }
+        setMetricValueWithSubtleUnit(target, parts, fallback);
+    });
+}
 
-        const valueSpan = document.createElement('span');
-        valueSpan.textContent = parts.valueText;
-
-        const unitSpan = document.createElement('span');
-        unitSpan.className = 'ml-1 text-xs opacity-70';
-        unitSpan.textContent = parts.unitText;
-
-        target.replaceChildren(valueSpan, unitSpan);
+function setMetricsValueWithSubtleUnit(selector, parts, fallback = '--') {
+    document.querySelectorAll(selector).forEach((target) => {
+        setMetricValueWithSubtleUnit(target, parts, fallback);
     });
 }
 
@@ -498,24 +498,27 @@ function renderServerMetrics() {
 
     const toGiB = (bytes) => (Number(bytes || 0) / (1024 * 1024 * 1024)).toFixed(1);
 
-    const cpuText =
+    const cpuParts =
         metrics?.cpu?.usagePercent !== null && metrics?.cpu?.usagePercent !== undefined
-            ? `${metrics.cpu.usagePercent.toFixed(1)}%`
-            : '--';
-    const ramText =
+            ? { valueText: metrics.cpu.usagePercent.toFixed(1), unitText: '%' }
+            : null;
+    const ramParts =
         metrics?.memory?.usedBytes !== null && metrics?.memory?.totalBytes !== null
-            ? `${toGiB(metrics.memory.usedBytes)}/${toGiB(metrics.memory.totalBytes)}G`
-            : '--';
-    const diskText =
+            ? {
+                  valueText: `${toGiB(metrics.memory.usedBytes)}/${toGiB(metrics.memory.totalBytes)}`,
+                  unitText: 'G',
+              }
+            : null;
+    const diskParts =
         metrics?.disk?.usedPercent !== null && metrics?.disk?.usedPercent !== undefined
-            ? `${metrics.disk.usedPercent.toFixed(1)}%`
-            : '--';
+            ? { valueText: metrics.disk.usedPercent.toFixed(1), unitText: '%' }
+            : null;
     const downKbps = metrics?.network?.downloadKbps;
     const upKbps = metrics?.network?.uploadKbps;
 
-    setAll('.cpu-metric', cpuText);
-    setAll('.ram-metric', ramText);
-    setAll('.disk-metric', diskText);
+    setMetricsValueWithSubtleUnit('.cpu-metric', cpuParts);
+    setMetricsValueWithSubtleUnit('.ram-metric', ramParts);
+    setMetricsValueWithSubtleUnit('.disk-metric', diskParts);
     setMetricsBitrateWithSubtleUnit('.downlink-metric', downKbps);
     setMetricsBitrateWithSubtleUnit('.uplink-metric', upKbps);
 }
