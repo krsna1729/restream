@@ -103,6 +103,9 @@ Runtime config is loaded from `src/config/restream.json` (path overridable via `
 Client
   │
   ▼
+Acquire in-memory start lock for (pipelineId, outputId)
+  │ already locked → 409 "Start already in progress for this output"
+  ▼
 Validate pipeline + output exist in DB
   │
   ▼

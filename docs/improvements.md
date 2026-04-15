@@ -551,8 +551,12 @@ setInterval(() => {
 
 ### 5.1 Race Condition in Job Start
 
-**Status:** ✅ Confirmed  
-**Location:** `src/index.js:787-875`
+**Status:** ✅ Mitigated (single-instance)  
+**Location:** `src/index.js` start handler
+
+**Implementation update (2026-04-15):** A per-output in-memory start lock was added in the backend start route, returning `409 Start already in progress for this output` when concurrent starts target the same `(pipelineId, outputId)`. This prevents duplicate ffmpeg spawns within a single server instance.
+
+Residual risk: in-memory locking is process-local; multi-instance deployments would require a shared/distributed lock strategy.
 
 ```javascript
 const existingRunning = db.getRunningJobFor(pid, oid);    // line 787

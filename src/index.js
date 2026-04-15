@@ -25,6 +25,22 @@ const streamProbeCache = new Map(); // streamKey -> { ts, info }
 // Runtime-only progress state from ffmpeg "-progress pipe:3" (never persisted to DB).
 // NOTE: This is intentionally internal for now; a future API/WS endpoint can expose it.
 const ffmpegProgressByJobId = new Map(); // jobId -> latest ffmpeg progress block
+const outputStartLocks = new Set(); // pipelineId:outputId currently starting
+
+function outputStartKey(pipelineId, outputId) {
+    return `${pipelineId}:${outputId}`;
+}
+
+function tryAcquireOutputStartLock(pipelineId, outputId) {
+    const key = outputStartKey(pipelineId, outputId);
+    if (outputStartLocks.has(key)) return false;
+    outputStartLocks.add(key);
+    return true;
+}
+
+function releaseOutputStartLock(pipelineId, outputId) {
+    outputStartLocks.delete(outputStartKey(pipelineId, outputId));
+}
 
 let systemMetricsSample = {
     ts: Date.now(),
@@ -774,9 +790,14 @@ app.delete('/pipelines/:pipelineId/outputs/:outputId', (req, res) => {
 
 // start output (spawn ffmpeg)
 app.post('/pipelines/:pipelineId/outputs/:outputId/start', async (req, res) => {
+    const pid = req.params.pipelineId;
+    const oid = req.params.outputId;
+
+    if (!tryAcquireOutputStartLock(pid, oid)) {
+        return res.status(409).json({ error: 'Start already in progress for this output' });
+    }
+
     try {
-        const pid = req.params.pipelineId;
-        const oid = req.params.outputId;
         const pipeline = db.getPipeline(pid);
         if (!pipeline) return res.status(404).json({ error: 'Pipeline not found' });
 
@@ -978,6 +999,8 @@ app.post('/pipelines/:pipelineId/outputs/:outputId/start', async (req, res) => {
         return res.status(201).json({ message: 'Job started', job });
     } catch (err) {
         return res.status(500).json({ error: String(err) });
+    } finally {
+        releaseOutputStartLock(pid, oid);
     }
 });
 
