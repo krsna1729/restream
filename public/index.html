@@ -234,18 +234,24 @@
     <div class="grid h-screen min-h-0 flex-1 gap-4 p-4 pt-0 grid-cols-[auto_1fr_auto]">
       <!-- Left Column -->
       <div class="bg-base-300 rounded-box w-full overflow-y-auto">
-        <div id="pipe-overwiew" class="p-4">
-          <div>
-            <span id="pipe-cnt"></span> Inputs
-            <div class="badge badge-sm badge-success ml-1 px-2" id="pipe-oks"></div>
-            <div class="badge badge-sm badge-warning ml-1 px-2" id="pipe-warnings"></div>
-            <div class="badge badge-sm badge-error ml-1 px-2" id="pipe-errors"></div>
+        <div id="pipe-overwiew" class="p-4 space-y-2">
+          <div class="grid grid-cols-[88px_auto] items-center gap-x-3">
+            <div class="text-base"><span id="pipe-cnt"></span> Inputs</div>
+            <div class="flex items-center gap-1">
+              <div class="badge badge-sm badge-success px-2" id="pipe-oks" title="On"></div>
+              <div class="badge badge-sm badge-warning px-2" id="pipe-warnings" title="Warning"></div>
+              <div class="badge badge-sm badge-error px-2" id="pipe-errors" title="Error"></div>
+              <div class="badge badge-sm badge-neutral px-2" id="pipe-offs" title="Off / intentionally stopped"></div>
+            </div>
           </div>
-          <div class="mt-1">
-            <span id="out-cnt"></span> Outputs
-            <div class="badge badge-sm badge-success ml-1 px-2" id="out-oks"></div>
-            <div class="badge badge-sm badge-warning ml-1 px-2" id="out-warnings"></div>
-            <div class="badge badge-sm badge-error ml-1 px-2" id="out-errors"></div>
+          <div class="grid grid-cols-[88px_auto] items-center gap-x-3">
+            <div class="text-base"><span id="out-cnt"></span> Outputs</div>
+            <div class="flex items-center gap-1">
+              <div class="badge badge-sm badge-success px-2" id="out-oks" title="On"></div>
+              <div class="badge badge-sm badge-warning px-2" id="out-warnings" title="Warning"></div>
+              <div class="badge badge-sm badge-error px-2" id="out-errors" title="Error"></div>
+              <div class="badge badge-sm badge-neutral px-2" id="out-offs" title="Off / intentionally stopped"></div>
+            </div>
           </div>
         </div>
         <ul class="menu rounded-box w-full" id="pipelines"></ul>

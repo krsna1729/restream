@@ -645,6 +645,7 @@ async function fetchConfig() {
     etag = res.etag;
     configEtag = res.configEtag;
     config = res.data;
+    setServerConfig(config?.serverName);
 }
 
 async function fetchHealth() {
@@ -706,7 +707,6 @@ async function onVisibilityChange() {
 
 (async () => {
     markUserConfigBaseline();
-    setServerConfig(config?.serverName);
     await fetchAndRerender();
     startDashboardPolling(document.hidden ? DASHBOARD_HIDDEN_POLL_INTERVAL_MS : DASHBOARD_POLL_INTERVAL_MS);
     startStreamingConfigPolling();

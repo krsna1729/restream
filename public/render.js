@@ -91,27 +91,28 @@ function setMetricsValueWithSubtleUnit(selector, parts, fallback = '--') {
 }
 
 function renderPipelinesList(selectedPipe) {
-    setInnerText('pipe-cnt', pipelines.length);
-    setInnerText('pipe-oks', pipelines.filter((p) => p.input.status === 'on').length);
-    setInnerText('pipe-errors', pipelines.filter((p) => p.input.status === 'off').length);
-    setInnerText('pipe-warnings', pipelines.filter((p) => p.input.status === 'warning').length);
+    const inputOn = pipelines.filter((p) => p.input.status === 'on').length;
+    const inputWarning = pipelines.filter((p) => p.input.status === 'warning').length;
+    const inputError = pipelines.filter((p) => p.input.status === 'error').length;
+    const inputOff = pipelines.filter((p) => p.input.status === 'off').length;
 
-    setInnerText(
-        'out-cnt',
-        pipelines.reduce((sum, p) => sum + p.outs.length, 0),
-    );
-    setInnerText(
-        'out-oks',
-        pipelines.reduce((sum, p) => sum + p.outs.filter((o) => o.status === 'on').length, 0),
-    );
-    setInnerText(
-        'out-warnings',
-        pipelines.reduce((sum, p) => sum + p.outs.filter((o) => o.status === 'warning').length, 0),
-    );
-    setInnerText(
-        'out-errors',
-        pipelines.reduce((sum, p) => sum + p.outs.filter((o) => o.status === 'error').length, 0),
-    );
+    setInnerText('pipe-cnt', pipelines.length);
+    setInnerText('pipe-oks', inputOn);
+    setInnerText('pipe-warnings', inputWarning);
+    setInnerText('pipe-errors', inputError);
+    setInnerText('pipe-offs', inputOff);
+
+    const outputTotal = pipelines.reduce((sum, p) => sum + p.outs.length, 0);
+    const outputOn = pipelines.reduce((sum, p) => sum + p.outs.filter((o) => o.status === 'on').length, 0);
+    const outputWarning = pipelines.reduce((sum, p) => sum + p.outs.filter((o) => o.status === 'warning').length, 0);
+    const outputError = pipelines.reduce((sum, p) => sum + p.outs.filter((o) => o.status === 'error').length, 0);
+    const outputOff = pipelines.reduce((sum, p) => sum + p.outs.filter((o) => o.status === 'off').length, 0);
+
+    setInnerText('out-cnt', outputTotal);
+    setInnerText('out-oks', outputOn);
+    setInnerText('out-warnings', outputWarning);
+    setInnerText('out-errors', outputError);
+    setInnerText('out-offs', outputOff);
 
     const sortedPipelines = [...pipelines].sort((a, b) => a.name.localeCompare(b.name));
     const pipelinesList = document.getElementById('pipelines');
