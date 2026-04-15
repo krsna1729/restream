@@ -1376,7 +1376,11 @@ app.get('/healthz', (req, res) => {
  * Static UI & Server
  * ====================== */
 
-app.use('/', express.static(path.join(__dirname, '..', 'public')));
+app.use('/', express.static(path.join(__dirname, '..', 'public'), {
+    maxAge: '1h',
+    etag: true,
+    lastModified: true,
+}));
 
 app.listen(appPort, appHost, () => {
     startMediamtxReadinessChecks();
