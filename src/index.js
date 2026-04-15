@@ -3,7 +3,7 @@ const express = require('express');
 const compression = require('compression');
 const fetch = global.fetch || require('node-fetch'); // keep compatibility
 const db = require('./db');
-const { getConfig } = require('./config');
+const { getConfig, toPublicConfig } = require('./config');
 const fs = require('fs');
 const os = require('os');
 
@@ -1538,15 +1538,13 @@ app.get('/config', async (req, res) => {
         }
 
         // build snapshot same as recomputeEtag logic
-        const streamKeys = db.listStreamKeys();
         const pipelines = db.listPipelines();
         const outputs = db.listOutputs();
         const jobs = db.listJobs();
-        const runtimeConfig = getConfig();
+        const publicConfig = toPublicConfig(getConfig());
 
         const snapshot = {
-            ...runtimeConfig,
-            streamKeys,
+            ...publicConfig,
             pipelines,
             outputs,
             jobs,

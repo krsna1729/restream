@@ -81,18 +81,49 @@ function getConfigPath() {
     return process.env.RESTREAM_CONFIG_PATH || DEFAULT_CONFIG_PATH;
 }
 
+let cachedConfig = null;
+let cachedConfigMtimeMs = null;
+
 function getConfig() {
     const configPath = getConfigPath();
     try {
+        const stat = fs.statSync(configPath);
+        if (cachedConfig && cachedConfigMtimeMs === stat.mtimeMs) {
+            return cachedConfig;
+        }
+
         const raw = fs.readFileSync(configPath, 'utf8');
         const parsed = JSON.parse(raw);
-        return sanitizeConfig(parsed);
+        const sanitized = sanitizeConfig(parsed);
+        cachedConfig = sanitized;
+        cachedConfigMtimeMs = stat.mtimeMs;
+        return sanitized;
     } catch (err) {
-        return sanitizeConfig(DEFAULT_CONFIG);
+        if (cachedConfig) return cachedConfig;
+        const fallback = sanitizeConfig(DEFAULT_CONFIG);
+        cachedConfig = fallback;
+        cachedConfigMtimeMs = null;
+        return fallback;
     }
+}
+
+function toPublicConfig(config) {
+    const safe = sanitizeConfig(config);
+    return {
+        serverName: safe.serverName,
+        pipelinesLimit: safe.pipelinesLimit,
+        outLimit: safe.outLimit,
+        ingest: {
+            host: safe.mediamtx?.ingest?.host ?? null,
+            rtmpPort: safe.mediamtx?.ingest?.rtmpPort ?? String(DEFAULT_CONFIG.mediamtx.ingest.rtmpPort),
+            rtspPort: safe.mediamtx?.ingest?.rtspPort ?? String(DEFAULT_CONFIG.mediamtx.ingest.rtspPort),
+            srtPort: safe.mediamtx?.ingest?.srtPort ?? String(DEFAULT_CONFIG.mediamtx.ingest.srtPort),
+        },
+    };
 }
 
 module.exports = {
     getConfig,
     getConfigPath,
+    toPublicConfig,
 };

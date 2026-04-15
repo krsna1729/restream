@@ -213,7 +213,7 @@ function renderPipelineInfoColumn(selectedPipe) {
         return `${value.slice(0, 2)}...${value.slice(-2)}`;
     };
 
-    const ingestConfig = config?.mediamtx?.ingest || {};
+    const ingestConfig = config?.ingest || {};
     const streamKey = pipe.key || 'Unassigned';
     const maskedStreamKey = pipe.key ? maskSecret(pipe.key) : streamKey;
 

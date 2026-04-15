@@ -126,51 +126,52 @@ app.use('/stream-keys', writeLimiter);
 
 ### 1.3 Stream Key Exposure in APIs
 
-**Status:** ✅ Confirmed  
+**Status:** ⚠️ Partially implemented  
 **Severity:** High  
 **Location:** `src/index.js:576` (`GET /stream-keys`), `src/index.js:1426` (`GET /config`)
 
-Full stream keys are returned verbatim in API responses. Anyone with API access can:
+Full stream keys were being returned verbatim in API responses, and `/config` also exposed raw runtime server shape. Anyone with API access could:
 
 - Obtain valid RTMP/RTSP/SRT ingest URLs
 - Push streams to any pipeline
 
-**Recommendation:**
+The `/config` payload has now been narrowed to the public fields the dashboard actually needs.
 
-- Add a `maskKeys` query parameter to `/config` that returns masked keys
-- Return only key prefixes in list endpoints (e.g., `abc1...xyz9`)
-- Use the masked version by default in frontend APIs
+Remaining exposure still exists on the dedicated `/stream-keys` admin endpoint, which continues to return full keys for current edit/delete/copy flows.
 
 <details><summary><strong>Implementation</strong></summary>
 
-**File:** `src/index.js` — In the `GET /config` handler (~line 1426):
+**Files:** `src/config/index.js`, `src/index.js`, `public/render.js`
+
+`/config` now returns a transformed public runtime block instead of the raw config object:
 
 ```javascript
-// Default to masked unless ?full_keys=true AND request is authenticated
-const maskKeys = req.query.full_keys !== 'true';
-
-// When building the response snapshot, mask stream keys:
-if (maskKeys) {
-    for (const pipeline of snapshot.pipelines) {
-        if (pipeline.streamKey) pipeline.streamKey = maskToken(pipeline.streamKey);
+{
+    serverName: 'Server Name',
+    pipelinesLimit: 25,
+    outLimit: 95,
+    ingest: {
+        host: null,
+        rtmpPort: '1935',
+        rtspPort: '8554',
+        srtPort: '8890',
     }
 }
 ```
 
-**File:** `src/index.js` — In `GET /stream-keys` (~line 576):
+Changes applied:
+- removed top-level `host` from the public `/config` response
+- removed the nested `mediamtx` wrapper from the public `/config` response
+- removed the unused `streamKeys` array from `/config`
+- updated the frontend ingest URL renderer to read `config.ingest`
 
-```javascript
-// Return masked keys by default
-const keys = db.listStreamKeys().map(k => ({
-    ...k,
-    key: maskToken(k.key), // only show prefix/suffix
-    fullKey: undefined,     // never expose in list
-}));
-```
+This avoids leaking the app bind host (`0.0.0.0`) and the internal config nesting to dashboard clients while preserving the ingest ports the UI needs to display.
 
-Add a separate `GET /stream-keys/:key/reveal` endpoint behind auth for when the full key is needed (e.g., copying to OBS).
+Still open:
+- masking or replacing full keys on `GET /stream-keys`
+- removing raw pipeline stream keys from dashboard snapshots if copy/reveal flows are redesigned
 
-**Effort:** ~25 lines. No new dependencies.
+**Implemented in:** current branch
 
 </details>
 
@@ -415,7 +416,7 @@ Both files contain explicit `> **Historical …**` deprecation banners and have 
 
 ### 4.1 Config File Re-read on Every Request
 
-**Status:** ✅ Confirmed  
+**Status:** ✅ Implemented  
 **Location:** `src/config/index.js:84-93`
 
 `getConfig()` calls `fs.readFileSync()` + `JSON.parse()` on every invocation. This function is called from:
@@ -426,34 +427,40 @@ Both files contain explicit `> **Historical …**` deprecation banners and have 
 
 **Impact:** Unnecessary I/O on every config-dependent request. Mitigated by config rarely changing and `readFileSync` being fast for small files.
 
-**Recommendation:** Cache in memory and reload on `fs.watch` or periodic interval.
+This is now cached in memory with mtime-based invalidation.
 
 <details><summary><strong>Implementation</strong></summary>
 
-**File:** `src/config/index.js` — Replace `getConfig()`:
+**File:** `src/config/index.js` — Added in-memory cache + mtime tracking:
 
 ```javascript
-let _cachedConfig = null;
-let _configMtime = 0;
+let cachedConfig = null;
+let cachedConfigMtimeMs = null;
 
 function getConfig() {
-    const configPath = path.join(__dirname, 'restream.json');
+    const configPath = getConfigPath();
     try {
         const stat = fs.statSync(configPath);
-        if (_cachedConfig && stat.mtimeMs === _configMtime) return _cachedConfig;
+        if (cachedConfig && cachedConfigMtimeMs === stat.mtimeMs) return cachedConfig;
+
         const raw = fs.readFileSync(configPath, 'utf8');
-        _cachedConfig = JSON.parse(raw);
-        _configMtime = stat.mtimeMs;
-        return _cachedConfig;
-    } catch {
-        return _cachedConfig || {};
+        const sanitized = sanitizeConfig(JSON.parse(raw));
+        cachedConfig = sanitized;
+        cachedConfigMtimeMs = stat.mtimeMs;
+        return sanitized;
+    } catch (err) {
+        if (cachedConfig) return cachedConfig;
+        const fallback = sanitizeConfig(DEFAULT_CONFIG);
+        cachedConfig = fallback;
+        cachedConfigMtimeMs = null;
+        return fallback;
     }
 }
 ```
 
-This avoids re-parsing JSON on every call while still detecting file changes via `stat.mtimeMs` (a single syscall vs read+parse). For even better performance, use `fs.watch()` to invalidate.
+This avoids re-reading and re-parsing config JSON on every call, while still picking up changes when the config file mtime changes.
 
-**Effort:** ~15 lines, no new dependencies.
+**Implemented in:** current branch
 
 </details>
 
