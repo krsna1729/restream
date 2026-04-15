@@ -712,18 +712,18 @@ Both mock servers model the **post-upsert scenario** (1 job per output). See §7
 
 Static assets are identical across both mock servers (same `public/` directory). Sizes from CDP `ResourceFinish` events:
 
-| Resource | Type | Transfer Size | Decoded Size | Compressed? |
-|----------|------|--------------|--------------|-------------|
-| `/output.css` | stylesheet | **81.0 KB** | 80.9 KB | ❌ No |
-| `/render.js` | script | 25.2 KB | 25.0 KB | ❌ No |
-| `/index.html` | document | 17.1 KB | 17.0 KB | ❌ No |
-| `/dashboard.js` | script | 12.2 KB | 12.0 KB | ❌ No |
-| `/pipeline.js` | script | 5.8 KB | 5.6 KB | ❌ No |
-| `/api.js` | script | 5.5 KB | 5.4 KB | ❌ No |
-| `/utils.js` | script | 4.3 KB | 4.1 KB | ❌ No |
-| **Total static** | | **151 KB** | **150 KB** | |
+| Resource | Type | Decoded Size | Brotli Transfer | Saving |
+|----------|------|-------------|----------------|--------|
+| `/output.css` | stylesheet | 90.2 KB | 15.0 KB | −83% |
+| `/render.js` | script | 25.2 KB | 5.1 KB | −80% |
+| `/index.html` | document | 18.6 KB | ~3.5 KB | ~−81% |
+| `/dashboard.js` | script | 21.7 KB | 4.9 KB | −77% |
+| `/pipeline.js` | script | 5.5 KB | 1.1 KB | −80% |
+| `/api.js` | script | 5.6 KB | 1.0 KB | −82% |
+| `/utils.js` | script | 4.0 KB | 0.9 KB | −78% |
+| **Total static** | | **~151 KB** | **~32 KB** | **−79%** |
 
-> **All responses are uncompressed.** Encoded ≈ Decoded on every asset — no `Content-Encoding: gzip` present.
+> **All responses are brotli-compressed** (`Content-Encoding: br`, `Vary: Accept-Encoding`). Measured with Chrome MCP + curl after `compression@1.8.1` was added (see §7.3.1).
 
 ### 7.3 Findings
 
@@ -1049,22 +1049,23 @@ All traces used `Tracing.start` with categories `devtools.timeline`, `v8.execute
 
 | Metric | 4P/12O | 30P/500O | Growth |
 |--------|--------|----------|--------|
-| Per-poll payload (no gzip) | ~10.2 KB | **280 KB** | **27.5×** |
-| Per minute (12 polls) | 122 KB | **3.36 MB** | 27.5× |
-| Per 8h day | **57 MB** | **1.6 GB** | 28× |
-| Fast 4G BW consumed | **0.4%** | **11%** | — |
+| Per-poll payload (uncompressed) | ~10.2 KB | **280 KB** | **27.5×** |
+| Per-poll payload (brotli, ~82%) | ~1.8 KB | **~50 KB** | 27.5× |
+| Per minute (12 polls, compressed) | ~22 KB | **~600 KB** | 27.5× |
+| Per 8h day (compressed) | **10 MB** | **288 MB** | 28× |
+| Fast 4G BW consumed (compressed) | **<0.1%** | **~2%** | — |
 
-> At 30P/500O on Fast 4G, polling consumes 11% of available bandwidth — comfortable headroom. With gzip (~75% compression), this drops to ~3%. **Without the upsert fix** (unbounded job history), `/config` at 30P/500O would grow to 1.5 MB+, pushing Fast 4G bandwidth consumption to **61%** — see §7.5.3.
+> With brotli now active, 30P/500O polling drops from 11% to ~2% of Fast 4G bandwidth. **Without the upsert fix** (unbounded job history), `/config` at 30P/500O would grow to 1.5 MB+ uncompressed (~270 KB compressed), still manageable but wasteful — see §7.5.3.
 
-#### 7.4.6 Compression Status (CDP-confirmed)
+#### 7.4.6 Compression Status ✅ Implemented
 
-All responses are uncompressed (encoded ≈ decoded on every asset). See §7.2 for static asset sizes.
+All responses are brotli-compressed (`Content-Encoding: br`). See §7.3.1 for full evidence and §7.2 for updated static asset sizes.
 
-| Asset type | Total raw | Est. gzipped (~75%) | Saving |
-|-----------|-----------|-------------------|--------|
-| Static (CSS + JS + HTML) | 151 KB | ~38 KB | ~113 KB |
-| `/config` per poll (30P/500O) | 205 KB | ~51 KB | ~154 KB |
-| `/health` per poll (30P/500O) | 75 KB | ~19 KB | ~56 KB |
+| Asset type | Uncompressed | Brotli | Saving |
+|-----------|-------------|--------|--------|
+| Static (CSS + JS + HTML) | ~151 KB | ~32 KB | **−79%** |
+| `/config` per poll (30P/500O) | 205 KB | ~37 KB | **−82%** |
+| `/health` per poll (30P/500O) | 75 KB | ~14 KB | **−81%** |
 
 ### 7.5 Scale Extrapolation: 30 Pipelines × 500 Outputs
 
