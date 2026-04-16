@@ -38,6 +38,7 @@ const healthSnapshotIntervalMs = Number(process.env.HEALTH_SNAPSHOT_INTERVAL_MS 
 
 // ── Timing constants ──────────────────────────────────
 const MEDIAMTX_CHECK_INTERVAL_MS = 5000;
+const MEDIAMTX_FETCH_TIMEOUT_MS = 5000;
 const FFPROBE_TIMEOUT_MS = 8000;
 const JOB_STABILITY_CHECK_MS = 250;
 
@@ -265,7 +266,7 @@ async function checkMediamtxReadiness() {
     const previousError = mediamtxReadiness.error;
     try {
         const response = await fetch(`${getMediamtxApiBaseUrl()}/v3/config/global/get`, {
-            signal: AbortSignal.timeout(MEDIAMTX_CHECK_INTERVAL_MS),
+            signal: AbortSignal.timeout(MEDIAMTX_FETCH_TIMEOUT_MS),
         });
 
         if (!response.ok) {
@@ -561,7 +562,7 @@ function getReaderIdFromQuery(query) {
 async function fetchMediamtxJson(endpoint) {
     const url = `${getMediamtxApiBaseUrl()}${endpoint}`;
     const resp = await fetch(url, {
-        signal: AbortSignal.timeout(MEDIAMTX_CHECK_INTERVAL_MS),
+        signal: AbortSignal.timeout(MEDIAMTX_FETCH_TIMEOUT_MS),
     });
     let data = null;
     try {
@@ -864,7 +865,7 @@ app.post('/pipelines/:id', async (req, res) => {
         // Block stream key change while any output has a running job.
         const streamKeyChanging = streamKey !== existing.streamKey;
         if (streamKeyChanging) {
-            const pipelineOutputs = db.listOutputs().filter((o) => o.pipelineId === id);
+            const pipelineOutputs = db.listOutputsForPipeline(id);
             const hasRunningJob = pipelineOutputs.some((o) => !!db.getRunningJobFor(id, o.id));
             if (hasRunningJob) {
                 return res.status(409).json({
@@ -916,7 +917,7 @@ app.delete('/pipelines/:id', (req, res) => {
         const existing = db.getPipeline(id);
         if (!existing) return res.status(404).json({ error: 'Pipeline not found' });
 
-        const outputs = db.listOutputs().filter((output) => output.pipelineId === id);
+        const outputs = db.listOutputsForPipeline(id);
         for (const output of outputs) {
             const running = db.getRunningJobFor(id, output.id);
             if (running) stopRunningJob(running);
@@ -968,7 +969,7 @@ app.post('/pipelines/:pipelineId/outputs', (req, res) => {
 
         const runtimeConfig = getConfig();
         const outLimit = Number(runtimeConfig.outLimit);
-        const currentOutCount = db.listOutputs().filter((output) => output.pipelineId === pid).length;
+        const currentOutCount = db.listOutputsForPipeline(pid).length;
         if (Number.isFinite(outLimit) && currentOutCount >= outLimit) {
             return res.status(400).json({ error: `Output limit reached for pipeline: ${outLimit}` });
         }
@@ -1456,6 +1457,238 @@ function setLatestHealthSnapshot(snapshot) {
     return latestHealthSnapshot;
 }
 
+function groupOutputsByPipeline(outputs) {
+    const outputsByPipeline = new Map();
+
+    for (const output of outputs) {
+        const existing = outputsByPipeline.get(output.pipelineId);
+        if (existing) {
+            existing.push(output);
+            continue;
+        }
+        outputsByPipeline.set(output.pipelineId, [output]);
+    }
+
+    return outputsByPipeline;
+}
+
+function indexRtspConnectionsByReaderTag(rtspConns, rtspSessions) {
+    const rtspSessionById = new Map((rtspSessions.items || []).map((session) => [session.id, session]));
+    const rtspConnectionRecords = (rtspConns.items || []).map((conn) => {
+        const session = conn?.session ? rtspSessionById.get(conn.session) : null;
+
+        return {
+            id: conn?.id || null,
+            sessionId: conn?.session || session?.id || null,
+            path: conn?.path || session?.path || null,
+            query: conn?.query || session?.query || null,
+            remoteAddr: conn?.remoteAddr || session?.remoteAddr || null,
+            bytesReceived: conn?.bytesReceived || session?.bytesReceived || 0,
+            bytesSent: conn?.bytesSent || session?.bytesSent || 0,
+        };
+    });
+
+    const rtspByReaderTag = new Map();
+    for (const conn of rtspConnectionRecords) {
+        const readerTag = getReaderIdFromQuery(conn.query);
+        if (!readerTag) continue;
+
+        const existing = rtspByReaderTag.get(readerTag);
+        if (existing) {
+            existing.push(conn);
+            continue;
+        }
+        rtspByReaderTag.set(readerTag, [conn]);
+    }
+
+    return { rtspConnectionRecords, rtspByReaderTag };
+}
+
+function startPipelineProbeRefresh(streamKey, nowMs) {
+    probeRefreshStartedAt.set(streamKey, nowMs);
+    getCachedRtspProbeInfo(streamKey, getPipelineRtspUrl(streamKey))
+        .catch(() => {})
+        .finally(() => {
+            probeRefreshStartedAt.delete(streamKey);
+        });
+}
+
+function getPipelineProbeInfo(streamKey, pathAvailable, nowMs) {
+    if (!streamKey) return null;
+
+    const cachedProbe = streamProbeCache.get(streamKey);
+    const probeCacheAgeMs = cachedProbe ? (nowMs - cachedProbe.ts) : Number.POSITIVE_INFINITY;
+    const probeCacheExpired = probeCacheAgeMs >= probeCacheTtlMs;
+    let refreshStartedAt = probeRefreshStartedAt.get(streamKey) ?? null;
+
+    if (pathAvailable && probeCacheExpired && refreshStartedAt === null) {
+        startPipelineProbeRefresh(streamKey, nowMs);
+        refreshStartedAt = nowMs;
+    }
+
+    const withinRefreshGraceWindow = refreshStartedAt !== null
+        && (nowMs - refreshStartedAt) < FFPROBE_TIMEOUT_MS;
+    if (!cachedProbe || (probeCacheExpired && !withinRefreshGraceWindow)) return null;
+
+    return cachedProbe.info;
+}
+
+function findFirstVideoTrack(pathInfo) {
+    return (pathInfo?.tracks2 || []).find((track) =>
+        String(track.codec || '').toLowerCase().includes('264'),
+    ) || null;
+}
+
+function findFirstAudioTrack(pathInfo) {
+    return (pathInfo?.tracks2 || []).find((track) => {
+        const codec = String(track.codec || '').toLowerCase();
+        if (!codec) return false;
+        return !codec.includes('264')
+            && !codec.includes('265')
+            && !codec.includes('vp8')
+            && !codec.includes('vp9')
+            && !codec.includes('av1');
+    }) || null;
+}
+
+function updatePipelineInputStatusHistory(pipelineId, inputStatus) {
+    const previousInputStatus = pipelineInputStatusHistory.get(pipelineId);
+
+    if (previousInputStatus === undefined) {
+        db.appendPipelineEvent(
+            pipelineId,
+            `[input_state] initial_state=${inputStatus}`,
+            'pipeline_state',
+        );
+    } else if (previousInputStatus !== inputStatus) {
+        db.appendPipelineEvent(
+            pipelineId,
+            `[input_state] ${previousInputStatus} -> ${inputStatus}`,
+            'pipeline_state',
+        );
+    }
+
+    pipelineInputStatusHistory.set(pipelineId, inputStatus);
+}
+
+function buildPipelineInputHealth({ streamKey, pathInfo, inputStatus, probeInfo }) {
+    const readers = pathInfo?.readers || [];
+    const firstVideoTrack = findFirstVideoTrack(pathInfo);
+    const firstAudioTrack = findFirstAudioTrack(pathInfo);
+
+    return {
+        status: inputStatus,
+        publishStartedAt: pathInfo?.availableTime || pathInfo?.readyTime || null,
+        streamKey: streamKey || null,
+        readers: readers.length,
+        bytesReceived: pathInfo?.bytesReceived || 0,
+        bytesSent: pathInfo?.bytesSent || 0,
+        video: firstVideoTrack
+            ? {
+                  codec: firstVideoTrack.codec || null,
+                  width: firstVideoTrack.codecProps?.width || null,
+                  height: firstVideoTrack.codecProps?.height || null,
+                  profile: firstVideoTrack.codecProps?.profile || null,
+                  level: firstVideoTrack.codecProps?.level || null,
+                  fps: probeInfo?.video?.fps ?? firstVideoTrack.codecProps?.fps ?? null,
+                  bw: null,
+              }
+            : null,
+        audio: firstAudioTrack || probeInfo?.audio
+            ? {
+                  codec: probeInfo?.audio?.codec ?? firstAudioTrack?.codec ?? null,
+                  channels: probeInfo?.audio?.channels ?? firstAudioTrack?.codecProps?.channels ?? null,
+                  sample_rate: probeInfo?.audio?.sampleRate ?? firstAudioTrack?.codecProps?.sampleRate ?? null,
+                  profile: probeInfo?.audio?.profile ?? firstAudioTrack?.codecProps?.profile ?? null,
+                  bw: null,
+              }
+            : null,
+    };
+}
+
+function buildOutputHealthSnapshot(pipeline, output, latestJob, rtspByReaderTag) {
+    let status = 'off';
+    const ffmpegProgress = latestJob?.id ? ffmpegProgressByJobId.get(latestJob.id) || null : null;
+
+    if (latestJob?.status === 'failed') status = 'error';
+    if (latestJob?.status === 'running') {
+        const expectedReaderTag = generateReaderTag(pipeline.id, output.id);
+        const matches = rtspByReaderTag.get(expectedReaderTag) || [];
+        const readerConn = matches[0] || null;
+        status = readerConn ? 'on' : 'warning';
+
+        log('debug', 'Output health match result', {
+            pipelineId: pipeline.id,
+            outputId: output.id,
+            jobId: latestJob?.id || null,
+            jobPid: Number.isFinite(Number(latestJob.pid)) ? Number(latestJob.pid) : null,
+            jobStatus: latestJob?.status || null,
+            expectedReaderTag,
+            hasReaderTagMatch: !!readerConn,
+            matchedReaderCount: matches.length,
+            knownReaderTagCount: rtspByReaderTag.size,
+            finalStatus: status,
+        });
+    }
+
+    return {
+        status,
+        jobId: latestJob?.id || null,
+        totalSize: ffmpegProgress?.total_size || null,
+        bitrate: ffmpegProgress?.bitrate || null,
+        bitrateKbps: parseFfmpegBitrateToKbps(ffmpegProgress?.bitrate),
+    };
+}
+
+function buildPipelineHealthSnapshot(
+    pipeline,
+    pathInfo,
+    pipelineOutputs,
+    jobByOutputId,
+    rtspByReaderTag,
+    nowMs,
+) {
+    const streamKey = pipeline.streamKey || '';
+    const pathAvailable = !!(pathInfo?.available || pathInfo?.ready);
+    const pathOnline = !!pathInfo?.online;
+    const hasEverSeenLive = Number(pipeline.inputEverSeenLive || 0) === 1;
+    const inputStatus = computeInputStatus({
+        hasKey: !!streamKey,
+        pathAvailable,
+        pathOnline,
+        hasEverSeenLive,
+    });
+
+    if (streamKey && pathAvailable && !hasEverSeenLive) {
+        db.markPipelineInputSeenLive(pipeline.id);
+    }
+
+    updatePipelineInputStatusHistory(pipeline.id, inputStatus);
+
+    const probeInfo = getPipelineProbeInfo(streamKey, pathAvailable, nowMs);
+    const outputsHealth = {};
+
+    for (const output of pipelineOutputs) {
+        const latestJob = jobByOutputId.get(output.id) || null;
+        outputsHealth[output.id] = buildOutputHealthSnapshot(
+            pipeline,
+            output,
+            latestJob,
+            rtspByReaderTag,
+        );
+    }
+
+    return {
+        input: buildPipelineInputHealth({
+            streamKey,
+            pathInfo,
+            inputStatus,
+            probeInfo,
+        }),
+        outputs: outputsHealth,
+    };
+}
+
 async function buildHealthSnapshot() {
     if (!mediamtxReadiness.ready) {
         return buildDefaultHealthSnapshot('initializing');
@@ -1485,29 +1718,7 @@ async function buildHealthSnapshot() {
         });
 
         const pathByName = new Map((paths.items || []).map((item) => [item.name, item]));
-        const rtspSessionById = new Map((rtspSessions.items || []).map((s) => [s.id, s]));
-        const rtspConnectionRecords = (rtspConns.items || []).map((conn) => {
-            const session = conn?.session ? rtspSessionById.get(conn.session) : null;
-
-            return {
-                id: conn?.id || null,
-                sessionId: conn?.session || session?.id || null,
-                path: conn?.path || session?.path || null,
-                query: conn?.query || session?.query || null,
-                remoteAddr: conn?.remoteAddr || session?.remoteAddr || null,
-                bytesReceived: conn?.bytesReceived || session?.bytesReceived || 0,
-                bytesSent: conn?.bytesSent || session?.bytesSent || 0,
-            };
-        });
-
-        const rtspByReaderTag = new Map();
-        for (const conn of rtspConnectionRecords) {
-            const readerTag = getReaderIdFromQuery(conn.query);
-            if (!readerTag) continue;
-            const list = rtspByReaderTag.get(readerTag) || [];
-            list.push(conn);
-            rtspByReaderTag.set(readerTag, list);
-        }
+        const { rtspByReaderTag } = indexRtspConnectionsByReaderTag(rtspConns, rtspSessions);
 
         if ((rtspConns.items || []).length > 0 && rtspByReaderTag.size === 0) {
             log('warn', 'MediaMTX RTSP payload has no reader_id query for active readers', {
@@ -1521,6 +1732,7 @@ async function buildHealthSnapshot() {
         const pipelines = db.listPipelines();
         const outputs = db.listOutputs();
         const jobs = db.listJobs();
+        const outputsByPipeline = groupOutputsByPipeline(outputs);
 
         const jobByOutputId = new Map();
         for (const job of jobs) {
@@ -1531,138 +1743,18 @@ async function buildHealthSnapshot() {
         const nowMs = Date.now();
 
         for (const pipeline of pipelines) {
-            const key = pipeline.streamKey || '';
-            const pathInfo = key ? pathByName.get(key) : null;
-            const readers = pathInfo?.readers || [];
-            const pathAvailable = !!(pathInfo?.available || pathInfo?.ready);
-            const pathOnline = !!pathInfo?.online;
-            const hasEverSeenLive = Number(pipeline.inputEverSeenLive || 0) === 1;
-            const inputStatus = computeInputStatus({
-                hasKey: !!key,
-                pathAvailable,
-                pathOnline,
-                hasEverSeenLive,
-            });
+            const streamKey = pipeline.streamKey || '';
+            const pathInfo = streamKey ? pathByName.get(streamKey) : null;
+            const pipelineOutputs = outputsByPipeline.get(pipeline.id) || [];
 
-            if (key && pathAvailable && !hasEverSeenLive) {
-                db.markPipelineInputSeenLive(pipeline.id);
-            }
-
-            const previousInputStatus = pipelineInputStatusHistory.get(pipeline.id);
-            if (previousInputStatus === undefined) {
-                db.appendPipelineEvent(
-                    pipeline.id,
-                    `[input_state] initial_state=${inputStatus}`,
-                    'pipeline_state',
-                );
-            } else if (previousInputStatus !== inputStatus) {
-                db.appendPipelineEvent(
-                    pipeline.id,
-                    `[input_state] ${previousInputStatus} -> ${inputStatus}`,
-                    'pipeline_state',
-                );
-            }
-            pipelineInputStatusHistory.set(pipeline.id, inputStatus);
-
-            const cachedProbe = key ? streamProbeCache.get(key) : null;
-            const probeCacheAgeMs = cachedProbe ? (nowMs - cachedProbe.ts) : Number.POSITIVE_INFINITY;
-            const probeCacheExpired = probeCacheAgeMs >= probeCacheTtlMs;
-            let refreshStartedAt = key ? probeRefreshStartedAt.get(key) : null;
-            if (key && pathAvailable && probeCacheExpired && (refreshStartedAt === undefined || refreshStartedAt === null)) {
-                probeRefreshStartedAt.set(key, nowMs);
-                refreshStartedAt = nowMs;
-                getCachedRtspProbeInfo(key, getPipelineRtspUrl(key))
-                    .catch(() => {})
-                    .finally(() => {
-                        probeRefreshStartedAt.delete(key);
-                    });
-            }
-            const withinRefreshGraceWindow = refreshStartedAt !== undefined && refreshStartedAt !== null
-                && (nowMs - refreshStartedAt) < FFPROBE_TIMEOUT_MS;
-            const probeInfo = cachedProbe && (!probeCacheExpired || withinRefreshGraceWindow)
-                ? cachedProbe.info
-                : null;
-
-            const firstVideoTrack = (pathInfo?.tracks2 || []).find((track) =>
-                String(track.codec || '').toLowerCase().includes('264'),
+            health.pipelines[pipeline.id] = buildPipelineHealthSnapshot(
+                pipeline,
+                pathInfo,
+                pipelineOutputs,
+                jobByOutputId,
+                rtspByReaderTag,
+                nowMs,
             );
-            const firstAudioTrack = (pathInfo?.tracks2 || []).find((track) => {
-                const codec = String(track.codec || '').toLowerCase();
-                if (!codec) return false;
-                return !codec.includes('264') && !codec.includes('265') && !codec.includes('vp8') && !codec.includes('vp9') && !codec.includes('av1');
-            });
-
-            const pipelineHealth = {
-                input: {
-                    status: inputStatus,
-                    publishStartedAt: pathInfo?.availableTime || pathInfo?.readyTime || null,
-                    streamKey: key || null,
-                    readers: readers.length,
-                    bytesReceived: pathInfo?.bytesReceived || 0,
-                    bytesSent: pathInfo?.bytesSent || 0,
-                    video: firstVideoTrack
-                        ? {
-                              codec: firstVideoTrack.codec || null,
-                              width: firstVideoTrack.codecProps?.width || null,
-                              height: firstVideoTrack.codecProps?.height || null,
-                              profile: firstVideoTrack.codecProps?.profile || null,
-                              level: firstVideoTrack.codecProps?.level || null,
-                              fps: probeInfo?.video?.fps ?? firstVideoTrack.codecProps?.fps ?? null,
-                              bw: null,
-                          }
-                        : null,
-                    audio: firstAudioTrack || probeInfo?.audio
-                        ? {
-                              codec: probeInfo?.audio?.codec ?? firstAudioTrack?.codec ?? null,
-                              channels: probeInfo?.audio?.channels ?? firstAudioTrack?.codecProps?.channels ?? null,
-                              sample_rate: probeInfo?.audio?.sampleRate ?? firstAudioTrack?.codecProps?.sampleRate ?? null,
-                              profile: probeInfo?.audio?.profile ?? firstAudioTrack?.codecProps?.profile ?? null,
-                              bw: null,
-                          }
-                        : null,
-                },
-                outputs: {},
-            };
-
-            const pipelineOutputs = outputs.filter((output) => output.pipelineId === pipeline.id);
-
-            for (const output of pipelineOutputs) {
-                const latest = jobByOutputId.get(output.id) || null;
-                let readerConn = null;
-                let status = 'off';
-                const ffmpegProgress = latest?.id ? ffmpegProgressByJobId.get(latest.id) || null : null;
-
-                if (latest?.status === 'failed') status = 'error';
-                if (latest?.status === 'running') {
-                    const expectedReaderTag = getExpectedReaderTag(pipeline.id, output.id);
-                    const matches = rtspByReaderTag.get(expectedReaderTag) || [];
-                    readerConn = matches[0] || null;
-                    status = readerConn ? 'on' : 'warning';
-
-                    log('debug', 'Output health match result', {
-                        pipelineId: pipeline.id,
-                        outputId: output.id,
-                        jobId: latest?.id || null,
-                        jobPid: Number.isFinite(Number(latest.pid)) ? Number(latest.pid) : null,
-                        jobStatus: latest?.status || null,
-                        expectedReaderTag,
-                        hasReaderTagMatch: !!readerConn,
-                        matchedReaderCount: matches.length,
-                        knownReaderTagCount: rtspByReaderTag.size,
-                        finalStatus: status,
-                    });
-                }
-
-                pipelineHealth.outputs[output.id] = {
-                    status,
-                    jobId: latest?.id || null,
-                    totalSize: ffmpegProgress?.total_size || null,
-                    bitrate: ffmpegProgress?.bitrate || null,
-                    bitrateKbps: parseFfmpegBitrateToKbps(ffmpegProgress?.bitrate),
-                };
-            }
-
-            health.pipelines[pipeline.id] = pipelineHealth;
         }
 
         return {
@@ -1893,7 +1985,7 @@ function recomputeConfigEtag() {
 }
 
 // recomputeEtag: deterministic snapshot -> sha256 hex -> persist via db.setEtag
-async function recomputeEtag() {
+function recomputeEtag() {
     try {
         const etag = hashSnapshot({
             ...buildConfigSnapshot(),
@@ -1912,7 +2004,7 @@ async function recomputeEtag() {
 (async () => {
     try {
         if (!db.getConfigEtag()) recomputeConfigEtag();
-        if (!db.getEtag()) await recomputeEtag();
+        if (!db.getEtag()) recomputeEtag();
     } catch (e) {
         /* ignore */
     }
@@ -1925,7 +2017,7 @@ app.get('/config', async (req, res) => {
         let etag = db.getEtag();
         let configEtag = db.getConfigEtag();
         if (!configEtag) configEtag = recomputeConfigEtag();
-        if (!etag) etag = await recomputeEtag();
+        if (!etag) etag = recomputeEtag();
 
         const ifNoneMatch = normalizeEtag(req.get('If-None-Match'));
         if (ifNoneMatch && etag && ifNoneMatch === etag) {

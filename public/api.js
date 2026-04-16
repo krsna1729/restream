@@ -70,8 +70,32 @@ async function getConfigVersion(etag = null) {
     return { notModified: false, etag: newEtag };
 }
 
-async function getHealth() {
-    return apiRequest('/health');
+async function getHealth(etag = null) {
+    const headers = {};
+
+    if (etag) headers['If-None-Match'] = `"${etag}"`;
+    const response = await fetch('/health', { method: 'GET', headers, cache: 'no-store' });
+
+    if (response.status === 304) return { notModified: true, etag, data: null };
+
+    let data = null;
+    try {
+        data = await response.json();
+    } catch (e) {
+        showErrorAlert('Invalid JSON response: ' + e);
+        return null;
+    }
+
+    if (!response.ok) {
+        showErrorAlert(data?.error || `Request failed with ${response.status}`);
+        return null;
+    }
+
+    return {
+        notModified: false,
+        etag: normalizeEtag(response.headers.get('ETag')),
+        data,
+    };
 }
 
 async function getSystemMetrics() {

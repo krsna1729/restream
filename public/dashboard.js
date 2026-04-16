@@ -820,9 +820,10 @@ async function fetchConfig() {
 }
 
 async function fetchHealth() {
-    const res = await getHealth();
-    if (res === null) return;
-    health = res;
+    const res = await getHealth(healthEtag);
+    if (res === null || res.notModified) return;
+    healthEtag = res.etag;
+    health = res.data;
 }
 
 async function fetchSystemMetrics() {
@@ -832,6 +833,7 @@ async function fetchSystemMetrics() {
 }
 
 let etag = null;
+let healthEtag = null;
 let configEtag = null;
 let userConfigEtag = null;
 let dismissedStreamingConfigEtag = null;

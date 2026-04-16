@@ -211,6 +211,9 @@ const getOutputStmt = db.prepare(
 const listOutputsStmt = db.prepare(
     'SELECT id, pipeline_id AS pipelineId, name, url, encoding, created_at AS createdAt FROM outputs',
 );
+const listOutputsForPipelineStmt = db.prepare(
+    'SELECT id, pipeline_id AS pipelineId, name, url, encoding, created_at AS createdAt FROM outputs WHERE pipeline_id = ? ORDER BY created_at ASC, id ASC',
+);
 const updateOutputStmt = db.prepare(
     'UPDATE outputs SET name = @name, url = @url, encoding = @encoding WHERE id = @id AND pipeline_id = @pipeline_id',
 );
@@ -376,6 +379,9 @@ module.exports = {
     },
     listOutputs() {
         return listOutputsStmt.all();
+    },
+    listOutputsForPipeline(pipelineId) {
+        return listOutputsForPipelineStmt.all(pipelineId);
     },
     updateOutput(pipelineId, id, { name, url, encoding = 'source' }) {
         const info = updateOutputStmt.run({
