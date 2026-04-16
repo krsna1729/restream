@@ -17,6 +17,11 @@ The `/health` endpoint fetches three MediaMTX APIs in parallel, then merges with
 | DB: `listOutputs()`         | Output ↔ pipeline mapping                                |
 | DB: `listJobs()`            | One current job row per output (upsert model)            |
 
+`/health` also performs bounded DB writes for lifecycle bookkeeping:
+
+- marks `pipelines.input_ever_seen_live = 1` when a configured input first becomes available
+- appends pipeline-level history events (`pipeline_state`) only when status changes
+
 ---
 
 ## 2. Input Health Derivation
@@ -25,15 +30,17 @@ For each pipeline, the input status is derived from the pipeline's `streamKey`:
 
 ```mermaid
 flowchart TD
-    A["pipeline.streamKey"] --> B["pathByName.get(streamKey)"]
+  A["pipeline.streamKey"] --> B["pathByName.get(streamKey)"]
 
-    B --> C{pathInfo exists?}
-    C -->|no| OFF["status = 'off'"]
-    C -->|yes| D{"pathInfo.available?"}
-    D -->|yes| ON["status = 'on'\npublishStartedAt = pathInfo.availableTime"]
-    D -->|no| E{"pathInfo.online?"}
-    E -->|yes| WARN["status = 'warning'"]
-    E -->|no| OFF
+  B --> C{has stream key?}
+  C -->|no| OFF["status = 'off'"]
+  C -->|yes| D{"pathInfo.available?"}
+  D -->|yes| ON["status = 'on'\npublishStartedAt = pathInfo.availableTime"]
+  D -->|no| E{"pathInfo.online?"}
+  E -->|yes| WARN["status = 'warning'"]
+  E -->|no| F{"inputEverSeenLive == 1?"}
+  F -->|yes| ERR["status = 'error'"]
+  F -->|no| OFF
 ```
 
 **Input status values:**
@@ -42,7 +49,8 @@ flowchart TD
 |-------|----------------------------------------------------------------------|
 | `on`  | Path exists AND `pathInfo.available === true` *(fallback to deprecated `ready` for older MediaMTX versions)* |
 | `warning` | Path exists, `pathInfo.online === true`, but not yet `available` |
-| `off` | No path info, or path is neither online nor available |
+| `error` | Stream key is configured, path is neither online nor available, and `inputEverSeenLive === 1` |
+| `off` | No stream key configured, or stream key configured but never seen live |
 
 **Additional input fields from MediaMTX:**
 
@@ -156,7 +164,7 @@ The split badge on each pipeline card in the dashboard maps statuses to colors:
 |-----------|-------------|-----------------|
 | `on`      | Green       | input + output  |
 | `warning` | Yellow      | input + output  |
-| `error`   | Red         | output only     |
+| `error`   | Red         | input + output  |
 | `off`     | Grey        | input + output  |
 
 The left half shows input status (`on` / `warning` / `off`); the right half shows the aggregate of all output statuses for that pipeline (worst-case wins: `error` > `warning` > `on` > `off`).

@@ -30,12 +30,18 @@ db.prepare(
     name TEXT NOT NULL,
     stream_key TEXT,
     encoding TEXT,
+    input_ever_seen_live INTEGER NOT NULL DEFAULT 0,
     created_at TEXT,
     updated_at TEXT,
     FOREIGN KEY(stream_key) REFERENCES stream_keys(key) ON DELETE SET NULL
   )
 `,
 ).run();
+
+const pipelineColumns = db.prepare(`PRAGMA table_info(pipelines)`).all();
+if (!pipelineColumns.some((column) => column.name === 'input_ever_seen_live')) {
+    db.prepare(`ALTER TABLE pipelines ADD COLUMN input_ever_seen_live INTEGER NOT NULL DEFAULT 0`).run();
+}
 
 /* outputs table */
 db.prepare(
@@ -80,7 +86,7 @@ db.prepare(
 
 // Add unique constraint to enforce 1 job per (pipeline_id, output_id)
 db.prepare(
-        `
+    `
     CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_pipeline_output_unique
     ON jobs(pipeline_id, output_id)
 `,
@@ -94,6 +100,7 @@ db.prepare(
         job_id TEXT,
         pipeline_id TEXT,
         output_id TEXT,
+        event_type TEXT,
         ts TEXT,
         message TEXT
     )
@@ -107,6 +114,9 @@ if (!jobLogsColumns.some((column) => column.name === 'pipeline_id')) {
 }
 if (!jobLogsColumns.some((column) => column.name === 'output_id')) {
     db.prepare(`ALTER TABLE job_logs ADD COLUMN output_id TEXT`).run();
+}
+if (!jobLogsColumns.some((column) => column.name === 'event_type')) {
+    db.prepare(`ALTER TABLE job_logs ADD COLUMN event_type TEXT`).run();
 }
 
 // Migrate old FK-based job_logs table to decoupled schema.
@@ -122,13 +132,14 @@ if (jobLogsForeignKeys.some((fk) => fk.table === 'jobs' && fk.from === 'job_id')
         job_id TEXT,
         pipeline_id TEXT,
         output_id TEXT,
+        event_type TEXT,
         ts TEXT,
         message TEXT
       )
     `);
         db.exec(`
-      INSERT INTO job_logs_new (id, job_id, pipeline_id, output_id, ts, message)
-      SELECT id, job_id, pipeline_id, output_id, ts, message
+      INSERT INTO job_logs_new (id, job_id, pipeline_id, output_id, event_type, ts, message)
+      SELECT id, job_id, pipeline_id, output_id, NULL, ts, message
       FROM job_logs
     `);
         db.exec(`DROP TABLE job_logs`);
@@ -174,16 +185,19 @@ const deleteStreamKeyStmt = db.prepare('DELETE FROM stream_keys WHERE key = ?');
 
 /* Pipeline statements */
 const insertPipeline = db.prepare(
-    'INSERT INTO pipelines (id, name, stream_key, encoding, created_at, updated_at) VALUES (@id, @name, @stream_key, @encoding, @created_at, @updated_at)',
+    'INSERT INTO pipelines (id, name, stream_key, encoding, input_ever_seen_live, created_at, updated_at) VALUES (@id, @name, @stream_key, @encoding, @input_ever_seen_live, @created_at, @updated_at)',
 );
 const getPipelineStmt = db.prepare(
-    'SELECT id, name, stream_key AS streamKey, encoding, created_at AS createdAt, updated_at AS updatedAt FROM pipelines WHERE id = ?',
+    'SELECT id, name, stream_key AS streamKey, encoding, input_ever_seen_live AS inputEverSeenLive, created_at AS createdAt, updated_at AS updatedAt FROM pipelines WHERE id = ?',
 );
 const listPipelinesStmt = db.prepare(
-    'SELECT id, name, stream_key AS streamKey, encoding, created_at AS createdAt, updated_at AS updatedAt FROM pipelines',
+    'SELECT id, name, stream_key AS streamKey, encoding, input_ever_seen_live AS inputEverSeenLive, created_at AS createdAt, updated_at AS updatedAt FROM pipelines',
 );
 const updatePipelineStmt = db.prepare(
-    'UPDATE pipelines SET name = @name, stream_key = @stream_key, encoding = @encoding, updated_at = @updated_at WHERE id = @id',
+    'UPDATE pipelines SET name = @name, stream_key = @stream_key, encoding = @encoding, input_ever_seen_live = @input_ever_seen_live, updated_at = @updated_at WHERE id = @id',
+);
+const markPipelineInputSeenLiveStmt = db.prepare(
+    'UPDATE pipelines SET input_ever_seen_live = 1 WHERE id = @id',
 );
 const deletePipelineStmt = db.prepare('DELETE FROM pipelines WHERE id = ?');
 
@@ -236,15 +250,20 @@ const listJobsStmt = db.prepare(`
 
 /* JobLog statements */
 const insertJobLog = db.prepare(`
-    INSERT INTO job_logs (job_id, pipeline_id, output_id, ts, message) 
-    VALUES (@job_id, @pipeline_id, @output_id, @ts, @message)
+    INSERT INTO job_logs (job_id, pipeline_id, output_id, event_type, ts, message)
+    VALUES (@job_id, @pipeline_id, @output_id, @event_type, @ts, @message)
 `);
 const listJobLogs = db.prepare(`
-    SELECT ts, message FROM job_logs WHERE job_id = ? ORDER BY id ASC
+    SELECT ts, message, event_type AS eventType FROM job_logs WHERE job_id = ? ORDER BY id ASC
 `);
 const listJobLogsByOutput = db.prepare(`
-    SELECT ts, message FROM job_logs 
-    WHERE pipeline_id = ? AND output_id = ? 
+    SELECT ts, message, event_type AS eventType FROM job_logs
+    WHERE pipeline_id = ? AND output_id = ?
+    ORDER BY ts DESC
+`);
+const listJobLogsByPipeline = db.prepare(`
+    SELECT ts, message, event_type AS eventType FROM job_logs
+    WHERE pipeline_id = ? AND output_id IS NULL
     ORDER BY ts DESC
 `);
 const deleteOldJobLogs = db.prepare(`
@@ -300,6 +319,7 @@ module.exports = {
             name,
             stream_key: streamKey,
             encoding: encoding,
+            input_ever_seen_live: 0,
             created_at: now,
             updated_at: null,
         });
@@ -311,16 +331,24 @@ module.exports = {
     listPipelines() {
         return listPipelinesStmt.all();
     },
-    updatePipeline(id, { name, streamKey, encoding = null, updatedAt }) {
+    updatePipeline(
+        id,
+        { name, streamKey, encoding = null, inputEverSeenLive = 0, updatedAt },
+    ) {
         const now = updatedAt || new Date().toISOString();
         const info = updatePipelineStmt.run({
             id,
             name,
             stream_key: streamKey,
             encoding,
+            input_ever_seen_live: inputEverSeenLive,
             updated_at: now,
         });
         return info.changes > 0 ? getPipelineStmt.get(id) : null;
+    },
+    markPipelineInputSeenLive(id) {
+        markPipelineInputSeenLiveStmt.run({ id });
+        return getPipelineStmt.get(id);
     },
     deletePipeline(id) {
         const info = deletePipelineStmt.run(id);
@@ -406,14 +434,29 @@ module.exports = {
     },
 
     /* job log helpers */
-    appendJobLog(jobId, message, pipelineId = null, outputId = null) {
+    appendJobLog(jobId, message, pipelineId = null, outputId = null, eventType = 'output_log') {
         try {
-            insertJobLog.run({ 
-                job_id: jobId, 
+            insertJobLog.run({
+                job_id: jobId,
                 pipeline_id: pipelineId,
                 output_id: outputId,
-                ts: new Date().toISOString(), 
-                message 
+                event_type: eventType,
+                ts: new Date().toISOString(),
+                message,
+            });
+        } catch (e) {
+            /* ignore logging failures */
+        }
+    },
+    appendPipelineEvent(pipelineId, message, eventType = 'pipeline_event') {
+        try {
+            insertJobLog.run({
+                job_id: null,
+                pipeline_id: pipelineId,
+                output_id: null,
+                event_type: eventType,
+                ts: new Date().toISOString(),
+                message,
             });
         } catch (e) {
             /* ignore logging failures */
@@ -424,6 +467,9 @@ module.exports = {
     },
     listJobLogsByOutput(pipelineId, outputId) {
         return listJobLogsByOutput.all(pipelineId, outputId);
+    },
+    listJobLogsByPipeline(pipelineId) {
+        return listJobLogsByPipeline.all(pipelineId);
     },
     deleteJobLogsOlderThan(days = 7) {
         deleteOldJobLogs.run(`-${days} days`);

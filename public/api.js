@@ -215,3 +215,15 @@ async function getOutputHistory(pipeId, outId, limit = 200) {
         `/pipelines/${encodeURIComponent(pipeId)}/outputs/${encodeURIComponent(outId)}/history?limit=${encodeURIComponent(safeLimit)}`,
     );
 }
+
+async function getPipelineHistory(pipeId, limit = 200) {
+    if (!pipeId) {
+        showErrorAlert('Pipeline id is required');
+        return null;
+    }
+
+    const safeLimit = Number.isFinite(Number(limit)) ? Number(limit) : 200;
+    return apiRequest(
+        `/pipelines/${encodeURIComponent(pipeId)}/history?limit=${encodeURIComponent(safeLimit)}`,
+    );
+}

@@ -192,6 +192,14 @@ function renderPipelineInfoColumn(selectedPipe) {
     }
 
     document.getElementById('pipe-name').textContent = pipe.name;
+    const historyBtn = document.getElementById('pipe-history-btn');
+    if (historyBtn) {
+        historyBtn.onclick = () => {
+            if (typeof openPipelineHistoryModal === 'function') {
+                openPipelineHistoryModal(pipe.id, pipe.name);
+            }
+        };
+    }
     if (pipe.input.time === null) {
         document.getElementById('input-time').classList.add('hidden');
     } else {

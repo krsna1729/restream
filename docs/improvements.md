@@ -685,6 +685,91 @@ Add a warning message below the stream key select in edit mode:
 
 </details>
 
+### 5.4 Pipeline History for Config + Input State (NEW)
+
+**Status:** ✅ Implemented  
+**Severity:** Medium  
+**Location:** `src/db.js`, `src/index.js`, `public/dashboard.js`, `public/index.html`, `docs/api-reference.md`
+
+The dashboard already exposed per-output history by reading append-only `job_logs` entries for a specific `(pipeline_id, output_id)`. There was no equivalent for pipeline-level lifecycle:
+
+- stream key changes
+- pipeline name / encoding edits
+- input state transitions such as `off -> on` or `on -> warning`
+
+This made it difficult to answer operational questions like:
+
+- when did this pipeline switch to a new ingest key?
+- how often is the input flapping between `on` and `warning`?
+- was the current issue caused by a config change or by ingest instability?
+
+<details><summary><strong>Implementation</strong></summary>
+
+**Schema (`src/db.js`):**
+
+`job_logs` now supports optional pipeline-scoped event typing:
+
+```sql
+ALTER TABLE job_logs ADD COLUMN event_type TEXT;
+```
+
+Pipeline history rows reuse the same append-only table with:
+
+- `pipeline_id = <pipeline id>`
+- `output_id = NULL`
+- `job_id = NULL`
+- `event_type IN ('pipeline_config', 'pipeline_state')`
+
+This preserves the existing output history model while avoiding a second history table.
+
+**Backend (`src/index.js`):**
+
+Added `logPipelineConfigChanges()` to append config events after successful pipeline updates:
+
+```javascript
+if (previousPipeline.streamKey !== nextPipeline.streamKey) {
+    db.appendPipelineEvent(
+        pipelineId,
+        `[config] stream_key changed from ${maskToken(previousPipeline.streamKey || 'unassigned')} to ${maskToken(nextPipeline.streamKey || 'unassigned')}`,
+        'pipeline_config',
+    );
+}
+```
+
+Also logs pipeline creation and tracks input state transitions in `/health` using an in-memory last-seen status map. Entries are only appended when the status actually changes, not on every poll cycle.
+
+Input lifecycle semantics use a single persisted field on `pipelines`:
+
+- `input_ever_seen_live` (0/1)
+
+This allows `/health` to emit `error` when a configured input that was previously live is no longer available. The stream-key change flow resets lifecycle semantics by recomputing baseline state for the new key.
+
+**API (`src/index.js`, `docs/api-reference.md`):**
+
+New endpoint:
+
+```http
+GET /pipelines/:pipelineId/history?limit=200
+```
+
+Returns append-only pipeline events from `job_logs` where `output_id IS NULL`.
+
+**Frontend (`public/index.html`, `public/dashboard.js`, `public/render.js`):**
+
+Added a pipeline `History` button beside the pipeline title and a dedicated modal with:
+
+- timeline-focused event list (config + input-state events)
+- live polling with hidden-tab backoff
+- event badges (`Config`, `Input On`, `Input Warning`, `Input Off`, `Input Error`)
+
+Config timeline entries are grouped under a `Config` badge, and input state transitions are classified into `Input On`, `Input Warning`, `Input Off`, and `Input Error` badges based on the final state in the logged transition string.
+
+**Security / redaction note:**
+
+Stream key change messages are stored with masked values (`ab...cd`) because this history is intended for UI consumption rather than raw secret auditing.
+
+</details>
+
 ---
 
 ## 6. Code Simplification Opportunities

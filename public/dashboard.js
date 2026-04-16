@@ -49,6 +49,15 @@ const outputHistoryState = {
     pollEveryMs: null,
 };
 
+const pipelineHistoryState = {
+    pipelineId: null,
+    pipelineName: '',
+    logs: [],
+    playing: false,
+    pollTimer: null,
+    pollEveryMs: null,
+};
+
 const OUTPUT_HISTORY_POLL_INTERVAL_MS = 5000;
 const OUTPUT_HISTORY_HIDDEN_POLL_INTERVAL_MS = 30000;
 
@@ -120,13 +129,45 @@ function getTimelineLogs(logs) {
     return items.filter((log) => String(log?.message || '').startsWith('[lifecycle]'));
 }
 
-function sanitizeLogMessage(msg) {
-    if (!outputHistoryState.redacted) return String(msg);
+function sanitizeLogMessage(msg, redacted = true) {
+    if (!redacted) return String(msg);
     return String(msg)
         // rtmp://host/live/STREAMKEY  →  rtmp://host/live/***
         .replace(new RegExp('(rtmp://[^/]+/[^/]+/)([^\'\"\\s]+)', 'g'), '$1***')
         // rtsp://host/STREAMKEY?params  →  rtsp://host/***
         .replace(new RegExp('(rtsp://[^/]+/)([^\'\"\\s]+)', 'g'), '$1***');
+}
+
+function classifyPipelineHistoryEvent(log) {
+    const message = String(log?.message || '');
+
+    if (message.startsWith('[config]')) {
+        return { type: 'config', label: 'Config', badgeClass: 'badge-secondary' };
+    }
+    if (message.startsWith('[input_state]')) {
+        let finalState = '';
+        if (message.includes('->')) {
+            finalState = message.split('->').pop().trim().toLowerCase();
+        } else {
+            const match = message.match(/initial_state\s*=\s*([a-z_]+)/i);
+            finalState = (match && match[1] ? match[1] : '').toLowerCase();
+        }
+
+        if (finalState === 'on') return { type: 'on', label: 'Input On', badgeClass: 'badge-success' };
+        if (finalState === 'warning') return { type: 'warning', label: 'Input Warning', badgeClass: 'badge-warning' };
+        if (finalState === 'error') return { type: 'error', label: 'Input Error', badgeClass: 'badge-error' };
+        if (finalState === 'off') return { type: 'off', label: 'Input Off', badgeClass: 'badge-stopped' };
+    }
+
+    return { type: 'log', label: 'Event', badgeClass: 'badge-ghost' };
+}
+
+function getPipelineTimelineLogs(logs) {
+    const items = Array.isArray(logs) ? logs : [];
+    return items.filter((log) => {
+        const message = String(log?.message || '');
+        return message.startsWith('[config]') || message.startsWith('[input_state]');
+    });
 }
 
 function renderOutputHistory(scrollToTop = false) {
@@ -173,7 +214,7 @@ function renderOutputHistory(scrollToTop = false) {
 
             const msg = document.createElement('pre');
             msg.className = 'mt-1 text-xs whitespace-pre-wrap break-words';
-            msg.textContent = sanitizeLogMessage(log.message || '');
+            msg.textContent = sanitizeLogMessage(log.message || '', outputHistoryState.redacted);
 
             row.appendChild(header);
             row.appendChild(msg);
@@ -206,7 +247,7 @@ function renderOutputHistory(scrollToTop = false) {
 
         const details = document.createElement('pre');
         details.className = 'mt-1 text-xs whitespace-pre-wrap break-words';
-        details.textContent = sanitizeLogMessage(log.message || '');
+        details.textContent = sanitizeLogMessage(log.message || '', outputHistoryState.redacted);
 
         row.appendChild(header);
         row.appendChild(details);
@@ -314,6 +355,128 @@ async function openOutputHistoryModal(pipeId, outId, outName = '') {
 
     // Stop polling when dialog closes
     modal.addEventListener('close', stopHistoryPoll, { once: true });
+}
+
+function renderPipelineHistory(scrollToTop = false) {
+    const list = document.getElementById('pipeline-history-list');
+    const empty = document.getElementById('pipeline-history-empty');
+
+    if (!list || !empty) return;
+
+    list.replaceChildren();
+
+    if (!Array.isArray(pipelineHistoryState.logs) || pipelineHistoryState.logs.length === 0) {
+        empty.classList.remove('hidden');
+        return;
+    }
+
+    empty.classList.add('hidden');
+
+    const logs = getPipelineTimelineLogs(pipelineHistoryState.logs);
+    for (const log of logs) {
+        const event = classifyPipelineHistoryEvent(log);
+
+        const row = document.createElement('div');
+        row.className = 'rounded bg-base-100 p-2';
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between gap-2';
+
+        const badge = document.createElement('span');
+        badge.className = `badge badge-sm ${event.badgeClass}`;
+        badge.textContent = event.label;
+
+        const ts = document.createElement('span');
+        ts.className = 'text-xs opacity-70';
+        ts.textContent = formatHistoryTime(log.ts);
+
+        header.appendChild(badge);
+        header.appendChild(ts);
+
+        const details = document.createElement('pre');
+        details.className = 'mt-1 text-xs whitespace-pre-wrap break-words';
+        details.textContent = String(log.message || '');
+
+        row.appendChild(header);
+        row.appendChild(details);
+        list.appendChild(row);
+    }
+
+    if (scrollToTop) list.scrollTop = 0;
+}
+
+function stopPipelineHistoryPoll() {
+    if (pipelineHistoryState.pollTimer) {
+        clearInterval(pipelineHistoryState.pollTimer);
+        pipelineHistoryState.pollTimer = null;
+    }
+    pipelineHistoryState.pollEveryMs = null;
+    pipelineHistoryState.playing = false;
+    updatePipelineHistoryPlayPauseBtn();
+}
+
+function startPipelineHistoryPolling(intervalMs) {
+    if (pipelineHistoryState.pollTimer && pipelineHistoryState.pollEveryMs === intervalMs) return;
+    if (pipelineHistoryState.pollTimer) clearInterval(pipelineHistoryState.pollTimer);
+    pipelineHistoryState.pollEveryMs = intervalMs;
+    pipelineHistoryState.pollTimer = setInterval(pollPipelineHistoryOnce, intervalMs);
+}
+
+function updatePipelineHistoryPlayPauseBtn() {
+    const btn = document.getElementById('pipeline-history-playpause');
+    if (!btn) return;
+    btn.textContent = pipelineHistoryState.playing ? '⏸ Pause' : '▶ Live';
+    btn.classList.toggle('btn-accent', pipelineHistoryState.playing);
+    btn.classList.toggle('btn-outline', !pipelineHistoryState.playing);
+}
+
+async function pollPipelineHistoryOnce() {
+    const { pipelineId } = pipelineHistoryState;
+    if (!pipelineId) return;
+    const res = await getPipelineHistory(pipelineId, 200);
+    if (res === null) return;
+    pipelineHistoryState.logs = Array.isArray(res.logs) ? res.logs : [];
+    renderPipelineHistory(false);
+}
+
+function togglePipelineHistoryPlayPause() {
+    if (pipelineHistoryState.playing) {
+        stopPipelineHistoryPoll();
+    } else {
+        pipelineHistoryState.playing = true;
+        updatePipelineHistoryPlayPauseBtn();
+        pollPipelineHistoryOnce();
+        startPipelineHistoryPolling(document.hidden ? OUTPUT_HISTORY_HIDDEN_POLL_INTERVAL_MS : OUTPUT_HISTORY_POLL_INTERVAL_MS);
+    }
+}
+
+async function openPipelineHistoryModal(pipeId, pipeName = '') {
+    const modal = document.getElementById('pipeline-history-modal');
+    const title = document.getElementById('pipeline-history-title');
+    const loading = document.getElementById('pipeline-history-loading');
+
+    if (!modal || !title || !loading) return;
+
+    stopPipelineHistoryPoll();
+
+    pipelineHistoryState.pipelineId = pipeId;
+    pipelineHistoryState.pipelineName = pipeName || pipeId;
+    pipelineHistoryState.logs = [];
+
+    title.textContent = `Pipeline History: ${pipelineHistoryState.pipelineName}`;
+    updatePipelineHistoryPlayPauseBtn();
+    loading.classList.remove('hidden');
+    renderPipelineHistory();
+    modal.showModal();
+
+    const res = await getPipelineHistory(pipeId, 200);
+    loading.classList.add('hidden');
+    if (res === null) return;
+
+    pipelineHistoryState.logs = Array.isArray(res.logs) ? res.logs : [];
+    renderPipelineHistory(true);
+
+    modal.addEventListener('close', stopPipelineHistoryPoll, { once: true });
 }
 
 async function startOutBtn(pipeId, outId, button = null) {
@@ -702,12 +865,19 @@ async function onVisibilityChange() {
         if (outputHistoryState.playing) {
             startHistoryPolling(OUTPUT_HISTORY_HIDDEN_POLL_INTERVAL_MS);
         }
+        if (pipelineHistoryState.playing) {
+            startPipelineHistoryPolling(OUTPUT_HISTORY_HIDDEN_POLL_INTERVAL_MS);
+        }
         return;
     }
     startDashboardPolling(DASHBOARD_POLL_INTERVAL_MS);
     if (outputHistoryState.playing) {
         startHistoryPolling(OUTPUT_HISTORY_POLL_INTERVAL_MS);
         await pollHistoryOnce();
+    }
+    if (pipelineHistoryState.playing) {
+        startPipelineHistoryPolling(OUTPUT_HISTORY_POLL_INTERVAL_MS);
+        await pollPipelineHistoryOnce();
     }
     await fetchAndRerender();
     await checkStreamingConfigs();

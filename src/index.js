@@ -42,6 +42,7 @@ const JOB_STABILITY_CHECK_MS = 250;
 
 const streamProbeCache = new Map(); // streamKey -> { ts, info }
 const probeRefreshStartedAt = new Map(); // streamKey -> refresh start timestamp
+const pipelineInputStatusHistory = new Map(); // pipelineId -> last input status seen by /health
 // Runtime-only progress state from ffmpeg "-progress pipe:3" (never persisted to DB).
 // NOTE: This is intentionally internal for now; a future API/WS endpoint can expose it.
 const ffmpegProgressByJobId = new Map(); // jobId -> latest ffmpeg progress block
@@ -172,6 +173,82 @@ function redactFfmpegArgs(args) {
     });
 }
 
+function logPipelineConfigChanges(pipelineId, previousPipeline, nextPipeline) {
+    if (!pipelineId || !previousPipeline || !nextPipeline) return;
+
+    if (previousPipeline.name !== nextPipeline.name) {
+        db.appendPipelineEvent(
+            pipelineId,
+            `[config] name changed from "${previousPipeline.name}" to "${nextPipeline.name}"`,
+            'pipeline_config',
+        );
+    }
+
+    if (previousPipeline.encoding !== nextPipeline.encoding) {
+        db.appendPipelineEvent(
+            pipelineId,
+            `[config] encoding changed from ${previousPipeline.encoding || 'null'} to ${nextPipeline.encoding || 'null'}`,
+            'pipeline_config',
+        );
+    }
+
+    if (previousPipeline.streamKey !== nextPipeline.streamKey) {
+        db.appendPipelineEvent(
+            pipelineId,
+            `[config] stream_key changed from ${previousPipeline.streamKey ? maskToken(previousPipeline.streamKey) : 'unassigned'} to ${nextPipeline.streamKey ? maskToken(nextPipeline.streamKey) : 'unassigned'}`,
+            'pipeline_config',
+        );
+    }
+}
+
+function computeInputStatus({ hasKey, pathAvailable, pathOnline, hasEverSeenLive }) {
+    if (hasKey && pathAvailable) return 'on';
+    if (hasKey && pathOnline) return 'warning';
+    if (hasKey && hasEverSeenLive) return 'error';
+    return 'off';
+}
+
+async function resolveRuntimeInputState(streamKey, existingEverSeenLive = 0) {
+    const hasKey = !!streamKey;
+    if (!hasKey) {
+        return {
+            status: 'off',
+            inputEverSeenLive: 0,
+        };
+    }
+
+    let pathInfo = null;
+    try {
+        const paths = await fetchMediamtxJson('/v3/paths/list');
+        pathInfo = (paths.items || []).find((path) => path?.name === streamKey) || null;
+    } catch (err) {
+        // If MediaMTX is temporarily unavailable, preserve existing persisted state.
+        return {
+            status: computeInputStatus({
+                hasKey: true,
+                pathAvailable: false,
+                pathOnline: false,
+                hasEverSeenLive: Number(existingEverSeenLive || 0) === 1,
+            }),
+            inputEverSeenLive: Number(existingEverSeenLive || 0),
+        };
+    }
+
+    const pathAvailable = !!(pathInfo?.available || pathInfo?.ready);
+    const pathOnline = !!pathInfo?.online;
+    const nextEverSeenLive = pathAvailable ? 1 : Number(existingEverSeenLive || 0);
+
+    return {
+        status: computeInputStatus({
+            hasKey: true,
+            pathAvailable,
+            pathOnline,
+            hasEverSeenLive: nextEverSeenLive === 1,
+        }),
+        inputEverSeenLive: nextEverSeenLive,
+    };
+}
+
 function getMediamtxApiBaseUrl() {
     // MediaMTX internal API is always available on localhost:9997
     return 'http://localhost:9997';
@@ -221,6 +298,49 @@ function startMediamtxReadinessChecks() {
         void checkMediamtxReadiness();
     }, MEDIAMTX_CHECK_INTERVAL_MS);
     mediamtxReadinessTimer.unref?.();
+}
+
+async function bootstrapPipelineInputStatusHistory() {
+    const pipelines = db.listPipelines();
+    const pathByName = new Map();
+
+    try {
+        const paths = await fetchMediamtxJson('/v3/paths/list');
+        for (const item of paths.items || []) {
+            if (item?.name) pathByName.set(item.name, item);
+        }
+    } catch (err) {
+        log('warn', 'Failed to fetch MediaMTX paths during startup bootstrap', {
+            error: errMsg(err),
+            pipelineCount: pipelines.length,
+        });
+    }
+
+    for (const pipeline of pipelines) {
+        const key = pipeline.streamKey || '';
+        const hasKey = !!key;
+        const pathInfo = hasKey ? pathByName.get(key) : null;
+        const pathAvailable = !!(pathInfo?.available || pathInfo?.ready);
+        const pathOnline = !!pathInfo?.online;
+        const hasEverSeenLive = Number(pipeline.inputEverSeenLive || 0) === 1 || pathAvailable;
+        const status = computeInputStatus({
+            hasKey,
+            pathAvailable,
+            pathOnline,
+            hasEverSeenLive,
+        });
+
+        pipelineInputStatusHistory.set(pipeline.id, status);
+
+        if (hasKey && pathAvailable && Number(pipeline.inputEverSeenLive || 0) !== 1) {
+            db.markPipelineInputSeenLive(pipeline.id);
+        }
+    }
+
+    log('info', 'Pipeline input state bootstrap complete', {
+        pipelineCount: pipelines.length,
+        seededCount: pipelineInputStatusHistory.size,
+    });
 }
 
 function getMediamtxRtspBaseUrl() {
@@ -679,7 +799,7 @@ app.get('/stream-keys', (req, res) => {
  * ====================== */
 
 // create pipeline
-app.post('/pipelines', (req, res) => {
+app.post('/pipelines', async (req, res) => {
     try {
         const runtimeConfig = getConfig();
         const pipelineLimit = Number(runtimeConfig.pipelinesLimit);
@@ -691,18 +811,42 @@ app.post('/pipelines', (req, res) => {
         const streamKey = req.body?.streamKey ?? null;
         const encoding = req.body?.encoding ?? null;
 
-        const pipeline = db.createPipeline({ name, streamKey, encoding });
+        const runtimeState = await resolveRuntimeInputState(streamKey, 0);
+
+        const pipeline = db.createPipeline({
+            name,
+            streamKey,
+            encoding,
+        });
+        const pipelineWithState = db.updatePipeline(pipeline.id, {
+            name: pipeline.name,
+            streamKey: pipeline.streamKey,
+            encoding: pipeline.encoding,
+            inputEverSeenLive: runtimeState.inputEverSeenLive,
+        }) || pipeline;
+        db.appendPipelineEvent(
+            pipelineWithState.id,
+            `[config] created name="${pipelineWithState.name}" stream_key=${pipelineWithState.streamKey ? maskToken(pipelineWithState.streamKey) : 'unassigned'} encoding=${pipelineWithState.encoding || 'null'}`,
+            'pipeline_config',
+        );
+        // Seed baseline in-memory input state at creation time.
+        pipelineInputStatusHistory.set(pipelineWithState.id, runtimeState.status);
+        db.appendPipelineEvent(
+            pipelineWithState.id,
+            `[input_state] initial_state=${runtimeState.status}`,
+            'pipeline_state',
+        );
         // recompute global etag if available
         recomputeConfigEtag();
         recomputeEtag();
-        return res.status(201).json({ message: 'Pipeline created', pipeline });
+        return res.status(201).json({ message: 'Pipeline created', pipeline: pipelineWithState });
     } catch (err) {
         return res.status(400).json({ error: err.message });
     }
 });
 
 // update pipeline
-app.post('/pipelines/:id', (req, res) => {
+app.post('/pipelines/:id', async (req, res) => {
     try {
         const id = req.params.id;
         const existing = db.getPipeline(id);
@@ -724,8 +868,33 @@ app.post('/pipelines/:id', (req, res) => {
             }
         }
 
-        const updated = db.updatePipeline(id, { name, streamKey, encoding });
+        let inputEverSeenLive = Number(existing.inputEverSeenLive || 0);
+        let initialInputStatus = null;
+
+        if (streamKeyChanging) {
+            const runtimeState = await resolveRuntimeInputState(streamKey, 0);
+            inputEverSeenLive = runtimeState.inputEverSeenLive;
+            initialInputStatus = runtimeState.status;
+        }
+
+        const updated = db.updatePipeline(id, {
+            name,
+            streamKey,
+            encoding,
+            inputEverSeenLive,
+        });
         if (!updated) return res.status(500).json({ error: 'Failed to update pipeline' });
+        if (streamKeyChanging) {
+            // New stream key starts a fresh lifecycle baseline derived from current runtime state.
+            pipelineInputStatusHistory.set(id, initialInputStatus || 'off');
+            db.appendPipelineEvent(id, '[input_state] reset due to stream_key change', 'pipeline_state');
+            db.appendPipelineEvent(
+                id,
+                `[input_state] initial_state=${initialInputStatus || 'off'}`,
+                'pipeline_state',
+            );
+        }
+        logPipelineConfigChanges(id, existing, updated);
 
         recomputeConfigEtag();
         recomputeEtag();
@@ -750,6 +919,7 @@ app.delete('/pipelines/:id', (req, res) => {
 
         const ok = db.deletePipeline(id);
         if (!ok) return res.status(500).json({ error: 'Failed to delete pipeline' });
+        pipelineInputStatusHistory.delete(id);
 
         recomputeConfigEtag();
         recomputeEtag();
@@ -1166,6 +1336,29 @@ app.get('/pipelines/:pipelineId/outputs/:outputId/history', (req, res) => {
     }
 });
 
+app.get('/pipelines/:pipelineId/history', (req, res) => {
+    try {
+        const pid = req.params.pipelineId;
+
+        const pipeline = db.getPipeline(pid);
+        if (!pipeline) return res.status(404).json({ error: 'Pipeline not found' });
+
+        const requestedLimit = Number.parseInt(String(req.query.limit || '200'), 10);
+        const limit = Number.isFinite(requestedLimit)
+            ? Math.max(1, Math.min(requestedLimit, 1000))
+            : 200;
+
+        const logs = db.listJobLogsByPipeline(pid).slice(0, limit);
+
+        return res.json({
+            pipelineId: pid,
+            logs,
+        });
+    } catch (err) {
+        return res.status(500).json({ error: errMsg(err) });
+    }
+});
+
 /* ======================
  * Metrics
  * ====================== */
@@ -1314,9 +1507,33 @@ app.get('/health', async (req, res) => {
             // `online` (source != nil): a publisher is attached but stream may not be initialised yet.
             const pathAvailable = !!(pathInfo?.available || pathInfo?.ready);
             const pathOnline = !!pathInfo?.online;
-            let inputStatus = 'off';
-            if (key && pathAvailable) inputStatus = 'on';
-            else if (key && pathOnline) inputStatus = 'warning'; // publisher connecting, stream not yet ready
+            const hasEverSeenLive = Number(pipeline.inputEverSeenLive || 0) === 1;
+            const inputStatus = computeInputStatus({
+                hasKey: !!key,
+                pathAvailable,
+                pathOnline,
+                hasEverSeenLive,
+            });
+
+            if (key && pathAvailable && !hasEverSeenLive) {
+                db.markPipelineInputSeenLive(pipeline.id);
+            }
+
+            const previousInputStatus = pipelineInputStatusHistory.get(pipeline.id);
+            if (previousInputStatus === undefined) {
+                db.appendPipelineEvent(
+                    pipeline.id,
+                    `[input_state] initial_state=${inputStatus}`,
+                    'pipeline_state',
+                );
+            } else if (previousInputStatus !== inputStatus) {
+                db.appendPipelineEvent(
+                    pipeline.id,
+                    `[input_state] ${previousInputStatus} -> ${inputStatus}`,
+                    'pipeline_state',
+                );
+            }
+            pipelineInputStatusHistory.set(pipeline.id, inputStatus);
 
             // Stale-while-revalidate for probe info: return cached data while fresh, or while
             // a post-expiry refresh is actively in flight and still within the probe timeout window.
@@ -1461,40 +1678,49 @@ app.use('/', express.static(path.join(__dirname, '..', 'public'), {
     lastModified: true,
 }));
 
-app.listen(appPort, appHost, () => {
+async function startServer() {
     startMediamtxReadinessChecks();
-    console.log(`Controller running on ${appHost}:${appPort}`);
+    await bootstrapPipelineInputStatusHistory();
 
-    // Run a startup cleanup pass for stale jobs and orphaned logs.
-    try {
-        const cleaned = db.cleanupOldJobs();
-        if (cleaned.deletedJobs || cleaned.deletedLogs) {
-            log('info', 'Job cleanup', cleaned);
-        }
-    } catch (err) {
-        console.error('Error during startup job cleanup:', err);
-    }
+    app.listen(appPort, appHost, () => {
+        console.log(`Controller running on ${appHost}:${appPort}`);
 
-    // Daily sweep for stale jobs and orphaned logs.
-    setInterval(() => {
+        // Run a startup cleanup pass for stale jobs and orphaned logs.
         try {
-            const result = db.cleanupOldJobs();
-            if (result.deletedJobs || result.deletedLogs) {
-                log('info', 'Periodic job cleanup', result);
+            const cleaned = db.cleanupOldJobs();
+            if (cleaned.deletedJobs || cleaned.deletedLogs) {
+                log('info', 'Job cleanup', cleaned);
             }
         } catch (err) {
-            console.error('Error during periodic job cleanup:', err);
+            console.error('Error during startup job cleanup:', err);
         }
-    }, 24 * 60 * 60 * 1000); // Run every day
-    
-    // Start periodic cleanup of old job logs (7-day retention)
-    setInterval(() => {
-        try {
-            db.deleteJobLogsOlderThan(7);
-        } catch (err) {
-            console.error('Error cleaning up old job logs:', err);
-        }
-    }, 60 * 60 * 1000); // Run every hour
+
+        // Daily sweep for stale jobs and orphaned logs.
+        setInterval(() => {
+            try {
+                const result = db.cleanupOldJobs();
+                if (result.deletedJobs || result.deletedLogs) {
+                    log('info', 'Periodic job cleanup', result);
+                }
+            } catch (err) {
+                console.error('Error during periodic job cleanup:', err);
+            }
+        }, 24 * 60 * 60 * 1000); // Run every day
+
+        // Start periodic cleanup of old job logs (7-day retention)
+        setInterval(() => {
+            try {
+                db.deleteJobLogsOlderThan(7);
+            } catch (err) {
+                console.error('Error cleaning up old job logs:', err);
+            }
+        }, 60 * 60 * 1000); // Run every hour
+    });
+}
+
+startServer().catch((err) => {
+    console.error('Fatal startup error:', err);
+    process.exit(1);
 });
 
 // Etag-related, for the FE to check the last modified time of the entire config.

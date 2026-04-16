@@ -100,6 +100,7 @@ Returns all pipelines.
     "name": "Pipeline 1",
     "streamKey": "c1518f5ef0d917ef1b6547d7",
     "encoding": null,
+    "inputEverSeenLive": 1,
     "createdAt": "2026-04-10T11:00:00.000Z",
     "updatedAt": null
   }
@@ -139,6 +140,42 @@ Updates pipeline fields.
 **Response 200:**
 ```json
 { "message": "Pipeline updated", "pipeline": { ... } }
+```
+
+**Errors:** `404` pipeline not found; `409` stream key change blocked while outputs are running.
+
+---
+
+### `GET /pipelines/:pipelineId/history?limit=200`
+
+Returns append-only pipeline history events for UI consumption. This stream includes:
+
+- pipeline config mutations (`[config] ...`)
+- input state transitions (`[input_state] off -> on`, `on -> warning`, `warning -> error`, etc.)
+
+Pipeline-level history entries are stored in `job_logs` with:
+
+- `pipeline_id = :pipelineId`
+- `output_id IS NULL`
+- optional `event_type` values such as `pipeline_config` and `pipeline_state`
+
+**Response 200:**
+```json
+{
+  "pipelineId": "a1b2c3d4e5f6a7b8",
+  "logs": [
+    {
+      "ts": "2026-04-16T05:30:00.000Z",
+      "message": "[input_state] off -> on",
+      "eventType": "pipeline_state"
+    },
+    {
+      "ts": "2026-04-16T05:25:00.000Z",
+      "message": "[config] stream_key changed from ab...cd to ef...12",
+      "eventType": "pipeline_config"
+    }
+  ]
+}
 ```
 
 **Errors:** `404` pipeline not found.
