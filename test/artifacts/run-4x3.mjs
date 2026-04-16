@@ -18,6 +18,7 @@ const defaults = {
   verifyAppRetries: 30,
   inputFile: 'test/colorbar-timer.mp4',
   rtmpIngestBase: 'rtmp://localhost:1935',
+  rtmpOutputBase: 'rtmp://localhost:1936/live',
   rtspIngestBase: 'rtsp://localhost:8554',
   srtIngestBase: 'srt://localhost:8890?streamid=publish:',
   inputProtocols: 'rtmp,rtsp,srt',
@@ -37,6 +38,7 @@ const config = {
   verifyAppRetries: Number(process.env.VERIFY_APP_RETRIES || defaults.verifyAppRetries),
   inputFile: resolvePath(process.env.INPUT_FILE || defaults.inputFile),
   rtmpIngestBase: process.env.RTMP_INGEST_BASE || defaults.rtmpIngestBase,
+  rtmpOutputBase: process.env.RTMP_OUTPUT_BASE || defaults.rtmpOutputBase,
   rtspIngestBase: process.env.RTSP_INGEST_BASE || defaults.rtspIngestBase,
   srtIngestBase: process.env.SRT_INGEST_BASE || defaults.srtIngestBase,
   inputProtocols: process.env.INPUT_PROTOCOLS || defaults.inputProtocols,
@@ -115,7 +117,7 @@ function readBooleanEnv(name, defaultValue) {
 }
 
 function printHelp() {
-  console.log(`Usage: node test/artifacts/run-4x3.mjs\n\nEnvironment flags:\n  CLEAN_START=1    Tear down stale state and launch a fresh stack (default)\n  KEEP_RUNNING=1   Leave backend and publishers running after the run\n  MANIFEST_PATH    Path to the tracked 4x3 manifest\n  API_URL          Backend base URL (default: ${defaults.apiUrl})\n  RTMP_STAT_URL    nginx-rtmp stat URL (default: ${defaults.rtmpStatUrl})`);
+  console.log(`Usage: node test/artifacts/run-4x3.mjs\n\nEnvironment flags:\n  CLEAN_START=1    Tear down stale state and launch a fresh stack (default)\n  KEEP_RUNNING=1   Leave backend and publishers running after the run\n  MANIFEST_PATH    Path to the tracked 4x3 manifest\n  API_URL          Backend base URL (default: ${defaults.apiUrl})\n  RTMP_STAT_URL    nginx-rtmp stat URL (default: ${defaults.rtmpStatUrl})\n  RTMP_OUTPUT_BASE Base URL used for RTMP outputs (default: ${defaults.rtmpOutputBase})`);
 }
 
 function registerSignalHandlers() {
@@ -252,23 +254,39 @@ async function ensureResources(manifest) {
     });
 
     for (const outputDef of pipelineDef.outputs) {
+      const outputUrl = normalizeOutputUrl(outputDef.url);
       const encoding = outputDef.encoding || 'copy';
       let output = state.outputs.find(
         (item) =>
           item.pipelineId === pipeline.id &&
           item.name === outputDef.name &&
-          item.url === outputDef.url,
+          item.url === outputUrl,
       );
 
       if (!output) {
-        const result = await requestJson(`/pipelines/${pipeline.id}/outputs`, {
-          method: 'POST',
-          body: { name: outputDef.name, url: outputDef.url, encoding },
-          okStatuses: [201],
-        });
-        output = result.json.output;
-        console.log(`  Created output ${outputDef.name}: ${output.id}`);
-        state = await fetchConfigState();
+        const outputWithSameName = state.outputs.find(
+          (item) => item.pipelineId === pipeline.id && item.name === outputDef.name,
+        );
+
+        if (outputWithSameName) {
+          const result = await requestJson(`/pipelines/${pipeline.id}/outputs/${outputWithSameName.id}`, {
+            method: 'POST',
+            body: { name: outputDef.name, url: outputUrl, encoding },
+            okStatuses: [200],
+          });
+          output = result.json.output;
+          console.log(`  Updated output ${outputDef.name}: ${output.id} -> ${outputUrl}`);
+          state = await fetchConfigState();
+        } else {
+          const result = await requestJson(`/pipelines/${pipeline.id}/outputs`, {
+            method: 'POST',
+            body: { name: outputDef.name, url: outputUrl, encoding },
+            okStatuses: [201],
+          });
+          output = result.json.output;
+          console.log(`  Created output ${outputDef.name}: ${output.id}`);
+          state = await fetchConfigState();
+        }
       } else {
         console.log(`  Output exists ${outputDef.name}: ${output.id}`);
       }
@@ -278,7 +296,7 @@ async function ensureResources(manifest) {
         pipelineName: pipelineDef.name,
         outputId: output.id,
         outputName: outputDef.name,
-        outputUrl: outputDef.url,
+        outputUrl,
       });
     }
   }
@@ -365,6 +383,28 @@ function buildFfmpegArgs(protocol, targetUrl) {
     return [...baseArgs, '-f', 'mpegts', targetUrl];
   }
   throw new Error(`Unsupported input protocol: ${protocol}`);
+}
+
+function normalizeOutputUrl(outputUrl) {
+  if (!outputUrl || typeof outputUrl !== 'string') {
+    return outputUrl;
+  }
+
+  try {
+    const parsed = new URL(outputUrl);
+    if (parsed.protocol !== 'rtmp:' && parsed.protocol !== 'rtmps:') {
+      return outputUrl;
+    }
+  } catch {
+    return outputUrl;
+  }
+
+  const streamName = extractStreamName(outputUrl);
+  if (!streamName) {
+    return outputUrl;
+  }
+
+  return `${String(config.rtmpOutputBase).replace(/\/+$/, '')}/${streamName}`;
 }
 
 async function startOutputs(outputs) {

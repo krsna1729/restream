@@ -31,6 +31,10 @@ Leave stack running after completion for inspection:
 Reuse an already-running stack (skip media-service restart):
 - CLEAN_START=0 make run-4x3
 
+Docker mode (backend in container):
+- make run-docker
+- CLEAN_START=0 RTMP_OUTPUT_BASE="rtmp://nginx-rtmp/live" make run-4x3
+
 ## Notes
 
 - session-4x3-manifest.json is not rewritten by the runner.
