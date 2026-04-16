@@ -1064,9 +1064,19 @@ app.post('/pipelines/:pipelineId/outputs/:outputId', (req, res) => {
         const url = req.body?.url ?? existing.url;
         const encoding = req.body?.encoding ?? existing.encoding ?? 'source';
         const nameError = validateName(name, 'Output name');
+        const running = db.getRunningJobFor(pid, oid);
+        const urlChanged = url !== existing.url;
+        const encodingChanged = encoding !== (existing.encoding ?? 'source');
 
         if (nameError) {
             return res.status(400).json({ error: nameError });
+        }
+
+        // Running outputs can be renamed, but transport/encoding changes require a restart.
+        if (running && (urlChanged || encodingChanged)) {
+            return res.status(409).json({
+                error: 'Cannot change output URL or encoding while output is running. Stop output first.',
+            });
         }
 
         if (!validateOutputUrl(url)) {

@@ -34,6 +34,20 @@ function maskSecret(value) {
     return `${s.slice(0, 2)}...${s.slice(-2)}`;
 }
 
+function sanitizeLogMessage(msg, redacted = true) {
+    if (!redacted) return String(msg);
+    return String(msg)
+        // Mask only the final path segment (usually the secret key/token).
+        .replace(
+            new RegExp('(rtmps?://[^/\\s]+(?:/[^/\\s]+)*/)([^/\\s\'\"]+)(\\?[^\'\"\\s]*)?', 'g'),
+            '$1***$3',
+        )
+        .replace(
+            new RegExp('(rtsp://[^/\\s]+(?:/[^/\\s]+)*/)([^/\\s\'\"]+)(\\?[^\'\"\\s]*)?', 'g'),
+            '$1***$3',
+        );
+}
+
 function isValidRtmp(str) {
     // YouTube backup URL is a little funny
     if (str.includes(' ')) return false;

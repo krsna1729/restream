@@ -129,15 +129,6 @@ function getTimelineLogs(logs) {
     return items.filter((log) => String(log?.message || '').startsWith('[lifecycle]'));
 }
 
-function sanitizeLogMessage(msg, redacted = true) {
-    if (!redacted) return String(msg);
-    return String(msg)
-        // rtmp://host/live/STREAMKEY  →  rtmp://host/live/***
-        .replace(new RegExp('(rtmp://[^/]+/[^/]+/)([^\'\"\\s]+)', 'g'), '$1***')
-        // rtsp://host/STREAMKEY?params  →  rtsp://host/***
-        .replace(new RegExp('(rtsp://[^/]+/)([^\'\"\\s]+)', 'g'), '$1***');
-}
-
 function classifyPipelineHistoryEvent(log) {
     const message = String(log?.message || '');
 
@@ -581,7 +572,17 @@ async function openOutModal(mode, pipe, output = null) {
         mode === 'edit' ? `Edit Output "${output?.name || pipe.name}"` : `Add Output for "${pipe.name}"`;
     document.getElementById('out-submit-btn').innerText = mode === 'edit' ? 'Update' : 'Create';
     document.getElementById('out-name-input').value = output?.name || `Out_${pipe.outs.length + 1}`;
-    document.getElementById('out-encoding-input').value = output?.encoding || 'source';
+    const encodingSelect = document.getElementById('out-encoding-input');
+    const resolvedEncoding = output?.encoding || 'source';
+    if (![...encodingSelect.options].some((opt) => opt.value === resolvedEncoding)) {
+        const customOpt = document.createElement('option');
+        customOpt.value = resolvedEncoding;
+        customOpt.textContent = resolvedEncoding;
+        encodingSelect.appendChild(customOpt);
+    }
+    encodingSelect.value = resolvedEncoding;
+    const isRunningEdit =
+        mode === 'edit' && !!output && (output.status === 'on' || output.status === 'warning');
 
     const serverSelect = document.getElementById('out-server-url-input');
     serverSelect.value = '';
@@ -596,7 +597,19 @@ async function openOutModal(mode, pipe, output = null) {
     document.getElementById('out-rtmp-key-input').value = currentUrl.replace(serverSelect.value, '');
     document.getElementById('out-rtmp-key-input').classList.remove('input-error');
     document.getElementById('out-rtmp-error').classList.add('hidden');
+    document.getElementById('out-running-edit-hint').classList.toggle('hidden', !isRunningEdit);
     document.getElementById('out-name-input').classList.remove('input-error');
+
+    // Keep values visible; block interaction in running-edit mode.
+    encodingSelect.style.pointerEvents = isRunningEdit ? 'none' : '';
+    encodingSelect.style.opacity = isRunningEdit ? '0.75' : '';
+    serverSelect.style.pointerEvents = isRunningEdit ? 'none' : '';
+    serverSelect.style.opacity = isRunningEdit ? '0.75' : '';
+    const outRtmpInput = document.getElementById('out-rtmp-key-input');
+    outRtmpInput.readOnly = isRunningEdit;
+    outRtmpInput.classList.toggle('opacity-70', isRunningEdit);
+    document.getElementById('edit-out-modal').dataset.runningEdit = isRunningEdit ? '1' : '';
+
     document.getElementById('edit-out-modal').showModal();
 }
 
@@ -620,6 +633,8 @@ async function editOutFormBtn(event) {
     event.preventDefault();
 
     const mode = document.getElementById('out-mode-input').value || 'edit';
+    const modal = document.getElementById('edit-out-modal');
+    const isRunningEdit = modal.dataset.runningEdit === '1';
     const pipeId = document.getElementById('out-pipe-id-input').value;
     const serverUrl = document.getElementById('out-server-url-input').value;
     const rtmpKey = document.getElementById('out-rtmp-key-input').value.trim();
@@ -636,7 +651,7 @@ async function editOutFormBtn(event) {
         data.url = data.url.replaceAll('${s_prp}', params.get('s_prp'));
     }
 
-    const isRtmpValid = isValidRtmp(data.url);
+    const isRtmpValid = isRunningEdit ? true : isValidRtmp(data.url);
     if (isRtmpValid) {
         document.getElementById('out-rtmp-key-input').classList.remove('input-error');
         document.getElementById('out-rtmp-error').classList.add('hidden');
@@ -652,7 +667,7 @@ async function editOutFormBtn(event) {
         document.getElementById('out-name-input').classList.add('input-error');
     }
 
-    if (!isRtmpValid || !isOutNameValid) {
+    if ((!isRtmpValid && !isRunningEdit) || !isOutNameValid) {
         return;
     }
 

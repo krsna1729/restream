@@ -315,13 +315,17 @@ function renderOutsColumn(selectedPipe) {
             const isRunning = o.status === 'on' || o.status === 'warning';
 
             const row = document.createElement('div');
-            row.className = 'bg-base-100 px-3 py-2 shadow rounded-box grid grid-cols-[1fr_auto] gap-2 w-full';
+            row.className = 'bg-base-100 px-3 py-2 shadow rounded-box w-full';
+            row.style.display = 'grid';
+            row.style.gridTemplateColumns = 'minmax(0, 1fr) auto';
+            row.style.alignItems = 'start';
+            row.style.gap = '0.5rem';
 
             const content = document.createElement('div');
             content.className = 'min-w-0';
 
             const heading = document.createElement('div');
-            heading.className = 'font-semibold mr-3';
+            heading.className = 'font-semibold flex items-center gap-2 min-w-0';
 
             const status = document.createElement('div');
             status.setAttribute('aria-label', 'status');
@@ -352,41 +356,39 @@ function renderOutsColumn(selectedPipe) {
             });
             heading.appendChild(toggleBtn);
 
-            const outputName = document.createTextNode(` ${o.name}`);
+            const outputName = document.createElement('span');
+            outputName.className = 'whitespace-nowrap';
+            outputName.textContent = o.name;
             heading.appendChild(outputName);
 
             if (o.time !== null) {
                 const timeBadge = document.createElement('span');
-                timeBadge.className = 'badge badge-sm';
+                timeBadge.className = 'badge badge-sm whitespace-nowrap';
                 timeBadge.textContent = msToHHMMSS(o.time);
                 heading.appendChild(timeBadge);
             }
 
             if (isRunning) {
                 const throughputBadge = document.createElement('span');
-                throughputBadge.className = 'badge badge-sm';
+                throughputBadge.className = 'badge badge-sm whitespace-nowrap';
                 setBadgeBitrateWithSubtleUnit(throughputBadge, o.bitrateKbps);
                 heading.appendChild(throughputBadge);
             }
 
             if (o.totalSize) {
                 const volumeBadge = document.createElement('span');
-                volumeBadge.className = 'badge badge-sm';
+                volumeBadge.className = 'badge badge-sm whitespace-nowrap';
                 volumeBadge.textContent = `${(Number(o.totalSize) / (1024 * 1024)).toFixed(1)} MB`;
                 heading.appendChild(volumeBadge);
             }
 
             const outputUrl = document.createElement('code');
-            outputUrl.className = 'text-sm opacity-70 truncate block';
-            outputUrl.title = o.url;
-            outputUrl.textContent = o.url;
-
-            content.appendChild(heading);
-            content.appendChild(outputUrl);
-            row.appendChild(content);
+            outputUrl.className = 'text-sm opacity-70 truncate block mt-1';
+            outputUrl.textContent = sanitizeLogMessage(o.url, true);
+            outputUrl.title = 'Hidden by default';
 
             const actions = document.createElement('div');
-            actions.className = 'flex items-center gap-2 w-fit';
+            actions.className = 'flex items-center gap-2 self-start';
 
             const historyBtn = document.createElement('button');
             historyBtn.className = 'btn btn-xs btn-accent btn-outline';
@@ -398,10 +400,9 @@ function renderOutsColumn(selectedPipe) {
             });
 
             const editBtn = document.createElement('button');
-            editBtn.className = `btn btn-xs btn-accent btn-outline ${isRunning ? 'btn-disabled' : ''}`;
+            editBtn.className = 'btn btn-xs btn-accent btn-outline';
             editBtn.textContent = '✎';
             editBtn.addEventListener('click', () => {
-                if (editBtn.classList.contains('btn-disabled')) return;
                 editOutBtn(pipe.id, o.id);
             });
 
@@ -416,6 +417,10 @@ function renderOutsColumn(selectedPipe) {
             actions.appendChild(historyBtn);
             actions.appendChild(editBtn);
             actions.appendChild(deleteBtn);
+
+            content.appendChild(heading);
+            content.appendChild(outputUrl);
+            row.appendChild(content);
             row.appendChild(actions);
             outputsList.appendChild(row);
     });

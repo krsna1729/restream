@@ -172,6 +172,7 @@
             <legend class="fieldset-legend">Stream Key or Custom URL</legend>
             <input type="text" id="out-rtmp-key-input" class="input w-full" placeholder="Type here" />
             <p id="out-rtmp-error" class="text-error text-sm hidden">URL must start with rtmp:// or rtmps://</p>
+            <p id="out-running-edit-hint" class="text-warning text-sm hidden">Output is running. Only name can be edited.</p>
           </fieldset>
         </div>
 
@@ -409,32 +410,35 @@
             </div>
           </div>
           <div class="divider"></div>
-            <div class="mt-2 space-y-2">
-              <div class="flex items-center gap-2 text-sm">
-                <span class="min-w-24 font-semibold">Stream Key:</span>
-                <code class="flex-1 overflow-x-auto whitespace-nowrap" id="stream-key" data-copy=""></code>
+            <div class="mt-2 w-full space-y-2" style="--label-col: 96px;">
+              <div class="grid items-center gap-2 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto;">
+                <span class="font-semibold">Stream Key:</span>
+                <code class="overflow-x-auto whitespace-nowrap" id="stream-key" data-copy="" style="min-width: 0;"></code>
                 <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('stream-key')">📋</button>
               </div>
 
-              <div class="rounded-lg bg-base-300/40 p-2" id="ingest-urls-panel">
-                <div class="py-2 text-sm font-semibold">Ingest URLs</div>
-                <div class="space-y-2 text-sm">
-                  <div class="flex items-center gap-2">
-                    <span class="badge badge-outline min-w-14 justify-center">RTMP</span>
-                    <code class="flex-1 overflow-x-auto whitespace-nowrap" id="rtmp-url" data-copy=""></code>
-                    <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('rtmp-url')">📋</button>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <span class="badge badge-outline min-w-14 justify-center">RTSP</span>
-                    <code class="flex-1 overflow-x-auto whitespace-nowrap" id="rtsp-url" data-copy=""></code>
-                    <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('rtsp-url')">📋</button>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <span class="badge badge-outline min-w-14 justify-center">SRT</span>
-                    <code class="flex-1 overflow-x-auto whitespace-nowrap" id="srt-url" data-copy=""></code>
-                    <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('srt-url')">📋</button>
-                  </div>
-                </div>
+              <div class="grid items-center gap-2 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto;">
+                <span class="font-semibold">Ingest URLs</span>
+                <span></span>
+                <span></span>
+              </div>
+
+              <div class="grid items-center gap-2 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto;">
+                <span class="badge badge-outline justify-center">RTMP</span>
+                <code class="overflow-x-auto whitespace-nowrap" id="rtmp-url" data-copy="" style="min-width: 0;"></code>
+                <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('rtmp-url')">📋</button>
+              </div>
+
+              <div class="grid items-center gap-2 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto;">
+                <span class="badge badge-outline justify-center">RTSP</span>
+                <code class="overflow-x-auto whitespace-nowrap" id="rtsp-url" data-copy="" style="min-width: 0;"></code>
+                <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('rtsp-url')">📋</button>
+              </div>
+
+              <div class="grid items-center gap-2 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto;">
+                <span class="badge badge-outline justify-center">SRT</span>
+                <code class="overflow-x-auto whitespace-nowrap" id="srt-url" data-copy="" style="min-width: 0;"></code>
+                <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('srt-url')">📋</button>
               </div>
             </div>
         </div>
