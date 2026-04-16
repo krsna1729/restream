@@ -344,6 +344,9 @@ function renderOutsColumn(selectedPipe) {
             toggleBtn.classList.toggle('btn-disabled', !!toggleBusy);
             toggleBtn.addEventListener('click', () => {
                 if (toggleBtn.disabled) return;
+                // Immediately disable button to prevent race-condition double-clicks
+                toggleBtn.disabled = true;
+                toggleBtn.classList.add('btn-disabled');
                 const out = pipe.outs[outputIndex];
                 if (!out) return;
                 const running = out.status === 'on' || out.status === 'warning';
