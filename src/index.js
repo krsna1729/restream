@@ -712,6 +712,18 @@ app.post('/pipelines/:id', (req, res) => {
         const streamKey = req.body?.streamKey ?? existing.streamKey;
         const encoding = req.body?.encoding ?? existing.encoding;
 
+        // Block stream key change while any output has a running job.
+        const streamKeyChanging = streamKey !== existing.streamKey;
+        if (streamKeyChanging) {
+            const pipelineOutputs = db.listOutputs().filter((o) => o.pipelineId === id);
+            const hasRunningJob = pipelineOutputs.some((o) => !!db.getRunningJobFor(id, o.id));
+            if (hasRunningJob) {
+                return res.status(409).json({
+                    error: 'Cannot change stream key while outputs are running. Stop all outputs first.',
+                });
+            }
+        }
+
         const updated = db.updatePipeline(id, { name, streamKey, encoding });
         if (!updated) return res.status(500).json({ error: 'Failed to update pipeline' });
 

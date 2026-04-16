@@ -370,6 +370,14 @@ async function openPipeModal(mode, pipe = null, suggestedName = '') {
     document.getElementById('pipe-modal-title').innerText = mode === 'edit' ? 'Edit Pipeline' : 'Add Pipeline';
     document.getElementById('pipe-submit-btn').innerText = mode === 'edit' ? 'Update' : 'Create';
     await populatePipelineKeySelect(pipe?.key || '');
+
+    const keySelect = document.getElementById('pipe-stream-key-input');
+    const keyHint = document.getElementById('pipe-stream-key-locked-hint');
+    const hasRunningOutput =
+        mode === 'edit' && pipe?.outs?.some((o) => o.status === 'on' || o.status === 'warning');
+    keySelect.disabled = !!hasRunningOutput;
+    keyHint.classList.toggle('hidden', !hasRunningOutput);
+
     document.getElementById('edit-pipe-modal').dataset.mode = mode;
     document.getElementById('edit-pipe-modal').showModal();
 }

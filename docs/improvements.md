@@ -612,6 +612,79 @@ Residual caveat: multi-instance deployments would still need cross-process coord
 
 Corrected `value="720p"` to `value="1080p"` — selecting "1080p" was silently submitting `720p` to the server.
 
+### 5.3 Stream Key Change While Outputs Running (NEW)
+
+**Status:** ✅ Implemented  
+**Severity:** High  
+**Location:** `src/index.js:704-719` (POST /pipelines/:id), `public/dashboard.js:367-382` (openPipeModal), `public/index.html:118-120`
+
+**The bad behavior:** The backend allowed changing a pipeline's `streamKey` via `POST /pipelines/:id` without checking whether any of its outputs had running jobs. When the stream key changed:
+
+1. Running ffmpeg jobs kept pulling from the **old RTSP URL** (baked in at `POST .../start` time)
+2. `/health` polling switched to the **new key** → input shows `off` while outputs show `on` (contradictory state)
+3. Probe cache keyed by stream key → metadata (`fps`, audio codec, channels) dropped to `--` for the new key
+4. No path to consistent state without restarting the server
+
+The situation was made worse because the frontend had no guard — the UI happily let users change the stream key while outputs were visibly running.
+
+**Recommendation:** Block stream key changes while any output has a running job.
+
+<details><summary><strong>Implementation</strong></summary>
+
+**Backend guard (src/index.js):**
+
+In the `POST /pipelines/:id` handler, after fetching the existing pipeline:
+
+```javascript
+// Block stream key change while any output has a running job.
+const streamKeyChanging = streamKey !== existing.streamKey;
+if (streamKeyChanging) {
+    const pipelineOutputs = db.listOutputs().filter((o) => o.pipelineId === id);
+    const hasRunningJob = pipelineOutputs.some((o) => !!db.getRunningJobFor(id, o.id));
+    if (hasRunningJob) {
+        return res.status(409).json({
+            error: 'Cannot change stream key while outputs are running. Stop all outputs first.',
+        });
+    }
+}
+```
+
+When a 409 is returned, `apiRequest()` in the frontend automatically calls `showErrorAlert()` to toast the error message.
+
+**Frontend guard (public/dashboard.js):**
+
+In `openPipeModal(mode, pipe)`, after populating the stream key select, disable it when editing a pipeline that has running outputs:
+
+```javascript
+const keySelect = document.getElementById('pipe-stream-key-input');
+const keyHint = document.getElementById('pipe-stream-key-locked-hint');
+const hasRunningOutput =
+    mode === 'edit' && pipe?.outs?.some((o) => o.status === 'on' || o.status === 'warning');
+keySelect.disabled = !!hasRunningOutput;
+keyHint.classList.toggle('hidden', !hasRunningOutput);
+```
+
+**Frontend UI hint (public/index.html):**
+
+Add a warning message below the stream key select in edit mode:
+
+```html
+<select class="select w-full" id="pipe-stream-key-input"></select>
+<p id="pipe-stream-key-locked-hint" class="text-warning text-sm hidden">
+  Stop all outputs before changing the stream key.
+</p>
+```
+
+**Effort:** ~25 lines backend + ~20 lines frontend. No new dependencies.
+
+**Behavior after fix:**
+- Attempting to change stream key while outputs run returns `409 Conflict` with a clear message
+- The edit modal prevents the user from even attempting it — the select is disabled and a yellow hint appears
+- Creating a new pipeline always allows stream key selection (no outputs yet)
+- The user must stop all outputs, then return to edit to change the stream key
+
+</details>
+
 ---
 
 ## 6. Code Simplification Opportunities
