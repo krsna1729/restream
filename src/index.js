@@ -982,6 +982,36 @@ function validateOutputUrl(url) {
     return parsed.protocol === 'rtmp:' || parsed.protocol === 'rtmps:';
 }
 
+function buildFfmpegOutputArgs({ inputUrl, outputUrl }) {
+    return [
+        '-nostdin',
+        '-hide_banner',
+        '-loglevel',
+        'info',
+        // Disable legacy stderr progress lines; progress is emitted as key=value on fd3.
+        '-nostats',
+        '-stats_period',
+        '1',
+        '-progress',
+        'pipe:3',
+        '-rtsp_transport',
+        'tcp',
+        '-i',
+        inputUrl,
+        '-c:v',
+        'copy',
+        '-c:a',
+        'copy',
+        '-flvflags',
+        'no_duration_filesize',
+        '-rtmp_live',
+        'live',
+        '-f',
+        'flv',
+        outputUrl,
+    ];
+}
+
 // create output
 app.post('/pipelines/:pipelineId/outputs', (req, res) => {
     try {
@@ -1140,33 +1170,7 @@ app.post('/pipelines/:pipelineId/outputs/:outputId/start', async (req, res) => {
             return res.status(400).json({ error: 'Output URL must be a valid rtmp:// or rtmps:// URL' });
         }
 
-        const ffArgs = [
-            '-nostdin',
-            '-hide_banner',
-            '-loglevel',
-            'info',
-            // Disable legacy stderr progress lines; progress is emitted as key=value on fd3.
-            '-nostats',
-            '-stats_period',
-            '1',
-            '-progress',
-            'pipe:3',
-            '-rtsp_transport',
-            'tcp',
-            '-i',
-            inputUrl,
-            '-c:v',
-            'copy',
-            '-c:a',
-            'copy',
-            '-flvflags',
-            'no_duration_filesize',
-            '-rtmp_live',
-            'live',
-            '-f',
-            'flv',
-            outputUrl,
-        ];
+        const ffArgs = buildFfmpegOutputArgs({ inputUrl, outputUrl });
 
         const redactedFfArgs = redactFfmpegArgs(ffArgs);
         log('debug', 'Crafted ffmpeg output command', {

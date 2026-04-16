@@ -775,36 +775,52 @@ Stream key change messages are stored with masked values (`ab...cd`) because thi
 
 | Opportunity              | Location                 | Status | Description                                              |
 | ------------------------ | ------------------------ | ------ | -------------------------------------------------------- |
-| Extract FFmpeg args      | `src/index.js:815-842`   | ✅ Valid | 28-element array inline in route handler; could be a builder function |
+| Extract FFmpeg args      | `src/index.js:815-842`   | ✅ Implemented | Inline output arg construction moved to `buildFfmpegOutputArgs()` |
 | Remove redundant `crypto` import | `src/index.js:27-28` | ✅ Fixed | Deduplicated to single `require('crypto')` with `const { createHash } = crypto` |
 
 <details><summary><strong>Implementation — Extract FFmpeg Args Builder</strong></summary>
 
-**File:** `src/index.js` — Extract a function above the route handler:
+**File:** `src/index.js` — Extracted a dedicated builder above the output routes:
 
 ```javascript
-function buildFfmpegArgs({ inputUrl, outputUrl, encoding, videoCodec, audioCodec }) {
-    const args = ['-hide_banner', '-loglevel', 'error', '-progress', 'pipe:3'];
-    args.push('-i', inputUrl);
-
-    if (encoding === 'passthrough' || videoCodec === 'copy') {
-        args.push('-c:v', 'copy');
-    } else {
-        // ... existing codec/bitrate/resolution logic
-    }
-
-    args.push('-c:a', audioCodec || 'copy');
-    args.push('-f', 'flv', outputUrl);
-    return args;
+function buildFfmpegOutputArgs({ inputUrl, outputUrl }) {
+    return [
+        '-nostdin',
+        '-hide_banner',
+        '-loglevel',
+        'info',
+        '-nostats',
+        '-stats_period',
+        '1',
+        '-progress',
+        'pipe:3',
+        '-rtsp_transport',
+        'tcp',
+        '-i',
+        inputUrl,
+        '-c:v',
+        'copy',
+        '-c:a',
+        'copy',
+        '-flvflags',
+        'no_duration_filesize',
+        '-rtmp_live',
+        'live',
+        '-f',
+        'flv',
+        outputUrl,
+    ];
 }
 ```
 
 Replace lines 815–842 in the start handler with:
 ```javascript
-const ffmpegArgs = buildFfmpegArgs({ inputUrl, outputUrl, encoding, videoCodec, audioCodec });
+const ffmpegArgs = buildFfmpegOutputArgs({ inputUrl, outputUrl });
 ```
 
 **Effort:** ~35 lines (move, don't rewrite). Enables unit testing of arg generation.
+
+**Implemented in:** current branch
 
 </details>
 
@@ -1494,20 +1510,20 @@ At 50,000 job rows (weeks of operation): 15+ MB per poll → **29s transfer** �
 | P1       | Delete obsolete docs        | Trivial | Cleanup         | ✅ Confirmed |
 | P1       | Fix duplicate HTML option   | Trivial | Bug fix         | ✅ Confirmed |
 | P1       | Add magic number constants  | Low     | Maintainability | ✅ Confirmed |
-| P1       | Fix stream probe cache leak | Low     | Performance     | ⚠️ Partial (bounded, but still worth fixing) |
+| P1       | Fix stream probe cache leak | Low     | Performance     | ✅ Implemented |
 | P1       | Fix race condition in job start | Low | Correctness     | ✅ Confirmed (upgraded from P3 — the 88-line async window is wider than initially described) |
-| P2       | Consolidate mask functions  | Low     | Code cleanup    | ✅ Confirmed (3 copies, not 2) |
-| P2       | Add job/log auto-cleanup    | Medium  | Operations      | ✅ Confirmed |
-| P2       | Add config file caching     | Medium  | Performance     | ✅ Confirmed |
-| P2       | Standardize error handling  | Low     | Code quality    | ✅ Confirmed |
-| P2       | Add pipeline name validation | Low    | Input safety    | ✅ New finding |
-| P3       | Extract FFmpeg args builder | Low     | Maintainability | ✅ Valid |
-| P3       | Remove unused `crypto` import | Trivial | Cleanup       | ✅ New finding |
+| P2       | Consolidate mask functions  | Low     | Code cleanup    | ✅ Implemented |
+| P2       | Add job/log auto-cleanup    | Medium  | Operations      | ✅ Implemented |
+| P2       | Add config file caching     | Medium  | Performance     | ✅ Implemented |
+| P2       | Standardize error handling  | Low     | Code quality    | ✅ Implemented |
+| P2       | Add pipeline name validation | Low    | Input safety    | ✅ Implemented |
+| P3       | Extract FFmpeg args builder | Low     | Maintainability | ✅ Implemented |
+| P3       | Remove unused `crypto` import | Trivial | Cleanup       | ✅ Fixed |
 | **P0**   | **Add HTTP compression (`compression`)** | **Trivial** | **Scaling — without gzip, Fast 4G polling at unbounded jobs exceeds 61% BW at 30P/500O; gzip reduces post-upsert to ~3%** | ✅ Upgraded from P1 (network throttle analysis) |
 | ✅ DONE | Fix double `/config` fetch per poll cycle | Trivial | Performance — eliminates ~50% of config requests | ✅ Complete (Apr 15, 2026) |
-| P2       | Add `Cache-Control: max-age=1h` to static assets | Trivial | Performance — eliminates 6 conditional requests/reload | ✅ New (browser audit) |
-| P2       | Add Page Visibility polling backoff | Low | Performance — stops polling on hidden tabs | ✅ New (browser audit) |
-| P2       | Fix `/health` probe latency spikes | Low | Performance — prevents 3.5s dashboard freezes | ✅ New (browser audit) |
+| P2       | Add `Cache-Control: max-age=1h` to static assets | Trivial | Performance — eliminates 6 conditional requests/reload | ✅ Implemented |
+| P2       | Add Page Visibility polling backoff | Low | Performance — stops polling on hidden tabs | ✅ Implemented |
+| P2       | Fix `/health` probe latency spikes | Low | Performance — prevents 3.5s dashboard freezes | ✅ Implemented |
 | P3       | Minify CSS build (`--minify` flag) | Trivial | Performance — 81 KB → ~20 KB | ✅ New (browser audit) |
 | P3       | JS bundling/minification | Medium | Performance — 5 requests → 1, ~53 KB → ~18 KB | ✅ New (browser audit) |
 | P3       | Add FFREPORT env for ffmpeg logs under `data/ffmpeg/` | Low | Operations/debugging — cheap per-run ffmpeg diagnostics without changing API surface | ✅ New finding |
