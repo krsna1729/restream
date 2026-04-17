@@ -1,25 +1,106 @@
-# Restreamer
+# Restream
 
-A streaming server which takes inputs and replicates them to multiple outputs.
+A streaming control plane built on [MediaMTX](https://github.com/bluenviron/mediamtx). Takes RTMP ingest, manages stream keys and pipelines, and drives multiple FFmpeg output jobs to external platforms (YouTube, Facebook, etc.) via a browser dashboard.
 
-## Design
+## How It Works
 
-<img src="https://github.com/user-attachments/assets/499f3309-eed3-49b3-8eaf-6d3a365751de" align="center" width="500" >
+1. A publisher pushes an RTMP stream to MediaMTX.
+2. Restream's backend manages stream keys, pipelines, and output destinations in SQLite.
+3. When an output is started, the backend probes the RTSP relay, spawns an FFmpeg process to pull and push to the destination, and tracks its health.
+4. The browser polls `/config` (ETag-gated) and `/health` (live MediaMTX + DB aggregate) to render live status and metrics.
 
-### Basic features:
+## Project Structure
 
-- User can create a stream and give it a name (i.e. English or Spanish)
-- User can select a stream key for the stream or generate a new one.
-- For each stream user can add multiple outputs.
-- User can select encoding for each output. Some options are: source, rotate.
-- Once stream receives feed you can turn On/Off the outputs. This can be done dynamically without disturbing other outputs.
-- There should be two input RTMPs for each stream: main and backup. User should be able to manually select which one should be used for outputs.
+```
+src/
+  index.js          — Express REST API + FFmpeg lifecycle management
+  db.js             — SQLite schema, migrations, and query helpers (data/data.db)
+  config/
+    index.js        — Config loader with sanitization
+    restream.json   — App config: host, serverName, pipelinesLimit, outLimit
+public/
+  index.html        — Dashboard SPA shell
+  stream-keys.html  — Stream key management page
+  api.js            — All API calls (relative paths, never direct to MediaMTX)
+  dashboard.js      — Event handlers, modals, polling orchestration
+  pipeline.js       — parsePipelinesInfo(): merges config + health into view model
+  render.js         — DOM rendering: pipeline cards, stats, output tables
+  utils.js          — Shared utilities: formatTime, setServerConfig, copyData
+  output.css        — Compiled Tailwind + DaisyUI (do not edit manually)
+input.css           — Tailwind CSS source (compile with `make css`)
+docs/               — Architecture, API reference, health mapping, config guide
+infra/              — Deployment/runtime configs (MediaMTX, nginx-rtmp test sink)
+test/artifacts/     — Reproducible test scripts and session recordings
+docker-compose.yml  — Full-stack compose (app + mediamtx + nginx-rtmp test sink)
+```
 
-### Other features:
+SQLite runtime files are stored under `data/` (for example `data/data.db`).
 
-- User can upload a video to the server.
-- User can use the video as a source feed for any of the streams.
-- User can start stream recording.
+The compose file uses profiles:
+- `host`: MediaMTX in Docker with app on host (`make run-host`)
+- `container`: app + MediaMTX share a pod-like namespace via pause (`make run-docker`)
+
+## Documentation
+
+| Document | Description |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | System design, data model, call flows, deployment |
+| [docs/api-reference.md](docs/api-reference.md) | All REST endpoints with request/response shapes |
+| [docs/health-mapping.md](docs/health-mapping.md) | How input/output health statuses are derived |
+| [docs/configuration.md](docs/configuration.md) | All environment variables and config file options |
+| [docs/deployment-host.md](docs/deployment-host.md) | Production deployment guide on Linux hosts without containers |
+
+## Installation
+
+### Production Environment
+For production deployments, install only runtime dependencies:
+
+```sh
+npm ci --omit=dev
+```
+
+This installs:
+- `better-sqlite3` - Database
+- `express` - Web framework
+
+### Development Environment
+For local development with code formatting, CSS building, and live reload:
+
+```sh
+npm ci
+```
+
+This additionally installs:
+- `nodemon` - Auto-reload on file changes
+- `prettier` - Code formatter
+- `tailwindcss` - CSS framework
+- `@tailwindcss/cli` - Tailwind CLI
+- `daisyui` - UI component library
+
+### CI/Testing Environment
+For continuous integration and testing pipelines:
+
+```sh
+npm ci
+```
+
+## Run Modes
+
+### 1) Host Node + Docker MediaMTX
+
+Node runs on host and talks to MediaMTX via localhost.
+
+```sh
+make run-host
+```
+
+### 2) Full Docker (Node + MediaMTX)
+
+Node and MediaMTX both run in Docker. They share a pod-like network namespace, so the app reaches MediaMTX via `localhost`.
+
+```sh
+make run-docker
+```
 
 ## Contribute
 
@@ -27,6 +108,12 @@ After cloning, run:
 
 ```sh
 git config core.hooksPath .githooks
+```
+
+Then install dependencies:
+
+```sh
+npm ci
 ```
 
 ## Links

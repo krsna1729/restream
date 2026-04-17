@@ -1,0 +1,5 @@
+{
+    "serverName": "Server Name",
+    "pipelinesLimit": 25,
+    "outLimit": 95
+}

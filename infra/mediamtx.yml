@@ -1,0 +1,44 @@
+# Restream — minimal MediaMTX configuration
+#
+# Ingestion:  RTMP  rtmp://<host>:1935/<streamKey>
+#             RTSP  rtsp://<host>:8554/<streamKey>
+#             SRT   srt://<host>:8890?streamid=publish:<streamKey>
+#
+# Viewing:    WebRTC  http://<host>:8889/<streamKey>
+#             RTSP    rtsp://<host>:8554/<streamKey>
+#
+# Internal:   API     http://localhost:9997  (used by restream backend)
+
+# ── Ingest protocols ────────────────────────────────────────────────────────
+rtmp: yes          # port 1935
+rtsp: yes          # port 8554
+srt: yes           # port 8890
+
+# ── Browser playback ────────────────────────────────────────────────────────
+webrtc: yes        # HTTP signaling on port 8889, media on port 8189
+# For LAN or external browser access, advertise the host's reachable IP:
+# webrtcAdditionalHosts: ['<your-host-ip>']
+
+# ── Backend API ─────────────────────────────────────────────────────────────
+api: yes
+# Bind the control API to localhost so it remains available to the local
+# restream backend without being exposed on external interfaces by default.
+apiAddress: 127.0.0.1:9997   # used by restream for /v3/paths and /v3/*conns
+
+# ── Access control ──────────────────────────────────────────────────────────
+# Allow any client to publish, read, and use the API without authentication.
+# Restrict this in production by replacing 'any' with named users.
+authInternalUsers:
+    - user: any
+      pass:
+      ips: []
+      permissions:
+          - action: publish
+          - action: read
+          - action: playback
+          - action: api
+
+# ── Paths ───────────────────────────────────────────────────────────────────
+# No explicit paths needed — MediaMTX accepts any path on demand.
+# Add per-path overrides here only if custom behaviour is required.
+paths: {}

@@ -2,19 +2,23 @@
     "name": "restream",
     "version": "1.0.0",
     "description": "A streaming server which takes inputs and replicates them to multiple outputs.",
-    "main": "index.js",
+    "main": "src/index.js",
     "scripts": {
-        "start": "npx nodemon index.js",
-        "test": "echo \"Error: no test specified\" && exit 1"
+        "start": "node src/index.js",
+        "dev": "npx nodemon --ignore 'test/artifacts/**' src/index.js",
+        "test": "echo \"Error: no test specified\" && exit 1",
+        "test:4x3": "node test/artifacts/run-4x3.mjs"
     },
     "keywords": [],
     "author": "",
     "license": "ISC",
     "type": "commonjs",
+    "engines": {
+        "node": ">=20.19.0 <26",
+        "npm": ">=10"
+    },
     "dependencies": {
         "better-sqlite3": "12.6.0",
-        "body-parser": "2.2.2",
-        "cors": "2.8.5",
         "express": "5.1.0"
     },
     "devDependencies": {
