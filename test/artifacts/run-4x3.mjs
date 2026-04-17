@@ -260,7 +260,7 @@ async function ensureResources(manifest) {
 
     for (const [outputIndex, outputDef] of pipelineDef.outputs.entries()) {
       const outputUrl = normalizeOutputUrl(outputDef.url);
-      const encoding = resolveOutputEncoding(outputDef.encoding, pipelineIndex, outputIndex);
+      const encoding = resolveOutputEncoding(outputDef.encoding);
       let output = state.outputs.find(
         (item) =>
           item.pipelineId === pipeline.id &&
@@ -313,7 +313,7 @@ async function ensureResources(manifest) {
   return { pipelines: pipelineTargets, outputs: outputTargets };
 }
 
-function resolveOutputEncoding(encodingValue, pipelineIndex, outputIndex) {
+function resolveOutputEncoding(encodingValue) {
   const normalized = String(encodingValue || '').trim().toLowerCase();
   if (normalized) {
     if (!supportedOutputEncodings.has(normalized)) {
