@@ -275,7 +275,7 @@ function toggleOutputHistoryContext(log) {
         outputHistoryState.expandedContextKeys.add(contextKey);
         ensureOutputHistoryContext(log);
     }
-    renderOutputHistory(false);
+    renderOutputHistory(false, contextKey);
 }
 
 function setOutputHistorySearch(query) {
@@ -354,7 +354,7 @@ function setOutputHistoryOrder(order) {
     renderOutputHistory(true);
 }
 
-function renderOutputHistory(scrollToTop = false) {
+function renderOutputHistory(scrollToTop = false, anchorContextKey = null) {
     const list = document.getElementById('output-history-list');
     const empty = document.getElementById('output-history-empty');
     const searchWrap = document.getElementById('output-history-search-wrap');
@@ -475,6 +475,7 @@ function renderOutputHistory(scrollToTop = false) {
 
         const row = document.createElement('div');
         row.className = 'rounded bg-base-100 p-2';
+        if (contextKey) row.dataset.contextKey = contextKey;
 
         const header = document.createElement('div');
         header.className = 'flex items-center justify-between gap-2';
@@ -563,7 +564,12 @@ function renderOutputHistory(scrollToTop = false) {
         list.appendChild(row);
     });
 
-    if (scrollToTop) list.scrollTop = 0;
+    if (anchorContextKey) {
+        const target = list.querySelector(`[data-context-key="${CSS.escape(anchorContextKey)}"]`);
+        if (target) target.scrollIntoView({ block: 'nearest' });
+    } else if (scrollToTop) {
+        list.scrollTop = 0;
+    }
 }
 
 function setOutputHistoryMode(mode) {
