@@ -81,7 +81,13 @@ async function getHealth(etag = null) {
     const headers = {};
 
     if (etag) headers['If-None-Match'] = `"${etag}"`;
-    const response = await fetch('/health', { method: 'GET', headers, cache: 'no-store' });
+    let response = null;
+    try {
+        response = await fetch('/health', { method: 'GET', headers, cache: 'no-store' });
+    } catch (e) {
+        showErrorAlert('Network request failed: ' + e);
+        return null;
+    }
 
     if (response.status === 304) return { notModified: true, etag, data: null };
 
