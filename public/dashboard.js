@@ -584,7 +584,9 @@ function toggleHistoryRedaction() {
     outputHistoryState.redacted = !outputHistoryState.redacted;
     const btn = document.getElementById('output-history-redact');
     if (btn) {
-        btn.title = outputHistoryState.redacted ? 'Show URLs' : 'Hide URLs';
+        const label = outputHistoryState.redacted ? 'Show URLs' : 'Hide URLs';
+        btn.title = label;
+        btn.setAttribute('aria-label', label);
         btn.classList.toggle('btn-outline', outputHistoryState.redacted);
         btn.classList.toggle('btn-warning', !outputHistoryState.redacted);
     }
