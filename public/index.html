@@ -199,31 +199,36 @@
             <button
               id="output-history-redact"
               type="button"
+              aria-label="Toggle URL redaction"
               title="Show URLs"
               class="btn btn-xs btn-outline"
               onclick="toggleHistoryRedaction()">&#128065;</button>
-            <div class="join" role="tablist" aria-label="Output history order">
+            <div class="join" role="group" aria-label="Output history order">
             <button
               id="output-history-order-newest"
               type="button"
               class="btn btn-xs join-item btn-accent"
+              aria-pressed="true"
               onclick="setOutputHistoryOrder('desc')">Newest</button>
             <button
               id="output-history-order-oldest"
               type="button"
               class="btn btn-xs join-item btn-outline"
+              aria-pressed="false"
               onclick="setOutputHistoryOrder('asc')">Oldest</button>
             </div>
-            <div class="join" role="tablist" aria-label="Output history mode">
+            <div class="join" role="group" aria-label="Output history mode">
             <button
               id="output-history-mode-timeline"
               type="button"
               class="btn btn-xs join-item btn-accent"
+              aria-pressed="true"
               onclick="setOutputHistoryMode('timeline')">Timeline</button>
             <button
               id="output-history-mode-raw"
               type="button"
               class="btn btn-xs join-item btn-outline"
+              aria-pressed="false"
               onclick="setOutputHistoryMode('raw')">Raw</button>
             </div>
           </div>
@@ -245,8 +250,8 @@
                 onkeydown="onOutputHistorySearchKeydown(event)">
               <div class="absolute inset-y-0 right-2 flex items-center gap-1" id="output-history-search-controls">
                 <span id="output-history-search-status" class="text-xs opacity-70 min-w-12 text-right"></span>
-                <button id="output-history-search-prev" type="button" class="btn btn-ghost btn-xs btn-square" title="Previous match" onclick="navigateOutputHistorySearch(-1)">&#9650;</button>
-                <button id="output-history-search-next" type="button" class="btn btn-ghost btn-xs btn-square" title="Next match" onclick="navigateOutputHistorySearch(1)">&#9660;</button>
+              <button id="output-history-search-prev" type="button" class="btn btn-ghost btn-xs btn-square" aria-label="Previous match" title="Previous match" onclick="navigateOutputHistorySearch(-1)">&#9650;</button>
+                <button id="output-history-search-next" type="button" class="btn btn-ghost btn-xs btn-square" aria-label="Next match" title="Next match" onclick="navigateOutputHistorySearch(1)">&#9660;</button>
               </div>
             </div>
           </div>
