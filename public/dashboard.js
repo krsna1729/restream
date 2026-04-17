@@ -599,7 +599,18 @@ function startHistoryPolling(intervalMs) {
     if (outputHistoryState.pollTimer && outputHistoryState.pollEveryMs === intervalMs) return;
     if (outputHistoryState.pollTimer) clearInterval(outputHistoryState.pollTimer);
     outputHistoryState.pollEveryMs = intervalMs;
-    outputHistoryState.pollTimer = setInterval(pollHistoryOnce, intervalMs);
+    outputHistoryState.isPolling = false;
+    const pollWithGuard = async () => {
+        if (outputHistoryState.isPolling) return;
+        outputHistoryState.isPolling = true;
+        try {
+            await pollHistoryOnce();
+        } finally {
+            outputHistoryState.isPolling = false;
+        }
+        outputHistoryState.pollTimer = setTimeout(pollWithGuard, intervalMs);
+    };
+    outputHistoryState.pollTimer = setTimeout(pollWithGuard, intervalMs);
 }
 
 function updateHistoryPlayPauseBtn() {
@@ -980,12 +991,10 @@ async function openOutModal(mode, pipe, output = null) {
     document.getElementById('out-name-input').value = output?.name || `Out_${pipe.outs.length + 1}`;
     const encodingSelect = document.getElementById('out-encoding-input');
     const rawEncoding = String(output?.encoding || 'source').trim().toLowerCase();
-    const resolvedEncoding = rawEncoding;
-    if (![...encodingSelect.options].some((opt) => opt.value === resolvedEncoding)) {
-        const customOpt = document.createElement('option');
-        customOpt.value = resolvedEncoding;
-        customOpt.textContent = resolvedEncoding;
-        encodingSelect.appendChild(customOpt);
+    const isSupportedEncoding = [...encodingSelect.options].some((opt) => opt.value === rawEncoding);
+    const resolvedEncoding = isSupportedEncoding ? rawEncoding : 'source';
+    if (!isSupportedEncoding && rawEncoding !== 'source') {
+        console.warn(`Output encoding "${rawEncoding}" not supported; using 'source' instead`);
     }
     encodingSelect.value = resolvedEncoding;
     const isRunningEdit =
