@@ -340,18 +340,28 @@ function renderOutsColumn(selectedPipe) {
                 typeof isOutputToggleBusy === 'function' && isOutputToggleBusy(pipe.id, o.id);
             toggleBtn.disabled = !!toggleBusy;
             toggleBtn.classList.toggle('btn-disabled', !!toggleBusy);
-            toggleBtn.addEventListener('click', () => {
+            toggleBtn.addEventListener('click', async () => {
                 if (toggleBtn.disabled) return;
+                const out = pipe.outs[outputIndex];
+                if (!out) return;
                 // Immediately disable button to prevent race-condition double-clicks
                 toggleBtn.disabled = true;
                 toggleBtn.classList.add('btn-disabled');
-                const out = pipe.outs[outputIndex];
-                if (!out) return;
-                const running = out.status === 'on' || out.status === 'warning';
-                if (running) {
-                    stopOutBtn(pipe.id, out.id, toggleBtn);
-                } else {
-                    startOutBtn(pipe.id, out.id, toggleBtn);
+                try {
+                    const running = out.status === 'on' || out.status === 'warning';
+                    if (running) {
+                        await stopOutBtn(pipe.id, out.id, toggleBtn);
+                    } else {
+                        await startOutBtn(pipe.id, out.id, toggleBtn);
+                    }
+                } finally {
+                    const stillBusy =
+                        typeof isOutputToggleBusy === 'function' &&
+                        isOutputToggleBusy(pipe.id, out.id);
+                    if (!stillBusy) {
+                        toggleBtn.disabled = false;
+                        toggleBtn.classList.remove('btn-disabled');
+                    }
                 }
             });
             heading.appendChild(toggleBtn);

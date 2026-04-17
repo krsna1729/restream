@@ -6,9 +6,16 @@ async function apiRequest(url, { method = 'GET', body = null } = {}) {
         options.body = JSON.stringify(body);
     }
 
+    let response = null;
     showLoading();
-    const response = await fetch(url, options);
-    hideLoading();
+    try {
+        response = await fetch(url, options);
+    } catch (e) {
+        showErrorAlert('Network request failed: ' + e);
+        return null;
+    } finally {
+        hideLoading();
+    }
 
     let data = null;
     try {
