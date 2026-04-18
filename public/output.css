@@ -190,7 +190,7 @@
       display: grid;
       width: 100%;
       overflow: hidden;
-      webkit-user-select: none;
+      -webkit-user-select: none;
       user-select: none;
       grid-template-rows: 1fr 1.8rem 1fr;
       direction: ltr;
@@ -302,7 +302,7 @@
       align-items: center;
       justify-content: center;
       text-align: center;
-      webkit-user-select: none;
+      -webkit-user-select: none;
       user-select: none;
       &:hover {
         @media (hover: hover) {
@@ -572,7 +572,7 @@
       text-align: center;
       vertical-align: middle;
       outline-offset: 2px;
-      webkit-user-select: none;
+      -webkit-user-select: none;
       user-select: none;
       padding-inline: var(--btn-p);
       color: var(--btn-fg);
@@ -792,7 +792,7 @@
       appearance: none;
       place-content: center;
       vertical-align: middle;
-      webkit-user-select: none;
+      -webkit-user-select: none;
       user-select: none;
       grid-template-columns: 0fr 1fr 1fr;
       --radius-selector-max: calc(
@@ -1441,7 +1441,7 @@
       cursor: pointer;
       place-content: center;
       vertical-align: middle;
-      webkit-user-select: none;
+      -webkit-user-select: none;
       user-select: none;
       input {
         appearance: none;

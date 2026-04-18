@@ -90,6 +90,49 @@ db.prepare(
 `,
 ).run();
 
+// Deduplicate legacy jobs rows before creating a unique index.
+const duplicateJobPairs = db
+    .prepare(
+        `
+    SELECT pipeline_id AS pipelineId, output_id AS outputId, COUNT(*) AS count
+    FROM jobs
+    GROUP BY pipeline_id, output_id
+    HAVING COUNT(*) > 1
+`,
+    )
+    .all();
+
+if (duplicateJobPairs.length > 0) {
+    const selectJobToKeep = db.prepare(
+        `
+      SELECT id
+      FROM jobs
+      WHERE pipeline_id = ? AND output_id = ?
+      ORDER BY
+        CASE WHEN started_at IS NULL THEN 1 ELSE 0 END,
+        started_at DESC,
+        CASE WHEN ended_at IS NULL THEN 1 ELSE 0 END,
+        ended_at DESC,
+        rowid DESC
+      LIMIT 1
+  `,
+    );
+    const deleteDuplicateJobs = db.prepare(
+        `
+      DELETE FROM jobs
+      WHERE pipeline_id = ? AND output_id = ? AND id != ?
+  `,
+    );
+    const dedupeJobs = db.transaction((pairs) => {
+        for (const pair of pairs) {
+            const kept = selectJobToKeep.get(pair.pipelineId, pair.outputId);
+            if (!kept?.id) continue;
+            deleteDuplicateJobs.run(pair.pipelineId, pair.outputId, kept.id);
+        }
+    });
+    dedupeJobs(duplicateJobPairs);
+}
+
 // Add unique constraint to enforce 1 job per (pipeline_id, output_id)
 db.prepare(
     `

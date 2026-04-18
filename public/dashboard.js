@@ -1325,8 +1325,8 @@ async function onVisibilityChange() {
 }
 
 (async () => {
-    markUserConfigBaseline();
     await fetchAndRerender();
+    markUserConfigBaseline();
     startDashboardPolling(document.hidden ? DASHBOARD_HIDDEN_POLL_INTERVAL_MS : DASHBOARD_POLL_INTERVAL_MS);
     startStreamingConfigPolling();
 })();
