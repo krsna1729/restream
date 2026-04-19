@@ -17,7 +17,7 @@ The 4x3 workflow is driven by one tracked manifest and one Node runner.
 6. Waits for manifest-scoped inputs and outputs to become `on`.
 7. Captures a `/health` snapshot into test/artifacts/runs.
 8. Verifies output auto-retry by dropping and restoring the RTMP output sink.
-9. Verifies output auto-retry after an unexpected FFmpeg `SIGQUIT` while desired state remains `running`.
+9. Verifies output auto-retry after an unexpected FFmpeg `SIGKILL` while desired state remains `running`.
 10. Verifies input recovery restarts outputs whose desired state remains `running`.
 
 ## Primary Entry Points

@@ -114,7 +114,7 @@ async function main() {
     console.log('== Step 8: Verify output retry recovers after RTMP sink outage ==');
     await verifyOutputRetryOnSinkRecovery(resolved.outputs[0], resolved);
 
-    console.log('== Step 9: Verify output retry recovers after unexpected SIGQUIT ==');
+    console.log('== Step 9: Verify output retry recovers after unexpected SIGKILL ==');
     await verifyOutputRetryOnUnexpectedCleanExit(resolved.outputs[0], resolved);
 
     console.log('== Step 10: Verify input recovery restarts outputs with desiredState=running ==');
@@ -876,7 +876,7 @@ async function findOutputFfmpegProcess(target) {
     };
 }
 
-async function requestUnexpectedSigquitExit(target) {
+async function requestUnexpectedSigkillExit(target) {
     const match = await findOutputFfmpegProcess(target);
     const pid = Number(match.pid);
 
@@ -886,11 +886,11 @@ async function requestUnexpectedSigquitExit(target) {
         );
     }
 
-    process.kill(pid, 'SIGQUIT');
+    process.kill(pid, 'SIGKILL');
     return match;
 }
 
-function isUnexpectedSigquitExitLog(message) {
+function isUnexpectedSigkillExitLog(message) {
     const text = String(message || '');
     if (!text.startsWith('[lifecycle] exited')) {
         return false;
@@ -900,7 +900,7 @@ function isUnexpectedSigquitExitLog(message) {
         return false;
     }
 
-    return /exitSignal=SIGQUIT/.test(text) || /exitCode=255\b/.test(text);
+    return /exitSignal=SIGKILL/.test(text) || /exitCode=null/.test(text);
 }
 
 async function verifyOutputRetryOnUnexpectedCleanExit(target, resolved) {
@@ -914,12 +914,12 @@ async function verifyOutputRetryOnUnexpectedCleanExit(target, resolved) {
 
     const failureSince = new Date().toISOString();
 
-    const sigquitTarget = await requestUnexpectedSigquitExit(target);
+    const sigkillTarget = await requestUnexpectedSigkillExit(target);
     console.log(
-        `Sent SIGQUIT to ${target.pipelineName}/${target.outputName} ${target.pipelineId}/${target.outputId}`,
+        `Sent SIGKILL to ${target.pipelineName}/${target.outputName} ${target.pipelineId}/${target.outputId}`,
     );
     console.log(
-        `  ffmpeg pid=${sigquitTarget.pid} readerTag=${sigquitTarget.readerTag} to verify auto-retry after external termination`,
+        `  ffmpeg pid=${sigkillTarget.pid} readerTag=${sigkillTarget.readerTag} to verify auto-retry after external termination`,
     );
 
     await pollUntil(
@@ -930,11 +930,11 @@ async function verifyOutputRetryOnUnexpectedCleanExit(target, resolved) {
                 order: 'asc',
                 limit: 200,
             });
-            return logs.some((log) => isUnexpectedSigquitExitLog(log.message));
+            return logs.some((log) => isUnexpectedSigkillExitLog(log.message));
         },
         30000,
         500,
-        `${label} unexpected SIGQUIT exit`,
+        `${label} unexpected SIGKILL exit`,
     );
 
     await pollUntil(
@@ -953,7 +953,7 @@ async function verifyOutputRetryOnUnexpectedCleanExit(target, resolved) {
         },
         15000,
         500,
-        `${label} sigquit auto-retry decision`,
+        `${label} sigkill auto-retry decision`,
     );
 
     await pollUntil(
@@ -972,7 +972,7 @@ async function verifyOutputRetryOnUnexpectedCleanExit(target, resolved) {
         },
         45000,
         1000,
-        `${label} sigquit auto-retry restart`,
+        `${label} sigkill auto-retry restart`,
     );
 
     await waitForActive(resolved);
