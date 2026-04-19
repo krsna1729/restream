@@ -65,6 +65,7 @@ function registerOutputApi({
     reconcileOutput,
     resetOutputFailureCount,
     setOutputDesiredState,
+    stopRunningJobAndWait,
     stopRunningJob,
 }) {
     async function applyOutputStateChange(pid, oid, options) {
@@ -196,7 +197,7 @@ function registerOutputApi({
         }
     });
 
-    app.delete('/pipelines/:pipelineId/outputs/:outputId', (req, res) => {
+    app.delete('/pipelines/:pipelineId/outputs/:outputId', async (req, res) => {
         try {
             const pid = req.params.pipelineId;
             const oid = req.params.outputId;
@@ -207,7 +208,16 @@ function registerOutputApi({
             if (!existing) return res.status(404).json({ error: 'Output not found' });
 
             const running = db.getRunningJobFor(pid, oid);
-            if (running) stopRunningJob(running);
+            if (running) {
+                const stopResult = await stopRunningJobAndWait(running);
+                if (!stopResult.stopped || !stopResult.completed) {
+                    return res.status(409).json({
+                        error: 'Failed to stop output before delete',
+                        detail: stopResult.waitReason || stopResult.reason,
+                        result: stopResult,
+                    });
+                }
+            }
 
             const ok = db.deleteOutput(pid, oid);
             if (!ok) return res.status(500).json({ error: 'Failed to delete output' });

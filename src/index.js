@@ -87,6 +87,7 @@ const {
     reconcileOutput,
     resetOutputFailureCount,
     setOutputDesiredState,
+    stopRunningJobAndWait,
     stopRunningJob,
 } = outputLifecycle;
 
@@ -100,6 +101,7 @@ registerPipelineApi({
     healthMonitor,
     resetOutputFailureCount,
     clearOutputRestartState,
+    stopRunningJobAndWait,
     stopRunningJob,
     recomputeConfigEtag,
     recomputeEtag,
@@ -116,6 +118,7 @@ registerOutputApi({
     reconcileOutput,
     resetOutputFailureCount,
     setOutputDesiredState,
+    stopRunningJobAndWait,
     stopRunningJob,
 });
 

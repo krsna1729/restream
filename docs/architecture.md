@@ -25,6 +25,11 @@ configuration. The API now treats the SQLite write as the second phase and compe
 back the MediaMTX mutation if that DB phase fails, so the two control-plane stores do not drift on
 single-request errors.
 
+Pipeline and output deletion now also avoid split-brain windows between DB state and live FFmpeg
+processes. If a delete targets a running job, the API waits for teardown to complete before
+removing rows; if teardown times out or fails, the delete returns `409` and leaves the resources in
+place.
+
 ### Runtime Components
 
 | Component          | Role                                      | Default port(s)         |

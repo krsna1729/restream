@@ -46,6 +46,7 @@ function createOutputLifecycleService({
         restartPipelineOutputsOnInputRecovery,
         scheduleOutputRestart,
         setOutputDesiredState,
+        stopRunningJobAndWait,
         stopRunningJob,
         tryAcquireOutputStartLock,
     } = outputRecovery;
@@ -441,6 +442,7 @@ function createOutputLifecycleService({
         resetOutputFailureCount,
         restartPipelineOutputsOnInputRecovery,
         setOutputDesiredState,
+        stopRunningJobAndWait,
         stopRunningJob,
     };
 }

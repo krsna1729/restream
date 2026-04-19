@@ -191,14 +191,14 @@ Pipeline-level history entries are stored in `job_logs` with:
 
 ### `DELETE /pipelines/:id`
 
-Deletes a pipeline. All running output jobs are stopped (SIGTERM) before deletion. Outputs and jobs cascade-delete via SQLite FK.
+Deletes a pipeline. All running output jobs are stopped and the API waits for those processes to exit before deletion. Outputs and jobs cascade-delete via SQLite FK only after teardown completes.
 
 **Response 200:**
 ```json
 { "message": "Pipeline <id> deleted" }
 ```
 
-**Errors:** `404` pipeline not found.
+**Errors:** `404` pipeline not found; `409` one or more running outputs failed to stop before delete.
 
 ---
 
@@ -254,14 +254,14 @@ Updates an output.
 
 ### `DELETE /pipelines/:pipelineId/outputs/:outputId`
 
-Deletes an output. Running job is stopped first.
+Deletes an output. If a job is running, the API sends a stop signal and waits for the process to exit before removing the DB row.
 
 **Response 200:**
 ```json
 { "message": "Output <outputId> from pipeline <pipelineId> deleted" }
 ```
 
-**Errors:** `404` output or pipeline not found.
+**Errors:** `404` output or pipeline not found; `409` running process did not stop before delete.
 
 ---
 

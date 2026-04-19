@@ -2,6 +2,7 @@ const { errMsg, log } = require('../utils/app');
 const { getRetryDelayMs, getInputUnavailableExitGraceMs } = require('../utils/retry');
 
 const SIGKILL_ESCALATION_MS = 5000;
+const PROCESS_STOP_WAIT_TIMEOUT_MS = SIGKILL_ESCALATION_MS + 1500;
 
 function createOutputRecoveryService({
     db,
@@ -174,11 +175,25 @@ function createOutputRecoveryService({
         return wasRequested;
     }
 
+    function isProcessAlive(proc) {
+        if (!proc || !Number.isFinite(proc.pid)) return false;
+        try {
+            process.kill(proc.pid, 0);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
     function stopRunningJob(job, signal = 'SIGTERM') {
         if (!job) return { stopped: false, reason: 'missing-job' };
 
         const proc = processes.get(job.id);
-        if (proc && !proc.killed) {
+        if (proc && isProcessAlive(proc)) {
+            if (stopRequestedJobIds.has(job.id)) {
+                return { stopped: true, reason: 'signal-already-sent' };
+            }
+
             try {
                 // All stop paths funnel through here so user stops, deletes, and reconciler-driven
                 // stops share the same SIGTERM-first then SIGKILL-escalation behavior.
@@ -215,6 +230,7 @@ function createOutputRecoveryService({
             }
         }
 
+        processes.delete(job.id);
         db.updateJob(job.id, {
             status: 'stopped',
             endedAt: new Date().toISOString(),
@@ -239,6 +255,112 @@ function createOutputRecoveryService({
         );
         recomputeEtag();
         return { stopped: true, reason: 'marked-stopped' };
+    }
+
+    function waitForProcessExit(proc, timeoutMs = PROCESS_STOP_WAIT_TIMEOUT_MS) {
+        if (!proc) {
+            return Promise.resolve({
+                completed: true,
+                waitReason: 'process_not_found',
+                exitObserved: false,
+                exitCode: null,
+                exitSignal: null,
+            });
+        }
+
+        return new Promise((resolve) => {
+            let settled = false;
+
+            const finish = (result) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeoutHandle);
+                proc.removeListener('exit', onExit);
+                resolve(result);
+            };
+
+            const onExit = (code, signal) => {
+                finish({
+                    completed: true,
+                    waitReason: 'exit_observed',
+                    exitObserved: true,
+                    exitCode: code ?? null,
+                    exitSignal: signal || null,
+                });
+            };
+
+            proc.once('exit', onExit);
+
+            const timeoutHandle = setTimeout(() => {
+                finish({
+                    completed: false,
+                    waitReason: 'timeout',
+                    exitObserved: false,
+                    exitCode: null,
+                    exitSignal: null,
+                });
+            }, timeoutMs);
+
+            if (!isProcessAlive(proc)) {
+                finish({
+                    completed: true,
+                    waitReason: 'already_exited',
+                    exitObserved: false,
+                    exitCode: null,
+                    exitSignal: null,
+                });
+            }
+        });
+    }
+
+    async function stopRunningJobAndWait(job, signal = 'SIGTERM') {
+        if (!job) {
+            return {
+                stopped: false,
+                reason: 'missing-job',
+                completed: false,
+                waitReason: 'missing-job',
+                jobId: null,
+                pipelineId: null,
+                outputId: null,
+            };
+        }
+
+        const stopResult = stopRunningJob(job, signal);
+        if (!stopResult.stopped) {
+            return {
+                ...stopResult,
+                completed: false,
+                waitReason: stopResult.reason,
+                jobId: job.id,
+                pipelineId: job.pipelineId,
+                outputId: job.outputId,
+            };
+        }
+
+        const proc = processes.get(job.id);
+        if (!proc || stopResult.reason === 'marked-stopped') {
+            return {
+                ...stopResult,
+                completed: true,
+                waitReason: stopResult.reason,
+                exitObserved: false,
+                exitCode: null,
+                exitSignal: null,
+                jobId: job.id,
+                pipelineId: job.pipelineId,
+                outputId: job.outputId,
+            };
+        }
+
+        const waitResult = await waitForProcessExit(proc);
+        return {
+            ...stopResult,
+            ...waitResult,
+            jobId: job.id,
+            pipelineId: job.pipelineId,
+            outputId: job.outputId,
+        };
     }
 
     function armStopSignalEscalation(proc) {
@@ -547,6 +669,7 @@ function createOutputRecoveryService({
         restartPipelineOutputsOnInputRecovery,
         scheduleOutputRestart,
         setOutputDesiredState,
+        stopRunningJobAndWait,
         stopRunningJob,
         tryAcquireOutputStartLock,
     };

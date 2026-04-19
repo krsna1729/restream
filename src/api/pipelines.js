@@ -54,6 +54,7 @@ function registerPipelineApi({
     healthMonitor,
     resetOutputFailureCount,
     clearOutputRestartState,
+    stopRunningJobAndWait,
     stopRunningJob,
     recomputeConfigEtag,
     recomputeEtag,
@@ -320,16 +321,35 @@ function registerPipelineApi({
         }
     });
 
-    app.delete('/pipelines/:id', (req, res) => {
+    app.delete('/pipelines/:id', async (req, res) => {
         try {
             const id = req.params.id;
             const existing = db.getPipeline(id);
             if (!existing) return res.status(404).json({ error: 'Pipeline not found' });
 
             const outputs = db.listOutputsForPipeline(id);
-            for (const output of outputs) {
-                const running = db.getRunningJobFor(id, output.id);
-                if (running) stopRunningJob(running);
+            const runningJobs = outputs
+                .map((output) => db.getRunningJobFor(id, output.id))
+                .filter(Boolean);
+
+            if (runningJobs.length > 0) {
+                const stopResults = await Promise.all(
+                    runningJobs.map((job) => stopRunningJobAndWait(job)),
+                );
+                const failedStops = stopResults.filter(
+                    (result) => !result.stopped || !result.completed,
+                );
+
+                if (failedStops.length > 0) {
+                    return res.status(409).json({
+                        error: 'Failed to stop all outputs before deleting pipeline',
+                        outputs: failedStops.map((result) => ({
+                            outputId: result.outputId,
+                            jobId: result.jobId,
+                            detail: result.waitReason || result.reason,
+                        })),
+                    });
+                }
             }
 
             const ok = db.deletePipeline(id);
