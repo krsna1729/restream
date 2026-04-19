@@ -17,6 +17,8 @@
     } = window.historyRender;
 
     async function ensureOutputHistoryContext(log) {
+        // Timeline rows only fetch nearby stderr/exit/control logs on demand so the main history
+        // request can stay small while still letting users drill into a suspicious event.
         const contextKey = getOutputHistoryContextKey(log);
         if (
             !contextKey ||
@@ -144,6 +146,8 @@
         outputHistoryState.pollEveryMs = intervalMs;
         outputHistoryState.isPolling = false;
         const pollWithGuard = async () => {
+            // setTimeout plus isPolling avoids overlapping requests when a fetch takes longer than
+            // the nominal interval, which is safer here than stacking setInterval callbacks.
             if (outputHistoryState.isPolling) return;
             outputHistoryState.isPolling = true;
             try {
@@ -186,6 +190,8 @@
     }
 
     function toggleHistoryPlayPause() {
+        // “Live” mode is just polling plus an immediate fetch; pausing stops both the timer and
+        // the button state so the modal can stay open without consuming background requests.
         if (outputHistoryState.playing) {
             stopHistoryPoll();
         } else {

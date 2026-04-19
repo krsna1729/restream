@@ -194,6 +194,8 @@ function registerOutputApi({
     validateName,
 }) {
     async function applyOutputStateChange(pid, oid, options) {
+        // Start/stop routes differ in response payload, but both share the same state-change,
+        // recovery-reset, and reconcile sequence.
         const {
             desiredState,
             stateReason,

@@ -15,6 +15,8 @@
         button.classList.toggle('btn-disabled', busy);
     }
 
+    // Start/stop buttons use per-output pending keys so repeated clicks cannot queue overlapping
+    // API requests for the same output while the dashboard is refreshing.
     const pendingOutputToggles = new Set();
 
     function outputToggleKey(pipeId, outId) {
@@ -104,6 +106,8 @@
     }
 
     async function startOutBtn(pipeId, outId, button = null) {
+        // Wrap the raw API call with button state and dashboard refresh so the UI cannot drift from
+        // server intent even if the request succeeds after a visible delay.
         if (isOutputToggleBusy(pipeId, outId)) return;
         setOutputTogglePending(pipeId, outId, true);
         setOutputToggleBusy(button, true);

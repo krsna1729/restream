@@ -73,6 +73,8 @@ function createHealthMonitorService({
     probeEvictionTimer.unref?.();
 
     function isLatestJobLikelyInputUnavailableStop(pipelineId, latestJob) {
+        // A clean stop close to an input-off transition is treated as input loss, not an output
+        // failure, so retry logic can suppress noisy restarts during upstream outages.
         if (!latestJob || latestJob.status === 'running') {
             return { matched: false, reason: 'no_terminal_job' };
         }
@@ -109,6 +111,8 @@ function createHealthMonitorService({
     }
 
     async function resolveRuntimeInputState(streamKey, existingEverSeenLive = 0) {
+        // inputEverSeenLive lets the UI and recovery logic distinguish “never published” from
+        // “was live before, but is currently missing”.
         const hasKey = !!streamKey;
         if (!hasKey) {
             return {
@@ -195,6 +199,8 @@ function createHealthMonitorService({
     }
 
     async function bootstrapPipelineInputStatusHistory() {
+        // Recovery decisions rely on in-memory transition history, so startup seeds that history
+        // from current MediaMTX state before timers and routes begin using it.
         const pipelines = db.listPipelines();
         const pathByName = new Map();
 
@@ -568,6 +574,8 @@ function createHealthMonitorService({
     }
 
     async function buildHealthSnapshot() {
+        // This snapshot is intentionally rebuilt from transient MediaMTX/runtime state instead of
+        // persisted rows so it reflects live topology, reader matching, and probe data in one pass.
         if (!mediamtxReadiness.ready) {
             return buildDefaultHealthSnapshot('initializing', mediamtxReadiness.ready);
         }

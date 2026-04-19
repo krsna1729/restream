@@ -1,4 +1,6 @@
 (function () {
+    // Modal state is kept outside render functions so polling, search, and lazy-loaded context can
+    // update incrementally without rebuilding the whole feature around DOM state.
     const outputHistoryState = {
         pipelineId: null,
         outputId: null,
@@ -28,6 +30,8 @@
         pollEveryMs: null,
     };
 
+    // Hidden tabs back off polling to reduce network churn while still keeping history views fresh
+    // when the user returns.
     const OUTPUT_HISTORY_POLL_INTERVAL_MS = 5000;
     const OUTPUT_HISTORY_HIDDEN_POLL_INTERVAL_MS = 30000;
     const OUTPUT_HISTORY_RAW_LIMIT = 1000;

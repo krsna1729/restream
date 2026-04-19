@@ -69,10 +69,13 @@ function getOutputRecoveryConfig() {
 }
 
 function getInputUnavailableExitGraceMs() {
+    // Health snapshots are periodic, so exit-vs-input-loss correlation needs a tolerance window
+    // rather than exact timestamp equality.
     return Math.max(healthSnapshotIntervalMs * 3, 15000);
 }
 
 function getRetryDelayMs(failureCount) {
+    // Retry policy is split into fixed-delay attempts first, then capped exponential backoff.
     const cfg = getOutputRecoveryConfig();
     const immediateRetries = Number(cfg.immediateRetries || 0);
     const immediateDelayMs = Number(cfg.immediateDelayMs || 1000);

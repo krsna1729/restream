@@ -52,6 +52,8 @@ function createOutputRecoveryService({
         desiredState,
         { source = 'api', reason = 'unspecified' } = {},
     ) {
+        // desiredState captures user/system intent independently from job.status so retries and
+        // input-recovery can respect “should this output be running?” after transient exits.
         const output = db.getOutput(pipelineId, outputId);
         if (!output) return null;
 
@@ -130,6 +132,7 @@ function createOutputRecoveryService({
     }
 
     function registerOutputFailure(pipelineId, outputId) {
+        // Briefly stable runs earn a reset, so one old crash does not poison future retry budget.
         const state = getOutputRestartState(pipelineId, outputId);
         const cfg = getOutputRecoveryConfig();
         const resetAfterMs = Number(cfg.resetFailureCountAfterMs || 0);
@@ -163,6 +166,8 @@ function createOutputRecoveryService({
         const proc = processes.get(job.id);
         if (proc && !proc.killed) {
             try {
+                // All stop paths funnel through here so user stops, deletes, and reconciler-driven
+                // stops share the same SIGTERM-first then SIGKILL-escalation behavior.
                 proc.kill(signal);
                 armStopSignalEscalation(proc);
                 markStopRequested(job.id);

@@ -68,6 +68,8 @@
     }
 
     function renderHealthBanner() {
+        // The banner behaves like a small state machine: degraded stays visible, recovered shows
+        // briefly, and hidden means either healthy steady-state or user dismissal.
         const banner = document.getElementById('health-banner');
         const text = document.getElementById('health-banner-text');
         if (!banner || !text) return;

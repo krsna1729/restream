@@ -36,6 +36,8 @@ function setupDatabaseSchema(db) {
     }
 
     /* outputs table */
+    // desired_state stores operator intent (“should be running”) separately from jobs.status
+    // (“what happened last”), which lets recovery logic act on transient exits without losing intent.
     db.prepare(
         `
   CREATE TABLE IF NOT EXISTS outputs (
@@ -82,7 +84,8 @@ function setupDatabaseSchema(db) {
 `,
     ).run();
 
-    // Deduplicate legacy jobs rows before creating a unique index.
+    // Older schemas allowed multiple historical jobs per output; keep the newest plausible row
+    // before enforcing the one-current-job-per-output invariant used by the recovery layer.
     const duplicateJobPairs = db
         .prepare(
             `
@@ -125,7 +128,7 @@ function setupDatabaseSchema(db) {
         dedupeJobs(duplicateJobPairs);
     }
 
-    // Add unique constraint to enforce 1 job per (pipeline_id, output_id)
+    // Recovery and health logic read jobs as the current terminal/running row for an output.
     db.prepare(
         `
     CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_pipeline_output_unique

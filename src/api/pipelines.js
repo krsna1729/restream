@@ -17,6 +17,8 @@ function registerPipelineApi({
     validateName,
 }) {
     async function mutateMediamtxPath(key, action) {
+        // Stream-key creation/deletion must stay in sync with MediaMTX path config, so the route
+        // handlers share one request/parse/error path instead of duplicating control-plane logic.
         const methodByAction = {
             add: 'POST',
             delete: 'DELETE',

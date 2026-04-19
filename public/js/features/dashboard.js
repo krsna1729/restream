@@ -81,6 +81,8 @@ async function checkStreamingConfigs(secondTime = false, baselineEtag = userConf
         return;
     }
 
+    // Require two changed-version checks before surfacing the banner so brief config churn does
+    // not interrupt the dashboard while the user is actively editing.
     clearStreamingConfigRecheckTimer();
     streamingConfigRecheckTimer = setTimeout(() => {
         streamingConfigRecheckTimer = null;
@@ -89,6 +91,8 @@ async function checkStreamingConfigs(secondTime = false, baselineEtag = userConf
 }
 
 async function fetchAndRerender() {
+    // Fetch config, health, and metrics together so one render pass always sees a consistent view
+    // of the latest server state instead of mixing fresh and stale slices.
     await Promise.all([fetchConfig(), fetchHealth(), fetchSystemMetrics()]);
     pipelines = parsePipelinesInfo();
     renderPipelines();
@@ -128,6 +132,8 @@ let metrics = {};
 let pipelines = [];
 let health = {};
 
+// configEtag tracks the latest server config version; userConfigEtag is the version the current
+// page state considers “accepted”, which is what powers the reload-needed banner.
 const DASHBOARD_POLL_INTERVAL_MS = 5000;
 const DASHBOARD_HIDDEN_POLL_INTERVAL_MS = 30000;
 const STREAMING_CONFIG_CHECK_INTERVAL_MS = 30000;

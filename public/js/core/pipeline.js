@@ -3,6 +3,8 @@ const throughputState = {
 };
 
 function computeKbps(stateMap, key, totalBytes, nowMs) {
+    // Bitrate is inferred from monotonically increasing byte counters, so the first sample only
+    // establishes a baseline and later samples compute delta-bytes over delta-time.
     if (!key) return null;
     const safeBytes = Number(totalBytes || 0);
     const prev = stateMap.get(key);
@@ -17,6 +19,8 @@ function computeKbps(stateMap, key, totalBytes, nowMs) {
 }
 
 function parsePipelinesInfo() {
+    // The dashboard consumes one merged model that combines persisted config, current health, and
+    // latest job state; this keeps renderers simple even though the source data lives in 3 APIs.
     const newPipelines = [];
     const latestJobsByOutput = new Map();
     const healthByPipeline = health?.pipelines || {};

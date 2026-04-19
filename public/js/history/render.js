@@ -7,6 +7,8 @@
     }
 
     function inferIntentionalStop(logs, index) {
+        // Exit logs alone are ambiguous, so we scan nearby lifecycle/control messages to decide
+        // whether a terminal ffmpeg exit came from a user stop or from an unexpected failure.
         const entries = Array.isArray(logs) ? logs : [];
         const target = entries[index];
         if (!target) return false;
@@ -32,6 +34,8 @@
     }
 
     function classifyHistoryEvent(log, logs = [], index = -1) {
+        // Timeline badges are derived from message prefixes plus nearby context, not from a typed
+        // event schema, so this function is the UI-side decoder for backend lifecycle logs.
         const message = String(log?.message || '');
 
         if (message.startsWith('[lifecycle] desired_state')) {

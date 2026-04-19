@@ -65,6 +65,8 @@ function createOutputLifecycleService({
         reason = 'manual_request',
         source = 'api',
     }) {
+        // Starts are gated on both desiredState and live input readiness so auto-retry and manual
+        // start share the same pre-flight checks and do not spawn ffmpeg against an absent source.
         const pipeline = db.getPipeline(pipelineId);
         if (!pipeline) throw createHttpError(404, 'Pipeline not found');
 
@@ -207,6 +209,8 @@ function createOutputLifecycleService({
         let progressBuffer = '';
         if (progressStream)
             progressStream.on('data', (d) => {
+                // FFmpeg emits key=value progress records on fd 3; keep the latest block in memory
+                // so health/reporting can show runtime stats without persisting high-volume noise.
                 progressBuffer += d.toString();
                 const lines = progressBuffer.split('\n');
                 progressBuffer = lines.pop() || '';
@@ -272,6 +276,8 @@ function createOutputLifecycleService({
             ffmpegProgressByJobId.delete(job.id);
             ffmpegOutputMediaByJobId.delete(job.id);
 
+            // Unrequested failed exits always retry while desiredState=running; clean exits only
+            // retry when they are not plausibly explained by a recent input-unavailable transition.
             const latestJob = db.listJobsForOutput(pipelineId, outputId)[0] || null;
             const inputUnavailableMatch =
                 !wasStopRequested && st === 'stopped'
@@ -327,6 +333,8 @@ function createOutputLifecycleService({
         outputId,
         { trigger = 'reconcile', reason = 'desired_state_change', source = 'system' } = {},
     ) {
+        // Reconciliation is the single intent-vs-reality gate: desiredState says what should be
+        // true, while jobs/processes say what is true right now.
         const output = db.getOutput(pipelineId, outputId);
         if (!output) {
             clearOutputRestartState(pipelineId, outputId);
