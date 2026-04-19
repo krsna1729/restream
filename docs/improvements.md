@@ -1,6 +1,6 @@
 # Improvements Backlog
 
-**Last reviewed:** 2026-04-16
+**Last reviewed:** 2026-04-19
 
 This file is now a short current-state backlog. The earlier audit turned into a running changelog while the `improvements` branch landed most of the fixes, so the detailed narrative is no longer useful here. The source of truth for implemented work is the code plus the commits already on this branch.
 
@@ -18,6 +18,8 @@ This file is now a short current-state backlog. The earlier audit turned into a 
 - Validation hardening for pipeline/output names and output URLs at start time.
 - Shared frontend secret masking helper.
 - FFmpeg output argument builder extraction.
+- Backend helper-boundary refactor: shared runtime helpers extracted into `src/utils/{app,ffmpeg,mediamtx,retry}.js`.
+- Frontend ES-module migration across dashboard/history/stream-keys with explicit imports and shared state in `public/js/core/state.js`.
 
 ## Closed Or Stale Findings
 
