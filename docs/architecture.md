@@ -20,6 +20,11 @@ Browser ──► Node API :3030 ──► SQLite (data/data.db)
                     └──► MediaMTX API :9997 (health, path config, connection stats)
 ```
 
+Stream-key create/delete is a cross-system operation touching both SQLite and MediaMTX path
+configuration. The API now treats the SQLite write as the second phase and compensates by rolling
+back the MediaMTX mutation if that DB phase fails, so the two control-plane stores do not drift on
+single-request errors.
+
 ### Runtime Components
 
 | Component          | Role                                      | Default port(s)         |

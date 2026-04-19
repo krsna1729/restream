@@ -42,6 +42,27 @@ function registerPipelineApi({
     recomputeConfigEtag,
     recomputeEtag,
 }) {
+    async function mutateMediamtxPathWithRollback(key, action, applyDbChange) {
+        await mutateMediamtxPath(key, action);
+
+        try {
+            return await applyDbChange();
+        } catch (dbError) {
+            const rollbackAction = action === 'add' ? 'delete' : 'add';
+            try {
+                await mutateMediamtxPath(key, rollbackAction);
+            } catch (rollbackError) {
+                throw new Error(
+                    `${errMsg(dbError)}; MediaMTX rollback (${rollbackAction}) failed: ${errMsg(rollbackError)}`,
+                );
+            }
+
+            throw new Error(
+                `${errMsg(dbError)}; MediaMTX change was rolled back`,
+            );
+        }
+    }
+
     async function mutateMediamtxPath(key, action) {
         // Stream-key creation/deletion must stay in sync with MediaMTX path config, so the route
         // handlers share one request/parse/error path instead of duplicating control-plane logic.
@@ -85,13 +106,15 @@ function registerPipelineApi({
                 return res.status(409).json({ error: 'Stream key already exists' });
             }
 
-            await mutateMediamtxPath(key, 'add');
-
-            const streamKey = db.createStreamKey({
+            const streamKey = await mutateMediamtxPathWithRollback(
                 key,
-                label,
-                createdAt: new Date().toISOString(),
-            });
+                'add',
+                () => db.createStreamKey({
+                    key,
+                    label,
+                    createdAt: new Date().toISOString(),
+                }),
+            );
             recomputeConfigEtag();
             recomputeEtag();
             return res.status(201).json({ message: 'Stream key created', streamKey });
@@ -127,12 +150,13 @@ function registerPipelineApi({
                 return res.status(404).json({ error: 'Stream key not found' });
             }
 
-            await mutateMediamtxPath(key, 'delete');
-
-            const deleted = db.deleteStreamKey(key);
-            if (!deleted) {
-                return res.status(500).json({ error: 'Failed to remove stream key from DB' });
-            }
+            await mutateMediamtxPathWithRollback(key, 'delete', () => {
+                const deleted = db.deleteStreamKey(key);
+                if (!deleted) {
+                    throw new Error('Failed to remove stream key from DB');
+                }
+                return deleted;
+            });
 
             recomputeConfigEtag();
             recomputeEtag();

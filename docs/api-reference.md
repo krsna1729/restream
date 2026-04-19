@@ -29,6 +29,9 @@ Returns all stream keys ordered by creation date descending.
 
 Creates a stream key and registers the corresponding path in MediaMTX.
 
+> Note: If MediaMTX path registration succeeds but the SQLite insert fails, the API now attempts a
+> compensating MediaMTX path delete before returning `500`.
+
 **Request body:**
 ```json
 {
@@ -49,7 +52,7 @@ Creates a stream key and registers the corresponding path in MediaMTX.
 }
 ```
 
-**Errors:** `409` key already exists; `500` MediaMTX path registration failed.
+**Errors:** `409` key already exists; `500` MediaMTX registration failed, SQLite insert failed, or rollback failed.
 
 ---
 
@@ -77,12 +80,14 @@ Deletes a stream key and removes its path from MediaMTX.
 
 > Note: If MediaMTX path deletion fails the request returns `500`. The DB row is **not** deleted until MediaMTX confirms success.
 
+> If MediaMTX deletion succeeds but the SQLite delete fails, the API attempts a compensating path re-add before returning `500`.
+
 **Response 200:**
 ```json
 { "message": "Stream key deleted" }
 ```
 
-**Errors:** `404` key not found; `500` MediaMTX path deletion failed.
+**Errors:** `404` key not found; `500` MediaMTX deletion failed, SQLite delete failed, or rollback failed.
 
 ---
 
