@@ -1,3 +1,9 @@
+import { getConfig, getConfigVersion, getHealth, getSystemMetrics } from '../core/api.js';
+import { parsePipelinesInfo } from '../core/pipeline.js';
+import { setServerConfig } from '../core/utils.js';
+import { renderPipelines, renderMetrics } from './render.js';
+import { state } from '../core/state.js';
+
 async function refreshDashboard() {
     await fetchAndRerender();
 }
@@ -94,10 +100,10 @@ async function fetchAndRerender() {
     // Fetch config, health, and metrics together so one render pass always sees a consistent view
     // of the latest server state instead of mixing fresh and stale slices.
     await Promise.all([fetchConfig(), fetchHealth(), fetchSystemMetrics()]);
-    pipelines = parsePipelinesInfo();
+    state.pipelines = parsePipelinesInfo(state.config, state.health);
     renderPipelines();
     renderMetrics();
-    renderPublisherQualityModal();
+    window.renderPublisherQualityModal?.();
 }
 
 async function fetchConfig() {
@@ -105,21 +111,21 @@ async function fetchConfig() {
     if (res === null || res.notModified) return;
     etag = res.etag;
     configEtag = res.configEtag;
-    config = res.data;
-    setServerConfig(config?.serverName);
+    state.config = res.data;
+    setServerConfig(state.config?.serverName);
 }
 
 async function fetchHealth() {
     const res = await getHealth(healthEtag);
     if (res === null || res.notModified) return;
     healthEtag = res.etag;
-    health = res.data;
+    state.health = res.data;
 }
 
 async function fetchSystemMetrics() {
     const res = await getSystemMetrics();
     if (res === null) return;
-    metrics = res;
+    state.metrics = res;
 }
 
 let etag = null;
@@ -127,10 +133,6 @@ let healthEtag = null;
 let configEtag = null;
 let userConfigEtag = null;
 let dismissedStreamingConfigEtag = null;
-let config = {};
-let metrics = {};
-let pipelines = [];
-let health = {};
 
 // configEtag tracks the latest server config version; userConfigEtag is the version the current
 // page state considers “accepted”, which is what powers the reload-needed banner.
@@ -160,13 +162,13 @@ function startStreamingConfigPolling() {
 async function onVisibilityChange() {
     if (document.hidden) {
         startDashboardPolling(DASHBOARD_HIDDEN_POLL_INTERVAL_MS);
-        if (typeof syncHistoryPollingWithVisibility === 'function')
-            await syncHistoryPollingWithVisibility();
+        if (typeof window.syncHistoryPollingWithVisibility === 'function')
+            await window.syncHistoryPollingWithVisibility();
         return;
     }
     startDashboardPolling(DASHBOARD_POLL_INTERVAL_MS);
-    if (typeof syncHistoryPollingWithVisibility === 'function')
-        await syncHistoryPollingWithVisibility();
+    if (typeof window.syncHistoryPollingWithVisibility === 'function')
+        await window.syncHistoryPollingWithVisibility();
     await fetchAndRerender();
     await checkStreamingConfigs();
 }
@@ -188,3 +190,5 @@ document
 
 window.markUserConfigBaseline = markUserConfigBaseline;
 window.syncUserConfigBaseline = syncUserConfigBaseline;
+
+export { refreshDashboard, markUserConfigBaseline, syncUserConfigBaseline };

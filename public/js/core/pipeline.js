@@ -18,7 +18,7 @@ function computeKbps(stateMap, key, totalBytes, nowMs) {
     return Number(((deltaBytes * 8) / (dtMs / 1000) / 1000).toFixed(1));
 }
 
-function parsePipelinesInfo() {
+function parsePipelinesInfo(config, health) {
     // The dashboard consumes one merged model that combines persisted config, current health, and
     // latest job state; this keeps renderers simple even though the source data lives in 3 APIs.
     const newPipelines = [];
@@ -178,3 +178,5 @@ function parsePipelinesInfo() {
 
     return newPipelines;
 }
+
+export { parsePipelinesInfo };

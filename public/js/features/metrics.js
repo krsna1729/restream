@@ -1,5 +1,7 @@
-(function () {
-    const HEALTH_RECOVERY_BANNER_MS = 6000;
+import { setMetricsBitrateWithSubtleUnit, setMetricsValueWithSubtleUnit } from './render.js';
+import { state } from '../core/state.js';
+
+const HEALTH_RECOVERY_BANNER_MS = 6000;
     let previousHealthStatus = null;
     let recoveryBannerVisible = false;
     let recoveryBannerTimer = null;
@@ -31,7 +33,7 @@
                 elem.innerText = value;
             });
 
-        if (!metrics || Object.keys(metrics).length === 0) {
+        if (!state.metrics || Object.keys(state.metrics).length === 0) {
             setAll('.cpu-metric', '...');
             setAll('.ram-metric', '...');
             setAll('.disk-metric', '...');
@@ -43,22 +45,22 @@
         const toGiB = (bytes) => (Number(bytes || 0) / (1024 * 1024 * 1024)).toFixed(1);
 
         const cpuParts =
-            metrics?.cpu?.usagePercent !== null && metrics?.cpu?.usagePercent !== undefined
-                ? { valueText: metrics.cpu.usagePercent.toFixed(1), unitText: '%' }
+            state.metrics?.cpu?.usagePercent !== null && state.metrics?.cpu?.usagePercent !== undefined
+                ? { valueText: state.metrics.cpu.usagePercent.toFixed(1), unitText: '%' }
                 : null;
         const ramParts =
-            metrics?.memory?.usedBytes !== null && metrics?.memory?.totalBytes !== null
+            state.metrics?.memory?.usedBytes !== null && state.metrics?.memory?.totalBytes !== null
                 ? {
-                      valueText: `${toGiB(metrics.memory.usedBytes)}/${toGiB(metrics.memory.totalBytes)}`,
+                      valueText: `${toGiB(state.metrics.memory.usedBytes)}/${toGiB(state.metrics.memory.totalBytes)}`,
                       unitText: 'G',
                   }
                 : null;
         const diskParts =
-            metrics?.disk?.usedPercent !== null && metrics?.disk?.usedPercent !== undefined
-                ? { valueText: metrics.disk.usedPercent.toFixed(1), unitText: '%' }
+            state.metrics?.disk?.usedPercent !== null && state.metrics?.disk?.usedPercent !== undefined
+                ? { valueText: state.metrics.disk.usedPercent.toFixed(1), unitText: '%' }
                 : null;
-        const downKbps = metrics?.network?.downloadKbps;
-        const upKbps = metrics?.network?.uploadKbps;
+        const downKbps = state.metrics?.network?.downloadKbps;
+        const upKbps = state.metrics?.network?.uploadKbps;
 
         setMetricsValueWithSubtleUnit('.cpu-metric', cpuParts);
         setMetricsValueWithSubtleUnit('.ram-metric', ramParts);
@@ -74,7 +76,7 @@
         const text = document.getElementById('health-banner-text');
         if (!banner || !text) return;
 
-        const currentStatus = health?.status || null;
+        const currentStatus = state.health?.status || null;
         const bannerState = getHealthBannerState(currentStatus);
 
         if (bannerState !== activeHealthBannerState) {
@@ -141,4 +143,3 @@
     window.dismissHealthBanner = dismissHealthBanner;
     window.renderHealthBanner = renderHealthBanner;
     window.renderServerMetrics = renderServerMetrics;
-})();

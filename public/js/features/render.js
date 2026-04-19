@@ -1,3 +1,6 @@
+import { formatCodecName, getStatusColor, getUrlParam, msToHHMMSS, setInnerText, setUrlParam } from '../core/utils.js';
+import { state } from '../core/state.js';
+
 function formatBitrateKbpsParts(kbps) {
     const value = Number(kbps);
     if (!Number.isFinite(value) || value < 0) return null;
@@ -77,31 +80,31 @@ function isOutputUnexpectedlyDown(output) {
 }
 
 function renderPipelinesList(selectedPipe) {
-    const inputOn = pipelines.filter((p) => p.input.status === 'on').length;
-    const inputWarning = pipelines.filter((p) => p.input.status === 'warning').length;
-    const inputError = pipelines.filter((p) => p.input.status === 'error').length;
-    const inputOff = pipelines.filter((p) => p.input.status === 'off').length;
+    const inputOn = state.pipelines.filter((p) => p.input.status === 'on').length;
+    const inputWarning = state.pipelines.filter((p) => p.input.status === 'warning').length;
+    const inputError = state.pipelines.filter((p) => p.input.status === 'error').length;
+    const inputOff = state.pipelines.filter((p) => p.input.status === 'off').length;
 
-    setInnerText('pipe-cnt', pipelines.length);
+    setInnerText('pipe-cnt', state.pipelines.length);
     setInnerText('pipe-oks', inputOn);
     setInnerText('pipe-warnings', inputWarning);
     setInnerText('pipe-errors', inputError);
     setInnerText('pipe-offs', inputOff);
 
-    const outputTotal = pipelines.reduce((sum, p) => sum + p.outs.length, 0);
-    const outputOn = pipelines.reduce(
+    const outputTotal = state.pipelines.reduce((sum, p) => sum + p.outs.length, 0);
+    const outputOn = state.pipelines.reduce(
         (sum, p) => sum + p.outs.filter((o) => o.status === 'on').length,
         0,
     );
-    const outputWarning = pipelines.reduce(
+    const outputWarning = state.pipelines.reduce(
         (sum, p) => sum + p.outs.filter((o) => o.status === 'warning').length,
         0,
     );
-    const outputError = pipelines.reduce(
+    const outputError = state.pipelines.reduce(
         (sum, p) => sum + p.outs.filter((o) => isOutputUnexpectedlyDown(o)).length,
         0,
     );
-    const outputOff = pipelines.reduce(
+    const outputOff = state.pipelines.reduce(
         (sum, p) => sum + p.outs.filter((o) => isOutputIntentStopped(o)).length,
         0,
     );
@@ -112,7 +115,7 @@ function renderPipelinesList(selectedPipe) {
     setInnerText('out-errors', outputError);
     setInnerText('out-offs', outputOff);
 
-    const sortedPipelines = [...pipelines].sort((a, b) => a.name.localeCompare(b.name));
+    const sortedPipelines = [...state.pipelines].sort((a, b) => a.name.localeCompare(b.name));
     const pipelinesList = document.getElementById('pipelines');
     pipelinesList.replaceChildren();
 
@@ -192,8 +195,8 @@ function renderStatsColumn(selectedPipe) {
         document.getElementById('stats-col').classList.remove('hidden');
     }
 
-    const activeInputs = pipelines;
-    const activeOuts = pipelines.flatMap((p) => p.outs);
+    const activeInputs = state.pipelines;
+    const activeOuts = state.pipelines.flatMap((p) => p.outs);
     const statsTable = document.getElementById('stats-table');
     statsTable.replaceChildren();
 
@@ -287,17 +290,37 @@ function renderPipelines() {
     }
 
     renderPipelinesList(selectedPipe);
-    renderPipelineInfoColumn(selectedPipe);
-    renderOutsColumn(selectedPipe);
+    window.renderPipelineInfoColumn?.(selectedPipe);
+    window.renderOutsColumn?.(selectedPipe);
     renderStatsColumn(selectedPipe);
 }
 
 function renderMetrics() {
-    renderHealthBanner();
-    renderServerMetrics();
+    window.renderHealthBanner?.();
+    window.renderServerMetrics?.();
 }
 
 function selectPipeline(id) {
     setUrlParam('p', id);
     renderPipelines();
 }
+
+// HTML-bound handler — keep accessible as a global
+window.selectPipeline = selectPipeline;
+
+export {
+    formatBitrateKbpsParts,
+    setMetricValueWithSubtleUnit,
+    setBitrateWithSubtleUnit,
+    setBadgeBitrateWithSubtleUnit,
+    setMetricsBitrateWithSubtleUnit,
+    setMetricsValueWithSubtleUnit,
+    isOutputIntentStopped,
+    isOutputRunning,
+    isOutputUnexpectedlyDown,
+    renderPipelinesList,
+    renderStatsColumn,
+    renderPipelines,
+    renderMetrics,
+    selectPipeline,
+};

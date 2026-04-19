@@ -1,5 +1,4 @@
-(function () {
-    // Modal state is kept outside render functions so polling, search, and lazy-loaded context can
+// Modal state is kept outside render functions so polling, search, and lazy-loaded context can
     // update incrementally without rebuilding the whole feature around DOM state.
     const outputHistoryState = {
         pipelineId: null,
@@ -47,4 +46,3 @@
         OUTPUT_HISTORY_CONTEXT_WINDOW_MS,
         OUTPUT_HISTORY_CONTEXT_LIMIT,
     };
-})();

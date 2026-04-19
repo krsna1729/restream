@@ -196,3 +196,28 @@ function getStatusColor(status) {
             return 'grey';
     }
 }
+
+// HTML-bound handler — keep accessible as a global
+window.copyData = copyData;
+
+export {
+    msToHHMMSS,
+    setInnerText,
+    escapeHtml,
+    maskSecret,
+    sanitizeLogMessage,
+    formatCodecName,
+    isValidRtmp,
+    legacyCopy,
+    copyText,
+    copyData,
+    setUrlParam,
+    getUrlParam,
+    normalizeEtag,
+    setServerConfig,
+    showErrorAlert,
+    showLoading,
+    hideLoading,
+    showCopiedNotification,
+    getStatusColor,
+};

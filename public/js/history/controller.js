@@ -1,5 +1,6 @@
-(function () {
-    const outputHistoryState = window.outputHistoryState;
+import { getOutputHistory, getPipelineHistory } from '../core/api.js';
+
+const outputHistoryState = window.outputHistoryState;
     const pipelineHistoryState = window.pipelineHistoryState;
     const {
         OUTPUT_HISTORY_POLL_INTERVAL_MS,
@@ -367,4 +368,3 @@
     window.openPipelineHistoryModal = openPipelineHistoryModal;
     window.togglePipelineHistoryPlayPause = togglePipelineHistoryPlayPause;
     window.syncHistoryPollingWithVisibility = syncHistoryPollingWithVisibility;
-})();

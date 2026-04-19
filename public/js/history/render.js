@@ -1,5 +1,6 @@
-(function () {
-    function formatHistoryTime(ts) {
+import { sanitizeLogMessage } from '../core/utils.js';
+
+function formatHistoryTime(ts) {
         if (!ts) return '--';
         const d = new Date(ts);
         if (Number.isNaN(d.getTime())) return ts;
@@ -547,4 +548,3 @@
         renderOutputHistory,
         renderPipelineHistory,
     };
-})();

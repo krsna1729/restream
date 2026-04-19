@@ -1,5 +1,8 @@
-(function () {
-    function normalizePublisherProtocolLabel(protocol) {
+import { formatCodecName, maskSecret, msToHHMMSS, sanitizeLogMessage } from '../core/utils.js';
+import { setBadgeBitrateWithSubtleUnit, setBitrateWithSubtleUnit } from './render.js';
+import { state } from '../core/state.js';
+
+function normalizePublisherProtocolLabel(protocol) {
         const map = { rtsp: 'RTSP', rtmp: 'RTMP', srt: 'SRT', webrtc: 'WebRTC' };
         return map[protocol] || String(protocol || '').toUpperCase();
     }
@@ -109,7 +112,7 @@
 
         document.getElementById('pipe-info-col').classList.remove('hidden');
 
-        const pipe = pipelines.find((p) => p.id === selectedPipe);
+        const pipe = state.pipelines.find((p) => p.id === selectedPipe);
         if (!pipe) {
             console.error('Pipeline not found:', selectedPipe);
             return;
@@ -119,8 +122,8 @@
         const historyBtn = document.getElementById('pipe-history-btn');
         if (historyBtn) {
             historyBtn.onclick = () => {
-                if (typeof openPipelineHistoryModal === 'function') {
-                    openPipelineHistoryModal(pipe.id, pipe.name);
+                if (typeof window.openPipelineHistoryModal === 'function') {
+                    window.openPipelineHistoryModal(pipe.id, pipe.name);
                 }
             };
         }
@@ -139,7 +142,7 @@
             deletePipeBtn.title = '';
         }
 
-        const ingestConfig = config?.ingest || {};
+        const ingestConfig = state.config?.ingest || {};
         const streamKey = pipe.key || 'Unassigned';
         const maskedStreamKey = pipe.key ? maskSecret(pipe.key) : streamKey;
 
@@ -257,8 +260,8 @@
             qualityBtn.className = `badge text-sm px-3 cursor-pointer ${isHealthy ? 'badge-success' : 'badge-warning'}`;
             qualityBtn.textContent = isHealthy ? 'Healthy' : 'Unhealthy';
             qualityBtn.addEventListener('click', () => {
-                if (typeof openPublisherQualityModal === 'function') {
-                    openPublisherQualityModal(pipe.id);
+                if (typeof window.openPublisherQualityModal === 'function') {
+                    window.openPublisherQualityModal(pipe.id);
                 }
             });
             publisherMeta.appendChild(qualityBtn);
@@ -281,7 +284,7 @@
 
         document.getElementById('outs-col').classList.remove('hidden');
 
-        const pipe = pipelines.find((p) => p.id === selectedPipe);
+        const pipe = state.pipelines.find((p) => p.id === selectedPipe);
         if (!pipe) {
             console.error('Pipeline not found:', selectedPipe);
             return;
@@ -326,7 +329,8 @@
             toggleBtn.dataset.outputIndex = String(outputIndex);
             toggleBtn.textContent = isRunning ? 'stop' : 'start';
             const toggleBusy =
-                typeof isOutputToggleBusy === 'function' && isOutputToggleBusy(pipe.id, o.id);
+                typeof window.isOutputToggleBusy === 'function' &&
+                window.isOutputToggleBusy(pipe.id, o.id);
             toggleBtn.disabled = !!toggleBusy;
             toggleBtn.classList.toggle('btn-disabled', !!toggleBusy);
             toggleBtn.addEventListener('click', async () => {
@@ -338,14 +342,18 @@
                 try {
                     const running = out.status === 'on' || out.status === 'warning';
                     if (running) {
-                        await stopOutBtn(pipe.id, out.id, toggleBtn);
+                        if (typeof window.stopOutBtn === 'function') {
+                            await window.stopOutBtn(pipe.id, out.id, toggleBtn);
+                        }
                     } else {
-                        await startOutBtn(pipe.id, out.id, toggleBtn);
+                        if (typeof window.startOutBtn === 'function') {
+                            await window.startOutBtn(pipe.id, out.id, toggleBtn);
+                        }
                     }
                 } finally {
                     const stillBusy =
-                        typeof isOutputToggleBusy === 'function' &&
-                        isOutputToggleBusy(pipe.id, out.id);
+                        typeof window.isOutputToggleBusy === 'function' &&
+                        window.isOutputToggleBusy(pipe.id, out.id);
                     if (!stillBusy) {
                         toggleBtn.disabled = false;
                         toggleBtn.classList.remove('btn-disabled');
@@ -403,8 +411,8 @@
             historyBtn.className = 'btn btn-xs btn-accent btn-outline';
             historyBtn.textContent = 'History';
             historyBtn.addEventListener('click', () => {
-                if (typeof openOutputHistoryModal === 'function') {
-                    openOutputHistoryModal(pipe.id, o.id, o.name);
+                if (typeof window.openOutputHistoryModal === 'function') {
+                    window.openOutputHistoryModal(pipe.id, o.id, o.name);
                 }
             });
 
@@ -412,7 +420,9 @@
             editBtn.className = 'btn btn-xs btn-accent btn-outline';
             editBtn.textContent = '✎';
             editBtn.addEventListener('click', () => {
-                editOutBtn(pipe.id, o.id);
+                if (typeof window.editOutBtn === 'function') {
+                    window.editOutBtn(pipe.id, o.id);
+                }
             });
 
             const deleteBtn = document.createElement('button');
@@ -420,7 +430,9 @@
             deleteBtn.textContent = '✖';
             deleteBtn.addEventListener('click', () => {
                 if (deleteBtn.classList.contains('btn-disabled')) return;
-                deleteOutBtn(pipe.id, o.id);
+                if (typeof window.deleteOutBtn === 'function') {
+                    window.deleteOutBtn(pipe.id, o.id);
+                }
             });
 
             actions.appendChild(historyBtn);
@@ -441,4 +453,3 @@
     window.getPublisherQualityAlerts = getPublisherQualityAlerts;
     window.renderPipelineInfoColumn = renderPipelineInfoColumn;
     window.renderOutsColumn = renderOutsColumn;
-})();

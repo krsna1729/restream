@@ -1,15 +1,14 @@
-(function () {
-    async function updateLocalConfigBaseline() {
-        if (typeof syncUserConfigBaseline === 'function') {
-            await syncUserConfigBaseline();
-            return;
-        }
-        if (typeof markUserConfigBaseline === 'function') {
-            markUserConfigBaseline();
-        }
-    }
+import { getStreamKeys, startOut, stopOut, createPipeline, updatePipeline, deletePipeline, createOutput, updateOutput, deleteOutput } from '../core/api.js';
+import { getUrlParam, isValidRtmp, setUrlParam } from '../core/utils.js';
+import { state } from '../core/state.js';
+import { refreshDashboard, syncUserConfigBaseline } from './dashboard.js';
+import { renderPipelines } from './render.js';
 
-    function setOutputToggleBusy(button, busy) {
+async function updateLocalConfigBaseline() {
+    await syncUserConfigBaseline();
+}
+
+function setOutputToggleBusy(button, busy) {
         if (!button) return;
         button.disabled = busy;
         button.classList.toggle('btn-disabled', busy);
@@ -39,7 +38,7 @@
         const modal = document.getElementById('publisher-quality-modal');
         if (!modal || !modal.open) return;
 
-        const pipe = (pipelines || []).find((p) => p.id === publisherQualityModalPipeId);
+        const pipe = (state.pipelines || []).find((p) => p.id === publisherQualityModalPipeId);
         const publisher = pipe?.input?.publisher || null;
 
         const subtitle = document.getElementById('publisher-quality-subtitle');
@@ -53,14 +52,14 @@
         }
 
         const proto =
-            typeof normalizePublisherProtocolLabel === 'function'
-                ? normalizePublisherProtocolLabel(publisher.protocol)
+            typeof window.normalizePublisherProtocolLabel === 'function'
+                ? window.normalizePublisherProtocolLabel(publisher.protocol)
                 : String(publisher.protocol || '').toUpperCase();
         subtitle.textContent = `${proto} · ${publisher.remoteAddr || 'unknown'}`;
 
         const rows =
-            typeof getPublisherQualityMetrics === 'function'
-                ? getPublisherQualityMetrics(publisher)
+            typeof window.getPublisherQualityMetrics === 'function'
+                ? window.getPublisherQualityMetrics(publisher)
                 : [];
 
         tbody.replaceChildren();
@@ -98,7 +97,7 @@
         const modal = document.getElementById('publisher-quality-modal');
         if (!modal) return;
         publisherQualityModalPipeId = pipeId;
-        const pipe = (pipelines || []).find((p) => p.id === pipeId);
+        const pipe = (state.pipelines || []).find((p) => p.id === pipeId);
         const title = document.getElementById('publisher-quality-title');
         if (title) title.textContent = `Publisher Quality — ${pipe?.name || pipeId}`;
         modal.showModal();
@@ -267,7 +266,7 @@
     }
 
     async function editOutBtn(pipeId, outId) {
-        const pipe = pipelines.find((p) => p.id === String(pipeId));
+        const pipe = state.pipelines.find((p) => p.id === String(pipeId));
         if (!pipe) {
             console.error('Pipeline not found:', pipeId);
             return;
@@ -338,7 +337,7 @@
     }
 
     async function deleteOutBtn(pipeId, outId) {
-        const pipe = pipelines.find((p) => p.id === String(pipeId));
+        const pipe = state.pipelines.find((p) => p.id === String(pipeId));
         if (!pipe) {
             console.error('Pipeline not found:', pipeId);
             return;
@@ -371,14 +370,14 @@
             return;
         }
 
-        const pipe = pipelines.find((p) => p.id === pipeId);
+        const pipe = state.pipelines.find((p) => p.id === pipeId);
         if (!pipe) {
             console.error('Pipeline not found:', pipeId);
             return;
         }
 
-        if (config.outLimit && pipe.outs.length >= config.outLimit) {
-            console.error(`Output limit reached. Max outputs per pipeline: ${config.outLimit}`);
+        if (state.config?.outLimit && pipe.outs.length >= state.config?.outLimit) {
+            console.error(`Output limit reached. Max outputs per pipeline: ${state.config?.outLimit}`);
             return;
         }
 
@@ -386,7 +385,7 @@
     }
 
     async function addPipeBtn() {
-        const numbers = pipelines
+        const numbers = state.pipelines
             .filter((p) => p.name.startsWith('Pipeline '))
             .map((p) => parseInt(p.name.split(' ')[1]));
         const nextNumber = Math.max(...numbers, 0) + 1;
@@ -401,7 +400,7 @@
             return;
         }
 
-        const pipe = pipelines.find((p) => p.id === String(pipeId));
+        const pipe = state.pipelines.find((p) => p.id === String(pipeId));
         if (!pipe) {
             console.error('Pipeline not found:', pipeId);
             return;
@@ -417,7 +416,7 @@
             return;
         }
 
-        const pipe = pipelines.find((p) => p.id === pipeId);
+        const pipe = state.pipelines.find((p) => p.id === pipeId);
         if (!pipe) {
             console.error('Pipeline not found:', pipeId);
             return;
@@ -452,4 +451,3 @@
     window.addPipeBtn = addPipeBtn;
     window.editPipeBtn = editPipeBtn;
     window.deletePipeBtn = deletePipeBtn;
-})();
