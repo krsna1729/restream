@@ -70,6 +70,9 @@ These are hardcoded in the application and cannot be overridden via environment 
 - Total retry budget per failure streak is `immediateRetries + backoffRetries`.
 - `failureCount` counts failures, not retries. The first failed run is `failureCount=1`.
 - Retry is scheduled only while `failureCount <= totalRetries`.
+- Output control is intent-driven: each output persists `desiredState` as either `running` or `stopped`.
+- Manual stop sets `desiredState=stopped`, clears pending retry timers, and suppresses retry and input-recovery restarts until a later start sets `desiredState=running` again.
+- Newly created outputs default to `desiredState=stopped`; they do not auto-start until explicitly started.
 - When the next failure exceeds the retry budget, the job logs:
   - `[lifecycle] retry_decision failureCount=<n> scheduled=false`
   - `[lifecycle] retry_exhausted failureCount=<n> totalRetries=<m> action=give_up`
@@ -78,6 +81,7 @@ These are hardcoded in the application and cannot be overridden via environment 
 - `OUTPUT_RECOVERY_RESET_FAILURE_COUNT_AFTER_MS` resets the failure streak when a run survives at least that duration before failing.
   - This means retries can continue across long runtimes instead of permanently exhausting after one early burst.
 - `inputUnavailableOnly` and `failedOnly` input-recovery selection correlate output exits with the most recent `on -> non-on` input transition using a built-in grace window of `max(3 * HEALTH_SNAPSHOT_INTERVAL_MS, 15000ms)`.
+- Retry and input-recovery timers only attempt starts for outputs whose `desiredState` is still `running`.
 - `outputRecovery` in `src/config/restream.json` is optional. If omitted, built-in defaults are still active and env overrides still apply.
 
 ## 2. Application Config File

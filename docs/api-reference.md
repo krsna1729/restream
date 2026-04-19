@@ -219,6 +219,7 @@ Creates an output for a pipeline.
     "pipelineId": "a1b2c3d4e5f6a7b8",
     "name": "YouTube",
     "url": "rtmp://...",
+    "desiredState": "stopped",
     "encoding": "source",
     "createdAt": "2026-04-10T11:05:00.000Z"
   }
@@ -261,28 +262,30 @@ Deletes an output. Running job is stopped first.
 
 ### `POST /pipelines/:pipelineId/outputs/:outputId/start`
 
-Starts an FFmpeg job for this output. The full call flow is:
+Sets this output's desired state to `running` and reconciles runtime toward that state. The full call flow is:
 
-1. Acquire in-memory start lock for `(pipelineId, outputId)` — 409 if another start is already in progress.
-2. Validate pipeline + output exist.
-3. Check for an existing running job — 409 if found.
-4. Require `pipeline.streamKey`; resolve probe URL `rtsp://localhost:8554/<streamKey>`.
-5. Run `ffprobe -rtsp_transport tcp <probeUrl>` with 8 s timeout.
-6. Build tagged pull URL: `rtsp://localhost:8554/<streamKey>?reader_id=reader_<pipelineId>_<outputId>`.
-7. Spawn FFmpeg for the selected output encoding:
+1. Persist `outputs.desiredState='running'`.
+2. Acquire an in-memory start lock for `(pipelineId, outputId)` if a start is needed.
+3. Validate pipeline + output exist.
+4. Check for an existing running job.
+5. Require `pipeline.streamKey`; resolve probe URL `rtsp://localhost:8554/<streamKey>`.
+6. Run `ffprobe -rtsp_transport tcp <probeUrl>` with 8 s timeout.
+7. Build tagged pull URL: `rtsp://localhost:8554/<streamKey>?reader_id=reader_<pipelineId>_<outputId>`.
+8. Spawn FFmpeg for the selected output encoding:
   - `source`: codec copy (`-c:v copy -c:a copy`)
   - `vertical-crop`: `-vf scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280` + H.264/AAC encode
   - `vertical-rotate`: `-vf transpose=1,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280` + H.264/AAC encode
   - `720p`: `-vf scale=-2:720` + H.264/AAC encode
   - `1080p`: `-vf scale=-2:1080` + H.264/AAC encode
-8. Persist job row in DB, return after 250 ms stability check.
+9. Persist job row in DB, return after 250 ms stability check.
 
 **Request body:** none
 
 **Response 201:**
 ```json
 {
-  "message": "Job started",
+  "message": "Output started",
+  "desiredState": "running",
   "job": {
     "id": "3f2e1d0c9b8a7f6e",
     "pipelineId": "a1b2c3d4e5f6a7b8",
@@ -297,24 +300,35 @@ Starts an FFmpeg job for this output. The full call flow is:
 }
 ```
 
+**Response 409:**
+```json
+{
+  "error": "Pipeline input is not available yet",
+  "message": "Output desired state set to running; waiting for input",
+  "desiredState": "running",
+  "detail": "Publisher connected, stream not ready yet"
+}
+```
+
 **Errors:**
 - `400` no input URL available
 - `404` pipeline or output not found
 - `409` start already in progress for this output
-- `409` output already has a running job
-- `409` RTSP input not available yet (ffprobe failed)
+- `409` pipeline input not available yet; desired state is still updated to `running`
 - `500` FFmpeg failed to start (includes last 100 log lines)
 
 ---
 
 ### `POST /pipelines/:pipelineId/outputs/:outputId/stop`
 
-Stops the running FFmpeg job via SIGTERM with a 5 s SIGKILL escalation.
+Sets this output's desired state to `stopped`, clears pending retry timers, and reconciles runtime toward that state. If a process is running, it is stopped via SIGTERM with a 5 s SIGKILL escalation.
 
 **Response 200:**
 ```json
 {
-  "message": "Stopping job",
+  "message": "Output desired state set to stopped",
+  "desiredState": "stopped",
+  "previousState": "running",
   "jobId": "3f2e1d0c9b8a7f6e",
   "result": {
     "stopped": true,
@@ -323,7 +337,22 @@ Stops the running FFmpeg job via SIGTERM with a 5 s SIGKILL escalation.
 }
 ```
 
-**Errors:** `404` no running job for this output.
+If no process is running, the output intent is still updated and the response remains `200`:
+
+```json
+{
+  "message": "Output desired state set to stopped",
+  "desiredState": "stopped",
+  "previousState": "running",
+  "jobId": null,
+  "result": {
+    "stopped": false,
+    "reason": "already_stopped"
+  }
+}
+```
+
+**Errors:** `404` output or pipeline not found.
 
 ---
 
@@ -378,8 +407,11 @@ Guardrails:
 
 > Lifecycle enrichment: start/stop/status transitions now emit `[lifecycle] ...` messages in `job_logs`.
 > Current emitted formats:
+> - `[lifecycle] desired_state state=<running|stopped> source=<source> previousState=<state> reason=<reason>`
 > - `[lifecycle] started status=running pid=<pid|null>`
 > - `[lifecycle] stop_requested signal=<signal> status=running`
+> - `[lifecycle] auto_start_suppressed desiredState=stopped trigger=<trigger> reason=<reason>`
+> - `[lifecycle] retry_decision failureCount=<n> scheduled=<true|false> reason=<reason>`
 > - `[lifecycle] failed_on_error status=failed exitCode=null exitSignal=null`
 > - `[lifecycle] exited status=<stopped|failed> requestedStop=<true|false> exitCode=<code|null> exitSignal=<signal|null>`
 > - `[lifecycle] marked_stopped_no_process status=stopped`
@@ -409,6 +441,8 @@ If-None-Match: "abc123..."
   "jobs": [ ... ]
 }
 ```
+
+Each output now includes `desiredState`, which is the persistent operator intent (`running` or `stopped`).
 
 **Response headers:**
 ```

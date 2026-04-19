@@ -36,21 +36,28 @@ function maskSecret(value) {
 
 function sanitizeLogMessage(msg, redacted = true) {
     if (!redacted) return String(msg);
-    return String(msg)
-        // Mask only the final path segment (usually the secret key/token).
-        .replace(
-            new RegExp('(rtmps?://[^/\\s]+(?:/[^/\\s]+)*/)([^/\\s\'\"]+)(\\?[^\'\"\\s]*)?', 'g'),
-            '$1***$3',
-        )
-        .replace(
-            new RegExp('(rtsp://[^/\\s]+(?:/[^/\\s]+)*/)([^/\\s\'\"]+)(\\?[^\'\"\\s]*)?', 'g'),
-            '$1***$3',
-        );
+    return (
+        String(msg)
+            // Mask only the final path segment (usually the secret key/token).
+            .replace(
+                new RegExp(
+                    '(rtmps?://[^/\\s]+(?:/[^/\\s]+)*/)([^/\\s\'\"]+)(\\?[^\'\"\\s]*)?',
+                    'g',
+                ),
+                '$1***$3',
+            )
+            .replace(
+                new RegExp('(rtsp://[^/\\s]+(?:/[^/\\s]+)*/)([^/\\s\'\"]+)(\\?[^\'\"\\s]*)?', 'g'),
+                '$1***$3',
+            )
+    );
 }
 
 function formatCodecName(codec) {
     if (!codec) return null;
-    const c = String(codec).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const c = String(codec)
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
     if (c === 'h264' || c === 'avc' || c === 'avc1') return 'H.264';
     if (c === 'h265' || c === 'hevc' || c === 'hvc1') return 'H.265';
     if (c === 'aac') return 'AAC';

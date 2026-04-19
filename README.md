@@ -14,18 +14,45 @@ A streaming control plane built on [MediaMTX](https://github.com/bluenviron/medi
 ```
 src/
   index.js          — Express REST API + FFmpeg lifecycle management
-  db.js             — SQLite schema, migrations, and query helpers (data/data.db)
+  api/
+    config.js       — Config API registration and ETag helpers
+    outputs.js      — Output request validation and API registration
+    pipelines.js    — Pipeline CRUD API registration
+    metrics.js      — Host CPU, memory, disk, and network metrics API
+  services/
+    health.js       — Health snapshot collection and aggregation service
+    outputs.js      — Output start/stop lifecycle orchestration
+    recovery.js     — Output retry/backoff policy service
+    bootstrap.js    — App startup and recurring maintenance timers
+  utils/
+    health-connection.js — Connection/session indexing and reader correlation helpers
+    health-media.js      — Media/status calculation helpers for health snapshots
+    health-state.js      — Health snapshot/state assembly helpers
+  db/
+    index.js        — SQLite query helpers and data access methods (data/data.db)
+    schema.js       — SQLite schema setup and migration bootstrap
   config/
     index.js        — Config loader with sanitization
     restream.json   — App config: host, serverName, pipelinesLimit, outLimit
 public/
   index.html        — Dashboard SPA shell
   stream-keys.html  — Stream key management page
-  api.js            — All API calls (relative paths, never direct to MediaMTX)
-  dashboard.js      — Event handlers, modals, polling orchestration
-  pipeline.js       — parsePipelinesInfo(): merges config + health into view model
-  render.js         — DOM rendering: pipeline cards, stats, output tables
-  utils.js          — Shared utilities: formatTime, setServerConfig, copyData
+  js/
+    core/
+      api.js            — All API calls (relative paths, never direct to MediaMTX)
+      pipeline.js       — parsePipelinesInfo(): merges config + health into view model
+      utils.js          — Shared utilities: formatTime, setServerConfig, copyData
+    history/
+      state.js          — Shared state + polling constants for history modals
+      render.js         — Shared history rendering and timeline helper utilities
+      controller.js     — History modal controller and polling orchestration
+    features/
+      dashboard.js      — Event handlers, modals, polling orchestration
+      editor.js         — Output/pipeline modal edit interactions
+      pipeline-view.js  — Pipeline detail rendering helpers
+      render.js         — DOM rendering: pipeline cards, stats, output tables
+      metrics.js        — System metrics fetch + render helpers
+      stream-keys-page.js — Stream key page interactions
   output.css        — Compiled Tailwind + DaisyUI (do not edit manually)
 input.css           — Tailwind CSS source (compile with `make css`)
 docs/               — Architecture, API reference, health mapping, config guide

@@ -2,8 +2,6 @@ const throughputState = {
     inputBytes: new Map(),
 };
 
-
-
 function computeKbps(stateMap, key, totalBytes, nowMs) {
     if (!key) return null;
     const safeBytes = Number(totalBytes || 0);
@@ -40,7 +38,9 @@ function parsePipelinesInfo() {
     config?.pipelines.forEach((p) => {
         const inputBytesReceived = healthByPipeline[p.id]?.input?.bytesReceived || 0;
         const inputPublisher = healthByPipeline[p.id]?.input?.publisher || null;
-        const unexpectedReadersCount = Number(healthByPipeline[p.id]?.input?.unexpectedReaders?.count || 0);
+        const unexpectedReadersCount = Number(
+            healthByPipeline[p.id]?.input?.unexpectedReaders?.count || 0,
+        );
         const inputVideo = healthByPipeline[p.id]?.input?.video
             ? { ...healthByPipeline[p.id].input.video }
             : null;
@@ -137,6 +137,7 @@ function parsePipelinesInfo() {
             id: out.id,
             pipe: pipe.name,
             name: out.name,
+            desiredState: out.desiredState || 'stopped',
             encoding,
             url: out.url,
             status,

@@ -167,7 +167,6 @@ async function renderKeysTable() {
             const row = getKeyAt(btn);
             if (!row) return;
             openDeleteConfirmModal(row.key, row.label || '(untitled)');
-
         });
     });
 }

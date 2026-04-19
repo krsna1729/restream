@@ -345,11 +345,11 @@ DELETE /pipelines/:pipelineId/outputs/:outputId
 |-----------------------|---------------------------------------------------------------|
 | `public/index.html`   | Dashboard SPA shell                                           |
 | `public/stream-keys.html` | Stream key management page                               |
-| `public/api.js`       | All API calls as relative paths (never direct to MediaMTX)   |
-| `public/dashboard.js` | Event handlers, modal logic, polling orchestration           |
-| `public/pipeline.js`  | `parsePipelinesInfo()` — merges config + health into view model |
-| `public/render.js`    | DOM rendering — pipeline cards, stats tables, output rows     |
-| `public/utils.js`     | `setServerConfig()`, `formatTime()`, `copyData()`, etc.       |
+| `public/js/core/api.js`       | All API calls as relative paths (never direct to MediaMTX)   |
+| `public/js/features/dashboard.js` | Event handlers, modal logic, polling orchestration           |
+| `public/js/core/pipeline.js`  | `parsePipelinesInfo()` — merges config + health into view model |
+| `public/js/features/render.js`    | DOM rendering — pipeline cards, stats tables, output rows     |
+| `public/js/core/utils.js`     | `setServerConfig()`, `formatTime()`, `copyData()`, etc.       |
 | `public/output.css`   | Compiled Tailwind + DaisyUI output (do not edit manually)     |
 | `input.css`           | Tailwind source (project root, compiled with `make css`)      |
 
@@ -385,11 +385,11 @@ The dashboard tracks two ETag variables:
 | `etag` | every `fetchConfig()` (background poll) | keeps conditional GET efficient |
 | `userEtag` | only after this tab successfully mutates config | marks last change *this user* made |
 
-Every 30 s, `checkStreamingConfigs` calls `GET /config` with `If-None-Match: userEtag`. If the server returns 200 (current ETag differs from `userEtag`), a mutation happened that this tab did not initiate. After a 5 s confirmation re-check, the `#streaming-config-changed-alert` warning banner is shown, prompting the user to refresh. A 304 keeps the banner hidden.
+Every 30 s, `checkStreamingConfigs` calls `GET /config` with `If-None-Match: userEtag`. If the server returns 200 (current ETag differs from `userEtag`), a mutation happened that this tab did not initiate. After a 5 s confirmation re-check, the `#streaming-config-changed-alert` warning banner is shown, prompting the user to refresh. A 304 keeps the banner hidden. Delayed re-checks are canceled when this tab updates its own baseline ETag, and stale re-checks (queued with an old baseline) are ignored so local edits do not trigger false warnings. After successful local mutations, the client re-syncs baseline from `HEAD /config/version` before storing `userEtag`.
 
 ### 5.3 Throughput Computation (client-side)
 
-`pipeline.js` maintains `throughputState.inputBytes` for input throughput only. On each poll cycle, `computeKbps(stateMap, key, totalBytes, nowMs)` computes input bitrate from the delta of `input.bytesReceived` between cycles:
+`public/js/core/pipeline.js` maintains `throughputState.inputBytes` for input throughput only. On each poll cycle, `computeKbps(stateMap, key, totalBytes, nowMs)` computes input bitrate from the delta of `input.bytesReceived` between cycles:
 
 ```
 kbps = (deltaBytes × 8) / (deltaMs / 1000) / 1000
@@ -416,7 +416,7 @@ Each output card exposes a history modal with two modes:
 - Fetches up to 1000 rows ordered newest/oldest (user-selectable).
 - Find-in-page search: all rows render regardless of query; matching rows are highlighted inline and assigned a sequential match index. The `n/m` counter and up/down navigation (Enter / Shift+Enter) move between matches only. Scrolls active match into view. Non-matching rows remain visible for context.
 
-**Frontend constants** (in `dashboard.js`):
+**Frontend constants** (in `public/js/features/dashboard.js`):
 
 | Constant | Value | Purpose |
 |---|---|---|

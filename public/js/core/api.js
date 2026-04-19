@@ -200,10 +200,13 @@ async function updateOutput(pipeId, outId, data) {
         return null;
     }
 
-    return apiRequest(`/pipelines/${encodeURIComponent(pipeId)}/outputs/${encodeURIComponent(outId)}`, {
-        method: 'POST',
-        body: data,
-    });
+    return apiRequest(
+        `/pipelines/${encodeURIComponent(pipeId)}/outputs/${encodeURIComponent(outId)}`,
+        {
+            method: 'POST',
+            body: data,
+        },
+    );
 }
 
 async function deleteOutput(pipeId, outId) {
@@ -212,9 +215,12 @@ async function deleteOutput(pipeId, outId) {
         return null;
     }
 
-    return apiRequest(`/pipelines/${encodeURIComponent(pipeId)}/outputs/${encodeURIComponent(outId)}`, {
-        method: 'DELETE',
-    });
+    return apiRequest(
+        `/pipelines/${encodeURIComponent(pipeId)}/outputs/${encodeURIComponent(outId)}`,
+        {
+            method: 'DELETE',
+        },
+    );
 }
 
 async function startOut(pipeId, outId) {

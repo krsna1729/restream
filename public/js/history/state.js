@@ -1,0 +1,46 @@
+(function () {
+    const outputHistoryState = {
+        pipelineId: null,
+        outputId: null,
+        outputName: '',
+        mode: 'timeline',
+        order: 'desc',
+        lifecycleLogs: [],
+        rawLogs: [],
+        rawQuery: '',
+        rawMatchIndex: 0,
+        expandedContextKeys: new Set(),
+        contextLogsByKey: new Map(),
+        contextLoadingKeys: new Set(),
+        redacted: true,
+        playing: false,
+        pollTimer: null,
+        pollEveryMs: null,
+        isPolling: false,
+    };
+
+    const pipelineHistoryState = {
+        pipelineId: null,
+        pipelineName: '',
+        logs: [],
+        playing: false,
+        pollTimer: null,
+        pollEveryMs: null,
+    };
+
+    const OUTPUT_HISTORY_POLL_INTERVAL_MS = 5000;
+    const OUTPUT_HISTORY_HIDDEN_POLL_INTERVAL_MS = 30000;
+    const OUTPUT_HISTORY_RAW_LIMIT = 1000;
+    const OUTPUT_HISTORY_CONTEXT_WINDOW_MS = 5 * 60 * 1000;
+    const OUTPUT_HISTORY_CONTEXT_LIMIT = 50;
+
+    window.outputHistoryState = outputHistoryState;
+    window.pipelineHistoryState = pipelineHistoryState;
+    window.historyConstants = {
+        OUTPUT_HISTORY_POLL_INTERVAL_MS,
+        OUTPUT_HISTORY_HIDDEN_POLL_INTERVAL_MS,
+        OUTPUT_HISTORY_RAW_LIMIT,
+        OUTPUT_HISTORY_CONTEXT_WINDOW_MS,
+        OUTPUT_HISTORY_CONTEXT_LIMIT,
+    };
+})();

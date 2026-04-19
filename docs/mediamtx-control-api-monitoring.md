@@ -200,7 +200,7 @@ Restream already has a good foundation around runtime path health and FFmpeg out
 
 - `src/index.js` builds a cached health snapshot from `paths`, `rtspconns`, `rtspsessions`, `rtmpconns`, `srtconns`, and `webrtcsessions`.
 - `docs/health-mapping.md` documents the current input and output status derivation model.
-- `public/render.js` renders publisher protocol/remote badges plus ingest-side quality status and modal details.
+- `public/js/features/render.js` renders publisher protocol/remote badges plus ingest-side quality status and modal details.
 
 The main limitation is scope. Current health is ingest-centric and still leaves some playback and secure-protocol runtime resources unused.
 
