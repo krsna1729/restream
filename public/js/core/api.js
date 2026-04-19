@@ -1,26 +1,54 @@
 import { showLoading, hideLoading, showErrorAlert, normalizeEtag } from './utils.js';
 
+let activeMutationRequestCount = 0;
+
+function isMutationMethod(method) {
+    const normalizedMethod = String(method || 'GET').toUpperCase();
+    return normalizedMethod !== 'GET' && normalizedMethod !== 'HEAD' && normalizedMethod !== 'OPTIONS';
+}
+
+function beginMutationRequest() {
+    activeMutationRequestCount += 1;
+    if (activeMutationRequestCount === 1) {
+        showLoading();
+    }
+}
+
+function endMutationRequest() {
+    if (activeMutationRequestCount <= 0) {
+        activeMutationRequestCount = 0;
+        return;
+    }
+
+    activeMutationRequestCount -= 1;
+    if (activeMutationRequestCount === 0) {
+        hideLoading();
+    }
+}
+
 function getSnapshotVersion(response, fallback = null) {
     return normalizeEtag(response.headers.get('X-Snapshot-Version')) || fallback;
 }
 
 async function apiRequest(url, { method = 'GET', body = null } = {}) {
-    const options = { method };
+    const normalizedMethod = String(method || 'GET').toUpperCase();
+    const options = { method: normalizedMethod };
 
     if (body !== null) {
         options.headers = { 'Content-Type': 'application/json' };
         options.body = JSON.stringify(body);
     }
 
+    const showMutationLoading = isMutationMethod(normalizedMethod);
     let response = null;
-    showLoading();
+    if (showMutationLoading) beginMutationRequest();
     try {
         response = await fetch(url, options);
     } catch (e) {
         showErrorAlert('Network request failed: ' + e);
         return null;
     } finally {
-        hideLoading();
+        if (showMutationLoading) endMutationRequest();
     }
 
     let data = null;
