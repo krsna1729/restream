@@ -346,6 +346,16 @@ function createHealthMonitorService({
         return latestHealthSnapshot;
     }
 
+    function getCurrentStateVersion() {
+        return db.getEtag() || null;
+    }
+
+    function isHealthSnapshotStaleForCurrentState(snapshot) {
+        const currentStateVersion = getCurrentStateVersion();
+        if (!currentStateVersion) return false;
+        return snapshot?.snapshotVersion !== currentStateVersion;
+    }
+
     function startPipelineProbeRefresh(streamKey, nowMs) {
         probeRefreshStartedAt.set(streamKey, nowMs);
         getCachedRtspProbeInfo(
@@ -585,7 +595,11 @@ function createHealthMonitorService({
         // This snapshot is intentionally rebuilt from transient MediaMTX/runtime state instead of
         // persisted rows so it reflects live topology, reader matching, and probe data in one pass.
         if (!mediamtxReadiness.ready) {
-            return buildDefaultHealthSnapshot('initializing', mediamtxReadiness.ready);
+            return buildDefaultHealthSnapshot(
+                'initializing',
+                mediamtxReadiness.ready,
+                getCurrentStateVersion(),
+            );
         }
 
         try {
@@ -637,6 +651,7 @@ function createHealthMonitorService({
                 });
             }
 
+            const snapshotVersion = getCurrentStateVersion();
             const pipelines = db.listPipelines();
             const outputs = db.listOutputs();
             const jobs = db.listJobs();
@@ -670,6 +685,7 @@ function createHealthMonitorService({
 
             return {
                 generatedAt: new Date().toISOString(),
+                snapshotVersion,
                 status: 'ready',
                 mediamtx: {
                     pathCount: paths.itemCount || 0,
@@ -688,6 +704,7 @@ function createHealthMonitorService({
 
             return {
                 generatedAt: new Date().toISOString(),
+                snapshotVersion: getCurrentStateVersion(),
                 status: 'degraded',
                 mediamtx: {
                     pathCount: latestHealthSnapshot?.mediamtx?.pathCount || 0,
@@ -742,17 +759,28 @@ function createHealthMonitorService({
 
     function registerRoutes(app) {
         app.get('/health', async (req, res) => {
-            const snapshot = latestHealthSnapshot || (await collectHealthSnapshot());
+            let snapshot = latestHealthSnapshot;
+            if (!snapshot || isHealthSnapshotStaleForCurrentState(snapshot)) {
+                snapshot = await collectHealthSnapshot();
+            }
+
             const etag =
-                latestHealthSnapshotEtag || hashSnapshot(getHealthSnapshotHashSource(snapshot));
+                latestHealthSnapshotEtag ||
+                hashSnapshot(getHealthSnapshotHashSource(snapshot), createHash);
             const ifNoneMatch = normalizeEtag(req.get('If-None-Match'));
 
             if (ifNoneMatch && etag && ifNoneMatch === etag) {
                 res.set('ETag', `"${etag}"`);
+                if (snapshot?.snapshotVersion) {
+                    res.set('X-Snapshot-Version', `"${snapshot.snapshotVersion}"`);
+                }
                 return res.status(304).end();
             }
 
             if (etag) res.set('ETag', `"${etag}"`);
+            if (snapshot?.snapshotVersion) {
+                res.set('X-Snapshot-Version', `"${snapshot.snapshotVersion}"`);
+            }
 
             const generatedAtMs = Date.parse(snapshot.generatedAt);
             const ageMs = Number.isFinite(generatedAtMs)

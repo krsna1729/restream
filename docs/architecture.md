@@ -425,6 +425,12 @@ The dashboard tracks two ETag variables:
 
 Every 30 s, `checkStreamingConfigs` calls `GET /config` with `If-None-Match: userConfigEtag`. If the server returns 200 (current ETag differs from `userConfigEtag`), a mutation happened that this tab did not initiate. After a 5 s confirmation re-check, the `#streaming-config-changed-alert` warning banner is shown, prompting the user to refresh. A 304 keeps the banner hidden. Delayed re-checks are canceled when this tab updates its own baseline ETag, and stale re-checks (queued with an old baseline) are ignored so local edits do not trigger false warnings. After successful local mutations, the client re-syncs baseline from `HEAD /config/version` before storing `userConfigEtag`.
 
+The dashboard now also checks a shared `X-Snapshot-Version` token returned by both `/config` and
+`/health`. That token represents the config/jobs version seen by each endpoint. Health snapshots
+refresh themselves when their cached token is behind the current config/jobs state, and the client
+retries a refresh if the two responses still disagree, preventing mixed-moment merges after rapid
+mutations.
+
 ### 5.3 Throughput Computation (client-side)
 
 `public/js/core/pipeline.js` maintains `throughputState.inputBytes` for input throughput only. On each poll cycle, `computeKbps(stateMap, key, totalBytes, nowMs)` computes input bitrate from the delta of `input.bytesReceived` between cycles:

@@ -1,5 +1,9 @@
 import { showLoading, hideLoading, showErrorAlert, normalizeEtag } from './utils.js';
 
+function getSnapshotVersion(response, fallback = null) {
+    return normalizeEtag(response.headers.get('X-Snapshot-Version')) || fallback;
+}
+
 async function apiRequest(url, { method = 'GET', body = null } = {}) {
     const options = { method };
 
@@ -42,7 +46,14 @@ async function getConfig(etag = null) {
     const response = await fetch('/config', { method: 'GET', headers, cache: 'no-store' });
 
     // 304 → cached version is still valid
-    if (response.status === 304) return { notModified: true, etag, data: null };
+    if (response.status === 304) {
+        return {
+            notModified: true,
+            etag,
+            snapshotVersion: getSnapshotVersion(response, etag),
+            data: null,
+        };
+    }
 
     let data = null;
     try {
@@ -60,7 +71,13 @@ async function getConfig(etag = null) {
     const newEtag = normalizeEtag(response.headers.get('ETag'));
     const configEtag = normalizeEtag(response.headers.get('X-Config-ETag'));
 
-    return { notModified: false, etag: newEtag, configEtag: configEtag || newEtag, data };
+    return {
+        notModified: false,
+        etag: newEtag,
+        configEtag: configEtag || newEtag,
+        snapshotVersion: getSnapshotVersion(response, newEtag),
+        data,
+    };
 }
 
 async function getConfigVersion(etag = null) {
@@ -91,7 +108,14 @@ async function getHealth(etag = null) {
         return null;
     }
 
-    if (response.status === 304) return { notModified: true, etag, data: null };
+    if (response.status === 304) {
+        return {
+            notModified: true,
+            etag,
+            snapshotVersion: getSnapshotVersion(response, null),
+            data: null,
+        };
+    }
 
     let data = null;
     try {
@@ -109,6 +133,8 @@ async function getHealth(etag = null) {
     return {
         notModified: false,
         etag: normalizeEtag(response.headers.get('ETag')),
+        snapshotVersion:
+            getSnapshotVersion(response, null) || normalizeEtag(data?.snapshotVersion),
         data,
     };
 }

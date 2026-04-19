@@ -8,9 +8,14 @@ function getPipelineProbeRtspUrl(streamKey, getMediamtxRtspBaseUrl) {
     return `${getMediamtxRtspBaseUrl()}/${streamKey}?reader_id=${encodeURIComponent(probeTag)}`;
 }
 
-function buildDefaultHealthSnapshot(status = 'initializing', mediamtxReady = false) {
+function buildDefaultHealthSnapshot(
+    status = 'initializing',
+    mediamtxReady = false,
+    snapshotVersion = null,
+) {
     return {
         generatedAt: new Date().toISOString(),
+        snapshotVersion,
         status,
         mediamtx: {
             pathCount: 0,
@@ -26,6 +31,7 @@ function buildDefaultHealthSnapshot(status = 'initializing', mediamtxReady = fal
 
 function getHealthSnapshotHashSource(snapshot) {
     return {
+        snapshotVersion: snapshot?.snapshotVersion || null,
         status: snapshot?.status || 'initializing',
         mediamtx: snapshot?.mediamtx || {
             pathCount: 0,

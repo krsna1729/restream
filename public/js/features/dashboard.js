@@ -17,6 +17,45 @@ async function refreshDashboard() {
     await fetchAndRerender();
 }
 
+function resolveConfigSnapshotVersion(result) {
+    if (!result) return configSnapshotVersion;
+    return result.snapshotVersion || result.etag || configSnapshotVersion;
+}
+
+function resolveHealthSnapshotVersion(result) {
+    if (!result) return healthSnapshotVersion;
+    return result.snapshotVersion || healthSnapshotVersion;
+}
+
+function applyConfigSlice(result) {
+    if (!result) return;
+
+    if (result.etag) etag = result.etag;
+    if (result.configEtag) configEtag = result.configEtag;
+    configSnapshotVersion = resolveConfigSnapshotVersion(result);
+
+    if (result.notModified) return;
+
+    state.config = result.data;
+    setServerConfig(state.config?.serverName);
+}
+
+function applyHealthSlice(result) {
+    if (!result) return;
+
+    if (result.etag) healthEtag = result.etag;
+    healthSnapshotVersion = resolveHealthSnapshotVersion(result);
+
+    if (result.notModified) return;
+
+    state.health = result.data;
+}
+
+function applyMetricsSlice(result) {
+    if (result === null) return;
+    state.metrics = result;
+}
+
 function applyUserConfigBaseline(etagValue) {
     userConfigEtag = etagValue || null;
     dismissedStreamingConfigEtag = null;
@@ -105,10 +144,30 @@ async function checkStreamingConfigs(secondTime = false, baselineEtag = userConf
     }, 5000);
 }
 
-async function fetchAndRerender() {
+async function fetchAndRerender(attempt = 0) {
     // Fetch config, health, and metrics together so one render pass always sees a consistent view
     // of the latest server state instead of mixing fresh and stale slices.
-    await Promise.all([fetchConfig(), fetchHealth(), fetchSystemMetrics()]);
+    const [configResult, healthResult, metricsResult] = await Promise.all([
+        fetchConfig(),
+        fetchHealth(),
+        fetchSystemMetrics(),
+    ]);
+
+    const nextConfigSnapshotVersion = resolveConfigSnapshotVersion(configResult);
+    const nextHealthSnapshotVersion = resolveHealthSnapshotVersion(healthResult);
+
+    if (
+        nextConfigSnapshotVersion &&
+        nextHealthSnapshotVersion &&
+        nextConfigSnapshotVersion !== nextHealthSnapshotVersion &&
+        attempt < 2
+    ) {
+        return fetchAndRerender(attempt + 1);
+    }
+
+    applyConfigSlice(configResult);
+    applyHealthSlice(healthResult);
+    applyMetricsSlice(metricsResult);
     state.pipelines = parsePipelinesInfo(state.config, state.health);
     renderPipelines();
     renderMetrics();
@@ -116,30 +175,22 @@ async function fetchAndRerender() {
 }
 
 async function fetchConfig() {
-    const res = await getConfig(etag);
-    if (res === null || res.notModified) return;
-    etag = res.etag;
-    configEtag = res.configEtag;
-    state.config = res.data;
-    setServerConfig(state.config?.serverName);
+    return getConfig(etag);
 }
 
 async function fetchHealth() {
-    const res = await getHealth(healthEtag);
-    if (res === null || res.notModified) return;
-    healthEtag = res.etag;
-    state.health = res.data;
+    return getHealth(healthEtag);
 }
 
 async function fetchSystemMetrics() {
-    const res = await getSystemMetrics();
-    if (res === null) return;
-    state.metrics = res;
+    return getSystemMetrics();
 }
 
 let etag = null;
 let healthEtag = null;
 let configEtag = null;
+let configSnapshotVersion = null;
+let healthSnapshotVersion = null;
 let userConfigEtag = null;
 let dismissedStreamingConfigEtag = null;
 

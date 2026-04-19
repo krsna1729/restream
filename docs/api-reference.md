@@ -430,9 +430,20 @@ Guardrails:
 
 Returns the full state snapshot used by the dashboard. Supports conditional GET via `If-None-Match` / ETag.
 
+Response headers now include a shared `X-Snapshot-Version` token that identifies the config/jobs
+state version represented by this snapshot. The dashboard compares that token with the health
+response before committing a render.
+
 **Request headers (optional):**
 ```
 If-None-Match: "abc123..."
+```
+
+**Response headers:**
+```
+ETag: "..."                 // config + jobs snapshot hash
+X-Config-ETag: "..."        // config-only snapshot hash
+X-Snapshot-Version: "..."   // shared config/jobs state version used to align /config and /health
 ```
 
 **Response 200:**

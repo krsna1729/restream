@@ -112,6 +112,7 @@ function registerConfigApi({ app, db, getConfig, toPublicConfig }) {
             if (ifNoneMatch && etag && ifNoneMatch === etag) {
                 res.set('ETag', `"${etag}"`);
                 if (configEtag) res.set('X-Config-ETag', `"${configEtag}"`);
+                if (etag) res.set('X-Snapshot-Version', `"${etag}"`);
                 return res.status(304).end();
             }
 
@@ -129,6 +130,7 @@ function registerConfigApi({ app, db, getConfig, toPublicConfig }) {
 
             if (etag) res.set('ETag', `"${etag}"`);
             if (configEtag) res.set('X-Config-ETag', `"${configEtag}"`);
+            if (etag) res.set('X-Snapshot-Version', `"${etag}"`);
             return res.json(snapshot);
         } catch (err) {
             return res.status(500).json({ error: errMsg(err) });
@@ -159,6 +161,7 @@ function registerConfigApi({ app, db, getConfig, toPublicConfig }) {
             const configEtag = db.getConfigEtag();
             if (etag) res.set('ETag', `"${etag}"`);
             if (configEtag) res.set('X-Config-ETag', `"${configEtag}"`);
+            if (etag) res.set('X-Snapshot-Version', `"${etag}"`);
             return res.status(200).end();
         } catch (err) {
             return res.status(500).end();
