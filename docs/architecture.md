@@ -400,6 +400,15 @@ setInterval(checkStreamingConfigs, 30000)       external-change detection (see b
 
 `public/index.html` and `public/stream-keys.html` load frontend scripts as ES modules (`<script type="module">`). Cross-file dependencies are imported explicitly, while HTML-bound handlers used by inline attributes (`onclick` and `data-*` hooks) remain exposed on `window`.
 
+### 5.5 Frontend Module Conventions
+
+See [frontend-modules.md](./frontend-modules.md) for implementation-level rules and examples. In short:
+
+- Import dependencies explicitly; do not rely on implicit globals.
+- Keep shared mutable dashboard state in `public/js/core/state.js`.
+- Expose `window.*` only for handlers invoked directly by HTML attributes or legacy hooks.
+- Prefer normal module exports/imports for all other cross-file calls.
+
 #### External-change detection (`checkStreamingConfigs`)
 
 The dashboard tracks two ETag variables:
@@ -447,6 +456,15 @@ Each output card exposes a history modal with two modes:
 | `OUTPUT_HISTORY_RAW_LIMIT` | 1000 | Max rows fetched in raw mode |
 | `OUTPUT_HISTORY_CONTEXT_LIMIT` | 50 | Max rows per context on-demand fetch |
 | `OUTPUT_HISTORY_CONTEXT_WINDOW_MS` | 5 min | Look-back window for context fetch |
+
+### 5.5.1 Module Migration Troubleshooting
+
+If a page renders partially after a refactor, check these first:
+
+1. `ReferenceError` in browser console (usually an implicit-global access that should be an import or `window.*`).
+2. HTML handlers (`onclick`, `data-*`) still pointing to a function that is no longer exported to `window`.
+3. Shared state reads/writes still referencing old globals instead of `public/js/core/state.js`.
+4. Stale browser JS from static asset cache; hard-refresh to load latest module files.
 
 ---
 

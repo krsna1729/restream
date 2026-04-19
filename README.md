@@ -77,6 +77,7 @@ The compose file uses profiles:
 | Document | Description |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | System design, data model, call flows, deployment |
+| [docs/frontend-modules.md](docs/frontend-modules.md) | Frontend ES module conventions and troubleshooting |
 | [docs/api-reference.md](docs/api-reference.md) | All REST endpoints with request/response shapes |
 | [docs/health-mapping.md](docs/health-mapping.md) | How input/output health statuses are derived |
 | [docs/configuration.md](docs/configuration.md) | All environment variables and config file options |

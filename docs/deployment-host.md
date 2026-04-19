@@ -212,6 +212,15 @@ Upgrade process:
 2. Run `npm ci --omit=dev`.
 3. Restart `restream.service`.
 4. Run smoke tests.
+5. Validate dashboard and stream-keys pages after a hard refresh.
+
+### Frontend Cache Note
+
+Static UI assets are served with cache headers. After frontend JavaScript updates, operator/browser sessions can briefly run stale code unless the browser fetches fresh files. During rollout verification:
+
+- use a hard refresh in the browser
+- verify the latest JS is loaded before debugging runtime behavior
+- if needed, bump module asset URLs or adjust cache strategy for controlled rollouts
 
 ## 12. Security Baseline
 
