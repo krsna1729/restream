@@ -145,6 +145,7 @@ function setupDatabaseSchema(db) {
         pipeline_id TEXT,
         output_id TEXT,
         event_type TEXT,
+        event_data TEXT,
         ts TEXT,
         message TEXT
     )
@@ -162,6 +163,9 @@ function setupDatabaseSchema(db) {
     if (!jobLogsColumns.some((column) => column.name === 'event_type')) {
         db.prepare(`ALTER TABLE job_logs ADD COLUMN event_type TEXT`).run();
     }
+    if (!jobLogsColumns.some((column) => column.name === 'event_data')) {
+        db.prepare(`ALTER TABLE job_logs ADD COLUMN event_data TEXT`).run();
+    }
 
     // Migrate old FK-based job_logs table to decoupled schema.
     // Upsert updates jobs.id, which conflicts with FK(job_logs.job_id -> jobs.id).
@@ -177,13 +181,14 @@ function setupDatabaseSchema(db) {
         pipeline_id TEXT,
         output_id TEXT,
         event_type TEXT,
+                event_data TEXT,
         ts TEXT,
         message TEXT
       )
     `);
             db.exec(`
-      INSERT INTO job_logs_new (id, job_id, pipeline_id, output_id, event_type, ts, message)
-      SELECT id, job_id, pipeline_id, output_id, NULL, ts, message
+            INSERT INTO job_logs_new (id, job_id, pipeline_id, output_id, event_type, event_data, ts, message)
+            SELECT id, job_id, pipeline_id, output_id, event_type, event_data, ts, message
       FROM job_logs
     `);
             db.exec(`DROP TABLE job_logs`);

@@ -162,7 +162,7 @@ Pipeline-level history entries are stored in `job_logs` with:
 
 - `pipeline_id = :pipelineId`
 - `output_id IS NULL`
-- optional `event_type` values such as `pipeline_config` and `pipeline_state`
+- typed `eventType` values such as `pipeline.config.stream_key_changed` and `pipeline.input_state.transitioned`
 
 **Response 200:**
 ```json
@@ -171,13 +171,15 @@ Pipeline-level history entries are stored in `job_logs` with:
   "logs": [
     {
       "ts": "2026-04-16T05:30:00.000Z",
-      "message": "[input_state] off -> on",
-      "eventType": "pipeline_state"
+      "eventType": "pipeline.input_state.transitioned",
+      "eventData": { "from": "off", "to": "on" },
+      "message": "[input_state] off -> on"
     },
     {
       "ts": "2026-04-16T05:25:00.000Z",
-      "message": "[config] stream_key changed from ab...cd to ef...12",
-      "eventType": "pipeline_config"
+      "eventType": "pipeline.config.stream_key_changed",
+      "eventData": { "fromMasked": "ab...cd", "toMasked": "ef...12" },
+      "message": "[config] stream_key changed from ab...cd to ef...12"
     }
   ]
 }
@@ -394,14 +396,25 @@ Guardrails:
   "logs": [
     {
       "ts": "2026-04-15T12:20:57.098Z",
+      "eventType": "lifecycle.exited",
+      "eventData": {
+        "status": "failed",
+        "requestedStop": false,
+        "exitCode": 255,
+        "exitSignal": null
+      },
       "message": "[lifecycle] exited status=failed requestedStop=false exitCode=255 exitSignal=null"
     },
     {
       "ts": "2026-04-15T12:20:57.098Z",
+      "eventType": "output.exit",
+      "eventData": { "code": 255, "signal": null },
       "message": "[exit] code=255 signal=null"
     },
     {
       "ts": "2026-04-15T12:20:56.971Z",
+      "eventType": "output.stderr",
+      "eventData": null,
       "message": "[stderr] [flv @ ...] Non-monotonic DTS ..."
     }
   ]
@@ -410,17 +423,10 @@ Guardrails:
 
 **Errors:** `400` invalid `limit`, `since`, `until`, `order`, or `prefix`, or requested window too large; `404` output or pipeline not found.
 
-> Lifecycle enrichment: start/stop/status transitions now emit `[lifecycle] ...` messages in `job_logs`.
-> Current emitted formats:
-> - `[lifecycle] desired_state state=<running|stopped> source=<source> previousState=<state> reason=<reason>`
-> - `[lifecycle] started status=running pid=<pid|null>`
-> - `[lifecycle] stop_requested signal=<signal> status=running`
-> - `[lifecycle] auto_start_suppressed desiredState=stopped trigger=<trigger> reason=<reason>`
-> - `[lifecycle] retry_decision failureCount=<n> scheduled=<true|false> reason=<reason>`
-> - `[lifecycle] retry_suppressed reason=input_unavailable_clean_exit matchReason=<reason> exitCode=<code|null> exitSignal=<signal|null>`
-> - `[lifecycle] failed_on_error status=failed exitCode=null exitSignal=null`
-> - `[lifecycle] exited status=<stopped|failed> requestedStop=<true|false> exitCode=<code|null> exitSignal=<signal|null>`
-> - `[lifecycle] marked_stopped_no_process status=stopped`
+> History enrichment: timeline-relevant rows now include stable `eventType` codes and structured
+> `eventData` payloads. The human-readable `message` is still stored and returned for raw log
+> inspection, but clients should key timeline behavior off the typed fields instead of parsing the
+> prose message.
 
 ---
 

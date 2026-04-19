@@ -80,8 +80,10 @@ job_logs
   job_id      TEXT           -- optional reference to current/previous job id
   pipeline_id TEXT           -- direct lookup key for history by pipeline
   output_id   TEXT           -- direct lookup key for history by output
+  event_type  TEXT           -- stable event code, e.g. lifecycle.started or pipeline.input_state.transitioned
+  event_data  TEXT           -- optional JSON payload for structured event details
   ts          TEXT
-  message     TEXT           -- one line per stdout/stderr chunk, control event, or lifecycle state change
+  message     TEXT           -- human-readable line kept for raw logs and operator inspection
 
 meta
   key         TEXT PK

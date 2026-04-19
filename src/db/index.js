@@ -106,20 +106,20 @@ const listJobsStmt = db.prepare(`
 
 /* JobLog statements */
 const insertJobLog = db.prepare(`
-    INSERT INTO job_logs (job_id, pipeline_id, output_id, event_type, ts, message)
-    VALUES (@job_id, @pipeline_id, @output_id, @event_type, @ts, @message)
+    INSERT INTO job_logs (job_id, pipeline_id, output_id, event_type, event_data, ts, message)
+    VALUES (@job_id, @pipeline_id, @output_id, @event_type, @event_data, @ts, @message)
 `);
 const listJobLogs = db.prepare(`
-    SELECT ts, message, event_type AS eventType FROM job_logs WHERE job_id = ? ORDER BY id ASC
+    SELECT ts, message, event_type AS eventType, event_data AS eventData FROM job_logs WHERE job_id = ? ORDER BY id ASC
 `);
 const listJobLogsByOutput = db.prepare(`
-    SELECT ts, message, event_type AS eventType FROM job_logs
+    SELECT ts, message, event_type AS eventType, event_data AS eventData FROM job_logs
     WHERE pipeline_id = ? AND output_id = ?
     ORDER BY ts DESC
 `);
 const listLifecycleLogsByOutput = db.prepare(`
-    SELECT ts, message, event_type AS eventType FROM job_logs
-    WHERE pipeline_id = ? AND output_id = ? AND message LIKE '[lifecycle]%'
+    SELECT ts, message, event_type AS eventType, event_data AS eventData FROM job_logs
+    WHERE pipeline_id = ? AND output_id = ? AND (event_type LIKE 'lifecycle.%' OR message LIKE '[lifecycle]%')
     ORDER BY ts ASC
 `);
 function listJobLogsByOutputFiltered(
@@ -150,7 +150,7 @@ function listJobLogsByOutputFiltered(
 
     const normalizedOrder = order === 'asc' ? 'ASC' : 'DESC';
     let sql = `
-        SELECT ts, message, event_type AS eventType FROM job_logs
+        SELECT ts, message, event_type AS eventType, event_data AS eventData FROM job_logs
         WHERE ${clauses.join(' AND ')}
         ORDER BY ts ${normalizedOrder}
     `;
@@ -163,7 +163,7 @@ function listJobLogsByOutputFiltered(
     return db.prepare(sql).all(...params);
 }
 const listJobLogsByPipeline = db.prepare(`
-    SELECT ts, message, event_type AS eventType FROM job_logs
+    SELECT ts, message, event_type AS eventType, event_data AS eventData FROM job_logs
     WHERE pipeline_id = ? AND output_id IS NULL
     ORDER BY ts DESC
 `);
@@ -184,6 +184,37 @@ const setMetaStmt = db.prepare(`
 `);
 
 /* Exported DB helpers */
+
+function serializeEventData(eventData) {
+    if (eventData === null || eventData === undefined) return null;
+    try {
+        return JSON.stringify(eventData);
+    } catch {
+        return null;
+    }
+}
+
+function parseLogRow(row) {
+    if (!row) return row;
+
+    let eventData = null;
+    if (typeof row.eventData === 'string' && row.eventData.length > 0) {
+        try {
+            eventData = JSON.parse(row.eventData);
+        } catch {
+            eventData = null;
+        }
+    }
+
+    return {
+        ...row,
+        eventData,
+    };
+}
+
+function parseLogRows(rows) {
+    return rows.map(parseLogRow);
+}
 
 module.exports = {
     /* stream key helpers */
@@ -350,13 +381,21 @@ module.exports = {
     },
 
     /* job log helpers */
-    appendJobLog(jobId, message, pipelineId = null, outputId = null, eventType = 'output_log') {
+    appendJobLog(
+        jobId,
+        message,
+        pipelineId = null,
+        outputId = null,
+        eventType = 'output.log',
+        eventData = null,
+    ) {
         try {
             insertJobLog.run({
                 job_id: jobId,
                 pipeline_id: pipelineId,
                 output_id: outputId,
                 event_type: eventType,
+                event_data: serializeEventData(eventData),
                 ts: new Date().toISOString(),
                 message,
             });
@@ -364,13 +403,19 @@ module.exports = {
             /* ignore logging failures */
         }
     },
-    appendPipelineEvent(pipelineId, message, eventType = 'pipeline_event') {
+    appendPipelineEvent(
+        pipelineId,
+        message,
+        eventType = 'pipeline.event',
+        eventData = null,
+    ) {
         try {
             insertJobLog.run({
                 job_id: null,
                 pipeline_id: pipelineId,
                 output_id: null,
                 event_type: eventType,
+                event_data: serializeEventData(eventData),
                 ts: new Date().toISOString(),
                 message,
             });
@@ -379,19 +424,19 @@ module.exports = {
         }
     },
     listJobLogs(jobId) {
-        return listJobLogs.all(jobId);
+        return parseLogRows(listJobLogs.all(jobId));
     },
     listJobLogsByOutput(pipelineId, outputId) {
-        return listJobLogsByOutput.all(pipelineId, outputId);
+        return parseLogRows(listJobLogsByOutput.all(pipelineId, outputId));
     },
     listJobLogsByOutputFiltered(pipelineId, outputId, filters = {}) {
-        return listJobLogsByOutputFiltered(pipelineId, outputId, filters);
+        return parseLogRows(listJobLogsByOutputFiltered(pipelineId, outputId, filters));
     },
     listLifecycleLogsByOutput(pipelineId, outputId) {
-        return listLifecycleLogsByOutput.all(pipelineId, outputId);
+        return parseLogRows(listLifecycleLogsByOutput.all(pipelineId, outputId));
     },
     listJobLogsByPipeline(pipelineId) {
-        return listJobLogsByPipeline.all(pipelineId);
+        return parseLogRows(listJobLogsByPipeline.all(pipelineId));
     },
     deleteJobLogsOlderThan(days = 7) {
         deleteOldJobLogs.run(`-${days} days`);

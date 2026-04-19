@@ -8,7 +8,11 @@ function logPipelineConfigChanges(db, pipelineId, previousPipeline, nextPipeline
         db.appendPipelineEvent(
             pipelineId,
             `[config] name changed from "${previousPipeline.name}" to "${nextPipeline.name}"`,
-            'pipeline_config',
+            'pipeline.config.name_changed',
+            {
+                from: previousPipeline.name,
+                to: nextPipeline.name,
+            },
         );
     }
 
@@ -16,7 +20,11 @@ function logPipelineConfigChanges(db, pipelineId, previousPipeline, nextPipeline
         db.appendPipelineEvent(
             pipelineId,
             `[config] encoding changed from ${previousPipeline.encoding || 'null'} to ${nextPipeline.encoding || 'null'}`,
-            'pipeline_config',
+            'pipeline.config.encoding_changed',
+            {
+                from: previousPipeline.encoding || null,
+                to: nextPipeline.encoding || null,
+            },
         );
     }
 
@@ -24,7 +32,15 @@ function logPipelineConfigChanges(db, pipelineId, previousPipeline, nextPipeline
         db.appendPipelineEvent(
             pipelineId,
             `[config] stream_key changed from ${previousPipeline.streamKey ? maskToken(previousPipeline.streamKey) : 'unassigned'} to ${nextPipeline.streamKey ? maskToken(nextPipeline.streamKey) : 'unassigned'}`,
-            'pipeline_config',
+            'pipeline.config.stream_key_changed',
+            {
+                fromMasked: previousPipeline.streamKey
+                    ? maskToken(previousPipeline.streamKey)
+                    : 'unassigned',
+                toMasked: nextPipeline.streamKey
+                    ? maskToken(nextPipeline.streamKey)
+                    : 'unassigned',
+            },
         );
     }
 }
@@ -203,13 +219,21 @@ function registerPipelineApi({
             db.appendPipelineEvent(
                 pipelineWithState.id,
                 `[config] created name="${pipelineWithState.name}" stream_key=${pipelineWithState.streamKey ? maskToken(pipelineWithState.streamKey) : 'unassigned'} encoding=${pipelineWithState.encoding || 'null'}`,
-                'pipeline_config',
+                'pipeline.config.created',
+                {
+                    name: pipelineWithState.name,
+                    streamKeyMasked: pipelineWithState.streamKey
+                        ? maskToken(pipelineWithState.streamKey)
+                        : 'unassigned',
+                    encoding: pipelineWithState.encoding || null,
+                },
             );
             healthMonitor.seedPipelineRuntimeState(pipelineWithState.id, runtimeState.status);
             db.appendPipelineEvent(
                 pipelineWithState.id,
                 `[input_state] initial_state=${runtimeState.status}`,
-                'pipeline_state',
+                'pipeline.input_state.initialized',
+                { state: runtimeState.status },
             );
 
             recomputeConfigEtag();
@@ -271,12 +295,14 @@ function registerPipelineApi({
                 db.appendPipelineEvent(
                     id,
                     '[input_state] reset due to stream_key change',
-                    'pipeline_state',
+                    'pipeline.input_state.reset',
+                    { reason: 'stream_key_change' },
                 );
                 db.appendPipelineEvent(
                     id,
                     `[input_state] initial_state=${initialInputStatus || 'off'}`,
-                    'pipeline_state',
+                    'pipeline.input_state.initialized',
+                    { state: initialInputStatus || 'off' },
                 );
 
                 const outputs = db.listOutputsForPipeline(id);

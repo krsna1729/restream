@@ -163,16 +163,30 @@ function createOutputLifecycleService({
         ffmpegProgressByJobId.set(job.id, {});
         markOutputStartedNow(pipelineId, outputId);
 
-        const pushLog = (msg) => {
-            db.appendJobLog(job.id, msg, pipelineId, outputId);
+        const pushLog = (message, eventType = 'output.log', eventData = null) => {
+            db.appendJobLog(job.id, message, pipelineId, outputId, eventType, eventData);
         };
 
         pushLog(
             `[lifecycle] started status=running pid=${child.pid || 'null'} trigger=${trigger} reason=${reason}`,
+            'lifecycle.started',
+            {
+                status: 'running',
+                pid: child.pid || null,
+                trigger,
+                reason,
+            },
         );
 
         child.on('error', (err) => {
-            db.appendJobLog(job.id, `[error] ${errMsg(err)}`, pipelineId, outputId);
+            db.appendJobLog(
+                job.id,
+                `[error] ${errMsg(err)}`,
+                pipelineId,
+                outputId,
+                'output.error',
+                { error: errMsg(err) },
+            );
             log('error', 'ffmpeg child process error', {
                 pipelineId,
                 outputId,
@@ -189,7 +203,11 @@ function createOutputLifecycleService({
                 exitCode: null,
                 exitSignal: null,
             });
-            pushLog('[lifecycle] failed_on_error status=failed exitCode=null exitSignal=null');
+            pushLog(
+                '[lifecycle] failed_on_error status=failed exitCode=null exitSignal=null',
+                'lifecycle.failed_on_error',
+                { status: 'failed', exitCode: null, exitSignal: null },
+            );
             recomputeEtag();
             consumeStopRequested(job.id);
             processes.delete(job.id);
@@ -225,7 +243,7 @@ function createOutputLifecycleService({
         if (child.stderr)
             child.stderr.on('data', (d) => {
                 const s = d.toString();
-                pushLog(`[stderr] ${s}`);
+                pushLog(`[stderr] ${s}`, 'output.stderr');
                 if (outputMediaParsed) return;
                 stderrBuf += s;
                 const media = tryParseOutputMedia(stderrBuf);
@@ -261,8 +279,18 @@ function createOutputLifecycleService({
             });
             pushLog(
                 `[lifecycle] exited status=${st} requestedStop=${wasStopRequested} exitCode=${code ?? 'null'} exitSignal=${signal || 'null'}`,
+                'lifecycle.exited',
+                {
+                    status: st,
+                    requestedStop: wasStopRequested,
+                    exitCode: code ?? null,
+                    exitSignal: signal || null,
+                },
             );
-            pushLog(`[exit] code=${code} signal=${signal}`);
+            pushLog(`[exit] code=${code} signal=${signal}`, 'output.exit', {
+                code: code ?? null,
+                signal: signal || null,
+            });
             recomputeEtag();
             processes.delete(job.id);
             ffmpegProgressByJobId.delete(job.id);
@@ -291,6 +319,12 @@ function createOutputLifecycleService({
                 });
                 pushLog(
                     `[lifecycle] retry_decision failureCount=${failureCount} scheduled=${restartDecision.scheduled} reason=${restartDecision.reason}`,
+                    'lifecycle.retry_decision',
+                    {
+                        failureCount,
+                        scheduled: restartDecision.scheduled,
+                        reason: restartDecision.reason,
+                    },
                 );
                 if (restartDecision.reason === 'budget_exhausted') {
                     const cfg = getOutputRecoveryConfig();
@@ -298,11 +332,24 @@ function createOutputLifecycleService({
                         Number(cfg.immediateRetries || 0) + Number(cfg.backoffRetries || 0);
                     pushLog(
                         `[lifecycle] retry_exhausted failureCount=${failureCount} totalRetries=${totalRetries} action=give_up`,
+                        'lifecycle.retry_exhausted',
+                        {
+                            failureCount,
+                            totalRetries,
+                            action: 'give_up',
+                        },
                     );
                 }
             } else if (!wasStopRequested && st === 'stopped' && inputUnavailableMatch.matched) {
                 pushLog(
                     `[lifecycle] retry_suppressed reason=input_unavailable_clean_exit matchReason=${inputUnavailableMatch.reason} exitCode=${code ?? 'null'} exitSignal=${signal || 'null'}`,
+                    'lifecycle.retry_suppressed',
+                    {
+                        reason: 'input_unavailable_clean_exit',
+                        matchReason: inputUnavailableMatch.reason,
+                        exitCode: code ?? null,
+                        exitSignal: signal || null,
+                    },
                 );
             }
         });

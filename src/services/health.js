@@ -395,13 +395,15 @@ function createHealthMonitorService({
             db.appendPipelineEvent(
                 pipelineId,
                 `[input_state] initial_state=${inputStatus}`,
-                'pipeline_state',
+                'pipeline.input_state.initialized',
+                { state: inputStatus },
             );
         } else if (previousInputStatus !== inputStatus) {
             db.appendPipelineEvent(
                 pipelineId,
                 `[input_state] ${previousInputStatus} -> ${inputStatus}`,
-                'pipeline_state',
+                'pipeline.input_state.transitioned',
+                { from: previousInputStatus, to: inputStatus },
             );
         }
 

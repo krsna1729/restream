@@ -38,8 +38,15 @@ function createOutputRecoveryService({
         return output?.desiredState === 'running' ? 'running' : 'stopped';
     }
 
-    function appendOutputEventLog(pipelineId, outputId, message, jobId = null) {
-        db.appendJobLog(jobId, message, pipelineId, outputId);
+    function appendOutputEventLog(
+        pipelineId,
+        outputId,
+        message,
+        jobId = null,
+        eventType = 'output.log',
+        eventData = null,
+    ) {
+        db.appendJobLog(jobId, message, pipelineId, outputId, eventType, eventData);
     }
 
     function getLatestJobForOutput(pipelineId, outputId) {
@@ -73,6 +80,13 @@ function createOutputRecoveryService({
                 outputId,
                 `[lifecycle] desired_state state=${normalizedState} source=${source} previousState=${previousState} reason=${reason}`,
                 latestJob?.id || null,
+                'lifecycle.desired_state_changed',
+                {
+                    state: normalizedState,
+                    source,
+                    previousState,
+                    reason,
+                },
             );
         }
 
@@ -176,12 +190,16 @@ function createOutputRecoveryService({
                     `[control] requested ${signal}`,
                     job.pipelineId,
                     job.outputId,
+                    'control.signal_requested',
+                    { signal },
                 );
                 db.appendJobLog(
                     job.id,
                     `[lifecycle] stop_requested signal=${signal} status=running`,
                     job.pipelineId,
                     job.outputId,
+                    'lifecycle.stop_requested',
+                    { signal, status: 'running' },
                 );
                 return { stopped: true, reason: 'signal-sent' };
             } catch (err) {
@@ -190,6 +208,8 @@ function createOutputRecoveryService({
                     `[control] failed to send ${signal}: ${errMsg(err)}`,
                     job.pipelineId,
                     job.outputId,
+                    'control.signal_failed',
+                    { signal, error: errMsg(err) },
                 );
                 return { stopped: false, reason: 'signal-failed' };
             }
@@ -206,12 +226,16 @@ function createOutputRecoveryService({
             '[control] process not found in memory; marked stopped',
             job.pipelineId,
             job.outputId,
+            'control.process_missing_marked_stopped',
+            { status: 'stopped' },
         );
         db.appendJobLog(
             job.id,
             '[lifecycle] marked_stopped_no_process status=stopped',
             job.pipelineId,
             job.outputId,
+            'lifecycle.marked_stopped_no_process',
+            { status: 'stopped' },
         );
         recomputeEtag();
         return { stopped: true, reason: 'marked-stopped' };
@@ -262,6 +286,12 @@ function createOutputRecoveryService({
                     outputId,
                     `[lifecycle] auto_start_suppressed desiredState=stopped trigger=${trigger} reason=${reason}`,
                     getLatestJobForOutput(pipelineId, outputId)?.id || null,
+                    'lifecycle.auto_start_suppressed',
+                    {
+                        desiredState: 'stopped',
+                        trigger,
+                        reason,
+                    },
                 );
                 return;
             }

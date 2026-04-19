@@ -15,12 +15,26 @@ function formatHistoryTime(ts) {
         return d.toLocaleString();
     }
 
+    function getNormalizedEventType(log) {
+        return String(log?.eventType || '').trim().toLowerCase();
+    }
+
+    function getEventData(log) {
+        return log?.eventData && typeof log.eventData === 'object' ? log.eventData : null;
+    }
+
     function inferIntentionalStop(logs, index) {
         // Exit logs alone are ambiguous, so we scan nearby lifecycle/control messages to decide
         // whether a terminal ffmpeg exit came from a user stop or from an unexpected failure.
         const entries = Array.isArray(logs) ? logs : [];
         const target = entries[index];
         if (!target) return false;
+
+        const targetEventType = getNormalizedEventType(target);
+        const targetEventData = getEventData(target);
+        if (targetEventType === 'lifecycle.exited' && targetEventData?.requestedStop === true) {
+            return true;
+        }
 
         const targetMessage = String(target.message || '');
         if (/requestedStop=true/.test(targetMessage)) return true;
@@ -29,6 +43,13 @@ function formatHistoryTime(ts) {
         const windowEnd = Math.min(entries.length - 1, index + 6);
         for (let i = windowStart; i <= windowEnd; i += 1) {
             if (i === index) continue;
+            const eventType = getNormalizedEventType(entries[i]);
+            if (
+                eventType === 'lifecycle.stop_requested' ||
+                eventType === 'control.signal_requested'
+            ) {
+                return true;
+            }
             const msg = String(entries[i]?.message || '');
             if (
                 msg.startsWith('[lifecycle] stop_requested') ||
@@ -43,8 +64,78 @@ function formatHistoryTime(ts) {
     }
 
     function classifyHistoryEvent(log, logs = [], index = -1) {
-        // Timeline badges are derived from message prefixes plus nearby context, not from a typed
-        // event schema, so this function is the UI-side decoder for backend lifecycle logs.
+        const eventType = getNormalizedEventType(log);
+        const eventData = getEventData(log);
+
+        if (eventType === 'lifecycle.desired_state_changed') {
+            const desiredRunning = eventData?.state === 'running';
+            return {
+                type: 'desired_state',
+                label: desiredRunning ? 'Start requested' : 'Stop requested',
+                badgeClass: desiredRunning ? 'badge-info' : 'badge-warning',
+            };
+        }
+        if (eventType === 'lifecycle.started') {
+            return { type: 'started', label: 'Started', badgeClass: 'badge-success' };
+        }
+        if (eventType === 'lifecycle.stop_requested') {
+            return { type: 'stopping', label: 'Stop requested', badgeClass: 'badge-warning' };
+        }
+        if (eventType === 'lifecycle.auto_start_suppressed') {
+            return { type: 'suppressed', label: 'Auto-start skipped', badgeClass: 'badge-info' };
+        }
+        if (eventType === 'lifecycle.failed_on_error') {
+            return { type: 'failed', label: 'Failed', badgeClass: 'badge-error' };
+        }
+        if (eventType === 'lifecycle.retry_decision') {
+            if (
+                eventData?.scheduled === false &&
+                eventData?.reason === 'desired_state_stopped'
+            ) {
+                return {
+                    type: 'retry_suppressed',
+                    label: 'Retry skipped',
+                    badgeClass: 'badge-info',
+                };
+            }
+            if (eventData?.scheduled === false) {
+                return {
+                    type: 'retry_update',
+                    label: 'Retry not scheduled',
+                    badgeClass: 'badge-ghost',
+                };
+            }
+            return { type: 'retry_update', label: 'Retry queued', badgeClass: 'badge-warning' };
+        }
+        if (eventType === 'lifecycle.retry_suppressed') {
+            return {
+                type: 'retry_suppressed',
+                label: 'Retry skipped',
+                badgeClass: 'badge-info',
+            };
+        }
+        if (eventType === 'lifecycle.retry_exhausted') {
+            return { type: 'retry_exhausted', label: 'Retry exhausted', badgeClass: 'badge-error' };
+        }
+        if (eventType === 'lifecycle.marked_stopped_no_process') {
+            return { type: 'stopped', label: 'Stopped', badgeClass: 'badge-stopped' };
+        }
+        if (eventType === 'lifecycle.exited') {
+            const failed = eventData?.status === 'failed';
+            const requestedStop =
+                typeof eventData?.requestedStop === 'boolean'
+                    ? eventData.requestedStop
+                    : inferIntentionalStop(logs, index);
+            return {
+                type: failed && !requestedStop ? 'failed' : 'stopped',
+                label: failed && requestedStop ? 'Stopped' : failed ? 'Exited (failed)' : 'Exited',
+                badgeClass: failed && !requestedStop ? 'badge-error' : 'badge-stopped',
+            };
+        }
+        if (eventType === 'output.exit') {
+            return { type: 'log', label: 'Log', badgeClass: 'badge-ghost' };
+        }
+
         const message = String(log?.message || '');
 
         if (message.startsWith('[lifecycle] desired_state')) {
@@ -107,6 +198,38 @@ function formatHistoryTime(ts) {
     }
 
     function classifyPipelineHistoryEvent(log) {
+        const eventType = getNormalizedEventType(log);
+        const eventData = getEventData(log);
+
+        if (eventType.startsWith('pipeline.config.')) {
+            return { type: 'config', label: 'Config', badgeClass: 'badge-secondary' };
+        }
+        if (eventType === 'pipeline.input_state.initialized') {
+            const finalState = String(eventData?.state || '').toLowerCase();
+            if (finalState === 'on')
+                return { type: 'on', label: 'Input On', badgeClass: 'badge-success' };
+            if (finalState === 'warning')
+                return { type: 'warning', label: 'Input Warning', badgeClass: 'badge-warning' };
+            if (finalState === 'error')
+                return { type: 'error', label: 'Input Error', badgeClass: 'badge-error' };
+            if (finalState === 'off')
+                return { type: 'off', label: 'Input Off', badgeClass: 'badge-stopped' };
+        }
+        if (eventType === 'pipeline.input_state.transitioned') {
+            const finalState = String(eventData?.to || '').toLowerCase();
+            if (finalState === 'on')
+                return { type: 'on', label: 'Input On', badgeClass: 'badge-success' };
+            if (finalState === 'warning')
+                return { type: 'warning', label: 'Input Warning', badgeClass: 'badge-warning' };
+            if (finalState === 'error')
+                return { type: 'error', label: 'Input Error', badgeClass: 'badge-error' };
+            if (finalState === 'off')
+                return { type: 'off', label: 'Input Off', badgeClass: 'badge-stopped' };
+        }
+        if (eventType === 'pipeline.input_state.reset') {
+            return { type: 'reset', label: 'Input Reset', badgeClass: 'badge-info' };
+        }
+
         const message = String(log?.message || '');
 
         if (message.startsWith('[config]')) {
@@ -137,6 +260,13 @@ function formatHistoryTime(ts) {
     function getPipelineTimelineLogs(logs) {
         const items = Array.isArray(logs) ? logs : [];
         return items.filter((log) => {
+            const eventType = getNormalizedEventType(log);
+            if (
+                eventType.startsWith('pipeline.config.') ||
+                eventType.startsWith('pipeline.input_state.')
+            ) {
+                return true;
+            }
             const message = String(log?.message || '');
             return message.startsWith('[config]') || message.startsWith('[input_state]');
         });

@@ -23,6 +23,7 @@ This file is now a short current-state backlog. The earlier audit turned into a 
 - Stream-key create/delete now uses compensating MediaMTX rollback so DB write failures do not leave path config mutated on their own.
 - Dashboard/history frontend loading now uses page entry modules plus explicit import/callback wiring instead of ordered `<script type="module">` tags and internal `window.*` handoffs.
 - `/config` and `/health` now share an explicit snapshot-version token, and the dashboard retries refreshes until those slices agree before rendering.
+- History endpoints and stored `job_logs` entries now carry stable `eventType` codes plus structured `eventData`, so timeline rendering no longer depends on parsing backend prose.
 
 ## Architecture Follow-Ups From 2026-04-19 Review
 
@@ -31,7 +32,7 @@ This file is now a short current-state backlog. The earlier audit turned into a 
 | 2. Reconcile MediaMTX + SQLite stream-key mutations | Fixed | Create/delete now roll back the MediaMTX path change if the DB phase fails after the control-plane mutation succeeds. |
 | 3. Replace order-dependent frontend `window.*` module handoffs | Fixed | Dashboard and history features now load through page entry modules; internal module calls use imports or registered callbacks, leaving `window.*` only for markup-bound handlers. |
 | 4. Add shared snapshot identity across `/config` and `/health` | Fixed | Both endpoints now expose the same snapshot-version token for config/jobs state, health refreshes its cache when that token is stale, and the dashboard retries until the slices line up. |
-| 5. Replace history log-message parsing with typed event payloads | Active | History badges still depend on backend log prose like `[lifecycle] ...` and `[input_state] ...`. |
+| 5. Replace history log-message parsing with typed event payloads | Fixed | Lifecycle and pipeline history now emit stable event codes with structured payloads, and the UI consumes those fields with a fallback only for older stored rows. |
 | 6. Make delete flows wait for process teardown before final removal | Active | Delete responses still remove DB state before FFmpeg is guaranteed to be gone. |
 | 7. Move system metrics deltas to fixed background sampling | Active | Per-request deltas still depend on whichever client polled last. |
 
