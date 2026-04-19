@@ -123,12 +123,27 @@ healthMonitor.registerRoutes(app);
 registerSystemMetricsApi({ app });
 
 // ── Static UI ─────────────────────────────────────────
+const publicDir = path.join(__dirname, '..', 'public');
 app.use(
     '/',
-    express.static(path.join(__dirname, '..', 'public'), {
+    express.static(publicDir, {
         maxAge: '1h',
         etag: true,
         lastModified: true,
+        setHeaders: (res, filePath) => {
+            const ext = path.extname(filePath).toLowerCase();
+
+            // Prevent HTML document caching so clients always fetch the latest module graph.
+            if (ext === '.html') {
+                res.setHeader('Cache-Control', 'no-store');
+                return;
+            }
+
+            // Force revalidation for module-bearing assets to avoid stale mixed-version loads.
+            if (ext === '.js' || ext === '.css') {
+                res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+            }
+        },
     }),
 );
 

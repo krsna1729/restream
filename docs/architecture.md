@@ -464,7 +464,7 @@ If a page renders partially after a refactor, check these first:
 1. `ReferenceError` in browser console (usually an implicit-global access that should be an import or `window.*`).
 2. HTML handlers (`onclick`, `data-*`) still pointing to a function that is no longer exported to `window`.
 3. Shared state reads/writes still referencing old globals instead of `public/js/core/state.js`.
-4. Stale browser JS from static asset cache; hard-refresh to load latest module files.
+4. Stale browser JS from upstream cache/proxy; normal reload should revalidate, hard-refresh only if intermediaries ignore cache headers.
 
 ---
 

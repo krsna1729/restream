@@ -57,7 +57,7 @@ If a panel disappears, render stops halfway, or controls stop responding after r
 2. Verify page markup still points to valid handler names for inline attributes.
 3. Confirm state reads/writes use `state.*` rather than removed globals.
 4. Confirm required functions are still attached to `window` for HTML-bound hooks.
-5. Force reload to bypass stale browser cache when testing recent JS changes.
+5. Do a normal reload first; force reload only if an upstream cache/proxy serves stale JS.
 
 ## 6. Quick Verification
 
