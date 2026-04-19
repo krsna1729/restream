@@ -1,15 +1,15 @@
+const { errMsg, log } = require('../utils/app');
+const { getRetryDelayMs, getInputUnavailableExitGraceMs } = require('../utils/retry');
+
+const SIGKILL_ESCALATION_MS = 5000;
+
 function createOutputRecoveryService({
     db,
     getConfig,
-    log,
-    errMsg,
     processes,
     recomputeEtag,
-    getRetryDelayMs,
-    getInputUnavailableExitGraceMs,
     isLatestJobLikelyInputUnavailableStop,
     startOutputJob,
-    SIGKILL_ESCALATION_MS,
 }) {
     const stopRequestedJobIds = new Set();
     const outputStartLocks = new Set();

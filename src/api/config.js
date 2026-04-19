@@ -1,9 +1,12 @@
+const { createHash } = require('crypto');
+const { errMsg } = require('../utils/app');
+
 function normalizeEtag(value) {
     if (!value) return null;
     return value.replace(/^"(.*)"$/, '$1');
 }
 
-function registerConfigApi({ app, db, getConfig, toPublicConfig, createHash, errMsg }) {
+function registerConfigApi({ app, db, getConfig, toPublicConfig }) {
     function buildConfigSnapshot() {
         const streamKeys = db
             .listStreamKeys()

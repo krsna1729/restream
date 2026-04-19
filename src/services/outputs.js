@@ -1,46 +1,38 @@
 const { createOutputRecoveryService } = require('./recovery');
+const { errMsg, log, createHttpError } = require('../utils/app');
+const { fetchMediamtxJson, getPipelineTaggedRtspUrl, getExpectedReaderTag } = require('../utils/mediamtx');
+const {
+    buildCommandPreview,
+    buildFfmpegOutputArgs,
+    normalizeOutputEncoding,
+    redactFfmpegArgs,
+    redactSensitiveUrl,
+    tryParseOutputMedia,
+    validateOutputUrl,
+} = require('../utils/ffmpeg');
+
+const JOB_STABILITY_CHECK_MS = 250;
+const SIGKILL_ESCALATION_MS = 5000;
 
 function createOutputLifecycleService({
     db,
     getConfig,
-    log,
-    errMsg,
-    fetchMediamtxJson,
-    getPipelineTaggedRtspUrl,
-    getExpectedReaderTag,
-    validateOutputUrl,
-    normalizeOutputEncoding,
-    buildFfmpegOutputArgs,
-    redactFfmpegArgs,
-    redactSensitiveUrl,
-    buildCommandPreview,
-    ffmpegCmd,
     spawn,
     processes,
     ffmpegProgressByJobId,
     ffmpegOutputMediaByJobId,
-    tryParseOutputMedia,
     recomputeEtag,
-    createHttpError,
-    getRetryDelayMs,
-    getInputUnavailableExitGraceMs,
     isLatestJobLikelyInputUnavailableStop,
-    JOB_STABILITY_CHECK_MS,
-    SIGKILL_ESCALATION_MS,
 }) {
+    const ffmpegCmd = process.env.FFMPEG_PATH || 'ffmpeg';
     let startOutputJob;
     const outputRecovery = createOutputRecoveryService({
         db,
         getConfig,
-        log,
-        errMsg,
         processes,
         recomputeEtag,
-        getRetryDelayMs,
-        getInputUnavailableExitGraceMs,
         isLatestJobLikelyInputUnavailableStop,
         startOutputJob: (params) => startOutputJob(params),
-        SIGKILL_ESCALATION_MS,
     });
     const {
         clearOutputRestartState,

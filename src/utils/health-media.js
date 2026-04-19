@@ -1,3 +1,5 @@
+const { normalizeOutputEncoding } = require('./ffmpeg');
+
 function computeInputStatus({ hasKey, pathAvailable, pathOnline, hasEverSeenLive }) {
     if (hasKey && pathAvailable) return 'on';
     if (hasKey && pathOnline) return 'warning';
@@ -39,7 +41,7 @@ function parseFfmpegBitrateToKbps(rateValue) {
     return Number((bps / 1000).toFixed(1));
 }
 
-function deriveOutputMediaFromEncoding(encoding, inputMedia, normalizeOutputEncoding) {
+function deriveOutputMediaFromEncoding(encoding, inputMedia) {
     const normalizedEncoding = normalizeOutputEncoding(encoding) || 'source';
     const inputVideo = inputMedia?.video || null;
     const inputAudio = inputMedia?.audio || null;
@@ -99,7 +101,6 @@ function resolveOutputMediaSnapshot({
     latestJobId,
     inputMedia,
     ffmpegOutputMediaByJobId,
-    normalizeOutputEncoding,
 }) {
     const ffmpegMedia = latestJobId ? ffmpegOutputMediaByJobId.get(latestJobId) || null : null;
     if (ffmpegMedia) {
@@ -112,7 +113,6 @@ function resolveOutputMediaSnapshot({
     const fallbackMedia = deriveOutputMediaFromEncoding(
         encoding,
         inputMedia,
-        normalizeOutputEncoding,
     );
     if (fallbackMedia) {
         const normalizedEncoding = normalizeOutputEncoding(encoding) || 'source';

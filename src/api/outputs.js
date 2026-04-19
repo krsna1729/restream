@@ -1,129 +1,5 @@
-const SUPPORTED_OUTPUT_ENCODINGS = new Set([
-    'source',
-    'vertical-crop',
-    'vertical-rotate',
-    '720p',
-    '1080p',
-]);
-
-function validateOutputUrl(url) {
-    if (!url || typeof url !== 'string') return false;
-    let parsed;
-    try {
-        parsed = new URL(url);
-    } catch {
-        return false;
-    }
-    return parsed.protocol === 'rtmp:' || parsed.protocol === 'rtmps:';
-}
-
-function normalizeOutputEncoding(value) {
-    const normalized = String(value ?? 'source')
-        .trim()
-        .toLowerCase();
-    if (!normalized) return 'source';
-    if (normalized === 'vertical') return 'vertical-crop';
-    if (!SUPPORTED_OUTPUT_ENCODINGS.has(normalized)) return null;
-    return normalized;
-}
-
-function buildFfmpegOutputArgs({ inputUrl, outputUrl, encoding = 'source' }) {
-    const normalizedEncoding = normalizeOutputEncoding(encoding) || 'source';
-    const args = [
-        '-nostdin',
-        '-hide_banner',
-        '-loglevel',
-        'info',
-        '-nostats',
-        '-stats_period',
-        '1',
-        '-progress',
-        'pipe:3',
-        '-rtsp_transport',
-        'tcp',
-        '-i',
-        inputUrl,
-    ];
-
-    if (normalizedEncoding === 'source') {
-        args.push('-c:v', 'copy', '-c:a', 'copy');
-    } else {
-        const profileByEncoding = {
-            'vertical-crop': {
-                vf: 'scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280',
-                videoBitrate: '2500k',
-                maxrate: '2800k',
-                bufsize: '4200k',
-            },
-            'vertical-rotate': {
-                vf: 'transpose=1,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280',
-                videoBitrate: '2500k',
-                maxrate: '2800k',
-                bufsize: '4200k',
-            },
-            '720p': {
-                vf: 'scale=-2:720',
-                videoBitrate: '3000k',
-                maxrate: '3500k',
-                bufsize: '5000k',
-            },
-            '1080p': {
-                vf: 'scale=-2:1080',
-                videoBitrate: '5000k',
-                maxrate: '5800k',
-                bufsize: '8000k',
-            },
-        };
-
-        const profile = profileByEncoding[normalizedEncoding] || profileByEncoding['720p'];
-        args.push(
-            '-vf',
-            profile.vf,
-            '-c:v',
-            'libx264',
-            '-preset',
-            'veryfast',
-            '-pix_fmt',
-            'yuv420p',
-            '-profile:v',
-            'high',
-            '-level:v',
-            '4.1',
-            '-g',
-            '60',
-            '-keyint_min',
-            '60',
-            '-sc_threshold',
-            '0',
-            '-b:v',
-            profile.videoBitrate,
-            '-maxrate',
-            profile.maxrate,
-            '-bufsize',
-            profile.bufsize,
-            '-c:a',
-            'aac',
-            '-b:a',
-            '128k',
-            '-ar',
-            '48000',
-            '-ac',
-            '2',
-        );
-    }
-
-    args.push('-flvflags', 'no_duration_filesize', '-rtmp_live', 'live', '-f', 'flv', outputUrl);
-    return args;
-}
-
-function createHttpError(status, error, detail, extra = {}) {
-    const err = new Error(error);
-    err.status = status;
-    err.publicError = error;
-    err.detail = detail;
-    Object.assign(err, extra);
-    return err;
-}
+const { errMsg, createHttpError, validateName } = require('../utils/app');
+const { normalizeOutputEncoding, validateOutputUrl, buildFfmpegOutputArgs } = require('../utils/ffmpeg');
 
 const HISTORY_MESSAGE_PREFIXES = {
     lifecycle: '[lifecycle]',
@@ -182,7 +58,6 @@ function registerOutputApi({
     app,
     db,
     getConfig,
-    errMsg,
     recomputeConfigEtag,
     recomputeEtag,
     clearOutputRestartState,
@@ -191,7 +66,6 @@ function registerOutputApi({
     resetOutputFailureCount,
     setOutputDesiredState,
     stopRunningJob,
-    validateName,
 }) {
     async function applyOutputStateChange(pid, oid, options) {
         // Start/stop routes differ in response payload, but both share the same state-change,

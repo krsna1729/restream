@@ -1,26 +1,26 @@
-function createHealthMonitorService({
-    db,
-    log,
-    errMsg,
-    fetch,
+const { errMsg, log } = require('../utils/app');
+const {
+    MEDIAMTX_FETCH_TIMEOUT_MS,
     fetchMediamtxJson,
-    createHash,
-    normalizeEtag,
     getMediamtxApiBaseUrl,
     getMediamtxRtspBaseUrl,
     getExpectedReaderTag,
     getReaderIdFromQuery,
+} = require('../utils/mediamtx');
+const { normalizeOutputEncoding } = require('../utils/ffmpeg');
+const { getInputUnavailableExitGraceMs } = require('../utils/retry');
+
+// These timing constants can be overridden at startup but are stable after that.
+const MEDIAMTX_CHECK_INTERVAL_MS = 5000;
+const FFPROBE_TIMEOUT_MS = 8000;
+
+function createHealthMonitorService({
+    db,
+    fetch,
+    createHash,
+    normalizeEtag,
     ffmpegProgressByJobId,
     ffmpegOutputMediaByJobId,
-    normalizeOutputEncoding,
-    restartPipelineOutputsOnInputRecovery,
-    getInputUnavailableExitGraceMs,
-    mediamtxCheckIntervalMs,
-    mediamtxFetchTimeoutMs,
-    probeCacheTtlMs,
-    ffprobeTimeoutMs,
-    healthSnapshotIntervalMs,
-    ffprobeCmd,
     spawn,
 }) {
     const {
@@ -45,6 +45,14 @@ function createHealthMonitorService({
         parseFfmpegBitrateToKbps,
         resolveOutputMediaSnapshot,
     } = require('../utils/health-media');
+
+    // Callback registered after both healthMonitor and outputLifecycle are created, resolving
+    // the circular dependency without a late-binding let-variable workaround.
+    let inputRecoveryHandler = null;
+
+    const probeCacheTtlMs = Number(process.env.PROBE_CACHE_TTL_MS || 30000);
+    const healthSnapshotIntervalMs = Number(process.env.HEALTH_SNAPSHOT_INTERVAL_MS || 2000);
+    const ffprobeCmd = process.env.FFPROBE_PATH || 'ffprobe';
 
     const streamProbeCache = new Map();
     const probeRefreshStartedAt = new Map();
@@ -158,7 +166,7 @@ function createHealthMonitorService({
         const previousError = mediamtxReadiness.error;
         try {
             const response = await fetch(`${getMediamtxApiBaseUrl()}/v3/config/global/get`, {
-                signal: AbortSignal.timeout(mediamtxFetchTimeoutMs),
+                signal: AbortSignal.timeout(MEDIAMTX_FETCH_TIMEOUT_MS),
             });
 
             if (!response.ok) {
@@ -194,7 +202,7 @@ function createHealthMonitorService({
         if (mediamtxReadinessTimer) return;
         mediamtxReadinessTimer = setInterval(() => {
             void checkMediamtxReadiness();
-        }, mediamtxCheckIntervalMs);
+        }, MEDIAMTX_CHECK_INTERVAL_MS);
         mediamtxReadinessTimer.unref?.();
     }
 
@@ -282,10 +290,10 @@ function createHealthMonitorService({
                 }
                 resolve({
                     ok: false,
-                    error: `ffprobe timeout after ${ffprobeTimeoutMs}ms`,
+                    error: `ffprobe timeout after ${FFPROBE_TIMEOUT_MS}ms`,
                     stderr,
                 });
-            }, ffprobeTimeoutMs);
+            }, FFPROBE_TIMEOUT_MS);
 
             child.stdout.on('data', (chunk) => {
                 stdout += chunk.toString();
@@ -364,7 +372,7 @@ function createHealthMonitorService({
         }
 
         const withinRefreshGraceWindow =
-            refreshStartedAt !== null && nowMs - refreshStartedAt < ffprobeTimeoutMs;
+            refreshStartedAt !== null && nowMs - refreshStartedAt < FFPROBE_TIMEOUT_MS;
         if (!cachedProbe || (probeCacheExpired && !withinRefreshGraceWindow)) return null;
 
         return cachedProbe.info;
@@ -529,7 +537,7 @@ function createHealthMonitorService({
             inputTransition.previous !== 'on' &&
             inputTransition.current === 'on'
         ) {
-            restartPipelineOutputsOnInputRecovery(pipeline.id);
+            inputRecoveryHandler?.(pipeline.id);
         }
 
         const probeInfo = getPipelineProbeInfo(streamKey, pathAvailable, nowMs);
@@ -784,6 +792,9 @@ function createHealthMonitorService({
     return {
         clearPipelineRuntimeState,
         isLatestJobLikelyInputUnavailableStop,
+        registerInputRecoveryHandler(fn) {
+            inputRecoveryHandler = fn;
+        },
         registerRoutes,
         resolveRuntimeInputState,
         seedPipelineRuntimeState,

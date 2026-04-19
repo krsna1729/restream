@@ -1,20 +1,46 @@
+const { errMsg, maskToken, validateName } = require('../utils/app');
+const { getMediamtxApiBaseUrl } = require('../utils/mediamtx');
+
+function logPipelineConfigChanges(db, pipelineId, previousPipeline, nextPipeline) {
+    if (!pipelineId || !previousPipeline || !nextPipeline) return;
+
+    if (previousPipeline.name !== nextPipeline.name) {
+        db.appendPipelineEvent(
+            pipelineId,
+            `[config] name changed from "${previousPipeline.name}" to "${nextPipeline.name}"`,
+            'pipeline_config',
+        );
+    }
+
+    if (previousPipeline.encoding !== nextPipeline.encoding) {
+        db.appendPipelineEvent(
+            pipelineId,
+            `[config] encoding changed from ${previousPipeline.encoding || 'null'} to ${nextPipeline.encoding || 'null'}`,
+            'pipeline_config',
+        );
+    }
+
+    if (previousPipeline.streamKey !== nextPipeline.streamKey) {
+        db.appendPipelineEvent(
+            pipelineId,
+            `[config] stream_key changed from ${previousPipeline.streamKey ? maskToken(previousPipeline.streamKey) : 'unassigned'} to ${nextPipeline.streamKey ? maskToken(nextPipeline.streamKey) : 'unassigned'}`,
+            'pipeline_config',
+        );
+    }
+}
+
 function registerPipelineApi({
     app,
     db,
     getConfig,
     fetch,
     crypto,
-    errMsg,
-    getMediamtxApiBaseUrl,
     healthMonitor,
-    maskToken,
-    logPipelineConfigChanges,
     resetOutputFailureCount,
     clearOutputRestartState,
     stopRunningJob,
     recomputeConfigEtag,
     recomputeEtag,
-    validateName,
 }) {
     async function mutateMediamtxPath(key, action) {
         // Stream-key creation/deletion must stay in sync with MediaMTX path config, so the route
@@ -235,7 +261,7 @@ function registerPipelineApi({
                 }
             }
 
-            logPipelineConfigChanges(id, existing, updated);
+            logPipelineConfigChanges(db, id, existing, updated);
             recomputeConfigEtag();
             recomputeEtag();
             return res.json({ message: 'Pipeline updated', pipeline: updated });

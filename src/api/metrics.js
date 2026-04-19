@@ -1,5 +1,6 @@
 const fs = require('fs');
 const os = require('os');
+const { errMsg } = require('../utils/app');
 
 function getCpuTotals() {
     const totals = os.cpus().reduce(
@@ -69,7 +70,7 @@ function getDiskUsage(pathname = '/') {
     }
 }
 
-function registerSystemMetricsApi({ app, errMsg }) {
+function registerSystemMetricsApi({ app }) {
     let systemMetricsSample = {
         ts: Date.now(),
         cpu: getCpuTotals(),
