@@ -482,10 +482,14 @@
           </div>
           <div class="divider"></div>
           <div class="mt-2 w-full space-y-2" style="--label-col: 84px">
-            <div class="grid items-center gap-2 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
+            <div class="grid items-center gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
               <span class="font-semibold">Stream Key:</span>
-              <code class="overflow-x-auto whitespace-nowrap" id="stream-key" data-copy="" style="min-width: 0"></code>
-              <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('stream-key')">📋</button>
+              <code
+                class="whitespace-nowrap"
+                id="stream-key"
+                data-copy=""
+                style="min-width: 0; overflow: hidden; text-overflow: ellipsis; padding-right: 0.4rem; -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%); mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%)"></code>
+              <button class="btn btn-xs btn-accent btn-outline" aria-label="Copy stream key" onclick="copyData('stream-key')">📋</button>
             </div>
 
             <div class="grid items-center gap-2 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
@@ -494,22 +498,34 @@
               <span></span>
             </div>
 
-            <div class="grid items-start gap-2 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
+            <div class="grid items-start gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
               <span class="badge badge-outline justify-center">RTMP</span>
-              <code class="leading-5 break-all whitespace-normal" id="rtmp-url" data-copy="" style="min-width: 0"></code>
-              <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('rtmp-url')">📋</button>
+              <code
+                class="leading-5 whitespace-nowrap"
+                id="rtmp-url"
+                data-copy=""
+                style="min-width: 0; overflow: hidden; text-overflow: ellipsis; padding-right: 0.4rem; -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%); mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%)"></code>
+              <button class="btn btn-xs btn-accent btn-outline" aria-label="Copy RTMP URL" onclick="copyData('rtmp-url')">📋</button>
             </div>
 
-            <div class="grid items-start gap-2 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
+            <div class="grid items-start gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
               <span class="badge badge-outline justify-center">RTSP</span>
-              <code class="leading-5 break-all whitespace-normal" id="rtsp-url" data-copy="" style="min-width: 0"></code>
-              <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('rtsp-url')">📋</button>
+              <code
+                class="leading-5 whitespace-nowrap"
+                id="rtsp-url"
+                data-copy=""
+                style="min-width: 0; overflow: hidden; text-overflow: ellipsis; padding-right: 0.4rem; -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%); mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%)"></code>
+              <button class="btn btn-xs btn-accent btn-outline" aria-label="Copy RTSP URL" onclick="copyData('rtsp-url')">📋</button>
             </div>
 
-            <div class="grid items-start gap-2 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
+            <div class="grid items-start gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
               <span class="badge badge-outline justify-center">SRT</span>
-              <code class="leading-5 break-all whitespace-normal" id="srt-url" data-copy="" style="min-width: 0"></code>
-              <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('srt-url')">📋</button>
+              <code
+                class="leading-5 whitespace-nowrap"
+                id="srt-url"
+                data-copy=""
+                style="min-width: 0; overflow: hidden; text-overflow: ellipsis; padding-right: 0.4rem; -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%); mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%)"></code>
+              <button class="btn btn-xs btn-accent btn-outline" aria-label="Copy SRT URL" onclick="copyData('srt-url')">📋</button>
             </div>
           </div>
         </div>
