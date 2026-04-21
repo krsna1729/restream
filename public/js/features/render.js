@@ -1,12 +1,4 @@
 import { formatCodecName, getStatusColor, getUrlParam, msToHHMMSS, setInnerText, setUrlParam } from '../core/utils.js';
-import {
-    formatBitrateKbpsParts,
-    setMetricValueWithSubtleUnit,
-    setBitrateWithSubtleUnit,
-    setBadgeBitrateWithSubtleUnit,
-    setMetricsBitrateWithSubtleUnit,
-    setMetricsValueWithSubtleUnit,
-} from './metric-format.js';
 import { renderPipelineInfoColumn, renderOutsColumn } from './pipeline-view.js';
 import { renderHealthBanner, renderServerMetrics } from './metrics.js';
 import { state } from '../core/state.js';
@@ -253,12 +245,6 @@ function selectPipeline(id) {
 window.selectPipeline = selectPipeline;
 
 export {
-    formatBitrateKbpsParts,
-    setMetricValueWithSubtleUnit,
-    setBitrateWithSubtleUnit,
-    setBadgeBitrateWithSubtleUnit,
-    setMetricsBitrateWithSubtleUnit,
-    setMetricsValueWithSubtleUnit,
     isOutputIntentStopped,
     isOutputRunning,
     isOutputUnexpectedlyDown,

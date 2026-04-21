@@ -86,6 +86,14 @@ function sanitizePort(value, fallback) {
     return String(Math.floor(n));
 }
 
+function applyEnvOverrides(overrides) {
+    for (const [envName, applyOverride] of overrides) {
+        const value = process.env[envName];
+        if (!value) continue;
+        applyOverride(value);
+    }
+}
+
 function sanitizeConfig(config) {
     const safe = { ...DEFAULT_CONFIG, ...(config || {}) };
     safe.host = sanitizeHost(safe.host, DEFAULT_CONFIG.host);
@@ -156,100 +164,134 @@ function sanitizeConfig(config) {
     };
 
     // ENV overrides for ingest config (display only)
-    if (process.env.MEDIAMTX_INGEST_HOST) {
-        safe.mediamtx.ingest.host = sanitizeHost(
-            process.env.MEDIAMTX_INGEST_HOST,
-            safe.mediamtx.ingest.host,
-        );
-    }
-    if (process.env.MEDIAMTX_INGEST_RTMP_PORT) {
-        safe.mediamtx.ingest.rtmpPort = sanitizePort(
-            process.env.MEDIAMTX_INGEST_RTMP_PORT,
-            safe.mediamtx.ingest.rtmpPort,
-        );
-    }
-    if (process.env.MEDIAMTX_INGEST_RTSP_PORT) {
-        safe.mediamtx.ingest.rtspPort = sanitizePort(
-            process.env.MEDIAMTX_INGEST_RTSP_PORT,
-            safe.mediamtx.ingest.rtspPort,
-        );
-    }
-    if (process.env.MEDIAMTX_INGEST_SRT_PORT) {
-        safe.mediamtx.ingest.srtPort = sanitizePort(
-            process.env.MEDIAMTX_INGEST_SRT_PORT,
-            safe.mediamtx.ingest.srtPort,
-        );
-    }
-    if (process.env.HOST) {
-        safe.host = sanitizeHost(process.env.HOST, safe.host);
-    }
-
-    if (process.env.OUTPUT_RECOVERY_ENABLED) {
-        safe.outputRecovery.enabled = parseBoolean(
-            process.env.OUTPUT_RECOVERY_ENABLED,
-            safe.outputRecovery.enabled,
-        );
-    }
-    if (process.env.OUTPUT_RECOVERY_IMMEDIATE_RETRIES) {
-        safe.outputRecovery.immediateRetries = parseNonNegativeInt(
-            process.env.OUTPUT_RECOVERY_IMMEDIATE_RETRIES,
-            safe.outputRecovery.immediateRetries,
-        );
-    }
-    if (process.env.OUTPUT_RECOVERY_IMMEDIATE_DELAY_MS) {
-        safe.outputRecovery.immediateDelayMs = parsePositiveInt(
-            process.env.OUTPUT_RECOVERY_IMMEDIATE_DELAY_MS,
-            safe.outputRecovery.immediateDelayMs,
-        );
-    }
-    if (process.env.OUTPUT_RECOVERY_BACKOFF_RETRIES) {
-        safe.outputRecovery.backoffRetries = parseNonNegativeInt(
-            process.env.OUTPUT_RECOVERY_BACKOFF_RETRIES,
-            safe.outputRecovery.backoffRetries,
-        );
-    }
-    if (process.env.OUTPUT_RECOVERY_BACKOFF_BASE_DELAY_MS) {
-        safe.outputRecovery.backoffBaseDelayMs = parsePositiveInt(
-            process.env.OUTPUT_RECOVERY_BACKOFF_BASE_DELAY_MS,
-            safe.outputRecovery.backoffBaseDelayMs,
-        );
-    }
-    if (process.env.OUTPUT_RECOVERY_BACKOFF_MAX_DELAY_MS) {
-        safe.outputRecovery.backoffMaxDelayMs = parsePositiveInt(
-            process.env.OUTPUT_RECOVERY_BACKOFF_MAX_DELAY_MS,
-            safe.outputRecovery.backoffMaxDelayMs,
-        );
-    }
-    if (process.env.OUTPUT_RECOVERY_RESET_FAILURE_COUNT_AFTER_MS) {
-        safe.outputRecovery.resetFailureCountAfterMs = parsePositiveInt(
-            process.env.OUTPUT_RECOVERY_RESET_FAILURE_COUNT_AFTER_MS,
-            safe.outputRecovery.resetFailureCountAfterMs,
-        );
-    }
-    if (process.env.OUTPUT_RECOVERY_RESTART_ON_INPUT_RECOVERY) {
-        safe.outputRecovery.restartOnInputRecovery = parseBoolean(
-            process.env.OUTPUT_RECOVERY_RESTART_ON_INPUT_RECOVERY,
-            safe.outputRecovery.restartOnInputRecovery,
-        );
-    }
-    if (process.env.OUTPUT_RECOVERY_INPUT_RECOVERY_RESTART_MODE) {
-        safe.outputRecovery.inputRecoveryRestartMode = parseInputRecoveryRestartMode(
-            process.env.OUTPUT_RECOVERY_INPUT_RECOVERY_RESTART_MODE,
-            safe.outputRecovery.inputRecoveryRestartMode,
-        );
-    }
-    if (process.env.OUTPUT_RECOVERY_INPUT_RECOVERY_RESTART_DELAY_MS) {
-        safe.outputRecovery.inputRecoveryRestartDelayMs = parsePositiveInt(
-            process.env.OUTPUT_RECOVERY_INPUT_RECOVERY_RESTART_DELAY_MS,
-            safe.outputRecovery.inputRecoveryRestartDelayMs,
-        );
-    }
-    if (process.env.OUTPUT_RECOVERY_INPUT_RECOVERY_RESTART_STAGGER_MS) {
-        safe.outputRecovery.inputRecoveryRestartStaggerMs = parseNonNegativeInt(
-            process.env.OUTPUT_RECOVERY_INPUT_RECOVERY_RESTART_STAGGER_MS,
-            safe.outputRecovery.inputRecoveryRestartStaggerMs,
-        );
-    }
+    applyEnvOverrides([
+        [
+            'MEDIAMTX_INGEST_HOST',
+            (value) => {
+                safe.mediamtx.ingest.host = sanitizeHost(value, safe.mediamtx.ingest.host);
+            },
+        ],
+        [
+            'MEDIAMTX_INGEST_RTMP_PORT',
+            (value) => {
+                safe.mediamtx.ingest.rtmpPort = sanitizePort(value, safe.mediamtx.ingest.rtmpPort);
+            },
+        ],
+        [
+            'MEDIAMTX_INGEST_RTSP_PORT',
+            (value) => {
+                safe.mediamtx.ingest.rtspPort = sanitizePort(value, safe.mediamtx.ingest.rtspPort);
+            },
+        ],
+        [
+            'MEDIAMTX_INGEST_SRT_PORT',
+            (value) => {
+                safe.mediamtx.ingest.srtPort = sanitizePort(value, safe.mediamtx.ingest.srtPort);
+            },
+        ],
+        [
+            'HOST',
+            (value) => {
+                safe.host = sanitizeHost(value, safe.host);
+            },
+        ],
+        [
+            'OUTPUT_RECOVERY_ENABLED',
+            (value) => {
+                safe.outputRecovery.enabled = parseBoolean(value, safe.outputRecovery.enabled);
+            },
+        ],
+        [
+            'OUTPUT_RECOVERY_IMMEDIATE_RETRIES',
+            (value) => {
+                safe.outputRecovery.immediateRetries = parseNonNegativeInt(
+                    value,
+                    safe.outputRecovery.immediateRetries,
+                );
+            },
+        ],
+        [
+            'OUTPUT_RECOVERY_IMMEDIATE_DELAY_MS',
+            (value) => {
+                safe.outputRecovery.immediateDelayMs = parsePositiveInt(
+                    value,
+                    safe.outputRecovery.immediateDelayMs,
+                );
+            },
+        ],
+        [
+            'OUTPUT_RECOVERY_BACKOFF_RETRIES',
+            (value) => {
+                safe.outputRecovery.backoffRetries = parseNonNegativeInt(
+                    value,
+                    safe.outputRecovery.backoffRetries,
+                );
+            },
+        ],
+        [
+            'OUTPUT_RECOVERY_BACKOFF_BASE_DELAY_MS',
+            (value) => {
+                safe.outputRecovery.backoffBaseDelayMs = parsePositiveInt(
+                    value,
+                    safe.outputRecovery.backoffBaseDelayMs,
+                );
+            },
+        ],
+        [
+            'OUTPUT_RECOVERY_BACKOFF_MAX_DELAY_MS',
+            (value) => {
+                safe.outputRecovery.backoffMaxDelayMs = parsePositiveInt(
+                    value,
+                    safe.outputRecovery.backoffMaxDelayMs,
+                );
+            },
+        ],
+        [
+            'OUTPUT_RECOVERY_RESET_FAILURE_COUNT_AFTER_MS',
+            (value) => {
+                safe.outputRecovery.resetFailureCountAfterMs = parsePositiveInt(
+                    value,
+                    safe.outputRecovery.resetFailureCountAfterMs,
+                );
+            },
+        ],
+        [
+            'OUTPUT_RECOVERY_RESTART_ON_INPUT_RECOVERY',
+            (value) => {
+                safe.outputRecovery.restartOnInputRecovery = parseBoolean(
+                    value,
+                    safe.outputRecovery.restartOnInputRecovery,
+                );
+            },
+        ],
+        [
+            'OUTPUT_RECOVERY_INPUT_RECOVERY_RESTART_MODE',
+            (value) => {
+                safe.outputRecovery.inputRecoveryRestartMode = parseInputRecoveryRestartMode(
+                    value,
+                    safe.outputRecovery.inputRecoveryRestartMode,
+                );
+            },
+        ],
+        [
+            'OUTPUT_RECOVERY_INPUT_RECOVERY_RESTART_DELAY_MS',
+            (value) => {
+                safe.outputRecovery.inputRecoveryRestartDelayMs = parsePositiveInt(
+                    value,
+                    safe.outputRecovery.inputRecoveryRestartDelayMs,
+                );
+            },
+        ],
+        [
+            'OUTPUT_RECOVERY_INPUT_RECOVERY_RESTART_STAGGER_MS',
+            (value) => {
+                safe.outputRecovery.inputRecoveryRestartStaggerMs = parseNonNegativeInt(
+                    value,
+                    safe.outputRecovery.inputRecoveryRestartStaggerMs,
+                );
+            },
+        ],
+    ]);
 
     if (safe.outputRecovery.backoffMaxDelayMs < safe.outputRecovery.backoffBaseDelayMs) {
         safe.outputRecovery.backoffMaxDelayMs = safe.outputRecovery.backoffBaseDelayMs;

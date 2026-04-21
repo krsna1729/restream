@@ -1,5 +1,5 @@
-const { errMsg, createHttpError, validateName } = require('../utils/app');
-const { normalizeOutputEncoding, validateOutputUrl, buildFfmpegOutputArgs } = require('../utils/ffmpeg');
+const { errMsg, validateName } = require('../utils/app');
+const { normalizeOutputEncoding, validateOutputUrl } = require('../utils/ffmpeg');
 
 const HISTORY_MESSAGE_PREFIXES = {
     lifecycle: '[lifecycle]',
@@ -13,6 +13,11 @@ const HISTORY_MAX_LIMIT = 1000;
 const HISTORY_MAX_RANGE_MS = 24 * 60 * 60 * 1000;
 const HISTORY_MAX_HIGH_VOLUME_RANGE_MS = 10 * 60 * 1000;
 const HISTORY_HIGH_VOLUME_PREFIXES = new Set(['[stderr]', '[exit]', '[control]']);
+const INVALID_OUTPUT_ENCODING_ERROR =
+    'Encoding must be one of: source, vertical-crop, vertical-rotate, 720p, 1080p';
+const INVALID_OUTPUT_URL_ERROR = 'Output URL must be a valid rtmp:// or rtmps:// URL';
+const OUTPUT_MUTATION_WHILE_RUNNING_ERROR =
+    'Cannot change output URL or encoding while output is running. Stop output first.';
 
 function parseHistoryTimestamp(value) {
     if (value === undefined || value === null || value === '') return null;
@@ -97,6 +102,56 @@ function registerOutputApi({
         return { desiredStateChange, reconciliation };
     }
 
+    function normalizeOutputPayload(body, existing = null) {
+        const existingEncoding = existing
+            ? normalizeOutputEncoding(existing.encoding) || 'source'
+            : null;
+        const name = existing ? body?.name ?? existing.name : body?.name;
+        const url = existing ? body?.url ?? existing.url : body?.url;
+        const encoding = existing
+            ? body?.encoding === undefined
+                ? existingEncoding
+                : normalizeOutputEncoding(body?.encoding)
+            : normalizeOutputEncoding(body?.encoding ?? 'source');
+
+        return {
+            name,
+            url,
+            encoding,
+            existingEncoding,
+            urlChanged: existing ? url !== existing.url : false,
+            encodingChanged: existing ? encoding !== existingEncoding : false,
+        };
+    }
+
+    function getOutputValidationError({
+        name,
+        url,
+        encoding,
+        running = null,
+        urlChanged = false,
+        encodingChanged = false,
+    }) {
+        const nameError = validateName(name, 'Output name');
+        if (nameError) {
+            return { status: 400, error: nameError };
+        }
+
+        if (!encoding) {
+            return { status: 400, error: INVALID_OUTPUT_ENCODING_ERROR };
+        }
+
+        if (running && (urlChanged || encodingChanged)) {
+            return { status: 409, error: OUTPUT_MUTATION_WHILE_RUNNING_ERROR };
+        }
+
+        if (!validateOutputUrl(url)) {
+            return { status: 400, error: INVALID_OUTPUT_URL_ERROR };
+        }
+
+        return null;
+    }
+
     app.post('/pipelines/:pipelineId/outputs', (req, res) => {
         try {
             const pid = req.params.pipelineId;
@@ -112,25 +167,10 @@ function registerOutputApi({
                     .json({ error: `Output limit reached for pipeline: ${outLimit}` });
             }
 
-            const name = req.body?.name;
-            const url = req.body?.url;
-            const encoding = normalizeOutputEncoding(req.body?.encoding ?? 'source');
-            const nameError = validateName(name, 'Output name');
-
-            if (nameError) {
-                return res.status(400).json({ error: nameError });
-            }
-
-            if (!encoding) {
-                return res.status(400).json({
-                    error: 'Encoding must be one of: source, vertical-crop, vertical-rotate, 720p, 1080p',
-                });
-            }
-
-            if (!validateOutputUrl(url)) {
-                return res
-                    .status(400)
-                    .json({ error: 'Output URL must be a valid rtmp:// or rtmps:// URL' });
+            const { name, url, encoding } = normalizeOutputPayload(req.body);
+            const validationError = getOutputValidationError({ name, url, encoding });
+            if (validationError) {
+                return res.status(validationError.status).json({ error: validationError.error });
             }
 
             const output = db.createOutput({ pipelineId: pid, name, url, encoding });
@@ -152,38 +192,21 @@ function registerOutputApi({
             const existing = db.getOutput(pid, oid);
             if (!existing) return res.status(404).json({ error: 'Output not found' });
 
-            const name = req.body?.name ?? existing.name;
-            const url = req.body?.url ?? existing.url;
-            const existingEncoding = normalizeOutputEncoding(existing.encoding) || 'source';
-            const encoding =
-                req.body?.encoding === undefined
-                    ? existingEncoding
-                    : normalizeOutputEncoding(req.body?.encoding);
-            const nameError = validateName(name, 'Output name');
             const running = db.getRunningJobFor(pid, oid);
-            const urlChanged = url !== existing.url;
-            const encodingChanged = encoding !== existingEncoding;
-
-            if (nameError) {
-                return res.status(400).json({ error: nameError });
-            }
-
-            if (!encoding) {
-                return res.status(400).json({
-                    error: 'Encoding must be one of: source, vertical-crop, vertical-rotate, 720p, 1080p',
-                });
-            }
-
-            if (running && (urlChanged || encodingChanged)) {
-                return res.status(409).json({
-                    error: 'Cannot change output URL or encoding while output is running. Stop output first.',
-                });
-            }
-
-            if (!validateOutputUrl(url)) {
-                return res
-                    .status(400)
-                    .json({ error: 'Output URL must be a valid rtmp:// or rtmps:// URL' });
+            const { name, url, encoding, urlChanged, encodingChanged } = normalizeOutputPayload(
+                req.body,
+                existing,
+            );
+            const validationError = getOutputValidationError({
+                name,
+                url,
+                encoding,
+                running,
+                urlChanged,
+                encodingChanged,
+            });
+            if (validationError) {
+                return res.status(validationError.status).json({ error: validationError.error });
             }
 
             const updated = db.updateOutput(pid, oid, { name, url, encoding });
@@ -446,9 +469,5 @@ function registerOutputApi({
 }
 
 module.exports = {
-    buildFfmpegOutputArgs,
-    createHttpError,
-    normalizeOutputEncoding,
     registerOutputApi,
-    validateOutputUrl,
 };

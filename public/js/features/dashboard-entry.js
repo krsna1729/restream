@@ -1,9 +1,7 @@
 import { setDashboardHooks } from './dashboard.js';
 import {
     deleteOutBtn,
-    deletePipeBtn,
     editOutBtn,
-    editPipeBtn,
     isOutputToggleBusy,
     openPublisherQualityModal,
     renderPublisherQualityModal,
@@ -30,6 +28,3 @@ setPipelineViewDependencies({
     editOutBtn,
     deleteOutBtn,
 });
-
-void deletePipeBtn;
-void editPipeBtn;
