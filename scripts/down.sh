@@ -20,4 +20,4 @@ rm -f data/data.db data/data.db-*
 echo "Stopping ffmpeg publishers (if present)"
 pkill -f "^ffmpeg .* -stream_loop" 2>/dev/null || true
 
-docker compose --profile host --profile container stop mediamtx mediamtx-pod pause nginx-rtmp app 2>/dev/null || true
+docker compose --profile "*" down --timeout 1 -v --remove-orphans 2>/dev/null || true

@@ -5,11 +5,7 @@
     <title data-name="Dashboard">Dashboard</title>
     <link rel="icon" type="image/png" href="logo.png" />
     <link rel="stylesheet" type="text/css" href="output.css" />
-    <script type="text/javascript" src="utils.js"></script>
-    <script type="text/javascript" src="pipeline.js"></script>
-    <script type="text/javascript" src="api.js"></script>
-    <script type="text/javascript" src="render.js" defer></script>
-    <script type="text/javascript" src="dashboard.js" defer></script>
+    <script type="module" src="js/features/dashboard-entry.js"></script>
   </head>
   <body class="bg-base-100 text-base-content flex h-screen flex-col">
     <div class="navbar bg-base-100 shrink-0">
@@ -42,26 +38,20 @@
     <div
       id="top-banner-stack"
       class="fixed left-1/2 z-999 flex -translate-x-1/2 transform flex-col items-center gap-2"
-      style="top: 0.5rem; pointer-events: none;">
-      <div
-        id="health-banner"
-        role="alert"
-        class="alert alert-warning hidden w-fit max-w-xl shadow-lg"
-        style="pointer-events: auto;">
+      style="top: 0.5rem; pointer-events: none">
+      <div id="health-banner" role="alert" class="alert alert-warning hidden w-fit max-w-xl shadow-lg" style="pointer-events: auto">
         <span id="health-banner-text">Service is degraded: runtime telemetry is temporarily unavailable.</span>
         <button
           id="dismiss-health-banner-btn"
           type="button"
           class="btn btn-ghost btn-xs"
           aria-label="Dismiss health warning"
-          style="margin-left: auto;">×</button>
+          style="margin-left: auto">
+          ×
+        </button>
       </div>
 
-      <div
-        id="streaming-config-changed-alert"
-        role="alert"
-        class="alert alert-warning hidden max-w-175 opacity-90"
-        style="pointer-events: auto;">
+      <div id="streaming-config-changed-alert" role="alert" class="alert alert-warning hidden max-w-175 opacity-90" style="pointer-events: auto">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 shrink-0 stroke-current" fill="none" viewBox="0 0 24 24">
           <path
             stroke-linecap="round"
@@ -75,14 +65,12 @@
           type="button"
           class="btn btn-ghost btn-xs"
           aria-label="Dismiss configuration warning"
-          style="margin-left: auto;">×</button>
+          style="margin-left: auto">
+          ×
+        </button>
       </div>
 
-      <div
-        role="alert"
-        id="error-alert"
-        class="alert alert-error hidden max-w-175 opacity-90"
-        style="pointer-events: auto;">
+      <div role="alert" id="error-alert" class="alert alert-error hidden max-w-175 opacity-90" style="pointer-events: auto">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 shrink-0 stroke-current" fill="none" viewBox="0 0 24 24">
           <path
             stroke-linecap="round"
@@ -116,6 +104,7 @@
           <fieldset class="fieldset">
             <legend class="fieldset-legend">Stream Key</legend>
             <select class="select w-full" id="pipe-stream-key-input"></select>
+            <p id="pipe-stream-key-locked-hint" class="text-warning hidden text-sm">Stop all outputs before changing the stream key.</p>
           </fieldset>
         </div>
 
@@ -147,9 +136,10 @@
 
             <select class="select" id="out-encoding-input">
               <option selected="" value="source">Source</option>
-              <option value="vertical">Vertical</option>
+              <option value="vertical-crop">Vertical Crop</option>
+              <option value="vertical-rotate">Vertical Rotate</option>
               <option value="720p">720p</option>
-              <option value="720p">1080p</option>
+              <option value="1080p">1080p</option>
             </select>
           </fieldset>
 
@@ -170,7 +160,8 @@
           <fieldset class="fieldset">
             <legend class="fieldset-legend">Stream Key or Custom URL</legend>
             <input type="text" id="out-rtmp-key-input" class="input w-full" placeholder="Type here" />
-            <p id="out-rtmp-error" class="text-error text-sm hidden">URL must start with rtmp:// or rtmps://</p>
+            <p id="out-rtmp-error" class="text-error hidden text-sm">URL must start with rtmp:// or rtmps://</p>
+            <p id="out-running-edit-hint" class="text-warning hidden text-sm">Output is running. Only name can be edited.</p>
           </fieldset>
         </div>
 
@@ -183,21 +174,185 @@
       </div>
     </dialog>
 
-    <div class="grid h-screen min-h-0 flex-1 gap-4 p-4 pt-0 grid-cols-[auto_1fr_auto]">
-      <!-- Left Column -->
-      <div class="bg-base-300 rounded-box w-full overflow-y-auto">
-        <div id="pipe-overwiew" class="p-4">
-          <div>
-            <span id="pipe-cnt"></span> Inputs
-            <div class="badge badge-sm badge-success ml-1 px-2" id="pipe-oks"></div>
-            <div class="badge badge-sm badge-warning ml-1 px-2" id="pipe-warnings"></div>
-            <div class="badge badge-sm badge-error ml-1 px-2" id="pipe-errors"></div>
+    <dialog id="output-history-modal" class="modal">
+      <div class="modal-box flex h-[600px] max-w-160 flex-col">
+        <div class="flex flex-shrink-0 items-center justify-between gap-2">
+          <h3 class="text-lg font-bold" id="output-history-title">Output History</h3>
+          <div class="flex items-center gap-2">
+            <button id="output-history-playpause" type="button" class="btn btn-xs btn-outline" onclick="toggleHistoryPlayPause()">
+              &#9654; Live
+            </button>
+            <button
+              id="output-history-redact"
+              type="button"
+              aria-label="Hide URLs"
+              title="Hide URLs"
+              class="btn btn-xs btn-outline"
+              onclick="toggleHistoryRedaction()">
+              &#128065;
+            </button>
+            <div class="join" role="group" aria-label="Output history order">
+              <button
+                id="output-history-order-newest"
+                type="button"
+                class="btn btn-xs join-item btn-accent"
+                aria-pressed="true"
+                onclick="setOutputHistoryOrder('desc')">
+                Newest
+              </button>
+              <button
+                id="output-history-order-oldest"
+                type="button"
+                class="btn btn-xs join-item btn-outline"
+                aria-pressed="false"
+                onclick="setOutputHistoryOrder('asc')">
+                Oldest
+              </button>
+            </div>
+            <div class="join" role="group" aria-label="Output history mode">
+              <button
+                id="output-history-mode-timeline"
+                type="button"
+                class="btn btn-xs join-item btn-accent"
+                aria-pressed="true"
+                onclick="setOutputHistoryMode('timeline')">
+                Timeline
+              </button>
+              <button
+                id="output-history-mode-raw"
+                type="button"
+                class="btn btn-xs join-item btn-outline"
+                aria-pressed="false"
+                onclick="setOutputHistoryMode('raw')">
+                Raw
+              </button>
+            </div>
           </div>
-          <div class="mt-1">
-            <span id="out-cnt"></span> Outputs
-            <div class="badge badge-sm badge-success ml-1 px-2" id="out-oks"></div>
-            <div class="badge badge-sm badge-warning ml-1 px-2" id="out-warnings"></div>
-            <div class="badge badge-sm badge-error ml-1 px-2" id="out-errors"></div>
+        </div>
+
+        <div class="bg-base-200 mt-3 flex min-h-0 flex-1 flex-col rounded-lg p-3">
+          <div id="output-history-loading" class="hidden flex-shrink-0 text-sm opacity-70">
+            <span class="loading loading-dots loading-sm"></span>
+            Loading history...
+          </div>
+          <div id="output-history-search-wrap" class="mb-3 hidden flex-shrink-0">
+            <div class="relative w-full">
+              <input
+                id="output-history-search"
+                type="text"
+                class="input input-sm input-bordered w-full pr-40"
+                placeholder="Search raw logs"
+                oninput="setOutputHistorySearch(this.value)"
+                onkeydown="onOutputHistorySearchKeydown(event)" />
+              <div class="absolute inset-y-0 right-2 flex items-center gap-1" id="output-history-search-controls">
+                <span id="output-history-search-status" class="min-w-12 text-right text-xs opacity-70"></span>
+                <button
+                  id="output-history-search-prev"
+                  type="button"
+                  class="btn btn-ghost btn-xs btn-square"
+                  aria-label="Previous match"
+                  title="Previous match"
+                  onclick="navigateOutputHistorySearch(-1)">
+                  &#9650;
+                </button>
+                <button
+                  id="output-history-search-next"
+                  type="button"
+                  class="btn btn-ghost btn-xs btn-square"
+                  aria-label="Next match"
+                  title="Next match"
+                  onclick="navigateOutputHistorySearch(1)">
+                  &#9660;
+                </button>
+              </div>
+            </div>
+          </div>
+          <div id="output-history-empty" class="hidden flex-shrink-0 text-sm opacity-70">No history available yet.</div>
+          <div id="output-history-list" class="min-h-0 flex-1 space-y-2 overflow-auto"></div>
+        </div>
+
+        <div class="modal-action flex-shrink-0">
+          <form method="dialog">
+            <button class="btn">Close</button>
+          </form>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="pipeline-history-modal" class="modal">
+      <div class="modal-box flex h-[600px] max-w-160 flex-col">
+        <div class="flex flex-shrink-0 items-center justify-between gap-2">
+          <h3 class="text-lg font-bold" id="pipeline-history-title">Pipeline History</h3>
+          <div class="flex items-center gap-2">
+            <button id="pipeline-history-playpause" type="button" class="btn btn-xs btn-outline" onclick="togglePipelineHistoryPlayPause()">
+              &#9654; Live
+            </button>
+          </div>
+        </div>
+
+        <div class="bg-base-200 mt-3 flex min-h-0 flex-1 flex-col rounded-lg p-3">
+          <div id="pipeline-history-loading" class="hidden flex-shrink-0 text-sm opacity-70">
+            <span class="loading loading-dots loading-sm"></span>
+            Loading history...
+          </div>
+          <div id="pipeline-history-empty" class="hidden flex-shrink-0 text-sm opacity-70">No history available yet.</div>
+          <div id="pipeline-history-list" class="min-h-0 flex-1 space-y-2 overflow-auto"></div>
+        </div>
+
+        <div class="modal-action flex-shrink-0">
+          <form method="dialog">
+            <button class="btn">Close</button>
+          </form>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="publisher-quality-modal" class="modal">
+      <div class="modal-box max-w-lg">
+        <h3 class="text-lg font-bold" id="publisher-quality-title">Publisher Quality</h3>
+        <p class="mt-1 text-sm opacity-60" id="publisher-quality-subtitle"></p>
+        <div class="mt-4 overflow-x-auto">
+          <table class="table-sm table w-full">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th class="text-right">Value</th>
+                <th class="text-right">Status</th>
+              </tr>
+            </thead>
+            <tbody id="publisher-quality-rows"></tbody>
+          </table>
+        </div>
+        <div class="modal-action">
+          <form method="dialog">
+            <button class="btn btn-sm">Close</button>
+          </form>
+        </div>
+      </div>
+      <form method="dialog" class="modal-backdrop"><button>close</button></form>
+    </dialog>
+
+    <div class="grid h-screen min-h-0 flex-1 gap-4 p-4 pt-0" style="grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr) minmax(24rem, 1fr)">
+      <!-- Left Column -->
+      <div class="bg-base-300 rounded-box w-full max-w-[18rem] overflow-y-auto">
+        <div id="pipe-overwiew" class="space-y-2 p-4">
+          <div class="grid grid-cols-[88px_auto] items-center gap-x-3">
+            <div class="text-base"><span id="pipe-cnt"></span> Inputs</div>
+            <div class="flex items-center gap-1">
+              <div class="badge badge-sm badge-success px-2" id="pipe-oks" title="On"></div>
+              <div class="badge badge-sm badge-warning px-2" id="pipe-warnings" title="Warning"></div>
+              <div class="badge badge-sm badge-error px-2" id="pipe-errors" title="Error"></div>
+              <div class="badge badge-sm badge-neutral px-2" id="pipe-offs" title="Off / intentionally stopped"></div>
+            </div>
+          </div>
+          <div class="grid grid-cols-[88px_auto] items-center gap-x-3">
+            <div class="text-base"><span id="out-cnt"></span> Outputs</div>
+            <div class="flex items-center gap-1">
+              <div class="badge badge-sm badge-success px-2" id="out-oks" title="On"></div>
+              <div class="badge badge-sm badge-warning px-2" id="out-warnings" title="Warning"></div>
+              <div class="badge badge-sm badge-error px-2" id="out-errors" title="Error"></div>
+              <div class="badge badge-sm badge-neutral px-2" id="out-offs" title="Off / intentionally stopped"></div>
+            </div>
           </div>
         </div>
         <ul class="menu rounded-box w-full" id="pipelines"></ul>
@@ -236,12 +391,15 @@
         <div class="divider"></div>
 
         <div>
-          <div class="mb-3 flex items-center gap-2 text-xl font-bold">
-            <span id="pipe-name"></span>
-            <button class="btn btn-xs btn-accent btn-outline" id="edit-pipe-btn" onclick="editPipeBtn()">✎</button>
-            <button class="btn btn-xs btn-accent btn-outline" id="delete-pipe-btn" onclick="deletePipeBtn()">✖</button>
-            <span class="badge" id="input-time"></span>
+          <div class="mb-2 flex items-center justify-between gap-3 text-xl font-bold">
+            <span class="truncate" id="pipe-name"></span>
+            <div class="flex shrink-0 items-center gap-2">
+              <button class="btn btn-xs btn-accent btn-outline" id="pipe-history-btn">History</button>
+              <button class="btn btn-xs btn-accent btn-outline" id="edit-pipe-btn" onclick="editPipeBtn()">✎</button>
+              <button class="btn btn-xs btn-accent btn-outline" id="delete-pipe-btn" onclick="deletePipeBtn()">✖</button>
+            </div>
           </div>
+          <span class="badge hidden" id="input-time"></span>
 
           <div class="text-center" id="video-player">
             <!-- TODO: add player -->
@@ -266,13 +424,13 @@
               </div>
 
               <div class="stat p-3">
-                <div class="stat-title">Level</div>
-                <div class="stat-value text-sm" id="input-video-level"></div>
+                <div class="stat-title">Profile</div>
+                <div class="stat-value text-sm" id="input-video-profile"></div>
               </div>
 
               <div class="stat p-3">
-                <div class="stat-title">Profile</div>
-                <div class="stat-value text-sm" id="input-video-profile"></div>
+                <div class="stat-title">Level</div>
+                <div class="stat-value text-sm" id="input-video-level"></div>
               </div>
             </div>
 
@@ -284,13 +442,13 @@
               </div>
 
               <div class="stat p-3">
-                <div class="stat-title">Channels</div>
-                <div class="stat-value text-sm" id="input-audio-channels"></div>
+                <div class="stat-title">Sample Rate</div>
+                <div class="stat-value text-sm" id="input-audio-sample-rate"></div>
               </div>
 
               <div class="stat p-3">
-                <div class="stat-title">Sample Rate</div>
-                <div class="stat-value text-sm" id="input-audio-sample-rate"></div>
+                <div class="stat-title">Channels</div>
+                <div class="stat-value text-sm" id="input-audio-channels"></div>
               </div>
 
               <div class="stat p-3">
@@ -323,39 +481,58 @@
             </div>
           </div>
           <div class="divider"></div>
-            <div class="mt-2 space-y-2">
-              <div class="flex items-center gap-2 text-sm">
-                <span class="min-w-24 font-semibold">Stream Key:</span>
-                <code class="flex-1 overflow-x-auto whitespace-nowrap" id="stream-key" data-copy=""></code>
-                <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('stream-key')">📋</button>
-              </div>
-
-              <div class="rounded-lg bg-base-300/40 p-2" id="ingest-urls-panel">
-                <div class="py-2 text-sm font-semibold">Ingest URLs</div>
-                <div class="space-y-2 text-sm">
-                  <div class="flex items-center gap-2">
-                    <span class="badge badge-outline min-w-14 justify-center">RTMP</span>
-                    <code class="flex-1 overflow-x-auto whitespace-nowrap" id="rtmp-url" data-copy=""></code>
-                    <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('rtmp-url')">📋</button>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <span class="badge badge-outline min-w-14 justify-center">RTSP</span>
-                    <code class="flex-1 overflow-x-auto whitespace-nowrap" id="rtsp-url" data-copy=""></code>
-                    <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('rtsp-url')">📋</button>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <span class="badge badge-outline min-w-14 justify-center">SRT</span>
-                    <code class="flex-1 overflow-x-auto whitespace-nowrap" id="srt-url" data-copy=""></code>
-                    <button class="btn btn-xs btn-accent btn-outline" onclick="copyData('srt-url')">📋</button>
-                  </div>
-                </div>
-              </div>
+          <div class="mt-2 w-full space-y-2" style="--label-col: 84px">
+            <div class="grid items-center gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
+              <span class="font-semibold">Stream Key:</span>
+              <code
+                class="whitespace-nowrap"
+                id="stream-key"
+                data-copy=""
+                style="min-width: 0; overflow: hidden; text-overflow: ellipsis; padding-right: 0.4rem; -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%); mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%)"></code>
+              <button class="btn btn-xs btn-accent btn-outline" aria-label="Copy stream key" onclick="copyData('stream-key')">📋</button>
             </div>
+
+            <div id="ingest-urls-header-row" class="grid items-center gap-2 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
+              <span class="font-semibold">Ingest URLs</span>
+              <span></span>
+              <span></span>
+            </div>
+
+            <div id="ingest-url-rtmp-row" class="grid items-start gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
+              <span class="badge badge-outline justify-center">RTMP</span>
+              <code
+                class="leading-5 whitespace-nowrap"
+                id="rtmp-url"
+                data-copy=""
+                style="min-width: 0; overflow: hidden; text-overflow: ellipsis; padding-right: 0.4rem; -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%); mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%)"></code>
+              <button class="btn btn-xs btn-accent btn-outline" aria-label="Copy RTMP URL" onclick="copyData('rtmp-url')">📋</button>
+            </div>
+
+            <div id="ingest-url-rtsp-row" class="grid items-start gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
+              <span class="badge badge-outline justify-center">RTSP</span>
+              <code
+                class="leading-5 whitespace-nowrap"
+                id="rtsp-url"
+                data-copy=""
+                style="min-width: 0; overflow: hidden; text-overflow: ellipsis; padding-right: 0.4rem; -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%); mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%)"></code>
+              <button class="btn btn-xs btn-accent btn-outline" aria-label="Copy RTSP URL" onclick="copyData('rtsp-url')">📋</button>
+            </div>
+
+            <div id="ingest-url-srt-row" class="grid items-start gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
+              <span class="badge badge-outline justify-center">SRT</span>
+              <code
+                class="leading-5 whitespace-nowrap"
+                id="srt-url"
+                data-copy=""
+                style="min-width: 0; overflow: hidden; text-overflow: ellipsis; padding-right: 0.4rem; -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%); mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%)"></code>
+              <button class="btn btn-xs btn-accent btn-outline" aria-label="Copy SRT URL" onclick="copyData('srt-url')">📋</button>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- Right Column -->
-      <div class="bg-base-200 hidden overflow-y-auto rounded-xl p-4 shadow" id="outs-col">
+      <div class="bg-base-200 hidden w-full min-w-[24rem] overflow-y-auto rounded-xl p-4 shadow" id="outs-col">
         <h2 class="mb-3 text-xl font-bold">Outputs</h2>
         <div class="space-y-3" id="outputs-list"></div>
         <div class="mt-3 w-full text-center">

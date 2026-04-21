@@ -23,7 +23,7 @@ services:
     pause:
         profiles: ['container']
         image: gcr.io/google_containers/pause:latest
-        container_name: restream-pause
+        container_name: pause
         ports:
             - '3030:3030' # app
             - '1935:1935' # RTMP ingest (mediamtx)
@@ -40,7 +40,7 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
-        container_name: restream-app
+        container_name: app
         network_mode: service:pause
         environment:
             NODE_ENV: production
@@ -58,7 +58,7 @@ services:
     mediamtx-pod:
         profiles: ['container']
         image: bluenviron/mediamtx:1
-        container_name: mediamtx-pod
+        container_name: mediamtx
         network_mode: service:pause
         volumes:
             - ./infra/mediamtx.yml:/mediamtx.yml
@@ -68,10 +68,10 @@ services:
 
     # Available in both profiles as an external RTMP test sink.
     nginx-rtmp:
-        image: tiangolo/nginx-rtmp:latest
+        image: jasonrivers/nginx-rtmp
         container_name: nginx-rtmp
         ports:
             - '1936:1935'
             - '8081:80'
         volumes:
-            - ./infra/nginx-rtmp.conf:/etc/nginx/nginx.conf:ro
+            - ./infra/nginx-rtmp.conf:/opt/nginx/conf/nginx.conf:ro

@@ -25,6 +25,84 @@ function escapeHtml(str) {
         .replace(/'/g, '&#39;');
 }
 
+function maskSecret(value) {
+    const s = String(value ?? '');
+    if (!s) return '';
+
+    const maskToken = (token) => {
+        if (!token) return '';
+        if (token.length <= 4) {
+            return token.length === 1 ? token : `${token[0]}...${token[token.length - 1]}`;
+        }
+        return `${token.slice(0, 2)}...${token.slice(-2)}`;
+    };
+
+    const isRtmpLike = /^(rtmps?|rtsp):\/\//i.test(s);
+    if (isRtmpLike) {
+        return s.replace(
+            /^((?:rtmps?|rtsp):\/\/[^/\s?#]+(?:\/[^/\s?#]+)*\/)([^/\s?#]+)([?#].*)?$/i,
+            (full, prefix, secret, suffix) => `${prefix}${maskToken(secret)}${suffix || ''}`,
+        );
+    }
+
+    if (/^srt:\/\//i.test(s)) {
+        return s.replace(/([?&]streamid=)([^&]+)/i, (full, keyPrefix, streamIdValue) => {
+            const streamId = String(streamIdValue || '');
+            const publishPrefix = 'publish:';
+
+            if (streamId.startsWith(publishPrefix)) {
+                const streamPath = streamId.slice(publishPrefix.length);
+                const slashIdx = streamPath.lastIndexOf('/');
+                if (slashIdx >= 0) {
+                    const parent = streamPath.slice(0, slashIdx + 1);
+                    const secret = streamPath.slice(slashIdx + 1);
+                    return `${keyPrefix}${publishPrefix}${parent}${maskToken(secret)}`;
+                }
+                return `${keyPrefix}${publishPrefix}${maskToken(streamPath)}`;
+            }
+
+            return `${keyPrefix}${maskToken(streamId)}`;
+        });
+    }
+
+    return maskToken(s);
+}
+
+function sanitizeLogMessage(msg, redacted = true) {
+    if (!redacted) return String(msg);
+    return (
+        String(msg)
+            // Mask only the final path segment (usually the secret key/token).
+            .replace(
+                new RegExp(
+                    '(rtmps?://[^/\\s]+(?:/[^/\\s]+)*/)([^/\\s\'\"]+)(\\?[^\'\"\\s]*)?',
+                    'g',
+                ),
+                '$1***$3',
+            )
+            .replace(
+                new RegExp('(rtsp://[^/\\s]+(?:/[^/\\s]+)*/)([^/\\s\'\"]+)(\\?[^\'\"\\s]*)?', 'g'),
+                '$1***$3',
+            )
+    );
+}
+
+function formatCodecName(codec) {
+    if (!codec) return null;
+    const c = String(codec)
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+    if (c === 'h264' || c === 'avc' || c === 'avc1') return 'H.264';
+    if (c === 'h265' || c === 'hevc' || c === 'hvc1') return 'H.265';
+    if (c === 'aac') return 'AAC';
+    if (c === 'mp3' || c === 'mp3float') return 'MP3';
+    if (c === 'opus') return 'Opus';
+    if (c === 'vp8') return 'VP8';
+    if (c === 'vp9') return 'VP9';
+    if (c === 'av1') return 'AV1';
+    return codec;
+}
+
 function isValidRtmp(str) {
     // YouTube backup URL is a little funny
     if (str.includes(' ')) return false;
@@ -152,3 +230,28 @@ function getStatusColor(status) {
             return 'grey';
     }
 }
+
+// HTML-bound handler — keep accessible as a global
+window.copyData = copyData;
+
+export {
+    msToHHMMSS,
+    setInnerText,
+    escapeHtml,
+    maskSecret,
+    sanitizeLogMessage,
+    formatCodecName,
+    isValidRtmp,
+    legacyCopy,
+    copyText,
+    copyData,
+    setUrlParam,
+    getUrlParam,
+    normalizeEtag,
+    setServerConfig,
+    showErrorAlert,
+    showLoading,
+    hideLoading,
+    showCopiedNotification,
+    getStatusColor,
+};

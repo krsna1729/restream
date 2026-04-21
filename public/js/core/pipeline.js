@@ -2,9 +2,9 @@ const throughputState = {
     inputBytes: new Map(),
 };
 
-
-
 function computeKbps(stateMap, key, totalBytes, nowMs) {
+    // Bitrate is inferred from monotonically increasing byte counters, so the first sample only
+    // establishes a baseline and later samples compute delta-bytes over delta-time.
     if (!key) return null;
     const safeBytes = Number(totalBytes || 0);
     const prev = stateMap.get(key);
@@ -18,7 +18,47 @@ function computeKbps(stateMap, key, totalBytes, nowMs) {
     return Number(((deltaBytes * 8) / (dtMs / 1000) / 1000).toFixed(1));
 }
 
-function parsePipelinesInfo() {
+function resolveIngestUrls(pipeline, config) {
+    const ingestUrls = pipeline?.ingestUrls;
+    if (!ingestUrls) {
+        return { rtmp: null, rtsp: null, srt: null };
+    }
+
+    const ingestHost = config?.ingestHost;
+    if (ingestHost && ingestHost !== 'localhost') {
+        return ingestUrls;
+    }
+
+    const currentHost =
+        typeof window !== 'undefined' && window.location?.hostname
+            ? window.location.hostname
+            : null;
+    if (!currentHost || currentHost === 'localhost') {
+        return ingestUrls;
+    }
+
+    const rewriteHost = (url) => {
+        if (!url) return null;
+        try {
+            const parsed = new URL(url);
+            if (parsed.hostname !== 'localhost') return url;
+            parsed.hostname = currentHost;
+            return parsed.toString();
+        } catch (_) {
+            return url;
+        }
+    };
+
+    return {
+        rtmp: rewriteHost(ingestUrls.rtmp),
+        rtsp: rewriteHost(ingestUrls.rtsp),
+        srt: rewriteHost(ingestUrls.srt),
+    };
+}
+
+function parsePipelinesInfo(config, health) {
+    // The dashboard consumes one merged model that combines persisted config, current health, and
+    // latest job state; this keeps renderers simple even though the source data lives in 3 APIs.
     const newPipelines = [];
     const latestJobsByOutput = new Map();
     const healthByPipeline = health?.pipelines || {};
@@ -39,6 +79,10 @@ function parsePipelinesInfo() {
 
     config?.pipelines.forEach((p) => {
         const inputBytesReceived = healthByPipeline[p.id]?.input?.bytesReceived || 0;
+        const inputPublisher = healthByPipeline[p.id]?.input?.publisher || null;
+        const unexpectedReadersCount = Number(
+            healthByPipeline[p.id]?.input?.unexpectedReaders?.count || 0,
+        );
         const inputVideo = healthByPipeline[p.id]?.input?.video
             ? { ...healthByPipeline[p.id].input.video }
             : null;
@@ -59,6 +103,7 @@ function parsePipelinesInfo() {
             id: p.id,
             name: p.name,
             key: p.streamKey,
+            ingestUrls: resolveIngestUrls(p, config),
             input: {
                 status: inputStatus,
                 time: inputTime,
@@ -68,6 +113,8 @@ function parsePipelinesInfo() {
                 bytesSent: healthByPipeline[p.id]?.input?.bytesSent || 0,
                 readers: healthByPipeline[p.id]?.input?.readers || 0,
                 bitrateKbps: inputKbps,
+                publisher: inputPublisher,
+                unexpectedReadersCount,
             },
             outs: [],
             stats: {
@@ -76,6 +123,7 @@ function parsePipelinesInfo() {
                 readerCount: healthByPipeline[p.id]?.input?.readers || 0,
                 outputCount: 0,
                 readerMismatch: false,
+                unexpectedReadersCount,
             },
         });
     });
@@ -92,7 +140,17 @@ function parsePipelinesInfo() {
                 id: out.pipelineId,
                 name: 'Undefined',
                 key: null,
-                input: { status: 'off', time: null, video: null, audio: null, bitrateKbps: null, readers: 0 },
+                input: {
+                    status: 'off',
+                    time: null,
+                    video: null,
+                    audio: null,
+                    bitrateKbps: null,
+                    readers: 0,
+                    publisher: null,
+                    unexpectedReadersCount: 0,
+                },
+                ingestUrls: { rtmp: null, rtsp: null, srt: null },
                 outs: [],
                 stats: {
                     inputBitrateKbps: null,
@@ -100,6 +158,7 @@ function parsePipelinesInfo() {
                     readerCount: 0,
                     outputCount: 0,
                     readerMismatch: false,
+                    unexpectedReadersCount: 0,
                 },
             };
             newPipelines.push(pipe);
@@ -109,9 +168,9 @@ function parsePipelinesInfo() {
         const outputBitrateKbps = outHealth?.bitrateKbps ?? null;
 
         const encoding = out.encoding || 'source';
-        const isCopy = encoding === 'copy' || encoding === 'source';
-        const outVideo = isCopy ? pipe.input.video : null;
-        const outAudio = isCopy ? pipe.input.audio : null;
+        const outVideo = outHealth?.media?.video ?? null;
+        const outAudio = outHealth?.media?.audio ?? null;
+        const mediaSource = outHealth?.mediaSource || 'unknown';
 
         let outTime = null;
         if (status === 'on' && latestJob?.startedAt) {
@@ -122,12 +181,14 @@ function parsePipelinesInfo() {
             id: out.id,
             pipe: pipe.name,
             name: out.name,
+            desiredState: out.desiredState || 'stopped',
             encoding,
             url: out.url,
             status,
             time: outTime,
             video: outVideo,
             audio: outAudio,
+            mediaSource,
             job: latestJob || null,
             totalSize: outputTotalSize,
             bitrateKbps: outputBitrateKbps,
@@ -151,8 +212,11 @@ function parsePipelinesInfo() {
             readerCount,
             outputCount,
             readerMismatch: readerCount !== outputCount,
+            unexpectedReadersCount: Number(pipe.input.unexpectedReadersCount || 0),
         };
     });
 
     return newPipelines;
 }
+
+export { parsePipelinesInfo };

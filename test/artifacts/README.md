@@ -16,6 +16,9 @@ The 4x3 workflow is driven by one tracked manifest and one Node runner.
 5. Starts outputs for the resolved pipeline/output IDs.
 6. Waits for manifest-scoped inputs and outputs to become `on`.
 7. Captures a `/health` snapshot into test/artifacts/runs.
+8. Verifies output auto-retry by dropping and restoring the RTMP output sink.
+9. Verifies output auto-retry after an unexpected FFmpeg `SIGKILL` while desired state remains `running`.
+10. Verifies input recovery restarts outputs whose desired state remains `running`.
 
 ## Primary Entry Points
 
@@ -31,8 +34,13 @@ Leave stack running after completion for inspection:
 Reuse an already-running stack (skip media-service restart):
 - CLEAN_START=0 make run-4x3
 
+Docker mode (backend in container):
+- make run-docker
+- CLEAN_START=0 RTMP_OUTPUT_BASE="rtmp://nginx-rtmp/live" make run-4x3
+
 ## Notes
 
 - session-4x3-manifest.json is not rewritten by the runner.
+- If an output omits `encoding`, the runner assigns a fallback encoding with a safety cap: at most one each of `vertical-crop`, `vertical-rotate`, `720p`, and `1080p`; remaining unspecified outputs default to `source`.
 - Logs go to test/artifacts/logs.
 - Health snapshots go to test/artifacts/runs.

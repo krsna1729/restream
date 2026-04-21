@@ -1,21 +1,29 @@
 # Health Mapping: Status Derivation and Reader Correlation
 
-This document explains exactly how input and output health statuses are derived in `GET /health`.
+This document explains exactly how input and output health statuses are derived for the periodic health collector that backs `GET /health`.
 
 ---
 
 ## 1. Data Sources
 
-The `/health` endpoint fetches three MediaMTX APIs in parallel, then merges with DB state:
+The background health collector fetches multiple MediaMTX APIs in parallel on a fixed interval, then merges that runtime data with DB state and stores an in-memory snapshot. `GET /health` serves that cached snapshot and adds `ageMs` plus an `ETag` header. The interval defaults to 2000 ms and can be overridden with `HEALTH_SNAPSHOT_INTERVAL_MS`.
 
-| Source                      | What it provides                                         |
-|-----------------------------|----------------------------------------------------------|
-| `GET /v3/paths/list`        | Per-path: online, available, availableTime (plus deprecated ready/readyTime), bytesReceived, bytesSent, tracks2, readers list |
-| `GET /v3/rtspconns/list`    | All RTSP connections including `query` field (contains `reader_id`) |
-| `GET /v3/rtspsessions/list` | RTSP sessions for fallback field lookup                  |
-| DB: `listPipelines()`       | Pipeline ↔ stream key mapping                            |
-| DB: `listOutputs()`         | Output ↔ pipeline mapping                                |
-| DB: `listJobs()`            | Latest job status per output                             |
+| Source | What it provides |
+|---|---|
+| `GET /v3/paths/list` | Per-path: online, available, availableTime (plus deprecated ready/readyTime), bytesReceived, bytesSent, tracks2, readers list |
+| `GET /v3/rtspconns/list` | RTSP control connections including `query` (`reader_id`) for output correlation |
+| `GET /v3/rtspsessions/list` | RTSP sessions for publish-side RTP quality and session fallback lookup |
+| `GET /v3/rtmpconns/list` | RTMP publisher sessions (state/path/remote and byte counters) |
+| `GET /v3/srtconns/list` | SRT publisher sessions and ingest quality counters (RTT/loss/retrans/drop/undecrypt/rate) |
+| `GET /v3/webrtcsessions/list` | WebRTC publish sessions and ingest RTP quality counters |
+| DB: `listPipelines()` | Pipeline ↔ stream key mapping |
+| DB: `listOutputs()` | Output ↔ pipeline mapping |
+| DB: `listJobs()` | One current job row per output (upsert model) |
+
+The collector loop also performs bounded DB writes for lifecycle bookkeeping:
+
+- marks `pipelines.input_ever_seen_live = 1` when a configured input first becomes available
+- appends pipeline-level history events (`pipeline_state`) only when status changes
 
 ---
 
@@ -25,15 +33,18 @@ For each pipeline, the input status is derived from the pipeline's `streamKey`:
 
 ```mermaid
 flowchart TD
-    A["pipeline.streamKey"] --> B["pathByName.get(streamKey)"]
+  A["pipeline.streamKey"] --> B["effectivePath = live/<streamKey>"]
+  B --> C["pathByName.get(effectivePath)"]
 
-    B --> C{pathInfo exists?}
-    C -->|no| OFF["status = 'off'"]
-    C -->|yes| D{"pathInfo.available?"}
-    D -->|yes| ON["status = 'on'\npublishStartedAt = pathInfo.availableTime"]
-    D -->|no| E{"pathInfo.online?"}
-    E -->|yes| WARN["status = 'warning'"]
-    E -->|no| OFF
+  C --> D{has stream key?}
+  D -->|no| OFF["status = 'off'"]
+  D -->|yes| E{"pathInfo.available?"}
+  E -->|yes| ON["status = 'on'\npublishStartedAt = pathInfo.availableTime"]
+  E -->|no| F{"pathInfo.online?"}
+  F -->|yes| WARN["status = 'warning'"]
+  F -->|no| G{"inputEverSeenLive == 1?"}
+  G -->|yes| ERR["status = 'error'"]
+  G -->|no| OFF
 ```
 
 **Input status values:**
@@ -42,7 +53,8 @@ flowchart TD
 |-------|----------------------------------------------------------------------|
 | `on`  | Path exists AND `pathInfo.available === true` *(fallback to deprecated `ready` for older MediaMTX versions)* |
 | `warning` | Path exists, `pathInfo.online === true`, but not yet `available` |
-| `off` | No path info, or path is neither online nor available |
+| `error` | Stream key is configured, path is neither online nor available, and `inputEverSeenLive === 1` |
+| `off` | No stream key configured, or stream key configured but never seen live |
 
 **Additional input fields from MediaMTX:**
 
@@ -54,7 +66,18 @@ flowchart TD
 
 **ffprobe caching:**
 
-When a path is available, the backend calls `ffprobe -rtsp_transport tcp rtsp://localhost:8554/<streamKey>` and caches the result in `streamProbeCache` for `PROBE_CACHE_TTL_MS` (default 30 s). The probe is intentionally narrow: it supplements MediaMTX with video FPS plus audio codec/profile details, while MediaMTX remains the primary source for video dimensions/profile/level and audio channel count/sample rate.
+When a path is available, the collector checks `streamProbeCache` and triggers `ffprobe -rtsp_transport tcp rtsp://localhost:8554/live/<streamKey>` refreshes using stale-while-revalidate semantics. Probe results stay cached in `streamProbeCache` for `PROBE_CACHE_TTL_MS` (default 30 s). The probe is intentionally narrow: it supplements MediaMTX with video FPS plus audio codec/profile details, while MediaMTX remains the primary source for video dimensions/profile/level and audio channel count/sample rate.
+
+The probe URL includes a dedicated reader tag (`reader_id=probe_<streamKey>`). This allows the health collector to explicitly ignore internal probe readers when computing unexpected-reader alerts.
+
+### 2.1 Publisher And Reader-Safety Signals
+
+The input health payload now also includes:
+
+- `input.publisher`: active publisher identity and protocol-specific ingest quality counters (RTSP/RTMP/SRT/WebRTC)
+- `input.unexpectedReaders`: reader inventory that excludes expected managed output readers and internal probes
+
+`input.unexpectedReaders.count` is surfaced in the dashboard as a warning badge. Reader types outside managed RTSP outputs are treated as unexpected by design.
 
 ---
 
@@ -66,7 +89,7 @@ Output health combines the latest DB job state with live RTSP reader connection 
 
 ```mermaid
 flowchart TD
-    A["output.id"] --> B["latestJobByOutputId.get(outputId)"]
+  A["output.id"] --> B["jobByOutputId.get(outputId)"]
     B --> C{latest job\nstatus?}
 
     C -->|"failed"| ERR["status = 'error'"]
@@ -86,7 +109,7 @@ flowchart TD
 Each FFmpeg output is launched with a unique `reader_id` embedded in its RTSP pull URL:
 
 ```
-rtsp://localhost:8554/<streamKey>?reader_id=reader_<pipelineId>_<outputId>
+rtsp://localhost:8554/live/<streamKey>?reader_id=reader_<pipelineId>_<outputId>
 ```
 
 MediaMTX surfaces the full query string in `/v3/rtspconns/list` as `conn.query`. The health endpoint parses `reader_id` from each connection's query at run-time:
@@ -135,20 +158,16 @@ An earlier design inferred output→reader mapping by ordering (output N maps to
 
 ---
 
-## 4. `latestJobByOutputId` Map Construction
+## 4. `jobByOutputId` Map Construction
 
-Jobs are loaded with `db.listJobs()` (all jobs, ordered by `started_at DESC`). The map keeps only the single most-recent job per `outputId`:
+With upsert in place, `jobs` has at most one row per `(pipeline_id, output_id)`. `/health` now maps rows directly by `outputId` without timestamp reduction:
 
 ```
-for each job (newest-first):
-  key = job.outputId
-  if key not in map:
-    map.set(key, job)
-  else:
-    compare timestamps; keep whichever is newer
+for each job from db.listJobs():
+  map.set(job.outputId, job)
 ```
 
-This means the output status reflects the **latest** job run, not any historical failed run.
+This keeps `/health` processing bounded to output count and avoids scanning historical job rows.
 
 ---
 
@@ -160,7 +179,7 @@ The split badge on each pipeline card in the dashboard maps statuses to colors:
 |-----------|-------------|-----------------|
 | `on`      | Green       | input + output  |
 | `warning` | Yellow      | input + output  |
-| `error`   | Red         | output only     |
+| `error`   | Red         | input + output  |
 | `off`     | Grey        | input + output  |
 
 The left half shows input status (`on` / `warning` / `off`); the right half shows the aggregate of all output statuses for that pipeline (worst-case wins: `error` > `warning` > `on` > `off`).
@@ -235,4 +254,5 @@ Frontend-only derived output stats and display values:
 | `out.status` (dashboard model) | Backend `/health` | UI treats backend `outputs[outputId].status` as source of truth. |
 | `out.bitrateKbps` | Backend `/health` | Direct passthrough from `outputs[outputId].bitrateKbps` (numeric). |
 | `pipe.stats.outputBitrateKbps` | Computed in UI | Sum of active `out.bitrateKbps` values for display. |
-| `out.video`, `out.audio` for `copy/source` | Reused from input | Output display reuses input media metadata; ffprobe influence is indirect via input fields. |
+| `out.video`, `out.audio` | Backend `/health` (`outputs[outputId].media`) | Output media is resolved server-side from parsed FFmpeg `Output #0` stream info, with fallback derivation when FFmpeg details are not yet available. |
+| `out.mediaSource` | Backend `/health` (`outputs[outputId].mediaSource`) | Source tag used by UI to distinguish confirmed FFmpeg media (`ffmpeg`) from fallback-derived values (`fallback-source`, `fallback-profile`, `unknown`). |

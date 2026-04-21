@@ -5,7 +5,7 @@ INGEST_URL ?= rtmp://localhost:1935/mystream
 OUTPUT_URL ?= rtmp://localhost:1936/live/test
 
 run-host: deps
-	docker compose --profile host up -d
+	docker compose --profile host up -d --remove-orphans
 	npm run dev
 
 run-docker:
