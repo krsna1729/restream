@@ -73,7 +73,18 @@ sudo chown restream:restream /etc/restream/mediamtx.yml
 
 - `apiAddress: 127.0.0.1:9997`
 
-4. Open ingest ports to publishers as needed:
+4. Preview latency versus resource use:
+
+- The checked-in `mediamtx.yml` keeps HLS muxers warm with `hlsAlwaysRemux: yes` and uses
+  `hlsVariant: mpegts`.
+- This reduces first-preview startup delay in the dashboard, since MediaMTX does not need to spin
+  up a fresh HLS muxer on the first viewer request.
+- The tradeoff is higher steady resource use on the MediaMTX side, because ready paths continue to
+  maintain preview-ready HLS state even when nobody is watching.
+- On smaller hosts, operators can switch back to on-demand low-latency HLS, but they should
+  expect slower first preview loads.
+
+5. Open ingest ports to publishers as needed:
 
 - 1935 (RTMP)
 - 8554 (RTSP)

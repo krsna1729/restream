@@ -4,8 +4,7 @@
 #             RTSP  rtsp://<host>:8554/<streamKey>
 #             SRT   srt://<host>:8890?streamid=publish:<streamKey>
 #
-# Viewing:    WebRTC  http://<host>:8889/<streamKey>
-#             RTSP    rtsp://<host>:8554/<streamKey>
+# Viewing:    RTSP    rtsp://<host>:8554/<streamKey>
 #
 # Internal:   API     http://localhost:9997  (used by restream backend)
 
@@ -15,9 +14,15 @@ rtsp: yes          # port 8554
 srt: yes           # port 8890
 
 # ── Browser playback ────────────────────────────────────────────────────────
-webrtc: yes        # HTTP signaling on port 8889, media on port 8189
-# For LAN or external browser access, advertise the host's reachable IP:
-# webrtcAdditionalHosts: ['<your-host-ip>']
+hls: yes           # HTTP HLS on port 8888
+webrtc: no
+
+# Keep HLS muxers warm and use compatibility-oriented MPEG-TS packaging so first preview loads
+# do not block on on-demand muxer startup.
+# Tradeoff: lower cold-start latency and broader browser compatibility, but higher steady CPU/RAM
+# use because muxers stay active for ready paths even before a viewer asks for preview.
+hlsAlwaysRemux: yes
+hlsVariant: mpegts
 
 # ── Backend API ─────────────────────────────────────────────────────────────
 api: yes

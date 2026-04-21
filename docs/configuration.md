@@ -212,5 +212,36 @@ environment:
 | `8890` | SRT | SRT ingest |
 | `9997` | HTTP | MediaMTX API |
 | `8888` | HTTP | HLS / HTTP interface |
-| `8889` | HTTP/WS | WebRTC signaling |
-| `8189` | TCP/UDP | WebRTC media |
+
+## 5. Input Preview Proxy
+
+Dashboard input preview uses an app-level HLS proxy endpoint instead of sending browser traffic directly
+to MediaMTX.
+
+- Browser URL shape: `/preview/hls/<streamKey>/video-only.m3u8`
+- App proxy upstream: `http://localhost:8888/live/<streamKey>/...`
+
+Why this exists:
+
+- keep browser requests on the same origin as the dashboard
+- avoid exposing MediaMTX HLS directly to remote clients for preview
+- centralize preview policy and error handling in the app
+
+Notes:
+
+- The proxy validates stream keys and asset paths before forwarding.
+- The dashboard preview intentionally uses a generated video-only manifest because some Chromium
+  builds reject the input AAC track during decoder initialization; the proxy strips audio metadata
+  from the synthetic manifest so browsers only see the video track.
+- MediaMTX is configured for preview responsiveness with `hlsAlwaysRemux: yes` and
+  `hlsVariant: mpegts`.
+- That combination reduces first-preview cold-start time because HLS muxers are already active,
+  instead of being created only when the first viewer clicks Play.
+- The tradeoff is resource consumption: MediaMTX keeps muxers warm for ready paths, which raises
+  steady CPU/RAM use compared with on-demand low-latency HLS.
+- If an operator prefers lower idle resource usage over fast first preview, the opposite tuning is
+  `hlsAlwaysRemux: no` with `hlsVariant: lowLatency`, but that increases first-view startup delay.
+- In HTTPS deployments, terminate TLS on the dashboard origin and keep preview requests
+  same-origin so browsers do not hit mixed-content blocks.
+- The dashboard preview player is lazy-loaded: selecting a pipeline does not request HLS
+  assets until the user presses Play.

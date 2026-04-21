@@ -12,9 +12,6 @@ services:
             - '8554:8554' # RTSP ingest and read (mediamtx)
             - '8890:8890/udp' # SRT ingest (mediamtx)
             - '8888:8888' # HTTP interface / HLS (mediamtx)
-            - '8889:8889' # WebRTC HTTP (mediamtx)
-            - '8189:8189/udp' # WebRTC ICE (mediamtx)
-            - '8189:8189/tcp' # WebRTC ICE (mediamtx)
             - '127.0.0.1:9997:9997' # MediaMTX API (host-local only)
         volumes:
             - ./infra/mediamtx.yml:/mediamtx.yml
@@ -30,9 +27,6 @@ services:
             - '8554:8554' # RTSP ingest and read (mediamtx)
             - '8890:8890/udp' # SRT ingest (mediamtx)
             - '8888:8888' # HTTP interface / HLS (mediamtx)
-            - '8889:8889' # WebRTC HTTP (mediamtx)
-            - '8189:8189/udp' # WebRTC ICE (mediamtx)
-            - '8189:8189/tcp' # WebRTC ICE (mediamtx)
 
     # App uses pause network namespace so MediaMTX is reachable on localhost.
     app:
