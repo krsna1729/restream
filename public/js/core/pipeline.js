@@ -18,6 +18,44 @@ function computeKbps(stateMap, key, totalBytes, nowMs) {
     return Number(((deltaBytes * 8) / (dtMs / 1000) / 1000).toFixed(1));
 }
 
+function resolveIngestUrls(pipeline, config) {
+    const ingestUrls = pipeline?.ingestUrls;
+    if (!ingestUrls) {
+        return { rtmp: null, rtsp: null, srt: null };
+    }
+
+    const ingestHost = config?.ingestHost;
+    if (ingestHost && ingestHost !== 'localhost') {
+        return ingestUrls;
+    }
+
+    const currentHost =
+        typeof window !== 'undefined' && window.location?.hostname
+            ? window.location.hostname
+            : null;
+    if (!currentHost || currentHost === 'localhost') {
+        return ingestUrls;
+    }
+
+    const rewriteHost = (url) => {
+        if (!url) return null;
+        try {
+            const parsed = new URL(url);
+            if (parsed.hostname !== 'localhost') return url;
+            parsed.hostname = currentHost;
+            return parsed.toString();
+        } catch (_) {
+            return url;
+        }
+    };
+
+    return {
+        rtmp: rewriteHost(ingestUrls.rtmp),
+        rtsp: rewriteHost(ingestUrls.rtsp),
+        srt: rewriteHost(ingestUrls.srt),
+    };
+}
+
 function parsePipelinesInfo(config, health) {
     // The dashboard consumes one merged model that combines persisted config, current health, and
     // latest job state; this keeps renderers simple even though the source data lives in 3 APIs.
@@ -65,6 +103,7 @@ function parsePipelinesInfo(config, health) {
             id: p.id,
             name: p.name,
             key: p.streamKey,
+            ingestUrls: resolveIngestUrls(p, config),
             input: {
                 status: inputStatus,
                 time: inputTime,
@@ -111,6 +150,7 @@ function parsePipelinesInfo(config, health) {
                     publisher: null,
                     unexpectedReadersCount: 0,
                 },
+                ingestUrls: { rtmp: null, rtsp: null, srt: null },
                 outs: [],
                 stats: {
                     inputBitrateKbps: null,

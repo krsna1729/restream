@@ -1,5 +1,9 @@
 const { errMsg, maskToken, validateName } = require('../utils/app');
-const { getMediamtxApiBaseUrl } = require('../utils/mediamtx');
+const {
+    getMediamtxApiBaseUrl,
+    buildMediamtxPath,
+    buildIngestUrls,
+} = require('../utils/mediamtx');
 
 function logPipelineConfigChanges(db, pipelineId, previousPipeline, nextPipeline) {
     if (!pipelineId || !previousPipeline || !nextPipeline) return;
@@ -93,11 +97,12 @@ function registerPipelineApi({
             throw new Error(`Unsupported MediaMTX path action: ${action}`);
         }
 
-        const url = `${getMediamtxApiBaseUrl()}/v3/config/paths/${action}/${encodeURIComponent(key)}`;
+        const effectivePath = buildMediamtxPath(key);
+        const url = `${getMediamtxApiBaseUrl()}/v3/config/paths/${action}/${encodeURIComponent(effectivePath)}`;
         const resp = await fetch(url, {
             method,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: key }),
+            body: JSON.stringify({ name: effectivePath }),
         });
 
         let data = null;
@@ -134,7 +139,13 @@ function registerPipelineApi({
             );
             recomputeConfigEtag();
             recomputeEtag();
-            return res.status(201).json({ message: 'Stream key created', streamKey });
+            return res.status(201).json({
+                message: 'Stream key created',
+                streamKey: {
+                    ...streamKey,
+                    ingestUrls: await buildIngestUrls(streamKey.key, getConfig),
+                },
+            });
         } catch (err) {
             return res.status(500).json({ error: errMsg(err) });
         }
@@ -183,9 +194,15 @@ function registerPipelineApi({
         }
     });
 
-    app.get('/stream-keys', (req, res) => {
+    app.get('/stream-keys', async (req, res) => {
         try {
-            return res.json(db.listStreamKeys());
+            const streamKeys = await Promise.all(
+                db.listStreamKeys().map(async (streamKey) => ({
+                    ...streamKey,
+                    ingestUrls: await buildIngestUrls(streamKey.key, getConfig),
+                })),
+            );
+            return res.json(streamKeys);
         } catch (err) {
             return res.status(500).json({ error: errMsg(err) });
         }

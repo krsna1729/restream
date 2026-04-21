@@ -7,7 +7,7 @@ This document reviews the MediaMTX control API in `api/openapi.yaml` and maps it
 Restream currently uses a focused but growing subset of the MediaMTX control API:
 
 - Readiness: `GET /v3/config/global/get`
-- Stream key path provisioning: `POST /v3/config/paths/add/{name}` and `DELETE /v3/config/paths/delete/{name}`
+- Stream key path provisioning: `POST /v3/config/paths/add/{name}` and `DELETE /v3/config/paths/delete/{name}` (where `{name}` is `live/<streamKey>`)
 - Runtime health snapshot: `GET /v3/paths/list`, `GET /v3/rtspconns/list`, `GET /v3/rtspsessions/list`, `GET /v3/rtmpconns/list`, `GET /v3/srtconns/list`, and `GET /v3/webrtcsessions/list`
 
 That currently gives the project:

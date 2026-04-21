@@ -12,13 +12,20 @@ All request/response bodies are JSON. All timestamps are ISO 8601 UTC strings.
 
 Returns all stream keys ordered by creation date descending.
 
+`ingestUrls` ports are derived from MediaMTX global runtime config (`GET /v3/config/global/get`). If a protocol port cannot be resolved, that protocol URL is returned as `null`.
+
 **Response 200:**
 ```json
 [
   {
     "key": "c1518f5ef0d917ef1b6547d7",
     "label": "English Feed",
-    "createdAt": "2026-04-10T10:59:00.000Z"
+    "createdAt": "2026-04-10T10:59:00.000Z",
+    "ingestUrls": {
+      "rtmp": "rtmp://stream.example.com:1935/live/c1518f5ef0d917ef1b6547d7",
+      "rtsp": "rtsp://stream.example.com:8554/live/c1518f5ef0d917ef1b6547d7",
+      "srt": "srt://stream.example.com:8890?streamid=publish:live/c1518f5ef0d917ef1b6547d7"
+    }
   }
 ]
 ```
@@ -28,6 +35,8 @@ Returns all stream keys ordered by creation date descending.
 ### `POST /stream-keys`
 
 Creates a stream key and registers the corresponding path in MediaMTX.
+
+The MediaMTX path is always provisioned as `live/<streamKey>`.
 
 > Note: If MediaMTX path registration succeeds but the SQLite insert fails, the API now attempts a
 > compensating MediaMTX path delete before returning `500`.
@@ -47,7 +56,12 @@ Creates a stream key and registers the corresponding path in MediaMTX.
   "streamKey": {
     "key": "mystream",
     "label": "English Feed",
-    "createdAt": "2026-04-10T10:59:00.000Z"
+    "createdAt": "2026-04-10T10:59:00.000Z",
+    "ingestUrls": {
+      "rtmp": "rtmp://stream.example.com:1935/live/mystream",
+      "rtsp": "rtsp://stream.example.com:8554/live/mystream",
+      "srt": "srt://stream.example.com:8890?streamid=publish:live/mystream"
+    }
   }
 }
 ```
@@ -471,13 +485,19 @@ X-Snapshot-Version: "..."   // shared config/jobs state version used to align /c
     "inputRecoveryRestartDelayMs": 1000,
     "inputRecoveryRestartStaggerMs": 250
   },
-  "ingest": {
-    "host": null,
-    "rtmpPort": "1935",
-    "rtspPort": "8554",
-    "srtPort": "8890"
-  },
-  "pipelines": [ ... ],
+  "ingestHost": null,
+  "pipelines": [
+    {
+      "id": "a1b2c3d4e5f6a7b8",
+      "name": "Pipeline 1",
+      "streamKey": "c1518f5ef0d917ef1b6547d7",
+      "ingestUrls": {
+        "rtmp": "rtmp://stream.example.com:1935/live/c1518f5ef0d917ef1b6547d7",
+        "rtsp": "rtsp://stream.example.com:8554/live/c1518f5ef0d917ef1b6547d7",
+        "srt": "srt://stream.example.com:8890?streamid=publish:live/c1518f5ef0d917ef1b6547d7"
+      }
+    }
+  ],
   "outputs": [ ... ],
   "jobs": [ ... ]
 }

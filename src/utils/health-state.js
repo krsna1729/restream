@@ -1,3 +1,5 @@
+const { buildMediamtxPath } = require('./mediamtx');
+
 function generateProbeReaderTag(streamKey) {
     const suffix = String(streamKey || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
     return `probe_${suffix}`;
@@ -5,7 +7,8 @@ function generateProbeReaderTag(streamKey) {
 
 function getPipelineProbeRtspUrl(streamKey, getMediamtxRtspBaseUrl) {
     const probeTag = generateProbeReaderTag(streamKey);
-    return `${getMediamtxRtspBaseUrl()}/${streamKey}?reader_id=${encodeURIComponent(probeTag)}`;
+    const effectivePath = buildMediamtxPath(streamKey);
+    return `${getMediamtxRtspBaseUrl()}/${effectivePath}?reader_id=${encodeURIComponent(probeTag)}`;
 }
 
 function buildDefaultHealthSnapshot(

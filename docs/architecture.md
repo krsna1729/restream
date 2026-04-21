@@ -294,7 +294,7 @@ Server reads ETag from db.getEtag()
 Build snapshot:
   { ...runtimeConfig,       ← from src/config/restream.json
     streamKeys,             ← db.listStreamKeys()
-    pipelines,              ← db.listPipelines()
+    pipelines,              ← db.listPipelines() + per-pipeline ingestUrls
     outputs,                ← db.listOutputs()
     jobs }                  ← db.listJobs()
 
@@ -322,6 +322,8 @@ db.createStreamKey({ key, label, createdAt })
 201 { streamKey }
 ```
 
+`<key>` above is provisioned as effective path `live/<streamKey>` in MediaMTX.
+
 ### 4.7 Stream Key Deletion (`DELETE /stream-keys/:key`)
 
 ```
@@ -337,6 +339,8 @@ DELETE MediaMTX /v3/config/paths/delete/<key>
 db.deleteStreamKey(key)
 200 { message }
 ```
+
+Deletion targets the same effective path (`live/<streamKey>`).
 
 ### 4.8 Pipeline/Output Deletion with Cascade Stop
 

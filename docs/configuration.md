@@ -26,9 +26,9 @@ These are hardcoded in the application and cannot be overridden via environment 
 | Variable | Default | Description |
 |---|---|---|
 | `MEDIAMTX_INGEST_HOST` | dashboard host | Hostname/IP shown to publishers |
-| `MEDIAMTX_INGEST_RTMP_PORT` | `1935` | RTMP ingest port |
-| `MEDIAMTX_INGEST_RTSP_PORT` | `8554` | RTSP ingest port |
-| `MEDIAMTX_INGEST_SRT_PORT` | `8890` | SRT ingest port |
+
+Protocol ports are read from MediaMTX runtime config via `GET /v3/config/global/get`.
+If port discovery fails, backend leaves the corresponding `ingestUrls` field as `null`.
 
 ### FFmpeg and ffprobe
 
@@ -111,10 +111,7 @@ File: `src/config/restream.json`
   },
   "mediamtx": {
     "ingest": {
-      "host": "stream.example.com",
-      "rtmpPort": 1935,
-      "rtspPort": 8554,
-      "srtPort": 8890
+      "host": "stream.example.com"
     }
   }
 }
@@ -140,15 +137,17 @@ File: `src/config/restream.json`
 | `outputRecovery.inputRecoveryRestartDelayMs` | integer | `1000` | Initial delay before recovery restart |
 | `outputRecovery.inputRecoveryRestartStaggerMs` | integer | `250` | Stagger between output restarts during recovery |
 | `mediamtx.ingest.host` | string | `null` | Publisher-facing host. If omitted, UI uses dashboard hostname |
-| `mediamtx.ingest.rtmpPort` | integer | `1935` | Publisher RTMP ingest port |
-| `mediamtx.ingest.rtspPort` | integer | `8554` | Publisher RTSP ingest port |
-| `mediamtx.ingest.srtPort` | integer | `8890` | Publisher SRT ingest port |
 
-UI ingest URLs are built in app code as:
+Ingest URLs are precomputed by backend helpers and returned on stream-key and pipeline payloads.
+The effective MediaMTX path is always `live/<streamKey>`.
 
-- RTMP: `rtmp://<ingest.host>:<ingest.rtmpPort>/<streamKey>`
-- RTSP: `rtsp://<ingest.host>:<ingest.rtspPort>/<streamKey>`
-- SRT: `srt://<ingest.host>:<ingest.srtPort>?streamid=publish:<streamKey>`
+- RTMP: `rtmp://<ingest.host>:<rtmpPort>/live/<streamKey>`
+- RTSP: `rtsp://<ingest.host>:<rtspPort>/live/<streamKey>`
+- SRT: `srt://<ingest.host>:<srtPort>?streamid=publish:live/<streamKey>`
+
+`rtmpPort`, `rtspPort`, and `srtPort` are derived from MediaMTX global runtime config (`/v3/config/global/get`).
+
+`GET /config` exposes only `ingestHost` in the public config payload. Ports are not app-configurable and are resolved from MediaMTX at runtime for server-side `ingestUrls` generation.
 
 Backend internal URLs are hardcoded as:
 
@@ -202,9 +201,6 @@ Optional publisher-facing overrides:
 ```yaml
 environment:
   MEDIAMTX_INGEST_HOST: your-public-host
-  MEDIAMTX_INGEST_RTMP_PORT: '1935'
-  MEDIAMTX_INGEST_RTSP_PORT: '8554'
-  MEDIAMTX_INGEST_SRT_PORT: '8890'
 ```
 
 ## 4. MediaMTX Ports

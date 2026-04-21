@@ -57,38 +57,33 @@ function setPipelineViewDependencies(dependencies) {
             deletePipeBtn.title = '';
         }
 
-        const ingestConfig = state.config?.ingest || {};
         const streamKey = pipe.key || 'Unassigned';
         const maskedStreamKey = pipe.key ? maskSecret(pipe.key) : streamKey;
 
         document.getElementById('stream-key').textContent = maskedStreamKey;
         document.getElementById('stream-key').dataset.copy = pipe.key || '';
 
-        const ingestHost = ingestConfig.host || document.location.hostname;
-        const rtmpPort = ingestConfig.rtmpPort || '1935';
-        const rtspPort = ingestConfig.rtspPort || '8554';
-        const srtPort = ingestConfig.srtPort || '8890';
+        const ingestUrls = pipe.ingestUrls || {};
 
-        const rtmpBaseUrl = `rtmp://${ingestHost}:${rtmpPort}/`;
-        const rtmpUrl = pipe.key ? rtmpBaseUrl + pipe.key : 'Assign a stream key to enable ingest';
-        document.getElementById('rtmp-url').textContent = pipe.key
-            ? rtmpBaseUrl + maskedStreamKey
-            : rtmpUrl;
-        document.getElementById('rtmp-url').dataset.copy = pipe.key ? rtmpBaseUrl + pipe.key : '';
+        const setIngestUrlRow = (rowId, valueId, url) => {
+            const row = document.getElementById(rowId);
+            const valueEl = document.getElementById(valueId);
+            if (!row || !valueEl) return false;
 
-        const rtspBaseUrl = `rtsp://${ingestHost}:${rtspPort}/`;
-        const rtspUrl = pipe.key ? rtspBaseUrl + pipe.key : 'Assign a stream key to enable ingest';
-        document.getElementById('rtsp-url').textContent = pipe.key
-            ? rtspBaseUrl + maskedStreamKey
-            : rtspUrl;
-        document.getElementById('rtsp-url').dataset.copy = pipe.key ? rtspBaseUrl + pipe.key : '';
+            const hasUrl = typeof url === 'string' && url.trim() !== '';
+            row.classList.toggle('hidden', !hasUrl);
+            valueEl.textContent = hasUrl ? maskSecret(url) : '';
+            valueEl.dataset.copy = hasUrl ? url : '';
+            return hasUrl;
+        };
 
-        const srtBaseUrl = `srt://${ingestHost}:${srtPort}?streamid=publish:`;
-        const srtUrl = pipe.key ? srtBaseUrl + pipe.key : 'Assign a stream key to enable ingest';
-        document.getElementById('srt-url').textContent = pipe.key
-            ? srtBaseUrl + maskedStreamKey
-            : srtUrl;
-        document.getElementById('srt-url').dataset.copy = pipe.key ? srtBaseUrl + pipe.key : '';
+        const hasRtmpUrl = setIngestUrlRow('ingest-url-rtmp-row', 'rtmp-url', ingestUrls.rtmp);
+        const hasRtspUrl = setIngestUrlRow('ingest-url-rtsp-row', 'rtsp-url', ingestUrls.rtsp);
+        const hasSrtUrl = setIngestUrlRow('ingest-url-srt-row', 'srt-url', ingestUrls.srt);
+        const ingestHeaderRow = document.getElementById('ingest-urls-header-row');
+        if (ingestHeaderRow) {
+            ingestHeaderRow.classList.toggle('hidden', !(hasRtmpUrl || hasRtspUrl || hasSrtUrl));
+        }
 
         const playerElem = document.getElementById('video-player');
         const inputStatsElem = document.getElementById('input-stats');

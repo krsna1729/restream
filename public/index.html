@@ -492,13 +492,13 @@
               <button class="btn btn-xs btn-accent btn-outline" aria-label="Copy stream key" onclick="copyData('stream-key')">📋</button>
             </div>
 
-            <div class="grid items-center gap-2 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
+            <div id="ingest-urls-header-row" class="grid items-center gap-2 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
               <span class="font-semibold">Ingest URLs</span>
               <span></span>
               <span></span>
             </div>
 
-            <div class="grid items-start gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
+            <div id="ingest-url-rtmp-row" class="grid items-start gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
               <span class="badge badge-outline justify-center">RTMP</span>
               <code
                 class="leading-5 whitespace-nowrap"
@@ -508,7 +508,7 @@
               <button class="btn btn-xs btn-accent btn-outline" aria-label="Copy RTMP URL" onclick="copyData('rtmp-url')">📋</button>
             </div>
 
-            <div class="grid items-start gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
+            <div id="ingest-url-rtsp-row" class="grid items-start gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
               <span class="badge badge-outline justify-center">RTSP</span>
               <code
                 class="leading-5 whitespace-nowrap"
@@ -518,7 +518,7 @@
               <button class="btn btn-xs btn-accent btn-outline" aria-label="Copy RTSP URL" onclick="copyData('rtsp-url')">📋</button>
             </div>
 
-            <div class="grid items-start gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
+            <div id="ingest-url-srt-row" class="grid items-start gap-3 text-sm" style="grid-template-columns: var(--label-col) minmax(0, 1fr) auto">
               <span class="badge badge-outline justify-center">SRT</span>
               <code
                 class="leading-5 whitespace-nowrap"

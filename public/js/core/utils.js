@@ -28,10 +28,44 @@ function escapeHtml(str) {
 function maskSecret(value) {
     const s = String(value ?? '');
     if (!s) return '';
-    if (s.length <= 4) {
-        return s.length === 1 ? s : `${s[0]}...${s[s.length - 1]}`;
+
+    const maskToken = (token) => {
+        if (!token) return '';
+        if (token.length <= 4) {
+            return token.length === 1 ? token : `${token[0]}...${token[token.length - 1]}`;
+        }
+        return `${token.slice(0, 2)}...${token.slice(-2)}`;
+    };
+
+    const isRtmpLike = /^(rtmps?|rtsp):\/\//i.test(s);
+    if (isRtmpLike) {
+        return s.replace(
+            /^((?:rtmps?|rtsp):\/\/[^/\s?#]+(?:\/[^/\s?#]+)*\/)([^/\s?#]+)([?#].*)?$/i,
+            (full, prefix, secret, suffix) => `${prefix}${maskToken(secret)}${suffix || ''}`,
+        );
     }
-    return `${s.slice(0, 2)}...${s.slice(-2)}`;
+
+    if (/^srt:\/\//i.test(s)) {
+        return s.replace(/([?&]streamid=)([^&]+)/i, (full, keyPrefix, streamIdValue) => {
+            const streamId = String(streamIdValue || '');
+            const publishPrefix = 'publish:';
+
+            if (streamId.startsWith(publishPrefix)) {
+                const streamPath = streamId.slice(publishPrefix.length);
+                const slashIdx = streamPath.lastIndexOf('/');
+                if (slashIdx >= 0) {
+                    const parent = streamPath.slice(0, slashIdx + 1);
+                    const secret = streamPath.slice(slashIdx + 1);
+                    return `${keyPrefix}${publishPrefix}${parent}${maskToken(secret)}`;
+                }
+                return `${keyPrefix}${publishPrefix}${maskToken(streamPath)}`;
+            }
+
+            return `${keyPrefix}${maskToken(streamId)}`;
+        });
+    }
+
+    return maskToken(s);
 }
 
 function sanitizeLogMessage(msg, redacted = true) {

@@ -17,10 +17,7 @@ const defaults = {
     appLogPath: 'test/artifacts/logs/app-under-test.log',
     verifyAppRetries: 30,
     inputFile: 'test/colorbar-timer.mp4',
-    rtmpIngestBase: 'rtmp://localhost:1935',
     rtmpOutputBase: 'rtmp://localhost:1936/live',
-    rtspIngestBase: 'rtsp://localhost:8554',
-    srtIngestBase: 'srt://localhost:8890?streamid=publish:',
     inputProtocols: 'rtmp,rtsp,srt',
     maxRetries: 30,
     retryDelaySec: 1,
@@ -37,10 +34,7 @@ const config = {
     appLogPath: resolvePath(process.env.APP_LOG_PATH || defaults.appLogPath),
     verifyAppRetries: Number(process.env.VERIFY_APP_RETRIES || defaults.verifyAppRetries),
     inputFile: resolvePath(process.env.INPUT_FILE || defaults.inputFile),
-    rtmpIngestBase: process.env.RTMP_INGEST_BASE || defaults.rtmpIngestBase,
     rtmpOutputBase: process.env.RTMP_OUTPUT_BASE || defaults.rtmpOutputBase,
-    rtspIngestBase: process.env.RTSP_INGEST_BASE || defaults.rtspIngestBase,
-    srtIngestBase: process.env.SRT_INGEST_BASE || defaults.srtIngestBase,
     inputProtocols: process.env.INPUT_PROTOCOLS || defaults.inputProtocols,
     maxRetries: Number(process.env.MAX_RETRIES || defaults.maxRetries),
     retryDelaySec: Number(process.env.RETRY_DELAY_SEC || defaults.retryDelaySec),
@@ -384,6 +378,11 @@ async function startInputPublishers(manifest) {
     await access(config.inputFile);
     await mkdir(config.logDir, { recursive: true });
 
+    const state = await fetchConfigState();
+    const streamKeysByKey = new Map(
+        (state.streamKeys || []).map((streamKey) => [streamKey.key, streamKey]),
+    );
+
     const protocols = config.inputProtocols
         .split(',')
         .map((value) => value.trim().toLowerCase())
@@ -403,7 +402,8 @@ async function startInputPublishers(manifest) {
     for (const [index, streamKey] of streamKeys.entries()) {
         const ordinal = index + 1;
         const protocol = protocols[index % protocols.length];
-        const targetUrl = buildTargetUrl(protocol, streamKey);
+        const streamKeyRecord = streamKeysByKey.get(streamKey) || null;
+        const targetUrl = selectIngestUrl(streamKeyRecord, protocol);
         const logPath = path.join(config.logDir, `input-${ordinal}-${protocol}.log`);
         const publisherTarget = {
             ordinal,
@@ -457,17 +457,14 @@ async function restartInputPublisher(target) {
     return pid;
 }
 
-function buildTargetUrl(protocol, streamKey) {
-    if (protocol === 'rtmp') {
-        return `${config.rtmpIngestBase}/${streamKey}`;
-    }
-    if (protocol === 'rtsp') {
-        return `${config.rtspIngestBase}/${streamKey}`;
-    }
-    if (protocol === 'srt') {
-        return `${config.srtIngestBase}${streamKey}`;
-    }
-    throw new Error(`Unsupported input protocol: ${protocol}`);
+function selectIngestUrl(streamKeyRecord, protocol) {
+    const ingestUrls = streamKeyRecord?.ingestUrls || {};
+
+    if (protocol === 'rtmp' && ingestUrls.rtmp) return ingestUrls.rtmp;
+    if (protocol === 'rtsp' && ingestUrls.rtsp) return ingestUrls.rtsp;
+    if (protocol === 'srt' && ingestUrls.srt) return ingestUrls.srt;
+
+    throw new Error(`Missing ingest URL for protocol=${protocol} streamKey=${streamKeyRecord?.key || 'unknown'}`);
 }
 
 function buildFfmpegArgs(protocol, targetUrl) {

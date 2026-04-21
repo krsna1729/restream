@@ -6,6 +6,7 @@ const {
     getMediamtxRtspBaseUrl,
     getExpectedReaderTag,
     getReaderIdFromQuery,
+    buildMediamtxPath,
 } = require('../utils/mediamtx');
 const { normalizeOutputEncoding } = require('../utils/ffmpeg');
 const { getInputUnavailableExitGraceMs } = require('../utils/retry');
@@ -132,7 +133,8 @@ function createHealthMonitorService({
         let pathInfo = null;
         try {
             const paths = await fetchMediamtxJson('/v3/paths/list');
-            pathInfo = (paths.items || []).find((pathItem) => pathItem?.name === streamKey) || null;
+            const effectivePath = buildMediamtxPath(streamKey);
+            pathInfo = (paths.items || []).find((pathItem) => pathItem?.name === effectivePath) || null;
         } catch (err) {
             return {
                 status: computeInputStatus({
@@ -227,7 +229,8 @@ function createHealthMonitorService({
         for (const pipeline of pipelines) {
             const key = pipeline.streamKey || '';
             const hasKey = !!key;
-            const pathInfo = hasKey ? pathByName.get(key) : null;
+            const effectivePath = hasKey ? buildMediamtxPath(key) : '';
+            const pathInfo = hasKey ? pathByName.get(effectivePath) : null;
             const pathAvailable = !!(pathInfo?.available || pathInfo?.ready);
             const pathOnline = !!pathInfo?.online;
             const hasEverSeenLive = Number(pipeline.inputEverSeenLive || 0) === 1 || pathAvailable;
@@ -553,7 +556,8 @@ function createHealthMonitorService({
         }
 
         const probeInfo = getPipelineProbeInfo(streamKey, pathAvailable, nowMs);
-        const publisher = streamKey ? publisherByPath.get(streamKey) || null : null;
+        const effectivePath = streamKey ? buildMediamtxPath(streamKey) : '';
+        const publisher = streamKey ? publisherByPath.get(effectivePath) || null : null;
         const inputHealth = buildPipelineInputHealth({
             streamKey,
             pathInfo,
@@ -669,7 +673,8 @@ function createHealthMonitorService({
 
             for (const pipeline of pipelines) {
                 const streamKey = pipeline.streamKey || '';
-                const pathInfo = streamKey ? pathByName.get(streamKey) : null;
+                const effectivePath = streamKey ? buildMediamtxPath(streamKey) : '';
+                const pathInfo = streamKey ? pathByName.get(effectivePath) : null;
                 const pipelineOutputs = outputsByPipeline.get(pipeline.id) || [];
 
                 health.pipelines[pipeline.id] = buildPipelineHealthSnapshot(

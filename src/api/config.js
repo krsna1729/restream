@@ -1,5 +1,6 @@
 const { createHash } = require('crypto');
 const { errMsg } = require('../utils/app');
+const { buildIngestUrls } = require('../utils/mediamtx');
 
 function normalizeEtag(value) {
     if (!value) return null;
@@ -116,7 +117,12 @@ function registerConfigApi({ app, db, getConfig, toPublicConfig }) {
                 return res.status(304).end();
             }
 
-            const pipelines = db.listPipelines();
+            const pipelines = await Promise.all(
+                db.listPipelines().map(async (pipeline) => ({
+                    ...pipeline,
+                    ingestUrls: await buildIngestUrls(pipeline.streamKey, getConfig),
+                })),
+            );
             const outputs = db.listOutputs();
             const jobs = db.listJobs();
             const publicConfig = toPublicConfig(getConfig());

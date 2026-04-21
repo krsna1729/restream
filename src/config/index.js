@@ -24,9 +24,6 @@ const DEFAULT_CONFIG = {
     mediamtx: {
         ingest: {
             host: null,
-            rtmpPort: 1935,
-            rtspPort: 8554,
-            srtPort: 8890,
         },
     },
 };
@@ -78,12 +75,6 @@ function sanitizeHost(value, fallback) {
     const trimmed = value.trim();
     if (!trimmed) return fallback;
     return trimmed;
-}
-
-function sanitizePort(value, fallback) {
-    const n = Number(value);
-    if (!Number.isFinite(n) || n < 1 || n > 65535) return fallback;
-    return String(Math.floor(n));
 }
 
 function applyEnvOverrides(overrides) {
@@ -157,9 +148,6 @@ function sanitizeConfig(config) {
     safe.mediamtx = {
         ingest: {
             host: sanitizeHost(ingest.host, DEFAULT_CONFIG.mediamtx.ingest.host),
-            rtmpPort: sanitizePort(ingest.rtmpPort, DEFAULT_CONFIG.mediamtx.ingest.rtmpPort),
-            rtspPort: sanitizePort(ingest.rtspPort, DEFAULT_CONFIG.mediamtx.ingest.rtspPort),
-            srtPort: sanitizePort(ingest.srtPort, DEFAULT_CONFIG.mediamtx.ingest.srtPort),
         },
     };
 
@@ -169,24 +157,6 @@ function sanitizeConfig(config) {
             'MEDIAMTX_INGEST_HOST',
             (value) => {
                 safe.mediamtx.ingest.host = sanitizeHost(value, safe.mediamtx.ingest.host);
-            },
-        ],
-        [
-            'MEDIAMTX_INGEST_RTMP_PORT',
-            (value) => {
-                safe.mediamtx.ingest.rtmpPort = sanitizePort(value, safe.mediamtx.ingest.rtmpPort);
-            },
-        ],
-        [
-            'MEDIAMTX_INGEST_RTSP_PORT',
-            (value) => {
-                safe.mediamtx.ingest.rtspPort = sanitizePort(value, safe.mediamtx.ingest.rtspPort);
-            },
-        ],
-        [
-            'MEDIAMTX_INGEST_SRT_PORT',
-            (value) => {
-                safe.mediamtx.ingest.srtPort = sanitizePort(value, safe.mediamtx.ingest.srtPort);
             },
         ],
         [
@@ -349,15 +319,7 @@ function toPublicConfig(config) {
             inputRecoveryRestartDelayMs: safe.outputRecovery.inputRecoveryRestartDelayMs,
             inputRecoveryRestartStaggerMs: safe.outputRecovery.inputRecoveryRestartStaggerMs,
         },
-        ingest: {
-            host: safe.mediamtx?.ingest?.host ?? null,
-            rtmpPort:
-                safe.mediamtx?.ingest?.rtmpPort ?? String(DEFAULT_CONFIG.mediamtx.ingest.rtmpPort),
-            rtspPort:
-                safe.mediamtx?.ingest?.rtspPort ?? String(DEFAULT_CONFIG.mediamtx.ingest.rtspPort),
-            srtPort:
-                safe.mediamtx?.ingest?.srtPort ?? String(DEFAULT_CONFIG.mediamtx.ingest.srtPort),
-        },
+        ingestHost: safe.mediamtx?.ingest?.host ?? null,
     };
 }
 

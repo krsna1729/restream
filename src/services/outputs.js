@@ -1,6 +1,11 @@
 const { createOutputRecoveryService } = require('./recovery');
 const { errMsg, log, createHttpError } = require('../utils/app');
-const { fetchMediamtxJson, getPipelineTaggedRtspUrl, getExpectedReaderTag } = require('../utils/mediamtx');
+const {
+    fetchMediamtxJson,
+    getPipelineTaggedRtspUrl,
+    getExpectedReaderTag,
+    buildMediamtxPath,
+} = require('../utils/mediamtx');
 const {
     buildCommandPreview,
     buildFfmpegOutputArgs,
@@ -88,8 +93,9 @@ function createOutputLifecycleService({
         let pathInfo = null;
         try {
             const paths = await fetchMediamtxJson('/v3/paths/list');
+            const effectivePath = buildMediamtxPath(pipeline.streamKey);
             pathInfo =
-                (paths.items || []).find((path) => path?.name === pipeline.streamKey) || null;
+                (paths.items || []).find((path) => path?.name === effectivePath) || null;
         } catch (err) {
             throw createHttpError(503, 'MediaMTX API unavailable', errMsg(err));
         }
