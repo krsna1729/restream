@@ -15,7 +15,6 @@ The background health collector fetches multiple MediaMTX APIs in parallel on a 
 | `GET /v3/rtspsessions/list` | RTSP sessions for publish-side RTP quality and session fallback lookup |
 | `GET /v3/rtmpconns/list` | RTMP publisher sessions (state/path/remote and byte counters) |
 | `GET /v3/srtconns/list` | SRT publisher sessions and ingest quality counters (RTT/loss/retrans/drop/undecrypt/rate) |
-| `GET /v3/webrtcsessions/list` | WebRTC publish sessions and ingest RTP quality counters |
 | DB: `listPipelines()` | Pipeline ↔ stream key mapping |
 | DB: `listOutputs()` | Output ↔ pipeline mapping |
 | DB: `listJobs()` | One current job row per output (upsert model) |
@@ -58,7 +57,7 @@ flowchart TD
 
 **Additional input fields from MediaMTX:**
 
-- `publishStartedAt` — `pathInfo.availableTime` (fallback `readyTime`) ISO timestamp when input became available, across publisher protocols (RTMP, RTSP, SRT, WebRTC)
+- `publishStartedAt` — `pathInfo.availableTime` (fallback `readyTime`) ISO timestamp when input became available, across publisher protocols (RTMP, RTSP, SRT)
 - `video` — from `pathInfo.tracks2` (first H264 track) + `ffprobe` cache for FPS only
 - `audio` — from `pathInfo.tracks2` (first non-video codec) + `ffprobe` cache for codec/profile, with fallback for channels/sample rate
 - `readers` — `pathInfo.readers.length`
@@ -74,7 +73,7 @@ The probe URL includes a dedicated reader tag (`reader_id=probe_<streamKey>`). T
 
 The input health payload now also includes:
 
-- `input.publisher`: active publisher identity and protocol-specific ingest quality counters (RTSP/RTMP/SRT/WebRTC)
+- `input.publisher`: active publisher identity and protocol-specific ingest quality counters (RTSP/RTMP/SRT)
 - `input.unexpectedReaders`: reader inventory that excludes expected managed output readers and internal probes
 
 `input.unexpectedReaders.count` is surfaced in the dashboard as a warning badge. Reader types outside managed RTSP outputs are treated as unexpected by design.

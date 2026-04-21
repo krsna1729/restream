@@ -52,7 +52,7 @@ function indexRtspConnectionsByReaderTag(rtspConns, rtspSessions, getReaderIdFro
     return { rtspByReaderTag, rtspConnectionById, rtspSessionRecordById };
 }
 
-function indexPublishersByPath(rtspSessions, rtmpConns, srtConns, webrtcSessions) {
+function indexPublishersByPath(rtspSessions, rtmpConns, srtConns) {
     const publisherByPath = new Map();
 
     const setPublisher = (pathName, publisher) => {
@@ -110,23 +110,6 @@ function indexPublishersByPath(rtspSessions, rtmpConns, srtConns, webrtcSessions
         });
     }
 
-    for (const session of webrtcSessions.items || []) {
-        if (session?.state !== 'publish') continue;
-        setPublisher(session?.path, {
-            id: session?.id || null,
-            protocol: 'webrtc',
-            state: session?.state || null,
-            remoteAddr: session?.remoteAddr || null,
-            bytesReceived: getSessionBytesIn(session),
-            bytesSent: getSessionBytesOut(session),
-            quality: {
-                peerConnectionEstablished: !!session?.peerConnectionEstablished,
-                inboundRTPPacketsLost: session?.inboundRTPPacketsLost || 0,
-                inboundRTPPacketsJitter: session?.inboundRTPPacketsJitter || 0,
-            },
-        });
-    }
-
     return publisherByPath;
 }
 
@@ -154,11 +137,9 @@ function buildUnexpectedReaders({
         const readerId = reader?.id || null;
 
         if (readerType !== 'rtspSession' && readerType !== 'rtspConn') {
-            unexpectedReaders.push({
-                id: readerId,
-                type: readerType,
-                reason: 'non_managed_reader_type',
-            });
+            // "Unexpected readers" is a managed-output guardrail: only RTSP readers can be
+            // correlated to output jobs through reader_id tags. Other protocols (for example
+            // HLS preview via app proxy) are intentionally ignored here.
             continue;
         }
 

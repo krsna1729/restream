@@ -529,7 +529,7 @@ Returns the current ETag without a response body. Used to poll for changes witho
 
 ### `GET /health`
 
-Returns the latest server-side health snapshot. A periodic collector refreshes this snapshot in the background by calling MediaMTX endpoints in parallel: `/v3/paths/list`, `/v3/rtspconns/list`, `/v3/rtspsessions/list`, `/v3/rtmpconns/list`, `/v3/srtconns/list`, and `/v3/webrtcsessions/list`, then merging that runtime state with DB job state and input lifecycle bookkeeping. The collector interval defaults to 2000 ms and can be overridden with `HEALTH_SNAPSHOT_INTERVAL_MS`.
+Returns the latest server-side health snapshot. A periodic collector refreshes this snapshot in the background by calling MediaMTX endpoints in parallel: `/v3/paths/list`, `/v3/rtspconns/list`, `/v3/rtspsessions/list`, `/v3/rtmpconns/list`, and `/v3/srtconns/list`, then merging that runtime state with DB job state and input lifecycle bookkeeping. The collector interval defaults to 2000 ms and can be overridden with `HEALTH_SNAPSHOT_INTERVAL_MS`.
 
 `GET /health` itself does not call MediaMTX. It returns the most recent cached snapshot immediately.
 
@@ -549,7 +549,6 @@ Headers:
     "rtspConnCount": 3,
     "rtmpConnCount": 1,
     "srtConnCount": 0,
-    "webrtcSessionCount": 0,
     "ready": true
   },
   "pipelines": {
@@ -620,7 +619,6 @@ During startup, before MediaMTX is ready, `/health` returns an initialization sn
     "rtspConnCount": 0,
     "rtmpConnCount": 0,
     "srtConnCount": 0,
-    "webrtcSessionCount": 0,
     "ready": false
   },
   "pipelines": {}

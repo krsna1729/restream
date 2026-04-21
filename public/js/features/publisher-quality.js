@@ -1,5 +1,5 @@
 function normalizePublisherProtocolLabel(protocol) {
-    const map = { rtsp: 'RTSP', rtmp: 'RTMP', srt: 'SRT', webrtc: 'WebRTC' };
+    const map = { rtsp: 'RTSP', rtmp: 'RTMP', srt: 'SRT' };
     return map[protocol] || String(protocol || '').toUpperCase();
 }
 
@@ -77,16 +77,6 @@ function getPublisherQualityMetrics(publisher) {
         rawValue: q.packetsReceivedUndecrypt,
         alertCheck: (v) => v > 0,
     });
-
-    if (publisher.protocol === 'webrtc' && q.peerConnectionEstablished !== undefined) {
-        metrics.push({
-            code: 'webrtc_peer',
-            label: 'Peer connection established',
-            value: q.peerConnectionEstablished ? 1 : 0,
-            displayValue: q.peerConnectionEstablished ? 'Yes' : 'No',
-            isAlert: false,
-        });
-    }
 
     return metrics;
 }

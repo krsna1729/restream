@@ -218,7 +218,6 @@ Parallel fetch from MediaMTX API:
   ├── GET /v3/rtspsessions/list  → rtspSessionById Map
   ├── GET /v3/rtmpconns/list     → RTMP publishers by path
   ├── GET /v3/srtconns/list      → SRT publishers by path
-  └── GET /v3/webrtcsessions/list → WebRTC publishers by path
 
 Build rtspByReaderTag Map:
   for each RTSP connection:
@@ -246,7 +245,7 @@ For each pipeline:
                = 'on'      if running AND rtspByReaderTag has reader_<pid>_<oid>
                = 'warning' if running AND no reader tag match
 
-200 { generatedAt, status: 'ready', mediamtx: { pathCount, rtspConnCount, rtmpConnCount, srtConnCount, webrtcSessionCount, ready }, pipelines: {...} }
+200 { generatedAt, status: 'ready', mediamtx: { pathCount, rtspConnCount, rtmpConnCount, srtConnCount, ready }, pipelines: {...} }
 When MediaMTX is unavailable:
 { generatedAt, status: 'degraded', mediamtx: { ...counts, ready }, pipelines: {} }
 ```
