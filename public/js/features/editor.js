@@ -308,7 +308,7 @@ function setOutputToggleBusy(button, busy) {
             document.getElementById('out-rtmp-error').classList.remove('hidden');
         }
 
-        const isOutNameValid = /^[a-zA-Z0-9_]*$/.test(data.name);
+        const isOutNameValid = !!data.name;
         if (isOutNameValid) {
             document.getElementById('out-name-input').classList.remove('input-error');
         } else {
