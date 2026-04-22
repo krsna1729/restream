@@ -70,20 +70,8 @@ function maskSecret(value) {
 
 function sanitizeLogMessage(msg, redacted = true) {
     if (!redacted) return String(msg);
-    return (
-        String(msg)
-            // Mask only the final path segment (usually the secret key/token).
-            .replace(
-                new RegExp(
-                    '(rtmps?://[^/\\s]+(?:/[^/\\s]+)*/)([^/\\s\'\"]+)(\\?[^\'\"\\s]*)?',
-                    'g',
-                ),
-                '$1***$3',
-            )
-            .replace(
-                new RegExp('(rtsp://[^/\\s]+(?:/[^/\\s]+)*/)([^/\\s\'\"]+)(\\?[^\'\"\\s]*)?', 'g'),
-                '$1***$3',
-            )
+    return String(msg).replace(/((?:rtmps?|rtsp|srt):\/\/[^\s'"<>()]+)/gi, (full, url) =>
+        maskSecret(url || full),
     );
 }
 

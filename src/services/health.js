@@ -391,22 +391,48 @@ function createHealthMonitorService({
         return cachedProbe.info;
     }
 
-    function updatePipelineInputStatusHistory(pipelineId, inputStatus) {
+    function getInputPublisherMetadata(publisher) {
+        const protocol = String(publisher?.protocol || '')
+            .trim()
+            .toLowerCase();
+        const remoteAddr = String(publisher?.remoteAddr || '').trim();
+
+        return {
+            protocol: protocol || null,
+            remoteAddr: remoteAddr || null,
+        };
+    }
+
+    function updatePipelineInputStatusHistory(pipelineId, inputStatus, options = {}) {
         const previousInputStatus = pipelineInputStatusHistory.get(pipelineId);
+        const publisherMeta = getInputPublisherMetadata(options.publisher);
+        const inputBecameOn = inputStatus === 'on';
+        const transitionDetails = inputBecameOn
+            ? ` protocol=${publisherMeta.protocol || 'unknown'} remote=${publisherMeta.remoteAddr || 'unknown'}`
+            : '';
 
         if (previousInputStatus === undefined) {
             db.appendPipelineEvent(
                 pipelineId,
-                `[input_state] initial_state=${inputStatus}`,
+                `[input_state] initial_state=${inputStatus}${transitionDetails}`,
                 'pipeline.input_state.initialized',
-                { state: inputStatus },
+                {
+                    state: inputStatus,
+                    protocol: inputBecameOn ? publisherMeta.protocol : null,
+                    remoteAddr: inputBecameOn ? publisherMeta.remoteAddr : null,
+                },
             );
         } else if (previousInputStatus !== inputStatus) {
             db.appendPipelineEvent(
                 pipelineId,
-                `[input_state] ${previousInputStatus} -> ${inputStatus}`,
+                `[input_state] ${previousInputStatus} -> ${inputStatus}${transitionDetails}`,
                 'pipeline.input_state.transitioned',
-                { from: previousInputStatus, to: inputStatus },
+                {
+                    from: previousInputStatus,
+                    to: inputStatus,
+                    protocol: inputBecameOn ? publisherMeta.protocol : null,
+                    remoteAddr: inputBecameOn ? publisherMeta.remoteAddr : null,
+                },
             );
         }
 
@@ -545,7 +571,12 @@ function createHealthMonitorService({
             db.markPipelineInputSeenLive(pipeline.id);
         }
 
-        const inputTransition = updatePipelineInputStatusHistory(pipeline.id, inputStatus);
+        const effectivePath = streamKey ? buildMediamtxPath(streamKey) : '';
+        const publisher = streamKey ? publisherByPath.get(effectivePath) || null : null;
+
+        const inputTransition = updatePipelineInputStatusHistory(pipeline.id, inputStatus, {
+            publisher,
+        });
         if (
             inputTransition.changed &&
             inputTransition.previous !== undefined &&
@@ -556,8 +587,6 @@ function createHealthMonitorService({
         }
 
         const probeInfo = getPipelineProbeInfo(streamKey, pathAvailable, nowMs);
-        const effectivePath = streamKey ? buildMediamtxPath(streamKey) : '';
-        const publisher = streamKey ? publisherByPath.get(effectivePath) || null : null;
         const inputHealth = buildPipelineInputHealth({
             streamKey,
             pathInfo,

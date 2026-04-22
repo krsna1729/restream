@@ -115,3 +115,14 @@ This keeps migration failures visible before commit.
 	- RTMP: server URL, stream key, host, port, app name
 	- RTSP: full URL remains primary, with credentials, host, port, and stream path called out when useful
 	- SRT: host, port, streamid, latency, mode, and common query params
+
+## 9. History Timeline Expectations
+
+- Output history opens with URL redaction enabled by default. The eye toggle reveals or re-hides
+	URLs in both timeline and raw modes.
+- Redaction must mask RTMP/RTSP/SRT URL secrets consistently, including SRT `streamid`
+	segments used for publish routing.
+- Output configuration edits (name, URL, encoding) should emit a `Config` timeline event in
+	output history (`[lifecycle] config_created` and `[lifecycle] config_changed`).
+- Pipeline input-state transitions to `on` should include publisher protocol and remote address in
+	the logged event payload/message for troubleshooting.
