@@ -9,9 +9,10 @@ const { errMsg } = require('./app');
 
 const fetch = global.fetch || require('node-fetch');
 
-// MediaMTX API and RTSP are always on localhost with hardcoded ports.
+// MediaMTX API, RTSP, and HLS are always on localhost with hardcoded ports.
 const MEDIAMTX_API_BASE = 'http://localhost:9997';
 const MEDIAMTX_RTSP_BASE = 'rtsp://localhost:8554';
+const MEDIAMTX_HLS_BASE = 'http://localhost:8888';
 const LIVE_PATH_PREFIX = 'live/';
 const MEDIAMTX_FETCH_TIMEOUT_MS = 5000;
 const MEDIAMTX_INGEST_PORTS_CACHE_MS = 5000;
@@ -25,6 +26,10 @@ function getMediamtxApiBaseUrl() {
 
 function getMediamtxRtspBaseUrl() {
     return MEDIAMTX_RTSP_BASE;
+}
+
+function getMediamtxHlsBaseUrl() {
+    return MEDIAMTX_HLS_BASE;
 }
 
 function buildMediamtxPath(streamKey) {
@@ -138,6 +143,7 @@ module.exports = {
     MEDIAMTX_FETCH_TIMEOUT_MS,
     getMediamtxApiBaseUrl,
     getMediamtxRtspBaseUrl,
+    getMediamtxHlsBaseUrl,
     buildMediamtxPath,
     buildIngestUrls,
     fetchMediamtxJson,

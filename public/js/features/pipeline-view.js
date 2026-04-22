@@ -1,10 +1,22 @@
-import { formatCodecName, maskSecret, msToHHMMSS, sanitizeLogMessage } from '../core/utils.js';
+import {
+    copyText,
+    formatCodecName,
+    msToHHMMSS,
+    sanitizeLogMessage,
+    showCopiedNotification,
+} from '../core/utils.js';
 import { setBadgeBitrateWithSubtleUnit, setBitrateWithSubtleUnit } from './metric-format.js';
 import { state } from '../core/state.js';
 import {
     getPublisherQualityAlerts,
     normalizePublisherProtocolLabel,
 } from './publisher-quality.js';
+import {
+    PROTOCOL_LABELS,
+    parseProtocolAwareIngestUrl,
+    renderProtocolDetails,
+} from './ingest-url-details.js';
+import { clearInputPreview, renderInputPreview } from './input-preview.js';
 
 const pipelineViewDependencies = {
     openPipelineHistoryModal: null,
@@ -17,14 +29,29 @@ const pipelineViewDependencies = {
     deleteOutBtn: null,
 };
 
+const ingestUiState = {
+    selectedProtocol: 'rtmp',
+    keyVisible: false,
+    urlVisible: false,
+};
+
+let ingestVisibilityPipeId = null;
+
 function setPipelineViewDependencies(dependencies) {
     Object.assign(pipelineViewDependencies, dependencies || {});
 }
 
     function renderPipelineInfoColumn(selectedPipe) {
         if (!selectedPipe) {
+            ingestVisibilityPipeId = null;
             document.getElementById('pipe-info-col').classList.add('hidden');
             return;
+        }
+
+        if (selectedPipe !== ingestVisibilityPipeId) {
+            ingestVisibilityPipeId = selectedPipe;
+            ingestUiState.keyVisible = false;
+            ingestUiState.urlVisible = false;
         }
 
         document.getElementById('pipe-info-col').classList.remove('hidden');
@@ -57,42 +84,148 @@ function setPipelineViewDependencies(dependencies) {
             deletePipeBtn.title = '';
         }
 
-        const streamKey = pipe.key || 'Unassigned';
-        const maskedStreamKey = pipe.key ? maskSecret(pipe.key) : streamKey;
-
-        document.getElementById('stream-key').textContent = maskedStreamKey;
-        document.getElementById('stream-key').dataset.copy = pipe.key || '';
+        const streamKey = pipe.key || '';
+        const streamKeyValue = document.getElementById('stream-key');
+        const streamKeySurface = document.getElementById('stream-key-surface');
+        const streamKeyVisibilityBtn = document.getElementById('stream-key-visibility-btn');
+        const streamKeyCopyBtn = document.getElementById('stream-key-copy-btn');
+        if (streamKeyValue) {
+            streamKeyValue.dataset.copy = '';
+            streamKeyValue.textContent = ingestUiState.keyVisible ? streamKey || 'Unassigned' : '';
+        }
+        if (streamKeySurface) {
+            streamKeySurface.classList.toggle('hidden', !ingestUiState.keyVisible || !streamKey);
+        }
+        if (streamKeyVisibilityBtn) {
+            streamKeyVisibilityBtn.disabled = !streamKey;
+            streamKeyVisibilityBtn.classList.toggle('btn-disabled', !streamKey);
+            streamKeyVisibilityBtn.textContent = ingestUiState.keyVisible ? 'Hide Key' : 'View Key';
+            streamKeyVisibilityBtn.onclick = () => {
+                if (!pipe.key) return;
+                ingestUiState.keyVisible = !ingestUiState.keyVisible;
+                renderPipelineInfoColumn(selectedPipe);
+            };
+        }
+        if (streamKeyCopyBtn) {
+            streamKeyCopyBtn.disabled = !streamKey;
+            streamKeyCopyBtn.classList.toggle('btn-disabled', !streamKey);
+            streamKeyCopyBtn.onclick = async () => {
+                if (!streamKey) return;
+                if (await copyText(streamKey)) showCopiedNotification();
+            };
+        }
 
         const ingestUrls = pipe.ingestUrls || {};
+        const availableProtocols = ['rtmp', 'rtsp', 'srt'].filter((protocol) => {
+            const url = ingestUrls[protocol];
+            return typeof url === 'string' && url.trim() !== '';
+        });
 
-        const setIngestUrlRow = (rowId, valueId, url) => {
-            const row = document.getElementById(rowId);
-            const valueEl = document.getElementById(valueId);
-            if (!row || !valueEl) return false;
-
-            const hasUrl = typeof url === 'string' && url.trim() !== '';
-            row.classList.toggle('hidden', !hasUrl);
-            valueEl.textContent = hasUrl ? maskSecret(url) : '';
-            valueEl.dataset.copy = hasUrl ? url : '';
-            return hasUrl;
-        };
-
-        const hasRtmpUrl = setIngestUrlRow('ingest-url-rtmp-row', 'rtmp-url', ingestUrls.rtmp);
-        const hasRtspUrl = setIngestUrlRow('ingest-url-rtsp-row', 'rtsp-url', ingestUrls.rtsp);
-        const hasSrtUrl = setIngestUrlRow('ingest-url-srt-row', 'srt-url', ingestUrls.srt);
-        const ingestHeaderRow = document.getElementById('ingest-urls-header-row');
-        if (ingestHeaderRow) {
-            ingestHeaderRow.classList.toggle('hidden', !(hasRtmpUrl || hasRtspUrl || hasSrtUrl));
+        if (!availableProtocols.includes(ingestUiState.selectedProtocol)) {
+            ingestUiState.selectedProtocol = availableProtocols[0] || 'rtmp';
         }
+
+        ['rtmp', 'rtsp', 'srt'].forEach((protocol) => {
+            const btn = document.getElementById(`ingest-protocol-${protocol}`);
+            if (!btn) return;
+
+            const isAvailable = availableProtocols.includes(protocol);
+            const isActive = ingestUiState.selectedProtocol === protocol;
+
+            btn.disabled = !isAvailable;
+            btn.classList.toggle('btn-disabled', !isAvailable);
+            btn.classList.remove(
+                'border-accent/35',
+                'bg-accent/18',
+                'text-accent',
+                'border-base-content/10',
+                'bg-base-100/70',
+                'text-base-content/80',
+                'opacity-60',
+            );
+            if (isActive && isAvailable) {
+                btn.classList.add('border-accent/35', 'bg-accent/18', 'text-accent');
+            } else {
+                btn.classList.add('border-base-content/10', 'bg-base-100/70', 'text-base-content/80');
+            }
+            if (!isAvailable) {
+                btn.classList.add('opacity-60');
+            }
+            btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+            btn.onclick = () => {
+                if (!isAvailable) return;
+                ingestUiState.selectedProtocol = protocol;
+                renderPipelineInfoColumn(selectedPipe);
+            };
+        });
+
+        const selectedProtocol = ingestUiState.selectedProtocol;
+        const selectedUrl = ingestUrls[selectedProtocol] || '';
+
+        const ingestUrlSection = document.getElementById('ingest-url-section');
+        if (ingestUrlSection) {
+            ingestUrlSection.classList.toggle('hidden', availableProtocols.length === 0);
+        }
+
+        const ingestUrlTitle = document.getElementById('ingest-url-title');
+        if (ingestUrlTitle) {
+            const protocolLabel = PROTOCOL_LABELS[selectedProtocol] || 'Publish';
+            ingestUrlTitle.textContent = `${protocolLabel} Publish URL`;
+        }
+
+        const ingestUrlValue = document.getElementById('ingest-url');
+        const ingestUrlSurface = document.getElementById('ingest-url-surface');
+        if (ingestUrlValue) {
+            ingestUrlValue.dataset.copy = '';
+            ingestUrlValue.textContent = ingestUiState.urlVisible ? selectedUrl || '--' : '';
+        }
+        if (ingestUrlSurface) {
+            ingestUrlSurface.classList.toggle('hidden', !ingestUiState.urlVisible || !selectedUrl);
+        }
+
+        const ingestUrlVisibilityBtn = document.getElementById('ingest-url-visibility-btn');
+        if (ingestUrlVisibilityBtn) {
+            ingestUrlVisibilityBtn.disabled = !selectedUrl;
+            ingestUrlVisibilityBtn.classList.toggle('btn-disabled', !selectedUrl);
+            ingestUrlVisibilityBtn.textContent = ingestUiState.urlVisible ? 'Hide URL' : 'View URL';
+            ingestUrlVisibilityBtn.onclick = () => {
+                if (!selectedUrl) return;
+                ingestUiState.urlVisible = !ingestUiState.urlVisible;
+                renderPipelineInfoColumn(selectedPipe);
+            };
+        }
+
+        const ingestUrlCopyBtn = document.getElementById('ingest-url-copy-btn');
+        if (ingestUrlCopyBtn) {
+            ingestUrlCopyBtn.disabled = !selectedUrl;
+            ingestUrlCopyBtn.classList.toggle('btn-disabled', !selectedUrl);
+            ingestUrlCopyBtn.onclick = async () => {
+                if (!selectedUrl) return;
+                if (await copyText(selectedUrl)) showCopiedNotification();
+            };
+        }
+
+        const ingestUrlDetails = document.getElementById('ingest-url-details');
+        const ingestDetailsGrid = document.getElementById('ingest-details-grid');
+        const parsedIngestDetails = parseProtocolAwareIngestUrl(selectedProtocol, selectedUrl);
+        if (ingestUrlDetails) {
+            ingestUrlDetails.classList.toggle(
+                'hidden',
+                !ingestUiState.urlVisible || !selectedUrl || !parsedIngestDetails,
+            );
+        }
+        renderProtocolDetails(ingestDetailsGrid, selectedProtocol, parsedIngestDetails);
 
         const playerElem = document.getElementById('video-player');
         const inputStatsElem = document.getElementById('input-stats');
         if (pipe.input.status === 'off') {
             playerElem.classList.add('hidden');
             inputStatsElem.classList.add('hidden');
+            clearInputPreview(playerElem);
         } else {
             playerElem.classList.remove('hidden');
             inputStatsElem.classList.remove('hidden');
+            renderInputPreview(playerElem, pipe);
 
             const video = pipe.input.video || {};
             const audio = pipe.input.audio || {};

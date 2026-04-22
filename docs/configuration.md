@@ -18,6 +18,7 @@ Restream configuration uses two layers with precedence:
 The backend assumes MediaMTX is always available on `localhost` with default ports:
 - API: `http://localhost:9997`
 - RTSP: `rtsp://localhost:8554`
+- HLS: `http://localhost:8888`
 
 These are hardcoded in the application and cannot be overridden via environment variables.
 
@@ -171,10 +172,11 @@ Starts `mediamtx` + `nginx-rtmp` in Docker and runs Node on host.
 docker compose --profile host up -d mediamtx nginx-rtmp
 ```
 
-MediaMTX config binds API to localhost by default (`apiAddress: 127.0.0.1:9997`). Compose however overrides with
-`MTX_APIADDRESS=0.0.0.0:9997` inside the mediamtx container (`host` profile) so that `localhost:9997` from host works.
-Without this Node will not be able to access the MediaMTX API. Host exposure remains local-only via
-`127.0.0.1:9997:9997` port mapping. Container mode does not have this issue.
+MediaMTX config binds API and HLS to localhost by default (`apiAddress: 127.0.0.1:9997`,
+`hlsAddress: 127.0.0.1:8888`). Compose host profile overrides those inside the mediamtx container with
+`MTX_APIADDRESS=0.0.0.0:9997` and `MTX_HLSADDRESS=0.0.0.0:8888` so host-mode development can reach both services.
+Host exposure remains local-only via `127.0.0.1:9997:9997` (API) and
+`127.0.0.1:8888:8888` (HLS) port mappings.
 
 ### Container mode (`make run-docker`)
 
@@ -212,5 +214,36 @@ environment:
 | `8890` | SRT | SRT ingest |
 | `9997` | HTTP | MediaMTX API |
 | `8888` | HTTP | HLS / HTTP interface |
-| `8889` | HTTP/WS | WebRTC signaling |
-| `8189` | TCP/UDP | WebRTC media |
+
+## 5. Input Preview Proxy
+
+Dashboard input preview uses an app-level HLS proxy endpoint instead of sending browser traffic directly
+to MediaMTX.
+
+- Browser URL shape: `/preview/hls/<streamKey>/index.m3u8`
+- App proxy upstream: `http://localhost:8888/live/<streamKey>/...`
+
+Why this exists:
+
+- keep browser requests on the same origin as the dashboard
+- avoid exposing MediaMTX HLS directly to remote clients for preview
+- centralize preview policy and error handling in the app
+
+Notes:
+
+- The proxy validates stream keys and asset paths before forwarding.
+  Stream keys allow alphanumeric, `_`, `.`, and `-`, with `.` and `..` explicitly rejected.
+- The dashboard preview now uses the normal proxied HLS master manifest unchanged.
+- The backend no longer rewrites preview manifests; `.m3u8` requests are forwarded as plain
+  pass-through proxy responses after validation.
+- Current Chromium plus bundled `hls.js` playback works against that unchanged master manifest in
+  this repository's preview flow.
+- MediaMTX is configured for lower idle resource usage with `hlsAlwaysRemux: no` and
+  `hlsVariant: mpegts`.
+- This avoids maintaining active HLS muxers for all ready paths and reduces steady CPU/RAM use.
+- The tradeoff is slower first-preview startup because muxers are created on demand when a viewer
+  clicks Play.
+- In HTTPS deployments, terminate TLS on the dashboard origin and keep preview requests
+  same-origin so browsers do not hit mixed-content blocks.
+- The dashboard preview player is lazy-loaded: selecting a pipeline does not request HLS
+  assets until the user presses Play.

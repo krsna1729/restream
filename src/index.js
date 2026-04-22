@@ -8,6 +8,7 @@ const { spawn } = require('child_process');
 const db = require('./db');
 const { getConfig, toPublicConfig } = require('./config');
 const { registerConfigApi } = require('./api/config');
+const { registerPreviewProxyRoutes } = require('./api/preview');
 const { registerOutputApi } = require('./api/outputs');
 const { registerPipelineApi } = require('./api/pipelines');
 const { createHealthMonitorService } = require('./services/health');
@@ -15,8 +16,10 @@ const { createOutputLifecycleService } = require('./services/outputs');
 const { startServer } = require('./services/bootstrap');
 const { registerSystemMetricsApi } = require('./api/metrics');
 const { log } = require('./utils/app');
+const { buildMediamtxPath, getMediamtxHlsBaseUrl } = require('./utils/mediamtx');
 
 const app = express();
+const REVALIDATE_STATIC_CACHE_CONTROL = 'public, max-age=0, must-revalidate';
 app.use(express.json());
 app.use(
     compression({
@@ -124,8 +127,31 @@ registerOutputApi({
 
 healthMonitor.registerRoutes(app);
 registerSystemMetricsApi({ app });
+registerPreviewProxyRoutes({
+    app,
+    fetch,
+    log,
+    getMediamtxHlsBaseUrl,
+    buildMediamtxPath,
+});
 
 // ── Static UI ─────────────────────────────────────────
+const hlsVendorDir = path.join(__dirname, '..', 'node_modules', 'hls.js', 'dist');
+app.use(
+    '/vendor',
+    express.static(hlsVendorDir, {
+        maxAge: '1h',
+        etag: true,
+        lastModified: true,
+        setHeaders: (res, filePath) => {
+            const ext = path.extname(filePath).toLowerCase();
+            if (ext === '.js') {
+                res.setHeader('Cache-Control', REVALIDATE_STATIC_CACHE_CONTROL);
+            }
+        },
+    }),
+);
+
 const publicDir = path.join(__dirname, '..', 'public');
 app.use(
     '/',
@@ -142,9 +168,9 @@ app.use(
                 return;
             }
 
-            // Force revalidation for module-bearing assets to avoid stale mixed-version loads.
+            // Revalidate JS/CSS on reload while still allowing browser/proxy caching.
             if (ext === '.js' || ext === '.css') {
-                res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+                res.setHeader('Cache-Control', REVALIDATE_STATIC_CACHE_CONTROL);
             }
         },
     }),

@@ -609,14 +609,13 @@ function createHealthMonitorService({
         }
 
         try {
-            const [paths, rtspConns, rtspSessions, rtmpConns, srtConns, webrtcSessions] =
+            const [paths, rtspConns, rtspSessions, rtmpConns, srtConns] =
                 await Promise.all([
                     fetchMediamtxJson('/v3/paths/list'),
                     fetchMediamtxJson('/v3/rtspconns/list'),
                     fetchMediamtxJson('/v3/rtspsessions/list'),
                     fetchMediamtxJson('/v3/rtmpconns/list'),
                     fetchMediamtxJson('/v3/srtconns/list'),
-                    fetchMediamtxJson('/v3/webrtcsessions/list'),
                 ]);
 
             log('debug', 'Fetched MediaMTX health sources', {
@@ -625,7 +624,6 @@ function createHealthMonitorService({
                 rtspSessionCount: rtspSessions.itemCount || 0,
                 rtmpConnCount: rtmpConns.itemCount || 0,
                 srtConnCount: srtConns.itemCount || 0,
-                webrtcSessionCount: webrtcSessions.itemCount || 0,
                 rtspConnSummaries: (rtspConns.items || []).slice(0, 20).map((conn) => ({
                     id: conn?.id || null,
                     state: conn?.state || null,
@@ -645,7 +643,6 @@ function createHealthMonitorService({
                 rtspSessions,
                 rtmpConns,
                 srtConns,
-                webrtcSessions,
             );
 
             if ((rtspConns.items || []).length > 0 && rtspByReaderTag.size === 0) {
@@ -699,7 +696,6 @@ function createHealthMonitorService({
                     rtspConnCount: rtspConns.itemCount || 0,
                     rtmpConnCount: rtmpConns.itemCount || 0,
                     srtConnCount: srtConns.itemCount || 0,
-                    webrtcSessionCount: webrtcSessions.itemCount || 0,
                     ready: mediamtxReadiness.ready,
                 },
                 ...health,
@@ -718,7 +714,6 @@ function createHealthMonitorService({
                     rtspConnCount: latestHealthSnapshot?.mediamtx?.rtspConnCount || 0,
                     rtmpConnCount: latestHealthSnapshot?.mediamtx?.rtmpConnCount || 0,
                     srtConnCount: latestHealthSnapshot?.mediamtx?.srtConnCount || 0,
-                    webrtcSessionCount: latestHealthSnapshot?.mediamtx?.webrtcSessionCount || 0,
                     ready: mediamtxReadiness.ready,
                 },
                 pipelines: latestHealthSnapshot?.pipelines || {},

@@ -7,6 +7,7 @@
         "start": "node src/index.js",
         "dev": "npx nodemon --ignore 'test/artifacts/**' src/index.js",
         "test": "echo \"Error: no test specified\" && exit 1",
+        "test:routes": "node --test test/routes/*.test.js",
         "test:4x3": "node test/artifacts/run-4x3.mjs"
     },
     "keywords": [],
@@ -20,7 +21,8 @@
     "dependencies": {
         "better-sqlite3": "12.6.0",
         "compression": "^1.8.1",
-        "express": "5.1.0"
+        "express": "5.1.0",
+        "hls.js": "^1.5.20"
     },
     "devDependencies": {
         "@tailwindcss/cli": "4.1.18",
@@ -28,6 +30,7 @@
         "nodemon": "3.1.11",
         "prettier": "3.7.4",
         "prettier-plugin-tailwindcss": "0.7.2",
+        "supertest": "^7.2.2",
         "tailwindcss": "4.1.18"
     }
 }

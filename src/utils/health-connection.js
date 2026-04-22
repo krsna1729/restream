@@ -52,7 +52,7 @@ function indexRtspConnectionsByReaderTag(rtspConns, rtspSessions, getReaderIdFro
     return { rtspByReaderTag, rtspConnectionById, rtspSessionRecordById };
 }
 
-function indexPublishersByPath(rtspSessions, rtmpConns, srtConns, webrtcSessions) {
+function indexPublishersByPath(rtspSessions, rtmpConns, srtConns) {
     const publisherByPath = new Map();
 
     const setPublisher = (pathName, publisher) => {
@@ -110,23 +110,6 @@ function indexPublishersByPath(rtspSessions, rtmpConns, srtConns, webrtcSessions
         });
     }
 
-    for (const session of webrtcSessions.items || []) {
-        if (session?.state !== 'publish') continue;
-        setPublisher(session?.path, {
-            id: session?.id || null,
-            protocol: 'webrtc',
-            state: session?.state || null,
-            remoteAddr: session?.remoteAddr || null,
-            bytesReceived: getSessionBytesIn(session),
-            bytesSent: getSessionBytesOut(session),
-            quality: {
-                peerConnectionEstablished: !!session?.peerConnectionEstablished,
-                inboundRTPPacketsLost: session?.inboundRTPPacketsLost || 0,
-                inboundRTPPacketsJitter: session?.inboundRTPPacketsJitter || 0,
-            },
-        });
-    }
-
     return publisherByPath;
 }
 
@@ -148,10 +131,19 @@ function buildUnexpectedReaders({
         expectedReaderTags.add(generateProbeReaderTag(streamKey));
     }
     const unexpectedReaders = [];
+    let ignoredInternalHlsMuxer = false;
 
     for (const reader of readers) {
         const readerType = String(reader?.type || 'unknown');
         const readerId = reader?.id || null;
+        const normalizedReaderType = readerType.toLowerCase();
+
+        if (normalizedReaderType === 'hlsmuxer' && !ignoredInternalHlsMuxer) {
+            // MediaMTX exposes one internal HLS muxer reader per ready path when HLS is enabled.
+            // Ignore this single internal reader to avoid noisy dashboard warnings.
+            ignoredInternalHlsMuxer = true;
+            continue;
+        }
 
         if (readerType !== 'rtspSession' && readerType !== 'rtspConn') {
             unexpectedReaders.push({

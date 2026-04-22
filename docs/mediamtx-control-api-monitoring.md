@@ -155,7 +155,7 @@ Important runtime fields on `WebRTCSession` objects:
 - `state`, `path`, `query`, and `user` identify the viewer or publisher and target stream.
 - `inboundRTPPacketsLost`, `inboundRTPPacketsJitter`, `outboundFramesDiscarded`, and byte counters expose playback quality.
 
-For Restream specifically, WebRTC monitoring is also a major gap because WebRTC playback is enabled in the current MediaMTX config and the dashboard does not surface active WebRTC viewers at all.
+For Restream specifically, WebRTC monitoring remains a future gap to revisit if WebRTC playback is re-enabled. The current repo config disables WebRTC, so the missing viewer telemetry is dormant today even though these control API endpoints remain the relevant source.
 
 ### WebRTC Ingest Restriction (Playback-Only Policy)
 
@@ -198,7 +198,7 @@ Important runtime fields on `Recording` objects:
 
 Restream already has a good foundation around runtime path health and FFmpeg output correlation:
 
-- `src/index.js` builds a cached health snapshot from `paths`, `rtspconns`, `rtspsessions`, `rtmpconns`, `srtconns`, and `webrtcsessions`.
+- `src/services/health.js` builds a cached health snapshot from `paths`, `rtspconns`, `rtspsessions`, `rtmpconns`, and `srtconns`; the WebRTC session API remains documented here for future use, but current runtime collection leaves it disabled with WebRTC off in `mediamtx.yml`.
 - `docs/health-mapping.md` documents the current input and output status derivation model.
 - `public/js/features/render.js` renders publisher protocol/remote badges plus ingest-side quality status and modal details.
 

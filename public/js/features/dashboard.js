@@ -1,6 +1,6 @@
 import { getConfig, getConfigVersion, getHealth, getSystemMetrics } from '../core/api.js';
 import { parsePipelinesInfo } from '../core/pipeline.js';
-import { setServerConfig } from '../core/utils.js';
+import { getUrlParam, readSelectedPipelineHint, setServerConfig } from '../core/utils.js';
 import { renderPipelines, renderMetrics } from './render.js';
 import { syncHistoryPollingWithVisibility } from '../history/controller.js';
 import { state } from '../core/state.js';
@@ -82,6 +82,39 @@ function applyHealthSlice(result) {
 function applyMetricsSlice(result) {
     if (result === null) return;
     state.metrics = result;
+}
+
+function replaceUrlParam(param, value) {
+    const url = new URL(window.location);
+    if (value === null) {
+        url.searchParams.delete(param);
+    } else {
+        url.searchParams.set(param, value);
+    }
+    window.history.replaceState({}, '', url);
+}
+
+function reconcileSelectedPipeline(previousPipelines = []) {
+    const selectedPipeId = getUrlParam('p');
+    if (!selectedPipeId) return;
+    if (state.pipelines.some((pipe) => pipe.id === selectedPipeId)) return;
+
+    const previousSelectionById = previousPipelines.find((pipe) => pipe.id === selectedPipeId) || null;
+    const persistedHint = readSelectedPipelineHint();
+
+    if (!previousSelectionById && !persistedHint) {
+        replaceUrlParam('p', null);
+        return;
+    }
+
+    const replacement = state.pipelines.find((pipe) => {
+        if (previousSelectionById?.key && pipe.key === previousSelectionById.key) return true;
+        if (previousSelectionById?.name && pipe.name === previousSelectionById.name) return true;
+        if (persistedHint?.name && pipe.name === persistedHint.name) return true;
+        return false;
+    });
+
+    replaceUrlParam('p', replacement?.id ?? null);
 }
 
 function applyUserConfigBaseline(etagValue) {
@@ -196,7 +229,9 @@ async function fetchAndRerender(attempt = 0) {
     applyConfigSlice(configResult);
     applyHealthSlice(healthResult);
     applyMetricsSlice(metricsResult);
+    const previousPipelines = state.pipelines;
     state.pipelines = parsePipelinesInfo(state.config, state.health);
+    reconcileSelectedPipeline(previousPipelines);
     renderPipelines();
     renderMetrics();
     dashboardHooks.afterRender?.();

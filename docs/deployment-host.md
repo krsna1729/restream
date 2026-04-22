@@ -69,11 +69,21 @@ sudo cp /opt/restream/infra/mediamtx.yml /etc/restream/mediamtx.yml
 sudo chown restream:restream /etc/restream/mediamtx.yml
 ```
 
-3. Ensure API binding remains local-only:
+3. Ensure API and HLS bindings remain local-only:
 
 - `apiAddress: 127.0.0.1:9997`
+- `hlsAddress: 127.0.0.1:8888`
 
-4. Open ingest ports to publishers as needed:
+4. Preview latency versus resource use:
+
+- The checked-in `mediamtx.yml` keeps HLS muxers on-demand with `hlsAlwaysRemux: no` and uses
+  `hlsVariant: mpegts`.
+- This reduces steady CPU/RAM use when many inputs are idle, because MediaMTX does not maintain
+  active HLS muxers for every ready path.
+- The tradeoff is slower first-preview startup delay in the dashboard, since MediaMTX must spin up
+  a fresh HLS muxer on the first viewer request.
+
+5. Open ingest ports to publishers as needed:
 
 - 1935 (RTMP)
 - 8554 (RTSP)
