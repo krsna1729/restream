@@ -368,7 +368,7 @@ function setPipelineViewDependencies(dependencies) {
             const toggleBtn = document.createElement('button');
             toggleBtn.className = `btn btn-xs ${isRunning ? 'btn-accent btn-outline' : 'btn-accent'}`;
             toggleBtn.dataset.outputIndex = String(outputIndex);
-            toggleBtn.textContent = isRunning ? 'stop' : 'start';
+            toggleBtn.textContent = isRunning ? 'Stop' : 'Start';
             const toggleBusy = pipelineViewDependencies.isOutputToggleBusy?.(pipe.id, o.id);
             toggleBtn.disabled = !!toggleBusy;
             toggleBtn.classList.toggle('btn-disabled', !!toggleBusy);
@@ -402,11 +402,6 @@ function setPipelineViewDependencies(dependencies) {
             outputName.className = 'min-w-0 truncate';
             outputName.textContent = o.name;
             heading.appendChild(outputName);
-
-            const desiredStateBadge = document.createElement('span');
-            desiredStateBadge.className = `badge badge-sm whitespace-nowrap ${o.desiredState === 'running' ? 'badge-info' : 'badge-ghost'}`;
-            desiredStateBadge.textContent = `intent: ${o.desiredState === 'running' ? 'run' : 'stop'}`;
-            heading.appendChild(desiredStateBadge);
 
             const metadataRow = document.createElement('div');
             metadataRow.className =
