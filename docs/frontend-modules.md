@@ -135,6 +135,7 @@ This keeps migration failures visible before commit.
 	- RTMP: known platform endpoints plus `Custom`
 	- RTSP: `Custom` only
 	- SRT: `Custom` only
+- For new outputs in RTMP mode, the Server URL preset defaults to `YouTube` (stream key remains editable).
 - Protocol, encoding, and server selector controls should remain grouped into one compact row in
 	the modal header area.
 - Operator fields are protocol-specific and switch live with the protocol selector.

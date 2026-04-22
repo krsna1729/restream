@@ -12,8 +12,8 @@ async function updateLocalConfigBaseline() {
 }
 
 const OUTPUT_SERVER_PRESETS = {
+    // Keep the preferred RTMP default first; modal create/switch flows read rtmp[0].
     rtmp: [
-        { label: 'Custom', value: '' },
         { label: 'YouTube', value: 'rtmp://a.rtmp.youtube.com/live2/' },
         { label: 'YT Backup', value: 'rtmp://b.rtmp.youtube.com/live2?backup=1/' },
         { label: 'Facebook', value: 'rtmps://live-api-s.facebook.com:443/rtmp/' },
@@ -23,6 +23,7 @@ const OUTPUT_SERVER_PRESETS = {
         },
         { label: 'VDO Cipher', value: 'rtmp://live-ingest-01.vd0.co:1935/livestream/' },
         { label: 'VK Video', value: 'rtmp://ovsu.okcdn.ru/input/' },
+        { label: 'Custom', value: '' },
     ],
     rtsp: [{ label: 'Custom', value: '' }],
     srt: [{ label: 'Custom', value: '' }],
@@ -430,7 +431,7 @@ function setupOutputModalProtocolHandlers() {
         const previousRaw = rawInput.value.trim();
 
         if (protocol === 'rtmp') {
-            let selectedServer = '';
+            let selectedServer = OUTPUT_SERVER_PRESETS.rtmp[0]?.value || '';
             const parsed = safeParseUrl(previousRaw);
             let normalizedRaw = previousRaw;
 
@@ -444,13 +445,13 @@ function setupOutputModalProtocolHandlers() {
                     ? previousRaw.replace(selectedServer, '')
                     : previousRaw;
             } else {
-                normalizedRaw = buildDefaultCustomOutputUrl('rtmp', previousRaw);
+                normalizedRaw = getDefaultOutputToken(previousRaw);
             }
 
             populateOutputServerOptions('rtmp', selectedServer);
             if (selectedServer) {
-                rawInput.value = normalizedRaw;
-                syncRtmpOperatorFieldsFromRawInput(`${selectedServer}${normalizedRaw}`);
+                rawInput.value = normalizedRaw || getDefaultOutputToken(previousRaw);
+                syncRtmpOperatorFieldsFromRawInput(`${selectedServer}${rawInput.value}`);
             } else {
                 const sourceUrl =
                     isAbsoluteUrl(normalizedRaw)
@@ -782,7 +783,11 @@ function setOutputToggleBusy(button, busy) {
             mode === 'edit' && !!output && (output.status === 'on' || output.status === 'warning');
 
         const baseRtmpUrl = `rtmp://${document.location.hostname}:1935/live/`;
-        const currentUrl = output?.url || `${baseRtmpUrl}test`;
+        const isCreateMode = mode !== 'edit' || !output;
+        const defaultRtmpServerUrl = OUTPUT_SERVER_PRESETS.rtmp[0]?.value || '';
+        const currentUrl = isCreateMode
+            ? `${defaultRtmpServerUrl || baseRtmpUrl}test`
+            : output?.url || `${baseRtmpUrl}test`;
         const detectedProtocol = detectOutputProtocol(currentUrl);
         const protocolSelect = document.getElementById('out-protocol-input');
         const serverSelect = document.getElementById('out-server-url-input');
