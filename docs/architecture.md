@@ -152,9 +152,9 @@ Build FFmpeg args:
            vertical-rotate: -vf transpose=1,scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280 + libx264/aac
            720p: -vf scale=-2:720 + libx264/aac
            1080p: -vf scale=-2:1080 + libx264/aac
-         -flvflags no_duration_filesize
-         -rtmp_live live
-         -f flv <outputUrl>
+         protocol-specific output flags:
+           rtmp/rtmps: -flvflags no_duration_filesize -rtmp_live live -f flv <outputUrl>
+           srt: -f mpegts <outputUrl>
   │
   ▼
 spawn(ffmpegCmd, args)

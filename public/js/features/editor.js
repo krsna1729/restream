@@ -1,5 +1,5 @@
 import { getStreamKeys, startOut, stopOut, createPipeline, updatePipeline, deletePipeline, createOutput, updateOutput, deleteOutput } from '../core/api.js';
-import { getUrlParam, isValidRtmp, setUrlParam } from '../core/utils.js';
+import { getUrlParam, isValidOutput, setUrlParam } from '../core/utils.js';
 import { state } from '../core/state.js';
 import { refreshDashboard, syncUserConfigBaseline } from './dashboard.js';
 import {
@@ -299,7 +299,7 @@ function setOutputToggleBusy(button, busy) {
             data.url = data.url.replaceAll('${s_prp}', params.get('s_prp'));
         }
 
-        const isRtmpValid = isRunningEdit ? true : isValidRtmp(data.url);
+        const isRtmpValid = isRunningEdit ? true : isValidOutput(data.url);
         if (isRtmpValid) {
             document.getElementById('out-rtmp-key-input').classList.remove('input-error');
             document.getElementById('out-rtmp-error').classList.add('hidden');

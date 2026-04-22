@@ -103,10 +103,17 @@ function formatCodecName(codec) {
     return codec;
 }
 
-function isValidRtmp(str) {
-    // YouTube backup URL is a little funny
-    if (str.includes(' ')) return false;
-    return str.startsWith('rtmp://') || str.startsWith('rtmps://');
+function isValidOutput(str) {
+    if (!str || str.includes(' ')) return false;
+    try {
+        const parsed = new URL(str);
+        return (
+            !!parsed.hostname &&
+            (parsed.protocol === 'rtmp:' || parsed.protocol === 'rtmps:' || parsed.protocol === 'srt:')
+        );
+    } catch {
+        return false;
+    }
 }
 
 function legacyCopy(text) {
@@ -289,7 +296,7 @@ export {
     maskSecret,
     sanitizeLogMessage,
     formatCodecName,
-    isValidRtmp,
+    isValidOutput,
     legacyCopy,
     copyText,
     copyData,

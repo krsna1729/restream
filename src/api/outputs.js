@@ -1,5 +1,9 @@
 const { errMsg, validateName } = require('../utils/app');
-const { normalizeOutputEncoding, validateOutputUrl } = require('../utils/ffmpeg');
+const {
+    normalizeOutputEncoding,
+    validateOutputUrl,
+    INVALID_OUTPUT_URL_ERROR,
+} = require('../utils/ffmpeg');
 
 const HISTORY_MESSAGE_PREFIXES = {
     lifecycle: '[lifecycle]',
@@ -15,7 +19,6 @@ const HISTORY_MAX_HIGH_VOLUME_RANGE_MS = 10 * 60 * 1000;
 const HISTORY_HIGH_VOLUME_PREFIXES = new Set(['[stderr]', '[exit]', '[control]']);
 const INVALID_OUTPUT_ENCODING_ERROR =
     'Encoding must be one of: source, vertical-crop, vertical-rotate, 720p, 1080p';
-const INVALID_OUTPUT_URL_ERROR = 'Output URL must be a valid rtmp:// or rtmps:// URL';
 const OUTPUT_MUTATION_WHILE_RUNNING_ERROR =
     'Cannot change output URL or encoding while output is running. Stop output first.';
 

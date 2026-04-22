@@ -9,6 +9,7 @@ const {
 const {
     buildCommandPreview,
     buildFfmpegOutputArgs,
+    INVALID_OUTPUT_URL_ERROR,
     normalizeOutputEncoding,
     redactFfmpegArgs,
     redactSensitiveUrl,
@@ -116,7 +117,7 @@ function createOutputLifecycleService({
         const outputUrl = output.url;
         if (!outputUrl) throw createHttpError(400, 'Output URL is empty');
         if (!validateOutputUrl(outputUrl)) {
-            throw createHttpError(400, 'Output URL must be a valid rtmp:// or rtmps:// URL');
+            throw createHttpError(400, INVALID_OUTPUT_URL_ERROR);
         }
 
         const outputEncoding = normalizeOutputEncoding(output.encoding) || 'source';

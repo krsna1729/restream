@@ -73,6 +73,8 @@ const SUPPORTED_OUTPUT_ENCODINGS = new Set([
     '1080p',
 ]);
 
+const INVALID_OUTPUT_URL_ERROR = 'Output URL must be a valid rtmp://, rtmps://, or srt:// URL';
+
 function normalizeOutputEncoding(value) {
     const normalized = String(value ?? 'source')
         .trim()
@@ -93,13 +95,20 @@ function validateOutputUrl(url) {
     } catch {
         return false;
     }
-    return parsed.protocol === 'rtmp:' || parsed.protocol === 'rtmps:';
+    if (!parsed.hostname) return false;
+    return parsed.protocol === 'rtmp:' || parsed.protocol === 'rtmps:' || parsed.protocol === 'srt:';
 }
 
 // ── FFmpeg argument builder ───────────────────────────
 
 function buildFfmpegOutputArgs({ inputUrl, outputUrl, encoding = 'source' }) {
     const normalizedEncoding = normalizeOutputEncoding(encoding) || 'source';
+    let outputProtocol = '';
+    try {
+        outputProtocol = new URL(outputUrl).protocol;
+    } catch {
+        outputProtocol = '';
+    }
     const args = [
         '-nostdin',
         '-hide_banner',
@@ -183,6 +192,11 @@ function buildFfmpegOutputArgs({ inputUrl, outputUrl, encoding = 'source' }) {
         );
     }
 
+    if (outputProtocol === 'srt:') {
+        args.push('-f', 'mpegts', outputUrl);
+        return args;
+    }
+
     args.push('-flvflags', 'no_duration_filesize', '-rtmp_live', 'live', '-f', 'flv', outputUrl);
     return args;
 }
@@ -257,6 +271,7 @@ module.exports = {
     redactSensitiveUrl,
     redactFfmpegArgs,
     normalizeOutputEncoding,
+    INVALID_OUTPUT_URL_ERROR,
     validateOutputUrl,
     buildFfmpegOutputArgs,
     tryParseOutputMedia,
