@@ -97,7 +97,11 @@ function isValidOutput(str) {
         const parsed = new URL(str);
         return (
             !!parsed.hostname &&
-            (parsed.protocol === 'rtmp:' || parsed.protocol === 'rtmps:' || parsed.protocol === 'srt:')
+            (parsed.protocol === 'rtmp:' ||
+                parsed.protocol === 'rtmps:' ||
+                parsed.protocol === 'rtsp:' ||
+                parsed.protocol === 'rtsps:' ||
+                parsed.protocol === 'srt:')
         );
     } catch {
         return false;

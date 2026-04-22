@@ -73,7 +73,8 @@ const SUPPORTED_OUTPUT_ENCODINGS = new Set([
     '1080p',
 ]);
 
-const INVALID_OUTPUT_URL_ERROR = 'Output URL must be a valid rtmp://, rtmps://, or srt:// URL';
+const INVALID_OUTPUT_URL_ERROR =
+    'Output URL must be a valid rtmp://, rtmps://, rtsp://, rtsps://, or srt:// URL';
 
 function normalizeOutputEncoding(value) {
     const normalized = String(value ?? 'source')
@@ -96,7 +97,13 @@ function validateOutputUrl(url) {
         return false;
     }
     if (!parsed.hostname) return false;
-    return parsed.protocol === 'rtmp:' || parsed.protocol === 'rtmps:' || parsed.protocol === 'srt:';
+    return (
+        parsed.protocol === 'rtmp:' ||
+        parsed.protocol === 'rtmps:' ||
+        parsed.protocol === 'rtsp:' ||
+        parsed.protocol === 'rtsps:' ||
+        parsed.protocol === 'srt:'
+    );
 }
 
 // ── FFmpeg argument builder ───────────────────────────
@@ -194,6 +201,11 @@ function buildFfmpegOutputArgs({ inputUrl, outputUrl, encoding = 'source' }) {
 
     if (outputProtocol === 'srt:') {
         args.push('-f', 'mpegts', outputUrl);
+        return args;
+    }
+
+    if (outputProtocol === 'rtsp:' || outputProtocol === 'rtsps:') {
+        args.push('-f', 'rtsp', '-rtsp_transport', 'tcp', outputUrl);
         return args;
     }
 

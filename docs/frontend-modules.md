@@ -126,3 +126,32 @@ This keeps migration failures visible before commit.
 	output history (`[lifecycle] config_created` and `[lifecycle] config_changed`).
 - Pipeline input-state transitions to `on` should include publisher protocol and remote address in
 	the logged event payload/message for troubleshooting.
+
+## 10. Output Modal Protocol Behavior
+
+- `public/js/features/editor.js` owns protocol-aware behavior for the output add/edit modal.
+- Protocol selector currently supports `RTMP`, `RTSP`, and `SRT`.
+- Server URL presets are protocol-aware:
+	- RTMP: known platform endpoints plus `Custom`
+	- RTSP: `Custom` only
+	- SRT: `Custom` only
+- Protocol, encoding, and server selector controls should remain grouped into one compact row in
+	the modal header area.
+- Operator fields are protocol-specific and switch live with the protocol selector.
+- RTMP operator fields should be shown when RTMP uses `Custom` server URL, and hidden when a
+	predefined RTMP server preset is selected.
+- URL input label should stay minimal to avoid operator confusion:
+	- `Stream Key` for RTMP preset servers
+	- `Custom URL` for RTMP custom mode, RTSP, and SRT
+- Operator field cards should keep compact padding/gaps while preserving clear label-to-input
+	spacing for readability.
+- Users can still paste a full output URL directly; the modal should best-effort parse that URL
+	and repopulate protocol/operator fields when possible.
+- Protocol switches should normalize the URL input so stale values from another protocol are not
+	left behind (for example, `rtsp://...` should not remain after switching back to `RTMP`).
+- Protocol switches should seed a protocol-specific custom default URL and hydrate operator fields
+	from that URL immediately.
+- Default protocol ports in operator fields are:
+	- RTMP: `1935`
+	- RTSP: `554`
+	- SRT: `6000`
