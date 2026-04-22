@@ -1,8 +1,8 @@
 'use strict';
 
 const { Readable } = require('stream');
+const { validateStreamKey } = require('../utils/app');
 
-const STREAM_KEY_RE = /^[A-Za-z0-9_-]+$/;
 const HLS_ASSET_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
 const MAX_HLS_ASSET_PATH_CHARS = 512;
 const MAX_HLS_ASSET_SEGMENTS = 16;
@@ -276,7 +276,7 @@ async function streamUpstreamResponse({
 function registerPreviewProxyRoutes({ app, fetch, log, getMediamtxHlsBaseUrl, buildMediamtxPath }) {
     async function proxyHlsAsset(req, res, rawAssetPath) {
         const streamKey = String(req.params.streamKey || '').trim();
-        if (!STREAM_KEY_RE.test(streamKey)) {
+        if (validateStreamKey(streamKey)) {
             return res.status(400).json({ error: 'Invalid stream key' });
         }
 

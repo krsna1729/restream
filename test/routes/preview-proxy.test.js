@@ -85,10 +85,18 @@ test('rejects invalid stream key', async () => {
     assert.equal(calls.length, 0);
 });
 
+test('accepts dotted stream key', async () => {
+    const { app, calls } = createHarness();
+
+    await request(app).get('/preview/hls/cam.v1/index.m3u8').expect(200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'http://localhost:8888/live/cam.v1/index.m3u8');
+});
+
 test('rejects traversal-like wildcard asset path', async () => {
     const { app, calls } = createHarness();
 
-    await request(app).get('/preview/hls/abc123/%2E%2E/secret.ts').expect(400);
+    await request(app).get('/preview/hls/abc123/%2e%2e%2fsecret.ts').expect(400);
     assert.equal(calls.length, 0);
 });
 

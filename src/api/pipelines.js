@@ -1,4 +1,4 @@
-const { errMsg, maskToken, validateName } = require('../utils/app');
+const { errMsg, maskToken, validateName, validateStreamKey } = require('../utils/app');
 const {
     getMediamtxApiBaseUrl,
     buildMediamtxPath,
@@ -47,6 +47,14 @@ function logPipelineConfigChanges(db, pipelineId, previousPipeline, nextPipeline
             },
         );
     }
+}
+
+function normalizePipelineStreamKey(value) {
+    if (value === null || value === undefined) return null;
+    if (typeof value !== 'string') return value;
+
+    const normalized = value.trim();
+    return normalized || null;
 }
 
 function registerPipelineApi({
@@ -121,8 +129,18 @@ function registerPipelineApi({
 
     app.post('/stream-keys', async (req, res) => {
         try {
-            const key = req.body?.streamKey || crypto.randomBytes(12).toString('hex');
+            const hasCustomStreamKey = Object.prototype.hasOwnProperty.call(req.body || {}, 'streamKey');
+            const key = hasCustomStreamKey
+                ? (typeof req.body?.streamKey === 'string' ? req.body.streamKey.trim() : req.body?.streamKey)
+                : crypto.randomBytes(12).toString('hex');
             const label = req.body?.label ?? null;
+
+            if (hasCustomStreamKey) {
+                const streamKeyError = validateStreamKey(key);
+                if (streamKeyError) {
+                    return res.status(400).json({ error: streamKeyError });
+                }
+            }
 
             if (db.getStreamKey(key)) {
                 return res.status(409).json({ error: 'Stream key already exists' });
@@ -217,11 +235,17 @@ function registerPipelineApi({
             }
 
             const name = req.body?.name;
-            const streamKey = req.body?.streamKey ?? null;
+            const streamKey = normalizePipelineStreamKey(req.body?.streamKey);
             const encoding = req.body?.encoding ?? null;
             const nameError = validateName(name, 'Pipeline name');
             if (nameError) {
                 return res.status(400).json({ error: nameError });
+            }
+            if (streamKey !== null) {
+                const streamKeyError = validateStreamKey(streamKey);
+                if (streamKeyError) {
+                    return res.status(400).json({ error: streamKeyError });
+                }
             }
 
             const runtimeState = await healthMonitor.resolveRuntimeInputState(streamKey, 0);
@@ -271,11 +295,21 @@ function registerPipelineApi({
             if (!existing) return res.status(404).json({ error: 'Pipeline not found' });
 
             const name = req.body?.name ?? existing.name;
-            const streamKey = req.body?.streamKey ?? existing.streamKey;
+            const hasStreamKeyUpdate = Object.prototype.hasOwnProperty.call(req.body || {}, 'streamKey');
+            const streamKey = hasStreamKeyUpdate
+                ? normalizePipelineStreamKey(req.body?.streamKey)
+                : existing.streamKey;
             const encoding = req.body?.encoding ?? existing.encoding;
             const nameError = validateName(name, 'Pipeline name');
             if (nameError) {
                 return res.status(400).json({ error: nameError });
+            }
+
+            if (hasStreamKeyUpdate && streamKey !== null) {
+                const streamKeyError = validateStreamKey(streamKey);
+                if (streamKeyError) {
+                    return res.status(400).json({ error: streamKeyError });
+                }
             }
 
             const streamKeyChanging = streamKey !== existing.streamKey;

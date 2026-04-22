@@ -232,6 +232,7 @@ Why this exists:
 Notes:
 
 - The proxy validates stream keys and asset paths before forwarding.
+  Stream keys allow alphanumeric, `_`, `.`, and `-`, with `.` and `..` explicitly rejected.
 - The dashboard preview now uses the normal proxied HLS master manifest unchanged.
 - The backend no longer rewrites preview manifests; `.m3u8` requests are forwarded as plain
   pass-through proxy responses after validation.

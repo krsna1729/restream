@@ -5,6 +5,8 @@
 // that any module can require directly without going through the DI wiring in index.js.
 
 const MAX_NAME_LENGTH = 128;
+const MAX_STREAM_KEY_LENGTH = 128;
+const STREAM_KEY_SEGMENT_RE = /^[0-9a-zA-Z_.-]+$/;
 
 function errMsg(err) {
     return (err && err.message) || String(err);
@@ -54,6 +56,31 @@ function validateName(name, fieldLabel = 'Name') {
     return null;
 }
 
+function validateStreamKey(streamKey, fieldLabel = 'Stream key') {
+    if (typeof streamKey !== 'string') {
+        return `${fieldLabel} is required and must be a string`;
+    }
+
+    const normalized = streamKey.trim();
+    if (!normalized) {
+        return `${fieldLabel} is required and must be a non-empty string`;
+    }
+
+    if (normalized.length > MAX_STREAM_KEY_LENGTH) {
+        return `${fieldLabel} must be ${MAX_STREAM_KEY_LENGTH} characters or fewer`;
+    }
+
+    if (normalized === '.' || normalized === '..') {
+        return `${fieldLabel} cannot be dot segments`;
+    }
+
+    if (!STREAM_KEY_SEGMENT_RE.test(normalized)) {
+        return `${fieldLabel} can contain only alphanumeric characters, underscore, dot, or hyphen`;
+    }
+
+    return null;
+}
+
 // ── HTTP error constructor ─────────────────────────────
 // Creates a structured error object that route handlers can catch and translate to a response.
 // `publicError` is safe to send to the client; `detail` and `extra` are for logging only.
@@ -71,6 +98,8 @@ module.exports = {
     log,
     maskToken,
     validateName,
+    validateStreamKey,
     createHttpError,
     MAX_NAME_LENGTH,
+    MAX_STREAM_KEY_LENGTH,
 };

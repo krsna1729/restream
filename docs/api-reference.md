@@ -38,6 +38,13 @@ Creates a stream key and registers the corresponding path in MediaMTX.
 
 The MediaMTX path is always provisioned as `live/<streamKey>`.
 
+When provided, `streamKey` must match these rules:
+
+- non-empty string (after trimming)
+- up to 128 characters
+- allowed characters: alphanumeric, underscore (`_`), dot (`.`), hyphen (`-`)
+- disallowed values: `.` and `..`
+
 > Note: If MediaMTX path registration succeeds but the SQLite insert fails, the API now attempts a
 > compensating MediaMTX path delete before returning `500`.
 
@@ -132,6 +139,8 @@ Returns all pipelines.
 
 Creates a pipeline.
 
+If `streamKey` is provided, it follows the same validation rules as `POST /stream-keys`.
+
 **Request body:**
 ```json
 {
@@ -153,6 +162,8 @@ Creates a pipeline.
 ### `POST /pipelines/:id`
 
 Updates pipeline fields.
+
+If `streamKey` is provided in the request body, it follows the same validation rules as `POST /stream-keys`.
 
 **Request body:** same shape as create (all fields optional).
 
