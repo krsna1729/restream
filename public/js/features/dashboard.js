@@ -99,16 +99,18 @@ function reconcileSelectedPipeline(previousPipelines = []) {
     if (!selectedPipeId) return;
     if (state.pipelines.some((pipe) => pipe.id === selectedPipeId)) return;
 
-    const previousSelection =
-        previousPipelines.find((pipe) => pipe.id === selectedPipeId) || readSelectedPipelineHint();
-    if (!previousSelection) {
+    const previousSelectionById = previousPipelines.find((pipe) => pipe.id === selectedPipeId) || null;
+    const persistedHint = readSelectedPipelineHint();
+
+    if (!previousSelectionById && !persistedHint) {
         replaceUrlParam('p', null);
         return;
     }
 
     const replacement = state.pipelines.find((pipe) => {
-        if (previousSelection.key && pipe.key === previousSelection.key) return true;
-        if (previousSelection.name && pipe.name === previousSelection.name) return true;
+        if (previousSelectionById?.key && pipe.key === previousSelectionById.key) return true;
+        if (previousSelectionById?.name && pipe.name === previousSelectionById.name) return true;
+        if (persistedHint?.name && pipe.name === persistedHint.name) return true;
         return false;
     });
 

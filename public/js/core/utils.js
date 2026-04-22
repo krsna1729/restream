@@ -179,11 +179,20 @@ function readSelectedPipelineHint() {
         const parsed = JSON.parse(rawValue);
         if (!parsed || typeof parsed !== 'object') return null;
 
-        return {
+        const sanitizedHint = {
             id: typeof parsed.id === 'string' ? parsed.id : null,
-            key: typeof parsed.key === 'string' ? parsed.key : null,
             name: typeof parsed.name === 'string' ? parsed.name : null,
         };
+
+        // Migrate older session hints that persisted secret fields.
+        if (Object.prototype.hasOwnProperty.call(parsed, 'key')) {
+            window.sessionStorage.setItem(
+                SELECTED_PIPELINE_STORAGE_KEY,
+                JSON.stringify(sanitizedHint),
+            );
+        }
+
+        return sanitizedHint;
     } catch (_) {
         return null;
     }
@@ -200,7 +209,6 @@ function writeSelectedPipelineHint(pipe) {
             SELECTED_PIPELINE_STORAGE_KEY,
             JSON.stringify({
                 id: pipe.id || null,
-                key: pipe.key || null,
                 name: pipe.name || null,
             }),
         );

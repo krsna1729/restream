@@ -104,6 +104,10 @@ This keeps migration failures visible before commit.
 	rendering for RTMP/RTSP/SRT.
 - Stream key and publish URL values are hidden by default and revealed only by explicit user
 	action (`View Key` / `View URL`).
+- Dashboard selected-pipeline session hints persist only non-secret identifiers (`id`, `name`),
+	never stream keys.
+- Copy actions for stream key and publish URL read current in-memory values; sensitive values are
+	not parked in DOM `data-copy` attributes while hidden.
 - `Copy Key` and `Copy URL` actions remain available without forcing reveal.
 - Publish URL rendering is protocol-aware (`RTMP`, `RTSP`, `SRT`) and should prioritize the
 	operator-facing fields each protocol typically needs.

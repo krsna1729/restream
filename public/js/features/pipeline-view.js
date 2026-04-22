@@ -1,4 +1,10 @@
-import { formatCodecName, msToHHMMSS, sanitizeLogMessage } from '../core/utils.js';
+import {
+    copyText,
+    formatCodecName,
+    msToHHMMSS,
+    sanitizeLogMessage,
+    showCopiedNotification,
+} from '../core/utils.js';
 import { setBadgeBitrateWithSubtleUnit, setBitrateWithSubtleUnit } from './metric-format.js';
 import { state } from '../core/state.js';
 import {
@@ -82,8 +88,9 @@ function setPipelineViewDependencies(dependencies) {
         const streamKeyValue = document.getElementById('stream-key');
         const streamKeySurface = document.getElementById('stream-key-surface');
         const streamKeyVisibilityBtn = document.getElementById('stream-key-visibility-btn');
+        const streamKeyCopyBtn = document.getElementById('stream-key-copy-btn');
         if (streamKeyValue) {
-            streamKeyValue.dataset.copy = streamKey;
+            streamKeyValue.dataset.copy = '';
             streamKeyValue.textContent = ingestUiState.keyVisible ? streamKey || 'Unassigned' : '';
         }
         if (streamKeySurface) {
@@ -97,6 +104,14 @@ function setPipelineViewDependencies(dependencies) {
                 if (!pipe.key) return;
                 ingestUiState.keyVisible = !ingestUiState.keyVisible;
                 renderPipelineInfoColumn(selectedPipe);
+            };
+        }
+        if (streamKeyCopyBtn) {
+            streamKeyCopyBtn.disabled = !streamKey;
+            streamKeyCopyBtn.classList.toggle('btn-disabled', !streamKey);
+            streamKeyCopyBtn.onclick = async () => {
+                if (!streamKey) return;
+                if (await copyText(streamKey)) showCopiedNotification();
             };
         }
 
@@ -161,7 +176,7 @@ function setPipelineViewDependencies(dependencies) {
         const ingestUrlValue = document.getElementById('ingest-url');
         const ingestUrlSurface = document.getElementById('ingest-url-surface');
         if (ingestUrlValue) {
-            ingestUrlValue.dataset.copy = selectedUrl;
+            ingestUrlValue.dataset.copy = '';
             ingestUrlValue.textContent = ingestUiState.urlVisible ? selectedUrl || '--' : '';
         }
         if (ingestUrlSurface) {
@@ -184,6 +199,10 @@ function setPipelineViewDependencies(dependencies) {
         if (ingestUrlCopyBtn) {
             ingestUrlCopyBtn.disabled = !selectedUrl;
             ingestUrlCopyBtn.classList.toggle('btn-disabled', !selectedUrl);
+            ingestUrlCopyBtn.onclick = async () => {
+                if (!selectedUrl) return;
+                if (await copyText(selectedUrl)) showCopiedNotification();
+            };
         }
 
         const ingestUrlDetails = document.getElementById('ingest-url-details');
