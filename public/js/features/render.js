@@ -234,7 +234,10 @@ function renderPipelines() {
         selectedPipe ? state.pipelines.find((pipe) => pipe.id === selectedPipe) || null : null,
     );
 
-    const gridElem = document.querySelector('.grid');
+    const gridElem = document.getElementById('dashboard-grid');
+    if (!gridElem) {
+        return;
+    }
     if (selectedPipe) {
         gridElem.style.gridTemplateColumns =
             'minmax(15rem, 18rem) minmax(24rem, 34rem) minmax(24rem, 1fr)';

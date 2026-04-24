@@ -17,7 +17,7 @@ const defaults = {
     appLogPath: 'test/artifacts/logs/app-under-test.log',
     verifyAppRetries: 30,
     inputFile: 'test/colorbar-timer.mp4',
-    rtmpOutputBase: 'rtmp://localhost:1936/live',
+    rtmpOutputBase: '',
     inputProtocols: 'rtmp,rtsp,srt',
     maxRetries: 30,
     retryDelaySec: 1,
@@ -25,6 +25,8 @@ const defaults = {
     pollSec: 2,
     outDir: 'test/artifacts/runs',
 };
+
+const LOOPBACK_TIMEOUT_SEC = 10;
 
 const config = {
     apiUrl: process.env.API_URL || defaults.apiUrl,
@@ -118,6 +120,16 @@ async function main() {
         inputPublishers,
     );
 
+    console.log(
+        '== Step 11: Verify SRT output loopback activates target pipeline input via MediaMTX ==',
+    );
+    await verifySrtOutputLoopbackToPipelineInput(resolved, inputPublishers);
+
+    console.log(
+        '== Step 12: Verify RTSP output loopback activates target pipeline input via MediaMTX ==',
+    );
+    await verifyRtspOutputLoopbackToPipelineInput(resolved, inputPublishers);
+
     console.log('== 4x3 run complete ==');
 }
 
@@ -139,7 +151,7 @@ function readBooleanEnv(name, defaultValue) {
 
 function printHelp() {
     console.log(
-        `Usage: node test/artifacts/run-4x3.mjs\n\nEnvironment flags:\n  CLEAN_START=1    Tear down stale state and launch a fresh stack (default)\n  KEEP_RUNNING=1   Leave backend and publishers running after the run\n  MANIFEST_PATH    Path to the tracked 4x3 manifest\n  API_URL          Backend base URL (default: ${defaults.apiUrl})\n  RTMP_STAT_URL    nginx-rtmp stat URL (default: ${defaults.rtmpStatUrl})\n  RTMP_OUTPUT_BASE Base URL used for RTMP outputs (default: ${defaults.rtmpOutputBase})`,
+        `Usage: node test/artifacts/run-4x3.mjs\n\nEnvironment flags:\n  CLEAN_START=1    Tear down stale state and launch a fresh stack (default)\n  KEEP_RUNNING=1   Leave backend and publishers running after the run\n  MANIFEST_PATH    Path to the tracked 4x3 manifest\n  API_URL          Backend base URL (default: ${defaults.apiUrl})\n  RTMP_STAT_URL    nginx-rtmp stat URL (default: ${defaults.rtmpStatUrl})\n  RTMP_OUTPUT_BASE Base URL used to normalize RTMP output URLs (if set)`,
     );
 }
 
@@ -443,6 +455,63 @@ async function stopInputPublisher(target) {
     target.pid = null;
 }
 
+function getIngestTargetMarkers(streamKey, matchedManagedPublishers) {
+    const markers = new Set();
+    const normalizedStreamKey = String(streamKey || '').trim();
+
+    if (normalizedStreamKey) {
+        const normalizedRtmpBase = String(config.rtmpOutputBase).replace(/\/+$/, '');
+        markers.add(`${normalizedRtmpBase}/${normalizedStreamKey}`);
+        markers.add(`/live/${normalizedStreamKey}`);
+        markers.add(`streamid=publish:live/${normalizedStreamKey}`);
+        markers.add(`streamid=${encodeURIComponent(`publish:live/${normalizedStreamKey}`)}`);
+    }
+
+    for (const target of matchedManagedPublishers || []) {
+        const targetUrl = String(target?.targetUrl || '').trim();
+        if (!targetUrl) continue;
+        markers.add(targetUrl);
+    }
+
+    return [...markers].filter(Boolean);
+}
+
+async function stopAllInputPublishersForStreamKey(streamKey, inputPublishers) {
+    const matchedManagedPublishers = (inputPublishers || []).filter(
+        (target) => target?.streamKey === streamKey,
+    );
+
+    for (const target of matchedManagedPublishers) {
+        await stopInputPublisher(target);
+    }
+
+    const inputFileMarker = relativePath(config.inputFile);
+    const ingestTargetMarkers = getIngestTargetMarkers(streamKey, matchedManagedPublishers);
+    const processes = await listFfmpegProcesses();
+    const stalePublishers = processes.filter(
+        (proc) => {
+            const hasIngestTargetMarker = ingestTargetMarkers.some((marker) =>
+                proc.command.includes(marker),
+            );
+
+            return (
+                proc.command.includes('ffmpeg') &&
+                proc.command.includes(inputFileMarker) &&
+                hasIngestTargetMarker
+            );
+        },
+    );
+
+    for (const proc of stalePublishers) {
+        await terminateProcess({ pid: proc.pid, name: `stale-input-${streamKey}` });
+    }
+
+    return {
+        managedStopped: matchedManagedPublishers.length,
+        staleStopped: stalePublishers.length,
+    };
+}
+
 async function restartInputPublisher(target) {
     if (!target) {
         throw new Error('No publisher target available for restart');
@@ -494,6 +563,10 @@ function buildFfmpegArgs(protocol, targetUrl) {
 
 function normalizeOutputUrl(outputUrl) {
     if (!outputUrl || typeof outputUrl !== 'string') {
+        return outputUrl;
+    }
+
+    if (!config.rtmpOutputBase) {
         return outputUrl;
     }
 
@@ -1055,6 +1128,422 @@ async function verifyInputRecoveryRestart(pipelineTarget, pipelineOutputs, input
         pipelines: [pipelineTarget],
         outputs: pipelineOutputs,
     });
+}
+
+function selectLoopbackTargetPipeline(resolved) {
+    const pipelines = resolved?.pipelines || [];
+    if (pipelines.length < 2) {
+        throw new Error('Loopback stage requires at least two pipelines in the 4x3 manifest');
+    }
+    return pipelines[1];
+}
+
+function selectLoopbackSourceOutput(resolved, targetPipelineId) {
+    const outputs = resolved?.outputs || [];
+    const candidates = outputs.filter((output) => output.pipelineId !== targetPipelineId);
+    if (candidates.length === 0) {
+        throw new Error('No source output available outside the selected loopback target pipeline');
+    }
+
+    return candidates[0];
+}
+
+async function fetchConfigPipelineById(pipelineId) {
+    const snapshot = (await requestJson('/config')).json || {};
+    const pipelines = Array.isArray(snapshot.pipelines) ? snapshot.pipelines : [];
+    return pipelines.find((pipeline) => pipeline.id === pipelineId) || null;
+}
+
+function resolveLoopbackUrlFromPayload(ingestUrl, streamKey, protocol) {
+    const normalizedProtocol = String(protocol || '').trim().toLowerCase();
+    if (!['srt', 'rtsp'].includes(normalizedProtocol)) {
+        throw new Error(`Unsupported loopback protocol: ${normalizedProtocol || 'unknown'}`);
+    }
+
+    let parsed;
+    try {
+        parsed = new URL(ingestUrl);
+    } catch {
+        throw new Error(
+            `Target ${normalizedProtocol.toUpperCase()} ingest URL is invalid: ${String(ingestUrl || '')}`,
+        );
+    }
+
+    if (normalizedProtocol === 'srt') {
+        if (parsed.protocol !== 'srt:') {
+            throw new Error(`Target ingest URL is not SRT: ${ingestUrl}`);
+        }
+
+        const streamIdRaw = parsed.searchParams.get('streamid') || '';
+        const streamIdDecoded = decodeURIComponent(streamIdRaw);
+        const expectedStreamId = `publish:live/${streamKey}`;
+        if (streamIdDecoded !== expectedStreamId) {
+            throw new Error(
+                `Target SRT ingest URL streamid mismatch: expected ${expectedStreamId}, got ${streamIdDecoded || 'missing'}`,
+            );
+        }
+
+        // Preserve payload formatting exactly to avoid introducing URI re-encoding differences.
+        return String(ingestUrl);
+    }
+
+    if (parsed.protocol !== 'rtsp:' && parsed.protocol !== 'rtsps:') {
+        throw new Error(`Target ingest URL is not RTSP/RTSPS: ${ingestUrl}`);
+    }
+
+    const pathSegments = String(parsed.pathname || '')
+        .split('/')
+        .filter(Boolean);
+    const lastPathSegment =
+        pathSegments.length > 0
+            ? decodeURIComponent(pathSegments[pathSegments.length - 1])
+            : '';
+    if (lastPathSegment !== streamKey) {
+        throw new Error(
+            `Target RTSP ingest URL path mismatch: expected terminal path segment ${streamKey}, got ${lastPathSegment || 'missing'}`,
+        );
+    }
+
+    // Preserve payload formatting exactly to avoid introducing URI re-encoding differences.
+    return String(ingestUrl);
+}
+
+async function stopOutputForMutation(target) {
+    await requestJson(`/pipelines/${target.pipelineId}/outputs/${target.outputId}/stop`, {
+        method: 'POST',
+        okStatuses: [200],
+    });
+}
+
+async function updateOutputUrl(target, outputUrl) {
+    await requestJson(`/pipelines/${target.pipelineId}/outputs/${target.outputId}`, {
+        method: 'POST',
+        body: { url: outputUrl },
+        okStatuses: [200],
+    });
+    target.outputUrl = outputUrl;
+}
+
+async function startOutputWithRetry(target) {
+    for (let attempt = 1; attempt <= config.maxRetries; attempt += 1) {
+        const result = await requestJson(
+            `/pipelines/${target.pipelineId}/outputs/${target.outputId}/start`,
+            {
+                method: 'POST',
+                okStatuses: [200, 201, 409],
+            },
+        );
+        const message = result.json?.error || result.text || '';
+
+        if (result.status === 200 || result.status === 201) {
+            return;
+        }
+
+        if (result.status === 409 && message.includes('already has a running job')) {
+            return;
+        }
+
+        if (result.status === 409 && message.includes('input is not available yet')) {
+            if (attempt < config.maxRetries) {
+                await sleep(config.retryDelaySec * 1000);
+                continue;
+            }
+            throw new Error(
+                `Timed out waiting to start ${target.pipelineName}/${target.outputName}: ${message}`,
+            );
+        }
+
+        throw new Error(
+            `Failed to start ${target.pipelineName}/${target.outputName}: ${message || `HTTP ${result.status}`}`,
+        );
+    }
+}
+
+function getHealthLoopbackSummary(health, sourceOutput, targetPipeline) {
+    const sourceHealth = health?.pipelines?.[sourceOutput.pipelineId]?.outputs?.[sourceOutput.outputId] || null;
+    const targetInput = health?.pipelines?.[targetPipeline.pipelineId]?.input || null;
+    return {
+        sourceOutput: {
+            status: sourceHealth?.status || 'missing',
+            jobStatus: sourceHealth?.jobStatus || null,
+            remoteAddr: sourceHealth?.remoteAddr || null,
+        },
+        targetInput: {
+            status: targetInput?.status || 'missing',
+            online: targetInput?.online ?? null,
+            ready: targetInput?.ready ?? null,
+            readers: targetInput?.readers ?? null,
+        },
+    };
+}
+
+async function waitForPipelineInputStatus(pipelineTarget, expectedStatus, timeoutMs, label) {
+    await pollUntil(
+        async () => {
+            const health = (await requestJson('/health')).json;
+            return health?.pipelines?.[pipelineTarget.pipelineId]?.input?.status === expectedStatus;
+        },
+        timeoutMs,
+        500,
+        label || `${pipelineTarget.name || pipelineTarget.pipelineId} input status=${expectedStatus}`,
+    );
+}
+
+async function waitForPipelineInputNotOn(pipelineTarget, timeoutMs, label, logPrefix = 'loopback') {
+    let lastStatus = 'missing';
+    let lastOnline = null;
+    let lastReady = null;
+    let lastReaders = null;
+
+    await pollUntil(
+        async () => {
+            const health = (await requestJson('/health')).json;
+            const input = health?.pipelines?.[pipelineTarget.pipelineId]?.input || null;
+            lastStatus = input?.status || 'missing';
+            lastOnline = input?.online ?? null;
+            lastReady = input?.ready ?? null;
+            lastReaders = input?.readers ?? null;
+            return lastStatus !== 'on';
+        },
+        timeoutMs,
+        500,
+        label || `${pipelineTarget.name || pipelineTarget.pipelineId} input to leave on-state`,
+    );
+
+    console.log(
+        `[${logPrefix}] target input transitioned off on-state: status=${lastStatus} online=${lastOnline} ready=${lastReady} readers=${lastReaders}`,
+    );
+}
+
+async function waitForOutputStatus(outputTarget, expectedStatus, timeoutMs, label) {
+    await pollUntil(
+        async () => {
+            const health = (await requestJson('/health')).json;
+            return (
+                health?.pipelines?.[outputTarget.pipelineId]?.outputs?.[outputTarget.outputId]?.status ===
+                expectedStatus
+            );
+        },
+        timeoutMs,
+        500,
+        label ||
+            `${outputTarget.pipelineName}/${outputTarget.outputName} status=${expectedStatus}`,
+    );
+}
+
+async function waitForOutputUrl(outputTarget, expectedUrl, timeoutMs, label) {
+    await pollUntil(
+        async () => {
+            const state = await fetchConfigState();
+            const output = state.outputs.find(
+                (item) =>
+                    item.pipelineId === outputTarget.pipelineId && item.id === outputTarget.outputId,
+            );
+            return output?.url === expectedUrl;
+        },
+        timeoutMs,
+        500,
+        label ||
+            `${outputTarget.pipelineName}/${outputTarget.outputName} URL to match ${expectedUrl}`,
+    );
+}
+
+async function verifyOutputLoopbackToPipelineInput(resolved, inputPublishers, protocol) {
+    const normalizedProtocol = String(protocol || '').trim().toLowerCase();
+    if (!['srt', 'rtsp'].includes(normalizedProtocol)) {
+        throw new Error(`Unsupported loopback protocol: ${normalizedProtocol || 'unknown'}`);
+    }
+
+    const protocolLabel = normalizedProtocol.toUpperCase();
+    const logPrefix = `${normalizedProtocol}-loopback`;
+    const targetPipeline = selectLoopbackTargetPipeline(resolved);
+    const sourceOutput = selectLoopbackSourceOutput(resolved, targetPipeline.pipelineId);
+    if (sourceOutput.pipelineId === targetPipeline.pipelineId) {
+        throw new Error(
+            `${protocolLabel} loopback source output pipeline must differ from target pipeline: ${sourceOutput.pipelineId}`,
+        );
+    }
+    const sourceOriginalUrl = sourceOutput.outputUrl;
+
+    const targetConfigPipeline = await fetchConfigPipelineById(targetPipeline.pipelineId);
+    const targetIngestUrl = targetConfigPipeline?.ingestUrls?.[normalizedProtocol];
+    if (!targetIngestUrl) {
+        throw new Error(
+            `Selected target pipeline is missing ${protocolLabel} ingest URL: ${targetPipeline.pipelineId}`,
+        );
+    }
+
+    const loopbackUrl = resolveLoopbackUrlFromPayload(
+        targetIngestUrl,
+        targetPipeline.streamKey,
+        normalizedProtocol,
+    );
+
+    console.log(
+        `[${logPrefix}] selection ${JSON.stringify({
+            sourceOutput: {
+                pipelineId: sourceOutput.pipelineId,
+                outputId: sourceOutput.outputId,
+                outputName: sourceOutput.outputName,
+                originalUrl: sourceOriginalUrl,
+            },
+            targetPipeline: {
+                pipelineId: targetPipeline.pipelineId,
+                pipelineName: targetPipeline.name,
+                streamKey: targetPipeline.streamKey,
+                ingestUrl: loopbackUrl,
+            },
+        })}`,
+    );
+
+    const targetPublisher = (inputPublishers || []).find(
+        (publisher) => publisher.streamKey === targetPipeline.streamKey,
+    );
+    if (!targetPublisher) {
+        throw new Error(
+            `No managed input publisher found for target pipeline ${targetPipeline.pipelineId}`,
+        );
+    }
+
+    let targetPublisherStopped = false;
+    let sourceMutated = false;
+    const cleanupErrors = [];
+
+    try {
+        console.log(
+            `[${logPrefix}] 1/5 stop target external publisher and verify input leaves on-state`,
+        );
+        const stopSummary = await stopAllInputPublishersForStreamKey(
+            targetPipeline.streamKey,
+            inputPublishers,
+        );
+        targetPublisherStopped = true;
+        console.log(
+            `[${logPrefix}] stopped publishers for streamKey=${targetPipeline.streamKey} managed=${stopSummary.managedStopped} stale=${stopSummary.staleStopped}`,
+        );
+
+        await waitForPipelineInputNotOn(
+            targetPipeline,
+            LOOPBACK_TIMEOUT_SEC * 1000,
+            `${targetPipeline.name || targetPipeline.pipelineId} input to leave on-state for ${normalizedProtocol} loopback publish`,
+            logPrefix,
+        );
+
+        console.log(`[${logPrefix}] 2/5 stop source output and verify output=off`);
+        await stopOutputForMutation(sourceOutput);
+        await waitForOutputStatus(
+            sourceOutput,
+            'off',
+            LOOPBACK_TIMEOUT_SEC * 1000,
+            `${sourceOutput.pipelineName}/${sourceOutput.outputName} to stop before URL mutation`,
+        );
+
+        console.log(
+            `[${logPrefix}] 3/5 repoint source output to target ${protocolLabel} ingest and start`,
+        );
+        await updateOutputUrl(sourceOutput, loopbackUrl);
+        await startOutputWithRetry(sourceOutput);
+        sourceMutated = true;
+
+        console.log(`[${logPrefix}] 4/5 verify target pipeline input=on`);
+        const timeoutMs = LOOPBACK_TIMEOUT_SEC * 1000;
+        try {
+            await waitForPipelineInputStatus(
+                targetPipeline,
+                'on',
+                timeoutMs,
+                `${targetPipeline.name || targetPipeline.pipelineId} input to become on via ${normalizedProtocol} loopback`,
+            );
+        } catch (_error) {
+            const health = (await requestJson('/health')).json;
+            const summary = getHealthLoopbackSummary(health || {}, sourceOutput, targetPipeline);
+            throw new Error(
+                `Timed out waiting for ${protocolLabel} loopback activation (${LOOPBACK_TIMEOUT_SEC}s): ${JSON.stringify(summary)}`,
+            );
+        }
+
+        console.log(
+            `[${logPrefix}] activation passed sourceOutput=${sourceOutput.pipelineId}/${sourceOutput.outputId} targetPipeline=${targetPipeline.pipelineId}`,
+        );
+        return;
+    } finally {
+        if (sourceMutated) {
+            console.log(
+                `[${logPrefix}] 5/5 restore source output URL and restart target publisher`,
+            );
+            try {
+                await stopOutputForMutation(sourceOutput);
+                await waitForOutputStatus(
+                    sourceOutput,
+                    'off',
+                    LOOPBACK_TIMEOUT_SEC * 1000,
+                    `${sourceOutput.pipelineName}/${sourceOutput.outputName} to stop before restoring URL`,
+                );
+            } catch (error) {
+                cleanupErrors.push(`stop source output failed: ${String(error?.message || error)}`);
+            }
+
+            try {
+                await updateOutputUrl(sourceOutput, sourceOriginalUrl);
+                await waitForOutputUrl(
+                    sourceOutput,
+                    sourceOriginalUrl,
+                    LOOPBACK_TIMEOUT_SEC * 1000,
+                    `${sourceOutput.pipelineName}/${sourceOutput.outputName} URL to restore`,
+                );
+            } catch (error) {
+                cleanupErrors.push(
+                    `restore source output URL failed: ${String(error?.message || error)}`,
+                );
+            }
+
+            try {
+                await startOutputWithRetry(sourceOutput);
+                await waitForOutputStatus(
+                    sourceOutput,
+                    'on',
+                    LOOPBACK_TIMEOUT_SEC * 1000,
+                    `${sourceOutput.pipelineName}/${sourceOutput.outputName} to return on-state after restore`,
+                );
+            } catch (error) {
+                cleanupErrors.push(
+                    `restart source output on original URL failed: ${String(error?.message || error)}`,
+                );
+            }
+        }
+
+        if (targetPublisherStopped && sourceMutated) {
+            try {
+                await restartInputPublisher(targetPublisher);
+            } catch (error) {
+                cleanupErrors.push(
+                    `restart target input publisher failed: ${String(error?.message || error)}`,
+                );
+            }
+        }
+
+        if (sourceMutated) {
+            try {
+                await waitForActive(resolved);
+            } catch (error) {
+                cleanupErrors.push(`post-loopback stabilization failed: ${String(error?.message || error)}`);
+            }
+        }
+
+        if (cleanupErrors.length > 0) {
+            throw new Error(
+                `${protocolLabel} loopback cleanup failed: ${cleanupErrors.join(' | ')}`,
+            );
+        }
+    }
+}
+
+async function verifySrtOutputLoopbackToPipelineInput(resolved, inputPublishers) {
+    await verifyOutputLoopbackToPipelineInput(resolved, inputPublishers, 'srt');
+}
+
+async function verifyRtspOutputLoopbackToPipelineInput(resolved, inputPublishers) {
+    await verifyOutputLoopbackToPipelineInput(resolved, inputPublishers, 'rtsp');
 }
 
 async function waitForActive(resolved) {

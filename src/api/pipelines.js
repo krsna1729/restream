@@ -346,7 +346,7 @@ function registerPipelineApi({
                 healthMonitor.seedPipelineRuntimeState(id, initialInputStatus || 'off');
                 db.appendPipelineEvent(
                     id,
-                    '[input_state] reset due to stream_key change',
+                    '[input_state] reset reason=stream_key_change',
                     'pipeline.input_state.reset',
                     { reason: 'stream_key_change' },
                 );

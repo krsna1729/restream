@@ -120,6 +120,15 @@ function formatHistoryTime(ts) {
         if (eventType === 'lifecycle.marked_stopped_no_process') {
             return { type: 'stopped', label: 'Stopped', badgeClass: 'badge-stopped' };
         }
+        if (eventType === 'lifecycle.config_created') {
+            return { type: 'config', label: 'Config Created', badgeClass: 'badge-secondary' };
+        }
+        if (eventType === 'lifecycle.config_changed') {
+            return { type: 'config', label: 'Config Updated', badgeClass: 'badge-secondary' };
+        }
+        if (eventType.startsWith('lifecycle.config_')) {
+            return { type: 'config', label: 'Config Updated', badgeClass: 'badge-secondary' };
+        }
         if (eventType === 'lifecycle.exited') {
             const failed = eventData?.status === 'failed';
             const requestedStop =
@@ -181,6 +190,15 @@ function formatHistoryTime(ts) {
         if (message.startsWith('[lifecycle] marked_stopped_no_process')) {
             return { type: 'stopped', label: 'Stopped', badgeClass: 'badge-stopped' };
         }
+        if (message.startsWith('[lifecycle] config_created')) {
+            return { type: 'config', label: 'Config Created', badgeClass: 'badge-secondary' };
+        }
+        if (message.startsWith('[lifecycle] config_changed')) {
+            return { type: 'config', label: 'Config Updated', badgeClass: 'badge-secondary' };
+        }
+        if (message.startsWith('[lifecycle] config_')) {
+            return { type: 'config', label: 'Config Updated', badgeClass: 'badge-secondary' };
+        }
         if (message.startsWith('[lifecycle] exited')) {
             const failed = /status=failed/.test(message);
             const requestedStop = inferIntentionalStop(logs, index);
@@ -201,8 +219,11 @@ function formatHistoryTime(ts) {
         const eventType = getNormalizedEventType(log);
         const eventData = getEventData(log);
 
+        if (eventType === 'pipeline.config.created') {
+            return { type: 'config', label: 'Config Created', badgeClass: 'badge-secondary' };
+        }
         if (eventType.startsWith('pipeline.config.')) {
-            return { type: 'config', label: 'Config', badgeClass: 'badge-secondary' };
+            return { type: 'config', label: 'Config Updated', badgeClass: 'badge-secondary' };
         }
         if (eventType === 'pipeline.input_state.initialized') {
             const finalState = String(eventData?.state || '').toLowerCase();
@@ -232,8 +253,11 @@ function formatHistoryTime(ts) {
 
         const message = String(log?.message || '');
 
+        if (message.startsWith('[config] created')) {
+            return { type: 'config', label: 'Config Created', badgeClass: 'badge-secondary' };
+        }
         if (message.startsWith('[config]')) {
-            return { type: 'config', label: 'Config', badgeClass: 'badge-secondary' };
+            return { type: 'config', label: 'Config Updated', badgeClass: 'badge-secondary' };
         }
         if (message.startsWith('[input_state]')) {
             let finalState = '';

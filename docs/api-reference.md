@@ -242,6 +242,8 @@ Creates an output for a pipeline.
 }
 ```
 
+`url` supports `rtmp://`, `rtmps://`, `rtsp://`, `rtsps://`, and `srt://` output targets.
+
 **Response 201:**
 ```json
 {
@@ -274,6 +276,8 @@ Updates an output.
 ```
 
 **Errors:** `400` invalid encoding; `404` output or pipeline not found; `409` cannot change URL/encoding while running.
+
+FFmpeg output settings vary by protocol: SRT outputs use `-f mpegts`; RTMP/RTMPS outputs use `-f flv` with RTMP flags; RTSP/RTSPS outputs use `-f rtsp -rtsp_transport tcp`.
 
 ---
 

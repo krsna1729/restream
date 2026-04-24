@@ -37,10 +37,10 @@ function maskSecret(value) {
         return `${token.slice(0, 2)}...${token.slice(-2)}`;
     };
 
-    const isRtmpLike = /^(rtmps?|rtsp):\/\//i.test(s);
+    const isRtmpLike = /^(rtmps?|rtsps?):\/\//i.test(s);
     if (isRtmpLike) {
         return s.replace(
-            /^((?:rtmps?|rtsp):\/\/[^/\s?#]+(?:\/[^/\s?#]+)*\/)([^/\s?#]+)([?#].*)?$/i,
+            /^((?:rtmps?|rtsps?):\/\/[^/\s?#]+(?:\/[^/\s?#]+)*\/)([^/\s?#]+)([?#].*)?$/i,
             (full, prefix, secret, suffix) => `${prefix}${maskToken(secret)}${suffix || ''}`,
         );
     }
@@ -70,20 +70,8 @@ function maskSecret(value) {
 
 function sanitizeLogMessage(msg, redacted = true) {
     if (!redacted) return String(msg);
-    return (
-        String(msg)
-            // Mask only the final path segment (usually the secret key/token).
-            .replace(
-                new RegExp(
-                    '(rtmps?://[^/\\s]+(?:/[^/\\s]+)*/)([^/\\s\'\"]+)(\\?[^\'\"\\s]*)?',
-                    'g',
-                ),
-                '$1***$3',
-            )
-            .replace(
-                new RegExp('(rtsp://[^/\\s]+(?:/[^/\\s]+)*/)([^/\\s\'\"]+)(\\?[^\'\"\\s]*)?', 'g'),
-                '$1***$3',
-            )
+    return String(msg).replace(/((?:rtmps?|rtsps?|srt):\/\/[^\s'"<>()]+)/gi, (full, url) =>
+        maskSecret(url || full),
     );
 }
 
@@ -103,10 +91,21 @@ function formatCodecName(codec) {
     return codec;
 }
 
-function isValidRtmp(str) {
-    // YouTube backup URL is a little funny
-    if (str.includes(' ')) return false;
-    return str.startsWith('rtmp://') || str.startsWith('rtmps://');
+function isValidOutput(str) {
+    if (!str || str.includes(' ')) return false;
+    try {
+        const parsed = new URL(str);
+        return (
+            !!parsed.hostname &&
+            (parsed.protocol === 'rtmp:' ||
+                parsed.protocol === 'rtmps:' ||
+                parsed.protocol === 'rtsp:' ||
+                parsed.protocol === 'rtsps:' ||
+                parsed.protocol === 'srt:')
+        );
+    } catch {
+        return false;
+    }
 }
 
 function legacyCopy(text) {
@@ -289,7 +288,7 @@ export {
     maskSecret,
     sanitizeLogMessage,
     formatCodecName,
-    isValidRtmp,
+    isValidOutput,
     legacyCopy,
     copyText,
     copyData,

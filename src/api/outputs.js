@@ -1,5 +1,9 @@
 const { errMsg, validateName } = require('../utils/app');
-const { normalizeOutputEncoding, validateOutputUrl } = require('../utils/ffmpeg');
+const {
+    normalizeOutputEncoding,
+    validateOutputUrl,
+    INVALID_OUTPUT_URL_ERROR,
+} = require('../utils/ffmpeg');
 
 const HISTORY_MESSAGE_PREFIXES = {
     lifecycle: '[lifecycle]',
@@ -15,7 +19,6 @@ const HISTORY_MAX_HIGH_VOLUME_RANGE_MS = 10 * 60 * 1000;
 const HISTORY_HIGH_VOLUME_PREFIXES = new Set(['[stderr]', '[exit]', '[control]']);
 const INVALID_OUTPUT_ENCODING_ERROR =
     'Encoding must be one of: source, vertical-crop, vertical-rotate, 720p, 1080p';
-const INVALID_OUTPUT_URL_ERROR = 'Output URL must be a valid rtmp:// or rtmps:// URL';
 const OUTPUT_MUTATION_WHILE_RUNNING_ERROR =
     'Cannot change output URL or encoding while output is running. Stop output first.';
 
@@ -73,6 +76,48 @@ function registerOutputApi({
     stopRunningJobAndWait,
     stopRunningJob,
 }) {
+    function logOutputConfigChanges(pipelineId, outputId, previousOutput, nextOutput) {
+        if (!pipelineId || !outputId || !previousOutput || !nextOutput) return;
+
+        const changes = [];
+        if (previousOutput.name !== nextOutput.name) {
+            changes.push({ field: 'name', from: previousOutput.name, to: nextOutput.name });
+        }
+        if (previousOutput.url !== nextOutput.url) {
+            changes.push({
+                field: 'url',
+                from: previousOutput.url,
+                to: nextOutput.url,
+            });
+        }
+        if (previousOutput.encoding !== nextOutput.encoding) {
+            changes.push({
+                field: 'encoding',
+                from: previousOutput.encoding || null,
+                to: nextOutput.encoding || null,
+            });
+        }
+
+        if (changes.length === 0) return;
+
+        const summaryParts = changes.map((change) => {
+            const fromValue = change.from ?? 'null';
+            const toValue = change.to ?? 'null';
+            return `${change.field}=${fromValue} -> ${toValue}`;
+        });
+        const summary = summaryParts.join(' | ');
+
+        db.appendJobLog(
+            null,
+            `[lifecycle] config_changed ${summary}`,
+            pipelineId,
+            outputId,
+            'lifecycle.config_changed',
+            { changes },
+        );
+
+    }
+
     async function applyOutputStateChange(pid, oid, options) {
         // Start/stop routes differ in response payload, but both share the same state-change,
         // recovery-reset, and reconcile sequence.
@@ -174,6 +219,20 @@ function registerOutputApi({
             }
 
             const output = db.createOutput({ pipelineId: pid, name, url, encoding });
+
+            db.appendJobLog(
+                null,
+                `[lifecycle] config_created name=${output.name} url=${output.url} encoding=${output.encoding || 'null'}`,
+                pid,
+                output.id,
+                'lifecycle.config_created',
+                {
+                    name: output.name,
+                    url: output.url,
+                    encoding: output.encoding || null,
+                },
+            );
+
             recomputeConfigEtag();
             recomputeEtag();
             return res.status(201).json({ message: 'Output created', output });
@@ -211,6 +270,8 @@ function registerOutputApi({
 
             const updated = db.updateOutput(pid, oid, { name, url, encoding });
             if (!updated) return res.status(500).json({ error: 'Failed to update output' });
+
+            logOutputConfigChanges(pid, oid, existing, updated);
 
             recomputeConfigEtag();
             recomputeEtag();
