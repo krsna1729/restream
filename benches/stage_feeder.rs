@@ -40,6 +40,24 @@ fn audio_tracks() -> Arc<Vec<AudioMeta>> {
     }])
 }
 
+fn multi_audio_tracks(count: u32) -> Arc<Vec<AudioMeta>> {
+    Arc::new(
+        (0..count)
+            .map(|track_index| AudioMeta {
+                codec: "aac".to_string(),
+                sample_rate: 48_000,
+                channels: 2,
+                channel_layout: None,
+                track_index,
+                pid: None,
+                language: None,
+                title: None,
+                profile: None,
+            })
+            .collect(),
+    )
+}
+
 fn raw_h264_packet(payload_bytes: usize, pts: i64) -> MediaPacket {
     let mut payload = Vec::with_capacity(payload_bytes);
     payload.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x65]);
@@ -64,6 +82,13 @@ fn raw_aac_packet(payload_bytes: usize, pts: i64) -> MediaPacket {
         pts,
         dts: pts,
         payload: Bytes::from(vec![0x11; payload_bytes]),
+    }
+}
+
+fn raw_aac_packet_for_track(payload_bytes: usize, pts: i64, track_index: u32) -> MediaPacket {
+    MediaPacket {
+        track_index,
+        ..raw_aac_packet(payload_bytes, pts)
     }
 }
 
@@ -128,5 +153,38 @@ fn bench_burst_feed(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_single_packet_feed, bench_burst_feed);
+fn bench_multi_audio_feed(c: &mut Criterion) {
+    let video = video_meta();
+    let audio_tracks = multi_audio_tracks(16);
+    let packets: Vec<MediaPacket> = (0..64)
+        .map(|i| raw_aac_packet_for_track(200, i as i64 * 21, (i % 16) as u32))
+        .collect();
+    let bytes_per_burst = packets.iter().map(|p| p.payload.len() as u64).sum();
+    let mut group = c.benchmark_group("stage_feeder/multi_audio");
+
+    group.throughput(Throughput::Bytes(bytes_per_burst));
+    group.bench_function("64_audio_packets_16_tracks", |b| {
+        b.iter(|| {
+            let mut feeder = TsPacketFeeder::new(
+                Some(&video),
+                audio_tracks.clone(),
+                PacketFeedConfig::default(),
+            );
+            let mut output = Vec::with_capacity(256 * 188);
+            for packet in &packets {
+                black_box(feeder.extend_ts_for_packet(black_box(packet), &mut output));
+            }
+            black_box(output.len());
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_single_packet_feed,
+    bench_burst_feed,
+    bench_multi_audio_feed
+);
 criterion_main!(benches);

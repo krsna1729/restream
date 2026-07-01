@@ -96,7 +96,7 @@ impl TsPacketFeeder {
     }
 
     pub fn extend_ts_for_packet(&mut self, packet: &MediaPacket, output: &mut Vec<u8>) -> bool {
-        let payload = match packet.media_type {
+        let (payload, stream_idx) = match packet.media_type {
             MediaType::Video => match video_for_ts_into(
                 &packet.payload,
                 packet.format,
@@ -104,41 +104,26 @@ impl TsPacketFeeder {
                 &mut self.sps_pps_cache,
                 &mut self.video_conv_buf,
             ) {
-                Some(payload) => payload,
+                Some(payload) => (payload, 0),
                 None => return false,
             },
             MediaType::Audio => {
-                let track = self
+                let Some((track_index, track)) = self
                     .audio_tracks
                     .iter()
-                    .find(|a| a.track_index == packet.track_index)
-                    .or(self.audio_tracks.first());
-                let (sample_rate, channels) = track
-                    .map(|a| (a.sample_rate, a.channels))
-                    .unwrap_or((48_000, 1));
+                    .enumerate()
+                    .find(|(_, track)| track.track_index == packet.track_index)
+                else {
+                    return false;
+                };
                 match audio_for_ts_into(
                     &packet.payload,
                     packet.format,
-                    sample_rate,
-                    channels,
+                    track.sample_rate,
+                    track.channels,
                     &mut self.audio_conv_buf,
                 ) {
-                    Some(payload) => payload,
-                    None => return false,
-                }
-            }
-        };
-
-        let stream_idx = match packet.media_type {
-            MediaType::Video => 0,
-            MediaType::Audio => {
-                let video_offset = self.has_video as usize;
-                match self
-                    .audio_tracks
-                    .iter()
-                    .position(|a| a.track_index == packet.track_index)
-                {
-                    Some(index) => index + video_offset,
+                    Some(payload) => (payload, track_index + self.has_video as usize),
                     None => return false,
                 }
             }
