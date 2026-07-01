@@ -39,10 +39,38 @@ run_common_concurrency_checks() {
     scripts/resource-limit cargo test stale_egress_queue_removal_cannot_drop_replacement_queue --lib -- --nocapture
   "$run_step_fn" ring-proptest \
     scripts/resource-limit cargo test prop_no_loss_no_gap_no_duplication --test ring_migration -- --nocapture
+  "$run_step_fn" ring-multi-reader-proptest \
+    scripts/resource-limit cargo test prop_multi_reader_migration_preserves_each_reader_order --test ring_migration -- --nocapture
   "$run_step_fn" lib-avio-batch \
     scripts/resource-limit cargo test write_batch_round_trips_random_chunks --lib -- --nocapture
+  "$run_step_fn" lib-avio-unit \
+    scripts/resource-limit cargo test 'media::avio::tests' --lib -- --nocapture
   "$run_step_fn" lib-srt-epoll \
     scripts/resource-limit cargo test epoll_waiter_coordination --lib -- --nocapture
+  "$run_step_fn" lib-srt-stream-id-normalization \
+    scripts/resource-limit cargo test srt_stream_ids_normalize_equivalent --lib -- --nocapture
+  "$run_step_fn" lib-srt-sender-semaphore \
+    scripts/resource-limit cargo test srt_sender_semaphore --lib -- --nocapture
+  "$run_step_fn" external-transcoder-routing \
+    scripts/resource-limit cargo test external_output_stream_idx_routes_known_tracks_without_aliasing --lib -- --nocapture
+  "$run_step_fn" external-transcoder-routing-proptest \
+    scripts/resource-limit cargo test proptest_external_output_dts_routing_preserves_per_stream_monotonicity --lib -- --nocapture
+  "$run_step_fn" external-transcoder-h264-live \
+    scripts/resource-limit cargo test external_720p_stage_emits_live_packets_for_h264_marker_fixture --lib -- --nocapture
+  "$run_step_fn" external-transcoder-h264-dts-remux \
+    scripts/resource-limit cargo test external_1080p_stage_remuxes_marker_fixture_with_monotone_dts --lib -- --nocapture
+  "$run_step_fn" internal-transcoder-chunked-scale \
+    scripts/resource-limit cargo test internal_scale_stage_chunked_remux_input_preserves_video_timestamp_order --test transcoder -- --nocapture
+  "$run_step_fn" internal-transcoder-source-proptest \
+    scripts/resource-limit cargo test prop_source_stage_chunked_input_preserves_per_stream_dts_order --test transcoder -- --nocapture
+  "$run_step_fn" internal-transcoder-replacement-metadata \
+    scripts/resource-limit cargo test replacement_video_stage_preserves_codec_hint_and_audio_tracks --test transcoder -- --nocapture
+  "$run_step_fn" hls-segment-dts-boundaries \
+    scripts/resource-limit cargo test hls_segment_boundaries_preserve_non_decreasing_dts_per_stream --lib -- --nocapture
+  "$run_step_fn" test-harness-process-lifecycle \
+    scripts/resource-limit cargo test --bin test_harness tests::kill_and_wait_child_terminates_spawned_process -- --exact --nocapture
+  "$run_step_fn" test-harness-slow-sink-sibling-count \
+    scripts/resource-limit cargo test --bin test_harness tests::fault_output_stall_sibling_count_honors_n_per_group_cap -- --exact --nocapture
   "$run_step_fn" lib-recent-egress \
     scripts/resource-limit cargo test recent_egress --lib -- --nocapture
   "$run_step_fn" lib-ingest-grace \

@@ -161,12 +161,19 @@ surface already covers it.
   - `prop_egress_lifecycle_preserves_runtime_and_health_invariants`
 - `src/media/avio.rs`
   - close/wake/backpressure loom coverage in `tests/avio_loom.rs`
+  - `media::avio::tests`
   - `write_batch_round_trips_random_chunks`
+- `tests/transcoder.rs`
+  - `internal_scale_stage_chunked_remux_input_preserves_video_timestamp_order`
+  - `prop_source_stage_chunked_input_preserves_per_stream_dts_order`
+  - `replacement_video_stage_preserves_codec_hint_and_audio_tracks`
 - `src/media/external_transcoder.rs`
   - `external_output_stream_idx_routes_known_tracks_without_aliasing`
   - `proptest_external_output_dts_routing_preserves_per_stream_monotonicity`
   - `external_720p_stage_emits_live_packets_for_h264_marker_fixture`
   - `external_1080p_stage_remuxes_marker_fixture_with_monotone_dts`
+- `src/media/hls.rs`
+  - `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream`
 - `src/media/srt.rs`
   - `epoll_waiter_coordination`
   - `srt_stream_ids_normalize_equivalent_publish_keys_before_registration`

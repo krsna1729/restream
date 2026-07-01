@@ -104,9 +104,13 @@ This report summarizes the model, property, unit, and live-harness proof surface
   - `ts_muxer_stage_loom`
   - `transcoder_stage_loom`
 - Focused API/status lifecycle tests.
-- Ring migration property test: `prop_no_loss_no_gap_no_duplication`.
-- AVIO batch property test: `write_batch_round_trips_random_chunks`.
-- SRT epoll stress test: `epoll_waiter_coordination`.
+- Ring migration property tests: `prop_no_loss_no_gap_no_duplication` and `prop_multi_reader_migration_preserves_each_reader_order`.
+- AVIO unit/property tests: `media::avio::tests` and `write_batch_round_trips_random_chunks`.
+- SRT stress and protocol-boundary tests: `epoll_waiter_coordination`, stream-ID normalization, and sender semaphore checks.
+- External transcoder routing, DTS, and H264 marker-fixture checks.
+- Internal transcoder timestamp, chunking, and replacement metadata checks.
+- HLS MPEG-TS segment DTS boundary check.
+- Process lifecycle and slow-sink sibling-count harness unit checks.
 - Ingest/egress lifecycle proptests.
 
 ### Full Contract Gate
@@ -123,7 +127,7 @@ This report summarizes the model, property, unit, and live-harness proof surface
   - `recovery`
 - post-mode orphan process checks for `restream`, `mediamtx`, `ffmpeg`, `ffprobe`, and `test_harness`
 
-## Focused Validation Performed During The Sweep
+## Validation Performed During The Sweep
 
 The following focused checks passed serially after merging the isolated proof branches:
 
@@ -149,9 +153,11 @@ env N_PER_GROUP=1 ONLY_CHECKS=ffprobe SKIP_LOAD=1 scripts/resource-limit cargo r
 
 The full live `scripts/check-concurrency-contract.sh` gate remains the sign-off gate for broad lifecycle changes, but it should be run serially on a stable host because it starts several live harness modes.
 
+After wiring the expanded proof labels into `scripts/concurrency-proof-common.sh`, both `bash ./scripts/check-concurrency-proof-fast.sh` and `bash ./scripts/check-concurrency-contract.sh` passed. The full contract run produced logs for all mandatory proof steps and live modes under `test/artifacts/concurrency-contract-logs/`, and the post-run process cleanup check found no `restream`, `mediamtx`, `ffmpeg`, `ffprobe`, or `test_harness` survivors.
+
 ## Remaining Gaps
 
-- The full contract gate is intentionally heavier than the focused checks above; run it before final sign-off when host resources allow.
+- The full contract gate is intentionally heavier than the focused checks above; continue running it before final sign-off when host resources allow.
 - Slow-sink sibling isolation now has focused harness coverage at low output counts; broader high-output soak coverage remains a separate, resource-heavy confidence run.
 - Internal transcoder/libavcodec timestamp and metadata continuity now has unit, proptest, and loom coverage; live multi-codec soak coverage remains a separate confidence run.
 - HLS segment-boundary DTS monotonicity is now covered in memory, but recording remux continuity (TS -> MP4 -> TS timestamp continuity under source-retention permutations) still lacks a dedicated proof test.
