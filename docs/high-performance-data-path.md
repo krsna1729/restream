@@ -74,10 +74,12 @@ The high-confidence layout/cache-efficiency follow-ups are:
 - Move cold `StreamInfo` metadata such as language/title out of the MPEG-TS
   demuxer per-packet stream state if high-bitrate SRT ingest profiles show cache
   pressure in `TsDemuxer`.
-- Benchmark replacing tiny per-stage `Vec` state (`DtsEnforcer::last_dts`,
-  `TsMuxer::last_dts_90k`, and `TsMuxer::continuity`) with bounded inline arrays.
-  This removes small heap allocations and pointer dereferences, but it needs a
-  measured win because stream counts are normally tiny.
+- Keep `DtsEnforcer::last_dts` as a `Vec<i64>` unless a new benchmark says
+  otherwise. A 2026-07-02 inline-array trial improved a too-small 32-stream
+  version, but that capacity cannot cover the existing video+32-audio case; the
+  safe 64-stream version regressed `stage_feeder/dts_enforcer` by roughly 8-11%.
+  `TsMuxer::last_dts_90k` and `TsMuxer::continuity` remain possible candidates,
+  but need the same benchmark-first treatment.
 - Cache or stack-build PMT descriptor sections if keyframe/table insertion
   allocations show up in multi-output profiles.
 

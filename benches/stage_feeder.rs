@@ -7,7 +7,7 @@ use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use restream::media::engine::{AudioMeta, VideoMeta};
 use restream::media::feeder::{PacketFeedConfig, TsPacketFeeder};
-use restream::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat};
+use restream::media::ring_buffer::{DtsEnforcer, MediaPacket, MediaType, PayloadFormat};
 use std::sync::Arc;
 
 fn video_meta() -> VideoMeta {
@@ -181,10 +181,37 @@ fn bench_multi_audio_feed(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_dts_enforcer(c: &mut Criterion) {
+    let mut group = c.benchmark_group("stage_feeder/dts_enforcer");
+
+    for stream_count in [2usize, 16] {
+        group.bench_with_input(
+            BenchmarkId::new("round_robin", stream_count),
+            &stream_count,
+            |b, &stream_count| {
+                b.iter(|| {
+                    let mut enforcer = DtsEnforcer::new(stream_count);
+                    let mut sum = 0i64;
+                    for i in 0..256usize {
+                        let stream_idx = i % stream_count;
+                        let timestamp = (i / stream_count) as i64;
+                        let (pts, dts) = enforcer.enforce(stream_idx, timestamp, timestamp);
+                        sum += pts + dts;
+                    }
+                    black_box(sum);
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_single_packet_feed,
     bench_burst_feed,
-    bench_multi_audio_feed
+    bench_multi_audio_feed,
+    bench_dts_enforcer
 );
 criterion_main!(benches);
