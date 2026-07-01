@@ -43,6 +43,12 @@ impl StageMetrics {
     }
 
     #[inline]
+    pub fn record_in_batch(&self, packets: u64, bytes: u64) {
+        self.packets_in.fetch_add(packets, Ordering::Relaxed);
+        self.bytes_in.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    #[inline]
     pub fn record_out(&self, bytes: u64) {
         self.packets_out.fetch_add(1, Ordering::Relaxed);
         self.bytes_out.fetch_add(bytes, Ordering::Relaxed);

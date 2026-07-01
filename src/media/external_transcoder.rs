@@ -744,7 +744,7 @@ async fn start_external_transcoder_stage_inner(
         format!("ext-stage:{}:{}", pipeline_id, encoding),
         input_buffer,
     );
-    let mut ts_batch = Vec::<u8>::with_capacity(16 * 188);
+    let mut ts_batch = Vec::<u8>::with_capacity(65_536);
     let mut packets = Vec::with_capacity(32);
 
     'outer: loop {
@@ -755,32 +755,38 @@ async fn start_external_transcoder_stage_inner(
                 if reader.pull_burst(&mut packets, 32).is_err() {
                     continue;
                 }
+                ts_batch.clear();
+                let mut batch_in_packets = 0u64;
+                let mut batch_in_bytes = 0u64;
                 for pkt in packets.drain(..) {
                     if !include_audio && pkt.media_type == MediaType::Audio {
                         continue;
                     }
                     let in_bytes = pkt.payload.len() as u64;
-                    ts_batch.clear();
                     if feeder.extend_ts_for_packet(&pkt, &mut ts_batch) {
-                        let t0 = timing_clock.now();
-                        if stdin.write_all(&ts_batch).await.is_err() {
-                            error!(
-                                correlation_id = %correlation_id,
-                                pipeline_id = %pipeline_id,
-                                stage_encoding = %encoding,
-                                stage_backend = "external_ffmpeg",
-                                "[ext-transcoder] stdin write failed ({}:{}) — ffmpeg exited",
-                                pipeline_id,
-                                encoding
-                            );
-                            break 'outer;
-                        }
-                        let write_us = timing_clock.delta_us(t0);
-                        if write_us > PIPE_STALL_THRESHOLD_US {
-                            pipe_metrics.record_stall(write_us);
-                        }
-                        stage_metrics.record_in(in_bytes);
+                        batch_in_packets += 1;
+                        batch_in_bytes = batch_in_bytes.saturating_add(in_bytes);
                     }
+                }
+                if !ts_batch.is_empty() {
+                    let t0 = timing_clock.now();
+                    if stdin.write_all(&ts_batch).await.is_err() {
+                        error!(
+                            correlation_id = %correlation_id,
+                            pipeline_id = %pipeline_id,
+                            stage_encoding = %encoding,
+                            stage_backend = "external_ffmpeg",
+                            "[ext-transcoder] stdin write failed ({}:{}) — ffmpeg exited",
+                            pipeline_id,
+                            encoding
+                        );
+                        break 'outer;
+                    }
+                    let write_us = timing_clock.delta_us(t0);
+                    if write_us > PIPE_STALL_THRESHOLD_US {
+                        pipe_metrics.record_stall(write_us);
+                    }
+                    stage_metrics.record_in_batch(batch_in_packets, batch_in_bytes);
                 }
             }
         }

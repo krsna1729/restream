@@ -50,6 +50,48 @@ improvement in production-shaped measurements.
 | `const` CRC-32/MPEG-2 table | Complete | Replaced `static OnceLock<[u32; 256]>` with `const CRC32_TABLE: [u32; 256]` computed at compile time. All operations (loops, bit shifts, conditionals) are valid in `const fn`. Eliminates the atomic acquire load on every PAT/PMT write (~500 ms interval). Table lives in `.rodata`, no first-call latency. |
 | Sentinel `u8` for continuity counter and PMT version | Complete | `StreamInfo.continuity: Option<u8>` → `u8` with `CC_UNSET = u8::MAX` (valid CC values 0–15); `TsDemuxer.pmt_version: Option<u8>` → `u8` with `PMT_VER_UNSET = u8::MAX` (valid version 0–31). Removes the discriminant byte and the `Option`-unwrap branch on every TS packet processed. |
 | BytesMut burst alloc in SRT shared muxer | Complete | `srt.rs` shared muxer replaced per-chunk `Bytes::copy_from_slice` (one `malloc+memcpy` per muxed packet) with a single `BytesMut::with_capacity(65536)` per burst, then `Bytes::slice()` for each chunk (refcount bump only, no malloc). Benchmark `ts_chunk_burst_alloc` (bench-dev, x86-64 Zen): `per_chunk_copy_from_slice` ~3.93 µs vs `burst_bytesmut_then_slice` ~2.23 µs per 32-chunk burst — **~43% faster**, ~1.7 µs saved per burst. |
+| Batched external transcoder stdin writes | Complete | `external_transcoder.rs` now accumulates all feedable packets from a 32-packet ring burst into one stdin write while preserving packet/byte metrics via `record_in_batch`. Benchmark `data_path/burst_mux_write` (`--profile bench`, 2026-07-02): per-packet write ~33.0 µs vs batch accumulate write ~12.1 µs per 32-packet burst, about **63% lower** in the modeled queue/write path. |
+
+## Hot-Path Layout Follow-Up Audit (2026-07-02)
+
+The current layout audit did not find a justified custom-SIMD replacement for
+the existing byte scanners. TS sync still routes through `memchr`, Annex B
+start-code scanning still routes through `memchr::memmem`, and the remaining
+data movement is dominated by short `copy_from_slice`/memset-style operations
+that the compiler and libc already lower efficiently. New SIMD work should wait
+for profiler evidence on a named workload.
+
+The high-confidence layout/cache-efficiency follow-ups are:
+
+- Add and benchmark a `TsMuxer::mux_packet_by_stream_idx` path. `TsPacketFeeder`
+  already computes `stream_idx` for DTS enforcement, then `TsMuxer::mux_packet`
+  repeats a linear stream lookup per packet.
+- Combine the two `audio_tracks` scans in `TsPacketFeeder::extend_ts_for_packet`:
+  one scan gets sample rate/channels and a second scan gets stream index.
+- Split `MuxStreamConfig` hot lookup fields (`media_type`, `track_index`, `pid`,
+  `stream_type`) from cold metadata (`sample_rate`, `language`) if benchmarks
+  show the per-packet lookup remains visible after stream-index bypassing.
+- Move cold `StreamInfo` metadata such as language/title out of the MPEG-TS
+  demuxer per-packet stream state if high-bitrate SRT ingest profiles show cache
+  pressure in `TsDemuxer`.
+- Benchmark replacing tiny per-stage `Vec` state (`DtsEnforcer::last_dts`,
+  `TsMuxer::last_dts_90k`, and `TsMuxer::continuity`) with bounded inline arrays.
+  This removes small heap allocations and pointer dereferences, but it needs a
+  measured win because stream counts are normally tiny.
+- Cache or stack-build PMT descriptor sections if keyframe/table insertion
+  allocations show up in multi-output profiles.
+
+The structures that should stay as-is unless benchmarks say otherwise:
+
+- `MediaPacket` uses `#[repr(C)]` with hot dispatch/routing/timestamp/payload
+  fields in the first cache line.
+- `RingBuffer` keeps writer-owned atomics on separate 64-byte cache lines and
+  deliberately keeps slots compact to reduce reader working set size.
+- `TsDemuxer` PID dispatch uses the 8192-entry direct table, avoiding HashMap
+  lookups on every TS packet.
+- `StageMetrics` is a compact relaxed-atomic counter block with one writer per
+  stage in normal operation; no padding should be added without a false-sharing
+  benchmark.
 
 ## Per-Frame Allocation Audit (2026-06-23)
 
