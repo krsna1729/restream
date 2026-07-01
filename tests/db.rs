@@ -424,6 +424,7 @@ async fn app_logs_can_be_queried_by_output_scope() {
     let logs = db::list_app_logs(
         &pool,
         &AppLogFilters {
+            after_id: None,
             level: Some("info".to_string()),
             since: None,
             until: None,
@@ -445,6 +446,7 @@ async fn app_logs_can_be_queried_by_output_scope() {
     let lifecycle_only = db::list_app_logs(
         &pool,
         &AppLogFilters {
+            after_id: None,
             level: Some("info".to_string()),
             since: None,
             until: None,
@@ -517,6 +519,7 @@ async fn filtered_app_logs_honor_prefix_and_event_class_filters() {
     let logs = db::list_app_logs(
         &pool,
         &AppLogFilters {
+            after_id: None,
             level: Some("info".to_string()),
             since: None,
             until: None,
@@ -538,6 +541,7 @@ async fn filtered_app_logs_honor_prefix_and_event_class_filters() {
     let lifecycle_logs = db::list_app_logs(
         &pool,
         &AppLogFilters {
+            after_id: None,
             level: Some("info".to_string()),
             since: None,
             until: None,
@@ -598,6 +602,7 @@ async fn scoped_app_logs_can_be_limited_to_restream_only_entries() {
     let restream_logs = db::list_app_logs(
         &pool,
         &AppLogFilters {
+            after_id: None,
             level: Some("info".to_string()),
             since: None,
             until: None,
