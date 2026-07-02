@@ -191,23 +191,63 @@ Token costs grow with context length. To keep sessions efficient:
 
 ## Model Selection
 
-Current session model is the ceiling — never spawn a subagent at a higher tier.
-Pick the lowest model that can reliably complete the work:
+Pick the lowest model class that can reliably complete the work. If your
+environment supports helpers, subagents, or delegated tasks, never use a higher
+model tier for those helpers than the main session already has available.
 
 Model tiers (lowest to highest): `haiku` → `sonnet` → `opus`
 
-| Task type | Model |
-|-----------|-------|
-| Search, grep, file lookup, single-file read | `haiku` |
-| Code explanation, simple Q&A, rename/format | `haiku` |
-| Bug fix, small feature, test writing | `sonnet` |
-| Multi-file refactor, architecture, complex analysis | `sonnet` |
-| Deep reasoning, novel design, high-stakes decisions | `opus` |
+Rough cross-provider mapping for portable guidance in Claude, Codex, and
+GitHub Copilot environments:
 
-Apply this when spawning Agent subagents — pick the lowest tier sufficient for the work,
-never exceeding the current session model. For the main session task itself: if it fits
-a lower tier, tell the user (e.g. "This is a simple task — you could switch to Haiku
-(`/model haiku`) for lower cost.").
+| Model class | Claude-style label | OpenAI-style label | When to prefer it here |
+|-----------|-------|-------|-------|
+| Lightweight | `haiku` | `gpt-5.4-mini` or `gpt-5.4-nano` | Search, grep, doc lookup, simple explanation, tiny wording edits |
+| Workhorse | `sonnet` | `gpt-5.4` | Most bug fixes, small features, tests, API/UI gap closure, medium repo edits |
+| Deep reasoning | `opus` | `gpt-5.5` | Concurrency redesign, hot-path architecture, novel pipeline/protocol design, benchmark-driven decisions |
+
+These are task-class mappings, not exact capability equivalence claims. If an
+environment exposes only generic labels such as "fast", "balanced", or
+"powerful", map them to lightweight, workhorse, and deep-reasoning classes in
+that order.
+
+Preliminary workspace-specific heuristics, based on the task mix visible in
+active worktrees (`API-UI-gaps`, `docs-archify`, `hls-fmp4`), current
+priorities, and the repo's dedicated skills:
+
+| Query shape in this workspace | Model | Notes |
+|-----------|-------|-------|
+| Search, grep, file lookup, single-file read, command lookup, test discovery | `haiku` | Retrieval-first work with little synthesis |
+| Explain one subsystem, summarize docs, review one file, small docs/AGENTS wording updates, rename/format | `haiku` | Bounded context, low-risk judgment |
+| Scoped bug fix, small feature, test writing, API/UI gap closure, contract sync, harness triage in one area | `sonnet` | Usually touches a few files and needs validation |
+| Multi-file refactor, runtime/view separation, planner or stage-sharing cleanup, media-pipeline behavior analysis | `sonnet` | Cross-file reasoning, but still mostly within established architecture |
+| Concurrency/lifecycle redesign, task-thread-hop changes, hot-path packet-flow changes, HLS/fMP4 design, novel protocol behavior, benchmark-driven architecture decisions | `opus` | High-risk or performance-sensitive decisions with non-obvious tradeoffs |
+
+Escalate to `opus` when the task:
+
+- changes Tokio task ↔ OS thread ownership or cancellation/lifecycle behavior
+- introduces or reshapes abstractions in `src/media/` hot paths
+- requires benchmark interpretation, failure-mode design, or a new protocol/design direction
+- coordinates overlapping multi-agent work on the same runtime boundary
+
+Stay on `haiku` when the task is mostly:
+
+- repo navigation, grep, command lookup, or finding the right test/doc entrypoint
+- explaining existing code without changing behavior
+- making tiny wording, formatting, or rename-only edits
+
+Default to `sonnet` for implementation work in this repo, especially when the
+request implies code edits plus tests but does not clearly require novel design.
+
+Apply this across Claude, Codex, and GitHub Copilot desktop/CLI workflows. For
+helper agents, delegated tasks, or side sessions, pick the lowest tier
+sufficient for the work and do not exceed the main session's available model
+class. For the main task itself, if it clearly fits a lower-cost model, say so.
+Examples:
+
+- docs lookup, grep-heavy scouting, AGENTS wording, and simple explanations: use a lightweight model class such as `haiku` or `gpt-5.4-mini`
+- scoped bug fixes, tests, and medium-sized repo edits: use a workhorse model class such as `sonnet` or `gpt-5.4`
+- only keep the highest-tier model class for the uncommon cross-cutting design/perf/concurrency cases above, such as `opus` or `gpt-5.5`
 
 ## Key References
 
