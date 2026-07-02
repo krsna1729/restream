@@ -1,14 +1,38 @@
 import { test, expect, type Page, request } from '@playwright/test';
 import { spawn, type ChildProcess } from 'child_process';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 const TEST_BASE_URL = process.env.BASE_URL || 'http://localhost:3030';
+const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 async function login(page: Page): Promise<void> {
     await page.goto('/login');
     await page.fill('#password-input', 'admin');
     await page.click('#login-btn');
     await page.waitForURL('**/');
+}
+
+async function waitFor<T>(
+    fn: () => Promise<T>,
+    predicate: (value: T) => boolean,
+    attempts = 40,
+    delayMs = 1000,
+): Promise<T> {
+    let lastValue: T | undefined;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+        lastValue = await fn();
+        if (predicate(lastValue)) {
+            return lastValue;
+        }
+        if (attempt + 1 < attempts) {
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+    }
+    if (lastValue !== undefined) {
+        return lastValue;
+    }
+    throw new Error('waitFor called without any attempts');
 }
 
 test.describe('HLS Player — pure helpers', () => {
@@ -478,7 +502,7 @@ test.describe('HLS Player — integration', () => {
     });
 
     test('HLS segment endpoint returns 404 for nonexistent pipeline', async ({ page }) => {
-        const response = await page.request.get('/hls/nonexistent/seg-1.ts');
+        const response = await page.request.get('/hls/nonexistent/seg1.m4s');
         expect(response.status()).toBe(404);
     });
 });
@@ -486,7 +510,7 @@ test.describe('HLS Player — integration', () => {
 test.describe.serial('HLS Player — live playback', () => {
     let livePipelineId: string;
     let ffmproc: ChildProcess | null = null;
-    const INPUT_FILE = path.resolve(__dirname, '..', 'media', 'colorbar-timer-2v16a.mp4');
+    const INPUT_FILE = path.resolve(TEST_DIR, '..', 'media', 'colorbar-timer-2v16a.mp4');
 
     let livePipelineName: string;
 
@@ -594,7 +618,7 @@ test.describe.serial('HLS Player — live playback', () => {
             }
             await page.waitForTimeout(1000);
         }
-        const segMatch = playlist.match(/^(seg\d+\.ts)$/m);
+        const segMatch = playlist.match(/^(seg\d+\.m4s)$/m);
         expect(segMatch).not.toBeNull();
         const segName = segMatch![1];
 
@@ -683,7 +707,10 @@ test.describe.serial('HLS Player — live playback', () => {
             // fallback: check that the video has a src set and is loading
         }
 
-        const currentSrc = await video.getAttribute('src');
+        const currentSrc = await video.evaluate((element) => {
+            const videoEl = element as HTMLVideoElement;
+            return videoEl.currentSrc || videoEl.src || videoEl.dataset.previewSrc || null;
+        });
         expect(currentSrc).toBeTruthy();
     });
 
@@ -693,7 +720,7 @@ test.describe.serial('HLS Player — live playback', () => {
                 const resp = await page.request.get(`/hls/${livePipelineId}/index.m3u8`);
                 if (resp.ok()) {
                     const body = await resp.text();
-                    const matches = [...body.matchAll(/seg(\d+)\.ts/g)];
+                    const matches = [...body.matchAll(/seg(\d+)\.m4s/g)];
                     if (matches.length > 0) {
                         const indexes = matches.map(m => parseInt(m[1], 10));
                         return Math.max(...indexes);
@@ -817,5 +844,210 @@ test.describe.serial('HLS Player — live playback', () => {
 
         const managedVideo = page.locator('video[data-role="managed-hls-video"]');
         await expect(managedVideo).toBeAttached({ timeout: 10000 });
+    });
+});
+
+test.describe.serial('HLS Player — alternate audio preview', () => {
+    let pipelineId: string;
+    let pipelineName: string;
+
+    test.beforeAll(async () => {
+        const ctx = await request.newContext({ baseURL: TEST_BASE_URL });
+        await ctx.post('/api/v1/auth/login', { data: { password: 'admin' } });
+
+        pipelineName = `PlaywrightAltAudio_${Date.now()}`;
+        const pipeKey = `pw_alt_audio_${Date.now()}`;
+        const createResp = await ctx.post('/api/v1/pipelines', {
+            data: { name: pipelineName, streamKey: pipeKey },
+        });
+        expect(createResp.ok()).toBe(true);
+        const createJson = await createResp.json();
+        pipelineId = createJson.pipeline.id;
+        expect(pipelineId).toBeTruthy();
+
+        const configureResp = await ctx.put(`/api/v1/pipelines/${pipelineId}/file-ingest`, {
+            data: {
+                filename: 'colorbar-timer-2v16a.mp4',
+                loop: true,
+                liveOptimized: true,
+                targetGopSeconds: 4,
+            },
+        });
+        expect(configureResp.ok()).toBe(true);
+
+        const ingestResp = await ctx.get(`/api/v1/pipelines/${pipelineId}/file-ingest`);
+        expect(ingestResp.ok()).toBe(true);
+        const ingestJson = await ingestResp.json();
+        const ingestId = ingestJson.id;
+        expect(ingestId).toBeTruthy();
+
+        const startResp = await ctx.post(`/api/v1/ingests/${ingestId}/start`);
+        expect(startResp.ok()).toBe(true);
+
+        await waitFor(
+            async () => {
+                const healthResp = await ctx.get('/api/v1/engine/health');
+                return healthResp.ok() ? await healthResp.json() : null;
+            },
+            (health) => {
+                const input = health?.pipelines?.[pipelineId]?.input;
+                return input?.status === 'on' && (input?.audioTracks?.length || 0) >= 16;
+            },
+            40,
+            1000,
+        );
+
+        await waitFor(
+            async () => {
+                const playlistResp = await ctx.get(`/hls/${pipelineId}/master.m3u8`);
+                return playlistResp.ok() ? await playlistResp.text() : '';
+            },
+            (body) =>
+                body.includes('video/index.m3u8') &&
+                body.includes('audio/15/index.m3u8') &&
+                (body.match(/#EXT-X-MEDIA:TYPE=AUDIO/g) || []).length >= 16,
+            40,
+            500,
+        );
+
+        await ctx.dispose();
+    });
+
+    test.afterAll(async () => {
+        if (!pipelineId) return;
+        const ctx = await request.newContext({ baseURL: TEST_BASE_URL });
+        await ctx.post('/api/v1/auth/login', { data: { password: 'admin' } });
+        await ctx.delete(`/api/v1/pipelines/${pipelineId}`).catch(() => {});
+        await ctx.dispose();
+    });
+
+    test.beforeEach(async ({ page }) => {
+        await login(page);
+    });
+
+    test('master playlist advertises alternate audio renditions', async ({ page }) => {
+        const response = await page.request.get(`/hls/${pipelineId}/master.m3u8`);
+        expect(response.ok()).toBe(true);
+        const playlist = await response.text();
+
+        expect(playlist).toContain('video/index.m3u8');
+        expect(playlist).toContain('audio/0/index.m3u8');
+        expect(playlist).toContain('audio/15/index.m3u8');
+        expect((playlist.match(/#EXT-X-MEDIA:TYPE=AUDIO/g) || []).length).toBe(16);
+    });
+
+    test('browser preview loads video and switches alternate audio tracks', async ({ page }) => {
+        const requestedAudio15Urls = new Set<string>();
+        const responseListener = (response: { url(): string; status(): number }) => {
+            const url = response.url();
+            if (
+                response.status() === 200 &&
+                url.includes(`/hls/${pipelineId}/audio/15/`)
+            ) {
+                requestedAudio15Urls.add(url);
+            }
+        };
+        page.on('response', responseListener);
+
+        await page.getByRole('button', { name: 'Pipeline', exact: true }).click();
+        const pipelineItem = page.locator('#pipelines li', { hasText: pipelineName });
+        await expect(pipelineItem).toBeVisible({ timeout: 10000 });
+        await pipelineItem.click();
+
+        const videoPlayer = page.locator('#video-player');
+        const video = videoPlayer.locator('video[data-role="input-preview-video"]');
+        await expect(video).toBeAttached();
+
+        const playBtn = videoPlayer.locator('button', { hasText: 'Play preview' });
+        await expect(playBtn).toBeVisible();
+        await playBtn.click();
+
+        const usesHlsJs = await page.evaluate(() => !!window.Hls);
+        if (usesHlsJs) {
+            await expect(video).toHaveAttribute('src', /blob:/, { timeout: 20000 });
+        } else {
+            await expect(video).toHaveAttribute('src', new RegExp(`/hls/${pipelineId}/master.m3u8`), { timeout: 20000 });
+        }
+
+        await page.waitForFunction(() => {
+            const videoEl = document.querySelector<HTMLVideoElement>('video[data-role="input-preview-video"]');
+            const picker = document.querySelector<HTMLButtonElement>('#video-player button[aria-haspopup="listbox"]');
+            if (!videoEl || !picker) return false;
+            const pickerStyle = window.getComputedStyle(picker);
+            const pickerVisible = pickerStyle.display !== 'none' && pickerStyle.visibility !== 'hidden';
+            const hasPlaybackTarget = Boolean(videoEl.currentSrc || videoEl.src || videoEl.dataset.previewSrc);
+            return pickerVisible && hasPlaybackTarget;
+        }, { timeout: 20000 });
+
+        const currentSrc = await video.evaluate((element) => {
+            const videoEl = element as HTMLVideoElement;
+            return videoEl.currentSrc || videoEl.src || videoEl.dataset.previewSrc || null;
+        });
+        expect(currentSrc).toBeTruthy();
+
+        await page.waitForFunction(() => {
+            const videoEl = document.querySelector<HTMLVideoElement>('video[data-role="input-preview-video"]');
+            if (!videoEl) return false;
+            return videoEl.readyState >= 2 && videoEl.currentTime > 0 && !videoEl.error;
+        }, { timeout: 20000 });
+
+        const playbackBeforeSwitch = await video.evaluate((element) => {
+            const videoEl = element as HTMLVideoElement;
+            return {
+                currentTime: videoEl.currentTime,
+                readyState: videoEl.readyState,
+                paused: videoEl.paused,
+                errorCode: videoEl.error?.code ?? null,
+            };
+        });
+        expect(playbackBeforeSwitch.readyState).toBeGreaterThanOrEqual(2);
+        expect(playbackBeforeSwitch.currentTime).toBeGreaterThan(0);
+        expect(playbackBeforeSwitch.paused).toBe(false);
+        expect(playbackBeforeSwitch.errorCode).toBeNull();
+
+        const audioPickerButton = videoPlayer.locator('button[aria-haspopup="listbox"]');
+        await expect(audioPickerButton).toBeVisible({ timeout: 20000 });
+        const beforeLabel = await audioPickerButton.textContent();
+
+        await audioPickerButton.click();
+        const options = page.locator('[role="option"]');
+        await expect(options).toHaveCount(16, { timeout: 20000 });
+        await options.last().click();
+
+        if (beforeLabel) {
+            await expect(audioPickerButton).not.toHaveText(beforeLabel, { timeout: 10000 });
+        }
+
+        await audioPickerButton.click();
+        await expect(options.last()).toHaveAttribute('aria-selected', 'true');
+
+        await page.waitForFunction(
+            () => {
+                const videoEl = document.querySelector<HTMLVideoElement>('video[data-role="input-preview-video"]');
+                return Boolean(videoEl && videoEl.currentTime > 0 && !videoEl.paused && !videoEl.error);
+            },
+            { timeout: 20000 },
+        );
+
+        await expect.poll(
+            () => requestedAudio15Urls.size,
+            { timeout: 20000 },
+        ).toBeGreaterThan(0);
+
+        const playbackAfterSwitch = await video.evaluate((element) => {
+            const videoEl = element as HTMLVideoElement;
+            return {
+                currentTime: videoEl.currentTime,
+                readyState: videoEl.readyState,
+                paused: videoEl.paused,
+                errorCode: videoEl.error?.code ?? null,
+            };
+        });
+        expect(playbackAfterSwitch.readyState).toBeGreaterThanOrEqual(2);
+        expect(playbackAfterSwitch.currentTime).toBeGreaterThan(playbackBeforeSwitch.currentTime);
+        expect(playbackAfterSwitch.paused).toBe(false);
+        expect(playbackAfterSwitch.errorCode).toBeNull();
+
+        page.off('response', responseListener);
     });
 });

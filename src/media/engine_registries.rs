@@ -15,6 +15,7 @@ use crate::media::engine::{
     RecentEgressOutcome, RecentIngestOutcome,
 };
 use crate::media::hls::HlsStore;
+use crate::media::hls_fmp4::Fmp4HlsStore;
 use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_metrics::StageMetrics;
@@ -78,6 +79,7 @@ impl RecordingRegistry {
 
 pub struct HlsRegistry {
     pub stores: TokioRwLock<HashMap<String, Arc<HlsStore>>>,
+    pub preview_stores: TokioRwLock<HashMap<String, Arc<Fmp4HlsStore>>>,
     pub consumers: TokioRwLock<HashMap<String, HlsConsumers>>,
 }
 
@@ -85,6 +87,7 @@ impl HlsRegistry {
     pub fn new() -> Self {
         Self {
             stores: TokioRwLock::new(HashMap::new()),
+            preview_stores: TokioRwLock::new(HashMap::new()),
             consumers: TokioRwLock::new(HashMap::new()),
         }
     }

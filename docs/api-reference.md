@@ -846,13 +846,21 @@ does not include development-only or benchmark dependencies.
 | Method | Route | Purpose |
 |---|---|---|
 | `GET` | `/hls/:pipelineId` | Playlist alias |
-| `GET` | `/hls/:pipelineId/index.m3u8` | Playlist |
-| `GET` | `/hls/:pipelineId/seg<N>.ts` | MPEG-TS segment |
+| `GET` | `/hls/:pipelineId/index.m3u8` | Primary media playlist |
+| `GET` | `/hls/:pipelineId/master.m3u8` | Master playlist with alternate audio |
+| `GET` | `/hls/:pipelineId/seg<N>.m4s` | Video media segment alias |
+| `GET` | `/hls/:pipelineId/video/index.m3u8` | Video-only media playlist |
+| `GET` | `/hls/:pipelineId/video/init.mp4` | Video init segment |
+| `GET` | `/hls/:pipelineId/video/seg<N>.m4s` | Video media segment |
+| `GET` | `/hls/:pipelineId/audio/:trackIndex/index.m3u8` | Audio-only media playlist |
+| `GET` | `/hls/:pipelineId/audio/:trackIndex/init.mp4` | Audio init segment |
+| `GET` | `/hls/:pipelineId/audio/:trackIndex/seg<N>.m4s` | Audio media segment |
 
 Responses:
 
 - playlist: `application/vnd.apple.mpegurl`
-- segment: `video/mp2t`
+- video segment / init: `video/mp4`
+- audio segment / init: `audio/mp4`
 - `404`: no active store, no completed segments, or evicted segment
 - `400`: invalid segment filename
 

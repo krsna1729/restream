@@ -5,6 +5,7 @@ import { getAudioTrackLabel } from "./audio-track-labels.js";
 
 const INPUT_PREVIEW_VIDEO_SELECTOR = '[data-role="input-preview-video"]';
 const HLS_READY_RETRY_MS = 1000;
+const MEANINGLESS_LANG = new Set(["und", "unk", "zxx"]);
 
 const hlsInstances = new WeakMap<HTMLVideoElement, Hls>();
 const previewControllers = new WeakMap<HTMLElement, AbortController>();
@@ -34,6 +35,67 @@ function getFriendlyAudioTrackName(
   return trimmedName;
 }
 
+function normalizeTrackText(value: string | null | undefined): string {
+  return (value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function isMeaningfulLanguage(lang: string | null | undefined): boolean {
+  const trimmed = lang?.trim();
+  return !!trimmed && !MEANINGLESS_LANG.has(trimmed.toLowerCase());
+}
+
+function trackPositionLabel(
+  track: AudioTrack | null | undefined,
+  position: number,
+): string {
+  if (Number.isFinite(track?.index as number)) {
+    return `Track ${Number(track?.index) + 1}`;
+  }
+  return `Track ${position + 1}`;
+}
+
+function buildPreviewLanguageDetail(
+  track: AudioTrack | null | undefined,
+  displayLabel: string,
+): string | null {
+  if (!isMeaningfulLanguage(track?.language)) return null;
+  const language = String(track?.language).trim().toUpperCase();
+  return normalizeTrackText(displayLabel).includes(language.toLowerCase())
+    ? null
+    : language;
+}
+
+function buildPreviewNativeLabelDetail(
+  nativeLabel: string | null,
+  displayLabel: string,
+  track: AudioTrack | null | undefined,
+  position: number,
+): string | null {
+  if (!nativeLabel) return null;
+  const normalizedNative = normalizeTrackText(nativeLabel);
+  const normalizedDisplay = normalizeTrackText(displayLabel);
+  if (!normalizedNative || normalizedNative === normalizedDisplay) return null;
+
+  const normalizedTrackLabel = normalizeTrackText(
+    trackPositionLabel(track, position),
+  );
+  if (
+    normalizedNative === normalizedTrackLabel ||
+    normalizedNative.startsWith(`${normalizedTrackLabel} (`)
+  ) {
+    return null;
+  }
+
+  const meaningfulLanguage = isMeaningfulLanguage(track?.language)
+    ? String(track?.language).trim().toLowerCase()
+    : null;
+  if (meaningfulLanguage && normalizedNative === meaningfulLanguage) {
+    return null;
+  }
+
+  return nativeLabel;
+}
+
 export function getPreviewAudioMetadata(
   pipe: PipelineView,
   position: number,
@@ -48,24 +110,11 @@ export function getPreviewAudioMetadata(
 
 function buildPreviewTrackIdentifier(
   track: AudioTrack | null | undefined,
-  position: number,
-  displayLabel: string,
 ): string | null {
   if (!track) return null;
   const parts: string[] = [];
   if (Number.isFinite(track.pid as number)) {
     parts.push(`PID 0x${Number(track.pid).toString(16).toUpperCase()}`);
-  }
-  if (Number.isFinite(track.index as number)) {
-    parts.push(`Track ${Number(track.index) + 1}`);
-  } else {
-    parts.push(`Track ${position + 1}`);
-  }
-  if (
-    track.language?.trim() &&
-    track.language.trim().toUpperCase() !== displayLabel.trim().toUpperCase()
-  ) {
-    parts.push(track.language.trim().toUpperCase());
   }
   return parts.join(" / ");
 }
@@ -105,15 +154,18 @@ function buildPreviewAudioDetail(
   const metadata = getPreviewAudioMetadata(pipe, position);
   const displayLabel = getAudioTrackLabel(pipe.id, metadata, position);
   const friendlyName = getFriendlyAudioTrackName(nativeTrack.label);
-  const nativeLabel =
-    friendlyName && friendlyName.toLowerCase() !== displayLabel.toLowerCase()
-      ? friendlyName
-      : null;
+  const nativeLabel = buildPreviewNativeLabelDetail(
+    friendlyName,
+    displayLabel,
+    metadata,
+    position,
+  );
   const detailParts = [
     formatCodecName(metadata?.codec),
     metadata?.channels ? formatChannelCount(metadata.channels) : null,
     formatPreviewSampleRate(metadata?.sample_rate),
-    buildPreviewTrackIdentifier(metadata, position, displayLabel),
+    buildPreviewTrackIdentifier(metadata),
+    buildPreviewLanguageDetail(metadata, displayLabel),
     nativeLabel,
   ].filter(Boolean);
 

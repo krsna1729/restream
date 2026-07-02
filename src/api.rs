@@ -53,8 +53,7 @@ use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::events;
 use crate::logging::types::AppLogFilters;
 use crate::media::engine::MediaEngine;
-use crate::media::hls::{HlsSegmentVariant, HlsStore};
-use crate::media::mpegts::{TsSegmentView, remux_segment_view};
+use crate::media::hls_fmp4::{Fmp4HlsStore, parse_fmp4_segment_name};
 use crate::media::security::IngestSecurityService;
 use crate::media::srt::{SrtIngestPolicyStore, serialize_pipeline_srt_ingest_policy};
 use crate::types::{Ingest, Pipeline};
@@ -510,12 +509,20 @@ pub fn create_router(state: Arc<AppState>) -> Router {
                     get(hls_video_playlist_handler),
                 )
                 .route(
+                    "/hls/:pipeline_id/video/init.mp4",
+                    get(hls_video_init_handler),
+                )
+                .route(
                     "/hls/:pipeline_id/video/:segment",
                     get(hls_video_segment_handler),
                 )
                 .route(
                     "/hls/:pipeline_id/audio/:track_index/index.m3u8",
                     get(hls_audio_playlist_handler),
+                )
+                .route(
+                    "/hls/:pipeline_id/audio/:track_index/init.mp4",
+                    get(hls_audio_init_handler),
                 )
                 .route(
                     "/hls/:pipeline_id/audio/:track_index/:segment",
@@ -6749,7 +6756,7 @@ async fn select_hls_preview_ring(
 async fn get_or_start_hls_preview_store(
     state: &Arc<AppState>,
     pipeline_id: &str,
-) -> Result<Arc<HlsStore>, Response> {
+) -> Result<Arc<Fmp4HlsStore>, Response> {
     let has_ingest = state
         .engine
         .ingests
@@ -6771,7 +6778,10 @@ async fn get_or_start_hls_preview_store(
                 select_hls_preview_ring(state, pipeline_id, &cancel_token).await;
             let store_c = store.clone();
             tokio::spawn(async move {
-                crate::media::hls::start_hls_segmenter(
+                // Served preview HLS intentionally uses native fMP4 per rendition.
+                // Remote HLS PUT outputs still run through the MPEG-TS segmenter
+                // because those ingest endpoints commonly require `.ts` media.
+                crate::media::hls_fmp4::start_hls_fmp4_segmenter(
                     pid.clone(),
                     store_c,
                     ring_buf,
@@ -7046,34 +7056,6 @@ fn build_hls_audio_codec(track: &crate::media::engine::AudioMeta) -> Option<Stri
     }
 }
 
-fn parse_hls_segment_name(segment: &str) -> Option<u64> {
-    segment
-        .strip_prefix("seg")
-        .and_then(|s| s.strip_suffix(".ts"))
-        .and_then(|s| s.parse::<u64>().ok())
-}
-
-fn hls_variant_segment_response(
-    store: &HlsStore,
-    index: u64,
-    variant: HlsSegmentVariant,
-    view: TsSegmentView,
-) -> Response {
-    if let Some(data) = store.get_variant_segment(index, variant) {
-        return (StatusCode::OK, [(header::CONTENT_TYPE, "video/mp2t")], data).into_response();
-    }
-
-    let Some(source) = store.get_segment(index) else {
-        return (StatusCode::NOT_FOUND, "Segment not found").into_response();
-    };
-    let (video, audio_tracks) = store.stream_metadata();
-    let Some(data) = remux_segment_view(&source, video.as_ref(), &audio_tracks, view) else {
-        return (StatusCode::NOT_FOUND, "Variant segment not found").into_response();
-    };
-    store.put_variant_segment(index, variant, data.clone());
-    (StatusCode::OK, [(header::CONTENT_TYPE, "video/mp2t")], data).into_response()
-}
-
 async fn hls_playlist_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
@@ -7088,7 +7070,7 @@ async fn hls_playlist_handler(
         Ok(store) => store,
         Err(response) => return response,
     };
-    match store.get_playlist() {
+    match store.get_primary_playlist() {
         Some(playlist) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")],
@@ -7112,7 +7094,7 @@ async fn hls_master_handler(
         Ok(store) => store,
         Err(response) => return response,
     };
-    if store.get_playlist().is_none() {
+    if !store.has_video_playlist() && store.get_primary_playlist().is_none() {
         return (StatusCode::NOT_FOUND, "No segments yet").into_response();
     }
     let (video, audio_tracks) = store.stream_metadata();
@@ -7138,7 +7120,10 @@ async fn hls_video_playlist_handler(
         Ok(store) => store,
         Err(response) => return response,
     };
-    match store.get_playlist() {
+    match store
+        .get_video_playlist()
+        .or_else(|| store.get_primary_playlist())
+    {
         Some(playlist) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")],
@@ -7169,7 +7154,7 @@ async fn hls_audio_playlist_handler(
     {
         return (StatusCode::NOT_FOUND, "Audio track not found").into_response();
     }
-    match store.get_playlist() {
+    match store.get_audio_playlist(track_index) {
         Some(playlist) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")],
@@ -7194,17 +7179,11 @@ async fn hls_segment_handler(
     let Some(store) = state.engine.get_hls_preview_store(&pipeline_id).await else {
         return (StatusCode::NOT_FOUND, "No HLS stream").into_response();
     };
-    let index = segment
-        .strip_prefix("seg")
-        .and_then(|s| s.strip_suffix(".ts"))
-        .and_then(|s| s.parse::<u64>().ok());
-    let Some(index) = index else {
+    let Some(index) = parse_fmp4_segment_name(&segment) else {
         return (StatusCode::BAD_REQUEST, "Invalid segment name").into_response();
     };
-    match store.get_segment(index) {
-        Some(data) => {
-            (StatusCode::OK, [(header::CONTENT_TYPE, "video/mp2t")], data).into_response()
-        }
+    match store.get_video_segment(index) {
+        Some(data) => (StatusCode::OK, [(header::CONTENT_TYPE, "video/mp4")], data).into_response(),
         None => (StatusCode::NOT_FOUND, "Segment not found").into_response(),
     }
 }
@@ -7222,15 +7201,32 @@ async fn hls_video_segment_handler(
     let Some(store) = state.engine.get_hls_preview_store(&pipeline_id).await else {
         return (StatusCode::NOT_FOUND, "No HLS stream").into_response();
     };
-    let Some(index) = parse_hls_segment_name(&segment) else {
+    let Some(index) = parse_fmp4_segment_name(&segment) else {
         return (StatusCode::BAD_REQUEST, "Invalid segment name").into_response();
     };
-    hls_variant_segment_response(
-        &store,
-        index,
-        HlsSegmentVariant::Video,
-        TsSegmentView::Video,
-    )
+    match store.get_video_segment(index) {
+        Some(data) => (StatusCode::OK, [(header::CONTENT_TYPE, "video/mp4")], data).into_response(),
+        None => (StatusCode::NOT_FOUND, "Segment not found").into_response(),
+    }
+}
+
+async fn hls_video_init_handler(
+    State(state): State<Arc<AppState>>,
+    Path(pipeline_id): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = require_hls_access(&state, &headers, &uri).await {
+        return response;
+    }
+    state.engine.touch_hls_preview(&pipeline_id).await;
+    let Some(store) = state.engine.get_hls_preview_store(&pipeline_id).await else {
+        return (StatusCode::NOT_FOUND, "No HLS stream").into_response();
+    };
+    match store.get_video_init_segment() {
+        Some(data) => (StatusCode::OK, [(header::CONTENT_TYPE, "video/mp4")], data).into_response(),
+        None => (StatusCode::NOT_FOUND, "No init segment").into_response(),
+    }
 }
 
 async fn hls_audio_segment_handler(
@@ -7246,15 +7242,32 @@ async fn hls_audio_segment_handler(
     let Some(store) = state.engine.get_hls_preview_store(&pipeline_id).await else {
         return (StatusCode::NOT_FOUND, "No HLS stream").into_response();
     };
-    let Some(index) = parse_hls_segment_name(&segment) else {
+    let Some(index) = parse_fmp4_segment_name(&segment) else {
         return (StatusCode::BAD_REQUEST, "Invalid segment name").into_response();
     };
-    hls_variant_segment_response(
-        &store,
-        index,
-        HlsSegmentVariant::Audio(track_index),
-        TsSegmentView::Audio(track_index),
-    )
+    match store.get_audio_segment(track_index, index) {
+        Some(data) => (StatusCode::OK, [(header::CONTENT_TYPE, "audio/mp4")], data).into_response(),
+        None => (StatusCode::NOT_FOUND, "Segment not found").into_response(),
+    }
+}
+
+async fn hls_audio_init_handler(
+    State(state): State<Arc<AppState>>,
+    Path((pipeline_id, track_index)): Path<(String, u32)>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Some(response) = require_hls_access(&state, &headers, &uri).await {
+        return response;
+    }
+    state.engine.touch_hls_preview(&pipeline_id).await;
+    let Some(store) = state.engine.get_hls_preview_store(&pipeline_id).await else {
+        return (StatusCode::NOT_FOUND, "No HLS stream").into_response();
+    };
+    match store.get_audio_init_segment(track_index) {
+        Some(data) => (StatusCode::OK, [(header::CONTENT_TYPE, "audio/mp4")], data).into_response(),
+        None => (StatusCode::NOT_FOUND, "No init segment").into_response(),
+    }
 }
 
 #[cfg(test)]

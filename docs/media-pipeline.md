@@ -201,7 +201,7 @@ Standard RTMP (non-Enhanced) does not carry H.265. The reconciler enforces:
 | RTMP | H.265 + video preset | `video:preset` runs first (H.265 output, shared); `hevc_to_h264:from:<preset>` converts after — H.264 to RTMP — **working** |
 | SRT | H.265 source | Passthrough (MPEG-TS carries HEVC natively) — **working** |
 | SRT | H.265 + video preset | `video:preset` with libx265 → H.265 720p output; same ring shared with RTMP — **working** |
-| HLS preview | H.265 source | Preview-only `hevc_preview_h264` stage converts to H.264 720p before MPEG-TS HLS — **current browser-compatible path** |
+| HLS preview | H.265 source | Preview-only `hevc_preview_h264` stage converts to H.264 720p before served fMP4 HLS — **current path** |
 
 Enhanced RTMP/HEVC packetization is not implemented.
 
@@ -209,18 +209,17 @@ Enhanced RTMP/HEVC packetization is not implemented.
 
 | Ingest | RTMP egress | SRT egress | HLS preview | Recording |
 |---|---|---|---|---|
-| RTMP H.264 | Basic interop; B-frame timestamp gate | Implemented; full matrix gate | MPEG-TS HLS preview with audio renditions | Input-scoped mixed gate validates final MP4 |
+| RTMP H.264 | Basic interop; B-frame timestamp gate | Implemented; full matrix gate | fMP4 HLS preview with alternate-audio renditions | Input-scoped mixed gate validates final MP4 |
 | RTMP H.265 | Not supported without Enhanced RTMP | Not assumed | Not assumed | Not assumed |
-| SRT H.264 | Packetization implemented; live matrix gate | Locally validated | MPEG-TS HLS preview with audio renditions | Input-scoped mixed gate validates final MP4 |
-| SRT H.265 | RTMP: `hevc_to_h264` conversion working; SRT: passthrough working | Passthrough implemented; E2E gate | HEVC preview converts to H.264 720p before MPEG-TS HLS | Input-scoped mixed gate validates final MP4 |
-| File | RTMP-shaped via child FFmpeg | Implemented for compatible FLV codecs | Live TsMuxer; HEVC uses preview transcode | Input-scoped mixed gate validates final MP4 |
+| SRT H.264 | Packetization implemented; live matrix gate | Locally validated | fMP4 HLS preview with alternate-audio renditions | Input-scoped mixed gate validates final MP4 |
+| SRT H.265 | RTMP: `hevc_to_h264` conversion working; SRT: passthrough working | Passthrough implemented; E2E gate | HEVC preview converts to H.264 720p before served fMP4 HLS | Input-scoped mixed gate validates final MP4 |
+| File | RTMP-shaped via child FFmpeg | Implemented for compatible FLV codecs | Native fMP4 preview packager; HEVC uses preview transcode | Input-scoped mixed gate validates final MP4 |
 
-HLS preview currently prioritizes browser compatibility over HEVC preservation.
-If ingest video is HEVC/H.265, the API starts a preview-only
-`hevc_preview_h264` stage, feeds that H.264 720p ring into the native MPEG-TS
-segmenter, and serves `.ts` segments. The code does not yet implement HEVC
-fMP4/CMAF HLS (`EXT-X-MAP`, init segment, `.m4s`). Product-level HEVC HLS
-passthrough would require that separate fMP4 path.
+HLS preview is now served as fragmented MP4 with `EXT-X-MAP`, `init.mp4`, and
+`.m4s` media segments. The preview path uses one fMP4 muxer per HLS rendition:
+one video-only rendition plus separate audio-only playlists for alternate
+tracks. Remote HLS outputs intentionally remain MPEG-TS because HTTP PUT ingest
+targets commonly require `.ts` media segments.
 
 ## Minimum Work Per Consumer
 

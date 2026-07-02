@@ -62,6 +62,19 @@ Treat frontend confidence as four layers, each owning a different kind of risk:
 Use the lowest layer that can actually catch the bug. Move upward only when the
 lower layer cannot prove the behavior.
 
+For the native fMP4 preview path specifically:
+
+- `scripts/resource-limit cargo test hls_fmp4 -- --nocapture` covers the unit,
+  proptest, and loom-backed correctness checks for rendition publication and
+  sample timestamp packaging.
+- `scripts/resource-limit cargo bench --profile bench --bench hls_fmp4_cost`
+  measures fMP4 segment muxing plus the multi-rendition in-memory publication
+  path used by browser preview.
+- `npm run test:frontend:browser-dom` keeps the preview audio-track picker
+  behavior deterministic, and `npx playwright test test/hls-player.spec.ts`
+  proves the full browser flow against the running app, including real video
+  load and alternate-audio selection.
+
 ### UI Scenario Matrices
 
 When a dashboard surface starts accumulating too many manual "click every state"
@@ -132,6 +145,7 @@ Good scoped benchmark patterns:
 scripts/resource-limit cargo bench --bench <bench-name> -- <criterion-filter>
 scripts/resource-limit cargo bench --bench high_performance_data_path -- data_path/egress_progress
 scripts/resource-limit cargo bench --bench srt_ingest_latency -- 'srt_(ingest|egress)'
+scripts/resource-limit cargo bench --bench hls_fmp4_cost -- hls_fmp4_cost
 ```
 
 The SRT bench is a socket-pair microbenchmark, not a live pipeline test. It is
@@ -614,10 +628,10 @@ Multi-track inputs, including file multi fixtures, run the expanded table:
 | SRT | `source+atrack:0`, `source+atrack:1`, `720p+atrack:0`, `720p+atrack:1`, `1080p+atrack:0`, `1080p+atrack:1` | 1 |
 
 HLS preview currently asserts the browser-compatible preview contract:
-H.264 input remains source-size H.264 MPEG-TS HLS, while H.265 input is
-converted to 720p H.264 before the MPEG-TS HLS preview path. The HLS assertion
-also checks that the master playlist exposes the source audio-track count as
-audio renditions so the browser can select all available tracks.
+H.264 input remains source-size H.264 served fMP4 HLS, while H.265 input is
+converted to 720p H.264 before the preview fMP4 path. The HLS assertion also
+checks that the master playlist exposes the source audio-track count as
+alternate audio renditions.
 
 Recording is intentionally input-scoped rather than multiplied by every egress:
 it starts/stops once after the input is live, then validates the operator-visible

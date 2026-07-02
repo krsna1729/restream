@@ -770,7 +770,10 @@ pub async fn run_app() {
                                 || url_c.starts_with("http://")
                                 || url_c.starts_with("https://")
                             {
-                                // HLS egress: use the shared segmenter, register as persistent consumer
+                                // Remote HLS outputs intentionally stay on the MPEG-TS segmenter.
+                                // The served preview path uses per-rendition fMP4, but HLS PUT
+                                // ingest targets commonly require `.ts` media segments, so the
+                                // upload/output path keeps the original TS packaging behavior.
                                 let (store, already_running) =
                                     engine_c.ensure_hls_segmenter(&pipeline_id_c).await;
                                 if !already_running {

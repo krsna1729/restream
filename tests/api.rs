@@ -1521,7 +1521,7 @@ async fn internal_file_ingest_preview_hls_serves_playlist_and_segment() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let resp = app
+    let audio_playlist_resp = app
         .clone()
         .oneshot(auth_req(
             "GET",
@@ -1531,13 +1531,25 @@ async fn internal_file_ingest_preview_hls_serves_playlist_and_segment() {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(audio_playlist_resp.status(), StatusCode::OK);
+    let audio_playlist_body = audio_playlist_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let audio_playlist =
+        String::from_utf8(audio_playlist_body.to_vec()).expect("audio playlist utf8");
+    let audio_segment = audio_playlist
+        .lines()
+        .find(|line| !line.starts_with('#') && !line.is_empty())
+        .expect("audio segment path in playlist");
 
     let resp = app
         .clone()
         .oneshot(auth_req(
             "GET",
-            &format!("/hls/{pipeline_id}/audio/15/{segment}"),
+            &format!("/hls/{pipeline_id}/audio/15/{audio_segment}"),
             &cookie,
             None,
         ))
@@ -2385,7 +2397,8 @@ async fn health_endpoint_exposes_probe_and_egress_fault_fields() {
         .await;
     let (store, _) = engine.ensure_hls_preview_segmenter(&pid).await;
     engine.touch_hls_preview(&pid).await;
-    store.push_segment(2.0, bytes::Bytes::from_static(b"segment"));
+    store.put_video_init_segment(bytes::Bytes::from_static(b"init"));
+    store.push_video_segment(0, 2.0, bytes::Bytes::from_static(b"segment"));
 
     let resp = app
         .clone()

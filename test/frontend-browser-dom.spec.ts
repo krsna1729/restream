@@ -9,6 +9,7 @@ type HarnessAudioTrack = {
   sample_rate: number;
   language?: string;
   title?: string;
+  pid?: number;
 };
 
 async function mountPreviewPipe(
@@ -193,13 +194,18 @@ test.describe("Frontend Browser DOM", () => {
   test("preview audio picker surfaces all high-index tracks and switches to the last one", async ({
     page,
   }) => {
+    const languages = [
+      "eng", "spa", "fra", "deu", "ita", "por", "jpn", "kor",
+      "hin", "tam", "tel", "mal", "ara", "rus", "zho", "ind",
+    ];
     const audioTracks = Array.from({ length: 16 }, (_, index) => ({
       index,
       codec: "aac",
       channels: index % 2 === 0 ? 2 : 1,
       sample_rate: 48000,
-      language: `lang${index}`,
+      language: languages[index],
       title: `Track ${index + 1}`,
+      pid: 0x101 + index,
     }));
     await mountPreviewPipe(page, audioTracks);
 
@@ -250,6 +256,9 @@ test.describe("Frontend Browser DOM", () => {
       .filter({ hasText: "Track 16" })
       .first();
     await expect(track16Option).toBeVisible();
+    await expect(track16Option).toContainText("PID 0x110");
+    await expect(track16Option).not.toContainText(" / Track 16 / ");
+    await expect(track16Option).not.toContainText(" / IND / Track 16");
     await track16Option.click();
 
     await expect(audioPickerButton).toHaveText("Audio: Track 16");

@@ -17,6 +17,7 @@ use crate::media::engine_registries::{
     RuntimeInfra, StageRegistry,
 };
 use crate::media::hls::HlsStore;
+use crate::media::hls_fmp4::Fmp4HlsStore;
 use crate::media::ring_buffer::{
     RingBuffer, default_ring_capacity, default_transcoder_ring_capacity,
 };
@@ -519,12 +520,11 @@ impl MediaEngine {
 
     pub async fn hls_dependency_snapshot(&self, pipeline_id: &str) -> HlsDependencySnapshot {
         let consumers = self.hls.consumers.read().await;
-        let stores = self.hls.stores.read().await;
+        let stores = self.hls.preview_stores.read().await;
         let preview_key = hls_preview_registry_key(pipeline_id);
 
         let consumer = consumers.get(&preview_key);
         let store = stores.get(&preview_key);
-        let snapshot = store.and_then(|store| store.snapshot());
 
         HlsDependencySnapshot {
             store_exists: store.is_some(),
@@ -537,14 +537,8 @@ impl MediaEngine {
                 let last = consumer.last_access_ms.load(Ordering::Relaxed);
                 now.saturating_sub(last)
             }),
-            segments: snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.segments.len())
-                .unwrap_or(0),
-            playlist_bytes: snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.playlist.len())
-                .unwrap_or(0),
+            segments: store.map(|store| store.segment_count()).unwrap_or(0),
+            playlist_bytes: store.map(|store| store.primary_playlist_len()).unwrap_or(0),
         }
     }
 
@@ -2373,7 +2367,10 @@ impl MediaEngine {
     /// Ensure a browser-preview HLS segmenter is running for this pipeline.
     /// Preview segmenters are isolated from HLS egress so preview-only H.264
     /// conversion does not change upload/output behavior.
-    pub async fn ensure_hls_preview_segmenter(&self, pipeline_id: &str) -> (Arc<HlsStore>, bool) {
+    pub async fn ensure_hls_preview_segmenter(
+        &self,
+        pipeline_id: &str,
+    ) -> (Arc<Fmp4HlsStore>, bool) {
         let preview_key = hls_preview_registry_key(pipeline_id);
         let mut consumers = self.hls.consumers.write().await;
         let already_running = consumers.contains_key(&preview_key);
@@ -2436,7 +2433,7 @@ impl MediaEngine {
             c.cancel_token.cancel();
         }
         drop(consumers);
-        self.hls.stores.write().await.remove(&preview_key);
+        self.hls.preview_stores.write().await.remove(&preview_key);
     }
 
     /// Get the cancel token for a running HLS segmenter (used to spawn the task).
@@ -2462,12 +2459,12 @@ impl MediaEngine {
             .clone()
     }
 
-    pub async fn get_or_create_hls_preview_store(&self, pipeline_id: &str) -> Arc<HlsStore> {
+    pub async fn get_or_create_hls_preview_store(&self, pipeline_id: &str) -> Arc<Fmp4HlsStore> {
         let preview_key = hls_preview_registry_key(pipeline_id);
-        let mut stores = self.hls.stores.write().await;
+        let mut stores = self.hls.preview_stores.write().await;
         stores
             .entry(preview_key)
-            .or_insert_with(|| Arc::new(HlsStore::new()))
+            .or_insert_with(|| Arc::new(Fmp4HlsStore::new()))
             .clone()
     }
 
@@ -2481,9 +2478,9 @@ impl MediaEngine {
         stores.get(pipeline_id).cloned()
     }
 
-    pub async fn get_hls_preview_store(&self, pipeline_id: &str) -> Option<Arc<HlsStore>> {
+    pub async fn get_hls_preview_store(&self, pipeline_id: &str) -> Option<Arc<Fmp4HlsStore>> {
         let preview_key = hls_preview_registry_key(pipeline_id);
-        let stores = self.hls.stores.read().await;
+        let stores = self.hls.preview_stores.read().await;
         stores.get(&preview_key).cloned()
     }
 
@@ -3119,7 +3116,8 @@ mod tests {
         assert!(!already_running);
 
         engine.touch_hls_preview("pipe-hls-snapshot").await;
-        store.push_segment(2.0, Bytes::from_static(b"segment"));
+        store.put_video_init_segment(Bytes::from_static(b"init"));
+        store.push_video_segment(0, 2.0, Bytes::from_static(b"segment"));
 
         let snapshot = engine.hls_dependency_snapshot("pipe-hls-snapshot").await;
         assert!(snapshot.store_exists);

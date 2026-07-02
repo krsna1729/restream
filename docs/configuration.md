@@ -120,9 +120,11 @@ Supported routing behavior:
 | `rtmps://...` | Native RTMPS egress through the RTMP path with TLS before handshake |
 | `srt://...` | Native SRT MPEG-TS egress; percent-encoded characters in the `streamid` query parameter are decoded automatically |
 | `hls://...` | Starts the pipeline's local in-memory HLS segmenter |
-| `http://...`, `https://...` | Starts the local segmenter and uploads segments/playlist with HTTP PUT |
+| `http://...`, `https://...` | Starts the local MPEG-TS segmenter and uploads segments/playlist with HTTP PUT |
 
-Any other prefix is rejected during validation. For HTTP/HTTPS HLS upload,
+Any other prefix is rejected during validation. The served preview HLS path is
+fragmented MP4 (`init.mp4` + `.m4s`), but HTTP/HTTPS HLS upload intentionally
+stays on MPEG-TS for ingest compatibility. For HTTP/HTTPS HLS upload,
 segment upload URLs are derived from the playlist target: a `file=` query
 parameter is replaced with `seg<N>.ts`, otherwise the playlist path filename is
 replaced with the segment filename.
@@ -241,11 +243,17 @@ The in-memory HLS store is served at:
 ```text
 /hls/<pipelineId>
 /hls/<pipelineId>/index.m3u8
-/hls/<pipelineId>/seg<N>.ts
+/hls/<pipelineId>/seg<N>.m4s
+/hls/<pipelineId>/video/init.mp4
+/hls/<pipelineId>/audio/<trackIndex>/index.m3u8
+/hls/<pipelineId>/audio/<trackIndex>/init.mp4
+/hls/<pipelineId>/audio/<trackIndex>/seg<N>.m4s
 ```
 
-Live generation uses the native inline `TsMuxer`; one shared segmenter per pipeline serves
-browser previews and HLS-type outputs. The segmenter is kept alive while at
+Live preview generation uses one shared native fMP4 segmenter per pipeline and
+exposes separate video/audio rendition playlists from memory. The HTTP/HTTPS
+upload path still uses the native inline MPEG-TS segmenter. The preview
+segmenter is kept alive while at
 least one persistent HLS output is active; its reference count is adjusted
 correctly even when an HLS egress task panics (refcount is decremented in
 an always-runs cleanup path outside the panic-catching closure).
