@@ -13,7 +13,7 @@ use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
     ClientSession, ClientSessionConfig, ClientSessionEvent, ClientSessionResult,
     PublishRequestType, ServerSession, ServerSessionConfig, ServerSessionEvent,
-    ServerSessionResult,
+    ServerSessionResult, StreamMetadata,
 };
 use rml_rtmp::time::RtmpTimestamp;
 use std::io;
@@ -28,8 +28,10 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+use crate::media::MEDIA_PULL_BURST_PACKETS;
 use crate::media::codec;
 use crate::media::engine::{
     AudioMeta, EgressRegistration, IngestRegistration, MediaEngine, PublisherQuality, StageMetrics,
@@ -39,6 +41,10 @@ use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, R
 use crate::media::security::IngestSecurityService;
 use crate::media::tcp_stats::{collect_rtmp_receiver_stats, collect_rtmp_sender_stats};
 use bytes::Bytes;
+
+/// Start RTMP egress slightly before the latest keyframe so raw H.264 outputs
+/// can pick up standalone SPS/PPS NAL units emitted immediately before the IDR.
+const RTMP_EGRESS_KEYFRAME_PREROLL_PACKETS: usize = 32;
 
 struct RtmpIngestHandle {
     pipeline_id: String,
@@ -85,8 +91,10 @@ impl RtmpTimestampGuard {
 
 fn refreshed_video_sequence_header_timestamp(packet_ts: RtmpTimestamp) -> RtmpTimestamp {
     // Startup sequence headers are sent before media at timestamp 0. Refreshes
-    // happen in-band on keyframes and must not rewind the RTMP timestamp.
-    RtmpTimestamp::new(packet_ts.value)
+    // happen in-band immediately ahead of a keyframe, so prefer the preceding
+    // millisecond when possible to avoid duplicate DTS for the config packet
+    // and the following keyframe on downstream remuxers.
+    RtmpTimestamp::new(packet_ts.value.saturating_sub(1))
 }
 
 fn parse_flv_video_meta(data: &[u8]) -> Option<VideoMeta> {
@@ -1402,18 +1410,18 @@ async fn handle_session_results(
                         }
 
                         // Feed loop: read from RingBuffer and send RTMP data.
-                        // Use pull_burst() to batch up to 32 packets per iteration
+                        // Use pull_burst() to batch packets per iteration
                         // instead of pull() which acquires the write_idx atomic once
                         // per packet (~170 acquisitions/sec at 170 pkts/sec vs ~5/sec).
                         let ring_buf = engine.get_or_create_pipeline(&pipeline.id).await;
                         let mut reader =
                             Reader::new(format!("rtmp_play:{}", pipeline.id), ring_buf);
-                        let mut burst = Vec::with_capacity(32);
+                        let mut burst = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
                         let mut timestamp_guard = RtmpTimestampGuard::new();
 
                         'play: loop {
                             burst.clear();
-                            match reader.pull_burst(&mut burst, 32) {
+                            match reader.pull_burst(&mut burst, MEDIA_PULL_BURST_PACKETS) {
                                 Ok(0) => {
                                     reader.wait_for_data().await;
                                     continue;
@@ -1526,6 +1534,17 @@ pub async fn start_rtmp_egress(
         return;
     }
     let mut output_audio_track = output_audio_tracks.first().cloned();
+    if let Err(message) =
+        wait_for_rtmp_startup_media(&ring_buffer, &cancel_token, &engine, &pipeline_id).await
+    {
+        egress_error!("prepare", message);
+        return;
+    }
+    let mut reader = Reader::new_with_keyframe_preroll(
+        format!("rtmp_egress:{}", output_id),
+        ring_buffer.clone(),
+        RTMP_EGRESS_KEYFRAME_PREROLL_PACKETS,
+    );
     let parts = match parse_rtmp_url(&target_url) {
         Some(p) => p,
         None => {
@@ -1690,7 +1709,10 @@ pub async fn start_rtmp_egress(
     };
 
     let mut is_publishing = false;
-    let mut reader = Reader::new(format!("rtmp_egress:{}", output_id), ring_buffer);
+    let mut raw_h264_parameter_sets = ring_buffer
+        .video_parameter_sets()
+        .map(|parameter_sets| parameter_sets.to_vec())
+        .unwrap_or_default();
     let progress_sample_interval = Duration::from_millis(250);
     let mut last_progress_sample = Instant::now() - progress_sample_interval;
     let mut tcp_stats_interval = tokio::time::interval(Duration::from_secs(2));
@@ -1700,6 +1722,7 @@ pub async fn start_rtmp_egress(
     // config record when the encoder changes resolution or bitrate mid-stream.
     // None = no sequence header sent yet.
     let mut last_sent_sps: Option<Vec<u8>> = None;
+    let mut video_ready = false;
     let mut audio_sequence_header_sent = false;
     let mut timestamp_guard = RtmpTimestampGuard::new();
     // Per-egress reusable conversion buffers — avoids per-frame Vec allocation.
@@ -1709,7 +1732,7 @@ pub async fn start_rtmp_egress(
 
     // Pre-allocated burst buffer — declared outside the loop so capacity
     // is retained across bursts instead of re-allocating per burst.
-    let mut packets: Vec<Arc<MediaPacket>> = Vec::with_capacity(32);
+    let mut packets: Vec<Arc<MediaPacket>> = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
 
     loop {
         tokio::select! {
@@ -1764,18 +1787,29 @@ pub async fn start_rtmp_egress(
                                 ClientSessionEvent::PublishRequestAccepted => {
                                     info!("Stream publishing accepted on target");
                                     egress_phase!("sending");
+                                    if let Some(metadata) = rtmp_publish_metadata(
+                                        &engine,
+                                        &pipeline_id,
+                                        output_audio_track.as_ref(),
+                                    )
+                                    .await
+                                    {
+                                        if let Ok(ClientSessionResult::OutboundResponse(p)) =
+                                            session.publish_metadata(&metadata)
+                                            && socket.write_all(&p.bytes).await.is_err()
+                                        {
+                                            egress_error!(
+                                                "send",
+                                                "failed to write RTMP metadata"
+                                            );
+                                            return;
+                                        }
+                                    }
                                     // Send cached sequence headers before media data.
                                     // For H.265 ingests, video_sh is None (only RTMP ingest
                                     // caches FLV seq headers), so this is a no-op for H.265.
-                                    let (video_sh, mut audio_sh) = engine.get_sequence_headers(&pipeline_id).await;
-                                    if let Some(vsh) = video_sh
-                                        && let Ok(ClientSessionResult::OutboundResponse(p)) =
-                                            session.publish_video_data(vsh, RtmpTimestamp::new(0), true)
-                                            && socket.write_all(&p.bytes).await.is_err()
-                                    {
-                                        egress_error!("send", "failed to write video sequence header");
-                                        return;
-                                    }
+                                    let (ingest_video_sh, mut audio_sh) =
+                                        engine.get_sequence_headers(&pipeline_id).await;
                                     if audio_sh.is_none() && output_audio_track.is_none() {
                                         let refreshed_tracks = resolved_output_audio_tracks(
                                             &engine,
@@ -1822,6 +1856,26 @@ pub async fn start_rtmp_egress(
                                             audio_sequence_header_sent = true;
                                         }
                                     }
+                                    let video_sh = startup_video_sequence_header(
+                                        reader.current_ring(),
+                                        ingest_video_sh,
+                                    );
+                                    if let Some(vsh) = video_sh {
+                                        if let Ok(ClientSessionResult::OutboundResponse(p)) =
+                                            session.publish_video_data(
+                                                vsh,
+                                                RtmpTimestamp::new(0),
+                                                true,
+                                            )
+                                            && socket.write_all(&p.bytes).await.is_err()
+                                        {
+                                            egress_error!(
+                                                "send",
+                                                "failed to write video sequence header"
+                                            );
+                                            return;
+                                        }
+                                    }
                                     is_publishing = true;
                                 }
                                 ClientSessionEvent::ConnectionRequestRejected { description } => {
@@ -1838,7 +1892,7 @@ pub async fn start_rtmp_egress(
             }
             // Write packets from ring buffer when publishing is active
             _ = reader.wait_for_data(), if is_publishing => {
-                if reader.pull_burst(&mut packets, 32).is_ok() {
+                if reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS).is_ok() {
                     let mut burst_made_progress = false;
                     for packet in packets.drain(..) {
                         if packet.media_type == MediaType::Audio {
@@ -1896,11 +1950,29 @@ pub async fn start_rtmp_egress(
                                     audio_sequence_header_sent = true;
                                 }
                             }
+                            if packet.format == PayloadFormat::Raw && !audio_sequence_header_sent {
+                                // Raw AAC packets are not self-describing on the RTMP wire.
+                                // Wait until we can announce the AAC track instead of sending
+                                // a packet that makes downstream RTMP receivers reject the
+                                // entire publish as video-only.
+                                continue;
+                            }
                         }
-                        let ts = timestamp_guard.packet_timestamp(&packet);
+                        let mut ts = timestamp_guard.packet_timestamp(&packet);
+                        if packet.media_type == MediaType::Video
+                            && !video_ready
+                            && !packet.is_keyframe
+                            && packet.format != PayloadFormat::Raw
+                        {
+                            continue;
+                        }
                         let payload = if packet.format == PayloadFormat::Raw {
                             match packet.media_type {
                                 MediaType::Video => {
+                                    cache_h264_parameter_sets(
+                                        &packet.payload,
+                                        &mut raw_h264_parameter_sets,
+                                    );
                                     // Guard: Raw path is H.264-only.  H.265 packets
                                     // must be converted by hevc_to_h264 before reaching
                                     // RTMP egress.  If they arrive here the stage graph
@@ -1925,40 +1997,58 @@ pub async fn start_rtmp_egress(
                                             continue;
                                         }
                                     }
+                                    if !video_ready && !packet.is_keyframe {
+                                        continue;
+                                    }
                                     // On each keyframe, check whether the SPS has changed
                                     // (encoder resolution/bitrate switch) and (re-)send the
                                     // AVCC decoder configuration record before the IDR.
                                     if packet.is_keyframe {
-                                        let nalus = codec::split_annexb_nalus(&packet.payload);
-                                        let new_sps: Option<Vec<u8>> = nalus
-                                            .iter()
-                                            .find(|n| !n.is_empty() && (n[0] & 0x1F) == 7)
-                                            .map(|n| n.to_vec());
-                                        let sps_changed = match (&last_sent_sps, &new_sps) {
-                                            (None, Some(_)) => true,
-                                            (Some(old), Some(new)) => old != new,
-                                            _ => false,
-                                        };
-                                        if sps_changed
-                                            && let Some(seq_hdr) =
-                                                codec::build_avcc_sequence_header(&packet.payload)
+                                        if let Some((seq_hdr, new_sps)) =
+                                            h264_sequence_header_for_keyframe(
+                                                &packet.payload,
+                                                &raw_h264_parameter_sets,
+                                            )
                                         {
-                                            if let Ok(ClientSessionResult::OutboundResponse(
-                                                p,
-                                            )) = session.publish_video_data(
-                                                seq_hdr,
-                                                refreshed_video_sequence_header_timestamp(ts),
-                                                true,
-                                            ) && socket.write_all(&p.bytes).await.is_err()
-                                            {
-                                                egress_error!(
-                                                    "send",
-                                                    "failed to write refreshed video sequence header"
-                                                );
-                                                return;
+                                            let sps_changed = match (&last_sent_sps, &new_sps) {
+                                                (None, Some(_)) => true,
+                                                (Some(old), Some(new)) => old != new,
+                                                _ => false,
+                                            };
+                                            if sps_changed {
+                                                let sequence_header_ts =
+                                                    refreshed_video_sequence_header_timestamp(ts);
+                                                if let Ok(ClientSessionResult::OutboundResponse(
+                                                    p,
+                                                )) = session.publish_video_data(
+                                                    seq_hdr,
+                                                    sequence_header_ts,
+                                                    true,
+                                                ) && socket.write_all(&p.bytes).await.is_err()
+                                                {
+                                                    egress_error!(
+                                                        "send",
+                                                        "failed to write refreshed video sequence header"
+                                                    );
+                                                    return;
+                                                }
+                                                if sequence_header_ts.value == ts.value {
+                                                    ts = RtmpTimestamp::new(
+                                                        timestamp_guard
+                                                            .enforce_ms(
+                                                                MediaType::Video,
+                                                                sequence_header_ts.value as i64,
+                                                            )
+                                                            as u32,
+                                                    );
+                                                }
+                                                last_sent_sps = new_sps;
                                             }
-                                            last_sent_sps = new_sps;
+                                            video_ready = true;
                                         }
+                                    }
+                                    if !video_ready {
+                                        continue;
                                     }
                                     let composition_time_ms =
                                         (packet.pts - packet.dts).clamp(
@@ -1985,6 +2075,9 @@ pub async fn start_rtmp_egress(
                         };
                         let pkt = match packet.media_type {
                             MediaType::Video => {
+                                if !video_ready {
+                                    video_ready = true;
+                                }
                                 session.publish_video_data(payload, ts, packet.is_keyframe)
                             }
                             MediaType::Audio => {
@@ -2065,6 +2158,87 @@ fn validate_rtmp_output_audio_tracks(audio_tracks: &[AudioMeta]) -> Result<(), S
     Ok(())
 }
 
+async fn rtmp_publish_metadata(
+    engine: &MediaEngine,
+    pipeline_id: &str,
+    output_audio_track: Option<&AudioMeta>,
+) -> Option<StreamMetadata> {
+    let video = engine
+        .with_active_ingest(pipeline_id, |ingest| ingest.video.clone())
+        .await
+        .flatten();
+    let mut metadata = StreamMetadata::new();
+
+    if let Some(video) = video
+        && video.codec.eq_ignore_ascii_case("h264")
+    {
+        metadata.video_codec_id = Some(7);
+        metadata.video_width = (video.width > 0).then_some(video.width);
+        metadata.video_height = (video.height > 0).then_some(video.height);
+        metadata.video_frame_rate = (video.fps > 0.0).then_some(video.fps as f32);
+    }
+
+    if let Some(track) = output_audio_track
+        && track.codec.eq_ignore_ascii_case("aac")
+    {
+        metadata.audio_codec_id = Some(10);
+        metadata.audio_sample_rate = Some(track.sample_rate);
+        metadata.audio_channels = Some(track.channels);
+        metadata.audio_is_stereo = Some(track.channels >= 2);
+    }
+
+    (metadata.video_codec_id.is_some() || metadata.audio_codec_id.is_some()).then_some(metadata)
+}
+
+fn cache_h264_parameter_sets(payload: &[u8], cache: &mut Vec<u8>) {
+    let Some(parameter_sets) = codec::annexb_parameter_sets(payload) else {
+        return;
+    };
+    if h264_sps_nalu(&parameter_sets).is_some() {
+        *cache = parameter_sets;
+    }
+}
+
+fn startup_video_sequence_header(
+    ring_buffer: &RingBuffer,
+    ingest_sequence_header: Option<Bytes>,
+) -> Option<Bytes> {
+    if let Some(parameter_sets) = ring_buffer.video_parameter_sets()
+        && let Some(sequence_header) = codec::build_avcc_sequence_header(parameter_sets)
+    {
+        return Some(sequence_header);
+    }
+
+    // A brand-new raw H.264 output ring can be empty when the RTMP publisher
+    // connects before the stage has emitted its first keyframe. In that case
+    // the ingest-cached sequence header may describe the source stream rather
+    // than the transcode output (for example 1080p source vs 720p stage), so
+    // wait for the output ring's own keyframe/config instead of advertising
+    // the wrong decoder config.
+    if ring_buffer.get_write_idx() == 0 && !ring_buffer.codec_hint_str().is_empty() {
+        return None;
+    }
+
+    ingest_sequence_header
+}
+
+fn h264_sps_nalu(payload: &[u8]) -> Option<Vec<u8>> {
+    codec::split_annexb_nalus(payload)
+        .iter()
+        .find(|nalu| !nalu.is_empty() && (nalu[0] & 0x1F) == 7)
+        .map(|nalu| nalu.to_vec())
+}
+
+fn h264_sequence_header_for_keyframe(
+    payload: &[u8],
+    parameter_sets_cache: &[u8],
+) -> Option<(Bytes, Option<Vec<u8>>)> {
+    let sequence_header = codec::build_avcc_sequence_header(payload)
+        .or_else(|| codec::build_avcc_sequence_header(parameter_sets_cache))?;
+    let sps = h264_sps_nalu(payload).or_else(|| h264_sps_nalu(parameter_sets_cache));
+    Some((sequence_header, sps))
+}
+
 fn validate_rtmp_output_audio_packet_track(track_index: u32) -> Result<(), String> {
     if track_index != 0 {
         return Err(format!(
@@ -2073,6 +2247,77 @@ fn validate_rtmp_output_audio_packet_track(track_index: u32) -> Result<(), Strin
         ));
     }
     Ok(())
+}
+
+async fn wait_for_rtmp_startup_media(
+    ring_buffer: &Arc<RingBuffer>,
+    cancel_token: &CancellationToken,
+    engine: &MediaEngine,
+    pipeline_id: &str,
+) -> Result<(), &'static str> {
+    if rtmp_startup_media_ready(ring_buffer, engine, pipeline_id).await {
+        return Ok(());
+    }
+
+    let mut reader = Reader::new_live(
+        format!("rtmp_startup_wait:{pipeline_id}"),
+        ring_buffer.clone(),
+    );
+    let wait = async {
+        loop {
+            reader.wait_for_data().await;
+            if rtmp_startup_media_ready(reader.current_ring(), engine, pipeline_id).await {
+                return Ok(());
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = cancel_token.cancelled() => Err("cancelled before startup media became available"),
+        result = wait => result,
+    }
+}
+
+async fn rtmp_startup_media_ready(
+    ring: &RingBuffer,
+    engine: &MediaEngine,
+    pipeline_id: &str,
+) -> bool {
+    if !ingest_media_metadata_ready(engine, pipeline_id).await {
+        return false;
+    }
+
+    if engine.ingest_video_codec(pipeline_id).await.is_none() {
+        return ring.get_write_idx() > 0;
+    }
+
+    // The RTMP send loop already waits for the next keyframe before emitting
+    // raw/FLV video packets. Startup only needs some media in the ring plus a
+    // trustworthy decoder configuration so the publisher can connect instead
+    // of stalling forever when the current window has no retained keyframe.
+    if ring.get_write_idx() == 0 {
+        return false;
+    }
+
+    let (ingest_video_sh, _) = engine.get_sequence_headers(pipeline_id).await;
+    startup_video_sequence_header(ring, ingest_video_sh).is_some()
+}
+
+async fn ingest_media_metadata_ready(engine: &MediaEngine, pipeline_id: &str) -> bool {
+    engine
+        .with_active_ingest(pipeline_id, |ingest| {
+            if ingest.video.is_some() || ingest.audio.is_some() {
+                return true;
+            }
+
+            let audio_tracks = ingest
+                .audio_tracks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            !audio_tracks.is_empty()
+        })
+        .await
+        .unwrap_or(false)
 }
 
 async fn handle_client_results<S>(
@@ -2121,7 +2366,113 @@ where
 mod tests {
     use super::*;
     use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
-    use crate::media::ring_buffer::RingBuffer;
+    use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, RingBuffer};
+
+    #[test]
+    fn h264_sequence_header_for_keyframe_uses_cached_parameter_sets() {
+        let mut cache = Vec::new();
+        cache_h264_parameter_sets(
+            &[
+                0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+                0xCE, 0x38, 0x80,
+            ],
+            &mut cache,
+        );
+        let (sequence_header, sps) =
+            h264_sequence_header_for_keyframe(&[0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80], &cache)
+                .expect("cached SPS/PPS should synthesize a sequence header");
+
+        assert_eq!(sequence_header[0], 0x17);
+        assert_eq!(sequence_header[1], 0x00);
+        assert_eq!(
+            sps,
+            Some(vec![0x67, 0x42, 0x00, 0x1E, 0xAB]),
+            "cached SPS should be reused when the keyframe carries only IDR data"
+        );
+    }
+
+    #[test]
+    fn startup_video_sequence_header_prefers_ring_parameter_sets() {
+        let ring = Arc::new(RingBuffer::new(1024));
+        ring.set_codec_hint("h264");
+        ring.set_video_parameter_sets(vec![
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+            0xCE, 0x38, 0x80,
+        ]);
+        let ingest_sequence_header =
+            Bytes::from_static(&[0x17, 0x00, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x1F]);
+
+        let selected = startup_video_sequence_header(&ring, Some(ingest_sequence_header.clone()))
+            .expect("ring parameter sets should synthesize a startup header");
+
+        assert_ne!(
+            selected, ingest_sequence_header,
+            "startup header should come from the output ring, not the ingest cache"
+        );
+        assert_eq!(selected[0], 0x17);
+        assert_eq!(selected[1], 0x00);
+    }
+
+    #[test]
+    fn startup_video_sequence_header_skips_ingest_header_for_empty_raw_ring() {
+        let ring = Arc::new(RingBuffer::new(1024));
+        ring.set_codec_hint("h264");
+        let ingest_sequence_header =
+            Bytes::from_static(&[0x17, 0x00, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x1F]);
+
+        let selected = startup_video_sequence_header(&ring, Some(ingest_sequence_header));
+
+        assert!(
+            selected.is_none(),
+            "empty raw output rings should wait for their own keyframe/config"
+        );
+    }
+
+    #[tokio::test]
+    async fn rtmp_startup_media_ready_accepts_cached_header_without_retained_keyframe() {
+        let engine = MediaEngine::new();
+        engine
+            .try_register_ingest("p1", "key", "file")
+            .await
+            .expect("register ingest");
+        engine
+            .update_ingest_meta(
+                "p1",
+                Some(VideoMeta {
+                    codec: "h264".to_string(),
+                    width: 1920,
+                    height: 1080,
+                    fps: 30.0,
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+            .await;
+        engine
+            .cache_sequence_header(
+                "p1",
+                true,
+                Bytes::from_static(&[0x17, 0x00, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x1F]),
+            )
+            .await;
+
+        let ring = Arc::new(RingBuffer::new(64));
+        ring.push(MediaPacket {
+            media_type: MediaType::Video,
+            format: PayloadFormat::Raw,
+            is_keyframe: false,
+            track_index: 0,
+            pts: 33,
+            dts: 33,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41, 0x9A, 0x22]),
+        });
+
+        assert!(
+            rtmp_startup_media_ready(&ring, &engine, "p1").await,
+            "startup should proceed once decoder config is known and media is flowing, even if the current window has no retained keyframe"
+        );
+    }
 
     #[tokio::test]
     async fn detects_h265_from_ingest_video_meta() {
@@ -2738,7 +3089,32 @@ mod tests {
     fn refreshed_video_sequence_header_uses_current_media_timestamp() {
         let timestamp = refreshed_video_sequence_header_timestamp(RtmpTimestamp::new(42));
 
-        assert_eq!(timestamp.value, 42);
+        assert_eq!(timestamp.value, 41);
+    }
+
+    #[test]
+    fn refreshed_video_sequence_header_consumes_a_video_timestamp_slot() {
+        let mut guard = RtmpTimestampGuard::new();
+        let sequence_header_ts = RtmpTimestamp::new(guard.enforce_ms(MediaType::Video, 42) as u32);
+        let packet_ts = RtmpTimestamp::new(
+            guard.enforce_ms(MediaType::Video, sequence_header_ts.value as i64) as u32,
+        );
+
+        assert_eq!(
+            refreshed_video_sequence_header_timestamp(sequence_header_ts).value,
+            41
+        );
+        assert_eq!(
+            packet_ts.value, 43,
+            "the following keyframe must advance past the refreshed sequence header DTS"
+        );
+    }
+
+    #[test]
+    fn refreshed_video_sequence_header_keeps_zero_timestamp_for_first_keyframe() {
+        let timestamp = refreshed_video_sequence_header_timestamp(RtmpTimestamp::new(0));
+
+        assert_eq!(timestamp.value, 0);
     }
 
     #[test]

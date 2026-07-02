@@ -8,6 +8,7 @@ use crate::media::ring_buffer::{MediaPacket, MediaType, RingBuffer};
 use ffmpeg_next::{codec, encoder, format, media};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -321,6 +322,94 @@ fn load_ingest_runtime(
     })
 }
 
+fn h264_startup_state_from_stream(
+    stream: &ffmpeg_next::Stream<'_>,
+) -> Option<(Vec<u8>, bytes::Bytes)> {
+    if stream.parameters().id() != codec::Id::H264 {
+        return None;
+    }
+
+    let extradata = unsafe {
+        let params = stream.parameters().as_ptr();
+        if params.is_null() || (*params).extradata.is_null() || (*params).extradata_size <= 0 {
+            return None;
+        }
+        slice::from_raw_parts(
+            (*params).extradata.cast::<u8>(),
+            (*params).extradata_size as usize,
+        )
+    };
+
+    let annexb = if extradata.starts_with(&[0x00, 0x00, 0x01])
+        || extradata.starts_with(&[0x00, 0x00, 0x00, 0x01])
+    {
+        extradata.to_vec()
+    } else if extradata.first() == Some(&0x01) {
+        let (_, annexb) = crate::media::codec::parse_avcc_config(extradata);
+        annexb
+    } else {
+        Vec::new()
+    };
+
+    if annexb.is_empty() {
+        return None;
+    }
+
+    let sequence_header = crate::media::codec::build_avcc_sequence_header(&annexb)?;
+    Some((annexb, sequence_header))
+}
+
+fn prime_input_video_startup_state(
+    engine: &Arc<MediaEngine>,
+    runtime_handle: &Handle,
+    pipeline_id: &str,
+    ring_buffer: &Arc<RingBuffer>,
+    ictx: &format::context::Input,
+) {
+    let Some(video_stream) = ictx
+        .streams()
+        .find(|stream| stream.parameters().medium() == media::Type::Video)
+    else {
+        return;
+    };
+
+    let Some((parameter_sets, sequence_header)) = h264_startup_state_from_stream(&video_stream)
+    else {
+        return;
+    };
+
+    ring_buffer.set_video_parameter_sets(parameter_sets);
+    runtime_handle.block_on(async {
+        engine
+            .cache_sequence_header(pipeline_id, true, sequence_header)
+            .await;
+    });
+}
+
+fn prime_input_video_startup_state_from_packet(
+    engine: &Arc<MediaEngine>,
+    runtime_handle: &Handle,
+    pipeline_id: &str,
+    ring_buffer: &Arc<RingBuffer>,
+    payload: &[u8],
+) -> bool {
+    let Some(parameter_sets) = crate::media::codec::annexb_parameter_sets(payload) else {
+        return false;
+    };
+    let Some(sequence_header) = crate::media::codec::build_avcc_sequence_header(&parameter_sets)
+    else {
+        return false;
+    };
+
+    ring_buffer.set_video_parameter_sets(parameter_sets);
+    runtime_handle.block_on(async {
+        engine
+            .cache_sequence_header(pipeline_id, true, sequence_header)
+            .await;
+    });
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_internal_file_ingest_once(
     engine: &Arc<MediaEngine>,
@@ -350,6 +439,9 @@ fn run_internal_file_ingest_once(
         .output
         .as_mut()
         .ok_or_else(|| "Failed to acquire TS output context".to_string())?;
+
+    let mut startup_video_state_primed = false;
+    prime_input_video_startup_state(engine, runtime_handle, pipeline_id, ring_buffer, &ictx);
 
     let mut stream_mapping = vec![-1i32; ictx.nb_streams() as usize];
     let mut ist_time_bases = vec![ffmpeg_next::Rational(0, 1); ictx.nb_streams() as usize];
@@ -403,6 +495,18 @@ fn run_internal_file_ingest_once(
         }
 
         let ist_index = stream.index();
+        if !startup_video_state_primed
+            && stream.parameters().medium() == media::Type::Video
+            && let Some(payload) = packet.data()
+        {
+            startup_video_state_primed = prime_input_video_startup_state_from_packet(
+                engine,
+                runtime_handle,
+                pipeline_id,
+                ring_buffer,
+                payload,
+            );
+        }
         let mapped_index = stream_mapping.get(ist_index).copied().unwrap_or(-1);
         if mapped_index < 0 {
             continue;
@@ -568,6 +672,11 @@ fn push_demuxed_packets(
     }
 
     for pkt in packets.iter() {
+        if pkt.media_type == MediaType::Video
+            && let Some(parameter_sets) = crate::media::codec::annexb_parameter_sets(&pkt.payload)
+        {
+            ring_buffer.set_video_parameter_sets(parameter_sets);
+        }
         if pkt.media_type == MediaType::Video && pkt.is_keyframe {
             let mut times = cached_keyframe_times
                 .lock()
@@ -579,7 +688,7 @@ fn push_demuxed_packets(
         }
     }
 
-    ring_buffer.push_batch(packets.drain(..));
+    ring_buffer.push_drained_batch_capped(packets);
 }
 
 fn maybe_publish_probe(
@@ -598,11 +707,17 @@ fn maybe_publish_probe(
     };
     *probe_sent = true;
     let first_audio = probe.audio_tracks.first().cloned();
+    let video_sequence_header = probe.video_sequence_header.clone();
     let selected_video_track_index = probe.video.as_ref().map(|_| 0);
     runtime_handle.block_on(async {
         engine
             .update_ingest_meta(pipeline_id, probe.video, first_audio, None)
             .await;
+        if let Some(sequence_header) = video_sequence_header {
+            engine
+                .cache_sequence_header(pipeline_id, true, sequence_header)
+                .await;
+        }
         engine
             .update_ingest_video_track_selection(
                 pipeline_id,
@@ -620,10 +735,12 @@ fn maybe_publish_probe(
 
 #[cfg(test)]
 mod tests {
+    use super::maybe_publish_probe;
     use super::parse_start_time_ms;
     use super::spawn_internal_file_ingest;
     use super::{ContinuousTimestampState, LoopTimestampState};
     use crate::media::engine::MediaEngine;
+    use crate::media::mpegts::TsDemuxer;
     use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat};
     use bytes::Bytes;
     use std::sync::Arc;
@@ -834,5 +951,85 @@ mod tests {
 
         registration.cancel_token.cancel();
         sleep(Duration::from_millis(250)).await;
+    }
+
+    #[tokio::test]
+    async fn internal_bf0_file_ingest_caches_video_startup_state() {
+        let engine = Arc::new(MediaEngine::new());
+        let pipeline_id = "pipe-file-ingest-bf0-state";
+        let ingest_id = "ing-file-ingest-bf0-state";
+        let stream_key = "file-ingest-bf0-state-key";
+        let ring_buffer = engine.get_or_create_pipeline(pipeline_id).await;
+        let registration = engine
+            .try_register_ingest_attempt(pipeline_id, stream_key, "file")
+            .await
+            .expect("register ingest");
+
+        engine.mark_file_ingest_running(ingest_id).await;
+        spawn_internal_file_ingest(
+            engine.clone(),
+            tokio::runtime::Handle::current(),
+            ingest_id.to_string(),
+            pipeline_id.to_string(),
+            crate::test_fixtures::av_marker_transport_fixture_for_bframes(
+                "h264",
+                false,
+                crate::test_fixtures::AvMarkerBframeMode::Bf0,
+            )
+            .expect("checked-in bf0 transport fixture"),
+            String::new(),
+            false,
+            ring_buffer.clone(),
+            registration.clone(),
+        )
+        .expect("spawn internal ingest");
+
+        sleep(Duration::from_secs(2)).await;
+
+        let (cached_video, _) = engine.get_sequence_headers(pipeline_id).await;
+        let ring_parameter_sets = ring_buffer.video_parameter_sets().map(|sets| sets.to_vec());
+        let ring_sequence_header = ring_parameter_sets
+            .as_deref()
+            .and_then(crate::media::codec::build_avcc_sequence_header);
+        assert!(
+            cached_video.is_some(),
+            "internal BF0 file ingest should cache a startup video sequence header (ring parameter sets present: {}, ring startup header present: {})",
+            ring_parameter_sets.is_some(),
+            ring_sequence_header.is_some(),
+        );
+
+        registration.cancel_token.cancel();
+        sleep(Duration::from_millis(250)).await;
+    }
+
+    #[test]
+    fn maybe_publish_probe_caches_h264_sequence_header() {
+        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+        let engine = Arc::new(MediaEngine::new());
+        let pipeline_id = "pipe-file-probe-seqhdr";
+        runtime
+            .block_on(engine.try_register_ingest_attempt(pipeline_id, "stream-key", "file"))
+            .expect("register ingest");
+
+        let mut demuxer = TsDemuxer::new();
+        let fixture = crate::test_fixtures::canonical_h264_ts_fixture()
+            .expect("checked-in transport fixture");
+        let fixture_bytes = std::fs::read(fixture).expect("read checked-in transport fixture");
+        demuxer.feed(&fixture_bytes);
+        demuxer.flush();
+
+        let mut probe_sent = false;
+        maybe_publish_probe(
+            &engine,
+            runtime.handle(),
+            pipeline_id,
+            &mut demuxer,
+            &mut probe_sent,
+        );
+
+        let (cached_video, _) = runtime.block_on(engine.get_sequence_headers(pipeline_id));
+        let cached_video = cached_video.expect("probe should cache an H.264 startup header");
+        assert_eq!(cached_video[0], 0x17);
+        assert_eq!(cached_video[1], 0x00);
     }
 }

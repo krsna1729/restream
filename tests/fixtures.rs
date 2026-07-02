@@ -28,3 +28,70 @@ fn canonical_transport_fixtures_resolve() {
     assert!(h265.ends_with("test/fixtures/correctness-h265.ts"));
     assert!(sparse.ends_with("test/fixtures/sparse-gop-5s.mp4"));
 }
+
+#[test]
+fn bf0_marker_transport_fixtures_demux_into_packets() {
+    use restream::media::mpegts::TsDemuxer;
+    use restream::test_fixtures::{AvMarkerBframeMode, av_marker_transport_fixture_for_bframes};
+
+    for (codec, multi_audio) in [
+        ("h264", false),
+        ("h264", true),
+        ("h265", false),
+        ("h265", true),
+    ] {
+        let path =
+            av_marker_transport_fixture_for_bframes(codec, multi_audio, AvMarkerBframeMode::Bf0)
+                .unwrap_or_else(|e| panic!("{e}"));
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        let mut demuxer = TsDemuxer::new();
+        let mut packets = Vec::new();
+
+        for chunk in bytes.chunks(1316) {
+            demuxer.feed(chunk);
+            demuxer.drain_into(&mut packets);
+        }
+        demuxer.flush();
+        demuxer.drain_into(&mut packets);
+
+        assert!(
+            !packets.is_empty(),
+            "{} should demux into media packets",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn h264_bf0_marker_probe_emits_startup_sequence_header() {
+    use restream::media::mpegts::TsDemuxer;
+    use restream::test_fixtures::{AvMarkerBframeMode, av_marker_transport_fixture_for_bframes};
+
+    let path = av_marker_transport_fixture_for_bframes("h264", false, AvMarkerBframeMode::Bf0)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let bytes =
+        std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+    let mut demuxer = TsDemuxer::new();
+    let mut probe = None;
+
+    for chunk in bytes.chunks(1316) {
+        demuxer.feed(chunk);
+        probe = demuxer.take_probe();
+        if probe.is_some() {
+            break;
+        }
+    }
+
+    let probe = probe.unwrap_or_else(|| panic!("{} should yield a demux probe", path.display()));
+    assert!(
+        probe.video.is_some(),
+        "{} should yield video metadata in the demux probe",
+        path.display()
+    );
+    assert!(
+        probe.video_sequence_header.is_some(),
+        "{} should yield an H.264 startup sequence header in the demux probe",
+        path.display()
+    );
+}
