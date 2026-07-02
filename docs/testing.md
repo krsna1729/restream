@@ -178,7 +178,7 @@ opaque blocker.
 | 1. Changed behavior | Fastest proof for the exact code path touched by a change. | `cargo test --lib <filter>`, `cargo test --test api <filter>` |
 | 2. Contract slice | Neighboring API, graph, stage, protocol, or lifecycle contracts that consume the changed behavior. | Filtered package/integration tests by module, endpoint, protocol, or stage kind |
 | 3. Hot-path cost | Criterion group that measures the touched hot path only. | `cargo bench --bench <bench> -- <criterion-filter>` |
-| 4. Live protocol slice | One live protocol/topology check with minimal fanout and targeted assertions. | `target/bench/test_harness mixed.live.srt.h264.a1` |
+| 4. Live protocol slice | One live protocol/topology check with minimal fanout and targeted assertions. | `target/bench/test_harness mixed.live.srt.h264.a1.bf2` |
 | 5. Scale/degradation slice | A bounded load, ramp, restart, queue-pressure, or bonding slice for resource shape. | `N_OUTPUTS=<small>` ramp, `N_PER_GROUP=<small>` mixed.matrix, `bonding` |
 | 6. Full confidence gate | Release or milestone pass assembled from the relevant stages above. | Full `cargo test`, selected full benches, full integration modes |
 
@@ -290,8 +290,8 @@ live integration tests (`src/bin/test_harness.rs`). As of June 27, 2026 all
 | `GET` | `/api/v1/pipelines/:id/graph` | ✓ | ✓ | |
 | `GET` | `/api/v1/pipelines/:id/alerts` | ✓ | — | auth + response shape |
 | `GET` | `/api/v1/pipelines/:id/diagnostics` | ~ | — | SSE; precondition only |
-| `POST` | `/api/v1/pipelines/:id/recording/start` | — | ✓ | mixed.live.srt.h264.a1 |
-| `POST` | `/api/v1/pipelines/:id/recording/stop` | — | ✓ | mixed.live.srt.h264.a1 |
+| `POST` | `/api/v1/pipelines/:id/recording/start` | — | ✓ | mixed.live.srt.h264.a1.bf2 |
+| `POST` | `/api/v1/pipelines/:id/recording/stop` | — | ✓ | mixed.live.srt.h264.a1.bf2 |
 
 **Encodings**
 
@@ -515,7 +515,7 @@ Typical quick agent loop:
 
 ```sh
 scripts/resource-limit target/debug/test_harness preflight
-scripts/resource-limit target/bench/test_harness mixed.live.srt.h264.a1
+scripts/resource-limit target/bench/test_harness mixed.live.srt.h264.a1.bf2
 ```
 
 ### Manual Dashboard Live Env
@@ -586,22 +586,29 @@ legacy all-bash ramp path while bisecting harness behavior, or set
 N_PER_GROUP=2 ONLY_CHECKS=hls scripts/resource-limit target/bench/test_harness mixed.matrix
 ```
 
-Exercises the table-driven input matrix. Names follow `mixed.<source>.<ingest>.<video>.<audio>`. The current matrix uses `source` values `live` and `asset`, ingest values `srt`, `rtmp`, and `file`, video values `h264` and `h265`, and audio values `a1` and `a2`. RTMP ingest intentionally has only one row because standard RTMP input is H.264 with a single audio track; there is no `mixed.live.rtmp.h265.*` or multi-track RTMP ingest row unless the product contract changes.
+Exercises the table-driven input matrix. Names follow
+`mixed.<source>.<ingest>.<video>.<audio>.<reorder>`, where `reorder` is
+`bf0` or `bf2` based on the source-side B-frame signal. The current matrix uses
+`source` values `live` and `asset`, ingest values `srt`, `rtmp`, and `file`,
+video values `h264` and `h265`, and audio values `a1` and `a2`. RTMP ingest
+intentionally has only the H.264/single-audio shape because standard RTMP input
+is H.264 with one audio track; there is no `mixed.live.rtmp.h265.*` or
+multi-track RTMP ingest row unless the product contract changes.
 
-| Config | Ingest | Codec | Audio | Role |
-|---|---|---|:---:|---|
-| `mixed.asset.file.h264.a1` | file | H.264 | 1 | file-ingest H.264 baseline |
-| `mixed.asset.file.h265.a1` | file | H.265 | 1 | file-ingest HEVC baseline |
-| `mixed.asset.file.h264.a2` | file | H.264 | 2 | file-ingest multi-audio routing |
-| `mixed.asset.file.h265.a2` | file | H.265 | 2 | file-ingest HEVC + multi-audio routing |
-| `mixed.live.rtmp.h264.a1` | RTMP | H.264 | 1 | RTMP/FLV ingest baseline |
-| `mixed.live.srt.h264.a1` | SRT | H.264 | 1 | HLS + smoke + fatal ffprobe + stop lifecycle |
-| `mixed.live.srt.h265.a1` | SRT | H.265 | 1 | HEVC bridge and stage-sharing assertion |
-| `mixed.live.srt.h264.a2` | SRT | H.264 | 2 | multi-audio track routing |
-| `mixed.live.srt.h265.a2` | SRT | H.265 | 2 | HEVC + multi-audio |
+| Scenario family | Variants | Ingest | Codec | Audio | Role |
+|---|---|---|---|:---:|---|
+| `mixed.asset.file.h264.a1.{bf0,bf2}` | 2 | file | H.264 | 1 | file-ingest H.264 baseline plus no-reorder sibling |
+| `mixed.asset.file.h265.a1.{bf0,bf2}` | 2 | file | H.265 | 1 | file-ingest HEVC baseline plus no-reorder sibling |
+| `mixed.asset.file.h264.a2.{bf0,bf2}` | 2 | file | H.264 | 2 | file-ingest multi-audio routing |
+| `mixed.asset.file.h265.a2.{bf0,bf2}` | 2 | file | H.265 | 2 | file-ingest HEVC + multi-audio routing |
+| `mixed.live.rtmp.h264.a1.{bf0,bf2}` | 2 | RTMP | H.264 | 1 | RTMP/FLV ingest baseline |
+| `mixed.live.srt.h264.a1.{bf0,bf2}` | 2 | SRT | H.264 | 1 | HLS + smoke + fatal ffprobe + stop lifecycle |
+| `mixed.live.srt.h265.a1.{bf0,bf2}` | 2 | SRT | H.265 | 1 | HEVC bridge and stage-sharing assertion |
+| `mixed.live.srt.h264.a2.{bf0,bf2}` | 2 | SRT | H.264 | 2 | multi-audio track routing |
+| `mixed.live.srt.h265.a2.{bf0,bf2}` | 2 | SRT | H.265 | 2 | HEVC + multi-audio |
 
 Each row can be run directly as `target/bench/test_harness <scenario-id>`, for
-example `target/bench/test_harness mixed.live.srt.h265.a2`. The aggregate
+example `target/bench/test_harness mixed.live.srt.h265.a2.bf2`. The aggregate
 `mixed.matrix` runs every row sequentially under its own work directory so
 artifacts and HLS segments from one case cannot contaminate another.
 
@@ -638,7 +645,7 @@ it starts/stops once after the input is live, then validates the operator-visibl
 MP4 has the source video codec (`h264` or `hevc`) and the expected source
 audio-track count.
 
-**H.264 SRT single (`mixed.live.srt.h264.a1`)** runs three merged correctness checks in
+**H.264 SRT single (`mixed.live.srt.h264.a1.bf2`)** runs three merged correctness checks in
 addition to the resource measurements:
 
 1. **Smoke** — after source outputs are live, asserts no external transcoder has
@@ -650,7 +657,7 @@ addition to the resource measurements:
    markers, checks marker offset/drift, runs `ashowinfo`, `astats`,
    `silencedetect`, and scans decoded PCM for clipping and impulse-sized sample
    steps. The mixed correctness matrix uses checked-in A/V marker fixtures
-   (`av-marker-h264*.ts`, `av-marker-h265*.ts`) so this is a real oracle rather
+   (`av-marker-*-bf0*.ts` and `av-marker-*.ts`) so this is a real oracle rather
    than arbitrary-content probing.
 4. **Stop lifecycle** — calls `/stop` on every output and polls `/api/v1/settings` until
    all reach `"stopped"` within 60 s.
@@ -853,10 +860,10 @@ For real multi-NIC or dual-WAN validation, remember that upstream SRT also
 recommends `ENABLE_PKTINFO=ON`; otherwise a wildcard listener may reply from
 the wrong source IP and make a healthy bonding implementation look broken.
 
-### `mixed.live.srt.h264.a1` — Closed-GOP probe bundle
+### `mixed.live.srt.h264.a1.bf2` — Closed-GOP probe bundle
 
 ```sh
-scripts/resource-limit target/bench/test_harness mixed.live.srt.h264.a1
+scripts/resource-limit target/bench/test_harness mixed.live.srt.h264.a1.bf2
 ```
 
 Streams a closed-GOP RTMP/SRT matrix across H.264/H.265, 1080p/4K, selected
@@ -867,7 +874,7 @@ readers do not report positive `burstCount` and `avgBurstSize` telemetry.
 Env: `BURST_SETTLE_SECS` (default 8), `BURST_CONFIGS` (optional
 space-separated config allow-list, e.g. `BURST_CONFIGS="srt-h265-1080p-24fps-1a"`).
 
-The former anchor checks now live in the normalized `mixed.live.srt.h264.a1`
+The former anchor checks now live in the normalized `mixed.live.srt.h264.a1.bf2`
 table row; the matrix publishers, burst graph assertions, and HLS PUT probe
 checks are implemented in Rust.
 
@@ -884,7 +891,7 @@ Env: `HLS_PUT_PORT` (default: synthesized per-process helper port unless
 overridden), `HLS_PUT_SETTLE_SECS` (default 8), `HLS_PUT_RESTART_SECS`
 (default 12).
 
-The HLS PUT probe runs as part of `mixed.live.srt.h264.a1` and validates dummy PUT
+The HLS PUT probe runs as part of `mixed.live.srt.h264.a1.bf2` and validates dummy PUT
 sink delivery, signed-query preservation, ffprobe readability, and restart
 recovery behavior.
 
@@ -895,9 +902,11 @@ scripts/resource-limit target/debug/test_harness bframe-rtmp
 ```
 
 Publishes one RTMP H.264/AAC input with B-frames, starts an RTMP source output,
-and probes the egress packet stream with `ffprobe -show_packets`. The mode
-requires at least one video packet with `PTS > DTS` and verifies DTS stays
-monotone across the captured egress packets.
+and probes the egress packet stream with `ffprobe -show_packets`. The mode also
+installs explicit `h264_bf0` and `h264_bf2` transcode profiles, then verifies
+that real RTMP transcode outputs expose the expected packet shape: no packets
+with `PTS > DTS` for `bframes=0`, and reordered video packets for `bframes=2`,
+while DTS stays monotone in every case.
 
 The public shell mode is now a thin artifact/summary wrapper around
 `cargo run --bin test_harness -- bframe-rtmp`; the live scenario, packet probe,
@@ -1083,7 +1092,7 @@ Currently checked in:
 
 ```text
 scripts/resource-limit target/debug/test_harness ramp-family
-scripts/resource-limit target/bench/test_harness mixed.live.srt.h264.a1
+scripts/resource-limit target/bench/test_harness mixed.live.srt.h264.a1.bf2
 scripts/resource-limit target/debug/test_harness bonding
 scripts/resource-limit target/debug/test_harness bframe-rtmp
 scripts/resource-limit target/debug/test_harness correctness-srt-rtmp
@@ -1107,7 +1116,7 @@ in its own subdirectory, and records one JSONL result per mode in
 
 - `--run-id <id>` to choose the artifact run id
 - `--work-root <path>` to choose the aggregate artifact directory
-- `--only-modes mixed.live.srt.h264.a1,bframe-rtmp` to run a subset
+- `--only-modes mixed.live.srt.h264.a1.bf2,bframe-rtmp` to run a subset
 - `--preflight-only` to run readiness checks without starting live services
 - `--continue-on-fail` to keep collecting artifacts after the first failure
 
@@ -1126,10 +1135,10 @@ Why the aggregate runner lives in `test_harness` instead of a separate
   aggregate orchestration logic is already implemented in `test_harness`, so
   the extra wrapper only adds another compatibility surface to maintain.
 
-`mixed.live.srt.h264.a1`, `bframe-rtmp`, `correctness-srt-rtmp`,
+`mixed.live.srt.h264.a1.bf2`, `bframe-rtmp`, `correctness-srt-rtmp`,
 `correctness-hevc-rtmp`, and `correctness-hevc-srt` are behind typed Rust
 harness entry points, and `ramp-family` runs the full eight-config ramp matrix.
-`mixed.live.srt.h264.a1` owns the former anchor probe bundle.
+`mixed.live.srt.h264.a1.bf2` owns the former anchor probe bundle.
 
 `test_harness` writes `manifest.json` in the selected `WORK_DIR`
 for each checked-in mode. The manifest starts as `RUNNING` and is finalized to
@@ -1168,7 +1177,7 @@ These capabilities must be treated as test results, not assumptions:
 | Additional/custom video presets | Must be explicitly profiled and matrix-tested before advertising |
 | Embedded FFmpeg subprocess feature set | `scripts/build-static.sh` runs `restream-ffmpeg-capabilities` to prove the required codecs, `file`/`pipe` protocols, and `mov`/`matroska`/`mpegts` mux/demux surface are present |
 | HLS live segments | Native TsMuxer validates in-memory |
-| HLS upload egress | YouTube-style `file=` and path-style signed-query HTTP PUT delivery plus destination restart recovery are covered by unit tests and the `mixed.live.srt.h264.a1` HLS PUT probe |
+| HLS upload egress | YouTube-style `file=` and path-style signed-query HTTP PUT delivery plus destination restart recovery are covered by unit tests and the `mixed.live.srt.h264.a1.bf2` HLS PUT probe |
 | Recording | Readable file with correct streams/timestamps |
 | Audio remap/downmix | Channel-level filtering is implemented for the default runtime; full audio-content matrix remains required |
 | Custom encoding | Runtime output selection must stay rejected until custom args are applied by a transcoder backend |
@@ -1256,7 +1265,7 @@ Current bitrate-sweep takeaways:
 
 ## Media Correctness Findings (2026-07-01)
 
-These issues were found while hardening the `mixed.live.srt.h265.a2` live matrix
+These issues were found while hardening the `mixed.live.srt.h265.a2.bf2` live matrix
 around the checked-in H.265 + two-audio fixture.
 
 ### Fixed Runtime Issues
@@ -1311,5 +1320,5 @@ around the checked-in H.265 + two-audio fixture.
   the matrix for interoperability but use a direct FFmpeg-family sink for muxer
   correctness.
 - The direct SRT correctness mode is `SRT_SINK=ffmpeg` on
-  `mixed.live.srt.h265.a2`; it validates stream dimensions, selected audio-track
+  `mixed.live.srt.h265.a2.bf2`; it validates stream dimensions, selected audio-track
   count, duplicate DTS, large DTS gaps, and FFmpeg-family probe warnings.

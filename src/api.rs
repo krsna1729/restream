@@ -2787,7 +2787,7 @@ async fn pump_file_ingest_stdout(
     };
 
     let mut demuxer = crate::media::mpegts::TsDemuxer::new();
-    let mut packets = Vec::with_capacity(16);
+    let mut packets = Vec::with_capacity(crate::media::MEDIA_PRODUCER_BATCH_PACKETS);
     let mut probe_sent = false;
     let mut buf = vec![0u8; 64 * 1024];
 
@@ -2817,7 +2817,7 @@ async fn pump_file_ingest_stdout(
                     }
                 }
             }
-            ring_buffer.push_batch(packets.drain(..));
+            ring_buffer.push_drained_batch_capped(&mut packets);
         }
 
         if !probe_sent && let Some(probe) = demuxer.take_probe() {

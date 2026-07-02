@@ -520,11 +520,12 @@ impl MediaEngine {
 
     pub async fn hls_dependency_snapshot(&self, pipeline_id: &str) -> HlsDependencySnapshot {
         let consumers = self.hls.consumers.read().await;
-        let stores = self.hls.preview_stores.read().await;
+        let stores = self.hls.stores.read().await;
         let preview_key = hls_preview_registry_key(pipeline_id);
 
         let consumer = consumers.get(&preview_key);
         let store = stores.get(&preview_key);
+        let snapshot = store.and_then(|store| store.snapshot());
 
         HlsDependencySnapshot {
             store_exists: store.is_some(),
@@ -537,8 +538,14 @@ impl MediaEngine {
                 let last = consumer.last_access_ms.load(Ordering::Relaxed);
                 now.saturating_sub(last)
             }),
-            segments: store.map(|store| store.segment_count()).unwrap_or(0),
-            playlist_bytes: store.map(|store| store.primary_playlist_len()).unwrap_or(0),
+            segments: snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.segments.len())
+                .unwrap_or(0),
+            playlist_bytes: snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.playlist.len())
+                .unwrap_or(0),
         }
     }
 
@@ -1156,6 +1163,12 @@ impl MediaEngine {
         new_rb.set_estimated_pkt_rate(pkt_rate);
         if let Some(hint) = old_rb.codec_hint.get() {
             new_rb.set_codec_hint(hint);
+        }
+        if let Some(parameter_sets) = old_rb.video_parameter_sets() {
+            new_rb.set_video_parameter_sets(parameter_sets.to_vec());
+        }
+        if let Some(audio_tracks) = old_rb.audio_tracks() {
+            new_rb.set_audio_tracks(audio_tracks.to_vec());
         }
         let new_rb_clone = new_rb.clone();
 
@@ -2433,7 +2446,7 @@ impl MediaEngine {
             c.cancel_token.cancel();
         }
         drop(consumers);
-        self.hls.preview_stores.write().await.remove(&preview_key);
+        self.hls.stores.write().await.remove(&preview_key);
     }
 
     /// Get the cancel token for a running HLS segmenter (used to spawn the task).
@@ -3116,8 +3129,7 @@ mod tests {
         assert!(!already_running);
 
         engine.touch_hls_preview("pipe-hls-snapshot").await;
-        store.put_video_init_segment(Bytes::from_static(b"init"));
-        store.push_video_segment(0, 2.0, Bytes::from_static(b"segment"));
+        store.push_segment(2.0, Bytes::from_static(b"segment"));
 
         let snapshot = engine.hls_dependency_snapshot("pipe-hls-snapshot").await;
         assert!(snapshot.store_exists);
@@ -6105,6 +6117,48 @@ mod tests {
         let depth = ring.buffer_depth_secs().unwrap();
         // telemetry now reflects the lighter stream's real depth: 4980/80 ≈ 62 s
         assert!(depth > 60.0, "4980/80 ≈ 62.3 s; got {depth}");
+    }
+
+    #[tokio::test]
+    async fn adapt_pipeline_ring_preserves_codec_and_track_metadata() {
+        let engine = MediaEngine::new();
+        let ring = engine.get_or_create_pipeline("p").await;
+        ring.set_codec_hint("hevc");
+        ring.set_video_parameter_sets(vec![0, 0, 0, 1, 0x40, 0x01, 0x0c, 0x01]);
+        ring.set_audio_tracks(vec![AudioMeta {
+            codec: "aac".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            channel_layout: Some("stereo".to_string()),
+            track_index: 3,
+            pid: Some(257),
+            language: Some("eng".to_string()),
+            title: Some("Program".to_string()),
+            profile: Some("LC".to_string()),
+        }]);
+
+        let new_ring = engine
+            .adapt_pipeline_ring("p", 30.0, 16)
+            .await
+            .expect("ring must be resized for metadata preservation proof");
+
+        assert_eq!(new_ring.codec_hint_str(), "hevc");
+        assert_eq!(
+            new_ring.video_parameter_sets(),
+            Some(&[0, 0, 0, 1, 0x40, 0x01, 0x0c, 0x01][..])
+        );
+        let tracks = new_ring
+            .audio_tracks()
+            .expect("resized ring should preserve audio tracks");
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].codec, "aac");
+        assert_eq!(tracks[0].sample_rate, 48_000);
+        assert_eq!(tracks[0].channels, 2);
+        assert_eq!(tracks[0].track_index, 3);
+        assert_eq!(tracks[0].pid, Some(257));
+        assert_eq!(tracks[0].language.as_deref(), Some("eng"));
+        assert_eq!(tracks[0].title.as_deref(), Some("Program"));
+        assert_eq!(tracks[0].profile.as_deref(), Some("LC"));
     }
 
     #[tokio::test]
