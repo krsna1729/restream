@@ -96,6 +96,7 @@ use crate::media::timing;
 fn build_stage_ffmpeg_args_inner(
     preset: &str,
     input_codec: &str,
+    probe_codec: &str,
     include_audio: bool,
 ) -> Vec<String> {
     // Strip the internal stage-key prefix ("video:720p" → "720p").
@@ -125,7 +126,7 @@ fn build_stage_ffmpeg_args_inner(
                     .cloned()
             })
     };
-    let (analyze_duration_us, probe_size_bytes) = ext_stage_probe_budget(input_codec);
+    let (analyze_duration_us, probe_size_bytes) = ext_stage_probe_budget(probe_codec);
 
     let mut args = vec![
         "-nostdin".to_string(),
@@ -254,11 +255,31 @@ fn build_stage_ffmpeg_args_inner(
 }
 
 pub fn build_stage_ffmpeg_args(preset: &str, input_codec: &str) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, true)
+    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, true)
+}
+
+/// Like [`build_stage_ffmpeg_args`], but sizes FFmpeg's input probe budget from
+/// the codec actually flowing into the stage rather than the encoder-selection
+/// codec. On codec edges, an `hevc_to_h264` stage encodes H.264 while stdin
+/// carries H.265 and needs the larger HEVC probe window.
+pub fn build_stage_ffmpeg_args_for_input(
+    preset: &str,
+    input_codec: &str,
+    probe_codec: &str,
+) -> Vec<String> {
+    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, true)
 }
 
 pub fn build_stage_ffmpeg_video_only_args(preset: &str, input_codec: &str) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, false)
+    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, false)
+}
+
+pub fn build_stage_ffmpeg_video_only_args_for_input(
+    preset: &str,
+    input_codec: &str,
+    probe_codec: &str,
+) -> Vec<String> {
+    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, false)
 }
 
 fn stage_audio_routing(preset: &str) -> Option<AudioRouting> {
@@ -484,10 +505,16 @@ async fn start_external_transcoder_stage_inner(
     include_audio: bool,
 ) {
     let input_codec = input_codec_override.as_deref().unwrap_or("h264");
+    // Probe the stream format using what the source ring actually carries.
+    // Codec-edge stages can encode H.264 while reading H.265 from stdin.
+    let probe_codec = match input_buffer.codec_hint_str() {
+        "" => input_codec,
+        hint => hint,
+    };
     let args = if include_audio {
-        build_stage_ffmpeg_args(&encoding, input_codec)
+        build_stage_ffmpeg_args_for_input(&encoding, input_codec, probe_codec)
     } else {
-        build_stage_ffmpeg_video_only_args(&encoding, input_codec)
+        build_stage_ffmpeg_video_only_args_for_input(&encoding, input_codec, probe_codec)
     };
     let correlation_id = crate::logging::next_correlation_id("stage");
     info!(
@@ -1107,6 +1134,19 @@ mod tests {
     #[test]
     fn stage_args_hevc_raise_probe_budget() {
         let args = build_stage_ffmpeg_args("720p", "hevc");
+        assert!(args.windows(2).any(|w| {
+            w[0] == "-analyzeduration" && w[1] == EXT_STAGE_ANALYZE_DURATION_US_HEVC.to_string()
+        }));
+        assert!(args.windows(2).any(|w| {
+            w[0] == "-probesize" && w[1] == EXT_STAGE_PROBE_SIZE_BYTES_HEVC.to_string()
+        }));
+    }
+
+    #[test]
+    fn stage_args_codec_edge_probes_input_codec_but_encodes_output_codec() {
+        let args = build_stage_ffmpeg_args_for_input("h264", "h264", "hevc");
+        let cv_pos = args.iter().position(|a| a == "-c:v").unwrap();
+        assert_eq!(args[cv_pos + 1], "libx264");
         assert!(args.windows(2).any(|w| {
             w[0] == "-analyzeduration" && w[1] == EXT_STAGE_ANALYZE_DURATION_US_HEVC.to_string()
         }));
@@ -2656,7 +2696,7 @@ mod tests {
             .expect("temp artifact dir")
             .join("output.ts");
         let ffmpeg = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
-        let mut args = build_stage_ffmpeg_args("720p", "h264");
+        let mut args = build_stage_ffmpeg_args_for_input("720p", "h264", "hevc");
         let input_pos = args
             .iter()
             .position(|arg| arg == "-i")

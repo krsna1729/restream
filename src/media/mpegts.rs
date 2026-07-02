@@ -565,12 +565,42 @@ impl TsDemuxer {
         self.pmt_expected = 0;
     }
 
+    fn probe_payload_complete(&self, stream_idx: usize, payload: &[u8]) -> bool {
+        let stream = &self.streams[stream_idx];
+        match stream.kind.media_type() {
+            MediaType::Video => video_meta_complete(
+                stream.kind,
+                &probe_video(stream.kind, stream.pid, None, None, payload),
+            ),
+            MediaType::Audio => audio_meta_complete(
+                stream.kind,
+                &probe_audio(
+                    stream.kind,
+                    stream.track_index,
+                    stream.pid,
+                    None,
+                    None,
+                    payload,
+                ),
+            ),
+        }
+    }
+
     fn try_build_probe(&mut self, stream_idx: usize, payload: &[u8]) {
         // Stash payload for this stream's probe data
         if self.probe_payloads.len() < self.streams.len() {
             self.probe_payloads.resize(self.streams.len(), None);
         }
-        self.probe_payloads[stream_idx] = Some(payload.to_vec());
+        // Keep the first payload that yields complete metadata for this stream.
+        // Later non-IDR frames may lack SPS/PPS and would otherwise clobber the
+        // probe-ready GOP-start packet while other streams are still pending.
+        let replace = match self.probe_payloads[stream_idx].as_deref() {
+            None => true,
+            Some(existing) => !self.probe_payload_complete(stream_idx, existing),
+        };
+        if replace {
+            self.probe_payloads[stream_idx] = Some(payload.to_vec());
+        }
 
         // Wait until all streams have contributed at least one PES
         if self.probe_payloads.iter().any(|p| p.is_none()) {
@@ -2815,7 +2845,7 @@ mod tests {
         let mut muxer = TsMuxer::new(Some(&video), &[audio0, audio1]);
         let mut all_ts = Vec::new();
 
-        let video_payload = vec![0x00, 0x00, 0x00, 0x01, 0x65, 0x88];
+        let (video_payload, _) = first_probe_ready_payloads();
         // ADTS frame for AAC-LC 48 kHz stereo (7-byte header, no CRC)
         let audio0_payload = vec![0xFF, 0xF1, 0x50, 0x80, 0x02, 0x1F, 0xFC, 0x21, 0x10];
         // ADTS frame for AAC-LC 44.1 kHz mono
@@ -2917,7 +2947,7 @@ mod tests {
 
         let mut muxer = TsMuxer::new(Some(&video), &audio_tracks);
         let mut all_ts = Vec::new();
-        let video_payload = vec![0x00, 0x00, 0x00, 0x01, 0x65, 0x88];
+        let (video_payload, _) = first_probe_ready_payloads();
         let audio_payload = vec![0xFF, 0xF1, 0x4C, 0x40, 0x02, 0x1F, 0xFC, 0x21, 0x10];
 
         all_ts.extend_from_slice(muxer.mux_packet(MediaType::Video, 0, 0, 0, true, &video_payload));
@@ -3021,6 +3051,25 @@ mod tests {
         assert_eq!(probe.audio_tracks.len(), 1);
         assert!(probe.audio_tracks[0].sample_rate > 0);
         assert!(probe.audio_tracks[0].channels > 0);
+    }
+
+    #[test]
+    fn try_build_probe_keeps_complete_payload_when_later_frames_lack_sps() {
+        let (complete_video, complete_audio) = first_probe_ready_payloads();
+        let mut demuxer = TsDemuxer::new();
+        demuxer.streams = vec![h264_stream_info(0x100), aac_adts_stream_info(0x101, 0)];
+
+        demuxer.try_build_probe(0, &complete_video);
+        demuxer.try_build_probe(0, &[0x00, 0x00, 0x00, 0x01, 0x41, 0x9A, 0x00]);
+        assert!(demuxer.take_probe().is_none());
+
+        demuxer.try_build_probe(1, &complete_audio);
+        let probe = demuxer
+            .take_probe()
+            .expect("probe must survive non-SPS frames after complete video metadata");
+        let video = probe.video.expect("probe should include video metadata");
+        assert!(video.width > 0);
+        assert!(video.height > 0);
     }
 
     #[test]

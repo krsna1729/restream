@@ -520,12 +520,11 @@ impl MediaEngine {
 
     pub async fn hls_dependency_snapshot(&self, pipeline_id: &str) -> HlsDependencySnapshot {
         let consumers = self.hls.consumers.read().await;
-        let stores = self.hls.stores.read().await;
+        let stores = self.hls.preview_stores.read().await;
         let preview_key = hls_preview_registry_key(pipeline_id);
 
         let consumer = consumers.get(&preview_key);
         let store = stores.get(&preview_key);
-        let snapshot = store.and_then(|store| store.snapshot());
 
         HlsDependencySnapshot {
             store_exists: store.is_some(),
@@ -538,14 +537,8 @@ impl MediaEngine {
                 let last = consumer.last_access_ms.load(Ordering::Relaxed);
                 now.saturating_sub(last)
             }),
-            segments: snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.segments.len())
-                .unwrap_or(0),
-            playlist_bytes: snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.playlist.len())
-                .unwrap_or(0),
+            segments: store.map(|store| store.segment_count()).unwrap_or(0),
+            playlist_bytes: store.map(|store| store.primary_playlist_len()).unwrap_or(0),
         }
     }
 
@@ -2446,7 +2439,7 @@ impl MediaEngine {
             c.cancel_token.cancel();
         }
         drop(consumers);
-        self.hls.stores.write().await.remove(&preview_key);
+        self.hls.preview_stores.write().await.remove(&preview_key);
     }
 
     /// Get the cancel token for a running HLS segmenter (used to spawn the task).
@@ -3129,7 +3122,7 @@ mod tests {
         assert!(!already_running);
 
         engine.touch_hls_preview("pipe-hls-snapshot").await;
-        store.push_segment(2.0, Bytes::from_static(b"segment"));
+        store.push_video_segment(0, 2.0, Bytes::from_static(b"segment"));
 
         let snapshot = engine.hls_dependency_snapshot("pipe-hls-snapshot").await;
         assert!(snapshot.store_exists);
@@ -4245,14 +4238,14 @@ mod tests {
                 None,
             )
             .await;
+        // Re-prepare after the codec flip, as reconciliation would: this creates
+        // the h264-only path while the stale HEVC-era stages stay registered.
+        let _ = crate::application::egress::prepare_output_ring(&engine, &output).await;
 
         let stages = engine.active_transcoder_stages(pipeline_id).await;
         assert!(
             stages.iter().any(|(stage, live)| *stage
-                == StageKind::codec_edge(
-                    "hevc_to_h264",
-                    StageKind::audio_route("atrack:1", StageKind::video_preset("h264"))
-                )
+                == StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("h264"))
                 && *live),
             "test precondition: stale codec-edge stage should still exist in the engine registry"
         );
@@ -4274,8 +4267,14 @@ mod tests {
         assert!(
             !nodes
                 .iter()
-                .any(|node| node["stageKey"] == "hevc_to_h264:from:audio:atrack:1:from:video:h264"),
+                .any(|node| node["stageKey"] == "hevc_to_h264:from:video:h264"),
             "graph should omit stale codec-edge stages that no longer belong to the output path"
+        );
+        assert!(
+            !nodes
+                .iter()
+                .any(|node| node["stageKey"] == "audio:atrack:1:from:hevc_to_h264:from:video:h264"),
+            "graph should omit the stale audio route that was keyed off the codec edge"
         );
     }
 

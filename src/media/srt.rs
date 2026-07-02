@@ -2847,6 +2847,14 @@ mod tests {
         let mut reader = TsChunkReader::new("routed-audio-reader".to_string(), &stage);
         wait_for_shared_muxer_source_reader(&source_ring).await;
 
+        let (_, _, fixture_packets) =
+            crate::test_fixtures::primary_av_packets_for_codec("h264").expect("h264 fixture");
+        let probe_ready_video = fixture_packets
+            .iter()
+            .find(|p| p.media_type == MediaType::Video && p.is_keyframe)
+            .expect("fixture keyframe")
+            .payload
+            .clone();
         source_ring.push(crate::media::ring_buffer::MediaPacket {
             media_type: MediaType::Video,
             track_index: 0,
@@ -2854,7 +2862,7 @@ mod tests {
             dts: 1000,
             is_keyframe: true,
             format: PayloadFormat::Raw,
-            payload: bytes::Bytes::from_static(&[0, 0, 0, 1, 0x65, 1, 2, 3]),
+            payload: probe_ready_video,
         });
         source_ring.push(crate::media::ring_buffer::MediaPacket {
             media_type: MediaType::Audio,

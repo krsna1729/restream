@@ -604,7 +604,9 @@ fn pace_packet(cancel: &CancellationToken, anchor: &mut Option<(i64, Instant)>, 
     }
 
     let (base_ts_ms, start_instant) = anchor.expect("anchor initialized above");
-    let desired_ms = packet_ts_ms.saturating_sub(base_ts_ms) as u64;
+    // Interleaved streams can deliver a packet timestamped slightly before the
+    // anchor. Clamp the delta instead of wrapping into a very long sleep.
+    let desired_ms = packet_ts_ms.saturating_sub(base_ts_ms).max(0) as u64;
     let desired = Duration::from_millis(desired_ms);
     let elapsed = start_instant.elapsed();
     if elapsed >= desired {
@@ -770,6 +772,20 @@ mod tests {
         assert!(parse_start_time_ms("-1").is_err());
         assert!(parse_start_time_ms("1:two").is_err());
         assert!(parse_start_time_ms("1:2:3:4").is_err());
+    }
+
+    #[test]
+    fn pace_packet_does_not_sleep_for_timestamps_behind_the_anchor() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut anchor = None;
+        super::pace_packet(&cancel, &mut anchor, 1_433);
+
+        let start = std::time::Instant::now();
+        super::pace_packet(&cancel, &mut anchor, 1_400);
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(200),
+            "packet behind the pace anchor must pass through without sleeping"
+        );
     }
 
     #[test]

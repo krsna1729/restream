@@ -28,7 +28,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
-use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::media::MEDIA_PULL_BURST_PACKETS;
@@ -1534,12 +1533,6 @@ pub async fn start_rtmp_egress(
         return;
     }
     let mut output_audio_track = output_audio_tracks.first().cloned();
-    if let Err(message) =
-        wait_for_rtmp_startup_media(&ring_buffer, &cancel_token, &engine, &pipeline_id).await
-    {
-        egress_error!("prepare", message);
-        return;
-    }
     let mut reader = Reader::new_with_keyframe_preroll(
         format!("rtmp_egress:{}", output_id),
         ring_buffer.clone(),
@@ -2249,77 +2242,6 @@ fn validate_rtmp_output_audio_packet_track(track_index: u32) -> Result<(), Strin
     Ok(())
 }
 
-async fn wait_for_rtmp_startup_media(
-    ring_buffer: &Arc<RingBuffer>,
-    cancel_token: &CancellationToken,
-    engine: &MediaEngine,
-    pipeline_id: &str,
-) -> Result<(), &'static str> {
-    if rtmp_startup_media_ready(ring_buffer, engine, pipeline_id).await {
-        return Ok(());
-    }
-
-    let mut reader = Reader::new_live(
-        format!("rtmp_startup_wait:{pipeline_id}"),
-        ring_buffer.clone(),
-    );
-    let wait = async {
-        loop {
-            reader.wait_for_data().await;
-            if rtmp_startup_media_ready(reader.current_ring(), engine, pipeline_id).await {
-                return Ok(());
-            }
-        }
-    };
-
-    tokio::select! {
-        _ = cancel_token.cancelled() => Err("cancelled before startup media became available"),
-        result = wait => result,
-    }
-}
-
-async fn rtmp_startup_media_ready(
-    ring: &RingBuffer,
-    engine: &MediaEngine,
-    pipeline_id: &str,
-) -> bool {
-    if !ingest_media_metadata_ready(engine, pipeline_id).await {
-        return false;
-    }
-
-    if engine.ingest_video_codec(pipeline_id).await.is_none() {
-        return ring.get_write_idx() > 0;
-    }
-
-    // The RTMP send loop already waits for the next keyframe before emitting
-    // raw/FLV video packets. Startup only needs some media in the ring plus a
-    // trustworthy decoder configuration so the publisher can connect instead
-    // of stalling forever when the current window has no retained keyframe.
-    if ring.get_write_idx() == 0 {
-        return false;
-    }
-
-    let (ingest_video_sh, _) = engine.get_sequence_headers(pipeline_id).await;
-    startup_video_sequence_header(ring, ingest_video_sh).is_some()
-}
-
-async fn ingest_media_metadata_ready(engine: &MediaEngine, pipeline_id: &str) -> bool {
-    engine
-        .with_active_ingest(pipeline_id, |ingest| {
-            if ingest.video.is_some() || ingest.audio.is_some() {
-                return true;
-            }
-
-            let audio_tracks = ingest
-                .audio_tracks
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            !audio_tracks.is_empty()
-        })
-        .await
-        .unwrap_or(false)
-}
-
 async fn handle_client_results<S>(
     results: Vec<ClientSessionResult>,
     socket: &mut S,
@@ -2366,8 +2288,7 @@ where
 mod tests {
     use super::*;
     use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
-    use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, RingBuffer};
-    use tokio::time::{Duration, sleep};
+    use crate::media::ring_buffer::{MediaType, RingBuffer};
 
     #[test]
     fn h264_sequence_header_for_keyframe_uses_cached_parameter_sets() {
@@ -2427,101 +2348,6 @@ mod tests {
             selected.is_none(),
             "empty raw output rings should wait for their own keyframe/config"
         );
-    }
-
-    #[tokio::test]
-    async fn rtmp_startup_media_ready_accepts_cached_header_without_retained_keyframe() {
-        let engine = MediaEngine::new();
-        engine
-            .try_register_ingest("p1", "key", "file")
-            .await
-            .expect("register ingest");
-        engine
-            .update_ingest_meta(
-                "p1",
-                Some(VideoMeta {
-                    codec: "h264".to_string(),
-                    width: 1920,
-                    height: 1080,
-                    fps: 30.0,
-                    ..Default::default()
-                }),
-                None,
-                None,
-            )
-            .await;
-        engine
-            .cache_sequence_header(
-                "p1",
-                true,
-                Bytes::from_static(&[0x17, 0x00, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x1F]),
-            )
-            .await;
-
-        let ring = Arc::new(RingBuffer::new(64));
-        ring.push(MediaPacket {
-            media_type: MediaType::Video,
-            format: PayloadFormat::Raw,
-            is_keyframe: false,
-            track_index: 0,
-            pts: 33,
-            dts: 33,
-            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41, 0x9A, 0x22]),
-        });
-
-        assert!(
-            rtmp_startup_media_ready(&ring, &engine, "p1").await,
-            "startup should proceed once decoder config is known and media is flowing, even if the current window has no retained keyframe"
-        );
-    }
-
-    #[tokio::test]
-    async fn rtmp_startup_media_ready_for_looping_bf0_file_ingest() {
-        let engine = Arc::new(MediaEngine::new());
-        let pipeline_id = "rtmp-bf0-loop-startup";
-        let ingest_id = "rtmp-bf0-loop-startup";
-        let ring_buffer = engine.get_or_create_pipeline(pipeline_id).await;
-        let registration = engine
-            .try_register_ingest_attempt(pipeline_id, "stream-key", "file")
-            .await
-            .expect("register ingest");
-
-        engine.mark_file_ingest_running(ingest_id).await;
-        crate::media::file_ingest::spawn_internal_file_ingest(
-            engine.clone(),
-            tokio::runtime::Handle::current(),
-            ingest_id.to_string(),
-            pipeline_id.to_string(),
-            crate::test_fixtures::av_marker_transport_fixture_for_bframes(
-                "h264",
-                false,
-                crate::test_fixtures::AvMarkerBframeMode::Bf0,
-            )
-            .expect("checked-in bf0 transport fixture"),
-            String::new(),
-            true,
-            ring_buffer.clone(),
-            registration.clone(),
-        )
-        .expect("spawn internal ingest");
-
-        sleep(Duration::from_secs(12)).await;
-
-        let ready = rtmp_startup_media_ready(&ring_buffer, &engine, pipeline_id).await;
-        let (cached_video, _) = engine.get_sequence_headers(pipeline_id).await;
-        let current_ring = engine.get_or_create_pipeline(pipeline_id).await;
-        assert!(
-            ready,
-            "looping BF0 file ingest should satisfy RTMP startup readiness (cached video header: {}, ring parameter sets: {}, write_idx: {}, current_write_idx: {}, same_ring: {})",
-            cached_video.is_some(),
-            ring_buffer.video_parameter_sets().is_some(),
-            ring_buffer.get_write_idx(),
-            current_ring.get_write_idx(),
-            Arc::ptr_eq(&ring_buffer, &current_ring),
-        );
-
-        registration.cancel_token.cancel();
-        sleep(Duration::from_millis(250)).await;
     }
 
     #[tokio::test]

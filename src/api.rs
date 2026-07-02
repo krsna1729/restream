@@ -2806,6 +2806,12 @@ async fn pump_file_ingest_stdout(
         if demuxer.drain_into(&mut packets) > 0 {
             for pkt in &mut packets {
                 timestamps.apply(pkt);
+                if pkt.media_type == crate::media::ring_buffer::MediaType::Video
+                    && let Some(parameter_sets) =
+                        crate::media::codec::annexb_parameter_sets(&pkt.payload)
+                {
+                    ring_buffer.set_video_parameter_sets(parameter_sets);
+                }
                 if pkt.media_type == crate::media::ring_buffer::MediaType::Video && pkt.is_keyframe
                 {
                     let mut times = cached_keyframe_times
@@ -2823,11 +2829,18 @@ async fn pump_file_ingest_stdout(
         if !probe_sent && let Some(probe) = demuxer.take_probe() {
             probe_sent = true;
             let first_audio = probe.audio_tracks.first().cloned();
+            let video_sequence_header = probe.video_sequence_header.clone();
             let selected_video_track_index = probe.video.as_ref().map(|_| 0);
             state
                 .engine
                 .update_ingest_meta(&pipeline.id, probe.video, first_audio, None)
                 .await;
+            if let Some(sequence_header) = video_sequence_header {
+                state
+                    .engine
+                    .cache_sequence_header(&pipeline.id, true, sequence_header)
+                    .await;
+            }
             state
                 .engine
                 .update_ingest_video_track_selection(
