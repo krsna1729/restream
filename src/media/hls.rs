@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::ring_buffer::{MediaType, Reader, RingBuffer};
+use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
 
 const TARGET_DURATION_SECS: f64 = 6.0;
 const MIN_SEGMENT_SECS: f64 = 1.0;
@@ -276,8 +277,8 @@ pub async fn start_hls_segmenter(
     let mut audio_reader = audio_ring_buffer
         .clone()
         .map(|ring| Reader::new(format!("hls-audio:{}", pipeline_id), ring));
-    let mut packets = Vec::with_capacity(32);
-    let mut audio_packets = Vec::with_capacity(32);
+    let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
+    let mut audio_packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
     let mut feeder: Option<TsPacketFeeder> = None;
     // Pre-populate SPS/PPS cache from the engine's stored FLV sequence header.
     // This handles the case where the HLS task starts after the seq header has
@@ -287,7 +288,7 @@ pub async fn start_hls_segmenter(
     let mut accumulator = BytesMut::with_capacity(config.segment_capacity);
     let mut segment_start = Instant::now();
     let mut got_first_keyframe = false;
-    let mut ts_packet_buf = Vec::<u8>::with_capacity(65536);
+    let mut ts_packet_buf = Vec::<u8>::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
     let preview_video_meta = video_meta_override.clone();
 
     loop {
@@ -296,14 +297,14 @@ pub async fn start_hls_segmenter(
             _ = reader.wait_for_data() => {
                 loop {
                     packets.clear();
-                    match reader.pull_burst(&mut packets, 32) {
+                    match reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS) {
                         Ok(0) | Err(_) => break,
                         Ok(_) => {}
                     }
 
                     if let Some(audio_reader) = audio_reader.as_mut() {
                         audio_packets.clear();
-                        let _ = audio_reader.pull_burst(&mut audio_packets, 32);
+                        let _ = audio_reader.pull_burst(&mut audio_packets, MEDIA_PULL_BURST_PACKETS);
                     }
 
                     for packet in packets.iter().chain(
@@ -397,7 +398,13 @@ pub async fn start_hls_segmenter(
                                 video.as_ref(),
                                 audio_tracks,
                                 PacketFeedConfig {
-                                    video_sequence_header: video_sequence_header.as_ref().map(|v| v.to_vec()),
+                                    video_sequence_header: video_sequence_header
+                                        .as_ref()
+                                        .map(|v| v.to_vec()),
+                                    raw_video_parameter_sets: reader
+                                        .current_ring()
+                                        .video_parameter_sets()
+                                        .map(|v| v.to_vec()),
                                     ..PacketFeedConfig::default()
                                 },
                             ));

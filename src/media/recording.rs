@@ -13,6 +13,7 @@ use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::mpegts::TsServiceMetadata;
 use crate::media::ring_buffer::{Reader, RingBuffer};
+use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,6 +25,7 @@ use tracing::{error, info, warn};
 
 const MIN_DURATION_SECS: u64 = 5;
 const MP4_MUXER_NAME: &str = "mov";
+const RECORDING_KEYFRAME_PREROLL_PACKETS: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -405,8 +407,12 @@ pub async fn start_recording(
         }
     });
 
-    let mut reader = Reader::new_live(format!("recording:{}", pipeline_name), ring_buffer);
-    let mut packets = Vec::with_capacity(32);
+    let mut reader = Reader::new_with_keyframe_preroll(
+        format!("recording:{}", pipeline_name),
+        ring_buffer,
+        RECORDING_KEYFRAME_PREROLL_PACKETS,
+    );
+    let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
 
     // Lazily initialized when first packet arrives.
     let (video_sequence_header, _) = engine.get_sequence_headers(&pipeline_id).await;
@@ -414,7 +420,7 @@ pub async fn start_recording(
     // Accumulation buffer: collect all muxed TS bytes for a burst, then
     // write them in a single queue.write() call (one lock acquisition per
     // burst instead of one per packet).
-    let mut ts_batch: Vec<u8> = Vec::with_capacity(65536);
+    let mut ts_batch: Vec<u8> = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
 
     loop {
         tokio::select! {
@@ -422,7 +428,7 @@ pub async fn start_recording(
             _ = reader.wait_for_data() => {
                 loop {
                     packets.clear();
-                    match reader.pull_burst(&mut packets, 32) {
+                    match reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS) {
                         Ok(0) | Err(_) => break,
                         Ok(_) => {}
                     }
@@ -430,23 +436,44 @@ pub async fn start_recording(
                     for pkt in &packets {
                         // Lazily create the feeder from engine metadata.
                         if feeder.is_none() {
-                            let ingests = engine.ingests.active.read().await;
-                            if let Some(ingest) = ingests.get(&pipeline_id) {
-                                let video = ingest.video.as_ref();
-                                let tracks = ingest.audio_tracks.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                                feeder = Some(TsPacketFeeder::new(
-                                    video,
-                                    tracks,
-                                    PacketFeedConfig {
-                                    video_sequence_header: video_sequence_header.as_ref().map(|v| v.to_vec()),
-                                        service_metadata: Some(service_metadata.clone()),
-                                        ..PacketFeedConfig::default()
-                                    },
-                                ));
-                                drop(ingests);
-                            } else {
+                            let metadata = {
+                                let ingests = engine.ingests.active.read().await;
+                                ingests.get(&pipeline_id).and_then(|ingest| {
+                                    let video = ingest.video.clone();
+                                    let lock = ingest
+                                        .audio_tracks
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner());
+                                    let tracks = if lock.is_empty() {
+                                        ingest
+                                            .audio
+                                            .clone()
+                                            .map(|audio| Arc::new(vec![audio]))
+                                            .unwrap_or_else(|| Arc::new(Vec::new()))
+                                    } else {
+                                        Arc::clone(&lock)
+                                    };
+                                    (video.is_some() || !tracks.is_empty()).then_some((video, tracks))
+                                })
+                            };
+                            let Some((video, tracks)) = metadata else {
                                 continue;
-                            }
+                            };
+                            feeder = Some(TsPacketFeeder::new(
+                                video.as_ref(),
+                                tracks,
+                                PacketFeedConfig {
+                                    video_sequence_header: video_sequence_header
+                                        .as_ref()
+                                        .map(|v| v.to_vec()),
+                                    raw_video_parameter_sets: reader
+                                        .current_ring()
+                                        .video_parameter_sets()
+                                        .map(|v| v.to_vec()),
+                                    service_metadata: Some(service_metadata.clone()),
+                                    ..PacketFeedConfig::default()
+                                },
+                            ));
                         }
 
                         if let Some(ref mut feeder) = feeder {

@@ -34,7 +34,18 @@ pub fn video_for_ts<'a>(
             if payload.is_empty() {
                 None
             } else {
-                Some(Cow::Borrowed(payload))
+                let has_inline_parameter_sets =
+                    refresh_annexb_parameter_set_cache(payload, sps_pps_cache);
+                if !has_inline_parameter_sets
+                    && !sps_pps_cache.is_empty()
+                    && raw_annexb_is_keyframe(payload)
+                {
+                    let mut out = sps_pps_cache.clone();
+                    out.extend_from_slice(payload);
+                    Some(Cow::Owned(out))
+                } else {
+                    Some(Cow::Borrowed(payload))
+                }
             }
         }
         PayloadFormat::Flv => {
@@ -136,7 +147,19 @@ pub fn video_for_ts_into<'a>(
             if payload.is_empty() {
                 None
             } else {
-                Some(payload)
+                let has_inline_parameter_sets =
+                    refresh_annexb_parameter_set_cache(payload, sps_pps_cache);
+                if !has_inline_parameter_sets
+                    && !sps_pps_cache.is_empty()
+                    && raw_annexb_is_keyframe(payload)
+                {
+                    buf.clear();
+                    buf.extend_from_slice(sps_pps_cache);
+                    buf.extend_from_slice(payload);
+                    Some(buf.as_slice())
+                } else {
+                    Some(payload)
+                }
             }
         }
         PayloadFormat::Flv => {
@@ -150,19 +173,98 @@ pub fn video_for_ts_into<'a>(
                 *nalu_len_size = nls;
                 *sps_pps_cache = annexb;
                 return None;
+            } else {
+                let is_keyframe = (payload[0] & 0xF0) == 0x10;
+                if is_keyframe && !sps_pps_cache.is_empty() {
+                    buf.extend_from_slice(sps_pps_cache);
+                }
+                let before = buf.len();
+                avcc_to_annexb_into(&payload[5..], *nalu_len_size, buf);
+                if buf.len() == before {
+                    return None; // AVCC body was empty
+                }
+                Some(buf.as_slice())
             }
-            let is_keyframe = (payload[0] & 0xF0) == 0x10;
-            if is_keyframe && !sps_pps_cache.is_empty() {
-                buf.extend_from_slice(sps_pps_cache);
-            }
-            let before = buf.len();
-            avcc_to_annexb_into(&payload[5..], *nalu_len_size, buf);
-            if buf.len() == before {
-                return None; // AVCC body was empty
-            }
-            Some(buf.as_slice())
         }
     }
+}
+
+fn refresh_annexb_parameter_set_cache(payload: &[u8], sps_pps_cache: &mut Vec<u8>) -> bool {
+    let Some(parameter_sets) = annexb_parameter_sets(payload) else {
+        return false;
+    };
+
+    *sps_pps_cache = parameter_sets;
+    true
+}
+
+pub(crate) fn annexb_parameter_sets(payload: &[u8]) -> Option<Vec<u8>> {
+    let nalus = split_annexb_nalus(payload);
+    if nalus.is_empty() {
+        return None;
+    }
+
+    let mut parameter_sets = Vec::new();
+    let mut kind = AnnexbCodecKind::Unknown;
+    for nalu in nalus {
+        if nalu.is_empty() {
+            continue;
+        }
+
+        let h264_nal_type = nalu[0] & 0x1F;
+        let h265_nal_type = if nalu.len() >= 2 {
+            (nalu[0] >> 1) & 0x3F
+        } else {
+            0
+        };
+
+        match h264_nal_type {
+            7 | 8 => {
+                if matches!(kind, AnnexbCodecKind::Unknown | AnnexbCodecKind::H264) {
+                    kind = AnnexbCodecKind::H264;
+                    parameter_sets.extend_from_slice(&[0, 0, 0, 1]);
+                    parameter_sets.extend_from_slice(nalu);
+                }
+            }
+            _ => match h265_nal_type {
+                32..=34 => {
+                    if matches!(kind, AnnexbCodecKind::Unknown | AnnexbCodecKind::H265) {
+                        kind = AnnexbCodecKind::H265;
+                        parameter_sets.extend_from_slice(&[0, 0, 0, 1]);
+                        parameter_sets.extend_from_slice(nalu);
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+
+    (!parameter_sets.is_empty()).then_some(parameter_sets)
+}
+
+fn raw_annexb_is_keyframe(payload: &[u8]) -> bool {
+    split_annexb_nalus(payload).iter().any(|nalu| {
+        if nalu.is_empty() {
+            return false;
+        }
+
+        let h264_nal_type = nalu[0] & 0x1F;
+        if h264_nal_type == 5 {
+            return true;
+        }
+
+        if nalu.len() < 2 {
+            return false;
+        }
+        matches!((nalu[0] >> 1) & 0x3F, 16..=23)
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AnnexbCodecKind {
+    Unknown,
+    H264,
+    H265,
 }
 
 /// Zero-allocation variant of [`audio_for_ts`].
@@ -216,9 +318,7 @@ pub fn video_for_rtmp(payload: &[u8], is_keyframe: bool) -> Option<Vec<u8>> {
     let tag = if is_keyframe { 0x17u8 } else { 0x27u8 };
     let mut out = Vec::with_capacity(payload.len() + 5);
     out.extend_from_slice(&[tag, 1, 0, 0, 0]);
-    let start = out.len();
-    annexb_to_avcc_into(payload, &mut out);
-    if out.len() == start {
+    if !annexb_to_avcc_into(payload, &mut out) {
         return None; // no VCL NALUs found
     }
     Some(out)
@@ -247,9 +347,7 @@ pub fn video_for_rtmp_with_composition_into(
     out.clear();
     out.extend_from_slice(&[tag, 1, 0, 0, 0]);
     write_signed_be24(composition_time_ms, &mut out[2..5]);
-    let start = out.len();
-    annexb_to_avcc_into(payload, out);
-    out.len() > start
+    annexb_to_avcc_into(payload, out)
 }
 
 fn write_signed_be24(value: i32, out: &mut [u8]) {
@@ -370,7 +468,7 @@ pub fn avcc_to_annexb_into(data: &[u8], nalu_len_size: usize, out: &mut Vec<u8>)
 /// Filters out SPS (7), PPS (8), and AUD (9) NALUs.
 pub fn annexb_to_avcc(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
-    annexb_to_avcc_into(data, &mut out);
+    let _ = annexb_to_avcc_into(data, &mut out);
     out
 }
 
@@ -387,8 +485,9 @@ pub fn annexb_to_avcc(data: &[u8]) -> Vec<u8> {
 /// Re-benchmark on hardware with slower allocators or if NALU counts grow
 /// significantly (>4 per frame) where the allocation cost might dominate.
 #[inline]
-pub fn annexb_to_avcc_into(data: &[u8], out: &mut Vec<u8>) {
+pub fn annexb_to_avcc_into(data: &[u8], out: &mut Vec<u8>) -> bool {
     let nalus = split_annexb_nalus(data);
+    let mut has_vcl = false;
     for nalu in &nalus {
         if nalu.is_empty() {
             continue;
@@ -397,10 +496,14 @@ pub fn annexb_to_avcc_into(data: &[u8], out: &mut Vec<u8>) {
         if matches!(nal_type, 7..=9) {
             continue;
         }
+        if matches!(nal_type, 1..=5) {
+            has_vcl = true;
+        }
         let len = nalu.len() as u32;
         out.extend_from_slice(&len.to_be_bytes());
         out.extend_from_slice(nalu);
     }
+    has_vcl
 }
 
 /// Like `annexb_to_avcc` but uses caller-provided scratch buffers to avoid the
@@ -850,6 +953,17 @@ mod tests {
     }
 
     #[test]
+    fn video_for_rtmp_rejects_non_vcl_annexb_payload() {
+        let sei_only = [0, 0, 0, 1, 0x06, 0x05, 0xff, 0xff];
+        let mut out = Vec::new();
+
+        assert!(!video_for_rtmp_with_composition_into(
+            &sei_only, true, 0, &mut out
+        ));
+        assert_eq!(&out[..5], &[0x17, 0x01, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
     fn build_aac_seq_header_synthesizes_correct_config() {
         // AAC-LC (audioObjectType=2), 48000Hz (freq_idx=3), stereo (ch=2)
         // asc_byte0 = (2 << 3) | (3 >> 1) = 16 | 1 = 0x11
@@ -1110,6 +1224,60 @@ mod tests {
         let mut nls = 4;
         let mut cache = Vec::new();
         assert!(video_for_ts(&[], PayloadFormat::Raw, &mut nls, &mut cache).is_none());
+    }
+
+    #[test]
+    fn video_for_ts_raw_h264_keyframe_prepends_cached_parameter_sets() {
+        let payload = [0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80];
+        let mut nls = 4;
+        let mut cache = vec![
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+            0xCE, 0x38, 0x80,
+        ];
+
+        let result = video_for_ts(&payload, PayloadFormat::Raw, &mut nls, &mut cache)
+            .expect("cached SPS/PPS should be prepended to raw keyframes");
+
+        assert!(matches!(result, Cow::Owned(_)));
+        assert!(result.starts_with(&cache));
+        assert!(result.ends_with(&payload));
+    }
+
+    #[test]
+    fn video_for_ts_into_raw_h265_keyframe_prepends_cached_parameter_sets() {
+        let payload = [0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0xAA];
+        let mut nls = 4;
+        let mut cache = vec![
+            0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0xBB,
+            0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
+        ];
+        let mut buf = Vec::new();
+
+        let result =
+            video_for_ts_into(&payload, PayloadFormat::Raw, &mut nls, &mut cache, &mut buf)
+                .expect("cached VPS/SPS/PPS should be prepended to raw keyframes")
+                .to_vec();
+
+        assert_eq!(result, buf);
+        assert!(result.starts_with(&cache));
+        assert!(result.ends_with(&payload));
+    }
+
+    #[test]
+    fn video_for_ts_raw_inline_parameter_sets_refresh_cache_without_duplication() {
+        let payload = [
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+            0xCE, 0x38, 0x80, 0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80,
+        ];
+        let mut nls = 4;
+        let mut cache = Vec::new();
+
+        let result = video_for_ts(&payload, PayloadFormat::Raw, &mut nls, &mut cache)
+            .expect("inline SPS/PPS should still pass through");
+
+        assert!(matches!(result, Cow::Borrowed(_)));
+        assert_eq!(cache, payload[..17]);
+        assert_eq!(&*result, &payload);
     }
 
     #[test]

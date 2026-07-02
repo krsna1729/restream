@@ -109,6 +109,7 @@ struct StreamInfo {
 #[derive(Debug, Clone)]
 pub struct DemuxProbe {
     pub video: Option<VideoMeta>,
+    pub video_sequence_header: Option<Bytes>,
     pub video_track_count: usize,
     pub audio_tracks: Vec<AudioMeta>,
 }
@@ -569,9 +570,7 @@ impl TsDemuxer {
         if self.probe_payloads.len() < self.streams.len() {
             self.probe_payloads.resize(self.streams.len(), None);
         }
-        if self.probe_payloads[stream_idx].is_none() {
-            self.probe_payloads[stream_idx] = Some(payload.to_vec());
-        }
+        self.probe_payloads[stream_idx] = Some(payload.to_vec());
 
         // Wait until all streams have contributed at least one PES
         if self.probe_payloads.iter().any(|p| p.is_none()) {
@@ -580,32 +579,46 @@ impl TsDemuxer {
 
         let mut video_meta = None;
         let mut audio_tracks = Vec::new();
+        let mut video_sequence_header = None;
+        let mut probe_complete = true;
 
         for (idx, stream) in self.streams.iter().enumerate() {
             let data = self.probe_payloads[idx].as_deref().unwrap();
             match stream.kind.media_type() {
                 MediaType::Video => {
                     if video_meta.is_none() {
-                        video_meta = Some(probe_video(
+                        let meta = probe_video(
                             stream.kind,
                             stream.pid,
                             stream.language.clone(),
                             stream.title.clone(),
                             data,
-                        ));
+                        );
+                        if stream.kind == StreamKind::H264 {
+                            video_sequence_header =
+                                crate::media::codec::build_avcc_sequence_header(data);
+                        }
+                        probe_complete &= video_meta_complete(stream.kind, &meta);
+                        video_meta = Some(meta);
                     }
                 }
                 MediaType::Audio => {
-                    audio_tracks.push(probe_audio(
+                    let meta = probe_audio(
                         stream.kind,
                         stream.track_index,
                         stream.pid,
                         stream.language.clone(),
                         stream.title.clone(),
                         data,
-                    ));
+                    );
+                    probe_complete &= audio_meta_complete(stream.kind, &meta);
+                    audio_tracks.push(meta);
                 }
             }
+        }
+
+        if !probe_complete {
+            return;
         }
 
         let has_video_meta = video_meta.is_some();
@@ -613,6 +626,7 @@ impl TsDemuxer {
         self.probe_payloads.clear();
         self.probe_result = Some(DemuxProbe {
             video: video_meta,
+            video_sequence_header,
             video_track_count: self.video_track_count.max(usize::from(has_video_meta)),
             audio_tracks,
         });
@@ -1385,6 +1399,13 @@ fn probe_video(
     meta
 }
 
+fn video_meta_complete(kind: StreamKind, meta: &VideoMeta) -> bool {
+    match kind {
+        StreamKind::H264 | StreamKind::H265 => meta.width > 0 && meta.height > 0,
+        StreamKind::AacAdts | StreamKind::AacLatm => true,
+    }
+}
+
 fn probe_audio(
     kind: StreamKind,
     track_index: u32,
@@ -1435,6 +1456,13 @@ fn probe_audio(
     }
 
     meta
+}
+
+fn audio_meta_complete(kind: StreamKind, meta: &AudioMeta) -> bool {
+    match kind {
+        StreamKind::AacAdts => meta.sample_rate > 0 && meta.channels > 0,
+        StreamKind::AacLatm | StreamKind::H264 | StreamKind::H265 => true,
+    }
 }
 
 // --- H.264 NAL unit scanning ---
@@ -2101,6 +2129,71 @@ mod tests {
             "fixture TS segment should not be empty"
         );
         output.stdout
+    }
+
+    fn h264_stream_info(pid: u16) -> StreamInfo {
+        StreamInfo {
+            pid,
+            kind: StreamKind::H264,
+            track_index: 0,
+            language: None,
+            title: None,
+            continuity: CC_UNSET,
+            pes: PesAccumulator::new(),
+        }
+    }
+
+    fn aac_adts_stream_info(pid: u16, track_index: u32) -> StreamInfo {
+        StreamInfo {
+            pid,
+            kind: StreamKind::AacAdts,
+            track_index,
+            language: None,
+            title: None,
+            continuity: CC_UNSET,
+            pes: PesAccumulator::new(),
+        }
+    }
+
+    fn first_probe_ready_payloads() -> (Vec<u8>, Vec<u8>) {
+        let fixture =
+            crate::test_fixtures::canonical_h264_ts_fixture().unwrap_or_else(|e| panic!("{e}"));
+        let ts = std::fs::read(&fixture)
+            .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", fixture.display()));
+        let mut demuxer = TsDemuxer::new();
+        demuxer.feed(&ts);
+        demuxer.flush();
+        let packets = demuxer.drain();
+        let video = packets
+            .iter()
+            .find(|packet| {
+                packet.media_type == MediaType::Video
+                    && video_meta_complete(
+                        StreamKind::H264,
+                        &probe_video(StreamKind::H264, 0x100, None, None, packet.payload.as_ref()),
+                    )
+            })
+            .map(|packet| packet.payload.to_vec())
+            .expect("fixture should contain a probe-ready H.264 access unit");
+        let audio = packets
+            .iter()
+            .find(|packet| {
+                packet.media_type == MediaType::Audio
+                    && audio_meta_complete(
+                        StreamKind::AacAdts,
+                        &probe_audio(
+                            StreamKind::AacAdts,
+                            0,
+                            0x101,
+                            None,
+                            None,
+                            packet.payload.as_ref(),
+                        ),
+                    )
+            })
+            .map(|packet| packet.payload.to_vec())
+            .expect("fixture should contain a probe-ready AAC access unit");
+        (video, audio)
     }
 
     #[test]
@@ -2903,6 +2996,50 @@ mod tests {
             16,
             "fixture packets should cover all 16 logical audio tracks"
         );
+    }
+
+    #[test]
+    fn try_build_probe_waits_for_complete_h264_and_aac_metadata() {
+        let (complete_video, complete_audio) = first_probe_ready_payloads();
+        let mut demuxer = TsDemuxer::new();
+        demuxer.streams = vec![h264_stream_info(0x100), aac_adts_stream_info(0x101, 0)];
+
+        demuxer.try_build_probe(0, &[0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80]);
+        demuxer.try_build_probe(1, &complete_audio);
+        assert!(
+            demuxer.take_probe().is_none(),
+            "probe must wait for complete video dimensions instead of locking in 0x0 metadata"
+        );
+
+        demuxer.try_build_probe(0, &complete_video);
+        let probe = demuxer
+            .take_probe()
+            .expect("probe should finalize once both tracks have complete metadata");
+        let video = probe.video.expect("probe should include video metadata");
+        assert!(video.width > 0);
+        assert!(video.height > 0);
+        assert_eq!(probe.audio_tracks.len(), 1);
+        assert!(probe.audio_tracks[0].sample_rate > 0);
+        assert!(probe.audio_tracks[0].channels > 0);
+    }
+
+    #[test]
+    fn try_build_probe_caches_h264_sequence_header() {
+        let (complete_video, complete_audio) = first_probe_ready_payloads();
+        let mut demuxer = TsDemuxer::new();
+        demuxer.streams = vec![h264_stream_info(0x100), aac_adts_stream_info(0x101, 0)];
+
+        demuxer.try_build_probe(0, &complete_video);
+        demuxer.try_build_probe(1, &complete_audio);
+
+        let probe = demuxer
+            .take_probe()
+            .expect("probe should finalize once both tracks are complete");
+        let sequence_header = probe
+            .video_sequence_header
+            .expect("H.264 probe should synthesize an RTMP startup header");
+        assert_eq!(sequence_header[0], 0x17);
+        assert_eq!(sequence_header[1], 0x00);
     }
 
     #[test]

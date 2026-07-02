@@ -22,6 +22,7 @@ use crate::media::avio::MemoryQueue;
 use crate::media::engine::{AudioMeta, VideoMeta};
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
+use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
 
 /// Zero-copy wrapper: holds an `ffmpeg_next::Packet` so `Bytes::from_owner`
 /// can serve the encoded/demuxed buffer to ring-buffer readers without a `memcpy`.
@@ -150,6 +151,7 @@ pub async fn start_h264_transcoder(
         audio_tracks.clone(),
         PacketFeedConfig {
             video_sequence_header: video_sequence_header.as_ref().map(|v| v.to_vec()),
+            raw_video_parameter_sets: input_buffer.video_parameter_sets().map(|v| v.to_vec()),
             ..PacketFeedConfig::default()
         },
     );
@@ -157,8 +159,8 @@ pub async fn start_h264_transcoder(
     // Accumulation buffer: collect all muxed TS bytes for a burst, then
     // write them in a single queue.write() call (one lock acquisition per
     // burst instead of one per packet).
-    let mut ts_batch: Vec<u8> = Vec::with_capacity(65536);
-    let mut packets = Vec::with_capacity(32);
+    let mut ts_batch: Vec<u8> = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
+    let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
 
     loop {
         tokio::select! {
@@ -169,10 +171,16 @@ pub async fn start_h264_transcoder(
                 // continue path skips the end-of-arm clear (M6 fix).
                 ts_batch.clear();
                 packets.clear();
-                if reader.pull_burst(&mut packets, 32).is_err() {
+                if reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS).is_err() {
                     continue;
                 }
                 for pkt in &packets {
+                    if pkt.media_type == MediaType::Video
+                        && feeder.needs_raw_video_parameter_sets()
+                        && let Some(parameter_sets) = reader.current_ring().video_parameter_sets()
+                    {
+                        feeder.set_raw_video_parameter_sets_if_empty(parameter_sets);
+                    }
                     let in_bytes = pkt.payload.len() as u64;
                     if feeder.extend_ts_for_packet(pkt, &mut ts_batch) {
                         stage_metrics.record_in(in_bytes);
@@ -300,6 +308,10 @@ fn run_ffmpeg_h264_stage(
                 dts_val
             };
             let is_keyframe = pkt.is_key();
+            let payload = Bytes::from_owner(OwnedFfmpegPacket(pkt));
+            if let Some(parameter_sets) = crate::media::codec::annexb_parameter_sets(&payload) {
+                out_ring.set_video_parameter_sets(parameter_sets);
+            }
             out_ring.push(MediaPacket {
                 media_type,
                 track_index,
@@ -307,7 +319,7 @@ fn run_ffmpeg_h264_stage(
                 dts: dts_ms,
                 is_keyframe,
                 format: PayloadFormat::Raw,
-                payload: Bytes::from_owner(OwnedFfmpegPacket(pkt)),
+                payload,
             });
             continue;
         }
@@ -459,7 +471,15 @@ fn run_ffmpeg_h264_stage(
                     dts: dts_ms,
                     is_keyframe: enc_pkt.is_key(),
                     format: PayloadFormat::Raw,
-                    payload: Bytes::from_owner(OwnedFfmpegPacket(enc_pkt.clone())),
+                    payload: {
+                        let payload = Bytes::from_owner(OwnedFfmpegPacket(enc_pkt.clone()));
+                        if let Some(parameter_sets) =
+                            crate::media::codec::annexb_parameter_sets(&payload)
+                        {
+                            out_ring.set_video_parameter_sets(parameter_sets);
+                        }
+                        payload
+                    },
                 });
             }
         }

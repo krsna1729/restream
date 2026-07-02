@@ -18,6 +18,21 @@ use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::mpegts::TsDemuxer;
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AvMarkerBframeMode {
+    Bf0,
+    Bf2,
+}
+
+impl AvMarkerBframeMode {
+    const fn file_suffix(self) -> &'static str {
+        match self {
+            Self::Bf0 => "-bf0",
+            Self::Bf2 => "",
+        }
+    }
+}
+
 pub const REQUIRED_CHECKED_IN_FIXTURES: &[&str] = &[
     // Canonical H.264 MPEG-TS correctness source: single-video/single-audio
     // packet fixture used by unit tests and non-measurement protocol gates.
@@ -59,9 +74,21 @@ pub const REQUIRED_CHECKED_IN_FIXTURES: &[&str] = &[
     // track 1 has 2 kHz beeps for multi-audio routing and future frequency
     // identity checks.
     "test/fixtures/av-marker-h264-2a.ts",
+    // H.264 marker oracle with B-frames disabled so harnesses can verify
+    // source-side no-reorder ingest against the same flash/beep timing.
+    "test/fixtures/av-marker-h264-bf0.ts",
+    // H.264 two-audio marker oracle with B-frames disabled for multi-audio
+    // source-reorder matrix coverage.
+    "test/fixtures/av-marker-h264-bf0-2a.ts",
     // HEVC marker oracle with two AAC tracks, covering HEVC multi-audio
     // routing plus RTMP compatibility conversion under signal validation.
     "test/fixtures/av-marker-h265-2a.ts",
+    // HEVC marker oracle with B-frames disabled so mixed input can cover
+    // HEVC no-reorder ingest without dropping A/V marker signal.
+    "test/fixtures/av-marker-h265-bf0.ts",
+    // HEVC two-audio marker oracle with B-frames disabled for multi-audio
+    // no-reorder ingest coverage.
+    "test/fixtures/av-marker-h265-bf0-2a.ts",
     // HLS edge-case fixture whose first segment starts audio-only, guarding
     // preview and playlist startup behavior when video arrives later.
     "test/fixtures/hls-first-audio-only-6s.ts",
@@ -128,13 +155,24 @@ pub fn bench_transport_fixture(
 }
 
 pub fn av_marker_transport_fixture(codec: &str, multi_audio: bool) -> Result<PathBuf, String> {
+    av_marker_transport_fixture_for_bframes(codec, multi_audio, AvMarkerBframeMode::Bf2)
+}
+
+pub fn av_marker_transport_fixture_for_bframes(
+    codec: &str,
+    multi_audio: bool,
+    bframes: AvMarkerBframeMode,
+) -> Result<PathBuf, String> {
     let codec = match codec {
         "h264" | "avc" => "h264",
         "h265" | "hevc" => "h265",
         other => return Err(format!("unsupported A/V marker fixture codec {other:?}")),
     };
     let suffix = if multi_audio { "-2a" } else { "" };
-    checked_in_fixture(&format!("test/fixtures/av-marker-{codec}{suffix}.ts"))
+    checked_in_fixture(&format!(
+        "test/fixtures/av-marker-{codec}{}{suffix}.ts",
+        bframes.file_suffix()
+    ))
 }
 
 pub fn primary_av_packets_for_codec(

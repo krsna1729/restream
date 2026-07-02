@@ -2367,6 +2367,7 @@ mod tests {
     use super::*;
     use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
     use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, RingBuffer};
+    use tokio::time::{Duration, sleep};
 
     #[test]
     fn h264_sequence_header_for_keyframe_uses_cached_parameter_sets() {
@@ -2472,6 +2473,55 @@ mod tests {
             rtmp_startup_media_ready(&ring, &engine, "p1").await,
             "startup should proceed once decoder config is known and media is flowing, even if the current window has no retained keyframe"
         );
+    }
+
+    #[tokio::test]
+    async fn rtmp_startup_media_ready_for_looping_bf0_file_ingest() {
+        let engine = Arc::new(MediaEngine::new());
+        let pipeline_id = "rtmp-bf0-loop-startup";
+        let ingest_id = "rtmp-bf0-loop-startup";
+        let ring_buffer = engine.get_or_create_pipeline(pipeline_id).await;
+        let registration = engine
+            .try_register_ingest_attempt(pipeline_id, "stream-key", "file")
+            .await
+            .expect("register ingest");
+
+        engine.mark_file_ingest_running(ingest_id).await;
+        crate::media::file_ingest::spawn_internal_file_ingest(
+            engine.clone(),
+            tokio::runtime::Handle::current(),
+            ingest_id.to_string(),
+            pipeline_id.to_string(),
+            crate::test_fixtures::av_marker_transport_fixture_for_bframes(
+                "h264",
+                false,
+                crate::test_fixtures::AvMarkerBframeMode::Bf0,
+            )
+            .expect("checked-in bf0 transport fixture"),
+            String::new(),
+            true,
+            ring_buffer.clone(),
+            registration.clone(),
+        )
+        .expect("spawn internal ingest");
+
+        sleep(Duration::from_secs(12)).await;
+
+        let ready = rtmp_startup_media_ready(&ring_buffer, &engine, pipeline_id).await;
+        let (cached_video, _) = engine.get_sequence_headers(pipeline_id).await;
+        let current_ring = engine.get_or_create_pipeline(pipeline_id).await;
+        assert!(
+            ready,
+            "looping BF0 file ingest should satisfy RTMP startup readiness (cached video header: {}, ring parameter sets: {}, write_idx: {}, current_write_idx: {}, same_ring: {})",
+            cached_video.is_some(),
+            ring_buffer.video_parameter_sets().is_some(),
+            ring_buffer.get_write_idx(),
+            current_ring.get_write_idx(),
+            Arc::ptr_eq(&ring_buffer, &current_ring),
+        );
+
+        registration.cancel_token.cancel();
+        sleep(Duration::from_millis(250)).await;
     }
 
     #[tokio::test]

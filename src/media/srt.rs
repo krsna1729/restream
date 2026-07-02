@@ -63,6 +63,7 @@ use crate::domain::srt_ingest::{
 use crate::media::engine::{EgressRegistration, MediaEngine, PublisherQuality};
 use crate::media::ring_buffer::{MediaPacket, MediaType, Reader, RingBuffer};
 use crate::media::ts_chunk_ring::{TsChunkReader, TsChunkRing};
+use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
 use crate::types::Pipeline;
 
 // 256 slots covers the mux wakeup → SRT socket-write latency (sub-millisecond
@@ -1862,6 +1863,12 @@ impl SrtServer {
             if demuxer.drain_into(&mut packets) > 0 {
                 for pkt in &packets {
                     if pkt.media_type == crate::media::ring_buffer::MediaType::Video
+                        && let Some(parameter_sets) =
+                            crate::media::codec::annexb_parameter_sets(&pkt.payload)
+                    {
+                        ring_buffer.set_video_parameter_sets(parameter_sets);
+                    }
+                    if pkt.media_type == crate::media::ring_buffer::MediaType::Video
                         && pkt.is_keyframe
                         && let Some(ref kf_times) = cached_keyframe_times
                     {
@@ -1872,7 +1879,7 @@ impl SrtServer {
                         }
                     }
                 }
-                ring_buffer.push_batch(packets.drain(..));
+                ring_buffer.push_drained_batch_capped(&mut packets);
             }
 
             // Send probe metadata once ready
@@ -1950,7 +1957,15 @@ impl SrtServer {
         // Flush any remaining PES data
         demuxer.flush();
         if demuxer.drain_into(&mut packets) > 0 {
-            ring_buffer.push_batch(packets.drain(..));
+            for pkt in &packets {
+                if pkt.media_type == crate::media::ring_buffer::MediaType::Video
+                    && let Some(parameter_sets) =
+                        crate::media::codec::annexb_parameter_sets(&pkt.payload)
+                {
+                    ring_buffer.set_video_parameter_sets(parameter_sets);
+                }
+            }
+            ring_buffer.push_drained_batch_capped(&mut packets);
         }
 
         info!("Ingest stream finished for pipeline: {}", pipeline.id);
@@ -2071,8 +2086,8 @@ impl SrtServer {
         self.engine.register_os_thread(play_sender_handle);
 
         let mut reader = TsChunkReader::new(format!("srt_play:{}", pipeline_id), &shared_muxer);
-        let mut pull_packets = Vec::with_capacity(32);
-        let mut ts_batch: Vec<u8> = Vec::with_capacity(65536);
+        let mut pull_packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
+        let mut ts_batch: Vec<u8> = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
 
         loop {
             let wake = reader.wait_for_data_or_cancelled().await;
@@ -2081,7 +2096,7 @@ impl SrtServer {
             }
             loop {
                 pull_packets.clear();
-                match reader.pull_burst(&mut pull_packets, 32) {
+                match reader.pull_burst(&mut pull_packets, MEDIA_PULL_BURST_PACKETS) {
                     Ok(0) | Err(_) => break,
                     Ok(_) => {}
                 }
@@ -2740,6 +2755,7 @@ mod tests {
         // Create two readers
         let mut r1 = TsChunkReader::new("r1".to_string(), &stage1);
         let mut r2 = TsChunkReader::new("r2".to_string(), &stage1);
+        wait_for_shared_muxer_source_reader(&source_ring).await;
 
         // Push a video packet to the source ring
         source_ring.push(crate::media::ring_buffer::MediaPacket {
@@ -2829,6 +2845,7 @@ mod tests {
             .get_or_create_ts_muxer_stage(pipeline_id, "source+atrack:0", source_ring.clone())
             .await;
         let mut reader = TsChunkReader::new("routed-audio-reader".to_string(), &stage);
+        wait_for_shared_muxer_source_reader(&source_ring).await;
 
         source_ring.push(crate::media::ring_buffer::MediaPacket {
             media_type: MediaType::Video,
@@ -2867,6 +2884,24 @@ mod tests {
 
         cancel_ingest.cancel();
         stage.cancel.cancel();
+    }
+
+    async fn wait_for_shared_muxer_source_reader(source_ring: &Arc<RingBuffer>) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if source_ring
+                .reader_snapshots()
+                .iter()
+                .any(|snapshot| snapshot.name.starts_with("ts_shared_muxer:"))
+            {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "shared muxer source reader did not attach in time"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 
     #[tokio::test]
@@ -3040,10 +3075,10 @@ mod tests {
             let handle = tokio::spawn(async move {
                 let mut chunks_received = 0;
                 let mut bytes_received = 0u64;
-                let mut out_burst = Vec::with_capacity(32);
+                let mut out_burst = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
                 while chunks_received < n_packets {
                     out_burst.clear();
-                    match reader.pull_burst(&mut out_burst, 32) {
+                    match reader.pull_burst(&mut out_burst, MEDIA_PULL_BURST_PACKETS) {
                         Ok(0) => {
                             tokio::time::sleep(std::time::Duration::from_micros(100)).await;
                         }
@@ -3541,15 +3576,15 @@ pub fn start_shared_ts_muxer(
         // `chunk_ends` records (byte_offset_end, is_keyframe) for each muxed chunk so
         // we can slice a single `BytesMut` into per-chunk `Bytes` after the inner loop.
         // This converts N malloc+memcpy calls (one per chunk) to 1 malloc per burst.
-        let mut chunk_ends: Vec<(usize, bool)> = Vec::with_capacity(32);
-        let mut pull_packets = Vec::with_capacity(32);
+        let mut chunk_ends: Vec<(usize, bool)> = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
+        let mut pull_packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
 
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => break,
                 _ = reader.wait_for_data() => {
                     pull_packets.clear();
-                    match reader.pull_burst(&mut pull_packets, 32) {
+                    match reader.pull_burst(&mut pull_packets, MEDIA_PULL_BURST_PACKETS) {
                         Ok(0) | Err(_) => {}
                         Ok(_) => {
                             chunk_ends.clear();
@@ -4152,14 +4187,14 @@ pub async fn start_srt_egress(
     // Accumulation buffer: collect all muxed TS bytes for a burst, then
     // write them in a single out_queue.write() call (one lock acquisition
     // per burst instead of one per packet).
-    let mut ts_batch: Vec<u8> = Vec::with_capacity(65536);
-    let mut packets = Vec::with_capacity(32);
+    let mut ts_batch: Vec<u8> = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
+    let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
     loop {
         tokio::select! {
             _ = cancel_token.cancelled() => break,
             wake = reader.wait_for_data_or_cancelled() => {
                 packets.clear();
-                if reader.pull_burst(&mut packets, 32).is_ok() {
+                if reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS).is_ok() {
                     for pkt in &packets {
                         if !pkt.payload.is_empty() {
                             ts_batch.extend_from_slice(&pkt.payload);

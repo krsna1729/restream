@@ -52,6 +52,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
+use super::MEDIA_PRODUCER_BATCH_PACKETS;
+
 pub const DEFAULT_RING_CAPACITY: usize = 1024;
 const MIN_RING_CAPACITY: usize = 64;
 const MAX_RING_CAPACITY: usize = 16_384;
@@ -278,6 +280,9 @@ pub struct RingBuffer {
     /// `"h264"`, `"hevc"`, or empty string (= infer from ingest metadata).
     /// All packets in a ring share one codec — this avoids per-packet tagging.
     pub codec_hint: std::sync::OnceLock<String>,
+    /// Raw Annex B parameter sets captured at ingest so late-joining live
+    /// stages can seed H.264/H.265 decoders before the next keyframe arrives.
+    pub video_parameter_sets: std::sync::OnceLock<Vec<u8>>,
     /// Audio tracks metadata of packets in this ring.
     pub audio_tracks: std::sync::OnceLock<Vec<crate::media::engine::AudioMeta>>,
     /// Estimated packet rate (pkt/s) set once after stream probe.
@@ -319,6 +324,7 @@ impl RingBuffer {
             notify: Arc::new(tokio::sync::Notify::new()),
             readers: std::sync::Mutex::new(Vec::new()),
             codec_hint: std::sync::OnceLock::new(),
+            video_parameter_sets: std::sync::OnceLock::new(),
             audio_tracks: std::sync::OnceLock::new(),
             estimated_pkt_rate: std::sync::atomic::AtomicU32::new(0),
             next: ArcSwapOption::empty(),
@@ -394,6 +400,20 @@ impl RingBuffer {
         self.codec_hint.get().map(|s| s.as_str()).unwrap_or("")
     }
 
+    pub fn set_video_parameter_sets(&self, parameter_sets: Vec<u8>) {
+        let bytes = parameter_sets.len();
+        if bytes == 0 {
+            return;
+        }
+        if self.video_parameter_sets.set(parameter_sets).is_ok() {
+            debug!(bytes, "ring video parameter sets cached");
+        }
+    }
+
+    pub fn video_parameter_sets(&self) -> Option<&[u8]> {
+        self.video_parameter_sets.get().map(|v| v.as_slice())
+    }
+
     pub fn set_audio_tracks(&self, tracks: Vec<crate::media::engine::AudioMeta>) {
         let count = tracks.len();
         if self.audio_tracks.set(tracks).is_ok() {
@@ -458,6 +478,20 @@ impl RingBuffer {
         }
 
         count
+    }
+
+    /// Drain and publish a reusable producer batch in bounded chunks.
+    pub fn push_drained_batch_capped(&self, packets: &mut Vec<MediaPacket>) -> usize {
+        let mut total = 0usize;
+        let mut drained = packets.drain(..);
+        loop {
+            let published = self.push_batch(drained.by_ref().take(MEDIA_PRODUCER_BATCH_PACKETS));
+            if published == 0 {
+                break;
+            }
+            total += published;
+        }
+        total
     }
 
     pub fn read_at(&self, idx: usize) -> Option<Arc<MediaPacket>> {
@@ -639,6 +673,21 @@ impl Drop for Reader {
 }
 
 impl Reader {
+    fn register(name: String, buffer: Arc<RingBuffer>, start_idx: usize) -> Self {
+        let info = Arc::new(ReaderInfo::new(name.clone(), start_idx));
+
+        {
+            let mut r = buffer.readers.lock().unwrap_or_else(|e| e.into_inner());
+            r.push(Arc::downgrade(&info));
+        }
+
+        Self {
+            buffer,
+            info,
+            read_idx: start_idx,
+        }
+    }
+
     /// Current ring this reader is consuming from.  Changes after a successful
     /// migration triggered by `wait_for_data` following `seal_and_forward`.
     pub fn current_ring(&self) -> &Arc<RingBuffer> {
@@ -648,36 +697,41 @@ impl Reader {
     pub fn new(name: String, buffer: Arc<RingBuffer>) -> Self {
         let current_write = buffer.get_write_idx();
         let start_idx = buffer.fast_forward(current_write);
-        let info = Arc::new(ReaderInfo::new(name.clone(), start_idx));
+        let reader = Self::register(name, buffer, start_idx);
+        info!(reader = %reader.info.name, start_idx, "ring reader registered");
+        reader
+    }
 
-        {
-            let mut r = buffer.readers.lock().unwrap_or_else(|e| e.into_inner());
-            r.push(Arc::downgrade(&info));
-        }
-
-        info!(reader = %name, start_idx, "ring reader registered");
-        Self {
-            buffer,
-            info,
-            read_idx: start_idx,
-        }
+    pub fn new_with_keyframe_preroll(
+        name: String,
+        buffer: Arc<RingBuffer>,
+        preroll_packets: usize,
+    ) -> Self {
+        let current_write = buffer.get_write_idx();
+        let keyframe_start = buffer.fast_forward(current_write);
+        let oldest_available = current_write.saturating_sub(buffer.capacity.saturating_sub(1));
+        let start_idx = if keyframe_start < current_write {
+            keyframe_start
+                .saturating_sub(preroll_packets)
+                .max(oldest_available)
+        } else {
+            keyframe_start
+        };
+        let reader = Self::register(name, buffer, start_idx);
+        info!(
+            reader = %reader.info.name,
+            start_idx,
+            preroll_packets,
+            "ring reader registered (keyframe preroll)"
+        );
+        reader
     }
 
     pub fn new_live(name: String, buffer: Arc<RingBuffer>) -> Self {
         let current_write = buffer.get_write_idx();
-        let info = Arc::new(ReaderInfo::new(name.clone(), current_write));
-
-        {
-            let mut r = buffer.readers.lock().unwrap_or_else(|e| e.into_inner());
-            r.push(Arc::downgrade(&info));
-        }
-
-        info!(reader = %name, start_idx = current_write, "ring reader registered (live edge)");
-        Self {
-            buffer,
-            info,
-            read_idx: current_write,
-        }
+        let reader = Self::register(name, buffer, current_write);
+        info!(reader = %reader.info.name, start_idx = current_write, "ring reader registered (live edge)");
+        reader
     }
 
     pub fn pull(&mut self) -> Result<Option<Arc<MediaPacket>>, &'static str> {
@@ -1387,6 +1441,20 @@ mod tests {
         // fast_forward should return 0 (the keyframe slot), not 1 (live edge)
         let ff = rb.fast_forward(write_idx);
         assert_eq!(ff, 0, "fast_forward should return the keyframe at slot 0");
+    }
+
+    #[test]
+    fn keyframe_preroll_reader_starts_before_last_keyframe_when_available() {
+        let rb = Arc::new(RingBuffer::new(64));
+        for i in 0..8 {
+            rb.push(video_packet(i * 10, i * 10, i == 5));
+        }
+
+        let reader = Reader::new_with_keyframe_preroll("preroll".into(), rb, 2);
+        assert_eq!(
+            reader.read_idx, 3,
+            "reader should keep a small preroll window ahead of the last keyframe"
+        );
     }
 
     // ── Vec pre-allocation correctness ───────────────────────────────

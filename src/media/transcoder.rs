@@ -10,6 +10,9 @@ use crate::media::engine::AudioMeta;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
 use crate::media::stage_metrics::StageMetrics;
+use crate::media::{
+    MEDIA_PRODUCER_BATCH_PACKETS, MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES,
+};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -55,6 +58,9 @@ pub async fn start_audio_router(
     if !hint.is_empty() {
         output_buffer.set_codec_hint(hint);
     }
+    if let Some(parameter_sets) = input_buffer.video_parameter_sets() {
+        output_buffer.set_video_parameter_sets(parameter_sets.to_vec());
+    }
 
     let routing_mode = match &routing {
         AudioRouting::Passthrough => "all",
@@ -82,13 +88,14 @@ pub async fn start_audio_router(
     let mut first_push_logged = false;
     // Pre-allocated batches — reused across bursts so the Vec capacity
     // is retained (no re-allocation on the hot path after the first burst).
-    let mut out_batch: Vec<MediaPacket> = Vec::with_capacity(32);
-    let mut packets: Vec<std::sync::Arc<MediaPacket>> = Vec::with_capacity(32);
+    let mut out_batch: Vec<MediaPacket> = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
+    let mut packets: Vec<std::sync::Arc<MediaPacket>> =
+        Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
             _ = reader.wait_for_data() => {
-                if reader.pull_burst(&mut packets, 32).is_err() {
+                if reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS).is_err() {
                     continue;
                 }
                 for pkt in packets.drain(..) {
@@ -146,7 +153,7 @@ pub async fn start_audio_router(
                 }
                 // One write-index store + one Notify for the entire burst.
                 if !out_batch.is_empty() {
-                    output_buffer.push_batch(out_batch.drain(..));
+                    output_buffer.push_drained_batch_capped(&mut out_batch);
                 }
             }
         }
@@ -309,6 +316,7 @@ pub async fn start_transcoder(
         audio_tracks.clone(),
         PacketFeedConfig {
             video_sequence_header: video_sequence_header.as_ref().map(|v| v.to_vec()),
+            raw_video_parameter_sets: input_buffer.video_parameter_sets().map(|v| v.to_vec()),
             ..PacketFeedConfig::default()
         },
     );
@@ -319,8 +327,8 @@ pub async fn start_transcoder(
     // Accumulation buffer: collect all muxed TS bytes for a burst, then
     // write them in a single queue.write() call (one lock acquisition per
     // burst instead of one per packet).
-    let mut ts_batch: Vec<u8> = Vec::with_capacity(65536);
-    let mut packets = Vec::with_capacity(32);
+    let mut ts_batch: Vec<u8> = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
+    let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
     loop {
         tokio::select! {
             _ = cancel_token.cancelled() => break,
@@ -329,7 +337,7 @@ pub async fn start_transcoder(
                 // future continue path skips the end-of-arm clear (M6 fix).
                 ts_batch.clear();
                 packets.clear();
-                if reader.pull_burst(&mut packets, 32).is_ok() {
+                if reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS).is_ok() {
                     for pkt in &packets {
                         if feeder.extend_ts_for_packet(pkt, &mut ts_batch) {
                             stage_metrics.record_in(pkt.payload.len() as u64);
@@ -590,6 +598,52 @@ mod tests {
         assert_eq!(out_pkts[1].track_index, 0); // re-indexed to 0
     }
 
+    #[tokio::test]
+    async fn audio_router_preserves_upstream_video_parameter_sets() {
+        use crate::domain::stage::{StageKey, StageKind};
+        use crate::media::engine::MediaEngine;
+
+        let source_ring = Arc::new(RingBuffer::new(16));
+        let out_ring = Arc::new(RingBuffer::new(16));
+        let engine = Arc::new(MediaEngine::new());
+        let cancel = CancellationToken::new();
+        let stage_key = StageKey::new(
+            "pipe-video-params",
+            StageKind::audio_route("atrack:0", StageKind::source()),
+        );
+
+        source_ring.set_codec_hint("h264");
+        source_ring.set_video_parameter_sets(vec![
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+            0xCE, 0x38, 0x80,
+        ]);
+
+        let handle = tokio::spawn(start_audio_router(
+            "pipe-video-params".to_string(),
+            AudioRouting::SelectTracks(vec![0]),
+            source_ring,
+            out_ring.clone(),
+            engine,
+            cancel.clone(),
+            stage_key,
+        ));
+
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        assert_eq!(out_ring.codec_hint_str(), "h264");
+        assert_eq!(
+            out_ring.video_parameter_sets(),
+            Some(
+                &[
+                    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01,
+                    0x68, 0xCE, 0x38, 0x80,
+                ][..]
+            )
+        );
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
     // M7: pts=0 from AV_NOPTS_VALUE would cause a massive backward jump on a
     // long-running stream. Verify the timestamp conversion formula itself is
     // correct and that skipping None-pts packets is the right behavior.
@@ -620,7 +674,7 @@ mod tests {
     // the burst pattern: partial batch from one burst must not appear in the next.
     #[test]
     fn ts_batch_cleared_before_each_burst() {
-        let mut ts_batch: Vec<u8> = Vec::with_capacity(65536);
+        let mut ts_batch: Vec<u8> = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
 
         // Simulate two burst cycles: first accumulates data, second must start empty.
         let burst1 = b"packet_data_burst1";
@@ -713,7 +767,7 @@ fn run_ffmpeg_transcoder_stage_with_metrics(
         }
     }
 
-    let mut batch: Vec<MediaPacket> = Vec::with_capacity(32);
+    let mut batch: Vec<MediaPacket> = Vec::with_capacity(MEDIA_PRODUCER_BATCH_PACKETS);
     for (stream, packet) in ictx.packets() {
         if token.is_cancelled() {
             break;
@@ -757,12 +811,12 @@ fn run_ffmpeg_transcoder_stage_with_metrics(
             metrics.record_out(output_packet.payload.len() as u64);
         }
         batch.push(output_packet);
-        if batch.len() >= 32 {
-            out_ring.push_batch(batch.drain(..));
+        if batch.len() >= MEDIA_PRODUCER_BATCH_PACKETS {
+            out_ring.push_drained_batch_capped(&mut batch);
         }
     }
     if !batch.is_empty() {
-        out_ring.push_batch(batch.drain(..));
+        out_ring.push_drained_batch_capped(&mut batch);
     }
 
     Ok(())

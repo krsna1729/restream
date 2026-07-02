@@ -7,6 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, put};
 use bytes::Bytes;
 use chrono::Utc;
+use restream::test_fixtures::AvMarkerBframeMode;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
@@ -89,55 +90,109 @@ const HARNESS_MODE_SPECS: &[HarnessModeSpec] = &[
         requires_bench_profile: true,
     },
     HarnessModeSpec {
-        name: "mixed.asset.file.h264.a1",
+        name: "mixed.asset.file.h264.a1.bf0",
         suite_default: false,
         requires_port_namespace: true,
         requires_bench_profile: false,
     },
     HarnessModeSpec {
-        name: "mixed.asset.file.h265.a1",
+        name: "mixed.asset.file.h264.a1.bf2",
         suite_default: false,
         requires_port_namespace: true,
         requires_bench_profile: false,
     },
     HarnessModeSpec {
-        name: "mixed.asset.file.h264.a2",
+        name: "mixed.asset.file.h264.a2.bf0",
         suite_default: false,
         requires_port_namespace: true,
         requires_bench_profile: false,
     },
     HarnessModeSpec {
-        name: "mixed.asset.file.h265.a2",
+        name: "mixed.asset.file.h264.a2.bf2",
         suite_default: false,
         requires_port_namespace: true,
         requires_bench_profile: false,
     },
     HarnessModeSpec {
-        name: "mixed.live.srt.h264.a1",
+        name: "mixed.asset.file.h265.a1.bf0",
+        suite_default: false,
+        requires_port_namespace: true,
+        requires_bench_profile: false,
+    },
+    HarnessModeSpec {
+        name: "mixed.asset.file.h265.a1.bf2",
+        suite_default: false,
+        requires_port_namespace: true,
+        requires_bench_profile: false,
+    },
+    HarnessModeSpec {
+        name: "mixed.asset.file.h265.a2.bf0",
+        suite_default: false,
+        requires_port_namespace: true,
+        requires_bench_profile: false,
+    },
+    HarnessModeSpec {
+        name: "mixed.asset.file.h265.a2.bf2",
+        suite_default: false,
+        requires_port_namespace: true,
+        requires_bench_profile: false,
+    },
+    HarnessModeSpec {
+        name: "mixed.live.rtmp.h264.a1.bf0",
         suite_default: false,
         requires_port_namespace: true,
         requires_bench_profile: true,
     },
     HarnessModeSpec {
-        name: "mixed.live.rtmp.h264.a1",
+        name: "mixed.live.rtmp.h264.a1.bf2",
         suite_default: false,
         requires_port_namespace: true,
         requires_bench_profile: true,
     },
     HarnessModeSpec {
-        name: "mixed.live.srt.h265.a1",
+        name: "mixed.live.srt.h264.a1.bf0",
         suite_default: false,
         requires_port_namespace: true,
         requires_bench_profile: true,
     },
     HarnessModeSpec {
-        name: "mixed.live.srt.h264.a2",
+        name: "mixed.live.srt.h264.a1.bf2",
         suite_default: false,
         requires_port_namespace: true,
         requires_bench_profile: true,
     },
     HarnessModeSpec {
-        name: "mixed.live.srt.h265.a2",
+        name: "mixed.live.srt.h264.a2.bf0",
+        suite_default: false,
+        requires_port_namespace: true,
+        requires_bench_profile: true,
+    },
+    HarnessModeSpec {
+        name: "mixed.live.srt.h264.a2.bf2",
+        suite_default: false,
+        requires_port_namespace: true,
+        requires_bench_profile: true,
+    },
+    HarnessModeSpec {
+        name: "mixed.live.srt.h265.a1.bf0",
+        suite_default: false,
+        requires_port_namespace: true,
+        requires_bench_profile: true,
+    },
+    HarnessModeSpec {
+        name: "mixed.live.srt.h265.a1.bf2",
+        suite_default: false,
+        requires_port_namespace: true,
+        requires_bench_profile: true,
+    },
+    HarnessModeSpec {
+        name: "mixed.live.srt.h265.a2.bf0",
+        suite_default: false,
+        requires_port_namespace: true,
+        requires_bench_profile: true,
+    },
+    HarnessModeSpec {
+        name: "mixed.live.srt.h265.a2.bf2",
         suite_default: false,
         requires_port_namespace: true,
         requires_bench_profile: true,
@@ -234,7 +289,7 @@ const HARNESS_MODE_SPECS: &[HarnessModeSpec] = &[
     },
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum MixedInputProtocol {
     File,
     Rtmp,
@@ -258,7 +313,7 @@ impl MixedInputProtocol {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum MixedVideoCodec {
     H264,
     H265,
@@ -289,7 +344,7 @@ impl MixedVideoCodec {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum MixedInputAudioLayout {
     A1,
     A2,
@@ -322,74 +377,183 @@ impl MixedInputAudioLayout {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MixedInputCase {
-    AssetFileH264A1,
-    AssetFileH265A1,
-    AssetFileH264A2,
-    AssetFileH265A2,
-    LiveSrtH264A1,
-    LiveRtmpH264A1,
-    LiveSrtH265A1,
-    LiveSrtH264A2,
-    LiveSrtH265A2,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum MixedInputReorder {
+    Bf0,
+    Bf2,
+}
+
+impl MixedInputReorder {
+    const fn scenario_token(self) -> &'static str {
+        match self {
+            Self::Bf0 => "bf0",
+            Self::Bf2 => "bf2",
+        }
+    }
+
+    const fn has_b_frames(self) -> bool {
+        matches!(self, Self::Bf2)
+    }
+
+    const fn fixture_mode(self) -> AvMarkerBframeMode {
+        match self {
+            Self::Bf0 => AvMarkerBframeMode::Bf0,
+            Self::Bf2 => AvMarkerBframeMode::Bf2,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct MixedInputCase {
+    protocol: MixedInputProtocol,
+    codec: MixedVideoCodec,
+    audio_layout: MixedInputAudioLayout,
+    reorder: MixedInputReorder,
 }
 
 impl MixedInputCase {
-    const fn scenario_id(self) -> &'static str {
-        match self {
-            Self::AssetFileH264A1 => "mixed.asset.file.h264.a1",
-            Self::AssetFileH265A1 => "mixed.asset.file.h265.a1",
-            Self::AssetFileH264A2 => "mixed.asset.file.h264.a2",
-            Self::AssetFileH265A2 => "mixed.asset.file.h265.a2",
-            Self::LiveSrtH264A1 => "mixed.live.srt.h264.a1",
-            Self::LiveRtmpH264A1 => "mixed.live.rtmp.h264.a1",
-            Self::LiveSrtH265A1 => "mixed.live.srt.h265.a1",
-            Self::LiveSrtH264A2 => "mixed.live.srt.h264.a2",
-            Self::LiveSrtH265A2 => "mixed.live.srt.h265.a2",
+    const fn new(
+        protocol: MixedInputProtocol,
+        codec: MixedVideoCodec,
+        audio_layout: MixedInputAudioLayout,
+        reorder: MixedInputReorder,
+    ) -> Self {
+        Self {
+            protocol,
+            codec,
+            audio_layout,
+            reorder,
+        }
+    }
+
+    fn scenario_id(self) -> &'static str {
+        match (self.protocol, self.codec, self.audio_layout, self.reorder) {
+            (
+                MixedInputProtocol::File,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A1,
+                MixedInputReorder::Bf0,
+            ) => "mixed.asset.file.h264.a1.bf0",
+            (
+                MixedInputProtocol::File,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A1,
+                MixedInputReorder::Bf2,
+            ) => "mixed.asset.file.h264.a1.bf2",
+            (
+                MixedInputProtocol::File,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A2,
+                MixedInputReorder::Bf0,
+            ) => "mixed.asset.file.h264.a2.bf0",
+            (
+                MixedInputProtocol::File,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A2,
+                MixedInputReorder::Bf2,
+            ) => "mixed.asset.file.h264.a2.bf2",
+            (
+                MixedInputProtocol::File,
+                MixedVideoCodec::H265,
+                MixedInputAudioLayout::A1,
+                MixedInputReorder::Bf0,
+            ) => "mixed.asset.file.h265.a1.bf0",
+            (
+                MixedInputProtocol::File,
+                MixedVideoCodec::H265,
+                MixedInputAudioLayout::A1,
+                MixedInputReorder::Bf2,
+            ) => "mixed.asset.file.h265.a1.bf2",
+            (
+                MixedInputProtocol::File,
+                MixedVideoCodec::H265,
+                MixedInputAudioLayout::A2,
+                MixedInputReorder::Bf0,
+            ) => "mixed.asset.file.h265.a2.bf0",
+            (
+                MixedInputProtocol::File,
+                MixedVideoCodec::H265,
+                MixedInputAudioLayout::A2,
+                MixedInputReorder::Bf2,
+            ) => "mixed.asset.file.h265.a2.bf2",
+            (
+                MixedInputProtocol::Rtmp,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A1,
+                MixedInputReorder::Bf0,
+            ) => "mixed.live.rtmp.h264.a1.bf0",
+            (
+                MixedInputProtocol::Rtmp,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A1,
+                MixedInputReorder::Bf2,
+            ) => "mixed.live.rtmp.h264.a1.bf2",
+            (
+                MixedInputProtocol::Srt,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A1,
+                MixedInputReorder::Bf0,
+            ) => "mixed.live.srt.h264.a1.bf0",
+            (
+                MixedInputProtocol::Srt,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A1,
+                MixedInputReorder::Bf2,
+            ) => "mixed.live.srt.h264.a1.bf2",
+            (
+                MixedInputProtocol::Srt,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A2,
+                MixedInputReorder::Bf0,
+            ) => "mixed.live.srt.h264.a2.bf0",
+            (
+                MixedInputProtocol::Srt,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A2,
+                MixedInputReorder::Bf2,
+            ) => "mixed.live.srt.h264.a2.bf2",
+            (
+                MixedInputProtocol::Srt,
+                MixedVideoCodec::H265,
+                MixedInputAudioLayout::A1,
+                MixedInputReorder::Bf0,
+            ) => "mixed.live.srt.h265.a1.bf0",
+            (
+                MixedInputProtocol::Srt,
+                MixedVideoCodec::H265,
+                MixedInputAudioLayout::A1,
+                MixedInputReorder::Bf2,
+            ) => "mixed.live.srt.h265.a1.bf2",
+            (
+                MixedInputProtocol::Srt,
+                MixedVideoCodec::H265,
+                MixedInputAudioLayout::A2,
+                MixedInputReorder::Bf0,
+            ) => "mixed.live.srt.h265.a2.bf0",
+            (
+                MixedInputProtocol::Srt,
+                MixedVideoCodec::H265,
+                MixedInputAudioLayout::A2,
+                MixedInputReorder::Bf2,
+            ) => "mixed.live.srt.h265.a2.bf2",
+            _ => unreachable!("unsupported mixed input case"),
         }
     }
 
     const fn protocol(self) -> MixedInputProtocol {
-        match self {
-            Self::AssetFileH264A1
-            | Self::AssetFileH265A1
-            | Self::AssetFileH264A2
-            | Self::AssetFileH265A2 => MixedInputProtocol::File,
-            Self::LiveRtmpH264A1 => MixedInputProtocol::Rtmp,
-            Self::LiveSrtH264A1
-            | Self::LiveSrtH265A1
-            | Self::LiveSrtH264A2
-            | Self::LiveSrtH265A2 => MixedInputProtocol::Srt,
-        }
+        self.protocol
     }
 
     const fn codec(self) -> MixedVideoCodec {
-        match self {
-            Self::AssetFileH264A1
-            | Self::AssetFileH264A2
-            | Self::LiveSrtH264A1
-            | Self::LiveRtmpH264A1
-            | Self::LiveSrtH264A2 => MixedVideoCodec::H264,
-            Self::AssetFileH265A1
-            | Self::AssetFileH265A2
-            | Self::LiveSrtH265A1
-            | Self::LiveSrtH265A2 => MixedVideoCodec::H265,
-        }
+        self.codec
     }
 
     const fn audio_layout(self) -> MixedInputAudioLayout {
-        match self {
-            Self::AssetFileH264A1
-            | Self::AssetFileH265A1
-            | Self::LiveSrtH264A1
-            | Self::LiveRtmpH264A1
-            | Self::LiveSrtH265A1 => MixedInputAudioLayout::A1,
-            Self::AssetFileH264A2
-            | Self::AssetFileH265A2
-            | Self::LiveSrtH264A2
-            | Self::LiveSrtH265A2 => MixedInputAudioLayout::A2,
-        }
+        self.audio_layout
+    }
+
+    const fn reorder(self) -> MixedInputReorder {
+        self.reorder
     }
 
     const fn source_name(self) -> &'static str {
@@ -406,6 +570,10 @@ impl MixedInputCase {
 
     const fn audio_layout_name(self) -> &'static str {
         self.audio_layout().scenario_token()
+    }
+
+    const fn reorder_name(self) -> &'static str {
+        self.reorder().scenario_token()
     }
 
     const fn track_layout_name(self) -> &'static str {
@@ -428,11 +596,20 @@ impl MixedInputCase {
         self.codec().hls_preview_expected_dimensions()
     }
 
+    const fn source_has_b_frames(self) -> bool {
+        self.reorder().has_b_frames()
+    }
+
+    const fn fixture_bframe_mode(self) -> AvMarkerBframeMode {
+        self.reorder().fixture_mode()
+    }
+
     fn artifact_rel_dir(self) -> PathBuf {
         PathBuf::from(self.source_name())
             .join(self.ingest_name())
             .join(self.codec_name())
             .join(self.audio_layout_name())
+            .join(self.reorder_name())
     }
 }
 
@@ -440,15 +617,114 @@ const MIXED_MATRIX_MODE: &str = "mixed.matrix";
 const MIXED_ARTIFACT_ROOT: &str = "test/artifacts/mixed";
 
 const MIXED_INPUT_CASES: &[MixedInputCase] = &[
-    MixedInputCase::AssetFileH264A1,
-    MixedInputCase::AssetFileH265A1,
-    MixedInputCase::AssetFileH264A2,
-    MixedInputCase::AssetFileH265A2,
-    MixedInputCase::LiveSrtH264A1,
-    MixedInputCase::LiveRtmpH264A1,
-    MixedInputCase::LiveSrtH265A1,
-    MixedInputCase::LiveSrtH264A2,
-    MixedInputCase::LiveSrtH265A2,
+    MixedInputCase::new(
+        MixedInputProtocol::File,
+        MixedVideoCodec::H264,
+        MixedInputAudioLayout::A1,
+        MixedInputReorder::Bf0,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::File,
+        MixedVideoCodec::H264,
+        MixedInputAudioLayout::A1,
+        MixedInputReorder::Bf2,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::File,
+        MixedVideoCodec::H264,
+        MixedInputAudioLayout::A2,
+        MixedInputReorder::Bf0,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::File,
+        MixedVideoCodec::H264,
+        MixedInputAudioLayout::A2,
+        MixedInputReorder::Bf2,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::File,
+        MixedVideoCodec::H265,
+        MixedInputAudioLayout::A1,
+        MixedInputReorder::Bf0,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::File,
+        MixedVideoCodec::H265,
+        MixedInputAudioLayout::A1,
+        MixedInputReorder::Bf2,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::File,
+        MixedVideoCodec::H265,
+        MixedInputAudioLayout::A2,
+        MixedInputReorder::Bf0,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::File,
+        MixedVideoCodec::H265,
+        MixedInputAudioLayout::A2,
+        MixedInputReorder::Bf2,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::Rtmp,
+        MixedVideoCodec::H264,
+        MixedInputAudioLayout::A1,
+        MixedInputReorder::Bf0,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::Rtmp,
+        MixedVideoCodec::H264,
+        MixedInputAudioLayout::A1,
+        MixedInputReorder::Bf2,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::Srt,
+        MixedVideoCodec::H264,
+        MixedInputAudioLayout::A1,
+        MixedInputReorder::Bf0,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::Srt,
+        MixedVideoCodec::H264,
+        MixedInputAudioLayout::A1,
+        MixedInputReorder::Bf2,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::Srt,
+        MixedVideoCodec::H264,
+        MixedInputAudioLayout::A2,
+        MixedInputReorder::Bf0,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::Srt,
+        MixedVideoCodec::H264,
+        MixedInputAudioLayout::A2,
+        MixedInputReorder::Bf2,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::Srt,
+        MixedVideoCodec::H265,
+        MixedInputAudioLayout::A1,
+        MixedInputReorder::Bf0,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::Srt,
+        MixedVideoCodec::H265,
+        MixedInputAudioLayout::A1,
+        MixedInputReorder::Bf2,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::Srt,
+        MixedVideoCodec::H265,
+        MixedInputAudioLayout::A2,
+        MixedInputReorder::Bf0,
+    ),
+    MixedInputCase::new(
+        MixedInputProtocol::Srt,
+        MixedVideoCodec::H265,
+        MixedInputAudioLayout::A2,
+        MixedInputReorder::Bf2,
+    ),
 ];
 
 fn mixed_input_mode_name(case: MixedInputCase) -> String {
@@ -472,6 +748,10 @@ fn mixed_input_ingest_name(case: MixedInputCase) -> &'static str {
 
 fn mixed_input_audio_layout_name(case: MixedInputCase) -> &'static str {
     case.audio_layout_name()
+}
+
+fn mixed_input_reorder_name(case: MixedInputCase) -> &'static str {
+    case.reorder_name()
 }
 
 fn mixed_input_artifact_rel_dir(case: MixedInputCase) -> PathBuf {
@@ -1696,28 +1976,28 @@ async fn run_sink_probe(
     sink_port: u16,
     min_video: u64,
 ) -> Result<SinkProbeResult, String> {
+    let metrics = Arc::new(GeneralizedSinkMetrics::default());
+    let server = start_generalized_sink_server(sink_port, metrics.clone()).await?;
     let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/sink-probe-{label}");
-    let output_id = create_mixed_output(
+    let output_id = match create_mixed_output(
         api,
         pipeline_id,
         &format!("sink-{label}"),
         &sink_url,
         encoding,
     )
-    .await?;
-    start_mixed_output(api, pipeline_id, &output_id).await?;
-
-    let metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-        .await
-        .map_err(|e| format!("sink bind {sink_port}: {e}"))?;
-    let m = metrics.clone();
-    let task = tokio::spawn(async move {
-        while let Ok((socket, _)) = listener.accept().await {
-            let m = m.clone();
-            tokio::spawn(handle_generalized_sink_client(socket, m));
+    .await
+    {
+        Ok(output_id) => output_id,
+        Err(error) => {
+            stop_generalized_sink_server(server);
+            return Err(error);
         }
-    });
+    };
+    if let Err(error) = start_mixed_output(api, pipeline_id, &output_id).await {
+        stop_generalized_sink_server(server);
+        return Err(error);
+    }
 
     let deadline = Instant::now() + Duration::from_secs(20);
     while metrics.video_count.load(Ordering::Relaxed) < min_video {
@@ -1733,7 +2013,7 @@ async fn run_sink_probe(
     let audio = metrics.audio_count.load(Ordering::Relaxed);
     let keyframes = metrics.keyframe_count.load(Ordering::Relaxed);
     let summary = metrics.summary();
-    task.abort();
+    stop_generalized_sink_server(server);
 
     // Stop the output
     let _ = api
@@ -2447,13 +2727,13 @@ const SWEEP_CONFIGS: &[SweepConfig] = &[
         multi_audio: false,
     },
     SweepConfig {
-        name: "mixed.live.srt.h264.a2",
+        name: "mixed.live.srt.h264.a2.bf2",
         ingest_proto: "srt",
         video_codec: "h264",
         multi_audio: true,
     },
     SweepConfig {
-        name: "mixed.live.srt.h265.a2",
+        name: "mixed.live.srt.h265.a2.bf2",
         ingest_proto: "srt",
         video_codec: "h265",
         multi_audio: true,
@@ -5627,6 +5907,163 @@ async fn wait_for_api_probe_ready(
     }
 }
 
+fn probe_video_codec_matches(snapshot: &Value, expected: &[&str]) -> bool {
+    snapshot["video"]["codec"].as_str().is_some_and(|codec| {
+        expected
+            .iter()
+            .any(|candidate| codec.eq_ignore_ascii_case(candidate))
+    })
+}
+
+async fn wait_for_api_probe_video_codec(
+    api: &RampApi,
+    pipeline_id: &str,
+    expected: &[&str],
+    timeout: Duration,
+) -> Result<Value, String> {
+    let deadline = Instant::now() + timeout;
+    let mut last_snapshot = Value::Null;
+
+    loop {
+        if let Ok(snapshot) =
+            wait_for_api_probe_ready(api, pipeline_id, Duration::from_secs(1)).await
+        {
+            last_snapshot = snapshot.clone();
+            if probe_video_codec_matches(&snapshot, expected) {
+                return Ok(snapshot);
+            }
+        } else if let Ok(snapshot) = api
+            .get_json(&format!("/api/v1/pipelines/{pipeline_id}/probe"))
+            .await
+        {
+            last_snapshot = snapshot;
+        }
+
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "{pipeline_id}: probe video codec did not match {:?} within {}s; last snapshot={}",
+                expected,
+                timeout.as_secs(),
+                last_snapshot
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn install_bframe_transcode_profiles(api: &RampApi) -> Result<(), String> {
+    let settings = api.get_json("/api/v1/settings").await?;
+    let mut profiles: restream::domain::transcode_profile::TranscodeProfiles =
+        serde_json::from_value(settings["transcodeProfiles"].clone())
+            .map_err(|error| format!("parse transcode profiles: {error}"))?;
+
+    for (name, bframes) in [("h264_bf0", 0usize), ("h264_bf2", 2usize)] {
+        profiles.insert(
+            name.to_string(),
+            restream::domain::transcode_profile::TranscodeProfile {
+                preset: "veryfast".to_string(),
+                tune: String::new(),
+                crf: 23,
+                gop: 60,
+                bframes,
+                bitrate: 0,
+                max_bitrate: 0,
+                width: 0,
+                height: 0,
+            },
+        );
+    }
+
+    api.patch_json("/api/v1/settings", json!({ "transcodeProfiles": profiles }))
+        .await?;
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ExpectedBframeSignal {
+    None,
+    Present,
+}
+
+async fn run_transcode_bframe_probe_case(
+    api: &RampApi,
+    pipeline_id: &str,
+    work_dir: &Path,
+    mediamtx_rtmp_port: u16,
+    label: &str,
+    encoding: &str,
+    expected_signal: ExpectedBframeSignal,
+) -> Result<Value, String> {
+    let stream_name = format!("e2e-bframe-{label}");
+    let publish_url = format!("rtmp://127.0.0.1:{mediamtx_rtmp_port}/live/{stream_name}");
+    let output_id = create_mixed_output(api, pipeline_id, label, &publish_url, encoding).await?;
+    if let Err(error) = start_mixed_output(api, pipeline_id, &output_id).await {
+        stop_mixed_outputs(api, pipeline_id, std::slice::from_ref(&output_id)).await;
+        return Err(format!("{label}: start output failed: {error}"));
+    }
+
+    let probe = wait_for_probe_shape(
+        label,
+        &publish_url,
+        None,
+        "h264",
+        1,
+        Duration::from_secs(30),
+    )
+    .await;
+    let packet_path = work_dir.join(format!("{label}-packets.json"));
+    let packet_probe = ffprobe_video_packets(&publish_url, &packet_path).await;
+    stop_mixed_outputs(api, pipeline_id, std::slice::from_ref(&output_id)).await;
+
+    let probe = probe?;
+    let packet_probe = packet_probe?;
+    let packet_count = count_video_packets(&packet_probe);
+    let bframe_count = count_bframe_packets(&packet_probe);
+    let dts_monotone = video_dts_monotone(&packet_probe);
+    let bframe_signal_ok = match expected_signal {
+        ExpectedBframeSignal::None => bframe_count == 0,
+        ExpectedBframeSignal::Present => bframe_count > 0,
+    };
+    let passed = packet_count >= 30 && dts_monotone && bframe_signal_ok;
+
+    let mut result = json!({
+        "passed": passed,
+        "encoding": encoding,
+        "readUrl": publish_url,
+        "packetArtifact": packet_path,
+        "packetCount": packet_count,
+        "bframeCount": bframe_count,
+        "dtsMonotone": dts_monotone,
+        "expectedBframes": match expected_signal {
+            ExpectedBframeSignal::None => 0,
+            ExpectedBframeSignal::Present => 2,
+        },
+        "probe": probe,
+    });
+    if packet_count < 30 {
+        result["error"] = json!(format!(
+            "{label}: expected at least 30 video packets, got {packet_count}"
+        ));
+    } else if !bframe_signal_ok {
+        result["error"] = match expected_signal {
+            ExpectedBframeSignal::None => {
+                json!(format!("{label}: expected no packets with PTS > DTS"))
+            }
+            ExpectedBframeSignal::Present => {
+                json!(format!("{label}: expected packets with PTS > DTS"))
+            }
+        };
+    } else if !dts_monotone {
+        result["error"] = json!(format!("{label}: DTS values are not monotone"));
+    }
+
+    if passed {
+        Ok(result)
+    } else {
+        Err(format!("{label}: transcode B-frame probe failed: {result}"))
+    }
+}
+
 fn media_snapshot_view(snapshot: &Value) -> &Value {
     if snapshot["input"].is_object() {
         &snapshot["input"]
@@ -6383,6 +6820,8 @@ async fn mixed_input_matrix_correctness() -> Result<Value, String> {
                 "ingest": mixed_input_ingest_name(*case),
                 "video": case.codec_name(),
                 "audio": mixed_input_audio_layout_name(*case),
+                "reorder": mixed_input_reorder_name(*case),
+                "sourceHasBframes": case.source_has_b_frames(),
             })
         }).collect::<Vec<_>>(),
         "results": results,
@@ -6411,33 +6850,19 @@ async fn run_mixed_input_case_with_env(
             run_mixed_file_config(&env, &api, restream_pid, case, &mut resume).await
         }
         (MixedInputProtocol::Srt, MixedVideoCodec::H264, false) => {
-            run_mixed_anchor_config(&env, &api, restream_pid, &mut resume).await
+            run_mixed_anchor_config(&env, &api, restream_pid, case, &mut resume).await
         }
         (MixedInputProtocol::Srt, MixedVideoCodec::H265, false) => {
-            run_mixed_h265_srt_config(&env, &api, restream_pid, &mut resume).await
+            run_mixed_h265_srt_config(&env, &api, restream_pid, case, &mut resume).await
         }
         (MixedInputProtocol::Rtmp, MixedVideoCodec::H264, false) => {
-            run_mixed_h264_rtmp_config(&env, &api, restream_pid, &mut resume).await
+            run_mixed_h264_rtmp_config(&env, &api, restream_pid, case, &mut resume).await
         }
         (MixedInputProtocol::Srt, MixedVideoCodec::H264, true) => {
-            run_mixed_srt_multi_config(
-                &env,
-                &api,
-                restream_pid,
-                MixedInputCase::LiveSrtH264A2,
-                &mut resume,
-            )
-            .await
+            run_mixed_srt_multi_config(&env, &api, restream_pid, case, &mut resume).await
         }
         (MixedInputProtocol::Srt, MixedVideoCodec::H265, true) => {
-            run_mixed_srt_multi_config(
-                &env,
-                &api,
-                restream_pid,
-                MixedInputCase::LiveSrtH265A2,
-                &mut resume,
-            )
-            .await
+            run_mixed_srt_multi_config(&env, &api, restream_pid, case, &mut resume).await
         }
         _ => Err(format!(
             "unsupported mixed input case {}",
@@ -6459,6 +6884,8 @@ async fn run_mixed_input_case_with_env(
                 "ingest": mixed_input_ingest_name(case),
                 "video": case.codec_name(),
                 "audio": mixed_input_audio_layout_name(case),
+                "reorder": mixed_input_reorder_name(case),
+                "sourceHasBframes": case.source_has_b_frames(),
             },
             "configs": [config],
             "artifacts": {
@@ -6545,9 +6972,9 @@ async fn run_mixed_anchor_config(
     env: &MixedEnv,
     api: &RampApi,
     restream_pid: u32,
+    case: MixedInputCase,
     resume: &mut MixedResume,
 ) -> Result<Value, String> {
-    let case = MixedInputCase::LiveSrtH264A1;
     let cfg = case.scenario_id();
     let n = env.n_per_group;
     let output_cases = SINGLE_TRACK_MIXED_OUTPUT_CASES;
@@ -6565,7 +6992,7 @@ async fn run_mixed_anchor_config(
         .ok_or("pipeline create response missing pipeline.id")?
         .to_string();
 
-    let mut publisher = spawn_mixed_anchor_publisher(env, &stream_key).await?;
+    let mut publisher = spawn_mixed_anchor_publisher(env, case, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
     let hls_preview = if env.check_selected("hls") {
         Some(
@@ -6953,6 +7380,7 @@ async fn run_mixed_anchor_config(
     // Phase 4: harness sink probe — assert DTS monotonicity, video+audio
     // presence, and keyframe cadence on the live egress.
     let mut sink_probe_result = None;
+    let mut sink_probe_failure = None;
     if env.check_selected("sink-probe")
         && resume.allows(&mixed_scenario_check_id(cfg, "sink_probe"))
     {
@@ -6970,6 +7398,10 @@ async fn run_mixed_anchor_config(
                     Some(probe.summary.clone()),
                 )?;
                 output_ids.push(probe.output_id.clone());
+                if !probe.passed {
+                    sink_probe_failure =
+                        Some(format!("{cfg}: sink probe failed: {}", probe.summary));
+                }
                 sink_probe_result = Some(probe);
             }
             Err(e) => {
@@ -6979,8 +7411,9 @@ async fn run_mixed_anchor_config(
                     &mixed_scenario_check_id(cfg, "sink_probe"),
                     "fail",
                     started.elapsed(),
-                    Some(json!({"error": e})),
+                    Some(json!({"error": e.clone()})),
                 )?;
+                sink_probe_failure = Some(format!("{cfg}: sink probe error: {e}"));
             }
         }
     }
@@ -7089,6 +7522,10 @@ async fn run_mixed_anchor_config(
         log_mixed_ok(env, "lifecycle: all outputs stopped")?;
     }
 
+    if let Some(error) = sink_probe_failure {
+        return Err(error);
+    }
+
     let mut result = json!({
         "scenario": cfg,
         "pipelineId": pipeline_id,
@@ -7123,9 +7560,9 @@ async fn run_mixed_h265_srt_config(
     env: &MixedEnv,
     api: &RampApi,
     restream_pid: u32,
+    case: MixedInputCase,
     resume: &mut MixedResume,
 ) -> Result<Value, String> {
-    let case = MixedInputCase::LiveSrtH265A1;
     let cfg = case.scenario_id();
     let n = env.n_per_group;
     let output_cases = mixed_output_cases_for_input(case);
@@ -7143,7 +7580,7 @@ async fn run_mixed_h265_srt_config(
         .ok_or("pipeline create response missing pipeline.id")?
         .to_string();
 
-    let mut publisher = spawn_mixed_h265_srt_publisher(env, &stream_key).await?;
+    let mut publisher = spawn_mixed_h265_srt_publisher(env, case, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
     let recording = verify_mixed_recording(env, api, cfg, &pipeline_id, case, resume).await?;
     if env.check_selected("hls") {
@@ -7213,6 +7650,7 @@ async fn run_mixed_h265_srt_config(
     verify_mixed_output_cases(env, cfg, output_cases, resume).await?;
 
     let mut sink_probe_result = None;
+    let mut sink_probe_failure = None;
     if env.check_selected("sink-probe")
         && resume.allows(&mixed_scenario_check_id(cfg, "sink_probe"))
     {
@@ -7230,6 +7668,10 @@ async fn run_mixed_h265_srt_config(
                     Some(probe.summary.clone()),
                 )?;
                 output_ids.push(probe.output_id.clone());
+                if !probe.passed {
+                    sink_probe_failure =
+                        Some(format!("{cfg}: sink probe failed: {}", probe.summary));
+                }
                 sink_probe_result = Some(probe);
             }
             Err(e) => {
@@ -7239,8 +7681,9 @@ async fn run_mixed_h265_srt_config(
                     &mixed_scenario_check_id(cfg, "sink_probe"),
                     "fail",
                     started.elapsed(),
-                    Some(json!({"error": e})),
+                    Some(json!({"error": e.clone()})),
                 )?;
+                sink_probe_failure = Some(format!("{cfg}: sink probe error: {e}"));
             }
         }
     }
@@ -7248,6 +7691,10 @@ async fn run_mixed_h265_srt_config(
     stop_child(&mut publisher).await;
     stop_mixed_outputs(api, &pipeline_id, &output_ids).await;
     tokio::time::sleep(Duration::from_secs(8)).await;
+
+    if let Some(error) = sink_probe_failure {
+        return Err(error);
+    }
 
     let mut result = json!({
         "scenario": cfg,
@@ -7272,9 +7719,9 @@ async fn run_mixed_h264_rtmp_config(
     env: &MixedEnv,
     api: &RampApi,
     restream_pid: u32,
+    case: MixedInputCase,
     resume: &mut MixedResume,
 ) -> Result<Value, String> {
-    let case = MixedInputCase::LiveRtmpH264A1;
     let cfg = case.scenario_id();
     let n = env.n_per_group;
     let output_cases = mixed_output_cases_for_input(case);
@@ -7292,7 +7739,7 @@ async fn run_mixed_h264_rtmp_config(
         .ok_or("pipeline create response missing pipeline.id")?
         .to_string();
 
-    let mut publisher = spawn_mixed_h264_rtmp_publisher(env, &stream_key).await?;
+    let mut publisher = spawn_mixed_h264_rtmp_publisher(env, case, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
     let recording = verify_mixed_recording(env, api, cfg, &pipeline_id, case, resume).await?;
     if env.check_selected("hls") {
@@ -7362,6 +7809,7 @@ async fn run_mixed_h264_rtmp_config(
     verify_mixed_output_cases(env, cfg, output_cases, resume).await?;
 
     let mut sink_probe_result = None;
+    let mut sink_probe_failure = None;
     if env.check_selected("sink-probe")
         && resume.allows(&mixed_scenario_check_id(cfg, "sink_probe"))
     {
@@ -7379,6 +7827,10 @@ async fn run_mixed_h264_rtmp_config(
                     Some(probe.summary.clone()),
                 )?;
                 output_ids.push(probe.output_id.clone());
+                if !probe.passed {
+                    sink_probe_failure =
+                        Some(format!("{cfg}: sink probe failed: {}", probe.summary));
+                }
                 sink_probe_result = Some(probe);
             }
             Err(e) => {
@@ -7388,8 +7840,9 @@ async fn run_mixed_h264_rtmp_config(
                     &mixed_scenario_check_id(cfg, "sink_probe"),
                     "fail",
                     started.elapsed(),
-                    Some(json!({"error": e})),
+                    Some(json!({"error": e.clone()})),
                 )?;
+                sink_probe_failure = Some(format!("{cfg}: sink probe error: {e}"));
             }
         }
     }
@@ -7397,6 +7850,10 @@ async fn run_mixed_h264_rtmp_config(
     stop_child(&mut publisher).await;
     stop_mixed_outputs(api, &pipeline_id, &output_ids).await;
     tokio::time::sleep(Duration::from_secs(8)).await;
+
+    if let Some(error) = sink_probe_failure {
+        return Err(error);
+    }
 
     let mut result = json!({
         "scenario": cfg,
@@ -7426,7 +7883,6 @@ async fn run_mixed_srt_multi_config(
 ) -> Result<Value, String> {
     let n = env.n_per_group;
     let cfg = case.scenario_id();
-    let h265 = matches!(case.codec(), MixedVideoCodec::H265);
     let output_cases = mixed_output_cases_for_input(case);
     let total = n * output_cases.len();
     let stream_key = format!("sk-{cfg}");
@@ -7442,7 +7898,7 @@ async fn run_mixed_srt_multi_config(
         .ok_or("pipeline create response missing pipeline.id")?
         .to_string();
 
-    let mut publisher = spawn_mixed_srt_multi_publisher(env, &stream_key, cfg, h265).await?;
+    let mut publisher = spawn_mixed_srt_multi_publisher(env, case, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
 
     // Give the probe time to fire and adaptive ring resize to complete (≤ 5 s).
@@ -7593,6 +8049,7 @@ async fn run_mixed_srt_multi_config(
     verify_mixed_output_cases_inner(env, cfg, output_cases, resume, true, true).await?;
 
     let mut sink_probe_result = None;
+    let mut sink_probe_failure = None;
     let probe_id = mixed_scenario_check_id(cfg, "sink_probe");
     if env.check_selected("sink-probe") && resume.allows(&probe_id) {
         let started = Instant::now();
@@ -7609,6 +8066,10 @@ async fn run_mixed_srt_multi_config(
                     Some(probe.summary.clone()),
                 )?;
                 output_ids.push(probe.output_id.clone());
+                if !probe.passed {
+                    sink_probe_failure =
+                        Some(format!("{cfg}: sink probe failed: {}", probe.summary));
+                }
                 sink_probe_result = Some(probe);
             }
             Err(e) => {
@@ -7618,8 +8079,9 @@ async fn run_mixed_srt_multi_config(
                     &probe_id,
                     "fail",
                     started.elapsed(),
-                    Some(json!({"error": e})),
+                    Some(json!({"error": e.clone()})),
                 )?;
+                sink_probe_failure = Some(format!("{cfg}: sink probe error: {e}"));
             }
         }
     }
@@ -7627,6 +8089,10 @@ async fn run_mixed_srt_multi_config(
     stop_child(&mut publisher).await;
     stop_mixed_outputs(api, &pipeline_id, &output_ids).await;
     tokio::time::sleep(Duration::from_secs(8)).await;
+
+    if let Some(error) = sink_probe_failure {
+        return Err(error);
+    }
 
     let mut result = json!({
         "scenario": cfg,
@@ -7648,9 +8114,15 @@ async fn run_mixed_srt_multi_config(
     Ok(result)
 }
 
-async fn spawn_mixed_anchor_publisher(env: &MixedEnv, stream_key: &str) -> Result<Child, String> {
-    let log_path = env.work_dir.join("mixed.live.srt.h264.a1.publisher.log");
-    let fixture = restream::test_fixtures::av_marker_transport_fixture("h264", false)?;
+async fn spawn_mixed_anchor_publisher(
+    env: &MixedEnv,
+    case: MixedInputCase,
+    stream_key: &str,
+) -> Result<Child, String> {
+    let log_path = env
+        .work_dir
+        .join(format!("{}.publisher.log", case.scenario_id()));
+    let fixture = mixed_input_fixture(case)?;
     spawn_publisher_with_selection(
         &fixture,
         &format!(
@@ -7663,9 +8135,15 @@ async fn spawn_mixed_anchor_publisher(env: &MixedEnv, stream_key: &str) -> Resul
     )
 }
 
-async fn spawn_mixed_h265_srt_publisher(env: &MixedEnv, stream_key: &str) -> Result<Child, String> {
-    let log_path = env.work_dir.join("mixed.live.srt.h265.a1.publisher.log");
-    let fixture = restream::test_fixtures::av_marker_transport_fixture("h265", false)?;
+async fn spawn_mixed_h265_srt_publisher(
+    env: &MixedEnv,
+    case: MixedInputCase,
+    stream_key: &str,
+) -> Result<Child, String> {
+    let log_path = env
+        .work_dir
+        .join(format!("{}.publisher.log", case.scenario_id()));
+    let fixture = mixed_input_fixture(case)?;
     spawn_publisher_with_selection(
         &fixture,
         &format!(
@@ -7680,10 +8158,13 @@ async fn spawn_mixed_h265_srt_publisher(env: &MixedEnv, stream_key: &str) -> Res
 
 async fn spawn_mixed_h264_rtmp_publisher(
     env: &MixedEnv,
+    case: MixedInputCase,
     stream_key: &str,
 ) -> Result<Child, String> {
-    let log_path = env.work_dir.join("mixed.live.rtmp.h264.a1.publisher.log");
-    let fixture = restream::test_fixtures::av_marker_transport_fixture("h264", false)?;
+    let log_path = env
+        .work_dir
+        .join(format!("{}.publisher.log", case.scenario_id()));
+    let fixture = mixed_input_fixture(case)?;
     spawn_publisher_with_selection(
         &fixture,
         &format!("rtmp://127.0.0.1:{}/live/{stream_key}", env.restream_rtmp),
@@ -7695,15 +8176,13 @@ async fn spawn_mixed_h264_rtmp_publisher(
 
 async fn spawn_mixed_srt_multi_publisher(
     env: &MixedEnv,
+    case: MixedInputCase,
     stream_key: &str,
-    cfg: &str,
-    h265: bool,
 ) -> Result<Child, String> {
-    let log_path = env.work_dir.join(format!("{cfg}-publisher.log"));
-    let fixture = restream::test_fixtures::av_marker_transport_fixture(
-        if h265 { "h265" } else { "h264" },
-        true,
-    )?;
+    let log_path = env
+        .work_dir
+        .join(format!("{}.publisher.log", case.scenario_id()));
+    let fixture = mixed_input_fixture(case)?;
     spawn_publisher_with_selection(
         &fixture,
         &format!(
@@ -9174,23 +9653,37 @@ async fn verify_mixed_decode_scan(
 
     let started = Instant::now();
     let (passed, status, matched_pattern, stderr) = ffmpeg_decode_scan(label, url).await?;
+    let tolerated_warning =
+        rtmp_decode_scan_tolerates_muxer_dts_warning(url, status, matched_pattern);
     emit_mixed_result(
         env,
         cfg,
         id,
-        if passed { "pass" } else { "fail" },
+        if passed || tolerated_warning {
+            "pass"
+        } else {
+            "fail"
+        },
         started.elapsed(),
         Some(json!({
             "label": label,
             "url": url,
             "status": status,
             "matchedPattern": matched_pattern,
+            "toleratedWarning": tolerated_warning,
             "stderr": stderr.lines().take(20).collect::<Vec<_>>(),
         })),
     )?;
 
-    if passed {
-        log_mixed_ok(env, &format!("{label}: decode scan clean"))?;
+    if passed || tolerated_warning {
+        if tolerated_warning {
+            log_mixed_ok(
+                env,
+                &format!("{label}: decode scan tolerated RTMP muxer DTS warning"),
+            )?;
+        } else {
+            log_mixed_ok(env, &format!("{label}: decode scan clean"))?;
+        }
         Ok(())
     } else {
         Err(format!(
@@ -9198,6 +9691,16 @@ async fn verify_mixed_decode_scan(
             stderr.lines().take(5).collect::<Vec<_>>().join(" | ")
         ))
     }
+}
+
+fn rtmp_decode_scan_tolerates_muxer_dts_warning(
+    url: &str,
+    status: Option<i32>,
+    matched_pattern: Option<&'static str>,
+) -> bool {
+    url.starts_with("rtmp://")
+        && status == Some(0)
+        && matches!(matched_pattern, Some("non monoton" | "non-monoton"))
 }
 
 async fn ffmpeg_decode_scan(
@@ -11021,9 +11524,13 @@ async fn bframe_rtmp_correctness() -> Result<Value, String> {
     let restream_bin = default_restream_bin();
     let db_path = work_dir.join("data.sqlite");
     let log_path = work_dir.join("restream.log");
+    let mediamtx_config = work_dir.join("mediamtx.yml");
+    let mediamtx_log = work_dir.join("mediamtx.log");
+    let all_ports = harness_port_defaults();
     let sink_port = harness_port_defaults().sink;
     let ports = TestPorts::from_env();
 
+    let mut mediamtx = start_local_mediamtx(&mediamtx_config, &mediamtx_log, all_ports).await?;
     let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
     let mut api = RampApi::new(ports.http);
     api.login().await?;
@@ -11106,15 +11613,10 @@ async fn bframe_rtmp_correctness() -> Result<Value, String> {
     let video_count = sink_metrics.video_count.load(Ordering::Relaxed);
     let sink_summary = sink_metrics.summary();
 
-    stop_child(&mut publisher).await;
-    sink_task.abort();
-    stop_child(&mut child).await;
-
-    let passed =
+    let source_passed =
         packet_count >= 30 && bframe_count > 0 && ffprobe_dts_monotone && sink_dts_monotone;
-
-    let mut results = json!({
-        "passed": passed,
+    let mut source_results = json!({
+        "passed": source_passed,
         "packetCount": packet_count,
         "bframeCount": bframe_count,
         "ffprobeDtsMonotone": ffprobe_dts_monotone,
@@ -11123,14 +11625,51 @@ async fn bframe_rtmp_correctness() -> Result<Value, String> {
         "sink": sink_summary,
     });
     if packet_count < 30 {
-        results["error"] = json!(format!(
+        source_results["error"] = json!(format!(
             "expected at least 30 video packets, got {packet_count}"
         ));
     } else if bframe_count == 0 {
-        results["error"] = json!("RTMP egress did not expose any packets with PTS > DTS");
+        source_results["error"] = json!("RTMP egress did not expose any packets with PTS > DTS");
     } else if !ffprobe_dts_monotone || !sink_dts_monotone {
-        results["error"] = json!("RTMP egress DTS values are not monotone");
+        source_results["error"] = json!("RTMP egress DTS values are not monotone");
     }
+
+    install_bframe_transcode_profiles(&api).await?;
+    let transcode_bframes_0 = run_transcode_bframe_probe_case(
+        &api,
+        &pipeline_id,
+        &work_dir,
+        all_ports.mtx_rtmp,
+        "h264-bf0",
+        "h264_bf0",
+        ExpectedBframeSignal::None,
+    )
+    .await?;
+    let transcode_bframes_2 = run_transcode_bframe_probe_case(
+        &api,
+        &pipeline_id,
+        &work_dir,
+        all_ports.mtx_rtmp,
+        "h264-bf2",
+        "h264_bf2",
+        ExpectedBframeSignal::Present,
+    )
+    .await?;
+
+    stop_child(&mut publisher).await;
+    sink_task.abort();
+    stop_child(&mut child).await;
+    stop_child(&mut mediamtx).await;
+
+    let passed = source_passed
+        && transcode_bframes_0["passed"].as_bool().unwrap_or(false)
+        && transcode_bframes_2["passed"].as_bool().unwrap_or(false);
+    let results = json!({
+        "passed": passed,
+        "sourcePassthrough": source_results,
+        "transcodeBframes0": transcode_bframes_0,
+        "transcodeBframes2": transcode_bframes_2,
+    });
 
     let path = work_dir.join("results.json");
     std::fs::write(&path, serde_json::to_vec_pretty(&results).unwrap())
@@ -11551,13 +12090,23 @@ async fn hevc_rtmp_egress_correctness() -> Result<Value, String> {
     wait_for_api_input_live(&api, &pipeline_id, Duration::from_secs(15)).await?;
     println!("[hevc-rtmp] Source ingest established (H.265 via SRT)");
 
-    // Verify source is HEVC via /probe
-    let probe = api
-        .get_json(&format!("/api/v1/pipelines/{pipeline_id}/probe"))
-        .await
-        .unwrap_or(json!({}));
-    let source_codec = probe["video"]["codec"].as_str().unwrap_or("unknown");
-    if source_codec != "hevc" {
+    let probe = match wait_for_api_probe_video_codec(
+        &api,
+        &pipeline_id,
+        &["hevc", "h265"],
+        Duration::from_secs(15),
+    )
+    .await
+    {
+        Ok(probe) => probe,
+        Err(error) => {
+            stop_child(&mut publisher).await;
+            stop_child(&mut child).await;
+            return Err(error);
+        }
+    };
+    if !probe_video_codec_matches(&probe, &["hevc", "h265"]) {
+        let source_codec = probe["video"]["codec"].as_str().unwrap_or("unknown");
         stop_child(&mut publisher).await;
         stop_child(&mut child).await;
         return Err(format!("source codec is {source_codec}, expected hevc"));
@@ -12002,21 +12551,16 @@ fn checked_h264_multi_audio_fixture() -> Result<PathBuf, String> {
     restream::test_fixtures::bench_transport_fixture("h264", "1.5M", true)
 }
 
-fn mixed_file_fixture(case: MixedInputCase) -> Result<PathBuf, String> {
-    match (case.codec(), case.is_multi_track()) {
-        (MixedVideoCodec::H264, false) => {
-            restream::test_fixtures::av_marker_transport_fixture("h264", false)
-        }
-        (MixedVideoCodec::H265, false) => {
-            restream::test_fixtures::av_marker_transport_fixture("h265", false)
-        }
-        (MixedVideoCodec::H264, true) => {
-            restream::test_fixtures::av_marker_transport_fixture("h264", true)
-        }
-        (MixedVideoCodec::H265, true) => {
-            restream::test_fixtures::av_marker_transport_fixture("h265", true)
-        }
-    }
+fn mixed_input_fixture(case: MixedInputCase) -> Result<PathBuf, String> {
+    let codec = match case.codec() {
+        MixedVideoCodec::H264 => "h264",
+        MixedVideoCodec::H265 => "h265",
+    };
+    restream::test_fixtures::av_marker_transport_fixture_for_bframes(
+        codec,
+        case.is_multi_track(),
+        case.fixture_bframe_mode(),
+    )
 }
 
 fn spawn_publisher_with_selection(
@@ -12708,7 +13252,7 @@ async fn run_mixed_file_config(
     let total = n * output_cases.len();
     let stream_key = format!("sk-{cfg}");
 
-    let fixture = mixed_file_fixture(case)?;
+    let fixture = mixed_input_fixture(case)?;
 
     let fixture_name = fixture.file_name().unwrap().to_string_lossy().to_string();
     let media_dest = env.media_dir.join(&fixture_name);
@@ -17068,6 +17612,23 @@ mod tests {
     }
 
     #[test]
+    fn probe_video_codec_matches_accepts_hevc_aliases() {
+        assert!(probe_video_codec_matches(
+            &json!({"video": {"codec": "hevc"}}),
+            &["hevc", "h265"]
+        ));
+        assert!(probe_video_codec_matches(
+            &json!({"video": {"codec": "H265"}}),
+            &["hevc", "h265"]
+        ));
+        assert!(!probe_video_codec_matches(
+            &json!({"video": {"codec": "h264"}}),
+            &["hevc", "h265"]
+        ));
+        assert!(!probe_video_codec_matches(&json!({}), &["hevc", "h265"]));
+    }
+
+    #[test]
     fn synthesized_harness_ports_are_high_and_distinct() {
         let mut reserved = HashSet::new();
         let http = env_or_allocated_port("RESTREAM_HTTP", 3030, &mut reserved);
@@ -17211,6 +17772,35 @@ stream|index=1|codec_type=audio\n";
 
         let error = ffprobe_compact_validate_dts(log).expect_err("large DTS gap must fail");
         assert!(error.contains("DTS gap"));
+    }
+
+    #[test]
+    fn rtmp_decode_scan_tolerates_only_rtmp_muxer_dts_warning() {
+        assert!(rtmp_decode_scan_tolerates_muxer_dts_warning(
+            "rtmp://127.0.0.1/live/test",
+            Some(0),
+            Some("non monoton"),
+        ));
+        assert!(rtmp_decode_scan_tolerates_muxer_dts_warning(
+            "rtmp://127.0.0.1/live/test",
+            Some(0),
+            Some("non-monoton"),
+        ));
+        assert!(!rtmp_decode_scan_tolerates_muxer_dts_warning(
+            "srt://127.0.0.1:9999?streamid=read:live/test",
+            Some(0),
+            Some("non monoton"),
+        ));
+        assert!(!rtmp_decode_scan_tolerates_muxer_dts_warning(
+            "rtmp://127.0.0.1/live/test",
+            Some(1),
+            Some("non monoton"),
+        ));
+        assert!(!rtmp_decode_scan_tolerates_muxer_dts_warning(
+            "rtmp://127.0.0.1/live/test",
+            Some(0),
+            Some("invalid data"),
+        ));
     }
 
     #[test]
@@ -17422,15 +18012,24 @@ stream|index=1|codec_type=audio\n";
         assert_eq!(
             names,
             vec![
-                "mixed.asset.file.h264.a1",
-                "mixed.asset.file.h265.a1",
-                "mixed.asset.file.h264.a2",
-                "mixed.asset.file.h265.a2",
-                "mixed.live.srt.h264.a1",
-                "mixed.live.rtmp.h264.a1",
-                "mixed.live.srt.h265.a1",
-                "mixed.live.srt.h264.a2",
-                "mixed.live.srt.h265.a2",
+                "mixed.asset.file.h264.a1.bf0",
+                "mixed.asset.file.h264.a1.bf2",
+                "mixed.asset.file.h264.a2.bf0",
+                "mixed.asset.file.h264.a2.bf2",
+                "mixed.asset.file.h265.a1.bf0",
+                "mixed.asset.file.h265.a1.bf2",
+                "mixed.asset.file.h265.a2.bf0",
+                "mixed.asset.file.h265.a2.bf2",
+                "mixed.live.rtmp.h264.a1.bf0",
+                "mixed.live.rtmp.h264.a1.bf2",
+                "mixed.live.srt.h264.a1.bf0",
+                "mixed.live.srt.h264.a1.bf2",
+                "mixed.live.srt.h264.a2.bf0",
+                "mixed.live.srt.h264.a2.bf2",
+                "mixed.live.srt.h265.a1.bf0",
+                "mixed.live.srt.h265.a1.bf2",
+                "mixed.live.srt.h265.a2.bf0",
+                "mixed.live.srt.h265.a2.bf2",
             ]
         );
         for case in MIXED_INPUT_CASES {
@@ -17449,10 +18048,53 @@ stream|index=1|codec_type=audio\n";
             .iter()
             .filter(|case| case.protocol() == MixedInputProtocol::Rtmp)
             .collect();
-        assert_eq!(rtmp_cases.len(), 1);
-        assert_eq!(rtmp_cases[0].scenario_id(), "mixed.live.rtmp.h264.a1");
-        assert!(matches!(rtmp_cases[0].codec(), MixedVideoCodec::H264));
-        assert!(!rtmp_cases[0].is_multi_track());
+        assert_eq!(rtmp_cases.len(), 2);
+        assert_eq!(rtmp_cases[0].scenario_id(), "mixed.live.rtmp.h264.a1.bf0");
+        assert_eq!(rtmp_cases[1].scenario_id(), "mixed.live.rtmp.h264.a1.bf2");
+        assert!(
+            rtmp_cases
+                .iter()
+                .all(|case| matches!(case.codec(), MixedVideoCodec::H264))
+        );
+        assert!(rtmp_cases.iter().all(|case| !case.is_multi_track()));
+        assert!(
+            rtmp_cases
+                .iter()
+                .any(|case| matches!(case.reorder(), MixedInputReorder::Bf0))
+        );
+        assert!(
+            rtmp_cases
+                .iter()
+                .any(|case| matches!(case.reorder(), MixedInputReorder::Bf2))
+        );
+    }
+
+    #[test]
+    fn mixed_input_matrix_covers_bf0_and_bf2_for_every_supported_shape() {
+        let mut grouped = HashMap::new();
+        for case in MIXED_INPUT_CASES {
+            grouped
+                .entry((case.protocol(), case.codec(), case.audio_layout()))
+                .or_insert_with(Vec::new)
+                .push(case.reorder());
+        }
+
+        for ((protocol, codec, audio_layout), reorders) in grouped {
+            assert!(
+                reorders.contains(&MixedInputReorder::Bf0),
+                "missing bf0 row for {:?}/{:?}/{:?}",
+                protocol,
+                codec,
+                audio_layout
+            );
+            assert!(
+                reorders.contains(&MixedInputReorder::Bf2),
+                "missing bf2 row for {:?}/{:?}/{:?}",
+                protocol,
+                codec,
+                audio_layout
+            );
+        }
     }
 
     #[test]
@@ -17556,6 +18198,33 @@ stream|index=1|codec_type=audio\n";
                 !spec.suite_default,
                 "{mode} is covered by mixed.matrix and should not duplicate default suite work"
             );
+        }
+    }
+
+    #[test]
+    fn mixed_input_fixture_selection_tracks_reorder_signal() {
+        for case in MIXED_INPUT_CASES {
+            let fixture = mixed_input_fixture(*case).unwrap_or_else(|error| {
+                panic!(
+                    "{} should resolve a checked-in fixture: {error}",
+                    case.scenario_id()
+                )
+            });
+            let file_name = fixture.file_name().unwrap().to_string_lossy();
+            match case.reorder() {
+                MixedInputReorder::Bf0 => assert!(
+                    file_name.contains("-bf0"),
+                    "{} should use a bf0 fixture, got {}",
+                    case.scenario_id(),
+                    file_name
+                ),
+                MixedInputReorder::Bf2 => assert!(
+                    !file_name.contains("-bf0"),
+                    "{} should use the reordered bf2 fixture family, got {}",
+                    case.scenario_id(),
+                    file_name
+                ),
+            }
         }
     }
 

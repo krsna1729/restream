@@ -38,6 +38,7 @@ pub struct PacketFeedConfig {
     pub track_policy: TrackPolicy,
     pub write_mode: FeedWriteMode,
     pub video_sequence_header: Option<Vec<u8>>,
+    pub raw_video_parameter_sets: Option<Vec<u8>>,
     pub service_metadata: Option<TsServiceMetadata>,
 }
 
@@ -47,6 +48,7 @@ impl Default for PacketFeedConfig {
             track_policy: TrackPolicy::All,
             write_mode: FeedWriteMode::Batch,
             video_sequence_header: None,
+            raw_video_parameter_sets: None,
             service_metadata: None,
         }
     }
@@ -56,6 +58,9 @@ pub struct TsPacketFeeder {
     muxer: TsMuxer,
     dts_enforcer: DtsEnforcer,
     audio_tracks: Arc<Vec<AudioMeta>>,
+    audio_track_indices: Vec<u32>,
+    audio_sample_rates: Vec<u32>,
+    audio_channels: Vec<u32>,
     has_video: bool,
     nalu_len_size: usize,
     sps_pps_cache: Vec<u8>,
@@ -69,20 +74,31 @@ impl TsPacketFeeder {
         audio_tracks: Arc<Vec<AudioMeta>>,
         config: PacketFeedConfig,
     ) -> Self {
-        let (nalu_len_size, sps_pps_cache) = config
+        let (nalu_len_size, mut sps_pps_cache) = config
             .video_sequence_header
             .as_deref()
             .map(parse_video_sequence_header)
             .unwrap_or((4, Vec::new()));
+        if sps_pps_cache.is_empty()
+            && let Some(parameter_sets) = config.raw_video_parameter_sets
+        {
+            sps_pps_cache = parameter_sets;
+        }
         let num_streams = video.is_some() as usize + audio_tracks.len();
         let service_metadata = config
             .service_metadata
             .unwrap_or_else(TsServiceMetadata::disabled);
+        let audio_track_indices = audio_tracks.iter().map(|track| track.track_index).collect();
+        let audio_sample_rates = audio_tracks.iter().map(|track| track.sample_rate).collect();
+        let audio_channels = audio_tracks.iter().map(|track| track.channels).collect();
 
         Self {
             muxer: TsMuxer::new_with_metadata(video, &audio_tracks, service_metadata),
             dts_enforcer: DtsEnforcer::new(num_streams),
             audio_tracks,
+            audio_track_indices,
+            audio_sample_rates,
+            audio_channels,
             has_video: video.is_some(),
             nalu_len_size,
             sps_pps_cache,
@@ -93,6 +109,18 @@ impl TsPacketFeeder {
 
     pub fn audio_tracks(&self) -> &Arc<Vec<AudioMeta>> {
         &self.audio_tracks
+    }
+
+    pub fn needs_raw_video_parameter_sets(&self) -> bool {
+        self.has_video && self.sps_pps_cache.is_empty()
+    }
+
+    pub fn set_raw_video_parameter_sets_if_empty(&mut self, parameter_sets: &[u8]) -> bool {
+        if !self.needs_raw_video_parameter_sets() || parameter_sets.is_empty() {
+            return false;
+        }
+        self.sps_pps_cache.extend_from_slice(parameter_sets);
+        true
     }
 
     pub fn extend_ts_for_packet(&mut self, packet: &MediaPacket, output: &mut Vec<u8>) -> bool {
@@ -108,19 +136,18 @@ impl TsPacketFeeder {
                 None => return false,
             },
             MediaType::Audio => {
-                let Some((track_index, track)) = self
-                    .audio_tracks
+                let Some(track_index) = self
+                    .audio_track_indices
                     .iter()
-                    .enumerate()
-                    .find(|(_, track)| track.track_index == packet.track_index)
+                    .position(|&track_index| track_index == packet.track_index)
                 else {
                     return false;
                 };
                 match audio_for_ts_into(
                     &packet.payload,
                     packet.format,
-                    track.sample_rate,
-                    track.channels,
+                    self.audio_sample_rates[track_index],
+                    self.audio_channels[track_index],
                     &mut self.audio_conv_buf,
                 ) {
                     Some(payload) => (payload, track_index + self.has_video as usize),
@@ -379,5 +406,62 @@ mod tests {
             !stderr_lower.contains("non monoton"),
             "remuxed fixture must not contain duplicate DTS: {stderr}"
         );
+    }
+
+    #[test]
+    fn feeder_seeds_raw_h265_parameter_sets_for_late_joining_keyframes() {
+        let video = VideoMeta {
+            codec: "hevc".to_string(),
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            bw: None,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+            level: None,
+            pixel_format: None,
+        };
+        let parameter_sets = vec![
+            0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0xBB,
+            0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
+        ];
+        let mut feeder = TsPacketFeeder::new(
+            Some(&video),
+            Arc::new(Vec::new()),
+            PacketFeedConfig {
+                raw_video_parameter_sets: Some(parameter_sets.clone()),
+                ..PacketFeedConfig::default()
+            },
+        );
+        let packet = MediaPacket {
+            media_type: MediaType::Video,
+            format: crate::media::ring_buffer::PayloadFormat::Raw,
+            is_keyframe: true,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0xDD]),
+        };
+
+        let mut output = Vec::new();
+        assert!(feeder.extend_ts_for_packet(&packet, &mut output));
+
+        let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+        let mut remuxed_packets = Vec::new();
+        for chunk in output.chunks(188) {
+            demuxer.feed(chunk);
+            demuxer.drain_into(&mut remuxed_packets);
+        }
+        demuxer.flush();
+        demuxer.drain_into(&mut remuxed_packets);
+
+        let remuxed = remuxed_packets
+            .iter()
+            .find(|packet| packet.media_type == MediaType::Video)
+            .expect("remuxed output should contain video");
+        assert!(remuxed.payload.starts_with(&parameter_sets));
+        assert!(remuxed.payload.ends_with(&packet.payload));
     }
 }
