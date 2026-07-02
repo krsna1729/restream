@@ -12,7 +12,7 @@ This report summarizes the model, property, unit, and live-harness proof surface
 | TS chunk ring wait/cancel/live readers | Loom + unit tests | `ts_chunk_ring_loom`, `live_reader_starts_after_existing_chunks` |
 | AVIO/MemoryQueue close/wake/backpressure | Loom + unit/proptest tests | `avio_loom`, `media::avio::tests`, `write_batch_round_trips_random_chunks` |
 | Stage registry replacement and TS muxer sweep | Loom + lifecycle unit tests | `transcoder_stage_loom`, `ts_muxer_stage_loom`, stale attempt tests |
-| External transcoder pipe/output/SRT path | Unit + proptest + focused live harness | external transcoder marker tests, DTS routing proptest, `mixed-file-h264-single` smoke |
+| External transcoder pipe/output/SRT path | Unit + proptest + focused live harness | external transcoder marker tests, DTS routing proptest, `mixed.asset.file.h264.a1` smoke |
 | Internal transcoder/libavcodec timestamp and metadata continuity | Unit + proptest + loom | chunked remux timestamp-order test, source-stage DTS chunking proptest, codec metadata replacement loom |
 | SRT protocol boundaries | Unit/stress tests | stream-id normalization tests, sender semaphore tests, `epoll_waiter_coordination` |
 | Child process lifecycle and cleanup | Static script guard + unit test + live contract cleanup checks | `kill_and_wait_child_terminates_spawned_process`, process lifecycle guard, post-harness orphan checks |
@@ -89,7 +89,9 @@ This report summarizes the model, property, unit, and live-harness proof surface
 - `scripts/check-concurrency-contract.sh`
   - Defaults a host-global build lock when unset.
   - Adds static lifecycle guards for child process handling.
-  - Checks for orphaned runtime processes after harness-mode cleanup.
+  - Captures a runtime-process baseline and checks that harness-mode cleanup
+    leaves no new `restream`, `mediamtx`, `ffmpeg`, `ffprobe`, or
+    `test_harness` survivors behind.
 
 ## Gate Inventory
 
@@ -125,7 +127,8 @@ This report summarizes the model, property, unit, and live-harness proof surface
   - `fault-egress-retry`
   - `fault-output-stall`
   - `recovery`
-- post-mode orphan process checks for `restream`, `mediamtx`, `ffmpeg`, `ffprobe`, and `test_harness`
+- post-mode orphan process checks for any new `restream`, `mediamtx`, `ffmpeg`,
+  `ffprobe`, or `test_harness` processes started by the gate
 
 ## Validation Performed During The Sweep
 
@@ -148,12 +151,12 @@ scripts/resource-limit cargo test srt_stream_ids_normalize_equivalent --lib -- -
 scripts/resource-limit cargo test srt_sender_semaphore --lib -- --nocapture
 scripts/resource-limit cargo test --bin test_harness tests::kill_and_wait_child_terminates_spawned_process -- --exact --nocapture
 N_PER_GROUP=1 scripts/resource-limit cargo run --bin test_harness -- fault-output-stall --no-netns
-env N_PER_GROUP=1 ONLY_CHECKS=ffprobe SKIP_LOAD=1 scripts/resource-limit cargo run --bin test_harness -- mixed-file-h264-single
+env N_PER_GROUP=1 ONLY_CHECKS=ffprobe SKIP_LOAD=1 scripts/resource-limit cargo run --bin test_harness -- mixed.asset.file.h264.a1
 ```
 
 The full live `scripts/check-concurrency-contract.sh` gate remains the sign-off gate for broad lifecycle changes, but it should be run serially on a stable host because it starts several live harness modes.
 
-After wiring the expanded proof labels into `scripts/concurrency-proof-common.sh`, both `bash ./scripts/check-concurrency-proof-fast.sh` and `bash ./scripts/check-concurrency-contract.sh` passed. The full contract run produced logs for all mandatory proof steps and live modes under `test/artifacts/concurrency-contract-logs/`, and the post-run process cleanup check found no `restream`, `mediamtx`, `ffmpeg`, `ffprobe`, or `test_harness` survivors.
+After wiring the expanded proof labels into `scripts/concurrency-proof-common.sh`, both `bash ./scripts/check-concurrency-proof-fast.sh` and `bash ./scripts/check-concurrency-contract.sh` passed. The full contract run produced logs for all mandatory proof steps and live modes under `test/artifacts/concurrency-contract-logs/`, and the post-run process cleanup check found no new `restream`, `mediamtx`, `ffmpeg`, `ffprobe`, or `test_harness` survivors beyond the gate's startup baseline.
 
 ## Remaining Gaps
 

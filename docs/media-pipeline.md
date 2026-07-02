@@ -242,13 +242,8 @@ borrowed payload slice is returned directly (zero copy).
 
 ## Scale Test Pipeline Paths
 
-`scripts/resource-limit target/bench/test_harness mixed-input-matrix` exercises
-the closed-GOP input matrix. Individual rows use
-`mixed-<codec>-<protocol>-<single|multi>` for live inputs and
-`mixed-file-<codec>-<single|multi>` for file ingest. RTMP input is intentionally
-limited to `mixed-h264-rtmp-single`, because standard RTMP ingest carries H.264
-with one audio track in the current product contract. SRT and file ingest cover
-both H.264/H.265 and single/multi-track fixtures.
+`scripts/resource-limit target/bench/test_harness mixed.matrix` exercises
+the closed-GOP input matrix. Individual rows use the scenario grammar `mixed.<source>.<ingest>.<video>.<audio>`. The current table uses `source` values `live` and `asset`, ingest values `srt`, `rtmp`, and `file`, video values `h264` and `h265`, and audio values `a1` and `a2`. RTMP input is intentionally limited to `mixed.live.rtmp.h264.a1`, because standard RTMP ingest carries H.264 with one audio track in the current product contract. SRT and file ingest cover both H.264/H.265 and single/multi-track fixtures.
 
 Each single-track row fans out to RTMP and SRT `source`, `720p`, and `1080p`
 outputs. Each multi-track row uses the expanded selected-track table: RTMP
@@ -259,7 +254,7 @@ rather than multiplying across every egress. The traces below show the exact
 mux/demux, conversion, and transcoding
 at every hop for each path.
 
-### h264-rtmp-single — H.264 RTMP ingest
+### mixed.live.rtmp.h264.a1 — H.264 RTMP ingest
 
 ```
 RTMP ingest (TCP)
@@ -284,7 +279,7 @@ source outputs
 
 ---
 
-### h264-srt-single — H.264 SRT ingest
+### mixed.live.srt.h264.a1 — H.264 SRT ingest
 
 ```
 SRT ingest (UDP)
@@ -306,14 +301,14 @@ source outputs
 
 **Stages spawned:** 1 ext FFmpeg subprocess (`video:720p`).
 
-Key difference from h264-rtmp-single: `source_ring` holds `Raw` packets.
+Key difference from `mixed.live.rtmp.h264.a1`: `source_ring` holds `Raw` packets.
 RTMP-src must reconstruct AVCC/FLV headers (`build_avcc_seq_hdr + video_for_rtmp`)
 rather than byte-cloning. SRT-src is a plain `TsMuxer` pass-through for both
 ingest types.
 
 ---
 
-### h265-srt-single — H.265 SRT ingest
+### mixed.live.srt.h265.a1 — H.265 SRT ingest
 
 Standard RTMP cannot carry H.265. The reconciler inserts a `hevc_to_h264`
 stage **after** any video-preset transcoding, keyed by the upstream stage so
@@ -356,7 +351,7 @@ RTMP-720p  (needs_rtmp_h264_conv = true)
 
 ---
 
-### h264-srt-multi — H.264 SRT ingest, 2 audio tracks
+### mixed.live.srt.h264.a2 — H.264 SRT ingest, 2 audio tracks
 
 Publisher sends video + 2 AAC audio tracks. Compound encodings select audio tracks
 per egress type:
@@ -369,7 +364,7 @@ SRT ingest
   → source_ring [Raw, H.264 + AAC track0 + AAC track1]
 
 source outputs
-  RTMP-src / SRT-src: identical to h264-srt-single source paths above.
+  RTMP-src / SRT-src: identical to `mixed.live.srt.h264.a1` source paths above.
 
 RTMP-720p  encoding = "720p+atrack:0"
   source_ring → video:720p ext FFmpeg (shared) → output_ring [H.264 + track0 + track1]
@@ -390,7 +385,7 @@ Audio-routing stages are pure packet filters — no OS threads, no FFmpeg.
 
 ---
 
-### h265-srt-multi — H.265 SRT ingest, 2 audio tracks
+### mixed.live.srt.h265.a2 — H.265 SRT ingest, 2 audio tracks
 
 Combines H.265→H.264 conversion (post-preset, RTMP only) with multi-audio
 track routing.
@@ -400,7 +395,7 @@ SRT ingest
   → TsDemuxer (H.265 video + 2 AAC audio track PIDs)
   → source_ring [Raw, H.265 + AAC track0 + AAC track1]
 
-RTMP-src / SRT-src: identical to h265-srt-single source paths above.
+RTMP-src / SRT-src: identical to `mixed.live.srt.h265.a1` source paths above.
 
 720p preset  (shared ext FFmpeg subprocess)
   source_ring

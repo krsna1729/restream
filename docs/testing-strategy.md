@@ -103,7 +103,8 @@ real wire output — more precise than shelling out to ffprobe, and with no extr
 ### The harness-as-sink is already prototyped
 
 [`src/bin/test_harness.rs`](../src/bin/test_harness.rs) already binds a real RTMP sink on
-`SINK_PORT` (`start_rtmp_server_on` / `handle_sink_client` / `SinkMetrics`): full
+`SINK_PORT` (synthesized per process unless overridden) (`start_rtmp_server_on` /
+`handle_sink_client` / `SinkMetrics`): full
 server-side handshake, a real `ServerSession`, real media received over the socket. Today
 it only counts bytes/messages (`network_load`). The work is to **generalize it from
 counting to test-case-aware assertion** and reuse it as the standard egress sink for live
@@ -196,7 +197,7 @@ Phases 0–5 are complete.
    `network`, `in-process`. No whitebox tier exists; the engine is only tested via unit
    tests and through the binary.
 3. **`api-smoke`** — done, in the default suite.
-4. **Expand `mixed-*` assertions** — done. `mixed-h264-srt-single` now includes:
+4. **Expand `mixed-*` assertions** — done. `mixed.live.srt.h264.a1` now includes:
    - `sink-probe` (DTS monotonicity, video/audio/keyframe counts via harness RTMP sink)
    - `hls-put-probe` (HLS PUT upload: playlist, content types, segment decode via harness
      HTTP PUT sink)
@@ -205,6 +206,6 @@ Phases 0–5 are complete.
    - `fault-resilience`: publisher disconnect detection (RTMP kill → input off, SRT kill →
      input off, file-ingest stop → input off) and egress sink disappearance (RTMP sink
      gone → output error/reconnect, SRT sink gone → output error/reconnect).
-   - `mixed-file-h264-single` and `mixed-file-h264-multi`: file-ingest as input source with RTMP+SRT egress mixed-input load.
+   - `mixed.asset.file.h264.a1` and `mixed.asset.file.h264.a2`: file-ingest as input source with RTMP+SRT egress mixed-input load.
    - `wait_for_api_input_off()` helper verifies `/api/v1/engine/health` transitions to `"off"` within
      a timeout after publisher disconnects.

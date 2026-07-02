@@ -12,6 +12,44 @@ if [[ -z "${RESTREAM_BUILD_LOCK_FILE:-}" ]]; then
   export RESTREAM_BUILD_LOCK_FILE="/tmp/restream-build.lock"
 fi
 
+declare -A BASELINE_RUNTIME_PIDS=()
+
+capture_runtime_baseline() {
+  while read -r pid comm; do
+    [[ -n "$pid" ]] || continue
+    BASELINE_RUNTIME_PIDS["$pid"]="$comm"
+  done < <(ps -eo pid=,comm= | awk '$2 ~ /^(restream|mediamtx|ffmpeg|ffprobe|test_harness)$/ { print $1, $2 }')
+}
+
+runtime_process_rows() {
+  ps -eo pid=,comm=,args= | awk '
+    $2 ~ /^(restream|mediamtx|ffmpeg|ffprobe|test_harness)$/ {
+      sub(/^ +/, "", $0)
+      print $0
+    }
+  '
+}
+
+new_runtime_pids() {
+  while read -r pid comm _; do
+    [[ -n "$pid" ]] || continue
+    [[ -n "${BASELINE_RUNTIME_PIDS[$pid]:-}" ]] && continue
+    printf '%s\n' "$pid"
+  done < <(runtime_process_rows)
+}
+
+new_runtime_rows() {
+  while read -r pid comm rest; do
+    [[ -n "$pid" ]] || continue
+    [[ -n "${BASELINE_RUNTIME_PIDS[$pid]:-}" ]] && continue
+    if [[ -n "${rest:-}" ]]; then
+      printf '%s %s %s\n' "$pid" "$comm" "$rest"
+    else
+      printf '%s %s\n' "$pid" "$comm"
+    fi
+  done < <(runtime_process_rows)
+}
+
 check_process_lifecycle_guards() {
   local harness="src/bin/test_harness.rs"
 
@@ -37,11 +75,26 @@ check_process_lifecycle_guards() {
 }
 
 cleanup_runtime() {
-  pkill -x restream >/dev/null 2>&1 || true
-  pkill -x mediamtx >/dev/null 2>&1 || true
-  pkill -x ffmpeg >/dev/null 2>&1 || true
-  pkill -x ffprobe >/dev/null 2>&1 || true
-  pkill -x test_harness >/dev/null 2>&1 || true
+  local -a pids=()
+
+  mapfile -t pids < <(new_runtime_pids)
+  ((${#pids[@]} == 0)) && return 0
+
+  kill -TERM -- "${pids[@]}" >/dev/null 2>&1 || true
+
+  for _ in {1..10}; do
+    mapfile -t pids < <(new_runtime_pids)
+    ((${#pids[@]} == 0)) && return 0
+    sleep 0.5
+  done
+
+  kill -KILL -- "${pids[@]}" >/dev/null 2>&1 || true
+
+  for _ in {1..10}; do
+    mapfile -t pids < <(new_runtime_pids)
+    ((${#pids[@]} == 0)) && return 0
+    sleep 0.5
+  done
 }
 
 assert_no_runtime_processes() {
@@ -49,7 +102,7 @@ assert_no_runtime_processes() {
   local survivors
 
   for _ in {1..10}; do
-    survivors=$(pgrep -a 'restream|mediamtx|ffmpeg|ffprobe|test_harness' || true)
+    survivors=$(new_runtime_rows || true)
     [[ -z "$survivors" ]] && return 0
     sleep 0.5
   done
@@ -90,6 +143,7 @@ run_harness_mode() {
   assert_no_runtime_processes "$mode"
 }
 
+capture_runtime_baseline
 trap cleanup_runtime EXIT
 
 run_logged history-grouping bash scripts/check-history-grouping.sh

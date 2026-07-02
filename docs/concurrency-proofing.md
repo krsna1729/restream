@@ -101,6 +101,9 @@ dead sinks.
 draining RTMP sinks. `recovery` is the focused reconnect/grace/retry contract
 so we can target that behavior directly without depending on the broader
 teardown bucket.
+The full gate records a runtime-process baseline first, then asserts that the
+run leaves no new `restream`, `mediamtx`, `ffmpeg`, `ffprobe`, or
+`test_harness` survivors behind.
 
 The current proof inventory is summarized in
 [Concurrency Proof Coverage Report - 2026-07-02](concurrency-proof-coverage-2026-07-02.md).
