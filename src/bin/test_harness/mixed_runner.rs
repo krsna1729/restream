@@ -963,102 +963,7 @@ pub(super) async fn run_mixed_anchor_config(
     let rss = record_mixed_rss_delta(env, cfg, restream_pid, rss_baseline, total, None).await?;
 
     if env.check_selected("ffprobe") {
-        verify_mixed_stream(
-            env,
-            MixedProbeSpec {
-                cfg,
-                id: mixed_output_check_id(cfg, "rtmp.src.a0", "ffprobe"),
-                label: &format!("rtmp.src.a0 out{n}"),
-                url: &format!(
-                    "rtmp://127.0.0.1:{}/live/{cfg}-rtmp.src.a0-{n}",
-                    env.mtx_rtmp
-                ),
-                expected: "1920x1080",
-                cookie: None,
-            },
-            resume,
-        )
-        .await?;
-        verify_mixed_stream(
-            env,
-            MixedProbeSpec {
-                cfg,
-                id: mixed_output_check_id(cfg, "rtmp.720p.a0", "ffprobe"),
-                label: &format!("rtmp.720p.a0 out{n}"),
-                url: &format!(
-                    "rtmp://127.0.0.1:{}/live/{cfg}-rtmp.720p.a0-{n}",
-                    env.mtx_rtmp
-                ),
-                expected: "1280x720",
-                cookie: None,
-            },
-            resume,
-        )
-        .await?;
-        verify_mixed_stream(
-            env,
-            MixedProbeSpec {
-                cfg,
-                id: mixed_output_check_id(cfg, "rtmp.1080p.a0", "ffprobe"),
-                label: &format!("rtmp.1080p.a0 out{n}"),
-                url: &format!(
-                    "rtmp://127.0.0.1:{}/live/{cfg}-rtmp.1080p.a0-{n}",
-                    env.mtx_rtmp
-                ),
-                expected: "1920x1080",
-                cookie: None,
-            },
-            resume,
-        )
-        .await?;
-        verify_mixed_stream(
-            env,
-            MixedProbeSpec {
-                cfg,
-                id: mixed_output_check_id(cfg, "srt.src.a0", "ffprobe"),
-                label: &format!("srt.src.a0 out{n}"),
-                url: &format!(
-                    "srt://127.0.0.1:{}?streamid=read:live/{cfg}-srt.src.a0-{n}&timeout=30000000",
-                    env.mtx_srt
-                ),
-                expected: "1920x1080",
-                cookie: None,
-            },
-            resume,
-        )
-        .await?;
-        verify_mixed_stream(
-            env,
-            MixedProbeSpec {
-                cfg,
-                id: mixed_output_check_id(cfg, "srt.1080p.a0", "ffprobe"),
-                label: &format!("srt.1080p.a0 out{n}"),
-                url: &format!(
-                    "srt://127.0.0.1:{}?streamid=read:live/{cfg}-srt.1080p.a0-{n}&timeout=30000000",
-                    env.mtx_srt
-                ),
-                expected: "1920x1080",
-                cookie: None,
-            },
-            resume,
-        )
-        .await?;
-        verify_mixed_stream(
-            env,
-            MixedProbeSpec {
-                cfg,
-                id: mixed_output_check_id(cfg, "srt.720p.a0", "ffprobe"),
-                label: &format!("srt.720p.a0 out{n}"),
-                url: &format!(
-                    "srt://127.0.0.1:{}?streamid=read:live/{cfg}-srt.720p.a0-{n}&timeout=30000000",
-                    env.mtx_srt
-                ),
-                expected: "1280x720",
-                cookie: None,
-            },
-            resume,
-        )
-        .await?;
+        verify_mixed_output_dimensions(env, cfg, output_cases, resume).await?;
     } else if env.check_selected("lifecycle") {
         warm_mixed_stream(
             &format!("rtmp.720p.a0 out{n} lifecycle warmup"),
@@ -1972,6 +1877,35 @@ pub(super) async fn verify_mixed_output_cases(
     resume: &mut MixedResume,
 ) -> Result<(), String> {
     verify_mixed_output_cases_inner(env, cfg, cases, resume, false, false).await
+}
+
+pub(super) async fn verify_mixed_output_dimensions(
+    env: &MixedEnv,
+    cfg: &str,
+    cases: &[MixedOutputCase],
+    resume: &mut MixedResume,
+) -> Result<(), String> {
+    if !env.check_selected("ffprobe") {
+        return Ok(());
+    }
+    let index = env.n_per_group;
+    for case in cases {
+        let url = mixed_output_read_url(env, cfg, case, index);
+        verify_mixed_stream(
+            env,
+            MixedProbeSpec {
+                cfg,
+                id: mixed_output_check_id(cfg, case.id(), "ffprobe"),
+                label: &format!("{} out{index}", case.id()),
+                url: &url,
+                expected: case.expected_dimensions(),
+                cookie: None,
+            },
+            resume,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 pub(super) async fn verify_mixed_output_cases_inner(
