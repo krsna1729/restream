@@ -5093,16 +5093,7 @@ async fn run_ramp_config(
         config.name, config.ingest_proto, config.out_proto, config.encoding, env.n_outputs
     );
     let stream_key = format!("sk-{}", config.name);
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": config.name, "streamKey": stream_key}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create response missing pipeline.id")?
-        .to_string();
+    let pipeline_id = create_resource_pipeline(api, config.name, &stream_key).await?;
 
     let mut publisher = spawn_ramp_publisher(config, env, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
@@ -5119,21 +5110,10 @@ async fn run_ramp_config(
             ),
             other => return Err(format!("unsupported ramp output protocol {other}")),
         };
-        let output = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pipeline_id}/outputs"),
-                output_create_payload(&format!("out{n}"), &url, config.encoding),
-            )
-            .await?;
-        let output_id = output["output"]["id"]
-            .as_str()
-            .ok_or("output create response missing output.id")?
-            .to_string();
-        api.post_json(
-            &format!("/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/start"),
-            Value::Null,
-        )
-        .await?;
+        let output_id =
+            create_mixed_output(api, &pipeline_id, &format!("out{n}"), &url, config.encoding)
+                .await?;
+        start_mixed_output(api, &pipeline_id, &output_id).await?;
         output_ids.push(output_id);
         if n == 1 || n % env.snap_every == 0 {
             snapshot_ramp(env, restream_pid, config.name, n, &format!("out{n}")).await?;
@@ -7162,16 +7142,8 @@ async fn correctness_one_protocol(protocol: &str) -> Result<Value, String> {
     api.login().await?;
 
     let stream_key = format!("e2e-{protocol}");
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": format!("{protocol} test"), "streamKey": stream_key}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create missing id")?
-        .to_string();
+    let pipeline_id =
+        create_pipeline_with_stream_key(&api, &format!("{protocol} test"), &stream_key).await?;
     println!("[correctness-{protocol}] created pipeline {pipeline_id}");
 
     let fixture = if protocol == "rtmp" {
@@ -7258,16 +7230,7 @@ async fn egress_correctness() -> Result<Value, String> {
     let mut api = RampApi::new(ports.http);
     api.login().await?;
 
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "Egress source", "streamKey": "e2e-src"}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create missing id")?
-        .to_string();
+    let pipeline_id = create_pipeline_with_stream_key(&api, "Egress source", "e2e-src").await?;
 
     let fixture = checked_h264_fixture()?;
 
@@ -7320,16 +7283,8 @@ async fn egress_correctness() -> Result<Value, String> {
         "srt://127.0.0.1:{}?streamid=publish:live/e2e-srt-sink&pkt_size=1316",
         ports.srt
     );
-    let srt_pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "SRT egress sink", "streamKey": "e2e-srt-sink"}),
-        )
-        .await?;
-    let srt_pipeline_id = srt_pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("SRT pipeline create missing id")?
-        .to_string();
+    let srt_pipeline_id =
+        create_pipeline_with_stream_key(&api, "SRT egress sink", "e2e-srt-sink").await?;
     let srt_output_id =
         create_mixed_output(&api, &pipeline_id, "srt-egress", &srt_egress_url, "source").await?;
     start_mixed_output(&api, &pipeline_id, &srt_output_id).await?;
@@ -9248,17 +9203,9 @@ async fn fault_rtmp_stalled_sink_isolation_under_many_outputs(
     .await?;
     wait_for_api_input_live(api, &pid, timeout).await?;
 
-    api.post_json(
-        &format!("/api/v1/pipelines/{pid}/outputs/{stalled_oid}/start"),
-        json!({}),
-    )
-    .await?;
+    start_mixed_output(api, &pid, &stalled_oid).await?;
     for output_id in &healthy_output_ids {
-        api.post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs/{output_id}/start"),
-            json!({}),
-        )
-        .await?;
+        start_mixed_output(api, &pid, output_id).await?;
     }
 
     let stalled_accept_deadline = Instant::now() + Duration::from_secs(10);
