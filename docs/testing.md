@@ -693,16 +693,20 @@ Expected resource counts (see
 
 Env: `N_PER_GROUP` (default 25).
 
-The mixed input configs are Rust-owned through `test_harness` entry points and
-preserve the manifest, CSV, summary, and JSONL assertion layout. The multi-audio
-rows preserve the two-audio SRT/file fixture, RTMP selected-audio egresses, and
-SRT all-tracks plus selected-track egresses.
+The mixed input and fast-breadth DSL lives in
+`src/bin/test_harness/mixed_matrix.json`. That JSON file owns the stable input
+IDs, source axes, selected fast-breadth rows, checks, rationales, and shared
+batch packing. The carry-over guard is
+`mixed_json_dsl_carries_current_matrix_contract`, which proves the JSON expands
+to every current mixed row and fast-breadth batch before the live runner spends
+time on media processes.
 
-The manifest-shaped mixed matrix surface lives in
-`src/bin/test_harness/mixed_manifest.rs`: input axes, fast-breadth selections,
-output rows, typed names, and expected stage-count formulas belong there.
-Keep process lifecycle, sink/probe orchestration, API calls, and assertions in
-`src/bin/test_harness.rs` unless the runner itself becomes declarative.
+Typed expansion still lives in `src/bin/test_harness/mixed_manifest.rs`: axis
+enums, output rows, check names, source adapters, and expected stage-count
+formulas belong there. Runtime verbs live in `src/bin/test_harness/mixed_runner.rs`:
+process lifecycle, sink/probe orchestration, API calls, and assertions. When
+adding a scenario, update the JSON DSL first, then update the typed expansion
+or runner verbs only if the existing axes cannot describe the new behavior.
 
 ### `mixed.fast-breadth` — 5-minute breadth sweep
 
