@@ -239,7 +239,6 @@ interface CreatePipelineArgs {
   name: string;
   streamKey: string;
   inputSource?: string | null;
-  encoding?: string | null;
   srtIngestPolicy?: SrtPipelineIngestConfig | null;
   fileIngest?: {
     filename: string;

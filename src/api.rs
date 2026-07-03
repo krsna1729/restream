@@ -1181,7 +1181,6 @@ struct PipelinePayload {
     name: String,
     stream_key: Option<String>,
     input_source: Option<Option<String>>,
-    encoding: Option<String>,
     srt_ingest_policy: Option<SrtPipelineIngestConfig>,
     file_ingest: Option<Option<PipelineFileIngestPayload>>,
 }
@@ -1317,11 +1316,6 @@ async fn pipelines_post_handler(
     {
         return r;
     }
-    if let Some(ref e) = payload.encoding
-        && let Some(r) = check_field_len("encoding", e, MAX_ENCODING_LEN)
-    {
-        return r;
-    }
     if let Some(Some(ref file_ingest)) = payload.file_ingest
         && let Some(r) = validate_pipeline_file_ingest_payload(file_ingest)
     {
@@ -1390,7 +1384,6 @@ async fn pipelines_post_handler(
         &payload.name,
         &stream_key,
         input_source,
-        payload.encoding.as_deref(),
         srt_ingest_policy.as_deref(),
     )
     .await
@@ -1468,11 +1461,6 @@ async fn pipelines_update_handler(
     {
         return r;
     }
-    if let Some(ref e) = payload.encoding
-        && let Some(r) = check_field_len("encoding", e, MAX_ENCODING_LEN)
-    {
-        return r;
-    }
     if let Some(Some(ref file_ingest)) = payload.file_ingest
         && let Some(r) = validate_pipeline_file_ingest_payload(file_ingest)
     {
@@ -1498,14 +1486,12 @@ async fn pipelines_update_handler(
 
     let existing_stream_key = existing.stream_key.clone();
     let existing_input_source = existing.input_source.clone();
-    let existing_encoding = existing.encoding.clone();
     let existing_srt_ingest_policy = existing.srt_ingest_policy.clone();
 
     let stream_key = payload
         .stream_key
         .unwrap_or_else(|| existing_stream_key.clone());
     let input_source = payload.input_source.unwrap_or(existing_input_source);
-    let encoding = payload.encoding.or(existing_encoding);
     let srt_ingest_policy = match payload
         .srt_ingest_policy
         .as_ref()
@@ -1535,7 +1521,6 @@ async fn pipelines_update_handler(
         &payload.name,
         &stream_key,
         input_source.as_deref(),
-        encoding.as_deref(),
         srt_ingest_policy.as_deref(),
     )
     .await
@@ -1645,22 +1630,13 @@ async fn pipelines_delete_handler(
 struct OutputPayload {
     name: String,
     url: String,
-    #[serde(default)]
-    encoding: Option<String>,
-    #[serde(default)]
-    config: Option<OutputConfig>,
+    config: OutputConfig,
     monitoring_url: Option<String>,
 }
 
 impl OutputPayload {
-    fn config(&self) -> OutputConfig {
-        self.config
-            .clone()
-            .unwrap_or_else(|| OutputConfig::parse(self.encoding.as_deref().unwrap_or("source")))
-    }
-
     fn encoding_string(&self) -> String {
-        self.config().to_encoding_string()
+        self.config.to_encoding_string()
     }
 }
 
@@ -1842,9 +1818,9 @@ async fn outputs_create_handler(
     if let Some(r) = check_field_len("url", &payload.url, MAX_URL_LEN) {
         return r;
     }
-    let output_config = payload.config();
+    let output_config = payload.config.clone();
     let output_encoding = payload.encoding_string();
-    if let Some(r) = check_field_len("encoding", &output_encoding, MAX_ENCODING_LEN) {
+    if let Some(r) = check_field_len("config", &output_encoding, MAX_ENCODING_LEN) {
         return r;
     }
     if let Some(monitoring_url) = payload.monitoring_url.as_deref()
@@ -1894,7 +1870,7 @@ async fn outputs_create_handler(
         &payload.url,
         monitoring_url.as_deref(),
         "stopped",
-        &output_encoding,
+        &output_config,
     )
     .await
     {
@@ -1930,9 +1906,9 @@ async fn outputs_update_handler(
     if let Some(r) = check_field_len("url", &payload.url, MAX_URL_LEN) {
         return r;
     }
-    let output_config = payload.config();
+    let output_config = payload.config.clone();
     let output_encoding = payload.encoding_string();
-    if let Some(r) = check_field_len("encoding", &output_encoding, MAX_ENCODING_LEN) {
+    if let Some(r) = check_field_len("config", &output_encoding, MAX_ENCODING_LEN) {
         return r;
     }
     if let Some(monitoring_url) = payload.monitoring_url.as_deref()
@@ -1983,12 +1959,12 @@ async fn outputs_update_handler(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     if existing.desired_state == "running"
-        && (existing.url != payload.url || existing.encoding != output_encoding)
+        && (existing.url != payload.url || existing.config != output_config)
     {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({
-                "error": "Cannot change output transport URL or encoding while the output is running"
+                "error": "Cannot change output transport URL or config while the output is running"
             })),
         )
             .into_response();
@@ -2001,7 +1977,7 @@ async fn outputs_update_handler(
         &payload.name,
         &payload.url,
         monitoring_url.as_deref(),
-        &output_encoding,
+        &output_config,
     )
     .await
     {
@@ -5506,15 +5482,12 @@ async fn apply_agent_add_output(
     let name = required_change_field(change.name.as_deref(), "name")?;
     let url = required_change_field(change.url.as_deref(), "url")?.trim();
     let monitoring_url = normalize_monitoring_url(change.monitoring_url.as_deref());
-    let encoding = change.encoding.as_deref().unwrap_or("source").trim();
+    let config = change
+        .config
+        .as_ref()
+        .ok_or_else(|| "change is missing required field 'config'".to_string())?;
     let desired_state = change.desired_state.as_deref().unwrap_or("stopped").trim();
-    validate_output_fields(
-        name,
-        url,
-        monitoring_url.as_deref(),
-        encoding,
-        desired_state,
-    )?;
+    validate_output_fields(name, url, monitoring_url.as_deref(), config, desired_state)?;
 
     let output_id = change
         .output_id
@@ -5528,7 +5501,7 @@ async fn apply_agent_add_output(
         url,
         monitoring_url.as_deref(),
         desired_state,
-        encoding,
+        config,
     )
     .await
     .map_err(|err| format!("failed to create output: {err}"))?;
@@ -5562,23 +5535,13 @@ async fn apply_agent_update_output(
         .map(str::trim)
         .map(str::to_string)
         .or_else(|| existing.monitoring_url.clone());
-    let encoding = change
-        .encoding
-        .as_deref()
-        .unwrap_or(&existing.encoding)
-        .trim();
+    let config = change.config.as_ref().unwrap_or(&existing.config);
     let desired_state = change
         .desired_state
         .as_deref()
         .unwrap_or(&existing.desired_state)
         .trim();
-    validate_output_fields(
-        name,
-        url,
-        monitoring_url.as_deref(),
-        encoding,
-        desired_state,
-    )?;
+    validate_output_fields(name, url, monitoring_url.as_deref(), config, desired_state)?;
 
     let mut updated = db::update_output(
         &state.db,
@@ -5587,7 +5550,7 @@ async fn apply_agent_update_output(
         name.trim(),
         url,
         monitoring_url.as_deref(),
-        encoding,
+        config,
     )
     .await
     .map_err(|err| format!("failed to update output: {err}"))?
@@ -5675,16 +5638,17 @@ fn validate_output_fields(
     name: &str,
     url: &str,
     monitoring_url: Option<&str>,
-    encoding: &str,
+    config: &OutputConfig,
     desired_state: &str,
 ) -> Result<(), String> {
+    let encoding = config.to_encoding_string();
     validate_len("name", name, MAX_NAME_LEN)?;
     validate_len("url", url, MAX_URL_LEN)?;
-    validate_len("encoding", encoding, MAX_ENCODING_LEN)?;
+    validate_len("config", &encoding, MAX_ENCODING_LEN)?;
     if let Some(monitoring_url) = monitoring_url {
         validate_len("monitoring_url", monitoring_url, MAX_URL_LEN)?;
     }
-    if is_custom_output_encoding(encoding) {
+    if config.is_custom_output() {
         return Err(CUSTOM_OUTPUT_ENCODING_ERROR.to_string());
     }
     if !is_supported_output_url(url) {
@@ -6041,7 +6005,7 @@ fn agent_desired_vs_actual(
                 "actualPhase": runtime["phase"],
                 "converged": reason == "converged",
                 "reason": reason,
-                "encoding": output.encoding,
+                "config": output.config,
                 "recentJobs": recent_jobs,
             }));
         }

@@ -142,7 +142,6 @@ Create/update body:
   "name": "Main Feed",
   "streamKey": "stream-key",
   "inputSource": null,
-  "encoding": null,
   "fileIngest": {
     "filename": "recording-1.ts",
     "loopFlag": true,
@@ -157,8 +156,8 @@ Create/update body:
 uses the same payload type. If `streamKey` is omitted on create, the first unused
 built-in key is selected.
 
-`inputSource` and pipeline-level `encoding` are persisted but are not used to
-pull remote media or transform the active native ingest path.
+`inputSource` is persisted for operator metadata only; it does not pull remote
+media or transform the active native ingest path.
 
 `fileIngest` is optional. When present, pipeline create/update persists or
 replaces the pipeline's file-ingest config in the same mutation response; send
@@ -202,9 +201,8 @@ Create/update body:
 }
 ```
 
-Legacy clients may still send `encoding: "1080p+atrack:0"`, but the typed
-`config` object is now the preferred contract and all output responses include
-both `config` and the normalized legacy `encoding` string.
+`config` is the output contract. Output responses return the same typed object,
+and the runtime derives any internal stage labels from it server-side.
 
 The one-second reconciler starts and stops native egress tasks from
 `desiredState`.
@@ -427,7 +425,10 @@ Plan request:
       "kind": "addOutput",
       "name": "Primary CDN",
       "url": "rtmp://destination/live/key",
-      "encoding": "720p+atrack:0"
+      "config": {
+        "video": { "mode": "preset", "preset": "720p" },
+        "audio": { "mode": "selectTracks", "tracks": [0] }
+      }
     }
   ]
 }
@@ -450,7 +451,10 @@ Operation create request:
       "kind": "addOutput",
       "name": "Primary CDN",
       "url": "rtmp://cdn.example/live/key",
-      "encoding": "source",
+      "config": {
+        "video": { "mode": "source" },
+        "audio": { "mode": "all" }
+      },
       "desiredState": "stopped"
     }
   ]

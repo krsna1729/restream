@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
 use crate::application::output_path::OutputPath;
-use crate::domain::output_spec::{OutputConfig, OutputEncodingSpec, OutputUrlScheme};
+use crate::domain::output_spec::{OutputConfig, OutputUrlScheme};
 use crate::types::{Ingest, Output, Pipeline};
 
 const OUTPUT_URL_SCHEME_ERROR: &str =
@@ -65,7 +65,6 @@ pub struct ProposedChange {
     pub name: Option<String>,
     pub url: Option<String>,
     pub monitoring_url: Option<String>,
-    pub encoding: Option<String>,
     pub config: Option<OutputConfig>,
     pub desired_state: Option<String>,
 }
@@ -297,7 +296,6 @@ pub fn schema_catalog() -> Value {
                 "name": {"type": "string", "optional": true},
                 "url": {"type": "string", "optional": true, "redacted": true},
                 "monitoringUrl": {"type": "string", "optional": true, "redacted": true},
-                "encoding": {"type": "string", "optional": true},
                 "config": {"type": "object", "optional": true},
                 "desiredState": {"type": "string", "optional": true, "enum": ["running", "stopped"]}
             }
@@ -387,7 +385,6 @@ fn redacted_pipeline(pipeline: &Pipeline) -> Value {
         "streamKey": "redacted",
         "streamKeyFingerprint": fingerprint(&pipeline.stream_key),
         "inputSource": pipeline.input_source,
-        "encoding": pipeline.encoding,
     })
 }
 
@@ -400,18 +397,13 @@ fn redacted_output(output: &Output) -> Value {
         "urlRedacted": redacted_url(&output.url),
         "urlFingerprint": fingerprint(&output.url),
         "desiredState": output.desired_state,
-        "config": output.config(),
-        "encoding": output.encoding,
+        "config": output.config,
         "monitoringUrl": output.monitoring_url.as_ref().map(|url| redacted_url(url)),
     })
 }
 
-fn change_output_encoding(change: &ProposedChange) -> Option<String> {
-    change
-        .config
-        .as_ref()
-        .map(OutputConfig::to_encoding_string)
-        .or_else(|| change.encoding.clone())
+fn change_output_config(change: &ProposedChange) -> Option<&OutputConfig> {
+    change.config.as_ref()
 }
 
 fn redacted_ingest(ingest: &Ingest) -> Value {
@@ -718,6 +710,14 @@ pub fn validate_plan(
                     Some("url"),
                 ));
             }
+            if change.config.is_none() {
+                errors.push(issue(
+                    "error",
+                    "missingOutputConfig",
+                    "addOutput requires config.",
+                    Some("config"),
+                ));
+            }
         }
 
         if let Some(url) = change.url.as_deref()
@@ -731,21 +731,13 @@ pub fn validate_plan(
             ));
         }
 
-        if let Some(encoding) = change_output_encoding(change) {
-            if is_custom_output_encoding(&encoding) {
+        if let Some(config) = change_output_config(change) {
+            if config.is_custom_output() {
                 errors.push(issue(
                     "error",
                     "customEncodingUnsupported",
                     "Custom output encoding is not available in the runtime planner yet.",
-                    Some("encoding"),
-                ));
-            }
-            if encoding.trim().is_empty() {
-                errors.push(issue(
-                    "error",
-                    "emptyEncoding",
-                    "Encoding must be a non-empty string.",
-                    Some("encoding"),
+                    Some("config"),
                 ));
             }
         }
@@ -788,7 +780,8 @@ fn graph_preview(request: &PlanRequest, current_graph: Option<&Value>) -> GraphP
         else {
             continue;
         };
-        if let Some(encoding) = change_output_encoding(change) {
+        if let Some(config) = change_output_config(change) {
+            let encoding = config.to_encoding_string();
             let output_path =
                 OutputPath::resolve(pid, &encoding, change.url.as_deref().unwrap_or(""));
             if let Some(stage) = output_path.video_stage() {
@@ -849,7 +842,8 @@ fn impact_preview(request: &PlanRequest) -> ImpactPreview {
             .or(request.pipeline_id.as_deref())
         {
             affected_pipelines.insert(pid.to_string());
-            if let Some(encoding) = change_output_encoding(change) {
+            if let Some(config) = change_output_config(change) {
+                let encoding = config.to_encoding_string();
                 let output_path =
                     OutputPath::resolve(pid, &encoding, change.url.as_deref().unwrap_or(""));
                 if let Some(stage) = output_path.video_stage() {
@@ -905,10 +899,6 @@ fn is_supported_output_url(url: &str) -> bool {
     OutputUrlScheme::from_url(url).is_supported_output()
 }
 
-fn is_custom_output_encoding(encoding: &str) -> bool {
-    OutputEncodingSpec::parse(encoding).is_custom_output()
-}
-
 fn issue(
     severity: &'static str,
     code: &'static str,
@@ -958,7 +948,7 @@ mod tests {
                 name: Some("CDN".to_string()),
                 url: Some("ftp://example".to_string()),
                 monitoring_url: None,
-                encoding: Some("720p".to_string()),
+                config: Some(OutputConfig::parse("720p")),
                 desired_state: None,
             }],
         };
@@ -991,7 +981,7 @@ mod tests {
                 name: None,
                 url: Some("rtmp://example/live/key".to_string()),
                 monitoring_url: None,
-                encoding: Some("720p+atrack:0".to_string()),
+                config: Some(OutputConfig::parse("720p+atrack:0")),
                 desired_state: None,
             }],
         };

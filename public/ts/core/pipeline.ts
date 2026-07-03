@@ -7,10 +7,7 @@ import type {
   PipelineView,
   VideoTrack,
 } from "../types.js";
-import {
-  normalizeOutputConfig,
-  outputConfigToEncoding,
-} from "./output-config.js";
+import { normalizeOutputConfig } from "./output-config.js";
 
 const throughputState = {
   outputBytes: new Map<string, { ts: number; bytes: number }>(),
@@ -329,7 +326,6 @@ function parsePipelinesInfo(
       name: out.name,
       desiredState: out.desiredState || "stopped",
       config,
-      encoding: outputConfigToEncoding(config),
       url: out.url,
       monitoringUrl: out.monitoringUrl || null,
       status,

@@ -222,7 +222,6 @@ impl PipelineStore for SqlitePipelineStore {
                 &pipeline.name,
                 &pipeline.stream_key,
                 input_source,
-                pipeline.encoding.as_deref(),
                 pipeline.srt_ingest_policy.as_deref(),
             )
             .await

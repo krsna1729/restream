@@ -677,7 +677,7 @@ pub async fn run_app() {
                     // The egress client is protocol-agnostic w.r.t. this choice.
                     let output_id_c = output.id.clone();
                     let pipeline_id_c = output.pipeline_id.clone();
-                    let encoding_c = output.encoding.clone();
+                    let encoding_c = output.encoding_string();
                     let url_c = output.url.clone();
                     let pool_c = pool.clone();
                     let last_failed_c = last_failed.clone();

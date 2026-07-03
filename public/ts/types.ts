@@ -122,8 +122,7 @@ export interface ConfigOutput {
   name: string;
   url: string;
   monitoringUrl?: string | null;
-  config?: OutputConfig;
-  encoding?: string;
+  config: OutputConfig;
   desiredState?: string;
 }
 
@@ -360,8 +359,7 @@ export interface OutputView {
   pipe: string;
   name: string;
   desiredState: string;
-  config?: OutputConfig;
-  encoding: string;
+  config: OutputConfig;
   url: string;
   monitoringUrl: string | null;
   status: string;

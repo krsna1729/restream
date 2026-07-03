@@ -720,7 +720,7 @@ contention between consumers.
 
 ## Shared Processing Stages
 
-Output encoding strings are split into two stage identities:
+Typed output configs are lowered into two stage identities:
 
 1. video preset, shared across outputs using the same transform;
 2. audio routing, keyed by both routing mode and upstream video stage.

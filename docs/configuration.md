@@ -108,7 +108,10 @@ Each output stores:
 {
   "name": "Primary CDN",
   "url": "rtmp://destination.example/live/key",
-  "encoding": "source"
+  "config": {
+    "video": { "mode": "source" },
+    "audio": { "mode": "all" }
+  }
 }
 ```
 

@@ -119,7 +119,8 @@ pub(crate) async fn processing_graph(
                 && (output.desired_state == "running" || egresses.contains_key(&output.id))
         })
         .flat_map(|output| {
-            OutputPath::resolve(pipeline_id, &output.encoding, &output.url)
+            let encoding = output.encoding_string();
+            OutputPath::resolve(pipeline_id, &encoding, &output.url)
                 .needed_stage_keys(ingest_video_codec)
         })
         .collect();
@@ -180,6 +181,7 @@ pub(crate) async fn processing_graph(
     for output in &pipeline_outputs {
         let egress = egresses.get(&output.id);
         let output_node_id = format!("{pipeline_id}_output_{}", output.id);
+        let encoding = output.encoding_string();
 
         let protocol = MediaEngine::egress_protocol_from_url(&output.url);
         let protocol_label = MediaEngine::graph_protocol_label(protocol);
@@ -197,7 +199,7 @@ pub(crate) async fn processing_graph(
             egress.map(|egress| egress.metrics.snapshot()),
         ));
 
-        let output_path = OutputPath::resolve(pipeline_id, &output.encoding, &output.url);
+        let output_path = OutputPath::resolve(pipeline_id, &encoding, &output.url);
         let terminal_kind = output_path.terminal_stage_kind(ingest_is_hevc.then_some("hevc"));
         let terminal_node_id = if matches!(terminal_kind, StageKind::Source) {
             rb_node_id.clone()
@@ -206,7 +208,7 @@ pub(crate) async fn processing_graph(
         };
 
         if protocol == "srt" {
-            let mux_slug = MediaEngine::graph_slug(output.encoding.as_str());
+            let mux_slug = MediaEngine::graph_slug(encoding.as_str());
             let mux_node_id = format!(
                 "{pipeline_id}_ts_mux_{}",
                 if mux_slug.is_empty() {
@@ -215,7 +217,7 @@ pub(crate) async fn processing_graph(
                     mux_slug.as_str()
                 }
             );
-            let mux_key = format!("{pipeline_id}:{}", output.encoding.as_str());
+            let mux_key = format!("{pipeline_id}:{encoding}");
             let mux_active = ts_muxers
                 .get(&mux_key)
                 .is_some_and(|stage| !stage.cancel.is_cancelled());
@@ -226,11 +228,11 @@ pub(crate) async fn processing_graph(
                 nodes.push(api_view_models::processing_graph_node(
                     mux_node_id.clone(),
                     "packetizer",
-                    format!("MPEG-TS mux: {}", output.encoding.as_str()),
+                    format!("MPEG-TS mux: {encoding}"),
                     mux_active,
                     Some(api_view_models::processing_graph_packetizer_details(
                         "srt",
-                        output.encoding.as_str(),
+                        encoding.as_str(),
                         mux_key,
                         mux_payload_stats,
                     )),

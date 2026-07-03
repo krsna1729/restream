@@ -1,9 +1,11 @@
 //! SQLite persistence layer — raw `sqlx` prepared statements against `data.db`.
-//! Schema is created via `CREATE TABLE IF NOT EXISTS` at startup (no migrations).
-//! WAL mode is enabled for concurrent reader/writer access.
+//! Schema is created via `CREATE TABLE IF NOT EXISTS` at startup, with targeted
+//! in-place column backfills for contract migrations. WAL mode is enabled for
+//! concurrent reader/writer access.
 
+use crate::domain::output_spec::OutputConfig;
 use crate::types::{Ingest, Job, JobStatus, Output, Pipeline};
-use sqlx::{AssertSqlSafe, Row, SqlitePool};
+use sqlx::{AssertSqlSafe, FromRow, Row, SqlitePool};
 use std::time::SystemTime;
 
 /// Create a connection pool with all per-connection PRAGMAs baked in via
@@ -64,6 +66,7 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
             url TEXT NOT NULL,
             monitoring_url TEXT,
             desired_state TEXT NOT NULL DEFAULT 'running',
+            config TEXT NOT NULL DEFAULT '{\"video\":{\"mode\":\"source\"},\"audio\":{\"mode\":\"all\"}}',
             encoding TEXT,
             FOREIGN KEY(pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
         );",
@@ -71,6 +74,14 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
     .execute(pool)
     .await?;
     ensure_column_exists(pool, "outputs", "monitoring_url", "TEXT").await?;
+    ensure_column_exists(
+        pool,
+        "outputs",
+        "config",
+        "TEXT NOT NULL DEFAULT '{\"video\":{\"mode\":\"source\"},\"audio\":{\"mode\":\"all\"}}'",
+    )
+    .await?;
+    backfill_output_configs(pool).await?;
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_outputs_pipeline ON outputs(pipeline_id);")
         .execute(pool)
@@ -215,6 +226,128 @@ async fn ensure_column_exists(
     Ok(())
 }
 
+fn default_output_config() -> OutputConfig {
+    OutputConfig::default()
+}
+
+fn serialize_output_config(config: &OutputConfig) -> Result<String, sqlx::Error> {
+    serde_json::to_string(config)
+        .map_err(|err| sqlx::Error::Protocol(format!("serialize output config: {err}")))
+}
+
+fn deserialize_output_config(raw: &str) -> Result<OutputConfig, sqlx::Error> {
+    serde_json::from_str(raw)
+        .map_err(|err| sqlx::Error::Protocol(format!("parse output config json: {err}")))
+}
+
+async fn backfill_output_configs(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    if !table_has_column(pool, "outputs", "encoding").await? {
+        return Ok(());
+    }
+    let default_config = serialize_output_config(&default_output_config())?;
+    let rows = sqlx::query(
+        "SELECT id, COALESCE(config, '') AS config, COALESCE(encoding, '') AS encoding FROM outputs",
+    )
+    .fetch_all(pool)
+    .await?;
+    for row in rows {
+        let id: String = row.get("id");
+        let config_raw: String = row.get("config");
+        let encoding_raw: String = row.get("encoding");
+        let next_config = if !config_raw.trim().is_empty() {
+            if deserialize_output_config(&config_raw).is_ok() {
+                continue;
+            }
+            OutputConfig::parse(&encoding_raw)
+        } else if !encoding_raw.trim().is_empty() {
+            OutputConfig::parse(&encoding_raw)
+        } else {
+            default_output_config()
+        };
+        let next_config_json = serialize_output_config(&next_config)?;
+        sqlx::query("UPDATE outputs SET config = ? WHERE id = ?")
+            .bind(if next_config_json.is_empty() {
+                default_config.as_str()
+            } else {
+                next_config_json.as_str()
+            })
+            .bind(id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn table_has_column(
+    pool: &SqlitePool,
+    table: &str,
+    column: &str,
+) -> Result<bool, sqlx::Error> {
+    let pragma = format!("PRAGMA table_info({table})");
+    let rows = sqlx::query(AssertSqlSafe(pragma)).fetch_all(pool).await?;
+    Ok(rows
+        .iter()
+        .any(|row| row.get::<String, _>("name") == column))
+}
+
+#[derive(FromRow)]
+struct OutputRow {
+    id: String,
+    pipeline_id: String,
+    name: String,
+    url: String,
+    monitoring_url: Option<String>,
+    desired_state: String,
+    config: String,
+}
+
+impl TryFrom<OutputRow> for Output {
+    type Error = sqlx::Error;
+
+    fn try_from(row: OutputRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.id,
+            pipeline_id: row.pipeline_id,
+            name: row.name,
+            url: row.url,
+            monitoring_url: row.monitoring_url,
+            desired_state: row.desired_state,
+            config: deserialize_output_config(&row.config)?,
+        })
+    }
+}
+
+async fn fetch_output_optional(
+    pool: &SqlitePool,
+    query: &str,
+    binds: &[&str],
+) -> Result<Option<Output>, sqlx::Error> {
+    let mut sql = sqlx::query_as::<_, OutputRow>(query);
+    for bind in binds {
+        sql = sql.bind(*bind);
+    }
+    sql.fetch_optional(pool)
+        .await?
+        .map(Output::try_from)
+        .transpose()
+}
+
+async fn fetch_output_all(
+    pool: &SqlitePool,
+    query: &str,
+    binds: &[&str],
+) -> Result<Vec<Output>, sqlx::Error> {
+    let mut sql = sqlx::query_as::<_, OutputRow>(query);
+    for bind in binds {
+        sql = sql.bind(*bind);
+    }
+    sql.fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(Output::try_from)
+        .collect()
+}
+
 /* Pipeline Operations */
 
 pub async fn create_pipeline(
@@ -223,7 +356,6 @@ pub async fn create_pipeline(
     name: &str,
     stream_key: &str,
     input_source: Option<&str>,
-    encoding: Option<&str>,
     srt_ingest_policy: Option<&str>,
 ) -> Result<Pipeline, sqlx::Error> {
     let exists =
@@ -236,13 +368,12 @@ pub async fn create_pipeline(
     }
 
     sqlx::query(
-        "INSERT INTO pipelines (id, name, stream_key, input_source, encoding, srt_ingest_policy) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO pipelines (id, name, stream_key, input_source, srt_ingest_policy) VALUES (?, ?, ?, ?, ?)"
     )
     .bind(id)
     .bind(name)
     .bind(stream_key)
     .bind(input_source)
-    .bind(encoding)
     .bind(srt_ingest_policy)
     .execute(pool)
     .await?;
@@ -254,7 +385,7 @@ pub async fn create_pipeline(
 
 pub async fn get_pipeline(pool: &SqlitePool, id: &str) -> Result<Option<Pipeline>, sqlx::Error> {
     sqlx::query_as::<_, Pipeline>(
-        "SELECT id, name, stream_key, input_source, encoding, srt_ingest_policy FROM pipelines WHERE id = ?",
+        "SELECT id, name, stream_key, input_source, srt_ingest_policy FROM pipelines WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -266,7 +397,7 @@ pub async fn get_pipeline_by_stream_key(
     stream_key: &str,
 ) -> Result<Option<Pipeline>, sqlx::Error> {
     sqlx::query_as::<_, Pipeline>(
-        "SELECT id, name, stream_key, input_source, encoding, srt_ingest_policy FROM pipelines WHERE stream_key = ?",
+        "SELECT id, name, stream_key, input_source, srt_ingest_policy FROM pipelines WHERE stream_key = ?",
     )
     .bind(stream_key)
     .fetch_optional(pool)
@@ -275,7 +406,7 @@ pub async fn get_pipeline_by_stream_key(
 
 pub async fn list_pipelines(pool: &SqlitePool) -> Result<Vec<Pipeline>, sqlx::Error> {
     sqlx::query_as::<_, Pipeline>(
-        "SELECT id, name, stream_key, input_source, encoding, srt_ingest_policy FROM pipelines",
+        "SELECT id, name, stream_key, input_source, srt_ingest_policy FROM pipelines",
     )
     .fetch_all(pool)
     .await
@@ -287,7 +418,6 @@ pub async fn update_pipeline(
     name: &str,
     stream_key: &str,
     input_source: Option<&str>,
-    encoding: Option<&str>,
     srt_ingest_policy: Option<&str>,
 ) -> Result<Option<Pipeline>, sqlx::Error> {
     let duplicate = sqlx::query_scalar::<_, i64>(
@@ -302,12 +432,11 @@ pub async fn update_pipeline(
     }
 
     let result = sqlx::query(
-        "UPDATE pipelines SET name = ?, stream_key = ?, input_source = ?, encoding = ?, srt_ingest_policy = ? WHERE id = ?"
+        "UPDATE pipelines SET name = ?, stream_key = ?, input_source = ?, srt_ingest_policy = ? WHERE id = ?"
     )
     .bind(name)
     .bind(stream_key)
     .bind(input_source)
-    .bind(encoding)
     .bind(srt_ingest_policy)
     .bind(id)
     .execute(pool)
@@ -339,10 +468,11 @@ pub async fn create_output(
     url: &str,
     monitoring_url: Option<&str>,
     desired_state: &str,
-    encoding: &str,
+    config: &OutputConfig,
 ) -> Result<Output, sqlx::Error> {
+    let config_json = serialize_output_config(config)?;
     sqlx::query(
-        "INSERT INTO outputs (id, pipeline_id, name, url, monitoring_url, desired_state, encoding) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO outputs (id, pipeline_id, name, url, monitoring_url, desired_state, config) VALUES (?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(id)
     .bind(pipeline_id)
@@ -350,7 +480,7 @@ pub async fn create_output(
     .bind(url)
     .bind(monitoring_url)
     .bind(desired_state)
-    .bind(encoding)
+    .bind(config_json)
     .execute(pool)
     .await?;
 
@@ -364,22 +494,21 @@ pub async fn get_output(
     pipeline_id: &str,
     id: &str,
 ) -> Result<Option<Output>, sqlx::Error> {
-    sqlx::query_as::<_, Output>(
-        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, COALESCE(encoding, '') AS encoding \
+    fetch_output_optional(
+        pool,
+        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, config \
          FROM outputs WHERE id = ? AND pipeline_id = ?",
+        &[id, pipeline_id],
     )
-    .bind(id)
-    .bind(pipeline_id)
-    .fetch_optional(pool)
     .await
 }
 
 pub async fn list_outputs(pool: &SqlitePool) -> Result<Vec<Output>, sqlx::Error> {
-    sqlx::query_as::<_, Output>(
-        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, COALESCE(encoding, '') AS encoding \
-         FROM outputs",
+    fetch_output_all(
+        pool,
+        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, config FROM outputs",
+        &[],
     )
-    .fetch_all(pool)
     .await
 }
 
@@ -387,12 +516,12 @@ pub async fn list_outputs_for_pipeline(
     pool: &SqlitePool,
     pipeline_id: &str,
 ) -> Result<Vec<Output>, sqlx::Error> {
-    sqlx::query_as::<_, Output>(
-        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, COALESCE(encoding, '') AS encoding \
+    fetch_output_all(
+        pool,
+        "SELECT id, pipeline_id, name, url, monitoring_url, desired_state, config \
          FROM outputs WHERE pipeline_id = ? ORDER BY rowid ASC",
+        &[pipeline_id],
     )
-    .bind(pipeline_id)
-    .fetch_all(pool)
     .await
 }
 
@@ -403,15 +532,16 @@ pub async fn update_output(
     name: &str,
     url: &str,
     monitoring_url: Option<&str>,
-    encoding: &str,
+    config: &OutputConfig,
 ) -> Result<Option<Output>, sqlx::Error> {
+    let config_json = serialize_output_config(config)?;
     let result = sqlx::query(
-        "UPDATE outputs SET name = ?, url = ?, monitoring_url = ?, encoding = ? WHERE id = ? AND pipeline_id = ?",
+        "UPDATE outputs SET name = ?, url = ?, monitoring_url = ?, config = ? WHERE id = ? AND pipeline_id = ?",
     )
     .bind(name)
     .bind(url)
     .bind(monitoring_url)
-    .bind(encoding)
+    .bind(config_json)
     .bind(id)
     .bind(pipeline_id)
     .execute(pool)

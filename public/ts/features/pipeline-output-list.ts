@@ -1,5 +1,6 @@
 import { escapeHtml, msToHHMMSS, sanitizeLogMessage } from "../core/utils.js";
 import { state } from "../core/state.js";
+import { outputViewEncodingLabel } from "../core/output-config.js";
 import { openOutputMonitoringUrl } from "./control-room.js";
 import { getOutputControlIntent } from "./output-control-state.js";
 import { pipelineViewDependencies } from "./pipeline-dependencies.js";
@@ -189,7 +190,7 @@ function buildOutputMetricSpecs(
   metrics.push({
     key: "enc",
     label: "enc",
-    text: output.encoding,
+    text: outputViewEncodingLabel(output),
     title: "Selected encoding",
   });
   if (outputIssue) {

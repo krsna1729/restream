@@ -7,6 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, put};
 use bytes::Bytes;
 use chrono::Utc;
+use restream::domain::output_spec::OutputConfig;
 use restream::test_fixtures::AvMarkerBframeMode;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
@@ -2243,6 +2244,14 @@ fn stop_generalized_sink_server(server: GeneralizedSinkServer) {
     for handle in handles.iter() {
         handle.abort();
     }
+}
+
+fn output_create_payload(name: &str, url: &str, encoding: &str) -> Value {
+    json!({
+        "name": name,
+        "url": url,
+        "config": OutputConfig::parse(encoding),
+    })
 }
 
 async fn run_sink_probe(
@@ -5609,7 +5618,7 @@ async fn api_smoke() -> Result<Value, String> {
     let output = api
         .post_json(
             &format!("/api/v1/pipelines/{pipeline_id}/outputs"),
-            json!({"name": "smoke-out", "url": "rtmp://127.0.0.1:19350/live/nowhere", "encoding": "source"}),
+            output_create_payload("smoke-out", "rtmp://127.0.0.1:19350/live/nowhere", "source"),
         )
         .await?;
     let output_id = output["output"]["id"]
@@ -6009,7 +6018,7 @@ async fn run_ramp_config(
         let output = api
             .post_json(
                 &format!("/api/v1/pipelines/{pipeline_id}/outputs"),
-                json!({"name": format!("out{n}"), "url": url, "encoding": config.encoding}),
+                output_create_payload(&format!("out{n}"), &url, config.encoding),
             )
             .await?;
         let output_id = output["output"]["id"]
@@ -7834,6 +7843,19 @@ async fn run_mixed_anchor_config(
         .await?;
     }
     verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, resume).await?;
+    if env.needs_live_output_progress_gate() {
+        // The live-anchor matrix adds an HLS helper output ahead of the probe
+        // rows. Gate the external reads on the actual RTMP/SRT egress rows so
+        // the first ffprobe does not race outputs that are still starting up.
+        let progress_output_ids = mixed_progress_output_ids(&output_ids, &hls_output);
+        wait_for_outputs_progress(
+            api,
+            &pipeline_id,
+            &progress_output_ids,
+            Duration::from_secs(60),
+        )
+        .await?;
+    }
 
     let rss_final = process_rss_kb(restream_pid).await.unwrap_or(0);
     let ffmpeg = ffmpeg_pipe1_stats().await;
@@ -8851,7 +8873,7 @@ async fn create_mixed_output(
     let output = api
         .post_json(
             &format!("/api/v1/pipelines/{pipeline_id}/outputs"),
-            json!({"name": name, "url": url, "encoding": encoding}),
+            output_create_payload(name, url, encoding),
         )
         .await?;
     output["output"]["id"]
@@ -11401,7 +11423,7 @@ async fn srt_to_rtmp_correctness() -> Result<Value, String> {
     let output = api
         .post_json(
             &format!("/api/v1/pipelines/{pipeline_id}/outputs"),
-            json!({"name": "rtmp-sink", "url": sink_url, "encoding": "source"}),
+            output_create_payload("rtmp-sink", &sink_url, "source"),
         )
         .await?;
     let output_id = output["output"]["id"]
@@ -11512,7 +11534,7 @@ async fn srt_to_rtmp_atrack_correctness() -> Result<Value, String> {
     let output = api
         .post_json(
             &format!("/api/v1/pipelines/{pipeline_id}/outputs"),
-            json!({"name": "rtmp-atrack-sink", "url": sink_url, "encoding": "source+atrack:1"}),
+            output_create_payload("rtmp-atrack-sink", &sink_url, "source+atrack:1"),
         )
         .await?;
     let output_id = output["output"]["id"]
@@ -14204,6 +14226,13 @@ async fn run_mixed_file_config(
     if !ffmpeg_signal_sinks.is_empty() {
         finish_ffmpeg_signal_sinks(env, &mut ffmpeg_signal_sinks, resume).await?;
     }
+    if env.needs_live_output_progress_gate() {
+        // The first resumed external read can arrive while SRT egresses are
+        // still in "connecting/stalled" even though they do become healthy a
+        // few seconds later. Wait for real bytes-out once per scenario so the
+        // first probed cell does not lose signal to a startup race.
+        wait_for_outputs_progress(api, &pipeline_id, &output_ids, Duration::from_secs(60)).await?;
+    }
 
     let duration_secs: u64 = 10;
     if env.check_selected("hls") {
@@ -14320,7 +14349,7 @@ async fn fault_rtmp_egress_sink_disappear(
     let output = api
         .post_json(
             &format!("/api/v1/pipelines/{pid}/outputs"),
-            json!({"name": "rtmp-sink", "url": sink_url, "encoding": "source"}),
+            output_create_payload("rtmp-sink", &sink_url, "source"),
         )
         .await?;
     let oid = output["output"]["id"]
@@ -14539,7 +14568,7 @@ async fn fault_srt_egress_sink_disappear(
     let output = api
         .post_json(
             &format!("/api/v1/pipelines/{pid}/outputs"),
-            json!({"name": "srt-sink", "url": sink_url, "encoding": "source"}),
+            output_create_payload("srt-sink", &sink_url, "source"),
         )
         .await?;
     let oid = output["output"]["id"]
@@ -14695,11 +14724,11 @@ async fn fault_rtmp_egress_sink_stalls(
     let output = api
         .post_json(
             &format!("/api/v1/pipelines/{pid}/outputs"),
-            json!({
-                "name": "rtmp-stall-sink",
-                "url": format!("rtmp://127.0.0.1:{sink_port}/live/fault-egress-rtmp-stall-sink"),
-                "encoding": "source"
-            }),
+            output_create_payload(
+                "rtmp-stall-sink",
+                &format!("rtmp://127.0.0.1:{sink_port}/live/fault-egress-rtmp-stall-sink"),
+                "source",
+            ),
         )
         .await?;
     let oid = output["output"]["id"]
@@ -14883,11 +14912,13 @@ async fn fault_rtmp_stalled_sink_isolation_under_many_outputs(
     let stalled_output = api
         .post_json(
             &format!("/api/v1/pipelines/{pid}/outputs"),
-            json!({
-                "name": "rtmp-stall-sink-isolation",
-                "url": format!("rtmp://127.0.0.1:{stall_sink_port}/live/fault-egress-rtmp-stall-isolation-stalled"),
-                "encoding": "source"
-            }),
+            output_create_payload(
+                "rtmp-stall-sink-isolation",
+                &format!(
+                    "rtmp://127.0.0.1:{stall_sink_port}/live/fault-egress-rtmp-stall-isolation-stalled"
+                ),
+                "source",
+            ),
         )
         .await?;
     let stalled_oid = stalled_output["output"]["id"]
@@ -14905,11 +14936,13 @@ async fn fault_rtmp_stalled_sink_isolation_under_many_outputs(
         let output = api
             .post_json(
                 &format!("/api/v1/pipelines/{pid}/outputs"),
-                json!({
-                    "name": format!("rtmp-healthy-sink-{index:02}"),
-                    "url": format!("rtmp://127.0.0.1:{port}/live/fault-egress-rtmp-stall-isolation-healthy-{index:02}"),
-                    "encoding": "source"
-                }),
+                output_create_payload(
+                    &format!("rtmp-healthy-sink-{index:02}"),
+                    &format!(
+                        "rtmp://127.0.0.1:{port}/live/fault-egress-rtmp-stall-isolation-healthy-{index:02}"
+                    ),
+                    "source",
+                ),
             )
             .await?;
         let oid = output["output"]["id"]
@@ -15239,11 +15272,11 @@ async fn fault_rtmp_egress_retry_budget_exhausts_to_failed(
     let output = api
         .post_json(
             &format!("/api/v1/pipelines/{pid}/outputs"),
-            json!({
-                "name": "rtmp-dead-sink",
-                "url": format!("rtmp://127.0.0.1:{dead_sink_port}/live/retry-limit"),
-                "encoding": "source"
-            }),
+            output_create_payload(
+                "rtmp-dead-sink",
+                &format!("rtmp://127.0.0.1:{dead_sink_port}/live/retry-limit"),
+                "source",
+            ),
         )
         .await?;
     let oid = output["output"]["id"]
@@ -15391,11 +15424,13 @@ async fn fault_srt_egress_retry_budget_exhausts_to_failed(
     let output = api
         .post_json(
             &format!("/api/v1/pipelines/{pid}/outputs"),
-            json!({
-                "name": "srt-dead-sink",
-                "url": format!("srt://127.0.0.1:{dead_sink_port}?streamid=publish:live/retry-limit&pkt_size=1316"),
-                "encoding": "source"
-            }),
+            output_create_payload(
+                "srt-dead-sink",
+                &format!(
+                    "srt://127.0.0.1:{dead_sink_port}?streamid=publish:live/retry-limit&pkt_size=1316"
+                ),
+                "source",
+            ),
         )
         .await?;
     let oid = output["output"]["id"]
@@ -15561,11 +15596,11 @@ async fn recovery_live_cases(
         let output = api
             .post_json(
                 &format!("/api/v1/pipelines/{pid}/outputs"),
-                json!({
-                    "name": "rtmp-transient-sink",
-                    "url": format!("rtmp://127.0.0.1:{sink_port}/live/fault-rtmp-transient-sink"),
-                    "encoding": "source"
-                }),
+                output_create_payload(
+                    "rtmp-transient-sink",
+                    &format!("rtmp://127.0.0.1:{sink_port}/live/fault-rtmp-transient-sink"),
+                    "source",
+                ),
             )
             .await?;
         let oid = output["output"]["id"]
@@ -15803,11 +15838,11 @@ async fn recovery_live_cases(
         let output = api
             .post_json(
                 &format!("/api/v1/pipelines/{pid}/outputs"),
-                json!({
-                    "name": "srt-transient-sink",
-                    "url": format!("rtmp://127.0.0.1:{sink_port}/live/fault-srt-transient-sink"),
-                    "encoding": "source"
-                }),
+                output_create_payload(
+                    "srt-transient-sink",
+                    &format!("rtmp://127.0.0.1:{sink_port}/live/fault-srt-transient-sink"),
+                    "source",
+                ),
             )
             .await?;
         let oid = output["output"]["id"]
@@ -16015,11 +16050,11 @@ async fn recovery_live_cases(
         let output = api
             .post_json(
                 &format!("/api/v1/pipelines/{pid}/outputs"),
-                json!({
-                    "name": "srt-replacement-race-sink",
-                    "url": format!("rtmp://127.0.0.1:{sink_port}/live/fault-srt-replacement-race-sink"),
-                    "encoding": "source"
-                }),
+                output_create_payload(
+                    "srt-replacement-race-sink",
+                    &format!("rtmp://127.0.0.1:{sink_port}/live/fault-srt-replacement-race-sink"),
+                    "source",
+                ),
             )
             .await?;
         let oid = output["output"]["id"]
@@ -16246,11 +16281,11 @@ async fn recovery_live_cases(
         let output = api
             .post_json(
                 &format!("/api/v1/pipelines/{pid}/outputs"),
-                json!({
-                    "name": "rtmp-retry-gap-sink",
-                    "url": format!("rtmp://127.0.0.1:{sink_port}/live/fault-rtmp-retry-gap-sink"),
-                    "encoding": "source"
-                }),
+                output_create_payload(
+                    "rtmp-retry-gap-sink",
+                    &format!("rtmp://127.0.0.1:{sink_port}/live/fault-rtmp-retry-gap-sink"),
+                    "source",
+                ),
             )
             .await?;
         let oid = output["output"]["id"]
@@ -16533,11 +16568,13 @@ async fn recovery_live_cases(
         let output = api
             .post_json(
                 &format!("/api/v1/pipelines/{pid}/outputs"),
-                json!({
-                    "name": "hls-put-timeout",
-                    "url": format!("http://127.0.0.1:{hls_put_port}/upload?cid=fault-hls-put-timeout&copy=0&file=out.m3u8"),
-                    "encoding": "source"
-                }),
+                output_create_payload(
+                    "hls-put-timeout",
+                    &format!(
+                        "http://127.0.0.1:{hls_put_port}/upload?cid=fault-hls-put-timeout&copy=0&file=out.m3u8"
+                    ),
+                    "source",
+                ),
             )
             .await?;
         let oid = output["output"]["id"]
@@ -16725,11 +16762,11 @@ async fn recovery_live_cases(
         let output = api
             .post_json(
                 &format!("/api/v1/pipelines/{pid}/outputs"),
-                json!({
-                    "name": "rtmp-sink-flap",
-                    "url": format!("rtmp://127.0.0.1:{sink_port}/live/fault-rtmp-sink-flap"),
-                    "encoding": "source"
-                }),
+                output_create_payload(
+                    "rtmp-sink-flap",
+                    &format!("rtmp://127.0.0.1:{sink_port}/live/fault-rtmp-sink-flap"),
+                    "source",
+                ),
             )
             .await?;
         let oid = output["output"]["id"]

@@ -1,4 +1,5 @@
 import { buildLogsStreamUrl, getRestreamHistory } from "../core/api.js";
+import { outputViewEncodingLabel } from "../core/output-config.js";
 import {
   escapeHtml,
   getUrlParam,
@@ -910,10 +911,11 @@ function renderInspectSummary(pipe: PipelineView | null): void {
   const outputs = pipe.outs
     .map((out) => {
       const stateLabel = outputStateLabel(out);
+      const encodingLabel = outputViewEncodingLabel(out);
       return `<div class="flex items-center justify-between gap-2 border-base-content/10 border-t py-2">
                 <div class="min-w-0">
                     <div class="truncate text-sm font-medium">${escapeHtml(out.name)}</div>
-                    <div class="text-base-content/60 truncate text-xs">${escapeHtml(out.encoding)} / ${sanitizeLogMessage(out.url, true)}</div>
+                    <div class="text-base-content/60 truncate text-xs">${escapeHtml(encodingLabel)} / ${sanitizeLogMessage(out.url, true)}</div>
                 </div>
                 <span class="badge ${stateLabel.cls} shrink-0">${stateLabel.label}</span>
             </div>`;
@@ -1030,7 +1032,7 @@ function inspectGraphStateKey(pipe: PipelineView | null): string | null {
         out.id,
         out.status,
         out.desiredState,
-        out.encoding,
+        outputViewEncodingLabel(out),
         out.phase || "",
         out.retrying ? "1" : "0",
         out.flapping ? "1" : "0",

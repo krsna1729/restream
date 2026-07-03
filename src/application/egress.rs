@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> Arc<RingBuffer> {
     let source_buf = engine.get_or_create_pipeline(&output.pipeline_id).await;
-    let output_path =
-        OutputPath::resolve(output.pipeline_id.as_str(), &output.encoding, &output.url);
+    let encoding = output.encoding_string();
+    let output_path = OutputPath::resolve(output.pipeline_id.as_str(), &encoding, &output.url);
     let ingest_video_codec = engine.ingest_video_codec(&output.pipeline_id).await;
     let ingest_codec_override = output_path.ingest_codec_override(ingest_video_codec.as_deref());
 
@@ -64,7 +64,7 @@ mod tests {
             url: url.to_string(),
             monitoring_url: None,
             desired_state: "running".to_string(),
-            encoding: encoding.to_string(),
+            config: crate::domain::output_spec::OutputConfig::parse(encoding),
         }
     }
 

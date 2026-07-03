@@ -37,12 +37,11 @@ pub struct Pipeline {
     pub name: String,
     pub stream_key: String,
     pub input_source: Option<String>,
-    pub encoding: Option<String>,
     #[serde(skip_serializing, skip_deserializing)]
     pub srt_ingest_policy: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Output {
     pub id: String,
@@ -51,12 +50,12 @@ pub struct Output {
     pub url: String,
     pub monitoring_url: Option<String>,
     pub desired_state: String, // "running" | "stopped"
-    pub encoding: String,
+    pub config: OutputConfig,
 }
 
 impl Output {
-    pub fn config(&self) -> OutputConfig {
-        OutputConfig::parse(&self.encoding)
+    pub fn encoding_string(&self) -> String {
+        self.config.to_encoding_string()
     }
 }
 

@@ -1,5 +1,12 @@
 import type { OutputConfig, OutputView } from "../types.js";
 
+function defaultOutputConfig(): OutputConfig {
+  return {
+    video: { mode: "source" },
+    audio: { mode: "all" },
+  };
+}
+
 export function parseOutputConfig(
   encoding: string | null | undefined,
 ): OutputConfig {
@@ -92,16 +99,13 @@ export function outputConfigAudioOperation(
 }
 
 export function normalizeOutputConfig(output: {
-  config?: OutputConfig;
-  encoding?: string | null;
+  config?: OutputConfig | null;
 }): OutputConfig {
-  return output.config || parseOutputConfig(output.encoding);
+  return output.config || defaultOutputConfig();
 }
 
 export function outputViewEncodingLabel(
-  output: Pick<OutputView, "config" | "encoding">,
+  output: Pick<OutputView, "config">,
 ): string {
-  return (
-    output.encoding || outputConfigToEncoding(normalizeOutputConfig(output))
-  );
+  return outputConfigToEncoding(normalizeOutputConfig(output));
 }

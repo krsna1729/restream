@@ -41,7 +41,10 @@ This reference file supports the `restream-ops-agent` skill.
     "kind": "addOutput",
     "name": "YouTube Primary",
     "url": "rtmp://a.rtmp.youtube.com/live2/xxxx-xxxx",
-    "encoding": "source",
+    "config": {
+      "video": { "mode": "source" },
+      "audio": { "mode": "all" }
+    },
     "desiredState": "stopped"
   }]
 }
@@ -61,7 +64,10 @@ This reference file supports the `restream-ops-agent` skill.
     "kind": "addOutput",
     "name": "YouTube Primary",
     "url": "rtmp://a.rtmp.youtube.com/live2/xxxx-xxxx",
-    "encoding": "source",
+    "config": {
+      "video": { "mode": "source" },
+      "audio": { "mode": "all" }
+    },
     "desiredState": "stopped"
   }]
 }

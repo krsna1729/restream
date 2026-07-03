@@ -149,7 +149,7 @@ pub async fn load_output_runtime_snapshot(
 #[derive(Debug, Clone)]
 pub struct OutputStageSweepInput<'a> {
     pub pipeline_id: &'a str,
-    pub encoding: &'a str,
+    pub encoding: String,
     pub url: &'a str,
     pub desired_state: &'a str,
     pub is_active: bool,
@@ -163,7 +163,7 @@ pub fn collect_needed_stage_keys<'a>(
     let mut needed_stages = HashSet::new();
     for output in outputs {
         if output.effective_has_ingest && (output.is_active || output.desired_state == "running") {
-            let output_path = OutputPath::resolve(output.pipeline_id, output.encoding, output.url);
+            let output_path = OutputPath::resolve(output.pipeline_id, &output.encoding, output.url);
             for stage in output_path.needed_stage_keys(output.ingest_video_codec.as_deref()) {
                 needed_stages.insert(stage);
             }
@@ -178,7 +178,7 @@ pub fn output_stage_sweep_input<'a>(
 ) -> OutputStageSweepInput<'a> {
     OutputStageSweepInput {
         pipeline_id: output.pipeline_id.as_str(),
-        encoding: &output.encoding,
+        encoding: output.encoding_string(),
         url: &output.url,
         desired_state: &output.desired_state,
         is_active: snapshot.is_active,

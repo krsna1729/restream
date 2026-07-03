@@ -22,7 +22,6 @@ pub(crate) fn pipeline_response_json(
         "name": pipeline.name,
         "streamKey": pipeline.stream_key,
         "inputSource": pipeline.input_source,
-        "encoding": pipeline.encoding,
         "srtIngestPolicy": parse_pipeline_srt_ingest_policy(
             pipeline.srt_ingest_policy.as_deref()
         ),
@@ -79,8 +78,7 @@ pub(crate) fn output_response_json(output: &Output) -> serde_json::Value {
         "url": output.url,
         "monitoringUrl": output.monitoring_url,
         "desiredState": output.desired_state,
-        "config": output.config(),
-        "encoding": output.encoding,
+        "config": output.config,
     })
 }
 
