@@ -160,6 +160,7 @@ impl MixedInputReorder {
 /// Complete input-side scenario key for the mixed matrix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct MixedInputCase {
+    id: &'static str,
     protocol: MixedInputProtocol,
     codec: MixedVideoCodec,
     audio_layout: MixedInputAudioLayout,
@@ -168,12 +169,14 @@ pub(crate) struct MixedInputCase {
 
 impl MixedInputCase {
     pub(crate) const fn new(
+        id: &'static str,
         protocol: MixedInputProtocol,
         codec: MixedVideoCodec,
         audio_layout: MixedInputAudioLayout,
         reorder: MixedInputReorder,
     ) -> Self {
         Self {
+            id,
             protocol,
             codec,
             audio_layout,
@@ -181,118 +184,8 @@ impl MixedInputCase {
         }
     }
 
-    pub(crate) fn scenario_id(self) -> &'static str {
-        match (self.protocol, self.codec, self.audio_layout, self.reorder) {
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ) => "mixed.asset.file.h264.a1.bf0",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf2,
-            ) => "mixed.asset.file.h264.a1.bf2",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf0,
-            ) => "mixed.asset.file.h264.a2.bf0",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf2,
-            ) => "mixed.asset.file.h264.a2.bf2",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ) => "mixed.asset.file.h265.a1.bf0",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf2,
-            ) => "mixed.asset.file.h265.a1.bf2",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf0,
-            ) => "mixed.asset.file.h265.a2.bf0",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf2,
-            ) => "mixed.asset.file.h265.a2.bf2",
-            (
-                MixedInputProtocol::Rtmp,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ) => "mixed.live.rtmp.h264.a1.bf0",
-            (
-                MixedInputProtocol::Rtmp,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf2,
-            ) => "mixed.live.rtmp.h264.a1.bf2",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ) => "mixed.live.srt.h264.a1.bf0",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf2,
-            ) => "mixed.live.srt.h264.a1.bf2",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf0,
-            ) => "mixed.live.srt.h264.a2.bf0",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf2,
-            ) => "mixed.live.srt.h264.a2.bf2",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ) => "mixed.live.srt.h265.a1.bf0",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf2,
-            ) => "mixed.live.srt.h265.a1.bf2",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf0,
-            ) => "mixed.live.srt.h265.a2.bf0",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf2,
-            ) => "mixed.live.srt.h265.a2.bf2",
-            _ => unreachable!("unsupported mixed input case"),
-        }
+    pub(crate) const fn scenario_id(self) -> &'static str {
+        self.id
     }
 
     pub(crate) const fn protocol(self) -> MixedInputProtocol {
@@ -514,24 +407,33 @@ pub(crate) struct MixedDslInput {
 
 impl MixedDslInput {
     pub(crate) fn to_case(&self) -> Result<MixedInputCase, String> {
-        let case = MixedInputCase::new(
-            MixedInputProtocol::from_ingest_name(&self.ingest)
-                .ok_or_else(|| format!("{} has unknown ingest {}", self.id, self.ingest))?,
-            MixedVideoCodec::from_scenario_token(&self.video)
-                .ok_or_else(|| format!("{} has unknown video {}", self.id, self.video))?,
-            MixedInputAudioLayout::from_scenario_token(&self.audio)
-                .ok_or_else(|| format!("{} has unknown audio {}", self.id, self.audio))?,
-            MixedInputReorder::from_scenario_token(&self.reorder)
-                .ok_or_else(|| format!("{} has unknown reorder {}", self.id, self.reorder))?,
+        let protocol = MixedInputProtocol::from_ingest_name(&self.ingest)
+            .ok_or_else(|| format!("{} has unknown ingest {}", self.id, self.ingest))?;
+        let codec = MixedVideoCodec::from_scenario_token(&self.video)
+            .ok_or_else(|| format!("{} has unknown video {}", self.id, self.video))?;
+        let audio_layout = MixedInputAudioLayout::from_scenario_token(&self.audio)
+            .ok_or_else(|| format!("{} has unknown audio {}", self.id, self.audio))?;
+        let reorder = MixedInputReorder::from_scenario_token(&self.reorder)
+            .ok_or_else(|| format!("{} has unknown reorder {}", self.id, self.reorder))?;
+        let expected = format!(
+            "mixed.{}.{}.{}.{}.{}",
+            protocol.source_name(),
+            protocol.ingest_name(),
+            codec.scenario_token(),
+            audio_layout.scenario_token(),
+            reorder.scenario_token()
         );
-        if case.scenario_id() != self.id {
-            return Err(format!(
-                "DSL input {} expands to {}",
-                self.id,
-                case.scenario_id()
-            ));
+        if expected != self.id {
+            return Err(format!("DSL input {} expands to {}", self.id, expected));
         }
-        Ok(case)
+        let id: &'static str = Box::leak(self.id.clone().into_boxed_str());
+        Ok(MixedInputCase::new(
+            id,
+            protocol,
+            codec,
+            audio_layout,
+            reorder,
+        ))
     }
 }
 
