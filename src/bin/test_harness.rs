@@ -8775,8 +8775,7 @@ async fn fault_rtmp_egress_sink_disappear(
     sink_port: u16,
     timeout: Duration,
 ) -> Result<Value, String> {
-    let pid =
-        create_pipeline_with_stream_key(api, "fault-egress-rtmp", "fault-egress-rtmp").await?;
+    let pid = create_pipeline(api, "fault-egress-rtmp").await?;
 
     let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
     let sink_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
@@ -8990,10 +8989,9 @@ async fn fault_srt_egress_sink_disappear(
     fixture_h264: &Path,
     timeout: Duration,
 ) -> Result<Value, String> {
-    let pid = create_pipeline_with_stream_key(api, "fault-egress-srt", "fault-egress-srt").await?;
+    let pid = create_pipeline(api, "fault-egress-srt").await?;
 
-    let sink_pid =
-        create_pipeline_with_stream_key(api, "srt-sink-target", "srt-sink-target").await?;
+    let sink_pid = create_pipeline(api, "srt-sink-target").await?;
 
     let sink_url = format!(
         "srt://127.0.0.1:{}?streamid=publish:live/srt-sink-target&pkt_size=1316",
@@ -9135,31 +9133,16 @@ async fn fault_rtmp_egress_sink_stalls(
     sink_port: u16,
     timeout: Duration,
 ) -> Result<Value, String> {
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "fault-egress-rtmp-stall", "streamKey": "fault-egress-rtmp-stall"}),
-        )
-        .await?;
-    let pid = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("missing id")?
-        .to_string();
+    let pid = create_pipeline(api, "fault-egress-rtmp-stall").await?;
 
-    let output = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs"),
-            output_create_payload(
-                "rtmp-stall-sink",
-                &format!("rtmp://127.0.0.1:{sink_port}/live/fault-egress-rtmp-stall-sink"),
-                "source",
-            ),
-        )
-        .await?;
-    let oid = output["output"]["id"]
-        .as_str()
-        .ok_or("missing id")?
-        .to_string();
+    let oid = create_mixed_output(
+        api,
+        &pid,
+        "rtmp-stall-sink",
+        &format!("rtmp://127.0.0.1:{sink_port}/live/fault-egress-rtmp-stall-sink"),
+        "source",
+    )
+    .await?;
 
     let stall_server = start_stalled_rtmp_sink_server(sink_port).await?;
     let mut pub_child = spawn_publisher(
@@ -9320,36 +9303,18 @@ async fn fault_rtmp_stalled_sink_isolation_under_many_outputs(
     timeout: Duration,
 ) -> Result<Value, String> {
     let sibling_outputs = sibling_outputs.max(1);
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({
-                "name": "fault-egress-rtmp-stall-isolation",
-                "streamKey": "fault-egress-rtmp-stall-isolation"
-            }),
-        )
-        .await?;
-    let pid = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("missing id")?
-        .to_string();
+    let pid = create_pipeline(api, "fault-egress-rtmp-stall-isolation").await?;
 
-    let stalled_output = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs"),
-            output_create_payload(
-                "rtmp-stall-sink-isolation",
-                &format!(
-                    "rtmp://127.0.0.1:{stall_sink_port}/live/fault-egress-rtmp-stall-isolation-stalled"
-                ),
-                "source",
-            ),
-        )
-        .await?;
-    let stalled_oid = stalled_output["output"]["id"]
-        .as_str()
-        .ok_or("missing id")?
-        .to_string();
+    let stalled_oid = create_mixed_output(
+        api,
+        &pid,
+        "rtmp-stall-sink-isolation",
+        &format!(
+            "rtmp://127.0.0.1:{stall_sink_port}/live/fault-egress-rtmp-stall-isolation-stalled"
+        ),
+        "source",
+    )
+    .await?;
 
     let mut healthy_servers = Vec::with_capacity(sibling_outputs);
     let mut healthy_output_ids = Vec::with_capacity(sibling_outputs);
@@ -9358,22 +9323,16 @@ async fn fault_rtmp_stalled_sink_isolation_under_many_outputs(
         let port = healthy_sink_base_port.saturating_add(index as u16);
         let metrics = Arc::new(GeneralizedSinkMetrics::default());
         let server = start_generalized_sink_server(port, metrics.clone()).await?;
-        let output = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pid}/outputs"),
-                output_create_payload(
-                    &format!("rtmp-healthy-sink-{index:02}"),
-                    &format!(
-                        "rtmp://127.0.0.1:{port}/live/fault-egress-rtmp-stall-isolation-healthy-{index:02}"
-                    ),
-                    "source",
-                ),
-            )
-            .await?;
-        let oid = output["output"]["id"]
-            .as_str()
-            .ok_or("missing id")?
-            .to_string();
+        let oid = create_mixed_output(
+            api,
+            &pid,
+            &format!("rtmp-healthy-sink-{index:02}"),
+            &format!(
+                "rtmp://127.0.0.1:{port}/live/fault-egress-rtmp-stall-isolation-healthy-{index:02}"
+            ),
+            "source",
+        )
+        .await?;
         healthy_output_ids.push(oid);
         healthy_metrics.push(metrics);
         healthy_servers.push(server);
@@ -9519,6 +9478,10 @@ async fn create_pipeline_with_stream_key(
         .as_str()
         .map(str::to_string)
         .ok_or_else(|| format!("missing pipeline id for {name}"))
+}
+
+async fn create_pipeline(api: &RampApi, name: &str) -> Result<String, String> {
+    create_pipeline_with_stream_key(api, name, name).await
 }
 
 async fn delete_pipeline_v1(api: &RampApi, pipeline_id: &str) -> Result<(), String> {
@@ -9975,9 +9938,7 @@ async fn recovery_live_cases(
 
     // ── 1. Transient RTMP publisher drop does not tear down egress ─────
     {
-        let pid =
-            create_pipeline_with_stream_key(api, "fault-rtmp-transient", "fault-rtmp-transient")
-                .await?;
+        let pid = create_pipeline(api, "fault-rtmp-transient").await?;
 
         let metrics = Arc::new(GeneralizedSinkMetrics::default());
         let listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
@@ -10204,9 +10165,7 @@ async fn recovery_live_cases(
 
     // ── 2. Transient SRT publisher drop does not tear down egress ──────
     {
-        let pid =
-            create_pipeline_with_stream_key(api, "fault-srt-transient", "fault-srt-transient")
-                .await?;
+        let pid = create_pipeline(api, "fault-srt-transient").await?;
 
         let metrics = Arc::new(GeneralizedSinkMetrics::default());
         let listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
@@ -10609,9 +10568,7 @@ async fn recovery_live_cases(
 
     // ── 3. Egress retry survives transient ingest gap within grace ─────
     {
-        let pid =
-            create_pipeline_with_stream_key(api, "fault-rtmp-retry-gap", "fault-rtmp-retry-gap")
-                .await?;
+        let pid = create_pipeline(api, "fault-rtmp-retry-gap").await?;
 
         let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
         let sink_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
@@ -10905,9 +10862,7 @@ async fn recovery_live_cases(
 
     // ── 4. Hung HLS PUT sink times out, retries, and recovers after restart ──
     {
-        let pid =
-            create_pipeline_with_stream_key(api, "fault-hls-put-timeout", "fault-hls-put-timeout")
-                .await?;
+        let pid = create_pipeline(api, "fault-hls-put-timeout").await?;
         let sink_dir = artifact_path("recovery-hls-put-timeout");
         let _ = std::fs::remove_dir_all(&sink_dir);
         std::fs::create_dir_all(&sink_dir).map_err(|e| e.to_string())?;
@@ -11091,9 +11046,7 @@ async fn recovery_live_cases(
 
     // ── 5. Transient RTMP sink flaps surface recovered output instability ──
     {
-        let pid =
-            create_pipeline_with_stream_key(api, "fault-rtmp-sink-flap", "fault-rtmp-sink-flap")
-                .await?;
+        let pid = create_pipeline(api, "fault-rtmp-sink-flap").await?;
 
         let oid = create_mixed_output(
             api,
@@ -11330,9 +11283,7 @@ async fn recovery_live_cases(
 
     // ── 6. Transient SRT sink flaps surface recovered output instability ──
     {
-        let pid =
-            create_pipeline_with_stream_key(api, "fault-srt-sink-flap", "fault-srt-sink-flap")
-                .await?;
+        let pid = create_pipeline(api, "fault-srt-sink-flap").await?;
         let sink_stream_key = "fault-srt-sink-flap-target";
         let mut sink_pid =
             create_pipeline_with_stream_key(api, "srt-sink-flap-target-1", sink_stream_key).await?;
@@ -11641,16 +11592,7 @@ async fn fault_resilience() -> Result<Value, String> {
 
     // ── 1. RTMP publisher disconnect ────────────────────────────────────
     {
-        let pipeline = api
-            .post_json(
-                "/api/v1/pipelines",
-                json!({"name": "fault-rtmp", "streamKey": "fault-rtmp"}),
-            )
-            .await?;
-        let pid = pipeline["pipeline"]["id"]
-            .as_str()
-            .ok_or("missing id")?
-            .to_string();
+        let pid = create_pipeline(&api, "fault-rtmp").await?;
 
         let mut pub_child = spawn_publisher(
             &fixture_h264,
@@ -11694,16 +11636,7 @@ async fn fault_resilience() -> Result<Value, String> {
 
     // ── 2. SRT publisher disconnect ─────────────────────────────────────
     {
-        let pipeline = api
-            .post_json(
-                "/api/v1/pipelines",
-                json!({"name": "fault-srt", "streamKey": "fault-srt"}),
-            )
-            .await?;
-        let pid = pipeline["pipeline"]["id"]
-            .as_str()
-            .ok_or("missing id")?
-            .to_string();
+        let pid = create_pipeline(&api, "fault-srt").await?;
 
         let mut pub_child = spawn_publisher(
             &fixture_h264,
@@ -11750,16 +11683,7 @@ async fn fault_resilience() -> Result<Value, String> {
 
     // ── 4. File ingest stop ─────────────────────────────────────────────
     {
-        let pipeline = api
-            .post_json(
-                "/api/v1/pipelines",
-                json!({"name": "fault-file", "streamKey": "fault-file"}),
-            )
-            .await?;
-        let pid = pipeline["pipeline"]["id"]
-            .as_str()
-            .ok_or("missing id")?
-            .to_string();
+        let pid = create_pipeline(&api, "fault-file").await?;
 
         let fixture_name = fixture_h264
             .file_name()
@@ -11816,16 +11740,7 @@ async fn fault_resilience() -> Result<Value, String> {
 
     // ── 4. Recording stops and surfaces inactive after ingest disappears ──
     {
-        let pipeline = api
-            .post_json(
-                "/api/v1/pipelines",
-                json!({"name": "fault-recording", "streamKey": "fault-recording"}),
-            )
-            .await?;
-        let pid = pipeline["pipeline"]["id"]
-            .as_str()
-            .ok_or("missing id")?
-            .to_string();
+        let pid = create_pipeline(&api, "fault-recording").await?;
 
         let mut pub_child = spawn_publisher(
             &fixture_h264,
@@ -11910,16 +11825,7 @@ async fn fault_resilience() -> Result<Value, String> {
 
     // ── 5. External transcoder tears down after ingest disappears ───────
     {
-        let pipeline = api
-            .post_json(
-                "/api/v1/pipelines",
-                json!({"name": "fault-transcoder", "streamKey": "fault-transcoder"}),
-            )
-            .await?;
-        let pid = pipeline["pipeline"]["id"]
-            .as_str()
-            .ok_or("missing id")?
-            .to_string();
+        let pid = create_pipeline(&api, "fault-transcoder").await?;
 
         let sink_bytes = Arc::new(AtomicU64::new(0));
         let sink_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
@@ -11959,16 +11865,7 @@ async fn fault_resilience() -> Result<Value, String> {
         });
 
         let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/fault-transcoder-sink");
-        let output = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pid}/outputs"),
-                output_create_payload("rtmp.720p.a0", &sink_url, "720p"),
-            )
-            .await?;
-        let oid = output["output"]["id"]
-            .as_str()
-            .ok_or("missing id")?
-            .to_string();
+        let oid = create_mixed_output(&api, &pid, "rtmp.720p.a0", &sink_url, "720p").await?;
 
         let mut pub_child = spawn_publisher(
             &fixture_h264,
@@ -12084,16 +11981,7 @@ async fn fault_resilience() -> Result<Value, String> {
 
     // ── 9. HLS preview tears down after ingest disappears ───────────────
     {
-        let pipeline = api
-            .post_json(
-                "/api/v1/pipelines",
-                json!({"name": "fault-hls-preview", "streamKey": "fault-hls-preview"}),
-            )
-            .await?;
-        let pid = pipeline["pipeline"]["id"]
-            .as_str()
-            .ok_or("missing id")?
-            .to_string();
+        let pid = create_pipeline(&api, "fault-hls-preview").await?;
 
         let mut pub_child = spawn_publisher(
             &fixture_h264,
@@ -12165,16 +12053,7 @@ async fn fault_resilience() -> Result<Value, String> {
 
     // ── 9. File ingest EOF clears runtime state and allows restart ──────
     {
-        let pipeline = api
-            .post_json(
-                "/api/v1/pipelines",
-                json!({"name": "fault-file-eof", "streamKey": "fault-file-eof"}),
-            )
-            .await?;
-        let pid = pipeline["pipeline"]["id"]
-            .as_str()
-            .ok_or("missing id")?
-            .to_string();
+        let pid = create_pipeline(&api, "fault-file-eof").await?;
 
         let fixture_name = fixture_h264
             .file_name()
