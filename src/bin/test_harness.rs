@@ -2190,7 +2190,8 @@ impl SweepOutputKind {
 }
 
 /// Reusable resource-sweep egress shape shared by resource and branch matrices.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
 enum ResourceEgressShape {
     RtmpSource,
     SourceMixed,
@@ -2244,66 +2245,26 @@ impl ResourceEgressShape {
 }
 
 /// Declarative resource-sweep egress scenario row.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ResourceEgressScenario {
-    name: &'static str,
+    name: String,
     config_index: usize,
     shape: ResourceEgressShape,
     branch_order: Option<usize>,
 }
 
-const RESOURCE_EGRESS_SCENARIOS: &[ResourceEgressScenario] = &[
-    ResourceEgressScenario {
-        name: "egress-growth-source-same",
-        config_index: 1,
-        shape: ResourceEgressShape::RtmpSource,
-        branch_order: None,
-    },
-    ResourceEgressScenario {
-        name: "egress-growth-source-mixed",
-        config_index: 1,
-        shape: ResourceEgressShape::SourceMixed,
-        branch_order: Some(0),
-    },
-    ResourceEgressScenario {
-        name: "egress-growth-transcode-same",
-        config_index: 1,
-        shape: ResourceEgressShape::Rtmp720p,
-        branch_order: None,
-    },
-    ResourceEgressScenario {
-        name: "egress-growth-transcode-mixed",
-        config_index: 1,
-        shape: ResourceEgressShape::TranscodeMixed,
-        branch_order: Some(1),
-    },
-    ResourceEgressScenario {
-        name: "egress-growth-source-plus-transcode-mixed",
-        config_index: 1,
-        shape: ResourceEgressShape::SourcePlusTranscodeMixed,
-        branch_order: Some(2),
-    },
-    ResourceEgressScenario {
-        name: "egress-growth-transcode-dual-mixed",
-        config_index: 1,
-        shape: ResourceEgressShape::DualTranscodeMixed,
-        branch_order: Some(3),
-    },
-    ResourceEgressScenario {
-        name: "egress-growth-source-plus-transcode-dual-mixed",
-        config_index: 1,
-        shape: ResourceEgressShape::SourcePlusDualTranscodeMixed,
-        branch_order: Some(4),
-    },
-    ResourceEgressScenario {
-        name: "egress-growth-hevc-bridge",
-        config_index: 2,
-        shape: ResourceEgressShape::RtmpSource,
-        branch_order: None,
-    },
-];
+static RESOURCE_EGRESS_SCENARIOS_FROM_DSL: OnceLock<Vec<ResourceEgressScenario>> = OnceLock::new();
+
+fn resource_egress_scenarios() -> &'static [ResourceEgressScenario] {
+    RESOURCE_EGRESS_SCENARIOS_FROM_DSL.get_or_init(|| {
+        serde_json::from_str(include_str!("test_harness/resource_egress_scenarios.json"))
+            .expect("embedded resource_egress_scenarios.json should define valid resource rows")
+    })
+}
 
 fn resource_egress_scenario(name: &str) -> Option<&'static ResourceEgressScenario> {
-    RESOURCE_EGRESS_SCENARIOS
+    resource_egress_scenarios()
         .iter()
         .find(|scenario| scenario.name == name)
 }
@@ -2629,8 +2590,8 @@ async fn resource_sweep() -> Result<Value, String> {
             run_resource_ingest_growth(&env, &mut stack, &mut retained_publishers, true).await?,
         );
     }
-    for scenario in RESOURCE_EGRESS_SCENARIOS {
-        if !env.scenario_enabled(scenario.name) {
+    for scenario in resource_egress_scenarios() {
+        if !env.scenario_enabled(&scenario.name) {
             continue;
         }
         aggregates.extend(
@@ -2638,7 +2599,7 @@ async fn resource_sweep() -> Result<Value, String> {
                 &env,
                 &mut stack,
                 &mut retained_publishers,
-                scenario.name,
+                &scenario.name,
                 SWEEP_CONFIGS[scenario.config_index],
                 scenario.shape.output_kinds(),
             )
@@ -2759,11 +2720,11 @@ async fn run_branch_matrix_variant(env: &BranchMatrixEnv) -> Result<Value, Strin
     let mut retained_publishers: Vec<Child> = Vec::new();
     let mut aggregates = Vec::new();
 
-    for scenario in RESOURCE_EGRESS_SCENARIOS
+    for scenario in resource_egress_scenarios()
         .iter()
         .filter(|scenario| scenario.branch_order.is_some())
     {
-        if !env.scenario_enabled(scenario.name) {
+        if !env.scenario_enabled(&scenario.name) {
             continue;
         }
         aggregates.extend(
@@ -2771,7 +2732,7 @@ async fn run_branch_matrix_variant(env: &BranchMatrixEnv) -> Result<Value, Strin
                 resource,
                 &mut stack,
                 &mut retained_publishers,
-                scenario.name,
+                &scenario.name,
                 SWEEP_CONFIGS[scenario.config_index],
                 scenario.shape.output_kinds(),
             )
@@ -3766,7 +3727,7 @@ async fn run_resource_egress_growth(
     env: &ResourceSweepEnv,
     stack: &mut Option<ResourceSweepStack>,
     retained_publishers: &mut Vec<Child>,
-    scenario_name: &'static str,
+    scenario_name: &str,
     config: SweepConfig,
     output_kinds: &[SweepOutputKind],
 ) -> Result<Vec<ResourceAggregate>, String> {
@@ -12893,9 +12854,9 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn resource_egress_scenario_table_carries_branch_contract() {
-        assert_eq!(RESOURCE_EGRESS_SCENARIOS.len(), 8);
+        assert_eq!(resource_egress_scenarios().len(), 8);
         assert_eq!(
-            RESOURCE_EGRESS_SCENARIOS
+            resource_egress_scenarios()
                 .iter()
                 .filter(|scenario| scenario.branch_order.is_some())
                 .count(),

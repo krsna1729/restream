@@ -1,0 +1,10 @@
+[
+  {"name": "egress-growth-source-same", "configIndex": 1, "shape": "rtmpSource"},
+  {"name": "egress-growth-source-mixed", "configIndex": 1, "shape": "sourceMixed", "branchOrder": 0},
+  {"name": "egress-growth-transcode-same", "configIndex": 1, "shape": "rtmp720p"},
+  {"name": "egress-growth-transcode-mixed", "configIndex": 1, "shape": "transcodeMixed", "branchOrder": 1},
+  {"name": "egress-growth-source-plus-transcode-mixed", "configIndex": 1, "shape": "sourcePlusTranscodeMixed", "branchOrder": 2},
+  {"name": "egress-growth-transcode-dual-mixed", "configIndex": 1, "shape": "dualTranscodeMixed", "branchOrder": 3},
+  {"name": "egress-growth-source-plus-transcode-dual-mixed", "configIndex": 1, "shape": "sourcePlusDualTranscodeMixed", "branchOrder": 4},
+  {"name": "egress-growth-hevc-bridge", "configIndex": 2, "shape": "rtmpSource"}
+]
