@@ -732,6 +732,22 @@ async fn start_restream_child(
     start_restream_child_opts(bin, ports, db_path, log_path, true, None, &[]).await
 }
 
+async fn start_restream_api(
+    bin: &Path,
+    ports: &TestPorts,
+    db_path: &Path,
+    log_path: &Path,
+) -> Result<(Child, RampApi), String> {
+    let child = start_restream_child(bin, ports, db_path, log_path).await?;
+    Ok((child, login_api(ports).await?))
+}
+
+async fn login_api(ports: &TestPorts) -> Result<RampApi, String> {
+    let mut api = RampApi::new(ports.http);
+    api.login().await?;
+    Ok(api)
+}
+
 async fn start_restream_child_with_env(
     bin: &Path,
     ports: &TestPorts,
@@ -4652,9 +4668,7 @@ async fn api_smoke() -> Result<Value, String> {
     let ports = TestPorts::from_env();
 
     // ── First boot: CRUD ────────────────────────────────────────────
-    let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
     println!("[api-smoke] authenticated");
 
     // Health endpoint
@@ -5943,9 +5957,7 @@ async fn correctness() -> Result<Value, String> {
     let log_path = work_dir.join("restream.log");
     let ports = TestPorts::from_env();
 
-    let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     let rtmp_id = create_pipeline_with_stream_key(&api, "RTMP test", "e2e-rtmp").await?;
     let srt_id = create_pipeline_with_stream_key(&api, "SRT test", "e2e-srt").await?;
@@ -6041,9 +6053,7 @@ async fn srt_to_rtmp_correctness() -> Result<Value, String> {
     let sink_port = harness_port_defaults().sink;
     let ports = TestPorts::from_env();
 
-    let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     let pipeline_id =
         create_pipeline_with_stream_key(&api, "H.264 SRT source", "e2e-srt-rtmp").await?;
@@ -6124,9 +6134,7 @@ async fn srt_to_rtmp_atrack_correctness() -> Result<Value, String> {
     let sink_port = harness_port_defaults().sink;
     let ports = TestPorts::from_env();
 
-    let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     let pipeline_id =
         create_pipeline_with_stream_key(&api, "H.264 SRT multi-audio", "e2e-srt-rtmp-atrack")
@@ -6324,9 +6332,7 @@ async fn srt_policy_correctness() -> Result<Value, String> {
     let log_path = work_dir.join("restream.log");
     let ports = TestPorts::from_env();
 
-    let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     let fixture = checked_h264_fixture()?;
 
@@ -6884,9 +6890,7 @@ async fn bframe_rtmp_correctness() -> Result<Value, String> {
     let ports = TestPorts::from_env();
 
     let mut mediamtx = start_local_mediamtx(&mediamtx_config, &mediamtx_log, all_ports).await?;
-    let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     let pipeline_id =
         create_pipeline_with_stream_key(&api, "B-frame RTMP source", "e2e-bframe-src").await?;
@@ -7015,9 +7019,7 @@ async fn correctness_one_protocol(protocol: &str) -> Result<Value, String> {
     let log_path = work_dir.join("restream.log");
     let ports = TestPorts::from_env();
 
-    let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     let stream_key = format!("e2e-{protocol}");
     let pipeline_id =
@@ -7105,8 +7107,7 @@ async fn egress_correctness() -> Result<Value, String> {
     let mut child =
         start_restream_child_in_media_dir(&restream_bin, &ports, &db_path, &log_path, &media_dir)
             .await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let api = login_api(&ports).await?;
 
     let pipeline_id = create_pipeline_with_stream_key(&api, "Egress source", "e2e-src").await?;
 
@@ -7344,9 +7345,7 @@ async fn hevc_rtmp_egress_correctness() -> Result<Value, String> {
     let sink_port = harness_port_defaults().sink;
     let ports = TestPorts::from_env();
 
-    let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     let pipeline_id = create_pipeline_with_stream_key(&api, "H.265 SRT source", "e2e-hevc").await?;
 
@@ -7455,9 +7454,8 @@ async fn hevc_rtmp_atrack_correctness() -> Result<Value, String> {
     let ports = TestPorts::from_env();
 
     let mut mediamtx = start_local_mediamtx(&mediamtx_config, &mediamtx_log, all_ports).await?;
-    let mut restream = start_restream_child(&restream_bin, &ports, &db_path, &restream_log).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut restream, api) =
+        start_restream_api(&restream_bin, &ports, &db_path, &restream_log).await?;
 
     let pipeline_id =
         create_pipeline_with_stream_key(&api, "2v16a HEVC SRT source", "e2e-hevc-rtmp-atrack")
@@ -7666,9 +7664,7 @@ async fn hevc_srt_passthrough_correctness() -> Result<Value, String> {
     let log_path = work_dir.join("restream.log");
     let ports = TestPorts::from_env();
 
-    let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     // Source pipeline
     let pipeline_id =
@@ -8319,8 +8315,7 @@ async fn file_live_edge() -> Result<Value, String> {
     let mut child =
         start_restream_child_in_media_dir(&restream_bin, &ports, &db_path, &log_path, &media_dir)
             .await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let mut api = login_api(&ports).await?;
 
     let passthrough = run_file_live_edge_case(
         &mut api,
@@ -9027,9 +9022,7 @@ async fn fault_egress_retry() -> Result<Value, String> {
     let ports = TestPorts::from_env();
     let timeout = Duration::from_secs(15);
 
-    let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     let fixture_h264 = checked_h264_fixture()?;
     let results = vec![
@@ -9053,8 +9046,7 @@ async fn fault_egress_retry() -> Result<Value, String> {
         &retry_limit_env,
     )
     .await?;
-    let mut retry_limit_api = RampApi::new(ports.http);
-    retry_limit_api.login().await?;
+    let retry_limit_api = login_api(&ports).await?;
     let mut retry_limit_results = Vec::new();
     for case in retry_budget_cases() {
         retry_limit_results.push(
@@ -9102,9 +9094,7 @@ async fn fault_output_stall() -> Result<Value, String> {
     let ports = TestPorts::from_env();
     let timeout = Duration::from_secs(15);
 
-    let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     let fixture_h264 = checked_h264_fixture()?;
     let stall_single =
@@ -10609,9 +10599,8 @@ async fn recovery() -> Result<Value, String> {
     let ports = TestPorts::from_env();
     let timeout = Duration::from_secs(15);
 
-    let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut child, mut api) =
+        start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     let fixture_h264 = checked_h264_fixture()?;
     let results = recovery_live_cases(
@@ -11052,9 +11041,8 @@ async fn fault_resilience() -> Result<Value, String> {
     let ports = TestPorts::from_env();
     let timeout = Duration::from_secs(15);
 
-    let mut child = start_restream_child(&restream_bin, &ports, &db_path, &log_path).await?;
-    let mut api = RampApi::new(ports.http);
-    api.login().await?;
+    let (mut child, mut api) =
+        start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
 
     let fixture_h264 = checked_h264_fixture()?;
 
