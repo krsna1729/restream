@@ -1566,7 +1566,8 @@ async fn run_burst_graph_check(api: &RampApi, pipeline_id: &str) -> Result<(bool
 }
 
 /// One ramp-family input/output profile.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RampConfig {
     name: &'static str,
     ingest_proto: &'static str,
@@ -1574,34 +1575,12 @@ struct RampConfig {
     encoding: &'static str,
 }
 
-/// JSON row for ramp-family input/output profiles.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RampConfigRow {
-    name: String,
-    ingest_proto: String,
-    out_proto: String,
-    encoding: String,
-}
-
 static RAMP_CONFIGS_FROM_DSL: OnceLock<Vec<RampConfig>> = OnceLock::new();
-
-fn leak_manifest_str(value: String) -> &'static str {
-    Box::leak(value.into_boxed_str())
-}
 
 fn ramp_configs() -> &'static [RampConfig] {
     RAMP_CONFIGS_FROM_DSL.get_or_init(|| {
-        serde_json::from_str::<Vec<RampConfigRow>>(include_str!("test_harness/ramp_configs.json"))
+        serde_json::from_str::<Vec<RampConfig>>(include_str!("test_harness/ramp_configs.json"))
             .expect("embedded ramp_configs.json should define valid ramp rows")
-            .into_iter()
-            .map(|row| RampConfig {
-                name: leak_manifest_str(row.name),
-                ingest_proto: leak_manifest_str(row.ingest_proto),
-                out_proto: leak_manifest_str(row.out_proto),
-                encoding: leak_manifest_str(row.encoding),
-            })
-            .collect()
     })
 }
 
