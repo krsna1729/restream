@@ -3,7 +3,7 @@
 //! The engine owns stage lifecycles; this module owns the policy choice for how
 //! a typed stage should run.
 
-use crate::domain::audio_routing::{AudioRouting, parse_audio_routing};
+use crate::domain::audio_routing::{AudioRouting, parse_audio_operation};
 use crate::domain::stage::StageKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +35,7 @@ impl BackendPolicy {
     pub fn select_backend(&self, stage: &StageKind) -> StageBackend {
         match stage {
             StageKind::AudioRoute { operation, .. } => {
-                let routing = parse_audio_routing(&format!("source+{operation}"));
+                let routing = parse_audio_operation(operation);
                 if is_lightweight_audio_route(&routing) {
                     StageBackend::AudioRouter
                 } else {

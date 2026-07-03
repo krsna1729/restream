@@ -1,24 +1,26 @@
 //! Application-layer output path planning that interprets output encoding and
 //! target protocol choices into stage-aware routing decisions.
 
+use crate::domain::output_spec::{EgressProtocol, OutputEncodingSpec, VideoCodecKind};
 use crate::domain::stage::{EncodingStagePlan, PipelineId, StageKey, StageKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputPath {
     stage_plan: EncodingStagePlan,
-    is_rtmp: bool,
+    protocol: EgressProtocol,
 }
 
 impl OutputPath {
     pub fn resolve(pipeline_id: impl Into<PipelineId>, encoding: &str, url: &str) -> Self {
+        let spec = OutputEncodingSpec::parse(encoding);
         Self {
-            stage_plan: EncodingStagePlan::from_encoding(pipeline_id, encoding),
-            is_rtmp: is_rtmp_url(url),
+            stage_plan: EncodingStagePlan::from_spec(pipeline_id, &spec),
+            protocol: EgressProtocol::from_url(url),
         }
     }
 
     pub fn is_rtmp(&self) -> bool {
-        self.is_rtmp
+        self.protocol.is_rtmp()
     }
 
     pub fn video_stage(&self) -> Option<StageKey> {
@@ -34,7 +36,7 @@ impl OutputPath {
         // HEVC->H.264 edge by video shape only, then apply selected-audio
         // routing after it. That trades a few cheap audio-route stages for
         // sharing one codec edge across atrack:0/atrack:1 outputs.
-        self.is_rtmp.then(|| {
+        self.protocol.is_rtmp().then(|| {
             StageKey::new(
                 self.stage_plan.pipeline().clone(),
                 StageKind::codec_edge(
@@ -46,12 +48,16 @@ impl OutputPath {
     }
 
     pub fn needs_rtmp_h264_conv(&self, ingest_video_codec: Option<&str>) -> bool {
-        self.is_rtmp && ingest_video_codec.is_some_and(is_hevc_codec)
+        self.protocol.is_rtmp()
+            && ingest_video_codec
+                .map(VideoCodecKind::from_codec_name)
+                .is_some_and(VideoCodecKind::is_hevc)
     }
 
     pub fn ingest_codec_override(&self, ingest_video_codec: Option<&str>) -> Option<&'static str> {
         ingest_video_codec
-            .is_some_and(is_hevc_codec)
+            .map(VideoCodecKind::from_codec_name)
+            .is_some_and(VideoCodecKind::is_hevc)
             .then_some("hevc")
     }
 
@@ -96,14 +102,6 @@ impl OutputPath {
         }
         stages
     }
-}
-
-pub fn is_rtmp_url(url: &str) -> bool {
-    url.starts_with("rtmp://") || url.starts_with("rtmps://")
-}
-
-fn is_hevc_codec(codec: &str) -> bool {
-    codec.eq_ignore_ascii_case("hevc") || codec.eq_ignore_ascii_case("h265")
 }
 
 #[cfg(test)]

@@ -100,6 +100,13 @@ pub async fn start_audio_router(
                 }
                 for pkt in packets.drain(..) {
                     stage_metrics.record_in(pkt.payload.len() as u64);
+                    if pkt.media_type == MediaType::Video
+                        && output_buffer.video_parameter_sets().is_none()
+                        && let Some(parameter_sets) =
+                            crate::media::codec::annexb_parameter_sets(&pkt.payload)
+                    {
+                        output_buffer.set_video_parameter_sets(parameter_sets);
+                    }
                     let out = match &routing {
                         AudioRouting::Passthrough => Some((*pkt).clone()),
 
@@ -644,6 +651,68 @@ mod tests {
         let _ = handle.await;
     }
 
+    #[tokio::test]
+    async fn audio_router_learns_video_parameter_sets_from_live_packets() {
+        use crate::domain::stage::{StageKey, StageKind};
+        use crate::media::engine::MediaEngine;
+
+        let source_ring = Arc::new(RingBuffer::new(16));
+        let out_ring = Arc::new(RingBuffer::new(16));
+        let engine = Arc::new(MediaEngine::new());
+        let cancel = CancellationToken::new();
+        let stage_key = StageKey::new(
+            "pipe-video-params-live",
+            StageKind::audio_route("atrack:0", StageKind::source()),
+        );
+
+        source_ring.set_codec_hint("h264");
+
+        let handle = tokio::spawn(start_audio_router(
+            "pipe-video-params-live".to_string(),
+            AudioRouting::SelectTracks(vec![0]),
+            source_ring.clone(),
+            out_ring.clone(),
+            engine,
+            cancel.clone(),
+            stage_key,
+        ));
+
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        assert!(
+            out_ring.video_parameter_sets().is_none(),
+            "router should start without cached parameter sets when the upstream ring does not have them yet"
+        );
+
+        source_ring.push(MediaPacket {
+            media_type: MediaType::Video,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            is_keyframe: true,
+            format: PayloadFormat::Raw,
+            payload: bytes::Bytes::from_static(&[
+                0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x40, 0x28, 0x02, 0xDD, 0x80,
+                0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, 0x38, 0x80, 0x00, 0x00, 0x00, 0x01, 0x65, 0x88,
+                0x84, 0x00,
+            ]),
+        });
+
+        let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            if out_ring.video_parameter_sets().is_some() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < ready_deadline,
+                "router should cache parameter sets from the first live video packet"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
     // M7: pts=0 from AV_NOPTS_VALUE would cause a massive backward jump on a
     // long-running stream. Verify the timestamp conversion formula itself is
     // correct and that skipping None-pts packets is the right behavior.
@@ -725,7 +794,7 @@ fn run_ffmpeg_transcoder_stage_with_metrics(
         let audio_op = rest.rsplit_once(":from:").map(|(op, _)| op).unwrap_or(rest);
         (
             "source",
-            parse_audio_routing(&format!("source+{}", audio_op)),
+            crate::domain::audio_routing::parse_audio_operation(audio_op),
         )
     } else {
         let vp = preset.split('+').next().unwrap_or(preset);

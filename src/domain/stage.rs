@@ -8,6 +8,8 @@
 
 use std::fmt;
 
+use crate::domain::output_spec::{OutputEncodingSpec, VideoSelector};
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct PipelineId(String);
 
@@ -236,24 +238,17 @@ pub struct EncodingStagePlan {
 }
 
 impl EncodingStagePlan {
-    pub fn from_encoding(pipeline_id: impl Into<PipelineId>, encoding: &str) -> Self {
+    pub fn from_spec(pipeline_id: impl Into<PipelineId>, encoding: &OutputEncodingSpec) -> Self {
         let pipeline = pipeline_id.into();
-        let mut parts = encoding.splitn(2, '+');
-        let first_part = parts.next().unwrap_or("source");
-        let second_part = parts.next().filter(|value| !value.is_empty());
-        let (video_preset, audio_operation) = if looks_like_audio_operation(first_part) {
-            ("source", Some(first_part))
-        } else {
-            (first_part, second_part)
-        };
-
         let source = StageKind::source();
-        let needs_video =
-            !video_preset.is_empty() && video_preset != "source" && video_preset != "custom";
-        let video_stage = needs_video.then(|| StageKind::video_preset(video_preset));
+        let video_stage = match encoding.video() {
+            VideoSelector::Preset(preset) => Some(StageKind::video_preset(preset.clone())),
+            VideoSelector::Source | VideoSelector::Custom => None,
+        };
         let upstream = video_stage.clone().unwrap_or_else(|| source.clone());
-        let audio_stage =
-            audio_operation.map(|operation| StageKind::audio_route(operation, upstream));
+        let audio_stage = encoding
+            .audio_operation()
+            .map(|operation| StageKind::audio_route(operation, upstream));
 
         Self {
             pipeline,
@@ -261,6 +256,10 @@ impl EncodingStagePlan {
             video_stage,
             audio_stage,
         }
+    }
+
+    pub fn from_encoding(pipeline_id: impl Into<PipelineId>, encoding: &str) -> Self {
+        Self::from_spec(pipeline_id, &OutputEncodingSpec::parse(encoding))
     }
 
     pub fn pipeline(&self) -> &PipelineId {
@@ -308,10 +307,6 @@ impl EncodingStagePlan {
             StageKind::codec_edge(operation, self.terminal_kind().clone()),
         )
     }
-}
-
-fn looks_like_audio_operation(value: &str) -> bool {
-    value.starts_with("atrack:") || value.starts_with("remap:") || value.starts_with("downmix:")
 }
 
 #[cfg(test)]

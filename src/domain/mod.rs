@@ -2,6 +2,7 @@
 
 pub mod audio_routing;
 pub mod ingest_security;
+pub mod output_spec;
 pub mod srt_ingest;
 pub mod stage;
 pub mod transcode_profile;
