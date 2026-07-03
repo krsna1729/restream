@@ -253,10 +253,8 @@ pub(super) async fn mixed_input_matrix_correctness() -> Result<Value, String> {
     let mut results = Vec::new();
     for case in MIXED_INPUT_CASES {
         let mode = mixed_input_mode_name(*case);
-        let env = MixedEnv::from_env_with_default_work_dir(
-            &mode,
-            root.join(mixed_input_artifact_rel_dir(*case)),
-        );
+        let env =
+            MixedEnv::from_env_with_default_work_dir(&mode, root.join(case.artifact_rel_dir()));
         match run_mixed_input_case_with_env(*case, env).await {
             Ok(result) => results.push(result),
             Err(error) => {
@@ -273,11 +271,11 @@ pub(super) async fn mixed_input_matrix_correctness() -> Result<Value, String> {
         "inputCases": MIXED_INPUT_CASES.iter().map(|case| {
             json!({
                 "id": case.scenario_id(),
-                "source": mixed_input_source_name(*case),
-                "ingest": mixed_input_ingest_name(*case),
+                "source": case.source_name(),
+                "ingest": case.ingest_name(),
                 "video": case.codec_name(),
-                "audio": mixed_input_audio_layout_name(*case),
-                "reorder": mixed_input_reorder_name(*case),
+                "audio": case.audio_layout_name(),
+                "reorder": case.reorder_name(),
                 "sourceHasBframes": case.source_has_b_frames(),
             })
         }).collect::<Vec<_>>(),
@@ -327,7 +325,7 @@ pub(super) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
             let selected_a = mixed_fast_breadth_selected(case_a);
             let mut env_a = MixedEnv::from_env_with_default_work_dir(
                 case_a.scenario_id(),
-                root.join(mixed_input_artifact_rel_dir(case_a)),
+                root.join(case_a.artifact_rel_dir()),
             );
             bind_mixed_env_to_shared_stack(&mut env_a, &stack.env);
             if !explicit_n_per_group {
@@ -357,7 +355,7 @@ pub(super) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
                 let selected_b = mixed_fast_breadth_selected(case_b);
                 let mut env_b = MixedEnv::from_env_with_default_work_dir(
                     case_b.scenario_id(),
-                    root.join(mixed_input_artifact_rel_dir(case_b)),
+                    root.join(case_b.artifact_rel_dir()),
                 );
                 bind_mixed_env_to_shared_stack(&mut env_b, &stack.env);
                 if !explicit_n_per_group {
@@ -495,11 +493,11 @@ pub(super) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
             let selected = mixed_fast_breadth_selected(*case);
             json!({
                 "id": case.scenario_id(),
-                "source": mixed_input_source_name(*case),
-                "ingest": mixed_input_ingest_name(*case),
+                "source": case.source_name(),
+                "ingest": case.ingest_name(),
                 "video": case.codec_name(),
-                "audio": mixed_input_audio_layout_name(*case),
-                "reorder": mixed_input_reorder_name(*case),
+                "audio": case.audio_layout_name(),
+                "reorder": case.reorder_name(),
                 "sourceHasBframes": case.source_has_b_frames(),
                 "outputCells": mixed_output_cases_for_input(*case).len(),
                 "checks": selected.check_names(),
@@ -570,10 +568,10 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
             run_mixed_anchor_config(&env, api, restream_pid, case, &mut resume).await
         }
         (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H265, false) => {
-            run_mixed_h265_srt_config(&env, api, restream_pid, case, &mut resume).await
+            run_mixed_single_live_config(&env, api, restream_pid, case, &mut resume).await
         }
         (MixedSourceAdapter::RtmpPublisher, MixedVideoCodec::H264, false) => {
-            run_mixed_h264_rtmp_config(&env, api, restream_pid, case, &mut resume).await
+            run_mixed_single_live_config(&env, api, restream_pid, case, &mut resume).await
         }
         (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H264, true) => {
             run_mixed_srt_multi_config(&env, api, restream_pid, case, &mut resume).await
@@ -610,11 +608,11 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
             "scenario": case.scenario_id(),
             "inputCase": {
                 "id": case.scenario_id(),
-                "source": mixed_input_source_name(case),
-                "ingest": mixed_input_ingest_name(case),
+                "source": case.source_name(),
+                "ingest": case.ingest_name(),
                 "video": case.codec_name(),
-                "audio": mixed_input_audio_layout_name(case),
-                "reorder": mixed_input_reorder_name(case),
+                "audio": case.audio_layout_name(),
+                "reorder": case.reorder_name(),
                 "sourceHasBframes": case.source_has_b_frames(),
             },
             "sharedStackGroup": case.shared_batch_group().as_str(),
@@ -737,7 +735,7 @@ pub(super) async fn run_mixed_anchor_config(
         .ok_or("pipeline create response missing pipeline.id")?
         .to_string();
 
-    let mut publisher = spawn_mixed_anchor_publisher(env, case, &stream_key).await?;
+    let mut publisher = spawn_mixed_live_publisher(env, case, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
     let hls_preview = if env.check_selected("hls") {
         Some(
@@ -746,7 +744,7 @@ pub(super) async fn run_mixed_anchor_config(
                 api,
                 cfg,
                 &pipeline_id,
-                mixed_hls_preview_expected_dimensions(case),
+                case.hls_preview_expected_dimensions(),
                 case,
                 resume,
             )
@@ -1143,44 +1141,8 @@ pub(super) async fn run_mixed_anchor_config(
 
     // Phase 4: harness sink probe — assert DTS monotonicity, video+audio
     // presence, and keyframe cadence on the live egress.
-    let mut sink_probe_result = None;
-    let mut sink_probe_failure = None;
-    if env.check_selected("sink-probe")
-        && resume.allows(&mixed_scenario_check_id(cfg, "sink_probe"))
-    {
-        let started = Instant::now();
-        let sink_port = harness_port_defaults().sink;
-        match run_sink_probe(api, &pipeline_id, cfg, "source", sink_port, 30).await {
-            Ok(probe) => {
-                let status = if probe.passed { "pass" } else { "fail" };
-                emit_mixed_result(
-                    env,
-                    cfg,
-                    &mixed_scenario_check_id(cfg, "sink_probe"),
-                    status,
-                    started.elapsed(),
-                    Some(probe.summary.clone()),
-                )?;
-                output_ids.push(probe.output_id.clone());
-                if !probe.passed {
-                    sink_probe_failure =
-                        Some(format!("{cfg}: sink probe failed: {}", probe.summary));
-                }
-                sink_probe_result = Some(probe);
-            }
-            Err(e) => {
-                emit_mixed_result(
-                    env,
-                    cfg,
-                    &mixed_scenario_check_id(cfg, "sink_probe"),
-                    "fail",
-                    started.elapsed(),
-                    Some(json!({"error": e.clone()})),
-                )?;
-                sink_probe_failure = Some(format!("{cfg}: sink probe error: {e}"));
-            }
-        }
-    }
+    let (sink_probe_result, sink_probe_failure) =
+        run_optional_mixed_sink_probe(env, api, &pipeline_id, cfg, &mut output_ids, resume).await?;
 
     let mut hls_put_probe_result = None;
     if env.check_selected("hls-put-probe")
@@ -1320,7 +1282,7 @@ pub(super) async fn run_mixed_anchor_config(
     Ok(result)
 }
 
-pub(super) async fn run_mixed_h265_srt_config(
+pub(super) async fn run_mixed_single_live_config(
     env: &MixedEnv,
     api: &RampApi,
     restream_pid: u32,
@@ -1344,7 +1306,7 @@ pub(super) async fn run_mixed_h265_srt_config(
         .ok_or("pipeline create response missing pipeline.id")?
         .to_string();
 
-    let mut publisher = spawn_mixed_h265_srt_publisher(env, case, &stream_key).await?;
+    let mut publisher = spawn_mixed_live_publisher(env, case, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
     let recording = verify_mixed_recording(env, api, cfg, &pipeline_id, case, resume).await?;
     if env.check_selected("hls") {
@@ -1353,7 +1315,7 @@ pub(super) async fn run_mixed_h265_srt_config(
             api,
             cfg,
             &pipeline_id,
-            mixed_hls_preview_expected_dimensions(case),
+            case.hls_preview_expected_dimensions(),
             case,
             resume,
         )
@@ -1413,203 +1375,8 @@ pub(super) async fn run_mixed_h265_srt_config(
 
     verify_mixed_output_cases(env, cfg, output_cases, resume).await?;
 
-    let mut sink_probe_result = None;
-    let mut sink_probe_failure = None;
-    if env.check_selected("sink-probe")
-        && resume.allows(&mixed_scenario_check_id(cfg, "sink_probe"))
-    {
-        let started = Instant::now();
-        let sink_port = harness_port_defaults().sink;
-        match run_sink_probe(api, &pipeline_id, cfg, "source", sink_port, 30).await {
-            Ok(probe) => {
-                let status = if probe.passed { "pass" } else { "fail" };
-                emit_mixed_result(
-                    env,
-                    cfg,
-                    &mixed_scenario_check_id(cfg, "sink_probe"),
-                    status,
-                    started.elapsed(),
-                    Some(probe.summary.clone()),
-                )?;
-                output_ids.push(probe.output_id.clone());
-                if !probe.passed {
-                    sink_probe_failure =
-                        Some(format!("{cfg}: sink probe failed: {}", probe.summary));
-                }
-                sink_probe_result = Some(probe);
-            }
-            Err(e) => {
-                emit_mixed_result(
-                    env,
-                    cfg,
-                    &mixed_scenario_check_id(cfg, "sink_probe"),
-                    "fail",
-                    started.elapsed(),
-                    Some(json!({"error": e.clone()})),
-                )?;
-                sink_probe_failure = Some(format!("{cfg}: sink probe error: {e}"));
-            }
-        }
-    }
-
-    stop_child(&mut publisher).await;
-    stop_mixed_outputs(api, &pipeline_id, &output_ids).await;
-    tokio::time::sleep(Duration::from_secs(8)).await;
-
-    if let Some(error) = sink_probe_failure {
-        return Err(error);
-    }
-
-    let mut result = json!({
-        "scenario": cfg,
-        "pipelineId": pipeline_id,
-        "nPerGroup": n,
-        "totalOutputs": total,
-        "rssDeltaKb": rss_delta,
-        "perOutputKb": per_output,
-        "extFfmpegCount": ffmpeg.count,
-        "extFfmpegRssKb": ffmpeg.rss_kb,
-        "recording": recording,
-        "outputMatrix": mixed_output_matrix_json(output_cases),
-    });
-    if let Some(probe) = sink_probe_result {
-        result["sinkProbe"] = probe.summary;
-        result["sinkProbePassed"] = json!(probe.passed);
-    }
-    Ok(result)
-}
-
-pub(super) async fn run_mixed_h264_rtmp_config(
-    env: &MixedEnv,
-    api: &RampApi,
-    restream_pid: u32,
-    case: MixedInputCase,
-    resume: &mut MixedResume,
-) -> Result<Value, String> {
-    let cfg = case.scenario_id();
-    let n = env.n_per_group;
-    let output_cases = mixed_output_cases_for_input(case);
-    let total = n * output_cases.len();
-    let stream_key = format!("sk-{cfg}");
-
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": cfg, "streamKey": stream_key}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create response missing pipeline.id")?
-        .to_string();
-
-    let mut publisher = spawn_mixed_h264_rtmp_publisher(env, case, &stream_key).await?;
-    wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
-    let recording = verify_mixed_recording(env, api, cfg, &pipeline_id, case, resume).await?;
-    if env.check_selected("hls") {
-        verify_mixed_hls_preview(
-            env,
-            api,
-            cfg,
-            &pipeline_id,
-            mixed_hls_preview_expected_dimensions(case),
-            case,
-            resume,
-        )
-        .await?;
-    }
-    let rss_baseline = process_rss_kb(restream_pid).await.unwrap_or(0);
-    if !env.skip_load {
-        snapshot_mixed(env, restream_pid, cfg, "baseline (input live, 0 outputs)").await?;
-    }
-
-    let mut output_ids = Vec::with_capacity(total);
-    let mut ffmpeg_signal_sinks = Vec::new();
-    let mut next_ffmpeg_signal_sink = 0usize;
-    add_mixed_output_cases(
-        env,
-        api,
-        &pipeline_id,
-        restream_pid,
-        cfg,
-        output_cases,
-        &mut ffmpeg_signal_sinks,
-        &mut next_ffmpeg_signal_sink,
-        &mut output_ids,
-    )
-    .await?;
-    verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, resume).await?;
-    if !ffmpeg_signal_sinks.is_empty() {
-        finish_ffmpeg_signal_sinks(env, &mut ffmpeg_signal_sinks, resume).await?;
-    }
-
-    let rss_final = process_rss_kb(restream_pid).await.unwrap_or(0);
-    let ffmpeg = ffmpeg_pipe1_stats().await;
-    let rss_delta = rss_final.saturating_sub(rss_baseline);
-    let per_output = rss_delta / total as u64;
-    append_line(
-        &env.rss_summary,
-        &format!(
-            "{cfg},rss_delta_kb={rss_delta},per_output_kb={per_output},ext_ffmpeg_n={},ext_ffmpeg_rss_kb={}\n",
-            ffmpeg.count, ffmpeg.rss_kb
-        ),
-    )?;
-    if !env.skip_load && env.check_selected("load") {
-        emit_mixed_result(
-            env,
-            cfg,
-            &mixed_scenario_check_id(cfg, "load_delta_per_output"),
-            "pass",
-            Duration::ZERO,
-            Some(json!({
-                "rss_delta_kb": rss_delta,
-                "per_output_kb": per_output,
-                "ext_ffmpeg_n": ffmpeg.count,
-                "ext_ffmpeg_rss_kb": ffmpeg.rss_kb,
-            })),
-        )?;
-    }
-
-    verify_mixed_output_cases(env, cfg, output_cases, resume).await?;
-
-    let mut sink_probe_result = None;
-    let mut sink_probe_failure = None;
-    if env.check_selected("sink-probe")
-        && resume.allows(&mixed_scenario_check_id(cfg, "sink_probe"))
-    {
-        let started = Instant::now();
-        let sink_port = harness_port_defaults().sink;
-        match run_sink_probe(api, &pipeline_id, cfg, "source", sink_port, 30).await {
-            Ok(probe) => {
-                let status = if probe.passed { "pass" } else { "fail" };
-                emit_mixed_result(
-                    env,
-                    cfg,
-                    &mixed_scenario_check_id(cfg, "sink_probe"),
-                    status,
-                    started.elapsed(),
-                    Some(probe.summary.clone()),
-                )?;
-                output_ids.push(probe.output_id.clone());
-                if !probe.passed {
-                    sink_probe_failure =
-                        Some(format!("{cfg}: sink probe failed: {}", probe.summary));
-                }
-                sink_probe_result = Some(probe);
-            }
-            Err(e) => {
-                emit_mixed_result(
-                    env,
-                    cfg,
-                    &mixed_scenario_check_id(cfg, "sink_probe"),
-                    "fail",
-                    started.elapsed(),
-                    Some(json!({"error": e.clone()})),
-                )?;
-                sink_probe_failure = Some(format!("{cfg}: sink probe error: {e}"));
-            }
-        }
-    }
+    let (sink_probe_result, sink_probe_failure) =
+        run_optional_mixed_sink_probe(env, api, &pipeline_id, cfg, &mut output_ids, resume).await?;
 
     stop_child(&mut publisher).await;
     stop_mixed_outputs(api, &pipeline_id, &output_ids).await;
@@ -1671,7 +1438,7 @@ pub(super) async fn run_mixed_srt_multi_config(
             api,
             cfg,
             &pipeline_id,
-            mixed_hls_preview_expected_dimensions(case),
+            case.hls_preview_expected_dimensions(),
             case,
             resume,
         )
@@ -1828,43 +1595,8 @@ pub(super) async fn run_mixed_srt_multi_config(
 
     verify_mixed_output_cases_inner(env, cfg, output_cases, resume, true, true).await?;
 
-    let mut sink_probe_result = None;
-    let mut sink_probe_failure = None;
-    let probe_id = mixed_scenario_check_id(cfg, "sink_probe");
-    if env.check_selected("sink-probe") && resume.allows(&probe_id) {
-        let started = Instant::now();
-        let sink_port = harness_port_defaults().sink;
-        match run_sink_probe(api, &pipeline_id, cfg, "source", sink_port, 30).await {
-            Ok(probe) => {
-                let status = if probe.passed { "pass" } else { "fail" };
-                emit_mixed_result(
-                    env,
-                    cfg,
-                    &probe_id,
-                    status,
-                    started.elapsed(),
-                    Some(probe.summary.clone()),
-                )?;
-                output_ids.push(probe.output_id.clone());
-                if !probe.passed {
-                    sink_probe_failure =
-                        Some(format!("{cfg}: sink probe failed: {}", probe.summary));
-                }
-                sink_probe_result = Some(probe);
-            }
-            Err(e) => {
-                emit_mixed_result(
-                    env,
-                    cfg,
-                    &probe_id,
-                    "fail",
-                    started.elapsed(),
-                    Some(json!({"error": e.clone()})),
-                )?;
-                sink_probe_failure = Some(format!("{cfg}: sink probe error: {e}"));
-            }
-        }
-    }
+    let (sink_probe_result, sink_probe_failure) =
+        run_optional_mixed_sink_probe(env, api, &pipeline_id, cfg, &mut output_ids, resume).await?;
 
     stop_child(&mut publisher).await;
     stop_mixed_outputs(api, &pipeline_id, &output_ids).await;
@@ -1894,7 +1626,7 @@ pub(super) async fn run_mixed_srt_multi_config(
     Ok(result)
 }
 
-pub(super) async fn spawn_mixed_anchor_publisher(
+pub(super) async fn spawn_mixed_live_publisher(
     env: &MixedEnv,
     case: MixedInputCase,
     stream_key: &str,
@@ -1903,52 +1635,29 @@ pub(super) async fn spawn_mixed_anchor_publisher(
         .work_dir
         .join(format!("{}.publisher.log", case.scenario_id()));
     let fixture = mixed_input_fixture(case)?;
-    spawn_publisher_with_selection(
-        &fixture,
-        &format!(
-            "srt://127.0.0.1:{}?streamid=publish:live/{stream_key}&latency=200000",
-            env.restream_srt
+    let (url, format) = match case.protocol() {
+        MixedInputProtocol::Rtmp => (
+            format!("rtmp://127.0.0.1:{}/live/{stream_key}", env.restream_rtmp),
+            "flv",
         ),
-        "mpegts",
-        PublishTrackSelection::PrimaryAv,
-        Some(&log_path),
-    )
-}
-
-pub(super) async fn spawn_mixed_h265_srt_publisher(
-    env: &MixedEnv,
-    case: MixedInputCase,
-    stream_key: &str,
-) -> Result<Child, String> {
-    let log_path = env
-        .work_dir
-        .join(format!("{}.publisher.log", case.scenario_id()));
-    let fixture = mixed_input_fixture(case)?;
-    spawn_publisher_with_selection(
-        &fixture,
-        &format!(
-            "srt://127.0.0.1:{}?streamid=publish:live/{stream_key}&latency=200000",
-            env.restream_srt
+        MixedInputProtocol::Srt => (
+            format!(
+                "srt://127.0.0.1:{}?streamid=publish:live/{stream_key}&latency=200000",
+                env.restream_srt
+            ),
+            "mpegts",
         ),
-        "mpegts",
-        PublishTrackSelection::PrimaryAv,
-        Some(&log_path),
-    )
-}
-
-pub(super) async fn spawn_mixed_h264_rtmp_publisher(
-    env: &MixedEnv,
-    case: MixedInputCase,
-    stream_key: &str,
-) -> Result<Child, String> {
-    let log_path = env
-        .work_dir
-        .join(format!("{}.publisher.log", case.scenario_id()));
-    let fixture = mixed_input_fixture(case)?;
+        MixedInputProtocol::File => {
+            return Err(format!(
+                "{} uses file ingest and cannot spawn a live publisher",
+                case.scenario_id()
+            ));
+        }
+    };
     spawn_publisher_with_selection(
         &fixture,
-        &format!("rtmp://127.0.0.1:{}/live/{stream_key}", env.restream_rtmp),
-        "flv",
+        &url,
+        format,
         PublishTrackSelection::PrimaryAv,
         Some(&log_path),
     )
@@ -2005,6 +1714,54 @@ pub(super) async fn start_mixed_output(
     )
     .await
     .map(|_| ())
+}
+
+pub(super) async fn run_optional_mixed_sink_probe(
+    env: &MixedEnv,
+    api: &RampApi,
+    pipeline_id: &str,
+    cfg: &str,
+    output_ids: &mut Vec<String>,
+    resume: &mut MixedResume,
+) -> Result<(Option<SinkProbeResult>, Option<String>), String> {
+    let probe_id = mixed_scenario_check_id(cfg, "sink_probe");
+    if !env.check_selected("sink-probe") || !resume.allows(&probe_id) {
+        return Ok((None, None));
+    }
+
+    let started = Instant::now();
+    let sink_port = harness_port_defaults().sink;
+    match run_sink_probe(api, pipeline_id, cfg, "source", sink_port, 30).await {
+        Ok(probe) => {
+            let status = if probe.passed { "pass" } else { "fail" };
+            emit_mixed_result(
+                env,
+                cfg,
+                &probe_id,
+                status,
+                started.elapsed(),
+                Some(probe.summary.clone()),
+            )?;
+            output_ids.push(probe.output_id.clone());
+            let failure = if probe.passed {
+                None
+            } else {
+                Some(format!("{cfg}: sink probe failed: {}", probe.summary))
+            };
+            Ok((Some(probe), failure))
+        }
+        Err(error) => {
+            emit_mixed_result(
+                env,
+                cfg,
+                &probe_id,
+                "fail",
+                started.elapsed(),
+                Some(json!({"error": error.clone()})),
+            )?;
+            Ok((None, Some(format!("{cfg}: sink probe error: {error}"))))
+        }
+    }
 }
 
 /// Parameters for creating a homogeneous group of mixed-matrix outputs.
@@ -3060,7 +2817,7 @@ pub(super) async fn verify_mixed_hls_preview(
     let started = Instant::now();
     let (_status, playlist_body) =
         wait_for_hls_playlist_ready(api, pipeline_id, Duration::from_secs(30)).await?;
-    let expected_audio_tracks = mixed_input_expected_audio_tracks(case);
+    let expected_audio_tracks = case.expected_audio_tracks();
     let audio_renditions = playlist_body.matches("#EXT-X-MEDIA:TYPE=AUDIO").count();
     if audio_renditions != expected_audio_tracks {
         let message = format!(
@@ -3239,8 +2996,8 @@ pub(super) async fn verify_mixed_recording(
         .iter()
         .filter(|stream| stream["type"] == "audio")
         .count();
-    let expected_video_codec = mixed_input_expected_video_codec(case);
-    let expected_audio_tracks = mixed_input_expected_audio_tracks(case);
+    let expected_video_codec = case.expected_video_codec();
+    let expected_audio_tracks = case.expected_audio_tracks();
     let passed = video_codec == expected_video_codec && audio_tracks == expected_audio_tracks;
     let summary = json!({
         "inputCase": case.scenario_id(),
@@ -4490,7 +4247,7 @@ pub(super) async fn run_mixed_file_config(
             api,
             cfg,
             &pipeline_id,
-            mixed_hls_preview_expected_dimensions(case),
+            case.hls_preview_expected_dimensions(),
             case,
             resume,
         )

@@ -271,7 +271,7 @@ fn planned_mixed_stage_count(
     use restream::domain::stage::{StageKey, StageKind};
 
     let mut stages = HashSet::<StageKey>::new();
-    let ingest_codec = mixed_input_expected_video_codec(case);
+    let ingest_codec = case.expected_video_codec();
     for output_case in mixed_output_cases_for_input(case) {
         let url = match output_case.protocol() {
             MixedOutputProtocol::Rtmp => "rtmp://example/live/out",
@@ -13801,7 +13801,7 @@ stream|index=1|codec_type=audio\n";
     #[test]
     fn mixed_hls_preview_expectations_match_current_hevc_preview_contract() {
         for case in MIXED_INPUT_CASES {
-            let expected = mixed_hls_preview_expected_dimensions(*case);
+            let expected = case.hls_preview_expected_dimensions();
             if matches!(case.codec(), MixedVideoCodec::H265) {
                 assert_eq!(
                     expected,
@@ -13824,13 +13824,13 @@ stream|index=1|codec_type=audio\n";
     fn mixed_input_recording_expectations_follow_source_tracks() {
         for case in MIXED_INPUT_CASES {
             assert_eq!(
-                mixed_input_expected_audio_tracks(*case),
+                case.expected_audio_tracks(),
                 if case.is_multi_track() { 2 } else { 1 },
                 "{} should record one assertion row with the source audio-track count",
                 case.scenario_id()
             );
             assert_eq!(
-                mixed_input_expected_video_codec(*case),
+                case.expected_video_codec(),
                 if matches!(case.codec(), MixedVideoCodec::H265) {
                     "hevc"
                 } else {

@@ -758,26 +758,6 @@ pub(crate) fn selected_mixed_fast_breadth_batches()
     }
 }
 
-pub(crate) fn mixed_input_source_name(case: MixedInputCase) -> &'static str {
-    case.source_name()
-}
-
-pub(crate) fn mixed_input_ingest_name(case: MixedInputCase) -> &'static str {
-    case.ingest_name()
-}
-
-pub(crate) fn mixed_input_audio_layout_name(case: MixedInputCase) -> &'static str {
-    case.audio_layout_name()
-}
-
-pub(crate) fn mixed_input_reorder_name(case: MixedInputCase) -> &'static str {
-    case.reorder_name()
-}
-
-pub(crate) fn mixed_input_artifact_rel_dir(case: MixedInputCase) -> PathBuf {
-    case.artifact_rel_dir()
-}
-
 pub(crate) fn mixed_input_default_work_dir(case: MixedInputCase) -> PathBuf {
     PathBuf::from(MIXED_ARTIFACT_ROOT).join(case.artifact_rel_dir())
 }
@@ -788,18 +768,6 @@ pub(crate) fn mixed_matrix_default_work_dir() -> PathBuf {
 
 pub(crate) fn mixed_fast_breadth_default_work_dir() -> PathBuf {
     PathBuf::from(MIXED_ARTIFACT_ROOT).join("fast-breadth")
-}
-
-pub(crate) fn mixed_hls_preview_expected_dimensions(case: MixedInputCase) -> &'static str {
-    case.hls_preview_expected_dimensions()
-}
-
-pub(crate) fn mixed_input_expected_video_codec(case: MixedInputCase) -> &'static str {
-    case.expected_video_codec()
-}
-
-pub(crate) fn mixed_input_expected_audio_tracks(case: MixedInputCase) -> usize {
-    case.expected_audio_tracks()
 }
 
 pub(crate) fn mixed_output_cases_for_input(case: MixedInputCase) -> &'static [MixedOutputCase] {
