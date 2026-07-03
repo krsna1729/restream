@@ -6147,16 +6147,7 @@ async fn srt_to_rtmp_correctness() -> Result<Value, String> {
 
     // Start the generalized sink to receive egress
     let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let sink_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-        .await
-        .map_err(|e| format!("sink bind: {e}"))?;
-    let sink_m = sink_metrics.clone();
-    let sink_task = tokio::spawn(async move {
-        while let Ok((socket, _)) = sink_listener.accept().await {
-            let m = sink_m.clone();
-            tokio::spawn(handle_generalized_sink_client(socket, m));
-        }
-    });
+    let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
 
     let fixture = checked_h264_fixture()?;
 
@@ -6192,7 +6183,7 @@ async fn srt_to_rtmp_correctness() -> Result<Value, String> {
     let audio_count = sink_metrics.audio_count.load(Ordering::Relaxed);
 
     stop_child(&mut publisher).await;
-    sink_task.abort();
+    stop_generalized_sink_server(sink_server);
     stop_child(&mut child).await;
 
     let passed = video_count > 0 && audio_count > 0 && dts_ok;
@@ -6244,16 +6235,7 @@ async fn srt_to_rtmp_atrack_correctness() -> Result<Value, String> {
     .await?;
 
     let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let sink_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-        .await
-        .map_err(|e| format!("sink bind: {e}"))?;
-    let sink_m = sink_metrics.clone();
-    let sink_task = tokio::spawn(async move {
-        while let Ok((socket, _)) = sink_listener.accept().await {
-            let m = sink_m.clone();
-            tokio::spawn(handle_generalized_sink_client(socket, m));
-        }
-    });
+    let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
 
     let fixture = checked_h264_multi_audio_fixture()?;
     let mut publisher = spawn_publisher(
@@ -6305,7 +6287,7 @@ async fn srt_to_rtmp_atrack_correctness() -> Result<Value, String> {
         .unwrap_or(json!({}));
 
     stop_child(&mut publisher).await;
-    sink_task.abort();
+    stop_generalized_sink_server(sink_server);
     stop_child(&mut child).await;
 
     let output_phase = output_status["phase"].as_str().unwrap_or("unknown");
@@ -7008,16 +6990,7 @@ async fn bframe_rtmp_correctness() -> Result<Value, String> {
 
     // Start generalized sink
     let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let sink_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-        .await
-        .map_err(|e| format!("sink bind: {e}"))?;
-    let sink_m = sink_metrics.clone();
-    let sink_task = tokio::spawn(async move {
-        while let Ok((socket, _)) = sink_listener.accept().await {
-            let m = sink_m.clone();
-            tokio::spawn(handle_generalized_sink_client(socket, m));
-        }
-    });
+    let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
 
     let fixture = checked_h264_fixture()?;
 
@@ -7100,7 +7073,7 @@ async fn bframe_rtmp_correctness() -> Result<Value, String> {
     .await?;
 
     stop_child(&mut publisher).await;
-    sink_task.abort();
+    stop_generalized_sink_server(sink_server);
     stop_child(&mut child).await;
     stop_child(&mut mediamtx).await;
 
@@ -7261,16 +7234,7 @@ async fn egress_correctness() -> Result<Value, String> {
     .await?;
 
     let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let sink_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-        .await
-        .map_err(|e| format!("sink bind: {e}"))?;
-    let sink_m = sink_metrics.clone();
-    let sink_task = tokio::spawn(async move {
-        while let Ok((socket, _)) = sink_listener.accept().await {
-            let m = sink_m.clone();
-            tokio::spawn(handle_generalized_sink_client(socket, m));
-        }
-    });
+    let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
 
     start_mixed_output(&api, &pipeline_id, &rtmp_packet_output_id).await?;
     start_mixed_output(&api, &pipeline_id, &rtmp_probe_output_id).await?;
@@ -7447,7 +7411,7 @@ async fn egress_correctness() -> Result<Value, String> {
     results["passed"] = json!(passed);
 
     stop_child(&mut publisher).await;
-    sink_task.abort();
+    stop_generalized_sink_server(sink_server);
     stop_child(&mut child).await;
     stop_child(&mut mediamtx).await;
 
@@ -7526,16 +7490,7 @@ async fn hevc_rtmp_egress_correctness() -> Result<Value, String> {
     let output_id = create_mixed_output(&api, &pipeline_id, "hevc-rtmp", &sink_url, "h264").await?;
 
     let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let sink_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-        .await
-        .map_err(|e| format!("sink bind: {e}"))?;
-    let sink_m = sink_metrics.clone();
-    let sink_task = tokio::spawn(async move {
-        while let Ok((socket, _)) = sink_listener.accept().await {
-            let m = sink_m.clone();
-            tokio::spawn(handle_generalized_sink_client(socket, m));
-        }
-    });
+    let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
 
     start_mixed_output(&api, &pipeline_id, &output_id).await?;
 
@@ -7559,7 +7514,7 @@ async fn hevc_rtmp_egress_correctness() -> Result<Value, String> {
     let audio_aac = detected_audio.as_deref() == Some("aac");
 
     stop_child(&mut publisher).await;
-    sink_task.abort();
+    stop_generalized_sink_server(sink_server);
     stop_child(&mut child).await;
 
     let passed = video_count >= 30 && audio_count > 0 && dts_ok && video_h264 && audio_aac;
