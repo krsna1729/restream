@@ -13521,7 +13521,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn mixed_fast_breadth_is_small_but_axis_rich() {
-        let names: Vec<_> = MIXED_FAST_BREADTH_CASES
+        let names: Vec<_> = mixed_fast_breadth_cases()
             .iter()
             .map(|selected| selected.case.scenario_id())
             .collect();
@@ -13537,7 +13537,7 @@ stream|index=1|codec_type=audio\n";
             ]
         );
 
-        let cases: Vec<_> = MIXED_FAST_BREADTH_CASES
+        let cases: Vec<_> = mixed_fast_breadth_cases()
             .iter()
             .map(|selected| selected.case)
             .collect();
@@ -13577,7 +13577,7 @@ stream|index=1|codec_type=audio\n";
                 "fast breadth must cover RTMP sender reorder mode {reorder:?}"
             );
         }
-        for selected in MIXED_FAST_BREADTH_CASES {
+        for selected in mixed_fast_breadth_cases() {
             assert!(
                 !selected.checks.contains(&MixedCheck::Recording)
                     && !selected.checks.contains(&MixedCheck::Signal)
@@ -13587,7 +13587,7 @@ stream|index=1|codec_type=audio\n";
             );
         }
         assert_eq!(
-            MIXED_FAST_BREADTH_CASES
+            mixed_fast_breadth_cases()
                 .iter()
                 .filter(|selected| selected.checks.contains(&MixedCheck::Hls))
                 .count(),
@@ -13613,21 +13613,21 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn mixed_fast_breadth_batches_reuse_three_shared_stacks() {
-        assert_eq!(MIXED_FAST_BREADTH_BATCHES.len(), 3);
+        assert_eq!(mixed_fast_breadth_batches().len(), 3);
         assert_eq!(
-            MIXED_FAST_BREADTH_BATCHES
+            mixed_fast_breadth_batches()
                 .iter()
                 .map(|batch| batch.group.as_str())
                 .collect::<Vec<_>>(),
             vec!["live-rtmp", "live-srt", "file-ingest"]
         );
-        for batch in MIXED_FAST_BREADTH_BATCHES {
+        for batch in mixed_fast_breadth_batches() {
             assert!(
                 !batch.cases.is_empty() && batch.cases.len() <= 2,
                 "{} should stay within the two-pipeline shared-stack target",
                 batch.group.as_str()
             );
-            for case in batch.cases {
+            for case in &batch.cases {
                 assert_eq!(
                     case.shared_batch_group(),
                     batch.group,
@@ -13952,9 +13952,15 @@ stream|index=1|codec_type=audio\n";
                 )
             })
             .collect();
-        let rust_fast: Vec<_> = MIXED_FAST_BREADTH_CASES
+        let rust_fast: Vec<_> = mixed_fast_breadth_cases()
             .iter()
-            .map(|row| (row.case.scenario_id(), row.rationale, row.checks.to_vec()))
+            .map(|row| {
+                (
+                    row.case.scenario_id(),
+                    row.rationale.as_str(),
+                    row.checks.to_vec(),
+                )
+            })
             .collect();
         assert_eq!(dsl_fast, rust_fast);
 
@@ -13973,7 +13979,7 @@ stream|index=1|codec_type=audio\n";
                 )
             })
             .collect();
-        let rust_batches: Vec<_> = MIXED_FAST_BREADTH_BATCHES
+        let rust_batches: Vec<_> = mixed_fast_breadth_batches()
             .iter()
             .map(|batch| (batch.group, batch.cases.to_vec()))
             .collect();

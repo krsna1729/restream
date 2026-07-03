@@ -412,15 +412,15 @@ pub(crate) const MIXED_FAST_BREADTH_MODE: &str = "mixed.fast-breadth";
 const MIXED_ARTIFACT_ROOT: &str = "test/artifacts/mixed";
 
 /// One selected input row in the fast breadth sweep, with its minimal checks.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MixedFastBreadthCase {
     pub(crate) case: MixedInputCase,
-    pub(crate) rationale: &'static str,
-    pub(crate) checks: &'static [MixedCheck],
+    pub(crate) rationale: String,
+    pub(crate) checks: Vec<MixedCheck>,
 }
 
 impl MixedFastBreadthCase {
-    pub(crate) fn check_names(self) -> Vec<&'static str> {
+    pub(crate) fn check_names(&self) -> Vec<&'static str> {
         self.checks.iter().map(|check| check.as_str()).collect()
     }
 }
@@ -572,6 +572,8 @@ pub(crate) fn mixed_dsl_manifest() -> Result<MixedDslManifest, String> {
 }
 
 static MIXED_INPUT_CASES_FROM_DSL: OnceLock<Vec<MixedInputCase>> = OnceLock::new();
+static MIXED_FAST_BREADTH_CASES_FROM_DSL: OnceLock<Vec<MixedFastBreadthCase>> = OnceLock::new();
+static MIXED_FAST_BREADTH_BATCHES_FROM_DSL: OnceLock<Vec<MixedFastBreadthBatch>> = OnceLock::new();
 
 pub(crate) fn mixed_input_cases() -> &'static [MixedInputCase] {
     MIXED_INPUT_CASES_FROM_DSL.get_or_init(|| {
@@ -581,158 +583,58 @@ pub(crate) fn mixed_input_cases() -> &'static [MixedInputCase] {
     })
 }
 
-// Fast breadth is the "find the broad failure shape quickly without pretending
-// to be exhaustive" sweep.
-// It samples the 180 input/output cells by risk axes rather than by row count:
-// - file ingest: BF0 startup/liveness plus BF2+HEVC+multi-audio stress
-// - RTMP ingest: both sender BF0 and BF2, because RTMP timestamp/sequence-header
-//   behavior differs from SRT and file ingest
-// - SRT ingest: multi-audio BF0 plus HEVC BF2 codec-edge/transcode pressure
-// - output matrix: each selected A1 row covers 6 RTMP/SRT source/720p/1080p
-//   outputs; each selected A2 row covers the 15 all-audio/atrack variants.
-//
-// Keep this list small enough for a quick WSL-safe sweep. When a new input or
-// output axis is added, update the rationale and the coverage unit tests below
-// before relying on this mode as the first diagnostic pass. The runner defaults
-// to N_PER_GROUP=1, SKIP_LOAD=1, COLLECT_FAILURES=1, and the per-row `checks`
-// below so it reports the failure shape across selected cells; set those env
-// vars explicitly when scale/load/signal depth is the point. `mixed.matrix`
-// remains the exhaustive proof gate.
-pub(crate) const MIXED_FAST_BREADTH_CASES: &[MixedFastBreadthCase] = &[
-    MixedFastBreadthCase {
-        case: MixedInputCase::new(
-            MixedInputProtocol::File,
-            MixedVideoCodec::H264,
-            MixedInputAudioLayout::A1,
-            MixedInputReorder::Bf0,
-        ),
-        rationale: "file H.264 BF0 single-audio startup hero row",
-        checks: &[
-            MixedCheck::Ffprobe,
-            MixedCheck::StageSharing,
-            MixedCheck::Hls,
-        ],
-    },
-    MixedFastBreadthCase {
-        case: MixedInputCase::new(
-            MixedInputProtocol::File,
-            MixedVideoCodec::H265,
-            MixedInputAudioLayout::A2,
-            MixedInputReorder::Bf2,
-        ),
-        rationale: "file HEVC BF2 multi-audio plus codec-edge outputs",
-        checks: &[MixedCheck::Ffprobe, MixedCheck::StageSharing],
-    },
-    MixedFastBreadthCase {
-        case: MixedInputCase::new(
-            MixedInputProtocol::Rtmp,
-            MixedVideoCodec::H264,
-            MixedInputAudioLayout::A1,
-            MixedInputReorder::Bf0,
-        ),
-        rationale: "RTMP publisher without B-frames",
-        checks: &[MixedCheck::Ffprobe],
-    },
-    MixedFastBreadthCase {
-        case: MixedInputCase::new(
-            MixedInputProtocol::Rtmp,
-            MixedVideoCodec::H264,
-            MixedInputAudioLayout::A1,
-            MixedInputReorder::Bf2,
-        ),
-        rationale: "RTMP publisher with B-frames",
-        checks: &[MixedCheck::Ffprobe],
-    },
-    MixedFastBreadthCase {
-        case: MixedInputCase::new(
-            MixedInputProtocol::Srt,
-            MixedVideoCodec::H264,
-            MixedInputAudioLayout::A2,
-            MixedInputReorder::Bf0,
-        ),
-        rationale: "SRT H.264 BF0 multi-audio adaptive-ring row",
-        checks: &[MixedCheck::Ffprobe, MixedCheck::StageSharing],
-    },
-    MixedFastBreadthCase {
-        case: MixedInputCase::new(
-            MixedInputProtocol::Srt,
-            MixedVideoCodec::H265,
-            MixedInputAudioLayout::A2,
-            MixedInputReorder::Bf2,
-        ),
-        rationale: "SRT HEVC BF2 multi-audio codec-edge stress row",
-        checks: &[
-            MixedCheck::Ffprobe,
-            MixedCheck::StageSharing,
-            MixedCheck::Hls,
-        ],
-    },
-];
+pub(crate) fn mixed_fast_breadth_cases() -> &'static [MixedFastBreadthCase] {
+    MIXED_FAST_BREADTH_CASES_FROM_DSL.get_or_init(|| {
+        let manifest = mixed_dsl_manifest().expect("embedded mixed_matrix.json should parse");
+        manifest
+            .mixed
+            .fast_breadth
+            .iter()
+            .map(|row| MixedFastBreadthCase {
+                case: mixed_input_case_for_command(&row.id)
+                    .unwrap_or_else(|| panic!("{} is not a mixed input case", row.id)),
+                rationale: row.rationale.clone(),
+                checks: row
+                    .check_specs()
+                    .unwrap_or_else(|error| panic!("invalid fast-breadth checks: {error}")),
+            })
+            .collect()
+    })
+}
+
+pub(crate) fn mixed_fast_breadth_batches() -> &'static [MixedFastBreadthBatch] {
+    MIXED_FAST_BREADTH_BATCHES_FROM_DSL.get_or_init(|| {
+        let manifest = mixed_dsl_manifest().expect("embedded mixed_matrix.json should parse");
+        manifest
+            .mixed
+            .fast_breadth_batches
+            .iter()
+            .map(|batch| MixedFastBreadthBatch {
+                group: MixedSharedBatchGroup::from_str(&batch.group)
+                    .unwrap_or_else(|| panic!("{} is not a fast-breadth batch group", batch.group)),
+                cases: batch
+                    .cases
+                    .iter()
+                    .map(|case| {
+                        mixed_input_case_for_command(case)
+                            .unwrap_or_else(|| panic!("{case} is not a mixed input case"))
+                    })
+                    .collect(),
+            })
+            .collect()
+    })
+}
 
 /// Fast-mode shared-stack batches.
 ///
 /// Each batch reuses one restream + mediamtx setup and runs up to two input
 /// pipelines concurrently inside that stack. This keeps setup cost low while
 /// preserving enough isolation to attribute failures by transport family.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MixedFastBreadthBatch {
     pub(crate) group: MixedSharedBatchGroup,
-    pub(crate) cases: &'static [MixedInputCase],
+    pub(crate) cases: Vec<MixedInputCase>,
 }
-
-pub(crate) const MIXED_FAST_BREADTH_BATCHES: &[MixedFastBreadthBatch] = &[
-    MixedFastBreadthBatch {
-        group: MixedSharedBatchGroup::LiveRtmp,
-        cases: &[
-            MixedInputCase::new(
-                MixedInputProtocol::Rtmp,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ),
-            MixedInputCase::new(
-                MixedInputProtocol::Rtmp,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf2,
-            ),
-        ],
-    },
-    MixedFastBreadthBatch {
-        group: MixedSharedBatchGroup::LiveSrt,
-        cases: &[
-            MixedInputCase::new(
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf0,
-            ),
-            MixedInputCase::new(
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf2,
-            ),
-        ],
-    },
-    MixedFastBreadthBatch {
-        group: MixedSharedBatchGroup::FileIngest,
-        cases: &[
-            MixedInputCase::new(
-                MixedInputProtocol::File,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ),
-            MixedInputCase::new(
-                MixedInputProtocol::File,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf2,
-            ),
-        ],
-    },
-];
 
 pub(crate) fn mixed_input_mode_name(case: MixedInputCase) -> String {
     case.scenario_id().to_string()
@@ -746,7 +648,7 @@ pub(crate) fn mixed_input_case_for_command(command: &str) -> Option<MixedInputCa
 }
 
 pub(crate) fn mixed_fast_breadth_selected(case: MixedInputCase) -> &'static MixedFastBreadthCase {
-    MIXED_FAST_BREADTH_CASES
+    mixed_fast_breadth_cases()
         .iter()
         .find(|selected| selected.case == case)
         .unwrap_or_else(|| panic!("missing fast-breadth selection for {}", case.scenario_id()))
@@ -787,14 +689,14 @@ pub(crate) fn selected_mixed_fast_breadth_batches()
             Ok(groups
                 .into_iter()
                 .map(|group| {
-                    MIXED_FAST_BREADTH_BATCHES
+                    mixed_fast_breadth_batches()
                         .iter()
                         .find(|batch| batch.group == group)
                         .expect("every fast-breadth group should have one batch")
                 })
                 .collect())
         }
-        None => Ok(MIXED_FAST_BREADTH_BATCHES.iter().collect()),
+        None => Ok(mixed_fast_breadth_batches().iter().collect()),
     }
 }
 
