@@ -2547,21 +2547,27 @@ fn build_file_ingest_args(ingest: &Ingest, file_path: &FsPath) -> Vec<String> {
             "192k".into(),
             "-ar".into(),
             "48000".into(),
-            "-f".into(),
-            "mpegts".into(),
-            "pipe:1".into(),
         ]);
     } else {
-        args.extend([
-            "-map".into(),
-            "0".into(),
-            "-c".into(),
-            "copy".into(),
-            "-f".into(),
-            "mpegts".into(),
-            "pipe:1".into(),
-        ]);
+        args.extend(["-map".into(), "0".into(), "-c".into(), "copy".into()]);
     }
+    args.extend([
+        "-mpegts_flags".into(),
+        "resend_headers+pat_pmt_at_frames".into(),
+        "-pes_payload_size".into(),
+        "0".into(),
+        "-omit_video_pes_length".into(),
+        "0".into(),
+        "-flush_packets".into(),
+        "1".into(),
+        "-muxdelay".into(),
+        "0".into(),
+        "-muxpreload".into(),
+        "0".into(),
+        "-f".into(),
+        "mpegts".into(),
+        "pipe:1".into(),
+    ]);
     args
 }
 
@@ -7598,6 +7604,13 @@ mod tests {
         assert!(args.windows(2).any(|pair| pair == ["-re", "-stream_loop"]));
         assert!(args.windows(2).any(|pair| pair == ["-ss", "00:00:03"]));
         assert!(args.windows(2).any(|pair| pair == ["-c", "copy"]));
+        assert!(
+            args.windows(2)
+                .any(|pair| { pair == ["-mpegts_flags", "resend_headers+pat_pmt_at_frames"] })
+        );
+        assert!(args.windows(2).any(|pair| pair == ["-flush_packets", "1"]));
+        assert!(args.windows(2).any(|pair| pair == ["-muxdelay", "0"]));
+        assert!(args.windows(2).any(|pair| pair == ["-muxpreload", "0"]));
         assert!(args.windows(2).any(|pair| pair == ["-f", "mpegts"]));
         assert!(!args.iter().any(|arg| arg == "libx264"));
     }
@@ -7612,6 +7625,10 @@ mod tests {
         assert!(
             args.windows(2)
                 .any(|pair| pair == ["-force_key_frames", "expr:gte(t,n_forced*3)"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| { pair == ["-mpegts_flags", "resend_headers+pat_pmt_at_frames"] })
         );
         assert!(!args.windows(2).any(|pair| pair == ["-c", "copy"]));
     }

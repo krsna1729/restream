@@ -43,11 +43,12 @@ use tracing::{debug, error, info};
 
 use crate::domain::audio_routing::{AudioRouting, parse_audio_operation, parse_audio_routing};
 use crate::domain::output_spec::{StagePresetSpec, VideoCodecKind};
-use crate::domain::stage::StageKey;
+use crate::domain::stage::{StageKey, StageKind};
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::mpegts::TsDemuxer;
 use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::ring_buffer::{DtsEnforcer, MediaType, Reader, RingBuffer};
+use crate::media::startup_policy;
 use crate::media::{
     MEDIA_PRODUCER_BATCH_PACKETS, MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES,
 };
@@ -56,30 +57,6 @@ use crate::media::{engine::AudioMeta, engine::VideoMeta};
 /// Stdin writes or stdout reads exceeding this threshold are counted as stalls/idles.
 /// 1 ms filters normal async scheduling jitter while catching real back-pressure.
 const PIPE_STALL_THRESHOLD_US: u64 = 1_000;
-/// Start shared live transcode readers slightly before the last keyframe so
-/// HEVC streams can pick up VPS/SPS/PPS packets that precede the IRAP frame.
-const EXT_STAGE_KEYFRAME_PREROLL_PACKETS: usize = 32;
-/// Default low-latency probe budget for H.264-driven stages.
-const EXT_STAGE_ANALYZE_DURATION_US_DEFAULT: u64 = 0;
-const EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT: usize = 32 * 1024;
-/// Give FFmpeg extra startup probe budget to recover live HEVC TS streams
-/// that join mid-GOP, where VPS/SPS/PPS or ADTS may not appear immediately.
-const EXT_STAGE_ANALYZE_DURATION_US_HEVC: u64 = 1_000_000;
-const EXT_STAGE_PROBE_SIZE_BYTES_HEVC: usize = 512 * 1024;
-
-fn ext_stage_probe_budget(input_codec: &str) -> (u64, usize) {
-    if VideoCodecKind::from_codec_name(input_codec).is_hevc() {
-        (
-            EXT_STAGE_ANALYZE_DURATION_US_HEVC,
-            EXT_STAGE_PROBE_SIZE_BYTES_HEVC,
-        )
-    } else {
-        (
-            EXT_STAGE_ANALYZE_DURATION_US_DEFAULT,
-            EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT,
-        )
-    }
-}
 
 use crate::media::timing;
 
@@ -109,22 +86,10 @@ fn build_stage_ffmpeg_args_inner(
     let profile = if matches!(encoding, "" | "source" | "custom") {
         None
     } else {
-        crate::media::profiles::cache()
-            .try_read()
-            .ok()
-            .and_then(|cache| cache.get(encoding).or_else(|| cache.get("h264")).cloned())
-            .or_else(|| {
-                crate::media::profiles::built_in_defaults()
-                    .get(encoding)
-                    .cloned()
-            })
-            .or_else(|| {
-                crate::media::profiles::built_in_defaults()
-                    .get("h264")
-                    .cloned()
-            })
+        Some(crate::media::profiles::try_get_cached(encoding))
     };
-    let (analyze_duration_us, probe_size_bytes) = ext_stage_probe_budget(probe_codec);
+    let (analyze_duration_us, probe_size_bytes) =
+        startup_policy::ext_stage_probe_budget(VideoCodecKind::from_codec_name(probe_codec));
 
     let mut args = vec![
         "-nostdin".to_string(),
@@ -190,7 +155,10 @@ fn build_stage_ffmpeg_args_inner(
                 .unwrap_or_else(|| "veryfast".to_string()),
         ]);
         if encoder == "libx265" {
-            args.extend(["-x265-params".to_string(), "log-level=none".to_string()]);
+            args.extend([
+                "-x265-params".to_string(),
+                "repeat-headers=1:log-level=none".to_string(),
+            ]);
         }
         if let Some(profile) = &profile {
             if !profile.tune.is_empty() {
@@ -314,6 +282,7 @@ async fn wait_for_stage_metadata(
     pipeline_id: &str,
     source_buffer: &Arc<RingBuffer>,
     include_audio: bool,
+    eager_raw_parameter_sets: bool,
     input_codec_override: Option<&str>,
     cancel: &CancellationToken,
 ) -> Option<(VideoMeta, std::sync::Arc<Vec<AudioMeta>>)> {
@@ -337,8 +306,8 @@ async fn wait_for_stage_metadata(
                 if !stage_video_meta_ready(&video) {
                     return None;
                 }
-                let needs_raw_parameter_sets = ingest.protocol == "srt"
-                    && matches!(video.codec.as_str(), "h264" | "hevc" | "h265");
+                let needs_raw_parameter_sets =
+                    eager_raw_parameter_sets && codec_needs_parameter_sets(&video.codec);
                 if needs_raw_parameter_sets && source_buffer.video_parameter_sets().is_none() {
                     return None;
                 }
@@ -387,8 +356,14 @@ async fn wait_for_stage_metadata(
 
 fn stage_video_meta_ready(video: &VideoMeta) -> bool {
     !video.codec.is_empty()
-        && (!matches!(video.codec.as_str(), "h264" | "hevc" | "h265")
-            || (video.width > 0 && video.height > 0))
+        && (!codec_needs_parameter_sets(&video.codec) || (video.width > 0 && video.height > 0))
+}
+
+fn codec_needs_parameter_sets(codec: &str) -> bool {
+    matches!(
+        VideoCodecKind::from_codec_name(codec),
+        VideoCodecKind::H264 | VideoCodecKind::Hevc
+    )
 }
 
 fn stage_audio_tracks_ready(audio_tracks: &[AudioMeta]) -> bool {
@@ -713,11 +688,13 @@ async fn start_external_transcoder_stage_inner(
     }
 
     // ── wait for ingest metadata (video codec, audio tracks) ──────────────
+    let eager_raw_parameter_sets = matches!(stage_key.kind, StageKind::VideoPreset { .. });
     let Some((video_meta, audio_tracks)) = wait_for_stage_metadata(
         &engine,
         &pipeline_id,
         &input_buffer,
         include_audio,
+        eager_raw_parameter_sets,
         input_codec_override.as_deref(),
         &cancel,
     )
@@ -831,7 +808,7 @@ async fn start_external_transcoder_stage_inner(
     let mut reader = Reader::new_with_keyframe_preroll(
         format!("ext-stage:{}:{}", pipeline_id, encoding),
         input_buffer,
-        EXT_STAGE_KEYFRAME_PREROLL_PACKETS,
+        startup_policy::ext_stage_keyframe_preroll_packets(),
     );
     let mut ts_batch = Vec::<u8>::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
     let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
@@ -1118,12 +1095,16 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["-muxdelay", "0"]));
         assert!(args.windows(2).any(|w| w == ["-muxpreload", "0"]));
         assert!(args.windows(2).any(|w| w == ["-pes_payload_size", "0"]));
-        assert!(args.windows(2).any(|w| {
-            w[0] == "-analyzeduration" && w[1] == EXT_STAGE_ANALYZE_DURATION_US_DEFAULT.to_string()
-        }));
-        assert!(args.windows(2).any(|w| {
-            w[0] == "-probesize" && w[1] == EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT.to_string()
-        }));
+        let (analyze_duration_us, probe_size_bytes) =
+            startup_policy::ext_stage_probe_budget(VideoCodecKind::H264);
+        assert!(
+            args.windows(2)
+                .any(|w| { w[0] == "-analyzeduration" && w[1] == analyze_duration_us.to_string() })
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| { w[0] == "-probesize" && w[1] == probe_size_bytes.to_string() })
+        );
         // writes to stdout
         assert!(args.last() == Some(&"pipe:1".to_string()));
     }
@@ -1131,25 +1112,33 @@ mod tests {
     #[test]
     fn stage_args_hevc_raise_probe_budget() {
         let args = build_stage_ffmpeg_args("720p", "hevc");
-        assert!(args.windows(2).any(|w| {
-            w[0] == "-analyzeduration" && w[1] == EXT_STAGE_ANALYZE_DURATION_US_HEVC.to_string()
-        }));
-        assert!(args.windows(2).any(|w| {
-            w[0] == "-probesize" && w[1] == EXT_STAGE_PROBE_SIZE_BYTES_HEVC.to_string()
-        }));
+        let (analyze_duration_us, probe_size_bytes) =
+            startup_policy::ext_stage_probe_budget(VideoCodecKind::Hevc);
+        assert!(
+            args.windows(2)
+                .any(|w| { w[0] == "-analyzeduration" && w[1] == analyze_duration_us.to_string() })
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| { w[0] == "-probesize" && w[1] == probe_size_bytes.to_string() })
+        );
     }
 
     #[test]
     fn stage_args_codec_edge_probes_input_codec_but_encodes_output_codec() {
         let args = build_stage_ffmpeg_args_for_input("h264", "h264", "hevc");
+        let (analyze_duration_us, probe_size_bytes) =
+            startup_policy::ext_stage_probe_budget(VideoCodecKind::Hevc);
         let cv_pos = args.iter().position(|a| a == "-c:v").unwrap();
         assert_eq!(args[cv_pos + 1], "libx264");
-        assert!(args.windows(2).any(|w| {
-            w[0] == "-analyzeduration" && w[1] == EXT_STAGE_ANALYZE_DURATION_US_HEVC.to_string()
-        }));
-        assert!(args.windows(2).any(|w| {
-            w[0] == "-probesize" && w[1] == EXT_STAGE_PROBE_SIZE_BYTES_HEVC.to_string()
-        }));
+        assert!(
+            args.windows(2)
+                .any(|w| { w[0] == "-analyzeduration" && w[1] == analyze_duration_us.to_string() })
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| { w[0] == "-probesize" && w[1] == probe_size_bytes.to_string() })
+        );
     }
 
     #[test]
@@ -1158,6 +1147,8 @@ mod tests {
             let args = build_stage_ffmpeg_args("720p", codec);
             let cv_pos = args.iter().position(|a| a == "-c:v").unwrap();
             assert_eq!(args[cv_pos + 1], "libx265", "codec={codec}");
+            let x265_pos = args.iter().position(|a| a == "-x265-params").unwrap();
+            assert_eq!(args[x265_pos + 1], "repeat-headers=1:log-level=none");
             assert!(args.last() == Some(&"pipe:1".to_string()));
         }
     }
@@ -1392,6 +1383,7 @@ mod tests {
             "pipe-stage-meta",
             &upstream_ring,
             true,
+            true,
             None,
             &cancel,
         )
@@ -1457,6 +1449,7 @@ mod tests {
                 &engine_for_wait,
                 "pipe-stage-audio-ready",
                 &ring_for_wait,
+                true,
                 true,
                 None,
                 &cancel_for_wait,
@@ -1558,6 +1551,7 @@ mod tests {
                 "pipe-stage-params",
                 &ring_for_wait,
                 true,
+                true,
                 None,
                 &cancel_for_wait,
             )
@@ -1585,7 +1579,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stage_metadata_does_not_wait_for_raw_parameter_sets_on_file_inputs() {
+    async fn stage_metadata_waits_for_raw_parameter_sets_on_file_inputs() {
         let engine = Arc::new(MediaEngine::new());
         engine
             .try_register_ingest("pipe-stage-file-params", "stream-key", "file")
@@ -1631,22 +1625,103 @@ mod tests {
         upstream_ring.set_codec_hint("h264");
         let cancel = CancellationToken::new();
 
-        let (video, audio_tracks) = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
+        let engine_for_wait = engine.clone();
+        let ring_for_wait = upstream_ring.clone();
+        let cancel_for_wait = cancel.clone();
+        let wait = tokio::spawn(async move {
             wait_for_stage_metadata(
-                &engine,
+                &engine_for_wait,
                 "pipe-stage-file-params",
-                &upstream_ring,
+                &ring_for_wait,
+                true,
                 true,
                 None,
-                &cancel,
-            ),
-        )
-        .await
-        .expect("file stage metadata should not wait for cached raw parameter sets")
-        .expect("stage metadata should become ready");
+                &cancel_for_wait,
+            )
+            .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            !wait.is_finished(),
+            "file stage metadata should wait until raw parameter sets are cached on the source ring"
+        );
+
+        upstream_ring.set_video_parameter_sets(vec![
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+            0xCE, 0x38, 0x80,
+        ]);
+
+        let (video, audio_tracks) = wait
+            .await
+            .expect("wait task should join")
+            .expect("stage metadata should become ready");
 
         assert_eq!(video.codec, "h264");
+        assert_eq!(audio_tracks.len(), 1);
+        assert_eq!(audio_tracks[0].track_index, 0);
+    }
+
+    #[tokio::test]
+    async fn stage_metadata_allows_codec_edge_stages_before_upstream_headers() {
+        let engine = Arc::new(MediaEngine::new());
+        engine
+            .try_register_ingest("pipe-stage-codec-edge", "stream-key", "file")
+            .await
+            .unwrap();
+
+        let ready_audio = crate::media::engine::AudioMeta {
+            codec: "aac".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            channel_layout: None,
+            track_index: 0,
+            pid: Some(0x101),
+            language: None,
+            title: None,
+            profile: None,
+        };
+        engine
+            .update_ingest_meta(
+                "pipe-stage-codec-edge",
+                Some(crate::media::engine::VideoMeta {
+                    codec: "hevc".to_string(),
+                    width: 1280,
+                    height: 720,
+                    fps: 30.0,
+                    bw: None,
+                    pid: Some(0x100),
+                    language: None,
+                    title: None,
+                    profile: None,
+                    level: None,
+                    pixel_format: None,
+                }),
+                Some(ready_audio.clone()),
+                None,
+            )
+            .await;
+        engine
+            .update_ingest_audio_tracks("pipe-stage-codec-edge", vec![ready_audio])
+            .await;
+
+        let upstream_ring = Arc::new(RingBuffer::new(1024));
+        upstream_ring.set_codec_hint("hevc");
+        let cancel = CancellationToken::new();
+
+        let (video, audio_tracks) = wait_for_stage_metadata(
+            &engine,
+            "pipe-stage-codec-edge",
+            &upstream_ring,
+            true,
+            false,
+            None,
+            &cancel,
+        )
+        .await
+        .expect("codec-edge stages should not wait for upstream headers");
+
+        assert_eq!(video.codec, "hevc");
         assert_eq!(audio_tracks.len(), 1);
         assert_eq!(audio_tracks[0].track_index, 0);
     }
@@ -1664,7 +1739,7 @@ mod tests {
 
     #[test]
     fn audio_filter_complex_downmix_format() {
-        let routing = Some(AudioRouting::Downmix(1));
+        let routing = Some(AudioRouting::Downmix { track: 1 });
         let filter = audio_filter_complex(&routing).unwrap();
         assert_eq!(filter, "[0:a:1]aresample=out_chlayout=stereo[aout]");
     }
@@ -2329,6 +2404,10 @@ mod tests {
                 .iter()
                 .any(|packet| packet.media_type == MediaType::Video),
             "external 720p single-audio HEVC stage should emit live video packets"
+        );
+        assert!(
+            reader.current_ring().video_parameter_sets().is_some(),
+            "external 720p HEVC stage output ring should cache raw parameter sets for chained stages"
         );
     }
 

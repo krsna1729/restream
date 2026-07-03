@@ -268,7 +268,6 @@ mod tests {
                     name: "Pipeline".to_string(),
                     stream_key: stream_key.to_string(),
                     input_source: None,
-                    encoding: None,
                     srt_ingest_policy: None,
                 },
             );
@@ -553,7 +552,6 @@ mod tests {
             name: "Pipeline".to_string(),
             stream_key: "stream-key".to_string(),
             input_source: None,
-            encoding: None,
             srt_ingest_policy: None,
         };
         let ingest_lookup = FakeIngestLookup {
@@ -590,7 +588,6 @@ mod tests {
             name: "Pipeline".to_string(),
             stream_key: "stream-key".to_string(),
             input_source: None,
-            encoding: None,
             srt_ingest_policy: None,
         };
 
@@ -610,7 +607,6 @@ mod tests {
             name: "Pipeline".to_string(),
             stream_key: "stream-key".to_string(),
             input_source: None,
-            encoding: None,
             srt_ingest_policy: None,
         };
         let ingest_lookup = FakeIngestLookup {
@@ -651,7 +647,6 @@ mod tests {
             name: "Pipeline".to_string(),
             stream_key: "stream-key".to_string(),
             input_source: None,
-            encoding: None,
             srt_ingest_policy: None,
         };
         let ingest_lookup = FakeIngestLookup {

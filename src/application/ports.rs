@@ -352,7 +352,7 @@ mod tests {
     #[tokio::test]
     async fn sqlite_pipeline_store_returns_pipeline_for_stream_key() {
         let pool = test_pool().await;
-        crate::db::create_pipeline(&pool, "p1", "Pipeline", "stream-key", None, None, None)
+        crate::db::create_pipeline(&pool, "p1", "Pipeline", "stream-key", None, None)
             .await
             .unwrap();
         let store = SqlitePipelineStore::new(pool);
@@ -378,10 +378,10 @@ mod tests {
     #[tokio::test]
     async fn sqlite_pipeline_store_lists_pipelines() {
         let pool = test_pool().await;
-        crate::db::create_pipeline(&pool, "p1", "Pipeline One", "stream-one", None, None, None)
+        crate::db::create_pipeline(&pool, "p1", "Pipeline One", "stream-one", None, None)
             .await
             .unwrap();
-        crate::db::create_pipeline(&pool, "p2", "Pipeline Two", "stream-two", None, None, None)
+        crate::db::create_pipeline(&pool, "p2", "Pipeline Two", "stream-two", None, None)
             .await
             .unwrap();
         let store = SqlitePipelineStore::new(pool);

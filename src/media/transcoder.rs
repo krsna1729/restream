@@ -103,10 +103,14 @@ pub async fn start_audio_router(
                     stage_metrics.record_in(pkt.payload.len() as u64);
                     if pkt.media_type == MediaType::Video
                         && output_buffer.video_parameter_sets().is_none()
-                        && let Some(parameter_sets) =
-                            crate::media::codec::annexb_parameter_sets(&pkt.payload)
                     {
-                        output_buffer.set_video_parameter_sets(parameter_sets);
+                        if let Some(parameter_sets) = reader.current_ring().video_parameter_sets() {
+                            output_buffer.set_video_parameter_sets(parameter_sets.to_vec());
+                        } else if let Some(parameter_sets) =
+                            crate::media::codec::annexb_parameter_sets(&pkt.payload)
+                        {
+                            output_buffer.set_video_parameter_sets(parameter_sets);
+                        }
                     }
                     let out = match &routing {
                         AudioRouting::Passthrough => Some((*pkt).clone()),
@@ -706,6 +710,63 @@ mod tests {
             assert!(
                 tokio::time::Instant::now() < ready_deadline,
                 "router should cache parameter sets from the first live video packet"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn audio_router_copies_late_upstream_parameter_sets_without_inband_headers() {
+        use crate::domain::stage::{StageKey, StageKind};
+        use crate::media::engine::MediaEngine;
+
+        let source_ring = Arc::new(RingBuffer::new(16));
+        let out_ring = Arc::new(RingBuffer::new(16));
+        let engine = Arc::new(MediaEngine::new());
+        let cancel = CancellationToken::new();
+        let stage_key = StageKey::new(
+            "pipe-video-params-cache",
+            StageKind::audio_route("atrack:0", StageKind::source()),
+        );
+
+        source_ring.set_codec_hint("h264");
+
+        let handle = tokio::spawn(start_audio_router(
+            "pipe-video-params-cache".to_string(),
+            AudioRouting::SelectTracks { tracks: vec![0] },
+            source_ring.clone(),
+            out_ring.clone(),
+            engine,
+            cancel.clone(),
+            stage_key,
+        ));
+
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        source_ring.set_video_parameter_sets(vec![
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+            0xCE, 0x38, 0x80,
+        ]);
+        source_ring.push(MediaPacket {
+            media_type: MediaType::Video,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            is_keyframe: true,
+            format: PayloadFormat::Raw,
+            payload: bytes::Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00]),
+        });
+
+        let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            if out_ring.video_parameter_sets().is_some() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < ready_deadline,
+                "router should copy late upstream parameter sets even when the live packet payload lacks them"
             );
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }

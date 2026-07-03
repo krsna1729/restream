@@ -238,6 +238,7 @@ pub async fn build_recording_reconcile_plan(
 mod tests {
     use super::*;
     use crate::application::ports::{MetaLookupFuture, PipelineListFuture};
+    use crate::domain::output_spec::OutputConfig;
     use crate::domain::stage::StageKind;
     use crate::media::engine::VideoMeta;
     use crate::types::Pipeline;
@@ -338,7 +339,7 @@ mod tests {
         let stages = collect_needed_stage_keys([
             OutputStageSweepInput {
                 pipeline_id: "pipe",
-                encoding: "720p+atrack:0",
+                encoding: "720p+atrack:0".to_string(),
                 url: "rtmp://example/live",
                 desired_state: "running",
                 is_active: false,
@@ -347,7 +348,7 @@ mod tests {
             },
             OutputStageSweepInput {
                 pipeline_id: "pipe",
-                encoding: "source",
+                encoding: "source".to_string(),
                 url: "srt://example:9000",
                 desired_state: "stopped",
                 is_active: false,
@@ -396,7 +397,7 @@ mod tests {
             url: "rtmp://example/live/test".to_string(),
             monitoring_url: None,
             desired_state: "running".to_string(),
-            encoding: "source".to_string(),
+            config: OutputConfig::parse("source"),
         };
 
         let snapshot = load_output_runtime_snapshot(&engine, &output, 0).await;
@@ -421,7 +422,7 @@ mod tests {
             url: "srt://example:9000".to_string(),
             monitoring_url: None,
             desired_state: "running".to_string(),
-            encoding: "source".to_string(),
+            config: OutputConfig::parse("source"),
         };
 
         let snapshot = load_output_runtime_snapshot(&engine, &output, 1_000).await;
@@ -440,7 +441,7 @@ mod tests {
             url: "rtmp://example/live".to_string(),
             monitoring_url: None,
             desired_state: "running".to_string(),
-            encoding: "720p".to_string(),
+            config: OutputConfig::parse("720p"),
         };
         let snapshot = OutputRuntimeSnapshot {
             is_active: true,
@@ -528,7 +529,6 @@ mod tests {
                 name: "Pipeline One".to_string(),
                 stream_key: "stream-one".to_string(),
                 input_source: Some("cam-1".to_string()),
-                encoding: None,
                 srt_ingest_policy: None,
             }],
             error: None,
@@ -564,7 +564,6 @@ mod tests {
                 name: "Pipeline One".to_string(),
                 stream_key: "stream-one".to_string(),
                 input_source: None,
-                encoding: None,
                 srt_ingest_policy: None,
             }],
             error: None,

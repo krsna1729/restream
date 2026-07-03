@@ -954,7 +954,6 @@ mod tests {
             name: "Primary".to_string(),
             stream_key: "stream-key".to_string(),
             input_source: Some("file:clip.mp4".to_string()),
-            encoding: Some("copy".to_string()),
             srt_ingest_policy: Some(
                 serialize_pipeline_srt_ingest_policy(&SrtPipelineIngestConfig {
                     mode: SrtPipelineIngestMode::Encrypted,

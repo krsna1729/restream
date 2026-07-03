@@ -65,6 +65,18 @@ pub async fn get(name: &str) -> TranscodeProfile {
     resolve_from_profiles(&cache, name)
 }
 
+/// Get a profile without blocking the current thread.
+///
+/// Runtime media tasks call this from async contexts while constructing worker
+/// arguments. If another task is updating the cache, fall back to built-ins
+/// instead of blocking a Tokio worker.
+pub fn try_get_cached(name: &str) -> TranscodeProfile {
+    cache()
+        .try_read()
+        .map(|cache| resolve_from_profiles(&cache, name))
+        .unwrap_or_else(|_| resolve_from_profiles(&built_in_defaults(), name))
+}
+
 pub fn get_blocking(name: &str) -> TranscodeProfile {
     let cache = cache().blocking_read();
     resolve_from_profiles(&cache, name)

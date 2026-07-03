@@ -71,6 +71,17 @@ impl TsChunkReader {
         }
     }
 
+    pub fn new_with_keyframe_preroll(
+        name: String,
+        ring: &TsChunkRing,
+        preroll_packets: usize,
+    ) -> Self {
+        Self {
+            inner: Reader::new_with_keyframe_preroll(name, ring.ring.clone(), preroll_packets),
+            cancel: ring.cancel.clone(),
+        }
+    }
+
     pub fn new_live(name: String, ring: &TsChunkRing) -> Self {
         Self {
             inner: Reader::new_live(name, ring.ring.clone()),
@@ -149,6 +160,26 @@ mod tests {
         ts_ring.push(Bytes::from_static(b"new"), false);
         assert_eq!(reader.pull_burst(&mut out, 10).unwrap(), 1);
         assert_eq!(&*out[0].payload, b"new");
+    }
+
+    #[test]
+    fn keyframe_preroll_reader_keeps_small_pre_keyframe_window() {
+        let cancel = CancellationToken::new();
+        let ts_ring = TsChunkRing::new(16, cancel);
+        for i in 0..8 {
+            ts_ring.push(Bytes::from(vec![i as u8]), i == 5);
+        }
+
+        let mut reader =
+            TsChunkReader::new_with_keyframe_preroll("preroll".to_string(), &ts_ring, 2);
+        let mut out = Vec::new();
+        assert_eq!(reader.pull_burst(&mut out, 10).unwrap(), 5);
+        let payloads: Vec<u8> = out.iter().map(|packet| packet.payload[0]).collect();
+        assert_eq!(
+            payloads,
+            vec![3, 4, 5, 6, 7],
+            "TS readers should retain a short pre-keyframe window for late joins"
+        );
     }
 
     #[tokio::test]

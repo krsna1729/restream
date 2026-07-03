@@ -4112,7 +4112,7 @@ mod tests {
             url: "srt://example.com:9000?streamid=publish:live/test".to_string(),
             monitoring_url: None,
             desired_state: "running".to_string(),
-            encoding: "source".to_string(),
+            config: crate::domain::output_spec::OutputConfig::parse("source"),
         };
 
         let graph =
@@ -4164,7 +4164,7 @@ mod tests {
             url: "rtmp://example/live/test".to_string(),
             monitoring_url: None,
             desired_state: "running".to_string(),
-            encoding: "source".to_string(),
+            config: crate::domain::output_spec::OutputConfig::parse("source"),
         };
 
         let graph =
@@ -4208,7 +4208,7 @@ mod tests {
             url: "rtmp://example/live/test".to_string(),
             monitoring_url: None,
             desired_state: "running".to_string(),
-            encoding: "h264+atrack:1".to_string(),
+            config: crate::domain::output_spec::OutputConfig::parse("h264+atrack:1"),
         };
 
         let _ = crate::application::egress::prepare_output_ring(&engine, &output).await;

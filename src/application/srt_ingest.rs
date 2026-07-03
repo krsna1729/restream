@@ -177,7 +177,6 @@ mod tests {
                 name: "Pipeline One".to_string(),
                 stream_key: "stream-one".to_string(),
                 input_source: None,
-                encoding: None,
                 srt_ingest_policy: Some(
                     serialize_pipeline_srt_ingest_policy(
                         &crate::domain::srt_ingest::SrtPipelineIngestConfig::default(),
@@ -228,7 +227,6 @@ mod tests {
                 name: "Pipeline One".to_string(),
                 stream_key: "stream-one".to_string(),
                 input_source: None,
-                encoding: None,
                 srt_ingest_policy: Some(
                     serialize_pipeline_srt_ingest_policy(
                         &crate::domain::srt_ingest::SrtPipelineIngestConfig::default(),
