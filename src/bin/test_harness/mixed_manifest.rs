@@ -495,6 +495,8 @@ pub(crate) struct MixedDslManifest {
 pub(crate) struct MixedDslMatrix {
     pub(crate) inputs: Vec<MixedDslInput>,
     pub(crate) outputs: MixedDslOutputMatrices,
+    #[serde(rename = "defaultChecks")]
+    pub(crate) default_checks: Vec<String>,
     #[serde(rename = "fastBreadth")]
     pub(crate) fast_breadth: Vec<MixedDslFastBreadth>,
     #[serde(rename = "fastBreadthBatches")]
@@ -613,6 +615,7 @@ static MIXED_FAST_BREADTH_CASES_FROM_DSL: OnceLock<Vec<MixedFastBreadthCase>> = 
 static MIXED_FAST_BREADTH_BATCHES_FROM_DSL: OnceLock<Vec<MixedFastBreadthBatch>> = OnceLock::new();
 static SINGLE_TRACK_MIXED_OUTPUT_CASES_FROM_DSL: OnceLock<Vec<MixedOutputCase>> = OnceLock::new();
 static MULTI_TRACK_MIXED_OUTPUT_CASES_FROM_DSL: OnceLock<Vec<MixedOutputCase>> = OnceLock::new();
+static MIXED_DEFAULT_CHECKS_FROM_DSL: OnceLock<Vec<MixedCheck>> = OnceLock::new();
 
 pub(crate) fn mixed_input_cases() -> &'static [MixedInputCase] {
     MIXED_INPUT_CASES_FROM_DSL.get_or_init(|| {
@@ -691,6 +694,21 @@ pub(crate) fn multi_track_mixed_output_cases() -> &'static [MixedOutputCase] {
             .map(|row| {
                 row.to_output_case()
                     .unwrap_or_else(|error| panic!("invalid multi-track output row: {error}"))
+            })
+            .collect()
+    })
+}
+
+pub(crate) fn mixed_default_checks() -> &'static [MixedCheck] {
+    MIXED_DEFAULT_CHECKS_FROM_DSL.get_or_init(|| {
+        let manifest = mixed_dsl_manifest().expect("embedded mixed_matrix.json should parse");
+        manifest
+            .mixed
+            .default_checks
+            .iter()
+            .map(|check| {
+                MixedCheck::from_name(check)
+                    .unwrap_or_else(|| panic!("{check} is not a known mixed check"))
             })
             .collect()
     })
@@ -926,23 +944,6 @@ pub(crate) struct MixedScenarioPlan {
     pub(crate) expected_stages: MixedStageCount,
 }
 
-pub(crate) const MIXED_DEFAULT_CHECKS: &[MixedCheck] = &[
-    MixedCheck::Ffprobe,
-    MixedCheck::AudioRoute,
-    MixedCheck::DecodeScan,
-    MixedCheck::Signal,
-    MixedCheck::StageSharing,
-    MixedCheck::Hls,
-    MixedCheck::Recording,
-    MixedCheck::Load,
-    MixedCheck::Smoke,
-    MixedCheck::Lifecycle,
-    MixedCheck::SinkProbe,
-    MixedCheck::HlsPutProbe,
-    MixedCheck::BurstGraph,
-    MixedCheck::SoakDrift,
-];
-
 impl MixedScenarioPlan {
     pub(crate) fn for_input(input: MixedInputCase) -> Self {
         Self {
@@ -952,7 +953,7 @@ impl MixedScenarioPlan {
                 input,
             },
             outputs: mixed_output_cases_for_input(input),
-            checks: MIXED_DEFAULT_CHECKS,
+            checks: mixed_default_checks(),
             expected_stages: expected_mixed_stage_count(input),
         }
     }

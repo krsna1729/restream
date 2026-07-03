@@ -13909,7 +13909,7 @@ stream|index=1|codec_type=audio\n";
             8
         );
 
-        let check_names: Vec<_> = MIXED_DEFAULT_CHECKS
+        let check_names: Vec<_> = mixed_default_checks()
             .iter()
             .map(|check| check.as_str())
             .collect();

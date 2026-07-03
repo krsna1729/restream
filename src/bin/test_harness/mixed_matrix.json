@@ -48,6 +48,22 @@
         {"id": "srt.1080p.a1", "protocol": "srt", "encoding": "1080p+atrack:1", "expectedDimensions": "1920x1080", "expectedAudioTracks": 1, "selectedAudioTrack": 1}
       ]
     },
+    "defaultChecks": [
+      "ffprobe",
+      "audio-route",
+      "decode-scan",
+      "signal",
+      "stage-sharing",
+      "hls",
+      "recording",
+      "load",
+      "smoke",
+      "lifecycle",
+      "sink-probe",
+      "hls-put-probe",
+      "burst-graph",
+      "soak-drift"
+    ],
     "fastBreadth": [
       {"id": "mixed.asset.file.h264.a1.bf0", "rationale": "file H.264 BF0 single-audio startup hero row", "checks": ["ffprobe", "stage-sharing", "hls"]},
       {"id": "mixed.asset.file.h265.a2.bf2", "rationale": "file HEVC BF2 multi-audio plus codec-edge outputs", "checks": ["ffprobe", "stage-sharing"]},
