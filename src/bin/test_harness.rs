@@ -10905,38 +10905,25 @@ async fn recovery_live_cases(
 
     // ── 4. Hung HLS PUT sink times out, retries, and recovers after restart ──
     {
-        let pipeline = api
-            .post_json(
-                "/api/v1/pipelines",
-                json!({"name": "fault-hls-put-timeout", "streamKey": "fault-hls-put-timeout"}),
-            )
-            .await?;
-        let pid = pipeline["pipeline"]["id"]
-            .as_str()
-            .ok_or("missing id")?
-            .to_string();
+        let pid =
+            create_pipeline_with_stream_key(api, "fault-hls-put-timeout", "fault-hls-put-timeout")
+                .await?;
         let sink_dir = artifact_path("recovery-hls-put-timeout");
         let _ = std::fs::remove_dir_all(&sink_dir);
         std::fs::create_dir_all(&sink_dir).map_err(|e| e.to_string())?;
 
         let (hang_cancel, hang_handle) =
             start_hls_put_hang_sink(hls_put_port, Duration::from_secs(30)).await?;
-        let output = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pid}/outputs"),
-                output_create_payload(
-                    "hls-put-timeout",
-                    &format!(
-                        "http://127.0.0.1:{hls_put_port}/upload?cid=fault-hls-put-timeout&copy=0&file=out.m3u8"
-                    ),
-                    "source",
-                ),
-            )
-            .await?;
-        let oid = output["output"]["id"]
-            .as_str()
-            .ok_or("missing output id")?
-            .to_string();
+        let oid = create_mixed_output(
+            api,
+            &pid,
+            "hls-put-timeout",
+            &format!(
+                "http://127.0.0.1:{hls_put_port}/upload?cid=fault-hls-put-timeout&copy=0&file=out.m3u8"
+            ),
+            "source",
+        )
+        .await?;
 
         let mut pub_child = spawn_publisher(
             fixture_h264,
@@ -11104,31 +11091,18 @@ async fn recovery_live_cases(
 
     // ── 5. Transient RTMP sink flaps surface recovered output instability ──
     {
-        let pipeline = api
-            .post_json(
-                "/api/v1/pipelines",
-                json!({"name": "fault-rtmp-sink-flap", "streamKey": "fault-rtmp-sink-flap"}),
-            )
-            .await?;
-        let pid = pipeline["pipeline"]["id"]
-            .as_str()
-            .ok_or("missing id")?
-            .to_string();
+        let pid =
+            create_pipeline_with_stream_key(api, "fault-rtmp-sink-flap", "fault-rtmp-sink-flap")
+                .await?;
 
-        let output = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pid}/outputs"),
-                output_create_payload(
-                    "rtmp-sink-flap",
-                    &format!("rtmp://127.0.0.1:{sink_port}/live/fault-rtmp-sink-flap"),
-                    "source",
-                ),
-            )
-            .await?;
-        let oid = output["output"]["id"]
-            .as_str()
-            .ok_or("missing output id")?
-            .to_string();
+        let oid = create_mixed_output(
+            api,
+            &pid,
+            "rtmp-sink-flap",
+            &format!("rtmp://127.0.0.1:{sink_port}/live/fault-rtmp-sink-flap"),
+            "source",
+        )
+        .await?;
 
         let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
         let mut sink_server =
@@ -11363,23 +11337,17 @@ async fn recovery_live_cases(
         let mut sink_pid =
             create_pipeline_with_stream_key(api, "srt-sink-flap-target-1", sink_stream_key).await?;
 
-        let output = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pid}/outputs"),
-                output_create_payload(
-                    "srt-sink-flap",
-                    &format!(
-                        "srt://127.0.0.1:{}?streamid=publish:live/{}&pkt_size=1316",
-                        ports.srt, sink_stream_key
-                    ),
-                    "source",
-                ),
-            )
-            .await?;
-        let oid = output["output"]["id"]
-            .as_str()
-            .ok_or("missing output id")?
-            .to_string();
+        let oid = create_mixed_output(
+            api,
+            &pid,
+            "srt-sink-flap",
+            &format!(
+                "srt://127.0.0.1:{}?streamid=publish:live/{}&pkt_size=1316",
+                ports.srt, sink_stream_key
+            ),
+            "source",
+        )
+        .await?;
 
         let mut pub_child = spawn_publisher(
             fixture_h264,
