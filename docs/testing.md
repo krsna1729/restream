@@ -708,6 +708,11 @@ process lifecycle, sink/probe orchestration, API calls, and assertions. When
 adding a scenario, update the JSON DSL first, then update the typed expansion
 or runner verbs only if the existing axes cannot describe the new behavior.
 
+Smaller harness tables follow the same rule: `ramp_configs.json`,
+`sweep_configs.json`, `resource_egress_scenarios.json`, and `fault_cases.json`
+own declarative rows; Rust owns typed parsing, validation, process verbs, and
+assertions. Prefer extending those manifests over adding function-per-row Rust.
+
 ### `mixed.fast-breadth` — 5-minute breadth sweep
 
 ```sh
