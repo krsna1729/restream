@@ -33,6 +33,7 @@ mod mixed_manifest;
 use mixed_manifest::*;
 
 /// Static metadata describing how a harness mode participates in suite runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HarnessModeSpec {
     name: &'static str,
     suite_default: bool,
@@ -40,7 +41,7 @@ struct HarnessModeSpec {
     requires_bench_profile: bool,
 }
 
-const HARNESS_MODE_SPECS: &[HarnessModeSpec] = &[
+const BUILTIN_MODE_SPECS: &[HarnessModeSpec] = &[
     HarnessModeSpec {
         name: "api-smoke",
         suite_default: true,
@@ -96,121 +97,13 @@ const HARNESS_MODE_SPECS: &[HarnessModeSpec] = &[
         requires_bench_profile: true,
     },
     HarnessModeSpec {
-        name: "mixed.asset.file.h264.a1.bf0",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "mixed.asset.file.h264.a1.bf2",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "mixed.asset.file.h264.a2.bf0",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "mixed.asset.file.h264.a2.bf2",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "mixed.asset.file.h265.a1.bf0",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "mixed.asset.file.h265.a1.bf2",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "mixed.asset.file.h265.a2.bf0",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "mixed.asset.file.h265.a2.bf2",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "mixed.live.rtmp.h264.a1.bf0",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "mixed.live.rtmp.h264.a1.bf2",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "mixed.live.srt.h264.a1.bf0",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "mixed.live.srt.h264.a1.bf2",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "mixed.live.srt.h264.a2.bf0",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "mixed.live.srt.h264.a2.bf2",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "mixed.live.srt.h265.a1.bf0",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "mixed.live.srt.h265.a1.bf2",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "mixed.live.srt.h265.a2.bf0",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "mixed.live.srt.h265.a2.bf2",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "mixed.matrix",
+        name: MIXED_MATRIX_MODE,
         suite_default: true,
         requires_port_namespace: true,
         requires_bench_profile: true,
     },
     HarnessModeSpec {
-        name: "mixed.fast-breadth",
+        name: MIXED_FAST_BREADTH_MODE,
         suite_default: false,
         requires_port_namespace: true,
         requires_bench_profile: true,
@@ -403,20 +296,42 @@ fn planned_mixed_stage_count(
     counts
 }
 
-fn mode_spec(name: &str) -> Option<&'static HarnessModeSpec> {
-    HARNESS_MODE_SPECS.iter().find(|spec| spec.name == name)
+fn mixed_input_mode_spec(case: MixedInputCase) -> HarnessModeSpec {
+    HarnessModeSpec {
+        name: case.scenario_id(),
+        suite_default: false,
+        requires_port_namespace: true,
+        requires_bench_profile: matches!(
+            case.protocol(),
+            MixedInputProtocol::Rtmp | MixedInputProtocol::Srt
+        ),
+    }
+}
+
+fn mode_spec(name: &str) -> Option<HarnessModeSpec> {
+    BUILTIN_MODE_SPECS
+        .iter()
+        .copied()
+        .find(|spec| spec.name == name)
+        .or_else(|| mixed_input_case_for_command(name).map(mixed_input_mode_spec))
+}
+
+fn all_mode_specs() -> Vec<HarnessModeSpec> {
+    let mut specs = BUILTIN_MODE_SPECS.to_vec();
+    specs.extend(MIXED_INPUT_CASES.iter().copied().map(mixed_input_mode_spec));
+    specs
 }
 
 fn suite_default_modes() -> Vec<String> {
-    HARNESS_MODE_SPECS
-        .iter()
+    all_mode_specs()
+        .into_iter()
         .filter(|spec| spec.suite_default)
         .map(|spec| spec.name.to_string())
         .collect()
 }
 
 fn supported_mode_names() -> Vec<&'static str> {
-    HARNESS_MODE_SPECS.iter().map(|spec| spec.name).collect()
+    all_mode_specs().into_iter().map(|spec| spec.name).collect()
 }
 
 fn unknown_command_error(other: &str) -> String {
@@ -18040,11 +17955,10 @@ stream|index=1|codec_type=audio\n";
         assert!(message.contains("\"nope-mode\""));
         assert!(message.contains("suite"));
         assert!(message.contains("preflight"));
-        for spec in HARNESS_MODE_SPECS {
+        for mode in supported_mode_names() {
             assert!(
-                message.contains(spec.name),
-                "unknown-command help text is missing mode {}",
-                spec.name
+                message.contains(mode),
+                "unknown-command help text is missing mode {mode}"
             );
         }
     }
@@ -18055,7 +17969,7 @@ stream|index=1|codec_type=audio\n";
             env!("CARGO_MANIFEST_DIR"),
             "/src/bin/test_harness.rs"
         ));
-        for spec in HARNESS_MODE_SPECS {
+        for spec in all_mode_specs() {
             if spec.name == MIXED_MATRIX_MODE
                 || spec.name == MIXED_FAST_BREADTH_MODE
                 || mixed_input_case_for_command(spec.name).is_some()
@@ -18104,7 +18018,7 @@ stream|index=1|codec_type=audio\n";
             let mode = mixed_input_mode_name(*case);
             assert_eq!(mixed_input_case_for_command(&mode), Some(*case));
             assert!(
-                HARNESS_MODE_SPECS.iter().any(|spec| spec.name == mode),
+                mode_spec(&mode).is_some(),
                 "{mode} must be listed in harness help/suite specs"
             );
         }
