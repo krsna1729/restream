@@ -10424,8 +10424,34 @@ async fn verify_mixed_decode_scan(
 
     let started = Instant::now();
     let (passed, status, matched_pattern, stderr) = ffmpeg_decode_scan(label, url).await?;
-    let tolerated_warning =
-        rtmp_decode_scan_tolerates_muxer_dts_warning(url, status, matched_pattern);
+    let mut fallback_validation = None;
+    let tolerated_warning = if decode_scan_needs_video_dts_fallback(url, status, matched_pattern) {
+        let packets_path = env.work_dir.join(format!(
+            "{}.decode-scan.ffprobe.json",
+            safe_artifact_stem(&format!("{cfg}-{label}"))
+        ));
+        match ffprobe_video_packets(url, &packets_path).await {
+            Ok(packet_probe) => {
+                let packet_count = count_video_packets(&packet_probe);
+                let dts_monotone = video_dts_monotone(&packet_probe);
+                fallback_validation = Some(json!({
+                    "packetsPath": packets_path,
+                    "packetCount": packet_count,
+                    "videoDtsMonotone": dts_monotone,
+                }));
+                packet_count > 0 && dts_monotone
+            }
+            Err(error) => {
+                fallback_validation = Some(json!({
+                    "packetsPath": packets_path,
+                    "error": error,
+                }));
+                false
+            }
+        }
+    } else {
+        false
+    };
     emit_mixed_result(
         env,
         cfg,
@@ -10443,6 +10469,7 @@ async fn verify_mixed_decode_scan(
             "matchedPattern": matched_pattern,
             "toleratedWarning": tolerated_warning,
             "stderr": stderr.lines().take(20).collect::<Vec<_>>(),
+            "videoDtsFallback": fallback_validation,
         })),
     )?;
 
@@ -10450,7 +10477,9 @@ async fn verify_mixed_decode_scan(
         if tolerated_warning {
             log_mixed_ok(
                 env,
-                &format!("{label}: decode scan tolerated RTMP muxer DTS warning"),
+                &format!(
+                    "{label}: decode scan tolerated muxer DTS warning after packet DTS validation"
+                ),
             )?;
         } else {
             log_mixed_ok(env, &format!("{label}: decode scan clean"))?;
@@ -10464,12 +10493,12 @@ async fn verify_mixed_decode_scan(
     }
 }
 
-fn rtmp_decode_scan_tolerates_muxer_dts_warning(
+fn decode_scan_needs_video_dts_fallback(
     url: &str,
     status: Option<i32>,
     matched_pattern: Option<&'static str>,
 ) -> bool {
-    url.starts_with("rtmp://")
+    (url.starts_with("rtmp://") || url.starts_with("srt://"))
         && status == Some(0)
         && matches!(matched_pattern, Some("non monoton" | "non-monoton"))
 }
@@ -18612,31 +18641,36 @@ stream|index=1|codec_type=audio\n";
     }
 
     #[test]
-    fn rtmp_decode_scan_tolerates_only_rtmp_muxer_dts_warning() {
-        assert!(rtmp_decode_scan_tolerates_muxer_dts_warning(
+    fn decode_scan_video_dts_fallback_applies_to_rtmp_and_srt_muxer_warnings() {
+        assert!(decode_scan_needs_video_dts_fallback(
             "rtmp://127.0.0.1/live/test",
             Some(0),
             Some("non monoton"),
         ));
-        assert!(rtmp_decode_scan_tolerates_muxer_dts_warning(
+        assert!(decode_scan_needs_video_dts_fallback(
             "rtmp://127.0.0.1/live/test",
             Some(0),
             Some("non-monoton"),
         ));
-        assert!(!rtmp_decode_scan_tolerates_muxer_dts_warning(
+        assert!(decode_scan_needs_video_dts_fallback(
             "srt://127.0.0.1:9999?streamid=read:live/test",
             Some(0),
             Some("non monoton"),
         ));
-        assert!(!rtmp_decode_scan_tolerates_muxer_dts_warning(
+        assert!(!decode_scan_needs_video_dts_fallback(
             "rtmp://127.0.0.1/live/test",
             Some(1),
             Some("non monoton"),
         ));
-        assert!(!rtmp_decode_scan_tolerates_muxer_dts_warning(
+        assert!(!decode_scan_needs_video_dts_fallback(
             "rtmp://127.0.0.1/live/test",
             Some(0),
             Some("invalid data"),
+        ));
+        assert!(!decode_scan_needs_video_dts_fallback(
+            "http://127.0.0.1/live/test",
+            Some(0),
+            Some("non monoton"),
         ));
     }
 

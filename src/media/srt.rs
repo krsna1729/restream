@@ -4414,7 +4414,10 @@ pub async fn start_srt_egress(
     });
     engine.register_os_thread(egress_sender_handle);
 
-    let mut reader = TsChunkReader::new_live(format!("srt_egress:{}", output_id), &shared_muxer);
+    // Join the shared TS ring from its latest buffered keyframe instead of the
+    // strict live edge so late subscribers keep the muxed GOP/audio context
+    // that RTMP egress already replays from the upstream packet ring.
+    let mut reader = TsChunkReader::new(format!("srt_egress:{}", output_id), &shared_muxer);
     // Accumulation buffer: collect all muxed TS bytes for a burst, then
     // write them in a single out_queue.write() call (one lock acquisition
     // per burst instead of one per packet).
