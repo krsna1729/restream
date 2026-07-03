@@ -8,7 +8,6 @@ use axum::routing::{get, put};
 use bytes::Bytes;
 use chrono::Utc;
 use restream::domain::output_spec::OutputConfig;
-use restream::test_fixtures::AvMarkerBframeMode;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
@@ -27,6 +26,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
 use tokio_util::sync::CancellationToken;
+
+#[path = "test_harness/mixed_manifest.rs"]
+mod mixed_manifest;
+
+use mixed_manifest::*;
 
 /// Static metadata describing how a harness mode participates in suite runs.
 struct HarnessModeSpec {
@@ -297,683 +301,6 @@ const HARNESS_MODE_SPECS: &[HarnessModeSpec] = &[
     },
 ];
 
-/// Input transport family for mixed-matrix source streams.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum MixedInputProtocol {
-    File,
-    Rtmp,
-    Srt,
-}
-
-impl MixedInputProtocol {
-    const fn source_name(self) -> &'static str {
-        match self {
-            Self::File => "asset",
-            Self::Rtmp | Self::Srt => "live",
-        }
-    }
-
-    const fn ingest_name(self) -> &'static str {
-        match self {
-            Self::File => "file",
-            Self::Rtmp => "rtmp",
-            Self::Srt => "srt",
-        }
-    }
-}
-
-/// Video codec axis for mixed-matrix source streams.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum MixedVideoCodec {
-    H264,
-    H265,
-}
-
-impl MixedVideoCodec {
-    const fn scenario_token(self) -> &'static str {
-        match self {
-            Self::H264 => "h264",
-            Self::H265 => "h265",
-        }
-    }
-
-    const fn expected_video_codec(self) -> &'static str {
-        match self {
-            Self::H264 => "h264",
-            Self::H265 => "hevc",
-        }
-    }
-
-    const fn hls_preview_expected_dimensions(self) -> &'static str {
-        match self {
-            // HEVC preview is browser-compat today: HEVC input is converted to the
-            // 720p H.264 preview ring before the MPEG-TS HLS segmenter sees it.
-            Self::H264 => "1920x1080",
-            Self::H265 => "1280x720",
-        }
-    }
-}
-
-/// Source audio-track layout axis for mixed-matrix scenarios.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum MixedInputAudioLayout {
-    A1,
-    A2,
-}
-
-impl MixedInputAudioLayout {
-    const fn scenario_token(self) -> &'static str {
-        match self {
-            Self::A1 => "a1",
-            Self::A2 => "a2",
-        }
-    }
-
-    const fn track_layout_name(self) -> &'static str {
-        match self {
-            Self::A1 => "single",
-            Self::A2 => "multi",
-        }
-    }
-
-    const fn expected_audio_tracks(self) -> usize {
-        match self {
-            Self::A1 => 1,
-            Self::A2 => 2,
-        }
-    }
-
-    const fn is_multi_track(self) -> bool {
-        matches!(self, Self::A2)
-    }
-}
-
-/// Source frame-reordering axis used to distinguish BF0 from B-frame fixtures.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum MixedInputReorder {
-    Bf0,
-    Bf2,
-}
-
-impl MixedInputReorder {
-    const fn scenario_token(self) -> &'static str {
-        match self {
-            Self::Bf0 => "bf0",
-            Self::Bf2 => "bf2",
-        }
-    }
-
-    const fn has_b_frames(self) -> bool {
-        matches!(self, Self::Bf2)
-    }
-
-    const fn fixture_mode(self) -> AvMarkerBframeMode {
-        match self {
-            Self::Bf0 => AvMarkerBframeMode::Bf0,
-            Self::Bf2 => AvMarkerBframeMode::Bf2,
-        }
-    }
-}
-
-/// Complete input-side scenario key for the mixed matrix.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct MixedInputCase {
-    protocol: MixedInputProtocol,
-    codec: MixedVideoCodec,
-    audio_layout: MixedInputAudioLayout,
-    reorder: MixedInputReorder,
-}
-
-impl MixedInputCase {
-    const fn new(
-        protocol: MixedInputProtocol,
-        codec: MixedVideoCodec,
-        audio_layout: MixedInputAudioLayout,
-        reorder: MixedInputReorder,
-    ) -> Self {
-        Self {
-            protocol,
-            codec,
-            audio_layout,
-            reorder,
-        }
-    }
-
-    fn scenario_id(self) -> &'static str {
-        match (self.protocol, self.codec, self.audio_layout, self.reorder) {
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ) => "mixed.asset.file.h264.a1.bf0",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf2,
-            ) => "mixed.asset.file.h264.a1.bf2",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf0,
-            ) => "mixed.asset.file.h264.a2.bf0",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf2,
-            ) => "mixed.asset.file.h264.a2.bf2",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ) => "mixed.asset.file.h265.a1.bf0",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf2,
-            ) => "mixed.asset.file.h265.a1.bf2",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf0,
-            ) => "mixed.asset.file.h265.a2.bf0",
-            (
-                MixedInputProtocol::File,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf2,
-            ) => "mixed.asset.file.h265.a2.bf2",
-            (
-                MixedInputProtocol::Rtmp,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ) => "mixed.live.rtmp.h264.a1.bf0",
-            (
-                MixedInputProtocol::Rtmp,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf2,
-            ) => "mixed.live.rtmp.h264.a1.bf2",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ) => "mixed.live.srt.h264.a1.bf0",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf2,
-            ) => "mixed.live.srt.h264.a1.bf2",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf0,
-            ) => "mixed.live.srt.h264.a2.bf0",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf2,
-            ) => "mixed.live.srt.h264.a2.bf2",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ) => "mixed.live.srt.h265.a1.bf0",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf2,
-            ) => "mixed.live.srt.h265.a1.bf2",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf0,
-            ) => "mixed.live.srt.h265.a2.bf0",
-            (
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf2,
-            ) => "mixed.live.srt.h265.a2.bf2",
-            _ => unreachable!("unsupported mixed input case"),
-        }
-    }
-
-    const fn protocol(self) -> MixedInputProtocol {
-        self.protocol
-    }
-
-    const fn codec(self) -> MixedVideoCodec {
-        self.codec
-    }
-
-    const fn audio_layout(self) -> MixedInputAudioLayout {
-        self.audio_layout
-    }
-
-    const fn reorder(self) -> MixedInputReorder {
-        self.reorder
-    }
-
-    const fn source_name(self) -> &'static str {
-        self.protocol().source_name()
-    }
-
-    const fn ingest_name(self) -> &'static str {
-        self.protocol().ingest_name()
-    }
-
-    const fn codec_name(self) -> &'static str {
-        self.codec().scenario_token()
-    }
-
-    const fn audio_layout_name(self) -> &'static str {
-        self.audio_layout().scenario_token()
-    }
-
-    const fn reorder_name(self) -> &'static str {
-        self.reorder().scenario_token()
-    }
-
-    const fn track_layout_name(self) -> &'static str {
-        self.audio_layout().track_layout_name()
-    }
-
-    const fn is_multi_track(self) -> bool {
-        self.audio_layout().is_multi_track()
-    }
-
-    const fn expected_video_codec(self) -> &'static str {
-        self.codec().expected_video_codec()
-    }
-
-    const fn expected_audio_tracks(self) -> usize {
-        self.audio_layout().expected_audio_tracks()
-    }
-
-    const fn hls_preview_expected_dimensions(self) -> &'static str {
-        self.codec().hls_preview_expected_dimensions()
-    }
-
-    const fn source_has_b_frames(self) -> bool {
-        self.reorder().has_b_frames()
-    }
-
-    const fn fixture_bframe_mode(self) -> AvMarkerBframeMode {
-        self.reorder().fixture_mode()
-    }
-
-    fn artifact_rel_dir(self) -> PathBuf {
-        PathBuf::from(self.source_name())
-            .join(self.ingest_name())
-            .join(self.codec_name())
-            .join(self.audio_layout_name())
-            .join(self.reorder_name())
-    }
-
-    /// Shared-stack family used by the breadth sweeps.
-    ///
-    /// Fast mode uses this today, and the full matrix can reuse the same
-    /// grouping once we promote shared-stack waves there too.
-    const fn shared_batch_group(self) -> MixedSharedBatchGroup {
-        match self.protocol() {
-            MixedInputProtocol::Rtmp => MixedSharedBatchGroup::LiveRtmp,
-            MixedInputProtocol::Srt => MixedSharedBatchGroup::LiveSrt,
-            MixedInputProtocol::File => MixedSharedBatchGroup::FileIngest,
-        }
-    }
-}
-
-/// Shared-stack family for mixed breadth waves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MixedSharedBatchGroup {
-    LiveRtmp,
-    LiveSrt,
-    FileIngest,
-}
-
-impl MixedSharedBatchGroup {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::LiveRtmp => "live-rtmp",
-            Self::LiveSrt => "live-srt",
-            Self::FileIngest => "file-ingest",
-        }
-    }
-}
-
-const MIXED_MATRIX_MODE: &str = "mixed.matrix";
-const MIXED_FAST_BREADTH_MODE: &str = "mixed.fast-breadth";
-const MIXED_ARTIFACT_ROOT: &str = "test/artifacts/mixed";
-
-const MIXED_INPUT_CASES: &[MixedInputCase] = &[
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Rtmp,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Rtmp,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf2,
-    ),
-];
-
-/// One selected input row in the fast breadth sweep, with its minimal checks.
-#[derive(Clone, Copy, Debug)]
-struct MixedFastBreadthCase {
-    case: MixedInputCase,
-    rationale: &'static str,
-    checks: &'static [&'static str],
-}
-
-// Fast breadth is the "find the broad failure shape quickly without pretending
-// to be exhaustive" sweep.
-// It samples the 180 input/output cells by risk axes rather than by row count:
-// - file ingest: BF0 startup/liveness plus BF2+HEVC+multi-audio stress
-// - RTMP ingest: both sender BF0 and BF2, because RTMP timestamp/sequence-header
-//   behavior differs from SRT and file ingest
-// - SRT ingest: multi-audio BF0 plus HEVC BF2 codec-edge/transcode pressure
-// - output matrix: each selected A1 row covers 6 RTMP/SRT source/720p/1080p
-//   outputs; each selected A2 row covers the 15 all-audio/atrack variants.
-//
-// Keep this list small enough for a quick WSL-safe sweep. When a new input or
-// output axis is added, update the rationale and the coverage unit tests below
-// before relying on this mode as the first diagnostic pass. The runner defaults
-// to N_PER_GROUP=1, SKIP_LOAD=1, COLLECT_FAILURES=1, and the per-row `checks`
-// below so it reports the failure shape across selected cells; set those env
-// vars explicitly when scale/load/signal depth is the point. `mixed.matrix`
-// remains the exhaustive proof gate.
-const MIXED_FAST_BREADTH_CASES: &[MixedFastBreadthCase] = &[
-    MixedFastBreadthCase {
-        case: MixedInputCase::new(
-            MixedInputProtocol::File,
-            MixedVideoCodec::H264,
-            MixedInputAudioLayout::A1,
-            MixedInputReorder::Bf0,
-        ),
-        rationale: "file H.264 BF0 single-audio startup hero row",
-        checks: &["ffprobe", "stage-sharing", "hls"],
-    },
-    MixedFastBreadthCase {
-        case: MixedInputCase::new(
-            MixedInputProtocol::File,
-            MixedVideoCodec::H265,
-            MixedInputAudioLayout::A2,
-            MixedInputReorder::Bf2,
-        ),
-        rationale: "file HEVC BF2 multi-audio plus codec-edge outputs",
-        checks: &["ffprobe", "stage-sharing"],
-    },
-    MixedFastBreadthCase {
-        case: MixedInputCase::new(
-            MixedInputProtocol::Rtmp,
-            MixedVideoCodec::H264,
-            MixedInputAudioLayout::A1,
-            MixedInputReorder::Bf0,
-        ),
-        rationale: "RTMP publisher without B-frames",
-        checks: &["ffprobe"],
-    },
-    MixedFastBreadthCase {
-        case: MixedInputCase::new(
-            MixedInputProtocol::Rtmp,
-            MixedVideoCodec::H264,
-            MixedInputAudioLayout::A1,
-            MixedInputReorder::Bf2,
-        ),
-        rationale: "RTMP publisher with B-frames",
-        checks: &["ffprobe"],
-    },
-    MixedFastBreadthCase {
-        case: MixedInputCase::new(
-            MixedInputProtocol::Srt,
-            MixedVideoCodec::H264,
-            MixedInputAudioLayout::A2,
-            MixedInputReorder::Bf0,
-        ),
-        rationale: "SRT H.264 BF0 multi-audio adaptive-ring row",
-        checks: &["ffprobe", "stage-sharing"],
-    },
-    MixedFastBreadthCase {
-        case: MixedInputCase::new(
-            MixedInputProtocol::Srt,
-            MixedVideoCodec::H265,
-            MixedInputAudioLayout::A2,
-            MixedInputReorder::Bf2,
-        ),
-        rationale: "SRT HEVC BF2 multi-audio codec-edge stress row",
-        checks: &["ffprobe", "stage-sharing", "hls"],
-    },
-];
-
-/// Fast-mode shared-stack batches.
-///
-/// Each batch reuses one restream + mediamtx setup and runs up to two input
-/// pipelines concurrently inside that stack. This keeps setup cost low while
-/// preserving enough isolation to attribute failures by transport family.
-#[derive(Clone, Copy, Debug)]
-struct MixedFastBreadthBatch {
-    group: MixedSharedBatchGroup,
-    cases: &'static [MixedInputCase],
-}
-
-const MIXED_FAST_BREADTH_BATCHES: &[MixedFastBreadthBatch] = &[
-    MixedFastBreadthBatch {
-        group: MixedSharedBatchGroup::LiveRtmp,
-        cases: &[
-            MixedInputCase::new(
-                MixedInputProtocol::Rtmp,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ),
-            MixedInputCase::new(
-                MixedInputProtocol::Rtmp,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf2,
-            ),
-        ],
-    },
-    MixedFastBreadthBatch {
-        group: MixedSharedBatchGroup::LiveSrt,
-        cases: &[
-            MixedInputCase::new(
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf0,
-            ),
-            MixedInputCase::new(
-                MixedInputProtocol::Srt,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf2,
-            ),
-        ],
-    },
-    MixedFastBreadthBatch {
-        group: MixedSharedBatchGroup::FileIngest,
-        cases: &[
-            MixedInputCase::new(
-                MixedInputProtocol::File,
-                MixedVideoCodec::H264,
-                MixedInputAudioLayout::A1,
-                MixedInputReorder::Bf0,
-            ),
-            MixedInputCase::new(
-                MixedInputProtocol::File,
-                MixedVideoCodec::H265,
-                MixedInputAudioLayout::A2,
-                MixedInputReorder::Bf2,
-            ),
-        ],
-    },
-];
-
-fn mixed_input_mode_name(case: MixedInputCase) -> String {
-    case.scenario_id().to_string()
-}
-
-fn mixed_input_case_for_command(command: &str) -> Option<MixedInputCase> {
-    MIXED_INPUT_CASES
-        .iter()
-        .copied()
-        .find(|case| case.scenario_id() == command)
-}
-
-fn mixed_fast_breadth_selected(case: MixedInputCase) -> &'static MixedFastBreadthCase {
-    MIXED_FAST_BREADTH_CASES
-        .iter()
-        .find(|selected| selected.case == case)
-        .unwrap_or_else(|| panic!("missing fast-breadth selection for {}", case.scenario_id()))
-}
-
-fn mixed_input_source_name(case: MixedInputCase) -> &'static str {
-    case.source_name()
-}
-
-fn mixed_input_ingest_name(case: MixedInputCase) -> &'static str {
-    case.ingest_name()
-}
-
-fn mixed_input_audio_layout_name(case: MixedInputCase) -> &'static str {
-    case.audio_layout_name()
-}
-
-fn mixed_input_reorder_name(case: MixedInputCase) -> &'static str {
-    case.reorder_name()
-}
-
-fn mixed_input_artifact_rel_dir(case: MixedInputCase) -> PathBuf {
-    case.artifact_rel_dir()
-}
-
-fn mixed_input_default_work_dir(case: MixedInputCase) -> PathBuf {
-    PathBuf::from(MIXED_ARTIFACT_ROOT).join(case.artifact_rel_dir())
-}
-
-fn mixed_matrix_default_work_dir() -> PathBuf {
-    PathBuf::from(MIXED_ARTIFACT_ROOT).join("matrix")
-}
-
-fn mixed_fast_breadth_default_work_dir() -> PathBuf {
-    PathBuf::from(MIXED_ARTIFACT_ROOT).join("fast-breadth")
-}
-
 fn mixed_scenario_check_id(scenario: &str, check: &str) -> String {
     format!("{scenario}.{check}")
 }
@@ -984,34 +311,6 @@ fn mixed_output_check_id(scenario: &str, row_id: &str, check: &str) -> String {
 
 fn mixed_output_instance_name(scenario: &str, row_id: &str, index: usize) -> String {
     format!("{scenario}-{row_id}-{index}")
-}
-
-fn mixed_hls_preview_expected_dimensions(case: MixedInputCase) -> &'static str {
-    case.hls_preview_expected_dimensions()
-}
-
-fn mixed_input_expected_video_codec(case: MixedInputCase) -> &'static str {
-    case.expected_video_codec()
-}
-
-fn mixed_input_expected_audio_tracks(case: MixedInputCase) -> usize {
-    case.expected_audio_tracks()
-}
-
-fn mixed_output_cases_for_input(case: MixedInputCase) -> &'static [MixedOutputCase] {
-    if case.is_multi_track() {
-        MULTI_TRACK_MIXED_OUTPUT_CASES
-    } else {
-        SINGLE_TRACK_MIXED_OUTPUT_CASES
-    }
-}
-
-/// Expected unique processing-stage counts for a mixed scenario.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct MixedStageCount {
-    video: usize,
-    audio: usize,
-    codec_edge: usize,
 }
 
 /// Parsed source-ring telemetry used by the mixed adaptive-ring readiness gate.
@@ -1064,36 +363,6 @@ fn mixed_adaptive_ring_snapshot(telemetry: &Value) -> MixedAdaptiveRingSnapshot 
         resized,
         adequate,
         passed,
-    }
-}
-
-fn expected_mixed_stage_count(case: MixedInputCase) -> MixedStageCount {
-    match (case.codec(), case.is_multi_track()) {
-        // H.265 multi deliberately has more audio routes than H.264 multi:
-        // SRT selected-track outputs preserve HEVC while RTMP selected-track
-        // outputs select audio after the shared H.264 compatibility edge.
-        // The important expensive-stage invariant is codec_edge=3, one per
-        // video shape (source, 720p, 1080p), not one per selected audio track.
-        (MixedVideoCodec::H265, true) => MixedStageCount {
-            video: 2,
-            audio: 12,
-            codec_edge: 3,
-        },
-        (MixedVideoCodec::H265, false) => MixedStageCount {
-            video: 2,
-            audio: 0,
-            codec_edge: 3,
-        },
-        (_, true) => MixedStageCount {
-            video: 2,
-            audio: 6,
-            codec_edge: 0,
-        },
-        (_, false) => MixedStageCount {
-            video: 2,
-            audio: 0,
-            codec_edge: 0,
-        },
     }
 }
 
@@ -3521,6 +2790,16 @@ async fn resource_sweep() -> Result<Value, String> {
 
     if env.no_cleanup {
         println!("resource-sweep no-cleanup: leaving final stack running");
+        // kill_on_drop(true) is set at spawn time for these children, so simply
+        // skipping stop_child() isn't enough — dropping the Child handles below
+        // (at function return) would still SIGKILL them. mem::forget leaks the
+        // handles instead, which is fine since the process is about to _exit.
+        for child in retained_publishers.drain(..) {
+            std::mem::forget(child);
+        }
+        if let Some(stack) = stack.take() {
+            std::mem::forget(stack);
+        }
     } else {
         for child in &mut retained_publishers {
             stop_child(child).await;
@@ -7076,6 +6355,30 @@ impl MixedEnv {
                     .all(|item| item == "signal" || item == "soak-drift")
         })
     }
+
+    fn needs_live_output_progress_gate(&self) -> bool {
+        mixed_output_checks_need_live_progress_gate(self.only_checks.as_deref())
+    }
+}
+
+fn mixed_output_checks_need_live_progress_gate(only_checks: Option<&[String]>) -> bool {
+    let check_selected =
+        |check: &str| only_checks.is_none_or(|items| items.iter().any(|item| item == check));
+    let direct_signal_sinks = only_checks.is_some_and(|items| {
+        !items.is_empty()
+            && items
+                .iter()
+                .all(|item| item == "signal" || item == "soak-drift")
+    });
+    check_selected("ffprobe") || (check_selected("signal") && !direct_signal_sinks)
+}
+
+fn mixed_progress_output_ids(output_ids: &[String], non_progress_output_id: &str) -> Vec<String> {
+    output_ids
+        .iter()
+        .filter(|output_id| output_id.as_str() != non_progress_output_id)
+        .cloned()
+        .collect()
 }
 
 /// Resume gate that skips mixed checks until a requested assertion id is reached.
@@ -7199,6 +6502,7 @@ async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
     let root = std::env::var_os("WORK_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(mixed_fast_breadth_default_work_dir);
+    let selected_batches = selected_mixed_fast_breadth_batches()?;
     let explicit_n_per_group = std::env::var_os("N_PER_GROUP").is_some();
     let explicit_only_checks = std::env::var_os("ONLY_CHECKS").is_some();
     let explicit_skip_load = std::env::var_os("SKIP_LOAD").is_some();
@@ -7209,11 +6513,16 @@ async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
     let mut covered_output_cells = 0usize;
     let mut total_output_cells = 0usize;
 
-    for case in MIXED_INPUT_CASES {
+    let selected_cases: Vec<MixedInputCase> = selected_batches
+        .iter()
+        .flat_map(|batch| batch.cases.iter().copied())
+        .collect();
+
+    for case in &selected_cases {
         total_output_cells += mixed_output_cases_for_input(*case).len();
     }
 
-    for batch in MIXED_FAST_BREADTH_BATCHES {
+    for batch in &selected_batches {
         let stack_mode = format!("{MIXED_FAST_BREADTH_MODE}.{}", batch.group.as_str());
         let stack_env = MixedEnv::from_env_with_default_work_dir(
             &stack_mode,
@@ -7360,17 +6669,22 @@ async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
         "passed": true,
         "mode": MIXED_FAST_BREADTH_MODE,
         "coverage": {
-            "selectedInputCases": MIXED_FAST_BREADTH_CASES.len(),
+            "selectedInputCases": selected_cases.len(),
             "totalInputCases": MIXED_INPUT_CASES.len(),
             "selectedOutputCells": covered_output_cells,
             "totalOutputCells": total_output_cells,
             "nPerGroup": std::env::var("N_PER_GROUP").ok().unwrap_or_else(|| "1".to_string()),
+            "selectedBatchGroups": selected_batches
+                .iter()
+                .map(|batch| batch.group.as_str())
+                .collect::<Vec<_>>(),
             "defaultChecks": if explicit_only_checks {
                 Value::Null
             } else {
-                MIXED_FAST_BREADTH_CASES.iter().map(|selected| {
+                selected_cases.iter().map(|case| {
+                    let selected = mixed_fast_breadth_selected(*case);
                     json!({
-                        "id": selected.case.scenario_id(),
+                        "id": case.scenario_id(),
                         "checks": selected.checks,
                     })
                 }).collect::<Vec<_>>().into()
@@ -7382,7 +6696,7 @@ async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
             } else {
                 root.join("assertions.jsonl").to_string_lossy().into_owned().into()
             },
-            "sharedBatches": MIXED_FAST_BREADTH_BATCHES.iter().map(|batch| {
+            "sharedBatches": selected_batches.iter().map(|batch| {
                 json!({
                     "group": batch.group.as_str(),
                     "cases": batch.cases.iter().map(|case| case.scenario_id()).collect::<Vec<_>>(),
@@ -7390,17 +6704,17 @@ async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
                 })
             }).collect::<Vec<_>>(),
         },
-        "inputCases": MIXED_FAST_BREADTH_CASES.iter().map(|selected| {
-            let case = selected.case;
+        "inputCases": selected_cases.iter().map(|case| {
+            let selected = mixed_fast_breadth_selected(*case);
             json!({
                 "id": case.scenario_id(),
-                "source": mixed_input_source_name(case),
-                "ingest": mixed_input_ingest_name(case),
+                "source": mixed_input_source_name(*case),
+                "ingest": mixed_input_ingest_name(*case),
                 "video": case.codec_name(),
-                "audio": mixed_input_audio_layout_name(case),
-                "reorder": mixed_input_reorder_name(case),
+                "audio": mixed_input_audio_layout_name(*case),
+                "reorder": mixed_input_reorder_name(*case),
                 "sourceHasBframes": case.source_has_b_frames(),
-                "outputCells": mixed_output_cases_for_input(case).len(),
+                "outputCells": mixed_output_cases_for_input(*case).len(),
                 "checks": selected.checks,
                 "rationale": selected.rationale,
             })
@@ -7659,7 +6973,7 @@ async fn run_mixed_anchor_config(
     )
     .await?;
     start_mixed_output(api, &pipeline_id, &hls_output).await?;
-    output_ids.push(hls_output);
+    output_ids.push(hls_output.clone());
 
     add_mixed_group(
         env,
@@ -8903,157 +8217,6 @@ struct MixedGroupSpec<'a> {
     encoding: &'a str,
 }
 
-/// Output transport protocol axis for mixed-matrix output rows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MixedOutputProtocol {
-    Rtmp,
-    Srt,
-}
-/// Complete output-side row in the mixed matrix.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MixedOutputCase {
-    SingleRtmpSrcA0,
-    SingleRtmp720pA0,
-    SingleRtmp1080pA0,
-    SingleSrtSrcA0,
-    SingleSrt720pA0,
-    SingleSrt1080pA0,
-    MultiRtmpSrcA0,
-    MultiRtmpSrcA1,
-    MultiRtmp720pA0,
-    MultiRtmp720pA1,
-    MultiRtmp1080pA0,
-    MultiRtmp1080pA1,
-    MultiSrtSrcAll,
-    MultiSrtSrcA0,
-    MultiSrtSrcA1,
-    MultiSrt720pAll,
-    MultiSrt720pA0,
-    MultiSrt720pA1,
-    MultiSrt1080pAll,
-    MultiSrt1080pA0,
-    MultiSrt1080pA1,
-}
-
-impl MixedOutputCase {
-    const fn id(self) -> &'static str {
-        match self {
-            Self::SingleRtmpSrcA0 | Self::MultiRtmpSrcA0 => "rtmp.src.a0",
-            Self::MultiRtmpSrcA1 => "rtmp.src.a1",
-            Self::SingleRtmp720pA0 | Self::MultiRtmp720pA0 => "rtmp.720p.a0",
-            Self::MultiRtmp720pA1 => "rtmp.720p.a1",
-            Self::SingleRtmp1080pA0 | Self::MultiRtmp1080pA0 => "rtmp.1080p.a0",
-            Self::MultiRtmp1080pA1 => "rtmp.1080p.a1",
-            Self::SingleSrtSrcA0 => "srt.src.a0",
-            Self::MultiSrtSrcAll => "srt.src.all",
-            Self::MultiSrtSrcA0 => "srt.src.a0",
-            Self::MultiSrtSrcA1 => "srt.src.a1",
-            Self::SingleSrt720pA0 => "srt.720p.a0",
-            Self::MultiSrt720pAll => "srt.720p.all",
-            Self::MultiSrt720pA0 => "srt.720p.a0",
-            Self::MultiSrt720pA1 => "srt.720p.a1",
-            Self::SingleSrt1080pA0 => "srt.1080p.a0",
-            Self::MultiSrt1080pAll => "srt.1080p.all",
-            Self::MultiSrt1080pA0 => "srt.1080p.a0",
-            Self::MultiSrt1080pA1 => "srt.1080p.a1",
-        }
-    }
-
-    const fn protocol(self) -> MixedOutputProtocol {
-        match self {
-            Self::SingleRtmpSrcA0
-            | Self::SingleRtmp720pA0
-            | Self::SingleRtmp1080pA0
-            | Self::MultiRtmpSrcA0
-            | Self::MultiRtmpSrcA1
-            | Self::MultiRtmp720pA0
-            | Self::MultiRtmp720pA1
-            | Self::MultiRtmp1080pA0
-            | Self::MultiRtmp1080pA1 => MixedOutputProtocol::Rtmp,
-            _ => MixedOutputProtocol::Srt,
-        }
-    }
-
-    const fn encoding(self) -> &'static str {
-        match self {
-            Self::SingleRtmpSrcA0 | Self::SingleSrtSrcA0 | Self::MultiSrtSrcAll => "source",
-            Self::MultiRtmpSrcA0 | Self::MultiSrtSrcA0 => "source+atrack:0",
-            Self::MultiRtmpSrcA1 | Self::MultiSrtSrcA1 => "source+atrack:1",
-            Self::SingleRtmp720pA0 | Self::SingleSrt720pA0 | Self::MultiSrt720pAll => "720p",
-            Self::MultiRtmp720pA0 | Self::MultiSrt720pA0 => "720p+atrack:0",
-            Self::MultiRtmp720pA1 | Self::MultiSrt720pA1 => "720p+atrack:1",
-            Self::SingleRtmp1080pA0 | Self::SingleSrt1080pA0 | Self::MultiSrt1080pAll => "1080p",
-            Self::MultiRtmp1080pA0 | Self::MultiSrt1080pA0 => "1080p+atrack:0",
-            Self::MultiRtmp1080pA1 | Self::MultiSrt1080pA1 => "1080p+atrack:1",
-        }
-    }
-
-    const fn expected_dimensions(self) -> &'static str {
-        match self {
-            Self::SingleRtmp720pA0
-            | Self::SingleSrt720pA0
-            | Self::MultiRtmp720pA0
-            | Self::MultiRtmp720pA1
-            | Self::MultiSrt720pAll
-            | Self::MultiSrt720pA0
-            | Self::MultiSrt720pA1 => "1280x720",
-            _ => "1920x1080",
-        }
-    }
-
-    const fn expected_audio_tracks(self) -> usize {
-        match self {
-            Self::MultiSrtSrcAll | Self::MultiSrt720pAll | Self::MultiSrt1080pAll => 2,
-            _ => 1,
-        }
-    }
-
-    const fn selected_audio_track(self) -> Option<usize> {
-        match self {
-            Self::MultiRtmpSrcA0
-            | Self::MultiRtmp720pA0
-            | Self::MultiRtmp1080pA0
-            | Self::MultiSrtSrcA0
-            | Self::MultiSrt720pA0
-            | Self::MultiSrt1080pA0 => Some(0),
-            Self::MultiRtmpSrcA1
-            | Self::MultiRtmp720pA1
-            | Self::MultiRtmp1080pA1
-            | Self::MultiSrtSrcA1
-            | Self::MultiSrt720pA1
-            | Self::MultiSrt1080pA1 => Some(1),
-            _ => None,
-        }
-    }
-}
-
-const SINGLE_TRACK_MIXED_OUTPUT_CASES: &[MixedOutputCase] = &[
-    MixedOutputCase::SingleRtmpSrcA0,
-    MixedOutputCase::SingleRtmp720pA0,
-    MixedOutputCase::SingleRtmp1080pA0,
-    MixedOutputCase::SingleSrtSrcA0,
-    MixedOutputCase::SingleSrt720pA0,
-    MixedOutputCase::SingleSrt1080pA0,
-];
-
-const MULTI_TRACK_MIXED_OUTPUT_CASES: &[MixedOutputCase] = &[
-    MixedOutputCase::MultiRtmpSrcA0,
-    MixedOutputCase::MultiRtmpSrcA1,
-    MixedOutputCase::MultiRtmp720pA0,
-    MixedOutputCase::MultiRtmp720pA1,
-    MixedOutputCase::MultiRtmp1080pA0,
-    MixedOutputCase::MultiRtmp1080pA1,
-    MixedOutputCase::MultiSrtSrcAll,
-    MixedOutputCase::MultiSrtSrcA0,
-    MixedOutputCase::MultiSrtSrcA1,
-    MixedOutputCase::MultiSrt720pAll,
-    MixedOutputCase::MultiSrt720pA0,
-    MixedOutputCase::MultiSrt720pA1,
-    MixedOutputCase::MultiSrt1080pAll,
-    MixedOutputCase::MultiSrt1080pA0,
-    MixedOutputCase::MultiSrt1080pA1,
-];
-
 /// Direct FFmpeg SRT listener used to validate SRT egress without MediaMTX.
 struct FfmpegSrtSink {
     group: String,
@@ -9148,13 +8311,6 @@ fn mixed_output_read_url(env: &MixedEnv, cfg: &str, case: MixedOutputCase, index
                 env.mtx_srt
             )
         }
-    }
-}
-
-fn mixed_output_protocol_name(protocol: MixedOutputProtocol) -> &'static str {
-    match protocol {
-        MixedOutputProtocol::Rtmp => "rtmp",
-        MixedOutputProtocol::Srt => "srt",
     }
 }
 
@@ -12433,7 +11589,7 @@ async fn bframe_rtmp_correctness() -> Result<Value, String> {
     let output = api
         .post_json(
             &format!("/api/v1/pipelines/{pipeline_id}/outputs"),
-            json!({"name": "bframe-sink", "url": sink_url, "encoding": "source"}),
+            output_create_payload("bframe-sink", &sink_url, "source"),
         )
         .await?;
     let output_id = output["output"]["id"]
@@ -17010,15 +16166,14 @@ async fn recovery_live_cases(
         let output = api
             .post_json(
                 &format!("/api/v1/pipelines/{pid}/outputs"),
-                json!({
-                    "name": "srt-sink-flap",
-                    "url": format!(
+                output_create_payload(
+                    "srt-sink-flap",
+                    &format!(
                         "srt://127.0.0.1:{}?streamid=publish:live/{}&pkt_size=1316",
-                        ports.srt,
-                        sink_stream_key
+                        ports.srt, sink_stream_key
                     ),
-                    "encoding": "source"
-                }),
+                    "source",
+                ),
             )
             .await?;
         let oid = output["output"]["id"]
@@ -17639,7 +16794,7 @@ async fn fault_resilience() -> Result<Value, String> {
         let output = api
             .post_json(
                 &format!("/api/v1/pipelines/{pid}/outputs"),
-                json!({"name": "rtmp.720p.a0", "url": sink_url, "encoding": "720p"}),
+                output_create_payload("rtmp.720p.a0", &sink_url, "720p"),
             )
             .await?;
         let oid = output["output"]["id"]
@@ -19076,6 +18231,23 @@ stream|index=1|codec_type=audio\n";
     }
 
     #[test]
+    fn mixed_fast_breadth_group_parser_accepts_known_groups_once() {
+        assert_eq!(
+            parse_mixed_fast_breadth_groups("live-srt, live-rtmp, live-srt").unwrap(),
+            vec![
+                MixedSharedBatchGroup::LiveSrt,
+                MixedSharedBatchGroup::LiveRtmp
+            ]
+        );
+    }
+
+    #[test]
+    fn mixed_fast_breadth_group_parser_rejects_unknown_groups() {
+        let error = parse_mixed_fast_breadth_groups("live-srt,nope").unwrap_err();
+        assert!(error.contains("unknown MIXED_FAST_BREADTH_GROUPS entry 'nope'"));
+    }
+
+    #[test]
     fn mixed_fast_breadth_defaults_collect_failures_for_failure_mapping() {
         let source = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -19093,6 +18265,37 @@ stream|index=1|codec_type=audio\n";
         assert!(
             source.contains("root.join(\"assertions.jsonl\")"),
             "mixed.fast-breadth should emit machine-readable assertion rows by default"
+        );
+    }
+
+    #[test]
+    fn mixed_output_progress_gate_only_applies_to_external_read_checks() {
+        assert!(mixed_output_checks_need_live_progress_gate(None));
+        assert!(mixed_output_checks_need_live_progress_gate(Some(&[
+            "ffprobe".to_string()
+        ])));
+        assert!(mixed_output_checks_need_live_progress_gate(Some(&[
+            "ffprobe".to_string(),
+            "signal".to_string()
+        ])));
+        assert!(!mixed_output_checks_need_live_progress_gate(Some(&[
+            "signal".to_string()
+        ])));
+        assert!(!mixed_output_checks_need_live_progress_gate(Some(&[
+            "soak-drift".to_string()
+        ])));
+    }
+
+    #[test]
+    fn mixed_progress_output_ids_excludes_helper_outputs() {
+        let output_ids = vec![
+            "helper-hls".to_string(),
+            "rtmp-a".to_string(),
+            "srt-a".to_string(),
+        ];
+        assert_eq!(
+            mixed_progress_output_ids(&output_ids, "helper-hls"),
+            vec!["rtmp-a".to_string(), "srt-a".to_string()]
         );
     }
 

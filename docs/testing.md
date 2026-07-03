@@ -698,6 +698,46 @@ preserve the manifest, CSV, summary, and JSONL assertion layout. The multi-audio
 rows preserve the two-audio SRT/file fixture, RTMP selected-audio egresses, and
 SRT all-tracks plus selected-track egresses.
 
+The manifest-shaped mixed matrix surface lives in
+`src/bin/test_harness/mixed_manifest.rs`: input axes, fast-breadth selections,
+output rows, typed names, and expected stage-count formulas belong there.
+Keep process lifecycle, sink/probe orchestration, API calls, and assertions in
+`src/bin/test_harness.rs` unless the runner itself becomes declarative.
+
+### `mixed.fast-breadth` — 5-minute breadth sweep
+
+```sh
+./scripts/build-bench-harness.sh
+scripts/run-mixed-fast-breadth-parallel.sh
+```
+
+`mixed.fast-breadth` is the quick failure-shape sweep for the mixed matrix. It
+keeps `N_PER_GROUP=1`, `SKIP_LOAD=1`, and `COLLECT_FAILURES=1` by default, then
+reuses one shared Restream+MediaMTX stack per transport family.
+
+`scripts/run-mixed-fast-breadth-parallel.sh` is the wall-clock path when the
+goal is "collect the broad reports first, analyze afterward". It launches three
+independent `mixed.fast-breadth` processes concurrently:
+
+- `live-rtmp`
+- `live-srt`
+- `file-ingest`
+
+Each process gets its own work directory, SQLite DB, synthesized artifact set,
+and explicit port bundle so the three shared stacks can run side-by-side
+without colliding on host ports. The launcher waits for every batch to finish
+before printing artifact locations, then merges:
+
+- per-batch `assertions.jsonl` into `<root>/assertions.jsonl`
+- per-batch `timing.jsonl` into `<root>/timing.jsonl`
+- per-batch stdout/stderr paths into `<root>/report-index.txt`
+
+The parallel launcher uses `MIXED_FAST_BREADTH_GROUPS=<group>` together with
+`--no-netns`, unique port bundles, and isolated work directories so the three
+families can run side-by-side on the host without waiting for namespace
+re-exec. That env var also remains available for ad hoc targeting from the
+aggregate `mixed.fast-breadth` entry point.
+
 Set `FFMPEG_BIN_PATH=/usr/bin/ffmpeg` explicitly only for streaming-logic
 diagnosis against the system binary. Normal runs use the embedded standalone
 `public/bin/ffmpeg` through the production `restream` child. All selected
