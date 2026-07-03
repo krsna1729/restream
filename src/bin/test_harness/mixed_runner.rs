@@ -740,6 +740,9 @@ pub(super) async fn run_mixed_anchor_config(
     let n = env.n_per_group;
     let output_cases = single_track_mixed_output_cases();
     let total = n * output_cases.len();
+    let (source_output_case, scaled_output_cases) = output_cases
+        .split_first()
+        .ok_or("mixed anchor output matrix must contain a source row")?;
     let (pipeline_id, stream_key) = create_mixed_pipeline(api, cfg).await?;
 
     let mut publisher = spawn_mixed_live_publisher(env, case, &stream_key).await?;
@@ -764,28 +767,16 @@ pub(super) async fn run_mixed_anchor_config(
     start_mixed_output(api, &pipeline_id, &hls_output).await?;
     output_ids.push(hls_output.clone());
 
-    add_mixed_group(
+    add_mixed_output_matrix_rows(
         env,
         api,
         &pipeline_id,
-        MixedGroupSpec {
-            cfg,
-            group: "rtmp.src.a0",
-            count: n,
-            encoding: "source",
-        },
-        |index| {
-            format!(
-                "rtmp://127.0.0.1:{}/live/{cfg}-rtmp.src.a0-{index}",
-                env.mtx_rtmp
-            )
-        },
+        restream_pid,
+        cfg,
+        std::slice::from_ref(source_output_case),
         &mut output_ids,
     )
     .await?;
-    if !env.skip_load {
-        snapshot_mixed(env, restream_pid, cfg, &format!("after {n} RTMP source")).await?;
-    }
 
     if env.check_selected("smoke")
         && resume.allows(&mixed_scenario_check_id(
@@ -825,114 +816,13 @@ pub(super) async fn run_mixed_anchor_config(
         log_mixed_ok(env, "smoke: no external transcoder for source outputs")?;
     }
 
-    add_mixed_group(
+    add_mixed_output_matrix_rows(
         env,
         api,
         &pipeline_id,
-        MixedGroupSpec {
-            cfg,
-            group: "rtmp.720p.a0",
-            count: n,
-            encoding: "720p",
-        },
-        |index| {
-            format!(
-                "rtmp://127.0.0.1:{}/live/{cfg}-rtmp.720p.a0-{index}",
-                env.mtx_rtmp
-            )
-        },
-        &mut output_ids,
-    )
-    .await?;
-    if !env.skip_load {
-        snapshot_mixed(env, restream_pid, cfg, &format!("after {n} RTMP 720p")).await?;
-    }
-
-    add_mixed_group(
-        env,
-        api,
-        &pipeline_id,
-        MixedGroupSpec {
-            cfg,
-            group: "rtmp.1080p.a0",
-            count: n,
-            encoding: "1080p",
-        },
-        |index| {
-            format!(
-                "rtmp://127.0.0.1:{}/live/{cfg}-rtmp.1080p.a0-{index}",
-                env.mtx_rtmp
-            )
-        },
-        &mut output_ids,
-    )
-    .await?;
-    if !env.skip_load {
-        snapshot_mixed(env, restream_pid, cfg, &format!("after {n} RTMP 1080p")).await?;
-    }
-
-    add_mixed_group(
-        env,
-        api,
-        &pipeline_id,
-        MixedGroupSpec {
-            cfg,
-            group: "srt.src.a0",
-            count: n,
-            encoding: "source",
-        },
-        |index| {
-            format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{cfg}-srt.src.a0-{index}",
-                env.mtx_srt
-            )
-        },
-        &mut output_ids,
-    )
-    .await?;
-    if !env.skip_load {
-        snapshot_mixed(env, restream_pid, cfg, &format!("after {n} SRT source")).await?;
-    }
-
-    add_mixed_group(
-        env,
-        api,
-        &pipeline_id,
-        MixedGroupSpec {
-            cfg,
-            group: "srt.720p.a0",
-            count: n,
-            encoding: "720p",
-        },
-        |index| {
-            format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{cfg}-srt.720p.a0-{index}",
-                env.mtx_srt
-            )
-        },
-        &mut output_ids,
-    )
-    .await?;
-    if !env.skip_load {
-        snapshot_mixed(env, restream_pid, cfg, &format!("after {n} SRT 720p")).await?;
-    }
-
-    add_mixed_group(
-        env,
-        api,
-        &pipeline_id,
-        MixedGroupSpec {
-            cfg,
-            group: "srt.1080p.a0",
-            count: n,
-            encoding: "1080p",
-        },
-        |index| {
-            format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{cfg}-srt.1080p.a0-{index}",
-                env.mtx_srt
-            )
-        },
+        restream_pid,
+        cfg,
+        scaled_output_cases,
         &mut output_ids,
     )
     .await?;
@@ -1720,6 +1610,43 @@ pub(super) fn mixed_output_matrix_json(cases: &[MixedOutputCase]) -> Vec<Value> 
             value
         })
         .collect()
+}
+
+pub(super) async fn add_mixed_output_matrix_rows(
+    env: &MixedEnv,
+    api: &RampApi,
+    pipeline_id: &str,
+    restream_pid: u32,
+    cfg: &str,
+    cases: &[MixedOutputCase],
+    output_ids: &mut Vec<String>,
+) -> Result<(), String> {
+    for case in cases {
+        add_mixed_group(
+            env,
+            api,
+            pipeline_id,
+            MixedGroupSpec {
+                cfg,
+                group: case.id(),
+                count: env.n_per_group,
+                encoding: case.encoding(),
+            },
+            |index| mixed_output_publish_url(env, cfg, case, index),
+            output_ids,
+        )
+        .await?;
+        if !env.skip_load {
+            snapshot_mixed(
+                env,
+                restream_pid,
+                cfg,
+                &format!("after {} {} outputs", env.n_per_group, case.id()),
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
