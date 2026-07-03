@@ -738,6 +738,11 @@ families can run side-by-side on the host without waiting for namespace
 re-exec. That env var also remains available for ad hoc targeting from the
 aggregate `mixed.fast-breadth` entry point.
 
+By default the launcher also coexists with unrelated live demo processes: it
+records any pre-existing `restream`, `mediamtx`, or `ffmpeg` rows in
+`preexisting-runtime-processes.txt`, then uses its own high port ranges. Set
+`REQUIRE_CLEAN_RUNTIME=1` when a clean-host preflight is required instead.
+
 Set `FFMPEG_BIN_PATH=/usr/bin/ffmpeg` explicitly only for streaming-logic
 diagnosis against the system binary. Normal runs use the embedded standalone
 `public/bin/ffmpeg` through the production `restream` child. All selected

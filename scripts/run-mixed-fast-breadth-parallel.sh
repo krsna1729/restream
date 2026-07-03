@@ -8,14 +8,10 @@ N_PER_GROUP_VALUE=${N_PER_GROUP:-1}
 SKIP_LOAD_VALUE=${SKIP_LOAD:-1}
 COLLECT_FAILURES_VALUE=${COLLECT_FAILURES:-1}
 HARNESS_ARGS=${HARNESS_ARGS:---no-netns}
+REQUIRE_CLEAN_RUNTIME_VALUE=${REQUIRE_CLEAN_RUNTIME:-0}
 
 if [[ ! -x "$BIN" ]]; then
   echo "missing harness binary at $BIN; build it first with scripts/build-bench-harness.sh or scripts/resource-limit cargo build --profile bench --bin test_harness" >&2
-  exit 1
-fi
-
-if pgrep -x restream >/dev/null || pgrep -x mediamtx >/dev/null || pgrep -x ffmpeg >/dev/null; then
-  echo "refusing to start fast-breadth parallel run while restream/mediamtx/ffmpeg is already running" >&2
   exit 1
 fi
 
@@ -28,6 +24,17 @@ if [[ "$BIN" == "target/bench/test_harness" ]] \
 fi
 
 mkdir -p "$ROOT"
+
+runtime_rows=$(ps -eo pid=,comm=,args= | awk '$2 ~ /^(restream|mediamtx|ffmpeg)$/ { sub(/^ +/, "", $0); print }')
+if [[ -n "$runtime_rows" ]]; then
+  printf '%s\n' "$runtime_rows" >"$ROOT/preexisting-runtime-processes.txt"
+  if [[ "$REQUIRE_CLEAN_RUNTIME_VALUE" == "1" ]]; then
+    echo "refusing to start fast-breadth parallel run while runtime processes are already running" >&2
+    cat "$ROOT/preexisting-runtime-processes.txt" >&2
+    exit 1
+  fi
+  echo "warning: continuing beside pre-existing runtime processes; baseline saved to $ROOT/preexisting-runtime-processes.txt" >&2
+fi
 
 groups=(live-rtmp live-srt file-ingest)
 bases=(43000 48000 53000)
