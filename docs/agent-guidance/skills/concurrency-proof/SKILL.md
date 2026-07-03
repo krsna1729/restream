@@ -21,7 +21,7 @@ Use this skill when the task touches:
    - loom model for wake/cancel or registry ordering
    - harness test for real sockets/processes/threads
 3. Extend the mandatory gate if the new proof must stay enforced.
-4. If runtime status semantics changed, update API/frontend-facing contract tests and docs in the same change.
+4. If runtime status semantics changed, update API/frontend-facing contract tests and docs in the same change — typically `tests/api.rs`, `docs/api-reference.md`, `docs/observability.md`, and any frontend status badges that render the changed state.
 
 ## Mandatory Gates
 

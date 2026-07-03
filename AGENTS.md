@@ -127,6 +127,23 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 - For UI changes, run `npm run test:frontend` plus relevant Playwright tests.
 - For scale or integration checks, use `scripts/resource-limit target/debug/test_harness mixed-anchor`.
 
+## Autonomous Quality Loops
+
+- The autonomous quality program lives in `docs/agent-guidance/quality/`
+  (README, backlog, journal, baselines) with agent-neutral skills under
+  `docs/agent-guidance/skills/` (quality-loop, proof-sweep, resilience-sweep,
+  modularity-sweep, perf-sweep, backlog-groom, plus supporting task skills).
+- The `docs/agent-guidance/skills/<name>/SKILL.md` files are canonical for
+  every agent. `.claude/skills/` holds thin Claude Code registration shims
+  only; agents without a skill system follow the canonical files directly.
+- One loop iteration = one backlog item, verified by gates, journaled, and
+  committed on its own. Loops never push.
+- One quality loop per host. Multi-agent work goes through
+  `scripts/agent-worktree.sh` with a host-global
+  `RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock`.
+- Loops skip (never kill) media processes they did not start.
+- Backlog items are tier-tagged; do not attempt items above your model tier.
+
 ## Operational Guidance
 
 - If the user starts a clearly new, unrelated task, suggest a fresh session to keep context costs down.
@@ -145,6 +162,8 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 - Performance: `docs/high-performance-data-path.md`
 - Testing: `docs/testing.md`
 - Concurrency proofing: `docs/concurrency-proofing.md`
+- Agent skills (canonical, agent-neutral): `docs/agent-guidance/skills/`
+- Autonomous quality program: `docs/agent-guidance/quality/README.md`
 - Layering audit skill: `docs/agent-guidance/skills/layering-audit/SKILL.md`
 - Configuration: `docs/configuration.md`
 - Observability: `docs/observability.md`
