@@ -2893,6 +2893,222 @@ mod tests {
         stage.cancel.cancel();
     }
 
+    #[tokio::test]
+    async fn shared_ts_muxer_seeds_raw_hevc_parameter_sets_for_late_joiners() {
+        let engine = Arc::new(crate::media::engine::MediaEngine::new());
+        let pipeline_id = "test-pipe-routed-hevc";
+        let source_ring = engine.get_or_create_pipeline(pipeline_id).await;
+        let cancel_ingest = engine
+            .try_register_ingest(pipeline_id, "key", "srt")
+            .await
+            .unwrap();
+
+        engine
+            .update_ingest_meta(
+                pipeline_id,
+                Some(VideoMeta {
+                    codec: "hevc".to_string(),
+                    width: 1920,
+                    height: 1080,
+                    fps: 30.0,
+                    bw: None,
+                    pid: None,
+                    language: None,
+                    title: None,
+                    profile: None,
+                    level: None,
+                    pixel_format: None,
+                }),
+                None,
+                None,
+            )
+            .await;
+        engine
+            .update_ingest_audio_tracks(
+                pipeline_id,
+                vec![AudioMeta {
+                    codec: "aac".to_string(),
+                    sample_rate: 48_000,
+                    channels: 2,
+                    track_index: 1,
+                    ..Default::default()
+                }],
+            )
+            .await;
+        source_ring.set_codec_hint("hevc");
+        source_ring.set_audio_tracks(vec![AudioMeta {
+            codec: "aac".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            track_index: 1,
+            ..Default::default()
+        }]);
+        let parameter_sets = vec![
+            0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0xBB,
+            0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
+        ];
+        source_ring.set_video_parameter_sets(parameter_sets.clone());
+
+        let stage = engine
+            .get_or_create_ts_muxer_stage(pipeline_id, "source+atrack:1", source_ring.clone())
+            .await;
+        let mut reader = TsChunkReader::new("routed-hevc-reader".to_string(), &stage);
+        wait_for_shared_muxer_source_reader(&source_ring).await;
+
+        source_ring.push(crate::media::ring_buffer::MediaPacket {
+            media_type: MediaType::Video,
+            track_index: 0,
+            pts: 1000,
+            dts: 1000,
+            is_keyframe: true,
+            format: PayloadFormat::Raw,
+            payload: bytes::Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0xDD]),
+        });
+        source_ring.push(crate::media::ring_buffer::MediaPacket {
+            media_type: MediaType::Audio,
+            track_index: 1,
+            pts: 1020,
+            dts: 1020,
+            is_keyframe: false,
+            format: PayloadFormat::Raw,
+            payload: bytes::Bytes::from_static(&[0x11; 32]),
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let mut chunks = Vec::new();
+        assert!(reader.pull_burst(&mut chunks, 10).unwrap() > 0);
+
+        let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+        let mut packets = Vec::new();
+        for chunk in &chunks {
+            demuxer.feed(&chunk.payload);
+            demuxer.drain_into(&mut packets);
+        }
+        demuxer.flush();
+        demuxer.drain_into(&mut packets);
+
+        let video = packets
+            .iter()
+            .find(|packet| packet.media_type == MediaType::Video)
+            .expect("muxed TS should contain video");
+        assert!(
+            video.payload.starts_with(&parameter_sets),
+            "late-joining HEVC SRT muxer must prepend cached VPS/SPS/PPS"
+        );
+
+        cancel_ingest.cancel();
+        stage.cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn shared_ts_muxer_replays_prebuffered_hevc_keyframe() {
+        let engine = Arc::new(crate::media::engine::MediaEngine::new());
+        let pipeline_id = "test-pipe-prebuffered-hevc";
+        let source_ring = engine.get_or_create_pipeline(pipeline_id).await;
+        let cancel_ingest = engine
+            .try_register_ingest(pipeline_id, "key", "srt")
+            .await
+            .unwrap();
+
+        engine
+            .update_ingest_meta(
+                pipeline_id,
+                Some(VideoMeta {
+                    codec: "hevc".to_string(),
+                    width: 1920,
+                    height: 1080,
+                    fps: 30.0,
+                    bw: None,
+                    pid: None,
+                    language: None,
+                    title: None,
+                    profile: None,
+                    level: None,
+                    pixel_format: None,
+                }),
+                None,
+                None,
+            )
+            .await;
+        engine
+            .update_ingest_audio_tracks(
+                pipeline_id,
+                vec![AudioMeta {
+                    codec: "aac".to_string(),
+                    sample_rate: 48_000,
+                    channels: 2,
+                    track_index: 0,
+                    ..Default::default()
+                }],
+            )
+            .await;
+        source_ring.set_codec_hint("hevc");
+        source_ring.set_audio_tracks(vec![AudioMeta {
+            codec: "aac".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            track_index: 0,
+            ..Default::default()
+        }]);
+        let parameter_sets = vec![
+            0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0xBB,
+            0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
+        ];
+        source_ring.set_video_parameter_sets(parameter_sets.clone());
+        source_ring.push(crate::media::ring_buffer::MediaPacket {
+            media_type: MediaType::Video,
+            track_index: 0,
+            pts: 1000,
+            dts: 1000,
+            is_keyframe: true,
+            format: PayloadFormat::Raw,
+            payload: bytes::Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0xDD]),
+        });
+        source_ring.push(crate::media::ring_buffer::MediaPacket {
+            media_type: MediaType::Audio,
+            track_index: 0,
+            pts: 1020,
+            dts: 1020,
+            is_keyframe: false,
+            format: PayloadFormat::Raw,
+            payload: bytes::Bytes::from_static(&[0x11; 32]),
+        });
+
+        let stage = engine
+            .get_or_create_ts_muxer_stage(pipeline_id, "source", source_ring.clone())
+            .await;
+        let mut reader = TsChunkReader::new("prebuffered-hevc-reader".to_string(), &stage);
+        wait_for_shared_muxer_source_reader(&source_ring).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let mut chunks = Vec::new();
+        assert!(
+            reader.pull_burst(&mut chunks, 10).unwrap() > 0,
+            "late-joining shared muxer must replay the latest prebuffered HEVC keyframe"
+        );
+
+        let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+        let mut packets = Vec::new();
+        for chunk in &chunks {
+            demuxer.feed(&chunk.payload);
+            demuxer.drain_into(&mut packets);
+        }
+        demuxer.flush();
+        demuxer.drain_into(&mut packets);
+
+        let video = packets
+            .iter()
+            .find(|packet| packet.media_type == MediaType::Video)
+            .expect("muxed TS should contain video");
+        assert!(
+            video.payload.starts_with(&parameter_sets),
+            "prebuffered HEVC replay must include cached VPS/SPS/PPS"
+        );
+
+        cancel_ingest.cancel();
+        stage.cancel.cancel();
+    }
+
     async fn wait_for_shared_muxer_source_reader(source_ring: &Arc<RingBuffer>) {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
@@ -3569,12 +3785,14 @@ pub fn start_shared_ts_muxer(
                 } else {
                     Vec::new()
                 }
+            } else if let Some(parameter_sets) = source_ring.video_parameter_sets() {
+                parameter_sets.to_vec()
             } else {
                 Vec::new()
             }
         };
 
-        let mut reader = Reader::new_live(
+        let mut reader = Reader::new(
             format!("ts_shared_muxer:{}", pipeline_id_str),
             source_ring.clone(),
         );
@@ -3605,6 +3823,12 @@ pub fn start_shared_ts_muxer(
                             for pkt in &pull_packets {
                                 let payload: &[u8] = match pkt.media_type {
                                     MediaType::Video => {
+                                        if sps_pps_cache.is_empty()
+                                            && let Some(parameter_sets) =
+                                                reader.current_ring().video_parameter_sets()
+                                        {
+                                            sps_pps_cache.extend_from_slice(parameter_sets);
+                                        }
                                         match crate::media::codec::video_for_ts_into(
                                             &pkt.payload,
                                             pkt.format,
