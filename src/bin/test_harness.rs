@@ -2132,37 +2132,26 @@ struct SweepConfig {
     multi_audio: bool,
 }
 
+const fn sweep_config(
+    name: &'static str,
+    ingest_proto: &'static str,
+    video_codec: &'static str,
+    multi_audio: bool,
+) -> SweepConfig {
+    SweepConfig {
+        name,
+        ingest_proto,
+        video_codec,
+        multi_audio,
+    }
+}
+
 const SWEEP_CONFIGS: &[SweepConfig] = &[
-    SweepConfig {
-        name: "h264-rtmp",
-        ingest_proto: "rtmp",
-        video_codec: "h264",
-        multi_audio: false,
-    },
-    SweepConfig {
-        name: "h264-srt",
-        ingest_proto: "srt",
-        video_codec: "h264",
-        multi_audio: false,
-    },
-    SweepConfig {
-        name: "h265-srt",
-        ingest_proto: "srt",
-        video_codec: "h265",
-        multi_audio: false,
-    },
-    SweepConfig {
-        name: "mixed.live.srt.h264.a2.bf2",
-        ingest_proto: "srt",
-        video_codec: "h264",
-        multi_audio: true,
-    },
-    SweepConfig {
-        name: "mixed.live.srt.h265.a2.bf2",
-        ingest_proto: "srt",
-        video_codec: "h265",
-        multi_audio: true,
-    },
+    sweep_config("h264-rtmp", "rtmp", "h264", false),
+    sweep_config("h264-srt", "srt", "h264", false),
+    sweep_config("h265-srt", "srt", "h265", false),
+    sweep_config("mixed.live.srt.h264.a2.bf2", "srt", "h264", true),
+    sweep_config("mixed.live.srt.h265.a2.bf2", "srt", "h265", true),
 ];
 
 /// Output shape used by resource-sweep scenarios.
