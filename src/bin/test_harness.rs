@@ -1558,6 +1558,37 @@ struct RampConfig {
     encoding: &'static str,
 }
 
+/// JSON row for ramp-family input/output profiles.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RampConfigRow {
+    name: String,
+    ingest_proto: String,
+    out_proto: String,
+    encoding: String,
+}
+
+static RAMP_CONFIGS_FROM_DSL: OnceLock<Vec<RampConfig>> = OnceLock::new();
+
+fn leak_manifest_str(value: String) -> &'static str {
+    Box::leak(value.into_boxed_str())
+}
+
+fn ramp_configs() -> &'static [RampConfig] {
+    RAMP_CONFIGS_FROM_DSL.get_or_init(|| {
+        serde_json::from_str::<Vec<RampConfigRow>>(include_str!("test_harness/ramp_configs.json"))
+            .expect("embedded ramp_configs.json should define valid ramp rows")
+            .into_iter()
+            .map(|row| RampConfig {
+                name: leak_manifest_str(row.name),
+                ingest_proto: leak_manifest_str(row.ingest_proto),
+                out_proto: leak_manifest_str(row.out_proto),
+                encoding: leak_manifest_str(row.encoding),
+            })
+            .collect()
+    })
+}
+
 /// Runtime configuration and artifact paths for ramp-family runs.
 struct RampEnv {
     work_dir: PathBuf,
@@ -4842,63 +4873,13 @@ async fn ramp_family_correctness() -> Result<Value, String> {
 }
 
 fn selected_ramp_configs() -> Vec<RampConfig> {
-    const DEFAULTS: &[RampConfig] = &[
-        RampConfig {
-            name: "rtmp-rtmp-src",
-            ingest_proto: "rtmp",
-            out_proto: "rtmp",
-            encoding: "source",
-        },
-        RampConfig {
-            name: "rtmp-rtmp-720p",
-            ingest_proto: "rtmp",
-            out_proto: "rtmp",
-            encoding: "720p",
-        },
-        RampConfig {
-            name: "rtmp-srt-src",
-            ingest_proto: "rtmp",
-            out_proto: "srt",
-            encoding: "source",
-        },
-        RampConfig {
-            name: "rtmp-srt-720p",
-            ingest_proto: "rtmp",
-            out_proto: "srt",
-            encoding: "720p",
-        },
-        RampConfig {
-            name: "srt-rtmp-src",
-            ingest_proto: "srt",
-            out_proto: "rtmp",
-            encoding: "source",
-        },
-        RampConfig {
-            name: "srt-rtmp-720p",
-            ingest_proto: "srt",
-            out_proto: "rtmp",
-            encoding: "720p",
-        },
-        RampConfig {
-            name: "srt-srt-src",
-            ingest_proto: "srt",
-            out_proto: "srt",
-            encoding: "source",
-        },
-        RampConfig {
-            name: "srt-srt-720p",
-            ingest_proto: "srt",
-            out_proto: "srt",
-            encoding: "720p",
-        },
-    ];
     let allow = std::env::var("RAMP_FAMILY_CONFIGS").ok().map(|value| {
         value
             .split_whitespace()
             .map(str::to_string)
             .collect::<Vec<_>>()
     });
-    DEFAULTS
+    ramp_configs()
         .iter()
         .copied()
         .filter(|config| {
@@ -12929,6 +12910,14 @@ stream|index=1|codec_type=audio\n";
                 test_name
             );
         }
+    }
+
+    #[test]
+    fn ramp_json_dsl_carries_current_config_contract() {
+        let configs = ramp_configs();
+        assert_eq!(configs.len(), 8);
+        assert_eq!(configs[0].name, "rtmp-rtmp-src");
+        assert_eq!(configs[7].name, "srt-srt-720p");
     }
 
     #[test]

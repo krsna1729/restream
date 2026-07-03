@@ -1,0 +1,10 @@
+[
+  {"name": "rtmp-rtmp-src", "ingestProto": "rtmp", "outProto": "rtmp", "encoding": "source"},
+  {"name": "rtmp-rtmp-720p", "ingestProto": "rtmp", "outProto": "rtmp", "encoding": "720p"},
+  {"name": "rtmp-srt-src", "ingestProto": "rtmp", "outProto": "srt", "encoding": "source"},
+  {"name": "rtmp-srt-720p", "ingestProto": "rtmp", "outProto": "srt", "encoding": "720p"},
+  {"name": "srt-rtmp-src", "ingestProto": "srt", "outProto": "rtmp", "encoding": "source"},
+  {"name": "srt-rtmp-720p", "ingestProto": "srt", "outProto": "rtmp", "encoding": "720p"},
+  {"name": "srt-srt-src", "ingestProto": "srt", "outProto": "srt", "encoding": "source"},
+  {"name": "srt-srt-720p", "ingestProto": "srt", "outProto": "srt", "encoding": "720p"}
+]
