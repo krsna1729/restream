@@ -2093,7 +2093,8 @@ fn sweep_configs() -> &'static [SweepConfig] {
 }
 
 /// Output shape used by resource-sweep scenarios.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 enum SweepOutputKind {
     RtmpSource,
     SrtSource,
@@ -2150,69 +2151,21 @@ impl SweepOutputKind {
     }
 }
 
-/// Reusable resource-sweep egress shape shared by resource and branch matrices.
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum ResourceEgressShape {
-    RtmpSource,
-    SourceMixed,
-    Rtmp720p,
-    TranscodeMixed,
-    SourcePlusTranscodeMixed,
-    DualTranscodeMixed,
-    SourcePlusDualTranscodeMixed,
-}
-
-impl ResourceEgressShape {
-    const fn output_kinds(self) -> &'static [SweepOutputKind] {
-        match self {
-            Self::RtmpSource => &[SweepOutputKind::RtmpSource],
-            Self::SourceMixed => &[SweepOutputKind::RtmpSource, SweepOutputKind::SrtSource],
-            Self::Rtmp720p => &[SweepOutputKind::Rtmp720p],
-            Self::TranscodeMixed => &[SweepOutputKind::Rtmp720p, SweepOutputKind::Srt720p],
-            Self::SourcePlusTranscodeMixed => &[
-                SweepOutputKind::RtmpSource,
-                SweepOutputKind::SrtSource,
-                SweepOutputKind::Rtmp720p,
-                SweepOutputKind::Srt720p,
-            ],
-            Self::DualTranscodeMixed => &[
-                SweepOutputKind::Rtmp720p,
-                SweepOutputKind::Srt720p,
-                SweepOutputKind::Rtmp1080p,
-                SweepOutputKind::Srt1080p,
-            ],
-            Self::SourcePlusDualTranscodeMixed => &[
-                SweepOutputKind::RtmpSource,
-                SweepOutputKind::SrtSource,
-                SweepOutputKind::Rtmp720p,
-                SweepOutputKind::Srt720p,
-                SweepOutputKind::Rtmp1080p,
-                SweepOutputKind::Srt1080p,
-            ],
-        }
-    }
-
-    const fn branch_label(self) -> &'static str {
-        match self {
-            Self::SourceMixed => "source only",
-            Self::TranscodeMixed => "one transcode family (720p)",
-            Self::SourcePlusTranscodeMixed => "source + one transcode family",
-            Self::DualTranscodeMixed => "two transcode families (720p + 1080p)",
-            Self::SourcePlusDualTranscodeMixed => "source + two transcode families",
-            Self::RtmpSource | Self::Rtmp720p => "other",
-        }
-    }
-}
-
 /// Declarative resource-sweep egress scenario row.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ResourceEgressScenario {
     name: String,
     config_index: usize,
-    shape: ResourceEgressShape,
+    output_kinds: Vec<SweepOutputKind>,
     branch_order: Option<usize>,
+    branch_label: Option<&'static str>,
+}
+
+impl ResourceEgressScenario {
+    fn branch_label(&self) -> &'static str {
+        self.branch_label.unwrap_or("other")
+    }
 }
 
 static RESOURCE_EGRESS_SCENARIOS_FROM_DSL: OnceLock<Vec<ResourceEgressScenario>> = OnceLock::new();
@@ -2562,7 +2515,7 @@ async fn resource_sweep() -> Result<Value, String> {
                 &mut retained_publishers,
                 &scenario.name,
                 sweep_configs()[scenario.config_index],
-                scenario.shape.output_kinds(),
+                &scenario.output_kinds,
             )
             .await?,
         );
@@ -2695,7 +2648,7 @@ async fn run_branch_matrix_variant(env: &BranchMatrixEnv) -> Result<Value, Strin
                 &mut retained_publishers,
                 &scenario.name,
                 sweep_configs()[scenario.config_index],
-                scenario.shape.output_kinds(),
+                &scenario.output_kinds,
             )
             .await?,
         );
@@ -4354,7 +4307,7 @@ fn write_branch_matrix_markdown(
 
 fn branch_shape_label(scenario: &str) -> &'static str {
     resource_egress_scenario(scenario)
-        .map(|scenario| scenario.shape.branch_label())
+        .map(ResourceEgressScenario::branch_label)
         .unwrap_or("custom")
 }
 
@@ -12653,6 +12606,25 @@ stream|index=1|codec_type=audio\n";
                 .unwrap()
                 .config_index,
             2
+        );
+        assert_eq!(
+            resource_egress_scenario("egress-growth-source-plus-transcode-dual-mixed")
+                .unwrap()
+                .output_kinds,
+            vec![
+                SweepOutputKind::RtmpSource,
+                SweepOutputKind::SrtSource,
+                SweepOutputKind::Rtmp720p,
+                SweepOutputKind::Srt720p,
+                SweepOutputKind::Rtmp1080p,
+                SweepOutputKind::Srt1080p,
+            ]
+        );
+        assert_eq!(
+            resource_egress_scenario("egress-growth-transcode-mixed")
+                .unwrap()
+                .branch_label(),
+            "one transcode family (720p)"
         );
     }
 

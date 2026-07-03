@@ -1,10 +1,10 @@
 [
-  {"name": "egress-growth-source-same", "configIndex": 1, "shape": "rtmpSource"},
-  {"name": "egress-growth-source-mixed", "configIndex": 1, "shape": "sourceMixed", "branchOrder": 0},
-  {"name": "egress-growth-transcode-same", "configIndex": 1, "shape": "rtmp720p"},
-  {"name": "egress-growth-transcode-mixed", "configIndex": 1, "shape": "transcodeMixed", "branchOrder": 1},
-  {"name": "egress-growth-source-plus-transcode-mixed", "configIndex": 1, "shape": "sourcePlusTranscodeMixed", "branchOrder": 2},
-  {"name": "egress-growth-transcode-dual-mixed", "configIndex": 1, "shape": "dualTranscodeMixed", "branchOrder": 3},
-  {"name": "egress-growth-source-plus-transcode-dual-mixed", "configIndex": 1, "shape": "sourcePlusDualTranscodeMixed", "branchOrder": 4},
-  {"name": "egress-growth-hevc-bridge", "configIndex": 2, "shape": "rtmpSource"}
+  {"name": "egress-growth-source-same", "configIndex": 1, "outputKinds": ["rtmpSource"]},
+  {"name": "egress-growth-source-mixed", "configIndex": 1, "outputKinds": ["rtmpSource", "srtSource"], "branchOrder": 0, "branchLabel": "source only"},
+  {"name": "egress-growth-transcode-same", "configIndex": 1, "outputKinds": ["rtmp720p"]},
+  {"name": "egress-growth-transcode-mixed", "configIndex": 1, "outputKinds": ["rtmp720p", "srt720p"], "branchOrder": 1, "branchLabel": "one transcode family (720p)"},
+  {"name": "egress-growth-source-plus-transcode-mixed", "configIndex": 1, "outputKinds": ["rtmpSource", "srtSource", "rtmp720p", "srt720p"], "branchOrder": 2, "branchLabel": "source + one transcode family"},
+  {"name": "egress-growth-transcode-dual-mixed", "configIndex": 1, "outputKinds": ["rtmp720p", "srt720p", "rtmp1080p", "srt1080p"], "branchOrder": 3, "branchLabel": "two transcode families (720p + 1080p)"},
+  {"name": "egress-growth-source-plus-transcode-dual-mixed", "configIndex": 1, "outputKinds": ["rtmpSource", "srtSource", "rtmp720p", "srt720p", "rtmp1080p", "srt1080p"], "branchOrder": 4, "branchLabel": "source + two transcode families"},
+  {"name": "egress-growth-hevc-bridge", "configIndex": 2, "outputKinds": ["rtmpSource"]}
 ]
