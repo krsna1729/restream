@@ -1398,10 +1398,9 @@ async fn run_sink_probe(
 
     // Stop the output
     let _ = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop"),
-            json!({}),
-        )
+        .post_empty(&format!(
+            "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop"
+        ))
         .await;
 
     let passed = video >= min_video && audio > 0 && keyframes > 0 && dts_ok;
@@ -1496,10 +1495,9 @@ async fn run_hls_put_probe(
         .is_some_and(|s| s["bytesOut"].as_u64().unwrap_or(0) > 0);
 
     let _ = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop"),
-            json!({}),
-        )
+        .post_empty(&format!(
+            "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop"
+        ))
         .await;
 
     sink_cancel.cancel();
@@ -1717,6 +1715,10 @@ impl RampApi {
             request = request.header(reqwest::header::COOKIE, cookie);
         }
         json_response(request).await
+    }
+
+    async fn post_empty(&self, path: &str) -> Result<Value, String> {
+        self.post_json(path, json!({})).await
     }
 
     async fn patch_json(&self, path: &str, body: Value) -> Result<Value, String> {
@@ -7333,18 +7335,12 @@ async fn egress_correctness() -> Result<Value, String> {
 
     // Recording via API
     let before_files = media_dir_entries(&media_dir)?;
-    api.post_json(
-        &format!("/api/v1/pipelines/{pipeline_id}/recording/start"),
-        json!({}),
-    )
-    .await?;
+    api.post_empty(&format!("/api/v1/pipelines/{pipeline_id}/recording/start"))
+        .await?;
     wait_for_api_recording_state(&api, &pipeline_id, true, Duration::from_secs(10)).await?;
     tokio::time::sleep(Duration::from_secs(6)).await;
-    api.post_json(
-        &format!("/api/v1/pipelines/{pipeline_id}/recording/stop"),
-        json!({}),
-    )
-    .await?;
+    api.post_empty(&format!("/api/v1/pipelines/{pipeline_id}/recording/stop"))
+        .await?;
     wait_for_api_recording_state(&api, &pipeline_id, false, Duration::from_secs(20)).await?;
 
     // Recording defaults to remuxing into MP4 and dropping the transient TS,
@@ -8286,7 +8282,7 @@ async fn run_file_live_edge_case(
         .ok_or("pipeline file ingest missing id")?
         .to_string();
 
-    api.post_json(&format!("/api/v1/ingests/{ingest_id}/start"), json!({}))
+    api.post_empty(&format!("/api/v1/ingests/{ingest_id}/start"))
         .await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(30)).await?;
     wait_for_pipeline_file_ingest_running_state(api, &pipeline_id, true, Duration::from_secs(10))
@@ -8334,22 +8330,16 @@ async fn run_file_live_edge_case(
     };
 
     let before_files = media_dir_entries(media_dir)?;
-    api.post_json(
-        &format!("/api/v1/pipelines/{pipeline_id}/recording/start"),
-        json!({}),
-    )
-    .await?;
+    api.post_empty(&format!("/api/v1/pipelines/{pipeline_id}/recording/start"))
+        .await?;
     wait_for_api_recording_state(api, &pipeline_id, true, Duration::from_secs(10)).await?;
 
     let capture_target_secs = 8.0;
     let recording_started = Instant::now();
     tokio::time::sleep(Duration::from_secs_f64(capture_target_secs)).await;
 
-    api.post_json(
-        &format!("/api/v1/pipelines/{pipeline_id}/recording/stop"),
-        json!({}),
-    )
-    .await?;
+    api.post_empty(&format!("/api/v1/pipelines/{pipeline_id}/recording/stop"))
+        .await?;
     let capture_elapsed_secs = recording_started.elapsed().as_secs_f64();
     wait_for_api_recording_state(api, &pipeline_id, false, Duration::from_secs(20)).await?;
 
@@ -8360,7 +8350,7 @@ async fn run_file_live_edge_case(
     let expected_source_ts = recording_mp4.with_extension("ts");
     let source_retained = expected_source_ts.exists();
 
-    api.post_json(&format!("/api/v1/ingests/{ingest_id}/stop"), json!({}))
+    api.post_empty(&format!("/api/v1/ingests/{ingest_id}/stop"))
         .await?;
     wait_for_pipeline_file_ingest_running_state(api, &pipeline_id, false, Duration::from_secs(10))
         .await?;
@@ -8597,11 +8587,8 @@ async fn fault_rtmp_egress_sink_disappear(
     .await?;
     wait_for_api_input_live(api, &pid, timeout).await?;
 
-    api.post_json(
-        &format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"),
-        json!({}),
-    )
-    .await?;
+    api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
+        .await?;
 
     let _ = wait_for_sink_video_above(&sink_metrics, 9, timeout).await;
     println!("[fault] RTMP egress delivering data");
@@ -8749,11 +8736,8 @@ async fn fault_srt_egress_sink_disappear(
     .await?;
     wait_for_api_input_live(api, &pid, timeout).await?;
 
-    api.post_json(
-        &format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"),
-        json!({}),
-    )
-    .await?;
+    api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
+        .await?;
 
     let deadline = Instant::now() + timeout;
     let mut sink_live = false;
@@ -8895,11 +8879,8 @@ async fn fault_rtmp_egress_sink_stalls(
     .await?;
     wait_for_api_input_live(api, &pid, timeout).await?;
 
-    api.post_json(
-        &format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"),
-        json!({}),
-    )
-    .await?;
+    api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
+        .await?;
 
     let accept_deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < accept_deadline && !stall_server.publish_accepted.load(Ordering::Relaxed)
@@ -8931,10 +8912,7 @@ async fn fault_rtmp_egress_sink_stalls(
     );
 
     let _ = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"),
-            json!({}),
-        )
+        .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
         .await;
     stop_child(&mut pub_child).await;
     stop_stalled_rtmp_sink_server(stall_server);
@@ -9158,17 +9136,13 @@ async fn fault_rtmp_stalled_sink_isolation_under_many_outputs(
     );
 
     let _ = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs/{stalled_oid}/stop"),
-            json!({}),
-        )
+        .post_empty(&format!(
+            "/api/v1/pipelines/{pid}/outputs/{stalled_oid}/stop"
+        ))
         .await;
     for output_id in &healthy_output_ids {
         let _ = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pid}/outputs/{output_id}/stop"),
-                json!({}),
-            )
+            .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{output_id}/stop"))
             .await;
     }
     stop_child(&mut pub_child).await;
@@ -9407,11 +9381,8 @@ async fn fault_egress_retry_budget_exhausts_to_failed(
     .await?;
     wait_for_api_input_live(api, &pid, Duration::from_secs(15)).await?;
 
-    api.post_json(
-        &format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"),
-        json!({}),
-    )
-    .await?;
+    api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
+        .await?;
 
     let started = Instant::now();
     let deadline = started + Duration::from_secs(8);
@@ -9897,10 +9868,7 @@ async fn run_recovery_transient_case(
     );
 
     let _ = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"),
-            json!({}),
-        )
+        .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
         .await;
     if case.second_reconnect_checks_flapping {
         if let Some(child) = second_resumed_child.as_mut() {
@@ -10000,11 +9968,8 @@ async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        api.post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"),
-            json!({}),
-        )
-        .await?;
+        api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
+            .await?;
 
         let _ = wait_for_sink_video_above(
             &metrics,
@@ -10153,10 +10118,7 @@ async fn recovery_live_cases(
         }));
 
         let _ = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"),
-                json!({}),
-            )
+            .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
             .await;
         if let Some(child) = replacement_child.as_mut() {
             stop_child(child).await;
@@ -10188,11 +10150,8 @@ async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        api.post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"),
-            json!({}),
-        )
-        .await?;
+        api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
+            .await?;
 
         let _ = wait_for_sink_video_above(
             &sink_metrics,
@@ -10355,10 +10314,7 @@ async fn recovery_live_cases(
         stop_generalized_sink_server(recovery_server);
 
         let _ = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"),
-                json!({}),
-            )
+            .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
             .await;
         stop_child(&mut resumed_child).await;
     }
@@ -10391,11 +10347,8 @@ async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        api.post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"),
-            json!({}),
-        )
-        .await?;
+        api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
+            .await?;
 
         let retry =
             wait_for_output_retry_observation(api, &pid, &oid, Duration::from_secs(20)).await;
@@ -10507,10 +10460,7 @@ async fn recovery_live_cases(
         }));
 
         let _ = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"),
-                json!({}),
-            )
+            .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
             .await;
         stop_child(&mut pub_child).await;
         sink_cancel.cancel();
@@ -10542,11 +10492,8 @@ async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        api.post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"),
-            json!({}),
-        )
-        .await?;
+        api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
+            .await?;
 
         let _ = wait_for_sink_video_above(
             &sink_metrics,
@@ -10673,10 +10620,7 @@ async fn recovery_live_cases(
         }));
 
         let _ = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"),
-                json!({}),
-            )
+            .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
             .await;
         stop_child(&mut pub_child).await;
         if let Some(server) = sink_server.take() {
@@ -10714,11 +10658,8 @@ async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        api.post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"),
-            json!({}),
-        )
-        .await?;
+        api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
+            .await?;
 
         wait_for_api_input_media_ready(api, &sink_pid, Duration::from_secs(25)).await?;
 
@@ -10831,10 +10772,7 @@ async fn recovery_live_cases(
         }));
 
         let _ = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"),
-                json!({}),
-            )
+            .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
             .await;
         stop_child(&mut pub_child).await;
         let _ = delete_pipeline_v1(api, &sink_pid).await;
@@ -10910,6 +10848,7 @@ struct FaultCasesManifest {
     publisher_disconnect: Vec<PublisherDisconnectCase>,
     retry_budget: Vec<RetryBudgetCase>,
     recovery_transient: Vec<RecoveryTransientCase>,
+    ingest_lifecycle: Vec<IngestLifecycleCase>,
 }
 
 static FAULT_CASES_MANIFEST: OnceLock<FaultCasesManifest> = OnceLock::new();
@@ -10931,6 +10870,14 @@ fn retry_budget_cases() -> &'static [RetryBudgetCase] {
 
 fn recovery_transient_cases() -> &'static [RecoveryTransientCase] {
     &fault_cases_manifest().recovery_transient
+}
+
+fn ingest_lifecycle_case(test_name: &str) -> Result<&'static IngestLifecycleCase, String> {
+    fault_cases_manifest()
+        .ingest_lifecycle
+        .iter()
+        .find(|case| case.test_name == test_name)
+        .ok_or_else(|| format!("ingest lifecycle case {test_name} missing from manifest"))
 }
 
 async fn run_publisher_disconnect_case(
@@ -11018,6 +10965,265 @@ async fn configure_file_ingest_case(
         .ok_or_else(|| format!("file ingest not found in list for {stream_key}"))
 }
 
+/// Runtime feature whose cleanup is tied to input lifecycle.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum IngestLifecycleKind {
+    FileIngest,
+    HlsPreview,
+    Recording,
+}
+
+/// How a file-ingest lifecycle cell reaches input-off.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum FileIngestCompletion {
+    EofRestart,
+    Stop,
+}
+
+/// Declarative cell for input lifecycle cleanup coverage.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IngestLifecycleCase {
+    test_name: String,
+    pipeline: String,
+    kind: IngestLifecycleKind,
+    file_completion: Option<FileIngestCompletion>,
+    input_off_timeout_secs: u64,
+}
+
+async fn run_ingest_lifecycle_case(
+    api: &RampApi,
+    ports: &TestPorts,
+    fixture_h264: &Path,
+    case: &IngestLifecycleCase,
+) -> Result<Value, String> {
+    let pid = create_pipeline(api, &case.pipeline).await?;
+    let file_eof_restart = matches!(case.file_completion, Some(FileIngestCompletion::EofRestart));
+    let (mut publisher, mut file_ingest_id): (Option<Child>, Option<String>) = (None, None);
+
+    match case.kind {
+        IngestLifecycleKind::FileIngest => {
+            let ingest_id =
+                configure_file_ingest_case(api, &pid, &case.pipeline, fixture_h264).await?;
+            api.post_empty(&format!("/api/v1/ingests/{ingest_id}/start"))
+                .await?;
+            file_ingest_id = Some(ingest_id);
+        }
+        IngestLifecycleKind::HlsPreview | IngestLifecycleKind::Recording => {
+            publisher = Some(
+                spawn_publisher(
+                    fixture_h264,
+                    &format!("rtmp://127.0.0.1:{}/live/{}", ports.rtmp, case.pipeline),
+                    "flv",
+                    false,
+                )
+                .await?,
+            );
+        }
+    }
+    wait_for_api_input_live(api, &pid, Duration::from_secs(30)).await?;
+
+    let (mut hls_playlist_status, mut hls_playlist_ok, mut hls_playlist_error) = (None, None, None);
+    let active_result = match case.kind {
+        IngestLifecycleKind::FileIngest => match case.file_completion {
+            Some(FileIngestCompletion::EofRestart) => Some(
+                wait_for_pipeline_file_ingest_running_state(
+                    api,
+                    &pid,
+                    true,
+                    Duration::from_secs(10),
+                )
+                .await,
+            ),
+            Some(FileIngestCompletion::Stop) => {
+                println!("[fault] File ingest live");
+                None
+            }
+            None => return Err(format!("{} missing fileCompletion", case.test_name)),
+        },
+        IngestLifecycleKind::HlsPreview => {
+            match wait_for_hls_playlist_ready(api, &pid, Duration::from_secs(15)).await {
+                Ok((status, body)) => {
+                    hls_playlist_status = Some(status);
+                    hls_playlist_ok = Some(body.contains("#EXTM3U"));
+                }
+                Err(error) => {
+                    hls_playlist_status = Some(reqwest::StatusCode::NOT_FOUND);
+                    hls_playlist_ok = Some(false);
+                    hls_playlist_error = Some(error);
+                }
+            }
+            Some(wait_for_api_hls_preview_state(api, &pid, true, Duration::from_secs(10)).await)
+        }
+        IngestLifecycleKind::Recording => {
+            api.post_empty(&format!("/api/v1/pipelines/{pid}/recording/start"))
+                .await?;
+            Some(wait_for_api_recording_state(api, &pid, true, Duration::from_secs(10)).await)
+        }
+    };
+
+    match case.kind {
+        IngestLifecycleKind::FileIngest => {
+            if matches!(case.file_completion, Some(FileIngestCompletion::Stop)) {
+                let ingest_id = file_ingest_id.as_ref().ok_or("file ingest id missing")?;
+                api.post_empty(&format!("/api/v1/ingests/{ingest_id}/stop"))
+                    .await?;
+            }
+        }
+        IngestLifecycleKind::HlsPreview | IngestLifecycleKind::Recording => {
+            if matches!(case.kind, IngestLifecycleKind::Recording) {
+                tokio::time::sleep(Duration::from_secs(6)).await;
+            }
+            if let Some(child) = publisher.as_mut() {
+                stop_child(child).await;
+            }
+        }
+    }
+
+    let started = Instant::now();
+    let off_result =
+        wait_for_api_input_off(api, &pid, Duration::from_secs(case.input_off_timeout_secs)).await;
+    let inactive_result = match case.kind {
+        IngestLifecycleKind::FileIngest if file_eof_restart => Some(
+            wait_for_pipeline_file_ingest_running_state(api, &pid, false, Duration::from_secs(10))
+                .await,
+        ),
+        IngestLifecycleKind::HlsPreview => {
+            Some(wait_for_api_hls_preview_state(api, &pid, false, Duration::from_secs(15)).await)
+        }
+        IngestLifecycleKind::Recording => {
+            Some(wait_for_api_recording_state(api, &pid, false, Duration::from_secs(10)).await)
+        }
+        IngestLifecycleKind::FileIngest => None,
+    };
+
+    let active_ok = active_result.as_ref().is_none_or(Result::is_ok);
+    let inactive_ok = inactive_result.as_ref().is_none_or(Result::is_ok);
+    let restart_result = if file_eof_restart {
+        if off_result.is_ok() && inactive_ok {
+            let ingest_id = file_ingest_id.as_ref().ok_or("file ingest id missing")?;
+            match api
+                .post_empty(&format!("/api/v1/ingests/{ingest_id}/start"))
+                .await
+            {
+                Ok(_) => {
+                    if let Err(error) =
+                        wait_for_api_input_live(api, &pid, Duration::from_secs(30)).await
+                    {
+                        Err(error)
+                    } else {
+                        api.post_empty(&format!("/api/v1/ingests/{ingest_id}/stop"))
+                            .await
+                            .map(|_| ())
+                    }
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            Err("skipped restart because EOF cleanup did not complete".to_string())
+        }
+    } else {
+        Ok(())
+    };
+    let feature_result = match case.kind {
+        IngestLifecycleKind::FileIngest => json!({}),
+        IngestLifecycleKind::HlsPreview => {
+            let mut final_status = reqwest::StatusCode::OK;
+            let mut playlist_gone = false;
+            let shutdown_deadline = Instant::now() + Duration::from_secs(15);
+            while Instant::now() < shutdown_deadline {
+                let (status, _) = api
+                    .get_text_response(&format!("/hls/{pid}/master.m3u8"))
+                    .await?;
+                final_status = status;
+                if status == reqwest::StatusCode::NOT_FOUND {
+                    playlist_gone = true;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            json!({"finalPlaylistStatus": final_status.as_u16(), "finalPlaylistGone": playlist_gone})
+        }
+        IngestLifecycleKind::Recording => {
+            let recording_file_found = std::fs::read_dir("media")
+                .ok()
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|entry| {
+                    let path = entry.path();
+                    path.extension().is_some_and(|ext| ext == "ts")
+                        && path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.contains(&case.pipeline))
+                });
+            let state = inactive_result
+                .as_ref()
+                .and_then(|result| result.as_ref().ok());
+            json!({
+                "recordingEnabled": state.and_then(|state| state["enabled"].as_bool()).unwrap_or(false),
+                "recordingActive": state.and_then(|state| state["active"].as_bool()).unwrap_or(true),
+                "recordingFileFound": recording_file_found,
+            })
+        }
+    };
+    let elapsed = started.elapsed();
+    let feature_ok = match case.kind {
+        IngestLifecycleKind::FileIngest => true,
+        IngestLifecycleKind::HlsPreview => {
+            hls_playlist_ok == Some(true) && feature_result["finalPlaylistGone"] == true
+        }
+        IngestLifecycleKind::Recording => {
+            feature_result["recordingEnabled"] == true
+                && feature_result["recordingActive"] == false
+                && feature_result["recordingFileFound"] == true
+        }
+    };
+    let passed =
+        active_ok && off_result.is_ok() && inactive_ok && restart_result.is_ok() && feature_ok;
+    println!(
+        "[fault] {}: {} ({:.1}s)",
+        case.test_name,
+        if passed { "PASS" } else { "FAIL" },
+        elapsed.as_secs_f64()
+    );
+
+    let mut result = json!({
+        "test": case.test_name,
+        "passed": passed,
+        "elapsedMs": elapsed.as_millis(),
+    });
+    if file_eof_restart {
+        result["runningError"] = json!(active_result.and_then(Result::err));
+        result["inputOffError"] = json!(off_result.err());
+        result["stoppedError"] = json!(inactive_result.and_then(Result::err));
+        result["restartError"] = json!(restart_result.err());
+    } else if matches!(case.kind, IngestLifecycleKind::FileIngest) {
+        result["error"] = json!(off_result.err());
+    } else {
+        result["inputOffError"] = json!(off_result.err());
+        if matches!(case.kind, IngestLifecycleKind::HlsPreview) {
+            result["playlistStatus"] = json!(hls_playlist_status.map(|status| status.as_u16()));
+            result["playlistOk"] = json!(hls_playlist_ok);
+            result["playlistError"] = json!(hls_playlist_error);
+            result["hlsPreviewActiveError"] = json!(active_result.and_then(Result::err));
+            result["hlsPreviewInactiveError"] = json!(inactive_result.and_then(Result::err));
+        } else {
+            result["recordingActiveError"] = json!(active_result.and_then(Result::err));
+            result["recordingInactiveError"] = json!(inactive_result.and_then(Result::err));
+        }
+        if let Some(extra) = feature_result.as_object() {
+            for (key, value) in extra {
+                result[key] = value.clone();
+            }
+        }
+    }
+    Ok(result)
+}
+
 async fn fault_resilience() -> Result<Value, String> {
     let work_dir = artifact_path("fault-resilience");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
@@ -11055,118 +11261,19 @@ async fn fault_resilience() -> Result<Value, String> {
         .await?,
     );
 
-    // ── 4. File ingest stop ─────────────────────────────────────────────
-    {
-        let pid = create_pipeline(&api, "fault-file").await?;
-        let ingest_id = configure_file_ingest_case(&api, &pid, "fault-file", &fixture_h264).await?;
-
-        api.post_json(&format!("/api/v1/ingests/{ingest_id}/start"), json!({}))
-            .await?;
-        wait_for_api_input_live(&api, &pid, Duration::from_secs(30)).await?;
-        println!("[fault] File ingest live");
-
-        api.post_json(&format!("/api/v1/ingests/{ingest_id}/stop"), json!({}))
-            .await?;
-        let started = Instant::now();
-        let off_result = wait_for_api_input_off(&api, &pid, timeout).await;
-        let elapsed = started.elapsed();
-        let passed = off_result.is_ok();
-        println!(
-            "[fault] File ingest stop: {} ({:.1}s)",
-            if passed { "PASS" } else { "FAIL" },
-            elapsed.as_secs_f64()
+    for test_name in [
+        "file-ingest-stop",
+        "recording-stops-after-ingest-disconnect",
+    ] {
+        results.push(
+            run_ingest_lifecycle_case(
+                &api,
+                &ports,
+                &fixture_h264,
+                ingest_lifecycle_case(test_name)?,
+            )
+            .await?,
         );
-        results.push(json!({
-            "test": "file-ingest-stop",
-            "passed": passed,
-            "elapsedMs": elapsed.as_millis(),
-            "error": off_result.err(),
-        }));
-    }
-
-    // ── 4. Recording stops and surfaces inactive after ingest disappears ──
-    {
-        let pid = create_pipeline(&api, "fault-recording").await?;
-
-        let mut pub_child = spawn_publisher(
-            &fixture_h264,
-            &format!("rtmp://127.0.0.1:{}/live/fault-recording", ports.rtmp),
-            "flv",
-            false,
-        )
-        .await?;
-        wait_for_api_input_live(&api, &pid, timeout).await?;
-
-        api.post_json(
-            &format!("/api/v1/pipelines/{pid}/recording/start"),
-            json!({}),
-        )
-        .await?;
-
-        let active_result =
-            wait_for_api_recording_state(&api, &pid, true, Duration::from_secs(10)).await;
-        let active_ok = active_result.is_ok();
-        tokio::time::sleep(Duration::from_secs(6)).await;
-
-        stop_child(&mut pub_child).await;
-        let started = Instant::now();
-        let off_result = wait_for_api_input_off(&api, &pid, timeout).await;
-        let inactive_result =
-            wait_for_api_recording_state(&api, &pid, false, Duration::from_secs(10)).await;
-        let elapsed = started.elapsed();
-
-        let mut recording_file_found = false;
-        if let Ok(entries) = std::fs::read_dir("media") {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "ts") {
-                    let file_name = path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("");
-                    if file_name.contains("fault-recording") {
-                        recording_file_found = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        let recording_enabled = inactive_result
-            .as_ref()
-            .ok()
-            .and_then(|state| state["enabled"].as_bool())
-            .unwrap_or(false);
-        let recording_active = inactive_result
-            .as_ref()
-            .ok()
-            .and_then(|state| state["active"].as_bool())
-            .unwrap_or(true);
-        let passed = active_ok
-            && off_result.is_ok()
-            && inactive_result.is_ok()
-            && recording_enabled
-            && !recording_active
-            && recording_file_found;
-        println!(
-            "[fault] Recording follows ingest teardown: {} (enabled={}, active={}, fileFound={}, {:.1}s)",
-            if passed { "PASS" } else { "FAIL" },
-            recording_enabled,
-            recording_active,
-            recording_file_found,
-            elapsed.as_secs_f64()
-        );
-        results.push(json!({
-            "test": "recording-stops-after-ingest-disconnect",
-            "passed": passed,
-            "elapsedMs": elapsed.as_millis(),
-            "inputOffError": off_result.err(),
-            "recordingActiveError": active_result.err(),
-            "recordingInactiveError": inactive_result.err(),
-            "recordingEnabled": recording_enabled,
-            "recordingActive": recording_active,
-            "recordingFileFound": recording_file_found,
-        }));
     }
 
     // ── 5. External transcoder tears down after ingest disappears ───────
@@ -11188,11 +11295,8 @@ async fn fault_resilience() -> Result<Value, String> {
         .await?;
         wait_for_api_input_live(&api, &pid, timeout).await?;
 
-        api.post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"),
-            json!({}),
-        )
-        .await?;
+        api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
+            .await?;
 
         let restream_pid = child.id().ok_or("restream pid missing")?;
         let warm_deadline = Instant::now() + Duration::from_secs(15);
@@ -11290,137 +11394,19 @@ async fn fault_resilience() -> Result<Value, String> {
     // ── 8. SRT egress sink disappears ───────────────────────────────────
     results.push(fault_srt_egress_sink_disappear(&api, &ports, &fixture_h264, timeout).await?);
 
-    // ── 9. HLS preview tears down after ingest disappears ───────────────
-    {
-        let pid = create_pipeline(&api, "fault-hls-preview").await?;
-
-        let mut pub_child = spawn_publisher(
-            &fixture_h264,
-            &format!("rtmp://127.0.0.1:{}/live/fault-hls-preview", ports.rtmp),
-            "flv",
-            false,
-        )
-        .await?;
-        wait_for_api_input_live(&api, &pid, timeout).await?;
-
-        let playlist_result =
-            wait_for_hls_playlist_ready(&api, &pid, Duration::from_secs(15)).await;
-        let (playlist_status, playlist_ok, playlist_error) = match playlist_result {
-            Ok((status, body)) => (status, body.contains("#EXTM3U"), None),
-            Err(error) => (reqwest::StatusCode::NOT_FOUND, false, Some(error)),
-        };
-        let active_result =
-            wait_for_api_hls_preview_state(&api, &pid, true, Duration::from_secs(10)).await;
-        let active_ok = active_result.is_ok();
-
-        stop_child(&mut pub_child).await;
-        let started = Instant::now();
-        let off_result = wait_for_api_input_off(&api, &pid, timeout).await;
-        let inactive_result =
-            wait_for_api_hls_preview_state(&api, &pid, false, Duration::from_secs(15)).await;
-        let elapsed = started.elapsed();
-
-        let shutdown_deadline = Instant::now() + Duration::from_secs(15);
-        let mut final_playlist_status = reqwest::StatusCode::OK;
-        let mut final_playlist_gone = false;
-        while Instant::now() < shutdown_deadline {
-            let (status, _) = api
-                .get_text_response(&format!("/hls/{pid}/master.m3u8"))
-                .await?;
-            final_playlist_status = status;
-            if status == reqwest::StatusCode::NOT_FOUND {
-                final_playlist_gone = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-
-        let passed = playlist_ok
-            && active_ok
-            && off_result.is_ok()
-            && inactive_result.is_ok()
-            && final_playlist_gone;
-        println!(
-            "[fault] HLS preview tears down with ingest: {} (playlistOk={}, finalStatus={}, {:.1}s)",
-            if passed { "PASS" } else { "FAIL" },
-            playlist_ok,
-            final_playlist_status,
-            elapsed.as_secs_f64()
+    for test_name in [
+        "hls-preview-stops-after-ingest-disconnect",
+        "file-ingest-eof-clears-and-restarts",
+    ] {
+        results.push(
+            run_ingest_lifecycle_case(
+                &api,
+                &ports,
+                &fixture_h264,
+                ingest_lifecycle_case(test_name)?,
+            )
+            .await?,
         );
-        results.push(json!({
-            "test": "hls-preview-stops-after-ingest-disconnect",
-            "passed": passed,
-            "elapsedMs": elapsed.as_millis(),
-            "playlistStatus": playlist_status.as_u16(),
-            "playlistOk": playlist_ok,
-            "playlistError": playlist_error,
-            "hlsPreviewActiveError": active_result.err(),
-            "inputOffError": off_result.err(),
-            "hlsPreviewInactiveError": inactive_result.err(),
-            "finalPlaylistStatus": final_playlist_status.as_u16(),
-            "finalPlaylistGone": final_playlist_gone,
-        }));
-    }
-
-    // ── 9. File ingest EOF clears runtime state and allows restart ──────
-    {
-        let pid = create_pipeline(&api, "fault-file-eof").await?;
-        let ingest_id =
-            configure_file_ingest_case(&api, &pid, "fault-file-eof", &fixture_h264).await?;
-
-        api.post_json(&format!("/api/v1/ingests/{ingest_id}/start"), json!({}))
-            .await?;
-        wait_for_api_input_live(&api, &pid, Duration::from_secs(30)).await?;
-        let running_result =
-            wait_for_pipeline_file_ingest_running_state(&api, &pid, true, Duration::from_secs(10))
-                .await;
-        let started = Instant::now();
-        let off_result = wait_for_api_input_off(&api, &pid, Duration::from_secs(60)).await;
-        let stopped_result =
-            wait_for_pipeline_file_ingest_running_state(&api, &pid, false, Duration::from_secs(10))
-                .await;
-
-        let restart_result = if off_result.is_ok() && stopped_result.is_ok() {
-            let restart = api
-                .post_json(&format!("/api/v1/ingests/{ingest_id}/start"), json!({}))
-                .await;
-            match restart {
-                Ok(_) => {
-                    if let Err(error) =
-                        wait_for_api_input_live(&api, &pid, Duration::from_secs(30)).await
-                    {
-                        Err(error)
-                    } else {
-                        api.post_json(&format!("/api/v1/ingests/{ingest_id}/stop"), json!({}))
-                            .await
-                            .map(|_| ())
-                    }
-                }
-                Err(error) => Err(error),
-            }
-        } else {
-            Err("skipped restart because EOF cleanup did not complete".to_string())
-        };
-        let elapsed = started.elapsed();
-
-        let passed = running_result.is_ok()
-            && off_result.is_ok()
-            && stopped_result.is_ok()
-            && restart_result.is_ok();
-        println!(
-            "[fault] File ingest EOF clears runtime state: {} ({:.1}s)",
-            if passed { "PASS" } else { "FAIL" },
-            elapsed.as_secs_f64()
-        );
-        results.push(json!({
-            "test": "file-ingest-eof-clears-and-restarts",
-            "passed": passed,
-            "elapsedMs": elapsed.as_millis(),
-            "runningError": running_result.err(),
-            "inputOffError": off_result.err(),
-            "stoppedError": stopped_result.err(),
-            "restartError": restart_result.err(),
-        }));
     }
 
     let history_contract = verify_live_history_contract(&api, &["egress.failed"]).await?;
@@ -12960,6 +12946,18 @@ stream|index=1|codec_type=audio\n";
                 ),
             ]
         );
+
+        for test_name in [
+            "file-ingest-stop",
+            "recording-stops-after-ingest-disconnect",
+            "hls-preview-stops-after-ingest-disconnect",
+            "file-ingest-eof-clears-and-restarts",
+        ] {
+            assert_eq!(
+                ingest_lifecycle_case(test_name).unwrap().test_name,
+                test_name
+            );
+        }
     }
 
     #[test]
