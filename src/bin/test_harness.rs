@@ -6059,27 +6059,8 @@ async fn correctness() -> Result<Value, String> {
     let mut api = RampApi::new(ports.http);
     api.login().await?;
 
-    let rtmp_pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "RTMP test", "streamKey": "e2e-rtmp"}),
-        )
-        .await?;
-    let rtmp_id = rtmp_pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("RTMP pipeline create missing id")?
-        .to_string();
-
-    let srt_pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "SRT test", "streamKey": "e2e-srt"}),
-        )
-        .await?;
-    let srt_id = srt_pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("SRT pipeline create missing id")?
-        .to_string();
+    let rtmp_id = create_pipeline_with_stream_key(&api, "RTMP test", "e2e-rtmp").await?;
+    let srt_id = create_pipeline_with_stream_key(&api, "SRT test", "e2e-srt").await?;
     println!("[correctness] created pipelines {rtmp_id}, {srt_id}");
 
     let rtmp_fixture = checked_h264_fixture()?;
@@ -6176,29 +6157,13 @@ async fn srt_to_rtmp_correctness() -> Result<Value, String> {
     let mut api = RampApi::new(ports.http);
     api.login().await?;
 
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "H.264 SRT source", "streamKey": "e2e-srt-rtmp"}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create missing id")?
-        .to_string();
+    let pipeline_id =
+        create_pipeline_with_stream_key(&api, "H.264 SRT source", "e2e-srt-rtmp").await?;
 
     // Create RTMP egress output pointed at the generalized sink
     let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/e2e-srt-rtmp-sink");
-    let output = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pipeline_id}/outputs"),
-            output_create_payload("rtmp-sink", &sink_url, "source"),
-        )
-        .await?;
-    let output_id = output["output"]["id"]
-        .as_str()
-        .ok_or("output create missing id")?
-        .to_string();
+    let output_id =
+        create_mixed_output(&api, &pipeline_id, "rtmp-sink", &sink_url, "source").await?;
 
     // Start the generalized sink to receive egress
     let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
@@ -6229,11 +6194,7 @@ async fn srt_to_rtmp_correctness() -> Result<Value, String> {
     println!("[srt-rtmp] Source ingest established (H.264 via SRT)");
 
     // Start the output
-    api.post_json(
-        &format!("/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/start"),
-        json!({}),
-    )
-    .await?;
+    start_mixed_output(&api, &pipeline_id, &output_id).await?;
 
     // Wait for sink to receive data
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -6288,28 +6249,19 @@ async fn srt_to_rtmp_atrack_correctness() -> Result<Value, String> {
     let mut api = RampApi::new(ports.http);
     api.login().await?;
 
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "H.264 SRT multi-audio", "streamKey": "e2e-srt-rtmp-atrack"}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create missing id")?
-        .to_string();
+    let pipeline_id =
+        create_pipeline_with_stream_key(&api, "H.264 SRT multi-audio", "e2e-srt-rtmp-atrack")
+            .await?;
 
     let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/e2e-srt-rtmp-atrack-sink");
-    let output = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pipeline_id}/outputs"),
-            output_create_payload("rtmp-atrack-sink", &sink_url, "source+atrack:1"),
-        )
-        .await?;
-    let output_id = output["output"]["id"]
-        .as_str()
-        .ok_or("output create missing id")?
-        .to_string();
+    let output_id = create_mixed_output(
+        &api,
+        &pipeline_id,
+        "rtmp-atrack-sink",
+        &sink_url,
+        "source+atrack:1",
+    )
+    .await?;
 
     let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
     let sink_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
@@ -6339,11 +6291,7 @@ async fn srt_to_rtmp_atrack_correctness() -> Result<Value, String> {
         wait_for_api_input_media_ready(&api, &pipeline_id, Duration::from_secs(15)).await?;
     println!("[srt-rtmp-atrack] Source ingest established (H.264 via SRT, multi-audio)");
 
-    api.post_json(
-        &format!("/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/start"),
-        json!({}),
-    )
-    .await?;
+    start_mixed_output(&api, &pipeline_id, &output_id).await?;
 
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
@@ -7073,29 +7021,13 @@ async fn bframe_rtmp_correctness() -> Result<Value, String> {
     let mut api = RampApi::new(ports.http);
     api.login().await?;
 
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "B-frame RTMP source", "streamKey": "e2e-bframe-src"}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create missing id")?
-        .to_string();
+    let pipeline_id =
+        create_pipeline_with_stream_key(&api, "B-frame RTMP source", "e2e-bframe-src").await?;
 
     // Create RTMP egress output pointed at the harness sink
     let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/e2e-bframe-sink");
-    let output = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pipeline_id}/outputs"),
-            output_create_payload("bframe-sink", &sink_url, "source"),
-        )
-        .await?;
-    let output_id = output["output"]["id"]
-        .as_str()
-        .ok_or("output create missing id")?
-        .to_string();
+    let output_id =
+        create_mixed_output(&api, &pipeline_id, "bframe-sink", &sink_url, "source").await?;
 
     // Start generalized sink
     let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
@@ -7123,11 +7055,7 @@ async fn bframe_rtmp_correctness() -> Result<Value, String> {
     println!("[bframe-rtmp] Source ingest established");
 
     // Start the output
-    api.post_json(
-        &format!("/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/start"),
-        json!({}),
-    )
-    .await?;
+    start_mixed_output(&api, &pipeline_id, &output_id).await?;
 
     // Wait for sink to accumulate packets
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -7602,16 +7530,7 @@ async fn hevc_rtmp_egress_correctness() -> Result<Value, String> {
     let mut api = RampApi::new(ports.http);
     api.login().await?;
 
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "H.265 SRT source", "streamKey": "e2e-hevc"}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create missing id")?
-        .to_string();
+    let pipeline_id = create_pipeline_with_stream_key(&api, "H.265 SRT source", "e2e-hevc").await?;
 
     let fixture = checked_h265_fixture()?;
 
@@ -7731,16 +7650,9 @@ async fn hevc_rtmp_atrack_correctness() -> Result<Value, String> {
     let mut api = RampApi::new(ports.http);
     api.login().await?;
 
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "2v16a HEVC SRT source", "streamKey": "e2e-hevc-rtmp-atrack"}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create missing id")?
-        .to_string();
+    let pipeline_id =
+        create_pipeline_with_stream_key(&api, "2v16a HEVC SRT source", "e2e-hevc-rtmp-atrack")
+            .await?;
 
     let fixture = restream::test_fixtures::checked_in_fixture("media/colorbar-timer-2v16a.mp4")?;
     let mut publisher = spawn_publisher_with_selection(
@@ -7950,28 +7862,13 @@ async fn hevc_srt_passthrough_correctness() -> Result<Value, String> {
     api.login().await?;
 
     // Source pipeline
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "H.265 SRT source", "streamKey": "e2e-hevc-srt"}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create missing id")?
-        .to_string();
+    let pipeline_id =
+        create_pipeline_with_stream_key(&api, "H.265 SRT source", "e2e-hevc-srt").await?;
 
     // Sink pipeline (SRT egress will publish here)
-    let sink_pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "H.265 SRT passthrough sink", "streamKey": "e2e-hevc-srt-sink"}),
-        )
-        .await?;
-    let sink_pipeline_id = sink_pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("sink pipeline create missing id")?
-        .to_string();
+    let sink_pipeline_id =
+        create_pipeline_with_stream_key(&api, "H.265 SRT passthrough sink", "e2e-hevc-srt-sink")
+            .await?;
 
     let fixture = checked_h265_fixture()?;
 
