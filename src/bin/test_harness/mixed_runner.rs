@@ -967,32 +967,7 @@ pub(super) async fn run_mixed_anchor_config(
         .await?;
     }
 
-    let rss_final = process_rss_kb(restream_pid).await.unwrap_or(0);
-    let ffmpeg = ffmpeg_pipe1_stats().await;
-    let rss_delta = rss_final.saturating_sub(rss_baseline);
-    let per_output = rss_delta / total as u64;
-    append_line(
-        &env.rss_summary,
-        &format!(
-            "{cfg},rss_delta_kb={rss_delta},per_output_kb={per_output},ext_ffmpeg_n={},ext_ffmpeg_rss_kb={}\n",
-            ffmpeg.count, ffmpeg.rss_kb
-        ),
-    )?;
-    if !env.skip_load && env.check_selected("load") {
-        emit_mixed_result(
-            env,
-            cfg,
-            &mixed_scenario_check_id(cfg, "load_delta_per_output"),
-            "pass",
-            Duration::ZERO,
-            Some(json!({
-                "rss_delta_kb": rss_delta,
-                "per_output_kb": per_output,
-                "ext_ffmpeg_n": ffmpeg.count,
-                "ext_ffmpeg_rss_kb": ffmpeg.rss_kb,
-            })),
-        )?;
-    }
+    let rss = record_mixed_rss_delta(env, cfg, restream_pid, rss_baseline, total, None).await?;
 
     if env.check_selected("ffprobe") {
         verify_mixed_stream(
@@ -1257,10 +1232,10 @@ pub(super) async fn run_mixed_anchor_config(
         "pipelineId": pipeline_id,
         "nPerGroup": n,
         "totalOutputs": total,
-        "rssDeltaKb": rss_delta,
-        "perOutputKb": per_output,
-        "extFfmpegCount": ffmpeg.count,
-        "extFfmpegRssKb": ffmpeg.rss_kb,
+        "rssDeltaKb": rss.delta_kb,
+        "perOutputKb": rss.per_output_kb,
+        "extFfmpegCount": rss.ffmpeg.count,
+        "extFfmpegRssKb": rss.ffmpeg.rss_kb,
         "recording": recording,
         "outputMatrix": mixed_output_matrix_json(output_cases),
     });
@@ -1346,32 +1321,7 @@ pub(super) async fn run_mixed_single_live_config(
         finish_ffmpeg_signal_sinks(env, &mut ffmpeg_signal_sinks, resume).await?;
     }
 
-    let rss_final = process_rss_kb(restream_pid).await.unwrap_or(0);
-    let ffmpeg = ffmpeg_pipe1_stats().await;
-    let rss_delta = rss_final.saturating_sub(rss_baseline);
-    let per_output = rss_delta / total as u64;
-    append_line(
-        &env.rss_summary,
-        &format!(
-            "{cfg},rss_delta_kb={rss_delta},per_output_kb={per_output},ext_ffmpeg_n={},ext_ffmpeg_rss_kb={}\n",
-            ffmpeg.count, ffmpeg.rss_kb
-        ),
-    )?;
-    if !env.skip_load && env.check_selected("load") {
-        emit_mixed_result(
-            env,
-            cfg,
-            &mixed_scenario_check_id(cfg, "load_delta_per_output"),
-            "pass",
-            Duration::ZERO,
-            Some(json!({
-                "rss_delta_kb": rss_delta,
-                "per_output_kb": per_output,
-                "ext_ffmpeg_n": ffmpeg.count,
-                "ext_ffmpeg_rss_kb": ffmpeg.rss_kb,
-            })),
-        )?;
-    }
+    let rss = record_mixed_rss_delta(env, cfg, restream_pid, rss_baseline, total, None).await?;
 
     verify_mixed_output_cases(env, cfg, output_cases, resume).await?;
 
@@ -1391,10 +1341,10 @@ pub(super) async fn run_mixed_single_live_config(
         "pipelineId": pipeline_id,
         "nPerGroup": n,
         "totalOutputs": total,
-        "rssDeltaKb": rss_delta,
-        "perOutputKb": per_output,
-        "extFfmpegCount": ffmpeg.count,
-        "extFfmpegRssKb": ffmpeg.rss_kb,
+        "rssDeltaKb": rss.delta_kb,
+        "perOutputKb": rss.per_output_kb,
+        "extFfmpegCount": rss.ffmpeg.count,
+        "extFfmpegRssKb": rss.ffmpeg.rss_kb,
         "recording": recording,
         "outputMatrix": mixed_output_matrix_json(output_cases),
     });
@@ -1561,33 +1511,7 @@ pub(super) async fn run_mixed_srt_multi_config(
         finish_ffmpeg_signal_sinks(env, &mut ffmpeg_signal_sinks, resume).await?;
     }
 
-    let rss_final = process_rss_kb(restream_pid).await.unwrap_or(0);
-    let ffmpeg = ffmpeg_pipe1_stats().await;
-    let rss_delta = rss_final.saturating_sub(rss_baseline);
-    let per_output = rss_delta / total as u64;
-    append_line(
-        &env.rss_summary,
-        &format!(
-            "{cfg},rss_delta_kb={rss_delta},per_output_kb={per_output},ext_ffmpeg_n={},ext_ffmpeg_rss_kb={}\n",
-            ffmpeg.count, ffmpeg.rss_kb
-        ),
-    )?;
-    if !env.skip_load && env.check_selected("load") {
-        emit_mixed_result(
-            env,
-            cfg,
-            &mixed_scenario_check_id(cfg, "load_delta_per_output"),
-            "pass",
-            Duration::ZERO,
-            Some(json!({
-                "rss_delta_kb": rss_delta,
-                "per_output_kb": per_output,
-                "ext_ffmpeg_n": ffmpeg.count,
-                "ext_ffmpeg_rss_kb": ffmpeg.rss_kb,
-                "audio_tracks": 2,
-            })),
-        )?;
-    }
+    let rss = record_mixed_rss_delta(env, cfg, restream_pid, rss_baseline, total, Some(2)).await?;
 
     if !ffmpeg_srt_sinks.is_empty() {
         finish_ffmpeg_srt_sinks(&mut ffmpeg_srt_sinks).await?;
@@ -1611,10 +1535,10 @@ pub(super) async fn run_mixed_srt_multi_config(
         "pipelineId": pipeline_id,
         "nPerGroup": n,
         "totalOutputs": total,
-        "rssDeltaKb": rss_delta,
-        "perOutputKb": per_output,
-        "extFfmpegCount": ffmpeg.count,
-        "extFfmpegRssKb": ffmpeg.rss_kb,
+        "rssDeltaKb": rss.delta_kb,
+        "perOutputKb": rss.per_output_kb,
+        "extFfmpegCount": rss.ffmpeg.count,
+        "extFfmpegRssKb": rss.ffmpeg.rss_kb,
         "audioTracks": 2,
         "recording": recording,
         "outputMatrix": mixed_output_matrix_json(output_cases),
@@ -1762,6 +1686,57 @@ pub(super) async fn run_optional_mixed_sink_probe(
             Ok((None, Some(format!("{cfg}: sink probe error: {error}"))))
         }
     }
+}
+
+pub(super) struct MixedRssReport {
+    pub(super) delta_kb: u64,
+    pub(super) per_output_kb: u64,
+    pub(super) ffmpeg: FfmpegStats,
+}
+
+pub(super) async fn record_mixed_rss_delta(
+    env: &MixedEnv,
+    cfg: &str,
+    restream_pid: u32,
+    rss_baseline: u64,
+    total_outputs: usize,
+    audio_tracks: Option<usize>,
+) -> Result<MixedRssReport, String> {
+    let rss_final = process_rss_kb(restream_pid).await.unwrap_or(0);
+    let ffmpeg = ffmpeg_pipe1_stats().await;
+    let delta_kb = rss_final.saturating_sub(rss_baseline);
+    let per_output_kb = delta_kb / total_outputs.max(1) as u64;
+    append_line(
+        &env.rss_summary,
+        &format!(
+            "{cfg},rss_delta_kb={delta_kb},per_output_kb={per_output_kb},ext_ffmpeg_n={},ext_ffmpeg_rss_kb={}\n",
+            ffmpeg.count, ffmpeg.rss_kb
+        ),
+    )?;
+    if !env.skip_load && env.check_selected("load") {
+        let mut details = json!({
+            "rss_delta_kb": delta_kb,
+            "per_output_kb": per_output_kb,
+            "ext_ffmpeg_n": ffmpeg.count,
+            "ext_ffmpeg_rss_kb": ffmpeg.rss_kb,
+        });
+        if let Some(audio_tracks) = audio_tracks {
+            details["audio_tracks"] = json!(audio_tracks);
+        }
+        emit_mixed_result(
+            env,
+            cfg,
+            &mixed_scenario_check_id(cfg, "load_delta_per_output"),
+            "pass",
+            Duration::ZERO,
+            Some(details),
+        )?;
+    }
+    Ok(MixedRssReport {
+        delta_kb,
+        per_output_kb,
+        ffmpeg,
+    })
 }
 
 /// Parameters for creating a homogeneous group of mixed-matrix outputs.
