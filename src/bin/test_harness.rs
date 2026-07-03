@@ -8582,31 +8582,7 @@ async fn fault_rtmp_egress_sink_disappear(
     let pid = create_pipeline(api, "fault-egress-rtmp").await?;
 
     let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let sink_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-        .await
-        .map_err(|e| format!("sink bind: {e}"))?;
-    let sink_cancel = CancellationToken::new();
-    let reader_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>> =
-        Arc::new(Mutex::new(Vec::new()));
-    let reader_handles_inner = reader_handles.clone();
-    let sink_metrics_inner = sink_metrics.clone();
-    let sink_cancel_inner = sink_cancel.clone();
-    let sink_task = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                result = sink_listener.accept() => {
-                    if let Ok((socket, _)) = result {
-                        let metrics = sink_metrics_inner.clone();
-                        let h = tokio::spawn(async move {
-                            let _ = handle_generalized_sink_client(socket, metrics).await;
-                        });
-                        reader_handles_inner.lock().unwrap().push(h);
-                    }
-                }
-                _ = sink_cancel_inner.cancelled() => break,
-            }
-        }
-    });
+    let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
 
     let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/fault-egress-rtmp-sink");
     let oid = create_mixed_output(api, &pid, "rtmp-sink", &sink_url, "source").await?;
@@ -8626,23 +8602,10 @@ async fn fault_rtmp_egress_sink_disappear(
     )
     .await?;
 
-    let deadline = Instant::now() + timeout;
-    while sink_metrics.video_count.load(Ordering::Relaxed) < 10 {
-        if Instant::now() >= deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    let _ = wait_for_sink_video_above(&sink_metrics, 9, timeout).await;
     println!("[fault] RTMP egress delivering data");
 
-    sink_cancel.cancel();
-    sink_task.abort();
-    {
-        let handles = reader_handles.lock().unwrap();
-        for h in handles.iter() {
-            h.abort();
-        }
-    }
+    stop_generalized_sink_server(sink_server);
 
     let started = Instant::now();
     let poll_deadline = started + Duration::from_secs(10);
@@ -8690,31 +8653,8 @@ async fn fault_rtmp_egress_sink_disappear(
     }
     let elapsed = started.elapsed();
     let recovery_metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let recovered_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-        .await
-        .map_err(|e| format!("sink rebind: {e}"))?;
-    let recovered_cancel = CancellationToken::new();
-    let recovered_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>> =
-        Arc::new(Mutex::new(Vec::new()));
-    let recovered_handles_inner = recovered_handles.clone();
-    let recovery_metrics_inner = recovery_metrics.clone();
-    let recovered_cancel_inner = recovered_cancel.clone();
-    let recovered_task = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                result = recovered_listener.accept() => {
-                    if let Ok((socket, _)) = result {
-                        let metrics = recovery_metrics_inner.clone();
-                        let h = tokio::spawn(async move {
-                            let _ = handle_generalized_sink_client(socket, metrics).await;
-                        });
-                        recovered_handles_inner.lock().unwrap().push(h);
-                    }
-                }
-                _ = recovered_cancel_inner.cancelled() => break,
-            }
-        }
-    });
+    let recovered_server =
+        start_generalized_sink_server(sink_port, recovery_metrics.clone()).await?;
 
     let recovery_started = Instant::now();
     let recovery_deadline = recovery_started + Duration::from_secs(25);
@@ -8736,14 +8676,7 @@ async fn fault_rtmp_egress_sink_disappear(
             break;
         }
     }
-    recovered_cancel.cancel();
-    recovered_task.abort();
-    {
-        let handles = recovered_handles.lock().unwrap();
-        for h in handles.iter() {
-            h.abort();
-        }
-    }
+    stop_generalized_sink_server(recovered_server);
     let final_status = api
         .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
         .await
