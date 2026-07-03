@@ -9887,11 +9887,30 @@ fn input_disconnect_cleared(input: &Value) -> bool {
 }
 
 /// Output retry state observed from both the public status endpoint and engine health.
-#[derive(Default)]
 struct OutputRetryObservation {
     status_visible: bool,
     health_visible: bool,
     has_error: bool,
+    phase: String,
+    failure_phase: String,
+    last_error: String,
+    attempts: Option<u64>,
+    backoff_ms: Option<u64>,
+}
+
+impl Default for OutputRetryObservation {
+    fn default() -> Self {
+        Self {
+            status_visible: false,
+            health_visible: false,
+            has_error: false,
+            phase: String::from("unknown"),
+            failure_phase: String::from("unknown"),
+            last_error: String::new(),
+            attempts: None,
+            backoff_ms: None,
+        }
+    }
 }
 
 async fn wait_for_output_retry_observation(
@@ -9912,9 +9931,17 @@ async fn wait_for_output_retry_observation(
         {
             observation.status_visible = status["status"].as_str() == Some("retrying")
                 && status["retrying"].as_bool() == Some(true);
-            observation.has_error = status["lastError"]
+            observation.phase = status["phase"].as_str().unwrap_or("unknown").to_string();
+            observation.failure_phase = status["failurePhase"]
                 .as_str()
-                .is_some_and(|message| !message.is_empty());
+                .unwrap_or("unknown")
+                .to_string();
+            observation.last_error = status["lastError"].as_str().unwrap_or("").to_string();
+            observation.has_error = !observation.last_error.is_empty();
+            if observation.status_visible {
+                observation.attempts = status["retryAttempts"].as_u64();
+                observation.backoff_ms = status["retryBackoffMs"].as_u64();
+            }
         }
         if let Ok(health) = api.get_json("/api/v1/engine/health").await {
             let output = &health["pipelines"][pipeline_id]["outputs"][output_id];
@@ -10427,41 +10454,8 @@ async fn recovery_live_cases(
             }
         }
 
-        let retrying_deadline = Instant::now() + Duration::from_secs(10);
-        let mut retry_phase = String::from("unknown");
-        let mut retry_has_error = false;
-        let mut retry_status_visible = false;
-        let mut retry_health_visible = false;
-        let mut retry_attempts: Option<u64> = None;
-        let mut retry_backoff_ms: Option<u64> = None;
-        while Instant::now() < retrying_deadline {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            let status = api
-                .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-                .await
-                .ok();
-            if let Some(status) = status.as_ref() {
-                retry_has_error = status["lastError"]
-                    .as_str()
-                    .map(|message| !message.is_empty())
-                    .unwrap_or(false);
-                retry_phase = status["phase"].as_str().unwrap_or("unknown").to_string();
-                retry_status_visible = status["status"].as_str() == Some("retrying")
-                    && status["retrying"].as_bool() == Some(true);
-                if retry_status_visible {
-                    retry_attempts = status["retryAttempts"].as_u64();
-                    retry_backoff_ms = status["retryBackoffMs"].as_u64();
-                }
-            }
-            if let Ok(health) = api.get_json("/api/v1/engine/health").await {
-                let output_health = &health["pipelines"][&pid]["outputs"][&oid];
-                retry_health_visible = output_health["status"].as_str() == Some("retrying")
-                    && output_health["retrying"].as_bool() == Some(true);
-            }
-            if retry_status_visible && retry_health_visible && retry_has_error {
-                break;
-            }
-        }
+        let retry =
+            wait_for_output_retry_observation(api, &pid, &oid, Duration::from_secs(10)).await;
 
         stop_child(&mut pub_child).await;
         let input_off = wait_for_api_input_off(api, &pid, Duration::from_secs(10)).await;
@@ -10578,9 +10572,9 @@ async fn recovery_live_cases(
             && final_input["lastFailurePhase"].is_null()
             && final_input["recentDisconnectError"] == false;
         let passed = baseline_video >= 10
-            && retry_status_visible
-            && retry_health_visible
-            && retry_has_error
+            && retry.status_visible
+            && retry.health_visible
+            && retry.has_error
             && input_off.is_ok()
             && gap_output_retrying
             && gap_health_retrying
@@ -10595,8 +10589,8 @@ async fn recovery_live_cases(
         println!(
             "[fault] Egress retry survives transient ingest gap: {} (retrying={} healthRetrying={} gapRetrying={} gapHealthRetrying={} recovered={} recoveryStatus={} finalRetrying={} disconnectCleared={})",
             if passed { "PASS" } else { "FAIL" },
-            retry_status_visible,
-            retry_health_visible,
+            retry.status_visible,
+            retry.health_visible,
             gap_output_retrying,
             gap_health_retrying,
             recovered,
@@ -10608,12 +10602,12 @@ async fn recovery_live_cases(
             "test": "egress-retry-survives-transient-ingest-gap",
             "passed": passed,
             "baselineVideo": baseline_video,
-            "retryPhase": retry_phase,
-            "retryHasError": retry_has_error,
-            "retryStatusVisible": retry_status_visible,
-            "retryHealthVisible": retry_health_visible,
-            "retryAttempts": retry_attempts,
-            "retryBackoffMs": retry_backoff_ms,
+            "retryPhase": retry.phase,
+            "retryHasError": retry.has_error,
+            "retryStatusVisible": retry.status_visible,
+            "retryHealthVisible": retry.health_visible,
+            "retryAttempts": retry.attempts,
+            "retryBackoffMs": retry.backoff_ms,
             "inputOffError": input_off.err(),
             "gapOutputRetrying": gap_output_retrying,
             "gapHealthRetrying": gap_health_retrying,
@@ -10683,38 +10677,8 @@ async fn recovery_live_cases(
         )
         .await?;
 
-        let retry_deadline = Instant::now() + Duration::from_secs(20);
-        let mut retry_status_visible = false;
-        let mut retry_health_visible = false;
-        let mut retry_has_error = false;
-        let mut retry_phase = String::from("unknown");
-        let mut retry_failure_phase = String::from("unknown");
-        let mut retry_error = String::new();
-        while Instant::now() < retry_deadline {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            if let Ok(status) = api
-                .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-                .await
-            {
-                retry_status_visible = status["status"].as_str() == Some("retrying")
-                    && status["retrying"].as_bool() == Some(true);
-                retry_phase = status["phase"].as_str().unwrap_or("unknown").to_string();
-                retry_failure_phase = status["failurePhase"]
-                    .as_str()
-                    .unwrap_or("unknown")
-                    .to_string();
-                retry_error = status["lastError"].as_str().unwrap_or("").to_string();
-                retry_has_error = !retry_error.is_empty();
-            }
-            if let Ok(health) = api.get_json("/api/v1/engine/health").await {
-                let output = &health["pipelines"][&pid]["outputs"][&oid];
-                retry_health_visible = output["status"].as_str() == Some("retrying")
-                    && output["retrying"].as_bool() == Some(true);
-            }
-            if retry_status_visible && retry_health_visible && retry_has_error {
-                break;
-            }
-        }
+        let retry =
+            wait_for_output_retry_observation(api, &pid, &oid, Duration::from_secs(20)).await;
 
         hang_cancel.cancel();
         let _ = hang_handle.await;
@@ -10771,16 +10735,16 @@ async fn recovery_live_cases(
             .as_ref()
             .is_some_and(|status| status["lastError"].is_null());
         let timeout_error_visible = {
-            let lower = retry_error.to_ascii_lowercase();
+            let lower = retry.last_error.to_ascii_lowercase();
             lower.contains("timed out") || lower.contains("deadline")
         };
         let failure_phase_ok =
-            retry_failure_phase == "upload_segment" || retry_failure_phase == "upload_playlist";
-        let passed = retry_status_visible
-            && retry_health_visible
-            && retry_has_error
+            retry.failure_phase == "upload_segment" || retry.failure_phase == "upload_playlist";
+        let passed = retry.status_visible
+            && retry.health_visible
+            && retry.has_error
             && timeout_error_visible
-            && retry_phase == "failed"
+            && retry.phase == "failed"
             && failure_phase_ok
             && artifacts.is_ok()
             && content_types_ok
@@ -10792,10 +10756,10 @@ async fn recovery_live_cases(
         println!(
             "[fault] Hung HLS PUT sink recovers after timeout: {} (retrying={} healthRetrying={} timeoutVisible={} failurePhase={} recovered={} recoveryStatus={} finalRetrying={} bytesOut={})",
             if passed { "PASS" } else { "FAIL" },
-            retry_status_visible,
-            retry_health_visible,
+            retry.status_visible,
+            retry.health_visible,
             timeout_error_visible,
-            retry_failure_phase,
+            retry.failure_phase,
             recovered,
             recovery_status,
             final_retrying,
@@ -10804,12 +10768,12 @@ async fn recovery_live_cases(
         results.push(json!({
             "test": "hls-put-timeout-recovers-after-restart",
             "passed": passed,
-            "retryStatusVisible": retry_status_visible,
-            "retryHealthVisible": retry_health_visible,
-            "retryHasError": retry_has_error,
-            "retryPhase": retry_phase,
-            "retryFailurePhase": retry_failure_phase,
-            "retryError": retry_error,
+            "retryStatusVisible": retry.status_visible,
+            "retryHealthVisible": retry.health_visible,
+            "retryHasError": retry.has_error,
+            "retryPhase": retry.phase,
+            "retryFailurePhase": retry.failure_phase,
+            "retryError": retry.last_error,
             "timeoutErrorVisible": timeout_error_visible,
             "artifactsFound": artifacts.is_ok(),
             "contentTypesCorrect": content_types_ok,
