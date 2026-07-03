@@ -2093,7 +2093,7 @@ fn parse_bitrate_specs(name: &str, default: &str) -> Result<Vec<BitrateSpec>, St
 
 fn parse_sweep_configs(name: &str) -> Result<Vec<SweepConfig>, String> {
     let raw = std::env::var(name).unwrap_or_else(|_| {
-        SWEEP_CONFIGS
+        sweep_configs()
             .iter()
             .map(|cfg| cfg.name)
             .collect::<Vec<_>>()
@@ -2105,7 +2105,7 @@ fn parse_sweep_configs(name: &str) -> Result<Vec<SweepConfig>, String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let config = SWEEP_CONFIGS
+        let config = sweep_configs()
             .iter()
             .copied()
             .find(|cfg| cfg.name == part)
@@ -2119,7 +2119,8 @@ fn parse_sweep_configs(name: &str) -> Result<Vec<SweepConfig>, String> {
 }
 
 /// Input fixture shape used by resource and bitrate sweep families.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SweepConfig {
     name: &'static str,
     ingest_proto: &'static str,
@@ -2127,27 +2128,14 @@ struct SweepConfig {
     multi_audio: bool,
 }
 
-const fn sweep_config(
-    name: &'static str,
-    ingest_proto: &'static str,
-    video_codec: &'static str,
-    multi_audio: bool,
-) -> SweepConfig {
-    SweepConfig {
-        name,
-        ingest_proto,
-        video_codec,
-        multi_audio,
-    }
-}
+static SWEEP_CONFIGS_FROM_DSL: OnceLock<Vec<SweepConfig>> = OnceLock::new();
 
-const SWEEP_CONFIGS: &[SweepConfig] = &[
-    sweep_config("h264-rtmp", "rtmp", "h264", false),
-    sweep_config("h264-srt", "srt", "h264", false),
-    sweep_config("h265-srt", "srt", "h265", false),
-    sweep_config("mixed.live.srt.h264.a2.bf2", "srt", "h264", true),
-    sweep_config("mixed.live.srt.h265.a2.bf2", "srt", "h265", true),
-];
+fn sweep_configs() -> &'static [SweepConfig] {
+    SWEEP_CONFIGS_FROM_DSL.get_or_init(|| {
+        serde_json::from_str(include_str!("test_harness/sweep_configs.json"))
+            .expect("embedded sweep_configs.json should define valid sweep rows")
+    })
+}
 
 /// Output shape used by resource-sweep scenarios.
 #[derive(Clone, Copy)]
@@ -2557,7 +2545,7 @@ async fn resource_sweep() -> Result<Value, String> {
         aggregates.push(run_resource_baseline(&env, &mut stack, &mut retained_publishers).await?);
     }
     if env.scenario_enabled("ingest-only") {
-        for config in SWEEP_CONFIGS {
+        for config in sweep_configs() {
             aggregates.push(
                 run_resource_ingest_only(&env, &mut stack, &mut retained_publishers, *config)
                     .await?,
@@ -2584,7 +2572,7 @@ async fn resource_sweep() -> Result<Value, String> {
                 &mut stack,
                 &mut retained_publishers,
                 &scenario.name,
-                SWEEP_CONFIGS[scenario.config_index],
+                sweep_configs()[scenario.config_index],
                 scenario.shape.output_kinds(),
             )
             .await?,
@@ -2717,7 +2705,7 @@ async fn run_branch_matrix_variant(env: &BranchMatrixEnv) -> Result<Value, Strin
                 &mut stack,
                 &mut retained_publishers,
                 &scenario.name,
-                SWEEP_CONFIGS[scenario.config_index],
+                sweep_configs()[scenario.config_index],
                 scenario.shape.output_kinds(),
             )
             .await?,
@@ -3642,9 +3630,9 @@ async fn run_resource_ingest_growth(
     let mut out = Vec::new();
     for index in 1..=max_ingests {
         let config = if mixed {
-            SWEEP_CONFIGS[index - 1]
+            sweep_configs()[index - 1]
         } else {
-            SWEEP_CONFIGS[1]
+            sweep_configs()[1]
         };
         let stream_key = format!("resource-growth-{index}-{}", config.name);
         let pipeline_id = create_resource_pipeline(
@@ -3659,7 +3647,7 @@ async fn run_resource_ingest_growth(
         pipeline_ids.push(pipeline_id);
         if env.ingest_counts.contains(&index) {
             let ingest_types = if mixed {
-                SWEEP_CONFIGS
+                sweep_configs()
                     .iter()
                     .take(index)
                     .map(|cfg| cfg.name)
