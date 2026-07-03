@@ -37,7 +37,8 @@ use mixed_manifest::*;
 use mixed_runner::*;
 
 /// Static metadata describing how a harness mode participates in suite runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct HarnessModeSpec {
     name: &'static str,
     suite_default: bool,
@@ -45,60 +46,14 @@ struct HarnessModeSpec {
     requires_bench_profile: bool,
 }
 
-const fn harness_mode(name: &'static str, suite_default: bool) -> HarnessModeSpec {
-    HarnessModeSpec {
-        name,
-        suite_default,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    }
-}
+static BUILTIN_MODE_SPECS_FROM_DSL: OnceLock<Vec<HarnessModeSpec>> = OnceLock::new();
 
-const fn bench_harness_mode(name: &'static str, suite_default: bool) -> HarnessModeSpec {
-    HarnessModeSpec {
-        name,
-        suite_default,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    }
+fn builtin_mode_specs() -> &'static [HarnessModeSpec] {
+    BUILTIN_MODE_SPECS_FROM_DSL.get_or_init(|| {
+        serde_json::from_str(include_str!("test_harness/mode_specs.json"))
+            .expect("embedded mode_specs.json should define valid mode rows")
+    })
 }
-
-const fn local_harness_mode(name: &'static str, suite_default: bool) -> HarnessModeSpec {
-    HarnessModeSpec {
-        name,
-        suite_default,
-        requires_port_namespace: false,
-        requires_bench_profile: false,
-    }
-}
-
-const BUILTIN_MODE_SPECS: &[HarnessModeSpec] = &[
-    harness_mode("api-smoke", true),
-    harness_mode("correctness", false),
-    harness_mode("correctness-rtmp", false),
-    harness_mode("correctness-srt", false),
-    harness_mode("correctness-srt-rtmp", true),
-    harness_mode("correctness-srt-rtmp-atrack", true),
-    harness_mode("correctness-srt-policy", true),
-    harness_mode("bframe-rtmp", true),
-    bench_harness_mode("ramp-family", true),
-    bench_harness_mode(MIXED_MATRIX_MODE, true),
-    bench_harness_mode(MIXED_FAST_BREADTH_MODE, false),
-    harness_mode("egress", false),
-    harness_mode("correctness-hevc-rtmp", true),
-    harness_mode("correctness-hevc-rtmp-atrack", true),
-    harness_mode("correctness-hevc-srt", true),
-    harness_mode("fault-egress-retry", false),
-    harness_mode("fault-output-stall", false),
-    harness_mode("fault-resilience", true),
-    harness_mode("file-live-edge", true),
-    local_harness_mode("signal-control", false),
-    harness_mode("recovery", false),
-    bench_harness_mode("resource-sweep", true),
-    bench_harness_mode("bitrate-sweep", true),
-    bench_harness_mode("branch-matrix", true),
-    bench_harness_mode("srt-crypto-matrix", true),
-];
 
 fn mixed_scenario_check_id(scenario: &str, check: &str) -> String {
     format!("{scenario}.{check}")
@@ -215,7 +170,7 @@ fn mixed_input_mode_spec(case: MixedInputCase) -> HarnessModeSpec {
 }
 
 fn mode_spec(name: &str) -> Option<HarnessModeSpec> {
-    BUILTIN_MODE_SPECS
+    builtin_mode_specs()
         .iter()
         .copied()
         .find(|spec| spec.name == name)
@@ -223,7 +178,7 @@ fn mode_spec(name: &str) -> Option<HarnessModeSpec> {
 }
 
 fn all_mode_specs() -> Vec<HarnessModeSpec> {
-    let mut specs = BUILTIN_MODE_SPECS.to_vec();
+    let mut specs = builtin_mode_specs().to_vec();
     specs.extend(
         mixed_input_cases()
             .iter()
