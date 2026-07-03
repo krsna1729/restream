@@ -664,6 +664,13 @@ write_agent_state \
     "$TARGET_CACHE_MODE" \
     "$WITH_INCREMENTAL"
 
+if [[ -x "$WORKTREE_PATH/scripts/setup-agent-skills.sh" ]]; then
+    info "generate local Claude Code skill shims"
+    run_cmd "$WORKTREE_PATH/scripts/setup-agent-skills.sh"
+else
+    info "skip skill shims: scripts/setup-agent-skills.sh not present in worktree"
+fi
+
 cat <<EOF
 agent-worktree: ready
   worktree: $WORKTREE_PATH

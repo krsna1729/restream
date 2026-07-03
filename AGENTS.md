@@ -43,6 +43,8 @@ scripts/agent-worktree.sh <id>
 source worktrees/<id>/.agent-state/setup.env
 scripts/agent-worktree.sh --cleanup <id>
 
+scripts/setup-agent-skills.sh
+
 npm run test:frontend
 npm run test:frontend:coverage
 npx playwright test
@@ -52,6 +54,34 @@ scripts/resource-limit target/debug/test_harness mixed-anchor
 ```
 
 Integration tests use a private loopback namespace by default; use `--no-netns` only when required.
+
+## Inner Loop
+
+Maximize useful work per token: act on the files in front of you, pull docs
+in on demand, and verify with the narrowest gate first.
+
+- Do not preload architecture docs for scoped fixes; read the doc a task
+  touches when it touches it (see Key References).
+- Skill bodies load on invocation; the canonical versions live in
+  `docs/agent-guidance/skills/`. Claude Code shims are generated locally by
+  `scripts/setup-agent-skills.sh` (`.claude/` is gitignored;
+  `agent-worktree.sh` runs it automatically in new worktrees).
+- Pick the first gate by files touched, then broaden to full
+  `scripts/resource-limit cargo test` only when the change crosses module
+  boundaries or shared contracts. Treat unrelated full-suite failures as
+  separate findings.
+
+| Files touched | First gate |
+|---|---|
+| one backend module | `scripts/resource-limit cargo test <module>` |
+| timestamp/DTS/PTS logic | `scripts/resource-limit cargo test av_sync` |
+| lifecycle in `engine.rs`, `srt.rs`, `ts_chunk_ring.rs`, `avio.rs`, `recording.rs`, `file_ingest.rs`, `external_transcoder.rs` | `scripts/check-concurrency-contract.sh` |
+| concurrency primitives or thread hops | `scripts/check-concurrency-proof-fast.sh` |
+| frontend/backend contract surface | `scripts/check-api-contract.sh` |
+| test media, fixtures, bench/harness setup | `scripts/check-fixture-discipline.sh` |
+| `public/ts/`, `public/input.css` | `npm run test:frontend` (plus Playwright for browser-only behavior) |
+| hot-path code | relevant `benches/` suite before and after |
+| RTMP/SRT/HLS protocol behavior | `test_harness` `correctness*` modes (protocol-test skill) |
 
 ## Build and Worktree Safety
 
@@ -116,15 +146,9 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 - Resolve media through `src/test_fixtures.rs`; add new committed assets to `REQUIRED_CHECKED_IN_FIXTURES`.
 - Prefer checked-in fixtures over inline media generation for tests, benches, and harness runs.
 - For concurrency or thread-hop changes, extend `scripts/check-concurrency-proof-fast.sh` or explain why the existing proof gate already covers the change.
-- For lifecycle, cancellation, stage-sharing, or thread-hop changes in `src/media/engine.rs`, `srt.rs`, `ts_chunk_ring.rs`, `avio.rs`, `recording.rs`, `file_ingest.rs`, or `external_transcoder.rs`, run `scripts/check-concurrency-contract.sh`.
 - If teardown or recovery semantics change, update the live harness assertion and the operator-visible status contract in the same change.
-- Run `scripts/check-fixture-discipline.sh` when touching test media, benchmark fixtures, or harness measurement setup.
-- Run `scripts/check-api-contract.sh` when touching frontend/backend contract code.
-- Run scoped tests first, then broaden only if the change crosses module boundaries or shared contracts.
-- Treat unrelated full-suite failures as separate findings.
+- Gate selection by files touched: see the Inner Loop table above.
 - Let Cargo keep normal test parallelism for correctness work; do not shard multiple heavy `cargo test` runs across the same tree without explicit isolation.
-- Use `cargo test av_sync` for timestamp/DTS/PTS changes and protocol-matched probes for RTMP/SRT work.
-- For UI changes, run `npm run test:frontend` plus relevant Playwright tests.
 - For scale or integration checks, use `scripts/resource-limit target/debug/test_harness mixed-anchor`.
 
 ## Autonomous Quality Loops
@@ -134,8 +158,9 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
   `docs/agent-guidance/skills/` (quality-loop, proof-sweep, resilience-sweep,
   modularity-sweep, perf-sweep, backlog-groom, plus supporting task skills).
 - The `docs/agent-guidance/skills/<name>/SKILL.md` files are canonical for
-  every agent. `.claude/skills/` holds thin Claude Code registration shims
-  only; agents without a skill system follow the canonical files directly.
+  every agent. Claude Code registration shims in `.claude/skills/` are
+  generated locally by `scripts/setup-agent-skills.sh` (not checked in);
+  agents without a skill system follow the canonical files directly.
 - One loop iteration = one backlog item, verified by gates, journaled, and
   committed on its own. Loops never push.
 - One quality loop per host. Multi-agent work goes through

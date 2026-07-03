@@ -29,8 +29,10 @@ same location, one directory per skill.
 
 All skill bodies are agent-neutral: the canonical instructions are the
 `docs/agent-guidance/skills/<name>/SKILL.md` files. Claude Code registers
-them through thin shims in `.claude/skills/<name>/SKILL.md`; agents without
-a skill system read the canonical files directly (wired via `AGENTS.md`
+them through thin shims in `.claude/skills/<name>/SKILL.md`, generated
+locally by `scripts/setup-agent-skills.sh` (`.claude/` is gitignored;
+`agent-worktree.sh` runs the generator automatically). Agents without a
+skill system read the canonical files directly (wired via `AGENTS.md`
 § Autonomous Quality Loops).
 
 ## Running it
@@ -90,5 +92,5 @@ Add work by writing well-formed items into `backlog.md` (format in
 backlog-groom). Add a new dimension by writing a sweep skill with the same
 shape — discovery recipe + execution recipe + binding rules — into
 `docs/agent-guidance/skills/<name>/SKILL.md`, mapping its tag in the
-quality-loop dispatch table, and adding a matching registration shim in
-`.claude/skills/<name>/SKILL.md`.
+quality-loop dispatch table, and re-running `scripts/setup-agent-skills.sh`
+to refresh the local registration shims.
