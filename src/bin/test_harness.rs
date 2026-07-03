@@ -44,157 +44,59 @@ struct HarnessModeSpec {
     requires_bench_profile: bool,
 }
 
-const BUILTIN_MODE_SPECS: &[HarnessModeSpec] = &[
+const fn harness_mode(name: &'static str, suite_default: bool) -> HarnessModeSpec {
     HarnessModeSpec {
-        name: "api-smoke",
-        suite_default: true,
+        name,
+        suite_default,
         requires_port_namespace: true,
         requires_bench_profile: false,
-    },
+    }
+}
+
+const fn bench_harness_mode(name: &'static str, suite_default: bool) -> HarnessModeSpec {
     HarnessModeSpec {
-        name: "correctness",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "correctness-rtmp",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "correctness-srt",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "correctness-srt-rtmp",
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "correctness-srt-rtmp-atrack",
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "correctness-srt-policy",
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "bframe-rtmp",
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "ramp-family",
-        suite_default: true,
+        name,
+        suite_default,
         requires_port_namespace: true,
         requires_bench_profile: true,
-    },
+    }
+}
+
+const fn local_harness_mode(name: &'static str, suite_default: bool) -> HarnessModeSpec {
     HarnessModeSpec {
-        name: MIXED_MATRIX_MODE,
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: MIXED_FAST_BREADTH_MODE,
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "egress",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "correctness-hevc-rtmp",
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "correctness-hevc-rtmp-atrack",
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "correctness-hevc-srt",
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "fault-egress-retry",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "fault-output-stall",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "fault-resilience",
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "file-live-edge",
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "signal-control",
-        suite_default: false,
+        name,
+        suite_default,
         requires_port_namespace: false,
         requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "recovery",
-        suite_default: false,
-        requires_port_namespace: true,
-        requires_bench_profile: false,
-    },
-    HarnessModeSpec {
-        name: "resource-sweep",
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "bitrate-sweep",
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "branch-matrix",
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
-    HarnessModeSpec {
-        name: "srt-crypto-matrix",
-        suite_default: true,
-        requires_port_namespace: true,
-        requires_bench_profile: true,
-    },
+    }
+}
+
+const BUILTIN_MODE_SPECS: &[HarnessModeSpec] = &[
+    harness_mode("api-smoke", true),
+    harness_mode("correctness", false),
+    harness_mode("correctness-rtmp", false),
+    harness_mode("correctness-srt", false),
+    harness_mode("correctness-srt-rtmp", true),
+    harness_mode("correctness-srt-rtmp-atrack", true),
+    harness_mode("correctness-srt-policy", true),
+    harness_mode("bframe-rtmp", true),
+    bench_harness_mode("ramp-family", true),
+    bench_harness_mode(MIXED_MATRIX_MODE, true),
+    bench_harness_mode(MIXED_FAST_BREADTH_MODE, false),
+    harness_mode("egress", false),
+    harness_mode("correctness-hevc-rtmp", true),
+    harness_mode("correctness-hevc-rtmp-atrack", true),
+    harness_mode("correctness-hevc-srt", true),
+    harness_mode("fault-egress-retry", false),
+    harness_mode("fault-output-stall", false),
+    harness_mode("fault-resilience", true),
+    harness_mode("file-live-edge", true),
+    local_harness_mode("signal-control", false),
+    harness_mode("recovery", false),
+    bench_harness_mode("resource-sweep", true),
+    bench_harness_mode("bitrate-sweep", true),
+    bench_harness_mode("branch-matrix", true),
+    bench_harness_mode("srt-crypto-matrix", true),
 ];
 
 fn mixed_scenario_check_id(scenario: &str, check: &str) -> String {
