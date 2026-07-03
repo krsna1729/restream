@@ -6399,6 +6399,32 @@ async fn expect_srt_read_failure(url: &str, label: &str) -> Result<Value, String
     }
 }
 
+async fn create_srt_policy_pipeline(
+    api: &RampApi,
+    name: &str,
+    policy: Value,
+) -> Result<String, String> {
+    create_srt_policy_pipeline_with_key(api, name, name, policy).await
+}
+
+async fn create_srt_policy_pipeline_with_key(
+    api: &RampApi,
+    name: &str,
+    stream_key: &str,
+    policy: Value,
+) -> Result<String, String> {
+    let pipeline = api
+        .post_json(
+            "/api/v1/pipelines",
+            json!({"name": name, "streamKey": stream_key, "srtIngestPolicy": policy}),
+        )
+        .await?;
+    pipeline["pipeline"]["id"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| format!("{name} pipeline id missing"))
+}
+
 async fn srt_policy_correctness() -> Result<Value, String> {
     let work_dir = artifact_path("correctness-srt-policy");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
@@ -6421,16 +6447,9 @@ async fn srt_policy_correctness() -> Result<Value, String> {
         json!({"srtIngest": {"mode": "plaintext", "pbkeylen": 16, "passphrase": null}}),
     )
     .await?;
-    let plain_inherit = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "policy-plain-inherit", "streamKey": "policy-plain-inherit", "srtIngestPolicy": {"mode": "inherit"}}),
-        )
-        .await?;
-    let plain_inherit_id = plain_inherit["pipeline"]["id"]
-        .as_str()
-        .ok_or("plain inherit pipeline id missing")?
-        .to_string();
+    let plain_inherit_id =
+        create_srt_policy_pipeline(&api, "policy-plain-inherit", json!({"mode": "inherit"}))
+            .await?;
     let mut plain_pub = spawn_publisher(
         &fixture,
         &srt_publish_url(ports.srt, "policy-plain-inherit", None),
@@ -6453,16 +6472,8 @@ async fn srt_policy_correctness() -> Result<Value, String> {
         json!({"srtIngest": {"mode": "encrypted", "passphrase": "globalpass123", "pbkeylen": 16}}),
     )
     .await?;
-    let global_enc = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "policy-global-enc", "streamKey": "policy-global-enc", "srtIngestPolicy": {"mode": "inherit"}}),
-        )
-        .await?;
-    let global_enc_id = global_enc["pipeline"]["id"]
-        .as_str()
-        .ok_or("global enc pipeline id missing")?
-        .to_string();
+    let global_enc_id =
+        create_srt_policy_pipeline(&api, "policy-global-enc", json!({"mode": "inherit"})).await?;
     let mut global_enc_pub = spawn_publisher(
         &fixture,
         &srt_publish_url(ports.srt, "policy-global-enc", Some(("globalpass123", 16))),
@@ -6503,16 +6514,9 @@ async fn srt_policy_correctness() -> Result<Value, String> {
         }),
     );
 
-    let plain_override = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "policy-plain-override", "streamKey": "policy-plain-override", "srtIngestPolicy": {"mode": "plaintext"}}),
-        )
-        .await?;
-    let plain_override_id = plain_override["pipeline"]["id"]
-        .as_str()
-        .ok_or("plain override pipeline id missing")?
-        .to_string();
+    let plain_override_id =
+        create_srt_policy_pipeline(&api, "policy-plain-override", json!({"mode": "plaintext"}))
+            .await?;
     let mut plain_override_pub = spawn_publisher(
         &fixture,
         &srt_publish_url(ports.srt, "policy-plain-override", None),
@@ -6550,20 +6554,13 @@ async fn srt_policy_correctness() -> Result<Value, String> {
             32u32,
         ),
     ] {
-        let pipeline = api
-            .post_json(
-                "/api/v1/pipelines",
-                json!({
-                    "name": label,
-                    "streamKey": stream_key,
-                    "srtIngestPolicy": {"mode": "encrypted", "passphrase": passphrase, "pbkeylen": pbkeylen}
-                }),
-            )
-            .await?;
-        let pipeline_id = pipeline["pipeline"]["id"]
-            .as_str()
-            .ok_or("encrypted override pipeline id missing")?
-            .to_string();
+        let pipeline_id = create_srt_policy_pipeline_with_key(
+            &api,
+            label,
+            stream_key,
+            json!({"mode": "encrypted", "passphrase": passphrase, "pbkeylen": pbkeylen}),
+        )
+        .await?;
         let mut pub_ok = spawn_publisher(
             &fixture,
             &srt_publish_url(ports.srt, stream_key, Some((passphrase, pbkeylen))),
