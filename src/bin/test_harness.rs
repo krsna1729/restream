@@ -9886,6 +9886,48 @@ fn input_disconnect_cleared(input: &Value) -> bool {
         && input["recentDisconnectError"] == false
 }
 
+/// Output retry state observed from both the public status endpoint and engine health.
+#[derive(Default)]
+struct OutputRetryObservation {
+    status_visible: bool,
+    health_visible: bool,
+    has_error: bool,
+}
+
+async fn wait_for_output_retry_observation(
+    api: &RampApi,
+    pipeline_id: &str,
+    output_id: &str,
+    timeout: Duration,
+) -> OutputRetryObservation {
+    let deadline = Instant::now() + timeout;
+    let mut observation = OutputRetryObservation::default();
+    while Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if let Ok(status) = api
+            .get_json(&format!(
+                "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
+            ))
+            .await
+        {
+            observation.status_visible = status["status"].as_str() == Some("retrying")
+                && status["retrying"].as_bool() == Some(true);
+            observation.has_error = status["lastError"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty());
+        }
+        if let Ok(health) = api.get_json("/api/v1/engine/health").await {
+            let output = &health["pipelines"][pipeline_id]["outputs"][output_id];
+            observation.health_visible = output["status"].as_str() == Some("retrying")
+                && output["retrying"].as_bool() == Some(true);
+        }
+        if observation.status_visible && observation.health_visible && observation.has_error {
+            break;
+        }
+    }
+    observation
+}
+
 async fn run_recovery_transient_case(
     api: &mut RampApi,
     ports: &TestPorts,
@@ -10831,35 +10873,11 @@ async fn recovery_live_cases(
         }
         let baseline_video = sink_metrics.video_count.load(Ordering::Relaxed);
 
-        let mut first_retry_status_visible = false;
-        let mut first_retry_health_visible = false;
-        let mut first_retry_has_error = false;
         if let Some(server) = sink_server.take() {
             stop_generalized_sink_server(server);
         }
-        let first_retry_deadline = Instant::now() + Duration::from_secs(10);
-        while Instant::now() < first_retry_deadline {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            if let Ok(status) = api
-                .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-                .await
-            {
-                first_retry_status_visible = status["status"].as_str() == Some("retrying")
-                    && status["retrying"].as_bool() == Some(true);
-                first_retry_has_error = status["lastError"]
-                    .as_str()
-                    .map(|message| !message.is_empty())
-                    .unwrap_or(false);
-            }
-            if let Ok(health) = api.get_json("/api/v1/engine/health").await {
-                let output = &health["pipelines"][&pid]["outputs"][&oid];
-                first_retry_health_visible = output["status"].as_str() == Some("retrying")
-                    && output["retrying"].as_bool() == Some(true);
-            }
-            if first_retry_status_visible && first_retry_health_visible && first_retry_has_error {
-                break;
-            }
-        }
+        let first_retry =
+            wait_for_output_retry_observation(api, &pid, &oid, Duration::from_secs(10)).await;
 
         sink_server = Some(start_generalized_sink_server(sink_port, sink_metrics.clone()).await?);
         let first_recovery_deadline = Instant::now() + Duration::from_secs(25);
@@ -10882,36 +10900,11 @@ async fn recovery_live_cases(
             }
         }
 
-        let mut second_retry_status_visible = false;
-        let mut second_retry_health_visible = false;
-        let mut second_retry_has_error = false;
         if let Some(server) = sink_server.take() {
             stop_generalized_sink_server(server);
         }
-        let second_retry_deadline = Instant::now() + Duration::from_secs(10);
-        while Instant::now() < second_retry_deadline {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            if let Ok(status) = api
-                .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-                .await
-            {
-                second_retry_status_visible = status["status"].as_str() == Some("retrying")
-                    && status["retrying"].as_bool() == Some(true);
-                second_retry_has_error = status["lastError"]
-                    .as_str()
-                    .map(|message| !message.is_empty())
-                    .unwrap_or(false);
-            }
-            if let Ok(health) = api.get_json("/api/v1/engine/health").await {
-                let output = &health["pipelines"][&pid]["outputs"][&oid];
-                second_retry_health_visible = output["status"].as_str() == Some("retrying")
-                    && output["retrying"].as_bool() == Some(true);
-            }
-            if second_retry_status_visible && second_retry_health_visible && second_retry_has_error
-            {
-                break;
-            }
-        }
+        let second_retry =
+            wait_for_output_retry_observation(api, &pid, &oid, Duration::from_secs(10)).await;
 
         sink_server = Some(start_generalized_sink_server(sink_port, sink_metrics.clone()).await?);
         let second_recovery_deadline = Instant::now() + Duration::from_secs(25);
@@ -10967,13 +10960,13 @@ async fn recovery_live_cases(
             .unwrap_or(0);
         let health_flapping = final_output_health["flapping"].as_bool().unwrap_or(false);
         let passed = baseline_video >= 10
-            && first_retry_status_visible
-            && first_retry_health_visible
-            && first_retry_has_error
+            && first_retry.status_visible
+            && first_retry.health_visible
+            && first_retry.has_error
             && first_recovered
-            && second_retry_status_visible
-            && second_retry_health_visible
-            && second_retry_has_error
+            && second_retry.status_visible
+            && second_retry.health_visible
+            && second_retry.has_error
             && second_recovered
             && final_status_running
             && !final_retrying
@@ -10985,8 +10978,8 @@ async fn recovery_live_cases(
         println!(
             "[fault] RTMP sink flaps surface recovered-output instability: {} (firstRetrying={} secondRetrying={} firstRecovered={} secondRecovered={} finalRetrying={} finalFlapping={} recentFailureCount={})",
             if passed { "PASS" } else { "FAIL" },
-            first_retry_status_visible,
-            second_retry_status_visible,
+            first_retry.status_visible,
+            second_retry.status_visible,
             first_recovered,
             second_recovered,
             final_retrying,
@@ -10997,13 +10990,13 @@ async fn recovery_live_cases(
             "test": "rtmp-sink-flaps-surface-output-instability",
             "passed": passed,
             "baselineVideo": baseline_video,
-            "firstRetrying": first_retry_status_visible,
-            "firstHealthRetrying": first_retry_health_visible,
-            "firstRetryError": first_retry_has_error,
+            "firstRetrying": first_retry.status_visible,
+            "firstHealthRetrying": first_retry.health_visible,
+            "firstRetryError": first_retry.has_error,
             "firstRecovered": first_recovered,
-            "secondRetrying": second_retry_status_visible,
-            "secondHealthRetrying": second_retry_health_visible,
-            "secondRetryError": second_retry_has_error,
+            "secondRetrying": second_retry.status_visible,
+            "secondHealthRetrying": second_retry.health_visible,
+            "secondRetryError": second_retry.has_error,
             "secondRecovered": second_recovered,
             "finalStatusRunning": final_status_running,
             "finalRetrying": final_retrying,
@@ -11066,33 +11059,9 @@ async fn recovery_live_cases(
 
         wait_for_api_input_media_ready(api, &sink_pid, Duration::from_secs(25)).await?;
 
-        let mut first_retry_status_visible = false;
-        let mut first_retry_health_visible = false;
-        let mut first_retry_has_error = false;
         delete_pipeline_v1(api, &sink_pid).await?;
-        let first_retry_deadline = Instant::now() + Duration::from_secs(12);
-        while Instant::now() < first_retry_deadline {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            if let Ok(status) = api
-                .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-                .await
-            {
-                first_retry_status_visible = status["status"].as_str() == Some("retrying")
-                    && status["retrying"].as_bool() == Some(true);
-                first_retry_has_error = status["lastError"]
-                    .as_str()
-                    .map(|message| !message.is_empty())
-                    .unwrap_or(false);
-            }
-            if let Ok(health) = api.get_json("/api/v1/engine/health").await {
-                let output = &health["pipelines"][&pid]["outputs"][&oid];
-                first_retry_health_visible = output["status"].as_str() == Some("retrying")
-                    && output["retrying"].as_bool() == Some(true);
-            }
-            if first_retry_status_visible && first_retry_health_visible && first_retry_has_error {
-                break;
-            }
-        }
+        let first_retry =
+            wait_for_output_retry_observation(api, &pid, &oid, Duration::from_secs(12)).await;
 
         sink_pid =
             create_pipeline_with_stream_key(api, "srt-sink-flap-target-2", sink_stream_key).await?;
@@ -11116,34 +11085,9 @@ async fn recovery_live_cases(
             }
         }
 
-        let mut second_retry_status_visible = false;
-        let mut second_retry_health_visible = false;
-        let mut second_retry_has_error = false;
         delete_pipeline_v1(api, &sink_pid).await?;
-        let second_retry_deadline = Instant::now() + Duration::from_secs(12);
-        while Instant::now() < second_retry_deadline {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            if let Ok(status) = api
-                .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-                .await
-            {
-                second_retry_status_visible = status["status"].as_str() == Some("retrying")
-                    && status["retrying"].as_bool() == Some(true);
-                second_retry_has_error = status["lastError"]
-                    .as_str()
-                    .map(|message| !message.is_empty())
-                    .unwrap_or(false);
-            }
-            if let Ok(health) = api.get_json("/api/v1/engine/health").await {
-                let output = &health["pipelines"][&pid]["outputs"][&oid];
-                second_retry_health_visible = output["status"].as_str() == Some("retrying")
-                    && output["retrying"].as_bool() == Some(true);
-            }
-            if second_retry_status_visible && second_retry_health_visible && second_retry_has_error
-            {
-                break;
-            }
-        }
+        let second_retry =
+            wait_for_output_retry_observation(api, &pid, &oid, Duration::from_secs(12)).await;
 
         sink_pid =
             create_pipeline_with_stream_key(api, "srt-sink-flap-target-3", sink_stream_key).await?;
@@ -11199,14 +11143,14 @@ async fn recovery_live_cases(
             .as_u64()
             .unwrap_or(0);
         let health_flapping = final_output_health["flapping"].as_bool().unwrap_or(false);
-        let passed = first_retry_status_visible
-            && first_retry_health_visible
-            && first_retry_has_error
+        let passed = first_retry.status_visible
+            && first_retry.health_visible
+            && first_retry.has_error
             && first_recovery_ready.is_ok()
             && first_recovered
-            && second_retry_status_visible
-            && second_retry_health_visible
-            && second_retry_has_error
+            && second_retry.status_visible
+            && second_retry.health_visible
+            && second_retry.has_error
             && second_recovery_ready.is_ok()
             && second_recovered
             && final_status_running
@@ -11219,8 +11163,8 @@ async fn recovery_live_cases(
         println!(
             "[fault] SRT sink flaps surface recovered-output instability: {} (firstRetrying={} secondRetrying={} firstRecovered={} secondRecovered={} finalRetrying={} finalFlapping={} recentFailureCount={})",
             if passed { "PASS" } else { "FAIL" },
-            first_retry_status_visible,
-            second_retry_status_visible,
+            first_retry.status_visible,
+            second_retry.status_visible,
             first_recovered,
             second_recovered,
             final_retrying,
@@ -11230,15 +11174,15 @@ async fn recovery_live_cases(
         results.push(json!({
             "test": "srt-sink-flaps-surface-output-instability",
             "passed": passed,
-            "firstRetrying": first_retry_status_visible,
-            "firstHealthRetrying": first_retry_health_visible,
-            "firstRetryError": first_retry_has_error,
+            "firstRetrying": first_retry.status_visible,
+            "firstHealthRetrying": first_retry.health_visible,
+            "firstRetryError": first_retry.has_error,
             "firstRecoveryReady": first_recovery_ready.is_ok(),
             "firstRecoveryReadyError": first_recovery_ready.err(),
             "firstRecovered": first_recovered,
-            "secondRetrying": second_retry_status_visible,
-            "secondHealthRetrying": second_retry_health_visible,
-            "secondRetryError": second_retry_has_error,
+            "secondRetrying": second_retry.status_visible,
+            "secondHealthRetrying": second_retry.health_visible,
+            "secondRetryError": second_retry.has_error,
             "secondRecoveryReady": second_recovery_ready.is_ok(),
             "secondRecoveryReadyError": second_recovery_ready.err(),
             "secondRecovered": second_recovered,
