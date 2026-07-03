@@ -9409,6 +9409,60 @@ fn input_disconnect_cleared(input: &Value) -> bool {
         && input["recentDisconnectError"] == false
 }
 
+/// Final output state checked by recovery/fault cells after perturbation.
+struct FinalOutputObservation {
+    status: Option<Value>,
+    health: Value,
+    running: bool,
+    retrying: bool,
+    error_cleared: bool,
+    recent_failure_count: u64,
+    flapping: bool,
+    health_recent_failure_count: u64,
+    health_flapping: bool,
+}
+
+async fn observe_final_output(
+    api: &RampApi,
+    pipeline_id: &str,
+    output_id: &str,
+) -> FinalOutputObservation {
+    let status = api
+        .get_json(&format!(
+            "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
+        ))
+        .await
+        .ok();
+    let health = api.get_json("/api/v1/engine/health").await.ok();
+    let output_health = health
+        .as_ref()
+        .map(|health| health["pipelines"][pipeline_id]["outputs"][output_id].clone())
+        .unwrap_or(Value::Null);
+
+    FinalOutputObservation {
+        running: status.as_ref().and_then(|status| status["status"].as_str()) == Some("running"),
+        retrying: status
+            .as_ref()
+            .and_then(|status| status["retrying"].as_bool())
+            .unwrap_or(false),
+        error_cleared: status
+            .as_ref()
+            .is_some_and(|status| status["lastError"].is_null()),
+        recent_failure_count: status
+            .as_ref()
+            .and_then(|status| status["recentFailureCount"].as_u64())
+            .unwrap_or(0),
+        flapping: status
+            .as_ref()
+            .and_then(|status| status["flapping"].as_bool())
+            .unwrap_or(false),
+        health_recent_failure_count: output_health["recentFailureCount"].as_u64().unwrap_or(0),
+        health_flapping: output_health["flapping"].as_bool().unwrap_or(false),
+        status,
+        health: output_health,
+    }
+}
+
 /// Output retry state observed from both the public status endpoint and engine health.
 struct OutputRetryObservation {
     status_visible: bool,
@@ -10247,21 +10301,7 @@ async fn recovery_live_cases(
             }
         }
 
-        let final_status = api
-            .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-            .await
-            .ok();
-        let final_status_running = final_status
-            .as_ref()
-            .and_then(|status| status["status"].as_str())
-            == Some("running");
-        let final_retrying = final_status
-            .as_ref()
-            .and_then(|status| status["retrying"].as_bool())
-            .unwrap_or(false);
-        let final_error_cleared = final_status
-            .as_ref()
-            .is_some_and(|status| status["lastError"].is_null());
+        let final_output = observe_final_output(api, &pid, &oid).await;
         let timeout_error_visible = {
             let lower = retry.last_error.to_ascii_lowercase();
             lower.contains("timed out") || lower.contains("deadline")
@@ -10277,9 +10317,9 @@ async fn recovery_live_cases(
             && artifacts.is_ok()
             && content_types_ok
             && recovered
-            && final_status_running
-            && !final_retrying
-            && final_error_cleared
+            && final_output.running
+            && !final_output.retrying
+            && final_output.error_cleared
             && final_bytes_out > 0;
         println!(
             "[fault] Hung HLS PUT sink recovers after timeout: {} (retrying={} healthRetrying={} timeoutVisible={} failurePhase={} recovered={} recoveryStatus={} finalRetrying={} bytesOut={})",
@@ -10290,7 +10330,7 @@ async fn recovery_live_cases(
             retry.failure_phase,
             recovered,
             recovery_status,
-            final_retrying,
+            final_output.retrying,
             final_bytes_out,
         );
         results.push(json!({
@@ -10307,11 +10347,11 @@ async fn recovery_live_cases(
             "contentTypesCorrect": content_types_ok,
             "recovered": recovered,
             "recoveryStatus": recovery_status,
-            "finalStatusRunning": final_status_running,
-            "finalRetrying": final_retrying,
-            "finalErrorCleared": final_error_cleared,
+            "finalStatusRunning": final_output.running,
+            "finalRetrying": final_output.retrying,
+            "finalErrorCleared": final_output.error_cleared,
             "finalBytesOut": final_bytes_out,
-            "finalStatus": final_status,
+            "finalStatus": final_output.status,
         }));
 
         stop_mixed_outputs(api, &pid, std::slice::from_ref(&oid)).await;
@@ -10389,38 +10429,7 @@ async fn recovery_live_cases(
         )
         .await;
 
-        let final_status = api
-            .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-            .await
-            .ok();
-        let final_health = api.get_json("/api/v1/engine/health").await.ok();
-        let final_output_health = final_health
-            .as_ref()
-            .map(|health| health["pipelines"][&pid]["outputs"][&oid].clone())
-            .unwrap_or(Value::Null);
-        let final_status_running = final_status
-            .as_ref()
-            .and_then(|status| status["status"].as_str())
-            == Some("running");
-        let final_retrying = final_status
-            .as_ref()
-            .and_then(|status| status["retrying"].as_bool())
-            .unwrap_or(false);
-        let final_error_cleared = final_status
-            .as_ref()
-            .is_some_and(|status| status["lastError"].is_null());
-        let final_recent_failure_count = final_status
-            .as_ref()
-            .and_then(|status| status["recentFailureCount"].as_u64())
-            .unwrap_or(0);
-        let final_flapping = final_status
-            .as_ref()
-            .and_then(|status| status["flapping"].as_bool())
-            .unwrap_or(false);
-        let health_recent_failure_count = final_output_health["recentFailureCount"]
-            .as_u64()
-            .unwrap_or(0);
-        let health_flapping = final_output_health["flapping"].as_bool().unwrap_or(false);
+        let final_output = observe_final_output(api, &pid, &oid).await;
         let passed = baseline_video >= RECOVERY_WARM_VIDEO_MIN
             && first_retry.status_visible
             && first_retry.health_visible
@@ -10430,13 +10439,13 @@ async fn recovery_live_cases(
             && second_retry.health_visible
             && second_retry.has_error
             && second_recovered
-            && final_status_running
-            && !final_retrying
-            && final_error_cleared
-            && final_recent_failure_count >= 2
-            && final_flapping
-            && health_recent_failure_count >= 2
-            && health_flapping;
+            && final_output.running
+            && !final_output.retrying
+            && final_output.error_cleared
+            && final_output.recent_failure_count >= 2
+            && final_output.flapping
+            && final_output.health_recent_failure_count >= 2
+            && final_output.health_flapping;
         println!(
             "[fault] RTMP sink flaps surface recovered-output instability: {} (firstRetrying={} secondRetrying={} firstRecovered={} secondRecovered={} finalRetrying={} finalFlapping={} recentFailureCount={})",
             if passed { "PASS" } else { "FAIL" },
@@ -10444,9 +10453,9 @@ async fn recovery_live_cases(
             second_retry.status_visible,
             first_recovered,
             second_recovered,
-            final_retrying,
-            final_flapping,
-            final_recent_failure_count,
+            final_output.retrying,
+            final_output.flapping,
+            final_output.recent_failure_count,
         );
         results.push(json!({
             "test": "rtmp-sink-flaps-surface-output-instability",
@@ -10460,15 +10469,15 @@ async fn recovery_live_cases(
             "secondHealthRetrying": second_retry.health_visible,
             "secondRetryError": second_retry.has_error,
             "secondRecovered": second_recovered,
-            "finalStatusRunning": final_status_running,
-            "finalRetrying": final_retrying,
-            "finalErrorCleared": final_error_cleared,
-            "finalRecentFailureCount": final_recent_failure_count,
-            "finalFlapping": final_flapping,
-            "healthRecentFailureCount": health_recent_failure_count,
-            "healthFlapping": health_flapping,
-            "finalStatus": final_status,
-            "finalHealthOutput": final_output_health,
+            "finalStatusRunning": final_output.running,
+            "finalRetrying": final_output.retrying,
+            "finalErrorCleared": final_output.error_cleared,
+            "finalRecentFailureCount": final_output.recent_failure_count,
+            "finalFlapping": final_output.flapping,
+            "healthRecentFailureCount": final_output.health_recent_failure_count,
+            "healthFlapping": final_output.health_flapping,
+            "finalStatus": final_output.status,
+            "finalHealthOutput": final_output.health,
         }));
 
         stop_mixed_outputs(api, &pid, std::slice::from_ref(&oid)).await;
@@ -10534,38 +10543,7 @@ async fn recovery_live_cases(
         let second_recovered =
             wait_for_output_running(api, &pid, &oid, Duration::from_secs(25)).await;
 
-        let final_status = api
-            .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-            .await
-            .ok();
-        let final_health = api.get_json("/api/v1/engine/health").await.ok();
-        let final_output_health = final_health
-            .as_ref()
-            .map(|health| health["pipelines"][&pid]["outputs"][&oid].clone())
-            .unwrap_or(Value::Null);
-        let final_status_running = final_status
-            .as_ref()
-            .and_then(|status| status["status"].as_str())
-            == Some("running");
-        let final_retrying = final_status
-            .as_ref()
-            .and_then(|status| status["retrying"].as_bool())
-            .unwrap_or(false);
-        let final_error_cleared = final_status
-            .as_ref()
-            .is_some_and(|status| status["lastError"].is_null());
-        let final_recent_failure_count = final_status
-            .as_ref()
-            .and_then(|status| status["recentFailureCount"].as_u64())
-            .unwrap_or(0);
-        let final_flapping = final_status
-            .as_ref()
-            .and_then(|status| status["flapping"].as_bool())
-            .unwrap_or(false);
-        let health_recent_failure_count = final_output_health["recentFailureCount"]
-            .as_u64()
-            .unwrap_or(0);
-        let health_flapping = final_output_health["flapping"].as_bool().unwrap_or(false);
+        let final_output = observe_final_output(api, &pid, &oid).await;
         let passed = first_retry.status_visible
             && first_retry.health_visible
             && first_retry.has_error
@@ -10576,13 +10554,13 @@ async fn recovery_live_cases(
             && second_retry.has_error
             && second_recovery_ready.is_ok()
             && second_recovered
-            && final_status_running
-            && !final_retrying
-            && final_error_cleared
-            && final_recent_failure_count >= 2
-            && final_flapping
-            && health_recent_failure_count >= 2
-            && health_flapping;
+            && final_output.running
+            && !final_output.retrying
+            && final_output.error_cleared
+            && final_output.recent_failure_count >= 2
+            && final_output.flapping
+            && final_output.health_recent_failure_count >= 2
+            && final_output.health_flapping;
         println!(
             "[fault] SRT sink flaps surface recovered-output instability: {} (firstRetrying={} secondRetrying={} firstRecovered={} secondRecovered={} finalRetrying={} finalFlapping={} recentFailureCount={})",
             if passed { "PASS" } else { "FAIL" },
@@ -10590,9 +10568,9 @@ async fn recovery_live_cases(
             second_retry.status_visible,
             first_recovered,
             second_recovered,
-            final_retrying,
-            final_flapping,
-            final_recent_failure_count,
+            final_output.retrying,
+            final_output.flapping,
+            final_output.recent_failure_count,
         );
         results.push(json!({
             "test": "srt-sink-flaps-surface-output-instability",
@@ -10609,15 +10587,15 @@ async fn recovery_live_cases(
             "secondRecoveryReady": second_recovery_ready.is_ok(),
             "secondRecoveryReadyError": second_recovery_ready.err(),
             "secondRecovered": second_recovered,
-            "finalStatusRunning": final_status_running,
-            "finalRetrying": final_retrying,
-            "finalErrorCleared": final_error_cleared,
-            "finalRecentFailureCount": final_recent_failure_count,
-            "finalFlapping": final_flapping,
-            "healthRecentFailureCount": health_recent_failure_count,
-            "healthFlapping": health_flapping,
-            "finalStatus": final_status,
-            "finalHealthOutput": final_output_health,
+            "finalStatusRunning": final_output.running,
+            "finalRetrying": final_output.retrying,
+            "finalErrorCleared": final_output.error_cleared,
+            "finalRecentFailureCount": final_output.recent_failure_count,
+            "finalFlapping": final_output.flapping,
+            "healthRecentFailureCount": final_output.health_recent_failure_count,
+            "healthFlapping": final_output.health_flapping,
+            "finalStatus": final_output.status,
+            "finalHealthOutput": final_output.health,
         }));
 
         stop_mixed_outputs(api, &pid, std::slice::from_ref(&oid)).await;
