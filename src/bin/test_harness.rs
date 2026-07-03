@@ -10387,31 +10387,7 @@ async fn recovery_live_cases(
         let pid = create_pipeline(api, "fault-rtmp-retry-gap").await?;
 
         let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
-        let sink_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-            .await
-            .map_err(|e| format!("sink bind {sink_port}: {e}"))?;
-        let sink_cancel = CancellationToken::new();
-        let sink_reader_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>> =
-            Arc::new(Mutex::new(Vec::new()));
-        let sink_reader_handles_inner = sink_reader_handles.clone();
-        let sink_metrics_inner = sink_metrics.clone();
-        let sink_cancel_inner = sink_cancel.clone();
-        let sink_task = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    result = sink_listener.accept() => {
-                        if let Ok((socket, _)) = result {
-                            let metrics = sink_metrics_inner.clone();
-                            let handle = tokio::spawn(async move {
-                                let _ = handle_generalized_sink_client(socket, metrics).await;
-                            });
-                            sink_reader_handles_inner.lock().unwrap().push(handle);
-                        }
-                    }
-                    _ = sink_cancel_inner.cancelled() => break,
-                }
-            }
-        });
+        let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
 
         let oid = create_mixed_output(
             api,
@@ -10445,14 +10421,7 @@ async fn recovery_live_cases(
         }
         let baseline_video = sink_metrics.video_count.load(Ordering::Relaxed);
 
-        sink_cancel.cancel();
-        sink_task.abort();
-        {
-            let handles = sink_reader_handles.lock().unwrap();
-            for handle in handles.iter() {
-                handle.abort();
-            }
-        }
+        stop_generalized_sink_server(sink_server);
 
         let retry =
             wait_for_output_retry_observation(api, &pid, &oid, Duration::from_secs(10)).await;
@@ -10496,31 +10465,8 @@ async fn recovery_live_cases(
             .is_some_and(|remaining| remaining > 0 && remaining <= 5_000);
 
         let recovery_metrics = Arc::new(GeneralizedSinkMetrics::default());
-        let recovery_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-            .await
-            .map_err(|e| format!("sink rebind {sink_port}: {e}"))?;
-        let recovery_cancel = CancellationToken::new();
-        let recovery_reader_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>> =
-            Arc::new(Mutex::new(Vec::new()));
-        let recovery_reader_handles_inner = recovery_reader_handles.clone();
-        let recovery_metrics_inner = recovery_metrics.clone();
-        let recovery_cancel_inner = recovery_cancel.clone();
-        let recovery_task = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    result = recovery_listener.accept() => {
-                        if let Ok((socket, _)) = result {
-                            let metrics = recovery_metrics_inner.clone();
-                            let handle = tokio::spawn(async move {
-                                let _ = handle_generalized_sink_client(socket, metrics).await;
-                            });
-                            recovery_reader_handles_inner.lock().unwrap().push(handle);
-                        }
-                    }
-                    _ = recovery_cancel_inner.cancelled() => break,
-                }
-            }
-        });
+        let recovery_server =
+            start_generalized_sink_server(sink_port, recovery_metrics.clone()).await?;
 
         let mut resumed_child = spawn_publisher(
             fixture_h264,
@@ -10625,14 +10571,7 @@ async fn recovery_live_cases(
             "finalInputSnapshot": final_input,
         }));
 
-        recovery_cancel.cancel();
-        recovery_task.abort();
-        {
-            let handles = recovery_reader_handles.lock().unwrap();
-            for handle in handles.iter() {
-                handle.abort();
-            }
-        }
+        stop_generalized_sink_server(recovery_server);
 
         let _ = api
             .post_json(
