@@ -568,16 +568,16 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
             run_mixed_anchor_config(&env, api, restream_pid, case, &mut resume).await
         }
         (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H265, false) => {
-            run_mixed_single_live_config(&env, api, restream_pid, case, &mut resume).await
+            run_mixed_live_config(&env, api, restream_pid, case, &mut resume).await
         }
         (MixedSourceAdapter::RtmpPublisher, MixedVideoCodec::H264, false) => {
-            run_mixed_single_live_config(&env, api, restream_pid, case, &mut resume).await
+            run_mixed_live_config(&env, api, restream_pid, case, &mut resume).await
         }
         (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H264, true) => {
-            run_mixed_srt_multi_config(&env, api, restream_pid, case, &mut resume).await
+            run_mixed_live_config(&env, api, restream_pid, case, &mut resume).await
         }
         (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H265, true) => {
-            run_mixed_srt_multi_config(&env, api, restream_pid, case, &mut resume).await
+            run_mixed_live_config(&env, api, restream_pid, case, &mut resume).await
         }
         _ => Err(format!(
             "unsupported mixed input case {}",
@@ -1045,7 +1045,7 @@ pub(super) async fn run_mixed_anchor_config(
     Ok(result)
 }
 
-pub(super) async fn run_mixed_single_live_config(
+pub(super) async fn run_mixed_live_config(
     env: &MixedEnv,
     api: &RampApi,
     restream_pid: u32,
@@ -1058,172 +1058,16 @@ pub(super) async fn run_mixed_single_live_config(
     let total = n * output_cases.len();
     let (pipeline_id, stream_key) = create_mixed_pipeline(api, cfg).await?;
 
-    let mut publisher = spawn_mixed_live_publisher(env, case, &stream_key).await?;
+    let mut publisher = if case.is_multi_track() {
+        spawn_mixed_srt_multi_publisher(env, case, &stream_key).await?
+    } else {
+        spawn_mixed_live_publisher(env, case, &stream_key).await?
+    };
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
-    let recording = verify_mixed_recording(env, api, cfg, &pipeline_id, case, resume).await?;
-    verify_optional_mixed_hls_preview(env, api, cfg, &pipeline_id, case, resume).await?;
-    let rss_baseline = process_rss_kb(restream_pid).await.unwrap_or(0);
-    if !env.skip_load {
-        snapshot_mixed(env, restream_pid, cfg, "baseline (input live, 0 outputs)").await?;
-    }
-
-    let mut output_ids = Vec::with_capacity(total);
-    let mut ffmpeg_signal_sinks = Vec::new();
-    let mut next_ffmpeg_signal_sink = 0usize;
-    add_mixed_output_cases(
-        env,
-        api,
-        &pipeline_id,
-        restream_pid,
-        cfg,
-        output_cases,
-        &mut ffmpeg_signal_sinks,
-        &mut next_ffmpeg_signal_sink,
-        &mut output_ids,
-    )
-    .await?;
-    verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, resume).await?;
-    if !ffmpeg_signal_sinks.is_empty() {
-        finish_ffmpeg_signal_sinks(env, &mut ffmpeg_signal_sinks, resume).await?;
-    }
-
-    let rss = record_mixed_rss_delta(env, cfg, restream_pid, rss_baseline, total, None).await?;
-
-    verify_mixed_output_cases(env, cfg, output_cases, resume).await?;
-
-    let (sink_probe_result, sink_probe_failure) =
-        run_optional_mixed_sink_probe(env, api, &pipeline_id, cfg, &mut output_ids, resume).await?;
-
-    stop_child(&mut publisher).await;
-    stop_mixed_outputs(api, &pipeline_id, &output_ids).await;
-    tokio::time::sleep(Duration::from_secs(8)).await;
-
-    if let Some(error) = sink_probe_failure {
-        return Err(error);
-    }
-
-    let mut result = json!({
-        "scenario": cfg,
-        "pipelineId": pipeline_id,
-        "nPerGroup": n,
-        "totalOutputs": total,
-        "rssDeltaKb": rss.delta_kb,
-        "perOutputKb": rss.per_output_kb,
-        "extFfmpegCount": rss.ffmpeg.count,
-        "extFfmpegRssKb": rss.ffmpeg.rss_kb,
-        "recording": recording,
-        "outputMatrix": mixed_output_matrix_json(output_cases),
-    });
-    if let Some(probe) = sink_probe_result {
-        result["sinkProbe"] = probe.summary;
-        result["sinkProbePassed"] = json!(probe.passed);
-    }
-    Ok(result)
-}
-
-pub(super) async fn run_mixed_srt_multi_config(
-    env: &MixedEnv,
-    api: &RampApi,
-    restream_pid: u32,
-    case: MixedInputCase,
-    resume: &mut MixedResume,
-) -> Result<Value, String> {
-    let n = env.n_per_group;
-    let cfg = case.scenario_id();
-    let output_cases = mixed_output_cases_for_input(case);
-    let total = n * output_cases.len();
-    let (pipeline_id, stream_key) = create_mixed_pipeline(api, cfg).await?;
-
-    let mut publisher = spawn_mixed_srt_multi_publisher(env, case, &stream_key).await?;
-    wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
-
     verify_optional_mixed_hls_preview(env, api, cfg, &pipeline_id, case, resume).await?;
     let recording = verify_mixed_recording(env, api, cfg, &pipeline_id, case, resume).await?;
-
-    // Verify adaptive ring sizing: 2-audio-track SRT stream → 100+ pkt/s →
-    // ring must have grown beyond the 1024-slot default and hold ≥ 5 s of depth.
-    let ring_check_id = mixed_scenario_check_id(cfg, "adaptive_source_ring");
-    if env.check_selected("ffprobe") || resume.allows(&ring_check_id) {
-        let started = Instant::now();
-        let telem_path = format!("/api/v1/pipelines/{pipeline_id}/telemetry");
-        let deadline = Instant::now() + Duration::from_secs(6);
-        let mut last_error = None;
-        loop {
-            match api.get_json(&telem_path).await {
-                Ok(telem) => {
-                    let snapshot = mixed_adaptive_ring_snapshot(&telem);
-                    if snapshot.passed || Instant::now() >= deadline {
-                        let passed = snapshot.passed;
-                        emit_mixed_timing(
-                            env,
-                            cfg,
-                            "input.adaptive_ring",
-                            if passed { "pass" } else { "fail" },
-                            started.elapsed(),
-                            Some(snapshot.to_json()),
-                        )?;
-                        emit_mixed_result(
-                            env,
-                            cfg,
-                            &ring_check_id,
-                            if passed { "pass" } else { "fail" },
-                            started.elapsed(),
-                            Some(json!({
-                                        "ringCapacity": snapshot.capacity,
-                                        "bufferDepthSecs": snapshot.depth_secs,
-                                        "ringResized": snapshot.resized,
-                                        "adequate": snapshot.adequate,
-                                        "overflows": snapshot.overflows,
-                            })),
-                        )?;
-                        if passed {
-                            log_mixed_ok(
-                                env,
-                                &format!(
-                                    "adaptive-ring {cfg}: cap={} depth={:.1}s \
-                             overflows={}{}",
-                                    snapshot.capacity,
-                                    snapshot.depth_secs,
-                                    snapshot.overflows,
-                                    if snapshot.resized { " [resized]" } else { "" }
-                                ),
-                            )?;
-                            break;
-                        } else {
-                            return Err(format!(
-                                "adaptive ring check failed for {cfg}: cap={} depth={:.1}s overflows={}",
-                                snapshot.capacity, snapshot.depth_secs, snapshot.overflows
-                            ));
-                        }
-                    }
-                }
-                Err(error) => {
-                    last_error = Some(error);
-                }
-            }
-            if Instant::now() >= deadline {
-                let error =
-                    last_error.unwrap_or_else(|| "telemetry never became ready".to_string());
-                emit_mixed_result(
-                    env,
-                    cfg,
-                    &ring_check_id,
-                    "fail",
-                    started.elapsed(),
-                    Some(json!({"error": error})),
-                )?;
-                emit_mixed_timing(
-                    env,
-                    cfg,
-                    "input.adaptive_ring",
-                    "fail",
-                    started.elapsed(),
-                    Some(json!({"error": error})),
-                )?;
-                return Err(format!("adaptive ring check failed for {cfg}: {error}"));
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
+    if case.is_multi_track() {
+        verify_optional_mixed_adaptive_ring(env, api, cfg, &pipeline_id, resume).await?;
     }
 
     let rss_baseline = process_rss_kb(restream_pid).await.unwrap_or(0);
@@ -1236,32 +1080,64 @@ pub(super) async fn run_mixed_srt_multi_config(
     let mut next_ffmpeg_srt_sink = 0usize;
     let mut ffmpeg_signal_sinks = Vec::new();
     let mut next_ffmpeg_signal_sink = 0usize;
-    add_mixed_multi_output_cases(
-        env,
-        api,
-        &pipeline_id,
-        restream_pid,
-        cfg,
-        output_cases,
-        &mut ffmpeg_srt_sinks,
-        &mut next_ffmpeg_srt_sink,
-        &mut ffmpeg_signal_sinks,
-        &mut next_ffmpeg_signal_sink,
-        &mut output_ids,
-    )
-    .await?;
+    if case.is_multi_track() {
+        add_mixed_multi_output_cases(
+            env,
+            api,
+            &pipeline_id,
+            restream_pid,
+            cfg,
+            output_cases,
+            &mut ffmpeg_srt_sinks,
+            &mut next_ffmpeg_srt_sink,
+            &mut ffmpeg_signal_sinks,
+            &mut next_ffmpeg_signal_sink,
+            &mut output_ids,
+        )
+        .await?;
+    } else {
+        add_mixed_output_cases(
+            env,
+            api,
+            &pipeline_id,
+            restream_pid,
+            cfg,
+            output_cases,
+            &mut ffmpeg_signal_sinks,
+            &mut next_ffmpeg_signal_sink,
+            &mut output_ids,
+        )
+        .await?;
+    }
     verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, resume).await?;
     if !ffmpeg_signal_sinks.is_empty() {
         finish_ffmpeg_signal_sinks(env, &mut ffmpeg_signal_sinks, resume).await?;
     }
 
-    let rss = record_mixed_rss_delta(env, cfg, restream_pid, rss_baseline, total, Some(2)).await?;
+    let rss_min_audio_tracks = case.is_multi_track().then_some(2);
+    let rss = record_mixed_rss_delta(
+        env,
+        cfg,
+        restream_pid,
+        rss_baseline,
+        total,
+        rss_min_audio_tracks,
+    )
+    .await?;
 
     if !ffmpeg_srt_sinks.is_empty() {
         finish_ffmpeg_srt_sinks(&mut ffmpeg_srt_sinks).await?;
     }
 
-    verify_mixed_output_cases_inner(env, cfg, output_cases, resume, true, true).await?;
+    verify_mixed_output_cases_inner(
+        env,
+        cfg,
+        output_cases,
+        resume,
+        case.is_multi_track(),
+        case.is_multi_track(),
+    )
+    .await?;
 
     let (sink_probe_result, sink_probe_failure) =
         run_optional_mixed_sink_probe(env, api, &pipeline_id, cfg, &mut output_ids, resume).await?;
@@ -1287,11 +1163,107 @@ pub(super) async fn run_mixed_srt_multi_config(
         "recording": recording,
         "outputMatrix": mixed_output_matrix_json(output_cases),
     });
+    if case.is_multi_track() {
+        result["audioTracks"] = json!(2);
+    }
     if let Some(probe) = sink_probe_result {
         result["sinkProbe"] = probe.summary;
         result["sinkProbePassed"] = json!(probe.passed);
     }
     Ok(result)
+}
+
+pub(super) async fn verify_optional_mixed_adaptive_ring(
+    env: &MixedEnv,
+    api: &RampApi,
+    cfg: &str,
+    pipeline_id: &str,
+    resume: &mut MixedResume,
+) -> Result<(), String> {
+    // Two-audio-track SRT streams exceed the default small-ring shape; keep
+    // this as a source-side verb so the live runner remains matrix-driven.
+    let ring_check_id = mixed_scenario_check_id(cfg, "adaptive_source_ring");
+    if !env.check_selected("ffprobe") && !resume.allows(&ring_check_id) {
+        return Ok(());
+    }
+
+    let started = Instant::now();
+    let telem_path = format!("/api/v1/pipelines/{pipeline_id}/telemetry");
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let mut last_error = None;
+    loop {
+        match api.get_json(&telem_path).await {
+            Ok(telem) => {
+                let snapshot = mixed_adaptive_ring_snapshot(&telem);
+                if snapshot.passed || Instant::now() >= deadline {
+                    let passed = snapshot.passed;
+                    emit_mixed_timing(
+                        env,
+                        cfg,
+                        "input.adaptive_ring",
+                        if passed { "pass" } else { "fail" },
+                        started.elapsed(),
+                        Some(snapshot.to_json()),
+                    )?;
+                    emit_mixed_result(
+                        env,
+                        cfg,
+                        &ring_check_id,
+                        if passed { "pass" } else { "fail" },
+                        started.elapsed(),
+                        Some(json!({
+                            "ringCapacity": snapshot.capacity,
+                            "bufferDepthSecs": snapshot.depth_secs,
+                            "ringResized": snapshot.resized,
+                            "adequate": snapshot.adequate,
+                            "overflows": snapshot.overflows,
+                        })),
+                    )?;
+                    if passed {
+                        log_mixed_ok(
+                            env,
+                            &format!(
+                                "adaptive-ring {cfg}: cap={} depth={:.1}s overflows={}{}",
+                                snapshot.capacity,
+                                snapshot.depth_secs,
+                                snapshot.overflows,
+                                if snapshot.resized { " [resized]" } else { "" }
+                            ),
+                        )?;
+                        return Ok(());
+                    }
+                    return Err(format!(
+                        "adaptive ring check failed for {cfg}: cap={} depth={:.1}s overflows={}",
+                        snapshot.capacity, snapshot.depth_secs, snapshot.overflows
+                    ));
+                }
+            }
+            Err(error) => {
+                last_error = Some(error);
+            }
+        }
+        if Instant::now() >= deadline {
+            let error = last_error.unwrap_or_else(|| "telemetry never became ready".to_string());
+            emit_mixed_result(
+                env,
+                cfg,
+                &ring_check_id,
+                "fail",
+                started.elapsed(),
+                Some(json!({"error": error})),
+            )?;
+            emit_mixed_timing(
+                env,
+                cfg,
+                "input.adaptive_ring",
+                "fail",
+                started.elapsed(),
+                Some(json!({"error": error})),
+            )?;
+            return Err(format!("adaptive ring check failed for {cfg}: {error}"));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }
 
 pub(super) async fn spawn_mixed_live_publisher(
@@ -1795,15 +1767,6 @@ pub(super) async fn add_mixed_multi_output_cases(
         }
     }
     Ok(())
-}
-
-pub(super) async fn verify_mixed_output_cases(
-    env: &MixedEnv,
-    cfg: &str,
-    cases: &[MixedOutputCase],
-    resume: &mut MixedResume,
-) -> Result<(), String> {
-    verify_mixed_output_cases_inner(env, cfg, cases, resume, false, false).await
 }
 
 pub(super) async fn verify_mixed_output_dimensions(
