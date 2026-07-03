@@ -170,6 +170,29 @@ fn flv_video_composition_time_ms(data: &[u8]) -> i32 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlvVideoPacketKind {
+    SequenceHeader,
+    Keyframe,
+    Interframe,
+}
+
+fn classify_flv_video_packet(data: &[u8]) -> Option<FlvVideoPacketKind> {
+    if data.len() < 2 || !matches!(data[0] & 0x0f, 7 | 12) {
+        return None;
+    }
+
+    if data[1] == 0 {
+        return Some(FlvVideoPacketKind::SequenceHeader);
+    }
+
+    Some(if (data[0] >> 4) == 1 {
+        FlvVideoPacketKind::Keyframe
+    } else {
+        FlvVideoPacketKind::Interframe
+    })
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct SpsVideoInfo {
     width: u32,
@@ -1200,11 +1223,9 @@ async fn handle_session_results(
                                 .fetch_add(data.len() as u64, Ordering::Relaxed);
                             active.ingest_metrics.record_in(data.len() as u64);
 
-                            let is_keyframe = if data.is_empty() {
-                                false
-                            } else {
-                                (data[0] >> 4) == 1
-                            };
+                            let packet_kind = classify_flv_video_packet(&data);
+                            let is_keyframe =
+                                matches!(packet_kind, Some(FlvVideoPacketKind::Keyframe));
 
                             let dts = timestamp.value as i64;
                             let pts = dts + flv_video_composition_time_ms(&data) as i64;
@@ -1214,7 +1235,9 @@ async fn handle_session_results(
                             }
 
                             // Cache video sequence header for play subscribers
-                            if data.len() >= 2 && (data[0] & 0x0F) == 7 && data[1] == 0 {
+                            if matches!(packet_kind, Some(FlvVideoPacketKind::SequenceHeader))
+                                && (data[0] & 0x0F) == 7
+                            {
                                 engine
                                     .cache_sequence_header(pipeline_id, true, data.clone())
                                     .await;
@@ -1717,6 +1740,7 @@ pub async fn start_rtmp_egress(
     let mut last_sent_sps: Option<Vec<u8>> = None;
     let mut video_ready = false;
     let mut audio_sequence_header_sent = false;
+    let mut deferred_audio_sequence_header: Option<Bytes> = None;
     let mut timestamp_guard = RtmpTimestampGuard::new();
     // Per-egress reusable conversion buffers — avoids per-frame Vec allocation.
     // Each task owns its own buffer; no sharing, no contention with transcoder.
@@ -1867,6 +1891,11 @@ pub async fn start_rtmp_egress(
                                         }
                                         audio_sequence_header_sent = true;
                                     }
+                                    deferred_audio_sequence_header = if audio_sequence_header_sent {
+                                        None
+                                    } else {
+                                        audio_sh
+                                    };
                                     is_publishing = true;
                                 }
                                 ClientSessionEvent::ConnectionRequestRejected { description } => {
@@ -1922,14 +1951,13 @@ pub async fn start_rtmp_egress(
                                 egress_error!("send", message);
                                 return;
                             }
-                            if packet.format == PayloadFormat::Raw
-                                && !audio_sequence_header_sent
-                                && let Some(track) = output_audio_track.as_ref()
+                            if !audio_sequence_header_sent
+                                && let Some(sequence_header) =
+                                    resolve_deferred_audio_sequence_header(
+                                        deferred_audio_sequence_header.as_ref(),
+                                        output_audio_track.as_ref(),
+                                    )
                             {
-                                let sequence_header = codec::build_aac_sequence_header(
-                                    track.sample_rate,
-                                    track.channels,
-                                );
                                 if let Ok(ClientSessionResult::OutboundResponse(p)) =
                                     session.publish_audio_data(
                                         sequence_header,
@@ -1945,6 +1973,7 @@ pub async fn start_rtmp_egress(
                                         return;
                                     }
                                     audio_sequence_header_sent = true;
+                                    deferred_audio_sequence_header = None;
                                 }
                             }
                             if packet.format == PayloadFormat::Raw && !audio_sequence_header_sent {
@@ -1956,13 +1985,6 @@ pub async fn start_rtmp_egress(
                             }
                         }
                         let mut ts = timestamp_guard.packet_timestamp(&packet);
-                        if packet.media_type == MediaType::Video
-                            && !video_ready
-                            && !packet.is_keyframe
-                            && packet.format != PayloadFormat::Raw
-                        {
-                            continue;
-                        }
                         let payload = if packet.format == PayloadFormat::Raw {
                             match packet.media_type {
                                 MediaType::Video => {
@@ -2067,11 +2089,31 @@ pub async fn start_rtmp_egress(
                                 }
                             }
                         } else {
+                            if packet.media_type == MediaType::Video
+                                && !video_ready
+                                && let Some(kind) = classify_flv_video_packet(&packet.payload)
+                            {
+                                match kind {
+                                    FlvVideoPacketKind::SequenceHeader => {}
+                                    FlvVideoPacketKind::Keyframe => {}
+                                    FlvVideoPacketKind::Interframe => continue,
+                                }
+                            } else if packet.media_type == MediaType::Video
+                                && !video_ready
+                                && !packet.is_keyframe
+                            {
+                                continue;
+                            }
                             packet.payload.clone()
                         };
                         let pkt = match packet.media_type {
                             MediaType::Video => {
-                                if !video_ready {
+                                if !video_ready
+                                    && !matches!(
+                                        classify_flv_video_packet(&packet.payload),
+                                        Some(FlvVideoPacketKind::SequenceHeader)
+                                    )
+                                {
                                     video_ready = true;
                                 }
                                 session.publish_video_data(payload, ts, packet.is_keyframe)
@@ -2245,6 +2287,20 @@ fn should_defer_audio_until_video_ready(video_ready: bool, ring_buffer: &RingBuf
     !video_ready && rtmp_output_waits_for_video(ring_buffer)
 }
 
+fn resolve_deferred_audio_sequence_header(
+    cached_sequence_header: Option<&Bytes>,
+    output_audio_track: Option<&AudioMeta>,
+) -> Option<Bytes> {
+    cached_sequence_header.cloned().or_else(|| {
+        output_audio_track.and_then(|track| {
+            track
+                .codec
+                .eq_ignore_ascii_case("aac")
+                .then(|| codec::build_aac_sequence_header(track.sample_rate, track.channels))
+        })
+    })
+}
+
 fn h264_sps_nalu(payload: &[u8]) -> Option<Vec<u8>> {
     codec::split_annexb_nalus(payload)
         .iter()
@@ -2344,6 +2400,23 @@ mod tests {
     }
 
     #[test]
+    fn classify_flv_video_packet_distinguishes_config_and_media() {
+        assert_eq!(
+            classify_flv_video_packet(&[0x17, 0x00, 0x00, 0x00, 0x00]),
+            Some(FlvVideoPacketKind::SequenceHeader)
+        );
+        assert_eq!(
+            classify_flv_video_packet(&[0x17, 0x01, 0x00, 0x00, 0x28]),
+            Some(FlvVideoPacketKind::Keyframe)
+        );
+        assert_eq!(
+            classify_flv_video_packet(&[0x27, 0x01, 0x00, 0x00, 0x28]),
+            Some(FlvVideoPacketKind::Interframe)
+        );
+        assert_eq!(classify_flv_video_packet(&[0x12, 0x01]), None);
+    }
+
+    #[test]
     fn startup_video_sequence_header_prefers_ring_parameter_sets() {
         let ring = Arc::new(RingBuffer::new(1024));
         ring.set_codec_hint("h264");
@@ -2430,6 +2503,38 @@ mod tests {
             should_send_startup_audio_sequence_header(false, &ring),
             "once the output ring has H.264 parameter sets, startup audio can follow the video config"
         );
+    }
+
+    #[test]
+    fn deferred_audio_sequence_header_prefers_cached_flv_header() {
+        let cached = Bytes::from_static(&[0xaf, 0x00, 0x12, 0x10]);
+        let track = AudioMeta {
+            codec: "aac".into(),
+            sample_rate: 48_000,
+            channels: 2,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_deferred_audio_sequence_header(Some(&cached), Some(&track)),
+            Some(cached)
+        );
+    }
+
+    #[test]
+    fn deferred_audio_sequence_header_synthesizes_aac_when_cache_missing() {
+        let track = AudioMeta {
+            codec: "aac".into(),
+            sample_rate: 48_000,
+            channels: 2,
+            ..Default::default()
+        };
+
+        let header = resolve_deferred_audio_sequence_header(None, Some(&track))
+            .expect("AAC tracks should synthesize a deferred sequence header");
+
+        assert_eq!(header[0], 0xaf);
+        assert_eq!(header[1], 0x00);
     }
 
     #[tokio::test]

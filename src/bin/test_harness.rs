@@ -623,6 +623,36 @@ impl MixedInputCase {
             .join(self.audio_layout_name())
             .join(self.reorder_name())
     }
+
+    /// Shared-stack family used by the breadth sweeps.
+    ///
+    /// Fast mode uses this today, and the full matrix can reuse the same
+    /// grouping once we promote shared-stack waves there too.
+    const fn shared_batch_group(self) -> MixedSharedBatchGroup {
+        match self.protocol() {
+            MixedInputProtocol::Rtmp => MixedSharedBatchGroup::LiveRtmp,
+            MixedInputProtocol::Srt => MixedSharedBatchGroup::LiveSrt,
+            MixedInputProtocol::File => MixedSharedBatchGroup::FileIngest,
+        }
+    }
+}
+
+/// Shared-stack family for mixed breadth waves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MixedSharedBatchGroup {
+    LiveRtmp,
+    LiveSrt,
+    FileIngest,
+}
+
+impl MixedSharedBatchGroup {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::LiveRtmp => "live-rtmp",
+            Self::LiveSrt => "live-srt",
+            Self::FileIngest => "file-ingest",
+        }
+    }
 }
 
 const MIXED_MATRIX_MODE: &str = "mixed.matrix";
@@ -828,6 +858,71 @@ const MIXED_FAST_BREADTH_CASES: &[MixedFastBreadthCase] = &[
     },
 ];
 
+/// Fast-mode shared-stack batches.
+///
+/// Each batch reuses one restream + mediamtx setup and runs up to two input
+/// pipelines concurrently inside that stack. This keeps setup cost low while
+/// preserving enough isolation to attribute failures by transport family.
+#[derive(Clone, Copy, Debug)]
+struct MixedFastBreadthBatch {
+    group: MixedSharedBatchGroup,
+    cases: &'static [MixedInputCase],
+}
+
+const MIXED_FAST_BREADTH_BATCHES: &[MixedFastBreadthBatch] = &[
+    MixedFastBreadthBatch {
+        group: MixedSharedBatchGroup::LiveRtmp,
+        cases: &[
+            MixedInputCase::new(
+                MixedInputProtocol::Rtmp,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A1,
+                MixedInputReorder::Bf0,
+            ),
+            MixedInputCase::new(
+                MixedInputProtocol::Rtmp,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A1,
+                MixedInputReorder::Bf2,
+            ),
+        ],
+    },
+    MixedFastBreadthBatch {
+        group: MixedSharedBatchGroup::LiveSrt,
+        cases: &[
+            MixedInputCase::new(
+                MixedInputProtocol::Srt,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A2,
+                MixedInputReorder::Bf0,
+            ),
+            MixedInputCase::new(
+                MixedInputProtocol::Srt,
+                MixedVideoCodec::H265,
+                MixedInputAudioLayout::A2,
+                MixedInputReorder::Bf2,
+            ),
+        ],
+    },
+    MixedFastBreadthBatch {
+        group: MixedSharedBatchGroup::FileIngest,
+        cases: &[
+            MixedInputCase::new(
+                MixedInputProtocol::File,
+                MixedVideoCodec::H264,
+                MixedInputAudioLayout::A1,
+                MixedInputReorder::Bf0,
+            ),
+            MixedInputCase::new(
+                MixedInputProtocol::File,
+                MixedVideoCodec::H265,
+                MixedInputAudioLayout::A2,
+                MixedInputReorder::Bf2,
+            ),
+        ],
+    },
+];
+
 fn mixed_input_mode_name(case: MixedInputCase) -> String {
     case.scenario_id().to_string()
 }
@@ -837,6 +932,13 @@ fn mixed_input_case_for_command(command: &str) -> Option<MixedInputCase> {
         .iter()
         .copied()
         .find(|case| case.scenario_id() == command)
+}
+
+fn mixed_fast_breadth_selected(case: MixedInputCase) -> &'static MixedFastBreadthCase {
+    MIXED_FAST_BREADTH_CASES
+        .iter()
+        .find(|selected| selected.case == case)
+        .unwrap_or_else(|| panic!("missing fast-breadth selection for {}", case.scenario_id()))
 }
 
 fn mixed_input_source_name(case: MixedInputCase) -> &'static str {
@@ -6832,6 +6934,7 @@ async fn probe_dims_ramp_with_cookie(url: &str, cookie: Option<&str>) -> Result<
 }
 
 /// Runtime configuration and artifact paths for one mixed-matrix scenario.
+#[derive(Clone)]
 struct MixedEnv {
     work_dir: PathBuf,
     media_dir: PathBuf,
@@ -6992,6 +7095,52 @@ impl MixedResume {
     }
 }
 
+/// Shared live stack for mixed harness waves.
+struct MixedHarnessStack {
+    env: MixedEnv,
+    mediamtx: Child,
+    restream: Child,
+    api: RampApi,
+    restream_pid: u32,
+}
+
+async fn start_mixed_harness_stack(env: MixedEnv) -> Result<MixedHarnessStack, String> {
+    std::fs::create_dir_all(&env.work_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&env.media_dir).map_err(|e| e.to_string())?;
+    let mediamtx = start_mixed_mediamtx(&env).await?;
+    let restream = start_mixed_restream(&env).await?;
+    let restream_pid = restream.id().ok_or("restream pid missing")?;
+    let mut api = RampApi::new(env.restream_http);
+    api.login().await?;
+    Ok(MixedHarnessStack {
+        env,
+        mediamtx,
+        restream,
+        api,
+        restream_pid,
+    })
+}
+
+async fn stop_mixed_harness_stack(stack: &mut MixedHarnessStack) {
+    stop_child(&mut stack.restream).await;
+    stop_child(&mut stack.mediamtx).await;
+}
+
+fn bind_mixed_env_to_shared_stack(env: &mut MixedEnv, stack_env: &MixedEnv) {
+    env.restream_http = stack_env.restream_http;
+    env.restream_rtmp = stack_env.restream_rtmp;
+    env.restream_srt = stack_env.restream_srt;
+    env.mtx_rtmp = stack_env.mtx_rtmp;
+    env.mtx_srt = stack_env.mtx_srt;
+    env.mtx_hls = stack_env.mtx_hls;
+    env.mtx_api = stack_env.mtx_api;
+    env.media_dir = stack_env.media_dir.clone();
+    env.restream_log = stack_env.restream_log.clone();
+    env.mediamtx_log = stack_env.mediamtx_log.clone();
+    env.mediamtx_config = stack_env.mediamtx_config.clone();
+    env.restream_db_path = stack_env.restream_db_path.clone();
+}
+
 async fn mixed_input_case_correctness(case: MixedInputCase) -> Result<Value, String> {
     let mode = mixed_input_mode_name(case);
     let env = MixedEnv::from_env_with_default_work_dir(&mode, mixed_input_default_work_dir(case));
@@ -7055,44 +7204,139 @@ async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
         total_output_cells += mixed_output_cases_for_input(*case).len();
     }
 
-    for selected in MIXED_FAST_BREADTH_CASES {
-        let case = selected.case;
-        let mode = mixed_input_mode_name(case);
-        let mut env = MixedEnv::from_env_with_default_work_dir(
-            &mode,
-            root.join(mixed_input_artifact_rel_dir(case)),
+    for batch in MIXED_FAST_BREADTH_BATCHES {
+        let stack_mode = format!("{MIXED_FAST_BREADTH_MODE}.{}", batch.group.as_str());
+        let stack_env = MixedEnv::from_env_with_default_work_dir(
+            &stack_mode,
+            root.join("_shared").join(batch.group.as_str()),
         );
-        if !explicit_n_per_group {
-            env.n_per_group = 1;
-        }
-        if !explicit_only_checks {
-            env.only_checks = Some(
-                selected
-                    .checks
-                    .iter()
-                    .map(|check| check.to_string())
-                    .collect(),
+        let mut stack = start_mixed_harness_stack(stack_env).await?;
+
+        let wave_started = Instant::now();
+        let mut batch_cases = batch.cases.iter().copied();
+        let mut wave_index = 0usize;
+        while let Some(case_a) = batch_cases.next() {
+            wave_index += 1;
+            let case_b = batch_cases.next();
+
+            let selected_a = mixed_fast_breadth_selected(case_a);
+            let mut env_a = MixedEnv::from_env_with_default_work_dir(
+                case_a.scenario_id(),
+                root.join(mixed_input_artifact_rel_dir(case_a)),
             );
-        }
-        if !explicit_skip_load {
-            env.skip_load = true;
-        }
-        if !explicit_collect_failures {
-            env.collect_failures = true;
-        }
-        if !explicit_assertion_log {
-            env.assertion_log = Some(root.join("assertions.jsonl"));
-        }
-        covered_output_cells += mixed_output_cases_for_input(case).len();
-        match run_mixed_input_case_with_env(case, env).await {
-            Ok(mut result) => {
-                result["fastBreadthRationale"] = json!(selected.rationale);
-                results.push(result);
+            bind_mixed_env_to_shared_stack(&mut env_a, &stack.env);
+            if !explicit_n_per_group {
+                env_a.n_per_group = 1;
             }
-            Err(error) => {
-                failures.push(format!("{}: {error}", case.scenario_id()));
+            if !explicit_only_checks {
+                env_a.only_checks = Some(
+                    selected_a
+                        .checks
+                        .iter()
+                        .map(|check| check.to_string())
+                        .collect(),
+                );
+            }
+            if !explicit_skip_load {
+                env_a.skip_load = true;
+            }
+            if !explicit_collect_failures {
+                env_a.collect_failures = true;
+            }
+            if !explicit_assertion_log {
+                env_a.assertion_log = Some(root.join("assertions.jsonl"));
+            }
+            covered_output_cells += mixed_output_cases_for_input(case_a).len();
+
+            if let Some(case_b) = case_b {
+                let selected_b = mixed_fast_breadth_selected(case_b);
+                let mut env_b = MixedEnv::from_env_with_default_work_dir(
+                    case_b.scenario_id(),
+                    root.join(mixed_input_artifact_rel_dir(case_b)),
+                );
+                bind_mixed_env_to_shared_stack(&mut env_b, &stack.env);
+                if !explicit_n_per_group {
+                    env_b.n_per_group = 1;
+                }
+                if !explicit_only_checks {
+                    env_b.only_checks = Some(
+                        selected_b
+                            .checks
+                            .iter()
+                            .map(|check| check.to_string())
+                            .collect(),
+                    );
+                }
+                if !explicit_skip_load {
+                    env_b.skip_load = true;
+                }
+                if !explicit_collect_failures {
+                    env_b.collect_failures = true;
+                }
+                if !explicit_assertion_log {
+                    env_b.assertion_log = Some(root.join("assertions.jsonl"));
+                }
+                covered_output_cells += mixed_output_cases_for_input(case_b).len();
+
+                let (result_a, result_b) = tokio::join!(
+                    run_mixed_input_case_on_active_stack(
+                        case_a,
+                        env_a,
+                        &stack.api,
+                        stack.restream_pid,
+                    ),
+                    run_mixed_input_case_on_active_stack(
+                        case_b,
+                        env_b,
+                        &stack.api,
+                        stack.restream_pid,
+                    ),
+                );
+                for (case, selected, result) in [
+                    (case_a, selected_a, result_a),
+                    (case_b, selected_b, result_b),
+                ] {
+                    match result {
+                        Ok(mut value) => {
+                            value["fastBreadthRationale"] = json!(selected.rationale);
+                            value["batchGroup"] = json!(batch.group.as_str());
+                            value["wave"] = json!(wave_index);
+                            results.push(value);
+                        }
+                        Err(error) => failures.push(format!("{}: {error}", case.scenario_id())),
+                    }
+                }
+            } else {
+                match run_mixed_input_case_on_active_stack(
+                    case_a,
+                    env_a,
+                    &stack.api,
+                    stack.restream_pid,
+                )
+                .await
+                {
+                    Ok(mut value) => {
+                        value["fastBreadthRationale"] = json!(selected_a.rationale);
+                        value["batchGroup"] = json!(batch.group.as_str());
+                        value["wave"] = json!(wave_index);
+                        results.push(value);
+                    }
+                    Err(error) => failures.push(format!("{}: {error}", case_a.scenario_id())),
+                }
             }
         }
+        emit_mixed_timing(
+            &stack.env,
+            MIXED_FAST_BREADTH_MODE,
+            &format!("batch.{}", batch.group.as_str()),
+            if failures.is_empty() { "pass" } else { "fail" },
+            wave_started.elapsed(),
+            Some(json!({
+                "group": batch.group.as_str(),
+                "cases": batch.cases.iter().map(|case| case.scenario_id()).collect::<Vec<_>>(),
+            })),
+        )?;
+        stop_mixed_harness_stack(&mut stack).await;
     }
 
     if !failures.is_empty() {
@@ -7129,6 +7373,13 @@ async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
             } else {
                 root.join("assertions.jsonl").to_string_lossy().into_owned().into()
             },
+            "sharedBatches": MIXED_FAST_BREADTH_BATCHES.iter().map(|batch| {
+                json!({
+                    "group": batch.group.as_str(),
+                    "cases": batch.cases.iter().map(|case| case.scenario_id()).collect::<Vec<_>>(),
+                    "maxConcurrentPipelines": batch.cases.len().min(2),
+                })
+            }).collect::<Vec<_>>(),
         },
         "inputCases": MIXED_FAST_BREADTH_CASES.iter().map(|selected| {
             let case = selected.case;
@@ -7153,6 +7404,43 @@ async fn run_mixed_input_case_with_env(
     case: MixedInputCase,
     env: MixedEnv,
 ) -> Result<Value, String> {
+    let stack_started = Instant::now();
+    let mut stack = start_mixed_harness_stack(env).await?;
+    emit_mixed_timing(
+        &stack.env,
+        case.scenario_id(),
+        "stack.start",
+        "pass",
+        stack_started.elapsed(),
+        None,
+    )?;
+    let config = run_mixed_input_case_on_active_stack(
+        case,
+        stack.env.clone(),
+        &stack.api,
+        stack.restream_pid,
+    )
+    .await;
+
+    let cleanup_started = Instant::now();
+    stop_mixed_harness_stack(&mut stack).await;
+    emit_mixed_timing(
+        &stack.env,
+        case.scenario_id(),
+        "stack.cleanup",
+        "pass",
+        cleanup_started.elapsed(),
+        None,
+    )?;
+    config
+}
+
+async fn run_mixed_input_case_on_active_stack(
+    case: MixedInputCase,
+    env: MixedEnv,
+    api: &RampApi,
+    restream_pid: u32,
+) -> Result<Value, String> {
     let cfg = case.scenario_id();
     let scenario_started = Instant::now();
     if env.n_per_group == 0 {
@@ -7160,42 +7448,27 @@ async fn run_mixed_input_case_with_env(
     }
     std::fs::create_dir_all(&env.work_dir).map_err(|e| e.to_string())?;
     ensure_mixed_artifacts(&env)?;
-
-    let stack_started = Instant::now();
-    let mut mediamtx = start_mixed_mediamtx(&env).await?;
-    let mut restream = start_mixed_restream(&env).await?;
-    let restream_pid = restream.id().unwrap_or(0);
-    let mut api = RampApi::new(env.restream_http);
-    api.login().await?;
-    emit_mixed_timing(
-        &env,
-        cfg,
-        "stack.start",
-        "pass",
-        stack_started.elapsed(),
-        None,
-    )?;
     let mut resume = MixedResume::new(env.resume_from.clone());
 
     let config_started = Instant::now();
     let config = match (case.protocol(), case.codec(), case.is_multi_track()) {
         (MixedInputProtocol::File, _, _) => {
-            run_mixed_file_config(&env, &api, restream_pid, case, &mut resume).await
+            run_mixed_file_config(&env, api, restream_pid, case, &mut resume).await
         }
         (MixedInputProtocol::Srt, MixedVideoCodec::H264, false) => {
-            run_mixed_anchor_config(&env, &api, restream_pid, case, &mut resume).await
+            run_mixed_anchor_config(&env, api, restream_pid, case, &mut resume).await
         }
         (MixedInputProtocol::Srt, MixedVideoCodec::H265, false) => {
-            run_mixed_h265_srt_config(&env, &api, restream_pid, case, &mut resume).await
+            run_mixed_h265_srt_config(&env, api, restream_pid, case, &mut resume).await
         }
         (MixedInputProtocol::Rtmp, MixedVideoCodec::H264, false) => {
-            run_mixed_h264_rtmp_config(&env, &api, restream_pid, case, &mut resume).await
+            run_mixed_h264_rtmp_config(&env, api, restream_pid, case, &mut resume).await
         }
         (MixedInputProtocol::Srt, MixedVideoCodec::H264, true) => {
-            run_mixed_srt_multi_config(&env, &api, restream_pid, case, &mut resume).await
+            run_mixed_srt_multi_config(&env, api, restream_pid, case, &mut resume).await
         }
         (MixedInputProtocol::Srt, MixedVideoCodec::H265, true) => {
-            run_mixed_srt_multi_config(&env, &api, restream_pid, case, &mut resume).await
+            run_mixed_srt_multi_config(&env, api, restream_pid, case, &mut resume).await
         }
         _ => Err(format!(
             "unsupported mixed input case {}",
@@ -7208,18 +7481,6 @@ async fn run_mixed_input_case_with_env(
         "scenario.execute",
         if config.is_ok() { "pass" } else { "fail" },
         config_started.elapsed(),
-        None,
-    )?;
-
-    let cleanup_started = Instant::now();
-    stop_child(&mut restream).await;
-    stop_child(&mut mediamtx).await;
-    emit_mixed_timing(
-        &env,
-        cfg,
-        "stack.cleanup",
-        "pass",
-        cleanup_started.elapsed(),
         None,
     )?;
     emit_mixed_timing(
@@ -7245,6 +7506,7 @@ async fn run_mixed_input_case_with_env(
                 "reorder": mixed_input_reorder_name(case),
                 "sourceHasBframes": case.source_has_b_frames(),
             },
+            "sharedStackGroup": case.shared_batch_group().as_str(),
             "configs": [config],
             "artifacts": {
                 "workDir": env.work_dir,
@@ -18710,6 +18972,34 @@ stream|index=1|codec_type=audio\n";
             selected_cells < total_cells / 2,
             "fast breadth should stay quick enough to run before the exhaustive matrix"
         );
+    }
+
+    #[test]
+    fn mixed_fast_breadth_batches_reuse_three_shared_stacks() {
+        assert_eq!(MIXED_FAST_BREADTH_BATCHES.len(), 3);
+        assert_eq!(
+            MIXED_FAST_BREADTH_BATCHES
+                .iter()
+                .map(|batch| batch.group.as_str())
+                .collect::<Vec<_>>(),
+            vec!["live-rtmp", "live-srt", "file-ingest"]
+        );
+        for batch in MIXED_FAST_BREADTH_BATCHES {
+            assert!(
+                !batch.cases.is_empty() && batch.cases.len() <= 2,
+                "{} should stay within the two-pipeline shared-stack target",
+                batch.group.as_str()
+            );
+            for case in batch.cases {
+                assert_eq!(
+                    case.shared_batch_group(),
+                    batch.group,
+                    "{} should be packed into its matching shared stack family",
+                    case.scenario_id()
+                );
+                mixed_fast_breadth_selected(*case);
+            }
+        }
     }
 
     #[test]
