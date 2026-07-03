@@ -8530,18 +8530,16 @@ async fn fault_rtmp_egress_sink_disappear(
         }
     }
     stop_generalized_sink_server(recovered_server);
-    let final_status = api
-        .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-        .await
-        .ok();
-    let final_retrying = final_status
-        .as_ref()
-        .and_then(|status| status["retrying"].as_bool())
-        .unwrap_or(false);
+    let final_output = observe_final_output(api, &pid, &oid).await;
     let retry_phase_ok = output_retry_or_cleanup_phase_ok(&retry);
     println!(
         "[fault] RTMP egress sink disappear: {} (phase={}, hasError={}, sawRetrying={}, healthSawRetrying={}, recovered={}, recoveryStatus={}, finalRetrying={}, {:.1}s)",
-        if retry_phase_ok && recovered && saw_retrying && retry.health_visible && !final_retrying {
+        if retry_phase_ok
+            && recovered
+            && saw_retrying
+            && retry.health_visible
+            && !final_output.retrying
+        {
             "PASS"
         } else {
             "FAIL"
@@ -8552,7 +8550,7 @@ async fn fault_rtmp_egress_sink_disappear(
         retry.health_visible,
         recovered,
         recovery_status,
-        final_retrying,
+        final_output.retrying,
         elapsed.as_secs_f64()
     );
 
@@ -8560,7 +8558,7 @@ async fn fault_rtmp_egress_sink_disappear(
 
     Ok(json!({
         "test": "rtmp-egress-sink-disappear",
-        "passed": retry_phase_ok && recovered && saw_retrying && retry.health_visible && !final_retrying,
+        "passed": retry_phase_ok && recovered && saw_retrying && retry.health_visible && !final_output.retrying,
         "phase": retry.phase,
         "hasError": retry.has_error,
         "elapsedMs": elapsed.as_millis(),
@@ -8570,7 +8568,7 @@ async fn fault_rtmp_egress_sink_disappear(
         "retryBackoffMs": retry.backoff_ms,
         "recovered": recovered,
         "recoveryStatus": recovery_status,
-        "finalRetrying": final_retrying,
+        "finalRetrying": final_output.retrying,
     }))
 }
 
@@ -8634,18 +8632,11 @@ async fn fault_srt_egress_sink_disappear(
         wait_for_output_retry_or_cleanup_observation(api, &pid, &oid, Duration::from_secs(10))
             .await;
     let elapsed = started.elapsed();
-    let final_status = api
-        .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-        .await
-        .ok();
-    let final_retrying = final_status
-        .as_ref()
-        .and_then(|status| status["retrying"].as_bool())
-        .unwrap_or(false);
+    let final_output = observe_final_output(api, &pid, &oid).await;
     let retry_phase_ok = output_retry_or_cleanup_phase_ok(&retry);
     println!(
         "[fault] SRT egress sink disappear: {} (phase={}, hasError={}, sawRetrying={}, healthSawRetrying={}, finalRetrying={}, {:.1}s)",
-        if retry_phase_ok && retry.status_visible && retry.health_visible && final_retrying {
+        if retry_phase_ok && retry.status_visible && retry.health_visible && final_output.retrying {
             "PASS"
         } else {
             "FAIL"
@@ -8654,7 +8645,7 @@ async fn fault_srt_egress_sink_disappear(
         retry.has_error,
         retry.status_visible,
         retry.health_visible,
-        final_retrying,
+        final_output.retrying,
         elapsed.as_secs_f64()
     );
 
@@ -8662,7 +8653,7 @@ async fn fault_srt_egress_sink_disappear(
 
     Ok(json!({
         "test": "srt-egress-sink-disappear",
-        "passed": retry_phase_ok && retry.status_visible && retry.health_visible && final_retrying,
+        "passed": retry_phase_ok && retry.status_visible && retry.health_visible && final_output.retrying,
         "phase": retry.phase,
         "hasError": retry.has_error,
         "elapsedMs": elapsed.as_millis(),
@@ -8670,7 +8661,7 @@ async fn fault_srt_egress_sink_disappear(
         "healthSawRetrying": retry.health_visible,
         "retryAttempts": retry.attempts,
         "retryBackoffMs": retry.backoff_ms,
-        "finalRetrying": final_retrying,
+        "finalRetrying": final_output.retrying,
     }))
 }
 
