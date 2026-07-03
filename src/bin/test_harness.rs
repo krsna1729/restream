@@ -13342,7 +13342,9 @@ async fn hevc_srt_passthrough_correctness() -> Result<Value, String> {
         .as_array()
         .and_then(|s| s.iter().find(|s| s["codec_type"] == "video"))
         .and_then(|s| s["codec_name"].as_str())
-        .is_some_and(|codec| codec == "hevc" || codec == "h265");
+        .is_some_and(|codec| {
+            restream::domain::output_spec::VideoCodecKind::from_codec_name(codec).is_hevc()
+        });
     let audio_aac = probe["streams"]
         .as_array()
         .and_then(|s| s.iter().find(|s| s["codec_type"] == "audio"))

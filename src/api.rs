@@ -48,6 +48,7 @@ use crate::application::transcode_profiles::save_transcode_profiles;
 use crate::db;
 use crate::diag;
 use crate::domain::ingest_security::IngestSecurityConfig;
+use crate::domain::output_spec::{OutputEncodingSpec, OutputUrlScheme};
 use crate::domain::srt_ingest::{SrtGlobalIngestConfig, SrtPipelineIngestConfig};
 use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::events;
@@ -1649,12 +1650,7 @@ struct OutputPayload {
 }
 
 fn is_supported_output_url(url: &str) -> bool {
-    url.starts_with("rtmp://")
-        || url.starts_with("rtmps://")
-        || url.starts_with("srt://")
-        || url.starts_with("hls://")
-        || url.starts_with("http://")
-        || url.starts_with("https://")
+    OutputUrlScheme::from_url(url).is_supported_output()
 }
 
 const OUTPUT_URL_SCHEME_ERROR: &str = "Invalid URL scheme. Supported schemes are rtmp://, rtmps://, srt://, hls://, http://, and https://";
@@ -1664,11 +1660,7 @@ const CUSTOM_OUTPUT_ENCODING_ERROR: &str =
     "Custom output encoding is not available yet; choose source or a preset encoding";
 
 fn is_custom_output_encoding(encoding: &str) -> bool {
-    encoding
-        .split('+')
-        .next()
-        .map(|video| video.trim().eq_ignore_ascii_case("custom"))
-        .unwrap_or(false)
+    OutputEncodingSpec::parse(encoding).is_custom_output()
 }
 
 fn normalize_monitoring_url(url: Option<&str>) -> Option<String> {
@@ -1681,7 +1673,7 @@ fn normalize_monitoring_url(url: Option<&str>) -> Option<String> {
 }
 
 fn is_supported_monitoring_url(url: &str) -> bool {
-    url.starts_with("http://") || url.starts_with("https://") || url.starts_with("srt://")
+    OutputUrlScheme::from_url(url).supports_monitoring()
 }
 
 #[derive(Deserialize)]
@@ -5971,9 +5963,9 @@ async fn agent_media_inventory(state: &AppState) -> serde_json::Value {
 #[cfg(feature = "agent-plane")]
 fn agent_desired_vs_actual(
     pipelines: &[Pipeline],
-    outputs: &[Output],
+    outputs: &[crate::types::Output],
     ingests: &[Ingest],
-    jobs: &[Job],
+    jobs: &[crate::types::Job],
     recording_enabled: &std::collections::HashMap<String, bool>,
     health: &serde_json::Value,
 ) -> serde_json::Value {
@@ -6094,7 +6086,7 @@ fn agent_desired_vs_actual(
 #[cfg(feature = "agent-plane")]
 fn agent_diagnostics_summary(
     pipelines: &[Pipeline],
-    outputs: &[Output],
+    outputs: &[crate::types::Output],
     health: &serde_json::Value,
     graphs: &[serde_json::Value],
 ) -> serde_json::Value {
@@ -6173,7 +6165,7 @@ fn agent_diagnostics_summary(
 async fn agent_dependency_summary(
     state: &AppState,
     pipelines: &[Pipeline],
-    outputs: &[Output],
+    outputs: &[crate::types::Output],
     ingests: &[Ingest],
     recording_enabled: &std::collections::HashMap<String, bool>,
     health: &serde_json::Value,
@@ -6230,11 +6222,7 @@ async fn agent_dependency_summary(
 
     let hls_output_count = outputs
         .iter()
-        .filter(|output| {
-            output.url.starts_with("hls://")
-                || output.url.starts_with("http://")
-                || output.url.starts_with("https://")
-        })
+        .filter(|output| OutputUrlScheme::from_url(&output.url).is_hls_family())
         .count();
 
     serde_json::json!({

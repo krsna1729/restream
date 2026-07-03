@@ -688,13 +688,9 @@ pub async fn run_app() {
                     tokio::spawn(async move {
                         // Unsupported URL: reject immediately before the panic-safe
                         // block so its early `return` exits the entire spawn task.
-                        let is_supported = url_c.starts_with("rtmp://")
-                            || url_c.starts_with("rtmps://")
-                            || url_c.starts_with("srt://")
-                            || url_c.starts_with("hls://")
-                            || url_c.starts_with("http://")
-                            || url_c.starts_with("https://");
-                        if !is_supported {
+                        let url_scheme =
+                            crate::domain::output_spec::OutputUrlScheme::from_url(&url_c);
+                        if !url_scheme.is_supported_output() {
                             let end_now = chrono::Utc::now().to_rfc3339();
                             let _ = db::update_job(
                                 &pool_c,
@@ -751,93 +747,102 @@ pub async fn run_app() {
                         // status update) from running.
                         let mut hls_persistent_registered = false;
                         let panicked = std::panic::AssertUnwindSafe(async {
-                            if url_c.starts_with("rtmp://") || url_c.starts_with("rtmps://") {
-                                crate::media::rtmp::start_rtmp_egress(
-                                    output_id_c.clone(),
-                                    pipeline_id_c.clone(),
-                                    url_c.clone(),
-                                    ring_buf,
-                                    engine_c.clone(),
-                                    registration_c.clone(),
-                                )
-                                .await;
-                            } else if url_c.starts_with("srt://") {
-                                crate::media::srt::start_srt_egress(
-                                    output_id_c.clone(),
-                                    pipeline_id_c.clone(),
-                                    encoding_c,
-                                    url_c.clone(),
-                                    ring_buf,
-                                    engine_c.clone(),
-                                    registration_c.clone(),
-                                )
-                                .await;
-                            } else if url_c.starts_with("hls://")
-                                || url_c.starts_with("http://")
-                                || url_c.starts_with("https://")
-                            {
-                                // Remote HLS outputs intentionally stay on the MPEG-TS segmenter.
-                                // The served preview path uses per-rendition fMP4, but HLS PUT
-                                // ingest targets commonly require `.ts` media segments, so the
-                                // upload/output path keeps the original TS packaging behavior.
-                                let (store, already_running) =
-                                    engine_c.ensure_hls_segmenter(&pipeline_id_c).await;
-                                if !already_running {
-                                    let Some(hls_cancel) =
-                                        engine_c.get_hls_cancel_token(&pipeline_id_c).await
-                                    else {
-                                        warn!(
-                                            correlation_id = %output_correlation_id_c,
-                                            pipeline_id = %pipeline_id_c,
-                                            output_id = %output_id_c,
-                                            "HLS segmenter token missing — skipping"
-                                        );
-                                        return;
-                                    };
-                                    let eng2 = engine_c.clone();
-                                    let pid2 = pipeline_id_c.clone();
-                                    let rb2 = ring_buf.clone();
-                                    let store_for_segmenter = store.clone();
-                                    tokio::spawn(async move {
-                                        crate::media::hls::start_hls_segmenter(
-                                            pid2.clone(),
-                                            store_for_segmenter,
-                                            rb2,
-                                            None,
-                                            eng2.clone(),
-                                            hls_cancel,
-                                            None,
-                                        )
-                                        .await;
-                                        eng2.shutdown_hls_segmenter(&pid2).await;
-                                    });
-                                }
-                                engine_c.add_hls_persistent_consumer(&pipeline_id_c).await;
-                                hls_persistent_registered = true;
-                                if url_c.starts_with("http://") || url_c.starts_with("https://") {
-                                    crate::media::hls_upload::start_hls_put_upload(
+                            match url_scheme {
+                                crate::domain::output_spec::OutputUrlScheme::Rtmp
+                                | crate::domain::output_spec::OutputUrlScheme::Rtmps => {
+                                    crate::media::rtmp::start_rtmp_egress(
                                         output_id_c.clone(),
                                         pipeline_id_c.clone(),
                                         url_c.clone(),
-                                        store,
+                                        ring_buf,
                                         engine_c.clone(),
                                         registration_c.clone(),
                                     )
                                     .await;
-                                } else {
-                                    engine_c
-                                        .update_egress_phase_if_current(
-                                            &output_id_c,
-                                            &registration_c,
-                                            "segmenting",
+                                }
+                                crate::domain::output_spec::OutputUrlScheme::Srt => {
+                                    crate::media::srt::start_srt_egress(
+                                        output_id_c.clone(),
+                                        pipeline_id_c.clone(),
+                                        encoding_c,
+                                        url_c.clone(),
+                                        ring_buf,
+                                        engine_c.clone(),
+                                        registration_c.clone(),
+                                    )
+                                    .await;
+                                }
+                                crate::domain::output_spec::OutputUrlScheme::Hls
+                                | crate::domain::output_spec::OutputUrlScheme::Http
+                                | crate::domain::output_spec::OutputUrlScheme::Https => {
+                                    // Remote HLS outputs intentionally stay on the MPEG-TS segmenter.
+                                    // The served preview path uses per-rendition fMP4, but HLS PUT
+                                    // ingest targets commonly require `.ts` media segments, so the
+                                    // upload/output path keeps the original TS packaging behavior.
+                                    let (store, already_running) =
+                                        engine_c.ensure_hls_segmenter(&pipeline_id_c).await;
+                                    if !already_running {
+                                        let Some(hls_cancel) =
+                                            engine_c.get_hls_cancel_token(&pipeline_id_c).await
+                                        else {
+                                            warn!(
+                                                correlation_id = %output_correlation_id_c,
+                                                pipeline_id = %pipeline_id_c,
+                                                output_id = %output_id_c,
+                                                "HLS segmenter token missing — skipping"
+                                            );
+                                            return;
+                                        };
+                                        let eng2 = engine_c.clone();
+                                        let pid2 = pipeline_id_c.clone();
+                                        let rb2 = ring_buf.clone();
+                                        let store_for_segmenter = store.clone();
+                                        tokio::spawn(async move {
+                                            crate::media::hls::start_hls_segmenter(
+                                                pid2.clone(),
+                                                store_for_segmenter,
+                                                rb2,
+                                                None,
+                                                eng2.clone(),
+                                                hls_cancel,
+                                                None,
+                                            )
+                                            .await;
+                                            eng2.shutdown_hls_segmenter(&pid2).await;
+                                        });
+                                    }
+                                    engine_c.add_hls_persistent_consumer(&pipeline_id_c).await;
+                                    hls_persistent_registered = true;
+                                    if matches!(
+                                        url_scheme,
+                                        crate::domain::output_spec::OutputUrlScheme::Http
+                                            | crate::domain::output_spec::OutputUrlScheme::Https
+                                    ) {
+                                        crate::media::hls_upload::start_hls_put_upload(
+                                            output_id_c.clone(),
+                                            pipeline_id_c.clone(),
+                                            url_c.clone(),
+                                            store,
+                                            engine_c.clone(),
+                                            registration_c.clone(),
                                         )
                                         .await;
-                                    registration_c.cancel_token.cancelled().await;
+                                    } else {
+                                        engine_c
+                                            .update_egress_phase_if_current(
+                                                &output_id_c,
+                                                &registration_c,
+                                                "segmenting",
+                                            )
+                                            .await;
+                                        registration_c.cancel_token.cancelled().await;
+                                    }
+                                    // remove_hls_persistent_consumer is intentionally called
+                                    // in the always-runs cleanup section below (outside the
+                                    // catch_unwind) so a panic between add and here cannot
+                                    // permanently leak the refcount.
                                 }
-                                // remove_hls_persistent_consumer is intentionally called
-                                // in the always-runs cleanup section below (outside the
-                                // catch_unwind) so a panic between add and here cannot
-                                // permanently leak the refcount.
+                                crate::domain::output_spec::OutputUrlScheme::Unknown => {}
                             }
                         })
                         .catch_unwind()

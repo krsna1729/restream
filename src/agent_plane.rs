@@ -9,7 +9,8 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
-use crate::application::output_path::{OutputPath, is_rtmp_url};
+use crate::application::output_path::OutputPath;
+use crate::domain::output_spec::{OutputEncodingSpec, OutputUrlScheme};
 use crate::types::{Ingest, Output, Pipeline};
 
 const OUTPUT_URL_SCHEME_ERROR: &str =
@@ -850,7 +851,11 @@ fn impact_preview(request: &PlanRequest) -> ImpactPreview {
         if let Some(output_id) = &change.output_id {
             affected_outputs.insert(output_id.clone());
         }
-        if change.url.as_deref().is_some_and(is_rtmp_url) {
+        if change
+            .url
+            .as_deref()
+            .is_some_and(|url| OutputUrlScheme::from_url(url).is_rtmp_family())
+        {
             engineering_notes.push(
                 "RTMP/RTMPS outputs may require a shared HEVC-to-H.264 codec edge when the source is HEVC."
                     .to_string(),
@@ -885,20 +890,11 @@ fn impact_preview(request: &PlanRequest) -> ImpactPreview {
 }
 
 fn is_supported_output_url(url: &str) -> bool {
-    url.starts_with("rtmp://")
-        || url.starts_with("rtmps://")
-        || url.starts_with("srt://")
-        || url.starts_with("hls://")
-        || url.starts_with("http://")
-        || url.starts_with("https://")
+    OutputUrlScheme::from_url(url).is_supported_output()
 }
 
 fn is_custom_output_encoding(encoding: &str) -> bool {
-    encoding
-        .split('+')
-        .next()
-        .map(|video| video.trim().eq_ignore_ascii_case("custom"))
-        .unwrap_or(false)
+    OutputEncodingSpec::parse(encoding).is_custom_output()
 }
 
 fn issue(

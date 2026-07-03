@@ -5,6 +5,7 @@
 //! Audio routing: compound encodings like `720p+atrack:0,1` or `source+remap:0:1`
 //! are parsed to select/remap audio streams.
 
+use crate::domain::output_spec::StagePresetSpec;
 use crate::domain::stage::StageKey;
 use crate::media::engine::AudioMeta;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
@@ -788,18 +789,12 @@ fn run_ffmpeg_transcoder_stage_with_metrics(
 ) -> Result<(), &'static str> {
     use crate::media::avio::CustomInput;
 
-    let (video_preset, audio_routing) = if let Some(vp) = preset.strip_prefix("video:") {
-        (vp, AudioRouting::Passthrough)
-    } else if let Some(rest) = preset.strip_prefix("audio:") {
-        let audio_op = rest.rsplit_once(":from:").map(|(op, _)| op).unwrap_or(rest);
-        (
-            "source",
-            crate::domain::audio_routing::parse_audio_operation(audio_op),
-        )
-    } else {
-        let vp = preset.split('+').next().unwrap_or(preset);
-        (vp, parse_audio_routing(preset))
-    };
+    let stage_spec = StagePresetSpec::parse(preset);
+    let video_preset = stage_spec.video_encoding();
+    let audio_routing = stage_spec
+        .audio_operation()
+        .map(crate::domain::audio_routing::parse_audio_operation)
+        .unwrap_or_else(|| parse_audio_routing(preset));
 
     let mut custom_input = CustomInput::new(&*in_queue)?;
     let ictx = custom_input

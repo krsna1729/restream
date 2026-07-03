@@ -41,7 +41,8 @@ use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
-use crate::domain::audio_routing::{AudioRouting, parse_audio_routing};
+use crate::domain::audio_routing::{AudioRouting, parse_audio_operation, parse_audio_routing};
+use crate::domain::output_spec::{StagePresetSpec, VideoCodecKind};
 use crate::domain::stage::StageKey;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::mpegts::TsDemuxer;
@@ -67,7 +68,7 @@ const EXT_STAGE_ANALYZE_DURATION_US_HEVC: u64 = 1_000_000;
 const EXT_STAGE_PROBE_SIZE_BYTES_HEVC: usize = 512 * 1024;
 
 fn ext_stage_probe_budget(input_codec: &str) -> (u64, usize) {
-    if matches!(input_codec, "hevc" | "h265") {
+    if VideoCodecKind::from_codec_name(input_codec).is_hevc() {
         (
             EXT_STAGE_ANALYZE_DURATION_US_HEVC,
             EXT_STAGE_PROBE_SIZE_BYTES_HEVC,
@@ -102,11 +103,8 @@ fn build_stage_ffmpeg_args_inner(
     // Strip the internal stage-key prefix ("video:720p" → "720p").
     // Audio stages receive the selected upstream video ring, so they copy video
     // while applying any channel-level audio filter.
-    let encoding = if preset.starts_with("audio:") {
-        "source"
-    } else {
-        preset.strip_prefix("video:").unwrap_or(preset)
-    };
+    let stage_spec = StagePresetSpec::parse(preset);
+    let encoding = stage_spec.video_encoding();
     let audio_routing = stage_audio_routing(preset);
     let profile = if matches!(encoding, "" | "source" | "custom") {
         None
@@ -283,13 +281,12 @@ pub fn build_stage_ffmpeg_video_only_args_for_input(
 }
 
 fn stage_audio_routing(preset: &str) -> Option<AudioRouting> {
-    let operation = preset
-        .strip_prefix("audio:")
-        .and_then(|rest| rest.rsplit_once(":from:").map(|(op, _)| op))
+    let operation = StagePresetSpec::parse(preset)
+        .audio_operation()
         .map(str::to_string);
 
     let routing = if let Some(operation) = operation {
-        parse_audio_routing(&format!("source+{operation}"))
+        parse_audio_operation(&operation)
     } else {
         parse_audio_routing(preset)
     };
@@ -746,7 +743,7 @@ async fn start_external_transcoder_stage_inner(
     // task is spawned (OnceLock — set_codec_hint below is a no-op).
     // Keep it here as a defensive fallback in case the stage is ever called
     // outside the engine (e.g., tests).
-    let output_codec = if matches!(input_codec, "hevc" | "h265") {
+    let output_codec = if VideoCodecKind::from_codec_name(input_codec).is_hevc() {
         "hevc"
     } else {
         "h264"

@@ -9,6 +9,8 @@
 
 use crate::application::ingest::{IngestAuthError, authenticate_publish_stream_key};
 use crate::application::ports::PipelineStore;
+use crate::domain::output_spec::OutputUrlScheme;
+use reqwest::Url;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
     ClientSession, ClientSessionConfig, ClientSessionEvent, ClientSessionResult,
@@ -707,41 +709,20 @@ fn rtmp_sender_quality(
 
 // Standard RTMP URL parser helper
 fn parse_rtmp_url(url: &str) -> Option<RtmpUrlParts> {
-    if !url.starts_with("rtmp://") && !url.starts_with("rtmps://") {
+    let tls = match OutputUrlScheme::from_url(url) {
+        OutputUrlScheme::Rtmp => false,
+        OutputUrlScheme::Rtmps => true,
+        _ => return None,
+    };
+    let parsed = Url::parse(url).ok()?;
+    let host = parsed.host_str()?.trim_matches(['[', ']']).to_string();
+    let port = parsed.port().unwrap_or(1935);
+    let mut path_segments = parsed.path_segments()?;
+    let app = path_segments.next()?;
+    let stream_key = path_segments.collect::<Vec<_>>().join("/");
+    if app.is_empty() || stream_key.is_empty() {
         return None;
     }
-    let tls = url.starts_with("rtmps://");
-    let prefix_len = if tls {
-        "rtmps://".len()
-    } else {
-        "rtmp://".len()
-    };
-    let s = &url[prefix_len..];
-    let slash_idx = s.find('/')?;
-    let host_port = &s[..slash_idx];
-    let path = &s[slash_idx + 1..];
-
-    let (host, port) = if host_port.starts_with('[') {
-        // IPv6 literal: [::1]:1935
-        let bracket_end = host_port.find(']')?;
-        let host = host_port[1..bracket_end].to_string();
-        let port = if bracket_end + 1 < host_port.len() {
-            host_port[bracket_end + 2..].parse::<u16>().ok()?
-        } else {
-            1935
-        };
-        (host, port)
-    } else if let Some(colon_idx) = host_port.find(':') {
-        let h = &host_port[..colon_idx];
-        let p = host_port[colon_idx + 1..].parse::<u16>().ok()?;
-        (h.to_string(), p)
-    } else {
-        (host_port.to_string(), 1935)
-    };
-
-    let path_slash = path.find('/')?;
-    let app = &path[..path_slash];
-    let stream_key = &path[path_slash + 1..];
 
     Some(RtmpUrlParts {
         host,

@@ -5,6 +5,7 @@
 
 use crate::api_view_models;
 use crate::application::output_path::OutputPath;
+use crate::domain::output_spec::VideoCodecKind;
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::types::Output;
@@ -172,7 +173,7 @@ pub(crate) async fn processing_graph(
     }
     let ingest_is_hevc = ingest
         .and_then(|ingest| ingest.video.as_ref())
-        .map(|video| video.codec == "hevc" || video.codec == "h265")
+        .map(|video| VideoCodecKind::from_codec_name(&video.codec).is_hevc())
         .unwrap_or(false);
     let mut added_packetizers = std::collections::HashSet::new();
 
