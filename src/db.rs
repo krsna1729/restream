@@ -322,7 +322,7 @@ async fn fetch_output_optional(
     query: &str,
     binds: &[&str],
 ) -> Result<Option<Output>, sqlx::Error> {
-    let mut sql = sqlx::query_as::<_, OutputRow>(query);
+    let mut sql = sqlx::query_as::<_, OutputRow>(AssertSqlSafe(query.to_string()));
     for bind in binds {
         sql = sql.bind(*bind);
     }
@@ -337,7 +337,7 @@ async fn fetch_output_all(
     query: &str,
     binds: &[&str],
 ) -> Result<Vec<Output>, sqlx::Error> {
-    let mut sql = sqlx::query_as::<_, OutputRow>(query);
+    let mut sql = sqlx::query_as::<_, OutputRow>(AssertSqlSafe(query.to_string()));
     for bind in binds {
         sql = sql.bind(*bind);
     }
