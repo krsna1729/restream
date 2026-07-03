@@ -492,7 +492,53 @@ pub(crate) const MIXED_INPUT_CASES: &[MixedInputCase] = &[
 pub(crate) struct MixedFastBreadthCase {
     pub(crate) case: MixedInputCase,
     pub(crate) rationale: &'static str,
-    pub(crate) checks: &'static [&'static str],
+    pub(crate) checks: &'static [MixedCheck],
+}
+
+impl MixedFastBreadthCase {
+    pub(crate) fn check_names(self) -> Vec<&'static str> {
+        self.checks.iter().map(|check| check.as_str()).collect()
+    }
+}
+
+/// Observation/assertion axis for mixed scenarios.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum MixedCheck {
+    Ffprobe,
+    AudioRoute,
+    DecodeScan,
+    Signal,
+    StageSharing,
+    Hls,
+    Recording,
+    Load,
+    Smoke,
+    Lifecycle,
+    SinkProbe,
+    HlsPutProbe,
+    BurstGraph,
+    SoakDrift,
+}
+
+impl MixedCheck {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ffprobe => "ffprobe",
+            Self::AudioRoute => "audio-route",
+            Self::DecodeScan => "decode-scan",
+            Self::Signal => "signal",
+            Self::StageSharing => "stage-sharing",
+            Self::Hls => "hls",
+            Self::Recording => "recording",
+            Self::Load => "load",
+            Self::Smoke => "smoke",
+            Self::Lifecycle => "lifecycle",
+            Self::SinkProbe => "sink-probe",
+            Self::HlsPutProbe => "hls-put-probe",
+            Self::BurstGraph => "burst-graph",
+            Self::SoakDrift => "soak-drift",
+        }
+    }
 }
 
 // Fast breadth is the "find the broad failure shape quickly without pretending
@@ -521,7 +567,11 @@ pub(crate) const MIXED_FAST_BREADTH_CASES: &[MixedFastBreadthCase] = &[
             MixedInputReorder::Bf0,
         ),
         rationale: "file H.264 BF0 single-audio startup hero row",
-        checks: &["ffprobe", "stage-sharing", "hls"],
+        checks: &[
+            MixedCheck::Ffprobe,
+            MixedCheck::StageSharing,
+            MixedCheck::Hls,
+        ],
     },
     MixedFastBreadthCase {
         case: MixedInputCase::new(
@@ -531,7 +581,7 @@ pub(crate) const MIXED_FAST_BREADTH_CASES: &[MixedFastBreadthCase] = &[
             MixedInputReorder::Bf2,
         ),
         rationale: "file HEVC BF2 multi-audio plus codec-edge outputs",
-        checks: &["ffprobe", "stage-sharing"],
+        checks: &[MixedCheck::Ffprobe, MixedCheck::StageSharing],
     },
     MixedFastBreadthCase {
         case: MixedInputCase::new(
@@ -541,7 +591,7 @@ pub(crate) const MIXED_FAST_BREADTH_CASES: &[MixedFastBreadthCase] = &[
             MixedInputReorder::Bf0,
         ),
         rationale: "RTMP publisher without B-frames",
-        checks: &["ffprobe"],
+        checks: &[MixedCheck::Ffprobe],
     },
     MixedFastBreadthCase {
         case: MixedInputCase::new(
@@ -551,7 +601,7 @@ pub(crate) const MIXED_FAST_BREADTH_CASES: &[MixedFastBreadthCase] = &[
             MixedInputReorder::Bf2,
         ),
         rationale: "RTMP publisher with B-frames",
-        checks: &["ffprobe"],
+        checks: &[MixedCheck::Ffprobe],
     },
     MixedFastBreadthCase {
         case: MixedInputCase::new(
@@ -561,7 +611,7 @@ pub(crate) const MIXED_FAST_BREADTH_CASES: &[MixedFastBreadthCase] = &[
             MixedInputReorder::Bf0,
         ),
         rationale: "SRT H.264 BF0 multi-audio adaptive-ring row",
-        checks: &["ffprobe", "stage-sharing"],
+        checks: &[MixedCheck::Ffprobe, MixedCheck::StageSharing],
     },
     MixedFastBreadthCase {
         case: MixedInputCase::new(
@@ -571,7 +621,11 @@ pub(crate) const MIXED_FAST_BREADTH_CASES: &[MixedFastBreadthCase] = &[
             MixedInputReorder::Bf2,
         ),
         rationale: "SRT HEVC BF2 multi-audio codec-edge stress row",
-        checks: &["ffprobe", "stage-sharing", "hls"],
+        checks: &[
+            MixedCheck::Ffprobe,
+            MixedCheck::StageSharing,
+            MixedCheck::Hls,
+        ],
     },
 ];
 
@@ -945,6 +999,89 @@ pub(crate) const MULTI_TRACK_MIXED_OUTPUT_CASES: &[MixedOutputCase] = &[
     MixedOutputCase::MultiSrt1080pA0,
     MixedOutputCase::MultiSrt1080pA1,
 ];
+
+/// Source adapter used by the mixed runner for one input axis row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MixedSourceAdapter {
+    FileIngest,
+    RtmpPublisher,
+    SrtPublisher,
+}
+
+impl MixedSourceAdapter {
+    pub(crate) const fn for_input(case: MixedInputCase) -> Self {
+        match case.protocol() {
+            MixedInputProtocol::File => Self::FileIngest,
+            MixedInputProtocol::Rtmp => Self::RtmpPublisher,
+            MixedInputProtocol::Srt => Self::SrtPublisher,
+        }
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::FileIngest => "file-ingest",
+            Self::RtmpPublisher => "rtmp-publisher",
+            Self::SrtPublisher => "srt-publisher",
+        }
+    }
+}
+
+/// Typed source-side plan for one mixed scenario.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MixedSourcePlan {
+    pub(crate) adapter: MixedSourceAdapter,
+    pub(crate) input: MixedInputCase,
+}
+
+/// Typed expansion of `source axis + output matrix + checks`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MixedScenarioPlan {
+    pub(crate) input: MixedInputCase,
+    pub(crate) source: MixedSourcePlan,
+    pub(crate) outputs: &'static [MixedOutputCase],
+    pub(crate) checks: &'static [MixedCheck],
+    pub(crate) expected_stages: MixedStageCount,
+}
+
+pub(crate) const MIXED_DEFAULT_CHECKS: &[MixedCheck] = &[
+    MixedCheck::Ffprobe,
+    MixedCheck::AudioRoute,
+    MixedCheck::DecodeScan,
+    MixedCheck::Signal,
+    MixedCheck::StageSharing,
+    MixedCheck::Hls,
+    MixedCheck::Recording,
+    MixedCheck::Load,
+    MixedCheck::Smoke,
+    MixedCheck::Lifecycle,
+    MixedCheck::SinkProbe,
+    MixedCheck::HlsPutProbe,
+    MixedCheck::BurstGraph,
+    MixedCheck::SoakDrift,
+];
+
+impl MixedScenarioPlan {
+    pub(crate) fn for_input(input: MixedInputCase) -> Self {
+        Self {
+            input,
+            source: MixedSourcePlan {
+                adapter: MixedSourceAdapter::for_input(input),
+                input,
+            },
+            outputs: mixed_output_cases_for_input(input),
+            checks: MIXED_DEFAULT_CHECKS,
+            expected_stages: expected_mixed_stage_count(input),
+        }
+    }
+
+    pub(crate) fn check_names(self) -> Vec<&'static str> {
+        self.checks.iter().map(|check| check.as_str()).collect()
+    }
+
+    pub(crate) fn output_cells(self) -> usize {
+        self.outputs.len()
+    }
+}
 
 pub(crate) fn mixed_output_protocol_name(protocol: MixedOutputProtocol) -> &'static str {
     match protocol {

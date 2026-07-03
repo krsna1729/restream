@@ -13574,9 +13574,9 @@ stream|index=1|codec_type=audio\n";
         }
         for selected in MIXED_FAST_BREADTH_CASES {
             assert!(
-                !selected.checks.contains(&"recording")
-                    && !selected.checks.contains(&"signal")
-                    && !selected.checks.contains(&"load"),
+                !selected.checks.contains(&MixedCheck::Recording)
+                    && !selected.checks.contains(&MixedCheck::Signal)
+                    && !selected.checks.contains(&MixedCheck::Load),
                 "{} should keep fast-breadth checks short; use env overrides for depth",
                 selected.case.scenario_id()
             );
@@ -13584,7 +13584,7 @@ stream|index=1|codec_type=audio\n";
         assert_eq!(
             MIXED_FAST_BREADTH_CASES
                 .iter()
-                .filter(|selected| selected.checks.contains(&"hls"))
+                .filter(|selected| selected.checks.contains(&MixedCheck::Hls))
                 .count(),
             2,
             "HLS is sampled on representative H.264 and HEVC rows, not every row"
@@ -13845,7 +13845,10 @@ stream|index=1|codec_type=audio\n";
     #[test]
     fn mixed_input_rows_select_their_output_matrix() {
         for case in MIXED_INPUT_CASES {
-            let cases = mixed_output_cases_for_input(*case);
+            let plan = MixedScenarioPlan::for_input(*case);
+            let cases = plan.outputs;
+            assert_eq!(plan.source.adapter, MixedSourceAdapter::for_input(*case));
+            assert_eq!(plan.expected_stages, expected_mixed_stage_count(*case));
             if case.is_multi_track() {
                 assert_eq!(
                     cases.len(),
@@ -13864,6 +13867,66 @@ stream|index=1|codec_type=audio\n";
                 assert!(cases.iter().all(|case| case.expected_audio_tracks() == 1));
             }
         }
+    }
+
+    #[test]
+    fn mixed_scenario_plan_expands_without_losing_signal() {
+        let plans: Vec<_> = MIXED_INPUT_CASES
+            .iter()
+            .copied()
+            .map(MixedScenarioPlan::for_input)
+            .collect();
+
+        assert_eq!(plans.len(), 18);
+        assert_eq!(
+            plans.iter().map(|plan| plan.output_cells()).sum::<usize>(),
+            180
+        );
+        assert_eq!(
+            plans
+                .iter()
+                .filter(|plan| plan.source.adapter == MixedSourceAdapter::FileIngest)
+                .count(),
+            8
+        );
+        assert_eq!(
+            plans
+                .iter()
+                .filter(|plan| plan.source.adapter == MixedSourceAdapter::RtmpPublisher)
+                .count(),
+            2
+        );
+        assert_eq!(
+            plans
+                .iter()
+                .filter(|plan| plan.source.adapter == MixedSourceAdapter::SrtPublisher)
+                .count(),
+            8
+        );
+
+        let check_names: Vec<_> = MIXED_DEFAULT_CHECKS
+            .iter()
+            .map(|check| check.as_str())
+            .collect();
+        assert_eq!(
+            check_names,
+            vec![
+                "ffprobe",
+                "audio-route",
+                "decode-scan",
+                "signal",
+                "stage-sharing",
+                "hls",
+                "recording",
+                "load",
+                "smoke",
+                "lifecycle",
+                "sink-probe",
+                "hls-put-probe",
+                "burst-graph",
+                "soak-drift",
+            ]
+        );
     }
 
     #[test]

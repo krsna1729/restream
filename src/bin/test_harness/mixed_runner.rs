@@ -336,9 +336,9 @@ pub(super) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
             if !explicit_only_checks {
                 env_a.only_checks = Some(
                     selected_a
-                        .checks
-                        .iter()
-                        .map(|check| check.to_string())
+                        .check_names()
+                        .into_iter()
+                        .map(str::to_string)
                         .collect(),
                 );
             }
@@ -366,9 +366,9 @@ pub(super) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
                 if !explicit_only_checks {
                     env_b.only_checks = Some(
                         selected_b
-                            .checks
-                            .iter()
-                            .map(|check| check.to_string())
+                            .check_names()
+                            .into_iter()
+                            .map(str::to_string)
                             .collect(),
                     );
                 }
@@ -472,7 +472,7 @@ pub(super) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
                     let selected = mixed_fast_breadth_selected(*case);
                     json!({
                         "id": case.scenario_id(),
-                        "checks": selected.checks,
+                        "checks": selected.check_names(),
                     })
                 }).collect::<Vec<_>>().into()
             },
@@ -502,7 +502,7 @@ pub(super) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
                 "reorder": mixed_input_reorder_name(*case),
                 "sourceHasBframes": case.source_has_b_frames(),
                 "outputCells": mixed_output_cases_for_input(*case).len(),
-                "checks": selected.checks,
+                "checks": selected.check_names(),
                 "rationale": selected.rationale,
             })
         }).collect::<Vec<_>>(),
@@ -552,6 +552,7 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
     restream_pid: u32,
 ) -> Result<Value, String> {
     let cfg = case.scenario_id();
+    let plan = MixedScenarioPlan::for_input(case);
     let scenario_started = Instant::now();
     if env.n_per_group == 0 {
         return Err("N_PER_GROUP must be greater than zero".to_string());
@@ -561,23 +562,23 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
     let mut resume = MixedResume::new(env.resume_from.clone());
 
     let config_started = Instant::now();
-    let config = match (case.protocol(), case.codec(), case.is_multi_track()) {
-        (MixedInputProtocol::File, _, _) => {
+    let config = match (plan.source.adapter, case.codec(), case.is_multi_track()) {
+        (MixedSourceAdapter::FileIngest, _, _) => {
             run_mixed_file_config(&env, api, restream_pid, case, &mut resume).await
         }
-        (MixedInputProtocol::Srt, MixedVideoCodec::H264, false) => {
+        (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H264, false) => {
             run_mixed_anchor_config(&env, api, restream_pid, case, &mut resume).await
         }
-        (MixedInputProtocol::Srt, MixedVideoCodec::H265, false) => {
+        (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H265, false) => {
             run_mixed_h265_srt_config(&env, api, restream_pid, case, &mut resume).await
         }
-        (MixedInputProtocol::Rtmp, MixedVideoCodec::H264, false) => {
+        (MixedSourceAdapter::RtmpPublisher, MixedVideoCodec::H264, false) => {
             run_mixed_h264_rtmp_config(&env, api, restream_pid, case, &mut resume).await
         }
-        (MixedInputProtocol::Srt, MixedVideoCodec::H264, true) => {
+        (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H264, true) => {
             run_mixed_srt_multi_config(&env, api, restream_pid, case, &mut resume).await
         }
-        (MixedInputProtocol::Srt, MixedVideoCodec::H265, true) => {
+        (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H265, true) => {
             run_mixed_srt_multi_config(&env, api, restream_pid, case, &mut resume).await
         }
         _ => Err(format!(
@@ -617,6 +618,16 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
                 "sourceHasBframes": case.source_has_b_frames(),
             },
             "sharedStackGroup": case.shared_batch_group().as_str(),
+            "plan": {
+                "sourceAdapter": plan.source.adapter.as_str(),
+                "outputCells": plan.output_cells(),
+                "checks": plan.check_names(),
+                "expectedStages": {
+                    "video": plan.expected_stages.video,
+                    "audio": plan.expected_stages.audio,
+                    "codecEdge": plan.expected_stages.codec_edge,
+                },
+            },
             "configs": [config],
             "artifacts": {
                 "workDir": env.work_dir,
