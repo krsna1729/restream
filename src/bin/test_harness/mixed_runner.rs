@@ -251,7 +251,7 @@ pub(super) async fn mixed_input_matrix_correctness() -> Result<Value, String> {
         .map(PathBuf::from)
         .unwrap_or_else(mixed_matrix_default_work_dir);
     let mut results = Vec::new();
-    for case in MIXED_INPUT_CASES {
+    for case in mixed_input_cases() {
         let mode = mixed_input_mode_name(*case);
         let env =
             MixedEnv::from_env_with_default_work_dir(&mode, root.join(case.artifact_rel_dir()));
@@ -268,7 +268,7 @@ pub(super) async fn mixed_input_matrix_correctness() -> Result<Value, String> {
     Ok(json!({
         "passed": true,
         "mode": MIXED_MATRIX_MODE,
-        "inputCases": MIXED_INPUT_CASES.iter().map(|case| {
+        "inputCases": mixed_input_cases().iter().map(|case| {
             json!({
                 "id": case.scenario_id(),
                 "source": case.source_name(),
@@ -455,7 +455,7 @@ pub(super) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
         "mode": MIXED_FAST_BREADTH_MODE,
         "coverage": {
             "selectedInputCases": selected_cases.len(),
-            "totalInputCases": MIXED_INPUT_CASES.len(),
+            "totalInputCases": mixed_input_cases().len(),
             "selectedOutputCells": covered_output_cells,
             "totalOutputCells": total_output_cells,
             "nPerGroup": std::env::var("N_PER_GROUP").ok().unwrap_or_else(|| "1".to_string()),

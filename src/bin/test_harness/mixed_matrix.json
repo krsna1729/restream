@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "mixed": {
+    "inputs": [
+      {"id": "mixed.asset.file.h264.a1.bf0", "ingest": "file", "video": "h264", "audio": "a1", "reorder": "bf0"},
+      {"id": "mixed.asset.file.h264.a1.bf2", "ingest": "file", "video": "h264", "audio": "a1", "reorder": "bf2"},
+      {"id": "mixed.asset.file.h264.a2.bf0", "ingest": "file", "video": "h264", "audio": "a2", "reorder": "bf0"},
+      {"id": "mixed.asset.file.h264.a2.bf2", "ingest": "file", "video": "h264", "audio": "a2", "reorder": "bf2"},
+      {"id": "mixed.asset.file.h265.a1.bf0", "ingest": "file", "video": "h265", "audio": "a1", "reorder": "bf0"},
+      {"id": "mixed.asset.file.h265.a1.bf2", "ingest": "file", "video": "h265", "audio": "a1", "reorder": "bf2"},
+      {"id": "mixed.asset.file.h265.a2.bf0", "ingest": "file", "video": "h265", "audio": "a2", "reorder": "bf0"},
+      {"id": "mixed.asset.file.h265.a2.bf2", "ingest": "file", "video": "h265", "audio": "a2", "reorder": "bf2"},
+      {"id": "mixed.live.rtmp.h264.a1.bf0", "ingest": "rtmp", "video": "h264", "audio": "a1", "reorder": "bf0"},
+      {"id": "mixed.live.rtmp.h264.a1.bf2", "ingest": "rtmp", "video": "h264", "audio": "a1", "reorder": "bf2"},
+      {"id": "mixed.live.srt.h264.a1.bf0", "ingest": "srt", "video": "h264", "audio": "a1", "reorder": "bf0"},
+      {"id": "mixed.live.srt.h264.a1.bf2", "ingest": "srt", "video": "h264", "audio": "a1", "reorder": "bf2"},
+      {"id": "mixed.live.srt.h264.a2.bf0", "ingest": "srt", "video": "h264", "audio": "a2", "reorder": "bf0"},
+      {"id": "mixed.live.srt.h264.a2.bf2", "ingest": "srt", "video": "h264", "audio": "a2", "reorder": "bf2"},
+      {"id": "mixed.live.srt.h265.a1.bf0", "ingest": "srt", "video": "h265", "audio": "a1", "reorder": "bf0"},
+      {"id": "mixed.live.srt.h265.a1.bf2", "ingest": "srt", "video": "h265", "audio": "a1", "reorder": "bf2"},
+      {"id": "mixed.live.srt.h265.a2.bf0", "ingest": "srt", "video": "h265", "audio": "a2", "reorder": "bf0"},
+      {"id": "mixed.live.srt.h265.a2.bf2", "ingest": "srt", "video": "h265", "audio": "a2", "reorder": "bf2"}
+    ],
+    "fastBreadth": [
+      {"id": "mixed.asset.file.h264.a1.bf0", "rationale": "file H.264 BF0 single-audio startup hero row", "checks": ["ffprobe", "stage-sharing", "hls"]},
+      {"id": "mixed.asset.file.h265.a2.bf2", "rationale": "file HEVC BF2 multi-audio plus codec-edge outputs", "checks": ["ffprobe", "stage-sharing"]},
+      {"id": "mixed.live.rtmp.h264.a1.bf0", "rationale": "RTMP publisher without B-frames", "checks": ["ffprobe"]},
+      {"id": "mixed.live.rtmp.h264.a1.bf2", "rationale": "RTMP publisher with B-frames", "checks": ["ffprobe"]},
+      {"id": "mixed.live.srt.h264.a2.bf0", "rationale": "SRT H.264 BF0 multi-audio adaptive-ring row", "checks": ["ffprobe", "stage-sharing"]},
+      {"id": "mixed.live.srt.h265.a2.bf2", "rationale": "SRT HEVC BF2 multi-audio codec-edge stress row", "checks": ["ffprobe", "stage-sharing", "hls"]}
+    ],
+    "fastBreadthBatches": [
+      {"group": "live-rtmp", "cases": ["mixed.live.rtmp.h264.a1.bf0", "mixed.live.rtmp.h264.a1.bf2"]},
+      {"group": "live-srt", "cases": ["mixed.live.srt.h264.a2.bf0", "mixed.live.srt.h265.a2.bf2"]},
+      {"group": "file-ingest", "cases": ["mixed.asset.file.h264.a1.bf0", "mixed.asset.file.h265.a2.bf2"]}
+    ]
+  }
+}

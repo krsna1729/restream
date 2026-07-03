@@ -1,8 +1,10 @@
 //! Manifest-shaped mixed-matrix axes, rows, and coverage helpers.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use restream::test_fixtures::AvMarkerBframeMode;
+use serde::Deserialize;
 
 /// Input transport family for mixed-matrix source streams.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -25,6 +27,15 @@ impl MixedInputProtocol {
             Self::File => "file",
             Self::Rtmp => "rtmp",
             Self::Srt => "srt",
+        }
+    }
+
+    pub(crate) fn from_ingest_name(value: &str) -> Option<Self> {
+        match value {
+            "file" => Some(Self::File),
+            "rtmp" => Some(Self::Rtmp),
+            "srt" => Some(Self::Srt),
+            _ => None,
         }
     }
 }
@@ -57,6 +68,14 @@ impl MixedVideoCodec {
             // 720p H.264 preview ring before the MPEG-TS HLS segmenter sees it.
             Self::H264 => "1920x1080",
             Self::H265 => "1280x720",
+        }
+    }
+
+    pub(crate) fn from_scenario_token(value: &str) -> Option<Self> {
+        match value {
+            "h264" => Some(Self::H264),
+            "h265" => Some(Self::H265),
+            _ => None,
         }
     }
 }
@@ -93,6 +112,14 @@ impl MixedInputAudioLayout {
     pub(crate) const fn is_multi_track(self) -> bool {
         matches!(self, Self::A2)
     }
+
+    pub(crate) fn from_scenario_token(value: &str) -> Option<Self> {
+        match value {
+            "a1" => Some(Self::A1),
+            "a2" => Some(Self::A2),
+            _ => None,
+        }
+    }
 }
 
 /// Source frame-reordering axis used to distinguish BF0 from B-frame fixtures.
@@ -118,6 +145,14 @@ impl MixedInputReorder {
         match self {
             Self::Bf0 => AvMarkerBframeMode::Bf0,
             Self::Bf2 => AvMarkerBframeMode::Bf2,
+        }
+    }
+
+    pub(crate) fn from_scenario_token(value: &str) -> Option<Self> {
+        match value {
+            "bf0" => Some(Self::Bf0),
+            "bf2" => Some(Self::Bf2),
+            _ => None,
         }
     }
 }
@@ -376,117 +411,6 @@ pub(crate) const MIXED_MATRIX_MODE: &str = "mixed.matrix";
 pub(crate) const MIXED_FAST_BREADTH_MODE: &str = "mixed.fast-breadth";
 const MIXED_ARTIFACT_ROOT: &str = "test/artifacts/mixed";
 
-pub(crate) const MIXED_INPUT_CASES: &[MixedInputCase] = &[
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::File,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Rtmp,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Rtmp,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H264,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A1,
-        MixedInputReorder::Bf2,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf0,
-    ),
-    MixedInputCase::new(
-        MixedInputProtocol::Srt,
-        MixedVideoCodec::H265,
-        MixedInputAudioLayout::A2,
-        MixedInputReorder::Bf2,
-    ),
-];
-
 /// One selected input row in the fast breadth sweep, with its minimal checks.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MixedFastBreadthCase {
@@ -539,6 +463,122 @@ impl MixedCheck {
             Self::SoakDrift => "soak-drift",
         }
     }
+
+    pub(crate) fn from_name(value: &str) -> Option<Self> {
+        match value {
+            "ffprobe" => Some(Self::Ffprobe),
+            "audio-route" => Some(Self::AudioRoute),
+            "decode-scan" => Some(Self::DecodeScan),
+            "signal" => Some(Self::Signal),
+            "stage-sharing" => Some(Self::StageSharing),
+            "hls" => Some(Self::Hls),
+            "recording" => Some(Self::Recording),
+            "load" => Some(Self::Load),
+            "smoke" => Some(Self::Smoke),
+            "lifecycle" => Some(Self::Lifecycle),
+            "sink-probe" => Some(Self::SinkProbe),
+            "hls-put-probe" => Some(Self::HlsPutProbe),
+            "burst-graph" => Some(Self::BurstGraph),
+            "soak-drift" => Some(Self::SoakDrift),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct MixedDslManifest {
+    pub(crate) version: u32,
+    pub(crate) mixed: MixedDslMatrix,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct MixedDslMatrix {
+    pub(crate) inputs: Vec<MixedDslInput>,
+    #[serde(rename = "fastBreadth")]
+    pub(crate) fast_breadth: Vec<MixedDslFastBreadth>,
+    #[serde(rename = "fastBreadthBatches")]
+    pub(crate) fast_breadth_batches: Vec<MixedDslFastBreadthBatch>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct MixedDslInput {
+    pub(crate) id: String,
+    pub(crate) ingest: String,
+    pub(crate) video: String,
+    pub(crate) audio: String,
+    pub(crate) reorder: String,
+}
+
+impl MixedDslInput {
+    pub(crate) fn to_case(&self) -> Result<MixedInputCase, String> {
+        let case = MixedInputCase::new(
+            MixedInputProtocol::from_ingest_name(&self.ingest)
+                .ok_or_else(|| format!("{} has unknown ingest {}", self.id, self.ingest))?,
+            MixedVideoCodec::from_scenario_token(&self.video)
+                .ok_or_else(|| format!("{} has unknown video {}", self.id, self.video))?,
+            MixedInputAudioLayout::from_scenario_token(&self.audio)
+                .ok_or_else(|| format!("{} has unknown audio {}", self.id, self.audio))?,
+            MixedInputReorder::from_scenario_token(&self.reorder)
+                .ok_or_else(|| format!("{} has unknown reorder {}", self.id, self.reorder))?,
+        );
+        if case.scenario_id() != self.id {
+            return Err(format!(
+                "DSL input {} expands to {}",
+                self.id,
+                case.scenario_id()
+            ));
+        }
+        Ok(case)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct MixedDslFastBreadth {
+    pub(crate) id: String,
+    pub(crate) rationale: String,
+    pub(crate) checks: Vec<String>,
+}
+
+impl MixedDslFastBreadth {
+    pub(crate) fn check_specs(&self) -> Result<Vec<MixedCheck>, String> {
+        self.checks
+            .iter()
+            .map(|check| {
+                MixedCheck::from_name(check)
+                    .ok_or_else(|| format!("{} has unknown check {}", self.id, check))
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct MixedDslFastBreadthBatch {
+    pub(crate) group: String,
+    pub(crate) cases: Vec<String>,
+}
+
+impl MixedDslManifest {
+    pub(crate) fn input_cases(&self) -> Result<Vec<MixedInputCase>, String> {
+        self.mixed
+            .inputs
+            .iter()
+            .map(MixedDslInput::to_case)
+            .collect()
+    }
+}
+
+pub(crate) fn mixed_dsl_manifest() -> Result<MixedDslManifest, String> {
+    serde_json::from_str(include_str!("mixed_matrix.json")).map_err(|error| error.to_string())
+}
+
+static MIXED_INPUT_CASES_FROM_DSL: OnceLock<Vec<MixedInputCase>> = OnceLock::new();
+
+pub(crate) fn mixed_input_cases() -> &'static [MixedInputCase] {
+    MIXED_INPUT_CASES_FROM_DSL.get_or_init(|| {
+        mixed_dsl_manifest()
+            .and_then(|manifest| manifest.input_cases())
+            .expect("embedded mixed_matrix.json should define valid input cases")
+    })
 }
 
 // Fast breadth is the "find the broad failure shape quickly without pretending
@@ -699,7 +739,7 @@ pub(crate) fn mixed_input_mode_name(case: MixedInputCase) -> String {
 }
 
 pub(crate) fn mixed_input_case_for_command(command: &str) -> Option<MixedInputCase> {
-    MIXED_INPUT_CASES
+    mixed_input_cases()
         .iter()
         .copied()
         .find(|case| case.scenario_id() == command)

@@ -321,7 +321,12 @@ fn mode_spec(name: &str) -> Option<HarnessModeSpec> {
 
 fn all_mode_specs() -> Vec<HarnessModeSpec> {
     let mut specs = BUILTIN_MODE_SPECS.to_vec();
-    specs.extend(MIXED_INPUT_CASES.iter().copied().map(mixed_input_mode_spec));
+    specs.extend(
+        mixed_input_cases()
+            .iter()
+            .copied()
+            .map(mixed_input_mode_spec),
+    );
     specs
 }
 
@@ -13477,7 +13482,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn mixed_input_matrix_names_are_explicit_and_supported() {
-        let names: Vec<_> = MIXED_INPUT_CASES
+        let names: Vec<_> = mixed_input_cases()
             .iter()
             .map(|case| case.scenario_id())
             .collect();
@@ -13504,7 +13509,7 @@ stream|index=1|codec_type=audio\n";
                 "mixed.live.srt.h265.a2.bf2",
             ]
         );
-        for case in MIXED_INPUT_CASES {
+        for case in mixed_input_cases() {
             let mode = mixed_input_mode_name(*case);
             assert_eq!(mixed_input_case_for_command(&mode), Some(*case));
             assert!(
@@ -13594,7 +13599,7 @@ stream|index=1|codec_type=audio\n";
             .iter()
             .map(|case| mixed_output_cases_for_input(*case).len())
             .sum();
-        let total_cells: usize = MIXED_INPUT_CASES
+        let total_cells: usize = mixed_input_cases()
             .iter()
             .map(|case| mixed_output_cases_for_input(*case).len())
             .sum();
@@ -13745,7 +13750,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn mixed_input_matrix_keeps_rtmp_ingest_single_h264_only() {
-        let rtmp_cases: Vec<_> = MIXED_INPUT_CASES
+        let rtmp_cases: Vec<_> = mixed_input_cases()
             .iter()
             .filter(|case| case.protocol() == MixedInputProtocol::Rtmp)
             .collect();
@@ -13773,7 +13778,7 @@ stream|index=1|codec_type=audio\n";
     #[test]
     fn mixed_input_matrix_covers_bf0_and_bf2_for_every_supported_shape() {
         let mut grouped = HashMap::new();
-        for case in MIXED_INPUT_CASES {
+        for case in mixed_input_cases() {
             grouped
                 .entry((case.protocol(), case.codec(), case.audio_layout()))
                 .or_insert_with(Vec::new)
@@ -13800,7 +13805,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn mixed_hls_preview_expectations_match_current_hevc_preview_contract() {
-        for case in MIXED_INPUT_CASES {
+        for case in mixed_input_cases() {
             let expected = case.hls_preview_expected_dimensions();
             if matches!(case.codec(), MixedVideoCodec::H265) {
                 assert_eq!(
@@ -13822,7 +13827,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn mixed_input_recording_expectations_follow_source_tracks() {
-        for case in MIXED_INPUT_CASES {
+        for case in mixed_input_cases() {
             assert_eq!(
                 case.expected_audio_tracks(),
                 if case.is_multi_track() { 2 } else { 1 },
@@ -13844,7 +13849,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn mixed_input_rows_select_their_output_matrix() {
-        for case in MIXED_INPUT_CASES {
+        for case in mixed_input_cases() {
             let plan = MixedScenarioPlan::for_input(*case);
             let cases = plan.outputs;
             assert_eq!(plan.source.adapter, MixedSourceAdapter::for_input(*case));
@@ -13871,7 +13876,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn mixed_scenario_plan_expands_without_losing_signal() {
-        let plans: Vec<_> = MIXED_INPUT_CASES
+        let plans: Vec<_> = mixed_input_cases()
             .iter()
             .copied()
             .map(MixedScenarioPlan::for_input)
@@ -13930,8 +13935,54 @@ stream|index=1|codec_type=audio\n";
     }
 
     #[test]
+    fn mixed_json_dsl_carries_current_matrix_contract() {
+        let manifest = mixed_dsl_manifest().expect("mixed DSL manifest should parse");
+        assert_eq!(manifest.version, 1);
+        assert_eq!(manifest.input_cases().unwrap(), mixed_input_cases());
+
+        let dsl_fast: Vec<_> = manifest
+            .mixed
+            .fast_breadth
+            .iter()
+            .map(|row| {
+                (
+                    row.id.as_str(),
+                    row.rationale.as_str(),
+                    row.check_specs().unwrap(),
+                )
+            })
+            .collect();
+        let rust_fast: Vec<_> = MIXED_FAST_BREADTH_CASES
+            .iter()
+            .map(|row| (row.case.scenario_id(), row.rationale, row.checks.to_vec()))
+            .collect();
+        assert_eq!(dsl_fast, rust_fast);
+
+        let dsl_batches: Vec<_> = manifest
+            .mixed
+            .fast_breadth_batches
+            .iter()
+            .map(|batch| {
+                (
+                    MixedSharedBatchGroup::from_str(&batch.group).unwrap(),
+                    batch
+                        .cases
+                        .iter()
+                        .map(|id| mixed_input_case_for_command(id).unwrap())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        let rust_batches: Vec<_> = MIXED_FAST_BREADTH_BATCHES
+            .iter()
+            .map(|batch| (batch.group, batch.cases.to_vec()))
+            .collect();
+        assert_eq!(dsl_batches, rust_batches);
+    }
+
+    #[test]
     fn mixed_input_planning_shares_stages_across_duplicate_outputs() {
-        for case in MIXED_INPUT_CASES {
+        for case in mixed_input_cases() {
             let single = planned_mixed_stage_count(*case, 1);
             let duplicated = planned_mixed_stage_count(*case, 2);
             let expected = expected_mixed_stage_count(*case);
@@ -13958,7 +14009,7 @@ stream|index=1|codec_type=audio\n";
         let fast_spec =
             mode_spec(MIXED_FAST_BREADTH_MODE).expect("mixed.fast-breadth must be listed");
         assert!(!fast_spec.suite_default);
-        for case in MIXED_INPUT_CASES {
+        for case in mixed_input_cases() {
             let mode = mixed_input_mode_name(*case);
             let spec = mode_spec(&mode).unwrap_or_else(|| panic!("{mode} must be listed"));
             assert!(
@@ -13970,7 +14021,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn mixed_input_fixture_selection_tracks_reorder_signal() {
-        for case in MIXED_INPUT_CASES {
+        for case in mixed_input_cases() {
             let fixture = mixed_input_fixture(*case).unwrap_or_else(|error| {
                 panic!(
                     "{} should resolve a checked-in fixture: {error}",
