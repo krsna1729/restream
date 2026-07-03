@@ -8775,16 +8775,8 @@ async fn fault_rtmp_egress_sink_disappear(
     sink_port: u16,
     timeout: Duration,
 ) -> Result<Value, String> {
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "fault-egress-rtmp", "streamKey": "fault-egress-rtmp"}),
-        )
-        .await?;
-    let pid = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("missing id")?
-        .to_string();
+    let pid =
+        create_pipeline_with_stream_key(api, "fault-egress-rtmp", "fault-egress-rtmp").await?;
 
     let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
     let sink_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
@@ -8814,16 +8806,7 @@ async fn fault_rtmp_egress_sink_disappear(
     });
 
     let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/fault-egress-rtmp-sink");
-    let output = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs"),
-            output_create_payload("rtmp-sink", &sink_url, "source"),
-        )
-        .await?;
-    let oid = output["output"]["id"]
-        .as_str()
-        .ok_or("missing id")?
-        .to_string();
+    let oid = create_mixed_output(api, &pid, "rtmp-sink", &sink_url, "source").await?;
 
     let mut pub_child = spawn_publisher(
         fixture_h264,
@@ -9007,42 +8990,16 @@ async fn fault_srt_egress_sink_disappear(
     fixture_h264: &Path,
     timeout: Duration,
 ) -> Result<Value, String> {
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "fault-egress-srt", "streamKey": "fault-egress-srt"}),
-        )
-        .await?;
-    let pid = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("missing id")?
-        .to_string();
+    let pid = create_pipeline_with_stream_key(api, "fault-egress-srt", "fault-egress-srt").await?;
 
-    let sink_pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "srt-sink-target", "streamKey": "srt-sink-target"}),
-        )
-        .await?;
-    let sink_pid = sink_pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("missing id")?
-        .to_string();
+    let sink_pid =
+        create_pipeline_with_stream_key(api, "srt-sink-target", "srt-sink-target").await?;
 
     let sink_url = format!(
         "srt://127.0.0.1:{}?streamid=publish:live/srt-sink-target&pkt_size=1316",
         ports.srt
     );
-    let output = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs"),
-            output_create_payload("srt-sink", &sink_url, "source"),
-        )
-        .await?;
-    let oid = output["output"]["id"]
-        .as_str()
-        .ok_or("missing id")?
-        .to_string();
+    let oid = create_mixed_output(api, &pid, "srt-sink", &sink_url, "source").await?;
 
     let mut pub_child = spawn_publisher(
         fixture_h264,
@@ -9726,31 +9683,21 @@ async fn fault_rtmp_egress_retry_budget_exhausts_to_failed(
     fixture_h264: &Path,
     dead_sink_port: u16,
 ) -> Result<Value, String> {
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "fault-egress-rtmp-retry-limit", "streamKey": "fault-egress-rtmp-retry-limit"}),
-        )
-        .await?;
-    let pid = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("missing id")?
-        .to_string();
+    let pid = create_pipeline_with_stream_key(
+        api,
+        "fault-egress-rtmp-retry-limit",
+        "fault-egress-rtmp-retry-limit",
+    )
+    .await?;
 
-    let output = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs"),
-            output_create_payload(
-                "rtmp-dead-sink",
-                &format!("rtmp://127.0.0.1:{dead_sink_port}/live/retry-limit"),
-                "source",
-            ),
-        )
-        .await?;
-    let oid = output["output"]["id"]
-        .as_str()
-        .ok_or("missing id")?
-        .to_string();
+    let oid = create_mixed_output(
+        api,
+        &pid,
+        "rtmp-dead-sink",
+        &format!("rtmp://127.0.0.1:{dead_sink_port}/live/retry-limit"),
+        "source",
+    )
+    .await?;
 
     let mut pub_child = spawn_publisher(
         fixture_h264,
@@ -9878,33 +9825,23 @@ async fn fault_srt_egress_retry_budget_exhausts_to_failed(
     fixture_h264: &Path,
     dead_sink_port: u16,
 ) -> Result<Value, String> {
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": "fault-egress-srt-retry-limit", "streamKey": "fault-egress-srt-retry-limit"}),
-        )
-        .await?;
-    let pid = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("missing id")?
-        .to_string();
+    let pid = create_pipeline_with_stream_key(
+        api,
+        "fault-egress-srt-retry-limit",
+        "fault-egress-srt-retry-limit",
+    )
+    .await?;
 
-    let output = api
-        .post_json(
-            &format!("/api/v1/pipelines/{pid}/outputs"),
-            output_create_payload(
-                "srt-dead-sink",
-                &format!(
-                    "srt://127.0.0.1:{dead_sink_port}?streamid=publish:live/retry-limit&pkt_size=1316"
-                ),
-                "source",
-            ),
-        )
-        .await?;
-    let oid = output["output"]["id"]
-        .as_str()
-        .ok_or("missing id")?
-        .to_string();
+    let oid = create_mixed_output(
+        api,
+        &pid,
+        "srt-dead-sink",
+        &format!(
+            "srt://127.0.0.1:{dead_sink_port}?streamid=publish:live/retry-limit&pkt_size=1316"
+        ),
+        "source",
+    )
+    .await?;
 
     let mut pub_child = spawn_publisher(
         fixture_h264,
