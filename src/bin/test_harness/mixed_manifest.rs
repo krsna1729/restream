@@ -494,6 +494,7 @@ pub(crate) struct MixedDslManifest {
 #[derive(Debug, Deserialize)]
 pub(crate) struct MixedDslMatrix {
     pub(crate) inputs: Vec<MixedDslInput>,
+    pub(crate) outputs: MixedDslOutputMatrices,
     #[serde(rename = "fastBreadth")]
     pub(crate) fast_breadth: Vec<MixedDslFastBreadth>,
     #[serde(rename = "fastBreadthBatches")]
@@ -557,6 +558,42 @@ pub(crate) struct MixedDslFastBreadthBatch {
     pub(crate) cases: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct MixedDslOutputMatrices {
+    #[serde(rename = "singleTrack")]
+    pub(crate) single_track: Vec<MixedDslOutputCase>,
+    #[serde(rename = "multiTrack")]
+    pub(crate) multi_track: Vec<MixedDslOutputCase>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct MixedDslOutputCase {
+    pub(crate) id: String,
+    pub(crate) protocol: String,
+    pub(crate) encoding: String,
+    #[serde(rename = "expectedDimensions")]
+    pub(crate) expected_dimensions: String,
+    #[serde(rename = "expectedAudioTracks")]
+    pub(crate) expected_audio_tracks: usize,
+    #[serde(rename = "selectedAudioTrack")]
+    pub(crate) selected_audio_track: Option<usize>,
+}
+
+impl MixedDslOutputCase {
+    pub(crate) fn to_output_case(&self) -> Result<MixedOutputCase, String> {
+        Ok(MixedOutputCase {
+            id: self.id.clone(),
+            protocol: MixedOutputProtocol::from_name(&self.protocol).ok_or_else(|| {
+                format!("{} has unknown output protocol {}", self.id, self.protocol)
+            })?,
+            encoding: self.encoding.clone(),
+            expected_dimensions: self.expected_dimensions.clone(),
+            expected_audio_tracks: self.expected_audio_tracks,
+            selected_audio_track: self.selected_audio_track,
+        })
+    }
+}
+
 impl MixedDslManifest {
     pub(crate) fn input_cases(&self) -> Result<Vec<MixedInputCase>, String> {
         self.mixed
@@ -574,6 +611,8 @@ pub(crate) fn mixed_dsl_manifest() -> Result<MixedDslManifest, String> {
 static MIXED_INPUT_CASES_FROM_DSL: OnceLock<Vec<MixedInputCase>> = OnceLock::new();
 static MIXED_FAST_BREADTH_CASES_FROM_DSL: OnceLock<Vec<MixedFastBreadthCase>> = OnceLock::new();
 static MIXED_FAST_BREADTH_BATCHES_FROM_DSL: OnceLock<Vec<MixedFastBreadthBatch>> = OnceLock::new();
+static SINGLE_TRACK_MIXED_OUTPUT_CASES_FROM_DSL: OnceLock<Vec<MixedOutputCase>> = OnceLock::new();
+static MULTI_TRACK_MIXED_OUTPUT_CASES_FROM_DSL: OnceLock<Vec<MixedOutputCase>> = OnceLock::new();
 
 pub(crate) fn mixed_input_cases() -> &'static [MixedInputCase] {
     MIXED_INPUT_CASES_FROM_DSL.get_or_init(|| {
@@ -623,6 +662,46 @@ pub(crate) fn mixed_fast_breadth_batches() -> &'static [MixedFastBreadthBatch] {
             })
             .collect()
     })
+}
+
+pub(crate) fn single_track_mixed_output_cases() -> &'static [MixedOutputCase] {
+    SINGLE_TRACK_MIXED_OUTPUT_CASES_FROM_DSL.get_or_init(|| {
+        let manifest = mixed_dsl_manifest().expect("embedded mixed_matrix.json should parse");
+        manifest
+            .mixed
+            .outputs
+            .single_track
+            .iter()
+            .map(|row| {
+                row.to_output_case()
+                    .unwrap_or_else(|error| panic!("invalid single-track output row: {error}"))
+            })
+            .collect()
+    })
+}
+
+pub(crate) fn multi_track_mixed_output_cases() -> &'static [MixedOutputCase] {
+    MULTI_TRACK_MIXED_OUTPUT_CASES_FROM_DSL.get_or_init(|| {
+        let manifest = mixed_dsl_manifest().expect("embedded mixed_matrix.json should parse");
+        manifest
+            .mixed
+            .outputs
+            .multi_track
+            .iter()
+            .map(|row| {
+                row.to_output_case()
+                    .unwrap_or_else(|error| panic!("invalid multi-track output row: {error}"))
+            })
+            .collect()
+    })
+}
+
+pub(crate) fn mixed_output_cases_for_input(case: MixedInputCase) -> &'static [MixedOutputCase] {
+    if case.is_multi_track() {
+        multi_track_mixed_output_cases()
+    } else {
+        single_track_mixed_output_cases()
+    }
 }
 
 /// Fast-mode shared-stack batches.
@@ -712,14 +791,6 @@ pub(crate) fn mixed_fast_breadth_default_work_dir() -> PathBuf {
     PathBuf::from(MIXED_ARTIFACT_ROOT).join("fast-breadth")
 }
 
-pub(crate) fn mixed_output_cases_for_input(case: MixedInputCase) -> &'static [MixedOutputCase] {
-    if case.is_multi_track() {
-        MULTI_TRACK_MIXED_OUTPUT_CASES
-    } else {
-        SINGLE_TRACK_MIXED_OUTPUT_CASES
-    }
-}
-
 /// Expected unique processing-stage counts for a mixed scenario.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MixedStageCount {
@@ -765,150 +836,52 @@ pub(crate) enum MixedOutputProtocol {
     Srt,
 }
 
-/// Complete output-side row in the mixed matrix.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MixedOutputCase {
-    SingleRtmpSrcA0,
-    SingleRtmp720pA0,
-    SingleRtmp1080pA0,
-    SingleSrtSrcA0,
-    SingleSrt720pA0,
-    SingleSrt1080pA0,
-    MultiRtmpSrcA0,
-    MultiRtmpSrcA1,
-    MultiRtmp720pA0,
-    MultiRtmp720pA1,
-    MultiRtmp1080pA0,
-    MultiRtmp1080pA1,
-    MultiSrtSrcAll,
-    MultiSrtSrcA0,
-    MultiSrtSrcA1,
-    MultiSrt720pAll,
-    MultiSrt720pA0,
-    MultiSrt720pA1,
-    MultiSrt1080pAll,
-    MultiSrt1080pA0,
-    MultiSrt1080pA1,
-}
-
-impl MixedOutputCase {
-    pub(crate) const fn id(self) -> &'static str {
-        match self {
-            Self::SingleRtmpSrcA0 | Self::MultiRtmpSrcA0 => "rtmp.src.a0",
-            Self::MultiRtmpSrcA1 => "rtmp.src.a1",
-            Self::SingleRtmp720pA0 | Self::MultiRtmp720pA0 => "rtmp.720p.a0",
-            Self::MultiRtmp720pA1 => "rtmp.720p.a1",
-            Self::SingleRtmp1080pA0 | Self::MultiRtmp1080pA0 => "rtmp.1080p.a0",
-            Self::MultiRtmp1080pA1 => "rtmp.1080p.a1",
-            Self::SingleSrtSrcA0 => "srt.src.a0",
-            Self::MultiSrtSrcAll => "srt.src.all",
-            Self::MultiSrtSrcA0 => "srt.src.a0",
-            Self::MultiSrtSrcA1 => "srt.src.a1",
-            Self::SingleSrt720pA0 => "srt.720p.a0",
-            Self::MultiSrt720pAll => "srt.720p.all",
-            Self::MultiSrt720pA0 => "srt.720p.a0",
-            Self::MultiSrt720pA1 => "srt.720p.a1",
-            Self::SingleSrt1080pA0 => "srt.1080p.a0",
-            Self::MultiSrt1080pAll => "srt.1080p.all",
-            Self::MultiSrt1080pA0 => "srt.1080p.a0",
-            Self::MultiSrt1080pA1 => "srt.1080p.a1",
-        }
-    }
-
-    pub(crate) const fn protocol(self) -> MixedOutputProtocol {
-        match self {
-            Self::SingleRtmpSrcA0
-            | Self::SingleRtmp720pA0
-            | Self::SingleRtmp1080pA0
-            | Self::MultiRtmpSrcA0
-            | Self::MultiRtmpSrcA1
-            | Self::MultiRtmp720pA0
-            | Self::MultiRtmp720pA1
-            | Self::MultiRtmp1080pA0
-            | Self::MultiRtmp1080pA1 => MixedOutputProtocol::Rtmp,
-            _ => MixedOutputProtocol::Srt,
-        }
-    }
-
-    pub(crate) const fn encoding(self) -> &'static str {
-        match self {
-            Self::SingleRtmpSrcA0 | Self::SingleSrtSrcA0 | Self::MultiSrtSrcAll => "source",
-            Self::MultiRtmpSrcA0 | Self::MultiSrtSrcA0 => "source+atrack:0",
-            Self::MultiRtmpSrcA1 | Self::MultiSrtSrcA1 => "source+atrack:1",
-            Self::SingleRtmp720pA0 | Self::SingleSrt720pA0 | Self::MultiSrt720pAll => "720p",
-            Self::MultiRtmp720pA0 | Self::MultiSrt720pA0 => "720p+atrack:0",
-            Self::MultiRtmp720pA1 | Self::MultiSrt720pA1 => "720p+atrack:1",
-            Self::SingleRtmp1080pA0 | Self::SingleSrt1080pA0 | Self::MultiSrt1080pAll => "1080p",
-            Self::MultiRtmp1080pA0 | Self::MultiSrt1080pA0 => "1080p+atrack:0",
-            Self::MultiRtmp1080pA1 | Self::MultiSrt1080pA1 => "1080p+atrack:1",
-        }
-    }
-
-    pub(crate) const fn expected_dimensions(self) -> &'static str {
-        match self {
-            Self::SingleRtmp720pA0
-            | Self::SingleSrt720pA0
-            | Self::MultiRtmp720pA0
-            | Self::MultiRtmp720pA1
-            | Self::MultiSrt720pAll
-            | Self::MultiSrt720pA0
-            | Self::MultiSrt720pA1 => "1280x720",
-            _ => "1920x1080",
-        }
-    }
-
-    pub(crate) const fn expected_audio_tracks(self) -> usize {
-        match self {
-            Self::MultiSrtSrcAll | Self::MultiSrt720pAll | Self::MultiSrt1080pAll => 2,
-            _ => 1,
-        }
-    }
-
-    pub(crate) const fn selected_audio_track(self) -> Option<usize> {
-        match self {
-            Self::MultiRtmpSrcA0
-            | Self::MultiRtmp720pA0
-            | Self::MultiRtmp1080pA0
-            | Self::MultiSrtSrcA0
-            | Self::MultiSrt720pA0
-            | Self::MultiSrt1080pA0 => Some(0),
-            Self::MultiRtmpSrcA1
-            | Self::MultiRtmp720pA1
-            | Self::MultiRtmp1080pA1
-            | Self::MultiSrtSrcA1
-            | Self::MultiSrt720pA1
-            | Self::MultiSrt1080pA1 => Some(1),
+impl MixedOutputProtocol {
+    pub(crate) fn from_name(value: &str) -> Option<Self> {
+        match value {
+            "rtmp" => Some(Self::Rtmp),
+            "srt" => Some(Self::Srt),
             _ => None,
         }
     }
 }
 
-pub(crate) const SINGLE_TRACK_MIXED_OUTPUT_CASES: &[MixedOutputCase] = &[
-    MixedOutputCase::SingleRtmpSrcA0,
-    MixedOutputCase::SingleRtmp720pA0,
-    MixedOutputCase::SingleRtmp1080pA0,
-    MixedOutputCase::SingleSrtSrcA0,
-    MixedOutputCase::SingleSrt720pA0,
-    MixedOutputCase::SingleSrt1080pA0,
-];
+/// Complete output-side row in the mixed matrix.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MixedOutputCase {
+    id: String,
+    protocol: MixedOutputProtocol,
+    encoding: String,
+    expected_dimensions: String,
+    expected_audio_tracks: usize,
+    selected_audio_track: Option<usize>,
+}
 
-pub(crate) const MULTI_TRACK_MIXED_OUTPUT_CASES: &[MixedOutputCase] = &[
-    MixedOutputCase::MultiRtmpSrcA0,
-    MixedOutputCase::MultiRtmpSrcA1,
-    MixedOutputCase::MultiRtmp720pA0,
-    MixedOutputCase::MultiRtmp720pA1,
-    MixedOutputCase::MultiRtmp1080pA0,
-    MixedOutputCase::MultiRtmp1080pA1,
-    MixedOutputCase::MultiSrtSrcAll,
-    MixedOutputCase::MultiSrtSrcA0,
-    MixedOutputCase::MultiSrtSrcA1,
-    MixedOutputCase::MultiSrt720pAll,
-    MixedOutputCase::MultiSrt720pA0,
-    MixedOutputCase::MultiSrt720pA1,
-    MixedOutputCase::MultiSrt1080pAll,
-    MixedOutputCase::MultiSrt1080pA0,
-    MixedOutputCase::MultiSrt1080pA1,
-];
+impl MixedOutputCase {
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(crate) const fn protocol(&self) -> MixedOutputProtocol {
+        self.protocol
+    }
+
+    pub(crate) fn encoding(&self) -> &str {
+        &self.encoding
+    }
+
+    pub(crate) fn expected_dimensions(&self) -> &str {
+        &self.expected_dimensions
+    }
+
+    pub(crate) const fn expected_audio_tracks(&self) -> usize {
+        self.expected_audio_tracks
+    }
+
+    pub(crate) const fn selected_audio_track(&self) -> Option<usize> {
+        self.selected_audio_track
+    }
+}
 
 /// Source adapter used by the mixed runner for one input axis row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

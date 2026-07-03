@@ -21,6 +21,33 @@
       {"id": "mixed.live.srt.h265.a2.bf0", "ingest": "srt", "video": "h265", "audio": "a2", "reorder": "bf0"},
       {"id": "mixed.live.srt.h265.a2.bf2", "ingest": "srt", "video": "h265", "audio": "a2", "reorder": "bf2"}
     ],
+    "outputs": {
+      "singleTrack": [
+        {"id": "rtmp.src.a0", "protocol": "rtmp", "encoding": "source", "expectedDimensions": "1920x1080", "expectedAudioTracks": 1},
+        {"id": "rtmp.720p.a0", "protocol": "rtmp", "encoding": "720p", "expectedDimensions": "1280x720", "expectedAudioTracks": 1},
+        {"id": "rtmp.1080p.a0", "protocol": "rtmp", "encoding": "1080p", "expectedDimensions": "1920x1080", "expectedAudioTracks": 1},
+        {"id": "srt.src.a0", "protocol": "srt", "encoding": "source", "expectedDimensions": "1920x1080", "expectedAudioTracks": 1},
+        {"id": "srt.720p.a0", "protocol": "srt", "encoding": "720p", "expectedDimensions": "1280x720", "expectedAudioTracks": 1},
+        {"id": "srt.1080p.a0", "protocol": "srt", "encoding": "1080p", "expectedDimensions": "1920x1080", "expectedAudioTracks": 1}
+      ],
+      "multiTrack": [
+        {"id": "rtmp.src.a0", "protocol": "rtmp", "encoding": "source+atrack:0", "expectedDimensions": "1920x1080", "expectedAudioTracks": 1, "selectedAudioTrack": 0},
+        {"id": "rtmp.src.a1", "protocol": "rtmp", "encoding": "source+atrack:1", "expectedDimensions": "1920x1080", "expectedAudioTracks": 1, "selectedAudioTrack": 1},
+        {"id": "rtmp.720p.a0", "protocol": "rtmp", "encoding": "720p+atrack:0", "expectedDimensions": "1280x720", "expectedAudioTracks": 1, "selectedAudioTrack": 0},
+        {"id": "rtmp.720p.a1", "protocol": "rtmp", "encoding": "720p+atrack:1", "expectedDimensions": "1280x720", "expectedAudioTracks": 1, "selectedAudioTrack": 1},
+        {"id": "rtmp.1080p.a0", "protocol": "rtmp", "encoding": "1080p+atrack:0", "expectedDimensions": "1920x1080", "expectedAudioTracks": 1, "selectedAudioTrack": 0},
+        {"id": "rtmp.1080p.a1", "protocol": "rtmp", "encoding": "1080p+atrack:1", "expectedDimensions": "1920x1080", "expectedAudioTracks": 1, "selectedAudioTrack": 1},
+        {"id": "srt.src.all", "protocol": "srt", "encoding": "source", "expectedDimensions": "1920x1080", "expectedAudioTracks": 2},
+        {"id": "srt.src.a0", "protocol": "srt", "encoding": "source+atrack:0", "expectedDimensions": "1920x1080", "expectedAudioTracks": 1, "selectedAudioTrack": 0},
+        {"id": "srt.src.a1", "protocol": "srt", "encoding": "source+atrack:1", "expectedDimensions": "1920x1080", "expectedAudioTracks": 1, "selectedAudioTrack": 1},
+        {"id": "srt.720p.all", "protocol": "srt", "encoding": "720p", "expectedDimensions": "1280x720", "expectedAudioTracks": 2},
+        {"id": "srt.720p.a0", "protocol": "srt", "encoding": "720p+atrack:0", "expectedDimensions": "1280x720", "expectedAudioTracks": 1, "selectedAudioTrack": 0},
+        {"id": "srt.720p.a1", "protocol": "srt", "encoding": "720p+atrack:1", "expectedDimensions": "1280x720", "expectedAudioTracks": 1, "selectedAudioTrack": 1},
+        {"id": "srt.1080p.all", "protocol": "srt", "encoding": "1080p", "expectedDimensions": "1920x1080", "expectedAudioTracks": 2},
+        {"id": "srt.1080p.a0", "protocol": "srt", "encoding": "1080p+atrack:0", "expectedDimensions": "1920x1080", "expectedAudioTracks": 1, "selectedAudioTrack": 0},
+        {"id": "srt.1080p.a1", "protocol": "srt", "encoding": "1080p+atrack:1", "expectedDimensions": "1920x1080", "expectedAudioTracks": 1, "selectedAudioTrack": 1}
+      ]
+    },
     "fastBreadth": [
       {"id": "mixed.asset.file.h264.a1.bf0", "rationale": "file H.264 BF0 single-audio startup hero row", "checks": ["ffprobe", "stage-sharing", "hls"]},
       {"id": "mixed.asset.file.h265.a2.bf2", "rationale": "file HEVC BF2 multi-audio plus codec-edge outputs", "checks": ["ffprobe", "stage-sharing"]},

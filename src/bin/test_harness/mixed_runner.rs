@@ -738,7 +738,7 @@ pub(super) async fn run_mixed_anchor_config(
 ) -> Result<Value, String> {
     let cfg = case.scenario_id();
     let n = env.n_per_group;
-    let output_cases = SINGLE_TRACK_MIXED_OUTPUT_CASES;
+    let output_cases = single_track_mixed_output_cases();
     let total = n * output_cases.len();
     let (pipeline_id, stream_key) = create_mixed_pipeline(api, cfg).await?;
 
@@ -1763,7 +1763,7 @@ where
 pub(super) fn mixed_output_publish_url(
     env: &MixedEnv,
     cfg: &str,
-    case: MixedOutputCase,
+    case: &MixedOutputCase,
     index: usize,
 ) -> String {
     let output_name = mixed_output_instance_name(cfg, case.id(), index);
@@ -1783,7 +1783,7 @@ pub(super) fn mixed_output_publish_url(
 pub(super) fn mixed_output_read_url(
     env: &MixedEnv,
     cfg: &str,
-    case: MixedOutputCase,
+    case: &MixedOutputCase,
     index: usize,
 ) -> String {
     let output_name = mixed_output_instance_name(cfg, case.id(), index);
@@ -1834,7 +1834,7 @@ pub(super) async fn add_mixed_output_cases(
         if env.use_direct_signal_sinks() {
             for index in 1..=env.n_per_group {
                 let sink =
-                    spawn_ffmpeg_signal_sink(env, cfg, *case, index, *next_signal_sink_offset)
+                    spawn_ffmpeg_signal_sink(env, cfg, case, index, *next_signal_sink_offset)
                         .await?;
                 *next_signal_sink_offset += 1;
                 direct_urls.push(sink.publish_url.clone());
@@ -1856,7 +1856,7 @@ pub(super) async fn add_mixed_output_cases(
                 direct_urls
                     .get(index.saturating_sub(1))
                     .cloned()
-                    .unwrap_or_else(|| mixed_output_publish_url(env, cfg, *case, index))
+                    .unwrap_or_else(|| mixed_output_publish_url(env, cfg, case, index))
             },
             output_ids,
         )
@@ -1893,7 +1893,7 @@ pub(super) async fn add_mixed_multi_output_cases(
         if env.use_direct_signal_sinks() {
             for index in 1..=env.n_per_group {
                 let sink =
-                    spawn_ffmpeg_signal_sink(env, cfg, *case, index, *next_signal_sink_offset)
+                    spawn_ffmpeg_signal_sink(env, cfg, case, index, *next_signal_sink_offset)
                         .await?;
                 *next_signal_sink_offset += 1;
                 direct_urls.push(sink.publish_url.clone());
@@ -1917,7 +1917,7 @@ pub(super) async fn add_mixed_multi_output_cases(
                         direct_urls
                             .get(index.saturating_sub(1))
                             .cloned()
-                            .unwrap_or_else(|| mixed_output_publish_url(env, cfg, *case, index))
+                            .unwrap_or_else(|| mixed_output_publish_url(env, cfg, case, index))
                     },
                     output_ids,
                 )
@@ -1934,7 +1934,7 @@ pub(super) async fn add_mixed_multi_output_cases(
                         count: env.n_per_group,
                         encoding: case.encoding(),
                     },
-                    |index| mixed_output_publish_url(env, cfg, *case, index),
+                    |index| mixed_output_publish_url(env, cfg, case, index),
                     MixedSrtGroupValidation {
                         label: case.id(),
                         expected_dimensions: case.expected_dimensions(),
@@ -1995,7 +1995,7 @@ pub(super) async fn verify_mixed_output_cases_inner(
         {
             continue;
         }
-        let url = mixed_output_read_url(env, cfg, *case, index);
+        let url = mixed_output_read_url(env, cfg, case, index);
         let label = format!("{} out{index}", case.id());
         let mut output_failed = false;
         if env.check_selected("ffprobe") {
@@ -2157,7 +2157,7 @@ where
 pub(super) async fn spawn_ffmpeg_signal_sink(
     env: &MixedEnv,
     cfg: &str,
-    case: MixedOutputCase,
+    case: &MixedOutputCase,
     index: usize,
     offset: usize,
 ) -> Result<FfmpegSignalSink, String> {

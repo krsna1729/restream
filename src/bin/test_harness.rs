@@ -13857,7 +13857,7 @@ stream|index=1|codec_type=audio\n";
             if case.is_multi_track() {
                 assert_eq!(
                     cases.len(),
-                    MULTI_TRACK_MIXED_OUTPUT_CASES.len(),
+                    multi_track_mixed_output_cases().len(),
                     "{} should exercise the multi-audio output matrix",
                     case.scenario_id()
                 );
@@ -13865,7 +13865,7 @@ stream|index=1|codec_type=audio\n";
             } else {
                 assert_eq!(
                     cases.len(),
-                    SINGLE_TRACK_MIXED_OUTPUT_CASES.len(),
+                    single_track_mixed_output_cases().len(),
                     "{} should exercise the single-track output matrix",
                     case.scenario_id()
                 );
@@ -14054,7 +14054,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn single_track_output_matrix_exercises_all_protocol_encoding_pairs() {
-        let pairs: Vec<_> = SINGLE_TRACK_MIXED_OUTPUT_CASES
+        let pairs: Vec<_> = single_track_mixed_output_cases()
             .iter()
             .map(|case| (mixed_output_protocol_name(case.protocol()), case.encoding()))
             .collect();
@@ -14070,7 +14070,7 @@ stream|index=1|codec_type=audio\n";
             ]
         );
         assert!(
-            SINGLE_TRACK_MIXED_OUTPUT_CASES
+            single_track_mixed_output_cases()
                 .iter()
                 .all(|case| case.expected_audio_tracks() == 1)
         );
@@ -14078,7 +14078,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn single_track_output_matrix_reports_same_rows_it_executes() {
-        let rows = mixed_output_matrix_json(SINGLE_TRACK_MIXED_OUTPUT_CASES);
+        let rows = mixed_output_matrix_json(single_track_mixed_output_cases());
         let groups: Vec<_> = rows.iter().map(|row| row["id"].as_str().unwrap()).collect();
         assert_eq!(
             groups,
@@ -14095,7 +14095,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn multi_track_output_matrix_exercises_rtmp_subsets_and_srt_all_plus_subsets() {
-        let groups: Vec<_> = MULTI_TRACK_MIXED_OUTPUT_CASES
+        let groups: Vec<_> = multi_track_mixed_output_cases()
             .iter()
             .map(|case| case.id())
             .collect();
@@ -14119,7 +14119,7 @@ stream|index=1|codec_type=audio\n";
                 "srt.1080p.a1",
             ]
         );
-        let rtmp_cases: Vec<_> = MULTI_TRACK_MIXED_OUTPUT_CASES
+        let rtmp_cases: Vec<_> = multi_track_mixed_output_cases()
             .iter()
             .filter(|case| case.protocol() == MixedOutputProtocol::Rtmp)
             .collect();
@@ -14135,7 +14135,7 @@ stream|index=1|codec_type=audio\n";
                 .all(|case| case.selected_audio_track().is_some())
         );
 
-        let srt_all_cases: Vec<_> = MULTI_TRACK_MIXED_OUTPUT_CASES
+        let srt_all_cases: Vec<_> = multi_track_mixed_output_cases()
             .iter()
             .filter(|case| {
                 case.protocol() == MixedOutputProtocol::Srt && case.selected_audio_track().is_none()
