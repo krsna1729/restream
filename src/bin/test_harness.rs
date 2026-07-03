@@ -1721,6 +1721,10 @@ impl RampApi {
         self.post_json(path, json!({})).await
     }
 
+    async fn post_null(&self, path: &str) -> Result<Value, String> {
+        self.post_json(path, Value::Null).await
+    }
+
     async fn patch_json(&self, path: &str, body: Value) -> Result<Value, String> {
         let mut request = self
             .client
@@ -5149,10 +5153,9 @@ async fn run_ramp_config(
     stop_child(&mut publisher).await;
     for output_id in &output_ids {
         let _ = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop"),
-                Value::Null,
-            )
+            .post_null(&format!(
+                "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop"
+            ))
             .await;
     }
     tokio::time::sleep(env.cleanup_sleep).await;
@@ -8587,8 +8590,7 @@ async fn fault_rtmp_egress_sink_disappear(
     .await?;
     wait_for_api_input_live(api, &pid, timeout).await?;
 
-    api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
-        .await?;
+    start_mixed_output(api, &pid, &oid).await?;
 
     let _ = wait_for_sink_video_above(&sink_metrics, 9, timeout).await;
     println!("[fault] RTMP egress delivering data");
@@ -8736,8 +8738,7 @@ async fn fault_srt_egress_sink_disappear(
     .await?;
     wait_for_api_input_live(api, &pid, timeout).await?;
 
-    api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
-        .await?;
+    start_mixed_output(api, &pid, &oid).await?;
 
     let deadline = Instant::now() + timeout;
     let mut sink_live = false;
@@ -8879,8 +8880,7 @@ async fn fault_rtmp_egress_sink_stalls(
     .await?;
     wait_for_api_input_live(api, &pid, timeout).await?;
 
-    api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
-        .await?;
+    start_mixed_output(api, &pid, &oid).await?;
 
     let accept_deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < accept_deadline && !stall_server.publish_accepted.load(Ordering::Relaxed)
@@ -8911,9 +8911,7 @@ async fn fault_rtmp_egress_sink_stalls(
             .unwrap_or_else(|| "null".to_string()),
     );
 
-    let _ = api
-        .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
-        .await;
+    stop_mixed_outputs(api, &pid, std::slice::from_ref(&oid)).await;
     stop_child(&mut pub_child).await;
     stop_stalled_rtmp_sink_server(stall_server);
 
@@ -9135,16 +9133,8 @@ async fn fault_rtmp_stalled_sink_isolation_under_many_outputs(
         stalled_result.is_ok(),
     );
 
-    let _ = api
-        .post_empty(&format!(
-            "/api/v1/pipelines/{pid}/outputs/{stalled_oid}/stop"
-        ))
-        .await;
-    for output_id in &healthy_output_ids {
-        let _ = api
-            .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{output_id}/stop"))
-            .await;
-    }
+    stop_mixed_outputs(api, &pid, std::slice::from_ref(&stalled_oid)).await;
+    stop_mixed_outputs(api, &pid, &healthy_output_ids).await;
     stop_child(&mut pub_child).await;
     stop_stalled_rtmp_sink_server(stall_server);
     for server in healthy_servers {
@@ -9381,8 +9371,7 @@ async fn fault_egress_retry_budget_exhausts_to_failed(
     .await?;
     wait_for_api_input_live(api, &pid, Duration::from_secs(15)).await?;
 
-    api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
-        .await?;
+    start_mixed_output(api, &pid, &oid).await?;
 
     let started = Instant::now();
     let deadline = started + Duration::from_secs(8);
@@ -9867,9 +9856,7 @@ async fn run_recovery_transient_case(
         final_recent_disconnect_count,
     );
 
-    let _ = api
-        .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
-        .await;
+    stop_mixed_outputs(api, &pid, std::slice::from_ref(&oid)).await;
     if case.second_reconnect_checks_flapping {
         if let Some(child) = second_resumed_child.as_mut() {
             stop_child(child).await;
@@ -9968,8 +9955,7 @@ async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
-            .await?;
+        start_mixed_output(api, &pid, &oid).await?;
 
         let _ = wait_for_sink_video_above(
             &metrics,
@@ -10117,9 +10103,7 @@ async fn recovery_live_cases(
             "finalInputSnapshot": final_input,
         }));
 
-        let _ = api
-            .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
-            .await;
+        stop_mixed_outputs(api, &pid, std::slice::from_ref(&oid)).await;
         if let Some(child) = replacement_child.as_mut() {
             stop_child(child).await;
         }
@@ -10150,8 +10134,7 @@ async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
-            .await?;
+        start_mixed_output(api, &pid, &oid).await?;
 
         let _ = wait_for_sink_video_above(
             &sink_metrics,
@@ -10313,9 +10296,7 @@ async fn recovery_live_cases(
 
         stop_generalized_sink_server(recovery_server);
 
-        let _ = api
-            .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
-            .await;
+        stop_mixed_outputs(api, &pid, std::slice::from_ref(&oid)).await;
         stop_child(&mut resumed_child).await;
     }
 
@@ -10347,8 +10328,7 @@ async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
-            .await?;
+        start_mixed_output(api, &pid, &oid).await?;
 
         let retry =
             wait_for_output_retry_observation(api, &pid, &oid, Duration::from_secs(20)).await;
@@ -10459,9 +10439,7 @@ async fn recovery_live_cases(
             "finalStatus": final_status,
         }));
 
-        let _ = api
-            .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
-            .await;
+        stop_mixed_outputs(api, &pid, std::slice::from_ref(&oid)).await;
         stop_child(&mut pub_child).await;
         sink_cancel.cancel();
         let _ = sink_handle.await;
@@ -10492,8 +10470,7 @@ async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
-            .await?;
+        start_mixed_output(api, &pid, &oid).await?;
 
         let _ = wait_for_sink_video_above(
             &sink_metrics,
@@ -10619,9 +10596,7 @@ async fn recovery_live_cases(
             "finalHealthOutput": final_output_health,
         }));
 
-        let _ = api
-            .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
-            .await;
+        stop_mixed_outputs(api, &pid, std::slice::from_ref(&oid)).await;
         stop_child(&mut pub_child).await;
         if let Some(server) = sink_server.take() {
             stop_generalized_sink_server(server);
@@ -10658,8 +10633,7 @@ async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
-            .await?;
+        start_mixed_output(api, &pid, &oid).await?;
 
         wait_for_api_input_media_ready(api, &sink_pid, Duration::from_secs(25)).await?;
 
@@ -10771,9 +10745,7 @@ async fn recovery_live_cases(
             "finalHealthOutput": final_output_health,
         }));
 
-        let _ = api
-            .post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/stop"))
-            .await;
+        stop_mixed_outputs(api, &pid, std::slice::from_ref(&oid)).await;
         stop_child(&mut pub_child).await;
         let _ = delete_pipeline_v1(api, &sink_pid).await;
     }
@@ -11295,8 +11267,7 @@ async fn fault_resilience() -> Result<Value, String> {
         .await?;
         wait_for_api_input_live(&api, &pid, timeout).await?;
 
-        api.post_empty(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/start"))
-            .await?;
+        start_mixed_output(&api, &pid, &oid).await?;
 
         let restream_pid = child.id().ok_or("restream pid missing")?;
         let warm_deadline = Instant::now() + Duration::from_secs(15);

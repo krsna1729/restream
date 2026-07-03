@@ -1348,10 +1348,9 @@ pub(super) async fn start_mixed_output(
     pipeline_id: &str,
     output_id: &str,
 ) -> Result<(), String> {
-    api.post_json(
-        &format!("/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/start"),
-        Value::Null,
-    )
+    api.post_null(&format!(
+        "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/start"
+    ))
     .await
     .map(|_| ())
 }
@@ -3645,10 +3644,9 @@ pub(super) fn safe_artifact_stem(value: &str) -> String {
 pub(super) async fn stop_mixed_outputs(api: &RampApi, pipeline_id: &str, output_ids: &[String]) {
     for output_id in output_ids {
         let _ = api
-            .post_json(
-                &format!("/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop"),
-                Value::Null,
-            )
+            .post_null(&format!(
+                "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop"
+            ))
             .await;
     }
 }
