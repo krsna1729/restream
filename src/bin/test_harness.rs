@@ -2159,6 +2159,40 @@ impl SweepOutputKind {
             Self::Srt1080p => "srt.1080p.a0",
         }
     }
+
+    fn publish_url(self, rtmp_port: u16, srt_port: u16, name: &str) -> String {
+        match self {
+            Self::RtmpSource | Self::Rtmp720p | Self::Rtmp1080p => {
+                format!("rtmp://127.0.0.1:{rtmp_port}/live/{name}")
+            }
+            Self::SrtSource | Self::Srt720p | Self::Srt1080p => {
+                format!("srt://127.0.0.1:{srt_port}?streamid=publish:live/{name}")
+            }
+        }
+    }
+
+    fn read_url(self, rtmp_port: u16, srt_port: u16, name: &str) -> String {
+        match self {
+            Self::RtmpSource | Self::Rtmp720p | Self::Rtmp1080p => {
+                format!("rtmp://127.0.0.1:{rtmp_port}/live/{name}")
+            }
+            Self::SrtSource | Self::Srt720p | Self::Srt1080p => {
+                format!("srt://127.0.0.1:{srt_port}?streamid=read:live/{name}&timeout=30000000")
+            }
+        }
+    }
+
+    const fn encoding(self, multi_audio: bool) -> &'static str {
+        match (self, multi_audio) {
+            (Self::RtmpSource | Self::SrtSource, _) => "source",
+            (Self::Rtmp720p, true) => "720p+atrack:0",
+            (Self::Srt720p, true) => "720p+atrack:0,1",
+            (Self::Rtmp720p | Self::Srt720p, false) => "720p",
+            (Self::Rtmp1080p, true) => "1080p+atrack:0",
+            (Self::Srt1080p, true) => "1080p+atrack:0,1",
+            (Self::Rtmp1080p | Self::Srt1080p, false) => "1080p",
+        }
+    }
 }
 
 /// Reusable resource-sweep egress shape shared by resource and branch matrices.
@@ -2980,71 +3014,14 @@ fn bitrate_output_url(
     kind: SweepOutputKind,
     name: &str,
 ) -> (String, String) {
-    match kind {
-        SweepOutputKind::RtmpSource => (
-            format!("rtmp://127.0.0.1:{}/live/{name}", env.mtx_rtmp),
-            "source".to_string(),
-        ),
-        SweepOutputKind::SrtSource => (
-            format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{name}",
-                env.mtx_srt
-            ),
-            "source".to_string(),
-        ),
-        SweepOutputKind::Rtmp720p => (
-            format!("rtmp://127.0.0.1:{}/live/{name}", env.mtx_rtmp),
-            if config.multi_audio {
-                "720p+atrack:0".to_string()
-            } else {
-                "720p".to_string()
-            },
-        ),
-        SweepOutputKind::Srt720p => (
-            format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{name}",
-                env.mtx_srt
-            ),
-            if config.multi_audio {
-                "720p+atrack:0,1".to_string()
-            } else {
-                "720p".to_string()
-            },
-        ),
-        SweepOutputKind::Rtmp1080p => (
-            format!("rtmp://127.0.0.1:{}/live/{name}", env.mtx_rtmp),
-            if config.multi_audio {
-                "1080p+atrack:0".to_string()
-            } else {
-                "1080p".to_string()
-            },
-        ),
-        SweepOutputKind::Srt1080p => (
-            format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{name}",
-                env.mtx_srt
-            ),
-            if config.multi_audio {
-                "1080p+atrack:0,1".to_string()
-            } else {
-                "1080p".to_string()
-            },
-        ),
-    }
+    (
+        kind.publish_url(env.mtx_rtmp, env.mtx_srt, name),
+        kind.encoding(config.multi_audio).to_string(),
+    )
 }
 
 fn bitrate_probe_url(env: &BitrateSweepEnv, kind: SweepOutputKind, name: &str) -> String {
-    match kind {
-        SweepOutputKind::RtmpSource | SweepOutputKind::Rtmp720p | SweepOutputKind::Rtmp1080p => {
-            format!("rtmp://127.0.0.1:{}/live/{name}", env.mtx_rtmp)
-        }
-        SweepOutputKind::SrtSource | SweepOutputKind::Srt720p | SweepOutputKind::Srt1080p => {
-            format!(
-                "srt://127.0.0.1:{}?streamid=read:live/{name}&timeout=30000000",
-                env.mtx_srt
-            )
-        }
-    }
+    kind.read_url(env.mtx_rtmp, env.mtx_srt, name)
 }
 
 async fn sample_bitrate_window(
@@ -3868,57 +3845,10 @@ fn resource_output_url(
     kind: SweepOutputKind,
     name: &str,
 ) -> (String, String) {
-    match kind {
-        SweepOutputKind::RtmpSource => (
-            format!("rtmp://127.0.0.1:{}/live/{name}", env.mtx_rtmp),
-            "source".to_string(),
-        ),
-        SweepOutputKind::SrtSource => (
-            format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{name}",
-                env.mtx_srt
-            ),
-            "source".to_string(),
-        ),
-        SweepOutputKind::Rtmp720p => (
-            format!("rtmp://127.0.0.1:{}/live/{name}", env.mtx_rtmp),
-            if config.multi_audio {
-                "720p+atrack:0".to_string()
-            } else {
-                "720p".to_string()
-            },
-        ),
-        SweepOutputKind::Srt720p => (
-            format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{name}",
-                env.mtx_srt
-            ),
-            if config.multi_audio {
-                "720p+atrack:0,1".to_string()
-            } else {
-                "720p".to_string()
-            },
-        ),
-        SweepOutputKind::Rtmp1080p => (
-            format!("rtmp://127.0.0.1:{}/live/{name}", env.mtx_rtmp),
-            if config.multi_audio {
-                "1080p+atrack:0".to_string()
-            } else {
-                "1080p".to_string()
-            },
-        ),
-        SweepOutputKind::Srt1080p => (
-            format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{name}",
-                env.mtx_srt
-            ),
-            if config.multi_audio {
-                "1080p+atrack:0,1".to_string()
-            } else {
-                "1080p".to_string()
-            },
-        ),
-    }
+    (
+        kind.publish_url(env.mtx_rtmp, env.mtx_srt, name),
+        kind.encoding(config.multi_audio).to_string(),
+    )
 }
 
 async fn wait_for_outputs_progress(
@@ -12769,6 +12699,25 @@ stream|index=1|codec_type=audio\n";
                 .config_index,
             2
         );
+    }
+
+    #[test]
+    fn sweep_output_kind_centralizes_urls_and_multi_audio_encoding() {
+        assert_eq!(
+            SweepOutputKind::Rtmp720p.publish_url(1936, 8891, "out"),
+            "rtmp://127.0.0.1:1936/live/out"
+        );
+        assert_eq!(
+            SweepOutputKind::Srt720p.publish_url(1936, 8891, "out"),
+            "srt://127.0.0.1:8891?streamid=publish:live/out"
+        );
+        assert_eq!(
+            SweepOutputKind::Srt720p.read_url(1936, 8891, "out"),
+            "srt://127.0.0.1:8891?streamid=read:live/out&timeout=30000000"
+        );
+        assert_eq!(SweepOutputKind::Rtmp720p.encoding(true), "720p+atrack:0");
+        assert_eq!(SweepOutputKind::Srt720p.encoding(true), "720p+atrack:0,1");
+        assert_eq!(SweepOutputKind::SrtSource.encoding(true), "source");
     }
 
     #[test]
