@@ -9782,16 +9782,7 @@ async fn recovery_live_cases(
         let pid = create_pipeline(api, "fault-rtmp-transient").await?;
 
         let metrics = Arc::new(GeneralizedSinkMetrics::default());
-        let listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-            .await
-            .map_err(|e| format!("sink bind {sink_port}: {e}"))?;
-        let sink_metrics = metrics.clone();
-        let sink_task = tokio::spawn(async move {
-            while let Ok((socket, _)) = listener.accept().await {
-                let sink_metrics = sink_metrics.clone();
-                tokio::spawn(handle_generalized_sink_client(socket, sink_metrics));
-            }
-        });
+        let sink_server = start_generalized_sink_server(sink_port, metrics.clone()).await?;
 
         let oid = create_mixed_output(
             api,
@@ -10001,7 +9992,7 @@ async fn recovery_live_cases(
             )
             .await;
         stop_child(&mut second_resumed_child).await;
-        sink_task.abort();
+        stop_generalized_sink_server(sink_server);
     }
 
     // ── 2. Transient SRT publisher drop does not tear down egress ──────
@@ -10009,16 +10000,7 @@ async fn recovery_live_cases(
         let pid = create_pipeline(api, "fault-srt-transient").await?;
 
         let metrics = Arc::new(GeneralizedSinkMetrics::default());
-        let listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-            .await
-            .map_err(|e| format!("sink bind {sink_port}: {e}"))?;
-        let sink_metrics = metrics.clone();
-        let sink_task = tokio::spawn(async move {
-            while let Ok((socket, _)) = listener.accept().await {
-                let sink_metrics = sink_metrics.clone();
-                tokio::spawn(handle_generalized_sink_client(socket, sink_metrics));
-            }
-        });
+        let sink_server = start_generalized_sink_server(sink_port, metrics.clone()).await?;
 
         let oid = create_mixed_output(
             api,
@@ -10198,7 +10180,7 @@ async fn recovery_live_cases(
             )
             .await;
         stop_child(&mut resumed_child).await;
-        sink_task.abort();
+        stop_generalized_sink_server(sink_server);
     }
 
     // ── 2b. Rapid SRT publisher replacement preserves egress ownership ──
@@ -10211,16 +10193,7 @@ async fn recovery_live_cases(
         .await?;
 
         let metrics = Arc::new(GeneralizedSinkMetrics::default());
-        let listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-            .await
-            .map_err(|e| format!("sink bind {sink_port}: {e}"))?;
-        let sink_metrics = metrics.clone();
-        let sink_task = tokio::spawn(async move {
-            while let Ok((socket, _)) = listener.accept().await {
-                let sink_metrics = sink_metrics.clone();
-                tokio::spawn(handle_generalized_sink_client(socket, sink_metrics));
-            }
-        });
+        let sink_server = start_generalized_sink_server(sink_port, metrics.clone()).await?;
 
         let oid = create_mixed_output(
             api,
@@ -10404,7 +10377,7 @@ async fn recovery_live_cases(
         if let Some(child) = replacement_child.as_mut() {
             stop_child(child).await;
         }
-        sink_task.abort();
+        stop_generalized_sink_server(sink_server);
     }
 
     // ── 3. Egress retry survives transient ingest gap within grace ─────
