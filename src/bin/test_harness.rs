@@ -8500,49 +8500,9 @@ async fn fault_rtmp_egress_sink_disappear(
     stop_generalized_sink_server(sink_server);
 
     let started = Instant::now();
-    let poll_deadline = started + Duration::from_secs(10);
-    let mut passed = false;
-    let mut phase = String::from("unknown");
-    let mut has_error = false;
-    let mut saw_retrying = false;
-    let mut retry_attempts: Option<u64> = None;
-    let mut retry_backoff_ms: Option<u64> = None;
-    let mut health_saw_retrying = false;
-    while Instant::now() < poll_deadline {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let status = api
-            .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
+    let retry =
+        wait_for_output_retry_or_cleanup_observation(api, &pid, &oid, Duration::from_secs(10))
             .await;
-        match &status {
-            Err(_) => {
-                phase = "cleaned-up".to_string();
-                passed = true;
-                break;
-            }
-            Ok(s) => {
-                has_error = s["lastError"]
-                    .as_str()
-                    .map(|e| !e.is_empty())
-                    .unwrap_or(false);
-                phase = s["phase"].as_str().unwrap_or("unknown").to_string();
-                if s["status"].as_str() == Some("retrying") {
-                    saw_retrying = true;
-                    retry_attempts = s["retryAttempts"].as_u64();
-                    retry_backoff_ms = s["retryBackoffMs"].as_u64();
-                }
-                if let Ok(health) = api.get_json("/api/v1/engine/health").await
-                    && health["pipelines"][&pid]["outputs"][&oid]["status"].as_str()
-                        == Some("retrying")
-                {
-                    health_saw_retrying = true;
-                }
-                if saw_retrying && has_error {
-                    passed = true;
-                    break;
-                }
-            }
-        }
-    }
     let elapsed = started.elapsed();
     let recovery_metrics = Arc::new(GeneralizedSinkMetrics::default());
     let recovered_server =
@@ -8552,6 +8512,7 @@ async fn fault_rtmp_egress_sink_disappear(
     let recovery_deadline = recovery_started + Duration::from_secs(25);
     let mut recovered = false;
     let mut recovery_status = String::from("unknown");
+    let mut saw_retrying = retry.status_visible;
     while Instant::now() < recovery_deadline {
         tokio::time::sleep(Duration::from_millis(500)).await;
         if let Ok(status) = api
@@ -8577,17 +8538,18 @@ async fn fault_rtmp_egress_sink_disappear(
         .as_ref()
         .and_then(|status| status["retrying"].as_bool())
         .unwrap_or(false);
+    let retry_phase_ok = output_retry_or_cleanup_phase_ok(&retry);
     println!(
         "[fault] RTMP egress sink disappear: {} (phase={}, hasError={}, sawRetrying={}, healthSawRetrying={}, recovered={}, recoveryStatus={}, finalRetrying={}, {:.1}s)",
-        if passed && recovered && saw_retrying && health_saw_retrying && !final_retrying {
+        if retry_phase_ok && recovered && saw_retrying && retry.health_visible && !final_retrying {
             "PASS"
         } else {
             "FAIL"
         },
-        phase,
-        has_error,
+        retry.phase,
+        retry.has_error,
         saw_retrying,
-        health_saw_retrying,
+        retry.health_visible,
         recovered,
         recovery_status,
         final_retrying,
@@ -8598,14 +8560,14 @@ async fn fault_rtmp_egress_sink_disappear(
 
     Ok(json!({
         "test": "rtmp-egress-sink-disappear",
-        "passed": passed && recovered && saw_retrying && health_saw_retrying && !final_retrying,
-        "phase": phase,
-        "hasError": has_error,
+        "passed": retry_phase_ok && recovered && saw_retrying && retry.health_visible && !final_retrying,
+        "phase": retry.phase,
+        "hasError": retry.has_error,
         "elapsedMs": elapsed.as_millis(),
         "sawRetrying": saw_retrying,
-        "healthSawRetrying": health_saw_retrying,
-        "retryAttempts": retry_attempts,
-        "retryBackoffMs": retry_backoff_ms,
+        "healthSawRetrying": retry.health_visible,
+        "retryAttempts": retry.attempts,
+        "retryBackoffMs": retry.backoff_ms,
         "recovered": recovered,
         "recoveryStatus": recovery_status,
         "finalRetrying": final_retrying,
@@ -8668,49 +8630,9 @@ async fn fault_srt_egress_sink_disappear(
     let _ = request.send().await;
 
     let started = Instant::now();
-    let poll_deadline = started + Duration::from_secs(10);
-    let mut passed = false;
-    let mut phase = String::from("unknown");
-    let mut has_error = false;
-    let mut saw_retrying = false;
-    let mut health_saw_retrying = false;
-    let mut retry_attempts: Option<u64> = None;
-    let mut retry_backoff_ms: Option<u64> = None;
-    while Instant::now() < poll_deadline {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let status = api
-            .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
+    let retry =
+        wait_for_output_retry_or_cleanup_observation(api, &pid, &oid, Duration::from_secs(10))
             .await;
-        match &status {
-            Err(_) => {
-                phase = "cleaned-up".to_string();
-                passed = true;
-                break;
-            }
-            Ok(s) => {
-                has_error = s["lastError"]
-                    .as_str()
-                    .map(|e| !e.is_empty())
-                    .unwrap_or(false);
-                phase = s["phase"].as_str().unwrap_or("unknown").to_string();
-                if s["status"].as_str() == Some("retrying") {
-                    saw_retrying = true;
-                    retry_attempts = s["retryAttempts"].as_u64();
-                    retry_backoff_ms = s["retryBackoffMs"].as_u64();
-                }
-                if let Ok(health) = api.get_json("/api/v1/engine/health").await
-                    && health["pipelines"][&pid]["outputs"][&oid]["status"].as_str()
-                        == Some("retrying")
-                {
-                    health_saw_retrying = true;
-                }
-                if saw_retrying && has_error {
-                    passed = true;
-                    break;
-                }
-            }
-        }
-    }
     let elapsed = started.elapsed();
     let final_status = api
         .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
@@ -8720,17 +8642,18 @@ async fn fault_srt_egress_sink_disappear(
         .as_ref()
         .and_then(|status| status["retrying"].as_bool())
         .unwrap_or(false);
+    let retry_phase_ok = output_retry_or_cleanup_phase_ok(&retry);
     println!(
         "[fault] SRT egress sink disappear: {} (phase={}, hasError={}, sawRetrying={}, healthSawRetrying={}, finalRetrying={}, {:.1}s)",
-        if passed && saw_retrying && health_saw_retrying && final_retrying {
+        if retry_phase_ok && retry.status_visible && retry.health_visible && final_retrying {
             "PASS"
         } else {
             "FAIL"
         },
-        phase,
-        has_error,
-        saw_retrying,
-        health_saw_retrying,
+        retry.phase,
+        retry.has_error,
+        retry.status_visible,
+        retry.health_visible,
         final_retrying,
         elapsed.as_secs_f64()
     );
@@ -8739,14 +8662,14 @@ async fn fault_srt_egress_sink_disappear(
 
     Ok(json!({
         "test": "srt-egress-sink-disappear",
-        "passed": passed && saw_retrying && health_saw_retrying && final_retrying,
-        "phase": phase,
-        "hasError": has_error,
+        "passed": retry_phase_ok && retry.status_visible && retry.health_visible && final_retrying,
+        "phase": retry.phase,
+        "hasError": retry.has_error,
         "elapsedMs": elapsed.as_millis(),
-        "sawRetrying": saw_retrying,
-        "healthSawRetrying": health_saw_retrying,
-        "retryAttempts": retry_attempts,
-        "retryBackoffMs": retry_backoff_ms,
+        "sawRetrying": retry.status_visible,
+        "healthSawRetrying": retry.health_visible,
+        "retryAttempts": retry.attempts,
+        "retryBackoffMs": retry.backoff_ms,
         "finalRetrying": final_retrying,
     }))
 }
@@ -9491,6 +9414,7 @@ struct OutputRetryObservation {
     status_visible: bool,
     health_visible: bool,
     has_error: bool,
+    cleaned_up: bool,
     phase: String,
     failure_phase: String,
     last_error: String,
@@ -9504,6 +9428,7 @@ impl Default for OutputRetryObservation {
             status_visible: false,
             health_visible: false,
             has_error: false,
+            cleaned_up: false,
             phase: String::from("unknown"),
             failure_phase: String::from("unknown"),
             last_error: String::new(),
@@ -9553,6 +9478,54 @@ async fn wait_for_output_retry_observation(
         }
     }
     observation
+}
+
+async fn wait_for_output_retry_or_cleanup_observation(
+    api: &RampApi,
+    pipeline_id: &str,
+    output_id: &str,
+    timeout: Duration,
+) -> OutputRetryObservation {
+    let deadline = Instant::now() + timeout;
+    let mut observation = OutputRetryObservation::default();
+    while Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        match api
+            .get_json(&format!(
+                "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
+            ))
+            .await
+        {
+            Err(_) => {
+                observation.cleaned_up = true;
+                observation.phase = "cleaned-up".to_string();
+                break;
+            }
+            Ok(status) => {
+                observation.status_visible = status["status"].as_str() == Some("retrying");
+                observation.phase = status["phase"].as_str().unwrap_or("unknown").to_string();
+                observation.last_error = status["lastError"].as_str().unwrap_or("").to_string();
+                observation.has_error = !observation.last_error.is_empty();
+                if observation.status_visible {
+                    observation.attempts = status["retryAttempts"].as_u64();
+                    observation.backoff_ms = status["retryBackoffMs"].as_u64();
+                }
+            }
+        }
+        if let Ok(health) = api.get_json("/api/v1/engine/health").await {
+            observation.health_visible =
+                health["pipelines"][pipeline_id]["outputs"][output_id]["status"].as_str()
+                    == Some("retrying");
+        }
+        if observation.status_visible && observation.has_error {
+            break;
+        }
+    }
+    observation
+}
+
+fn output_retry_or_cleanup_phase_ok(observation: &OutputRetryObservation) -> bool {
+    observation.cleaned_up || (observation.status_visible && observation.has_error)
 }
 
 async fn output_running_without_retry(api: &RampApi, pipeline_id: &str, output_id: &str) -> bool {
@@ -12831,6 +12804,27 @@ stream|index=1|codec_type=audio\n";
                 test_name
             );
         }
+    }
+
+    #[test]
+    fn output_retry_fault_phase_accepts_retry_error_or_cleanup() {
+        let retrying_with_error = OutputRetryObservation {
+            status_visible: true,
+            has_error: true,
+            ..Default::default()
+        };
+        let cleaned_up = OutputRetryObservation {
+            cleaned_up: true,
+            ..Default::default()
+        };
+        let retrying_without_error = OutputRetryObservation {
+            status_visible: true,
+            ..Default::default()
+        };
+
+        assert!(output_retry_or_cleanup_phase_ok(&retrying_with_error));
+        assert!(output_retry_or_cleanup_phase_ok(&cleaned_up));
+        assert!(!output_retry_or_cleanup_phase_ok(&retrying_without_error));
     }
 
     #[test]
