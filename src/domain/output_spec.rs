@@ -1,6 +1,7 @@
-//! Typed parsing for output encodings, egress protocols, and codec families.
+//! Typed parsing for output encodings, egress protocols, codec families, and
+//! output configuration payloads.
 
-use crate::domain::audio_routing::is_audio_operation;
+use crate::domain::audio_routing::{AudioRouting, is_audio_operation, parse_audio_operation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EgressProtocol {
@@ -176,6 +177,103 @@ impl OutputEncodingSpec {
     pub fn is_custom_output(&self) -> bool {
         self.video.is_custom()
     }
+
+    pub fn from_config(config: &OutputConfig) -> Self {
+        Self {
+            video: config.video.selector(),
+            audio_operation: config.audio.operation_string(),
+        }
+    }
+
+    pub fn to_config(&self) -> OutputConfig {
+        OutputConfig {
+            video: OutputVideoConfig::from_selector(&self.video),
+            audio: self
+                .audio_operation
+                .as_deref()
+                .map(parse_audio_operation)
+                .unwrap_or(AudioRouting::Passthrough),
+        }
+    }
+
+    pub fn to_encoding_string(&self) -> String {
+        self.to_config().to_encoding_string()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputConfig {
+    pub video: OutputVideoConfig,
+    pub audio: AudioRouting,
+}
+
+impl Default for OutputConfig {
+    fn default() -> Self {
+        Self {
+            video: OutputVideoConfig::Source,
+            audio: AudioRouting::Passthrough,
+        }
+    }
+}
+
+impl OutputConfig {
+    pub fn parse(encoding: &str) -> Self {
+        OutputEncodingSpec::parse(encoding).to_config()
+    }
+
+    pub fn to_encoding_string(&self) -> String {
+        let video = self.video.encoding_label();
+        match self.audio.operation_string() {
+            Some(audio) if matches!(self.video, OutputVideoConfig::Source) => audio,
+            Some(audio) => format!("{video}+{audio}"),
+            None => video.to_string(),
+        }
+    }
+
+    pub fn is_custom_output(&self) -> bool {
+        self.video.is_custom()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+pub enum OutputVideoConfig {
+    Source,
+    Preset { preset: String },
+    Custom,
+}
+
+impl OutputVideoConfig {
+    pub fn selector(&self) -> VideoSelector {
+        match self {
+            Self::Source => VideoSelector::Source,
+            Self::Preset { preset } => VideoSelector::Preset(preset.clone()),
+            Self::Custom => VideoSelector::Custom,
+        }
+    }
+
+    pub fn from_selector(selector: &VideoSelector) -> Self {
+        match selector {
+            VideoSelector::Source => Self::Source,
+            VideoSelector::Preset(preset) => Self::Preset {
+                preset: preset.clone(),
+            },
+            VideoSelector::Custom => Self::Custom,
+        }
+    }
+
+    pub fn encoding_label(&self) -> &str {
+        match self {
+            Self::Source => "source",
+            Self::Preset { preset } => preset.as_str(),
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn is_custom(&self) -> bool {
+        matches!(self, Self::Custom)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -315,6 +413,34 @@ mod tests {
     #[test]
     fn output_encoding_spec_reports_custom_video_selector() {
         assert!(OutputEncodingSpec::parse("custom+atrack:0").is_custom_output());
+    }
+
+    #[test]
+    fn output_config_round_trips_through_legacy_encoding_string() {
+        let config = OutputConfig::parse("720p+downmix:1");
+        assert_eq!(
+            config,
+            OutputConfig {
+                video: OutputVideoConfig::Preset {
+                    preset: "720p".to_string()
+                },
+                audio: AudioRouting::Downmix { track: 1 },
+            }
+        );
+        assert_eq!(config.to_encoding_string(), "720p+downmix:1");
+    }
+
+    #[test]
+    fn output_config_serde_uses_typed_shape() {
+        let config = OutputConfig::parse("atrack:0,2");
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "video": {"mode": "source"},
+                "audio": {"mode": "selectTracks", "tracks": [0, 2]}
+            })
+        );
     }
 
     #[test]

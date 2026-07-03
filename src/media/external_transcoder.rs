@@ -292,7 +292,7 @@ fn stage_audio_routing(preset: &str) -> Option<AudioRouting> {
     };
 
     match routing {
-        AudioRouting::Remap { .. } | AudioRouting::Downmix(_) => Some(routing),
+        AudioRouting::Remap { .. } | AudioRouting::Downmix { .. } => Some(routing),
         _ => None,
     }
 }
@@ -302,7 +302,7 @@ fn audio_filter_complex(routing: &Option<AudioRouting>) -> Option<String> {
         Some(AudioRouting::Remap { left, right, track }) => Some(format!(
             "[0:a:{track}]pan=stereo|c0=c{left}|c1=c{right}[aout]"
         )),
-        Some(AudioRouting::Downmix(track)) => {
+        Some(AudioRouting::Downmix { track }) => {
             Some(format!("[0:a:{track}]aresample=out_chlayout=stereo[aout]"))
         }
         _ => None,
@@ -1297,7 +1297,7 @@ mod tests {
     fn stage_audio_routing_downmix_is_some() {
         let r = stage_audio_routing("audio:downmix:0:from:source");
         assert!(r.is_some());
-        assert!(matches!(r, Some(AudioRouting::Downmix(_))));
+        assert!(matches!(r, Some(AudioRouting::Downmix { .. })));
     }
 
     #[test]

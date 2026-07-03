@@ -62,6 +62,7 @@ use crate::domain::srt_ingest::{
 };
 use crate::media::engine::{EgressRegistration, MediaEngine, PublisherQuality};
 use crate::media::ring_buffer::{MediaPacket, MediaType, Reader, RingBuffer};
+use crate::media::startup_policy;
 use crate::media::ts_chunk_ring::{TsChunkReader, TsChunkRing};
 use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
 use crate::types::Pipeline;
@@ -2186,6 +2187,34 @@ mod tests {
             assert_eq!(parsed.mode, SrtConnectionMode::Publish, "input={input}");
             assert_eq!(parsed.stream_key, "key01", "input={input}");
         }
+    }
+
+    #[test]
+    fn srt_egress_preroll_is_reserved_for_1080p_variants() {
+        assert_eq!(
+            startup_policy::srt_egress_keyframe_preroll_packets("source"),
+            0
+        );
+        assert_eq!(
+            startup_policy::srt_egress_keyframe_preroll_packets("atrack:0"),
+            0
+        );
+        assert_eq!(
+            startup_policy::srt_egress_keyframe_preroll_packets("720p+atrack:0"),
+            0
+        );
+        assert_eq!(
+            startup_policy::srt_egress_keyframe_preroll_packets("1080p"),
+            32
+        );
+        assert_eq!(
+            startup_policy::srt_egress_keyframe_preroll_packets("1080p+atrack:1"),
+            32
+        );
+        assert_eq!(
+            startup_policy::srt_egress_keyframe_preroll_packets("1080p60+atrack:1"),
+            0
+        );
     }
 
     #[test]
@@ -4414,10 +4443,19 @@ pub async fn start_srt_egress(
     });
     engine.register_os_thread(egress_sender_handle);
 
-    // Join the shared TS ring from its latest buffered keyframe instead of the
-    // strict live edge so late subscribers keep the muxed GOP/audio context
-    // that RTMP egress already replays from the upstream packet ring.
-    let mut reader = TsChunkReader::new(format!("srt_egress:{}", output_id), &shared_muxer);
+    let preroll_packets = startup_policy::srt_egress_keyframe_preroll_packets(&encoding);
+    let mut reader = if preroll_packets == 0 {
+        TsChunkReader::new(format!("srt_egress:{}", output_id), &shared_muxer)
+    } else {
+        // 1080p SRT egress needs a short pre-keyframe replay window under
+        // mixed HEVC load so late readers inherit enough mux context to avoid
+        // the selected-audio sync gaps seen at the strict keyframe edge.
+        TsChunkReader::new_with_keyframe_preroll(
+            format!("srt_egress:{}", output_id),
+            &shared_muxer,
+            preroll_packets,
+        )
+    };
     // Accumulation buffer: collect all muxed TS bytes for a burst, then
     // write them in a single out_queue.write() call (one lock acquisition
     // per burst instead of one per packet).

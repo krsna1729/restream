@@ -7,6 +7,10 @@ import type {
   PipelineView,
   VideoTrack,
 } from "../types.js";
+import {
+  normalizeOutputConfig,
+  outputConfigToEncoding,
+} from "./output-config.js";
 
 const throughputState = {
   outputBytes: new Map<string, { ts: number; bytes: number }>(),
@@ -222,6 +226,7 @@ function parsePipelinesInfo(
   });
 
   (config?.outputs || []).forEach((out) => {
+    const config = normalizeOutputConfig(out);
     let pipe = newPipelines.find((p) => p.id === out.pipelineId);
     const latestJob = latestJobsByOutput.get(`${out.pipelineId}:${out.id}`);
     const outHealth =
@@ -323,7 +328,8 @@ function parsePipelinesInfo(
       pipe: pipe.name,
       name: out.name,
       desiredState: out.desiredState || "stopped",
-      encoding: out.encoding || "source",
+      config,
+      encoding: outputConfigToEncoding(config),
       url: out.url,
       monitoringUrl: out.monitoringUrl || null,
       status,

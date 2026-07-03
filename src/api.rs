@@ -48,7 +48,7 @@ use crate::application::transcode_profiles::save_transcode_profiles;
 use crate::db;
 use crate::diag;
 use crate::domain::ingest_security::IngestSecurityConfig;
-use crate::domain::output_spec::{OutputEncodingSpec, OutputUrlScheme};
+use crate::domain::output_spec::{OutputConfig, OutputUrlScheme};
 use crate::domain::srt_ingest::{SrtGlobalIngestConfig, SrtPipelineIngestConfig};
 use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::events;
@@ -1645,8 +1645,23 @@ async fn pipelines_delete_handler(
 struct OutputPayload {
     name: String,
     url: String,
-    encoding: String,
+    #[serde(default)]
+    encoding: Option<String>,
+    #[serde(default)]
+    config: Option<OutputConfig>,
     monitoring_url: Option<String>,
+}
+
+impl OutputPayload {
+    fn config(&self) -> OutputConfig {
+        self.config
+            .clone()
+            .unwrap_or_else(|| OutputConfig::parse(self.encoding.as_deref().unwrap_or("source")))
+    }
+
+    fn encoding_string(&self) -> String {
+        self.config().to_encoding_string()
+    }
 }
 
 fn is_supported_output_url(url: &str) -> bool {
@@ -1658,10 +1673,6 @@ const MONITORING_URL_SCHEME_ERROR: &str =
     "Invalid monitoring URL scheme. Supported schemes are http://, https://, and srt://";
 const CUSTOM_OUTPUT_ENCODING_ERROR: &str =
     "Custom output encoding is not available yet; choose source or a preset encoding";
-
-fn is_custom_output_encoding(encoding: &str) -> bool {
-    OutputEncodingSpec::parse(encoding).is_custom_output()
-}
 
 fn normalize_monitoring_url(url: Option<&str>) -> Option<String> {
     let trimmed = url.unwrap_or_default().trim();
@@ -1831,7 +1842,9 @@ async fn outputs_create_handler(
     if let Some(r) = check_field_len("url", &payload.url, MAX_URL_LEN) {
         return r;
     }
-    if let Some(r) = check_field_len("encoding", &payload.encoding, MAX_ENCODING_LEN) {
+    let output_config = payload.config();
+    let output_encoding = payload.encoding_string();
+    if let Some(r) = check_field_len("encoding", &output_encoding, MAX_ENCODING_LEN) {
         return r;
     }
     if let Some(monitoring_url) = payload.monitoring_url.as_deref()
@@ -1839,7 +1852,7 @@ async fn outputs_create_handler(
     {
         return r;
     }
-    if is_custom_output_encoding(&payload.encoding) {
+    if output_config.is_custom_output() {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -1881,7 +1894,7 @@ async fn outputs_create_handler(
         &payload.url,
         monitoring_url.as_deref(),
         "stopped",
-        &payload.encoding,
+        &output_encoding,
     )
     .await
     {
@@ -1917,7 +1930,9 @@ async fn outputs_update_handler(
     if let Some(r) = check_field_len("url", &payload.url, MAX_URL_LEN) {
         return r;
     }
-    if let Some(r) = check_field_len("encoding", &payload.encoding, MAX_ENCODING_LEN) {
+    let output_config = payload.config();
+    let output_encoding = payload.encoding_string();
+    if let Some(r) = check_field_len("encoding", &output_encoding, MAX_ENCODING_LEN) {
         return r;
     }
     if let Some(monitoring_url) = payload.monitoring_url.as_deref()
@@ -1925,7 +1940,7 @@ async fn outputs_update_handler(
     {
         return r;
     }
-    if is_custom_output_encoding(&payload.encoding) {
+    if output_config.is_custom_output() {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -1968,7 +1983,7 @@ async fn outputs_update_handler(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     if existing.desired_state == "running"
-        && (existing.url != payload.url || existing.encoding != payload.encoding)
+        && (existing.url != payload.url || existing.encoding != output_encoding)
     {
         return (
             StatusCode::CONFLICT,
@@ -1986,7 +2001,7 @@ async fn outputs_update_handler(
         &payload.name,
         &payload.url,
         monitoring_url.as_deref(),
-        &payload.encoding,
+        &output_encoding,
     )
     .await
     {

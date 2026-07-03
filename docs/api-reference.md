@@ -195,9 +195,16 @@ Create/update body:
 {
   "name": "Primary CDN",
   "url": "rtmp://destination.example/live/key",
-  "encoding": "1080p+atrack:0"
+  "config": {
+    "video": { "mode": "preset", "preset": "1080p" },
+    "audio": { "mode": "selectTracks", "tracks": [0] }
+  }
 }
 ```
+
+Legacy clients may still send `encoding: "1080p+atrack:0"`, but the typed
+`config` object is now the preferred contract and all output responses include
+both `config` and the normalized legacy `encoding` string.
 
 The one-second reconciler starts and stops native egress tasks from
 `desiredState`.
@@ -206,10 +213,10 @@ Create, update, start, and stop responses include a normalized `output` object
 plus the mutation message so clients can patch local output config state without
 an immediate follow-up settings fetch.
 
-Output encoding accepts `source`, built-in video presets, and audio-routing
-suffixes. `custom` output encoding is rejected with `400 Bad Request` because
-custom FFmpeg arguments are persisted for future use but are not applied by the
-runtime yet.
+Output config accepts `source`, built-in video presets, and typed audio-routing
+shapes (`all`, `selectTracks`, `downmix`, `remap`). `custom` output video mode
+is rejected with `400 Bad Request` because custom FFmpeg arguments are persisted
+for future use but are not applied by the runtime yet.
 
 Deleting a running output cancels and unregisters its active egress before the
 database row is removed.

@@ -65,9 +65,9 @@ pub async fn start_audio_router(
 
     let routing_mode = match &routing {
         AudioRouting::Passthrough => "all",
-        AudioRouting::SelectTracks(_) => "subset",
+        AudioRouting::SelectTracks { .. } => "subset",
         AudioRouting::Remap { .. } => "remap",
-        AudioRouting::Downmix(_) => "downmix",
+        AudioRouting::Downmix { .. } => "downmix",
     };
     info!(
         "[audio-router] start pipeline={} mode={} input_codec='{}' output_codec='{}'",
@@ -111,7 +111,7 @@ pub async fn start_audio_router(
                     let out = match &routing {
                         AudioRouting::Passthrough => Some((*pkt).clone()),
 
-                        AudioRouting::SelectTracks(tracks) => {
+                        AudioRouting::SelectTracks { tracks } => {
                             match pkt.media_type {
                                 MediaType::Video => Some((*pkt).clone()),
                                 MediaType::Audio => {
@@ -139,7 +139,7 @@ pub async fn start_audio_router(
                             }
                         }
 
-                        AudioRouting::Downmix(_) => {
+                        AudioRouting::Downmix { .. } => {
                             // Downmix requires decode→mix→encode; not handled here.
                             // get_or_create_transcoder routes Downmix to the FFmpeg path.
                             Some((*pkt).clone())
@@ -180,7 +180,7 @@ pub async fn start_audio_router(
 pub fn apply_audio_routing(routing: &AudioRouting, input_tracks: &[AudioMeta]) -> Vec<AudioMeta> {
     match routing {
         AudioRouting::Passthrough => input_tracks.to_vec(),
-        AudioRouting::SelectTracks(tracks) => {
+        AudioRouting::SelectTracks { tracks } => {
             let mut out = Vec::new();
             let mut out_idx = 0;
             for (i, track) in input_tracks.iter().enumerate() {
@@ -202,7 +202,7 @@ pub fn apply_audio_routing(routing: &AudioRouting, input_tracks: &[AudioMeta]) -
                 Vec::new()
             }
         }
-        AudioRouting::Downmix(track) => {
+        AudioRouting::Downmix { track } => {
             if let Some(t) = input_tracks.get(*track) {
                 let mut out_track = t.clone();
                 out_track.track_index = 0;
@@ -455,7 +455,7 @@ mod tests {
             },
         ];
         // Select tracks 0 and 2
-        let routing = AudioRouting::SelectTracks(vec![0, 2]);
+        let routing = AudioRouting::SelectTracks { tracks: vec![0, 2] };
         let result = apply_audio_routing(&routing, &tracks);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].track_index, 0); // re-indexed: track 0 → index 0
@@ -535,7 +535,7 @@ mod tests {
             },
         ];
 
-        let routing = AudioRouting::SelectTracks(vec![2]);
+        let routing = AudioRouting::SelectTracks { tracks: vec![2] };
         let output_tracks = apply_audio_routing(&routing, &input_tracks);
         assert_eq!(output_tracks.len(), 1);
         assert_eq!(output_tracks[0].track_index, 0); // re-indexed from 2 to 0
@@ -556,7 +556,7 @@ mod tests {
         );
 
         // Start audio router
-        let routing = AudioRouting::SelectTracks(vec![2]);
+        let routing = AudioRouting::SelectTracks { tracks: vec![2] };
         let handle = tokio::spawn(start_audio_router(
             "pipe-id".to_string(),
             routing,
@@ -628,7 +628,7 @@ mod tests {
 
         let handle = tokio::spawn(start_audio_router(
             "pipe-video-params".to_string(),
-            AudioRouting::SelectTracks(vec![0]),
+            AudioRouting::SelectTracks { tracks: vec![0] },
             source_ring,
             out_ring.clone(),
             engine,
@@ -670,7 +670,7 @@ mod tests {
 
         let handle = tokio::spawn(start_audio_router(
             "pipe-video-params-live".to_string(),
-            AudioRouting::SelectTracks(vec![0]),
+            AudioRouting::SelectTracks { tracks: vec![0] },
             source_ring.clone(),
             out_ring.clone(),
             engine,
@@ -815,9 +815,9 @@ fn run_ffmpeg_transcoder_stage_with_metrics(
         } else if medium == ffmpeg_next::media::Type::Audio {
             let include = match &audio_routing {
                 AudioRouting::Passthrough => true,
-                AudioRouting::SelectTracks(tracks) => tracks.contains(&audio_stream_index),
+                AudioRouting::SelectTracks { tracks } => tracks.contains(&audio_stream_index),
                 AudioRouting::Remap { track, .. } => audio_stream_index == *track,
-                AudioRouting::Downmix(track) => audio_stream_index == *track,
+                AudioRouting::Downmix { track } => audio_stream_index == *track,
             };
             if include {
                 stream_meta.push(Some((MediaType::Audio, audio_out_index)));
@@ -950,14 +950,7 @@ fn run_ffmpeg_transcode_with_scale_with_metrics(
         .map_err(|_| "decoder open error")?;
 
     // Look up target dimensions
-    let profile = {
-        let cache = crate::media::profiles::cache().blocking_read();
-        cache
-            .get(video_preset)
-            .or_else(|| cache.get("h264"))
-            .cloned()
-            .unwrap_or_default()
-    };
+    let profile = crate::media::profiles::get_blocking(video_preset);
 
     let target_w = profile.width;
     let target_h = profile.height;

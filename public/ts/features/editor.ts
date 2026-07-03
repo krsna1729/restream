@@ -48,6 +48,7 @@ import {
 } from "../core/audio-caps.js";
 import type { AudioCaps, AudioProtocol } from "../core/audio-caps.js";
 import { isOutputManagedActive } from "../core/output-status.js";
+import { normalizeOutputConfig } from "../core/output-config.js";
 import { state } from "../core/state.js";
 import {
   awaitDashboardRuntimeMutationConvergence,
@@ -64,6 +65,7 @@ import {
 import type {
   AudioTrack,
   ConfigPipeline,
+  OutputConfig,
   PipelineView,
   OutputView,
   SrtPipelineIngestConfig,
@@ -1461,68 +1463,41 @@ async function openOutModal(
   (document.getElementById("out-name-input") as HTMLInputElement).value =
     output?.name || `Out_${pipe.outs.length + 1}`;
 
-  // Parse compound encoding "videoEncoding+audioRouting" so both controls are
-  // populated independently. Pure audio-only or pure video-only are also handled.
-  const rawEncoding = String(output?.encoding || "source").trim();
-  const rawAudioEncoding = rawEncoding.toLowerCase();
-  const compoundMatch = /^([^+]+)\+(.+)$/.exec(rawEncoding);
-  let videoEncodingPart = rawEncoding;
-  let audioEncodingPart = "";
-  if (compoundMatch) {
-    videoEncodingPart = compoundMatch[1].trim();
-    audioEncodingPart = compoundMatch[2].trim().toLowerCase();
-  }
-
-  const isRemapEncoding = /^remap:(\d+):(\d+)(?::(\d+))?$/.test(
-    audioEncodingPart || rawAudioEncoding,
-  );
-  const remapSource = audioEncodingPart || rawAudioEncoding;
-  const remapParts = isRemapEncoding ? remapSource.split(":") : null;
-  let remapTrack = 0;
-  let remapLeft = 0;
-  let remapRight = 1;
-  if (remapParts) {
-    if (remapParts.length === 4) {
-      remapTrack = parseInt(remapParts[1], 10);
-      remapLeft = parseInt(remapParts[2], 10);
-      remapRight = parseInt(remapParts[3], 10);
-    } else {
-      remapLeft = parseInt(remapParts[1], 10);
-      remapRight = parseInt(remapParts[2], 10);
-    }
-  }
+  const outputConfig = output
+    ? normalizeOutputConfig(output)
+    : ({
+        video: { mode: "source" },
+        audio: { mode: "all" },
+      } as OutputConfig);
+  let remapTrack =
+    outputConfig.audio.mode === "remap" ? outputConfig.audio.track || 0 : 0;
+  let remapLeft =
+    outputConfig.audio.mode === "remap" ? outputConfig.audio.leftChannel : 0;
+  let remapRight =
+    outputConfig.audio.mode === "remap" ? outputConfig.audio.rightChannel : 1;
   currentModalAudioTracks = pipe.input.audioTracks || [];
   if (currentModalAudioTracks.length === 0 && pipe.input.audio) {
     currentModalAudioTracks = [pipe.input.audio];
   }
   currentModalIngestLive = pipe.input.status === "on";
 
-  const audioSource = audioEncodingPart || rawAudioEncoding;
-  const atrackMatch = /^atrack:(\d+(?:,\d+)*)$/.exec(audioSource);
-  const downmixMatch = /^downmix:(\d+)$/.exec(audioSource);
-  modalAudioMode = isRemapEncoding
-    ? "remap"
-    : atrackMatch
-      ? "subset"
-      : downmixMatch
-        ? "downmix"
-        : "all";
-  modalAudioSelectedTracks = atrackMatch
-    ? atrackMatch[1].split(",").map((t) => parseInt(t, 10))
-    : downmixMatch
-      ? [parseInt(downmixMatch[1], 10)]
-      : [0];
-  const isAudioRoutingEncoding =
-    isRemapEncoding || !!atrackMatch || !!downmixMatch;
+  modalAudioMode =
+    outputConfig.audio.mode === "remap"
+      ? "remap"
+      : outputConfig.audio.mode === "selectTracks"
+        ? "subset"
+        : outputConfig.audio.mode === "downmix"
+          ? "downmix"
+          : "all";
+  modalAudioSelectedTracks =
+    outputConfig.audio.mode === "selectTracks"
+      ? outputConfig.audio.tracks
+      : outputConfig.audio.mode === "downmix"
+        ? [outputConfig.audio.track]
+        : [0];
 
-  // Set the video encoding dropdown: compound → video part; pure audio-only → 'source';
-  // pure video → the encoding itself.
   populateOutputEncodingSelect(
-    compoundMatch
-      ? videoEncodingPart
-      : isAudioRoutingEncoding
-        ? "source"
-        : rawEncoding || "source",
+    outputConfig.video.mode === "preset" ? outputConfig.video.preset : "source",
   );
   const trackCount = Math.max(1, currentModalAudioTracks.length);
   populateRemapTrackOptions(trackCount, remapTrack);
@@ -1655,54 +1630,52 @@ export async function editOutFormBtn(event: Event): Promise<void> {
     (document.getElementById("out-encoding-input") as HTMLSelectElement | null)
       ?.value || "source";
 
-  // Build the audio routing suffix from the current modal audio state.
-  let audioSuffix = "";
-  if (modalAudioMode === "subset") {
-    audioSuffix = `atrack:${modalAudioSelectedTracks.join(",")}`;
-  } else if (modalAudioMode === "downmix") {
-    audioSuffix = `downmix:${modalAudioSelectedTracks[0] ?? 0}`;
-  } else if (modalAudioMode === "remap") {
-    const track =
-      (
-        document.getElementById(
-          "out-remap-track-input",
-        ) as HTMLSelectElement | null
-      )?.value || "0";
-    const left =
-      (
-        document.getElementById(
-          "out-remap-left-input",
-        ) as HTMLSelectElement | null
-      )?.value || "0";
-    const right =
-      (
-        document.getElementById(
-          "out-remap-right-input",
-        ) as HTMLSelectElement | null
-      )?.value || "1";
-    audioSuffix =
-      currentModalAudioTracks.length > 1
-        ? `remap:${track}:${left}:${right}`
-        : `remap:${left}:${right}`;
-  }
-
-  // Compose the final encoding:
-  //   - If there is an audio routing suffix AND the video encoding is NOT 'source',
-  //     produce a compound "videoEncoding+audioRouting" string.
-  //   - If video is 'source' with audio routing, emit only the audio routing (backward compat).
-  //   - If passthrough-all is selected, emit just the video encoding.
-  let resolvedEncoding: string;
-  if (audioSuffix) {
-    resolvedEncoding =
+  const config: OutputConfig = {
+    video:
       selectedEncoding === "source"
-        ? audioSuffix
-        : `${selectedEncoding}+${audioSuffix}`;
-  } else {
-    resolvedEncoding = selectedEncoding;
-  }
+        ? { mode: "source" }
+        : { mode: "preset", preset: selectedEncoding },
+    audio:
+      modalAudioMode === "subset"
+        ? { mode: "selectTracks", tracks: modalAudioSelectedTracks }
+        : modalAudioMode === "downmix"
+          ? { mode: "downmix", track: modalAudioSelectedTracks[0] ?? 0 }
+          : modalAudioMode === "remap"
+            ? {
+                mode: "remap",
+                track:
+                  currentModalAudioTracks.length > 1
+                    ? parseInt(
+                        (
+                          document.getElementById(
+                            "out-remap-track-input",
+                          ) as HTMLSelectElement | null
+                        )?.value || "0",
+                        10,
+                      )
+                    : undefined,
+                leftChannel: parseInt(
+                  (
+                    document.getElementById(
+                      "out-remap-left-input",
+                    ) as HTMLSelectElement | null
+                  )?.value || "0",
+                  10,
+                ),
+                rightChannel: parseInt(
+                  (
+                    document.getElementById(
+                      "out-remap-right-input",
+                    ) as HTMLSelectElement | null
+                  )?.value || "1",
+                  10,
+                ),
+              }
+            : { mode: "all" },
+  };
   const data: {
     name: string;
-    encoding: string;
+    config: OutputConfig;
     url: string;
     monitoringUrl: string;
   } = {
@@ -1710,7 +1683,7 @@ export async function editOutFormBtn(event: Event): Promise<void> {
       (
         document.getElementById("out-name-input") as HTMLInputElement | null
       )?.value.trim() || "",
-    encoding: resolvedEncoding,
+    config,
     url: getEffectiveOutputUrlFromModal(),
     monitoringUrl:
       (

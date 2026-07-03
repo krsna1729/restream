@@ -25,6 +25,7 @@ pub mod rtmp;
 pub mod security;
 pub mod srt;
 pub mod stage_metrics;
+pub mod startup_policy;
 pub mod tcp_stats;
 pub mod timing;
 pub mod transcoder;

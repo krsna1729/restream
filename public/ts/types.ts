@@ -122,9 +122,27 @@ export interface ConfigOutput {
   name: string;
   url: string;
   monitoringUrl?: string | null;
+  config?: OutputConfig;
   encoding?: string;
   desiredState?: string;
 }
+
+export type OutputConfig = {
+  video:
+    | { mode: "source" }
+    | { mode: "custom" }
+    | { mode: "preset"; preset: string };
+  audio:
+    | { mode: "all" }
+    | { mode: "selectTracks"; tracks: number[] }
+    | {
+        mode: "remap";
+        track?: number;
+        leftChannel: number;
+        rightChannel: number;
+      }
+    | { mode: "downmix"; track: number };
+};
 
 export interface Job {
   pipelineId: string;
@@ -342,6 +360,7 @@ export interface OutputView {
   pipe: string;
   name: string;
   desiredState: string;
+  config?: OutputConfig;
   encoding: string;
   url: string;
   monitoringUrl: string | null;

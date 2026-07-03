@@ -4,6 +4,7 @@
 //! file is for the remaining cross-layer records that still back SQLite rows
 //! and JSON payloads for pipelines, outputs, jobs, and file ingests.
 
+use crate::domain::output_spec::OutputConfig;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -51,6 +52,12 @@ pub struct Output {
     pub monitoring_url: Option<String>,
     pub desired_state: String, // "running" | "stopped"
     pub encoding: String,
+}
+
+impl Output {
+    pub fn config(&self) -> OutputConfig {
+        OutputConfig::parse(&self.encoding)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

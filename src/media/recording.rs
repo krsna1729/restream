@@ -13,6 +13,7 @@ use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::mpegts::TsServiceMetadata;
 use crate::media::ring_buffer::{Reader, RingBuffer};
+use crate::media::startup_policy;
 use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -25,7 +26,6 @@ use tracing::{error, info, warn};
 
 const MIN_DURATION_SECS: u64 = 5;
 const MP4_MUXER_NAME: &str = "mov";
-const RECORDING_KEYFRAME_PREROLL_PACKETS: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -411,7 +411,7 @@ pub async fn start_recording(
     let mut reader = Reader::new_with_keyframe_preroll(
         format!("recording:{}", pipeline_name),
         ring_buffer,
-        RECORDING_KEYFRAME_PREROLL_PACKETS,
+        startup_policy::recording_keyframe_preroll_packets(),
     );
     let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
 

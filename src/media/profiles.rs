@@ -15,6 +15,8 @@ use tokio::sync::RwLock;
 
 use crate::domain::transcode_profile::{TranscodeProfile, TranscodeProfiles};
 
+pub const BASELINE_TRANSCODE_PROFILE_KEY: &str = "h264";
+
 /// Runtime cache of profiles. Loaded from DB at startup, updated when
 /// the settings API patches the config. The transcoder reads from this
 /// cache when initializing an encoder.
@@ -47,15 +49,34 @@ pub async fn replace_runtime_profiles(profiles: &TranscodeProfiles) {
     *cache = effective_profiles(profiles);
 }
 
-/// Get a profile by name. Falls back to "h264", then to default.
-/// Called by the transcoder when initializing an encoder.
-pub async fn get(name: &str) -> TranscodeProfile {
-    let cache = cache().read().await;
-    cache
+fn resolve_from_profiles(profiles: &TranscodeProfiles, name: &str) -> TranscodeProfile {
+    profiles
         .get(name)
-        .or_else(|| cache.get("h264"))
+        .or_else(|| profiles.get(BASELINE_TRANSCODE_PROFILE_KEY))
         .cloned()
         .unwrap_or_default()
+}
+
+/// Get a profile by name. Falls back to the baseline passthrough/transcode
+/// profile used for H.264-shaped outputs, then to the type default.
+/// Called by transcoders when initializing an encoder.
+pub async fn get(name: &str) -> TranscodeProfile {
+    let cache = cache().read().await;
+    resolve_from_profiles(&cache, name)
+}
+
+pub fn get_blocking(name: &str) -> TranscodeProfile {
+    let cache = cache().blocking_read();
+    resolve_from_profiles(&cache, name)
+}
+
+pub fn dimensions_for_preset(name: &str) -> Option<(u32, u32)> {
+    let profile = get_blocking(name);
+    (profile.width > 0 && profile.height > 0).then_some((profile.width, profile.height))
+}
+
+pub fn baseline_profile() -> TranscodeProfile {
+    get_blocking(BASELINE_TRANSCODE_PROFILE_KEY)
 }
 
 /// Built-in realtime defaults. Used when no DB config is present.
@@ -130,7 +151,7 @@ mod tests {
     #[test]
     fn built_in_has_h264_and_720p() {
         let profiles = built_in_defaults();
-        assert!(profiles.contains_key("h264"));
+        assert!(profiles.contains_key(BASELINE_TRANSCODE_PROFILE_KEY));
         assert!(profiles.contains_key("720p"));
         assert!(profiles.contains_key("1080p"));
     }

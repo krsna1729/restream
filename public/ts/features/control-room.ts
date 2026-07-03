@@ -17,6 +17,7 @@ import {
 import { buildInputPreviewUrl } from "./input-preview.js";
 import { upsertDashboardOutputConfig } from "./dashboard.js";
 import type { OutputView, PipelineView } from "../types.js";
+import { normalizeOutputConfig } from "../core/output-config.js";
 
 interface ControlRoomState {
   pipelineId: string | null;
@@ -1865,7 +1866,7 @@ async function saveMonitoringUrlFromControlRoom(
   try {
     const res = await updateOutput(pipeline.id, output.id, {
       name: output.name,
-      encoding: output.encoding,
+      config: normalizeOutputConfig(output),
       url: output.url,
       monitoringUrl,
     });

@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
 use crate::application::output_path::OutputPath;
-use crate::domain::output_spec::{OutputEncodingSpec, OutputUrlScheme};
+use crate::domain::output_spec::{OutputConfig, OutputEncodingSpec, OutputUrlScheme};
 use crate::types::{Ingest, Output, Pipeline};
 
 const OUTPUT_URL_SCHEME_ERROR: &str =
@@ -66,6 +66,7 @@ pub struct ProposedChange {
     pub url: Option<String>,
     pub monitoring_url: Option<String>,
     pub encoding: Option<String>,
+    pub config: Option<OutputConfig>,
     pub desired_state: Option<String>,
 }
 
@@ -297,6 +298,7 @@ pub fn schema_catalog() -> Value {
                 "url": {"type": "string", "optional": true, "redacted": true},
                 "monitoringUrl": {"type": "string", "optional": true, "redacted": true},
                 "encoding": {"type": "string", "optional": true},
+                "config": {"type": "object", "optional": true},
                 "desiredState": {"type": "string", "optional": true, "enum": ["running", "stopped"]}
             }
         },
@@ -398,9 +400,18 @@ fn redacted_output(output: &Output) -> Value {
         "urlRedacted": redacted_url(&output.url),
         "urlFingerprint": fingerprint(&output.url),
         "desiredState": output.desired_state,
+        "config": output.config(),
         "encoding": output.encoding,
         "monitoringUrl": output.monitoring_url.as_ref().map(|url| redacted_url(url)),
     })
+}
+
+fn change_output_encoding(change: &ProposedChange) -> Option<String> {
+    change
+        .config
+        .as_ref()
+        .map(OutputConfig::to_encoding_string)
+        .or_else(|| change.encoding.clone())
 }
 
 fn redacted_ingest(ingest: &Ingest) -> Value {
@@ -720,8 +731,8 @@ pub fn validate_plan(
             ));
         }
 
-        if let Some(encoding) = change.encoding.as_deref() {
-            if is_custom_output_encoding(encoding) {
+        if let Some(encoding) = change_output_encoding(change) {
+            if is_custom_output_encoding(&encoding) {
                 errors.push(issue(
                     "error",
                     "customEncodingUnsupported",
@@ -770,15 +781,16 @@ fn graph_preview(request: &PlanRequest, current_graph: Option<&Value>) -> GraphP
 
     let mut candidate_stages = HashSet::new();
     for change in &request.proposed_changes {
-        if let (Some(pid), Some(encoding)) = (
-            change
-                .pipeline_id
-                .as_deref()
-                .or(request.pipeline_id.as_deref()),
-            change.encoding.as_deref(),
-        ) {
+        let Some(pid) = change
+            .pipeline_id
+            .as_deref()
+            .or(request.pipeline_id.as_deref())
+        else {
+            continue;
+        };
+        if let Some(encoding) = change_output_encoding(change) {
             let output_path =
-                OutputPath::resolve(pid, encoding, change.url.as_deref().unwrap_or(""));
+                OutputPath::resolve(pid, &encoding, change.url.as_deref().unwrap_or(""));
             if let Some(stage) = output_path.video_stage() {
                 candidate_stages.insert(stage.kind.to_string());
             }
@@ -837,9 +849,9 @@ fn impact_preview(request: &PlanRequest) -> ImpactPreview {
             .or(request.pipeline_id.as_deref())
         {
             affected_pipelines.insert(pid.to_string());
-            if let Some(encoding) = change.encoding.as_deref() {
+            if let Some(encoding) = change_output_encoding(change) {
                 let output_path =
-                    OutputPath::resolve(pid, encoding, change.url.as_deref().unwrap_or(""));
+                    OutputPath::resolve(pid, &encoding, change.url.as_deref().unwrap_or(""));
                 if let Some(stage) = output_path.video_stage() {
                     shared_stage_candidates.insert(stage.kind.to_string());
                 }

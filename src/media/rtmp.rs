@@ -40,12 +40,9 @@ use crate::media::engine::{
 };
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
 use crate::media::security::IngestSecurityService;
+use crate::media::startup_policy;
 use crate::media::tcp_stats::{collect_rtmp_receiver_stats, collect_rtmp_sender_stats};
 use bytes::Bytes;
-
-/// Start RTMP egress slightly before the latest keyframe so raw H.264 outputs
-/// can pick up standalone SPS/PPS NAL units emitted immediately before the IDR.
-const RTMP_EGRESS_KEYFRAME_PREROLL_PACKETS: usize = 32;
 
 struct RtmpIngestHandle {
     pipeline_id: String,
@@ -1540,7 +1537,7 @@ pub async fn start_rtmp_egress(
     let mut reader = Reader::new_with_keyframe_preroll(
         format!("rtmp_egress:{}", output_id),
         ring_buffer.clone(),
-        RTMP_EGRESS_KEYFRAME_PREROLL_PACKETS,
+        startup_policy::rtmp_egress_keyframe_preroll_packets(),
     );
     let parts = match parse_rtmp_url(&target_url) {
         Some(p) => p,

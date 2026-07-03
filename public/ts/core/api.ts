@@ -6,6 +6,7 @@ import type {
   ConfigData,
   HealthData,
   IngestSecurityConfig,
+  OutputConfig,
   RecordingSettings,
   SrtGlobalIngestConfig,
   SrtPipelineIngestConfig,
@@ -260,6 +261,13 @@ export interface OutputMutationResponse {
   output: ConfigOutput;
 }
 
+export interface OutputMutationArgs {
+  name: string;
+  url: string;
+  monitoringUrl?: string | null;
+  config: OutputConfig;
+}
+
 async function createPipeline(
   args: CreatePipelineArgs,
 ): Promise<PipelineMutationResponse | null> {
@@ -305,7 +313,7 @@ async function deletePipeline(pipeId: string): Promise<unknown | null> {
 
 async function createOutput(
   pipeId: string,
-  data: unknown,
+  data: OutputMutationArgs,
 ): Promise<OutputMutationResponse | null> {
   if (!pipeId) {
     showErrorAlert("Pipeline id is required");
@@ -324,7 +332,7 @@ async function createOutput(
 async function updateOutput(
   pipeId: string,
   outId: string,
-  data: unknown,
+  data: OutputMutationArgs,
 ): Promise<OutputMutationResponse | null> {
   if (!pipeId || !outId) {
     showErrorAlert("Pipeline id and output id are required");
