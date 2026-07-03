@@ -12633,13 +12633,7 @@ stream|index=1|codec_type=audio\n";
             .mixed
             .fast_breadth
             .iter()
-            .map(|row| {
-                (
-                    row.id.as_str(),
-                    row.rationale.as_str(),
-                    row.check_specs().unwrap(),
-                )
-            })
+            .map(|row| (row.id, row.rationale.as_str(), row.check_specs().unwrap()))
             .collect();
         let rust_fast: Vec<_> = mixed_fast_breadth_cases()
             .iter()

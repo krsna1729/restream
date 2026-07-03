@@ -379,34 +379,36 @@ impl MixedCheck {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct MixedDslManifest {
+#[serde(bound(deserialize = "'de: 'a"))]
+pub(crate) struct MixedDslManifest<'a> {
     #[allow(dead_code)]
     pub(crate) version: u32,
-    pub(crate) mixed: MixedDslMatrix,
+    pub(crate) mixed: MixedDslMatrix<'a>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct MixedDslMatrix {
-    pub(crate) inputs: Vec<MixedDslInput>,
-    pub(crate) outputs: MixedDslOutputMatrices,
+#[serde(bound(deserialize = "'de: 'a"))]
+pub(crate) struct MixedDslMatrix<'a> {
+    pub(crate) inputs: Vec<MixedDslInput<'a>>,
+    pub(crate) outputs: MixedDslOutputMatrices<'a>,
     #[serde(rename = "defaultChecks")]
-    pub(crate) default_checks: Vec<String>,
+    pub(crate) default_checks: Vec<&'a str>,
     #[serde(rename = "fastBreadth")]
-    pub(crate) fast_breadth: Vec<MixedDslFastBreadth>,
+    pub(crate) fast_breadth: Vec<MixedDslFastBreadth<'a>>,
     #[serde(rename = "fastBreadthBatches")]
-    pub(crate) fast_breadth_batches: Vec<MixedDslFastBreadthBatch>,
+    pub(crate) fast_breadth_batches: Vec<MixedDslFastBreadthBatch<'a>>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct MixedDslInput {
-    pub(crate) id: String,
-    pub(crate) ingest: String,
-    pub(crate) video: String,
-    pub(crate) audio: String,
-    pub(crate) reorder: String,
+pub(crate) struct MixedDslInput<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) ingest: &'a str,
+    pub(crate) video: &'a str,
+    pub(crate) audio: &'a str,
+    pub(crate) reorder: &'a str,
 }
 
-impl MixedDslInput {
+impl MixedDslInput<'static> {
     pub(crate) fn to_case(&self) -> Result<MixedInputCase, String> {
         let protocol = MixedInputProtocol::from_ingest_name(&self.ingest)
             .ok_or_else(|| format!("{} has unknown ingest {}", self.id, self.ingest))?;
@@ -427,9 +429,8 @@ impl MixedDslInput {
         if expected != self.id {
             return Err(format!("DSL input {} expands to {}", self.id, expected));
         }
-        let id: &'static str = Box::leak(self.id.clone().into_boxed_str());
         Ok(MixedInputCase::new(
-            id,
+            self.id,
             protocol,
             codec,
             audio_layout,
@@ -439,13 +440,13 @@ impl MixedDslInput {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct MixedDslFastBreadth {
-    pub(crate) id: String,
+pub(crate) struct MixedDslFastBreadth<'a> {
+    pub(crate) id: &'a str,
     pub(crate) rationale: String,
-    pub(crate) checks: Vec<String>,
+    pub(crate) checks: Vec<&'a str>,
 }
 
-impl MixedDslFastBreadth {
+impl MixedDslFastBreadth<'_> {
     pub(crate) fn check_specs(&self) -> Result<Vec<MixedCheck>, String> {
         self.checks
             .iter()
@@ -458,48 +459,49 @@ impl MixedDslFastBreadth {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct MixedDslFastBreadthBatch {
-    pub(crate) group: String,
-    pub(crate) cases: Vec<String>,
+pub(crate) struct MixedDslFastBreadthBatch<'a> {
+    pub(crate) group: &'a str,
+    pub(crate) cases: Vec<&'a str>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct MixedDslOutputMatrices {
+#[serde(bound(deserialize = "'de: 'a"))]
+pub(crate) struct MixedDslOutputMatrices<'a> {
     #[serde(rename = "singleTrack")]
-    pub(crate) single_track: Vec<MixedDslOutputCase>,
+    pub(crate) single_track: Vec<MixedDslOutputCase<'a>>,
     #[serde(rename = "multiTrack")]
-    pub(crate) multi_track: Vec<MixedDslOutputCase>,
+    pub(crate) multi_track: Vec<MixedDslOutputCase<'a>>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct MixedDslOutputCase {
-    pub(crate) id: String,
-    pub(crate) protocol: String,
-    pub(crate) encoding: String,
+pub(crate) struct MixedDslOutputCase<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) protocol: &'a str,
+    pub(crate) encoding: &'a str,
     #[serde(rename = "expectedDimensions")]
-    pub(crate) expected_dimensions: String,
+    pub(crate) expected_dimensions: &'a str,
     #[serde(rename = "expectedAudioTracks")]
     pub(crate) expected_audio_tracks: usize,
     #[serde(rename = "selectedAudioTrack")]
     pub(crate) selected_audio_track: Option<usize>,
 }
 
-impl MixedDslOutputCase {
+impl MixedDslOutputCase<'_> {
     pub(crate) fn to_output_case(&self) -> Result<MixedOutputCase, String> {
         Ok(MixedOutputCase {
-            id: self.id.clone(),
+            id: self.id.to_string(),
             protocol: MixedOutputProtocol::from_name(&self.protocol).ok_or_else(|| {
                 format!("{} has unknown output protocol {}", self.id, self.protocol)
             })?,
-            encoding: self.encoding.clone(),
-            expected_dimensions: self.expected_dimensions.clone(),
+            encoding: self.encoding.to_string(),
+            expected_dimensions: self.expected_dimensions.to_string(),
             expected_audio_tracks: self.expected_audio_tracks,
             selected_audio_track: self.selected_audio_track,
         })
     }
 }
 
-impl MixedDslManifest {
+impl MixedDslManifest<'static> {
     pub(crate) fn input_cases(&self) -> Result<Vec<MixedInputCase>, String> {
         self.mixed
             .inputs
@@ -509,7 +511,7 @@ impl MixedDslManifest {
     }
 }
 
-pub(crate) fn mixed_dsl_manifest() -> Result<MixedDslManifest, String> {
+pub(crate) fn mixed_dsl_manifest() -> Result<MixedDslManifest<'static>, String> {
     serde_json::from_str(include_str!("mixed_matrix.json")).map_err(|error| error.to_string())
 }
 
@@ -566,7 +568,7 @@ pub(crate) fn mixed_fast_breadth_batches() -> &'static [MixedFastBreadthBatch] {
     })
 }
 
-fn output_cases_from_dsl(rows: &[MixedDslOutputCase], label: &str) -> Vec<MixedOutputCase> {
+fn output_cases_from_dsl(rows: &[MixedDslOutputCase<'_>], label: &str) -> Vec<MixedOutputCase> {
     rows.iter()
         .map(|row| {
             row.to_output_case()
