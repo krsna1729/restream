@@ -380,6 +380,7 @@ impl MixedCheck {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct MixedDslManifest {
+    #[allow(dead_code)]
     pub(crate) version: u32,
     pub(crate) mixed: MixedDslMatrix,
 }

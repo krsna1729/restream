@@ -12,6 +12,7 @@ use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
     ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::OpenOptions;
@@ -9275,14 +9276,14 @@ async fn fault_egress_retry() -> Result<Value, String> {
     let mut retry_limit_api = RampApi::new(ports.http);
     retry_limit_api.login().await?;
     let mut retry_limit_results = Vec::new();
-    for case in RETRY_BUDGET_CASES {
+    for case in retry_budget_cases() {
         retry_limit_results.push(
             fault_egress_retry_budget_exhausts_to_failed(
                 &retry_limit_api,
                 &ports,
                 &fixture_h264,
                 sink_port.saturating_add(case.dead_sink_offset),
-                *case,
+                case,
             )
             .await?,
         );
@@ -9368,48 +9369,30 @@ async fn fault_output_stall() -> Result<Value, String> {
 }
 
 /// Declarative cell for retry-budget exhaustion coverage against an unreachable sink.
-#[derive(Clone, Copy)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RetryBudgetCase {
-    test_name: &'static str,
-    log_label: &'static str,
-    pipeline: &'static str,
-    output_name: &'static str,
+    test_name: String,
+    log_label: String,
+    pipeline: String,
+    output_name: String,
     protocol: HarnessPublisherProtocol,
     dead_sink_offset: u16,
 }
-
-const RETRY_BUDGET_CASES: &[RetryBudgetCase] = &[
-    RetryBudgetCase {
-        test_name: "rtmp-egress-retry-budget-exhausts",
-        log_label: "RTMP",
-        pipeline: "fault-egress-rtmp-retry-limit",
-        output_name: "rtmp-dead-sink",
-        protocol: HarnessPublisherProtocol::Rtmp,
-        dead_sink_offset: 77,
-    },
-    RetryBudgetCase {
-        test_name: "srt-egress-retry-budget-exhausts",
-        log_label: "SRT",
-        pipeline: "fault-egress-srt-retry-limit",
-        output_name: "srt-dead-sink",
-        protocol: HarnessPublisherProtocol::Srt,
-        dead_sink_offset: 78,
-    },
-];
 
 async fn fault_egress_retry_budget_exhausts_to_failed(
     api: &RampApi,
     ports: &TestPorts,
     fixture_h264: &Path,
     dead_sink_port: u16,
-    case: RetryBudgetCase,
+    case: &RetryBudgetCase,
 ) -> Result<Value, String> {
-    let pid = create_pipeline_with_stream_key(api, case.pipeline, case.pipeline).await?;
+    let pid = create_pipeline_with_stream_key(api, &case.pipeline, &case.pipeline).await?;
 
     let oid = create_mixed_output(
         api,
         &pid,
-        case.output_name,
+        &case.output_name,
         &case.protocol.retry_limit_output_url(dead_sink_port),
         "source",
     )
@@ -9417,7 +9400,7 @@ async fn fault_egress_retry_budget_exhausts_to_failed(
 
     let mut pub_child = spawn_publisher(
         fixture_h264,
-        &case.protocol.publish_url(ports, case.pipeline),
+        &case.protocol.publish_url(ports, &case.pipeline),
         case.protocol.ffmpeg_format(),
         case.protocol.map_all_streams(),
     )
@@ -9535,7 +9518,8 @@ async fn fault_egress_retry_budget_exhausts_to_failed(
 }
 
 /// Publisher transport details that vary across otherwise identical live scenarios.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
 enum HarnessPublisherProtocol {
     Rtmp,
     Srt,
@@ -9574,54 +9558,30 @@ impl HarnessPublisherProtocol {
 }
 
 /// Declarative cell for transient ingest-drop recovery coverage.
-#[derive(Clone, Copy)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RecoveryTransientCase {
-    test_name: &'static str,
-    log_label: &'static str,
-    pipeline: &'static str,
-    output_name: &'static str,
-    sink_stream: &'static str,
+    test_name: String,
+    log_label: String,
+    pipeline: String,
+    output_name: String,
+    sink_stream: String,
     protocol: HarnessPublisherProtocol,
     wait_input_off_after_drop: bool,
     require_media_ready_on_resume: bool,
     second_reconnect_checks_flapping: bool,
 }
 
-const RECOVERY_TRANSIENT_CASES: &[RecoveryTransientCase] = &[
-    RecoveryTransientCase {
-        test_name: "transient-rtmp-drop-preserves-egress",
-        log_label: "Transient RTMP publisher drop preserves egress",
-        pipeline: "fault-rtmp-transient",
-        output_name: "rtmp-transient-sink",
-        sink_stream: "fault-rtmp-transient-sink",
-        protocol: HarnessPublisherProtocol::Rtmp,
-        wait_input_off_after_drop: false,
-        require_media_ready_on_resume: false,
-        second_reconnect_checks_flapping: true,
-    },
-    RecoveryTransientCase {
-        test_name: "transient-srt-drop-preserves-egress",
-        log_label: "Transient SRT publisher drop preserves egress",
-        pipeline: "fault-srt-transient",
-        output_name: "srt-transient-sink",
-        sink_stream: "fault-srt-transient-sink",
-        protocol: HarnessPublisherProtocol::Srt,
-        wait_input_off_after_drop: true,
-        require_media_ready_on_resume: true,
-        second_reconnect_checks_flapping: false,
-    },
-];
-
 const RECOVERY_WARM_VIDEO_MIN: u64 = 10;
 
 async fn spawn_recovery_publisher(
     fixture: &Path,
     ports: &TestPorts,
-    case: RecoveryTransientCase,
+    case: &RecoveryTransientCase,
 ) -> Result<Child, String> {
     spawn_publisher(
         fixture,
-        &case.protocol.publish_url(ports, case.pipeline),
+        &case.protocol.publish_url(ports, &case.pipeline),
         case.protocol.ffmpeg_format(),
         case.protocol.map_all_streams(),
     )
@@ -9786,15 +9746,15 @@ async fn run_recovery_transient_case(
     fixture_h264: &Path,
     sink_port: u16,
     timeout: Duration,
-    case: RecoveryTransientCase,
+    case: &RecoveryTransientCase,
 ) -> Result<Value, String> {
-    let pid = create_pipeline(api, case.pipeline).await?;
+    let pid = create_pipeline(api, &case.pipeline).await?;
     let metrics = Arc::new(GeneralizedSinkMetrics::default());
     let sink_server = start_generalized_sink_server(sink_port, metrics.clone()).await?;
     let oid = create_mixed_output(
         api,
         &pid,
-        case.output_name,
+        &case.output_name,
         &format!("rtmp://127.0.0.1:{sink_port}/live/{}", case.sink_stream),
         "source",
     )
@@ -10002,10 +9962,9 @@ async fn recovery_live_cases(
 ) -> Result<Vec<Value>, String> {
     let mut results = Vec::new();
 
-    for case in RECOVERY_TRANSIENT_CASES {
+    for case in recovery_transient_cases() {
         results.push(
-            run_recovery_transient_case(api, ports, fixture_h264, sink_port, timeout, *case)
-                .await?,
+            run_recovery_transient_case(api, ports, fixture_h264, sink_port, timeout, case).await?,
         );
     }
 
@@ -10936,41 +10895,56 @@ async fn recovery() -> Result<Value, String> {
 }
 
 /// Declarative cell for publisher disconnect fault coverage.
-#[derive(Clone, Copy)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PublisherDisconnectCase {
-    test_name: &'static str,
-    log_label: &'static str,
-    pipeline: &'static str,
+    test_name: String,
+    log_label: String,
+    pipeline: String,
     protocol: HarnessPublisherProtocol,
 }
 
-const PUBLISHER_DISCONNECT_CASES: &[PublisherDisconnectCase] = &[
-    PublisherDisconnectCase {
-        test_name: "rtmp-publisher-disconnect",
-        log_label: "RTMP",
-        pipeline: "fault-rtmp",
-        protocol: HarnessPublisherProtocol::Rtmp,
-    },
-    PublisherDisconnectCase {
-        test_name: "srt-publisher-disconnect",
-        log_label: "SRT",
-        pipeline: "fault-srt",
-        protocol: HarnessPublisherProtocol::Srt,
-    },
-];
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FaultCasesManifest {
+    publisher_disconnect: Vec<PublisherDisconnectCase>,
+    retry_budget: Vec<RetryBudgetCase>,
+    recovery_transient: Vec<RecoveryTransientCase>,
+}
+
+static FAULT_CASES_MANIFEST: OnceLock<FaultCasesManifest> = OnceLock::new();
+
+fn fault_cases_manifest() -> &'static FaultCasesManifest {
+    FAULT_CASES_MANIFEST.get_or_init(|| {
+        serde_json::from_str(include_str!("test_harness/fault_cases.json"))
+            .expect("embedded fault_cases.json should define valid typed harness cases")
+    })
+}
+
+fn publisher_disconnect_cases() -> &'static [PublisherDisconnectCase] {
+    &fault_cases_manifest().publisher_disconnect
+}
+
+fn retry_budget_cases() -> &'static [RetryBudgetCase] {
+    &fault_cases_manifest().retry_budget
+}
+
+fn recovery_transient_cases() -> &'static [RecoveryTransientCase] {
+    &fault_cases_manifest().recovery_transient
+}
 
 async fn run_publisher_disconnect_case(
     api: &RampApi,
     ports: &TestPorts,
     fixture_h264: &Path,
     timeout: Duration,
-    case: PublisherDisconnectCase,
+    case: &PublisherDisconnectCase,
 ) -> Result<Value, String> {
-    let pid = create_pipeline(api, case.pipeline).await?;
+    let pid = create_pipeline(api, &case.pipeline).await?;
 
     let mut pub_child = spawn_publisher(
         fixture_h264,
-        &case.protocol.publish_url(ports, case.pipeline),
+        &case.protocol.publish_url(ports, &case.pipeline),
         case.protocol.ffmpeg_format(),
         case.protocol.map_all_streams(),
     )
@@ -11064,10 +11038,9 @@ async fn fault_resilience() -> Result<Value, String> {
 
     let mut results: Vec<Value> = Vec::new();
 
-    for case in PUBLISHER_DISCONNECT_CASES {
-        results.push(
-            run_publisher_disconnect_case(&api, &ports, &fixture_h264, timeout, *case).await?,
-        );
+    for case in publisher_disconnect_cases() {
+        results
+            .push(run_publisher_disconnect_case(&api, &ports, &fixture_h264, timeout, case).await?);
     }
 
     results.extend(
@@ -11200,42 +11173,8 @@ async fn fault_resilience() -> Result<Value, String> {
     {
         let pid = create_pipeline(&api, "fault-transcoder").await?;
 
-        let sink_bytes = Arc::new(AtomicU64::new(0));
-        let sink_listener = TcpListener::bind(format!("127.0.0.1:{sink_port}"))
-            .await
-            .map_err(|e| format!("sink bind: {e}"))?;
-        let sink_cancel = CancellationToken::new();
-        let sink_bytes_inner = sink_bytes.clone();
-        let sink_cancel_inner = sink_cancel.clone();
-        let sink_task = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    result = sink_listener.accept() => {
-                        if let Ok((socket, _)) = result {
-                            let bytes = sink_bytes_inner.clone();
-                            tokio::spawn(async move {
-                                let mut buf = [0u8; 65536];
-                                while let Ok(()) = socket.readable().await {
-                                    match socket.try_read(&mut buf) {
-                                        Ok(0) => break,
-                                        Ok(n) => {
-                                            bytes.fetch_add(n as u64, Ordering::Relaxed);
-                                        }
-                                        Err(ref e)
-                                            if e.kind() == std::io::ErrorKind::WouldBlock =>
-                                        {
-                                            continue;
-                                        }
-                                        Err(_) => break,
-                                    }
-                                }
-                            });
-                        }
-                    }
-                    _ = sink_cancel_inner.cancelled() => break,
-                }
-            }
-        });
+        let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
+        let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
 
         let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/fault-transcoder-sink");
         let oid = create_mixed_output(&api, &pid, "rtmp.720p.a0", &sink_url, "720p").await?;
@@ -11268,7 +11207,7 @@ async fn fault_resilience() -> Result<Value, String> {
                 telemetry["activeTranscoderBuffers"].as_u64().unwrap_or(0);
             peak_ffmpeg_children = peak_ffmpeg_children.max(ffmpeg.count);
             peak_transcoder_buffers = peak_transcoder_buffers.max(active_transcoder_buffers);
-            saw_output_bytes |= sink_bytes.load(Ordering::Relaxed) > 0;
+            saw_output_bytes |= sink_metrics.bytes.load(Ordering::Relaxed) > 0;
             if (ffmpeg.count > 0 || active_transcoder_buffers > 0) && saw_output_bytes {
                 ffmpeg_spawned = true;
                 break;
@@ -11335,8 +11274,7 @@ async fn fault_resilience() -> Result<Value, String> {
             "outputCleanedUp": output_cleaned_up,
         }));
 
-        sink_cancel.cancel();
-        sink_task.abort();
+        stop_generalized_sink_server(sink_server);
     }
 
     // ── 6. RTMP egress sink disappears ──────────────────────────────────
@@ -12967,6 +12905,61 @@ stream|index=1|codec_type=audio\n";
             .map(|batch| (batch.group, batch.cases.to_vec()))
             .collect();
         assert_eq!(dsl_batches, rust_batches);
+    }
+
+    #[test]
+    fn fault_json_dsl_carries_current_case_contract() {
+        assert_eq!(
+            publisher_disconnect_cases()
+                .iter()
+                .map(|case| case.test_name.as_str())
+                .collect::<Vec<_>>(),
+            ["rtmp-publisher-disconnect", "srt-publisher-disconnect"]
+        );
+
+        assert_eq!(
+            retry_budget_cases()
+                .iter()
+                .map(|case| (
+                    case.test_name.as_str(),
+                    case.protocol.ffmpeg_format(),
+                    case.dead_sink_offset
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("rtmp-egress-retry-budget-exhausts", "flv", 77),
+                ("srt-egress-retry-budget-exhausts", "mpegts", 78),
+            ]
+        );
+
+        assert_eq!(
+            recovery_transient_cases()
+                .iter()
+                .map(|case| (
+                    case.test_name.as_str(),
+                    case.protocol.ffmpeg_format(),
+                    case.wait_input_off_after_drop,
+                    case.require_media_ready_on_resume,
+                    case.second_reconnect_checks_flapping,
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "transient-rtmp-drop-preserves-egress",
+                    "flv",
+                    false,
+                    false,
+                    true,
+                ),
+                (
+                    "transient-srt-drop-preserves-egress",
+                    "mpegts",
+                    true,
+                    true,
+                    false,
+                ),
+            ]
+        );
     }
 
     #[test]
