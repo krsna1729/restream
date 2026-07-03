@@ -1783,19 +1783,17 @@ pub async fn start_rtmp_egress(
                                     if let Some(metadata) = rtmp_publish_metadata(
                                         &engine,
                                         &pipeline_id,
+                                        reader.current_ring(),
                                         output_audio_track.as_ref(),
                                     )
                                     .await
                                         && let Ok(ClientSessionResult::OutboundResponse(p)) =
                                             session.publish_metadata(&metadata)
-                                            && socket.write_all(&p.bytes).await.is_err()
-                                        {
-                                            egress_error!(
-                                                "send",
-                                                "failed to write RTMP metadata"
-                                            );
-                                            return;
-                                        }
+                                        && socket.write_all(&p.bytes).await.is_err()
+                                    {
+                                        egress_error!("send", "failed to write RTMP metadata");
+                                        return;
+                                    }
                                     // Send cached sequence headers before media data.
                                     // For H.265 ingests, video_sh is None (only RTMP ingest
                                     // caches FLV seq headers), so this is a no-op for H.265.
@@ -1829,23 +1827,6 @@ pub async fn start_rtmp_egress(
                                             track.channels,
                                         ));
                                     }
-                                    if let Some(ref ash) = audio_sh
-                                        && let Ok(ClientSessionResult::OutboundResponse(p)) =
-                                            session.publish_audio_data(
-                                                ash.clone(),
-                                                RtmpTimestamp::new(0),
-                                                false,
-                                            )
-                                        {
-                                            if socket.write_all(&p.bytes).await.is_err() {
-                                                egress_error!(
-                                                    "send",
-                                                    "failed to write audio sequence header"
-                                                );
-                                                return;
-                                            }
-                                            audio_sequence_header_sent = true;
-                                        }
                                     let video_sh = startup_video_sequence_header(
                                         reader.current_ring(),
                                         ingest_video_sh,
@@ -1857,14 +1838,35 @@ pub async fn start_rtmp_egress(
                                                 RtmpTimestamp::new(0),
                                                 true,
                                             )
-                                            && socket.write_all(&p.bytes).await.is_err()
-                                        {
+                                        && socket.write_all(&p.bytes).await.is_err()
+                                    {
+                                        egress_error!(
+                                            "send",
+                                            "failed to write video sequence header"
+                                        );
+                                        return;
+                                    }
+                                    if let Some(ref ash) = audio_sh
+                                        && should_send_startup_audio_sequence_header(
+                                            video_ready,
+                                            reader.current_ring(),
+                                        )
+                                        && let Ok(ClientSessionResult::OutboundResponse(p)) =
+                                            session.publish_audio_data(
+                                                ash.clone(),
+                                                RtmpTimestamp::new(0),
+                                                false,
+                                            )
+                                    {
+                                        if socket.write_all(&p.bytes).await.is_err() {
                                             egress_error!(
                                                 "send",
-                                                "failed to write video sequence header"
+                                                "failed to write audio sequence header"
                                             );
                                             return;
                                         }
+                                        audio_sequence_header_sent = true;
+                                    }
                                     is_publishing = true;
                                 }
                                 ClientSessionEvent::ConnectionRequestRejected { description } => {
@@ -1885,6 +1887,12 @@ pub async fn start_rtmp_egress(
                     let mut burst_made_progress = false;
                     for packet in packets.drain(..) {
                         if packet.media_type == MediaType::Audio {
+                            if should_defer_audio_until_video_ready(
+                                video_ready,
+                                reader.current_ring(),
+                            ) {
+                                continue;
+                            }
                             if output_audio_track.is_none() {
                                 let refreshed_tracks = resolved_output_audio_tracks(
                                     &engine,
@@ -1998,7 +2006,7 @@ pub async fn start_rtmp_egress(
                                                 &packet.payload,
                                                 &raw_h264_parameter_sets,
                                             )
-                                        {
+                                    {
                                             let sps_changed = match (&last_sent_sps, &new_sps) {
                                                 (None, Some(_)) => true,
                                                 (Some(old), Some(new)) => old != new,
@@ -2034,7 +2042,7 @@ pub async fn start_rtmp_egress(
                                                 last_sent_sps = new_sps;
                                             }
                                             video_ready = true;
-                                        }
+                                    }
                                     if !video_ready {
                                         continue;
                                     }
@@ -2149,6 +2157,7 @@ fn validate_rtmp_output_audio_tracks(audio_tracks: &[AudioMeta]) -> Result<(), S
 async fn rtmp_publish_metadata(
     engine: &MediaEngine,
     pipeline_id: &str,
+    output_ring: &Arc<RingBuffer>,
     output_audio_track: Option<&AudioMeta>,
 ) -> Option<StreamMetadata> {
     let video = engine
@@ -2158,7 +2167,7 @@ async fn rtmp_publish_metadata(
     let mut metadata = StreamMetadata::new();
 
     if let Some(video) = video
-        && video.codec.eq_ignore_ascii_case("h264")
+        && rtmp_output_video_codec(&video, output_ring).eq_ignore_ascii_case("h264")
     {
         metadata.video_codec_id = Some(7);
         metadata.video_width = (video.width > 0).then_some(video.width);
@@ -2176,6 +2185,18 @@ async fn rtmp_publish_metadata(
     }
 
     (metadata.video_codec_id.is_some() || metadata.audio_codec_id.is_some()).then_some(metadata)
+}
+
+fn rtmp_output_video_codec<'a>(
+    ingest_video: &'a VideoMeta,
+    output_ring: &'a RingBuffer,
+) -> &'a str {
+    let output_codec = output_ring.codec_hint_str();
+    if output_codec.is_empty() {
+        ingest_video.codec.as_str()
+    } else {
+        output_codec
+    }
 }
 
 fn cache_h264_parameter_sets(payload: &[u8], cache: &mut Vec<u8>) {
@@ -2208,6 +2229,20 @@ fn startup_video_sequence_header(
     }
 
     ingest_sequence_header
+}
+
+fn rtmp_output_waits_for_video(ring_buffer: &RingBuffer) -> bool {
+    !ring_buffer.codec_hint_str().is_empty() || ring_buffer.video_parameter_sets().is_some()
+}
+
+fn should_send_startup_audio_sequence_header(video_ready: bool, ring_buffer: &RingBuffer) -> bool {
+    video_ready
+        || !rtmp_output_waits_for_video(ring_buffer)
+        || ring_buffer.video_parameter_sets().is_some()
+}
+
+fn should_defer_audio_until_video_ready(video_ready: bool, ring_buffer: &RingBuffer) -> bool {
+    !video_ready && rtmp_output_waits_for_video(ring_buffer)
 }
 
 fn h264_sps_nalu(payload: &[u8]) -> Option<Vec<u8>> {
@@ -2343,6 +2378,146 @@ mod tests {
             selected.is_none(),
             "empty raw output rings should wait for their own keyframe/config"
         );
+    }
+
+    #[test]
+    fn startup_audio_waits_for_video_on_empty_transcoded_ring() {
+        let ring = Arc::new(RingBuffer::new(1024));
+        ring.set_codec_hint("h264");
+
+        assert!(
+            rtmp_output_waits_for_video(&ring),
+            "transcoded RTMP output rings should wait for their own video startup"
+        );
+        assert!(
+            should_defer_audio_until_video_ready(false, &ring),
+            "audio packets must be deferred until the codec-edge ring has emitted video"
+        );
+        assert!(
+            !should_send_startup_audio_sequence_header(false, &ring),
+            "startup AAC config must not be sent before video is ready on an empty transcoded ring"
+        );
+    }
+
+    #[test]
+    fn startup_audio_allows_passthrough_audio_only_ring() {
+        let ring = Arc::new(RingBuffer::new(1024));
+
+        assert!(
+            !rtmp_output_waits_for_video(&ring),
+            "audio-only or unknown rings should not be forced to wait for video startup"
+        );
+        assert!(
+            !should_defer_audio_until_video_ready(false, &ring),
+            "audio packets should flow immediately when the ring is not video-gated"
+        );
+        assert!(
+            should_send_startup_audio_sequence_header(false, &ring),
+            "audio-only startup should still emit AAC config immediately"
+        );
+    }
+
+    #[test]
+    fn startup_audio_unblocks_once_parameter_sets_exist() {
+        let ring = Arc::new(RingBuffer::new(1024));
+        ring.set_codec_hint("h264");
+        ring.set_video_parameter_sets(vec![
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+            0xCE, 0x38, 0x80,
+        ]);
+
+        assert!(
+            should_send_startup_audio_sequence_header(false, &ring),
+            "once the output ring has H.264 parameter sets, startup audio can follow the video config"
+        );
+    }
+
+    #[tokio::test]
+    async fn rtmp_metadata_uses_terminal_ring_codec_for_hevc_codec_edge() {
+        let engine = MediaEngine::new();
+        engine
+            .try_register_ingest("p-codec-edge", "key", "srt")
+            .await
+            .unwrap();
+        engine
+            .update_ingest_meta(
+                "p-codec-edge",
+                Some(VideoMeta {
+                    codec: "hevc".into(),
+                    width: 1920,
+                    height: 1080,
+                    fps: 50.0,
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+            .await;
+
+        let output_ring = Arc::new(RingBuffer::new(1024));
+        output_ring.set_codec_hint("h264");
+        let audio = AudioMeta {
+            codec: "aac".into(),
+            sample_rate: 48_000,
+            channels: 2,
+            track_index: 0,
+            ..Default::default()
+        };
+
+        let metadata = rtmp_publish_metadata(&engine, "p-codec-edge", &output_ring, Some(&audio))
+            .await
+            .expect("codec-edge RTMP output should publish metadata");
+
+        assert_eq!(
+            metadata.video_codec_id,
+            Some(7),
+            "HEVC ingest converted by hevc_to_h264 must advertise AVC on RTMP"
+        );
+        assert_eq!(metadata.video_width, Some(1920));
+        assert_eq!(metadata.video_height, Some(1080));
+        assert_eq!(metadata.audio_codec_id, Some(10));
+    }
+
+    #[tokio::test]
+    async fn rtmp_metadata_does_not_advertise_unconverted_hevc_as_avc() {
+        let engine = MediaEngine::new();
+        engine
+            .try_register_ingest("p-hevc-source", "key", "srt")
+            .await
+            .unwrap();
+        engine
+            .update_ingest_meta(
+                "p-hevc-source",
+                Some(VideoMeta {
+                    codec: "hevc".into(),
+                    width: 1920,
+                    height: 1080,
+                    fps: 50.0,
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+            .await;
+
+        let output_ring = Arc::new(RingBuffer::new(1024));
+        let audio = AudioMeta {
+            codec: "aac".into(),
+            sample_rate: 48_000,
+            channels: 2,
+            track_index: 0,
+            ..Default::default()
+        };
+
+        let metadata = rtmp_publish_metadata(&engine, "p-hevc-source", &output_ring, Some(&audio))
+            .await
+            .expect("audio metadata should still be present");
+
+        assert_eq!(
+            metadata.video_codec_id, None,
+            "without a terminal H.264 ring, HEVC must not be mislabeled as AVC"
+        );
+        assert_eq!(metadata.audio_codec_id, Some(10));
     }
 
     #[tokio::test]

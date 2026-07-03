@@ -27,6 +27,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
 use tokio_util::sync::CancellationToken;
 
+/// Static metadata describing how a harness mode participates in suite runs.
 struct HarnessModeSpec {
     name: &'static str,
     suite_default: bool,
@@ -204,6 +205,12 @@ const HARNESS_MODE_SPECS: &[HarnessModeSpec] = &[
         requires_bench_profile: true,
     },
     HarnessModeSpec {
+        name: "mixed.fast-breadth",
+        suite_default: false,
+        requires_port_namespace: true,
+        requires_bench_profile: true,
+    },
+    HarnessModeSpec {
         name: "egress",
         suite_default: false,
         requires_port_namespace: true,
@@ -289,6 +296,7 @@ const HARNESS_MODE_SPECS: &[HarnessModeSpec] = &[
     },
 ];
 
+/// Input transport family for mixed-matrix source streams.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum MixedInputProtocol {
     File,
@@ -313,6 +321,7 @@ impl MixedInputProtocol {
     }
 }
 
+/// Video codec axis for mixed-matrix source streams.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum MixedVideoCodec {
     H264,
@@ -344,6 +353,7 @@ impl MixedVideoCodec {
     }
 }
 
+/// Source audio-track layout axis for mixed-matrix scenarios.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum MixedInputAudioLayout {
     A1,
@@ -377,6 +387,7 @@ impl MixedInputAudioLayout {
     }
 }
 
+/// Source frame-reordering axis used to distinguish BF0 from B-frame fixtures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum MixedInputReorder {
     Bf0,
@@ -403,6 +414,7 @@ impl MixedInputReorder {
     }
 }
 
+/// Complete input-side scenario key for the mixed matrix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct MixedInputCase {
     protocol: MixedInputProtocol,
@@ -614,6 +626,7 @@ impl MixedInputCase {
 }
 
 const MIXED_MATRIX_MODE: &str = "mixed.matrix";
+const MIXED_FAST_BREADTH_MODE: &str = "mixed.fast-breadth";
 const MIXED_ARTIFACT_ROOT: &str = "test/artifacts/mixed";
 
 const MIXED_INPUT_CASES: &[MixedInputCase] = &[
@@ -727,6 +740,94 @@ const MIXED_INPUT_CASES: &[MixedInputCase] = &[
     ),
 ];
 
+/// One selected input row in the fast breadth sweep, with its minimal checks.
+#[derive(Clone, Copy, Debug)]
+struct MixedFastBreadthCase {
+    case: MixedInputCase,
+    rationale: &'static str,
+    checks: &'static [&'static str],
+}
+
+// Fast breadth is the "find the broad failure shape quickly without pretending
+// to be exhaustive" sweep.
+// It samples the 180 input/output cells by risk axes rather than by row count:
+// - file ingest: BF0 startup/liveness plus BF2+HEVC+multi-audio stress
+// - RTMP ingest: both sender BF0 and BF2, because RTMP timestamp/sequence-header
+//   behavior differs from SRT and file ingest
+// - SRT ingest: multi-audio BF0 plus HEVC BF2 codec-edge/transcode pressure
+// - output matrix: each selected A1 row covers 6 RTMP/SRT source/720p/1080p
+//   outputs; each selected A2 row covers the 15 all-audio/atrack variants.
+//
+// Keep this list small enough for a quick WSL-safe sweep. When a new input or
+// output axis is added, update the rationale and the coverage unit tests below
+// before relying on this mode as the first diagnostic pass. The runner defaults
+// to N_PER_GROUP=1, SKIP_LOAD=1, COLLECT_FAILURES=1, and the per-row `checks`
+// below so it reports the failure shape across selected cells; set those env
+// vars explicitly when scale/load/signal depth is the point. `mixed.matrix`
+// remains the exhaustive proof gate.
+const MIXED_FAST_BREADTH_CASES: &[MixedFastBreadthCase] = &[
+    MixedFastBreadthCase {
+        case: MixedInputCase::new(
+            MixedInputProtocol::File,
+            MixedVideoCodec::H264,
+            MixedInputAudioLayout::A1,
+            MixedInputReorder::Bf0,
+        ),
+        rationale: "file H.264 BF0 single-audio startup hero row",
+        checks: &["ffprobe", "stage-sharing", "hls"],
+    },
+    MixedFastBreadthCase {
+        case: MixedInputCase::new(
+            MixedInputProtocol::File,
+            MixedVideoCodec::H265,
+            MixedInputAudioLayout::A2,
+            MixedInputReorder::Bf2,
+        ),
+        rationale: "file HEVC BF2 multi-audio plus codec-edge outputs",
+        checks: &["ffprobe", "stage-sharing"],
+    },
+    MixedFastBreadthCase {
+        case: MixedInputCase::new(
+            MixedInputProtocol::Rtmp,
+            MixedVideoCodec::H264,
+            MixedInputAudioLayout::A1,
+            MixedInputReorder::Bf0,
+        ),
+        rationale: "RTMP publisher without B-frames",
+        checks: &["ffprobe"],
+    },
+    MixedFastBreadthCase {
+        case: MixedInputCase::new(
+            MixedInputProtocol::Rtmp,
+            MixedVideoCodec::H264,
+            MixedInputAudioLayout::A1,
+            MixedInputReorder::Bf2,
+        ),
+        rationale: "RTMP publisher with B-frames",
+        checks: &["ffprobe"],
+    },
+    MixedFastBreadthCase {
+        case: MixedInputCase::new(
+            MixedInputProtocol::Srt,
+            MixedVideoCodec::H264,
+            MixedInputAudioLayout::A2,
+            MixedInputReorder::Bf0,
+        ),
+        rationale: "SRT H.264 BF0 multi-audio adaptive-ring row",
+        checks: &["ffprobe", "stage-sharing"],
+    },
+    MixedFastBreadthCase {
+        case: MixedInputCase::new(
+            MixedInputProtocol::Srt,
+            MixedVideoCodec::H265,
+            MixedInputAudioLayout::A2,
+            MixedInputReorder::Bf2,
+        ),
+        rationale: "SRT HEVC BF2 multi-audio codec-edge stress row",
+        checks: &["ffprobe", "stage-sharing", "hls"],
+    },
+];
+
 fn mixed_input_mode_name(case: MixedInputCase) -> String {
     case.scenario_id().to_string()
 }
@@ -766,6 +867,10 @@ fn mixed_matrix_default_work_dir() -> PathBuf {
     PathBuf::from(MIXED_ARTIFACT_ROOT).join("matrix")
 }
 
+fn mixed_fast_breadth_default_work_dir() -> PathBuf {
+    PathBuf::from(MIXED_ARTIFACT_ROOT).join("fast-breadth")
+}
+
 fn mixed_scenario_check_id(scenario: &str, check: &str) -> String {
     format!("{scenario}.{check}")
 }
@@ -798,11 +903,65 @@ fn mixed_output_cases_for_input(case: MixedInputCase) -> &'static [MixedOutputCa
     }
 }
 
+/// Expected unique processing-stage counts for a mixed scenario.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MixedStageCount {
     video: usize,
     audio: usize,
     codec_edge: usize,
+}
+
+/// Parsed source-ring telemetry used by the mixed adaptive-ring readiness gate.
+#[derive(Debug, Clone, Copy)]
+struct MixedAdaptiveRingSnapshot {
+    capacity: u64,
+    depth_secs: f64,
+    overflows: u64,
+    resized: bool,
+    adequate: bool,
+    passed: bool,
+}
+
+impl MixedAdaptiveRingSnapshot {
+    fn to_json(self) -> Value {
+        json!({
+            "ringCapacity": self.capacity,
+            "bufferDepthSecs": self.depth_secs,
+            "ringResized": self.resized,
+            "adequate": self.adequate,
+            "overflows": self.overflows,
+        })
+    }
+}
+
+fn mixed_adaptive_ring_snapshot(telemetry: &Value) -> MixedAdaptiveRingSnapshot {
+    let capacity = telemetry["sourceRing"]["capacity"].as_u64().unwrap_or(0);
+    let depth_secs = telemetry["sourceRing"]["bufferDepthSecs"]
+        .as_f64()
+        .unwrap_or(0.0);
+    let overflows = telemetry["sourceRing"]["readers"]
+        .as_array()
+        .map(|readers| {
+            readers
+                .iter()
+                .map(|reader| reader["overflowCount"].as_u64().unwrap_or(0))
+                .sum()
+        })
+        .unwrap_or(0);
+    // 2 audio tracks x 50 pkt/s + video is roughly 130 pkt/s, so 780 slots is
+    // enough for the minimum 5-second depth. A capacity above 1024 additionally
+    // proves the adaptive resize path fired.
+    let resized = capacity > 1024;
+    let adequate = depth_secs >= 5.0 || capacity >= 780;
+    let passed = adequate && overflows == 0;
+    MixedAdaptiveRingSnapshot {
+        capacity,
+        depth_secs,
+        overflows,
+        resized,
+        adequate,
+        passed,
+    }
 }
 
 fn expected_mixed_stage_count(case: MixedInputCase) -> MixedStageCount {
@@ -1103,6 +1262,8 @@ async fn run() -> Result<(), String> {
     ensure_measurement_profile(&command, &raw[1..])?;
     let result = if command == MIXED_MATRIX_MODE {
         mixed_input_matrix_correctness().await
+    } else if command == MIXED_FAST_BREADTH_MODE {
+        mixed_fast_breadth_correctness().await
     } else if let Some(case) = mixed_input_case_for_command(&command) {
         mixed_input_case_correctness(case).await
     } else {
@@ -1158,10 +1319,16 @@ async fn run() -> Result<(), String> {
 }
 
 fn mixed_command_artifact_path(command: &str) -> Option<PathBuf> {
-    if command == MIXED_MATRIX_MODE {
+    if command == MIXED_MATRIX_MODE || command == MIXED_FAST_BREADTH_MODE {
         let work_dir = std::env::var_os("WORK_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(mixed_matrix_default_work_dir);
+            .unwrap_or_else(|| {
+                if command == MIXED_FAST_BREADTH_MODE {
+                    mixed_fast_breadth_default_work_dir()
+                } else {
+                    mixed_matrix_default_work_dir()
+                }
+            });
         return Some(work_dir.join("scenario.json"));
     }
     let case = mixed_input_case_for_command(command)?;
@@ -1208,6 +1375,7 @@ fn harness_srt_pbkeylen() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// SRT encryption parameters injected into harness SRT listeners and URLs.
 #[derive(Clone, Debug)]
 struct HarnessSrtCrypto {
     label: String,
@@ -1321,12 +1489,14 @@ fn apply_harness_srt_listener_env(cmd: &mut Command) {
 // setup that was previously inlined in `start_ramp_restream` and
 // `start_mixed_restream`.
 
+/// Concrete restream listener ports for one isolated harness process.
 struct TestPorts {
     http: u16,
     rtmp: u16,
     srt: u16,
 }
 
+/// Synthesized non-overlapping port ranges for restream, MediaMTX, and probes.
 #[derive(Clone, Copy)]
 struct HarnessPortDefaults {
     restream_http: u16,
@@ -1453,6 +1623,7 @@ async fn start_restream_child_opts(
 // with timestamps, format, keyframe flags, and counts — the single source of
 // truth for egress correctness in live tests.
 
+/// Packet-level observation captured by the generalized RTMP sink.
 struct SinkPacket {
     media_type: &'static str,
     timestamp_ms: u64,
@@ -1461,6 +1632,7 @@ struct SinkPacket {
     video_is_sequence_header: bool,
 }
 
+/// Shared counters and packet history for generalized sink assertions.
 struct GeneralizedSinkMetrics {
     connections: AtomicUsize,
     publishing: AtomicUsize,
@@ -1746,18 +1918,21 @@ async fn write_generalized_sink_results(
 // packets, asserts DTS monotonicity / video+audio presence / keyframes,
 // then tears down. Returns the sink summary for embedding in test results.
 
+/// Result bundle returned by the live egress sink-probe helper.
 struct SinkProbeResult {
     passed: bool,
     summary: Value,
     output_id: String,
 }
 
+/// Running generalized RTMP sink and its spawned connection tasks.
 struct GeneralizedSinkServer {
     cancel: CancellationToken,
     task: tokio::task::JoinHandle<()>,
     reader_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
+/// RTMP sink that intentionally stops reading to exercise output-stall handling.
 struct StalledRtmpSinkServer {
     cancel: CancellationToken,
     task: tokio::task::JoinHandle<()>,
@@ -2041,6 +2216,7 @@ async fn run_sink_probe(
     })
 }
 
+/// Result bundle returned by the synthetic HLS PUT upload probe.
 struct HlsPutProbeResult {
     passed: bool,
     summary: Value,
@@ -2169,6 +2345,7 @@ async fn run_burst_graph_check(api: &RampApi, pipeline_id: &str) -> Result<(bool
     Ok((passed, summary))
 }
 
+/// One ramp-family input/output profile.
 #[derive(Clone, Copy)]
 struct RampConfig {
     name: &'static str,
@@ -2177,6 +2354,7 @@ struct RampConfig {
     encoding: &'static str,
 }
 
+/// Runtime configuration and artifact paths for ramp-family runs.
 struct RampEnv {
     work_dir: PathBuf,
     scale_log: PathBuf,
@@ -2239,6 +2417,7 @@ impl RampEnv {
     }
 }
 
+/// Small authenticated HTTP client wrapper for the local restream API.
 struct RampApi {
     client: reqwest::Client,
     base_url: String,
@@ -2509,6 +2688,7 @@ async fn verify_external_transcoder_history_contract(api: &RampApi) -> Result<Va
     }))
 }
 
+/// Resource-sweep process lifetime model for publishers and outputs.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ResourceSweepLifecycle {
     Isolated,
@@ -2541,6 +2721,7 @@ impl ResourceSweepLifecycle {
     }
 }
 
+/// Environment and output paths for resource-sweep measurement runs.
 #[derive(Clone)]
 struct ResourceSweepEnv {
     work_dir: PathBuf,
@@ -2699,6 +2880,7 @@ fn parse_sweep_configs(name: &str) -> Result<Vec<SweepConfig>, String> {
     Ok(out)
 }
 
+/// Input fixture shape used by resource and bitrate sweep families.
 #[derive(Clone, Copy)]
 struct SweepConfig {
     name: &'static str,
@@ -2740,6 +2922,7 @@ const SWEEP_CONFIGS: &[SweepConfig] = &[
     },
 ];
 
+/// Output shape used by resource-sweep scenarios.
 #[derive(Clone, Copy)]
 enum SweepOutputKind {
     RtmpSource,
@@ -2763,6 +2946,7 @@ impl SweepOutputKind {
     }
 }
 
+/// Live process stack shared by a resource-sweep sample.
 struct ResourceSweepStack {
     mediamtx: Child,
     restream: Child,
@@ -2770,6 +2954,7 @@ struct ResourceSweepStack {
     restream_pid: u32,
 }
 
+/// Environment and output paths for branch-matrix runs.
 #[derive(Clone)]
 struct BranchMatrixEnv {
     resource: ResourceSweepEnv,
@@ -2820,6 +3005,7 @@ impl BranchMatrixEnv {
     }
 }
 
+/// Environment and output paths for bitrate-sweep measurement runs.
 struct BitrateSweepEnv {
     work_dir: PathBuf,
     summary_json: PathBuf,
@@ -2880,12 +3066,14 @@ impl BitrateSweepEnv {
     }
 }
 
+/// One target bitrate value in a bitrate sweep.
 #[derive(Clone)]
 struct BitrateSpec {
     label: String,
     mbps: f64,
 }
 
+/// One periodic resource sample captured during a bitrate-sweep case.
 #[derive(Clone)]
 struct BitrateSweepSample {
     config: String,
@@ -2908,6 +3096,7 @@ struct BitrateSweepSample {
     overflow_count: u64,
 }
 
+/// Aggregated result for one bitrate/config/output-count case.
 struct BitrateSweepCase {
     config: String,
     ingest_proto: String,
@@ -2944,6 +3133,7 @@ struct BitrateSweepCase {
     correctness_failures: Vec<String>,
 }
 
+/// One periodic process/memory sample in resource-oriented sweeps.
 #[derive(Clone)]
 struct ResourceSample {
     scenario: String,
@@ -2981,6 +3171,7 @@ struct ResourceSample {
     unattributed_kb: u64,
 }
 
+/// Rollup statistics for a resource-sweep scenario.
 struct ResourceAggregate {
     scenario: String,
     label: String,
@@ -3018,6 +3209,7 @@ struct ResourceAggregate {
     pipeline_count_peak: usize,
 }
 
+/// Static labels and dimensions for one resource-sweep scenario.
 struct ResourceScenarioMeta<'a> {
     scenario: &'a str,
     label: String,
@@ -3028,6 +3220,7 @@ struct ResourceScenarioMeta<'a> {
     transcode: &'a str,
 }
 
+/// Parsed `/proc/<pid>/smaps_rollup` memory counters used for attribution.
 struct ProcMemRollup {
     anonymous_kb: u64,
     private_dirty_kb: u64,
@@ -3594,6 +3787,7 @@ async fn start_bitrate_sweep_stack(env: &BitrateSweepEnv) -> Result<ResourceSwee
     })
 }
 
+/// Output names allocated for one bitrate-sweep case.
 struct BitrateOutputNames {
     rtmp_source: String,
     rtmp_720p: String,
@@ -4413,7 +4607,9 @@ async fn run_resource_egress_growth(
             );
         }
     }
-    if env.lifecycle == ResourceSweepLifecycle::Cumulative {
+    if env.lifecycle == ResourceSweepLifecycle::Cumulative && env.no_cleanup {
+        retained_publishers.push(publisher);
+    } else if env.lifecycle == ResourceSweepLifecycle::Cumulative {
         retained_publishers.push(publisher);
     } else {
         stop_child(&mut publisher).await;
@@ -5978,6 +6174,7 @@ async fn install_bframe_transcode_profiles(api: &RampApi) -> Result<(), String> 
     Ok(())
 }
 
+/// Expected presence of B-frame signal in a generated/probed stream.
 #[derive(Clone, Copy)]
 enum ExpectedBframeSignal {
     None,
@@ -6117,14 +6314,15 @@ async fn wait_for_api_health_matches_probe(
     let mut last_snapshot = Value::Null;
 
     loop {
-        if let Ok(health) = api.get_json("/api/v1/engine/health").await
-            && let Some(snapshot) = health["pipelines"]
+        if let Ok(health) = api.get_json("/api/v1/engine/health").await {
+            if let Some(snapshot) = health["pipelines"]
                 .as_object()
                 .and_then(|pipelines| pipelines.get(pipeline_id).cloned())
-        {
-            last_snapshot = snapshot.clone();
-            if media_snapshot_matches_probe(&snapshot, probe_snapshot) {
-                return Ok(snapshot);
+            {
+                last_snapshot = snapshot.clone();
+                if media_snapshot_matches_probe(&snapshot, probe_snapshot) {
+                    return Ok(snapshot);
+                }
             }
         }
         if Instant::now() >= deadline {
@@ -6398,6 +6596,7 @@ async fn wait_for_hls_playlist_ready(
     }
 }
 
+/// One ramp-family resource snapshot written to CSV and JSON summaries.
 struct RampSnapshot {
     cpu_pct: String,
     rss_kb: u64,
@@ -6456,6 +6655,7 @@ fn append_line(path: &Path, line: &str) -> Result<(), String> {
     file.write_all(line.as_bytes()).map_err(|e| e.to_string())
 }
 
+/// Count and RSS total for external FFmpeg worker processes.
 #[derive(Clone)]
 struct FfmpegStats {
     count: u64,
@@ -6565,6 +6765,7 @@ async fn probe_dims_ramp(url: &str) -> Result<String, String> {
     probe_dims_ramp_with_cookie(url, None).await
 }
 
+/// Minimal HLS playlist progress marker used by live-edge checks.
 #[derive(Clone, Debug)]
 struct HlsPlaylistSnapshot {
     media_sequence: Option<u64>,
@@ -6630,10 +6831,12 @@ async fn probe_dims_ramp_with_cookie(url: &str, cookie: Option<&str>) -> Result<
         .replace(',', "x"))
 }
 
+/// Runtime configuration and artifact paths for one mixed-matrix scenario.
 struct MixedEnv {
     work_dir: PathBuf,
     media_dir: PathBuf,
     scale_log: PathBuf,
+    timing_log: PathBuf,
     rss_summary: PathBuf,
     summary_log: PathBuf,
     restream_log: PathBuf,
@@ -6660,6 +6863,7 @@ struct MixedEnv {
     av_soak_seconds: u64,
     n_per_group: usize,
     snapshot_sleep: Duration,
+    collect_failures: bool,
 }
 impl MixedEnv {
     fn from_env_with_default_work_dir(log_stem: &str, default_work_dir: PathBuf) -> Self {
@@ -6674,6 +6878,9 @@ impl MixedEnv {
             scale_log: std::env::var_os("SCALE_LOG")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| work_dir.join("scale.csv")),
+            timing_log: std::env::var_os("TIMING_LOG")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| work_dir.join("timing.jsonl")),
             rss_summary: std::env::var_os("RSS_SUMMARY")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| work_dir.join("rss-summary.csv")),
@@ -6730,6 +6937,9 @@ impl MixedEnv {
             av_soak_seconds: env_secs("AV_SOAK_SECONDS", 120),
             n_per_group: env_usize("N_PER_GROUP", 25),
             snapshot_sleep: Duration::from_secs(env_secs("SNAPSHOT_SLEEP_SECS", 3)),
+            collect_failures: std::env::var("COLLECT_FAILURES")
+                .ok()
+                .is_some_and(|value| value == "1"),
             work_dir,
         }
     }
@@ -6756,6 +6966,7 @@ impl MixedEnv {
     }
 }
 
+/// Resume gate that skips mixed checks until a requested assertion id is reached.
 struct MixedResume {
     target: Option<String>,
     active: bool,
@@ -6826,23 +7037,147 @@ async fn mixed_input_matrix_correctness() -> Result<Value, String> {
     }))
 }
 
+async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
+    let root = std::env::var_os("WORK_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(mixed_fast_breadth_default_work_dir);
+    let explicit_n_per_group = std::env::var_os("N_PER_GROUP").is_some();
+    let explicit_only_checks = std::env::var_os("ONLY_CHECKS").is_some();
+    let explicit_skip_load = std::env::var_os("SKIP_LOAD").is_some();
+    let explicit_collect_failures = std::env::var_os("COLLECT_FAILURES").is_some();
+    let explicit_assertion_log = std::env::var_os("ASSERTION_LOG").is_some();
+    let mut results = Vec::new();
+    let mut failures = Vec::new();
+    let mut covered_output_cells = 0usize;
+    let mut total_output_cells = 0usize;
+
+    for case in MIXED_INPUT_CASES {
+        total_output_cells += mixed_output_cases_for_input(*case).len();
+    }
+
+    for selected in MIXED_FAST_BREADTH_CASES {
+        let case = selected.case;
+        let mode = mixed_input_mode_name(case);
+        let mut env = MixedEnv::from_env_with_default_work_dir(
+            &mode,
+            root.join(mixed_input_artifact_rel_dir(case)),
+        );
+        if !explicit_n_per_group {
+            env.n_per_group = 1;
+        }
+        if !explicit_only_checks {
+            env.only_checks = Some(
+                selected
+                    .checks
+                    .iter()
+                    .map(|check| check.to_string())
+                    .collect(),
+            );
+        }
+        if !explicit_skip_load {
+            env.skip_load = true;
+        }
+        if !explicit_collect_failures {
+            env.collect_failures = true;
+        }
+        if !explicit_assertion_log {
+            env.assertion_log = Some(root.join("assertions.jsonl"));
+        }
+        covered_output_cells += mixed_output_cases_for_input(case).len();
+        match run_mixed_input_case_with_env(case, env).await {
+            Ok(mut result) => {
+                result["fastBreadthRationale"] = json!(selected.rationale);
+                results.push(result);
+            }
+            Err(error) => {
+                failures.push(format!("{}: {error}", case.scenario_id()));
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        return Err(format!(
+            "mixed fast breadth failed {} selected case(s): {}",
+            failures.len(),
+            failures.join(" | ")
+        ));
+    }
+
+    Ok(json!({
+        "passed": true,
+        "mode": MIXED_FAST_BREADTH_MODE,
+        "coverage": {
+            "selectedInputCases": MIXED_FAST_BREADTH_CASES.len(),
+            "totalInputCases": MIXED_INPUT_CASES.len(),
+            "selectedOutputCells": covered_output_cells,
+            "totalOutputCells": total_output_cells,
+            "nPerGroup": std::env::var("N_PER_GROUP").ok().unwrap_or_else(|| "1".to_string()),
+            "defaultChecks": if explicit_only_checks {
+                Value::Null
+            } else {
+                MIXED_FAST_BREADTH_CASES.iter().map(|selected| {
+                    json!({
+                        "id": selected.case.scenario_id(),
+                        "checks": selected.checks,
+                    })
+                }).collect::<Vec<_>>().into()
+            },
+            "defaultSkipLoad": !explicit_skip_load,
+            "defaultCollectFailures": !explicit_collect_failures,
+            "defaultAssertionLog": if explicit_assertion_log {
+                Value::Null
+            } else {
+                root.join("assertions.jsonl").to_string_lossy().into_owned().into()
+            },
+        },
+        "inputCases": MIXED_FAST_BREADTH_CASES.iter().map(|selected| {
+            let case = selected.case;
+            json!({
+                "id": case.scenario_id(),
+                "source": mixed_input_source_name(case),
+                "ingest": mixed_input_ingest_name(case),
+                "video": case.codec_name(),
+                "audio": mixed_input_audio_layout_name(case),
+                "reorder": mixed_input_reorder_name(case),
+                "sourceHasBframes": case.source_has_b_frames(),
+                "outputCells": mixed_output_cases_for_input(case).len(),
+                "checks": selected.checks,
+                "rationale": selected.rationale,
+            })
+        }).collect::<Vec<_>>(),
+        "results": results,
+    }))
+}
+
 async fn run_mixed_input_case_with_env(
     case: MixedInputCase,
     env: MixedEnv,
 ) -> Result<Value, String> {
+    let cfg = case.scenario_id();
+    let scenario_started = Instant::now();
     if env.n_per_group == 0 {
         return Err("N_PER_GROUP must be greater than zero".to_string());
     }
     std::fs::create_dir_all(&env.work_dir).map_err(|e| e.to_string())?;
     ensure_mixed_artifacts(&env)?;
 
+    let stack_started = Instant::now();
     let mut mediamtx = start_mixed_mediamtx(&env).await?;
     let mut restream = start_mixed_restream(&env).await?;
     let restream_pid = restream.id().unwrap_or(0);
     let mut api = RampApi::new(env.restream_http);
     api.login().await?;
+    emit_mixed_timing(
+        &env,
+        cfg,
+        "stack.start",
+        "pass",
+        stack_started.elapsed(),
+        None,
+    )?;
     let mut resume = MixedResume::new(env.resume_from.clone());
 
+    let config_started = Instant::now();
     let config = match (case.protocol(), case.codec(), case.is_multi_track()) {
         (MixedInputProtocol::File, _, _) => {
             run_mixed_file_config(&env, &api, restream_pid, case, &mut resume).await
@@ -6867,9 +7202,34 @@ async fn run_mixed_input_case_with_env(
             case.scenario_id()
         )),
     };
+    emit_mixed_timing(
+        &env,
+        cfg,
+        "scenario.execute",
+        if config.is_ok() { "pass" } else { "fail" },
+        config_started.elapsed(),
+        None,
+    )?;
 
+    let cleanup_started = Instant::now();
     stop_child(&mut restream).await;
     stop_child(&mut mediamtx).await;
+    emit_mixed_timing(
+        &env,
+        cfg,
+        "stack.cleanup",
+        "pass",
+        cleanup_started.elapsed(),
+        None,
+    )?;
+    emit_mixed_timing(
+        &env,
+        cfg,
+        "scenario.total",
+        if config.is_ok() { "pass" } else { "fail" },
+        scenario_started.elapsed(),
+        None,
+    )?;
 
     config.map(|config| {
         json!({
@@ -6889,6 +7249,7 @@ async fn run_mixed_input_case_with_env(
             "artifacts": {
                 "workDir": env.work_dir,
                 "scaleCsv": env.scale_log,
+                "timingJsonl": env.timing_log,
                 "rssSummary": env.rss_summary,
                 "summary": env.summary_log,
                 "restreamLog": env.restream_log,
@@ -6906,6 +7267,9 @@ fn ensure_mixed_artifacts(env: &MixedEnv) -> Result<(), String> {
             "config,label,cpu_pct,rss_kb,ext_ffmpeg_n,ext_ffmpeg_rss_kb\n",
         )
         .map_err(|e| e.to_string())?;
+    }
+    if !env.timing_log.exists() {
+        std::fs::write(&env.timing_log, "").map_err(|e| e.to_string())?;
     }
     if !env.rss_summary.exists() {
         std::fs::write(&env.rss_summary, "").map_err(|e| e.to_string())?;
@@ -7027,6 +7391,7 @@ async fn run_mixed_anchor_config(
     output_ids.push(hls_output);
 
     add_mixed_group(
+        env,
         api,
         &pipeline_id,
         MixedGroupSpec {
@@ -7087,6 +7452,7 @@ async fn run_mixed_anchor_config(
     }
 
     add_mixed_group(
+        env,
         api,
         &pipeline_id,
         MixedGroupSpec {
@@ -7109,6 +7475,7 @@ async fn run_mixed_anchor_config(
     }
 
     add_mixed_group(
+        env,
         api,
         &pipeline_id,
         MixedGroupSpec {
@@ -7131,6 +7498,7 @@ async fn run_mixed_anchor_config(
     }
 
     add_mixed_group(
+        env,
         api,
         &pipeline_id,
         MixedGroupSpec {
@@ -7153,6 +7521,7 @@ async fn run_mixed_anchor_config(
     }
 
     add_mixed_group(
+        env,
         api,
         &pipeline_id,
         MixedGroupSpec {
@@ -7175,6 +7544,7 @@ async fn run_mixed_anchor_config(
     }
 
     add_mixed_group(
+        env,
         api,
         &pipeline_id,
         MixedGroupSpec {
@@ -7899,8 +8269,6 @@ async fn run_mixed_srt_multi_config(
     let mut publisher = spawn_mixed_srt_multi_publisher(env, case, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
 
-    // Give the probe time to fire and adaptive ring resize to complete (≤ 5 s).
-    tokio::time::sleep(Duration::from_secs(6)).await;
     if env.check_selected("hls") {
         verify_mixed_hls_preview(
             env,
@@ -7919,67 +8287,85 @@ async fn run_mixed_srt_multi_config(
     // ring must have grown beyond the 1024-slot default and hold ≥ 5 s of depth.
     let ring_check_id = mixed_scenario_check_id(cfg, "adaptive_source_ring");
     if env.check_selected("ffprobe") || resume.allows(&ring_check_id) {
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         let telem_path = format!("/api/v1/pipelines/{pipeline_id}/telemetry");
-        match api.get_json(&telem_path).await {
-            Ok(telem) => {
-                let cap = telem["sourceRing"]["capacity"].as_u64().unwrap_or(0);
-                let depth = telem["sourceRing"]["bufferDepthSecs"]
-                    .as_f64()
-                    .unwrap_or(0.0);
-                let overflows: u64 = telem["sourceRing"]["readers"]
-                    .as_array()
-                    .map(|rs| {
-                        rs.iter()
-                            .map(|r| r["overflowCount"].as_u64().unwrap_or(0))
-                            .sum()
-                    })
-                    .unwrap_or(0);
-                // 2 audio tracks × 50 pkt/s + video ≈ 130 pkt/s → needed ≈ 780
-                // Any capacity > 1024 confirms adaptive resize fired correctly
-                let resized = cap > 1024;
-                let adequate = depth >= 5.0 || cap >= 780;
-                let no_overflow = overflows == 0;
-                let passed = adequate && no_overflow;
-                emit_mixed_result(
-                    env,
-                    cfg,
-                    &ring_check_id,
-                    if passed { "pass" } else { "fail" },
-                    started.elapsed(),
-                    Some(json!({
-                        "ringCapacity": cap,
-                        "bufferDepthSecs": depth,
-                        "ringResized": resized,
-                        "adequate": adequate,
-                        "overflows": overflows,
-                    })),
-                )?;
-                if passed {
-                    log_mixed_ok(
-                        env,
-                        &format!(
-                            "adaptive-ring {cfg}: cap={cap} depth={depth:.1}s \
-                             overflows={overflows}{}",
-                            if resized { " [resized]" } else { "" }
-                        ),
-                    )?;
-                } else {
-                    return Err(format!(
-                        "adaptive ring check failed for {cfg}: cap={cap} depth={depth:.1}s overflows={overflows}"
-                    ));
+        let deadline = Instant::now() + Duration::from_secs(6);
+        let mut last_error = None;
+        loop {
+            match api.get_json(&telem_path).await {
+                Ok(telem) => {
+                    let snapshot = mixed_adaptive_ring_snapshot(&telem);
+                    if snapshot.passed || Instant::now() >= deadline {
+                        let passed = snapshot.passed;
+                        emit_mixed_timing(
+                            env,
+                            cfg,
+                            "input.adaptive_ring",
+                            if passed { "pass" } else { "fail" },
+                            started.elapsed(),
+                            Some(snapshot.to_json()),
+                        )?;
+                        emit_mixed_result(
+                            env,
+                            cfg,
+                            &ring_check_id,
+                            if passed { "pass" } else { "fail" },
+                            started.elapsed(),
+                            Some(json!({
+                                        "ringCapacity": snapshot.capacity,
+                                        "bufferDepthSecs": snapshot.depth_secs,
+                                        "ringResized": snapshot.resized,
+                                        "adequate": snapshot.adequate,
+                                        "overflows": snapshot.overflows,
+                            })),
+                        )?;
+                        if passed {
+                            log_mixed_ok(
+                                env,
+                                &format!(
+                                    "adaptive-ring {cfg}: cap={} depth={:.1}s \
+                             overflows={}{}",
+                                    snapshot.capacity,
+                                    snapshot.depth_secs,
+                                    snapshot.overflows,
+                                    if snapshot.resized { " [resized]" } else { "" }
+                                ),
+                            )?;
+                            break;
+                        } else {
+                            return Err(format!(
+                                "adaptive ring check failed for {cfg}: cap={} depth={:.1}s overflows={}",
+                                snapshot.capacity, snapshot.depth_secs, snapshot.overflows
+                            ));
+                        }
+                    }
+                }
+                Err(error) => {
+                    last_error = Some(error);
                 }
             }
-            Err(e) => {
+            if Instant::now() >= deadline {
+                let error =
+                    last_error.unwrap_or_else(|| "telemetry never became ready".to_string());
                 emit_mixed_result(
                     env,
                     cfg,
                     &ring_check_id,
                     "fail",
                     started.elapsed(),
-                    Some(json!({"error": e})),
+                    Some(json!({"error": error})),
                 )?;
+                emit_mixed_timing(
+                    env,
+                    cfg,
+                    "input.adaptive_ring",
+                    "fail",
+                    started.elapsed(),
+                    Some(json!({"error": error})),
+                )?;
+                return Err(format!("adaptive ring check failed for {cfg}: {error}"));
             }
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
 
@@ -8225,6 +8611,7 @@ async fn start_mixed_output(
     .map(|_| ())
 }
 
+/// Parameters for creating a homogeneous group of mixed-matrix outputs.
 struct MixedGroupSpec<'a> {
     cfg: &'a str,
     group: &'a str,
@@ -8232,11 +8619,13 @@ struct MixedGroupSpec<'a> {
     encoding: &'a str,
 }
 
+/// Output transport protocol axis for mixed-matrix output rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MixedOutputProtocol {
     Rtmp,
     Srt,
 }
+/// Complete output-side row in the mixed matrix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MixedOutputCase {
     SingleRtmpSrcA0,
@@ -8381,6 +8770,7 @@ const MULTI_TRACK_MIXED_OUTPUT_CASES: &[MixedOutputCase] = &[
     MixedOutputCase::MultiSrt1080pA1,
 ];
 
+/// Direct FFmpeg SRT listener used to validate SRT egress without MediaMTX.
 struct FfmpegSrtSink {
     group: String,
     index: usize,
@@ -8391,6 +8781,7 @@ struct FfmpegSrtSink {
     child: Child,
 }
 
+/// Direct FFmpeg RTMP/SRT listener used for AV marker signal capture.
 struct FfmpegSignalSink {
     cfg: String,
     group: String,
@@ -8401,6 +8792,7 @@ struct FfmpegSignalSink {
 }
 
 async fn add_mixed_group<F>(
+    env: &MixedEnv,
     api: &RampApi,
     pipeline_id: &str,
     spec: MixedGroupSpec<'_>,
@@ -8410,6 +8802,7 @@ async fn add_mixed_group<F>(
 where
     F: Fn(usize) -> String,
 {
+    let started = Instant::now();
     for index in 1..=spec.count {
         let output_id = create_mixed_output(
             api,
@@ -8426,6 +8819,18 @@ where
         "[mixed-input] added {} {} outputs for {}",
         spec.count, spec.group, spec.cfg
     );
+    emit_mixed_timing(
+        env,
+        spec.cfg,
+        &format!("outputs.create.{}", spec.group),
+        "pass",
+        started.elapsed(),
+        Some(json!({
+            "group": spec.group,
+            "count": spec.count,
+            "encoding": spec.encoding,
+        })),
+    )?;
     Ok(())
 }
 
@@ -8514,6 +8919,7 @@ async fn add_mixed_output_cases(
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
         add_mixed_group(
+            env,
             api,
             pipeline_id,
             MixedGroupSpec {
@@ -8574,6 +8980,7 @@ async fn add_mixed_multi_output_cases(
         match case.protocol() {
             MixedOutputProtocol::Rtmp => {
                 add_mixed_group(
+                    env,
                     api,
                     pipeline_id,
                     MixedGroupSpec {
@@ -8654,7 +9061,9 @@ async fn verify_mixed_output_cases_inner(
     if !env.check_selected("ffprobe") && !env.check_selected("signal") {
         return Ok(());
     }
+    let started = Instant::now();
     let index = env.n_per_group;
+    let mut failures = Vec::new();
     for case in cases {
         if skip_direct_srt_sinks
             && env.ffmpeg_srt_sink
@@ -8664,9 +9073,10 @@ async fn verify_mixed_output_cases_inner(
         }
         let url = mixed_output_read_url(env, cfg, *case, index);
         let label = format!("{} out{index}", case.id());
+        let mut output_failed = false;
         if env.check_selected("ffprobe") {
             let ffprobe_id = mixed_output_check_id(cfg, case.id(), "ffprobe");
-            verify_mixed_stream(
+            let ffprobe_result = verify_mixed_stream(
                 env,
                 MixedProbeSpec {
                     cfg,
@@ -8678,9 +9088,19 @@ async fn verify_mixed_output_cases_inner(
                 },
                 resume,
             )
-            .await?;
+            .await;
+            if let Err(error) = ffprobe_result {
+                if env.collect_failures {
+                    output_failed = true;
+                    failures.push(error);
+                } else {
+                    return Err(error);
+                }
+            }
+        }
+        if env.check_selected("ffprobe") && !output_failed {
             let audio_id = mixed_output_check_id(cfg, case.id(), "audio_route");
-            verify_mixed_audio_route(
+            let audio_result = verify_mixed_audio_route(
                 env,
                 cfg,
                 &audio_id,
@@ -8690,20 +9110,65 @@ async fn verify_mixed_output_cases_inner(
                 case.expected_audio_tracks(),
                 resume,
             )
-            .await?;
-            if decode_scan {
-                let decode_id = mixed_output_check_id(cfg, case.id(), "decode_scan");
-                verify_mixed_decode_scan(env, cfg, &decode_id, &label, &url, resume).await?;
+            .await;
+            if let Err(error) = audio_result {
+                if env.collect_failures {
+                    output_failed = true;
+                    failures.push(error);
+                } else {
+                    return Err(error);
+                }
+            }
+        }
+        if env.check_selected("ffprobe") && decode_scan && !output_failed {
+            let decode_id = mixed_output_check_id(cfg, case.id(), "decode_scan");
+            let decode_result =
+                verify_mixed_decode_scan(env, cfg, &decode_id, &label, &url, resume).await;
+            if let Err(error) = decode_result {
+                if env.collect_failures {
+                    failures.push(error);
+                } else {
+                    return Err(error);
+                }
             }
         }
         if env.check_selected("signal") && !env.use_direct_signal_sinks() {
             let signal_id = mixed_output_check_id(cfg, case.id(), "signal");
-            verify_mixed_signal_quality(env, cfg, &signal_id, &label, &url, resume).await?;
+            let signal_result =
+                verify_mixed_signal_quality(env, cfg, &signal_id, &label, &url, resume).await;
+            if let Err(error) = signal_result {
+                if env.collect_failures {
+                    failures.push(error);
+                } else {
+                    return Err(error);
+                }
+            }
         }
+    }
+    let status = if failures.is_empty() { "pass" } else { "fail" };
+    emit_mixed_timing(
+        env,
+        cfg,
+        "outputs.verify",
+        status,
+        started.elapsed(),
+        Some(json!({
+            "cases": cases.len(),
+            "nPerGroup": env.n_per_group,
+            "failureCount": failures.len(),
+        })),
+    )?;
+    if !failures.is_empty() {
+        return Err(format!(
+            "{} mixed output check(s) failed: {}",
+            failures.len(),
+            failures.join(" | ")
+        ));
     }
     Ok(())
 }
 
+/// Expected probe shape for one direct SRT sink group.
 struct MixedSrtGroupValidation<'a> {
     label: &'a str,
     expected_dimensions: &'a str,
@@ -8749,6 +9214,7 @@ where
     }
 
     add_mixed_group(
+        env,
         api,
         pipeline_id,
         spec,
@@ -9256,6 +9722,7 @@ async fn snapshot_mixed(
     Ok(())
 }
 
+/// Inputs for one ffprobe-based mixed output assertion.
 struct MixedProbeSpec<'a> {
     cfg: &'a str,
     id: String,
@@ -9399,6 +9866,17 @@ async fn verify_mixed_hls_preview(
                 started.elapsed(),
                 Some(summary.clone()),
             )?;
+            emit_mixed_timing(
+                env,
+                cfg,
+                "check.hls_preview",
+                "pass",
+                started.elapsed(),
+                Some(json!({
+                    "expected": expected_dimensions,
+                    "got": dimensions,
+                })),
+            )?;
             log_mixed_ok(env, &format!("hls-preview: {cfg} -> {dimensions}"))?;
             Ok(summary)
         }
@@ -9418,6 +9896,17 @@ async fn verify_mixed_hls_preview(
                     "url": playlist_url,
                 })),
             )?;
+            emit_mixed_timing(
+                env,
+                cfg,
+                "check.hls_preview",
+                "fail",
+                started.elapsed(),
+                Some(json!({
+                    "expected": expected_dimensions,
+                    "got": dimensions,
+                })),
+            )?;
             Err(message)
         }
         Err(error) => {
@@ -9433,6 +9922,14 @@ async fn verify_mixed_hls_preview(
                     "error": error,
                     "url": playlist_url,
                 })),
+            )?;
+            emit_mixed_timing(
+                env,
+                cfg,
+                "check.hls_preview",
+                "fail",
+                started.elapsed(),
+                Some(json!({"error": error})),
             )?;
             Err(message)
         }
@@ -9520,6 +10017,19 @@ async fn verify_mixed_recording(
         if passed { "pass" } else { "fail" },
         started.elapsed(),
         Some(summary.clone()),
+    )?;
+    emit_mixed_timing(
+        env,
+        cfg,
+        "check.recording",
+        if passed { "pass" } else { "fail" },
+        started.elapsed(),
+        Some(json!({
+            "expectedVideoCodec": expected_video_codec,
+            "videoCodec": video_codec,
+            "expectedAudioTracks": expected_audio_tracks,
+            "audioTracks": audio_tracks,
+        })),
     )?;
     if passed {
         log_mixed_ok(
@@ -9753,6 +10263,7 @@ async fn ffmpeg_decode_scan(
     Ok((passed, output.status.code(), matched_pattern, stderr))
 }
 
+/// Parsed marker positions and quality flags from AV signal captures.
 #[derive(Debug, Clone)]
 struct MarkerQualityReport {
     video_markers: Vec<f64>,
@@ -9764,6 +10275,7 @@ struct MarkerQualityReport {
     pcm: PcmQualityReport,
 }
 
+/// PCM-level audio quality statistics for signal-control assertions.
 #[derive(Debug, Clone, Copy)]
 struct PcmQualityReport {
     samples: usize,
@@ -10382,6 +10894,25 @@ fn emit_mixed_result(
         object.extend(extra);
     }
     append_line(path, &format!("{}\n", Value::Object(object))).map_err(|e| e.to_string())
+}
+
+fn emit_mixed_timing(
+    env: &MixedEnv,
+    cfg: &str,
+    stage: &str,
+    status: &str,
+    elapsed: Duration,
+    extra: Option<Value>,
+) -> Result<(), String> {
+    let mut object = serde_json::Map::new();
+    object.insert("scenario".to_string(), json!(cfg));
+    object.insert("stage".to_string(), json!(stage));
+    object.insert("status".to_string(), json!(status));
+    object.insert("ms".to_string(), json!(elapsed.as_millis()));
+    if let Some(Value::Object(extra)) = extra {
+        object.extend(extra);
+    }
+    append_line(&env.timing_log, &format!("{}\n", Value::Object(object))).map_err(|e| e.to_string())
 }
 
 fn log_mixed_ok(env: &MixedEnv, message: &str) -> Result<(), String> {
@@ -11079,17 +11610,20 @@ async fn srt_policy_correctness() -> Result<Value, String> {
 }
 
 /// Test: SRT ingest -> HLS HTTP PUT upload for YouTube-style and path-style sinks.
+/// Files written by the synthetic HLS PUT sink.
 struct HlsPutArtifacts {
     youtube_playlist: PathBuf,
     youtube_segment: PathBuf,
 }
 
+/// Shared filesystem/request state for the synthetic HLS PUT sink.
 struct HlsPutSinkState {
     root: PathBuf,
     requests_path: PathBuf,
     write_lock: Mutex<()>,
 }
 
+/// State for an HLS PUT sink that intentionally delays responses.
 #[derive(Clone)]
 struct HlsPutHangSinkState {
     cancel: CancellationToken,
@@ -11387,6 +11921,14 @@ fn graph_active_node_count(graph: &Value, node_type: &str) -> usize {
         .count()
 }
 
+fn mixed_stage_count_from_graph(graph: &Value) -> MixedStageCount {
+    MixedStageCount {
+        video: graph_active_node_count(graph, "transcoder"),
+        audio: graph_active_node_count(graph, "audio_filter"),
+        codec_edge: graph_active_node_count(graph, "codec_edge"),
+    }
+}
+
 async fn verify_mixed_graph_stage_sharing(
     env: &MixedEnv,
     api: &RampApi,
@@ -11404,23 +11946,28 @@ async fn verify_mixed_graph_stage_sharing(
     }
     let started = Instant::now();
     let expected = expected_mixed_stage_count(case);
-    let graph = api
-        .get_json(&format!("/api/v1/pipelines/{pipeline_id}/graph"))
-        .await?;
-    let got = MixedStageCount {
-        video: graph_active_node_count(&graph, "transcoder"),
-        audio: graph_active_node_count(&graph, "audio_filter"),
-        codec_edge: graph_active_node_count(&graph, "codec_edge"),
-    };
+    let graph_path = format!("/api/v1/pipelines/{pipeline_id}/graph");
     // A stage-sharing-only run creates outputs but does not necessarily attach
     // every protocol reader. Audio-route stages are cheap and may be lazy until
     // the selected-track output is consumed, so this live check treats the
     // matrix audio count as an upper bound. The expensive HEVC->H.264
     // codec-edge count must be exact; that is the regression this check exists
     // to catch when N_PER_GROUP grows.
-    let passed = got.video == expected.video
-        && got.codec_edge == expected.codec_edge
-        && got.audio <= expected.audio;
+    let stage_counts_match = |got: MixedStageCount| {
+        got.video == expected.video
+            && got.codec_edge == expected.codec_edge
+            && got.audio <= expected.audio
+    };
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let (graph, got) = loop {
+        let graph = api.get_json(&graph_path).await?;
+        let got = mixed_stage_count_from_graph(&graph);
+        if stage_counts_match(got) || Instant::now() >= deadline {
+            break (graph, got);
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
+    let passed = stage_counts_match(got);
     emit_mixed_result(
         env,
         cfg,
@@ -11443,6 +11990,26 @@ async fn verify_mixed_graph_stage_sharing(
             "nPerGroup": env.n_per_group,
             "outputMatrix": mixed_output_matrix_json(mixed_output_cases_for_input(case)),
             "graph": graph,
+        })),
+    )?;
+    emit_mixed_timing(
+        env,
+        cfg,
+        "check.stage_sharing",
+        if passed { "pass" } else { "fail" },
+        started.elapsed(),
+        Some(json!({
+            "expected": {
+                "video": expected.video,
+                "audio": expected.audio,
+                "codecEdge": expected.codec_edge,
+            },
+            "got": {
+                "video": got.video,
+                "audio": got.audio,
+                "codecEdge": got.codec_edge,
+            },
+            "nPerGroup": env.n_per_group,
         })),
     )?;
     if passed {
@@ -12321,7 +12888,7 @@ async fn hevc_rtmp_atrack_correctness() -> Result<Value, String> {
     } else {
         ffmpeg.count <= 3
     };
-    let graph_ok = codec_edges == 2 && video_stages == 1 && audio_routes == 2;
+    let graph_ok = codec_edges == 2 && video_stages == 1 && audio_routes == 3;
     let decode_ok = source_a_decode.0 && source_b_decode.0 && scaled_decode.0;
     let passed = graph_ok && external_stage_count_ok && decode_ok;
 
@@ -12522,6 +13089,7 @@ async fn hevc_srt_passthrough_correctness() -> Result<Value, String> {
     }
 }
 
+/// Stream-selection policy for FFmpeg publishers spawned by the harness.
 #[derive(Clone, Copy)]
 enum PublishTrackSelection {
     PrimaryAv,
@@ -16718,8 +17286,14 @@ async fn fault_resilience() -> Result<Value, String> {
                                 while let Ok(()) = socket.readable().await {
                                     match socket.try_read(&mut buf) {
                                         Ok(0) => break,
-                                        Ok(n) => { bytes.fetch_add(n as u64, Ordering::Relaxed); }
-                                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                                        Ok(n) => {
+                                            bytes.fetch_add(n as u64, Ordering::Relaxed);
+                                        }
+                                        Err(ref e)
+                                            if e.kind() == std::io::ErrorKind::WouldBlock =>
+                                        {
+                                            continue;
+                                        }
                                         Err(_) => break,
                                     }
                                 }
@@ -17100,6 +17674,7 @@ fn suite_mode_is_parallelizable(mode: &str, preflight_only: bool) -> bool {
     !preflight_only && !measurement_mode_requires_bench_profile(mode)
 }
 
+/// Result summary for one child mode launched by the aggregate suite runner.
 struct SuiteModeOutcome {
     index: usize,
     mode: String,
@@ -17991,7 +18566,10 @@ stream|index=1|codec_type=audio\n";
             "/src/bin/test_harness.rs"
         ));
         for spec in HARNESS_MODE_SPECS {
-            if spec.name == "mixed.matrix" || mixed_input_case_for_command(spec.name).is_some() {
+            if spec.name == MIXED_MATRIX_MODE
+                || spec.name == MIXED_FAST_BREADTH_MODE
+                || mixed_input_case_for_command(spec.name).is_some()
+            {
                 continue;
             }
             let arm = format!("\"{}\" =>", spec.name);
@@ -18040,6 +18618,154 @@ stream|index=1|codec_type=audio\n";
                 "{mode} must be listed in harness help/suite specs"
             );
         }
+    }
+
+    #[test]
+    fn mixed_fast_breadth_is_small_but_axis_rich() {
+        let names: Vec<_> = MIXED_FAST_BREADTH_CASES
+            .iter()
+            .map(|selected| selected.case.scenario_id())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "mixed.asset.file.h264.a1.bf0",
+                "mixed.asset.file.h265.a2.bf2",
+                "mixed.live.rtmp.h264.a1.bf0",
+                "mixed.live.rtmp.h264.a1.bf2",
+                "mixed.live.srt.h264.a2.bf0",
+                "mixed.live.srt.h265.a2.bf2",
+            ]
+        );
+
+        let cases: Vec<_> = MIXED_FAST_BREADTH_CASES
+            .iter()
+            .map(|selected| selected.case)
+            .collect();
+        for protocol in [
+            MixedInputProtocol::File,
+            MixedInputProtocol::Rtmp,
+            MixedInputProtocol::Srt,
+        ] {
+            assert!(
+                cases.iter().any(|case| case.protocol() == protocol),
+                "fast breadth must cover input protocol {protocol:?}"
+            );
+        }
+        for codec in [MixedVideoCodec::H264, MixedVideoCodec::H265] {
+            assert!(
+                cases.iter().any(|case| case.codec() == codec),
+                "fast breadth must cover codec {codec:?}"
+            );
+        }
+        for audio in [MixedInputAudioLayout::A1, MixedInputAudioLayout::A2] {
+            assert!(
+                cases.iter().any(|case| case.audio_layout() == audio),
+                "fast breadth must cover audio layout {audio:?}"
+            );
+        }
+        for reorder in [MixedInputReorder::Bf0, MixedInputReorder::Bf2] {
+            assert!(
+                cases.iter().any(|case| case.reorder() == reorder),
+                "fast breadth must cover reorder mode {reorder:?}"
+            );
+        }
+        for reorder in [MixedInputReorder::Bf0, MixedInputReorder::Bf2] {
+            assert!(
+                cases.iter().any(|case| {
+                    case.protocol() == MixedInputProtocol::Rtmp && case.reorder() == reorder
+                }),
+                "fast breadth must cover RTMP sender reorder mode {reorder:?}"
+            );
+        }
+        for selected in MIXED_FAST_BREADTH_CASES {
+            assert!(
+                !selected.checks.contains(&"recording")
+                    && !selected.checks.contains(&"signal")
+                    && !selected.checks.contains(&"load"),
+                "{} should keep fast-breadth checks short; use env overrides for depth",
+                selected.case.scenario_id()
+            );
+        }
+        assert_eq!(
+            MIXED_FAST_BREADTH_CASES
+                .iter()
+                .filter(|selected| selected.checks.contains(&"hls"))
+                .count(),
+            2,
+            "HLS is sampled on representative H.264 and HEVC rows, not every row"
+        );
+
+        let selected_cells: usize = cases
+            .iter()
+            .map(|case| mixed_output_cases_for_input(*case).len())
+            .sum();
+        let total_cells: usize = MIXED_INPUT_CASES
+            .iter()
+            .map(|case| mixed_output_cases_for_input(*case).len())
+            .sum();
+        assert_eq!(selected_cells, 63);
+        assert_eq!(total_cells, 180);
+        assert!(
+            selected_cells < total_cells / 2,
+            "fast breadth should stay quick enough to run before the exhaustive matrix"
+        );
+    }
+
+    #[test]
+    fn mixed_fast_breadth_defaults_collect_failures_for_failure_mapping() {
+        let source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bin/test_harness.rs"
+        ));
+
+        assert!(
+            source.contains("env.collect_failures = true"),
+            "mixed.fast-breadth should continue through selected rows to map failures"
+        );
+        assert!(
+            source.contains("\"defaultCollectFailures\""),
+            "mixed.fast-breadth result metadata should disclose the collection default"
+        );
+        assert!(
+            source.contains("root.join(\"assertions.jsonl\")"),
+            "mixed.fast-breadth should emit machine-readable assertion rows by default"
+        );
+    }
+
+    #[test]
+    fn mixed_adaptive_ring_snapshot_accepts_capacity_or_depth_without_overflow() {
+        let resized = mixed_adaptive_ring_snapshot(&json!({
+            "sourceRing": {
+                "capacity": 2048,
+                "bufferDepthSecs": 0.5,
+                "readers": [{"overflowCount": 0}]
+            }
+        }));
+        assert!(resized.resized);
+        assert!(resized.adequate);
+        assert!(resized.passed);
+
+        let deep_enough = mixed_adaptive_ring_snapshot(&json!({
+            "sourceRing": {
+                "capacity": 512,
+                "bufferDepthSecs": 5.1,
+                "readers": [{"overflowCount": 0}]
+            }
+        }));
+        assert!(!deep_enough.resized);
+        assert!(deep_enough.adequate);
+        assert!(deep_enough.passed);
+
+        let overflowed = mixed_adaptive_ring_snapshot(&json!({
+            "sourceRing": {
+                "capacity": 2048,
+                "bufferDepthSecs": 5.1,
+                "readers": [{"overflowCount": 1}]
+            }
+        }));
+        assert!(overflowed.adequate);
+        assert!(!overflowed.passed);
     }
 
     #[test]
@@ -18191,6 +18917,9 @@ stream|index=1|codec_type=audio\n";
     fn mixed_input_suite_default_runs_aggregate_not_duplicate_rows() {
         let matrix_spec = mode_spec("mixed.matrix").expect("mixed.matrix must be listed");
         assert!(matrix_spec.suite_default);
+        let fast_spec =
+            mode_spec(MIXED_FAST_BREADTH_MODE).expect("mixed.fast-breadth must be listed");
+        assert!(!fast_spec.suite_default);
         for case in MIXED_INPUT_CASES {
             let mode = mixed_input_mode_name(*case);
             let spec = mode_spec(&mode).unwrap_or_else(|| panic!("{mode} must be listed"));
