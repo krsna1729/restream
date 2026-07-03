@@ -2726,18 +2726,12 @@ pub(super) async fn verify_mixed_recording(
 
     let started = Instant::now();
     let before_files = media_dir_entries(&env.media_dir)?;
-    api.post_json(
-        &format!("/api/v1/pipelines/{pipeline_id}/recording/start"),
-        json!({}),
-    )
-    .await?;
+    api.post_empty(&format!("/api/v1/pipelines/{pipeline_id}/recording/start"))
+        .await?;
     wait_for_api_recording_state(api, pipeline_id, true, Duration::from_secs(10)).await?;
     tokio::time::sleep(Duration::from_secs(6)).await;
-    api.post_json(
-        &format!("/api/v1/pipelines/{pipeline_id}/recording/stop"),
-        json!({}),
-    )
-    .await?;
+    api.post_empty(&format!("/api/v1/pipelines/{pipeline_id}/recording/stop"))
+        .await?;
     wait_for_api_recording_state(api, pipeline_id, false, Duration::from_secs(20)).await?;
 
     let recording_entry =
@@ -3940,7 +3934,7 @@ pub(super) async fn run_mixed_file_config(
         .ok_or("file ingest not found in list")?
         .to_string();
 
-    api.post_json(&format!("/api/v1/ingests/{ingest_id}/start"), json!({}))
+    api.post_empty(&format!("/api/v1/ingests/{ingest_id}/start"))
         .await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
     let recording = verify_mixed_recording(env, api, cfg, &pipeline_id, case, resume).await?;
@@ -4025,17 +4019,16 @@ pub(super) async fn run_mixed_file_config(
     let growth_kb = rss_peak.saturating_sub(rss_baseline);
 
     for (i, output_id) in output_ids.iter().enumerate() {
-        api.post_json(
-            &format!("/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop"),
-            json!({}),
-        )
+        api.post_empty(&format!(
+            "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop"
+        ))
         .await?;
         if i % 4 == 3 {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
-    api.post_json(&format!("/api/v1/ingests/{ingest_id}/stop"), json!({}))
+    api.post_empty(&format!("/api/v1/ingests/{ingest_id}/stop"))
         .await?;
 
     println!(
