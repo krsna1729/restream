@@ -744,22 +744,8 @@ pub(super) async fn run_mixed_anchor_config(
 
     let mut publisher = spawn_mixed_live_publisher(env, case, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
-    let hls_preview = if env.check_selected("hls") {
-        Some(
-            verify_mixed_hls_preview(
-                env,
-                api,
-                cfg,
-                &pipeline_id,
-                case.hls_preview_expected_dimensions(),
-                case,
-                resume,
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
+    let hls_preview =
+        verify_optional_mixed_hls_preview(env, api, cfg, &pipeline_id, case, resume).await?;
     let recording = verify_mixed_recording(env, api, cfg, &pipeline_id, case, resume).await?;
     let rss_baseline = process_rss_kb(restream_pid).await.unwrap_or(0);
     if !env.skip_load {
@@ -1280,18 +1266,7 @@ pub(super) async fn run_mixed_single_live_config(
     let mut publisher = spawn_mixed_live_publisher(env, case, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
     let recording = verify_mixed_recording(env, api, cfg, &pipeline_id, case, resume).await?;
-    if env.check_selected("hls") {
-        verify_mixed_hls_preview(
-            env,
-            api,
-            cfg,
-            &pipeline_id,
-            case.hls_preview_expected_dimensions(),
-            case,
-            resume,
-        )
-        .await?;
-    }
+    verify_optional_mixed_hls_preview(env, api, cfg, &pipeline_id, case, resume).await?;
     let rss_baseline = process_rss_kb(restream_pid).await.unwrap_or(0);
     if !env.skip_load {
         snapshot_mixed(env, restream_pid, cfg, "baseline (input live, 0 outputs)").await?;
@@ -1367,18 +1342,7 @@ pub(super) async fn run_mixed_srt_multi_config(
     let mut publisher = spawn_mixed_srt_multi_publisher(env, case, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
 
-    if env.check_selected("hls") {
-        verify_mixed_hls_preview(
-            env,
-            api,
-            cfg,
-            &pipeline_id,
-            case.hls_preview_expected_dimensions(),
-            case,
-            resume,
-        )
-        .await?;
-    }
+    verify_optional_mixed_hls_preview(env, api, cfg, &pipeline_id, case, resume).await?;
     let recording = verify_mixed_recording(env, api, cfg, &pipeline_id, case, resume).await?;
 
     // Verify adaptive ring sizing: 2-audio-track SRT stream → 100+ pkt/s →
@@ -2896,6 +2860,31 @@ pub(super) async fn verify_mixed_hls_preview(
     }
 }
 
+pub(super) async fn verify_optional_mixed_hls_preview(
+    env: &MixedEnv,
+    api: &RampApi,
+    cfg: &str,
+    pipeline_id: &str,
+    case: MixedInputCase,
+    resume: &mut MixedResume,
+) -> Result<Option<Value>, String> {
+    if env.check_selected("hls") {
+        verify_mixed_hls_preview(
+            env,
+            api,
+            cfg,
+            pipeline_id,
+            case.hls_preview_expected_dimensions(),
+            case,
+            resume,
+        )
+        .await
+        .map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 pub(super) async fn verify_mixed_recording(
     env: &MixedEnv,
     api: &RampApi,
@@ -4191,18 +4180,7 @@ pub(super) async fn run_mixed_file_config(
     }
 
     let duration_secs: u64 = 10;
-    if env.check_selected("hls") {
-        verify_mixed_hls_preview(
-            env,
-            api,
-            cfg,
-            &pipeline_id,
-            case.hls_preview_expected_dimensions(),
-            case,
-            resume,
-        )
-        .await?;
-    }
+    verify_optional_mixed_hls_preview(env, api, cfg, &pipeline_id, case, resume).await?;
     if !ffmpeg_srt_sinks.is_empty() {
         finish_ffmpeg_srt_sinks(&mut ffmpeg_srt_sinks).await?;
     }
