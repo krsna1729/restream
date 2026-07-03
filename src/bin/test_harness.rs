@@ -10935,6 +10935,115 @@ async fn recovery() -> Result<Value, String> {
     Ok(result)
 }
 
+/// Declarative cell for publisher disconnect fault coverage.
+#[derive(Clone, Copy)]
+struct PublisherDisconnectCase {
+    test_name: &'static str,
+    log_label: &'static str,
+    pipeline: &'static str,
+    protocol: HarnessPublisherProtocol,
+}
+
+const PUBLISHER_DISCONNECT_CASES: &[PublisherDisconnectCase] = &[
+    PublisherDisconnectCase {
+        test_name: "rtmp-publisher-disconnect",
+        log_label: "RTMP",
+        pipeline: "fault-rtmp",
+        protocol: HarnessPublisherProtocol::Rtmp,
+    },
+    PublisherDisconnectCase {
+        test_name: "srt-publisher-disconnect",
+        log_label: "SRT",
+        pipeline: "fault-srt",
+        protocol: HarnessPublisherProtocol::Srt,
+    },
+];
+
+async fn run_publisher_disconnect_case(
+    api: &RampApi,
+    ports: &TestPorts,
+    fixture_h264: &Path,
+    timeout: Duration,
+    case: PublisherDisconnectCase,
+) -> Result<Value, String> {
+    let pid = create_pipeline(api, case.pipeline).await?;
+
+    let mut pub_child = spawn_publisher(
+        fixture_h264,
+        &case.protocol.publish_url(ports, case.pipeline),
+        case.protocol.ffmpeg_format(),
+        case.protocol.map_all_streams(),
+    )
+    .await?;
+    wait_for_api_input_live(api, &pid, timeout).await?;
+    println!("[fault] {} publisher live", case.log_label);
+
+    stop_child(&mut pub_child).await;
+    let started = Instant::now();
+    let off_result = wait_for_api_input_off(api, &pid, timeout).await;
+    let elapsed = started.elapsed();
+    let off_health = api.get_json("/api/v1/engine/health").await.ok();
+    let off_input = health_input_snapshot(off_health.as_ref(), &pid);
+    let assert_disconnect_fields = matches!(case.protocol, HarnessPublisherProtocol::Rtmp);
+    let disconnect_fields_ok = !assert_disconnect_fields
+        || (off_input["lastSessionProtocol"] == "rtmp"
+            && off_input["lastDisconnectAt"].is_string()
+            && off_input["lastDisconnectReason"] == "publisher disconnected"
+            && off_input["lastFailurePhase"] == "disconnect"
+            && off_input["recentDisconnectError"] == false);
+    let passed = off_result.is_ok() && disconnect_fields_ok;
+    println!(
+        "[fault] {} publisher disconnect: {} ({:.1}s)",
+        case.log_label,
+        if passed { "PASS" } else { "FAIL" },
+        elapsed.as_secs_f64()
+    );
+
+    let mut result = json!({
+        "test": case.test_name,
+        "passed": passed,
+        "elapsedMs": elapsed.as_millis(),
+        "error": off_result.err(),
+        "disconnectFieldsOk": disconnect_fields_ok,
+    });
+    if assert_disconnect_fields {
+        result["inputSnapshot"] = off_input;
+    }
+    Ok(result)
+}
+
+async fn configure_file_ingest_case(
+    api: &RampApi,
+    pipeline_id: &str,
+    stream_key: &str,
+    fixture: &Path,
+) -> Result<String, String> {
+    let fixture_name = fixture.file_name().unwrap().to_string_lossy().to_string();
+    let media_dest =
+        PathBuf::from(std::env::var("RESTREAM_MEDIA_DIR").unwrap_or_else(|_| "media".into()))
+            .join(&fixture_name);
+    if !media_dest.exists() {
+        std::fs::copy(fixture, &media_dest).map_err(|e| e.to_string())?;
+    }
+
+    api.put_json(
+        &format!("/api/v1/pipelines/{pipeline_id}/file-ingest"),
+        json!({"filename": fixture_name, "loop": false}),
+    )
+    .await?;
+
+    let ingest_list = api.get_json("/api/v1/ingests").await?;
+    ingest_list
+        .as_array()
+        .and_then(|arr| {
+            arr.iter()
+                .find(|ingest| ingest["streamKey"].as_str() == Some(stream_key))
+        })
+        .and_then(|ingest| ingest["id"].as_str())
+        .map(str::to_string)
+        .ok_or_else(|| format!("file ingest not found in list for {stream_key}"))
+}
+
 async fn fault_resilience() -> Result<Value, String> {
     let work_dir = artifact_path("fault-resilience");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
@@ -10955,83 +11064,10 @@ async fn fault_resilience() -> Result<Value, String> {
 
     let mut results: Vec<Value> = Vec::new();
 
-    // ── 1. RTMP publisher disconnect ────────────────────────────────────
-    {
-        let pid = create_pipeline(&api, "fault-rtmp").await?;
-
-        let mut pub_child = spawn_publisher(
-            &fixture_h264,
-            &format!("rtmp://127.0.0.1:{}/live/fault-rtmp", ports.rtmp),
-            "flv",
-            false,
-        )
-        .await?;
-        wait_for_api_input_live(&api, &pid, timeout).await?;
-        println!("[fault] RTMP publisher live");
-
-        stop_child(&mut pub_child).await;
-        let started = Instant::now();
-        let off_result = wait_for_api_input_off(&api, &pid, timeout).await;
-        let elapsed = started.elapsed();
-        let off_health = api.get_json("/api/v1/engine/health").await.ok();
-        let off_input = off_health
-            .as_ref()
-            .map(|health| health["pipelines"][&pid]["input"].clone())
-            .unwrap_or(Value::Null);
-        let disconnect_fields_ok = off_input["lastSessionProtocol"] == "rtmp"
-            && off_input["lastDisconnectAt"].is_string()
-            && off_input["lastDisconnectReason"] == "publisher disconnected"
-            && off_input["lastFailurePhase"] == "disconnect"
-            && off_input["recentDisconnectError"] == false;
-        let passed = off_result.is_ok() && disconnect_fields_ok;
-        println!(
-            "[fault] RTMP publisher disconnect: {} ({:.1}s)",
-            if passed { "PASS" } else { "FAIL" },
-            elapsed.as_secs_f64()
+    for case in PUBLISHER_DISCONNECT_CASES {
+        results.push(
+            run_publisher_disconnect_case(&api, &ports, &fixture_h264, timeout, *case).await?,
         );
-        results.push(json!({
-            "test": "rtmp-publisher-disconnect",
-            "passed": passed,
-            "elapsedMs": elapsed.as_millis(),
-            "error": off_result.err(),
-            "disconnectFieldsOk": disconnect_fields_ok,
-            "inputSnapshot": off_input,
-        }));
-    }
-
-    // ── 2. SRT publisher disconnect ─────────────────────────────────────
-    {
-        let pid = create_pipeline(&api, "fault-srt").await?;
-
-        let mut pub_child = spawn_publisher(
-            &fixture_h264,
-            &format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/fault-srt&pkt_size=1316",
-                ports.srt
-            ),
-            "mpegts",
-            true,
-        )
-        .await?;
-        wait_for_api_input_live(&api, &pid, timeout).await?;
-        println!("[fault] SRT publisher live");
-
-        stop_child(&mut pub_child).await;
-        let started = Instant::now();
-        let off_result = wait_for_api_input_off(&api, &pid, timeout).await;
-        let elapsed = started.elapsed();
-        let passed = off_result.is_ok();
-        println!(
-            "[fault] SRT publisher disconnect: {} ({:.1}s)",
-            if passed { "PASS" } else { "FAIL" },
-            elapsed.as_secs_f64()
-        );
-        results.push(json!({
-            "test": "srt-publisher-disconnect",
-            "passed": passed,
-            "elapsedMs": elapsed.as_millis(),
-            "error": off_result.err(),
-        }));
     }
 
     results.extend(
@@ -11049,35 +11085,7 @@ async fn fault_resilience() -> Result<Value, String> {
     // ── 4. File ingest stop ─────────────────────────────────────────────
     {
         let pid = create_pipeline(&api, "fault-file").await?;
-
-        let fixture_name = fixture_h264
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        let media_dest =
-            PathBuf::from(std::env::var("RESTREAM_MEDIA_DIR").unwrap_or_else(|_| "media".into()))
-                .join(&fixture_name);
-        if !media_dest.exists() {
-            std::fs::copy(&fixture_h264, &media_dest).map_err(|e| e.to_string())?;
-        }
-
-        api.put_json(
-            &format!("/api/v1/pipelines/{pid}/file-ingest"),
-            json!({"filename": fixture_name, "loop": false}),
-        )
-        .await?;
-
-        let ingest_list = api.get_json("/api/v1/ingests").await?;
-        let ingest_id = ingest_list
-            .as_array()
-            .and_then(|arr| {
-                arr.iter()
-                    .find(|i| i["streamKey"].as_str() == Some("fault-file"))
-            })
-            .and_then(|i| i["id"].as_str())
-            .ok_or("file ingest not found in list")?
-            .to_string();
+        let ingest_id = configure_file_ingest_case(&api, &pid, "fault-file", &fixture_h264).await?;
 
         api.post_json(&format!("/api/v1/ingests/{ingest_id}/start"), json!({}))
             .await?;
@@ -11419,35 +11427,8 @@ async fn fault_resilience() -> Result<Value, String> {
     // ── 9. File ingest EOF clears runtime state and allows restart ──────
     {
         let pid = create_pipeline(&api, "fault-file-eof").await?;
-
-        let fixture_name = fixture_h264
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        let media_dest =
-            PathBuf::from(std::env::var("RESTREAM_MEDIA_DIR").unwrap_or_else(|_| "media".into()))
-                .join(&fixture_name);
-        if !media_dest.exists() {
-            std::fs::copy(&fixture_h264, &media_dest).map_err(|e| e.to_string())?;
-        }
-
-        api.put_json(
-            &format!("/api/v1/pipelines/{pid}/file-ingest"),
-            json!({"filename": fixture_name, "loop": false}),
-        )
-        .await?;
-
-        let ingest_list = api.get_json("/api/v1/ingests").await?;
-        let ingest_id = ingest_list
-            .as_array()
-            .and_then(|arr| {
-                arr.iter()
-                    .find(|i| i["streamKey"].as_str() == Some("fault-file-eof"))
-            })
-            .and_then(|i| i["id"].as_str())
-            .ok_or("file ingest not found in list")?
-            .to_string();
+        let ingest_id =
+            configure_file_ingest_case(&api, &pid, "fault-file-eof", &fixture_h264).await?;
 
         api.post_json(&format!("/api/v1/ingests/{ingest_id}/start"), json!({}))
             .await?;
