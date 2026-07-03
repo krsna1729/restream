@@ -2189,6 +2189,125 @@ impl SweepOutputKind {
     }
 }
 
+/// Reusable resource-sweep egress shape shared by resource and branch matrices.
+#[derive(Clone, Copy)]
+enum ResourceEgressShape {
+    RtmpSource,
+    SourceMixed,
+    Rtmp720p,
+    TranscodeMixed,
+    SourcePlusTranscodeMixed,
+    DualTranscodeMixed,
+    SourcePlusDualTranscodeMixed,
+}
+
+impl ResourceEgressShape {
+    const fn output_kinds(self) -> &'static [SweepOutputKind] {
+        match self {
+            Self::RtmpSource => &[SweepOutputKind::RtmpSource],
+            Self::SourceMixed => &[SweepOutputKind::RtmpSource, SweepOutputKind::SrtSource],
+            Self::Rtmp720p => &[SweepOutputKind::Rtmp720p],
+            Self::TranscodeMixed => &[SweepOutputKind::Rtmp720p, SweepOutputKind::Srt720p],
+            Self::SourcePlusTranscodeMixed => &[
+                SweepOutputKind::RtmpSource,
+                SweepOutputKind::SrtSource,
+                SweepOutputKind::Rtmp720p,
+                SweepOutputKind::Srt720p,
+            ],
+            Self::DualTranscodeMixed => &[
+                SweepOutputKind::Rtmp720p,
+                SweepOutputKind::Srt720p,
+                SweepOutputKind::Rtmp1080p,
+                SweepOutputKind::Srt1080p,
+            ],
+            Self::SourcePlusDualTranscodeMixed => &[
+                SweepOutputKind::RtmpSource,
+                SweepOutputKind::SrtSource,
+                SweepOutputKind::Rtmp720p,
+                SweepOutputKind::Srt720p,
+                SweepOutputKind::Rtmp1080p,
+                SweepOutputKind::Srt1080p,
+            ],
+        }
+    }
+
+    const fn branch_label(self) -> &'static str {
+        match self {
+            Self::SourceMixed => "source only",
+            Self::TranscodeMixed => "one transcode family (720p)",
+            Self::SourcePlusTranscodeMixed => "source + one transcode family",
+            Self::DualTranscodeMixed => "two transcode families (720p + 1080p)",
+            Self::SourcePlusDualTranscodeMixed => "source + two transcode families",
+            Self::RtmpSource | Self::Rtmp720p => "other",
+        }
+    }
+}
+
+/// Declarative resource-sweep egress scenario row.
+struct ResourceEgressScenario {
+    name: &'static str,
+    config_index: usize,
+    shape: ResourceEgressShape,
+    branch_order: Option<usize>,
+}
+
+const RESOURCE_EGRESS_SCENARIOS: &[ResourceEgressScenario] = &[
+    ResourceEgressScenario {
+        name: "egress-growth-source-same",
+        config_index: 1,
+        shape: ResourceEgressShape::RtmpSource,
+        branch_order: None,
+    },
+    ResourceEgressScenario {
+        name: "egress-growth-source-mixed",
+        config_index: 1,
+        shape: ResourceEgressShape::SourceMixed,
+        branch_order: Some(0),
+    },
+    ResourceEgressScenario {
+        name: "egress-growth-transcode-same",
+        config_index: 1,
+        shape: ResourceEgressShape::Rtmp720p,
+        branch_order: None,
+    },
+    ResourceEgressScenario {
+        name: "egress-growth-transcode-mixed",
+        config_index: 1,
+        shape: ResourceEgressShape::TranscodeMixed,
+        branch_order: Some(1),
+    },
+    ResourceEgressScenario {
+        name: "egress-growth-source-plus-transcode-mixed",
+        config_index: 1,
+        shape: ResourceEgressShape::SourcePlusTranscodeMixed,
+        branch_order: Some(2),
+    },
+    ResourceEgressScenario {
+        name: "egress-growth-transcode-dual-mixed",
+        config_index: 1,
+        shape: ResourceEgressShape::DualTranscodeMixed,
+        branch_order: Some(3),
+    },
+    ResourceEgressScenario {
+        name: "egress-growth-source-plus-transcode-dual-mixed",
+        config_index: 1,
+        shape: ResourceEgressShape::SourcePlusDualTranscodeMixed,
+        branch_order: Some(4),
+    },
+    ResourceEgressScenario {
+        name: "egress-growth-hevc-bridge",
+        config_index: 2,
+        shape: ResourceEgressShape::RtmpSource,
+        branch_order: None,
+    },
+];
+
+fn resource_egress_scenario(name: &str) -> Option<&'static ResourceEgressScenario> {
+    RESOURCE_EGRESS_SCENARIOS
+        .iter()
+        .find(|scenario| scenario.name == name)
+}
+
 /// Live process stack shared by a resource-sweep sample.
 struct ResourceSweepStack {
     mediamtx: Child,
@@ -2510,123 +2629,18 @@ async fn resource_sweep() -> Result<Value, String> {
             run_resource_ingest_growth(&env, &mut stack, &mut retained_publishers, true).await?,
         );
     }
-    if env.scenario_enabled("egress-growth-source-same") {
+    for scenario in RESOURCE_EGRESS_SCENARIOS {
+        if !env.scenario_enabled(scenario.name) {
+            continue;
+        }
         aggregates.extend(
             run_resource_egress_growth(
                 &env,
                 &mut stack,
                 &mut retained_publishers,
-                "egress-growth-source-same",
-                SWEEP_CONFIGS[1],
-                &[SweepOutputKind::RtmpSource],
-            )
-            .await?,
-        );
-    }
-    if env.scenario_enabled("egress-growth-source-mixed") {
-        aggregates.extend(
-            run_resource_egress_growth(
-                &env,
-                &mut stack,
-                &mut retained_publishers,
-                "egress-growth-source-mixed",
-                SWEEP_CONFIGS[1],
-                &[SweepOutputKind::RtmpSource, SweepOutputKind::SrtSource],
-            )
-            .await?,
-        );
-    }
-    if env.scenario_enabled("egress-growth-transcode-same") {
-        aggregates.extend(
-            run_resource_egress_growth(
-                &env,
-                &mut stack,
-                &mut retained_publishers,
-                "egress-growth-transcode-same",
-                SWEEP_CONFIGS[1],
-                &[SweepOutputKind::Rtmp720p],
-            )
-            .await?,
-        );
-    }
-    if env.scenario_enabled("egress-growth-transcode-mixed") {
-        aggregates.extend(
-            run_resource_egress_growth(
-                &env,
-                &mut stack,
-                &mut retained_publishers,
-                "egress-growth-transcode-mixed",
-                SWEEP_CONFIGS[1],
-                &[SweepOutputKind::Rtmp720p, SweepOutputKind::Srt720p],
-            )
-            .await?,
-        );
-    }
-    if env.scenario_enabled("egress-growth-source-plus-transcode-mixed") {
-        aggregates.extend(
-            run_resource_egress_growth(
-                &env,
-                &mut stack,
-                &mut retained_publishers,
-                "egress-growth-source-plus-transcode-mixed",
-                SWEEP_CONFIGS[1],
-                &[
-                    SweepOutputKind::RtmpSource,
-                    SweepOutputKind::SrtSource,
-                    SweepOutputKind::Rtmp720p,
-                    SweepOutputKind::Srt720p,
-                ],
-            )
-            .await?,
-        );
-    }
-    if env.scenario_enabled("egress-growth-transcode-dual-mixed") {
-        aggregates.extend(
-            run_resource_egress_growth(
-                &env,
-                &mut stack,
-                &mut retained_publishers,
-                "egress-growth-transcode-dual-mixed",
-                SWEEP_CONFIGS[1],
-                &[
-                    SweepOutputKind::Rtmp720p,
-                    SweepOutputKind::Srt720p,
-                    SweepOutputKind::Rtmp1080p,
-                    SweepOutputKind::Srt1080p,
-                ],
-            )
-            .await?,
-        );
-    }
-    if env.scenario_enabled("egress-growth-source-plus-transcode-dual-mixed") {
-        aggregates.extend(
-            run_resource_egress_growth(
-                &env,
-                &mut stack,
-                &mut retained_publishers,
-                "egress-growth-source-plus-transcode-dual-mixed",
-                SWEEP_CONFIGS[1],
-                &[
-                    SweepOutputKind::RtmpSource,
-                    SweepOutputKind::SrtSource,
-                    SweepOutputKind::Rtmp720p,
-                    SweepOutputKind::Srt720p,
-                    SweepOutputKind::Rtmp1080p,
-                    SweepOutputKind::Srt1080p,
-                ],
-            )
-            .await?,
-        );
-    }
-    if env.scenario_enabled("egress-growth-hevc-bridge") {
-        aggregates.extend(
-            run_resource_egress_growth(
-                &env,
-                &mut stack,
-                &mut retained_publishers,
-                "egress-growth-hevc-bridge",
-                SWEEP_CONFIGS[2],
-                &[SweepOutputKind::RtmpSource],
+                scenario.name,
+                SWEEP_CONFIGS[scenario.config_index],
+                scenario.shape.output_kinds(),
             )
             .await?,
         );
@@ -2745,46 +2759,11 @@ async fn run_branch_matrix_variant(env: &BranchMatrixEnv) -> Result<Value, Strin
     let mut retained_publishers: Vec<Child> = Vec::new();
     let mut aggregates = Vec::new();
 
-    for (scenario_name, output_kinds) in [
-        (
-            "egress-growth-source-mixed",
-            vec![SweepOutputKind::RtmpSource, SweepOutputKind::SrtSource],
-        ),
-        (
-            "egress-growth-transcode-mixed",
-            vec![SweepOutputKind::Rtmp720p, SweepOutputKind::Srt720p],
-        ),
-        (
-            "egress-growth-source-plus-transcode-mixed",
-            vec![
-                SweepOutputKind::RtmpSource,
-                SweepOutputKind::SrtSource,
-                SweepOutputKind::Rtmp720p,
-                SweepOutputKind::Srt720p,
-            ],
-        ),
-        (
-            "egress-growth-transcode-dual-mixed",
-            vec![
-                SweepOutputKind::Rtmp720p,
-                SweepOutputKind::Srt720p,
-                SweepOutputKind::Rtmp1080p,
-                SweepOutputKind::Srt1080p,
-            ],
-        ),
-        (
-            "egress-growth-source-plus-transcode-dual-mixed",
-            vec![
-                SweepOutputKind::RtmpSource,
-                SweepOutputKind::SrtSource,
-                SweepOutputKind::Rtmp720p,
-                SweepOutputKind::Srt720p,
-                SweepOutputKind::Rtmp1080p,
-                SweepOutputKind::Srt1080p,
-            ],
-        ),
-    ] {
-        if !env.scenario_enabled(scenario_name) {
+    for scenario in RESOURCE_EGRESS_SCENARIOS
+        .iter()
+        .filter(|scenario| scenario.branch_order.is_some())
+    {
+        if !env.scenario_enabled(scenario.name) {
             continue;
         }
         aggregates.extend(
@@ -2792,9 +2771,9 @@ async fn run_branch_matrix_variant(env: &BranchMatrixEnv) -> Result<Value, Strin
                 resource,
                 &mut stack,
                 &mut retained_publishers,
-                scenario_name,
-                SWEEP_CONFIGS[1],
-                &output_kinds,
+                scenario.name,
+                SWEEP_CONFIGS[scenario.config_index],
+                scenario.shape.output_kinds(),
             )
             .await?,
         );
@@ -4476,13 +4455,10 @@ fn write_branch_matrix_markdown(
     rows: &[ResourceAggregate],
 ) -> Result<(), String> {
     let mut selected: Vec<&ResourceAggregate> = rows.iter().collect();
-    selected.sort_by_key(|row| match row.scenario.as_str() {
-        "egress-growth-source-mixed" => 0,
-        "egress-growth-transcode-mixed" => 1,
-        "egress-growth-source-plus-transcode-mixed" => 2,
-        "egress-growth-transcode-dual-mixed" => 3,
-        "egress-growth-source-plus-transcode-dual-mixed" => 4,
-        _ => 99,
+    selected.sort_by_key(|row| {
+        resource_egress_scenario(&row.scenario)
+            .and_then(|scenario| scenario.branch_order)
+            .unwrap_or(99)
     });
 
     let mut text = String::new();
@@ -4559,14 +4535,9 @@ fn write_branch_matrix_markdown(
 }
 
 fn branch_shape_label(scenario: &str) -> &'static str {
-    match scenario {
-        "egress-growth-source-mixed" => "source only",
-        "egress-growth-transcode-mixed" => "one transcode family (720p)",
-        "egress-growth-source-plus-transcode-mixed" => "source + one transcode family",
-        "egress-growth-transcode-dual-mixed" => "two transcode families (720p + 1080p)",
-        "egress-growth-source-plus-transcode-dual-mixed" => "source + two transcode families",
-        _ => "custom",
-    }
+    resource_egress_scenario(scenario)
+        .map(|scenario| scenario.shape.branch_label())
+        .unwrap_or("custom")
 }
 
 fn csv_escape(value: &str) -> String {
@@ -12918,6 +12889,24 @@ stream|index=1|codec_type=audio\n";
         assert_eq!(configs.len(), 8);
         assert_eq!(configs[0].name, "rtmp-rtmp-src");
         assert_eq!(configs[7].name, "srt-srt-720p");
+    }
+
+    #[test]
+    fn resource_egress_scenario_table_carries_branch_contract() {
+        assert_eq!(RESOURCE_EGRESS_SCENARIOS.len(), 8);
+        assert_eq!(
+            RESOURCE_EGRESS_SCENARIOS
+                .iter()
+                .filter(|scenario| scenario.branch_order.is_some())
+                .count(),
+            5
+        );
+        assert_eq!(
+            resource_egress_scenario("egress-growth-hevc-bridge")
+                .unwrap()
+                .config_index,
+            2
+        );
     }
 
     #[test]
