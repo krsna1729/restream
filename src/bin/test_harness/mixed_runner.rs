@@ -711,6 +711,24 @@ pub(super) async fn start_mixed_mediamtx(env: &MixedEnv) -> Result<Child, String
     Ok(child)
 }
 
+pub(super) async fn create_mixed_pipeline(
+    api: &RampApi,
+    cfg: &str,
+) -> Result<(String, String), String> {
+    let stream_key = format!("sk-{cfg}");
+    let pipeline = api
+        .post_json(
+            "/api/v1/pipelines",
+            json!({"name": cfg, "streamKey": stream_key}),
+        )
+        .await?;
+    let pipeline_id = pipeline["pipeline"]["id"]
+        .as_str()
+        .ok_or("pipeline create response missing pipeline.id")?
+        .to_string();
+    Ok((pipeline_id, stream_key))
+}
+
 pub(super) async fn run_mixed_anchor_config(
     env: &MixedEnv,
     api: &RampApi,
@@ -722,18 +740,7 @@ pub(super) async fn run_mixed_anchor_config(
     let n = env.n_per_group;
     let output_cases = SINGLE_TRACK_MIXED_OUTPUT_CASES;
     let total = n * output_cases.len();
-    let stream_key = format!("sk-{cfg}");
-
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": cfg, "streamKey": stream_key}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create response missing pipeline.id")?
-        .to_string();
+    let (pipeline_id, stream_key) = create_mixed_pipeline(api, cfg).await?;
 
     let mut publisher = spawn_mixed_live_publisher(env, case, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
@@ -1268,18 +1275,7 @@ pub(super) async fn run_mixed_single_live_config(
     let n = env.n_per_group;
     let output_cases = mixed_output_cases_for_input(case);
     let total = n * output_cases.len();
-    let stream_key = format!("sk-{cfg}");
-
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": cfg, "streamKey": stream_key}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create response missing pipeline.id")?
-        .to_string();
+    let (pipeline_id, stream_key) = create_mixed_pipeline(api, cfg).await?;
 
     let mut publisher = spawn_mixed_live_publisher(env, case, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
@@ -1366,18 +1362,7 @@ pub(super) async fn run_mixed_srt_multi_config(
     let cfg = case.scenario_id();
     let output_cases = mixed_output_cases_for_input(case);
     let total = n * output_cases.len();
-    let stream_key = format!("sk-{cfg}");
-
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": cfg, "streamKey": stream_key}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create response missing pipeline.id")?
-        .to_string();
+    let (pipeline_id, stream_key) = create_mixed_pipeline(api, cfg).await?;
 
     let mut publisher = spawn_mixed_srt_multi_publisher(env, case, &stream_key).await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
@@ -4116,7 +4101,6 @@ pub(super) async fn run_mixed_file_config(
     let n = env.n_per_group;
     let output_cases = mixed_output_cases_for_input(case);
     let total = n * output_cases.len();
-    let stream_key = format!("sk-{cfg}");
 
     let fixture = mixed_input_fixture(case)?;
 
@@ -4126,16 +4110,7 @@ pub(super) async fn run_mixed_file_config(
         std::fs::copy(&fixture, &media_dest).map_err(|e| e.to_string())?;
     }
 
-    let pipeline = api
-        .post_json(
-            "/api/v1/pipelines",
-            json!({"name": cfg, "streamKey": stream_key}),
-        )
-        .await?;
-    let pipeline_id = pipeline["pipeline"]["id"]
-        .as_str()
-        .ok_or("pipeline create response missing pipeline.id")?
-        .to_string();
+    let (pipeline_id, stream_key) = create_mixed_pipeline(api, cfg).await?;
 
     api.put_json(
         &format!("/api/v1/pipelines/{pipeline_id}/file-ingest"),
