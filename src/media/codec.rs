@@ -172,7 +172,7 @@ pub fn video_for_ts_into<'a>(
                 let (nls, annexb) = parse_avcc_config(&payload[5..]);
                 *nalu_len_size = nls;
                 *sps_pps_cache = annexb;
-                return None;
+                None
             } else {
                 let is_keyframe = (payload[0] & 0xF0) == 0x10;
                 if is_keyframe && !sps_pps_cache.is_empty() {
@@ -226,16 +226,15 @@ pub(crate) fn annexb_parameter_sets(payload: &[u8]) -> Option<Vec<u8>> {
                     parameter_sets.extend_from_slice(nalu);
                 }
             }
-            _ => match h265_nal_type {
-                32..=34 => {
-                    if matches!(kind, AnnexbCodecKind::Unknown | AnnexbCodecKind::H265) {
-                        kind = AnnexbCodecKind::H265;
-                        parameter_sets.extend_from_slice(&[0, 0, 0, 1]);
-                        parameter_sets.extend_from_slice(nalu);
-                    }
+            _ => {
+                if (32..=34).contains(&h265_nal_type)
+                    && matches!(kind, AnnexbCodecKind::Unknown | AnnexbCodecKind::H265)
+                {
+                    kind = AnnexbCodecKind::H265;
+                    parameter_sets.extend_from_slice(&[0, 0, 0, 1]);
+                    parameter_sets.extend_from_slice(nalu);
                 }
-                _ => {}
-            },
+            }
         }
     }
 

@@ -51,6 +51,7 @@ improvement in production-shaped measurements.
 | Sentinel `u8` for continuity counter and PMT version | Complete | `StreamInfo.continuity: Option<u8>` → `u8` with `CC_UNSET = u8::MAX` (valid CC values 0–15); `TsDemuxer.pmt_version: Option<u8>` → `u8` with `PMT_VER_UNSET = u8::MAX` (valid version 0–31). Removes the discriminant byte and the `Option`-unwrap branch on every TS packet processed. |
 | BytesMut burst alloc in SRT shared muxer | Complete | `srt.rs` shared muxer replaced per-chunk `Bytes::copy_from_slice` (one `malloc+memcpy` per muxed packet) with a single `BytesMut::with_capacity(65536)` per burst, then `Bytes::slice()` for each chunk (refcount bump only, no malloc). Benchmark `ts_chunk_burst_alloc` (bench-dev, x86-64 Zen): `per_chunk_copy_from_slice` ~3.93 µs vs `burst_bytesmut_then_slice` ~2.23 µs per 32-chunk burst — **~43% faster**, ~1.7 µs saved per burst. |
 | Batched external transcoder stdin writes | Complete | `external_transcoder.rs` now accumulates all feedable packets from a 32-packet ring burst into one stdin write while preserving packet/byte metrics via `record_in_batch`. Benchmark `data_path/burst_mux_write` (`--profile bench`, 2026-07-02): per-packet write ~33.0 µs vs batch accumulate write ~12.1 µs per 32-packet burst, about **63% lower** in the modeled queue/write path. |
+| `TsMuxer::mux_packet_by_stream_idx` hot-path bypass | Complete | `TsPacketFeeder::extend_ts_for_packet` already computes `stream_idx` for `DtsEnforcer`; it now passes that index straight to a new `mux_packet_by_stream_idx()` entry point instead of letting `mux_packet()` redo an equivalent linear `(media_type, track_index)` scan. Benchmark `stage_feeder` (`--profile bench`, `--baseline before_stream_idx_bypass`, 2026-07-03): `single_packet/audio_raw_aac_200b` ~72.2 ns → ~46.2 ns (**~35.6% lower**, p<0.05); `burst/30_video_30_audio_packets` ~33.4 µs → ~33.4 µs (**~4.1% lower**, p<0.05); `single_packet/video_raw_h264_8k` and `multi_audio/64_audio_packets_16_tracks` showed no significant change; the unrelated `dts_enforcer` control group was flat, confirming the comparison methodology. |
 
 ## Hot-Path Layout Follow-Up Audit (2026-07-02)
 
@@ -63,9 +64,13 @@ for profiler evidence on a named workload.
 
 The high-confidence layout/cache-efficiency follow-ups are:
 
-- Add and benchmark a `TsMuxer::mux_packet_by_stream_idx` path. `TsPacketFeeder`
-  already computes `stream_idx` for DTS enforcement, then `TsMuxer::mux_packet`
-  repeats a linear stream lookup per packet.
+- ~~Add and benchmark a `TsMuxer::mux_packet_by_stream_idx` path.~~ Done
+  2026-07-03: `TsPacketFeeder::extend_ts_for_packet` now passes the `stream_idx`
+  it already computes for `DtsEnforcer::enforce` straight into a new
+  `TsMuxer::mux_packet_by_stream_idx` entry point instead of letting
+  `mux_packet` redo an equivalent linear scan. See the Progress Log entry
+  above and the P2 note below for how this differs from the earlier rejected
+  lookup-table experiment.
 - Combine the two `audio_tracks` scans in `TsPacketFeeder::extend_ts_for_packet`:
   one scan gets sample rate/channels and a second scan gets stream index.
 - Split `MuxStreamConfig` hot lookup fields (`media_type`, `track_index`, `pid`,
@@ -639,6 +644,14 @@ against the existing linear `.position()` search. With typical stream counts
 (1 video + 1–16 audio), the linear scan is already branch-predicted and L1-hot.
 The table lookup added indirection overhead and measured ~10% *slower*. Keeping
 the simple linear search.
+
+Note this rejected experiment is a different technique from the
+`mux_packet_by_stream_idx` bypass added 2026-07-03 (see Progress Log and the
+Hot-Path Layout Follow-Up Audit above). That change does not add any new
+lookup structure inside `TsMuxer` — it eliminates a *second, redundant* linear
+scan by reusing the `stream_idx` the caller (`TsPacketFeeder`) already computed
+for `DtsEnforcer::enforce`. The linear scan itself is unchanged and still runs
+exactly once per packet; only the duplicate second occurrence of it is gone.
 
 ### P2: Timestamp and CRC helpers
 

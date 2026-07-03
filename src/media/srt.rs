@@ -1310,8 +1310,7 @@ impl SrtServer {
                 std::mem::size_of::<c_int>() as c_int,
             );
         }
-        let listener_store_ptr =
-            Arc::as_ptr(&self.ingest_policy_store) as *const SrtIngestPolicyStore as *mut c_void;
+        let listener_store_ptr = Arc::as_ptr(&self.ingest_policy_store) as *mut c_void;
         let callback_res = unsafe {
             srt_listen_callback(
                 server_sock,
@@ -3946,14 +3945,14 @@ pub async fn start_srt_egress(
             return;
         }
         srt_set_highbitrate_opts(client_sock);
-        if let Some(crypto) = &url_crypto {
-            if let Err(error) = apply_srt_crypto_socket(client_sock, crypto) {
-                egress_error!("connect", error);
-                unsafe {
-                    srt_close(client_sock);
-                }
-                return;
+        if let Some(crypto) = &url_crypto
+            && let Err(error) = apply_srt_crypto_socket(client_sock, crypto)
+        {
+            egress_error!("connect", error);
+            unsafe {
+                srt_close(client_sock);
             }
+            return;
         }
 
         if !streamid.is_empty() {

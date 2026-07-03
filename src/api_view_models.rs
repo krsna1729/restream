@@ -675,6 +675,7 @@ pub(crate) fn avio_egress_queue_json(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn memory_accounting_json(
     retained_payload_bytes: u64,
     source_rings: Vec<serde_json::Value>,
@@ -867,6 +868,7 @@ pub(crate) fn processing_graph_source_ring_details(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn processing_graph_stage_node(
     id: impl Into<String>,
     node_type: &'static str,

@@ -1531,10 +1531,10 @@ impl GeneralizedSinkMetrics {
                 if pkt.video_is_sequence_header {
                     continue;
                 }
-                if let Some(prev) = last_video_ts {
-                    if pkt.timestamp_ms <= prev {
-                        return false;
-                    }
+                if let Some(prev) = last_video_ts
+                    && pkt.timestamp_ms <= prev
+                {
+                    return false;
                 }
                 last_video_ts = Some(pkt.timestamp_ms);
             }
@@ -1707,16 +1707,16 @@ async fn write_generalized_sink_results(
                         .bytes
                         .fetch_add(data.len() as u64, Ordering::Relaxed);
                     metrics.audio_count.fetch_add(1, Ordering::Relaxed);
-                    if metrics.audio_codec.lock().unwrap().is_none() {
-                        if let Some(&tag) = data.first() {
-                            let codec = match (tag >> 4) & 0x0F {
-                                10 => Some("aac"),
-                                2 => Some("mp3"),
-                                _ => None,
-                            };
-                            if let Some(c) = codec {
-                                *metrics.audio_codec.lock().unwrap() = Some(c.to_string());
-                            }
+                    if metrics.audio_codec.lock().unwrap().is_none()
+                        && let Some(&tag) = data.first()
+                    {
+                        let codec = match (tag >> 4) & 0x0F {
+                            10 => Some("aac"),
+                            2 => Some("mp3"),
+                            _ => None,
+                        };
+                        if let Some(c) = codec {
+                            *metrics.audio_codec.lock().unwrap() = Some(c.to_string());
                         }
                     }
                     let audio_packet_type = data.get(1).copied();
@@ -3831,6 +3831,7 @@ async fn check_bitrate_stream(
     Ok(Some(observed))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn summarize_bitrate_case(
     config: SweepConfig,
     bitrate: &BitrateSpec,
@@ -4412,9 +4413,7 @@ async fn run_resource_egress_growth(
             );
         }
     }
-    if env.lifecycle == ResourceSweepLifecycle::Cumulative && env.no_cleanup {
-        retained_publishers.push(publisher);
-    } else if env.lifecycle == ResourceSweepLifecycle::Cumulative {
+    if env.lifecycle == ResourceSweepLifecycle::Cumulative {
         retained_publishers.push(publisher);
     } else {
         stop_child(&mut publisher).await;
@@ -6118,15 +6117,14 @@ async fn wait_for_api_health_matches_probe(
     let mut last_snapshot = Value::Null;
 
     loop {
-        if let Ok(health) = api.get_json("/api/v1/engine/health").await {
-            if let Some(snapshot) = health["pipelines"]
+        if let Ok(health) = api.get_json("/api/v1/engine/health").await
+            && let Some(snapshot) = health["pipelines"]
                 .as_object()
                 .and_then(|pipelines| pipelines.get(pipeline_id).cloned())
-            {
-                last_snapshot = snapshot.clone();
-                if media_snapshot_matches_probe(&snapshot, probe_snapshot) {
-                    return Ok(snapshot);
-                }
+        {
+            last_snapshot = snapshot.clone();
+            if media_snapshot_matches_probe(&snapshot, probe_snapshot) {
+                return Ok(snapshot);
             }
         }
         if Instant::now() >= deadline {
@@ -8490,6 +8488,7 @@ fn mixed_output_matrix_json(cases: &[MixedOutputCase]) -> Vec<Value> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn add_mixed_output_cases(
     env: &MixedEnv,
     api: &RampApi,
@@ -8545,6 +8544,7 @@ async fn add_mixed_output_cases(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn add_mixed_multi_output_cases(
     env: &MixedEnv,
     api: &RampApi,
@@ -8884,13 +8884,12 @@ async fn finish_ffmpeg_signal_sinks(
             started,
         )
         .await;
-        if let Err(error) = result {
-            return Err(error);
-        }
+        result?;
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn validate_signal_capture_artifact(
     env: &MixedEnv,
     cfg: &str,
@@ -9773,6 +9772,7 @@ struct PcmQualityReport {
     rms: f64,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn signal_report_json(
     label: &str,
     url: &str,
@@ -10232,7 +10232,9 @@ fn marker_gaps_from_intervals(intervals: &[(f64, f64)]) -> Vec<f64> {
             let previous_end = pair[0].1;
             let next_start = pair[1].0;
             let gap = next_start - previous_end;
-            (gap >= 0.050 && gap <= 0.500).then_some(previous_end + gap / 2.0)
+            (0.050..=0.500)
+                .contains(&gap)
+                .then_some(previous_end + gap / 2.0)
         })
         .collect()
 }
@@ -16713,14 +16715,11 @@ async fn fault_resilience() -> Result<Value, String> {
                             let bytes = sink_bytes_inner.clone();
                             tokio::spawn(async move {
                                 let mut buf = [0u8; 65536];
-                                loop {
-                                    match socket.readable().await {
-                                        Ok(()) => match socket.try_read(&mut buf) {
-                                            Ok(0) => break,
-                                            Ok(n) => { bytes.fetch_add(n as u64, Ordering::Relaxed); }
-                                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-                                            Err(_) => break,
-                                        },
+                                while let Ok(()) = socket.readable().await {
+                                    match socket.try_read(&mut buf) {
+                                        Ok(0) => break,
+                                        Ok(n) => { bytes.fetch_add(n as u64, Ordering::Relaxed); }
+                                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
                                         Err(_) => break,
                                     }
                                 }
@@ -17388,6 +17387,7 @@ fn suite_spawn_mode(
     Ok(status.success())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn suite_write_manifest(
     path: &Path,
     status: &str,
@@ -17497,7 +17497,7 @@ async fn preflight_check() -> Result<Value, String> {
         .unwrap_or(2048);
     let disk_check = match nix::sys::statvfs::statvfs(&artifact_root) {
         Ok(stat) => {
-            let free_mb = stat.block_size() as u64 * stat.blocks_available() / 1_048_576;
+            let free_mb = stat.block_size() * stat.blocks_available() / 1_048_576;
             if free_mb >= min_free_mb {
                 json!({ "check": "artifact-disk", "freeMb": free_mb, "minFreeMb": min_free_mb, "status": "ok" })
             } else {

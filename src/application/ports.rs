@@ -127,6 +127,7 @@ pub trait IngestLookup: Send + Sync {
 }
 
 pub trait IngestWriter: Send + Sync {
+    #[allow(clippy::too_many_arguments)]
     fn create_ingest<'a>(
         &'a self,
         id: &'a str,
@@ -137,6 +138,7 @@ pub trait IngestWriter: Send + Sync {
         live_optimized: bool,
         target_gop_seconds: u32,
     ) -> IngestWriteFuture<'a>;
+    #[allow(clippy::too_many_arguments)]
     fn update_ingest<'a>(
         &'a self,
         id: &'a str,

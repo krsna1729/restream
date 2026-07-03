@@ -340,6 +340,7 @@ fn build_recording_service_metadata(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn start_recording(
     pipeline_name: String,
     pipeline_id: String,
@@ -582,6 +583,8 @@ fn run_ts_writer(
 mod tests {
     use super::*;
     use crate::media::avio::MemoryQueue;
+    use crate::media::mpegts::TsDemuxer;
+    use crate::media::ring_buffer::{MediaPacket, MediaType};
     use std::sync::Arc;
     use tokio::process::Command as TokioCommand;
     use tokio_util::sync::CancellationToken;
@@ -854,6 +857,137 @@ mod tests {
         let _ = std::fs::remove_file(state_path);
         let _ = std::fs::remove_file(source);
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    fn demux_ts_file(path: &Path) -> Vec<MediaPacket> {
+        let bytes = std::fs::read(path)
+            .unwrap_or_else(|e| panic!("failed to read TS file {}: {e}", path.display()));
+        let mut demuxer = TsDemuxer::new();
+        demuxer.feed(&bytes);
+        demuxer.flush();
+        demuxer.drain()
+    }
+
+    /// Asserts DTS is monotonically non-decreasing within each stream and that
+    /// no gap between consecutive packets exceeds 1s (which would indicate a
+    /// dropped GOP or dropped audio frames introduced by the remux).
+    fn assert_continuous_monotonic_dts(packets: &[MediaPacket], label: &str) {
+        let mut last_video_dts: Option<i64> = None;
+        let mut last_audio_dts: Option<i64> = None;
+        let mut video_count = 0usize;
+        let mut audio_count = 0usize;
+
+        for packet in packets {
+            let (last_dts, count) = match packet.media_type {
+                MediaType::Video => (&mut last_video_dts, &mut video_count),
+                MediaType::Audio => (&mut last_audio_dts, &mut audio_count),
+            };
+            *count += 1;
+            if let Some(previous) = *last_dts {
+                let gap = packet.dts - previous;
+                assert!(
+                    gap >= 0,
+                    "{label}: {:?} DTS must be non-decreasing: {previous} -> {}",
+                    packet.media_type,
+                    packet.dts
+                );
+                assert!(
+                    gap < 1000,
+                    "{label}: {:?} DTS gap {gap}ms between {previous} and {} is too large, \
+                     suggests dropped frames across the remux",
+                    packet.media_type,
+                    packet.dts
+                );
+            }
+            *last_dts = Some(packet.dts);
+        }
+
+        assert!(video_count > 1, "{label}: expected multiple video packets");
+        assert!(audio_count > 1, "{label}: expected multiple audio packets");
+    }
+
+    fn stream_span_ms(packets: &[MediaPacket], media_type: MediaType) -> i64 {
+        let mut min = i64::MAX;
+        let mut max = i64::MIN;
+        for packet in packets.iter().filter(|p| p.media_type == media_type) {
+            min = min.min(packet.dts);
+            max = max.max(packet.dts);
+        }
+        assert!(
+            min <= max,
+            "expected at least one packet for {media_type:?}"
+        );
+        max - min
+    }
+
+    /// Proof: TS -> MP4 -> TS remux preserves DTS monotonicity and timeline
+    /// span for both video and audio streams, regardless of whether the
+    /// source TS is retained or deleted after the remux completes.
+    async fn assert_remux_preserves_timestamp_continuity(retain_source_ts: bool) {
+        let (temp_dir, source, mp4_path, state_path) =
+            remux_recording_fixture(RecordingSettings { retain_source_ts }).await;
+
+        let fixture = crate::test_fixtures::canonical_h264_ts_fixture()
+            .expect("checked-in TS fixture should exist");
+        let source_packets = demux_ts_file(&fixture);
+        assert_continuous_monotonic_dts(&source_packets, "source TS");
+        let source_video_span = stream_span_ms(&source_packets, MediaType::Video);
+        let source_audio_span = stream_span_ms(&source_packets, MediaType::Audio);
+
+        let roundtrip_ts = temp_dir.join("roundtrip.ts");
+        let status = TokioCommand::new(crate::ffmpeg_extract::ffmpeg_bin_path())
+            .args([
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                &mp4_path.display().to_string(),
+                "-map",
+                "0",
+                "-c",
+                "copy",
+                "-f",
+                "mpegts",
+                &roundtrip_ts.display().to_string(),
+            ])
+            .status()
+            .await
+            .expect("bundled ffmpeg should remux mp4 back to ts");
+        assert!(status.success(), "mp4 -> ts round trip should succeed");
+
+        let roundtrip_packets = demux_ts_file(&roundtrip_ts);
+        assert_continuous_monotonic_dts(&roundtrip_packets, "TS -> MP4 -> TS roundtrip");
+
+        let roundtrip_video_span = stream_span_ms(&roundtrip_packets, MediaType::Video);
+        let roundtrip_audio_span = stream_span_ms(&roundtrip_packets, MediaType::Audio);
+
+        assert!(
+            (source_video_span - roundtrip_video_span).abs() <= 40,
+            "video timeline span should survive TS -> MP4 -> TS within rounding: \
+             source={source_video_span}ms roundtrip={roundtrip_video_span}ms"
+        );
+        assert!(
+            (source_audio_span - roundtrip_audio_span).abs() <= 40,
+            "audio timeline span should survive TS -> MP4 -> TS within rounding: \
+             source={source_audio_span}ms roundtrip={roundtrip_audio_span}ms"
+        );
+
+        let _ = std::fs::remove_file(roundtrip_ts);
+        let _ = std::fs::remove_file(mp4_path);
+        let _ = std::fs::remove_file(state_path);
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_disabled() {
+        assert_remux_preserves_timestamp_continuity(false).await;
+    }
+
+    #[tokio::test]
+    async fn remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_enabled() {
+        assert_remux_preserves_timestamp_continuity(true).await;
     }
 
     #[test]

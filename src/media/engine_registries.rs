@@ -31,6 +31,12 @@ pub struct IngestRegistry {
     pub recent: TokioRwLock<HashMap<String, RecentIngestOutcome>>,
 }
 
+impl Default for IngestRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IngestRegistry {
     pub fn new() -> Self {
         Self {
@@ -52,6 +58,12 @@ pub struct EgressRegistry {
     pub retry: TokioRwLock<HashMap<String, EgressRetryState>>,
 }
 
+impl Default for EgressRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EgressRegistry {
     pub fn new() -> Self {
         Self {
@@ -69,6 +81,12 @@ pub struct RecordingRegistry {
     pub cancel_tokens: TokioRwLock<HashMap<String, CancellationToken>>,
 }
 
+impl Default for RecordingRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RecordingRegistry {
     pub fn new() -> Self {
         Self {
@@ -81,6 +99,12 @@ pub struct HlsRegistry {
     pub stores: TokioRwLock<HashMap<String, Arc<HlsStore>>>,
     pub preview_stores: TokioRwLock<HashMap<String, Arc<Fmp4HlsStore>>>,
     pub consumers: TokioRwLock<HashMap<String, HlsConsumers>>,
+}
+
+impl Default for HlsRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HlsRegistry {
@@ -98,6 +122,12 @@ pub struct FileIngestRegistry {
     pub active: TokioRwLock<HashSet<String>>,
 }
 
+impl Default for FileIngestRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileIngestRegistry {
     pub fn new() -> Self {
         Self {
@@ -113,6 +143,12 @@ pub struct StageRegistry {
     pub input_queues: TokioRwLock<HashMap<StageKey, Arc<MemoryQueue>>>,
     pub pipe_metrics: TokioRwLock<HashMap<StageKey, Arc<PipeMetrics>>>,
     pub ts_muxers: TokioRwLock<HashMap<String, Arc<TsChunkRing>>>,
+}
+
+impl Default for StageRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StageRegistry {
@@ -133,6 +169,12 @@ pub struct RuntimeInfra {
     pub sender_semaphore: Arc<tokio::sync::Semaphore>,
     pub diag_semaphores: TokioRwLock<HashMap<String, Arc<tokio::sync::Semaphore>>>,
     pub event_log: Arc<EventLog>,
+}
+
+impl Default for RuntimeInfra {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RuntimeInfra {

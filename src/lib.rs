@@ -71,6 +71,12 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex as TokioMutex;
 use tracing::{error, info, warn};
 
+/// # Safety
+///
+/// Exported with the C ABI as a link-time shim for the removed libavcodec
+/// symbol. Callers (ffmpeg-next's decoder drop path) must pass a codec
+/// context pointer; the pointer is never dereferenced here, so any value is
+/// accepted.
 #[cfg(restream_ffmpeg_needs_avcodec_close_shim)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn avcodec_close(

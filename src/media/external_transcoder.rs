@@ -367,7 +367,7 @@ async fn wait_for_stage_metadata(
                         .filter(|tracks| !tracks.is_empty())
                         .map(|tracks| std::sync::Arc::new(tracks.to_vec()))
                         .filter(|tracks| stage_audio_tracks_ready(tracks))
-                        .unwrap_or_else(|| ingest_audio_tracks)
+                        .unwrap_or(ingest_audio_tracks)
                 } else {
                     std::sync::Arc::new(Vec::new())
                 };

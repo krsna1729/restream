@@ -134,12 +134,13 @@ fn parse_stream_descriptors(data: &[u8]) -> StreamDescriptors {
         }
 
         let payload = &data[start..end];
-        if tag == 0x0A && payload.len() >= 3 {
-            if let Ok(language) = std::str::from_utf8(&payload[..3]) {
-                let language = language.trim().to_ascii_lowercase();
-                if !language.is_empty() {
-                    descriptors.language = Some(language);
-                }
+        if tag == 0x0A
+            && payload.len() >= 3
+            && let Ok(language) = std::str::from_utf8(&payload[..3])
+        {
+            let language = language.trim().to_ascii_lowercase();
+            if !language.is_empty() {
+                descriptors.language = Some(language);
             }
         }
 
@@ -830,6 +831,16 @@ impl TsMuxer {
         }
     }
 
+    /// Resolve a packet's `(media_type, track_index)` into this muxer's stream
+    /// index once, so a hot loop can call
+    /// [`mux_packet_by_stream_idx`](Self::mux_packet_by_stream_idx) on every
+    /// subsequent packet from that track instead of re-scanning `streams`.
+    pub fn stream_index(&self, media_type: MediaType, track_index: u32) -> Option<usize> {
+        self.streams
+            .iter()
+            .position(|s| s.media_type == media_type && s.track_index == track_index)
+    }
+
     /// Mux a MediaPacket into MPEG-TS bytes. Returns the produced bytes.
     ///
     /// `payload` should be the raw codec payload (FLV headers already stripped if needed).
@@ -842,20 +853,52 @@ impl TsMuxer {
         is_keyframe: bool,
         payload: &[u8],
     ) -> &[u8] {
+        let Some(stream_idx) = self.stream_index(media_type, track_index) else {
+            self.output.clear();
+            return &self.output;
+        };
+        self.mux_packet_at(stream_idx, media_type, pts_ms, dts_ms, is_keyframe, payload)
+    }
+
+    /// Like [`mux_packet`](Self::mux_packet), but takes an already-resolved
+    /// stream index instead of re-scanning `streams` by `(media_type,
+    /// track_index)` on every call. Callers that mux many packets per track
+    /// (recording/HLS/transcoder stdin feeders) should resolve the index once
+    /// via [`stream_index`](Self::stream_index) and reuse it here.
+    ///
+    /// `stream_idx` must identify a stream whose media type matches
+    /// `media_type`; a stale or out-of-range index returns an empty slice,
+    /// same as a lookup miss in [`mux_packet`](Self::mux_packet).
+    pub fn mux_packet_by_stream_idx(
+        &mut self,
+        stream_idx: usize,
+        media_type: MediaType,
+        pts_ms: i64,
+        dts_ms: i64,
+        is_keyframe: bool,
+        payload: &[u8],
+    ) -> &[u8] {
+        if self.streams.get(stream_idx).map(|s| s.media_type) != Some(media_type) {
+            self.output.clear();
+            return &self.output;
+        }
+        self.mux_packet_at(stream_idx, media_type, pts_ms, dts_ms, is_keyframe, payload)
+    }
+
+    fn mux_packet_at(
+        &mut self,
+        stream_idx: usize,
+        media_type: MediaType,
+        pts_ms: i64,
+        dts_ms: i64,
+        is_keyframe: bool,
+        payload: &[u8],
+    ) -> &[u8] {
         self.output.clear();
 
         if payload.is_empty() {
             return &self.output;
         }
-
-        let stream_idx = match self
-            .streams
-            .iter()
-            .position(|s| s.media_type == media_type && s.track_index == track_index)
-        {
-            Some(idx) => idx,
-            None => return &self.output,
-        };
 
         let pid = self.streams[stream_idx].pid;
         let mut pts_90k = ms_to_ts(pts_ms);
@@ -2845,6 +2888,8 @@ mod tests {
         let mut muxer = TsMuxer::new(Some(&video), &[audio0, audio1]);
         let mut all_ts = Vec::new();
 
+        // Probe-ready H.264 access unit (contains SPS/PPS) so the demuxer's
+        // metadata-completeness gate can build the probe.
         let (video_payload, _) = first_probe_ready_payloads();
         // ADTS frame for AAC-LC 48 kHz stereo (7-byte header, no CRC)
         let audio0_payload = vec![0xFF, 0xF1, 0x50, 0x80, 0x02, 0x1F, 0xFC, 0x21, 0x10];
@@ -2947,6 +2992,8 @@ mod tests {
 
         let mut muxer = TsMuxer::new(Some(&video), &audio_tracks);
         let mut all_ts = Vec::new();
+        // Probe-ready H.264 access unit (contains SPS/PPS) so the demuxer's
+        // metadata-completeness gate can build the probe.
         let (video_payload, _) = first_probe_ready_payloads();
         let audio_payload = vec![0xFF, 0xF1, 0x4C, 0x40, 0x02, 0x1F, 0xFC, 0x21, 0x10];
 

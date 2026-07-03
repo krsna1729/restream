@@ -1786,8 +1786,7 @@ pub async fn start_rtmp_egress(
                                         output_audio_track.as_ref(),
                                     )
                                     .await
-                                    {
-                                        if let Ok(ClientSessionResult::OutboundResponse(p)) =
+                                        && let Ok(ClientSessionResult::OutboundResponse(p)) =
                                             session.publish_metadata(&metadata)
                                             && socket.write_all(&p.bytes).await.is_err()
                                         {
@@ -1797,7 +1796,6 @@ pub async fn start_rtmp_egress(
                                             );
                                             return;
                                         }
-                                    }
                                     // Send cached sequence headers before media data.
                                     // For H.265 ingests, video_sh is None (only RTMP ingest
                                     // caches FLV seq headers), so this is a no-op for H.265.
@@ -1831,8 +1829,8 @@ pub async fn start_rtmp_egress(
                                             track.channels,
                                         ));
                                     }
-                                    if let Some(ref ash) = audio_sh {
-                                        if let Ok(ClientSessionResult::OutboundResponse(p)) =
+                                    if let Some(ref ash) = audio_sh
+                                        && let Ok(ClientSessionResult::OutboundResponse(p)) =
                                             session.publish_audio_data(
                                                 ash.clone(),
                                                 RtmpTimestamp::new(0),
@@ -1848,13 +1846,12 @@ pub async fn start_rtmp_egress(
                                             }
                                             audio_sequence_header_sent = true;
                                         }
-                                    }
                                     let video_sh = startup_video_sequence_header(
                                         reader.current_ring(),
                                         ingest_video_sh,
                                     );
-                                    if let Some(vsh) = video_sh {
-                                        if let Ok(ClientSessionResult::OutboundResponse(p)) =
+                                    if let Some(vsh) = video_sh
+                                        && let Ok(ClientSessionResult::OutboundResponse(p)) =
                                             session.publish_video_data(
                                                 vsh,
                                                 RtmpTimestamp::new(0),
@@ -1868,7 +1865,6 @@ pub async fn start_rtmp_egress(
                                             );
                                             return;
                                         }
-                                    }
                                     is_publishing = true;
                                 }
                                 ClientSessionEvent::ConnectionRequestRejected { description } => {
@@ -1996,8 +1992,8 @@ pub async fn start_rtmp_egress(
                                     // On each keyframe, check whether the SPS has changed
                                     // (encoder resolution/bitrate switch) and (re-)send the
                                     // AVCC decoder configuration record before the IDR.
-                                    if packet.is_keyframe {
-                                        if let Some((seq_hdr, new_sps)) =
+                                    if packet.is_keyframe
+                                        && let Some((seq_hdr, new_sps)) =
                                             h264_sequence_header_for_keyframe(
                                                 &packet.payload,
                                                 &raw_h264_parameter_sets,
@@ -2039,7 +2035,6 @@ pub async fn start_rtmp_egress(
                                             }
                                             video_ready = true;
                                         }
-                                    }
                                     if !video_ready {
                                         continue;
                                     }
@@ -2119,10 +2114,10 @@ async fn resolved_output_audio_tracks(
     pipeline_id: &str,
     ring_buffer: &Arc<RingBuffer>,
 ) -> Vec<AudioMeta> {
-    if let Some(tracks) = ring_buffer.audio_tracks() {
-        if !tracks.is_empty() {
-            return tracks.to_vec();
-        }
+    if let Some(tracks) = ring_buffer.audio_tracks()
+        && !tracks.is_empty()
+    {
+        return tracks.to_vec();
     }
 
     engine

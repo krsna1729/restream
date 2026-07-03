@@ -1138,9 +1138,7 @@ impl MediaEngine {
             .min(MAX_RING_CAPACITY);
 
         let mut pipelines = self.ingests.pipelines.write().await;
-        let Some(old_rb) = pipelines.get(pipeline_id).cloned() else {
-            return None;
-        };
+        let old_rb = pipelines.get(pipeline_id).cloned()?;
 
         // Always record the packet rate for buffer-depth telemetry.
         old_rb.set_estimated_pkt_rate(pkt_rate);
@@ -4965,6 +4963,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shutdown_hls_preview_segmenter_removes_consumer_and_store() {
+        let engine = Arc::new(MediaEngine::new());
+        let (store, already_running) = engine
+            .ensure_hls_preview_segmenter("pipe-hls-preview-clean")
+            .await;
+        assert!(!already_running);
+        store.push_video_segment(0, 1.0, bytes::Bytes::from_static(b"segment"));
+
+        assert!(
+            engine
+                .get_hls_preview_store("pipe-hls-preview-clean")
+                .await
+                .is_some()
+        );
+        assert!(
+            engine
+                .get_hls_preview_cancel_token("pipe-hls-preview-clean")
+                .await
+                .is_some()
+        );
+
+        engine
+            .shutdown_hls_preview_segmenter("pipe-hls-preview-clean")
+            .await;
+
+        assert!(
+            engine
+                .get_hls_preview_store("pipe-hls-preview-clean")
+                .await
+                .is_none(),
+            "preview store must be dropped on shutdown, not leaked in the registry"
+        );
+        assert!(
+            engine
+                .get_hls_preview_cancel_token("pipe-hls-preview-clean")
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn hls_segmenter_without_ingest_is_immediately_shutdown_candidate() {
         let engine = Arc::new(MediaEngine::new());
         let pipeline_id = "pipe-hls-no-ingest";
@@ -6015,7 +6054,7 @@ mod tests {
         let ring = engine.get_or_create_pipeline("p").await;
         assert_eq!(ring.capacity(), default_ring_capacity());
         let depth = ring.buffer_depth_secs().unwrap();
-        assert!(depth >= 12.0 && depth <= 13.0, "depth={depth}");
+        assert!((12.0..=13.0).contains(&depth), "depth={depth}");
     }
 
     #[tokio::test]

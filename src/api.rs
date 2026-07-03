@@ -2197,6 +2197,7 @@ fn log_stream_prefix_matches(prefix: Option<&str>, message: &str) -> bool {
         .any(|part| message.starts_with(part))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn log_broadcast_matches_stream_filters(
     entry: &crate::logging::LogBroadcast,
     target: Option<&str>,
@@ -2268,7 +2269,7 @@ async fn list_logs_stream_backfill(
     for row in pipeline_logs
         .unwrap_or_default()
         .into_iter()
-        .chain(restream_logs.unwrap_or_default().into_iter())
+        .chain(restream_logs.unwrap_or_default())
     {
         merged.insert(row.id, row);
     }

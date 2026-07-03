@@ -4,6 +4,7 @@
 //! transcoder demuxes it and pushes MediaPackets to the output RingBuffer.
 
 use proptest::prelude::*;
+use proptest::test_runner::FileFailurePersistence;
 use restream::domain::stage::{StageKey, StageKind};
 use restream::media::avio::MemoryQueue;
 use restream::media::engine::VideoMeta;
@@ -458,6 +459,9 @@ proptest! {
     #![proptest_config(ProptestConfig {
         cases: 6,
         max_shrink_iters: 0,
+        failure_persistence: Some(Box::new(FileFailurePersistence::WithSource(
+            "proptest-regressions"
+        ))),
         .. ProptestConfig::default()
     })]
 

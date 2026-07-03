@@ -159,9 +159,14 @@ impl TsPacketFeeder {
         let (pts, dts) = self
             .dts_enforcer
             .enforce(stream_idx, packet.pts, packet.dts);
-        let ts_bytes = self.muxer.mux_packet(
+        // `stream_idx` above is already the muxer's stream index (video is
+        // always 0 when present; audio tracks are pushed onto both
+        // `audio_track_indices` and the muxer's `streams` in the same order
+        // from the same source slice at construction), so skip mux_packet's
+        // redundant linear (media_type, track_index) scan.
+        let ts_bytes = self.muxer.mux_packet_by_stream_idx(
+            stream_idx,
             packet.media_type,
-            packet.track_index,
             pts,
             dts,
             packet.is_keyframe,

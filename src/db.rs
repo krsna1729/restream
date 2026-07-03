@@ -330,6 +330,7 @@ pub async fn delete_pipeline(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::
 
 /* Output Operations */
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_output(
     pool: &SqlitePool,
     id: &str,
@@ -754,6 +755,7 @@ pub async fn reset_running_jobs(pool: &SqlitePool, now_ts: &str) -> Result<(), s
 
 /* Ingest Operations */
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_ingest(
     pool: &SqlitePool,
     id: &str,
@@ -835,6 +837,7 @@ pub async fn list_ingests_for_filename(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn update_ingest(
     pool: &SqlitePool,
     id: &str,

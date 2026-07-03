@@ -47,7 +47,7 @@ fn audio_track(index: u32) -> AudioMeta {
     AudioMeta {
         codec: "aac".to_string(),
         sample_rate: 48_000,
-        channels: if index % 2 == 0 { 2 } else { 1 },
+        channels: if index.is_multiple_of(2) { 2 } else { 1 },
         channel_layout: None,
         track_index: index,
         pid: None,

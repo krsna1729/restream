@@ -216,12 +216,12 @@ impl<S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>> Layer
     }
 
     fn on_record(&self, id: &Id, values: &Record<'_>, _ctx: Context<'_, S>) {
-        if let Ok(mut m) = self.spans.0.lock() {
-            if let Some(sf) = m.get_mut(id) {
-                let mut v = SpanVisitor(sf.clone());
-                values.record(&mut v);
-                *sf = v.0;
-            }
+        if let Ok(mut m) = self.spans.0.lock()
+            && let Some(sf) = m.get_mut(id)
+        {
+            let mut v = SpanVisitor(sf.clone());
+            values.record(&mut v);
+            *sf = v.0;
         }
     }
 
@@ -285,12 +285,12 @@ impl<S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>> Layer
     }
 
     fn on_record(&self, id: &Id, values: &Record<'_>, _ctx: Context<'_, S>) {
-        if let Ok(mut m) = self.spans.0.lock() {
-            if let Some(sf) = m.get_mut(id) {
-                let mut v = SpanVisitor(sf.clone());
-                values.record(&mut v);
-                *sf = v.0;
-            }
+        if let Ok(mut m) = self.spans.0.lock()
+            && let Some(sf) = m.get_mut(id)
+        {
+            let mut v = SpanVisitor(sf.clone());
+            values.record(&mut v);
+            *sf = v.0;
         }
     }
 

@@ -14,6 +14,7 @@ This report summarizes the model, property, unit, and live-harness proof surface
 | Stage registry replacement and TS muxer sweep | Loom + lifecycle unit tests | `transcoder_stage_loom`, `ts_muxer_stage_loom`, stale attempt tests |
 | External transcoder pipe/output/SRT path | Unit + proptest + focused live harness | external transcoder marker tests, DTS routing proptest, `mixed.asset.file.h264.a1` smoke |
 | Internal transcoder/libavcodec timestamp and metadata continuity | Unit + proptest + loom | chunked remux timestamp-order test, source-stage DTS chunking proptest, codec metadata replacement loom |
+| Recording TS -> MP4 -> TS remux timestamp continuity | Deterministic round-trip unit tests | `remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_disabled`, `remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_enabled` |
 | SRT protocol boundaries | Unit/stress tests | stream-id normalization tests, sender semaphore tests, `epoll_waiter_coordination` |
 | Child process lifecycle and cleanup | Static script guard + unit test + live contract cleanup checks | `kill_and_wait_child_terminates_spawned_process`, process lifecycle guard, post-harness orphan checks |
 | Runtime status after cleanup/recovery | API/status tests + live harness | API lifecycle tests, `fault-resilience`, `fault-egress-retry`, `fault-output-stall`, `recovery` |
@@ -69,6 +70,10 @@ This report summarizes the model, property, unit, and live-harness proof surface
 - `src/media/hls.rs`
   - Added `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream`, a deterministic in-memory proof that demuxed DTS values stay non-decreasing per stream across consecutive HLS MPEG-TS segment boundaries.
   - Coverage includes both packet-level DTS monotonicity and explicit first-packet-vs-previous-segment-last boundary checks after HLS keyframe-triggered segmentation.
+- `src/media/recording.rs`
+  - Added `remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_disabled` and `remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_enabled`, closing the previously open recording-remux-continuity gap.
+  - Each test demuxes the checked-in canonical TS fixture with the codebase's own `TsDemuxer` (no dependency on the external `ffprobe` binary), runs the production TS -> MP4 remux path, remuxes the resulting MP4 back to TS via the bundled ffmpeg, and demuxes that round-trip TS with the same `TsDemuxer`.
+  - Asserts per-stream DTS is monotonically non-decreasing with no inter-packet gap over 1s (catching dropped GOPs/frames) on both the source TS and the roundtrip TS, and that video/audio timeline span is preserved within 40ms across the full TS -> MP4 -> TS trip, under both `retain_source_ts` permutations.
 
 ### SRT Protocol Boundaries
 
@@ -112,6 +117,7 @@ This report summarizes the model, property, unit, and live-harness proof surface
 - External transcoder routing, DTS, and H264 marker-fixture checks.
 - Internal transcoder timestamp, chunking, and replacement metadata checks.
 - HLS MPEG-TS segment DTS boundary check.
+- Recording TS -> MP4 -> TS remux timestamp-continuity checks under both source-retention permutations.
 - Process lifecycle and slow-sink sibling-count harness unit checks.
 - Ingest/egress lifecycle proptests.
 
@@ -163,4 +169,4 @@ After wiring the expanded proof labels into `scripts/concurrency-proof-common.sh
 - The full contract gate is intentionally heavier than the focused checks above; continue running it before final sign-off when host resources allow.
 - Slow-sink sibling isolation now has focused harness coverage at low output counts; broader high-output soak coverage remains a separate, resource-heavy confidence run.
 - Internal transcoder/libavcodec timestamp and metadata continuity now has unit, proptest, and loom coverage; live multi-codec soak coverage remains a separate confidence run.
-- HLS segment-boundary DTS monotonicity is now covered in memory, but recording remux continuity (TS -> MP4 -> TS timestamp continuity under source-retention permutations) still lacks a dedicated proof test.
+- HLS segment-boundary DTS monotonicity is now covered in memory, and recording remux continuity (TS -> MP4 -> TS timestamp continuity under source-retention permutations) is now covered by a dedicated proof test (`src/media/recording.rs`, wired into the fast proof gate).

@@ -172,6 +172,7 @@ pub fn parse_start_time_ms(input: &str) -> Result<Option<i64>, String> {
     Ok(Some(total_ms))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_internal_file_ingest(
     engine: Arc<MediaEngine>,
     runtime_handle: Handle,
@@ -254,6 +255,7 @@ pub fn spawn_internal_file_ingest(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_internal_file_ingest_loop(
     engine: Arc<MediaEngine>,
     runtime_handle: Handle,
@@ -605,7 +607,9 @@ fn pace_packet(cancel: &CancellationToken, anchor: &mut Option<(i64, Instant)>, 
 
     let (base_ts_ms, start_instant) = anchor.expect("anchor initialized above");
     // Interleaved streams can deliver a packet timestamped slightly before the
-    // anchor. Clamp the delta instead of wrapping into a very long sleep.
+    // anchor (e.g. audio that starts earlier than the first video packet in
+    // mux order). A negative delta must clamp to zero — casting it straight
+    // to u64 would wrap into a near-infinite sleep and hang the ingest.
     let desired_ms = packet_ts_ms.saturating_sub(base_ts_ms).max(0) as u64;
     let desired = Duration::from_millis(desired_ms);
     let elapsed = start_instant.elapsed();

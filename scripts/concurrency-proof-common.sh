@@ -67,6 +67,10 @@ run_common_concurrency_checks() {
     scripts/resource-limit cargo test replacement_video_stage_preserves_codec_hint_and_audio_tracks --test transcoder -- --nocapture
   "$run_step_fn" hls-segment-dts-boundaries \
     scripts/resource-limit cargo test hls_segment_boundaries_preserve_non_decreasing_dts_per_stream --lib -- --nocapture
+  "$run_step_fn" recording-remux-continuity-retention-disabled \
+    scripts/resource-limit cargo test remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_disabled --lib -- --nocapture
+  "$run_step_fn" recording-remux-continuity-retention-enabled \
+    scripts/resource-limit cargo test remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_enabled --lib -- --nocapture
   "$run_step_fn" test-harness-process-lifecycle \
     scripts/resource-limit cargo test --bin test_harness tests::kill_and_wait_child_terminates_spawned_process -- --exact --nocapture
   "$run_step_fn" test-harness-slow-sink-sibling-count \

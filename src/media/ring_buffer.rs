@@ -937,9 +937,9 @@ mod tests {
 
     static EXPECTED_PANIC_HOOK_LOCK: Mutex<()> = Mutex::new(());
 
-    struct ScopedSilentPanicHook(
-        Option<Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>>,
-    );
+    type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
+
+    struct ScopedSilentPanicHook(Option<PanicHook>);
 
     impl ScopedSilentPanicHook {
         fn new() -> Self {

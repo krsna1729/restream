@@ -196,7 +196,7 @@ mod tests {
         let unique: HashSet<_> = matrix
             .iter()
             .flat_map(|(encoding, url, codec)| {
-                OutputPath::resolve("pipe", *encoding, *url).needed_stage_keys(*codec)
+                OutputPath::resolve("pipe", encoding, url).needed_stage_keys(*codec)
             })
             .collect();
 

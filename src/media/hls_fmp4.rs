@@ -485,15 +485,15 @@ pub async fn start_hls_fmp4_segmenter(
         }
     }
 
-    if let Some(state) = video_state.as_mut() {
-        if let Err(err) = state.flush_segment(
+    if let Some(state) = video_state.as_mut()
+        && let Err(err) = state.flush_segment(
             &store,
             next_segment_index,
             state.current_segment_duration_secs(),
             None,
-        ) {
-            warn!(pipeline_id = %pipeline_id, err = %err, "failed to flush final video fmp4 segment");
-        }
+        )
+    {
+        warn!(pipeline_id = %pipeline_id, err = %err, "failed to flush final video fmp4 segment");
     }
     for audio_state in audio_states.values_mut() {
         if let Err(err) = audio_state.flush_segment(

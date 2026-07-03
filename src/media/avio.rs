@@ -460,6 +460,9 @@ impl CustomOutput {
                 // FFmpeg 8 made the write callback buffer const; older host
                 // headers still expose it as mutable. Pointer mutability is
                 // not an ABI distinction, and write_packet_cb only reads it.
+                // The target type must stay inferred (`_`) so this compiles
+                // against both callback signatures.
+                #[allow(clippy::missing_transmute_annotations)]
                 Some(std::mem::transmute::<
                     unsafe extern "C" fn(*mut c_void, *mut u8, c_int) -> c_int,
                     _,
@@ -567,9 +570,9 @@ mod tests {
 
     static EXPECTED_PANIC_HOOK_LOCK: Mutex<()> = Mutex::new(());
 
-    struct ScopedSilentPanicHook(
-        Option<Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>>,
-    );
+    type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
+
+    struct ScopedSilentPanicHook(Option<PanicHook>);
 
     impl ScopedSilentPanicHook {
         fn new() -> Self {
