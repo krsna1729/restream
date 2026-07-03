@@ -536,8 +536,7 @@ pub(crate) fn mixed_fast_breadth_cases() -> &'static [MixedFastBreadthCase] {
             .fast_breadth
             .iter()
             .map(|row| MixedFastBreadthCase {
-                case: mixed_input_case_for_command(&row.id)
-                    .unwrap_or_else(|| panic!("{} is not a mixed input case", row.id)),
+                case: mixed_input_case_from_manifest(&row.id),
                 rationale: row.rationale.clone(),
                 checks: row
                     .check_specs()
@@ -560,45 +559,33 @@ pub(crate) fn mixed_fast_breadth_batches() -> &'static [MixedFastBreadthBatch] {
                 cases: batch
                     .cases
                     .iter()
-                    .map(|case| {
-                        mixed_input_case_for_command(case)
-                            .unwrap_or_else(|| panic!("{case} is not a mixed input case"))
-                    })
+                    .map(|case| mixed_input_case_from_manifest(case))
                     .collect(),
             })
             .collect()
     })
 }
 
+fn output_cases_from_dsl(rows: &[MixedDslOutputCase], label: &str) -> Vec<MixedOutputCase> {
+    rows.iter()
+        .map(|row| {
+            row.to_output_case()
+                .unwrap_or_else(|error| panic!("invalid {label} output row: {error}"))
+        })
+        .collect()
+}
+
 pub(crate) fn single_track_mixed_output_cases() -> &'static [MixedOutputCase] {
     SINGLE_TRACK_MIXED_OUTPUT_CASES_FROM_DSL.get_or_init(|| {
         let manifest = mixed_dsl_manifest().expect("embedded mixed_matrix.json should parse");
-        manifest
-            .mixed
-            .outputs
-            .single_track
-            .iter()
-            .map(|row| {
-                row.to_output_case()
-                    .unwrap_or_else(|error| panic!("invalid single-track output row: {error}"))
-            })
-            .collect()
+        output_cases_from_dsl(&manifest.mixed.outputs.single_track, "single-track")
     })
 }
 
 pub(crate) fn multi_track_mixed_output_cases() -> &'static [MixedOutputCase] {
     MULTI_TRACK_MIXED_OUTPUT_CASES_FROM_DSL.get_or_init(|| {
         let manifest = mixed_dsl_manifest().expect("embedded mixed_matrix.json should parse");
-        manifest
-            .mixed
-            .outputs
-            .multi_track
-            .iter()
-            .map(|row| {
-                row.to_output_case()
-                    .unwrap_or_else(|error| panic!("invalid multi-track output row: {error}"))
-            })
-            .collect()
+        output_cases_from_dsl(&manifest.mixed.outputs.multi_track, "multi-track")
     })
 }
 
@@ -645,6 +632,10 @@ pub(crate) fn mixed_input_case_for_command(command: &str) -> Option<MixedInputCa
         .iter()
         .copied()
         .find(|case| case.scenario_id() == command)
+}
+
+fn mixed_input_case_from_manifest(id: &str) -> MixedInputCase {
+    mixed_input_case_for_command(id).unwrap_or_else(|| panic!("{id} is not a mixed input case"))
 }
 
 pub(crate) fn mixed_fast_breadth_selected(case: MixedInputCase) -> &'static MixedFastBreadthCase {
