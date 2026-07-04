@@ -1,1 +1,152 @@
-[{"name":"api-smoke","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"correctness","suiteDefault":false,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"correctness-rtmp","suiteDefault":false,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"correctness-srt","suiteDefault":false,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"correctness-srt-rtmp","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"correctness-srt-rtmp-atrack","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"correctness-srt-policy","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"bframe-rtmp","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"ramp-family","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":true},{"name":"mixed.matrix","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":true},{"name":"mixed.fast-breadth","suiteDefault":false,"requiresPortNamespace":true,"requiresBenchProfile":true},{"name":"egress","suiteDefault":false,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"correctness-hevc-rtmp","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"correctness-hevc-rtmp-atrack","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"correctness-hevc-srt","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"fault-egress-retry","suiteDefault":false,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"fault-output-stall","suiteDefault":false,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"fault-resilience","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"file-live-edge","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"signal-control","suiteDefault":false,"requiresPortNamespace":false,"requiresBenchProfile":false},{"name":"recovery","suiteDefault":false,"requiresPortNamespace":true,"requiresBenchProfile":false},{"name":"resource-sweep","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":true},{"name":"bitrate-sweep","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":true},{"name":"branch-matrix","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":true},{"name":"srt-crypto-matrix","suiteDefault":true,"requiresPortNamespace":true,"requiresBenchProfile":true}]
+[
+    {
+        "name": "api-smoke",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "correctness",
+        "suiteDefault": false,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "correctness-rtmp",
+        "suiteDefault": false,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "correctness-srt",
+        "suiteDefault": false,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "correctness-srt-rtmp",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "correctness-srt-rtmp-atrack",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "correctness-srt-policy",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "bframe-rtmp",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "ramp-family",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": true
+    },
+    {
+        "name": "mixed.matrix",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": true
+    },
+    {
+        "name": "mixed.fast-breadth",
+        "suiteDefault": false,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": true
+    },
+    {
+        "name": "egress",
+        "suiteDefault": false,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "correctness-hevc-rtmp",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "correctness-hevc-rtmp-atrack",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "correctness-hevc-srt",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "fault-egress-retry",
+        "suiteDefault": false,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "fault-output-stall",
+        "suiteDefault": false,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "fault-resilience",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "file-live-edge",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "signal-control",
+        "suiteDefault": false,
+        "requiresPortNamespace": false,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "recovery",
+        "suiteDefault": false,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": false
+    },
+    {
+        "name": "resource-sweep",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": true
+    },
+    {
+        "name": "bitrate-sweep",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": true
+    },
+    {
+        "name": "branch-matrix",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": true
+    },
+    {
+        "name": "srt-crypto-matrix",
+        "suiteDefault": true,
+        "requiresPortNamespace": true,
+        "requiresBenchProfile": true
+    }
+]

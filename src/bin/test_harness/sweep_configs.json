@@ -1,1 +1,32 @@
-[{"name":"h264-rtmp","ingestProto":"rtmp","videoCodec":"h264","multiAudio":false},{"name":"h264-srt","ingestProto":"srt","videoCodec":"h264","multiAudio":false},{"name":"h265-srt","ingestProto":"srt","videoCodec":"h265","multiAudio":false},{"name":"mixed.live.srt.h264.a2.bf2","ingestProto":"srt","videoCodec":"h264","multiAudio":true},{"name":"mixed.live.srt.h265.a2.bf2","ingestProto":"srt","videoCodec":"h265","multiAudio":true}]
+[
+    {
+        "name": "h264-rtmp",
+        "ingestProto": "rtmp",
+        "videoCodec": "h264",
+        "multiAudio": false
+    },
+    {
+        "name": "h264-srt",
+        "ingestProto": "srt",
+        "videoCodec": "h264",
+        "multiAudio": false
+    },
+    {
+        "name": "h265-srt",
+        "ingestProto": "srt",
+        "videoCodec": "h265",
+        "multiAudio": false
+    },
+    {
+        "name": "mixed.live.srt.h264.a2.bf2",
+        "ingestProto": "srt",
+        "videoCodec": "h264",
+        "multiAudio": true
+    },
+    {
+        "name": "mixed.live.srt.h265.a2.bf2",
+        "ingestProto": "srt",
+        "videoCodec": "h265",
+        "multiAudio": true
+    }
+]

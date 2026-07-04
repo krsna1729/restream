@@ -1,3 +1,6 @@
+# WIP
+worktrees/
+
 # Rust build artifacts
 /target
 /.build
