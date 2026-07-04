@@ -38,8 +38,6 @@ COPY test/srt-bond-client.c test/srt-bond-client.c
 COPY test/srt-bond-server.c test/srt-bond-server.c
 COPY test/ffmpeg-capabilities.c test/ffmpeg-capabilities.c
 
-RUN chmod +x scripts/bootstrap-dev.sh scripts/resource-limit scripts/setup-static-build.sh
-
 # bootstrap-dev owns the fresh-Ubuntu dependency contract, including Node/npm
 # plus npm ci for the committed frontend toolchain dependencies.
 RUN scripts/bootstrap-dev.sh
@@ -73,7 +71,6 @@ FROM native-deps AS rust-build
 WORKDIR /workspace
 
 COPY scripts/build-static.sh scripts/build-static.sh
-RUN chmod +x scripts/build-static.sh
 
 # Warm the release dependency graph without copying the real application code.
 # The dummy main compiles the full dependency set into .build/static/cargo-target
