@@ -10,7 +10,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 mkdir -p test/artifacts/latest
-scripts/build-bench-harness.sh
 
 : > test/artifacts/latest/run.log
 # Canonical validation slices.
@@ -20,6 +19,6 @@ for mode in \
   mixed.live.rtmp.h264.a1.bf2
 do
   echo "== $mode ==" | tee -a test/artifacts/latest/run.log
-  target/bench/test_harness "$mode" \
+  scripts/run-bench-harness.sh "$mode" \
     | tee -a test/artifacts/latest/run.log
 done

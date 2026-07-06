@@ -3,7 +3,7 @@
 The preferred integration entry point is the native Rust harness mode:
 
 ```sh
-./target/bench/test_harness resource-sweep
+./scripts/run-bench-harness.sh resource-sweep
 ```
 
 The sweep measures `restream` CPU and memory across a fixed set of live
@@ -42,11 +42,10 @@ For transcode scenarios the CSV/JSON now split CPU into:
 - `ffmpeg_cpu_*`: CPU consumed by child `ffmpeg` processes
 - `total_cpu_*`: combined CPU for the scenario
 
-Run it with the current optimized binary:
+Run it with the canonical bench harness wrapper:
 
 ```sh
-./scripts/build-bench-harness.sh
-./target/bench/test_harness resource-sweep
+./scripts/run-bench-harness.sh resource-sweep
 ```
 
 Useful env vars:
@@ -68,7 +67,7 @@ If you specifically want the current-code passthrough-vs-transcode-family
 baseline, use the dedicated harness mode instead:
 
 ```sh
-./target/bench/test_harness branch-matrix
+./scripts/run-bench-harness.sh branch-matrix
 ```
 
 Examples:
@@ -76,39 +75,39 @@ Examples:
 ```sh
 RESOURCE_SWEEP_SCENARIOS=egress-growth-transcode-mixed \
 RESOURCE_SWEEP_EGRESS_COUNTS=10 \
-./target/bench/test_harness resource-sweep
+./scripts/run-bench-harness.sh resource-sweep
 
 RESOURCE_SWEEP_SCENARIOS=egress-growth-hevc-bridge \
 RESOURCE_SWEEP_EGRESS_COUNTS=10 \
-./target/bench/test_harness resource-sweep
+./scripts/run-bench-harness.sh resource-sweep
 
 RESOURCE_SWEEP_SCENARIOS=egress-growth-transcode-dual-mixed,egress-growth-source-plus-transcode-dual-mixed \
 RESOURCE_SWEEP_EGRESS_COUNTS=10 \
-./target/bench/test_harness resource-sweep
+./scripts/run-bench-harness.sh resource-sweep
 
 HARNESS_SRT_PASSPHRASE=0123456789abcd \
 HARNESS_SRT_PBKEYLEN=16 \
 RESOURCE_SWEEP_SCENARIOS=ingest-only,egress-growth-source-mixed \
-./target/bench/test_harness resource-sweep
+./scripts/run-bench-harness.sh resource-sweep
 
 RESTREAM_BIN=target/bench/restream \
 SRT_CRYPTO_MATRIX_VARIANTS=plaintext,enc16,enc24,enc32 \
 BRANCH_MATRIX_SCENARIOS=egress-growth-source-mixed \
-./target/bench/test_harness srt-crypto-matrix
+./scripts/run-bench-harness.sh srt-crypto-matrix
 ```
 
 To leave the last scenario up for interactive inspection:
 
 ```sh
-RESOURCE_SWEEP_NO_CLEANUP=1 ./target/bench/test_harness resource-sweep
+RESOURCE_SWEEP_NO_CLEANUP=1 ./scripts/run-bench-harness.sh resource-sweep
 ```
 
 Lifecycle modes:
 
 ```sh
-RESOURCE_SWEEP_LIFECYCLE=isolated ./target/bench/test_harness resource-sweep
-RESOURCE_SWEEP_LIFECYCLE=continuous ./target/bench/test_harness resource-sweep
-RESOURCE_SWEEP_LIFECYCLE=cumulative ./target/bench/test_harness resource-sweep
+RESOURCE_SWEEP_LIFECYCLE=isolated ./scripts/run-bench-harness.sh resource-sweep
+RESOURCE_SWEEP_LIFECYCLE=continuous ./scripts/run-bench-harness.sh resource-sweep
+RESOURCE_SWEEP_LIFECYCLE=cumulative ./scripts/run-bench-harness.sh resource-sweep
 ```
 
 - `isolated`: restart `restream` and `mediamtx` between scenarios for cleaner attribution
@@ -170,7 +169,7 @@ WORK_DIR=test/artifacts/profile-external \
 RESOURCE_SWEEP_SCENARIOS=egress-growth-transcode-mixed \
 RESOURCE_SWEEP_EGRESS_COUNTS=10 \
 RESOURCE_SWEEP_SAMPLE_SECS=30 \
-./target/bench/test_harness resource-sweep
+./scripts/run-bench-harness.sh resource-sweep
 ```
 
 On Linux, attach `perf` to the live pid:

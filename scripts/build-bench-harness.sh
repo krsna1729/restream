@@ -33,6 +33,6 @@ Bench-profile measurement binaries are ready:
   target/bench/restream
   target/bench/test_harness
 
-Run measurement modes from target/bench/test_harness so the harness can reject
-debug/release launches and keep benchmark numbers comparable.
+Use scripts/run-bench-harness.sh for measurement modes so bench binaries stay
+fresh and launches remain comparable.
 EOF

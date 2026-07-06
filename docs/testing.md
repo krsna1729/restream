@@ -582,8 +582,7 @@ legacy all-bash ramp path while bisecting harness behavior, or set
 ### `mixed.matrix` — Mixed input/output correctness
 
 ```sh
-./scripts/build-bench-harness.sh
-N_PER_GROUP=2 ONLY_CHECKS=hls scripts/resource-limit target/bench/test_harness mixed.matrix
+N_PER_GROUP=2 ONLY_CHECKS=hls ./scripts/run-bench-harness.sh mixed.matrix
 ```
 
 Exercises the table-driven input matrix. Names follow
@@ -607,10 +606,28 @@ multi-track RTMP ingest row unless the product contract changes.
 | `mixed.live.srt.h264.a2.{bf0,bf2}` | 2 | SRT | H.264 | 2 | multi-audio track routing |
 | `mixed.live.srt.h265.a2.{bf0,bf2}` | 2 | SRT | H.265 | 2 | HEVC + multi-audio |
 
-Each row can be run directly as `target/bench/test_harness <scenario-id>`, for
-example `target/bench/test_harness mixed.live.srt.h265.a2.bf2`. The aggregate
-`mixed.matrix` runs every row sequentially under its own work directory so
-artifacts and HLS segments from one case cannot contaminate another.
+Each row can be run through `scripts/run-bench-harness.sh <scenario-id>`, for
+example `scripts/run-bench-harness.sh mixed.live.srt.h265.a2.bf2`. By default the
+aggregate `mixed.matrix` reuses one shared Restream+MediaMTX stack per input
+family (`live-rtmp`, `live-srt`, `file-ingest`) and executes up to two cases per
+wave inside that stack, while still writing each case to its own work directory.
+Set `MIXED_MATRIX_SERIAL=1` to force the legacy fully serial execution order
+when bisecting.
+
+By default, full matrix runs now continue across scenario failures and emit an
+aggregate failure list at the end so one bad row does not hide later coverage.
+Set `MIXED_MATRIX_FAIL_FAST=1` when you need the old stop-at-first-failure
+behavior for tighter bisects.
+
+Signal quality checks are part of the full matrix default check set. Unless
+`ONLY_CHECKS` is explicitly set, every mixed row includes `signal` in its check
+selection. Matrix runs also default `COLLECT_FAILURES=1` and write
+`assertions.jsonl` in `WORK_DIR` unless `COLLECT_FAILURES` or `ASSERTION_LOG`
+is overridden.
+
+`scripts/run-bench-harness.sh` is the canonical measurement entrypoint: it
+builds bench-profile binaries first (unless `BENCH_BUILD=0` is set) and then
+executes `target/bench/test_harness` via `scripts/resource-limit`.
 
 The row structure is deliberately two-layered:
 

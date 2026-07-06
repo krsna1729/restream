@@ -44,7 +44,7 @@ Run the broad quiet-log gate before sign-off on test-heavy changes:
 
 - Do not add inline media generators to test-facing code when an existing fixture can cover the case.
 - Do not add a committed fixture without registering it in the fixture contract.
-- Do not run measurement harness modes from `target/debug` or `target/release`; use `./scripts/build-bench-harness.sh` and `target/bench/test_harness`.
+- Do not run measurement harness modes from `target/debug` or `target/release`; use `./scripts/run-bench-harness.sh` (or `./scripts/build-bench-harness.sh` followed by `target/bench/test_harness` when debugging the runner itself).
 - Do not let passing tests emit warnings, panic text, or known FFmpeg noise.
 
 ## Read These References
