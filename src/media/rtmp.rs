@@ -156,6 +156,48 @@ fn parse_flv_video_meta(data: &[u8]) -> Option<VideoMeta> {
     Some(meta)
 }
 
+/// Extracts SPS/PPS from an FLV AVCDecoderConfigurationRecord (the H.264
+/// sequence-header video tag body) and re-emits them in Annex-B form
+/// (start-code prefixed), the format `RingBuffer::video_parameter_sets`
+/// callers expect. Returns `None` for anything malformed or non-H.264 —
+/// this parses untrusted publisher input, so it must never panic.
+fn flv_avcc_config_annexb_parameter_sets(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() <= 5 || (data[0] & 0x0F) != 7 || data[1] != 0 {
+        return None;
+    }
+    let avc_config = &data[5..];
+    if avc_config.len() < 6 {
+        return None;
+    }
+
+    let mut annexb = Vec::new();
+    let num_sps = (avc_config[5] & 0x1F) as usize;
+    let mut offset = 6usize;
+    for _ in 0..num_sps {
+        let len = *avc_config.get(offset)? as usize;
+        let len = (len << 8) | (*avc_config.get(offset + 1)? as usize);
+        offset += 2;
+        let sps = avc_config.get(offset..offset + len)?;
+        annexb.extend_from_slice(&[0, 0, 0, 1]);
+        annexb.extend_from_slice(sps);
+        offset += len;
+    }
+
+    let num_pps = *avc_config.get(offset)? as usize;
+    offset += 1;
+    for _ in 0..num_pps {
+        let len = *avc_config.get(offset)? as usize;
+        let len = (len << 8) | (*avc_config.get(offset + 1)? as usize);
+        offset += 2;
+        let pps = avc_config.get(offset..offset + len)?;
+        annexb.extend_from_slice(&[0, 0, 0, 1]);
+        annexb.extend_from_slice(pps);
+        offset += len;
+    }
+
+    codec::annexb_parameter_sets(&annexb)
+}
+
 fn flv_video_composition_time_ms(data: &[u8]) -> i32 {
     if data.len() < 5 || !matches!(data[0] & 0x0f, 7 | 12) || data[1] != 1 {
         return 0;
@@ -1219,6 +1261,16 @@ async fn handle_session_results(
                                 engine
                                     .cache_sequence_header(pipeline_id, true, data.clone())
                                     .await;
+                                // Raw SPS/PPS on the ingest ring let stages that need
+                                // eager parameter sets (e.g. VideoPreset stages —
+                                // see wait_for_stage_metadata) become ready without
+                                // waiting on a decoded frame; file/SRT ingest already
+                                // populate this, RTMP previously never did.
+                                if let Some(parameter_sets) =
+                                    flv_avcc_config_annexb_parameter_sets(&data)
+                                {
+                                    active.ring.set_video_parameter_sets(parameter_sets);
+                                }
                             }
 
                             // Probe video metadata from sequence header (first config packet)
@@ -1547,6 +1599,25 @@ pub async fn start_rtmp_egress(
             return;
         }
     };
+
+    // Pre-connect warmup: wait for the upstream ring to have data before
+    // connecting to MediaMTX. Transcoded/routed rings (codec_hint set) go
+    // through a multi-stage chain that takes seconds to warm up. Connecting
+    // before any data is ready results in an idle publisher that MediaMTX
+    // closes for inactivity before the first packet ever arrives — under
+    // high output fanout this manifests as a repeating connect/drop/retry
+    // storm. Mirrors the same gate in start_srt_egress.
+    if !ring_buffer.codec_hint_str().is_empty() {
+        let mut warmup = Reader::new(
+            format!("rtmp_egress_warmup:{}", output_id),
+            ring_buffer.clone(),
+        );
+        tokio::select! {
+            _ = cancel_token.cancelled() => return,
+            _ = warmup.wait_for_data() => {}
+        }
+    }
+
     egress_phase!("connecting");
     egress_target_addr!(format!("{}:{}", parts.host, parts.port));
     info!(
@@ -1935,24 +2006,22 @@ pub async fn start_rtmp_egress(
                                         deferred_audio_sequence_header.as_ref(),
                                         output_audio_track.as_ref(),
                                     )
-                            {
-                                if let Ok(ClientSessionResult::OutboundResponse(p)) =
+                                && let Ok(ClientSessionResult::OutboundResponse(p)) =
                                     session.publish_audio_data(
                                         sequence_header,
                                         RtmpTimestamp::new(0),
                                         false,
                                     )
-                                {
-                                    if socket.write_all(&p.bytes).await.is_err() {
-                                        egress_error!(
-                                            "send",
-                                            "failed to write deferred audio sequence header"
-                                        );
-                                        return;
-                                    }
-                                    audio_sequence_header_sent = true;
-                                    deferred_audio_sequence_header = None;
+                            {
+                                if socket.write_all(&p.bytes).await.is_err() {
+                                    egress_error!(
+                                        "send",
+                                        "failed to write deferred audio sequence header"
+                                    );
+                                    return;
                                 }
+                                audio_sequence_header_sent = true;
+                                deferred_audio_sequence_header = None;
                             }
                             if packet.format == PayloadFormat::Raw && !audio_sequence_header_sent {
                                 // Raw AAC packets are not self-describing on the RTMP wire.
@@ -2604,6 +2673,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_rtmp_egress_waits_for_ring_data_before_connecting() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let ring = Arc::new(RingBuffer::new(1024));
+        ring.set_codec_hint("h264");
+
+        let engine = Arc::new(MediaEngine::new());
+        let registration = engine
+            .register_egress_attempt("out-warmup", "pipe-warmup", "rtmp://ignored/app/key")
+            .await;
+
+        let ring_c = ring.clone();
+        let engine_c = engine.clone();
+        let registration_c = registration.clone();
+        tokio::spawn(async move {
+            start_rtmp_egress(
+                "out-warmup".to_string(),
+                "pipe-warmup".to_string(),
+                format!("rtmp://{}/live/key", addr),
+                ring_c,
+                engine_c,
+                registration_c,
+            )
+            .await;
+        });
+
+        // No data on the ring yet: the pre-connect warmup gate must hold off
+        // connecting, or MediaMTX would accept an idle publisher and later
+        // drop it for inactivity (the root cause of the RTMP reconnect storm
+        // under high output fanout).
+        let early_accept =
+            tokio::time::timeout(std::time::Duration::from_millis(200), listener.accept()).await;
+        assert!(
+            early_accept.is_err(),
+            "must not connect before the ring has data"
+        );
+
+        ring.push(MediaPacket {
+            media_type: MediaType::Video,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            is_keyframe: true,
+            format: PayloadFormat::Flv,
+            payload: bytes::Bytes::from_static(&[0x17, 0x01, 0x00, 0x00, 0x00]),
+        });
+
+        let late_accept =
+            tokio::time::timeout(std::time::Duration::from_secs(2), listener.accept()).await;
+        assert!(late_accept.is_ok(), "must connect once the ring has data");
+
+        registration.cancel_token.cancel();
+    }
+
+    #[tokio::test]
     async fn detects_h265_from_ingest_video_meta() {
         let engine = MediaEngine::new();
         engine
@@ -2852,6 +2977,42 @@ mod tests {
         assert_eq!(meta.level.as_deref(), Some("3.1"));
         assert_eq!(meta.width, 1280);
         assert_eq!(meta.height, 720);
+    }
+
+    #[test]
+    fn flv_avcc_config_annexb_parameter_sets_extracts_sps_and_pps() {
+        #[rustfmt::skip]
+        let data: &[u8] = &[
+            0x17, 0x00, 0x00, 0x00, 0x00, // FLV header + AVC seq header + comp time
+            0x01, 0x64, 0x00, 0x1F, 0xFF, 0xE1, // AVCC header, numSPS=1
+            0x00, 0x04, // SPS length = 4
+            0x67, 0x64, 0x00, 0x1F, // SPS NAL (nal_type=7)
+            0x01, // numPPS = 1
+            0x00, 0x02, // PPS length = 2
+            0x68, 0xCE, // PPS NAL (nal_type=8)
+        ];
+
+        let parameter_sets = flv_avcc_config_annexb_parameter_sets(data).unwrap();
+        assert_eq!(
+            parameter_sets,
+            vec![0, 0, 0, 1, 0x67, 0x64, 0x00, 0x1F, 0, 0, 0, 1, 0x68, 0xCE]
+        );
+    }
+
+    #[test]
+    fn flv_avcc_config_annexb_parameter_sets_rejects_truncated_input() {
+        let data: &[u8] = &[
+            0x17, 0x00, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x1F, 0xFF, 0xE1,
+        ];
+        assert!(flv_avcc_config_annexb_parameter_sets(data).is_none());
+    }
+
+    #[test]
+    fn flv_avcc_config_annexb_parameter_sets_rejects_non_h264() {
+        let data: &[u8] = &[
+            0x1C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x1F, 0xFF, 0xE1,
+        ];
+        assert!(flv_avcc_config_annexb_parameter_sets(data).is_none());
     }
 
     #[test]
