@@ -18,6 +18,7 @@ use rml_rtmp::sessions::{
     ServerSessionResult, StreamMetadata,
 };
 use rml_rtmp::time::RtmpTimestamp;
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -788,7 +789,7 @@ pub async fn start_rtmp_server_on(
     port: u16,
 ) {
     let addr = format!("0.0.0.0:{port}");
-    let listener = match TcpListener::bind(&addr).await {
+    let listener = match bind_rtmp_listener_with_backlog(port) {
         Ok(l) => l,
         Err(e) => {
             error!("Failed to bind TCP listener on {}: {:?}", addr, e);
@@ -822,6 +823,24 @@ pub async fn start_rtmp_server_on(
             }
         }
     }
+}
+
+fn rtmp_listener_backlog() -> i32 {
+    std::env::var("RESTREAM_RTMP_LISTENER_BACKLOG")
+        .ok()
+        .and_then(|value| value.parse::<i32>().ok())
+        .unwrap_or(1024)
+        .max(1)
+}
+
+fn bind_rtmp_listener_with_backlog(port: u16) -> Result<TcpListener, std::io::Error> {
+    let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_reuse_address(true)?;
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    socket.bind(&SockAddr::from(addr))?;
+    socket.listen(rtmp_listener_backlog())?;
+    socket.set_nonblocking(true)?;
+    TcpListener::from_std(std::net::TcpListener::from(socket))
 }
 
 async fn handle_rtmp_client(

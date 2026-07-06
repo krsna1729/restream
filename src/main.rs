@@ -2,6 +2,24 @@
 //! The tokio multi-threaded runtime is used for all async I/O.
 //! CPU-bound FFmpeg work runs on dedicated OS threads (see `src/lib.rs` docs).
 
+fn env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(default)
+}
+
+fn runtime_worker_threads() -> usize {
+    let cpus = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    env_usize("RESTREAM_TOKIO_WORKER_THREADS", cpus.clamp(2, 16)).max(1)
+}
+
+fn runtime_max_blocking_threads() -> usize {
+    env_usize("RESTREAM_TOKIO_MAX_BLOCKING_THREADS", 512).max(1)
+}
+
 fn main() {
     let mut args = std::env::args_os();
     let _program = args.next();
@@ -46,7 +64,11 @@ fn main() {
     // spawning.
     restream::ffmpeg_extract::ensure_ffmpeg_extracted();
 
+    let worker_threads = runtime_worker_threads();
+    let max_blocking_threads = runtime_max_blocking_threads();
     tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .max_blocking_threads(max_blocking_threads)
         .enable_all()
         .build()
         .expect("Failed to build tokio runtime")

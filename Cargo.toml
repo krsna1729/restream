@@ -53,6 +53,7 @@ shiguredo_mp4 = "2026.3.0"
 tracing = { version = "0.1", features = ["max_level_debug", "release_max_level_info"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"
+socket2 = "0.5"
 
 [build-dependencies]
 pkg-config = "0.3"

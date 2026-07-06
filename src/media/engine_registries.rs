@@ -167,6 +167,7 @@ pub struct RuntimeInfra {
     pub listener_stats: Arc<ListenerSocketStats>,
     pub os_threads: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
     pub sender_semaphore: Arc<tokio::sync::Semaphore>,
+    pub external_ffmpeg_semaphore: Arc<tokio::sync::Semaphore>,
     pub diag_semaphores: TokioRwLock<HashMap<String, Arc<tokio::sync::Semaphore>>>,
     pub event_log: Arc<EventLog>,
 }
@@ -179,12 +180,42 @@ impl Default for RuntimeInfra {
 
 impl RuntimeInfra {
     pub fn new() -> Self {
+        let external_ffmpeg_permits = external_ffmpeg_child_limit();
         Self {
             listener_stats: Arc::new(ListenerSocketStats::default()),
             os_threads: std::sync::Mutex::new(Vec::new()),
             sender_semaphore: Arc::new(tokio::sync::Semaphore::new(512)),
+            external_ffmpeg_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                external_ffmpeg_permits,
+            )),
             diag_semaphores: TokioRwLock::new(HashMap::new()),
             event_log: Arc::new(EventLog::new()),
         }
     }
+}
+
+fn external_ffmpeg_child_limit() -> usize {
+    let cpus = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    let reserve = std::env::var("RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(2)
+        .min(cpus.saturating_sub(1));
+    let per_child = std::env::var("RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(2)
+        .max(1);
+    let derived = cpus
+        .saturating_sub(reserve)
+        .max(1)
+        .div_ceil(per_child)
+        .max(1);
+    let hard_cap = std::env::var("RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(usize::MAX);
+    derived.min(hard_cap).max(1)
 }

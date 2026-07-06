@@ -90,6 +90,11 @@ fn build_stage_ffmpeg_args_inner(
     };
     let (analyze_duration_us, probe_size_bytes) =
         startup_policy::ext_stage_probe_budget(VideoCodecKind::from_codec_name(probe_codec));
+    let ffmpeg_threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(2)
+        .max(1);
 
     let mut args = vec![
         "-nostdin".to_string(),
@@ -97,6 +102,8 @@ fn build_stage_ffmpeg_args_inner(
         "-nostats".to_string(),
         "-loglevel".to_string(),
         "warning".to_string(),
+        "-threads".to_string(),
+        ffmpeg_threads.to_string(),
         "-fflags".to_string(),
         "nobuffer".to_string(),
         "-flags".to_string(),
@@ -489,6 +496,27 @@ async fn start_external_transcoder_stage_inner(
         build_stage_ffmpeg_video_only_args_for_input(&encoding, input_codec, probe_codec)
     };
     let correlation_id = crate::logging::next_correlation_id("stage");
+    let ffmpeg_permit = match engine.runtime.external_ffmpeg_semaphore.acquire().await {
+        Ok(permit) => permit,
+        Err(error) => {
+            error!(
+                correlation_id = %correlation_id,
+                pipeline_id = %pipeline_id,
+                stage_encoding = %encoding,
+                stage_backend = "external_ffmpeg",
+                err = %error,
+                "[ext-transcoder] external ffmpeg semaphore closed"
+            );
+            engine
+                .runtime
+                .event_log
+                .emit(crate::events::EventKind::StageStopped {
+                    pipeline_id: pipeline_id.clone(),
+                    encoding: encoding.clone(),
+                });
+            return;
+        }
+    };
     info!(
         correlation_id = %correlation_id,
         pipeline_id = %pipeline_id,
@@ -528,6 +556,7 @@ async fn start_external_transcoder_stage_inner(
                     pipeline_id: pipeline_id.clone(),
                     encoding: encoding.clone(),
                 });
+            drop(ffmpeg_permit);
             return;
         }
     };
@@ -556,6 +585,7 @@ async fn start_external_transcoder_stage_inner(
                     pipeline_id: pipeline_id.clone(),
                     encoding: encoding.clone(),
                 });
+            drop(ffmpeg_permit);
             return;
         }
     };
@@ -581,6 +611,7 @@ async fn start_external_transcoder_stage_inner(
                     pipeline_id: pipeline_id.clone(),
                     encoding: encoding.clone(),
                 });
+            drop(ffmpeg_permit);
             return;
         }
     };
@@ -712,6 +743,7 @@ async fn start_external_transcoder_stage_inner(
                 pipeline_id: pipeline_id.clone(),
                 encoding: encoding.clone(),
             });
+        drop(ffmpeg_permit);
         return;
     };
 
@@ -883,6 +915,7 @@ async fn start_external_transcoder_stage_inner(
             pipeline_id: pipeline_id.clone(),
             encoding: encoding.clone(),
         });
+    drop(ffmpeg_permit);
 
     info!(
         correlation_id = %correlation_id,
@@ -1080,6 +1113,7 @@ mod tests {
     #[test]
     fn stage_args_720p_reads_stdin_writes_stdout() {
         let args = build_stage_ffmpeg_args("720p", "h264");
+        assert!(args.windows(2).any(|w| w == ["-threads", "2"]));
         // reads from stdin
         assert!(args.iter().any(|a| a == "-i"));
         let i_pos = args.iter().position(|a| a == "-i").unwrap();

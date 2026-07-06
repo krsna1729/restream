@@ -137,12 +137,19 @@ pub(crate) fn load_conversion_state(ts_path: &Path) -> Option<RecordingConversio
 }
 
 fn build_recording_remux_args(input_path: &Path, output_path: &Path) -> Vec<String> {
+    let ffmpeg_threads = std::env::var("RESTREAM_RECORDING_FFMPEG_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(2)
+        .max(1);
     vec![
         "-y".to_string(),
         "-nostdin".to_string(),
         "-hide_banner".to_string(),
         "-loglevel".to_string(),
         "warning".to_string(),
+        "-threads".to_string(),
+        ffmpeg_threads.to_string(),
         "-fflags".to_string(),
         "+genpts".to_string(),
         "-i".to_string(),
