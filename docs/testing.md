@@ -439,6 +439,10 @@ All live integration tests are unified under one entry point:
 scripts/resource-limit target/debug/test_harness [--no-netns] <mode>
 ```
 
+`scripts/resource-limit` only constrains build/test command parallelism. It
+does not sandbox runtime CPU or memory for `restream`, MediaMTX, or FFmpeg
+children once the harness process starts.
+
 By default every mode that manages its own server processes runs inside a
 private loopback network namespace (`unshare --net`) so ports never conflict
 with the host. Pass `--no-netns` to skip namespace re-exec.
@@ -483,6 +487,35 @@ Common runner flags:
 The runner kills only processes it starts. Set `ALLOW_GLOBAL_PROCESS_CLEANUP=1`
 only when you explicitly want the legacy host-wide `restream`/`mediamtx`
 cleanup before a run.
+
+Runtime thread and process limits relevant to matrix and fast-breadth runs:
+
+| Env var | Scope | Default | Purpose |
+|---|---|---|---|
+| `HARNESS_FFMPEG_THREADS` | Harness publisher FFmpeg | `2` | Caps encoder/reader threads for harness-side publishers. |
+| `RESTREAM_EXTERNAL_FFMPEG_THREADS` | External stage FFmpeg children | `2` | Caps per-child FFmpeg worker threads in runtime transcoder stages. |
+| `RESTREAM_RECORDING_FFMPEG_THREADS` | Recording remux FFmpeg child | `2` | Caps thread fanout during TS->MP4 remux. |
+| `RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN` | Restream stage scheduler | derived | Hard cap for concurrent external FFmpeg stage children. |
+| `RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE` | Restream stage scheduler | `2` | CPU headroom reserved for Tokio + listeners while deriving child cap. |
+| `RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD` | Restream stage scheduler | `2` | Expected CPU budget per external FFmpeg child when deriving child cap. |
+| `RESTREAM_TOKIO_WORKER_THREADS` | Restream Tokio runtime | `min(max(cpus,2),16)` | Explicit runtime worker thread cap for async tasks. |
+| `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` | Restream Tokio runtime | `512` | Caps Tokio blocking pool size. |
+| `HARNESS_TOKIO_WORKER_THREADS` | Test harness Tokio runtime | `min(max(cpus,2),16)` | Caps harness-side async worker threads. |
+| `HARNESS_TOKIO_MAX_BLOCKING_THREADS` | Test harness Tokio runtime | `256` | Caps harness blocking task pool size. |
+| `RESTREAM_RTMP_LISTENER_BACKLOG` | Restream RTMP listener | `1024` | Explicit accept backlog for RTMP ingest socket. |
+
+Optional per-stack cgroup limits for harness-managed processes:
+
+- Set `HARNESS_USE_CGROUP_WRAPPER=1` to route harness-spawned `restream`,
+  MediaMTX, and publisher FFmpeg processes through `scripts/cgroup-wrap`.
+- Set `HARNESS_CGROUP_CPU_MAX` (for example `200%`) and/or
+  `HARNESS_CGROUP_MEMORY_MAX` (for example `2G`) to apply limits.
+- Scopes are named per stack using synthesized ports (for example
+  `restream-<http-port>`, `mediamtx-<api-port>`) so parallel matrix stacks
+  do not collide.
+
+Detailed rationale and sizing notes are tracked in
+[docs/matrix-resource-constraints.md](matrix-resource-constraints.md).
 
 ### Matrix quick reference
 

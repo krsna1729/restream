@@ -217,17 +217,16 @@ File ingest paces packets by timestamp but can still consume one OS thread per
 active file ingest and one `MemoryQueue`. No global file-ingest count limit
 exists. Location: [src/media/file_ingest.rs](../src/media/file_ingest.rs).
 
-## Documented-but-unimplemented knobs
+## Harness/runtime knobs status
 
-These env vars are described in [testing.md](testing.md) but are **not found in
-source**:
+The following previously documented knobs are now implemented in the harness:
 
 | Var | Documented use | Implemented? |
 |---|---|---|
-| `KEEP_ARTIFACTS` | Retain old `test/artifacts/` directories | No |
-| `RSS_BASELINE` | Compare mixed-input RSS against saved CSV | No |
-| `SAVE_RSS_BASELINE` | Save current RSS summary as baseline | No |
-| `ALLOW_GLOBAL_PROCESS_CLEANUP` | Legacy host-wide cleanup before run | No |
+| `KEEP_ARTIFACTS` | Retain old `test/artifacts/` directories | Yes |
+| `RSS_BASELINE` | Compare mixed-input RSS against saved CSV | Yes |
+| `SAVE_RSS_BASELINE` | Save current RSS summary as baseline | Yes |
+| `ALLOW_GLOBAL_PROCESS_CLEANUP` | Legacy host-wide cleanup before run | Yes |
 
 Implemented knobs:
 
@@ -266,9 +265,8 @@ Update [testing.md](testing.md) to:
 
 1. State clearly that `scripts/resource-limit` constrains **build parallelism
    only**.
-2. Remove or mark as “not yet implemented” the `KEEP_ARTIFACTS`,
-   `RSS_BASELINE`, `SAVE_RSS_BASELINE`, and `ALLOW_GLOBAL_PROCESS_CLEANUP`
-   entries.
+2. Keep `KEEP_ARTIFACTS`, `RSS_BASELINE`, `SAVE_RSS_BASELINE`, and
+  `ALLOW_GLOBAL_PROCESS_CLEANUP` documented as implemented harness controls.
 3. Add a “Runtime resource limits” table listing the bounded knobs that
    actually exist.
 
@@ -285,19 +283,14 @@ Add an optional wrapper (e.g., `scripts/run-matrix-cgroup.sh`) that uses
 
 ### Implement missing knobs (optional)
 
-If the documented RSS baseline and artifact-retention behavior are desired:
-
-- Implement `SAVE_RSS_BASELINE` / `RSS_BASELINE` in
-  [src/bin/test_harness/mixed_telemetry.rs](../src/bin/test_harness/mixed_telemetry.rs).
-- Implement `KEEP_ARTIFACTS` in the harness cleanup path.
-- Implement `ALLOW_GLOBAL_PROCESS_CLEANUP` only if the legacy behavior is still
-  needed; otherwise remove it from docs.
+The documented RSS baseline and artifact-retention knobs are implemented.
+Optional future work is stricter baseline schema/versioning and richer diff
+reporting on baseline mismatches.
 
 ### Add a global child-FFmpeg cap (optional)
 
-Consider a semaphore for external transcoder children, similar to the
-512-permit SRT sender semaphore, to prevent runaway child process counts on
-custom output matrices.
+Implemented: runtime now gates external transcoder children behind a semaphore
+with derived sizing and env overrides (`RESTREAM_EXTERNAL_FFMPEG_*`).
 
 ## Bottom line
 
