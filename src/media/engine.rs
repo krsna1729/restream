@@ -1254,13 +1254,24 @@ impl MediaEngine {
                 .unwrap_or_default()
         };
 
-        let output_tracks = if let Some(audio_op) = stage_kind.audio_operation() {
-            let routing = crate::domain::audio_routing::parse_audio_operation(audio_op);
-            crate::media::transcoder::apply_audio_routing(&routing, &input_tracks)
-        } else {
-            (*input_tracks).clone()
-        };
-        output_buf.set_audio_tracks(output_tracks);
+        // Only eagerly propagate audio_tracks when we have real data.
+        // For lightweight audio-router stages on live SRT/RTMP ingest, the
+        // ingest audio_tracks may not yet be known at output-wiring time.
+        // Setting empty tracks here would poison the ArcSwapOption and prevent
+        // start_audio_router() from installing the correct tracks once the
+        // ingest stream has been probed.  The audio_router stage handles the
+        // late-binding case by setting tracks on the output ring at startup.
+        if !input_tracks.is_empty() {
+            let output_tracks = if let Some(audio_op) = stage_kind.audio_operation() {
+                let routing = crate::domain::audio_routing::parse_audio_operation(audio_op);
+                crate::media::transcoder::apply_audio_routing(&routing, &input_tracks)
+            } else {
+                (*input_tracks).clone()
+            };
+            if !output_tracks.is_empty() {
+                output_buf.set_audio_tracks(output_tracks);
+            }
+        }
 
         let encoding_str = stage_kind.to_string();
         info!(pipeline_id = %pipeline_id, encoding = %encoding_str, "spawning transcoder stage");
@@ -1372,9 +1383,11 @@ impl MediaEngine {
         // can initialize their TsMuxer / PMT with the correct codec.
         output_buf.set_codec_hint("h264");
 
-        // Inherit audio tracks from source_buffer
+        // Inherit audio tracks from source_buffer (codec-edge stages do not
+        // do audio routing, so tracks pass through unchanged).
+        // Only set when non-empty — same reasoning as get_or_create_transcoder.
         let input_tracks = if let Some(tracks) = source_buffer.audio_tracks() {
-            std::sync::Arc::new(tracks.to_vec())
+            std::sync::Arc::new(tracks)
         } else {
             let ingests = self.ingests.active.read().await;
             ingests
@@ -1391,7 +1404,9 @@ impl MediaEngine {
                 })
                 .unwrap_or_default()
         };
-        output_buf.set_audio_tracks((*input_tracks).clone());
+        if !input_tracks.is_empty() {
+            output_buf.set_audio_tracks((*input_tracks).clone());
+        }
         let cancel = CancellationToken::new();
         buffers.insert(key.clone(), (output_buf.clone(), cancel.clone()));
         drop(buffers); // release write lock before spawning

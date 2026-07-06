@@ -62,6 +62,15 @@ pub async fn start_audio_router(
     if let Some(parameter_sets) = input_buffer.video_parameter_sets() {
         output_buffer.set_video_parameter_sets(parameter_sets.to_vec());
     }
+    // Propagate audio track metadata to the output ring, applying the routing
+    // transformation (e.g. SelectTracks re-indexes track_index values).
+    // This is done here (in the spawned task) rather than eagerly in
+    // get_or_create_transcoder() because for live SRT ingest the source ring's
+    // audio_tracks may not be populated yet at output-wiring time.
+    if let Some(input_tracks) = input_buffer.audio_tracks() {
+        let output_tracks = apply_audio_routing(&routing, &input_tracks);
+        output_buffer.set_audio_tracks(output_tracks);
+    }
 
     let routing_mode = match &routing {
         AudioRouting::Passthrough => "all",
@@ -110,6 +119,14 @@ pub async fn start_audio_router(
                             crate::media::codec::annexb_parameter_sets(&pkt.payload)
                         {
                             output_buffer.set_video_parameter_sets(parameter_sets);
+                        }
+                    }
+                    // Propagate audio_tracks from input ring as soon as they are
+                    // available (late-arriving on live SRT/RTMP ingest).
+                    if output_buffer.audio_tracks().is_none() {
+                        if let Some(input_tracks) = reader.current_ring().audio_tracks() {
+                            let output_tracks = apply_audio_routing(&routing, &input_tracks);
+                            output_buffer.set_audio_tracks(output_tracks);
                         }
                     }
                     let out = match &routing {
@@ -608,6 +625,160 @@ mod tests {
         assert_eq!(out_pkts[0].media_type, MediaType::Video);
         assert_eq!(out_pkts[1].media_type, MediaType::Audio);
         assert_eq!(out_pkts[1].track_index, 0); // re-indexed to 0
+    }
+
+    #[tokio::test]
+    async fn audio_router_propagates_late_arriving_audio_tracks() {
+        // Simulates SRT multi-audio: source ring has no audio_tracks when the
+        // audio_router stage starts, then they arrive mid-stream.
+        use crate::domain::stage::{StageKey, StageKind};
+        use crate::media::engine::MediaEngine;
+
+        let source_ring = Arc::new(RingBuffer::new(16));
+        let out_ring = Arc::new(RingBuffer::new(16));
+        let engine = Arc::new(MediaEngine::new());
+        let cancel = CancellationToken::new();
+        let stage_key = StageKey::new(
+            "late-tracks",
+            StageKind::audio_route("atrack:0,1", StageKind::source()),
+        );
+
+        source_ring.set_codec_hint("h264");
+        // NOTE: no set_audio_tracks() yet — simulates live SRT before probe
+
+        let handle = tokio::spawn(start_audio_router(
+            "late-tracks".to_string(),
+            AudioRouting::SelectTracks { tracks: vec![0, 1] },
+            source_ring.clone(),
+            out_ring.clone(),
+            engine,
+            cancel.clone(),
+            stage_key,
+        ));
+
+        // Output ring has no audio_tracks yet (source not probed)
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        assert!(
+            out_ring.audio_tracks().is_none(),
+            "output ring should not have tracks before source has them"
+        );
+
+        // SRT ingest probe completes — audio_tracks become available
+        source_ring.set_audio_tracks(vec![
+            AudioMeta {
+                codec: "aac".to_string(),
+                sample_rate: 48000,
+                channels: 2,
+                channel_layout: Some("stereo".to_string()),
+                track_index: 0,
+                pid: Some(0x100),
+                language: Some("eng".to_string()),
+                title: None,
+                profile: None,
+            },
+            AudioMeta {
+                codec: "aac".to_string(),
+                sample_rate: 48000,
+                channels: 2,
+                channel_layout: Some("stereo".to_string()),
+                track_index: 1,
+                pid: Some(0x101),
+                language: Some("fra".to_string()),
+                title: None,
+                profile: None,
+            },
+        ]);
+
+        // Push an audio packet — router burst loop should propagate audio_tracks
+        source_ring.push(MediaPacket {
+            media_type: MediaType::Audio,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            is_keyframe: false,
+            payload: bytes::Bytes::from_static(&[0x01]),
+            format: crate::media::ring_buffer::PayloadFormat::Raw,
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let tracks = out_ring
+            .audio_tracks()
+            .expect("output ring should have audio_tracks after source ring received them");
+        assert_eq!(
+            tracks.len(),
+            2,
+            "SelectTracks [0,1] should propagate both tracks"
+        );
+        assert_eq!(tracks[0].track_index, 0);
+        assert_eq!(tracks[1].track_index, 1);
+
+        cancel.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn audio_tracks_ring_supports_reconnect_update() {
+        // Verifies that ArcSwapOption allows updating audio_tracks across
+        // publisher reconnects — a reconnected stream may have different tracks.
+        let ring = Arc::new(RingBuffer::new(8));
+
+        // First publisher: 2 audio tracks
+        ring.set_audio_tracks(vec![
+            AudioMeta {
+                codec: "aac".to_string(),
+                sample_rate: 48000,
+                channels: 2,
+                channel_layout: None,
+                track_index: 0,
+                pid: None,
+                language: None,
+                title: None,
+                profile: None,
+            },
+            AudioMeta {
+                codec: "aac".to_string(),
+                sample_rate: 48000,
+                channels: 2,
+                channel_layout: None,
+                track_index: 1,
+                pid: None,
+                language: None,
+                title: None,
+                profile: None,
+            },
+        ]);
+        assert_eq!(
+            ring.audio_tracks().unwrap().len(),
+            2,
+            "first publisher: 2 tracks"
+        );
+
+        // Publisher reconnects — RTMP clears with empty vec, then re-probes
+        ring.set_audio_tracks(Vec::new());
+        assert!(
+            ring.audio_tracks().is_none(),
+            "empty set_audio_tracks should clear metadata (not a no-op)"
+        );
+
+        // Re-probe with new single-track configuration
+        ring.set_audio_tracks(vec![AudioMeta {
+            codec: "aac".to_string(),
+            sample_rate: 44100,
+            channels: 1,
+            channel_layout: None,
+            track_index: 0,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+        }]);
+        let tracks = ring.audio_tracks().unwrap();
+        assert_eq!(tracks.len(), 1, "reconnected publisher: 1 track");
+        assert_eq!(
+            tracks[0].sample_rate, 44100,
+            "reconnected publisher track data"
+        );
     }
 
     #[tokio::test]

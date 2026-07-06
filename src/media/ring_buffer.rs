@@ -284,7 +284,9 @@ pub struct RingBuffer {
     /// stages can seed H.264/H.265 decoders before the next keyframe arrives.
     pub video_parameter_sets: std::sync::OnceLock<Vec<u8>>,
     /// Audio tracks metadata of packets in this ring.
-    pub audio_tracks: std::sync::OnceLock<Vec<crate::media::engine::AudioMeta>>,
+    /// Stored behind ArcSwapOption so it can be updated when a publisher reconnects
+    /// with a different track configuration (OnceLock would silently ignore updates).
+    pub audio_tracks: ArcSwapOption<Vec<crate::media::engine::AudioMeta>>,
     /// Estimated packet rate (pkt/s) set once after stream probe.
     /// Used by telemetry to compute buffer depth in seconds.
     pub estimated_pkt_rate: std::sync::atomic::AtomicU32,
@@ -325,7 +327,7 @@ impl RingBuffer {
             readers: std::sync::Mutex::new(Vec::new()),
             codec_hint: std::sync::OnceLock::new(),
             video_parameter_sets: std::sync::OnceLock::new(),
-            audio_tracks: std::sync::OnceLock::new(),
+            audio_tracks: ArcSwapOption::empty(),
             estimated_pkt_rate: std::sync::atomic::AtomicU32::new(0),
             next: ArcSwapOption::empty(),
         }
@@ -414,15 +416,25 @@ impl RingBuffer {
         self.video_parameter_sets.get().map(|v| v.as_slice())
     }
 
+    /// Set (or update) the audio track metadata for this ring.
+    /// An empty `tracks` vec clears the metadata, signalling "not yet known" to
+    /// downstream stages — this is used by RTMP ingest on publisher reconnect.
     pub fn set_audio_tracks(&self, tracks: Vec<crate::media::engine::AudioMeta>) {
         let count = tracks.len();
-        if self.audio_tracks.set(tracks).is_ok() {
+        if tracks.is_empty() {
+            self.audio_tracks.store(None);
+            debug!("ring audio tracks cleared");
+        } else {
+            self.audio_tracks.store(Some(std::sync::Arc::new(tracks)));
             debug!(count, "ring audio tracks set");
         }
     }
 
-    pub fn audio_tracks(&self) -> Option<&[crate::media::engine::AudioMeta]> {
-        self.audio_tracks.get().map(|v| v.as_slice())
+    /// Returns a snapshot clone of the audio track metadata, or `None` if not yet known.
+    /// Clones the inner Vec; `audio_tracks` is only read at stage startup, not on the
+    /// hot packet path, so this clone is acceptable.
+    pub fn audio_tracks(&self) -> Option<Vec<crate::media::engine::AudioMeta>> {
+        self.audio_tracks.load_full().map(|arc| (*arc).clone())
     }
 
     pub fn push(&self, packet: MediaPacket) {
