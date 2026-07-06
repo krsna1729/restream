@@ -484,6 +484,28 @@ The runner kills only processes it starts. Set `ALLOW_GLOBAL_PROCESS_CLEANUP=1`
 only when you explicitly want the legacy host-wide `restream`/`mediamtx`
 cleanup before a run.
 
+### Matrix quick reference
+
+The live protocol/input matrix has two primary entry points: `mixed.matrix`
+for the full correctness sweep and `mixed.fast-breadth` for a quick
+failure-shape sweep.
+
+| Goal | Command |
+|---|---|
+| Full matrix | `scripts/run-bench-harness.sh mixed.matrix` |
+| Single scenario | `scripts/run-bench-harness.sh mixed.live.srt.h264.a1.bf2` |
+| Fast breadth, parallel families | `scripts/run-mixed-fast-breadth-parallel.sh` |
+| Fast breadth, one family | `N_PER_GROUP=1 scripts/run-bench-harness.sh mixed.fast-breadth -- --no-netns` |
+
+Useful matrix knobs:
+
+- `MIXED_MATRIX_FAIL_FAST=1` — stop at the first failing scenario instead of
+  continuing and emitting an aggregate failure list.
+- `ONLY_CHECKS=stage-sharing` — run only the stage-sharing assertion.
+- `ONLY_CHECKS=hls` — run only the HLS preview/recording assertions.
+- `N_PER_GROUP=2` — validate that identical outputs share processing stages
+  (default for the full matrix).
+
 ### Artifact Disk Guards
 
 Live integration runs write logs, JSONL assertions, ffprobe stderr, SQLite
@@ -580,6 +602,20 @@ legacy all-bash ramp path while bisecting harness behavior, or set
 `RAMP_FAMILY_CONFIGS` to hand a subset back to bash for focused comparisons.
 
 ### `mixed.matrix` — Mixed input/output correctness
+
+Run the full matrix:
+
+```sh
+./scripts/run-bench-harness.sh mixed.matrix
+```
+
+Run one scenario for focused debugging:
+
+```sh
+./scripts/run-bench-harness.sh mixed.live.srt.h264.a1.bf2
+```
+
+Run only the HLS/recording slice:
 
 ```sh
 N_PER_GROUP=2 ONLY_CHECKS=hls ./scripts/run-bench-harness.sh mixed.matrix
