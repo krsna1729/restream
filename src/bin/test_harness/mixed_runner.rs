@@ -61,8 +61,8 @@ pub(super) use mixed_signal::{
     nearest_marker_offsets_ms, parse_blackdetect_intervals, parse_silencedetect_intervals,
 };
 pub(super) use mixed_signal::{
-    decode_pcm_quality, run_ffmpeg_filter_log, signal_report_json, validate_signal_quality,
-    verify_mixed_signal_quality,
+    SignalTolerances, decode_pcm_quality, run_ffmpeg_filter_log, signal_report_json,
+    validate_signal_quality, validate_signal_quality_with_tolerances, verify_mixed_signal_quality,
 };
 pub(super) use mixed_sinks::{
     add_mixed_multi_output_cases, add_mixed_output_cases, finish_ffmpeg_signal_sinks,

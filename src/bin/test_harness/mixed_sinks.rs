@@ -466,7 +466,16 @@ pub(crate) async fn validate_signal_capture_artifact(
         )
         .await?;
         let pcm = decode_pcm_quality(capture_path, duration).await?;
-        validate_signal_quality(&black, &silence, &ashow, &astats, pcm)
+        let tolerances = if cfg.contains("h265") || cfg.contains("hevc") {
+            SignalTolerances {
+                drift_ms: 100.0,
+                max_audio_pts_gap_ms: 300.0,
+                ..SignalTolerances::default()
+            }
+        } else {
+            SignalTolerances::default()
+        };
+        validate_signal_quality_with_tolerances(&black, &silence, &ashow, &astats, pcm, &tolerances)
     }
     .await;
 

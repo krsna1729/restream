@@ -2303,12 +2303,26 @@ impl MediaEngine {
 
     /// Update audio track metadata for an active ingest (multi-track support).
     pub async fn update_ingest_audio_tracks(&self, pipeline_id: &str, tracks: Vec<AudioMeta>) {
-        let ingests = self.ingests.active.read().await;
-        if let Some(ingest) = ingests.get(pipeline_id) {
-            *ingest
-                .audio_tracks
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = std::sync::Arc::new(tracks);
+        // Update the ingest metadata registry (used for API views and stage metadata lookups).
+        {
+            let ingests = self.ingests.active.read().await;
+            if let Some(ingest) = ingests.get(pipeline_id) {
+                *ingest
+                    .audio_tracks
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = std::sync::Arc::new(tracks.clone());
+            }
+        }
+        // Also propagate audio_tracks to the source ring so downstream stages
+        // (audio_router, RTMP/SRT egress) can read them directly from the ring
+        // without going through the ingest registry.  This makes the source ring
+        // authoritative for audio metadata, matching how codec_hint and
+        // video_parameter_sets are handled.
+        if !tracks.is_empty() {
+            let pipelines = self.ingests.pipelines.read().await;
+            if let Some(ring) = pipelines.get(pipeline_id) {
+                ring.set_audio_tracks(tracks);
+            }
         }
     }
 

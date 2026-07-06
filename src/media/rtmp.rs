@@ -1594,17 +1594,6 @@ pub async fn start_rtmp_egress(
                 .await;
         }};
     }
-    let output_audio_tracks =
-        resolved_output_audio_tracks(&engine, &pipeline_id, &ring_buffer).await;
-    if let Err(message) = validate_rtmp_output_audio_tracks(&output_audio_tracks) {
-        error!(
-            "[rtmp-egress] refusing to start output {} for pipeline {}: {}",
-            output_id, pipeline_id, message
-        );
-        egress_error!("prepare", message);
-        return;
-    }
-    let mut output_audio_track = output_audio_tracks.first().cloned();
     let mut reader = Reader::new_with_keyframe_preroll(
         format!("rtmp_egress:{}", output_id),
         ring_buffer.clone(),
@@ -1636,6 +1625,24 @@ pub async fn start_rtmp_egress(
             _ = warmup.wait_for_data() => {}
         }
     }
+
+    // Resolve audio tracks AFTER warmup so that audio-router stages (which
+    // run as separate tasks) have had a chance to process the first burst and
+    // set audio_tracks on the output ring.  Resolving before warmup races
+    // with the audio_router startup and falls back to the raw ingest tracks
+    // (all N tracks), causing validate_rtmp_output_audio_tracks to reject
+    // the routed single-track output as having "too many tracks".
+    let output_audio_tracks =
+        resolved_output_audio_tracks(&engine, &pipeline_id, &ring_buffer).await;
+    if let Err(message) = validate_rtmp_output_audio_tracks(&output_audio_tracks) {
+        error!(
+            "[rtmp-egress] refusing to start output {} for pipeline {}: {}",
+            output_id, pipeline_id, message
+        );
+        egress_error!("prepare", message);
+        return;
+    }
+    let mut output_audio_track = output_audio_tracks.first().cloned();
 
     egress_phase!("connecting");
     egress_target_addr!(format!("{}:{}", parts.host, parts.port));

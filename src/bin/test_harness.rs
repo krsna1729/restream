@@ -6467,17 +6467,9 @@ fn spawn_publisher_with_selection(
         .unwrap_or(2)
         .max(1);
     let mut cmd = command_with_optional_cgroup("ffmpeg", "publisher");
-    cmd.args([
-        "-nostdin",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-re",
-        "-stream_loop",
-        "-1",
-        "-i",
-    ]);
-    cmd.arg("-threads").arg(ffmpeg_threads.to_string());
+    cmd.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-threads"]);
+    cmd.arg(ffmpeg_threads.to_string());
+    cmd.args(["-re", "-stream_loop", "-1", "-i"]);
     cmd.arg(path);
     match selection {
         PublishTrackSelection::AllStreams => {
