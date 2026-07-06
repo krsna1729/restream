@@ -15,6 +15,7 @@ use rml_rtmp::sessions::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::ffi::OsStr;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::unix::io::AsRawFd;
@@ -414,6 +415,25 @@ fn ensure_measurement_profile(command: &str, raw: &[String]) -> Result<(), Strin
     ))
 }
 
+fn harness_runtime_worker_threads() -> usize {
+    let cpus = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    std::env::var("HARNESS_TOKIO_WORKER_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(cpus.clamp(2, 16))
+        .max(1)
+}
+
+fn harness_runtime_max_blocking_threads() -> usize {
+    std::env::var("HARNESS_TOKIO_MAX_BLOCKING_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(256)
+        .max(1)
+}
+
 fn default_restream_bin() -> PathBuf {
     if let Some(path) = std::env::var_os("RESTREAM_BIN").map(PathBuf::from) {
         return path;
@@ -429,18 +449,26 @@ fn default_restream_bin() -> PathBuf {
     PathBuf::from("target/release/restream")
 }
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() {
-    if let Err(error) = maybe_reexec_in_port_namespace() {
-        eprintln!("test harness failed: {error}");
-        unsafe { libc::_exit(1) };
-    }
-    if let Err(error) = run().await {
-        eprintln!("test harness failed: {error}");
-        // Native FFmpeg/libsrt worker threads can still be alive on a failed
-        // test. Avoid process-global C teardown while those threads exist.
-        unsafe { libc::_exit(1) };
-    }
+fn main() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(harness_runtime_worker_threads())
+        .max_blocking_threads(harness_runtime_max_blocking_threads())
+        .enable_all()
+        .build()
+        .expect("create test harness tokio runtime");
+
+    runtime.block_on(async {
+        if let Err(error) = maybe_reexec_in_port_namespace() {
+            eprintln!("test harness failed: {error}");
+            unsafe { libc::_exit(1) };
+        }
+        if let Err(error) = run().await {
+            eprintln!("test harness failed: {error}");
+            // Native FFmpeg/libsrt worker threads can still be alive on a failed
+            // test. Avoid process-global C teardown while those threads exist.
+            unsafe { libc::_exit(1) };
+        }
+    });
 }
 
 fn ensure_loopback() {
@@ -453,6 +481,8 @@ fn ensure_loopback() {
 
 async fn run() -> Result<(), String> {
     ensure_loopback();
+    maybe_prune_old_artifacts()?;
+    maybe_global_process_cleanup();
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let command = raw.first().cloned().unwrap_or_else(|| "suite".to_string());
     ensure_measurement_profile(&command, &raw[1..])?;
@@ -531,6 +561,81 @@ fn artifact_path(name: &str) -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("test/artifacts/latest"))
         .join(name)
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+fn maybe_global_process_cleanup() {
+    if !env_flag("ALLOW_GLOBAL_PROCESS_CLEANUP") {
+        return;
+    }
+    for program in ["restream", "mediamtx", "ffmpeg"] {
+        let _ = std::process::Command::new("pkill")
+            .args(["-x", program])
+            .status();
+    }
+}
+
+fn maybe_prune_old_artifacts() -> Result<(), String> {
+    if env_flag("KEEP_ARTIFACTS") {
+        return Ok(());
+    }
+    let artifact_root = PathBuf::from("test/artifacts");
+    let Ok(entries) = std::fs::read_dir(&artifact_root) else {
+        return Ok(());
+    };
+    let mut run_dirs: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(is_timestamp_run_dir)
+        })
+        .collect();
+    if run_dirs.len() <= 3 {
+        return Ok(());
+    }
+    run_dirs.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    });
+    let remove_count = run_dirs.len().saturating_sub(3);
+    for path in run_dirs.into_iter().take(remove_count) {
+        std::fs::remove_dir_all(&path).map_err(|error| {
+            format!(
+                "failed to prune old artifact directory {}: {error}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn command_with_optional_cgroup(program: impl AsRef<OsStr>, scope: &str) -> Command {
+    if !env_flag("HARNESS_USE_CGROUP_WRAPPER") {
+        return Command::new(program);
+    }
+    let mut command = Command::new("scripts/cgroup-wrap");
+    command.arg("--scope").arg(scope).arg("--").arg(program);
+    command
+}
+
+fn is_timestamp_run_dir(name: &str) -> bool {
+    if name.len() != 16 {
+        return false;
+    }
+    let bytes = name.as_bytes();
+    bytes[..8].iter().all(u8::is_ascii_digit)
+        && bytes[8] == b'T'
+        && bytes[9..15].iter().all(u8::is_ascii_digit)
+        && bytes[15] == b'Z'
 }
 
 fn absolute_path(path: &Path) -> Result<PathBuf, String> {
@@ -782,7 +887,7 @@ async fn start_restream_child_opts(
     std::fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
     let log = std::fs::File::create(log_path).map_err(|e| e.to_string())?;
     let stderr_log = log.try_clone().map_err(|e| e.to_string())?;
-    let mut command = Command::new(bin);
+    let mut command = command_with_optional_cgroup(bin, &format!("restream-{}", ports.http));
     command
         .env("RESTREAM_HTTP_PORT", ports.http.to_string())
         .env("RESTREAM_RTMP_PORT", ports.rtmp.to_string())
@@ -6356,7 +6461,12 @@ fn spawn_publisher_with_selection(
     selection: PublishTrackSelection,
     log_path: Option<&Path>,
 ) -> Result<Child, String> {
-    let mut cmd = Command::new("ffmpeg");
+    let ffmpeg_threads = std::env::var("HARNESS_FFMPEG_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(2)
+        .max(1);
+    let mut cmd = command_with_optional_cgroup("ffmpeg", "publisher");
     cmd.args([
         "-nostdin",
         "-hide_banner",
@@ -6367,6 +6477,7 @@ fn spawn_publisher_with_selection(
         "-1",
         "-i",
     ]);
+    cmd.arg("-threads").arg(ffmpeg_threads.to_string());
     cmd.arg(path);
     match selection {
         PublishTrackSelection::AllStreams => {

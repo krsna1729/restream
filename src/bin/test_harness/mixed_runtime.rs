@@ -29,7 +29,7 @@ pub(crate) async fn start_mixed_mediamtx(env: &MixedEnv) -> Result<Child, String
     .map_err(|e| e.to_string())?;
     let log = std::fs::File::create(&env.mediamtx_log).map_err(|e| e.to_string())?;
     let stderr_log = log.try_clone().map_err(|e| e.to_string())?;
-    let mut child = Command::new("mediamtx")
+    let mut child = command_with_optional_cgroup("mediamtx", &format!("mediamtx-{}", env.mtx_api))
         .arg(&env.mediamtx_config)
         .env_remove("MTX_RTMP")
         .env_remove("MTX_SRT")

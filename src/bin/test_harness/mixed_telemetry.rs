@@ -1,6 +1,7 @@
 //! Resource sampling and stage-sharing telemetry helpers for mixed scenarios.
 
 use super::*;
+use std::path::Path;
 
 pub(crate) struct MixedRssReport {
     pub(crate) delta_kb: u64,
@@ -27,6 +28,18 @@ pub(crate) async fn record_mixed_rss_delta(
             ffmpeg.count, ffmpeg.rss_kb
         ),
     )?;
+    if let Some(path) = std::env::var_os("SAVE_RSS_BASELINE") {
+        append_line(
+            Path::new(&path),
+            &format!(
+                "{cfg},per_output_kb={per_output_kb},ext_ffmpeg_n={},ext_ffmpeg_rss_kb={}\n",
+                ffmpeg.count, ffmpeg.rss_kb
+            ),
+        )?;
+    }
+    if let Some(path) = std::env::var_os("RSS_BASELINE") {
+        check_rss_baseline(Path::new(&path), cfg, per_output_kb)?;
+    }
     if !env.skip_load && env.check_selected("load") {
         let mut details = json!({
             "rss_delta_kb": delta_kb,
@@ -51,6 +64,52 @@ pub(crate) async fn record_mixed_rss_delta(
         per_output_kb,
         ffmpeg,
     })
+}
+
+fn parse_per_output_kb(line: &str) -> Option<(String, u64)> {
+    let mut parts = line.split(',');
+    let cfg = parts.next()?.trim();
+    if cfg.is_empty() {
+        return None;
+    }
+    for part in parts {
+        let part = part.trim();
+        if let Some(value) = part.strip_prefix("per_output_kb=")
+            && let Ok(parsed) = value.parse::<u64>()
+        {
+            return Some((cfg.to_string(), parsed));
+        }
+    }
+    None
+}
+
+fn check_rss_baseline(path: &Path, cfg: &str, current_per_output_kb: u64) -> Result<(), String> {
+    let baseline = std::fs::read_to_string(path)
+        .map_err(|error| format!("failed to read RSS_BASELINE {}: {error}", path.display()))?;
+    let baseline_per_output_kb = baseline
+        .lines()
+        .filter_map(parse_per_output_kb)
+        .find_map(|(baseline_cfg, value)| (baseline_cfg == cfg).then_some(value))
+        .ok_or_else(|| {
+            format!(
+                "RSS baseline {} does not contain a per_output_kb row for {}",
+                path.display(),
+                cfg
+            )
+        })?;
+    let threshold_pct = std::env::var("RSS_BASELINE_THRESHOLD_PCT")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(5.0)
+        .max(0.0);
+    let allowed = ((baseline_per_output_kb as f64) * (1.0 + threshold_pct / 100.0)).ceil() as u64;
+    if current_per_output_kb > allowed {
+        return Err(format!(
+            "RSS baseline regression for {cfg}: current per_output_kb={} exceeds allowed {} (baseline {} + {}%)",
+            current_per_output_kb, allowed, baseline_per_output_kb, threshold_pct
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) async fn snapshot_mixed(
