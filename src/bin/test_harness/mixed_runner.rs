@@ -40,10 +40,12 @@ pub(super) use mixed_outputs::{
     mixed_output_publish_url, mixed_output_read_url,
 };
 pub(super) use mixed_playback::{verify_mixed_recording, verify_optional_mixed_hls_preview};
+#[cfg(test)]
+pub(super) use mixed_probes::decode_scan_needs_video_dts_fallback;
 pub(super) use mixed_probes::{
-    MixedProbeSpec, decode_scan_needs_video_dts_fallback, ffprobe_compact_audio_track_count,
-    ffprobe_compact_validate_dts, ffprobe_compact_video_dimensions, verify_mixed_audio_route,
-    verify_mixed_decode_scan, verify_mixed_stream, warm_mixed_stream,
+    MixedProbeSpec, ffprobe_compact_audio_track_count, ffprobe_compact_validate_dts,
+    ffprobe_compact_video_dimensions, verify_mixed_audio_route, verify_mixed_decode_scan,
+    verify_mixed_stream, warm_mixed_stream,
 };
 pub(super) use mixed_reporting::{
     count_log_matches, emit_mixed_result, emit_mixed_timing, file_tail_lines, log_mixed_ok,
@@ -53,11 +55,14 @@ pub(super) use mixed_runtime::{
     spawn_mixed_live_publisher, spawn_mixed_srt_multi_publisher, start_mixed_mediamtx,
     start_mixed_restream,
 };
+#[cfg(test)]
 pub(super) use mixed_signal::{
-    PcmQualityReport, analyze_pcm_s16le, decode_pcm_quality, marker_gaps_from_intervals,
-    max_audio_pts_gap_ms, nearest_marker_offsets_ms, parse_blackdetect_intervals,
-    parse_silencedetect_intervals, run_ffmpeg_filter_log, signal_report_json,
-    validate_signal_quality, verify_mixed_signal_quality,
+    PcmQualityReport, analyze_pcm_s16le, marker_gaps_from_intervals, max_audio_pts_gap_ms,
+    nearest_marker_offsets_ms, parse_blackdetect_intervals, parse_silencedetect_intervals,
+};
+pub(super) use mixed_signal::{
+    decode_pcm_quality, run_ffmpeg_filter_log, signal_report_json, validate_signal_quality,
+    verify_mixed_signal_quality,
 };
 pub(super) use mixed_sinks::{
     add_mixed_multi_output_cases, add_mixed_output_cases, finish_ffmpeg_signal_sinks,
@@ -101,6 +106,7 @@ pub(super) struct MixedEnv {
     pub(super) ffmpeg_srt_sink_base: u16,
     pub(super) ffmpeg_srt_sink_seconds: u64,
     pub(super) ffmpeg_signal_sink_base: u16,
+    pub(super) sink_port_offset: usize,
     pub(super) av_signal_seconds: u64,
     pub(super) av_soak_seconds: u64,
     pub(super) n_per_group: usize,
@@ -178,6 +184,7 @@ impl MixedEnv {
             ffmpeg_srt_sink_base: ports.ffmpeg_srt_sink_base,
             ffmpeg_srt_sink_seconds: env_secs("FFMPEG_SRT_SINK_SECONDS", 8),
             ffmpeg_signal_sink_base: ports.ffmpeg_signal_sink_base,
+            sink_port_offset: 0,
             av_signal_seconds: env_secs("AV_SIGNAL_SECONDS", 20),
             av_soak_seconds: env_secs("AV_SOAK_SECONDS", 120),
             n_per_group: env_usize("N_PER_GROUP", 25),
@@ -222,27 +229,118 @@ pub(super) async fn mixed_input_case_correctness(case: MixedInputCase) -> Result
 }
 
 pub(super) async fn mixed_input_matrix_correctness() -> Result<Value, String> {
+    let force_serial = std::env::var("MIXED_MATRIX_SERIAL")
+        .ok()
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    if force_serial {
+        return mixed_input_matrix_correctness_serial().await;
+    }
+
+    mixed_input_matrix_correctness_shared().await
+}
+
+fn mixed_matrix_fail_fast() -> bool {
+    std::env::var("MIXED_MATRIX_FAIL_FAST")
+        .ok()
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+fn mixed_matrix_default_check_names() -> Vec<String> {
+    mixed_default_checks()
+        .iter()
+        .map(|check| check.as_str().to_string())
+        .collect()
+}
+
+fn apply_mixed_matrix_defaults(
+    env: &mut MixedEnv,
+    default_checks: Option<&[String]>,
+    default_assertion_log: Option<&Path>,
+    explicit_collect_failures: bool,
+) {
+    if let Some(default_checks) = default_checks {
+        env.only_checks = Some(default_checks.to_vec());
+    }
+    if !explicit_collect_failures {
+        // Full matrix should continue collecting evidence across scenarios.
+        env.collect_failures = true;
+    }
+    if let Some(assertion_log) = default_assertion_log {
+        env.assertion_log = Some(assertion_log.to_path_buf());
+    }
+}
+
+async fn mixed_input_matrix_correctness_serial() -> Result<Value, String> {
     let root = std::env::var_os("WORK_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(mixed_matrix_default_work_dir);
+    let explicit_only_checks = std::env::var_os("ONLY_CHECKS").is_some();
+    let explicit_collect_failures = std::env::var_os("COLLECT_FAILURES").is_some();
+    let explicit_assertion_log = std::env::var_os("ASSERTION_LOG").is_some();
+    let fail_fast = mixed_matrix_fail_fast();
+    let default_checks = (!explicit_only_checks).then(mixed_matrix_default_check_names);
+    let default_assertion_log = (!explicit_assertion_log).then(|| root.join("assertions.jsonl"));
     let mut results = Vec::new();
+    let mut failures = Vec::new();
+    let mut covered_output_cells = 0usize;
+    let total_output_cells: usize = mixed_input_cases()
+        .iter()
+        .map(|case| mixed_output_cases_for_input(*case).len())
+        .sum();
     for case in mixed_input_cases() {
         let mode = mixed_input_mode_name(*case);
-        let env =
+        let mut env =
             MixedEnv::from_env_with_default_work_dir(&mode, root.join(case.artifact_rel_dir()));
+        apply_mixed_matrix_defaults(
+            &mut env,
+            default_checks.as_deref(),
+            default_assertion_log.as_deref(),
+            explicit_collect_failures,
+        );
+        covered_output_cells += mixed_output_cases_for_input(*case).len();
         match run_mixed_input_case_with_env(*case, env).await {
             Ok(result) => results.push(result),
             Err(error) => {
-                return Err(format!(
-                    "mixed input case {} failed: {error}",
-                    case.scenario_id()
-                ));
+                let failure = format!("mixed input case {} failed: {error}", case.scenario_id());
+                if fail_fast {
+                    return Err(failure);
+                }
+                failures.push(failure);
             }
         }
     }
+
     Ok(json!({
-        "passed": true,
+        "passed": failures.is_empty(),
         "mode": MIXED_MATRIX_MODE,
+        "coverage": {
+            "selectedInputCases": mixed_input_cases().len(),
+            "totalInputCases": mixed_input_cases().len(),
+            "selectedOutputCells": covered_output_cells,
+            "totalOutputCells": total_output_cells,
+            "execution": "serial",
+            "defaultExecution": "shared-batch",
+            "forcedSerial": true,
+            "serialOptOutEnv": "MIXED_MATRIX_SERIAL",
+            "continueOnScenarioFailure": !fail_fast,
+            "failFastOptOutEnv": "MIXED_MATRIX_FAIL_FAST",
+            "defaultCollectFailures": !explicit_collect_failures,
+            "defaultAssertionLog": if explicit_assertion_log {
+                Value::Null
+            } else {
+                root.join("assertions.jsonl").to_string_lossy().into_owned().into()
+            },
+            "defaultChecks": if explicit_only_checks {
+                Value::Null
+            } else {
+                mixed_default_checks()
+                    .iter()
+                    .map(|check| check.as_str())
+                    .collect::<Vec<_>>()
+                    .into()
+            },
+            "sharedBatchGroups": ["live-rtmp", "live-srt", "file-ingest"],
+        },
         "inputCases": mixed_input_cases().iter().map(|case| {
             json!({
                 "id": case.scenario_id(),
@@ -254,6 +352,278 @@ pub(super) async fn mixed_input_matrix_correctness() -> Result<Value, String> {
                 "sourceHasBframes": case.source_has_b_frames(),
             })
         }).collect::<Vec<_>>(),
+        "failures": failures,
+        "results": results,
+    }))
+}
+
+async fn mixed_input_matrix_correctness_shared() -> Result<Value, String> {
+    let root = std::env::var_os("WORK_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(mixed_matrix_default_work_dir);
+    let explicit_only_checks = std::env::var_os("ONLY_CHECKS").is_some();
+    let explicit_collect_failures = std::env::var_os("COLLECT_FAILURES").is_some();
+    let explicit_assertion_log = std::env::var_os("ASSERTION_LOG").is_some();
+    let fail_fast = mixed_matrix_fail_fast();
+    let default_checks = (!explicit_only_checks).then(mixed_matrix_default_check_names);
+    let default_assertion_log = (!explicit_assertion_log).then(|| root.join("assertions.jsonl"));
+    let mut results = Vec::new();
+    let mut failures = Vec::new();
+    let mut covered_output_cells = 0usize;
+    let total_output_cells: usize = mixed_input_cases()
+        .iter()
+        .map(|case| mixed_output_cases_for_input(*case).len())
+        .sum();
+    let batch_groups = [
+        MixedSharedBatchGroup::LiveRtmp,
+        MixedSharedBatchGroup::LiveSrt,
+        MixedSharedBatchGroup::FileIngest,
+    ];
+
+    for group in batch_groups {
+        let failures_before_group = failures.len();
+        let cases: Vec<_> = mixed_input_cases()
+            .iter()
+            .copied()
+            .filter(|case| case.shared_batch_group() == group)
+            .collect();
+        if cases.is_empty() {
+            continue;
+        }
+
+        let stack_mode = format!("{MIXED_MATRIX_MODE}.{}", group.as_str());
+        let mut stack_env = MixedEnv::from_env_with_default_work_dir(
+            &stack_mode,
+            root.join("_shared").join(group.as_str()),
+        );
+        apply_mixed_matrix_defaults(
+            &mut stack_env,
+            default_checks.as_deref(),
+            default_assertion_log.as_deref(),
+            explicit_collect_failures,
+        );
+        let mut stack = start_mixed_harness_stack(stack_env).await?;
+        let mut stack_stopped = false;
+        let wave_started = Instant::now();
+
+        let mut cases_queue: VecDeque<MixedInputCase> = cases.iter().copied().collect();
+        let mut wave_index = 0usize;
+        while let Some(case_a) = cases_queue.pop_front() {
+            wave_index += 1;
+            let case_b = cases_queue.pop_front();
+
+            let mut env_a = MixedEnv::from_env_with_default_work_dir(
+                case_a.scenario_id(),
+                root.join(case_a.artifact_rel_dir()),
+            );
+            bind_mixed_env_to_shared_stack(&mut env_a, &stack.env);
+            env_a.sink_port_offset = 0;
+            apply_mixed_matrix_defaults(
+                &mut env_a,
+                default_checks.as_deref(),
+                default_assertion_log.as_deref(),
+                explicit_collect_failures,
+            );
+            covered_output_cells += mixed_output_cases_for_input(case_a).len();
+            let mut wave_failed = false;
+
+            if let Some(case_b) = case_b {
+                let mut env_b = MixedEnv::from_env_with_default_work_dir(
+                    case_b.scenario_id(),
+                    root.join(case_b.artifact_rel_dir()),
+                );
+                bind_mixed_env_to_shared_stack(&mut env_b, &stack.env);
+                env_b.sink_port_offset = 1;
+                env_b.ffmpeg_signal_sink_base = stack
+                    .env
+                    .ffmpeg_signal_sink_base
+                    .checked_add(128)
+                    .ok_or("mixed ffmpeg signal sink base overflowed")?;
+                env_b.ffmpeg_srt_sink_base = stack
+                    .env
+                    .ffmpeg_srt_sink_base
+                    .checked_add(128)
+                    .ok_or("mixed ffmpeg srt sink base overflowed")?;
+                apply_mixed_matrix_defaults(
+                    &mut env_b,
+                    default_checks.as_deref(),
+                    default_assertion_log.as_deref(),
+                    explicit_collect_failures,
+                );
+                covered_output_cells += mixed_output_cases_for_input(case_b).len();
+
+                let (result_a, result_b) = tokio::join!(
+                    run_mixed_input_case_on_active_stack(
+                        case_a,
+                        env_a,
+                        &stack.api,
+                        stack.restream_pid,
+                    ),
+                    run_mixed_input_case_on_active_stack(
+                        case_b,
+                        env_b,
+                        &stack.api,
+                        stack.restream_pid,
+                    ),
+                );
+                for (case, result) in [(case_a, result_a), (case_b, result_b)] {
+                    match result {
+                        Ok(mut value) => {
+                            value["batchGroup"] = json!(group.as_str());
+                            value["wave"] = json!(wave_index);
+                            results.push(value);
+                        }
+                        Err(error) => {
+                            let failure =
+                                format!("mixed input case {} failed: {error}", case.scenario_id());
+                            if fail_fast {
+                                stop_mixed_harness_stack(&mut stack).await;
+                                return Err(failure);
+                            }
+                            wave_failed = true;
+                            failures.push(failure);
+                        }
+                    }
+                }
+            } else {
+                match run_mixed_input_case_on_active_stack(
+                    case_a,
+                    env_a,
+                    &stack.api,
+                    stack.restream_pid,
+                )
+                .await
+                {
+                    Ok(mut value) => {
+                        value["batchGroup"] = json!(group.as_str());
+                        value["wave"] = json!(wave_index);
+                        results.push(value);
+                    }
+                    Err(error) => {
+                        let failure =
+                            format!("mixed input case {} failed: {error}", case_a.scenario_id());
+                        if fail_fast {
+                            stop_mixed_harness_stack(&mut stack).await;
+                            return Err(failure);
+                        }
+                        wave_failed = true;
+                        failures.push(failure);
+                    }
+                }
+            }
+
+            if wave_failed {
+                stop_mixed_harness_stack(&mut stack).await;
+                stack_stopped = true;
+                if !cases_queue.is_empty() {
+                    let mut restarted_stack_env = MixedEnv::from_env_with_default_work_dir(
+                        &stack_mode,
+                        root.join("_shared").join(group.as_str()),
+                    );
+                    apply_mixed_matrix_defaults(
+                        &mut restarted_stack_env,
+                        default_checks.as_deref(),
+                        default_assertion_log.as_deref(),
+                        explicit_collect_failures,
+                    );
+                    stack = start_mixed_harness_stack(restarted_stack_env).await?;
+                    stack_stopped = false;
+                }
+            }
+        }
+
+        emit_mixed_timing(
+            &stack.env,
+            MIXED_MATRIX_MODE,
+            &format!("batch.{}", group.as_str()),
+            if failures.len() == failures_before_group {
+                "pass"
+            } else {
+                "fail"
+            },
+            wave_started.elapsed(),
+            Some(json!({
+                "group": group.as_str(),
+                "cases": cases.iter().map(|case| case.scenario_id()).collect::<Vec<_>>(),
+            })),
+        )?;
+        if !stack_stopped {
+            stop_mixed_harness_stack(&mut stack).await;
+        }
+    }
+
+    Ok(json!({
+        "passed": failures.is_empty(),
+        "mode": MIXED_MATRIX_MODE,
+        "coverage": {
+            "selectedInputCases": mixed_input_cases().len(),
+            "totalInputCases": mixed_input_cases().len(),
+            "selectedOutputCells": covered_output_cells,
+            "totalOutputCells": total_output_cells,
+            "execution": "shared-batch",
+            "defaultExecution": "shared-batch",
+            "forcedSerial": false,
+            "serialOptOutEnv": "MIXED_MATRIX_SERIAL",
+            "continueOnScenarioFailure": !fail_fast,
+            "failFastOptOutEnv": "MIXED_MATRIX_FAIL_FAST",
+            "defaultCollectFailures": !explicit_collect_failures,
+            "defaultAssertionLog": if explicit_assertion_log {
+                Value::Null
+            } else {
+                root.join("assertions.jsonl").to_string_lossy().into_owned().into()
+            },
+            "defaultChecks": if explicit_only_checks {
+                Value::Null
+            } else {
+                mixed_default_checks()
+                    .iter()
+                    .map(|check| check.as_str())
+                    .collect::<Vec<_>>()
+                    .into()
+            },
+            "sharedBatchGroups": ["live-rtmp", "live-srt", "file-ingest"],
+            "sharedBatches": [
+                {
+                    "group": "live-rtmp",
+                    "maxConcurrentPipelines": 2,
+                    "cases": mixed_input_cases()
+                        .iter()
+                        .filter(|case| case.shared_batch_group() == MixedSharedBatchGroup::LiveRtmp)
+                        .map(|case| case.scenario_id())
+                        .collect::<Vec<_>>(),
+                },
+                {
+                    "group": "live-srt",
+                    "maxConcurrentPipelines": 2,
+                    "cases": mixed_input_cases()
+                        .iter()
+                        .filter(|case| case.shared_batch_group() == MixedSharedBatchGroup::LiveSrt)
+                        .map(|case| case.scenario_id())
+                        .collect::<Vec<_>>(),
+                },
+                {
+                    "group": "file-ingest",
+                    "maxConcurrentPipelines": 2,
+                    "cases": mixed_input_cases()
+                        .iter()
+                        .filter(|case| case.shared_batch_group() == MixedSharedBatchGroup::FileIngest)
+                        .map(|case| case.scenario_id())
+                        .collect::<Vec<_>>(),
+                }
+            ],
+        },
+        "inputCases": mixed_input_cases().iter().map(|case| {
+            json!({
+                "id": case.scenario_id(),
+                "source": case.source_name(),
+                "ingest": case.ingest_name(),
+                "video": case.codec_name(),
+                "audio": case.audio_layout_name(),
+                "reorder": case.reorder_name(),
+                "sourceHasBframes": case.source_has_b_frames(),
+            })
+        }).collect::<Vec<_>>(),
+        "failures": failures,
         "results": results,
     }))
 }
@@ -303,6 +673,7 @@ pub(super) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
                 root.join(case_a.artifact_rel_dir()),
             );
             bind_mixed_env_to_shared_stack(&mut env_a, &stack.env);
+            env_a.sink_port_offset = 0;
             if !explicit_n_per_group {
                 env_a.n_per_group = 1;
             }
@@ -333,6 +704,17 @@ pub(super) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
                     root.join(case_b.artifact_rel_dir()),
                 );
                 bind_mixed_env_to_shared_stack(&mut env_b, &stack.env);
+                env_b.sink_port_offset = 1;
+                env_b.ffmpeg_signal_sink_base = stack
+                    .env
+                    .ffmpeg_signal_sink_base
+                    .checked_add(128)
+                    .ok_or("mixed ffmpeg signal sink base overflowed")?;
+                env_b.ffmpeg_srt_sink_base = stack
+                    .env
+                    .ffmpeg_srt_sink_base
+                    .checked_add(128)
+                    .ok_or("mixed ffmpeg srt sink base overflowed")?;
                 if !explicit_n_per_group {
                     env_b.n_per_group = 1;
                 }
@@ -591,6 +973,7 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
                 "sourceHasBframes": case.source_has_b_frames(),
             },
             "sharedStackGroup": case.shared_batch_group().as_str(),
+            "sinkPortOffset": env.sink_port_offset,
             "plan": {
                 "sourceAdapter": plan.source.adapter.as_str(),
                 "outputCells": plan.output_cells(),
@@ -829,15 +1212,30 @@ pub(super) async fn run_mixed_anchor_config(
 
     // Phase 4: harness sink probe — assert DTS monotonicity, video+audio
     // presence, and keyframe cadence on the live egress.
-    let (sink_probe_result, sink_probe_failure) =
-        run_optional_mixed_sink_probe(env, api, &pipeline_id, cfg, &mut output_ids, resume).await?;
+    let sink_port = harness_port_defaults()
+        .sink
+        .checked_add(env.sink_port_offset as u16)
+        .ok_or("mixed sink probe port overflowed")?;
+    let (sink_probe_result, sink_probe_failure) = run_optional_mixed_sink_probe(
+        env,
+        api,
+        &pipeline_id,
+        cfg,
+        sink_port,
+        &mut output_ids,
+        resume,
+    )
+    .await?;
 
     let mut hls_put_probe_result = None;
     if env.check_selected("hls-put-probe")
         && resume.allows(&mixed_scenario_check_id(cfg, "hls_put"))
     {
         let started = Instant::now();
-        let put_port = harness_port_defaults().hls_put;
+        let put_port = harness_port_defaults()
+            .hls_put
+            .checked_add(env.sink_port_offset as u16)
+            .ok_or("mixed hls-put probe port overflowed")?;
         match run_hls_put_probe(api, &pipeline_id, cfg, put_port).await {
             Ok(probe) => {
                 let status = if probe.passed { "pass" } else { "fail" };
@@ -1064,8 +1462,20 @@ pub(super) async fn run_mixed_live_config(
     )
     .await?;
 
-    let (sink_probe_result, sink_probe_failure) =
-        run_optional_mixed_sink_probe(env, api, &pipeline_id, cfg, &mut output_ids, resume).await?;
+    let sink_port = harness_port_defaults()
+        .sink
+        .checked_add(env.sink_port_offset as u16)
+        .ok_or("mixed sink probe port overflowed")?;
+    let (sink_probe_result, sink_probe_failure) = run_optional_mixed_sink_probe(
+        env,
+        api,
+        &pipeline_id,
+        cfg,
+        sink_port,
+        &mut output_ids,
+        resume,
+    )
+    .await?;
 
     stop_child(&mut publisher).await;
     stop_mixed_outputs(api, &pipeline_id, &output_ids).await;

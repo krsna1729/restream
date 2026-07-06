@@ -28,6 +28,7 @@ pub(crate) async fn run_optional_mixed_sink_probe(
     api: &RampApi,
     pipeline_id: &str,
     cfg: &str,
+    sink_port: u16,
     output_ids: &mut Vec<String>,
     resume: &mut MixedResume,
 ) -> Result<(Option<SinkProbeResult>, Option<String>), String> {
@@ -37,7 +38,6 @@ pub(crate) async fn run_optional_mixed_sink_probe(
     }
 
     let started = Instant::now();
-    let sink_port = harness_port_defaults().sink;
     match run_sink_probe(api, pipeline_id, cfg, "source", sink_port, 30).await {
         Ok(probe) => {
             let status = if probe.passed { "pass" } else { "fail" };

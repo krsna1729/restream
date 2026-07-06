@@ -9231,12 +9231,26 @@ stream|index=1|codec_type=audio\n";
         for selected in mixed_fast_breadth_cases() {
             assert!(
                 !selected.checks.contains(&MixedCheck::Recording)
-                    && !selected.checks.contains(&MixedCheck::Signal)
                     && !selected.checks.contains(&MixedCheck::Load),
                 "{} should keep fast-breadth checks short; use env overrides for depth",
                 selected.case.scenario_id()
             );
         }
+        assert_eq!(
+            mixed_fast_breadth_cases()
+                .iter()
+                .filter(|selected| selected.checks.contains(&MixedCheck::Signal))
+                .count(),
+            1,
+            "signal quality should be sampled on exactly one sentinel fast-breadth row"
+        );
+        assert!(
+            mixed_fast_breadth_cases().iter().any(|selected| {
+                selected.case.scenario_id() == "mixed.live.rtmp.h264.a1.bf0"
+                    && selected.checks.contains(&MixedCheck::Signal)
+            }),
+            "RTMP H.264 BF0 should stay the signal-quality sentinel row"
+        );
         assert_eq!(
             mixed_fast_breadth_cases()
                 .iter()
@@ -9330,6 +9344,77 @@ stream|index=1|codec_type=audio\n";
         assert!(
             source.contains("root.join(\"assertions.jsonl\")"),
             "mixed.fast-breadth should emit machine-readable assertion rows by default"
+        );
+    }
+
+    #[test]
+    fn mixed_matrix_defaults_to_shared_batch_execution() {
+        let mixed_source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bin/test_harness/mixed_runner.rs"
+        ));
+
+        assert!(
+            mixed_source.contains("mixed_input_matrix_correctness_shared().await"),
+            "mixed.matrix should default to the shared-batch matrix path"
+        );
+        assert!(
+            mixed_source.contains("\"execution\": \"shared-batch\""),
+            "mixed.matrix result metadata should report shared-batch execution"
+        );
+        assert!(
+            mixed_source.contains("\"sharedBatches\""),
+            "mixed.matrix metadata should report shared batch group coverage"
+        );
+    }
+
+    #[test]
+    fn mixed_matrix_serial_opt_out_stays_explicit() {
+        let mixed_source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bin/test_harness/mixed_runner.rs"
+        ));
+
+        assert!(
+            mixed_source.contains("MIXED_MATRIX_SERIAL"),
+            "mixed.matrix should expose explicit serial opt-out env"
+        );
+        assert!(
+            mixed_source.contains("mixed_input_matrix_correctness_serial().await"),
+            "mixed.matrix should keep the serial fallback path for bisecting"
+        );
+        assert!(
+            mixed_source.contains("\"execution\": \"serial\""),
+            "mixed.matrix serial fallback should report serial execution metadata"
+        );
+    }
+
+    #[test]
+    fn mixed_matrix_defaults_include_signal_and_continue_on_failure() {
+        let mixed_source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bin/test_harness/mixed_runner.rs"
+        ));
+
+        assert!(
+            mixed_source.contains("mixed_matrix_default_check_names"),
+            "mixed.matrix should derive default checks from manifest"
+        );
+        assert!(
+            mixed_source.contains("continueOnScenarioFailure"),
+            "mixed.matrix metadata should disclose continue-on-failure behavior"
+        );
+        assert!(
+            mixed_source.contains("MIXED_MATRIX_FAIL_FAST"),
+            "mixed.matrix should expose fail-fast env opt-out"
+        );
+        assert!(
+            mixed_source.contains("\"failures\": failures"),
+            "mixed.matrix should aggregate per-scenario failures in final report"
+        );
+        assert!(
+            mixed_default_checks().contains(&MixedCheck::Signal),
+            "mixed.matrix default checks must include signal validation"
         );
     }
 
