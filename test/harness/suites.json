@@ -1,0 +1,158 @@
+{
+  "version": 1,
+  "suites": {
+    "bitrate-sweep": {
+      "version": 1,
+      "id": "bitrate-sweep",
+      "runtimeProfile": "bitrateSweep",
+      "coverage": "scenarios/mixed.json#coverageSlices.bitrateSweep",
+      "workflow": "workflows/mixed-slice.json",
+      "execution": {
+        "stackPolicy": "perSlicePerBitrate",
+        "continueOnFail": true
+      },
+      "artifact": {
+        "path": "${runtime.summaryJson}"
+      },
+      "selector": "scenarios/mixed.json#selectors.bitrate-sweep",
+      "coverageFromSelector": true
+    },
+    "branch-matrix": {
+      "version": 1,
+      "id": "branch-matrix",
+      "runtimeProfile": "branchMatrix",
+      "coverage": "scenarios/mixed.json#coverageSlices.branchMatrix",
+      "workflow": "workflows/mixed-slice.json",
+      "execution": {
+        "stackPolicy": "perSlice",
+        "continueOnFail": true
+      },
+      "artifact": {
+        "path": "${runtime.summaryJson}"
+      },
+      "selector": "scenarios/mixed.json#selectors.branch-matrix",
+      "coverageFromSelector": true
+    },
+    "default": {
+      "version": 1,
+      "id": "default",
+      "mode": "suite",
+      "selection": {
+        "fromModes": "modes.json",
+        "where": {
+          "suiteDefault": true
+        },
+        "surface": "agent-canonical"
+      },
+      "options": {
+        "continueOnFailEnv": "CONTINUE_ON_FAIL",
+        "onlyModesArg": "--only-modes",
+        "preflightOnlyArg": "--preflight-only"
+      }
+    },
+    "generic-sweeps": {
+      "version": 1,
+      "id": "generic-sweeps",
+      "runtimeProfile": "mixed",
+      "coverage": "scenarios/mixed.json#coverageSlices.genericSweeps",
+      "workflow": "workflows/mixed-slice.json",
+      "execution": {
+        "stackPolicy": "perSlice",
+        "continueOnFail": false
+      },
+      "artifact": {
+        "path": "${runtime.artifactRoot}/generic-sweeps/scenario.json"
+      },
+      "selector": "scenarios/mixed.json#selectors.generic-sweeps",
+      "coverageFromSelector": true
+    },
+    "mixed.fast-breadth": {
+      "version": 1,
+      "id": "mixed.fast-breadth",
+      "runtimeProfile": "mixedFastBreadth",
+      "batches": "scenarios/mixed.json#fastBreadthBatches",
+      "selection": {
+        "env": "MIXED_FAST_BREADTH_GROUPS",
+        "default": "all"
+      },
+      "execution": {
+        "stackPolicy": "perBatch",
+        "maxConcurrentPipelinesPerBatch": 2,
+        "continueOnFail": true
+      },
+      "defaultsUnlessOverridden": {
+        "nPerGroup": 1,
+        "skipLoad": true,
+        "collectFailures": true,
+        "assertionLog": "${runtime.artifactRoot}/assertions.jsonl"
+      },
+      "artifact": {
+        "path": "${runtime.artifactRoot}/scenario.json"
+      }
+    },
+    "mixed.matrix": {
+      "version": 1,
+      "id": "mixed.matrix",
+      "runtimeProfile": "mixed",
+      "scenarios": {
+        "from": "scenarios/mixed.json#inputs",
+        "order": "manifest"
+      },
+      "execution": {
+        "stackPolicy": "perScenario",
+        "continueOnFail": false
+      },
+      "artifact": {
+        "path": "${runtime.artifactRoot}/matrix/scenario.json"
+      }
+    },
+    "ramp-family": {
+      "version": 1,
+      "id": "ramp-family",
+      "runtimeProfile": "mixed",
+      "coverage": "scenarios/mixed.json#coverageSlices.rampFamily",
+      "workflow": "workflows/mixed-slice.json",
+      "execution": {
+        "stackPolicy": "perSlice",
+        "continueOnFail": false
+      },
+      "artifact": {
+        "path": "${runtime.artifactRoot}/ramp-family/scenario.json"
+      },
+      "selector": "scenarios/mixed.json#selectors.ramp-family",
+      "coverageFromSelector": true
+    },
+    "resource-sweep": {
+      "version": 1,
+      "id": "resource-sweep",
+      "runtimeProfile": "mixed",
+      "coverage": "scenarios/mixed.json#coverageSlices.resourceEgress",
+      "workflow": "workflows/mixed-slice.json",
+      "execution": {
+        "stackPolicy": "perSlice",
+        "continueOnFail": false
+      },
+      "artifact": {
+        "path": "${runtime.artifactRoot}/resource-sweep/scenario.json"
+      },
+      "selector": "scenarios/mixed.json#selectors.resource-sweep",
+      "coverageFromSelector": true
+    },
+    "srt-crypto-matrix": {
+      "version": 1,
+      "id": "srt-crypto-matrix",
+      "runtimeProfile": "srtCryptoMatrix",
+      "coverage": "scenarios/mixed.json#coverageSlices.srtCryptoMatrix",
+      "workflow": "workflows/mixed-slice.json",
+      "execution": {
+        "stackPolicy": "perSlicePerVariant",
+        "continueOnFail": true
+      },
+      "artifact": {
+        "path": "${runtime.summaryJson}"
+      },
+      "selector": "scenarios/mixed.json#selectors.srt-crypto-matrix",
+      "coverageFromSelector": true
+    }
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "profiles": {
+    "default": {
+      "artifactRoot": "test/artifacts/latest",
+      "workDir": "${artifactRoot}/${mode}",
+      "mediaDir": "${workDir}/media",
+      "logDir": "${workDir}/logs",
+      "dbPath": "${workDir}/${mode}.db",
+      "nPerGroup": 1,
+      "snapshotSleepSecs": 0,
+      "skipLoad": false,
+      "collectFailures": false
+    },
+    "mixed": {
+      "artifactRoot": "test/artifacts/mixed",
+      "workDir": "${artifactRoot}/${scenario.artifact.relDir}",
+      "mediaDir": "${workDir}/media",
+      "logDir": "${workDir}/logs",
+      "dbPath": "${workDir}/${scenario.id}.db",
+      "scaleLog": "${workDir}/scale.csv",
+      "timingLog": "${workDir}/timing.jsonl",
+      "rssSummary": "${workDir}/rss-summary.csv",
+      "summaryLog": "${workDir}/summary.txt",
+      "restreamLog": "${workDir}/${scenario.id}-restream.log",
+      "mediamtxLog": "${workDir}/${scenario.id}-mediamtx.log",
+      "mediamtxConfig": "${workDir}/${scenario.id}-mediamtx.yml",
+      "nPerGroup": 25,
+      "snapshotSleepSecs": 3,
+      "skipLoad": false,
+      "collectFailures": false
+    },
+    "mixedFastBreadth": {
+      "extends": "mixed",
+      "artifactRoot": "test/artifacts/mixed/fast-breadth",
+      "nPerGroup": 1,
+      "skipLoad": true,
+      "collectFailures": true,
+      "assertionLog": "${artifactRoot}/assertions.jsonl"
+    },
+    "bitrateSweep": {
+      "extends": "mixed",
+      "artifactRoot": "test/artifacts/bitrate-sweep",
+      "workDir": "${artifactRoot}",
+      "summaryJson": "${workDir}/bitrate-sweep-results.json",
+      "summaryCsv": "${workDir}/bitrate-sweep-results.csv",
+      "samplesJsonl": "${workDir}/bitrate-sweep-samples.jsonl",
+      "stabilizeSecs": 30,
+      "sampleIntervalSecs": 5,
+      "outputGroups": 1,
+      "noCleanup": false
+    },
+    "branchMatrix": {
+      "extends": "mixed",
+      "artifactRoot": "test/artifacts/branch-matrix",
+      "workDir": "${artifactRoot}",
+      "summaryJson": "${workDir}/branch-matrix-results.json",
+      "summaryCsv": "${workDir}/branch-matrix-results.csv",
+      "summaryMd": "${workDir}/branch-matrix-summary.md",
+      "samplesJsonl": "${workDir}/branch-matrix-samples.jsonl",
+      "egressCount": 10,
+      "ingestCount": 1
+    },
+    "srtCryptoMatrix": {
+      "extends": "mixed",
+      "artifactRoot": "test/artifacts/srt-crypto-matrix",
+      "workDir": "${artifactRoot}",
+      "summaryJson": "${workDir}/srt-crypto-matrix-results.json",
+      "samplesJsonl": "${workDir}/srt-crypto-matrix-samples.jsonl"
+    }
+  },
+  "envCompatibility": {
+    "WORK_DIR": "workDir",
+    "RESTREAM_MEDIA_DIR": "mediaDir",
+    "SCALE_LOG": "scaleLog",
+    "TIMING_LOG": "timingLog",
+    "RSS_SUMMARY": "rssSummary",
+    "SUMMARY_LOG": "summaryLog",
+    "MIXED_RESTREAM_LOG": "restreamLog",
+    "MIXED_MEDIAMTX_LOG": "mediamtxLog",
+    "MIXED_MEDIAMTX_CONFIG": "mediamtxConfig",
+    "RESTREAM_DB_PATH": "dbPath",
+    "ASSERTION_LOG": "assertionLog",
+    "N_PER_GROUP": "nPerGroup",
+    "SNAPSHOT_SLEEP_SECS": "snapshotSleepSecs",
+    "SKIP_LOAD": "skipLoad",
+    "COLLECT_FAILURES": "collectFailures",
+    "ONLY_CHECKS": "onlyChecks",
+    "RESUME_FROM": "resumeFrom",
+    "BITRATE_SWEEP_STABILIZE_SECS": "stabilizeSecs",
+    "BITRATE_SWEEP_SAMPLE_INTERVAL_SECS": "sampleIntervalSecs",
+    "BITRATE_SWEEP_OUTPUT_GROUPS": "outputGroups",
+    "BITRATE_SWEEP_NO_CLEANUP": "noCleanup",
+    "BRANCH_MATRIX_EGRESS_COUNT": "egressCount",
+    "BRANCH_MATRIX_SCENARIOS": "scenarioFilter",
+    "RESTREAM_USE_INTERNAL_TRANSCODER": "backendInternal",
+    "SRT_CRYPTO_VARIANTS": "srtCryptoVariants",
+    "HARNESS_SRT_CRYPTO_VARIANTS": "srtCryptoVariants"
+  }
+}

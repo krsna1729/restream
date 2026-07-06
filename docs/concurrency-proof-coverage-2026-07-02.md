@@ -17,7 +17,7 @@ This report summarizes the model, property, unit, and live-harness proof surface
 | Recording TS -> MP4 -> TS remux timestamp continuity | Deterministic round-trip unit tests | `remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_disabled`, `remux_recording_to_mp4_preserves_timestamp_continuity_when_retention_enabled` |
 | SRT protocol boundaries | Unit/stress tests | stream-id normalization tests, sender semaphore tests, `epoll_waiter_coordination` |
 | Child process lifecycle and cleanup | Static script guard + unit test + live contract cleanup checks | `kill_and_wait_child_terminates_spawned_process`, process lifecycle guard, post-harness orphan checks |
-| Runtime status after cleanup/recovery | API/status tests + live harness | API lifecycle tests, `fault-resilience`, `fault-egress-retry`, `fault-output-stall`, `recovery` |
+| Runtime status after cleanup/recovery | API/status tests + live harness | API lifecycle tests, `fault.resilience`, `fault.egress-retry`, `fault.output-stall`, `recovery` |
 
 ## New Proof Coverage Added In This Sweep
 
@@ -86,7 +86,7 @@ This report summarizes the model, property, unit, and live-harness proof surface
 
 - `src/bin/test_harness.rs`
   - Added `kill_and_wait_child` coverage through `tests::kill_and_wait_child_terminates_spawned_process`.
-  - Extended `fault-output-stall` with a sibling-isolation subtest (`rtmp-stalled-sink-isolation-under-many-outputs`) that keeps one RTMP sink intentionally non-draining while sibling RTMP outputs drain through generalized sink servers.
+  - Extended `fault.output-stall` with a sibling-isolation subtest (`rtmp-stalled-sink-isolation-under-many-outputs`) that keeps one RTMP sink intentionally non-draining while sibling RTMP outputs drain through generalized sink servers.
   - The subtest now proves isolation: the stalled output surfaces `status=stalled` while sibling outputs remain `running`/progressing with positive bytes and fresh progress timestamps.
   - `FAULT_OUTPUT_STALL_SIBLINGS` controls sibling fanout (default `12`), capped by `N_PER_GROUP` so `N_PER_GROUP=1` keeps the mode cheap for fast loops.
 - `scripts/resource-limit`
@@ -129,9 +129,9 @@ This report summarizes the model, property, unit, and live-harness proof surface
 - static process lifecycle guards
 - debug binary build for `restream` and `test_harness`
 - live harness modes:
-  - `fault-resilience`
-  - `fault-egress-retry`
-  - `fault-output-stall`
+  - `fault.resilience`
+  - `fault.egress-retry`
+  - `fault.output-stall`
   - `recovery`
 - post-mode orphan process checks for any new `restream`, `mediamtx`, `ffmpeg`,
   `ffprobe`, or `test_harness` processes started by the gate
@@ -156,7 +156,7 @@ scripts/resource-limit cargo test media::avio::tests --lib -- --nocapture
 scripts/resource-limit cargo test srt_stream_ids_normalize_equivalent --lib -- --nocapture
 scripts/resource-limit cargo test srt_sender_semaphore --lib -- --nocapture
 scripts/resource-limit cargo test --bin test_harness tests::kill_and_wait_child_terminates_spawned_process -- --exact --nocapture
-N_PER_GROUP=1 scripts/resource-limit cargo run --bin test_harness -- fault-output-stall --no-netns
+N_PER_GROUP=1 scripts/resource-limit cargo run --bin test_harness -- fault.output-stall --no-netns
 env N_PER_GROUP=1 ONLY_CHECKS=ffprobe SKIP_LOAD=1 scripts/resource-limit cargo run --bin test_harness -- mixed.asset.file.h264.a1
 ```
 

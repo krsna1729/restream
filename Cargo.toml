@@ -143,6 +143,13 @@ opt-level = 1
 # Local benchmarks: fast incremental builds, debug symbols for flamegraphs.
 # Accuracy is equivalent for relative comparisons; absolute ns values may
 # differ ≤5% from full release.  CI uses --profile release for absolute numbers.
+#
+# Cargo hardcodes target/release as this profile's output dir for `bench`
+# (dir-name cannot be overridden for the built-in profile names) and `cargo
+# bench` on the `[[bench]]` entries below always resolves this profile by
+# name — so it can't be renamed either. `scripts/build-bench-harness.sh` is
+# the one canonical way to get bench-profile binaries into target/bench/;
+# do not `cargo build --profile bench` directly and expect them there.
 [profile.bench]
 opt-level = 3
 lto = "thin"

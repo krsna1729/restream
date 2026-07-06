@@ -1,0 +1,265 @@
+//! HLS preview and recording verification helpers for mixed scenarios.
+
+use super::*;
+
+pub(crate) async fn verify_mixed_hls_preview(
+    env: &MixedEnv,
+    api: &RampApi,
+    cfg: &str,
+    pipeline_id: &str,
+    expected_dimensions: &str,
+    case: MixedInputCase,
+    resume: &mut MixedResume,
+) -> Result<Value, String> {
+    let id = mixed_scenario_check_id(cfg, "hls_preview");
+    if !resume.allows(&id) {
+        return Ok(json!({"skipped": true}));
+    }
+    let started = Instant::now();
+    let (_status, playlist_body) =
+        wait_for_hls_playlist_ready(api, pipeline_id, Duration::from_secs(30)).await?;
+    let expected_audio_tracks = case.expected_audio_tracks();
+    let audio_renditions = playlist_body.matches("#EXT-X-MEDIA:TYPE=AUDIO").count();
+    if audio_renditions != expected_audio_tracks {
+        let message = format!(
+            "hls-preview {cfg}: expected {expected_audio_tracks} audio renditions, got {audio_renditions}"
+        );
+        emit_mixed_result(
+            env,
+            cfg,
+            &id,
+            "fail",
+            started.elapsed(),
+            Some(json!({
+                "message": message,
+                "expectedAudioRenditions": expected_audio_tracks,
+                "audioRenditions": audio_renditions,
+                "playlist": playlist_body,
+            })),
+        )?;
+        return Err(message);
+    }
+    let preview =
+        wait_for_api_hls_preview_state(api, pipeline_id, true, Duration::from_secs(10)).await?;
+    let playlist_url = format!(
+        "http://127.0.0.1:{}/hls/{pipeline_id}/master.m3u8",
+        env.restream_http
+    );
+    match probe_dims_ramp_with_cookie(&playlist_url, api.cookie.as_deref()).await {
+        Ok(dimensions) if dimensions == expected_dimensions => {
+            let summary = json!({
+                "inputCase": case.scenario_id(),
+                "codec": case.codec_name(),
+                "trackLayout": case.track_layout_name(),
+                "playlistReady": playlist_body.contains("#EXTM3U"),
+                "expectedAudioRenditions": expected_audio_tracks,
+                "audioRenditions": audio_renditions,
+                "preview": preview,
+                "expected": expected_dimensions,
+                "got": dimensions,
+                "url": playlist_url,
+            });
+            emit_mixed_result(
+                env,
+                cfg,
+                &id,
+                "pass",
+                started.elapsed(),
+                Some(summary.clone()),
+            )?;
+            emit_mixed_timing(
+                env,
+                cfg,
+                "check.hls_preview",
+                "pass",
+                started.elapsed(),
+                Some(json!({
+                    "expected": expected_dimensions,
+                    "got": dimensions,
+                })),
+            )?;
+            log_mixed_ok(env, &format!("hls-preview: {cfg} -> {dimensions}"))?;
+            Ok(summary)
+        }
+        Ok(dimensions) => {
+            let message =
+                format!("hls-preview {cfg}: expected {expected_dimensions}, got {dimensions}");
+            emit_mixed_result(
+                env,
+                cfg,
+                &id,
+                "fail",
+                started.elapsed(),
+                Some(json!({
+                    "message": message,
+                    "expected": expected_dimensions,
+                    "got": dimensions,
+                    "url": playlist_url,
+                })),
+            )?;
+            emit_mixed_timing(
+                env,
+                cfg,
+                "check.hls_preview",
+                "fail",
+                started.elapsed(),
+                Some(json!({
+                    "expected": expected_dimensions,
+                    "got": dimensions,
+                })),
+            )?;
+            Err(message)
+        }
+        Err(error) => {
+            let message = format!("hls-preview {cfg}: ffprobe failed: {error}");
+            emit_mixed_result(
+                env,
+                cfg,
+                &id,
+                "fail",
+                started.elapsed(),
+                Some(json!({
+                    "message": message,
+                    "error": error,
+                    "url": playlist_url,
+                })),
+            )?;
+            emit_mixed_timing(
+                env,
+                cfg,
+                "check.hls_preview",
+                "fail",
+                started.elapsed(),
+                Some(json!({"error": error})),
+            )?;
+            Err(message)
+        }
+    }
+}
+
+pub(crate) async fn verify_optional_mixed_hls_preview(
+    env: &MixedEnv,
+    api: &RampApi,
+    cfg: &str,
+    pipeline_id: &str,
+    case: MixedInputCase,
+    resume: &mut MixedResume,
+) -> Result<Option<Value>, String> {
+    if env.check_selected("hls") {
+        verify_mixed_hls_preview(
+            env,
+            api,
+            cfg,
+            pipeline_id,
+            case.hls_preview_expected_dimensions(),
+            case,
+            resume,
+        )
+        .await
+        .map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+pub(crate) async fn verify_mixed_recording(
+    env: &MixedEnv,
+    api: &RampApi,
+    cfg: &str,
+    pipeline_id: &str,
+    case: MixedInputCase,
+    resume: &mut MixedResume,
+) -> Result<Value, String> {
+    if !env.check_selected("recording") {
+        return Ok(json!({"skipped": true}));
+    }
+    let id = mixed_scenario_check_id(cfg, "recording");
+    if !resume.allows(&id) {
+        return Ok(json!({"skipped": true}));
+    }
+
+    let started = Instant::now();
+    let before_files = media_dir_entries(&env.media_dir)?;
+    api.post_empty(&format!("/api/v1/pipelines/{pipeline_id}/recording/start"))
+        .await?;
+    wait_for_api_recording_state(api, pipeline_id, true, Duration::from_secs(10)).await?;
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    api.post_empty(&format!("/api/v1/pipelines/{pipeline_id}/recording/stop"))
+        .await?;
+    wait_for_api_recording_state(api, pipeline_id, false, Duration::from_secs(20)).await?;
+
+    let recording_entry =
+        wait_for_api_media_file(api, &before_files, ".mp4", Duration::from_secs(30)).await?;
+    let recording_name = recording_entry["playName"]
+        .as_str()
+        .or_else(|| recording_entry["name"].as_str())
+        .ok_or("recording entry missing playName/name")?;
+    let recording_path = env.media_dir.join(recording_name);
+    if !recording_path.exists() {
+        return Err(format!(
+            "recording listed by API but missing on disk: {}",
+            recording_path.display()
+        ));
+    }
+
+    let probe = ffprobe(recording_path.to_string_lossy().as_ref()).await?;
+    let streams = normalized_streams(&probe)?;
+    let stream_array = streams
+        .as_array()
+        .ok_or("recording normalized stream list missing array")?;
+    let video_codec = stream_array
+        .iter()
+        .find(|stream| stream["type"] == "video")
+        .and_then(|stream| stream["codec"].as_str())
+        .unwrap_or_default();
+    let audio_tracks = stream_array
+        .iter()
+        .filter(|stream| stream["type"] == "audio")
+        .count();
+    let expected_video_codec = case.expected_video_codec();
+    let expected_audio_tracks = case.expected_audio_tracks();
+    let passed = video_codec == expected_video_codec && audio_tracks == expected_audio_tracks;
+    let summary = json!({
+        "inputCase": case.scenario_id(),
+        "recordingFile": recording_path,
+        "expectedVideoCodec": expected_video_codec,
+        "videoCodec": video_codec,
+        "expectedAudioTracks": expected_audio_tracks,
+        "audioTracks": audio_tracks,
+        "entry": recording_entry,
+        "normalizedStreams": streams,
+        "probe": probe,
+    });
+    emit_mixed_result(
+        env,
+        cfg,
+        &id,
+        if passed { "pass" } else { "fail" },
+        started.elapsed(),
+        Some(summary.clone()),
+    )?;
+    emit_mixed_timing(
+        env,
+        cfg,
+        "check.recording",
+        if passed { "pass" } else { "fail" },
+        started.elapsed(),
+        Some(json!({
+            "expectedVideoCodec": expected_video_codec,
+            "videoCodec": video_codec,
+            "expectedAudioTracks": expected_audio_tracks,
+            "audioTracks": audio_tracks,
+        })),
+    )?;
+    if passed {
+        log_mixed_ok(
+            env,
+            &format!("recording: {cfg} -> {video_codec}, audio_tracks={audio_tracks}"),
+        )?;
+        Ok(summary)
+    } else {
+        Err(format!(
+            "recording {cfg}: expected {expected_video_codec} with {expected_audio_tracks} audio tracks, got {video_codec} with {audio_tracks}"
+        ))
+    }
+}

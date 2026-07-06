@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "id": "fault-recovery-transient",
+  "runtimeProfile": "default",
+  "stack": "fault",
+  "steps": [
+    {
+      "op": "createPipeline",
+      "as": "pipeline",
+      "name": "${case.pipeline}",
+      "streamKey": "${case.pipeline}"
+    },
+    {
+      "op": "startGeneralizedSink",
+      "as": "sink",
+      "port": "${ports.sink}"
+    },
+    {
+      "op": "createOutput",
+      "as": "output",
+      "pipeline": "${pipeline.id}",
+      "name": "${case.outputName}",
+      "url": "rtmp://127.0.0.1:${ports.sink}/live/${case.sinkStream}",
+      "encoding": "source"
+    },
+    {
+      "op": "spawnPublisher",
+      "as": "publisher",
+      "fixture": "h264-primary"
+    },
+    {
+      "op": "waitApiInputLive",
+      "pipeline": "${pipeline.id}",
+      "timeoutSecs": 15
+    },
+    {
+      "op": "startOutput",
+      "pipeline": "${pipeline.id}",
+      "output": "${output.id}"
+    },
+    {
+      "op": "waitSinkVideoAbove",
+      "sink": "sink",
+      "threshold": 9,
+      "timeoutSecs": 15
+    },
+    {
+      "op": "captureSinkMetrics",
+      "as": "baseline",
+      "sink": "sink"
+    },
+    {
+      "op": "stop",
+      "targets": [
+        "publisher"
+      ]
+    },
+    {
+      "op": "waitOrSleepForInputDrop",
+      "as": "gapWait",
+      "pipeline": "${pipeline.id}",
+      "waitInputOff": "${case.waitInputOffAfterDrop}",
+      "timeoutSecs": 10,
+      "sleepMillis": 2500
+    },
+    {
+      "op": "captureGapState",
+      "as": "gap",
+      "pipeline": "${pipeline.id}",
+      "output": "${output.id}",
+      "sink": "sink",
+      "gapWait": "gapWait",
+      "baseline": "baseline",
+      "waitInputOffAfterDrop": "${case.waitInputOffAfterDrop}"
+    },
+    {
+      "op": "spawnPublisher",
+      "as": "resumedPublisher",
+      "fixture": "h264-primary"
+    },
+    {
+      "op": "waitResume",
+      "as": "resumed",
+      "pipeline": "${pipeline.id}",
+      "sink": "sink",
+      "mediaReady": "${case.requireMediaReadyOnResume}",
+      "videoAbove": "${baseline.video + 10}",
+      "timeoutSecs": 30
+    },
+    {
+      "op": "optionalSecondReconnect",
+      "as": "secondReconnect",
+      "when": "case.secondReconnectChecksFlapping",
+      "pipeline": "${pipeline.id}",
+      "sink": "sink",
+      "publisher": "resumedPublisher",
+      "baseline": "baseline"
+    },
+    {
+      "op": "captureFinalState",
+      "as": "final",
+      "pipeline": "${pipeline.id}",
+      "output": "${output.id}",
+      "sink": "sink"
+    },
+    {
+      "op": "assert",
+      "id": "transient-recovery-preserved-egress",
+      "all": [
+        "baseline.video >= 10",
+        "baseline.connections == 1",
+        "gap.inputOff == true",
+        "gap.statusExists == true",
+        "gap.connections == baseline.connections",
+        "gap.statusRunning == true",
+        "gap.retrying == false",
+        "gap.hasError == false",
+        "gap.graceActive == true",
+        "gap.graceRemainingBounded == true",
+        "resumed.ok == true",
+        "resumed.mediaReadyOk == true",
+        "final.connections == baseline.connections",
+        "final.statusRunning == true",
+        "final.retrying == false",
+        "final.disconnectCleared == true",
+        "!case.secondReconnectChecksFlapping || (secondReconnect.graceActive == true && secondReconnect.graceRemainingBounded == true && secondReconnect.resumed == true && final.flapping == true && final.recentDisconnectCount >= 2)"
+      ]
+    },
+    {
+      "op": "stop",
+      "targets": [
+        "resumedPublisher",
+        "sink",
+        "outputs"
+      ]
+    }
+  ]
+}

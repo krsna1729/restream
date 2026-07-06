@@ -4,6 +4,7 @@
 
 use restream::{
     db,
+    domain::output_spec::OutputConfig,
     logging::types::{AppLogEntry, AppLogFilters},
     types::JobStatus,
 };
@@ -40,7 +41,7 @@ fn app_log_entry(
 async fn pipeline_crud() {
     let pool = test_pool().await;
 
-    let p = db::create_pipeline(&pool, "p1", "Test Pipeline", "key01", None, None, None)
+    let p = db::create_pipeline(&pool, "p1", "Test Pipeline", "key01", None, None)
         .await
         .unwrap();
     assert_eq!(p.id, "p1");
@@ -59,18 +60,10 @@ async fn pipeline_crud() {
     let all = db::list_pipelines(&pool).await.unwrap();
     assert_eq!(all.len(), 1);
 
-    let updated = db::update_pipeline(
-        &pool,
-        "p1",
-        "Renamed",
-        "key02",
-        Some("file.mp4"),
-        None,
-        None,
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let updated = db::update_pipeline(&pool, "p1", "Renamed", "key02", Some("file.mp4"), None)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(updated.name, "Renamed");
     assert_eq!(updated.stream_key, "key02");
     assert_eq!(updated.input_source.as_deref(), Some("file.mp4"));
@@ -82,7 +75,7 @@ async fn pipeline_crud() {
 #[tokio::test]
 async fn update_nonexistent_pipeline_returns_none() {
     let pool = test_pool().await;
-    let result = db::update_pipeline(&pool, "nope", "x", "k", None, None, None)
+    let result = db::update_pipeline(&pool, "nope", "x", "k", None, None)
         .await
         .unwrap();
     assert!(result.is_none());
@@ -91,7 +84,7 @@ async fn update_nonexistent_pipeline_returns_none() {
 #[tokio::test]
 async fn output_crud() {
     let pool = test_pool().await;
-    db::create_pipeline(&pool, "p1", "P", "key01", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
         .await
         .unwrap();
 
@@ -103,7 +96,7 @@ async fn output_crud() {
         "rtmp://yt/live",
         None,
         "stopped",
-        "source",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
@@ -116,12 +109,20 @@ async fn output_crud() {
     let all = db::list_outputs_for_pipeline(&pool, "p1").await.unwrap();
     assert_eq!(all.len(), 1);
 
-    let updated = db::update_output(&pool, "p1", "o1", "Twitch", "rtmp://tw/live", None, "720p")
-        .await
-        .unwrap()
-        .unwrap();
+    let updated = db::update_output(
+        &pool,
+        "p1",
+        "o1",
+        "Twitch",
+        "rtmp://tw/live",
+        None,
+        &OutputConfig::parse("720p"),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(updated.name, "Twitch");
-    assert_eq!(updated.encoding, "720p");
+    assert_eq!(updated.encoding_string(), "720p");
 
     let started = db::set_output_desired_state(&pool, "p1", "o1", "running")
         .await
@@ -135,11 +136,18 @@ async fn output_crud() {
 #[tokio::test]
 async fn cascade_delete_removes_outputs() {
     let pool = test_pool().await;
-    db::create_pipeline(&pool, "p1", "P", "key01", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
         .await
         .unwrap();
     db::create_output(
-        &pool, "o1", "p1", "Out", "rtmp://x", None, "stopped", "source",
+        &pool,
+        "o1",
+        "p1",
+        "Out",
+        "rtmp://x",
+        None,
+        "stopped",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
@@ -152,11 +160,18 @@ async fn cascade_delete_removes_outputs() {
 #[tokio::test]
 async fn job_lifecycle() {
     let pool = test_pool().await;
-    db::create_pipeline(&pool, "p1", "P", "key01", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
         .await
         .unwrap();
     db::create_output(
-        &pool, "o1", "p1", "Out", "rtmp://x", None, "stopped", "source",
+        &pool,
+        "o1",
+        "p1",
+        "Out",
+        "rtmp://x",
+        None,
+        "stopped",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
@@ -200,11 +215,18 @@ async fn job_lifecycle() {
 #[tokio::test]
 async fn job_upsert_on_conflict() {
     let pool = test_pool().await;
-    db::create_pipeline(&pool, "p1", "P", "key01", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
         .await
         .unwrap();
     db::create_output(
-        &pool, "o1", "p1", "Out", "rtmp://x", None, "stopped", "source",
+        &pool,
+        "o1",
+        "p1",
+        "Out",
+        "rtmp://x",
+        None,
+        "stopped",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
@@ -241,11 +263,18 @@ async fn job_upsert_on_conflict() {
 #[tokio::test]
 async fn stale_job_update_cannot_clobber_replacement_attempt() {
     let pool = test_pool().await;
-    db::create_pipeline(&pool, "p1", "P", "key01", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
         .await
         .unwrap();
     db::create_output(
-        &pool, "o1", "p1", "Out", "rtmp://x", None, "stopped", "source",
+        &pool,
+        "o1",
+        "p1",
+        "Out",
+        "rtmp://x",
+        None,
+        "stopped",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
@@ -302,11 +331,18 @@ async fn stale_job_update_cannot_clobber_replacement_attempt() {
 #[tokio::test]
 async fn multiple_stale_job_updates_cannot_clobber_newest_attempt() {
     let pool = test_pool().await;
-    db::create_pipeline(&pool, "p1", "P", "key01", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
         .await
         .unwrap();
     db::create_output(
-        &pool, "o1", "p1", "Out", "rtmp://x", None, "stopped", "source",
+        &pool,
+        "o1",
+        "p1",
+        "Out",
+        "rtmp://x",
+        None,
+        "stopped",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
@@ -386,11 +422,18 @@ async fn multiple_stale_job_updates_cannot_clobber_newest_attempt() {
 #[tokio::test]
 async fn app_logs_can_be_queried_by_output_scope() {
     let pool = test_pool().await;
-    db::create_pipeline(&pool, "p1", "P", "key01", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
         .await
         .unwrap();
     db::create_output(
-        &pool, "o1", "p1", "Out", "rtmp://x", None, "stopped", "source",
+        &pool,
+        "o1",
+        "p1",
+        "Out",
+        "rtmp://x",
+        None,
+        "stopped",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
@@ -472,11 +515,18 @@ async fn app_logs_can_be_queried_by_output_scope() {
 #[tokio::test]
 async fn filtered_app_logs_honor_prefix_and_event_class_filters() {
     let pool = test_pool().await;
-    db::create_pipeline(&pool, "p1", "P", "key01", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
         .await
         .unwrap();
     db::create_output(
-        &pool, "o1", "p1", "Out", "rtmp://x", None, "stopped", "source",
+        &pool,
+        "o1",
+        "p1",
+        "Out",
+        "rtmp://x",
+        None,
+        "stopped",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
@@ -694,11 +744,18 @@ async fn session_operations() {
 #[tokio::test]
 async fn reset_running_jobs() {
     let pool = test_pool().await;
-    db::create_pipeline(&pool, "p1", "P", "key01", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
         .await
         .unwrap();
     db::create_output(
-        &pool, "o1", "p1", "Out", "rtmp://x", None, "stopped", "source",
+        &pool,
+        "o1",
+        "p1",
+        "Out",
+        "rtmp://x",
+        None,
+        "stopped",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
@@ -726,21 +783,42 @@ async fn reset_running_jobs() {
 #[tokio::test]
 async fn cleanup_old_jobs_removes_only_old_terminal_jobs() {
     let pool = test_pool().await;
-    db::create_pipeline(&pool, "p1", "P", "key01", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
         .await
         .unwrap();
     db::create_output(
-        &pool, "o1", "p1", "Out", "rtmp://x", None, "stopped", "source",
+        &pool,
+        "o1",
+        "p1",
+        "Out",
+        "rtmp://x",
+        None,
+        "stopped",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
     db::create_output(
-        &pool, "o2", "p1", "Out 2", "rtmp://y", None, "stopped", "source",
+        &pool,
+        "o2",
+        "p1",
+        "Out 2",
+        "rtmp://y",
+        None,
+        "stopped",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
     db::create_output(
-        &pool, "o3", "p1", "Out 3", "rtmp://z", None, "stopped", "source",
+        &pool,
+        "o3",
+        "p1",
+        "Out 3",
+        "rtmp://z",
+        None,
+        "stopped",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
@@ -845,19 +923,20 @@ async fn pool_connections_have_busy_timeout_set() {
     );
 }
 
-// M5: NULL encoding in DB must not cause a decode failure. A row with
-// encoding=NULL must be returned as an empty string via COALESCE.
+// M5: NULL legacy encoding in DB must not cause a decode failure. A row with
+// encoding=NULL falls back to the `config` column's default (source).
 #[tokio::test]
-async fn output_with_null_encoding_decodes_as_empty_string() {
+async fn output_with_null_encoding_decodes_as_source_default() {
     let pool = db::create_pool("sqlite::memory:").await.unwrap();
     db::setup_database_schema(&pool).await.unwrap();
 
-    db::create_pipeline(&pool, "p1", "P", "key-null-enc", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key-null-enc", None, None)
         .await
         .unwrap();
 
     // Insert a row with NULL encoding directly — bypasses the Rust layer to
-    // simulate a legacy row that predates the encoding column.
+    // simulate a legacy row that predates the encoding column. `config` is
+    // left unspecified, so it takes the column's NOT NULL DEFAULT (source).
     sqlx::query(
         "INSERT INTO outputs (id, pipeline_id, name, url, desired_state, encoding) \
          VALUES ('o-null', 'p1', 'Legacy', 'rtmp://x', 'stopped', NULL)",
@@ -869,16 +948,17 @@ async fn output_with_null_encoding_decodes_as_empty_string() {
     let outputs = db::list_outputs(&pool).await.unwrap();
     assert_eq!(outputs.len(), 1);
     assert_eq!(
-        outputs[0].encoding, "",
-        "NULL encoding must decode to empty string via COALESCE"
+        outputs[0].encoding_string(),
+        "source",
+        "NULL legacy encoding must decode to the source default, not fail"
     );
 
     let fetched = db::get_output(&pool, "p1", "o-null")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(fetched.encoding, "");
+    assert_eq!(fetched.encoding_string(), "source");
 
     let by_pipeline = db::list_outputs_for_pipeline(&pool, "p1").await.unwrap();
-    assert_eq!(by_pipeline[0].encoding, "");
+    assert_eq!(by_pipeline[0].encoding_string(), "source");
 }

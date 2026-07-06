@@ -10,6 +10,13 @@ fi
 
 scripts/resource-limit cargo build --profile bench --bin restream --bin test_harness
 
+# Cargo hardcodes target/release as the output dir for a profile named
+# "bench" (dir-name cannot be overridden for built-in profile names, and the
+# profile can't be renamed either since `cargo bench` always resolves it by
+# name) — this copy is the only bridge from that fixed location into
+# target/bench/, which the rest of the repo treats as the canonical home for
+# bench-profile binaries. Do not duplicate this copy elsewhere; scripts that
+# need a bench-profile binary should depend on this script instead.
 mkdir -p target/bench
 cp target/release/restream target/bench/restream
 cp target/release/test_harness target/bench/test_harness
@@ -26,6 +33,6 @@ Bench-profile measurement binaries are ready:
   target/bench/restream
   target/bench/test_harness
 
-Run measurement modes from target/bench/test_harness so the harness can reject
-debug/release launches and keep benchmark numbers comparable.
+Use scripts/run-bench-harness.sh for measurement modes so bench binaries stay
+fresh and launches remain comparable.
 EOF

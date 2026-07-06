@@ -20,11 +20,11 @@ hundreds of times per event. One invocation proves or fixes one failure path.
    reader, re-publish while draining; assert operator-visible status.
 3. **Live harness fault modes** (build harness first, run under
    `scripts/resource-limit`, private netns by default):
-   - `fault-resilience` — general fault isolation
-   - `fault-egress-retry` — egress destination failure/retry
-   - `fault-output-stall` — stalled output handling
+   - `fault.resilience` — general fault isolation
+   - `fault.egress-retry` — egress destination failure/retry
+   - `fault.output-stall` — stalled output handling
    - `recovery` — disconnect/recovery semantics
-   - `signal-control` — signal-driven lifecycle
+   - `signal.control` — signal-driven lifecycle
 4. **Panic containment audit** — every FFmpeg/libsrt OS-thread entry point
    must be wrapped in `catch_unwind(AssertUnwindSafe(...))`.
 

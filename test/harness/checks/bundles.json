@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "bundles": {
+    "media.basic": {
+      "checks": [
+        "ffprobe",
+        "audio-route"
+      ],
+      "purpose": "stream shape and audio-track routing"
+    },
+    "media.deep": {
+      "checks": [
+        "ffprobe",
+        "audio-route",
+        "decode-scan",
+        "sink-probe"
+      ],
+      "purpose": "stream shape, decode health, packet-level sink sanity"
+    },
+    "media.hls": {
+      "checks": [
+        "hls-preview",
+        "hls",
+        "hls-put-probe"
+      ],
+      "purpose": "restream and MediaMTX HLS surfaces plus PUT upload"
+    },
+    "media.recording": {
+      "checks": [
+        "recording",
+        "lifecycle"
+      ],
+      "purpose": "recording start/stop and ingest lifecycle cleanup"
+    },
+    "media.signal": {
+      "checks": [
+        "signal",
+        "soak-drift"
+      ],
+      "purpose": "AV marker, silence, black-frame, and drift validation"
+    },
+    "resource.light": {
+      "checks": [
+        "stage-sharing",
+        "load"
+      ],
+      "purpose": "basic stage sharing and one resource snapshot"
+    },
+    "resource.window": {
+      "checks": [
+        "stage-sharing",
+        "load",
+        "burst-graph"
+      ],
+      "purpose": "stage sharing with sampled resource window"
+    },
+    "resource.bitrate": {
+      "checks": [
+        "ffprobe",
+        "audio-route",
+        "bitrate-resource"
+      ],
+      "purpose": "bitrate-driven CPU/RSS/ring/AVIO resource behavior"
+    },
+    "resource.branch": {
+      "checks": [
+        "stage-sharing",
+        "branch-resource"
+      ],
+      "purpose": "branch/topology resource attribution"
+    },
+    "security.srt-crypto": {
+      "checks": [
+        "ffprobe",
+        "audio-route",
+        "srt-crypto"
+      ],
+      "purpose": "SRT plaintext/encrypted publish/read/rejection matrix"
+    },
+    "security.srt-policy": {
+      "checks": [
+        "ffprobe",
+        "audio-route",
+        "srt-crypto"
+      ],
+      "purpose": "SRT policy inheritance/override/rejection behavior"
+    },
+    "mixed.fast-smoke": {
+      "checks": [
+        "ffprobe",
+        "stage-sharing"
+      ],
+      "purpose": "low-cost selected-row correctness"
+    },
+    "mixed.full": {
+      "checks": [
+        "ffprobe",
+        "audio-route",
+        "decode-scan",
+        "signal",
+        "stage-sharing",
+        "hls",
+        "recording",
+        "load",
+        "smoke",
+        "lifecycle",
+        "sink-probe",
+        "hls-put-probe",
+        "burst-graph",
+        "soak-drift"
+      ],
+      "purpose": "the current exhaustive mixed default check set"
+    },
+    "selected-audio.rtmp": {
+      "checks": [
+        "ffprobe",
+        "audio-route",
+        "sink-probe"
+      ],
+      "purpose": "selected-audio RTMP output, AAC sequence header, raw AAC without ADTS, monotone DTS"
+    },
+    "timestamp.bframe": {
+      "checks": [
+        "ffprobe",
+        "decode-scan",
+        "sink-probe"
+      ],
+      "purpose": "B-frame PTS>DTS presence and monotone DTS"
+    }
+  }
+}

@@ -2,12 +2,12 @@
 
 use std::sync::OnceLock;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::TestPorts;
 
 /// Declarative cell for retry-budget exhaustion coverage against an unreachable sink.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RetryBudgetCase {
     pub(crate) test_name: String,
@@ -19,7 +19,7 @@ pub(crate) struct RetryBudgetCase {
 }
 
 /// Publisher transport details that vary across otherwise identical live scenarios.
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum HarnessPublisherProtocol {
     Rtmp,
@@ -59,7 +59,7 @@ impl HarnessPublisherProtocol {
 }
 
 /// Declarative cell for transient ingest-drop recovery coverage.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecoveryTransientCase {
     pub(crate) test_name: String,

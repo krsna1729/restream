@@ -62,8 +62,8 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Status: open (Filed: 2026-07-03 by bootstrap)
 
 ### Q-005 [resilience] [sonnet] Baseline the harness fault modes
-- Goal: current pass/fail state of `fault-resilience`, `fault-egress-retry`,
-  `fault-output-stall`, and `recovery` recorded in the journal; any failure or
+- Goal: current pass/fail state of `fault.resilience`, `fault.egress-retry`,
+  `fault.output-stall`, and `recovery` recorded in the journal; any failure or
   flake filed as its own item with output attached.
 - Files: none modified (measurement only).
 - Gates: `scripts/resource-limit cargo build --bin test_harness` then each
@@ -114,7 +114,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Goal: FFmpeg AVIO output written directly into a pre-sized `BytesMut`,
   removing the AVIO buffer → `ts_accum` copy, with before/after
   `avio_throughput` + `high_performance_data_path` numbers and green
-  `correctness-srt` / `correctness-rtmp` harness modes.
+  `mixed.live.srt.h264.a1.bf0` / `mixed.live.rtmp.h264.a1.bf0` harness modes.
 - Files: `src/media/avio.rs`, `src/media/srt.rs` (TS mux accumulator), ledger.
 - Gates: perf-sweep Mode C discipline (baseline first, serial measurement),
   protocol correctness modes, concurrency gates if thread-hops move.

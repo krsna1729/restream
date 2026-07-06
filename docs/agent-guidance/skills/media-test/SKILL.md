@@ -25,8 +25,7 @@ Run scoped media pipeline tests, then optionally escalate to live harness tests.
    - If no argument given: ask the user which module or filter to use.
 
 3. If step 2 passes, report the scoped results, then ask: "Scoped tests pass. Escalate to the live harness? This takes several minutes." Escalation options:
-   - `scripts/resource-limit target/debug/test_harness correctness` — general live correctness
-   - `scripts/resource-limit target/debug/test_harness correctness-srt` / `correctness-rtmp` — protocol-scoped
+   - `scripts/resource-limit target/debug/test_harness mixed.live.srt.h264.a1.bf0` / `mixed.live.rtmp.h264.a1.bf0` — protocol-scoped correctness
    - `scripts/resource-limit target/debug/test_harness mixed-anchor` — scale/integration anchor
 
 4. If the user confirms, build the harness first (`scripts/resource-limit cargo build --bin test_harness`) and run the chosen mode.

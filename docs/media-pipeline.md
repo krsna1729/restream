@@ -681,7 +681,7 @@ gone:
 - **RTMPS**: URL parser accepts it and the reconciler dispatches it through
   RTMP egress with Rustls wrapping before the RTMP handshake.
 - **SRT→RTMP egress**: Raw Annex-B/ADTS packets are converted to FLV/AVCC/AAC
-  for RTMP egress. `cargo run --bin test_harness -- correctness-srt-rtmp`
+  for RTMP egress. `cargo run --bin test_harness -- mixed.live.srt.h264.a1.bf0`
   verifies the live H.264/AAC cross-protocol packetization path.
 - **File ingest**: implemented with child FFmpeg; running state is checked from
   the tracked child process, and exited children are reaped.

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "schema": "restream.test-harness.catalog.v1",
+  "modes": "modes.json",
+  "runtime": {
+    "profiles": "runtime/profiles.json",
+    "ports": "runtime/ports.json",
+    "protocols": "runtime/protocols.json",
+    "services": "runtime/services.json"
+  },
+  "checks": {
+    "registry": "checks/checks.json",
+    "ffmpegPatterns": "checks/ffmpeg-patterns.json",
+    "bundles": "checks/bundles.json"
+  },
+  "suites": {
+    "index": "suites.json"
+  },
+  "scenarios": {
+    "mixed": "scenarios/mixed.json",
+    "fault": "scenarios/fault.json"
+  },
+  "workflows": {
+    "mixedScenario": "workflows/mixed-scenario.json",
+    "mixedSlice": "workflows/mixed-slice.json",
+    "faultRetryBudget": "workflows/fault-retry-budget.json",
+    "faultRecoveryTransient": "workflows/fault-recovery-transient.json"
+  }
+}

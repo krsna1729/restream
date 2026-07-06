@@ -1,0 +1,195 @@
+{
+  "version": 1,
+  "checks": {
+    "ffprobe": {
+      "executor": "probe.ffprobe.dimensions",
+      "attempts": 30,
+      "intervalMs": 2000
+    },
+    "audio-route": {
+      "executor": "probe.ffprobe.audioTracks",
+      "attempts": 15,
+      "intervalMs": 2000
+    },
+    "decode-scan": {
+      "executor": "probe.ffmpeg.decode",
+      "durationSecs": 5,
+      "timeoutSecs": 45,
+      "badPatternsRef": "checks/ffmpeg-patterns.json#decodeBadPatterns",
+      "fallbacksRef": "checks/ffmpeg-patterns.json#decodeFallbacks"
+    },
+    "signal": {
+      "executor": "probe.signal.avMarkers",
+      "durationSecs": {
+        "env": "AV_SIGNAL_SECONDS",
+        "default": 20
+      },
+      "timeoutPadSecs": 90,
+      "blackdetect": "blackdetect=d=0.05:pix_th=0.10",
+      "silencedetect": "silencedetect=n=-35dB:d=0.05",
+      "audioFilters": [
+        "ashowinfo",
+        "astats=metadata=1:reset=1"
+      ]
+    },
+    "soak-drift": {
+      "executor": "probe.signal.avMarkers",
+      "durationSecs": {
+        "env": "AV_SOAK_SECONDS",
+        "default": 120
+      },
+      "timeoutPadSecs": 90
+    },
+    "stage-sharing": {
+      "executor": "assert.stageGraph",
+      "expectedFrom": "scenario.expect.stages"
+    },
+    "hls": {
+      "executor": "probe.hls.transport",
+      "playlistTimeoutSecs": 30
+    },
+    "hls-preview": {
+      "executor": "probe.hls.preview",
+      "playlistTimeoutSecs": 30,
+      "stateTimeoutSecs": 10,
+      "expectedDimensionsFrom": "scenario.expect.hlsPreviewDimensions",
+      "expectedAudioTracksFrom": "scenario.expect.audioTracks"
+    },
+    "recording": {
+      "executor": "probe.recording",
+      "recordSecs": 6,
+      "stateTimeoutSecs": 20,
+      "mediaFileTimeoutSecs": 30,
+      "expectedVideoCodecFrom": "scenario.expect.videoCodec",
+      "expectedAudioTracksFrom": "scenario.expect.audioTracks"
+    },
+    "sink-probe": {
+      "executor": "probe.rtmpSink.packetMetrics",
+      "durationSecs": 30,
+      "sinkPort": "${ports.sink}"
+    },
+    "hls-put-probe": {
+      "executor": "probe.hlsPut",
+      "putPort": "${ports.hlsPut}"
+    },
+    "burst-graph": {
+      "executor": "assert.burstGraph"
+    },
+    "adaptive-source-ring": {
+      "executor": "assert.telemetry.sourceRing",
+      "timeoutSecs": 6,
+      "intervalMs": 250,
+      "minDepthSecs": 5.0,
+      "minCapacity": 780,
+      "resizeCapacity": 1024,
+      "maxOverflows": 0
+    },
+    "load": {
+      "executor": "metric.snapshot"
+    },
+    "smoke": {
+      "executor": "assert.log.noExternalTranscoderBeforeScaledOutputs"
+    },
+    "lifecycle": {
+      "executor": "assert.lifecycle"
+    },
+    "bitrate-resource": {
+      "executor": "metric.bitrateSweep",
+      "bitrateValuesFrom": "axis.bitrate.values",
+      "stabilizeSecs": {
+        "env": "BITRATE_SWEEP_STABILIZE_SECS",
+        "default": 30
+      },
+      "sampleIntervalSecs": {
+        "env": "BITRATE_SWEEP_SAMPLE_INTERVAL_SECS",
+        "default": 5
+      },
+      "outputGroups": {
+        "env": "BITRATE_SWEEP_OUTPUT_GROUPS",
+        "default": 1
+      },
+      "metrics": [
+        "restreamCpuPct",
+        "ffmpegCpuPct",
+        "totalCpuPct",
+        "restreamRssKb",
+        "ffmpegCount",
+        "ffmpegRssKb",
+        "totalRssKb",
+        "retainedPayloadKb",
+        "sourceRingKb",
+        "transcoderRingKb",
+        "tsmuxRingKb",
+        "avioLenKb",
+        "avioHwmKb",
+        "overflowCount"
+      ]
+    },
+    "branch-resource": {
+      "executor": "metric.branchMatrix",
+      "egressCount": {
+        "env": "BRANCH_MATRIX_EGRESS_COUNT",
+        "default": 10
+      },
+      "backend": {
+        "env": "RESTREAM_USE_INTERNAL_TRANSCODER",
+        "falseLabel": "external",
+        "trueLabel": "internal"
+      },
+      "scenarioFilterEnv": "BRANCH_MATRIX_SCENARIOS",
+      "metrics": [
+        "pipelines",
+        "outputs",
+        "ingests",
+        "egresses",
+        "stages",
+        "activeTranscoderBuffers",
+        "retainedKb",
+        "sourceRingKb",
+        "transcoderRingKb",
+        "tsmuxRingKb",
+        "avioLenKb",
+        "avioHwmKb",
+        "unattributedKb"
+      ]
+    },
+    "srt-crypto": {
+      "executor": "assert.srtCryptoMatrix",
+      "variantsFrom": "axis.srtCrypto.variants",
+      "successChecks": [
+        "publishSucceeds",
+        "readSucceeds",
+        "mediaOnly"
+      ],
+      "rejectionChecks": [
+        "plaintextReadRejected",
+        "wrongPassphraseReadRejected",
+        "plaintextPublishRejected"
+      ]
+    },
+    "no-early-external-transcoder": {
+      "executor": "assert.log.noExternalTranscoderBeforeScaledOutputs",
+      "log": "${runtime.restreamLog}",
+      "pattern": "[external-transcoder] Launching ffmpeg",
+      "maxMatches": 0,
+      "phase": "source-only",
+      "purpose": "Source passthrough outputs must not launch external FFmpeg before scaled outputs exist."
+    }
+  },
+  "defaultMixedChecks": [
+    "ffprobe",
+    "audio-route",
+    "decode-scan",
+    "signal",
+    "stage-sharing",
+    "hls",
+    "recording",
+    "load",
+    "smoke",
+    "lifecycle",
+    "sink-probe",
+    "hls-put-probe",
+    "burst-graph",
+    "soak-drift"
+  ]
+}

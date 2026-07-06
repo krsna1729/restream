@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "services": {
+    "restream": {
+      "binary": {
+        "env": "RESTREAM_BIN",
+        "default": "target/release/restream",
+        "siblingOfHarness": "restream"
+      },
+      "env": {
+        "RESTREAM_HTTP_PORT": "${ports.restreamHttp}",
+        "RESTREAM_RTMP_PORT": "${ports.restreamRtmp}",
+        "RESTREAM_SRT_PORT": "${ports.restreamSrt}",
+        "RESTREAM_LOG_DIR": "${runtime.logDir}",
+        "RESTREAM_DB_PATH": "${runtime.dbPath}",
+        "RESTREAM_MEDIA_DIR": "${runtime.mediaDir}"
+      },
+      "stdout": "${runtime.restreamLog}",
+      "stderr": "${runtime.restreamLog}",
+      "killOnDrop": true,
+      "ready": [
+        {
+          "kind": "httpOk",
+          "url": "http://127.0.0.1:${ports.restreamHttp}/healthz",
+          "timeoutSecs": 30
+        },
+        {
+          "kind": "tcp",
+          "port": "${ports.restreamRtmp}",
+          "timeoutSecs": 10
+        }
+      ]
+    },
+    "mediamtx": {
+      "binary": {
+        "default": "mediamtx"
+      },
+      "args": [
+        "${runtime.mediamtxConfig}"
+      ],
+      "configTemplate": "templates/mediamtx.yml.tmpl",
+      "envRemove": [
+        "MTX_RTMP",
+        "MTX_SRT",
+        "MTX_HLS",
+        "MTX_API"
+      ],
+      "stdout": "${runtime.mediamtxLog}",
+      "stderr": "${runtime.mediamtxLog}",
+      "killOnDrop": true,
+      "ready": [
+        {
+          "kind": "httpOk",
+          "url": "http://127.0.0.1:${ports.mtxApi}/v3/paths/list",
+          "timeoutSecs": 30
+        }
+      ]
+    }
+  },
+  "stacks": {
+    "mixedLive": [
+      "mediamtx",
+      "restream"
+    ],
+    "fault": [
+      "restream"
+    ]
+  }
+}

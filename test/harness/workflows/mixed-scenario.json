@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "id": "mixed-scenario",
+  "runtimeProfile": "mixed",
+  "stack": "mixedLive",
+  "description": "Full mixed scenario executor. Source setup is selected by source.adapter; output sequencing is selected by outputPlan.",
+  "steps": [
+    {
+      "op": "resolveSourceAdapter",
+      "as": "sourceAdapter",
+      "adapter": "${scenario.source.adapter}",
+      "scenario": "${scenario.id}"
+    },
+    {
+      "op": "resolveOutputPlan",
+      "as": "outputPlan",
+      "plan": "${scenario.outputPlan}",
+      "registry": "scenarios/mixed.json#outputPlans"
+    },
+    {
+      "op": "createPipeline",
+      "as": "pipeline",
+      "name": "${scenario.id}",
+      "streamKey": "sk-${scenario.id}"
+    },
+    {
+      "op": "startSource",
+      "as": "source",
+      "adapter": "${sourceAdapter}",
+      "scenario": "${scenario.id}",
+      "fixture": "${scenario.source.fixture}",
+      "trackSelection": "${scenario.source.trackSelection}",
+      "protocol": "${scenario.source.ingest}"
+    },
+    {
+      "op": "waitApiInputLive",
+      "pipeline": "${pipeline.id}",
+      "timeoutSecs": 45
+    },
+    {
+      "op": "runCheck",
+      "check": "hls-preview",
+      "whenSelected": true
+    },
+    {
+      "op": "runCheck",
+      "check": "recording",
+      "whenSelected": true
+    },
+    {
+      "op": "runCheck",
+      "check": "adaptive-source-ring",
+      "when": "scenario.expect.audioTracks > 1"
+    },
+    {
+      "op": "metricSnapshot",
+      "label": "baseline (input live, 0 outputs)",
+      "skipWhen": "runtime.skipLoad"
+    },
+    {
+      "op": "createHelperOutputs",
+      "outputs": "${outputPlan.helperOutputs}"
+    },
+    {
+      "op": "executeOutputPlan",
+      "plan": "${outputPlan}",
+      "outputs": "${scenario.outputs}",
+      "nPerGroup": "${runtime.nPerGroup}"
+    },
+    {
+      "op": "progressGate",
+      "policy": "${outputPlan.progressGate}",
+      "checks": "${scenario.checks}"
+    },
+    {
+      "op": "runChecks",
+      "checks": "${scenario.checks}"
+    },
+    {
+      "op": "stop",
+      "targets": [
+        "source",
+        "outputs",
+        "helperOutputs"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "protocols": {
+    "rtmp": {
+      "ffmpegFormat": "flv",
+      "mapAllStreams": false,
+      "publishUrl": "rtmp://127.0.0.1:${ports.restreamRtmp}/live/${streamKey}",
+      "egressPublishUrl": "rtmp://127.0.0.1:${ports.mtxRtmp}/live/${outputName}",
+      "egressReadUrl": "rtmp://127.0.0.1:${ports.mtxRtmp}/live/${outputName}",
+      "deadSinkUrl": "rtmp://127.0.0.1:${deadSinkPort}/live/retry-limit",
+      "signalSinkPublishUrl": "rtmp://127.0.0.1:${port}/live/${stem}",
+      "signalSinkListenUrl": "rtmp://127.0.0.1:${port}/live/${stem}"
+    },
+    "srt": {
+      "ffmpegFormat": "mpegts",
+      "mapAllStreams": true,
+      "publishUrl": "srt://127.0.0.1:${ports.restreamSrt}?streamid=publish:live/${streamKey}&pkt_size=1316",
+      "publishUrlLiveLatency": "srt://127.0.0.1:${ports.restreamSrt}?streamid=publish:live/${streamKey}&latency=200000",
+      "egressPublishUrl": "srt://127.0.0.1:${ports.mtxSrt}?streamid=publish:live/${outputName}",
+      "egressReadUrl": "srt://127.0.0.1:${ports.mtxSrt}?streamid=read:live/${outputName}&timeout=30000000",
+      "deadSinkUrl": "srt://127.0.0.1:${deadSinkPort}?streamid=publish:live/retry-limit&pkt_size=1316",
+      "signalSinkPublishUrl": "srt://127.0.0.1:${port}?pkt_size=1316&latency=200000",
+      "signalSinkListenUrl": "srt://127.0.0.1:${port}?mode=listener&transtype=live&timeout=30000000&latency=200000"
+    },
+    "hls": {
+      "restreamPreviewUrl": "http://127.0.0.1:${ports.restreamHttp}/hls/${pipelineId}/master.m3u8",
+      "restreamPipelineUrl": "http://127.0.0.1:${ports.restreamHttp}/hls/${pipelineId}/index.m3u8",
+      "mtxUrl": "http://127.0.0.1:${ports.mtxHls}/live/${outputName}/index.m3u8"
+    }
+  },
+  "srtCryptoVariants": {
+    "plaintext": {},
+    "encrypted-16": {
+      "passphrase": "0123456789abcd",
+      "pbkeylen": 16
+    },
+    "encrypted-24": {
+      "passphrase": "0123456789abcd",
+      "pbkeylen": 24
+    },
+    "encrypted-32": {
+      "passphrase": "0123456789abcd",
+      "pbkeylen": 32
+    }
+  }
+}

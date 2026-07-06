@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "id": "mixed-slice",
+  "runtimeProfile": "mixed",
+  "stack": "mixedLive",
+  "description": "Generic executor for mixed-derived coverage slices: output subsets, load axes, branch/resource axes, and SRT crypto axes.",
+  "steps": [
+    {
+      "op": "resolveMixedScenario",
+      "as": "scenario",
+      "id": "${slice.sourceScenario}"
+    },
+    {
+      "op": "expandSliceAxes",
+      "as": "axisCases",
+      "axes": "${slice.axes}",
+      "legacyAxisFields": [
+        "bitrateAxis",
+        "branchAxis",
+        "cryptoAxis"
+      ]
+    },
+    {
+      "op": "forEachAxisCase",
+      "items": "${axisCases}",
+      "steps": [
+        {
+          "op": "applyAxisRuntime",
+          "axisCase": "${axisCase}"
+        },
+        {
+          "op": "prepareSourceFixture",
+          "as": "fixture",
+          "scenario": "${scenario.id}",
+          "bitrate": "${axisCase.bitrate}"
+        },
+        {
+          "op": "createPipeline",
+          "as": "pipeline",
+          "name": "${slice.id}-${axisCase.name}",
+          "streamKey": "sk-${slice.id}-${axisCase.name}"
+        },
+        {
+          "op": "applyTransportPolicy",
+          "pipeline": "${pipeline.id}",
+          "srtCrypto": "${axisCase.srtCrypto}",
+          "srtPolicy": "${axisCase.srtPolicy}"
+        },
+        {
+          "op": "spawnPublisherOrFileIngest",
+          "as": "source",
+          "scenario": "${scenario.id}",
+          "fixture": "${fixture.path}",
+          "srtCrypto": "${axisCase.srtCrypto}"
+        },
+        {
+          "op": "waitApiInputLive",
+          "pipeline": "${pipeline.id}",
+          "timeoutSecs": 45
+        },
+        {
+          "op": "metricSnapshot",
+          "label": "baseline ${slice.id}/${axisCase.name}",
+          "skipWhen": "runtime.skipLoad"
+        },
+        {
+          "op": "createOutputsFromSelection",
+          "outputs": "${scenario.outputs}",
+          "rows": "${slice.outputRows}",
+          "filter": "${slice.outputFilter}",
+          "nPerGroup": "${slice.outputGroups || slice.egressCount || runtime.nPerGroup}",
+          "srtCrypto": "${axisCase.srtCrypto}"
+        },
+        {
+          "op": "runCheckBundle",
+          "bundle": "${slice.checkBundle}",
+          "extraChecks": "${slice.extraChecks}",
+          "resourceProfile": "${slice.resourceProfile}",
+          "axisCase": "${axisCase}"
+        },
+        {
+          "op": "runNegativeAssertions",
+          "assertions": "${slice.negativeAssertions}",
+          "axisCase": "${axisCase}"
+        },
+        {
+          "op": "writeSliceArtifact",
+          "slice": "${slice.id}",
+          "axisCase": "${axisCase.name}"
+        },
+        {
+          "op": "stop",
+          "targets": [
+            "source",
+            "outputs"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -5,6 +5,7 @@
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
+use restream::domain::output_spec::OutputConfig;
 use restream::domain::srt_ingest::SrtGlobalIngestConfig;
 use restream::domain::stage::{StageKey, StageKind};
 use restream::logging::types::AppLogEntry;
@@ -399,7 +400,7 @@ async fn duplicate_stream_keys_are_rejected() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;
 
-    db::create_pipeline(&pool, "p1", "P1", "unique-key", None, None, None)
+    db::create_pipeline(&pool, "p1", "P1", "unique-key", None, None)
         .await
         .unwrap();
 
@@ -445,7 +446,7 @@ async fn rtmps_output_is_accepted_by_api() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;
 
-    db::create_pipeline(&pool, "p_rtmps", "P", "key_rtmps", None, None, None)
+    db::create_pipeline(&pool, "p_rtmps", "P", "key_rtmps", None, None)
         .await
         .unwrap();
 
@@ -456,7 +457,7 @@ async fn rtmps_output_is_accepted_by_api() {
             "POST",
             "/api/v1/pipelines/p_rtmps/outputs",
             &cookie,
-            Some(r#"{"name":"FB","url":"rtmps://live-api-s.facebook.com:443/rtmp/test","encoding":"source"}"#),
+            Some(r#"{"name":"FB","url":"rtmps://live-api-s.facebook.com:443/rtmp/test","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
@@ -479,7 +480,7 @@ async fn local_hls_output_is_accepted_by_api() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;
 
-    db::create_pipeline(&pool, "p_hls", "P", "key_hls", None, None, None)
+    db::create_pipeline(&pool, "p_hls", "P", "key_hls", None, None)
         .await
         .unwrap();
 
@@ -489,7 +490,7 @@ async fn local_hls_output_is_accepted_by_api() {
             "POST",
             "/api/v1/pipelines/p_hls/outputs",
             &cookie,
-            Some(r#"{"name":"Local HLS","url":"hls://localhost/hls/key_hls","encoding":"source"}"#),
+            Some(r#"{"name":"Local HLS","url":"hls://localhost/hls/key_hls","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
@@ -504,7 +505,7 @@ async fn custom_output_encoding_is_rejected_by_api() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;
 
-    db::create_pipeline(&pool, "p_custom", "P", "key_custom", None, None, None)
+    db::create_pipeline(&pool, "p_custom", "P", "key_custom", None, None)
         .await
         .unwrap();
 
@@ -514,7 +515,9 @@ async fn custom_output_encoding_is_rejected_by_api() {
             "POST",
             "/api/v1/pipelines/p_custom/outputs",
             &cookie,
-            Some(r#"{"name":"Custom","url":"rtmp://dest/live/key","encoding":"custom"}"#),
+            Some(
+                r#"{"name":"Custom","url":"rtmp://dest/live/key","config":{"video":{"mode":"custom"},"audio":{"mode":"all"}}}"#,
+            ),
         ))
         .await
         .unwrap();
@@ -536,7 +539,7 @@ async fn custom_output_encoding_is_rejected_by_api() {
         "rtmp://dest/live/key",
         None,
         "stopped",
-        "source",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
@@ -547,7 +550,9 @@ async fn custom_output_encoding_is_rejected_by_api() {
             "PATCH",
             &uri,
             &cookie,
-            Some(r#"{"name":"Custom","url":"rtmp://dest/live/key","encoding":"custom+atrack:0"}"#),
+            Some(
+                r#"{"name":"Custom","url":"rtmp://dest/live/key","config":{"video":{"mode":"custom"},"audio":{"mode":"downmix","track":0}}}"#,
+            ),
         ))
         .await
         .unwrap();
@@ -559,7 +564,7 @@ async fn http_hls_upload_output_is_accepted_by_api() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;
 
-    db::create_pipeline(&pool, "p_http_hls", "P", "key_http_hls", None, None, None)
+    db::create_pipeline(&pool, "p_http_hls", "P", "key_http_hls", None, None)
         .await
         .unwrap();
 
@@ -569,7 +574,7 @@ async fn http_hls_upload_output_is_accepted_by_api() {
             "POST",
             "/api/v1/pipelines/p_http_hls/outputs",
             &cookie,
-            Some(r#"{"name":"Remote HLS","url":"https://a.upload.youtube.com/http_upload_hls?cid=abc&copy=0&file=out.m3u8","encoding":"source"}"#),
+            Some(r#"{"name":"Remote HLS","url":"https://a.upload.youtube.com/http_upload_hls?cid=abc&copy=0&file=out.m3u8","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
@@ -587,7 +592,7 @@ async fn output_crud_via_api() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;
 
-    db::create_pipeline(&pool, "p1", "P", "key01", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
         .await
         .unwrap();
 
@@ -598,7 +603,7 @@ async fn output_crud_via_api() {
             "POST",
             "/api/v1/pipelines/p1/outputs",
             &cookie,
-            Some(r#"{"name":"YouTube","url":"rtmp://yt/live","encoding":"source"}"#),
+            Some(r#"{"name":"YouTube","url":"rtmp://yt/live","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
@@ -650,7 +655,7 @@ async fn config_get_returns_structured_data() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;
 
-    db::create_pipeline(&pool, "p1", "P", "key01", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
         .await
         .unwrap();
     db::create_output(
@@ -661,7 +666,7 @@ async fn config_get_returns_structured_data() {
         "rtmp://dest/live",
         None,
         "running",
-        "source",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
@@ -727,7 +732,7 @@ async fn config_patch_server_name() {
 async fn config_patch_ingest_host_persists_and_updates_ingest_urls() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;
-    db::create_pipeline(&pool, "p1", "P", "key01", None, None, None)
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
         .await
         .unwrap();
 
@@ -1388,17 +1393,9 @@ async fn internal_file_ingest_preview_hls_serves_playlist_and_segment() {
     let stream_key = "file-preview-key";
     let ingest_id = "ingest-file-preview";
 
-    db::create_pipeline(
-        &pool,
-        pipeline_id,
-        "File Preview",
-        stream_key,
-        None,
-        None,
-        None,
-    )
-    .await
-    .expect("create pipeline");
+    db::create_pipeline(&pool, pipeline_id, "File Preview", stream_key, None, None)
+        .await
+        .expect("create pipeline");
 
     let ring_buffer = engine.get_or_create_pipeline(pipeline_id).await;
     let registration = engine
@@ -1768,7 +1765,6 @@ async fn diagnostics_supports_active_file_ingest() {
         "file-diag-key",
         Some("file"),
         None,
-        None,
     )
     .await
     .unwrap();
@@ -1954,7 +1950,7 @@ async fn health_shows_registered_egress() {
             "POST",
             &format!("/api/v1/pipelines/{pid}/outputs"),
             &cookie,
-            Some(r#"{"name":"O","url":"rtmp://dest/live/k","encoding":"source"}"#),
+            Some(r#"{"name":"O","url":"rtmp://dest/live/k","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
@@ -2013,7 +2009,7 @@ async fn output_status_and_health_preserve_recent_egress_failure_after_unregiste
             "POST",
             &format!("/api/v1/pipelines/{pid}/outputs"),
             &cookie,
-            Some(r#"{"name":"O","url":"rtmp://dest/live/k","encoding":"source"}"#),
+            Some(r#"{"name":"O","url":"rtmp://dest/live/k","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
@@ -2095,7 +2091,7 @@ async fn active_output_status_ignores_stale_retry_state_after_restart() {
             "POST",
             &format!("/api/v1/pipelines/{pid}/outputs"),
             &cookie,
-            Some(r#"{"name":"O","url":"rtmp://dest/live/k","encoding":"source"}"#),
+            Some(r#"{"name":"O","url":"rtmp://dest/live/k","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
@@ -2188,7 +2184,7 @@ async fn recovered_output_surfaces_flapping_after_repeated_sink_failures() {
             "POST",
             &format!("/api/v1/pipelines/{pid}/outputs"),
             &cookie,
-            Some(r#"{"name":"O","url":"rtmp://dest/live/k","encoding":"source"}"#),
+            Some(r#"{"name":"O","url":"rtmp://dest/live/k","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
@@ -2277,7 +2273,7 @@ async fn delete_output_cancels_egress() {
             "POST",
             &format!("/api/v1/pipelines/{pid}/outputs"),
             &cookie,
-            Some(r#"{"name":"O","url":"rtmp://dest/live/k","encoding":"source"}"#),
+            Some(r#"{"name":"O","url":"rtmp://dest/live/k","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
@@ -2331,7 +2327,7 @@ async fn health_endpoint_exposes_probe_and_egress_fault_fields() {
             "POST",
             &format!("/api/v1/pipelines/{pid}/outputs"),
             &cookie,
-            Some(r#"{"name":"O","url":"rtmp://dest/live/k","encoding":"source"}"#),
+            Some(r#"{"name":"O","url":"rtmp://dest/live/k","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
@@ -3378,7 +3374,6 @@ async fn v1_pipeline_list_detail_and_graph_endpoints_return_payloads() {
         "key_v1",
         None,
         Some("source"),
-        None,
     )
     .await
     .unwrap();
@@ -3390,7 +3385,7 @@ async fn v1_pipeline_list_detail_and_graph_endpoints_return_payloads() {
         "rtmp://example/live/key",
         None,
         "stopped",
-        "source",
+        &OutputConfig::default(),
     )
     .await
     .unwrap();
@@ -3837,7 +3832,7 @@ async fn agent_context_returns_redacted_state_bundle() {
                 &serde_json::json!({
                     "name": "Redacted CDN",
                     "url": raw_output_url,
-                    "encoding": "source"
+                    "config": {"video": {"mode": "source"}, "audio": {"mode": "all"}}
                 })
                 .to_string(),
             ),
@@ -4029,7 +4024,7 @@ async fn agent_plan_validates_and_previews_stage_impact() {
                         "kind": "addOutput",
                         "name": "Primary CDN",
                         "url": "rtmp://example/live/key",
-                        "encoding": "720p+atrack:0"
+                        "config": {"video": {"mode": "preset", "preset": "720p"}, "audio": {"mode": "downmix", "track": 0}}
                     }]
                 })
                 .to_string(),
@@ -4075,7 +4070,7 @@ async fn agent_plan_validate_reports_invalid_changes() {
                     "proposedChanges": [{
                         "kind": "addOutput",
                         "url": "ftp://example/live/key",
-                        "encoding": "custom"
+                        "config": {"video": {"mode": "custom"}, "audio": {"mode": "all"}}
                     }]
                 })
                 .to_string(),
@@ -4166,7 +4161,7 @@ async fn agent_operation_lifecycle_is_approval_gated_redacted_and_verified() {
             "kind": "addOutput",
             "name": "Agent CDN",
             "url": raw_output_url,
-            "encoding": "source",
+            "config": {"video": {"mode": "source"}, "audio": {"mode": "all"}},
             "desiredState": "stopped"
         }]
     });
@@ -4417,7 +4412,7 @@ async fn agent_graph_diff_preview_returns_404_when_compiled_out() {
             "POST",
             "/api/v1/agent/graph-diff-preview",
             &cookie,
-            Some(r#"{"changes":[]}"#),
+            Some(r#"{"intent":"preview","proposedChanges":[]}"#),
         ))
         .await
         .unwrap();

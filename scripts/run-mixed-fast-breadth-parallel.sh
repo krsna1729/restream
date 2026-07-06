@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT=${WORK_DIR:-"test/artifacts/mixed/fast-breadth-parallel-$(date +%Y%m%dT%H%M%S)"}
-BIN=${HARNESS_BIN:-target/bench/test_harness}
+RUNNER=${HARNESS_RUNNER:-scripts/run-bench-harness.sh}
 MODE=${HARNESS_MODE:-mixed.fast-breadth}
 N_PER_GROUP_VALUE=${N_PER_GROUP:-1}
 SKIP_LOAD_VALUE=${SKIP_LOAD:-1}
@@ -10,18 +10,12 @@ COLLECT_FAILURES_VALUE=${COLLECT_FAILURES:-1}
 HARNESS_ARGS=${HARNESS_ARGS:---no-netns}
 REQUIRE_CLEAN_RUNTIME_VALUE=${REQUIRE_CLEAN_RUNTIME:-0}
 
-if [[ ! -x "$BIN" ]]; then
-  echo "missing harness binary at $BIN; build it first with scripts/build-bench-harness.sh or scripts/resource-limit cargo build --profile bench --bin test_harness" >&2
+if [[ ! -x "$RUNNER" ]]; then
+  echo "missing harness runner at $RUNNER" >&2
   exit 1
 fi
 
-if [[ "$BIN" == "target/bench/test_harness" ]] \
-  && [[ -x target/release/test_harness && -x target/release/restream ]] \
-  && { [[ ! -x target/bench/test_harness ]] || [[ target/release/test_harness -nt target/bench/test_harness ]] || [[ ! -x target/bench/restream ]] || [[ target/release/restream -nt target/bench/restream ]]; }; then
-  mkdir -p target/bench
-  cp target/release/test_harness target/bench/test_harness
-  cp target/release/restream target/bench/restream
-fi
+BENCH_BUILD=if-needed "$RUNNER" --prepare
 
 mkdir -p "$ROOT"
 
@@ -73,9 +67,9 @@ run_group() {
 
     if [[ -n "$HARNESS_ARGS" ]]; then
       # shellcheck disable=SC2086
-      exec "$BIN" "$MODE" $HARNESS_ARGS
+      BENCH_BUILD=never exec "$RUNNER" "$MODE" -- $HARNESS_ARGS
     else
-      exec "$BIN" "$MODE"
+      BENCH_BUILD=never exec "$RUNNER" "$MODE"
     fi
   ) >"$group_dir/result.json" 2>"$group_dir/stderr.log" &
   group_pids+=("$!")

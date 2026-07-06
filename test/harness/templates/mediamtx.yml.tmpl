@@ -1,0 +1,17 @@
+logLevel: warn
+rtmp: yes
+rtmpAddress: :${ports.mtxRtmp}
+rtmpEncryption: "no"
+rtsp: no
+srt: yes
+srtAddress: :${ports.mtxSrt}
+hls: yes
+hlsAddress: :${ports.mtxHls}
+hlsPartDuration: 200ms
+hlsSegmentDuration: 2s
+webrtc: no
+api: yes
+apiAddress: :${ports.mtxApi}
+metrics: no
+paths:
+  all:

@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "id": "fault-retry-budget",
+  "runtimeProfile": "default",
+  "stack": "fault",
+  "steps": [
+    {
+      "op": "createPipeline",
+      "as": "pipeline",
+      "name": "${case.pipeline}",
+      "streamKey": "${case.pipeline}"
+    },
+    {
+      "op": "derive",
+      "as": "deadSinkPort",
+      "value": "${ports.sink + case.deadSinkOffset}"
+    },
+    {
+      "op": "createOutput",
+      "as": "output",
+      "pipeline": "${pipeline.id}",
+      "name": "${case.outputName}",
+      "deadSinkPort": "${deadSinkPort}",
+      "encoding": "source"
+    },
+    {
+      "op": "spawnPublisher",
+      "as": "publisher",
+      "fixture": "h264-primary"
+    },
+    {
+      "op": "waitApiInputLive",
+      "pipeline": "${pipeline.id}",
+      "timeoutSecs": 15
+    },
+    {
+      "op": "startOutput",
+      "pipeline": "${pipeline.id}",
+      "output": "${output.id}"
+    },
+    {
+      "op": "pollOutputStatus",
+      "as": "retryStatus",
+      "pipeline": "${pipeline.id}",
+      "output": "${output.id}",
+      "until": {
+        "field": "status",
+        "equals": "failed"
+      },
+      "timeoutSecs": 8,
+      "intervalMs": 100,
+      "capture": [
+        "sawRetrying",
+        "sawFailed",
+        "retryAttempts",
+        "retryBackoffMs"
+      ]
+    },
+    {
+      "op": "sleep",
+      "millis": 500
+    },
+    {
+      "op": "getOutputStatus",
+      "as": "stableStatus",
+      "pipeline": "${pipeline.id}",
+      "output": "${output.id}",
+      "timeoutSecs": 2
+    },
+    {
+      "op": "getEngineHealth",
+      "as": "health",
+      "pipeline": "${pipeline.id}",
+      "output": "${output.id}"
+    },
+    {
+      "op": "assert",
+      "id": "retry-budget-exhausted",
+      "all": [
+        "retryStatus.sawRetrying || stableStatus.recentFailureCount >= 2 || health.output.recentFailureCount >= 2",
+        "retryStatus.sawFailed",
+        "stableStatus.status == 'failed'",
+        "health.output.status == 'failed'",
+        "stableStatus.retrying == false",
+        "stableStatus.retryAttempts == null",
+        "stableStatus.retryBackoffMs == null",
+        "stableStatus.retryRemainingMs == null"
+      ]
+    },
+    {
+      "op": "stop",
+      "targets": [
+        "publisher",
+        "outputs"
+      ]
+    }
+  ]
+}

@@ -332,7 +332,8 @@
         "id": "mixed.live.rtmp.h264.a1.bf0",
         "rationale": "RTMP publisher without B-frames",
         "checks": [
-          "ffprobe"
+          "ffprobe",
+          "signal"
         ]
       },
       {

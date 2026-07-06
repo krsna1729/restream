@@ -261,7 +261,7 @@ live integration tests (`src/bin/test_harness.rs`). As of June 27, 2026 all
 | `GET` | `/api/v1/pipelines` | ✓ | ✓ | |
 | `POST` | `/api/v1/pipelines` | ✓ | ✓ | Create |
 | `PATCH` | `/api/v1/pipelines/:id` | ✓ | — | Update |
-| `DELETE` | `/api/v1/pipelines/:id` | ✓ | ✓ | fault-resilience SRT test |
+| `DELETE` | `/api/v1/pipelines/:id` | ✓ | ✓ | fault.resilience SRT test |
 
 **File ingest**
 
@@ -309,7 +309,7 @@ live integration tests (`src/bin/test_harness.rs`). As of June 27, 2026 all
 | `PUT` | `/api/v1/ingests/:id` | ✓ | — | |
 | `DELETE` | `/api/v1/ingests/:id` | ✓ | — | |
 | `POST` | `/api/v1/ingests/:id/start` | ✓ | ✓ | |
-| `POST` | `/api/v1/ingests/:id/stop` | — | ✓ | fault-resilience |
+| `POST` | `/api/v1/ingests/:id/stop` | — | ✓ | fault.resilience |
 
 **Status and health**
 
@@ -582,8 +582,7 @@ legacy all-bash ramp path while bisecting harness behavior, or set
 ### `mixed.matrix` — Mixed input/output correctness
 
 ```sh
-./scripts/build-bench-harness.sh
-N_PER_GROUP=2 ONLY_CHECKS=hls scripts/resource-limit target/bench/test_harness mixed.matrix
+N_PER_GROUP=2 ONLY_CHECKS=hls ./scripts/run-bench-harness.sh mixed.matrix
 ```
 
 Exercises the table-driven input matrix. Names follow
@@ -607,10 +606,33 @@ multi-track RTMP ingest row unless the product contract changes.
 | `mixed.live.srt.h264.a2.{bf0,bf2}` | 2 | SRT | H.264 | 2 | multi-audio track routing |
 | `mixed.live.srt.h265.a2.{bf0,bf2}` | 2 | SRT | H.265 | 2 | HEVC + multi-audio |
 
-Each row can be run directly as `target/bench/test_harness <scenario-id>`, for
-example `target/bench/test_harness mixed.live.srt.h265.a2.bf2`. The aggregate
-`mixed.matrix` runs every row sequentially under its own work directory so
-artifacts and HLS segments from one case cannot contaminate another.
+Each row can be run through `scripts/run-bench-harness.sh <scenario-id>`, for
+example `scripts/run-bench-harness.sh mixed.live.srt.h265.a2.bf2`. By default the
+aggregate `mixed.matrix` reuses one shared Restream+MediaMTX stack per input
+family (`live-rtmp`, `live-srt`, `file-ingest`) and executes up to two cases per
+wave inside that stack, while still writing each case to its own work directory.
+Set `MIXED_MATRIX_SERIAL=1` to force the legacy fully serial execution order
+when bisecting.
+
+By default, full matrix runs now continue across scenario failures and emit an
+aggregate failure list at the end so one bad row does not hide later coverage.
+Set `MIXED_MATRIX_FAIL_FAST=1` when you need the old stop-at-first-failure
+behavior for tighter bisects.
+
+Signal quality checks are part of the full matrix default check set. Unless
+`ONLY_CHECKS` is explicitly set, every mixed row includes `signal` in its check
+selection. Matrix runs also default `COLLECT_FAILURES=1` and write
+`assertions.jsonl` in `WORK_DIR` unless `COLLECT_FAILURES` or `ASSERTION_LOG`
+is overridden.
+
+`scripts/run-bench-harness.sh` is the canonical measurement entrypoint: it
+builds bench-profile binaries first (unless `BENCH_BUILD=0` is set) and then
+executes `target/bench/test_harness` via `scripts/resource-limit`.
+
+While `mixed.matrix` is running, `WORK_DIR/scenario.json` is refreshed
+incrementally with live progress counters and per-case status. The `progress`
+section includes total/completed/in-progress/pending counts for both cases and
+output cells so operators can track sweep completion without tailing logs.
 
 The row structure is deliberately two-layered:
 
@@ -691,7 +713,7 @@ Expected resource counts (see
 | `h264-*-multi` | 2 (`720p`, `1080p`) | 6 | 0 |
 | `h265-*-multi` | 2 (`720p`, `1080p`) | 12 | 3 (`source`, `720p`, `1080p` RTMP paths) |
 
-Env: `N_PER_GROUP` (default 25).
+Env: `N_PER_GROUP` (default 2).
 
 The mixed matrix DSL lives in
 `src/bin/test_harness/mixed_matrix.json`. That JSON file owns the stable input
@@ -708,7 +730,7 @@ process lifecycle, sink/probe orchestration, API calls, and assertions. When
 adding a scenario, update the JSON DSL first, then update the typed expansion
 or runner verbs only if the existing axes cannot describe the new behavior.
 
-Smaller harness tables follow the same rule: `mode_specs.json`,
+Smaller harness tables follow the same rule: `test/harness/modes.json`,
 `ramp_configs.json`, `sweep_configs.json`, `resource_egress_scenarios.json`,
 and `fault_cases.json` own declarative rows; Rust owns typed parsing,
 validation, process verbs, and assertions. Prefer extending those manifests
@@ -950,10 +972,10 @@ The HLS PUT probe runs as part of `mixed.live.srt.h264.a1.bf2` and validates dum
 sink delivery, signed-query preservation, ffprobe readability, and restart
 recovery behavior.
 
-### `bframe-rtmp` — RTMP B-frame timestamp round-trip
+### `timestamp.bframe` — RTMP B-frame timestamp round-trip
 
 ```sh
-scripts/resource-limit target/debug/test_harness bframe-rtmp
+scripts/resource-limit target/debug/test_harness timestamp.bframe
 ```
 
 Publishes one RTMP H.264/AAC input with B-frames, starts an RTMP source output,
@@ -964,7 +986,7 @@ with `PTS > DTS` for `bframes=0`, and reordered video packets for `bframes=2`,
 while DTS stays monotone in every case.
 
 The public shell mode is now a thin artifact/summary wrapper around
-`cargo run --bin test_harness -- bframe-rtmp`; the live scenario, packet probe,
+`cargo run --bin test_harness -- timestamp.bframe`; the live scenario, packet probe,
 and assertions are implemented in Rust.
 
 ## Validation Results: June 20, 2026
@@ -1106,15 +1128,13 @@ detection):
 Publish H.265 via SRT. Verify SRT passthrough preserves HEVC identity, RTMP
 egress capability test, no silent HEVC-as-H.264 mislabeling.
 
-`cargo run --bin test_harness -- correctness-hevc-rtmp` covers the RTMP edge:
-it ingests H.265 over SRT, runs the shared `hevc_to_h264` stage, and verifies
-the RTMP egress as H.264 video plus AAC audio.
+`cargo run --bin test_harness -- mixed.live.srt.h265.a1.bf2` covers both HEVC
+edges from a single scenario: it ingests H.265 over SRT and, through its
+multi-protocol output plan, verifies the RTMP leg (shared `hevc_to_h264` stage,
+H.264 video plus AAC audio at the RTMP read endpoint) and the SRT leg (native
+HEVC passthrough, HEVC video plus AAC audio at the SRT read endpoint) together.
 
-`cargo run --bin test_harness -- correctness-hevc-srt` covers native SRT
-passthrough: it ingests H.265 over SRT, loops it through SRT egress, and
-verifies HEVC video plus AAC audio at the SRT read endpoint.
-
-`cargo run --bin test_harness -- correctness-srt-rtmp` covers the direct
+`cargo run --bin test_harness -- mixed.live.srt.h264.a1.bf0` covers the direct
 cross-protocol packetization path: it ingests H.264/AAC over SRT, loops it
 through RTMP egress, and verifies H.264 video plus AAC audio at the RTMP read
 endpoint.
@@ -1149,10 +1169,9 @@ Currently checked in:
 scripts/resource-limit target/debug/test_harness ramp-family
 scripts/resource-limit target/bench/test_harness mixed.live.srt.h264.a1.bf2
 scripts/resource-limit target/debug/test_harness bonding
-scripts/resource-limit target/debug/test_harness bframe-rtmp
-scripts/resource-limit target/debug/test_harness correctness-srt-rtmp
-scripts/resource-limit target/debug/test_harness correctness-hevc-rtmp
-scripts/resource-limit target/debug/test_harness correctness-hevc-srt
+scripts/resource-limit target/debug/test_harness timestamp.bframe
+scripts/resource-limit target/debug/test_harness mixed.live.srt.h264.a1.bf0
+scripts/resource-limit target/debug/test_harness mixed.live.srt.h265.a1.bf2
 ./target/bench/test_harness resource-sweep
 ./target/bench/test_harness bitrate-sweep
 test/run-media-validation.sh
@@ -1171,7 +1190,7 @@ in its own subdirectory, and records one JSONL result per mode in
 
 - `--run-id <id>` to choose the artifact run id
 - `--work-root <path>` to choose the aggregate artifact directory
-- `--only-modes mixed.live.srt.h264.a1.bf2,bframe-rtmp` to run a subset
+- `--only-modes mixed.live.srt.h264.a1.bf2,timestamp.bframe` to run a subset
 - `--preflight-only` to run readiness checks without starting live services
 - `--continue-on-fail` to keep collecting artifacts after the first failure
 
@@ -1190,8 +1209,8 @@ Why the aggregate runner lives in `test_harness` instead of a separate
   aggregate orchestration logic is already implemented in `test_harness`, so
   the extra wrapper only adds another compatibility surface to maintain.
 
-`mixed.live.srt.h264.a1.bf2`, `bframe-rtmp`, `correctness-srt-rtmp`,
-`correctness-hevc-rtmp`, and `correctness-hevc-srt` are behind typed Rust
+`mixed.live.srt.h264.a1.bf2`, `timestamp.bframe`, `mixed.live.srt.h264.a1.bf0`,
+and `mixed.live.srt.h265.a1.bf2` are behind typed Rust
 harness entry points, and `ramp-family` runs the full eight-config ramp matrix.
 `mixed.live.srt.h264.a1.bf2` owns the former anchor probe bundle.
 
@@ -1223,11 +1242,11 @@ These capabilities must be treated as test results, not assumptions:
 
 | Capability | Gate |
 |---|---|
-| RTMP H.264/AAC ingest and egress | B-frame timestamp round-trip through `target/debug/test_harness bframe-rtmp` |
+| RTMP H.264/AAC ingest and egress | B-frame timestamp round-trip through `target/debug/test_harness timestamp.bframe` |
 | SRT H.264 and H.265 ingest/egress | Full correctness matrix |
-| H.265 SRT passthrough | Live HEVC identity preservation through `target/debug/test_harness correctness-hevc-srt` |
-| H.265 source to RTMP egress | Live H.265→H.264 edge conversion through `target/debug/test_harness correctness-hevc-rtmp` |
-| Cross-protocol SRT→RTMP | Live H.264/AAC packetization through `target/debug/test_harness correctness-srt-rtmp` |
+| H.265 SRT passthrough | Live HEVC identity preservation through `target/debug/test_harness mixed.live.srt.h265.a1.bf2` |
+| H.265 source to RTMP egress | Live H.265→H.264 edge conversion through `target/debug/test_harness mixed.live.srt.h265.a1.bf2` |
+| Cross-protocol SRT→RTMP | Live H.264/AAC packetization through `target/debug/test_harness mixed.live.srt.h264.a1.bf0` |
 | Built-in video presets (`h264`, `720p`, `1080p`) | Decode/filter/encode loop is covered by transcoder integration tests |
 | Additional/custom video presets | Must be explicitly profiled and matrix-tested before advertising |
 | Embedded FFmpeg subprocess feature set | `scripts/build-static.sh` runs `restream-ffmpeg-capabilities` to prove the required codecs, `file`/`pipe` protocols, and `mov`/`matroska`/`mpegts` mux/demux surface are present |

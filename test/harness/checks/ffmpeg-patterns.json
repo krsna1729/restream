@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "decodeBadPatterns": [
+    "non-monoton",
+    "non monoton",
+    "invalid data",
+    "error while decoding",
+    "timestamp discontinuity",
+    "queue input is backward in time",
+    "too many packets buffered",
+    "aac bitstream error",
+    "missing picture"
+  ],
+  "srtSinkBadPatterns": [
+    "non-monoton",
+    "non monoton",
+    "invalid data",
+    "error while decoding",
+    "timestamp discontinuity",
+    "queue input is backward in time",
+    "too many packets buffered",
+    "aac bitstream error",
+    "missing picture"
+  ],
+  "decodeFallbacks": [
+    {
+      "name": "rtmp-srt-nonmonotone-warning-with-valid-video-dts",
+      "when": {
+        "urlPrefixes": [
+          "rtmp://",
+          "srt://"
+        ],
+        "exitStatus": 0,
+        "matchedPatternAny": [
+          "non monoton",
+          "non-monoton"
+        ]
+      },
+      "validate": "video-dts-monotone"
+    }
+  ]
+}

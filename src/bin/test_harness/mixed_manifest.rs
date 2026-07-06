@@ -410,13 +410,13 @@ pub(crate) struct MixedDslInput<'a> {
 
 impl MixedDslInput<'static> {
     pub(crate) fn to_case(&self) -> Result<MixedInputCase, String> {
-        let protocol = MixedInputProtocol::from_ingest_name(&self.ingest)
+        let protocol = MixedInputProtocol::from_ingest_name(self.ingest)
             .ok_or_else(|| format!("{} has unknown ingest {}", self.id, self.ingest))?;
-        let codec = MixedVideoCodec::from_scenario_token(&self.video)
+        let codec = MixedVideoCodec::from_scenario_token(self.video)
             .ok_or_else(|| format!("{} has unknown video {}", self.id, self.video))?;
-        let audio_layout = MixedInputAudioLayout::from_scenario_token(&self.audio)
+        let audio_layout = MixedInputAudioLayout::from_scenario_token(self.audio)
             .ok_or_else(|| format!("{} has unknown audio {}", self.id, self.audio))?;
-        let reorder = MixedInputReorder::from_scenario_token(&self.reorder)
+        let reorder = MixedInputReorder::from_scenario_token(self.reorder)
             .ok_or_else(|| format!("{} has unknown reorder {}", self.id, self.reorder))?;
         let expected = format!(
             "mixed.{}.{}.{}.{}.{}",
@@ -490,7 +490,7 @@ impl MixedDslOutputCase<'_> {
     pub(crate) fn to_output_case(&self) -> Result<MixedOutputCase, String> {
         Ok(MixedOutputCase {
             id: self.id.to_string(),
-            protocol: MixedOutputProtocol::from_name(&self.protocol).ok_or_else(|| {
+            protocol: MixedOutputProtocol::from_name(self.protocol).ok_or_else(|| {
                 format!("{} has unknown output protocol {}", self.id, self.protocol)
             })?,
             encoding: self.encoding.to_string(),
@@ -538,7 +538,7 @@ pub(crate) fn mixed_fast_breadth_cases() -> &'static [MixedFastBreadthCase] {
             .fast_breadth
             .iter()
             .map(|row| MixedFastBreadthCase {
-                case: mixed_input_case_from_manifest(&row.id),
+                case: mixed_input_case_from_manifest(row.id),
                 rationale: row.rationale.clone(),
                 checks: row
                     .check_specs()
@@ -556,7 +556,7 @@ pub(crate) fn mixed_fast_breadth_batches() -> &'static [MixedFastBreadthBatch] {
             .fast_breadth_batches
             .iter()
             .map(|batch| MixedFastBreadthBatch {
-                group: MixedSharedBatchGroup::from_str(&batch.group)
+                group: MixedSharedBatchGroup::from_str(batch.group)
                     .unwrap_or_else(|| panic!("{} is not a fast-breadth batch group", batch.group)),
                 cases: batch
                     .cases
