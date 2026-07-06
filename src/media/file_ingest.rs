@@ -2,7 +2,7 @@
 //! feeds the live ring-buffer graph as if it were an active publisher.
 
 use crate::media::avio::{CustomOutput, MemoryQueue};
-use crate::media::engine::{IngestRegistration, MediaEngine, StageMetrics};
+use crate::media::engine::{AudioMeta, IngestRegistration, MediaEngine, StageMetrics, VideoMeta};
 use crate::media::mpegts::TsDemuxer;
 use crate::media::ring_buffer::{MediaPacket, MediaType, RingBuffer};
 use ffmpeg_next::{codec, encoder, format, media};
@@ -361,6 +361,16 @@ fn h264_startup_state_from_stream(
     Some((annexb, sequence_header))
 }
 
+fn ingest_codec_name(id: ffmpeg_next::codec::Id) -> String {
+    match id {
+        ffmpeg_next::codec::Id::H264 => "h264",
+        ffmpeg_next::codec::Id::HEVC => "hevc",
+        ffmpeg_next::codec::Id::AAC => "aac",
+        other => return format!("{other:?}").to_ascii_lowercase(),
+    }
+    .to_string()
+}
+
 fn prime_input_video_startup_state(
     engine: &Arc<MediaEngine>,
     runtime_handle: &Handle,
@@ -388,6 +398,97 @@ fn prime_input_video_startup_state(
     });
 }
 
+// The internal TS-remux probe (see `maybe_publish_probe`) only resolves once
+// every stream has emitted a real-time-paced packet, so `ingest.video` /
+// `ingest.audio_tracks` otherwise stay empty until playback reaches whichever
+// track's first frame sits latest in the file's own timeline. Container
+// stream headers carry width/height/sample_rate/channel-count directly, so
+// read those up front to unblock `wait_for_stage_metadata` immediately.
+fn prime_input_container_metadata(
+    engine: &Arc<MediaEngine>,
+    runtime_handle: &Handle,
+    pipeline_id: &str,
+    ictx: &format::context::Input,
+) {
+    let mut video_meta = None;
+    let mut audio_tracks = Vec::new();
+    let mut track_index = 0u32;
+
+    for stream in ictx.streams() {
+        let params = stream.parameters();
+        match params.medium() {
+            media::Type::Video if video_meta.is_none() => unsafe {
+                let ptr = params.as_ptr();
+                if ptr.is_null() {
+                    continue;
+                }
+                let width = (*ptr).width.max(0) as u32;
+                let height = (*ptr).height.max(0) as u32;
+                if width > 0 && height > 0 {
+                    video_meta = Some(VideoMeta {
+                        codec: ingest_codec_name(params.id()),
+                        width,
+                        height,
+                        fps: 0.0,
+                        bw: None,
+                        pid: None,
+                        language: None,
+                        title: None,
+                        profile: None,
+                        level: None,
+                        pixel_format: None,
+                    });
+                }
+            },
+            media::Type::Audio => {
+                let (sample_rate, channels) = unsafe {
+                    let ptr = params.as_ptr();
+                    if ptr.is_null() {
+                        (0, 0)
+                    } else {
+                        (
+                            (*ptr).sample_rate.max(0) as u32,
+                            (*ptr).ch_layout.nb_channels.max(0) as u32,
+                        )
+                    }
+                };
+                if sample_rate > 0 && channels > 0 {
+                    audio_tracks.push(AudioMeta {
+                        codec: ingest_codec_name(params.id()),
+                        sample_rate,
+                        channels,
+                        track_index,
+                        ..Default::default()
+                    });
+                }
+                track_index += 1;
+            }
+            _ => {}
+        }
+    }
+
+    if video_meta.is_none() && audio_tracks.is_empty() {
+        return;
+    }
+
+    let first_audio = audio_tracks.first().cloned();
+    runtime_handle.block_on(async {
+        engine
+            .update_ingest_meta(pipeline_id, video_meta, first_audio, None)
+            .await;
+        if !audio_tracks.is_empty() {
+            engine
+                .update_ingest_audio_tracks(pipeline_id, audio_tracks)
+                .await;
+        }
+    });
+}
+
+// `build_avcc_sequence_header` only understands H.264 NAL types, so it
+// returns `None` for HEVC parameter sets. The FLV/AVCC sequence header cache
+// is an H.264-only optimization (raw RTMP passthrough); `video_parameter_sets`
+// on the ring buffer must still be set for any codec so
+// `wait_for_stage_metadata` can unblock transcoder stages waiting on it.
 fn prime_input_video_startup_state_from_packet(
     engine: &Arc<MediaEngine>,
     runtime_handle: &Handle,
@@ -398,17 +499,16 @@ fn prime_input_video_startup_state_from_packet(
     let Some(parameter_sets) = crate::media::codec::annexb_parameter_sets(payload) else {
         return false;
     };
-    let Some(sequence_header) = crate::media::codec::build_avcc_sequence_header(&parameter_sets)
-    else {
-        return false;
-    };
 
+    let sequence_header = crate::media::codec::build_avcc_sequence_header(&parameter_sets);
     ring_buffer.set_video_parameter_sets(parameter_sets);
-    runtime_handle.block_on(async {
-        engine
-            .cache_sequence_header(pipeline_id, true, sequence_header)
-            .await;
-    });
+    if let Some(sequence_header) = sequence_header {
+        runtime_handle.block_on(async {
+            engine
+                .cache_sequence_header(pipeline_id, true, sequence_header)
+                .await;
+        });
+    }
     true
 }
 
@@ -444,6 +544,7 @@ fn run_internal_file_ingest_once(
 
     let mut startup_video_state_primed = false;
     prime_input_video_startup_state(engine, runtime_handle, pipeline_id, ring_buffer, &ictx);
+    prime_input_container_metadata(engine, runtime_handle, pipeline_id, &ictx);
 
     let mut stream_mapping = vec![-1i32; ictx.nb_streams() as usize];
     let mut ist_time_bases = vec![ffmpeg_next::Rational(0, 1); ictx.nb_streams() as usize];
@@ -743,12 +844,15 @@ fn maybe_publish_probe(
 mod tests {
     use super::maybe_publish_probe;
     use super::parse_start_time_ms;
+    use super::prime_input_container_metadata;
+    use super::prime_input_video_startup_state_from_packet;
     use super::spawn_internal_file_ingest;
     use super::{ContinuousTimestampState, LoopTimestampState};
     use crate::media::engine::MediaEngine;
     use crate::media::mpegts::TsDemuxer;
     use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat};
     use bytes::Bytes;
+    use ffmpeg_next::format;
     use std::sync::Arc;
     use tokio::time::{Duration, sleep};
 
@@ -1020,6 +1124,101 @@ mod tests {
 
         registration.cancel_token.cancel();
         sleep(Duration::from_millis(250)).await;
+    }
+
+    #[test]
+    fn prime_input_video_startup_state_from_packet_sets_ring_parameter_sets_for_hevc() {
+        // HEVC has no AVCC/FLV sequence header (build_avcc_sequence_header
+        // only understands H.264 NALs, so it returns None for HEVC VPS/SPS/
+        // PPS), but wait_for_stage_metadata's eager-parameter-sets gate for
+        // VideoPreset transcoder stages only needs
+        // `ring_buffer.video_parameter_sets()` — that must still get set from
+        // the first video packet even when no AVCC header can be built.
+        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+        let engine = Arc::new(MediaEngine::new());
+        let pipeline_id = "pipe-file-hevc-paramsets-direct";
+        runtime
+            .block_on(engine.try_register_ingest_attempt(pipeline_id, "hevc-key", "file"))
+            .expect("register ingest");
+        let ring_buffer = runtime.block_on(engine.get_or_create_pipeline(pipeline_id));
+
+        let fixture = crate::test_fixtures::av_marker_transport_fixture_for_bframes(
+            "h265",
+            false,
+            crate::test_fixtures::AvMarkerBframeMode::Bf0,
+        )
+        .expect("checked-in hevc bf0 transport fixture");
+        let fixture_bytes = std::fs::read(fixture).expect("read checked-in transport fixture");
+
+        let mut demuxer = TsDemuxer::new();
+        let mut packets = Vec::new();
+        demuxer.feed(&fixture_bytes);
+        demuxer.flush();
+        demuxer.drain_into(&mut packets);
+
+        let video_payload = packets
+            .iter()
+            .find(|pkt| pkt.media_type == MediaType::Video)
+            .map(|pkt| pkt.payload.clone())
+            .expect("fixture should contain at least one video packet");
+
+        assert!(
+            crate::media::codec::build_avcc_sequence_header(
+                &crate::media::codec::annexb_parameter_sets(&video_payload)
+                    .expect("hevc payload should carry VPS/SPS/PPS")
+            )
+            .is_none(),
+            "sanity check: HEVC parameter sets must not build an AVCC header"
+        );
+
+        let primed = prime_input_video_startup_state_from_packet(
+            &engine,
+            runtime.handle(),
+            pipeline_id,
+            &ring_buffer,
+            &video_payload,
+        );
+
+        assert!(primed, "priming should report success for HEVC packets");
+        assert!(
+            ring_buffer.video_parameter_sets().is_some(),
+            "HEVC video packet should prime ring buffer parameter sets even without an AVCC header"
+        );
+    }
+
+    #[test]
+    fn prime_input_container_metadata_populates_ingest_before_any_packet_read() {
+        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+        let engine = Arc::new(MediaEngine::new());
+        let pipeline_id = "pipe-file-ingest-eager-meta";
+        runtime
+            .block_on(engine.try_register_ingest_attempt(pipeline_id, "eager-meta-key", "file"))
+            .expect("register ingest");
+
+        let fixture = crate::test_fixtures::av_marker_transport_fixture("h265", true)
+            .expect("checked-in 2-audio-track transport fixture");
+        let ictx = format::input(&fixture).expect("open fixture container");
+
+        // No packets have been read or paced yet: this proves metadata comes
+        // from container stream headers, not from the packet-paced probe.
+        prime_input_container_metadata(&engine, runtime.handle(), pipeline_id, &ictx);
+
+        runtime.block_on(async {
+            let ingests = engine.ingests.active.read().await;
+            let ingest = ingests.get(pipeline_id).expect("ingest registered");
+            let video = ingest.video.as_ref().expect("video meta primed eagerly");
+            assert_eq!(video.codec, "hevc");
+            assert!(video.width > 0 && video.height > 0);
+
+            let audio_tracks = ingest
+                .audio_tracks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            assert_eq!(audio_tracks.len(), 2, "both audio tracks should be primed");
+            for track in audio_tracks.iter() {
+                assert!(track.sample_rate > 0 && track.channels > 0);
+            }
+        });
     }
 
     #[test]
