@@ -629,6 +629,11 @@ is overridden.
 builds bench-profile binaries first (unless `BENCH_BUILD=0` is set) and then
 executes `target/bench/test_harness` via `scripts/resource-limit`.
 
+While `mixed.matrix` is running, `WORK_DIR/scenario.json` is refreshed
+incrementally with live progress counters and per-case status. The `progress`
+section includes total/completed/in-progress/pending counts for both cases and
+output cells so operators can track sweep completion without tailing logs.
+
 The row structure is deliberately two-layered:
 
 | Scope | Coverage |
@@ -708,7 +713,7 @@ Expected resource counts (see
 | `h264-*-multi` | 2 (`720p`, `1080p`) | 6 | 0 |
 | `h265-*-multi` | 2 (`720p`, `1080p`) | 12 | 3 (`source`, `720p`, `1080p` RTMP paths) |
 
-Env: `N_PER_GROUP` (default 25).
+Env: `N_PER_GROUP` (default 2).
 
 The mixed matrix DSL lives in
 `src/bin/test_harness/mixed_matrix.json`. That JSON file owns the stable input

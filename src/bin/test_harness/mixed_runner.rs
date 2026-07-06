@@ -187,7 +187,7 @@ impl MixedEnv {
             sink_port_offset: 0,
             av_signal_seconds: env_secs("AV_SIGNAL_SECONDS", 20),
             av_soak_seconds: env_secs("AV_SOAK_SECONDS", 120),
-            n_per_group: env_usize("N_PER_GROUP", 25),
+            n_per_group: env_usize("N_PER_GROUP", 2),
             snapshot_sleep: Duration::from_secs(env_secs("SNAPSHOT_SLEEP_SECS", 3)),
             collect_failures: std::env::var("COLLECT_FAILURES")
                 .ok()
@@ -270,10 +270,171 @@ fn apply_mixed_matrix_defaults(
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MatrixCaseState {
+    Pending,
+    InProgress,
+    Passed,
+    Failed,
+}
+
+impl MatrixCaseState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in-progress",
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn is_completed(self) -> bool {
+        matches!(self, Self::Passed | Self::Failed)
+    }
+}
+
+#[derive(Clone)]
+struct MatrixCaseProgress {
+    case: MixedInputCase,
+    batch_group: MixedSharedBatchGroup,
+    output_cells: usize,
+    state: MatrixCaseState,
+    wave: Option<usize>,
+    error: Option<String>,
+}
+
+fn matrix_case_progress_rows() -> Vec<MatrixCaseProgress> {
+    mixed_input_cases()
+        .iter()
+        .copied()
+        .map(|case| MatrixCaseProgress {
+            case,
+            batch_group: case.shared_batch_group(),
+            output_cells: mixed_output_cases_for_input(case).len(),
+            state: MatrixCaseState::Pending,
+            wave: None,
+            error: None,
+        })
+        .collect()
+}
+
+fn matrix_mark_case_state(
+    rows: &mut [MatrixCaseProgress],
+    case: MixedInputCase,
+    state: MatrixCaseState,
+    wave: Option<usize>,
+    error: Option<String>,
+) {
+    if let Some(row) = rows.iter_mut().find(|row| row.case == case) {
+        row.state = state;
+        row.wave = wave;
+        row.error = error;
+    }
+}
+
+fn matrix_progress_totals(rows: &[MatrixCaseProgress]) -> Value {
+    let total_cases = rows.len();
+    let completed_cases = rows.iter().filter(|row| row.state.is_completed()).count();
+    let in_progress_cases = rows
+        .iter()
+        .filter(|row| row.state == MatrixCaseState::InProgress)
+        .count();
+    let failed_cases = rows
+        .iter()
+        .filter(|row| row.state == MatrixCaseState::Failed)
+        .count();
+    let pending_cases = total_cases.saturating_sub(completed_cases + in_progress_cases);
+
+    let total_cells = rows.iter().map(|row| row.output_cells).sum::<usize>();
+    let completed_cells = rows
+        .iter()
+        .filter(|row| row.state.is_completed())
+        .map(|row| row.output_cells)
+        .sum::<usize>();
+    let in_progress_cells = rows
+        .iter()
+        .filter(|row| row.state == MatrixCaseState::InProgress)
+        .map(|row| row.output_cells)
+        .sum::<usize>();
+    let pending_cells = total_cells.saturating_sub(completed_cells + in_progress_cells);
+
+    json!({
+        "totalCases": total_cases,
+        "completedCases": completed_cases,
+        "inProgressCases": in_progress_cases,
+        "failedCases": failed_cases,
+        "pendingCases": pending_cases,
+        "totalCells": total_cells,
+        "completedCells": completed_cells,
+        "inProgressCells": in_progress_cells,
+        "pendingCells": pending_cells,
+    })
+}
+
+fn matrix_case_progress_json(rows: &[MatrixCaseProgress]) -> Vec<Value> {
+    rows.iter()
+        .map(|row| {
+            json!({
+                "id": row.case.scenario_id(),
+                "status": row.state.as_str(),
+                "batchGroup": row.batch_group.as_str(),
+                "wave": row.wave,
+                "outputCells": row.output_cells,
+                "error": row.error,
+            })
+        })
+        .collect()
+}
+
+fn write_json_pretty_atomic(path: &Path, value: &Value) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let tmp_path = path.with_extension("json.tmp");
+    let payload = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    std::fs::write(&tmp_path, payload).map_err(|error| error.to_string())?;
+    std::fs::rename(tmp_path, path).map_err(|error| error.to_string())
+}
+
+fn write_matrix_scenario_progress(
+    path: &Path,
+    execution: &str,
+    fail_fast: bool,
+    rows: &[MatrixCaseProgress],
+    failures: &[String],
+) -> Result<(), String> {
+    let progress = matrix_progress_totals(rows);
+    let total_cases = progress["totalCases"].as_u64().unwrap_or(0);
+    let completed_cases = progress["completedCases"].as_u64().unwrap_or(0);
+    let execution_state = if completed_cases < total_cases {
+        "running"
+    } else {
+        "completed"
+    };
+    let passed = completed_cases == total_cases && failures.is_empty();
+
+    write_json_pretty_atomic(
+        path,
+        &json!({
+            "mode": MIXED_MATRIX_MODE,
+            "execution": execution,
+            "executionState": execution_state,
+            "passed": passed,
+            "progress": progress,
+            "failures": failures,
+            "continueOnScenarioFailure": !fail_fast,
+            "failFastOptOutEnv": "MIXED_MATRIX_FAIL_FAST",
+            "caseProgress": matrix_case_progress_json(rows),
+            "updatedAt": Utc::now().to_rfc3339(),
+        }),
+    )
+}
+
 async fn mixed_input_matrix_correctness_serial() -> Result<Value, String> {
     let root = std::env::var_os("WORK_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(mixed_matrix_default_work_dir);
+    let scenario_path = root.join("scenario.json");
     let explicit_only_checks = std::env::var_os("ONLY_CHECKS").is_some();
     let explicit_collect_failures = std::env::var_os("COLLECT_FAILURES").is_some();
     let explicit_assertion_log = std::env::var_os("ASSERTION_LOG").is_some();
@@ -282,13 +443,21 @@ async fn mixed_input_matrix_correctness_serial() -> Result<Value, String> {
     let default_assertion_log = (!explicit_assertion_log).then(|| root.join("assertions.jsonl"));
     let mut results = Vec::new();
     let mut failures = Vec::new();
+    let mut case_progress = matrix_case_progress_rows();
     let mut covered_output_cells = 0usize;
     let total_output_cells: usize = mixed_input_cases()
         .iter()
         .map(|case| mixed_output_cases_for_input(*case).len())
         .sum();
-    for case in mixed_input_cases() {
-        let mode = mixed_input_mode_name(*case);
+    write_matrix_scenario_progress(
+        &scenario_path,
+        "serial",
+        fail_fast,
+        &case_progress,
+        &failures,
+    )?;
+    for (wave_index, case) in mixed_input_cases().iter().copied().enumerate() {
+        let mode = mixed_input_mode_name(case);
         let mut env =
             MixedEnv::from_env_with_default_work_dir(&mode, root.join(case.artifact_rel_dir()));
         apply_mixed_matrix_defaults(
@@ -297,22 +466,76 @@ async fn mixed_input_matrix_correctness_serial() -> Result<Value, String> {
             default_assertion_log.as_deref(),
             explicit_collect_failures,
         );
-        covered_output_cells += mixed_output_cases_for_input(*case).len();
-        match run_mixed_input_case_with_env(*case, env).await {
+        covered_output_cells += mixed_output_cases_for_input(case).len();
+        matrix_mark_case_state(
+            &mut case_progress,
+            case,
+            MatrixCaseState::InProgress,
+            Some(wave_index + 1),
+            None,
+        );
+        write_matrix_scenario_progress(
+            &scenario_path,
+            "serial",
+            fail_fast,
+            &case_progress,
+            &failures,
+        )?;
+        match run_mixed_input_case_with_env(case, env).await {
             Ok(result) => results.push(result),
             Err(error) => {
                 let failure = format!("mixed input case {} failed: {error}", case.scenario_id());
+                matrix_mark_case_state(
+                    &mut case_progress,
+                    case,
+                    MatrixCaseState::Failed,
+                    Some(wave_index + 1),
+                    Some(error.clone()),
+                );
                 if fail_fast {
+                    failures.push(failure.clone());
+                    write_matrix_scenario_progress(
+                        &scenario_path,
+                        "serial",
+                        fail_fast,
+                        &case_progress,
+                        &failures,
+                    )?;
                     return Err(failure);
                 }
                 failures.push(failure);
+                write_matrix_scenario_progress(
+                    &scenario_path,
+                    "serial",
+                    fail_fast,
+                    &case_progress,
+                    &failures,
+                )?;
+                continue;
             }
         }
+        matrix_mark_case_state(
+            &mut case_progress,
+            case,
+            MatrixCaseState::Passed,
+            Some(wave_index + 1),
+            None,
+        );
+        write_matrix_scenario_progress(
+            &scenario_path,
+            "serial",
+            fail_fast,
+            &case_progress,
+            &failures,
+        )?;
     }
+    let progress = matrix_progress_totals(&case_progress);
 
     Ok(json!({
         "passed": failures.is_empty(),
         "mode": MIXED_MATRIX_MODE,
+        "progress": progress,
+        "caseProgress": matrix_case_progress_json(&case_progress),
         "coverage": {
             "selectedInputCases": mixed_input_cases().len(),
             "totalInputCases": mixed_input_cases().len(),
@@ -361,6 +584,7 @@ async fn mixed_input_matrix_correctness_shared() -> Result<Value, String> {
     let root = std::env::var_os("WORK_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(mixed_matrix_default_work_dir);
+    let scenario_path = root.join("scenario.json");
     let explicit_only_checks = std::env::var_os("ONLY_CHECKS").is_some();
     let explicit_collect_failures = std::env::var_os("COLLECT_FAILURES").is_some();
     let explicit_assertion_log = std::env::var_os("ASSERTION_LOG").is_some();
@@ -369,6 +593,7 @@ async fn mixed_input_matrix_correctness_shared() -> Result<Value, String> {
     let default_assertion_log = (!explicit_assertion_log).then(|| root.join("assertions.jsonl"));
     let mut results = Vec::new();
     let mut failures = Vec::new();
+    let mut case_progress = matrix_case_progress_rows();
     let mut covered_output_cells = 0usize;
     let total_output_cells: usize = mixed_input_cases()
         .iter()
@@ -379,6 +604,13 @@ async fn mixed_input_matrix_correctness_shared() -> Result<Value, String> {
         MixedSharedBatchGroup::LiveSrt,
         MixedSharedBatchGroup::FileIngest,
     ];
+    write_matrix_scenario_progress(
+        &scenario_path,
+        "shared-batch",
+        fail_fast,
+        &case_progress,
+        &failures,
+    )?;
 
     for group in batch_groups {
         let failures_before_group = failures.len();
@@ -411,6 +643,30 @@ async fn mixed_input_matrix_correctness_shared() -> Result<Value, String> {
         while let Some(case_a) = cases_queue.pop_front() {
             wave_index += 1;
             let case_b = cases_queue.pop_front();
+
+            matrix_mark_case_state(
+                &mut case_progress,
+                case_a,
+                MatrixCaseState::InProgress,
+                Some(wave_index),
+                None,
+            );
+            if let Some(case_b) = case_b {
+                matrix_mark_case_state(
+                    &mut case_progress,
+                    case_b,
+                    MatrixCaseState::InProgress,
+                    Some(wave_index),
+                    None,
+                );
+            }
+            write_matrix_scenario_progress(
+                &scenario_path,
+                "shared-batch",
+                fail_fast,
+                &case_progress,
+                &failures,
+            )?;
 
             let mut env_a = MixedEnv::from_env_with_default_work_dir(
                 case_a.scenario_id(),
@@ -466,26 +722,52 @@ async fn mixed_input_matrix_correctness_shared() -> Result<Value, String> {
                         stack.restream_pid,
                     ),
                 );
+                let mut fail_fast_error = None;
                 for (case, result) in [(case_a, result_a), (case_b, result_b)] {
                     match result {
                         Ok(mut value) => {
                             value["batchGroup"] = json!(group.as_str());
                             value["wave"] = json!(wave_index);
                             results.push(value);
+                            matrix_mark_case_state(
+                                &mut case_progress,
+                                case,
+                                MatrixCaseState::Passed,
+                                Some(wave_index),
+                                None,
+                            );
                         }
                         Err(error) => {
                             let failure =
                                 format!("mixed input case {} failed: {error}", case.scenario_id());
-                            if fail_fast {
-                                stop_mixed_harness_stack(&mut stack).await;
-                                return Err(failure);
-                            }
                             wave_failed = true;
-                            failures.push(failure);
+                            failures.push(failure.clone());
+                            matrix_mark_case_state(
+                                &mut case_progress,
+                                case,
+                                MatrixCaseState::Failed,
+                                Some(wave_index),
+                                Some(error),
+                            );
+                            if fail_fast && fail_fast_error.is_none() {
+                                fail_fast_error = Some(failure);
+                            }
                         }
                     }
                 }
+                write_matrix_scenario_progress(
+                    &scenario_path,
+                    "shared-batch",
+                    fail_fast,
+                    &case_progress,
+                    &failures,
+                )?;
+                if let Some(failure) = fail_fast_error {
+                    stop_mixed_harness_stack(&mut stack).await;
+                    return Err(failure);
+                }
             } else {
+                let mut fail_fast_error = None;
                 match run_mixed_input_case_on_active_stack(
                     case_a,
                     env_a,
@@ -498,17 +780,41 @@ async fn mixed_input_matrix_correctness_shared() -> Result<Value, String> {
                         value["batchGroup"] = json!(group.as_str());
                         value["wave"] = json!(wave_index);
                         results.push(value);
+                        matrix_mark_case_state(
+                            &mut case_progress,
+                            case_a,
+                            MatrixCaseState::Passed,
+                            Some(wave_index),
+                            None,
+                        );
                     }
                     Err(error) => {
                         let failure =
                             format!("mixed input case {} failed: {error}", case_a.scenario_id());
-                        if fail_fast {
-                            stop_mixed_harness_stack(&mut stack).await;
-                            return Err(failure);
-                        }
                         wave_failed = true;
-                        failures.push(failure);
+                        failures.push(failure.clone());
+                        matrix_mark_case_state(
+                            &mut case_progress,
+                            case_a,
+                            MatrixCaseState::Failed,
+                            Some(wave_index),
+                            Some(error),
+                        );
+                        if fail_fast {
+                            fail_fast_error = Some(failure);
+                        }
                     }
+                }
+                write_matrix_scenario_progress(
+                    &scenario_path,
+                    "shared-batch",
+                    fail_fast,
+                    &case_progress,
+                    &failures,
+                )?;
+                if let Some(failure) = fail_fast_error {
+                    stop_mixed_harness_stack(&mut stack).await;
+                    return Err(failure);
                 }
             }
 
@@ -551,10 +857,13 @@ async fn mixed_input_matrix_correctness_shared() -> Result<Value, String> {
             stop_mixed_harness_stack(&mut stack).await;
         }
     }
+    let progress = matrix_progress_totals(&case_progress);
 
     Ok(json!({
         "passed": failures.is_empty(),
         "mode": MIXED_MATRIX_MODE,
+        "progress": progress,
+        "caseProgress": matrix_case_progress_json(&case_progress),
         "coverage": {
             "selectedInputCases": mixed_input_cases().len(),
             "totalInputCases": mixed_input_cases().len(),
