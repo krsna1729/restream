@@ -3030,6 +3030,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shared_ts_muxer_prefers_preset_ring_parameter_sets_over_ingest_cache() {
+        let engine = Arc::new(crate::media::engine::MediaEngine::new());
+        let pipeline_id = "test-pipe-preset-mismatch";
+
+        // Raw ingest: registers an active ingest and caches an FLV AVC sequence
+        // header, exactly as RTMP ingest does. This populates the pipeline-level
+        // get_sequence_headers() cache with the *ingest's* (not the preset's)
+        // SPS/PPS.
+        let cancel_ingest = engine
+            .try_register_ingest(pipeline_id, "key", "rtmp")
+            .await
+            .unwrap();
+        engine
+            .update_ingest_meta(
+                pipeline_id,
+                Some(VideoMeta {
+                    codec: "h264".to_string(),
+                    width: 1920,
+                    height: 1080,
+                    fps: 30.0,
+                    bw: None,
+                    pid: None,
+                    language: None,
+                    title: None,
+                    profile: None,
+                    level: None,
+                    pixel_format: None,
+                }),
+                None,
+                None,
+            )
+            .await;
+        // FLV AVC sequence header tag body: [frame_type<<4|codec_id, pkt_type,
+        // composition_time(3 bytes), AVCDecoderConfigurationRecord...].
+        // AVCDecoderConfigurationRecord: version, profile, compat, level,
+        // nalu_len_size byte, num_sps, sps_len(u16), sps..., num_pps,
+        // pps_len(u16), pps... — encodes the ingest's own (1920x1080) SPS/PPS.
+        let ingest_flv_seq_header = bytes::Bytes::from(vec![
+            0x17, 0x00, 0x00, 0x00, 0x00, // FLV video tag header + composition time
+            0x01, 0x64, 0x00, 0x1e, 0xFF, // AVCC version/profile/compat/level/nalu_len
+            0x01, 0x00, 0x04, 0x67, 0x11, 0x22, 0x33, // 1 SPS, len 4
+            0x01, 0x00, 0x04, 0x68, 0x44, 0x55, 0x66, // 1 PPS, len 4
+        ]);
+        let ingest_parameter_sets: &[u8] = &[
+            0, 0, 0, 1, 0x67, 0x11, 0x22, 0x33, 0, 0, 0, 1, 0x68, 0x44, 0x55, 0x66,
+        ];
+        engine
+            .cache_sequence_header(pipeline_id, true, ingest_flv_seq_header)
+            .await;
+
+        // Preset/transcoded ring: a distinct ring (e.g. the 720p transcoder's
+        // output ring) with its own, different SPS/PPS.
+        let preset_ring = Arc::new(RingBuffer::new(16));
+        preset_ring.set_codec_hint("h264");
+        let preset_parameter_sets = vec![
+            0, 0, 0, 1, 0x67, 0xAA, 0xBB, 0xCC, 0, 0, 0, 1, 0x68, 0xDD, 0xEE, 0xFF,
+        ];
+        preset_ring.set_video_parameter_sets(preset_parameter_sets.clone());
+
+        let stage = engine
+            .get_or_create_ts_muxer_stage(pipeline_id, "720p", preset_ring.clone())
+            .await;
+        let mut reader = TsChunkReader::new("preset-reader".to_string(), &stage);
+        wait_for_shared_muxer_source_reader(&preset_ring).await;
+
+        preset_ring.push(crate::media::ring_buffer::MediaPacket {
+            media_type: MediaType::Video,
+            track_index: 0,
+            pts: 1000,
+            dts: 1000,
+            is_keyframe: true,
+            format: PayloadFormat::Flv,
+            payload: bytes::Bytes::from(vec![
+                0x17, 0x01, 0x00, 0x00, 0x00, // AVC keyframe packet, no composition offset
+                0x00, 0x00, 0x00, 0x04, 0x65, 0xAB, 0xCD,
+                0xEF, // one 4-byte-length-prefixed NALU
+            ]),
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let mut chunks = Vec::new();
+        assert!(reader.pull_burst(&mut chunks, 10).unwrap() > 0);
+
+        let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+        let mut packets = Vec::new();
+        for chunk in &chunks {
+            demuxer.feed(&chunk.payload);
+            demuxer.drain_into(&mut packets);
+        }
+        demuxer.flush();
+        demuxer.drain_into(&mut packets);
+
+        let video = packets
+            .iter()
+            .find(|packet| packet.media_type == MediaType::Video)
+            .expect("muxed TS should contain video");
+        assert!(
+            video.payload.starts_with(&preset_parameter_sets),
+            "preset SRT muxer must prime from its own transcoded ring's parameter sets, \
+             not the pipeline-level ingest sequence-header cache"
+        );
+        assert!(
+            !video.payload.starts_with(ingest_parameter_sets),
+            "preset SRT muxer must not seed the raw ingest's SPS/PPS"
+        );
+
+        cancel_ingest.cancel();
+        stage.cancel.cancel();
+    }
+
+    #[tokio::test]
     async fn shared_ts_muxer_replays_prebuffered_hevc_keyframe() {
         let engine = Arc::new(crate::media::engine::MediaEngine::new());
         let pipeline_id = "test-pipe-prebuffered-hevc";
@@ -3804,22 +3915,30 @@ pub fn start_shared_ts_muxer(
         let num_streams = (video_meta.is_some() as usize) + audio_tracks.len();
         let mut dts_enforcer = crate::media::ring_buffer::DtsEnforcer::new(num_streams);
         let mut nalu_len_size: usize = 4;
-        let mut sps_pps_cache: Vec<u8> = {
-            let (vsh, _) = engine.get_sequence_headers(&pipeline_id_str).await;
-            if let Some(ref flv_sh) = vsh {
-                if flv_sh.len() > 5 {
-                    let (nls, annexb) = crate::media::codec::parse_avcc_config(&flv_sh[5..]);
-                    nalu_len_size = nls;
-                    annexb
+        // source_ring's own cache always wins: for a preset/transcoded egress
+        // muxer, source_ring is the transcoder's output ring, which describes
+        // a different resolution/codec than the pipeline-level ingest
+        // sequence-header cache below. That ingest cache is keyed only by
+        // pipeline_id (see MediaEngine::cache_sequence_header), so it cannot
+        // distinguish "source" from "preset" — only fall back to it when the
+        // ring itself has nothing cached yet.
+        let mut sps_pps_cache: Vec<u8> =
+            if let Some(parameter_sets) = source_ring.video_parameter_sets() {
+                parameter_sets.to_vec()
+            } else {
+                let (vsh, _) = engine.get_sequence_headers(&pipeline_id_str).await;
+                if let Some(ref flv_sh) = vsh {
+                    if flv_sh.len() > 5 {
+                        let (nls, annexb) = crate::media::codec::parse_avcc_config(&flv_sh[5..]);
+                        nalu_len_size = nls;
+                        annexb
+                    } else {
+                        Vec::new()
+                    }
                 } else {
                     Vec::new()
                 }
-            } else if let Some(parameter_sets) = source_ring.video_parameter_sets() {
-                parameter_sets.to_vec()
-            } else {
-                Vec::new()
-            }
-        };
+            };
 
         let mut reader = Reader::new(
             format!("ts_shared_muxer:{}", pipeline_id_str),
