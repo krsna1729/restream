@@ -1032,7 +1032,8 @@ export async function addOutBtn(): Promise<void> {
 export async function addPipeBtn(): Promise<void> {
     const numbers = state.pipelines
         .filter((p) => p.name.startsWith('Pipeline '))
-        .map((p) => parseInt(p.name.split(' ')[1]));
+        .map((p) => parseInt(p.name.split(' ')[1], 10))
+        .filter((n) => Number.isFinite(n));
     const nextNumber = Math.max(...numbers, 0) + 1;
 
     const response = (await createPipeline({
