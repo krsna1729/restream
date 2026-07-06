@@ -124,7 +124,7 @@ async fn active_output_status_matches_health_runtime_fields() {
             "POST",
             &format!("/api/v1/pipelines/{pid}/outputs"),
             &cookie,
-            Some(r#"{"name":"O","url":"rtmp://dest/live/k","encoding":"source"}"#),
+            Some(r#"{"name":"O","url":"rtmp://dest/live/k","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
@@ -223,7 +223,7 @@ async fn stalled_output_status_matches_health_runtime_fields() {
             "POST",
             &format!("/api/v1/pipelines/{pid}/outputs"),
             &cookie,
-            Some(r#"{"name":"O","url":"rtmp://dest/live/k","encoding":"source"}"#),
+            Some(r#"{"name":"O","url":"rtmp://dest/live/k","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
