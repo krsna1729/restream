@@ -28,6 +28,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
 use tokio_util::sync::CancellationToken;
 
+#[path = "test_harness/catalog.rs"]
+#[allow(dead_code)]
+mod catalog;
 #[path = "test_harness/fault_manifest.rs"]
 mod fault_manifest;
 #[path = "test_harness/fault_runner.rs"]
@@ -36,28 +39,63 @@ mod fault_runner;
 mod mixed_manifest;
 #[path = "test_harness/mixed_runner.rs"]
 mod mixed_runner;
+#[path = "test_harness/workflow_exec.rs"]
+mod workflow_exec;
 
+use catalog::HarnessCatalog;
 use fault_manifest::*;
 use fault_runner::*;
 use mixed_manifest::*;
 use mixed_runner::*;
+use workflow_exec::*;
 
-/// Static metadata describing how a harness mode participates in suite runs.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+/// Metadata describing how a harness mode participates in suite runs,
+/// derived from the `test/harness/modes.json` catalog.
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct HarnessModeSpec {
-    name: &'static str,
+    name: String,
     suite_default: bool,
     requires_port_namespace: bool,
     requires_bench_profile: bool,
 }
 
-static BUILTIN_MODE_SPECS_FROM_DSL: OnceLock<Vec<HarnessModeSpec>> = OnceLock::new();
+fn harness_catalog_root() -> PathBuf {
+    std::env::var_os("HARNESS_CATALOG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/harness"))
+}
+
+static BUILTIN_MODE_SPECS_FROM_CATALOG: OnceLock<Vec<HarnessModeSpec>> = OnceLock::new();
 
 fn builtin_mode_specs() -> &'static [HarnessModeSpec] {
-    BUILTIN_MODE_SPECS_FROM_DSL.get_or_init(|| {
-        serde_json::from_str(include_str!("test_harness/mode_specs.json"))
-            .expect("embedded mode_specs.json should define valid mode rows")
+    BUILTIN_MODE_SPECS_FROM_CATALOG.get_or_init(|| {
+        let catalog = HarnessCatalog::load(&harness_catalog_root())
+            .expect("test/harness catalog should load");
+        let index = catalog
+            .mode_index()
+            .expect("test/harness modes.json should index cleanly");
+        index
+            .into_values()
+            .map(|entry| {
+                let requires = entry.spec.get("requires").cloned().unwrap_or_default();
+                HarnessModeSpec {
+                    name: entry.name,
+                    suite_default: entry
+                        .spec
+                        .get("suiteDefault")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    requires_port_namespace: requires
+                        .get("portNamespace")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    requires_bench_profile: requires
+                        .get("benchProfile")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                }
+            })
+            .collect()
     })
 }
 
@@ -165,7 +203,7 @@ fn planned_mixed_stage_count(
 
 fn mixed_input_mode_spec(case: MixedInputCase) -> HarnessModeSpec {
     HarnessModeSpec {
-        name: case.scenario_id(),
+        name: case.scenario_id().to_string(),
         suite_default: false,
         requires_port_namespace: true,
         requires_bench_profile: matches!(
@@ -178,8 +216,8 @@ fn mixed_input_mode_spec(case: MixedInputCase) -> HarnessModeSpec {
 fn mode_spec(name: &str) -> Option<HarnessModeSpec> {
     builtin_mode_specs()
         .iter()
-        .copied()
         .find(|spec| spec.name == name)
+        .cloned()
         .or_else(|| mixed_input_case_for_command(name).map(mixed_input_mode_spec))
 }
 
@@ -198,17 +236,16 @@ fn suite_default_modes() -> Vec<String> {
     all_mode_specs()
         .into_iter()
         .filter(|spec| spec.suite_default)
-        .map(|spec| spec.name.to_string())
+        .map(|spec| spec.name)
         .collect()
 }
 
-fn supported_mode_names() -> Vec<&'static str> {
+fn supported_mode_names() -> Vec<String> {
     all_mode_specs().into_iter().map(|spec| spec.name).collect()
 }
 
 fn unknown_command_error(other: &str) -> String {
-    let mut supported = vec!["suite", "preflight"];
-    supported.extend(supported_mode_names());
+    let supported = supported_mode_names();
     format!("unknown command {other:?}; use {}", supported.join(", "))
 }
 
@@ -428,25 +465,16 @@ async fn run() -> Result<(), String> {
     } else {
         match command.as_str() {
             "api-smoke" => api_smoke().await,
-            "correctness" => correctness().await,
-            "correctness-rtmp" => correctness_rtmp().await,
-            "correctness-srt" => correctness_srt().await,
-            "correctness-srt-rtmp" => srt_to_rtmp_correctness().await,
-            "correctness-srt-rtmp-atrack" => srt_to_rtmp_atrack_correctness().await,
-            "correctness-srt-policy" => srt_policy_correctness().await,
-            "bframe-rtmp" => bframe_rtmp_correctness().await,
+            "srt.policy" => srt_policy_correctness().await,
+            "timestamp.bframe" => bframe_rtmp_correctness().await,
             "ramp-family" => ramp_family_correctness().await,
             "suite" => suite_run().await,
             "preflight" => preflight_check().await,
-            "egress" => egress_correctness().await,
-            "correctness-hevc-rtmp" => hevc_rtmp_egress_correctness().await,
-            "correctness-hevc-rtmp-atrack" => hevc_rtmp_atrack_correctness().await,
-            "correctness-hevc-srt" => hevc_srt_passthrough_correctness().await,
-            "fault-egress-retry" => fault_egress_retry().await,
-            "fault-output-stall" => fault_output_stall().await,
-            "fault-resilience" => fault_resilience().await,
-            "file-live-edge" => file_live_edge().await,
-            "signal-control" => signal_control().await,
+            "fault.egress-retry" => fault_egress_retry().await,
+            "fault.output-stall" => fault_output_stall().await,
+            "fault.resilience" => fault_resilience().await,
+            "file.live-edge" => file_live_edge().await,
+            "signal.control" => signal_control().await,
             "recovery" => recovery().await,
             "resource-sweep" => resource_sweep().await,
             "bitrate-sweep" => bitrate_sweep().await,
@@ -1337,7 +1365,7 @@ async fn run_sink_probe(
     let metrics = Arc::new(GeneralizedSinkMetrics::default());
     let server = start_generalized_sink_server(sink_port, metrics.clone()).await?;
     let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/sink-probe-{label}");
-    let output_id = match create_mixed_output(
+    let output_id = match create_output(
         api,
         pipeline_id,
         &format!("sink-{label}"),
@@ -1352,7 +1380,7 @@ async fn run_sink_probe(
             return Err(error);
         }
     };
-    if let Err(error) = start_mixed_output(api, pipeline_id, &output_id).await {
+    if let Err(error) = start_output(api, pipeline_id, &output_id).await {
         stop_generalized_sink_server(server);
         return Err(error);
     }
@@ -1419,7 +1447,7 @@ async fn run_hls_put_probe(
 
     let put_url =
         format!("http://127.0.0.1:{put_port}/upload?cid=probe-{label}&copy=0&file=out.m3u8");
-    let output_id = create_mixed_output(
+    let output_id = create_output(
         api,
         pipeline_id,
         &format!("hls-put-{label}"),
@@ -1427,7 +1455,7 @@ async fn run_hls_put_probe(
         "source",
     )
     .await?;
-    start_mixed_output(api, pipeline_id, &output_id).await?;
+    start_output(api, pipeline_id, &output_id).await?;
 
     let artifacts = wait_for_hls_put_artifacts(&sink_dir, Duration::from_secs(30)).await;
     let mut playlist_ok = false;
@@ -2774,9 +2802,8 @@ async fn run_bitrate_case(
             (SweepOutputKind::Srt720p, names.srt_720p, "1280x720"),
         ] {
             let (url, encoding) = bitrate_output_url(env, config, kind, &name);
-            let output_id =
-                create_mixed_output(&stack.api, &pipeline_id, &name, &url, &encoding).await?;
-            start_mixed_output(&stack.api, &pipeline_id, &output_id).await?;
+            let output_id = create_output(&stack.api, &pipeline_id, &name, &url, &encoding).await?;
+            start_output(&stack.api, &pipeline_id, &output_id).await?;
             output_ids.push(output_id);
             probe_specs.push((kind, name, expected.to_string()));
         }
@@ -2840,7 +2867,7 @@ async fn start_bitrate_sweep_stack(env: &BitrateSweepEnv) -> Result<ResourceSwee
     std::fs::write(
         &env.mediamtx_config,
         format!(
-            "logLevel: warn\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
+            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
             env.mtx_rtmp, env.mtx_srt, env.mtx_api
         ),
     )
@@ -3347,7 +3374,7 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
     std::fs::write(
         &env.mediamtx_config,
         format!(
-            "logLevel: warn\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
+            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
             env.mtx_rtmp, env.mtx_srt, env.mtx_api
         ),
     )
@@ -3617,18 +3644,14 @@ async fn run_resource_egress_growth(
             let name = format!("{scenario_name}-{}-{index}", kind.label());
             let (url, encoding) = resource_output_url(env, config, *kind, &name);
             let output_id =
-                create_mixed_output(&active.api, &pipeline_id, &name, &url, &encoding).await?;
-            start_mixed_output(&active.api, &pipeline_id, &output_id).await?;
+                create_output(&active.api, &pipeline_id, &name, &url, &encoding).await?;
+            start_output(&active.api, &pipeline_id, &output_id).await?;
             output_ids.push(output_id);
         }
         if env.egress_counts.contains(&index) {
-            wait_for_outputs_progress(
-                &active.api,
-                &pipeline_id,
-                &output_ids,
-                Duration::from_secs(30),
-            )
-            .await?;
+            let progress_timeout = resource_output_progress_timeout(output_ids.len());
+            wait_for_outputs_progress(&active.api, &pipeline_id, &output_ids, progress_timeout)
+                .await?;
             out.push(
                 sample_resource_window(
                     env,
@@ -3663,9 +3686,7 @@ async fn run_resource_egress_growth(
             );
         }
     }
-    if env.lifecycle == ResourceSweepLifecycle::Cumulative && env.no_cleanup {
-        retained_publishers.push(publisher);
-    } else if env.lifecycle == ResourceSweepLifecycle::Cumulative {
+    if env.lifecycle == ResourceSweepLifecycle::Cumulative {
         retained_publishers.push(publisher);
     } else {
         stop_child(&mut publisher).await;
@@ -3765,6 +3786,25 @@ fn resource_output_url(
     )
 }
 
+fn resource_output_progress_timeout(output_count: usize) -> Duration {
+    let base_secs = env_secs("RESOURCE_SWEEP_PROGRESS_TIMEOUT_BASE_SECS", 30);
+    let per_output_secs = env_secs("RESOURCE_SWEEP_PROGRESS_TIMEOUT_PER_OUTPUT_SECS", 4);
+    let cap_secs = env_secs("RESOURCE_SWEEP_PROGRESS_TIMEOUT_CAP_SECS", 240);
+    scaled_output_progress_timeout(output_count, base_secs, per_output_secs, cap_secs)
+}
+
+fn scaled_output_progress_timeout(
+    output_count: usize,
+    base_secs: u64,
+    per_output_secs: u64,
+    cap_secs: u64,
+) -> Duration {
+    let cap_secs = cap_secs.max(base_secs);
+    let extra_outputs = output_count.saturating_sub(1) as u64;
+    let scaled_secs = base_secs.saturating_add(extra_outputs.saturating_mul(per_output_secs));
+    Duration::from_secs(scaled_secs.min(cap_secs))
+}
+
 async fn wait_for_outputs_progress(
     api: &RampApi,
     pipeline_id: &str,
@@ -3797,7 +3837,8 @@ async fn wait_for_outputs_progress(
         }
         if Instant::now() >= deadline {
             return Err(format!(
-                "outputs did not make progress for pipeline {pipeline_id}: {progressed}/{}; stalled={}",
+                "outputs did not make progress for pipeline {pipeline_id} within {:?}: {progressed}/{}; stalled={}",
+                timeout,
                 output_ids.len(),
                 stalled.join(", ")
             ));
@@ -4682,7 +4723,7 @@ async fn start_ramp_mediamtx(env: &RampEnv) -> Result<Child, String> {
     std::fs::write(
         &env.mediamtx_config,
         format!(
-            "logLevel: warn\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
+            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: no\nwebrtc: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
             env.mtx_rtmp, env.mtx_srt, env.mtx_api
         ),
     )
@@ -4786,7 +4827,7 @@ async fn start_local_mediamtx(
     std::fs::write(
         config_path,
         format!(
-            "logLevel: warn\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: yes\nhlsAddress: :{}\nhlsPartDuration: 200ms\nhlsSegmentDuration: 2s\nwebrtc: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
+            "logLevel: warn\nreadTimeout: 30s\nwriteTimeout: 30s\nrtmp: yes\nrtmpAddress: :{}\nrtmpEncryption: \"no\"\nrtsp: no\nsrt: yes\nsrtAddress: :{}\nhls: yes\nhlsAddress: :{}\nhlsPartDuration: 200ms\nhlsSegmentDuration: 2s\nwebrtc: no\napi: yes\napiAddress: :{}\nmetrics: no\npaths:\n  all:\n",
             ports.mtx_rtmp, ports.mtx_srt, ports.mtx_hls, ports.mtx_api
         ),
     )
@@ -4845,9 +4886,8 @@ async fn run_ramp_config(
             other => return Err(format!("unsupported ramp output protocol {other}")),
         };
         let output_id =
-            create_mixed_output(api, &pipeline_id, &format!("out{n}"), &url, config.encoding)
-                .await?;
-        start_mixed_output(api, &pipeline_id, &output_id).await?;
+            create_output(api, &pipeline_id, &format!("out{n}"), &url, config.encoding).await?;
+        start_output(api, &pipeline_id, &output_id).await?;
         output_ids.push(output_id);
         if n == 1 || n % env.snap_every == 0 {
             snapshot_ramp(env, restream_pid, config.name, n, &format!("out{n}")).await?;
@@ -4995,85 +5035,6 @@ async fn wait_for_api_input_media_ready(
     }
 }
 
-async fn wait_for_api_probe_ready(
-    api: &RampApi,
-    pipeline_id: &str,
-    timeout: Duration,
-) -> Result<Value, String> {
-    let deadline = Instant::now() + timeout;
-    let mut last_snapshot = Value::Null;
-
-    loop {
-        if let Ok(snapshot) = api
-            .get_json(&format!("/api/v1/pipelines/{pipeline_id}/probe"))
-            .await
-        {
-            last_snapshot = snapshot.clone();
-            let has_video = !snapshot["video"].is_null();
-            let has_audio = snapshot["audioTracks"]
-                .as_array()
-                .map(|tracks| !tracks.is_empty())
-                .unwrap_or(false)
-                || !snapshot["audio"].is_null();
-            if has_video && has_audio {
-                return Ok(snapshot);
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "{pipeline_id}: probe metadata was incomplete within {}s; last snapshot={}",
-                timeout.as_secs(),
-                last_snapshot
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
-fn probe_video_codec_matches(snapshot: &Value, expected: &[&str]) -> bool {
-    snapshot["video"]["codec"].as_str().is_some_and(|codec| {
-        expected
-            .iter()
-            .any(|candidate| codec.eq_ignore_ascii_case(candidate))
-    })
-}
-
-async fn wait_for_api_probe_video_codec(
-    api: &RampApi,
-    pipeline_id: &str,
-    expected: &[&str],
-    timeout: Duration,
-) -> Result<Value, String> {
-    let deadline = Instant::now() + timeout;
-    let mut last_snapshot = Value::Null;
-
-    loop {
-        if let Ok(snapshot) =
-            wait_for_api_probe_ready(api, pipeline_id, Duration::from_secs(1)).await
-        {
-            last_snapshot = snapshot.clone();
-            if probe_video_codec_matches(&snapshot, expected) {
-                return Ok(snapshot);
-            }
-        } else if let Ok(snapshot) = api
-            .get_json(&format!("/api/v1/pipelines/{pipeline_id}/probe"))
-            .await
-        {
-            last_snapshot = snapshot;
-        }
-
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "{pipeline_id}: probe video codec did not match {:?} within {}s; last snapshot={}",
-                expected,
-                timeout.as_secs(),
-                last_snapshot
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
 async fn install_bframe_transcode_profiles(api: &RampApi) -> Result<(), String> {
     let settings = api.get_json("/api/v1/settings").await?;
     let mut profiles: restream::domain::transcode_profile::TranscodeProfiles =
@@ -5120,8 +5081,8 @@ async fn run_transcode_bframe_probe_case(
 ) -> Result<Value, String> {
     let stream_name = format!("e2e-bframe-{label}");
     let publish_url = format!("rtmp://127.0.0.1:{mediamtx_rtmp_port}/live/{stream_name}");
-    let output_id = create_mixed_output(api, pipeline_id, label, &publish_url, encoding).await?;
-    if let Err(error) = start_mixed_output(api, pipeline_id, &output_id).await {
+    let output_id = create_output(api, pipeline_id, label, &publish_url, encoding).await?;
+    if let Err(error) = start_output(api, pipeline_id, &output_id).await {
         stop_mixed_outputs(api, pipeline_id, std::slice::from_ref(&output_id)).await;
         return Err(format!("{label}: start output failed: {error}"));
     }
@@ -5185,158 +5146,6 @@ async fn run_transcode_bframe_probe_case(
         Ok(result)
     } else {
         Err(format!("{label}: transcode B-frame probe failed: {result}"))
-    }
-}
-
-fn media_snapshot_view(snapshot: &Value) -> &Value {
-    if snapshot["input"].is_object() {
-        &snapshot["input"]
-    } else {
-        snapshot
-    }
-}
-
-fn snapshot_audio_entry(snapshot: &Value) -> Option<&Value> {
-    let view = media_snapshot_view(snapshot);
-    view["audioTracks"]
-        .as_array()
-        .and_then(|tracks| tracks.first())
-        .or_else(|| (!view["audio"].is_null()).then_some(&view["audio"]))
-}
-
-fn media_snapshot_matches_probe(snapshot: &Value, normalized: &Value) -> bool {
-    let input = media_snapshot_view(snapshot);
-    let streams = match normalized.as_array() {
-        Some(streams) => streams,
-        None => return false,
-    };
-    let Some(video) = streams.iter().find(|stream| stream["type"] == "video") else {
-        return false;
-    };
-    let Some(audio) = streams.iter().find(|stream| stream["type"] == "audio") else {
-        return false;
-    };
-    let Some(snapshot_audio) = snapshot_audio_entry(snapshot) else {
-        return false;
-    };
-    let probe_sample_rate = audio["sampleRate"]
-        .as_str()
-        .and_then(|value| value.parse::<u64>().ok())
-        .or_else(|| audio["sampleRate"].as_u64());
-
-    input["video"]["codec"] == video["codec"]
-        && input["video"]["width"] == video["width"]
-        && input["video"]["height"] == video["height"]
-        && snapshot_audio["codec"] == audio["codec"]
-        && snapshot_audio["sampleRate"].as_u64() == probe_sample_rate
-        && snapshot_audio["channels"] == audio["channels"]
-}
-
-async fn wait_for_api_health_matches_probe(
-    api: &RampApi,
-    pipeline_id: &str,
-    probe_snapshot: &Value,
-    timeout: Duration,
-) -> Result<Value, String> {
-    let deadline = Instant::now() + timeout;
-    let mut last_snapshot = Value::Null;
-
-    loop {
-        if let Ok(health) = api.get_json("/api/v1/engine/health").await {
-            if let Some(snapshot) = health["pipelines"]
-                .as_object()
-                .and_then(|pipelines| pipelines.get(pipeline_id).cloned())
-            {
-                last_snapshot = snapshot.clone();
-                if media_snapshot_matches_probe(&snapshot, probe_snapshot) {
-                    return Ok(snapshot);
-                }
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "{pipeline_id}: health snapshot did not converge to probe metadata within {}s; probe={} last_health={}",
-                timeout.as_secs(),
-                probe_snapshot,
-                last_snapshot
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
-fn output_runtime_matches(a: &Value, b: &Value) -> bool {
-    a["protocol"] == b["protocol"]
-        && a["status"] == b["status"]
-        && a["rawStatus"] == b["rawStatus"]
-        && a["phase"] == b["phase"]
-        && a["targetAddr"] == b["targetAddr"]
-        && a["bytesOut"] == b["bytesOut"]
-        && a["totalSize"] == b["totalSize"]
-        && a["startedAt"] == b["startedAt"]
-        && a["lastProgressAt"] == b["lastProgressAt"]
-        && a["lastError"] == b["lastError"]
-        && a["failurePhase"] == b["failurePhase"]
-        && a["retrying"] == b["retrying"]
-        && a["retryAttempts"] == b["retryAttempts"]
-        && a["retryBackoffMs"] == b["retryBackoffMs"]
-}
-
-fn output_runtime_is_live_and_progressing(snapshot: &Value) -> bool {
-    snapshot["status"].as_str() == Some("running")
-        && matches!(snapshot["phase"].as_str(), Some("sending" | "uploading"))
-        && snapshot["bytesOut"].as_u64().unwrap_or(0) > 0
-        && snapshot["totalSize"].as_u64().unwrap_or(0) > 0
-        && snapshot["startedAt"].is_string()
-        && snapshot["lastProgressAt"].is_string()
-        && snapshot["lastProgressAgeMs"].as_u64().is_some()
-        && snapshot["lastError"].is_null()
-        && snapshot["failurePhase"].is_null()
-        && snapshot["bitrateKbps"].as_f64().unwrap_or(0.0) > 0.0
-}
-
-async fn wait_for_output_status_matches_health(
-    api: &RampApi,
-    pipeline_id: &str,
-    output_id: &str,
-    timeout: Duration,
-) -> Result<(Value, Value), String> {
-    let deadline = Instant::now() + timeout;
-    let mut last_status = Value::Null;
-    let mut last_health = Value::Null;
-
-    loop {
-        if let Ok(status) = api
-            .get_json(&format!(
-                "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
-            ))
-            .await
-        {
-            last_status = status.clone();
-            if let Ok(health) = api.get_json("/api/v1/engine/health").await
-                && let Some(output) = health["pipelines"][pipeline_id]["outputs"]
-                    .as_object()
-                    .and_then(|outputs| outputs.get(output_id).cloned())
-            {
-                last_health = output.clone();
-                if output_runtime_is_live_and_progressing(&status)
-                    && output_runtime_matches(&status, &output)
-                {
-                    return Ok((status, output));
-                }
-            }
-        }
-
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "{pipeline_id}/{output_id}: output status did not converge to a healthy runtime snapshot within {}s; last_status={} last_health={}",
-                timeout.as_secs(),
-                last_status,
-                last_health
-            ));
-        }
-
-        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -5759,309 +5568,6 @@ async fn probe_dims_ramp_with_cookie(url: &str, cookie: Option<&str>) -> Result<
         .replace(',', "x"))
 }
 
-async fn correctness() -> Result<Value, String> {
-    let work_dir = artifact_path("correctness");
-    std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
-
-    let restream_bin = default_restream_bin();
-    let db_path = work_dir.join("data.sqlite");
-    let log_path = work_dir.join("restream.log");
-    let ports = TestPorts::from_env();
-
-    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
-
-    let rtmp_id = create_pipeline_with_stream_key(&api, "RTMP test", "e2e-rtmp").await?;
-    let srt_id = create_pipeline_with_stream_key(&api, "SRT test", "e2e-srt").await?;
-    println!("[correctness] created pipelines {rtmp_id}, {srt_id}");
-
-    let rtmp_fixture = checked_h264_fixture()?;
-    let srt_fixture = checked_h265_fixture()?;
-
-    let rtmp_publish = format!("rtmp://127.0.0.1:{}/live/e2e-rtmp", ports.rtmp);
-    let srt_publish = format!(
-        "srt://127.0.0.1:{}?streamid=publish:live/e2e-srt&pkt_size=1316",
-        ports.srt
-    );
-    let rtmp_read = rtmp_publish.clone();
-    let srt_read = format!(
-        "srt://127.0.0.1:{}?streamid=read:live/e2e-srt&mode=caller&transtype=live&latency=100",
-        ports.srt
-    );
-
-    let mut rtmp_publisher = spawn_publisher(&rtmp_fixture, &rtmp_publish, "flv", false).await?;
-    let mut srt_publisher = spawn_publisher(&srt_fixture, &srt_publish, "mpegts", true).await?;
-
-    wait_for_api_input_live(&api, &rtmp_id, Duration::from_secs(15)).await?;
-    wait_for_api_input_live(&api, &srt_id, Duration::from_secs(15)).await?;
-
-    let rtmp_probe = ffprobe(&rtmp_read).await?;
-    let srt_probe = ffprobe(&srt_read).await?;
-    assert_media_only(&rtmp_probe, "RTMP read")?;
-    assert_media_only(&srt_probe, "SRT read")?;
-    let rtmp_media = normalized_streams(&rtmp_probe)?;
-    let srt_media = normalized_streams(&srt_probe)?;
-
-    let rtmp_snapshot = wait_for_api_probe_ready(&api, &rtmp_id, Duration::from_secs(15)).await?;
-    let srt_snapshot = wait_for_api_probe_ready(&api, &srt_id, Duration::from_secs(15)).await?;
-    let rtmp_health =
-        wait_for_api_health_matches_probe(&api, &rtmp_id, &rtmp_media, Duration::from_secs(15))
-            .await?;
-    let srt_health =
-        wait_for_api_health_matches_probe(&api, &srt_id, &srt_media, Duration::from_secs(15))
-            .await?;
-
-    assert_snapshot_matches_probe(&rtmp_snapshot, &rtmp_media, "RTMP")?;
-    assert_snapshot_matches_probe(&srt_snapshot, &srt_media, "SRT")?;
-    assert_snapshot_matches_probe(&rtmp_health, &rtmp_media, "RTMP health")?;
-    assert_snapshot_matches_probe(&srt_health, &srt_media, "SRT health")?;
-
-    stop_child(&mut rtmp_publisher).await;
-    stop_child(&mut srt_publisher).await;
-    stop_child(&mut child).await;
-
-    Ok(json!({
-        "passed": true,
-        "rtmp": {
-            "fixture": rtmp_fixture,
-            "publishUrl": rtmp_publish,
-            "readUrl": rtmp_read,
-            "snapshot": rtmp_snapshot,
-            "health": rtmp_health,
-            "probe": rtmp_probe,
-            "normalizedStreams": rtmp_media,
-        },
-        "srt": {
-            "fixture": srt_fixture,
-            "publishUrl": srt_publish,
-            "readUrl": srt_read,
-            "snapshot": srt_snapshot,
-            "health": srt_health,
-            "probe": srt_probe,
-            "normalizedStreams": srt_media,
-        },
-    }))
-}
-
-async fn correctness_rtmp() -> Result<Value, String> {
-    correctness_one_protocol("rtmp").await
-}
-
-async fn correctness_srt() -> Result<Value, String> {
-    correctness_one_protocol("srt").await
-}
-
-/// Test: SRT H.264/AAC ingest → RTMP source egress.
-///
-/// Validates the direct Raw Annex-B/ADTS to RTMP FLV/AVCC/AAC packetization
-/// path without involving a transcoder.
-async fn srt_to_rtmp_correctness() -> Result<Value, String> {
-    let work_dir = artifact_path("correctness-srt-rtmp");
-    std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
-
-    let restream_bin = default_restream_bin();
-    let db_path = work_dir.join("data.sqlite");
-    let log_path = work_dir.join("restream.log");
-    let sink_port = harness_port_defaults().sink;
-    let ports = TestPorts::from_env();
-
-    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
-
-    let pipeline_id =
-        create_pipeline_with_stream_key(&api, "H.264 SRT source", "e2e-srt-rtmp").await?;
-
-    // Create RTMP egress output pointed at the generalized sink
-    let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/e2e-srt-rtmp-sink");
-    let output_id =
-        create_mixed_output(&api, &pipeline_id, "rtmp-sink", &sink_url, "source").await?;
-
-    // Start the generalized sink to receive egress
-    let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
-
-    let fixture = checked_h264_fixture()?;
-
-    let mut publisher = spawn_publisher(
-        &fixture,
-        &format!(
-            "srt://127.0.0.1:{}?streamid=publish:live/e2e-srt-rtmp&pkt_size=1316",
-            ports.srt
-        ),
-        "mpegts",
-        true,
-    )
-    .await?;
-    wait_for_api_input_live(&api, &pipeline_id, Duration::from_secs(15)).await?;
-    println!("[srt-rtmp] Source ingest established (H.264 via SRT)");
-
-    // Start the output
-    start_mixed_output(&api, &pipeline_id, &output_id).await?;
-
-    // Wait for sink to receive data
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while sink_metrics.video_count.load(Ordering::Relaxed) < 10 {
-        if Instant::now() >= deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    let sink_summary = sink_metrics.summary();
-    let dts_ok = sink_metrics.dts_monotone();
-    let video_count = sink_metrics.video_count.load(Ordering::Relaxed);
-    let audio_count = sink_metrics.audio_count.load(Ordering::Relaxed);
-
-    stop_child(&mut publisher).await;
-    stop_generalized_sink_server(sink_server);
-    stop_child(&mut child).await;
-
-    let passed = video_count > 0 && audio_count > 0 && dts_ok;
-    let results = json!({
-        "passed": passed,
-        "dtsMonotone": dts_ok,
-        "videoCount": video_count,
-        "audioCount": audio_count,
-        "sink": sink_summary,
-    });
-
-    let path = work_dir.join("results.json");
-    std::fs::write(&path, serde_json::to_vec_pretty(&results).unwrap())
-        .map_err(|e| e.to_string())?;
-    println!("{}", serde_json::to_string_pretty(&results).unwrap());
-    if passed {
-        Ok(results)
-    } else {
-        Err(format!("SRT to RTMP direct egress failed: {results}"))
-    }
-}
-
-async fn srt_to_rtmp_atrack_correctness() -> Result<Value, String> {
-    let work_dir = artifact_path("correctness-srt-rtmp-atrack");
-    std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
-
-    let restream_bin = default_restream_bin();
-    let db_path = work_dir.join("data.sqlite");
-    let log_path = work_dir.join("restream.log");
-    let sink_port = harness_port_defaults().sink;
-    let ports = TestPorts::from_env();
-
-    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
-
-    let pipeline_id =
-        create_pipeline_with_stream_key(&api, "H.264 SRT multi-audio", "e2e-srt-rtmp-atrack")
-            .await?;
-
-    let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/e2e-srt-rtmp-atrack-sink");
-    let output_id = create_mixed_output(
-        &api,
-        &pipeline_id,
-        "rtmp-atrack-sink",
-        &sink_url,
-        "source+atrack:1",
-    )
-    .await?;
-
-    let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
-
-    let fixture = checked_h264_multi_audio_fixture()?;
-    let mut publisher = spawn_publisher(
-        &fixture,
-        &format!(
-            "srt://127.0.0.1:{}?streamid=publish:live/e2e-srt-rtmp-atrack&pkt_size=1316",
-            ports.srt
-        ),
-        "mpegts",
-        true,
-    )
-    .await?;
-    wait_for_api_input_live(&api, &pipeline_id, Duration::from_secs(15)).await?;
-    let input_snapshot =
-        wait_for_api_input_media_ready(&api, &pipeline_id, Duration::from_secs(15)).await?;
-    println!("[srt-rtmp-atrack] Source ingest established (H.264 via SRT, multi-audio)");
-
-    start_mixed_output(&api, &pipeline_id, &output_id).await?;
-
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        let (_, audio_sequence_headers, audio_raw_packets, _) = sink_metrics.audio_packet_stats();
-        if sink_metrics.video_count.load(Ordering::Relaxed) >= 10
-            && audio_sequence_headers > 0
-            && audio_raw_packets > 0
-        {
-            break;
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    let sink_summary = sink_metrics.summary();
-    let dts_ok = sink_metrics.dts_monotone();
-    let video_count = sink_metrics.video_count.load(Ordering::Relaxed);
-    let audio_count = sink_metrics.audio_count.load(Ordering::Relaxed);
-    let detected_audio = sink_metrics.audio_codec.lock().unwrap().clone();
-    let (first_audio_packet_type, audio_sequence_headers, audio_raw_packets, audio_raw_with_adts) =
-        sink_metrics.audio_packet_stats();
-
-    let output_status = api
-        .get_json(&format!(
-            "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
-        ))
-        .await
-        .unwrap_or(json!({}));
-
-    stop_child(&mut publisher).await;
-    stop_generalized_sink_server(sink_server);
-    stop_child(&mut child).await;
-
-    let output_phase = output_status["phase"].as_str().unwrap_or("unknown");
-    let output_error = output_status["lastError"].as_str();
-    // This slice owns the selected-audio RTMP contract, including strict DTS:
-    // FFmpeg treats equal DTS as non-monotonic even when the RTMP sink accepts
-    // the packet sequence.
-    let passed = video_count > 0
-        && audio_count > 0
-        && dts_ok
-        && detected_audio.as_deref() == Some("aac")
-        && first_audio_packet_type == Some(0)
-        && audio_sequence_headers > 0
-        && audio_raw_packets > 0
-        && audio_raw_with_adts == 0
-        && output_phase == "sending"
-        && output_error.is_none();
-
-    let results = json!({
-        "passed": passed,
-        "encoding": "source+atrack:1",
-        "dtsMonotone": dts_ok,
-        "videoCount": video_count,
-        "audioCount": audio_count,
-        "audioCodec": detected_audio,
-        "firstAudioPacketType": first_audio_packet_type,
-        "audioSequenceHeaders": audio_sequence_headers,
-        "audioRawPackets": audio_raw_packets,
-        "audioRawPacketsWithAdts": audio_raw_with_adts,
-        "inputAudioTracks": input_snapshot["input"]["audioTracks"].as_array().map(|tracks| tracks.len()).unwrap_or(0),
-        "outputPhase": output_phase,
-        "outputLastError": output_error,
-        "outputStatus": output_status,
-        "sink": sink_summary,
-    });
-
-    let path = work_dir.join("results.json");
-    std::fs::write(&path, serde_json::to_vec_pretty(&results).unwrap())
-        .map_err(|e| e.to_string())?;
-    println!("{}", serde_json::to_string_pretty(&results).unwrap());
-    if passed {
-        Ok(results)
-    } else {
-        Err(format!("SRT to RTMP atrack egress failed: {results}"))
-    }
-}
-
 fn srt_publish_url(port: u16, stream_key: &str, crypto: Option<(&str, u32)>) -> String {
     let mut url =
         format!("srt://127.0.0.1:{port}?streamid=publish:live/{stream_key}&pkt_size=1316");
@@ -6135,7 +5641,7 @@ async fn create_srt_policy_pipeline_with_key(
 }
 
 async fn srt_policy_correctness() -> Result<Value, String> {
-    let work_dir = artifact_path("correctness-srt-policy");
+    let work_dir = artifact_path("srt.policy");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
 
     let restream_bin = default_restream_bin();
@@ -6688,7 +6194,7 @@ async fn wait_for_probe_shape(
 /// harness sink, and verifies ffprobe observes composition offsets (PTS > DTS)
 /// while DTS stays monotone.
 async fn bframe_rtmp_correctness() -> Result<Value, String> {
-    let work_dir = artifact_path("bframe-rtmp");
+    let work_dir = artifact_path("timestamp.bframe");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
 
     let restream_bin = default_restream_bin();
@@ -6708,8 +6214,7 @@ async fn bframe_rtmp_correctness() -> Result<Value, String> {
 
     // Create RTMP egress output pointed at the harness sink
     let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/e2e-bframe-sink");
-    let output_id =
-        create_mixed_output(&api, &pipeline_id, "bframe-sink", &sink_url, "source").await?;
+    let output_id = create_output(&api, &pipeline_id, "bframe-sink", &sink_url, "source").await?;
 
     // Start generalized sink
     let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
@@ -6725,10 +6230,10 @@ async fn bframe_rtmp_correctness() -> Result<Value, String> {
     )
     .await?;
     wait_for_api_input_live(&api, &pipeline_id, Duration::from_secs(15)).await?;
-    println!("[bframe-rtmp] Source ingest established");
+    println!("[timestamp.bframe] Source ingest established");
 
     // Start the output
-    start_mixed_output(&api, &pipeline_id, &output_id).await?;
+    start_output(&api, &pipeline_id, &output_id).await?;
 
     // Wait for sink to accumulate packets
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -6821,764 +6326,11 @@ async fn bframe_rtmp_correctness() -> Result<Value, String> {
     }
 }
 
-async fn correctness_one_protocol(protocol: &str) -> Result<Value, String> {
-    let work_dir = artifact_path(&format!("correctness-{protocol}"));
-    std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
-
-    let restream_bin = default_restream_bin();
-    let db_path = work_dir.join("data.sqlite");
-    let log_path = work_dir.join("restream.log");
-    let ports = TestPorts::from_env();
-
-    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
-
-    let stream_key = format!("e2e-{protocol}");
-    let pipeline_id =
-        create_pipeline_with_stream_key(&api, &format!("{protocol} test"), &stream_key).await?;
-    println!("[correctness-{protocol}] created pipeline {pipeline_id}");
-
-    let fixture = if protocol == "rtmp" {
-        checked_h264_fixture()?
-    } else {
-        checked_h265_fixture()?
-    };
-    let (publish_url, read_url, format) = if protocol == "rtmp" {
-        (
-            format!("rtmp://127.0.0.1:{}/live/{stream_key}", ports.rtmp),
-            format!("rtmp://127.0.0.1:{}/live/{stream_key}", ports.rtmp),
-            "flv",
-        )
-    } else {
-        (
-            format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{stream_key}&pkt_size=1316",
-                ports.srt
-            ),
-            format!(
-                "srt://127.0.0.1:{}?streamid=read:live/{stream_key}&mode=caller&transtype=live&latency=100",
-                ports.srt
-            ),
-            "mpegts",
-        )
-    };
-    let map_all = protocol == "srt";
-    let mut publisher = spawn_publisher(&fixture, &publish_url, format, map_all).await?;
-    wait_for_api_input_live(&api, &pipeline_id, Duration::from_secs(15)).await?;
-
-    let snapshot = match wait_for_api_probe_ready(&api, &pipeline_id, Duration::from_secs(15)).await
-    {
-        Ok(snapshot) => snapshot,
-        Err(err) => {
-            stop_child(&mut publisher).await;
-            stop_child(&mut child).await;
-            return Err(err);
-        }
-    };
-
-    let probe = ffprobe(&read_url).await?;
-    assert_media_only(&probe, &format!("{protocol} read"))?;
-    let normalized = normalized_streams(&probe)?;
-    let health =
-        wait_for_api_health_matches_probe(&api, &pipeline_id, &normalized, Duration::from_secs(15))
-            .await?;
-    assert_snapshot_matches_probe(&snapshot, &normalized, protocol)?;
-    assert_snapshot_matches_probe(&health, &normalized, &format!("{protocol} health"))?;
-
-    stop_child(&mut publisher).await;
-    stop_child(&mut child).await;
-
-    Ok(json!({
-        "passed": true,
-        "protocol": protocol,
-        "publishUrl": publish_url,
-        "readUrl": read_url,
-        "snapshot": snapshot,
-        "health": health,
-        "probe": probe,
-        "normalizedStreams": normalized,
-    }))
-}
-
-async fn egress_correctness() -> Result<Value, String> {
-    let work_dir = artifact_path("egress");
-    std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
-
-    let restream_bin = default_restream_bin();
-    let db_path = work_dir.join("data.sqlite");
-    let log_path = work_dir.join("restream.log");
-    let sink_port = harness_port_defaults().sink;
-    let ports = TestPorts::from_env();
-    let mtx_ports = harness_port_defaults();
-    let mediamtx_config = work_dir.join("mediamtx.yml");
-    let mediamtx_log = work_dir.join("mediamtx.log");
-    let media_dir = work_dir.join("media");
-    std::fs::create_dir_all(&media_dir).map_err(|e| e.to_string())?;
-
-    let mut mediamtx = start_local_mediamtx(&mediamtx_config, &mediamtx_log, mtx_ports).await?;
-    let mut child =
-        start_restream_child_in_media_dir(&restream_bin, &ports, &db_path, &log_path, &media_dir)
-            .await?;
-    let api = login_api(&ports).await?;
-
-    let pipeline_id = create_pipeline_with_stream_key(&api, "Egress source", "e2e-src").await?;
-
-    let fixture = checked_h264_fixture()?;
-
-    let mut publisher = spawn_publisher(
-        &fixture,
-        &format!("rtmp://127.0.0.1:{}/live/e2e-src", ports.rtmp),
-        "flv",
-        false,
-    )
-    .await?;
-    wait_for_api_input_live(&api, &pipeline_id, Duration::from_secs(15)).await?;
-    println!("[egress] Source ingest established");
-
-    // RTMP egress — one target goes to a packet-inspecting sink for transport
-    // assertions, and one goes to MediaMTX so a real consumer can ffprobe the
-    // sink-side stream.
-    let rtmp_sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/e2e-rtmp-sink-packets");
-    let rtmp_packet_output_id =
-        create_mixed_output(&api, &pipeline_id, "rtmp-egress", &rtmp_sink_url, "source").await?;
-    let rtmp_probe_sink_url = format!(
-        "rtmp://127.0.0.1:{}/live/e2e-rtmp-sink-probe",
-        mtx_ports.mtx_rtmp
-    );
-    let rtmp_probe_output_id = create_mixed_output(
-        &api,
-        &pipeline_id,
-        "rtmp-egress-probe",
-        &rtmp_probe_sink_url,
-        "source",
-    )
-    .await?;
-
-    let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
-
-    start_mixed_output(&api, &pipeline_id, &rtmp_packet_output_id).await?;
-    start_mixed_output(&api, &pipeline_id, &rtmp_probe_output_id).await?;
-
-    // SRT egress — create a second output to a real SRT listener pipeline
-    let srt_egress_url = format!(
-        "srt://127.0.0.1:{}?streamid=publish:live/e2e-srt-sink&pkt_size=1316",
-        ports.srt
-    );
-    let srt_pipeline_id =
-        create_pipeline_with_stream_key(&api, "SRT egress sink", "e2e-srt-sink").await?;
-    let srt_output_id =
-        create_mixed_output(&api, &pipeline_id, "srt-egress", &srt_egress_url, "source").await?;
-    start_mixed_output(&api, &pipeline_id, &srt_output_id).await?;
-
-    // Wait for sink to receive enough data
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while sink_metrics.video_count.load(Ordering::Relaxed) < 30 {
-        if Instant::now() >= deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    let mut results = json!({});
-
-    // RTMP egress validation via packet sink + external ffprobe on the sink-side stream.
-    let dts_ok = sink_metrics.dts_monotone();
-    let video_count = sink_metrics.video_count.load(Ordering::Relaxed);
-    let audio_count = sink_metrics.audio_count.load(Ordering::Relaxed);
-    let rtmp_sink_read_url = format!(
-        "rtmp://127.0.0.1:{}/live/e2e-rtmp-sink-probe",
-        mtx_ports.mtx_rtmp
-    );
-    let rtmp_probe = ffprobe(&rtmp_sink_read_url).await?;
-    assert_media_only(&rtmp_probe, "RTMP egress sink read")?;
-    let rtmp_normalized = normalized_streams(&rtmp_probe)?;
-    let (rtmp_output_status, rtmp_output_health) = wait_for_output_status_matches_health(
-        &api,
-        &pipeline_id,
-        &rtmp_probe_output_id,
-        Duration::from_secs(15),
-    )
-    .await?;
-    let rtmp_passed = video_count >= 30 && audio_count > 0 && dts_ok;
-    results["rtmpEgress"] = json!({
-        "passed": rtmp_passed,
-        "dtsMonotone": dts_ok,
-        "videoCount": video_count,
-        "audioCount": audio_count,
-        "sink": sink_metrics.summary(),
-        "readUrl": rtmp_sink_read_url,
-        "outputStatus": rtmp_output_status,
-        "outputHealth": rtmp_output_health,
-        "probe": rtmp_probe,
-        "normalizedStreams": rtmp_normalized,
-    });
-
-    // SRT egress validation — assert the sink-side stream is externally readable
-    // and that the sink pipeline's probe + health metadata match that reality.
-    let srt_sink_read_url = srt_read_url(ports.srt, "e2e-srt-sink", None);
-    let srt_probe = ffprobe(&srt_sink_read_url).await?;
-    assert_media_only(&srt_probe, "SRT egress sink read")?;
-    let srt_normalized = normalized_streams(&srt_probe)?;
-    let srt_snapshot =
-        wait_for_api_probe_ready(&api, &srt_pipeline_id, Duration::from_secs(15)).await?;
-    let srt_health = wait_for_api_health_matches_probe(
-        &api,
-        &srt_pipeline_id,
-        &srt_normalized,
-        Duration::from_secs(15),
-    )
-    .await?;
-    let (srt_output_status, srt_output_health) = wait_for_output_status_matches_health(
-        &api,
-        &pipeline_id,
-        &srt_output_id,
-        Duration::from_secs(15),
-    )
-    .await?;
-    assert_snapshot_matches_probe(&srt_snapshot, &srt_normalized, "SRT sink probe")?;
-    assert_snapshot_matches_probe(&srt_health, &srt_normalized, "SRT sink health")?;
-    results["srtEgress"] = json!({
-        "passed": true,
-        "srtSinkPipelineId": srt_pipeline_id,
-        "readUrl": srt_sink_read_url,
-        "outputStatus": srt_output_status,
-        "outputHealth": srt_output_health,
-        "snapshot": srt_snapshot,
-        "health": srt_health,
-        "probe": srt_probe,
-        "normalizedStreams": srt_normalized,
-    });
-
-    // Recording via API
-    let before_files = media_dir_entries(&media_dir)?;
-    api.post_empty(&format!("/api/v1/pipelines/{pipeline_id}/recording/start"))
-        .await?;
-    wait_for_api_recording_state(&api, &pipeline_id, true, Duration::from_secs(10)).await?;
-    tokio::time::sleep(Duration::from_secs(6)).await;
-    api.post_empty(&format!("/api/v1/pipelines/{pipeline_id}/recording/stop"))
-        .await?;
-    wait_for_api_recording_state(&api, &pipeline_id, false, Duration::from_secs(20)).await?;
-
-    // Recording defaults to remuxing into MP4 and dropping the transient TS,
-    // so the correctness check follows the operator-visible final artifact and
-    // confirms the API inventory matches the file persisted on disk.
-    let recording_entry =
-        wait_for_api_media_file(&api, &before_files, ".mp4", Duration::from_secs(30)).await;
-    let recording_result = match recording_entry {
-        Ok(entry) => {
-            let recording_name = entry["playName"]
-                .as_str()
-                .or_else(|| entry["name"].as_str())
-                .unwrap_or_default();
-            let path = media_dir.join(recording_name);
-            if recording_name.is_empty() {
-                json!({"passed": false, "error": "recording entry missing playName/name", "entry": entry})
-            } else if !path.exists() {
-                json!({
-                    "passed": false,
-                    "error": format!("recording listed by API but missing on disk: {}", path.display()),
-                    "entry": entry,
-                })
-            } else {
-                match ffprobe(path.to_string_lossy().as_ref()).await {
-                    Ok(probe) => match normalized_streams(&probe) {
-                        Ok(streams) => {
-                            let has_video = streams.as_array().is_some_and(|streams| {
-                                streams.iter().any(|stream| stream["type"] == "video")
-                            });
-                            let has_audio = streams.as_array().is_some_and(|streams| {
-                                streams.iter().any(|stream| stream["type"] == "audio")
-                            });
-                            let file_analysis =
-                                restream::media::file_analysis::analyze_media_file(&path)
-                                    .map_err(|error| error.to_string())
-                                    .ok();
-                            json!({
-                                "passed": has_video && has_audio,
-                                "file": path,
-                                "entry": entry,
-                                "hasVideo": has_video,
-                                "hasAudio": has_audio,
-                                "probe": probe,
-                                "normalizedStreams": streams,
-                                "analysis": file_analysis,
-                            })
-                        }
-                        Err(error) => {
-                            json!({"passed": false, "error": format!("recording stream normalization failed: {error}"), "entry": entry})
-                        }
-                    },
-                    Err(error) => {
-                        json!({"passed": false, "error": format!("recording ffprobe failed: {error}"), "entry": entry})
-                    }
-                }
-            }
-        }
-        Err(error) => json!({"passed": false, "error": error}),
-    };
-    results["recording"] = recording_result;
-
-    let passed = results["rtmpEgress"]["passed"].as_bool().unwrap_or(false)
-        && results["srtEgress"]["passed"].as_bool().unwrap_or(false)
-        && results["recording"]["passed"].as_bool().unwrap_or(false);
-    results["passed"] = json!(passed);
-
-    stop_child(&mut publisher).await;
-    stop_generalized_sink_server(sink_server);
-    stop_child(&mut child).await;
-    stop_child(&mut mediamtx).await;
-
-    let path = work_dir.join("results.json");
-    std::fs::write(&path, serde_json::to_vec_pretty(&results).unwrap())
-        .map_err(|e| e.to_string())?;
-    println!("{}", serde_json::to_string_pretty(&results).unwrap());
-
-    if passed {
-        Ok(results)
-    } else {
-        Err(format!("egress correctness failed: {results}"))
-    }
-}
-
-/// Test: SRT ingest of H.265 → RTMP egress with inline H.265→H.264 transcoding.
-///
-/// Validates that the RTMP output stream contains valid H.264 video + AAC audio
-/// (proving the transcoder works correctly end-to-end). Uses the generalized sink
-/// for DTS assertions and ffprobe for codec identity.
-async fn hevc_rtmp_egress_correctness() -> Result<Value, String> {
-    let work_dir = artifact_path("correctness-hevc-rtmp");
-    std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
-
-    let restream_bin = default_restream_bin();
-    let db_path = work_dir.join("data.sqlite");
-    let log_path = work_dir.join("restream.log");
-    let sink_port = harness_port_defaults().sink;
-    let ports = TestPorts::from_env();
-
-    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
-
-    let pipeline_id = create_pipeline_with_stream_key(&api, "H.265 SRT source", "e2e-hevc").await?;
-
-    let fixture = checked_h265_fixture()?;
-
-    let mut publisher = spawn_publisher(
-        &fixture,
-        &format!(
-            "srt://127.0.0.1:{}?streamid=publish:live/e2e-hevc&pkt_size=1316",
-            ports.srt
-        ),
-        "mpegts",
-        true,
-    )
-    .await?;
-    wait_for_api_input_live(&api, &pipeline_id, Duration::from_secs(15)).await?;
-    println!("[hevc-rtmp] Source ingest established (H.265 via SRT)");
-
-    let probe = match wait_for_api_probe_video_codec(
-        &api,
-        &pipeline_id,
-        &["hevc", "h265"],
-        Duration::from_secs(15),
-    )
-    .await
-    {
-        Ok(probe) => probe,
-        Err(error) => {
-            stop_child(&mut publisher).await;
-            stop_child(&mut child).await;
-            return Err(error);
-        }
-    };
-    if !probe_video_codec_matches(&probe, &["hevc", "h265"]) {
-        let source_codec = probe["video"]["codec"].as_str().unwrap_or("unknown");
-        stop_child(&mut publisher).await;
-        stop_child(&mut child).await;
-        return Err(format!("source codec is {source_codec}, expected hevc"));
-    }
-
-    // Create RTMP output with transcoding (encoding=h264 triggers transcode)
-    let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/e2e-hevc-sink");
-    let output_id = create_mixed_output(&api, &pipeline_id, "hevc-rtmp", &sink_url, "h264").await?;
-
-    let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
-
-    start_mixed_output(&api, &pipeline_id, &output_id).await?;
-
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while sink_metrics.video_count.load(Ordering::Relaxed) < 30 {
-        if Instant::now() >= deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    let dts_ok = sink_metrics.dts_monotone();
-    let video_count = sink_metrics.video_count.load(Ordering::Relaxed);
-    let audio_count = sink_metrics.audio_count.load(Ordering::Relaxed);
-    let sink_summary = sink_metrics.summary();
-
-    let detected_video = sink_metrics.video_codec.lock().unwrap().clone();
-    let detected_audio = sink_metrics.audio_codec.lock().unwrap().clone();
-    let video_h264 = detected_video.as_deref() == Some("h264");
-    let audio_aac = detected_audio.as_deref() == Some("aac");
-
-    stop_child(&mut publisher).await;
-    stop_generalized_sink_server(sink_server);
-    stop_child(&mut child).await;
-
-    let passed = video_count >= 30 && audio_count > 0 && dts_ok && video_h264 && audio_aac;
-    let results = json!({
-        "passed": passed,
-        "dtsMonotone": dts_ok,
-        "videoCount": video_count,
-        "audioCount": audio_count,
-        "videoCodec": detected_video,
-        "audioCodec": detected_audio,
-        "sink": sink_summary,
-    });
-
-    let path = work_dir.join("results.json");
-    std::fs::write(&path, serde_json::to_vec_pretty(&results).unwrap())
-        .map_err(|e| e.to_string())?;
-    println!("{}", serde_json::to_string_pretty(&results).unwrap());
-
-    if passed {
-        Ok(results)
-    } else {
-        Err(format!("HEVC RTMP egress failed: {results}"))
-    }
-}
-
-async fn hevc_rtmp_atrack_correctness() -> Result<Value, String> {
-    let work_dir = artifact_path("correctness-hevc-rtmp-atrack");
-    std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
-
-    let restream_bin = default_restream_bin();
-    let db_path = work_dir.join("data.sqlite");
-    let restream_log = work_dir.join("restream.log");
-    let mediamtx_config = work_dir.join("mediamtx.yml");
-    let mediamtx_log = work_dir.join("mediamtx.log");
-    let all_ports = harness_port_defaults();
-    let ports = TestPorts::from_env();
-
-    let mut mediamtx = start_local_mediamtx(&mediamtx_config, &mediamtx_log, all_ports).await?;
-    let (mut restream, api) =
-        start_restream_api(&restream_bin, &ports, &db_path, &restream_log).await?;
-
-    let pipeline_id =
-        create_pipeline_with_stream_key(&api, "2v16a HEVC SRT source", "e2e-hevc-rtmp-atrack")
-            .await?;
-
-    let fixture = restream::test_fixtures::checked_in_fixture("media/colorbar-timer-2v16a.mp4")?;
-    let mut publisher = spawn_publisher_with_selection(
-        &fixture,
-        &format!(
-            "srt://127.0.0.1:{}?streamid=publish:live/e2e-hevc-rtmp-atrack&pkt_size=1316&latency=200000",
-            ports.srt
-        ),
-        "mpegts",
-        PublishTrackSelection::VideoIndexAllAudio(1),
-        Some(&work_dir.join("publisher.log")),
-    )?;
-    wait_for_api_input_live(&api, &pipeline_id, Duration::from_secs(30)).await?;
-    let input_snapshot =
-        wait_for_api_input_media_ready(&api, &pipeline_id, Duration::from_secs(30)).await?;
-    let input_audio_tracks = input_snapshot["input"]["audioTracks"]
-        .as_array()
-        .map(Vec::len)
-        .unwrap_or(0);
-    if input_audio_tracks < 16 {
-        stop_child(&mut publisher).await;
-        stop_child(&mut restream).await;
-        stop_child(&mut mediamtx).await;
-        return Err(format!(
-            "2v16a ingest exposed {input_audio_tracks} audio tracks, expected at least 16"
-        ));
-    }
-
-    let source_a_url = format!(
-        "rtmp://127.0.0.1:{}/live/e2e-hevc-rtmp-atrack-source-a",
-        all_ports.mtx_rtmp
-    );
-    let source_b_url = format!(
-        "rtmp://127.0.0.1:{}/live/e2e-hevc-rtmp-atrack-source-b",
-        all_ports.mtx_rtmp
-    );
-    let scaled_url = format!(
-        "rtmp://127.0.0.1:{}/live/e2e-hevc-rtmp-atrack-1080p",
-        all_ports.mtx_rtmp
-    );
-    let source_a_id = create_mixed_output(
-        &api,
-        &pipeline_id,
-        "rtmp-source-atrack-a",
-        &source_a_url,
-        "source+atrack:0",
-    )
-    .await?;
-    let source_b_id = create_mixed_output(
-        &api,
-        &pipeline_id,
-        "rtmp-source-atrack-b",
-        &source_b_url,
-        "source+atrack:1",
-    )
-    .await?;
-    let scaled_id = create_mixed_output(
-        &api,
-        &pipeline_id,
-        "rtmp-1080p-atrack",
-        &scaled_url,
-        "1080p+atrack:0",
-    )
-    .await?;
-    let output_ids = vec![source_a_id, source_b_id, scaled_id];
-    for output_id in &output_ids {
-        start_mixed_output(&api, &pipeline_id, output_id).await?;
-    }
-    wait_for_outputs_progress(&api, &pipeline_id, &output_ids, Duration::from_secs(45)).await?;
-
-    let source_a_probe = wait_for_probe_shape(
-        "source+atrack:0 A",
-        &source_a_url,
-        None,
-        "h264",
-        1,
-        Duration::from_secs(45),
-    )
-    .await?;
-    let source_b_probe = wait_for_probe_shape(
-        "source+atrack:1 B",
-        &source_b_url,
-        None,
-        "h264",
-        1,
-        Duration::from_secs(45),
-    )
-    .await?;
-    let source_a_decode = ffmpeg_decode_scan("source+atrack:0 A", &source_a_url).await?;
-    let source_b_decode = ffmpeg_decode_scan("source+atrack:1 B", &source_b_url).await?;
-    let scaled_decode = ffmpeg_decode_scan("1080p+atrack:0", &scaled_url).await?;
-    let scaled_probe = wait_for_probe_shape(
-        "1080p+atrack:0",
-        &scaled_url,
-        Some("1920x1080"),
-        "h264",
-        1,
-        Duration::from_secs(45),
-    )
-    .await?;
-
-    let graph = api
-        .get_json(&format!("/api/v1/pipelines/{pipeline_id}/graph"))
-        .await?;
-    let codec_edges = graph_active_node_count(&graph, "codec_edge");
-    let video_stages = graph_active_node_count(&graph, "transcoder");
-    let audio_routes = graph_active_node_count(&graph, "audio_filter");
-    let ffmpeg = ffmpeg_pipe1_stats().await;
-    let internal_backend = std::env::var("RESTREAM_USE_INTERNAL_TRANSCODER")
-        .ok()
-        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
-    let external_stage_count_ok = if internal_backend {
-        ffmpeg.count == 0
-    } else {
-        ffmpeg.count <= 3
-    };
-    let graph_ok = codec_edges == 2 && video_stages == 1 && audio_routes == 3;
-    let decode_ok = source_a_decode.0 && source_b_decode.0 && scaled_decode.0;
-    let passed = graph_ok && external_stage_count_ok && decode_ok;
-
-    stop_mixed_outputs(&api, &pipeline_id, &output_ids).await;
-    stop_child(&mut publisher).await;
-    stop_child(&mut restream).await;
-    stop_child(&mut mediamtx).await;
-
-    let results = json!({
-        "passed": passed,
-        "fixture": fixture,
-        "inputAudioTracks": input_audio_tracks,
-        "sourceA": {
-            "url": source_a_url,
-            "encoding": "source+atrack:0",
-            "probe": source_a_probe,
-            "decode": {
-                "passed": source_a_decode.0,
-                "status": source_a_decode.1,
-                "matchedPattern": source_a_decode.2,
-                "stderr": source_a_decode.3.lines().take(20).collect::<Vec<_>>(),
-            },
-        },
-        "sourceB": {
-            "url": source_b_url,
-            "encoding": "source+atrack:1",
-            "probe": source_b_probe,
-            "decode": {
-                "passed": source_b_decode.0,
-                "status": source_b_decode.1,
-                "matchedPattern": source_b_decode.2,
-                "stderr": source_b_decode.3.lines().take(20).collect::<Vec<_>>(),
-            },
-        },
-        "scaled": {
-            "url": scaled_url,
-            "encoding": "1080p+atrack:0",
-            "probe": scaled_probe,
-            "decode": {
-                "passed": scaled_decode.0,
-                "status": scaled_decode.1,
-                "matchedPattern": scaled_decode.2,
-                "stderr": scaled_decode.3.lines().take(20).collect::<Vec<_>>(),
-            },
-        },
-        "graph": {
-            "codecEdges": codec_edges,
-            "videoStages": video_stages,
-            "audioRoutes": audio_routes,
-            "ok": graph_ok,
-            "raw": graph,
-        },
-        "backend": if internal_backend { "internal" } else { "external" },
-        "externalFfmpegPipe1Count": ffmpeg.count,
-        "externalStageCountOk": external_stage_count_ok,
-        "decodeOk": decode_ok,
-        "artifacts": {
-            "restreamLog": restream_log,
-            "mediamtxLog": mediamtx_log,
-            "mediamtxConfig": mediamtx_config,
-        },
-    });
-    let path = work_dir.join("results.json");
-    std::fs::write(&path, serde_json::to_vec_pretty(&results).unwrap())
-        .map_err(|e| e.to_string())?;
-    println!("{}", serde_json::to_string_pretty(&results).unwrap());
-
-    if passed {
-        Ok(results)
-    } else {
-        Err(format!("HEVC RTMP atrack correctness failed: {results}"))
-    }
-}
-
-/// Test: SRT ingest of H.265 → SRT egress passthrough.
-///
-/// Validates that native SRT egress preserves HEVC video identity while carrying
-/// AAC audio, so the H.265 path is not silently mislabeled or transcoded.
-async fn hevc_srt_passthrough_correctness() -> Result<Value, String> {
-    let work_dir = artifact_path("correctness-hevc-srt");
-    std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
-
-    let restream_bin = default_restream_bin();
-    let db_path = work_dir.join("data.sqlite");
-    let log_path = work_dir.join("restream.log");
-    let ports = TestPorts::from_env();
-
-    let (mut child, api) = start_restream_api(&restream_bin, &ports, &db_path, &log_path).await?;
-
-    // Source pipeline
-    let pipeline_id =
-        create_pipeline_with_stream_key(&api, "H.265 SRT source", "e2e-hevc-srt").await?;
-
-    // Sink pipeline (SRT egress will publish here)
-    let sink_pipeline_id =
-        create_pipeline_with_stream_key(&api, "H.265 SRT passthrough sink", "e2e-hevc-srt-sink")
-            .await?;
-
-    let fixture = checked_h265_fixture()?;
-
-    let mut publisher = spawn_publisher(
-        &fixture,
-        &format!(
-            "srt://127.0.0.1:{}?streamid=publish:live/e2e-hevc-srt&pkt_size=1316",
-            ports.srt
-        ),
-        "mpegts",
-        true,
-    )
-    .await?;
-    wait_for_api_input_live(&api, &pipeline_id, Duration::from_secs(15)).await?;
-    println!("[hevc-srt] Source ingest established (H.265 via SRT)");
-
-    // Create SRT egress output (passthrough — encoding=source)
-    let srt_sink_url = format!(
-        "srt://127.0.0.1:{}?streamid=publish:live/e2e-hevc-srt-sink&pkt_size=1316",
-        ports.srt
-    );
-    let output_id = create_mixed_output(
-        &api,
-        &pipeline_id,
-        "srt-passthrough",
-        &srt_sink_url,
-        "source",
-    )
-    .await?;
-    start_mixed_output(&api, &pipeline_id, &output_id).await?;
-
-    // Wait for the egress to publish to the sink pipeline
-    wait_for_api_input_live(&api, &sink_pipeline_id, Duration::from_secs(15)).await?;
-    println!("[hevc-srt] Sink ingest established (H.265 via SRT egress)");
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
-    // ffprobe the SRT read URL to verify codec identity
-    let srt_read_url = format!(
-        "srt://127.0.0.1:{}?streamid=read:live/e2e-hevc-srt-sink&mode=caller&transtype=live&latency=100",
-        ports.srt
-    );
-    let probe = ffprobe(&srt_read_url).await?;
-    let media_check = assert_media_only(&probe, "HEVC SRT passthrough");
-    let streams = normalized_streams(&probe).ok();
-    let video_hevc = probe["streams"]
-        .as_array()
-        .and_then(|s| s.iter().find(|s| s["codec_type"] == "video"))
-        .and_then(|s| s["codec_name"].as_str())
-        .is_some_and(|codec| {
-            restream::domain::output_spec::VideoCodecKind::from_codec_name(codec).is_hevc()
-        });
-    let audio_aac = probe["streams"]
-        .as_array()
-        .and_then(|s| s.iter().find(|s| s["codec_type"] == "audio"))
-        .and_then(|s| s["codec_name"].as_str())
-        == Some("aac");
-
-    stop_child(&mut publisher).await;
-    stop_child(&mut child).await;
-
-    let passed = media_check.is_ok() && video_hevc && audio_aac;
-    let mut results = json!({
-        "passed": passed,
-        "videoCodec": if video_hevc { "hevc" } else { "NOT_hevc" },
-        "audioCodec": if audio_aac { "aac" } else { "NOT_aac" },
-        "mediaCheck": media_check.is_ok(),
-        "mediaError": media_check.err(),
-        "probe": probe,
-    });
-    if let Some(s) = streams {
-        results["streams"] = s;
-    }
-    if !video_hevc {
-        results["error"] = json!("SRT output video codec is not HEVC — passthrough failed");
-    }
-
-    let path = work_dir.join("results.json");
-    std::fs::write(&path, serde_json::to_vec_pretty(&results).unwrap())
-        .map_err(|e| e.to_string())?;
-    println!("{}", serde_json::to_string_pretty(&results).unwrap());
-
-    if passed {
-        Ok(results)
-    } else {
-        Err(format!("HEVC SRT passthrough failed: {results}"))
-    }
-}
-
 /// Stream-selection policy for FFmpeg publishers spawned by the harness.
 #[derive(Clone, Copy)]
 enum PublishTrackSelection {
     PrimaryAv,
     AllStreams,
-    VideoIndexAllAudio(usize),
 }
 
 fn sweep_fixture(config: SweepConfig, bitrate_label: &str) -> Result<PathBuf, String> {
@@ -7595,14 +6347,6 @@ fn ramp_fixture() -> Result<PathBuf, String> {
 
 fn checked_h264_fixture() -> Result<PathBuf, String> {
     restream::test_fixtures::canonical_h264_ts_fixture()
-}
-
-fn checked_h265_fixture() -> Result<PathBuf, String> {
-    restream::test_fixtures::canonical_h265_ts_fixture()
-}
-
-fn checked_h264_multi_audio_fixture() -> Result<PathBuf, String> {
-    restream::test_fixtures::bench_transport_fixture("h264", "1.5M", true)
 }
 
 fn spawn_publisher_with_selection(
@@ -7631,12 +6375,10 @@ fn spawn_publisher_with_selection(
         PublishTrackSelection::PrimaryAv => {
             cmd.args(["-map", "0:v", "-map", "0:a:0"]);
         }
-        PublishTrackSelection::VideoIndexAllAudio(video_index) => {
-            cmd.arg("-map")
-                .arg(format!("0:v:{video_index}"))
-                .arg("-map")
-                .arg("0:a");
-        }
+    }
+    if format == "mpegts" {
+        cmd.args(["-mpegts_flags", "+resend_headers"]);
+        cmd.args(["-bsf:v", "dump_extra=freq=keyframe"]);
     }
     cmd.args(["-c", "copy", "-f", format]).arg(url);
     if let Some(log_path) = log_path {
@@ -7847,20 +6589,6 @@ fn assert_media_only(probe: &Value, label: &str) -> Result<(), String> {
         return Err(format!(
             "{label}: expected 1 video + >=1 audio, got video={video_count} \
              audio={audio_count} non_media={non_media:?}"
-        ));
-    }
-    Ok(())
-}
-
-fn assert_snapshot_matches_probe(
-    snapshot: &Value,
-    normalized: &Value,
-    label: &str,
-) -> Result<(), String> {
-    if !media_snapshot_matches_probe(snapshot, normalized) {
-        return Err(format!(
-            "{label}: media snapshot mismatch: snapshot={} normalized={}",
-            snapshot, normalized
         ));
     }
     Ok(())
@@ -8113,7 +6841,7 @@ async fn run_file_live_edge_case(
 }
 
 async fn file_live_edge() -> Result<Value, String> {
-    let work_dir = artifact_path("file-live-edge");
+    let work_dir = artifact_path("file.live-edge");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
 
     let restream_bin = default_restream_bin();
@@ -8155,7 +6883,7 @@ async fn file_live_edge() -> Result<Value, String> {
     let cases = vec![passthrough, live_optimized];
     let passed = cases.iter().all(|case| case["passed"] == true);
     Ok(json!({
-        "mode": "file-live-edge",
+        "mode": "file.live-edge",
         "passed": passed,
         "cases": cases,
         "mediaDir": media_dir,
@@ -8164,9 +6892,9 @@ async fn file_live_edge() -> Result<Value, String> {
 }
 
 async fn signal_control() -> Result<Value, String> {
-    let work_dir = artifact_path("signal-control");
+    let work_dir = artifact_path("signal.control");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
-    let env = MixedEnv::from_env_with_default_work_dir("signal-control", work_dir.clone());
+    let env = MixedEnv::from_env_with_default_work_dir("signal.control", work_dir.clone());
     let duration = env.av_signal_seconds;
     let cases = [
         ("h264-single-source", "h264", false, false),
@@ -8184,7 +6912,7 @@ async fn signal_control() -> Result<Value, String> {
         let started = Instant::now();
         validate_signal_capture_artifact(
             &env,
-            "signal-control",
+            "signal.control",
             &format!("SC-{name}"),
             name,
             &fixture.to_string_lossy(),
@@ -8202,7 +6930,7 @@ async fn signal_control() -> Result<Value, String> {
         }));
     }
     Ok(json!({
-        "mode": "signal-control",
+        "mode": "signal.control",
         "passed": true,
         "durationSecs": duration,
         "workDir": work_dir,
@@ -8287,7 +7015,7 @@ async fn fault_rtmp_egress_sink_disappear(
     let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
 
     let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/fault-egress-rtmp-sink");
-    let oid = create_mixed_output(api, &pid, "rtmp-sink", &sink_url, "source").await?;
+    let oid = create_output(api, &pid, "rtmp-sink", &sink_url, "source").await?;
 
     let mut pub_child = spawn_publisher(
         fixture_h264,
@@ -8298,7 +7026,7 @@ async fn fault_rtmp_egress_sink_disappear(
     .await?;
     wait_for_api_input_live(api, &pid, timeout).await?;
 
-    start_mixed_output(api, &pid, &oid).await?;
+    start_output(api, &pid, &oid).await?;
 
     let _ = wait_for_sink_video_above(&sink_metrics, 9, timeout).await;
     println!("[fault] RTMP egress delivering data");
@@ -8392,7 +7120,7 @@ async fn fault_srt_egress_sink_disappear(
         "srt://127.0.0.1:{}?streamid=publish:live/srt-sink-target&pkt_size=1316",
         ports.srt
     );
-    let oid = create_mixed_output(api, &pid, "srt-sink", &sink_url, "source").await?;
+    let oid = create_output(api, &pid, "srt-sink", &sink_url, "source").await?;
 
     let mut pub_child = spawn_publisher(
         fixture_h264,
@@ -8406,7 +7134,7 @@ async fn fault_srt_egress_sink_disappear(
     .await?;
     wait_for_api_input_live(api, &pid, timeout).await?;
 
-    start_mixed_output(api, &pid, &oid).await?;
+    start_output(api, &pid, &oid).await?;
 
     let deadline = Instant::now() + timeout;
     let mut sink_live = false;
@@ -8480,7 +7208,7 @@ async fn fault_rtmp_egress_sink_stalls(
 ) -> Result<Value, String> {
     let pid = create_pipeline(api, "fault-egress-rtmp-stall").await?;
 
-    let oid = create_mixed_output(
+    let oid = create_output(
         api,
         &pid,
         "rtmp-stall-sink",
@@ -8502,7 +7230,7 @@ async fn fault_rtmp_egress_sink_stalls(
     .await?;
     wait_for_api_input_live(api, &pid, timeout).await?;
 
-    start_mixed_output(api, &pid, &oid).await?;
+    start_output(api, &pid, &oid).await?;
 
     let accept_deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < accept_deadline && !stall_server.publish_accepted.load(Ordering::Relaxed)
@@ -8641,7 +7369,7 @@ async fn fault_rtmp_stalled_sink_isolation_under_many_outputs(
     let sibling_outputs = sibling_outputs.max(1);
     let pid = create_pipeline(api, "fault-egress-rtmp-stall-isolation").await?;
 
-    let stalled_oid = create_mixed_output(
+    let stalled_oid = create_output(
         api,
         &pid,
         "rtmp-stall-sink-isolation",
@@ -8659,7 +7387,7 @@ async fn fault_rtmp_stalled_sink_isolation_under_many_outputs(
         let port = healthy_sink_base_port.saturating_add(index as u16);
         let metrics = Arc::new(GeneralizedSinkMetrics::default());
         let server = start_generalized_sink_server(port, metrics.clone()).await?;
-        let oid = create_mixed_output(
+        let oid = create_output(
             api,
             &pid,
             &format!("rtmp-healthy-sink-{index:02}"),
@@ -8687,9 +7415,9 @@ async fn fault_rtmp_stalled_sink_isolation_under_many_outputs(
     .await?;
     wait_for_api_input_live(api, &pid, timeout).await?;
 
-    start_mixed_output(api, &pid, &stalled_oid).await?;
+    start_output(api, &pid, &stalled_oid).await?;
     for output_id in &healthy_output_ids {
-        start_mixed_output(api, &pid, output_id).await?;
+        start_output(api, &pid, output_id).await?;
     }
 
     let stalled_accept_deadline = Instant::now() + Duration::from_secs(10);
@@ -8821,7 +7549,7 @@ async fn delete_pipeline_v1(api: &RampApi, pipeline_id: &str) -> Result<(), Stri
 }
 
 async fn fault_egress_retry() -> Result<Value, String> {
-    let work_dir = artifact_path("fault-egress-retry");
+    let work_dir = artifact_path("fault.egress-retry");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
 
     let restream_bin = default_restream_bin();
@@ -8860,16 +7588,15 @@ async fn fault_egress_retry() -> Result<Value, String> {
     let retry_limit_api = login_api(&ports).await?;
     let mut retry_limit_results = Vec::new();
     for case in retry_budget_cases() {
-        retry_limit_results.push(
-            fault_egress_retry_budget_exhausts_to_failed(
-                &retry_limit_api,
-                &ports,
-                &fixture_h264,
-                sink_port.saturating_add(case.dead_sink_offset),
-                case,
-            )
-            .await?,
-        );
+        let workflow_result = run_retry_budget_case_via_workflow(
+            &retry_limit_api,
+            &ports,
+            &fixture_h264,
+            sink_port,
+            case,
+        )
+        .await?;
+        retry_limit_results.push(workflow_result);
     }
     stop_child(&mut retry_limit_child).await;
 
@@ -8878,24 +7605,24 @@ async fn fault_egress_retry() -> Result<Value, String> {
 
     let all_passed = results.iter().all(|r| r["passed"] == true);
     let result = json!({
-        "mode": "fault-egress-retry",
+        "mode": "fault.egress-retry",
         "passed": all_passed,
         "tests": results,
     });
 
-    let result_path = work_dir.join("fault-egress-retry.json");
+    let result_path = work_dir.join("fault.egress-retry.json");
     std::fs::write(&result_path, serde_json::to_string_pretty(&result).unwrap())
         .map_err(|e| e.to_string())?;
     println!("artifact={}", result_path.display());
 
     if !all_passed {
-        return Err("fault-egress-retry: not all tests passed".to_string());
+        return Err("fault.egress-retry: not all tests passed".to_string());
     }
     Ok(result)
 }
 
 async fn fault_output_stall() -> Result<Value, String> {
-    let work_dir = artifact_path("fault-output-stall");
+    let work_dir = artifact_path("fault.output-stall");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
 
     let restream_bin = default_restream_bin();
@@ -8929,13 +7656,13 @@ async fn fault_output_stall() -> Result<Value, String> {
         .iter()
         .all(|result| result["passed"].as_bool().unwrap_or(false));
     let payload = json!({
-        "mode": "fault-output-stall",
+        "mode": "fault.output-stall",
         "passed": passed,
         "siblingOutputs": sibling_outputs,
         "tests": tests,
     });
 
-    let result_path = work_dir.join("fault-output-stall.json");
+    let result_path = work_dir.join("fault.output-stall.json");
     std::fs::write(
         &result_path,
         serde_json::to_string_pretty(&payload).unwrap(),
@@ -8944,7 +7671,7 @@ async fn fault_output_stall() -> Result<Value, String> {
     println!("artifact={}", result_path.display());
 
     if !passed {
-        return Err("fault-output-stall: not all tests passed".to_string());
+        return Err("fault.output-stall: not all tests passed".to_string());
     }
     Ok(payload)
 }
@@ -9258,7 +7985,7 @@ async fn recovery() -> Result<Value, String> {
 }
 
 async fn fault_resilience() -> Result<Value, String> {
-    let work_dir = artifact_path("fault-resilience");
+    let work_dir = artifact_path("fault.resilience");
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
 
     let restream_bin = default_restream_bin();
@@ -9316,7 +8043,7 @@ async fn fault_resilience() -> Result<Value, String> {
         let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
 
         let sink_url = format!("rtmp://127.0.0.1:{sink_port}/live/fault-transcoder-sink");
-        let oid = create_mixed_output(&api, &pid, "rtmp.720p.a0", &sink_url, "720p").await?;
+        let oid = create_output(&api, &pid, "rtmp.720p.a0", &sink_url, "720p").await?;
 
         let mut pub_child = spawn_publisher(
             &fixture_h264,
@@ -9327,7 +8054,7 @@ async fn fault_resilience() -> Result<Value, String> {
         .await?;
         wait_for_api_input_live(&api, &pid, timeout).await?;
 
-        start_mixed_output(&api, &pid, &oid).await?;
+        start_output(&api, &pid, &oid).await?;
 
         let restream_pid = child.id().ok_or("restream pid missing")?;
         let warm_deadline = Instant::now() + Duration::from_secs(15);
@@ -9442,26 +8169,26 @@ async fn fault_resilience() -> Result<Value, String> {
 
     let history_contract = verify_live_history_contract(&api, &["egress.failed"]).await?;
     let external_transcoder_history = verify_external_transcoder_history_contract(&api).await?;
-    println!("[fault-resilience] history contract verified");
+    println!("[fault.resilience] history contract verified");
 
     stop_child(&mut child).await;
 
     let all_passed = results.iter().all(|r| r["passed"] == true);
     let result = json!({
-        "mode": "fault-resilience",
+        "mode": "fault.resilience",
         "passed": all_passed,
         "tests": results,
         "historyContract": history_contract,
         "externalTranscoderHistory": external_transcoder_history,
     });
 
-    let result_path = work_dir.join("fault-resilience.json");
+    let result_path = work_dir.join("fault.resilience.json");
     std::fs::write(&result_path, serde_json::to_string_pretty(&result).unwrap())
         .map_err(|e| e.to_string())?;
     println!("artifact={}", result_path.display());
 
     if !all_passed {
-        return Err("fault-resilience: not all tests passed".to_string());
+        return Err("fault.resilience: not all tests passed".to_string());
     }
     Ok(result)
 }
@@ -10002,10 +8729,10 @@ mod tests {
 
     #[test]
     fn only_non_measurement_modes_parallelize_in_suite() {
-        assert!(suite_mode_is_parallelizable("correctness-hevc-srt", false));
-        assert!(suite_mode_is_parallelizable("fault-egress-retry", false));
-        assert!(suite_mode_is_parallelizable("fault-output-stall", false));
-        assert!(suite_mode_is_parallelizable("fault-resilience", false));
+        assert!(suite_mode_is_parallelizable("srt.policy", false));
+        assert!(suite_mode_is_parallelizable("fault.egress-retry", false));
+        assert!(suite_mode_is_parallelizable("fault.output-stall", false));
+        assert!(suite_mode_is_parallelizable("fault.resilience", false));
         assert!(suite_mode_is_parallelizable("recovery", false));
         assert!(!suite_mode_is_parallelizable("bitrate-sweep", false));
         assert!(!suite_mode_is_parallelizable("preflight", true));
@@ -10017,23 +8744,6 @@ mod tests {
         assert_eq!(effective_fault_output_stall_siblings(12, Some(1)), 1);
         assert_eq!(effective_fault_output_stall_siblings(4, Some(8)), 4);
         assert_eq!(effective_fault_output_stall_siblings(0, Some(0)), 1);
-    }
-
-    #[test]
-    fn probe_video_codec_matches_accepts_hevc_aliases() {
-        assert!(probe_video_codec_matches(
-            &json!({"video": {"codec": "hevc"}}),
-            &["hevc", "h265"]
-        ));
-        assert!(probe_video_codec_matches(
-            &json!({"video": {"codec": "H265"}}),
-            &["hevc", "h265"]
-        ));
-        assert!(!probe_video_codec_matches(
-            &json!({"video": {"codec": "h264"}}),
-            &["hevc", "h265"]
-        ));
-        assert!(!probe_video_codec_matches(&json!({}), &["hevc", "h265"]));
     }
 
     #[test]
@@ -10390,7 +9100,7 @@ stream|index=1|codec_type=audio\n";
         assert!(message.contains("preflight"));
         for mode in supported_mode_names() {
             assert!(
-                message.contains(mode),
+                message.contains(mode.as_str()),
                 "unknown-command help text is missing mode {mode}"
             );
         }
@@ -10405,8 +9115,11 @@ stream|index=1|codec_type=audio\n";
         for spec in all_mode_specs() {
             if spec.name == MIXED_MATRIX_MODE
                 || spec.name == MIXED_FAST_BREADTH_MODE
-                || mixed_input_case_for_command(spec.name).is_some()
+                || spec.name == "generic-sweeps"
+                || mixed_input_case_for_command(&spec.name).is_some()
             {
+                // "generic-sweeps" is a manifest-only suite-composition entry
+                // (folded into "mixed"); it has no standalone Rust runner.
                 continue;
             }
             let arm = format!("\"{}\" =>", spec.name);
@@ -11068,6 +9781,26 @@ stream|index=1|codec_type=audio\n";
         assert_eq!(SweepOutputKind::Rtmp720p.encoding(true), "720p+atrack:0");
         assert_eq!(SweepOutputKind::Srt720p.encoding(true), "720p+atrack:0,1");
         assert_eq!(SweepOutputKind::SrtSource.encoding(true), "source");
+    }
+
+    #[test]
+    fn resource_output_progress_timeout_scales_and_caps() {
+        assert_eq!(
+            scaled_output_progress_timeout(1, 30, 4, 240),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            scaled_output_progress_timeout(20, 30, 4, 240),
+            Duration::from_secs(106)
+        );
+        assert_eq!(
+            scaled_output_progress_timeout(60, 30, 4, 240),
+            Duration::from_secs(240)
+        );
+        assert_eq!(
+            scaled_output_progress_timeout(0, 30, 4, 240),
+            Duration::from_secs(30)
+        );
     }
 
     #[test]

@@ -2,362 +2,6 @@
 
 use super::*;
 
-/// Declarative retry-budget exhaustion runner: publish, break egress, confirm the
-/// output settles into `failed` once the configured retry budget is spent.
-pub(super) async fn fault_egress_retry_budget_exhausts_to_failed(
-    api: &RampApi,
-    ports: &TestPorts,
-    fixture_h264: &Path,
-    dead_sink_port: u16,
-    case: &RetryBudgetCase,
-) -> Result<Value, String> {
-    let pid = create_pipeline_with_stream_key(api, &case.pipeline, &case.pipeline).await?;
-
-    let oid = create_mixed_output(
-        api,
-        &pid,
-        &case.output_name,
-        &case.protocol.retry_limit_output_url(dead_sink_port),
-        "source",
-    )
-    .await?;
-
-    let mut pub_child = spawn_publisher(
-        fixture_h264,
-        &case.protocol.publish_url(ports, &case.pipeline),
-        case.protocol.ffmpeg_format(),
-        case.protocol.map_all_streams(),
-    )
-    .await?;
-    wait_for_api_input_live(api, &pid, Duration::from_secs(15)).await?;
-
-    start_mixed_output(api, &pid, &oid).await?;
-
-    let started = Instant::now();
-    let deadline = started + Duration::from_secs(8);
-    let mut saw_retrying = false;
-    let mut saw_failed = false;
-    let mut final_status = None;
-    while Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let Some(status) = api
-            .get_json_or_not_found(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-            .await?
-        else {
-            continue;
-        };
-        if status["status"].as_str() == Some("retrying") {
-            saw_retrying = true;
-        }
-        if status["status"].as_str() == Some("failed") {
-            saw_failed = true;
-            final_status = Some(status);
-            break;
-        }
-        final_status = Some(status);
-    }
-
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let stable_deadline = Instant::now() + Duration::from_secs(2);
-    let stable_status = loop {
-        if let Some(status) = api
-            .get_json_or_not_found(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-            .await?
-        {
-            break status;
-        }
-        if Instant::now() >= stable_deadline {
-            return Err(format!(
-                "retry-limit {} output {oid} status never became visible",
-                case.log_label
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    let health = api.get_json("/api/v1/engine/health").await?;
-    let health_output = &health["pipelines"][&pid]["outputs"][&oid];
-
-    let final_status = final_status.unwrap_or_else(|| stable_status.clone());
-    let retry_attempts = final_status["retryAttempts"].as_u64();
-    let retry_backoff_ms = final_status["retryBackoffMs"].as_u64();
-    let status_failed = stable_status["status"].as_str() == Some("failed");
-    let health_failed = health_output["status"].as_str() == Some("failed");
-    let stable_not_retrying = stable_status["retrying"].as_bool() == Some(false)
-        && stable_status["retryAttempts"].is_null()
-        && stable_status["retryBackoffMs"].is_null()
-        && stable_status["retryRemainingMs"].is_null();
-    let recent_failure_count = stable_status["recentFailureCount"].as_u64().unwrap_or(0);
-    let health_recent_failure_count = health_output["recentFailureCount"].as_u64().unwrap_or(0);
-    let retry_evidence =
-        saw_retrying || recent_failure_count >= 2 || health_recent_failure_count >= 2;
-    let last_error = stable_status["lastError"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-
-    println!(
-        "[fault] {} egress retry budget exhausts: {} (sawRetrying={}, retryEvidence={}, sawFailed={}, statusFailed={}, healthFailed={}, stableNotRetrying={}, recentFailureCount={}, healthRecentFailureCount={}, retryAttempts={:?}, retryBackoffMs={:?}, lastError={}, {:.1}s)",
-        case.log_label,
-        if retry_evidence && saw_failed && status_failed && health_failed && stable_not_retrying {
-            "PASS"
-        } else {
-            "FAIL"
-        },
-        saw_retrying,
-        retry_evidence,
-        saw_failed,
-        status_failed,
-        health_failed,
-        stable_not_retrying,
-        recent_failure_count,
-        health_recent_failure_count,
-        retry_attempts,
-        retry_backoff_ms,
-        last_error,
-        started.elapsed().as_secs_f64()
-    );
-
-    stop_child(&mut pub_child).await;
-
-    Ok(json!({
-        "test": case.test_name,
-        "passed": retry_evidence && saw_failed && status_failed && health_failed && stable_not_retrying,
-        "sawRetrying": saw_retrying,
-        "retryEvidence": retry_evidence,
-        "recentFailureCount": recent_failure_count,
-        "healthRecentFailureCount": health_recent_failure_count,
-        "sawFailed": saw_failed,
-        "statusFailed": status_failed,
-        "healthFailed": health_failed,
-        "stableNotRetrying": stable_not_retrying,
-        "retryAttempts": retry_attempts,
-        "retryBackoffMs": retry_backoff_ms,
-        "lastError": last_error,
-        "elapsedMs": started.elapsed().as_millis(),
-    }))
-}
-
-async fn spawn_recovery_publisher(
-    fixture: &Path,
-    ports: &TestPorts,
-    case: &RecoveryTransientCase,
-) -> Result<Child, String> {
-    spawn_publisher(
-        fixture,
-        &case.protocol.publish_url(ports, &case.pipeline),
-        case.protocol.ffmpeg_format(),
-        case.protocol.map_all_streams(),
-    )
-    .await
-}
-
-pub(super) async fn run_recovery_transient_case(
-    api: &mut RampApi,
-    ports: &TestPorts,
-    fixture_h264: &Path,
-    sink_port: u16,
-    timeout: Duration,
-    case: &RecoveryTransientCase,
-) -> Result<Value, String> {
-    let pid = create_pipeline(api, &case.pipeline).await?;
-    let metrics = Arc::new(GeneralizedSinkMetrics::default());
-    let sink_server = start_generalized_sink_server(sink_port, metrics.clone()).await?;
-    let oid = create_mixed_output(
-        api,
-        &pid,
-        &case.output_name,
-        &format!("rtmp://127.0.0.1:{sink_port}/live/{}", case.sink_stream),
-        "source",
-    )
-    .await?;
-
-    let mut pub_child = spawn_recovery_publisher(fixture_h264, ports, case).await?;
-    wait_for_api_input_live(api, &pid, timeout).await?;
-    start_mixed_output(api, &pid, &oid).await?;
-
-    let _ = wait_for_sink_video_above(
-        &metrics,
-        RECOVERY_WARM_VIDEO_MIN - 1,
-        Duration::from_secs(15),
-    )
-    .await;
-    let baseline_video = metrics.video_count.load(Ordering::Relaxed);
-    let baseline_connections = metrics.connections.load(Ordering::Relaxed);
-
-    stop_child(&mut pub_child).await;
-    let mut gap_off_error = None;
-    let gap_input = if case.wait_input_off_after_drop {
-        let off_result = wait_for_api_input_off(api, &pid, Duration::from_secs(10)).await;
-        gap_off_error = off_result.err();
-        let off_health = api.get_json("/api/v1/engine/health").await.ok();
-        health_input_snapshot(off_health.as_ref(), &pid)
-    } else {
-        tokio::time::sleep(Duration::from_millis(2_500)).await;
-        let gap_health = api.get_json("/api/v1/engine/health").await.ok();
-        health_input_snapshot(gap_health.as_ref(), &pid)
-    };
-
-    let gap_status = api
-        .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-        .await
-        .ok();
-    let gap_connections = metrics.connections.load(Ordering::Relaxed);
-    let gap_status_running = gap_status
-        .as_ref()
-        .and_then(|status| status["status"].as_str())
-        == Some("running");
-    let gap_retrying = gap_status
-        .as_ref()
-        .and_then(|status| status["retrying"].as_bool())
-        .unwrap_or(false);
-    let gap_has_error = gap_status
-        .as_ref()
-        .and_then(|status| status["lastError"].as_str())
-        .is_some_and(|message| !message.is_empty());
-    let gap_grace_active = gap_input["disconnectGraceActive"] == true;
-    let gap_grace_remaining = disconnect_grace_remaining_bounded(&gap_input);
-    let gap_input_off = !case.wait_input_off_after_drop
-        || (gap_off_error.is_none() && gap_input["status"] == "off");
-    let gap_preserved = gap_input_off
-        && gap_status.is_some()
-        && gap_connections == baseline_connections
-        && gap_status_running
-        && !gap_retrying
-        && !gap_has_error
-        && gap_grace_active
-        && gap_grace_remaining;
-
-    let mut resumed_child = spawn_recovery_publisher(fixture_h264, ports, case).await?;
-    let media_ready = if case.require_media_ready_on_resume {
-        Some(wait_for_api_input_media_ready(api, &pid, Duration::from_secs(30)).await)
-    } else {
-        wait_for_api_input_live(api, &pid, Duration::from_secs(30)).await?;
-        None
-    };
-    let resumed =
-        wait_for_sink_video_above(&metrics, baseline_video + 10, Duration::from_secs(15)).await;
-
-    let mut second_gap_input = Value::Null;
-    let mut second_gap_grace_active = false;
-    let mut second_gap_grace_remaining = false;
-    let mut second_resumed = false;
-    let mut second_resumed_child = None;
-    if case.second_reconnect_checks_flapping {
-        stop_child(&mut resumed_child).await;
-        tokio::time::sleep(Duration::from_millis(2_500)).await;
-        let second_gap_health = api.get_json("/api/v1/engine/health").await.ok();
-        second_gap_input = health_input_snapshot(second_gap_health.as_ref(), &pid);
-        second_gap_grace_active = second_gap_input["disconnectGraceActive"] == true;
-        second_gap_grace_remaining = disconnect_grace_remaining_bounded(&second_gap_input);
-
-        let child = spawn_recovery_publisher(fixture_h264, ports, case).await?;
-        wait_for_api_input_live(api, &pid, Duration::from_secs(30)).await?;
-        second_resumed =
-            wait_for_sink_video_above(&metrics, baseline_video + 20, Duration::from_secs(15)).await;
-        second_resumed_child = Some(child);
-    }
-
-    let final_connections = metrics.connections.load(Ordering::Relaxed);
-    let final_status = api
-        .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-        .await
-        .ok();
-    let final_status_running = final_status
-        .as_ref()
-        .and_then(|status| status["status"].as_str())
-        == Some("running");
-    let final_retrying = final_status
-        .as_ref()
-        .and_then(|status| status["retrying"].as_bool())
-        .unwrap_or(false);
-    let final_health = api.get_json("/api/v1/engine/health").await.ok();
-    let final_input = health_input_snapshot(final_health.as_ref(), &pid);
-    let final_disconnect_cleared = input_disconnect_cleared(&final_input);
-    let final_flapping = final_input["flapping"] == true;
-    let final_recent_disconnect_count = final_input["recentDisconnectCount"].as_u64().unwrap_or(0);
-    let media_ready_ok = media_ready.as_ref().is_none_or(|result| result.is_ok());
-    let passed = baseline_video >= RECOVERY_WARM_VIDEO_MIN
-        && baseline_connections == 1
-        && gap_preserved
-        && resumed
-        && final_connections == baseline_connections
-        && final_status_running
-        && !final_retrying
-        && final_disconnect_cleared
-        && media_ready_ok
-        && (!case.second_reconnect_checks_flapping
-            || (second_gap_grace_active
-                && second_gap_grace_remaining
-                && second_resumed
-                && final_flapping
-                && final_recent_disconnect_count >= 2));
-
-    println!(
-        "[fault] {}: {} (connections={} resumed={} secondResumed={} gapStatusRunning={} gapRetrying={} finalRetrying={} disconnectCleared={} flapping={} disconnectCount={})",
-        case.log_label,
-        if passed { "PASS" } else { "FAIL" },
-        final_connections,
-        resumed,
-        second_resumed,
-        gap_status_running,
-        gap_retrying,
-        final_retrying,
-        final_disconnect_cleared,
-        final_flapping,
-        final_recent_disconnect_count,
-    );
-
-    stop_mixed_outputs(api, &pid, std::slice::from_ref(&oid)).await;
-    if case.second_reconnect_checks_flapping {
-        if let Some(child) = second_resumed_child.as_mut() {
-            stop_child(child).await;
-        }
-    } else {
-        stop_child(&mut resumed_child).await;
-    }
-    stop_generalized_sink_server(sink_server);
-
-    let mut result = json!({
-        "test": case.test_name,
-        "passed": passed,
-        "baselineVideo": baseline_video,
-        "baselineConnections": baseline_connections,
-        "gapConnections": gap_connections,
-        "gapStatusExists": gap_status.is_some(),
-        "gapStatusRunning": gap_status_running,
-        "gapRetrying": gap_retrying,
-        "gapHasError": gap_has_error,
-        "gapGraceActive": gap_grace_active,
-        "gapGraceRemainingBounded": gap_grace_remaining,
-        "resumed": resumed,
-        "finalConnections": final_connections,
-        "finalStatusRunning": final_status_running,
-        "finalRetrying": final_retrying,
-        "finalDisconnectCleared": final_disconnect_cleared,
-        "finalInputSnapshot": final_input,
-    });
-    if case.wait_input_off_after_drop {
-        result["gapInputOff"] = json!(gap_input_off);
-        result["gapOffError"] = json!(gap_off_error);
-        result["gapOffInputSnapshot"] = gap_input;
-    } else {
-        result["gapInputSnapshot"] = gap_input;
-    }
-    if let Some(media_ready) = media_ready {
-        result["mediaReady"] = json!(media_ready.is_ok());
-        result["mediaReadyError"] = json!(media_ready.err());
-    }
-    if case.second_reconnect_checks_flapping {
-        result["secondGapGraceActive"] = json!(second_gap_grace_active);
-        result["secondGapGraceRemainingBounded"] = json!(second_gap_grace_remaining);
-        result["secondGapInputSnapshot"] = second_gap_input;
-        result["secondResumed"] = json!(second_resumed);
-        result["finalFlapping"] = json!(final_flapping);
-        result["finalRecentDisconnectCount"] = json!(final_recent_disconnect_count);
-    }
-    Ok(result)
-}
-
 pub(super) async fn recovery_live_cases(
     api: &mut RampApi,
     ports: &TestPorts,
@@ -369,9 +13,10 @@ pub(super) async fn recovery_live_cases(
     let mut results = Vec::new();
 
     for case in recovery_transient_cases() {
-        results.push(
-            run_recovery_transient_case(api, ports, fixture_h264, sink_port, timeout, case).await?,
-        );
+        let workflow_result =
+            run_recovery_transient_case_via_workflow(api, ports, fixture_h264, sink_port, case)
+                .await?;
+        results.push(workflow_result);
     }
 
     // ── 2b. Rapid SRT publisher replacement preserves egress ownership ──
@@ -386,7 +31,7 @@ pub(super) async fn recovery_live_cases(
         let metrics = Arc::new(GeneralizedSinkMetrics::default());
         let sink_server = start_generalized_sink_server(sink_port, metrics.clone()).await?;
 
-        let oid = create_mixed_output(
+        let oid = create_output(
             api,
             &pid,
             "srt-replacement-race-sink",
@@ -406,7 +51,7 @@ pub(super) async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        start_mixed_output(api, &pid, &oid).await?;
+        start_output(api, &pid, &oid).await?;
 
         let _ = wait_for_sink_video_above(
             &metrics,
@@ -568,7 +213,7 @@ pub(super) async fn recovery_live_cases(
         let sink_metrics = Arc::new(GeneralizedSinkMetrics::default());
         let sink_server = start_generalized_sink_server(sink_port, sink_metrics.clone()).await?;
 
-        let oid = create_mixed_output(
+        let oid = create_output(
             api,
             &pid,
             "rtmp-retry-gap-sink",
@@ -585,7 +230,7 @@ pub(super) async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        start_mixed_output(api, &pid, &oid).await?;
+        start_output(api, &pid, &oid).await?;
 
         let _ = wait_for_sink_video_above(
             &sink_metrics,
@@ -760,7 +405,7 @@ pub(super) async fn recovery_live_cases(
 
         let (hang_cancel, hang_handle) =
             start_hls_put_hang_sink(hls_put_port, Duration::from_secs(30)).await?;
-        let oid = create_mixed_output(
+        let oid = create_output(
             api,
             &pid,
             "hls-put-timeout",
@@ -779,7 +424,7 @@ pub(super) async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        start_mixed_output(api, &pid, &oid).await?;
+        start_output(api, &pid, &oid).await?;
 
         let retry =
             wait_for_output_retry_observation(api, &pid, &oid, Duration::from_secs(20)).await;
@@ -886,7 +531,7 @@ pub(super) async fn recovery_live_cases(
     {
         let pid = create_pipeline(api, "fault-rtmp-sink-flap").await?;
 
-        let oid = create_mixed_output(
+        let oid = create_output(
             api,
             &pid,
             "rtmp-sink-flap",
@@ -907,7 +552,7 @@ pub(super) async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        start_mixed_output(api, &pid, &oid).await?;
+        start_output(api, &pid, &oid).await?;
 
         let _ = wait_for_sink_video_above(
             &sink_metrics,
@@ -1016,7 +661,7 @@ pub(super) async fn recovery_live_cases(
         let mut sink_pid =
             create_pipeline_with_stream_key(api, "srt-sink-flap-target-1", sink_stream_key).await?;
 
-        let oid = create_mixed_output(
+        let oid = create_output(
             api,
             &pid,
             "srt-sink-flap",
@@ -1039,7 +684,7 @@ pub(super) async fn recovery_live_cases(
         )
         .await?;
         wait_for_api_input_live(api, &pid, timeout).await?;
-        start_mixed_output(api, &pid, &oid).await?;
+        start_output(api, &pid, &oid).await?;
 
         wait_for_api_input_media_ready(api, &sink_pid, Duration::from_secs(25)).await?;
 
@@ -1367,6 +1012,9 @@ pub(super) async fn run_ingest_lifecycle_case(
             json!({"finalPlaylistStatus": final_status.as_u16(), "finalPlaylistGone": playlist_gone})
         }
         IngestLifecycleKind::Recording => {
+            // A completed recording may already have been remuxed from .ts to
+            // .mp4 (recording.rs deletes the source .ts on successful remux
+            // unless retention is enabled), so either extension counts as found.
             let recording_file_found = std::fs::read_dir("media")
                 .ok()
                 .into_iter()
@@ -1374,7 +1022,8 @@ pub(super) async fn run_ingest_lifecycle_case(
                 .flatten()
                 .any(|entry| {
                     let path = entry.path();
-                    path.extension().is_some_and(|ext| ext == "ts")
+                    path.extension()
+                        .is_some_and(|ext| ext == "ts" || ext == "mp4")
                         && path
                             .file_name()
                             .and_then(|name| name.to_str())

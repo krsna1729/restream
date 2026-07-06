@@ -1,0 +1,189 @@
+{
+  "version": 3,
+  "commandSurface": "agent-canonical",
+  "defaultCommand": "suite",
+  "modeGroups": [
+    {
+      "kind": "suite",
+      "group": "canonical-suites",
+      "modes": {
+        "suite": {
+          "suiteRef": "suites.json#suites.default",
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": false,
+            "benchProfile": true
+          }
+        },
+        "mixed.matrix": {
+          "suiteRef": "suites.json#suites.mixed-matrix",
+          "suiteDefault": true,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          }
+        },
+        "mixed.fast-breadth": {
+          "suiteRef": "suites.json#suites.mixed-fast-breadth",
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          }
+        },
+        "ramp-family": {
+          "suiteRef": "suites.json#suites.ramp-family",
+          "suiteDefault": true,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "foldedInto": "mixed"
+        },
+        "generic-sweeps": {
+          "suiteRef": "suites.json#suites.generic-sweeps",
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "foldedInto": "mixed"
+        },
+        "resource-sweep": {
+          "suiteRef": "suites.json#suites.resource-sweep",
+          "suiteDefault": true,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "foldedInto": "mixed"
+        },
+        "bitrate-sweep": {
+          "suiteRef": "suites.json#suites.bitrate-sweep",
+          "suiteDefault": true,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "foldedInto": "mixed+bitrate-axis"
+        },
+        "branch-matrix": {
+          "suiteRef": "suites.json#suites.branch-matrix",
+          "suiteDefault": true,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "foldedInto": "mixed+branch-axis"
+        },
+        "srt-crypto-matrix": {
+          "suiteRef": "suites.json#suites.srt-crypto-matrix",
+          "suiteDefault": true,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "foldedInto": "mixed+srt-crypto-axis"
+        }
+      }
+    },
+    {
+      "kind": "runner",
+      "group": "special-workflows",
+      "modes": {
+        "api-smoke": {
+          "suiteDefault": true,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "API/auth/DB persistence/health smoke"
+        },
+        "preflight": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "environment and binary availability checks"
+        },
+        "srt.policy": {
+          "suiteDefault": true,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "SRT global/pipeline policy inheritance, override, and rejection behavior"
+        },
+        "timestamp.bframe": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "B-frame timestamp/DTS behavior",
+          "migrationBlockedBy": "needs transcodeProfileAxis for full matrix coverage"
+        },
+        "file.live-edge": {
+          "suiteDefault": true,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "file-ingest-as-live GOP/live-edge policy behavior"
+        },
+        "signal.control": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "AV signal-control knobs and signal-specific validation"
+        },
+        "fault.egress-retry": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "egress retry-budget/failure behavior"
+        },
+        "fault.output-stall": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "stalled sink/output fault behavior"
+        },
+        "fault.resilience": {
+          "suiteDefault": true,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "publisher disconnect, recovery, ingest lifecycle and cleanup coverage"
+        },
+        "recovery": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": false
+          },
+          "purpose": "recovery-focused subset of fault behavior"
+        }
+      }
+    }
+  ],
+  "dynamicModes": [
+    {
+      "namePrefix": "mixed.",
+      "kind": "scenario",
+      "scenarioSet": "scenarios/mixed.json#inputs",
+      "scenarioIdField": "id",
+      "workflowField": "workflow",
+      "requiresFromScenario": "requires",
+      "artifactRootFromScenario": "artifact.relDir"
+    }
+  ]
+}

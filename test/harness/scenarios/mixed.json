@@ -1,0 +1,1801 @@
+{
+  "version": 1,
+  "inputs": [
+    {
+      "id": "mixed.asset.file.h264.a1.bf0",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": false
+      },
+      "artifact": {
+        "relDir": "asset/file/h264/a1/bf0"
+      },
+      "source": {
+        "kind": "file",
+        "ingest": "file",
+        "publisher": null,
+        "fixture": "av-marker-h264-a1-bf0",
+        "trackSelection": "primary-av",
+        "hasBFrames": false,
+        "adapter": "file"
+      },
+      "expect": {
+        "videoCodec": "h264",
+        "audioTracks": 1,
+        "hlsPreviewDimensions": "1920x1080",
+        "stages": {
+          "video": 2,
+          "audio": 0,
+          "codecEdge": 0
+        }
+      },
+      "outputs": "@outputs.singleTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "file-ingest",
+      "outputPlan": "file-ingest-all-at-once"
+    },
+    {
+      "id": "mixed.asset.file.h264.a1.bf2",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": false
+      },
+      "artifact": {
+        "relDir": "asset/file/h264/a1/bf2"
+      },
+      "source": {
+        "kind": "file",
+        "ingest": "file",
+        "publisher": null,
+        "fixture": "av-marker-h264-a1-bf2",
+        "trackSelection": "primary-av",
+        "hasBFrames": true,
+        "adapter": "file"
+      },
+      "expect": {
+        "videoCodec": "h264",
+        "audioTracks": 1,
+        "hlsPreviewDimensions": "1920x1080",
+        "stages": {
+          "video": 2,
+          "audio": 0,
+          "codecEdge": 0
+        }
+      },
+      "outputs": "@outputs.singleTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "file-ingest",
+      "outputPlan": "file-ingest-all-at-once"
+    },
+    {
+      "id": "mixed.asset.file.h264.a2.bf0",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": false
+      },
+      "artifact": {
+        "relDir": "asset/file/h264/a2/bf0"
+      },
+      "source": {
+        "kind": "file",
+        "ingest": "file",
+        "publisher": null,
+        "fixture": "av-marker-h264-a2-bf0",
+        "trackSelection": "all",
+        "hasBFrames": false,
+        "adapter": "file"
+      },
+      "expect": {
+        "videoCodec": "h264",
+        "audioTracks": 2,
+        "hlsPreviewDimensions": "1920x1080",
+        "stages": {
+          "video": 2,
+          "audio": 6,
+          "codecEdge": 0
+        }
+      },
+      "outputs": "@outputs.multiTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "file-ingest",
+      "outputPlan": "file-ingest-all-at-once"
+    },
+    {
+      "id": "mixed.asset.file.h264.a2.bf2",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": false
+      },
+      "artifact": {
+        "relDir": "asset/file/h264/a2/bf2"
+      },
+      "source": {
+        "kind": "file",
+        "ingest": "file",
+        "publisher": null,
+        "fixture": "av-marker-h264-a2-bf2",
+        "trackSelection": "all",
+        "hasBFrames": true,
+        "adapter": "file"
+      },
+      "expect": {
+        "videoCodec": "h264",
+        "audioTracks": 2,
+        "hlsPreviewDimensions": "1920x1080",
+        "stages": {
+          "video": 2,
+          "audio": 6,
+          "codecEdge": 0
+        }
+      },
+      "outputs": "@outputs.multiTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "file-ingest",
+      "outputPlan": "file-ingest-all-at-once"
+    },
+    {
+      "id": "mixed.asset.file.h265.a1.bf0",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": false
+      },
+      "artifact": {
+        "relDir": "asset/file/h265/a1/bf0"
+      },
+      "source": {
+        "kind": "file",
+        "ingest": "file",
+        "publisher": null,
+        "fixture": "av-marker-h265-a1-bf0",
+        "trackSelection": "primary-av",
+        "hasBFrames": false,
+        "adapter": "file"
+      },
+      "expect": {
+        "videoCodec": "hevc",
+        "audioTracks": 1,
+        "hlsPreviewDimensions": "1280x720",
+        "stages": {
+          "video": 2,
+          "audio": 0,
+          "codecEdge": 3
+        }
+      },
+      "outputs": "@outputs.singleTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "file-ingest",
+      "outputPlan": "file-ingest-all-at-once"
+    },
+    {
+      "id": "mixed.asset.file.h265.a1.bf2",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": false
+      },
+      "artifact": {
+        "relDir": "asset/file/h265/a1/bf2"
+      },
+      "source": {
+        "kind": "file",
+        "ingest": "file",
+        "publisher": null,
+        "fixture": "av-marker-h265-a1-bf2",
+        "trackSelection": "primary-av",
+        "hasBFrames": true,
+        "adapter": "file"
+      },
+      "expect": {
+        "videoCodec": "hevc",
+        "audioTracks": 1,
+        "hlsPreviewDimensions": "1280x720",
+        "stages": {
+          "video": 2,
+          "audio": 0,
+          "codecEdge": 3
+        }
+      },
+      "outputs": "@outputs.singleTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "file-ingest",
+      "outputPlan": "file-ingest-all-at-once"
+    },
+    {
+      "id": "mixed.asset.file.h265.a2.bf0",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": false
+      },
+      "artifact": {
+        "relDir": "asset/file/h265/a2/bf0"
+      },
+      "source": {
+        "kind": "file",
+        "ingest": "file",
+        "publisher": null,
+        "fixture": "av-marker-h265-a2-bf0",
+        "trackSelection": "all",
+        "hasBFrames": false,
+        "adapter": "file"
+      },
+      "expect": {
+        "videoCodec": "hevc",
+        "audioTracks": 2,
+        "hlsPreviewDimensions": "1280x720",
+        "stages": {
+          "video": 2,
+          "audio": 12,
+          "codecEdge": 3
+        }
+      },
+      "outputs": "@outputs.multiTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "file-ingest",
+      "outputPlan": "file-ingest-all-at-once"
+    },
+    {
+      "id": "mixed.asset.file.h265.a2.bf2",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": false
+      },
+      "artifact": {
+        "relDir": "asset/file/h265/a2/bf2"
+      },
+      "source": {
+        "kind": "file",
+        "ingest": "file",
+        "publisher": null,
+        "fixture": "av-marker-h265-a2-bf2",
+        "trackSelection": "all",
+        "hasBFrames": true,
+        "adapter": "file"
+      },
+      "expect": {
+        "videoCodec": "hevc",
+        "audioTracks": 2,
+        "hlsPreviewDimensions": "1280x720",
+        "stages": {
+          "video": 2,
+          "audio": 12,
+          "codecEdge": 3
+        }
+      },
+      "outputs": "@outputs.multiTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "file-ingest",
+      "outputPlan": "file-ingest-all-at-once"
+    },
+    {
+      "id": "mixed.live.rtmp.h264.a1.bf0",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": true
+      },
+      "artifact": {
+        "relDir": "live/rtmp/h264/a1/bf0"
+      },
+      "source": {
+        "kind": "live",
+        "ingest": "rtmp",
+        "publisher": "ffmpeg",
+        "fixture": "av-marker-h264-a1-bf0",
+        "trackSelection": "primary-av",
+        "hasBFrames": false,
+        "adapter": "rtmpPublisher"
+      },
+      "expect": {
+        "videoCodec": "h264",
+        "audioTracks": 1,
+        "hlsPreviewDimensions": "1920x1080",
+        "stages": {
+          "video": 2,
+          "audio": 0,
+          "codecEdge": 0
+        }
+      },
+      "outputs": "@outputs.singleTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "live-rtmp",
+      "outputPlan": "all-at-once"
+    },
+    {
+      "id": "mixed.live.rtmp.h264.a1.bf2",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": true
+      },
+      "artifact": {
+        "relDir": "live/rtmp/h264/a1/bf2"
+      },
+      "source": {
+        "kind": "live",
+        "ingest": "rtmp",
+        "publisher": "ffmpeg",
+        "fixture": "av-marker-h264-a1-bf2",
+        "trackSelection": "primary-av",
+        "hasBFrames": true,
+        "adapter": "rtmpPublisher"
+      },
+      "expect": {
+        "videoCodec": "h264",
+        "audioTracks": 1,
+        "hlsPreviewDimensions": "1920x1080",
+        "stages": {
+          "video": 2,
+          "audio": 0,
+          "codecEdge": 0
+        }
+      },
+      "outputs": "@outputs.singleTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "live-rtmp",
+      "outputPlan": "all-at-once"
+    },
+    {
+      "id": "mixed.live.srt.h264.a1.bf0",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": true
+      },
+      "artifact": {
+        "relDir": "live/srt/h264/a1/bf0"
+      },
+      "source": {
+        "kind": "live",
+        "ingest": "srt",
+        "publisher": "ffmpeg",
+        "fixture": "av-marker-h264-a1-bf0",
+        "trackSelection": "primary-av",
+        "hasBFrames": false,
+        "adapter": "srtPublisher"
+      },
+      "expect": {
+        "videoCodec": "h264",
+        "audioTracks": 1,
+        "hlsPreviewDimensions": "1920x1080",
+        "stages": {
+          "video": 2,
+          "audio": 0,
+          "codecEdge": 0
+        }
+      },
+      "outputs": "@outputs.singleTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "live-srt",
+      "outputPlan": "phased-source-then-scaled",
+      "formerWorkflow": "mixed-anchor"
+    },
+    {
+      "id": "mixed.live.srt.h264.a1.bf2",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": true
+      },
+      "artifact": {
+        "relDir": "live/srt/h264/a1/bf2"
+      },
+      "source": {
+        "kind": "live",
+        "ingest": "srt",
+        "publisher": "ffmpeg",
+        "fixture": "av-marker-h264-a1-bf2",
+        "trackSelection": "primary-av",
+        "hasBFrames": true,
+        "adapter": "srtPublisher"
+      },
+      "expect": {
+        "videoCodec": "h264",
+        "audioTracks": 1,
+        "hlsPreviewDimensions": "1920x1080",
+        "stages": {
+          "video": 2,
+          "audio": 0,
+          "codecEdge": 0
+        }
+      },
+      "outputs": "@outputs.singleTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "live-srt",
+      "outputPlan": "phased-source-then-scaled",
+      "formerWorkflow": "mixed-anchor"
+    },
+    {
+      "id": "mixed.live.srt.h264.a2.bf0",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": true
+      },
+      "artifact": {
+        "relDir": "live/srt/h264/a2/bf0"
+      },
+      "source": {
+        "kind": "live",
+        "ingest": "srt",
+        "publisher": "ffmpeg",
+        "fixture": "av-marker-h264-a2-bf0",
+        "trackSelection": "all",
+        "hasBFrames": false,
+        "adapter": "srtPublisher"
+      },
+      "expect": {
+        "videoCodec": "h264",
+        "audioTracks": 2,
+        "hlsPreviewDimensions": "1920x1080",
+        "stages": {
+          "video": 2,
+          "audio": 6,
+          "codecEdge": 0
+        }
+      },
+      "outputs": "@outputs.multiTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "live-srt",
+      "outputPlan": "all-at-once"
+    },
+    {
+      "id": "mixed.live.srt.h264.a2.bf2",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": true
+      },
+      "artifact": {
+        "relDir": "live/srt/h264/a2/bf2"
+      },
+      "source": {
+        "kind": "live",
+        "ingest": "srt",
+        "publisher": "ffmpeg",
+        "fixture": "av-marker-h264-a2-bf2",
+        "trackSelection": "all",
+        "hasBFrames": true,
+        "adapter": "srtPublisher"
+      },
+      "expect": {
+        "videoCodec": "h264",
+        "audioTracks": 2,
+        "hlsPreviewDimensions": "1920x1080",
+        "stages": {
+          "video": 2,
+          "audio": 6,
+          "codecEdge": 0
+        }
+      },
+      "outputs": "@outputs.multiTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "live-srt",
+      "outputPlan": "all-at-once"
+    },
+    {
+      "id": "mixed.live.srt.h265.a1.bf0",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": true
+      },
+      "artifact": {
+        "relDir": "live/srt/h265/a1/bf0"
+      },
+      "source": {
+        "kind": "live",
+        "ingest": "srt",
+        "publisher": "ffmpeg",
+        "fixture": "av-marker-h265-a1-bf0",
+        "trackSelection": "primary-av",
+        "hasBFrames": false,
+        "adapter": "srtPublisher"
+      },
+      "expect": {
+        "videoCodec": "hevc",
+        "audioTracks": 1,
+        "hlsPreviewDimensions": "1280x720",
+        "stages": {
+          "video": 2,
+          "audio": 0,
+          "codecEdge": 3
+        }
+      },
+      "outputs": "@outputs.singleTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "live-srt",
+      "outputPlan": "all-at-once"
+    },
+    {
+      "id": "mixed.live.srt.h265.a1.bf2",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": true
+      },
+      "artifact": {
+        "relDir": "live/srt/h265/a1/bf2"
+      },
+      "source": {
+        "kind": "live",
+        "ingest": "srt",
+        "publisher": "ffmpeg",
+        "fixture": "av-marker-h265-a1-bf2",
+        "trackSelection": "primary-av",
+        "hasBFrames": true,
+        "adapter": "srtPublisher"
+      },
+      "expect": {
+        "videoCodec": "hevc",
+        "audioTracks": 1,
+        "hlsPreviewDimensions": "1280x720",
+        "stages": {
+          "video": 2,
+          "audio": 0,
+          "codecEdge": 3
+        }
+      },
+      "outputs": "@outputs.singleTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "live-srt",
+      "outputPlan": "all-at-once"
+    },
+    {
+      "id": "mixed.live.srt.h265.a2.bf0",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": true
+      },
+      "artifact": {
+        "relDir": "live/srt/h265/a2/bf0"
+      },
+      "source": {
+        "kind": "live",
+        "ingest": "srt",
+        "publisher": "ffmpeg",
+        "fixture": "av-marker-h265-a2-bf0",
+        "trackSelection": "all",
+        "hasBFrames": false,
+        "adapter": "srtPublisher"
+      },
+      "expect": {
+        "videoCodec": "hevc",
+        "audioTracks": 2,
+        "hlsPreviewDimensions": "1280x720",
+        "stages": {
+          "video": 2,
+          "audio": 12,
+          "codecEdge": 3
+        }
+      },
+      "outputs": "@outputs.multiTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "live-srt",
+      "outputPlan": "all-at-once"
+    },
+    {
+      "id": "mixed.live.srt.h265.a2.bf2",
+      "workflow": "mixed-scenario",
+      "requires": {
+        "portNamespace": true,
+        "benchProfile": true
+      },
+      "artifact": {
+        "relDir": "live/srt/h265/a2/bf2"
+      },
+      "source": {
+        "kind": "live",
+        "ingest": "srt",
+        "publisher": "ffmpeg",
+        "fixture": "av-marker-h265-a2-bf2",
+        "trackSelection": "all",
+        "hasBFrames": true,
+        "adapter": "srtPublisher"
+      },
+      "expect": {
+        "videoCodec": "hevc",
+        "audioTracks": 2,
+        "hlsPreviewDimensions": "1280x720",
+        "stages": {
+          "video": 2,
+          "audio": 12,
+          "codecEdge": 3
+        }
+      },
+      "outputs": "@outputs.multiTrack",
+      "checks": "@checks.defaultMixed",
+      "batchGroup": "live-srt",
+      "outputPlan": "all-at-once"
+    }
+  ],
+  "outputs": {
+    "singleTrack": [
+      {
+        "id": "rtmp.src.a0",
+        "protocol": "rtmp",
+        "encoding": "source",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1
+      },
+      {
+        "id": "rtmp.720p.a0",
+        "protocol": "rtmp",
+        "encoding": "720p",
+        "expectedDimensions": "1280x720",
+        "expectedAudioTracks": 1
+      },
+      {
+        "id": "rtmp.1080p.a0",
+        "protocol": "rtmp",
+        "encoding": "1080p",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1
+      },
+      {
+        "id": "srt.src.a0",
+        "protocol": "srt",
+        "encoding": "source",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1
+      },
+      {
+        "id": "srt.720p.a0",
+        "protocol": "srt",
+        "encoding": "720p",
+        "expectedDimensions": "1280x720",
+        "expectedAudioTracks": 1
+      },
+      {
+        "id": "srt.1080p.a0",
+        "protocol": "srt",
+        "encoding": "1080p",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1
+      }
+    ],
+    "multiTrack": [
+      {
+        "id": "rtmp.src.a0",
+        "protocol": "rtmp",
+        "encoding": "source+atrack:0",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1,
+        "selectedAudioTrack": 0
+      },
+      {
+        "id": "rtmp.src.a1",
+        "protocol": "rtmp",
+        "encoding": "source+atrack:1",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1,
+        "selectedAudioTrack": 1
+      },
+      {
+        "id": "rtmp.720p.a0",
+        "protocol": "rtmp",
+        "encoding": "720p+atrack:0",
+        "expectedDimensions": "1280x720",
+        "expectedAudioTracks": 1,
+        "selectedAudioTrack": 0
+      },
+      {
+        "id": "rtmp.720p.a1",
+        "protocol": "rtmp",
+        "encoding": "720p+atrack:1",
+        "expectedDimensions": "1280x720",
+        "expectedAudioTracks": 1,
+        "selectedAudioTrack": 1
+      },
+      {
+        "id": "rtmp.1080p.a0",
+        "protocol": "rtmp",
+        "encoding": "1080p+atrack:0",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1,
+        "selectedAudioTrack": 0
+      },
+      {
+        "id": "rtmp.1080p.a1",
+        "protocol": "rtmp",
+        "encoding": "1080p+atrack:1",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1,
+        "selectedAudioTrack": 1
+      },
+      {
+        "id": "srt.src.all",
+        "protocol": "srt",
+        "encoding": "source",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 2
+      },
+      {
+        "id": "srt.src.a0",
+        "protocol": "srt",
+        "encoding": "source+atrack:0",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1,
+        "selectedAudioTrack": 0
+      },
+      {
+        "id": "srt.src.a1",
+        "protocol": "srt",
+        "encoding": "source+atrack:1",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1,
+        "selectedAudioTrack": 1
+      },
+      {
+        "id": "srt.720p.all",
+        "protocol": "srt",
+        "encoding": "720p",
+        "expectedDimensions": "1280x720",
+        "expectedAudioTracks": 2
+      },
+      {
+        "id": "srt.720p.a0",
+        "protocol": "srt",
+        "encoding": "720p+atrack:0",
+        "expectedDimensions": "1280x720",
+        "expectedAudioTracks": 1,
+        "selectedAudioTrack": 0
+      },
+      {
+        "id": "srt.720p.a1",
+        "protocol": "srt",
+        "encoding": "720p+atrack:1",
+        "expectedDimensions": "1280x720",
+        "expectedAudioTracks": 1,
+        "selectedAudioTrack": 1
+      },
+      {
+        "id": "srt.1080p.all",
+        "protocol": "srt",
+        "encoding": "1080p",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 2
+      },
+      {
+        "id": "srt.1080p.a0",
+        "protocol": "srt",
+        "encoding": "1080p+atrack:0",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1,
+        "selectedAudioTrack": 0
+      },
+      {
+        "id": "srt.1080p.a1",
+        "protocol": "srt",
+        "encoding": "1080p+atrack:1",
+        "expectedDimensions": "1920x1080",
+        "expectedAudioTracks": 1,
+        "selectedAudioTrack": 1
+      }
+    ]
+  },
+  "checks": {
+    "defaultMixed": "@checks/checks.json#defaultMixedChecks",
+    "full": "checks/bundles.json#bundles.mixed.full",
+    "basic": "checks/bundles.json#bundles.media.basic"
+  },
+  "fastBreadth": [
+    {
+      "id": "mixed.asset.file.h264.a1.bf0",
+      "rationale": "file H.264 BF0 single-audio startup hero row",
+      "checks": [
+        "ffprobe",
+        "stage-sharing",
+        "hls"
+      ]
+    },
+    {
+      "id": "mixed.asset.file.h265.a2.bf2",
+      "rationale": "file HEVC BF2 multi-audio plus codec-edge outputs",
+      "checks": [
+        "ffprobe",
+        "stage-sharing"
+      ]
+    },
+    {
+      "id": "mixed.live.rtmp.h264.a1.bf0",
+      "rationale": "RTMP publisher without B-frames",
+      "checks": [
+        "ffprobe"
+      ]
+    },
+    {
+      "id": "mixed.live.rtmp.h264.a1.bf2",
+      "rationale": "RTMP publisher with B-frames",
+      "checks": [
+        "ffprobe"
+      ]
+    },
+    {
+      "id": "mixed.live.srt.h264.a2.bf0",
+      "rationale": "SRT H.264 BF0 multi-audio adaptive-ring row",
+      "checks": [
+        "ffprobe",
+        "stage-sharing"
+      ]
+    },
+    {
+      "id": "mixed.live.srt.h265.a2.bf2",
+      "rationale": "SRT HEVC BF2 multi-audio codec-edge stress row",
+      "checks": [
+        "ffprobe",
+        "stage-sharing",
+        "hls"
+      ]
+    }
+  ],
+  "fastBreadthBatches": [
+    {
+      "group": "live-rtmp",
+      "cases": [
+        "mixed.live.rtmp.h264.a1.bf0",
+        "mixed.live.rtmp.h264.a1.bf2"
+      ]
+    },
+    {
+      "group": "live-srt",
+      "cases": [
+        "mixed.live.srt.h264.a2.bf0",
+        "mixed.live.srt.h265.a2.bf2"
+      ]
+    },
+    {
+      "group": "file-ingest",
+      "cases": [
+        "mixed.asset.file.h264.a1.bf0",
+        "mixed.asset.file.h265.a2.bf2"
+      ]
+    }
+  ],
+  "coverageSlices": {
+    "rampFamily": [
+      {
+        "id": "ramp.rtmp-rtmp-src",
+        "foldedInto": "mixed.live.rtmp.h264.a1.bf0",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputFilter": {
+          "protocol": "rtmp",
+          "encoding": "source"
+        },
+        "rationale": "legacy ramp RTMP ingest to RTMP source output is a subset of the mixed H.264 single-track matrix",
+        "checkBundle": "resource.light",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "stage-sharing",
+          "load"
+        ],
+        "kind": "output-slice"
+      },
+      {
+        "id": "ramp.rtmp-rtmp-720p",
+        "foldedInto": "mixed.live.rtmp.h264.a1.bf0",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputFilter": {
+          "protocol": "rtmp",
+          "encoding": "720p"
+        },
+        "rationale": "legacy ramp RTMP ingest to RTMP 720p output is a subset of the mixed H.264 single-track matrix",
+        "checkBundle": "resource.light",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "stage-sharing",
+          "load"
+        ],
+        "kind": "output-slice"
+      },
+      {
+        "id": "ramp.rtmp-srt-src",
+        "foldedInto": "mixed.live.rtmp.h264.a1.bf0",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputFilter": {
+          "protocol": "srt",
+          "encoding": "source"
+        },
+        "rationale": "legacy ramp RTMP ingest to SRT source output is a subset of the mixed H.264 single-track matrix",
+        "checkBundle": "resource.light",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "stage-sharing",
+          "load"
+        ],
+        "kind": "output-slice"
+      },
+      {
+        "id": "ramp.rtmp-srt-720p",
+        "foldedInto": "mixed.live.rtmp.h264.a1.bf0",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputFilter": {
+          "protocol": "srt",
+          "encoding": "720p"
+        },
+        "rationale": "legacy ramp RTMP ingest to SRT 720p output is a subset of the mixed H.264 single-track matrix",
+        "checkBundle": "resource.light",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "stage-sharing",
+          "load"
+        ],
+        "kind": "output-slice"
+      },
+      {
+        "id": "ramp.srt-rtmp-src",
+        "foldedInto": "mixed.live.srt.h264.a1.bf0",
+        "sourceScenario": "mixed.live.srt.h264.a1.bf0",
+        "outputFilter": {
+          "protocol": "rtmp",
+          "encoding": "source"
+        },
+        "rationale": "legacy ramp SRT ingest to RTMP source output is a subset of the mixed H.264 single-track matrix",
+        "checkBundle": "resource.light",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "stage-sharing",
+          "load"
+        ],
+        "kind": "output-slice"
+      },
+      {
+        "id": "ramp.srt-rtmp-720p",
+        "foldedInto": "mixed.live.srt.h264.a1.bf0",
+        "sourceScenario": "mixed.live.srt.h264.a1.bf0",
+        "outputFilter": {
+          "protocol": "rtmp",
+          "encoding": "720p"
+        },
+        "rationale": "legacy ramp SRT ingest to RTMP 720p output is a subset of the mixed H.264 single-track matrix",
+        "checkBundle": "resource.light",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "stage-sharing",
+          "load"
+        ],
+        "kind": "output-slice"
+      },
+      {
+        "id": "ramp.srt-srt-src",
+        "foldedInto": "mixed.live.srt.h264.a1.bf0",
+        "sourceScenario": "mixed.live.srt.h264.a1.bf0",
+        "outputFilter": {
+          "protocol": "srt",
+          "encoding": "source"
+        },
+        "rationale": "legacy ramp SRT ingest to SRT source output is a subset of the mixed H.264 single-track matrix",
+        "checkBundle": "resource.light",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "stage-sharing",
+          "load"
+        ],
+        "kind": "output-slice"
+      },
+      {
+        "id": "ramp.srt-srt-720p",
+        "foldedInto": "mixed.live.srt.h264.a1.bf0",
+        "sourceScenario": "mixed.live.srt.h264.a1.bf0",
+        "outputFilter": {
+          "protocol": "srt",
+          "encoding": "720p"
+        },
+        "rationale": "legacy ramp SRT ingest to SRT 720p output is a subset of the mixed H.264 single-track matrix",
+        "checkBundle": "resource.light",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "stage-sharing",
+          "load"
+        ],
+        "kind": "output-slice"
+      }
+    ],
+    "genericSweeps": [
+      {
+        "id": "sweep.h264-rtmp",
+        "foldedInto": "mixed.live.rtmp.h264.a1.bf2",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf2",
+        "rationale": "legacy H.264 RTMP sweep is covered by mixed RTMP/H.264/single-audio with B-frame reorder",
+        "checkBundle": "media.deep",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "decode-scan",
+          "stage-sharing",
+          "load"
+        ],
+        "kind": "scenario-slice"
+      },
+      {
+        "id": "sweep.h264-srt",
+        "foldedInto": "mixed.live.srt.h264.a1.bf2",
+        "sourceScenario": "mixed.live.srt.h264.a1.bf2",
+        "rationale": "legacy H.264 SRT sweep is covered by mixed SRT/H.264/single-audio with B-frame reorder",
+        "checkBundle": "media.deep",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "decode-scan",
+          "stage-sharing",
+          "load"
+        ],
+        "kind": "scenario-slice"
+      },
+      {
+        "id": "sweep.h265-srt",
+        "foldedInto": "mixed.live.srt.h265.a1.bf2",
+        "sourceScenario": "mixed.live.srt.h265.a1.bf2",
+        "rationale": "legacy HEVC SRT sweep is covered by mixed SRT/HEVC/single-audio with B-frame reorder",
+        "checkBundle": "media.deep",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "decode-scan",
+          "stage-sharing",
+          "load"
+        ],
+        "kind": "scenario-slice"
+      },
+      {
+        "id": "sweep.mixed.live.srt.h264.a2.bf2",
+        "foldedInto": "mixed.live.srt.h264.a2.bf2",
+        "sourceScenario": "mixed.live.srt.h264.a2.bf2",
+        "rationale": "legacy multi-audio H.264 SRT sweep directly names the mixed scenario",
+        "checkBundle": "media.deep",
+        "extraChecks": [
+          "adaptive-source-ring"
+        ],
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "decode-scan",
+          "stage-sharing",
+          "adaptive-source-ring",
+          "load"
+        ],
+        "kind": "scenario-slice"
+      },
+      {
+        "id": "sweep.mixed.live.srt.h265.a2.bf2",
+        "foldedInto": "mixed.live.srt.h265.a2.bf2",
+        "sourceScenario": "mixed.live.srt.h265.a2.bf2",
+        "rationale": "legacy multi-audio HEVC SRT sweep directly names the mixed scenario",
+        "checkBundle": "media.deep",
+        "extraChecks": [
+          "adaptive-source-ring"
+        ],
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "decode-scan",
+          "stage-sharing",
+          "adaptive-source-ring",
+          "load"
+        ],
+        "kind": "scenario-slice"
+      }
+    ],
+    "resourceEgress": [
+      {
+        "id": "resource.egress-growth-source-same",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputKinds": [
+          "rtmpSource"
+        ],
+        "outputRows": [
+          "rtmp.src.a0"
+        ],
+        "configIndex": 1,
+        "rationale": "resource growth source-only same-protocol slice using mixed output row",
+        "checkBundle": "resource.branch",
+        "checks": [
+          "stage-sharing",
+          "load"
+        ],
+        "resourceProfile": "branch",
+        "kind": "resource-growth"
+      },
+      {
+        "id": "resource.egress-growth-source-mixed",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputKinds": [
+          "rtmpSource",
+          "srtSource"
+        ],
+        "outputRows": [
+          "rtmp.src.a0",
+          "srt.src.a0"
+        ],
+        "configIndex": 1,
+        "branchOrder": 0,
+        "branchLabel": "source only",
+        "rationale": "resource growth source-only mixed-protocol slice using mixed output rows",
+        "checkBundle": "resource.branch",
+        "checks": [
+          "stage-sharing",
+          "load"
+        ],
+        "resourceProfile": "branch",
+        "kind": "resource-growth"
+      },
+      {
+        "id": "resource.egress-growth-transcode-same",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputKinds": [
+          "rtmp720p"
+        ],
+        "outputRows": [
+          "rtmp.720p.a0"
+        ],
+        "configIndex": 1,
+        "rationale": "resource growth single transcode same-protocol slice using mixed output row",
+        "checkBundle": "resource.branch",
+        "checks": [
+          "stage-sharing",
+          "load"
+        ],
+        "resourceProfile": "branch",
+        "kind": "resource-growth"
+      },
+      {
+        "id": "resource.egress-growth-transcode-mixed",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputKinds": [
+          "rtmp720p",
+          "srt720p"
+        ],
+        "outputRows": [
+          "rtmp.720p.a0",
+          "srt.720p.a0"
+        ],
+        "configIndex": 1,
+        "branchOrder": 1,
+        "branchLabel": "one transcode family (720p)",
+        "rationale": "resource growth one transcode family across RTMP/SRT using mixed output rows",
+        "checkBundle": "resource.branch",
+        "checks": [
+          "stage-sharing",
+          "load"
+        ],
+        "resourceProfile": "branch",
+        "kind": "resource-growth"
+      },
+      {
+        "id": "resource.egress-growth-source-plus-transcode-mixed",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputKinds": [
+          "rtmpSource",
+          "srtSource",
+          "rtmp720p",
+          "srt720p"
+        ],
+        "outputRows": [
+          "rtmp.src.a0",
+          "srt.src.a0",
+          "rtmp.720p.a0",
+          "srt.720p.a0"
+        ],
+        "configIndex": 1,
+        "branchOrder": 2,
+        "branchLabel": "source + one transcode family",
+        "rationale": "resource growth source plus 720p branch using mixed output rows",
+        "checkBundle": "resource.branch",
+        "checks": [
+          "stage-sharing",
+          "load"
+        ],
+        "resourceProfile": "branch",
+        "kind": "resource-growth"
+      },
+      {
+        "id": "resource.egress-growth-transcode-dual-mixed",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputKinds": [
+          "rtmp720p",
+          "srt720p",
+          "rtmp1080p",
+          "srt1080p"
+        ],
+        "outputRows": [
+          "rtmp.720p.a0",
+          "srt.720p.a0",
+          "rtmp.1080p.a0",
+          "srt.1080p.a0"
+        ],
+        "configIndex": 1,
+        "branchOrder": 3,
+        "branchLabel": "two transcode families (720p + 1080p)",
+        "rationale": "resource growth dual transcode branches using mixed output rows",
+        "checkBundle": "resource.branch",
+        "checks": [
+          "stage-sharing",
+          "load"
+        ],
+        "resourceProfile": "branch",
+        "kind": "resource-growth"
+      },
+      {
+        "id": "resource.egress-growth-source-plus-transcode-dual-mixed",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputKinds": [
+          "rtmpSource",
+          "srtSource",
+          "rtmp720p",
+          "srt720p",
+          "rtmp1080p",
+          "srt1080p"
+        ],
+        "outputRows": [
+          "rtmp.src.a0",
+          "srt.src.a0",
+          "rtmp.720p.a0",
+          "srt.720p.a0",
+          "rtmp.1080p.a0",
+          "srt.1080p.a0"
+        ],
+        "configIndex": 1,
+        "branchOrder": 4,
+        "branchLabel": "source + two transcode families",
+        "rationale": "resource growth full H.264 output branch set using mixed output rows",
+        "checkBundle": "resource.branch",
+        "checks": [
+          "stage-sharing",
+          "load"
+        ],
+        "resourceProfile": "branch",
+        "kind": "resource-growth"
+      },
+      {
+        "id": "resource.egress-growth-hevc-bridge",
+        "sourceScenario": "mixed.live.srt.h265.a1.bf2",
+        "outputKinds": [
+          "rtmpSource"
+        ],
+        "outputRows": [
+          "rtmp.src.a0"
+        ],
+        "configIndex": 2,
+        "rationale": "HEVC bridge resource case maps to mixed SRT/HEVC source with RTMP source output",
+        "checkBundle": "resource.branch",
+        "checks": [
+          "ffprobe",
+          "stage-sharing",
+          "load"
+        ],
+        "resourceProfile": "branch",
+        "kind": "resource-growth"
+      }
+    ],
+    "bitrateSweep": [
+      {
+        "id": "bitrate.h264-rtmp",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf2",
+        "bitrateAxis": "@axes.bitrate",
+        "outputRows": [
+          "rtmp.src.a0",
+          "srt.src.a0",
+          "rtmp.720p.a0",
+          "srt.720p.a0"
+        ],
+        "outputGroups": {
+          "env": "BITRATE_SWEEP_OUTPUT_GROUPS",
+          "default": 1
+        },
+        "legacyConfig": "h264-rtmp",
+        "rationale": "measures bitrate-driven CPU/RSS/ring/AVIO growth for RTMP H.264 ingest",
+        "checkBundle": "resource.bitrate",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "bitrate-resource"
+        ],
+        "resourceProfile": "bitrate",
+        "kind": "bitrate-load"
+      },
+      {
+        "id": "bitrate.h264-srt",
+        "sourceScenario": "mixed.live.srt.h264.a1.bf2",
+        "bitrateAxis": "@axes.bitrate",
+        "outputRows": [
+          "rtmp.src.a0",
+          "srt.src.a0",
+          "rtmp.720p.a0",
+          "srt.720p.a0"
+        ],
+        "outputGroups": {
+          "env": "BITRATE_SWEEP_OUTPUT_GROUPS",
+          "default": 1
+        },
+        "legacyConfig": "h264-srt",
+        "rationale": "measures bitrate-driven CPU/RSS/ring/AVIO growth for SRT H.264 ingest",
+        "checkBundle": "resource.bitrate",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "bitrate-resource"
+        ],
+        "resourceProfile": "bitrate",
+        "kind": "bitrate-load"
+      },
+      {
+        "id": "bitrate.h265-srt",
+        "sourceScenario": "mixed.live.srt.h265.a1.bf2",
+        "bitrateAxis": "@axes.bitrate",
+        "outputRows": [
+          "rtmp.src.a0",
+          "srt.src.a0",
+          "rtmp.720p.a0",
+          "srt.720p.a0"
+        ],
+        "outputGroups": {
+          "env": "BITRATE_SWEEP_OUTPUT_GROUPS",
+          "default": 1
+        },
+        "legacyConfig": "h265-srt",
+        "rationale": "measures bitrate-driven bridge/transcode resource growth for SRT HEVC ingest",
+        "checkBundle": "resource.bitrate",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "bitrate-resource"
+        ],
+        "resourceProfile": "bitrate",
+        "kind": "bitrate-load"
+      },
+      {
+        "id": "bitrate.mixed.live.srt.h264.a2.bf2",
+        "sourceScenario": "mixed.live.srt.h264.a2.bf2",
+        "bitrateAxis": "@axes.bitrate",
+        "outputRows": [
+          "rtmp.src.a0",
+          "srt.src.all",
+          "rtmp.720p.a0",
+          "srt.720p.all"
+        ],
+        "outputGroups": {
+          "env": "BITRATE_SWEEP_OUTPUT_GROUPS",
+          "default": 1
+        },
+        "legacyConfig": "mixed.live.srt.h264.a2.bf2",
+        "rationale": "measures bitrate/resource behavior with multi-audio SRT H.264 ingest",
+        "checkBundle": "resource.bitrate",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "adaptive-source-ring",
+          "bitrate-resource"
+        ],
+        "resourceProfile": "bitrate",
+        "kind": "bitrate-load"
+      },
+      {
+        "id": "bitrate.mixed.live.srt.h265.a2.bf2",
+        "sourceScenario": "mixed.live.srt.h265.a2.bf2",
+        "bitrateAxis": "@axes.bitrate",
+        "outputRows": [
+          "rtmp.src.a0",
+          "srt.src.all",
+          "rtmp.720p.a0",
+          "srt.720p.all"
+        ],
+        "outputGroups": {
+          "env": "BITRATE_SWEEP_OUTPUT_GROUPS",
+          "default": 1
+        },
+        "legacyConfig": "mixed.live.srt.h265.a2.bf2",
+        "rationale": "measures bitrate/resource behavior with multi-audio SRT HEVC ingest",
+        "checkBundle": "resource.bitrate",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "adaptive-source-ring",
+          "bitrate-resource"
+        ],
+        "resourceProfile": "bitrate",
+        "kind": "bitrate-load"
+      }
+    ],
+    "branchMatrix": [
+      {
+        "id": "branch.egress-growth-source-mixed",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputKinds": [
+          "rtmpSource",
+          "srtSource"
+        ],
+        "outputRows": [
+          "rtmp.src.a0",
+          "srt.src.a0"
+        ],
+        "configIndex": 1,
+        "branchOrder": 0,
+        "branchLabel": "source only",
+        "rationale": "branch matrix for source only: backend/egress-count resource attribution using mixed rows",
+        "branchAxis": "@axes.branchBackend",
+        "egressCount": {
+          "env": "BRANCH_MATRIX_EGRESS_COUNT",
+          "default": 10
+        },
+        "checkBundle": "resource.branch",
+        "checks": [
+          "stage-sharing",
+          "branch-resource"
+        ],
+        "resourceProfile": "branch",
+        "kind": "branch-topology"
+      },
+      {
+        "id": "branch.egress-growth-transcode-mixed",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputKinds": [
+          "rtmp720p",
+          "srt720p"
+        ],
+        "outputRows": [
+          "rtmp.720p.a0",
+          "srt.720p.a0"
+        ],
+        "configIndex": 1,
+        "branchOrder": 1,
+        "branchLabel": "one transcode family (720p)",
+        "rationale": "branch matrix for one transcode family (720p): backend/egress-count resource attribution using mixed rows",
+        "branchAxis": "@axes.branchBackend",
+        "egressCount": {
+          "env": "BRANCH_MATRIX_EGRESS_COUNT",
+          "default": 10
+        },
+        "checkBundle": "resource.branch",
+        "checks": [
+          "stage-sharing",
+          "branch-resource"
+        ],
+        "resourceProfile": "branch",
+        "kind": "branch-topology"
+      },
+      {
+        "id": "branch.egress-growth-source-plus-transcode-mixed",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputKinds": [
+          "rtmpSource",
+          "srtSource",
+          "rtmp720p",
+          "srt720p"
+        ],
+        "outputRows": [
+          "rtmp.src.a0",
+          "srt.src.a0",
+          "rtmp.720p.a0",
+          "srt.720p.a0"
+        ],
+        "configIndex": 1,
+        "branchOrder": 2,
+        "branchLabel": "source + one transcode family",
+        "rationale": "branch matrix for source + one transcode family: backend/egress-count resource attribution using mixed rows",
+        "branchAxis": "@axes.branchBackend",
+        "egressCount": {
+          "env": "BRANCH_MATRIX_EGRESS_COUNT",
+          "default": 10
+        },
+        "checkBundle": "resource.branch",
+        "checks": [
+          "stage-sharing",
+          "branch-resource"
+        ],
+        "resourceProfile": "branch",
+        "kind": "branch-topology"
+      },
+      {
+        "id": "branch.egress-growth-transcode-dual-mixed",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputKinds": [
+          "rtmp720p",
+          "srt720p",
+          "rtmp1080p",
+          "srt1080p"
+        ],
+        "outputRows": [
+          "rtmp.720p.a0",
+          "srt.720p.a0",
+          "rtmp.1080p.a0",
+          "srt.1080p.a0"
+        ],
+        "configIndex": 1,
+        "branchOrder": 3,
+        "branchLabel": "two transcode families (720p + 1080p)",
+        "rationale": "branch matrix for two transcode families (720p + 1080p): backend/egress-count resource attribution using mixed rows",
+        "branchAxis": "@axes.branchBackend",
+        "egressCount": {
+          "env": "BRANCH_MATRIX_EGRESS_COUNT",
+          "default": 10
+        },
+        "checkBundle": "resource.branch",
+        "checks": [
+          "stage-sharing",
+          "branch-resource"
+        ],
+        "resourceProfile": "branch",
+        "kind": "branch-topology"
+      },
+      {
+        "id": "branch.egress-growth-source-plus-transcode-dual-mixed",
+        "sourceScenario": "mixed.live.rtmp.h264.a1.bf0",
+        "outputKinds": [
+          "rtmpSource",
+          "srtSource",
+          "rtmp720p",
+          "srt720p",
+          "rtmp1080p",
+          "srt1080p"
+        ],
+        "outputRows": [
+          "rtmp.src.a0",
+          "srt.src.a0",
+          "rtmp.720p.a0",
+          "srt.720p.a0",
+          "rtmp.1080p.a0",
+          "srt.1080p.a0"
+        ],
+        "configIndex": 1,
+        "branchOrder": 4,
+        "branchLabel": "source + two transcode families",
+        "rationale": "branch matrix for source + two transcode families: backend/egress-count resource attribution using mixed rows",
+        "branchAxis": "@axes.branchBackend",
+        "egressCount": {
+          "env": "BRANCH_MATRIX_EGRESS_COUNT",
+          "default": 10
+        },
+        "checkBundle": "resource.branch",
+        "checks": [
+          "stage-sharing",
+          "branch-resource"
+        ],
+        "resourceProfile": "branch",
+        "kind": "branch-topology"
+      },
+      {
+        "id": "branch.egress-growth-hevc-bridge",
+        "sourceScenario": "mixed.live.srt.h265.a1.bf2",
+        "outputKinds": [
+          "rtmpSource"
+        ],
+        "outputRows": [
+          "rtmp.src.a0"
+        ],
+        "configIndex": 2,
+        "rationale": "branch matrix HEVC bridge resource attribution using mixed HEVC source and RTMP source output",
+        "branchAxis": "@axes.branchBackend",
+        "egressCount": {
+          "env": "BRANCH_MATRIX_EGRESS_COUNT",
+          "default": 10
+        },
+        "checkBundle": "resource.branch",
+        "checks": [
+          "ffprobe",
+          "stage-sharing",
+          "branch-resource"
+        ],
+        "resourceProfile": "branch",
+        "kind": "branch-topology"
+      }
+    ],
+    "srtCryptoMatrix": [
+      {
+        "id": "srt-crypto.h264.single",
+        "sourceScenario": "mixed.live.srt.h264.a1.bf2",
+        "cryptoAxis": "@axes.srtCrypto",
+        "outputRows": [
+          "srt.src.a0"
+        ],
+        "rationale": "SRT crypto transport success/rejection coverage on H.264 single-audio BF2 source",
+        "checkBundle": "security.srt-crypto",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "srt-crypto"
+        ],
+        "kind": "srt-crypto"
+      },
+      {
+        "id": "srt-crypto.h264.multi",
+        "sourceScenario": "mixed.live.srt.h264.a2.bf2",
+        "cryptoAxis": "@axes.srtCrypto",
+        "outputRows": [
+          "srt.src.all",
+          "srt.src.a0"
+        ],
+        "rationale": "SRT crypto transport coverage with multi-audio SRT H.264 source",
+        "checkBundle": "security.srt-crypto",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "adaptive-source-ring",
+          "srt-crypto"
+        ],
+        "kind": "srt-crypto"
+      },
+      {
+        "id": "srt-crypto.h265.single",
+        "sourceScenario": "mixed.live.srt.h265.a1.bf2",
+        "cryptoAxis": "@axes.srtCrypto",
+        "outputRows": [
+          "srt.src.a0"
+        ],
+        "rationale": "SRT crypto transport coverage with HEVC source passthrough",
+        "checkBundle": "security.srt-crypto",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "srt-crypto"
+        ],
+        "kind": "srt-crypto"
+      },
+      {
+        "id": "srt-crypto.h265.multi",
+        "sourceScenario": "mixed.live.srt.h265.a2.bf2",
+        "cryptoAxis": "@axes.srtCrypto",
+        "outputRows": [
+          "srt.src.all",
+          "srt.src.a0"
+        ],
+        "rationale": "SRT crypto transport coverage with HEVC multi-audio source",
+        "checkBundle": "security.srt-crypto",
+        "checks": [
+          "ffprobe",
+          "audio-route",
+          "adaptive-source-ring",
+          "srt-crypto"
+        ],
+        "kind": "srt-crypto"
+      }
+    ]
+  },
+  "axes": {
+    "bitrate": {
+      "env": "BITRATE_SWEEP_BITRATES",
+      "default": [
+        "1.5M",
+        "4M",
+        "8M"
+      ],
+      "parse": "mbps"
+    },
+    "branchBackend": {
+      "env": "RESTREAM_USE_INTERNAL_TRANSCODER",
+      "variants": [
+        "external",
+        "internal"
+      ],
+      "default": "external"
+    },
+    "srtCrypto": {
+      "env": "SRT_CRYPTO_VARIANTS",
+      "default": [
+        "plaintext",
+        "encrypted-16",
+        "encrypted-24",
+        "encrypted-32"
+      ],
+      "variants": {
+        "plaintext": {},
+        "encrypted-16": {
+          "passphrase": "0123456789abcd",
+          "pbkeylen": 16
+        },
+        "encrypted-24": {
+          "passphrase": "0123456789abcd",
+          "pbkeylen": 24
+        },
+        "encrypted-32": {
+          "passphrase": "0123456789abcd",
+          "pbkeylen": 32
+        }
+      }
+    }
+  },
+  "selectors": {
+    "ramp-family": {
+      "coverage": "coverageSlices.rampFamily",
+      "workflow": "mixed-slice"
+    },
+    "generic-sweeps": {
+      "coverage": "coverageSlices.genericSweeps",
+      "workflow": "mixed-slice"
+    },
+    "resource-sweep": {
+      "coverage": "coverageSlices.resourceEgress",
+      "workflow": "mixed-slice"
+    },
+    "bitrate-sweep": {
+      "coverage": "coverageSlices.bitrateSweep",
+      "workflow": "mixed-slice"
+    },
+    "branch-matrix": {
+      "coverage": "coverageSlices.branchMatrix",
+      "workflow": "mixed-slice"
+    },
+    "srt-crypto-matrix": {
+      "coverage": "coverageSlices.srtCryptoMatrix",
+      "workflow": "mixed-slice"
+    },
+    "mixed-matrix": {
+      "coverage": "inputs",
+      "workflow": "mixed-scenario"
+    }
+  },
+  "outputPlans": {
+    "all-at-once": {
+      "kind": "all-at-once",
+      "description": "Create the scenario output matrix in one pass, then run selected checks.",
+      "outputs": "${scenario.outputs}",
+      "progressGate": {
+        "kind": "selectedChecks",
+        "excludeHelperOutputs": true
+      }
+    },
+    "phased-source-then-scaled": {
+      "kind": "phased",
+      "description": "Create source passthrough outputs first, assert no premature transcode, then create scaled outputs.",
+      "helperOutputs": [
+        {
+          "id": "hls-preview",
+          "name": "hls-preview",
+          "url": "hls://${scenario.id}-preview",
+          "encoding": "source"
+        }
+      ],
+      "phases": [
+        {
+          "name": "source-only",
+          "outputs": [
+            "rtmp.src.a0"
+          ],
+          "checks": [
+            "no-early-external-transcoder"
+          ]
+        },
+        {
+          "name": "scaled",
+          "outputs": [
+            "rtmp.720p.a0",
+            "rtmp.1080p.a0",
+            "srt.src.a0",
+            "srt.720p.a0",
+            "srt.1080p.a0"
+          ],
+          "checks": [
+            "stage-sharing"
+          ]
+        }
+      ],
+      "progressGate": {
+        "kind": "external-read-checks",
+        "excludeHelperOutputs": true
+      }
+    },
+    "file-ingest-all-at-once": {
+      "kind": "all-at-once",
+      "description": "File source setup followed by normal mixed output matrix creation.",
+      "outputs": "${scenario.outputs}",
+      "progressGate": {
+        "kind": "selectedChecks",
+        "excludeHelperOutputs": true
+      }
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "defaults": {
+    "restreamHttp": {
+      "env": "RESTREAM_HTTP_PORT",
+      "default": 11980
+    },
+    "restreamRtmp": {
+      "env": "RESTREAM_RTMP_PORT",
+      "default": 11935
+    },
+    "restreamSrt": {
+      "env": "RESTREAM_SRT_PORT",
+      "default": 11936
+    },
+    "mtxRtmp": {
+      "env": "MTX_RTMP_PORT",
+      "default": 12935
+    },
+    "mtxSrt": {
+      "env": "MTX_SRT_PORT",
+      "default": 12936
+    },
+    "mtxHls": {
+      "env": "MTX_HLS_PORT",
+      "default": 12937
+    },
+    "mtxApi": {
+      "env": "MTX_API_PORT",
+      "default": 12938
+    },
+    "sink": {
+      "env": "HARNESS_SINK_PORT",
+      "default": 12935
+    },
+    "hlsPut": {
+      "env": "HARNESS_HLS_PUT_PORT",
+      "default": 12939
+    },
+    "ffmpegSrtSinkBase": {
+      "env": "FFMPEG_SRT_SINK_BASE",
+      "default": 13000
+    },
+    "ffmpegSignalSinkBase": {
+      "env": "FFMPEG_SIGNAL_SINK_BASE",
+      "default": 13100
+    }
+  },
+  "offsetPolicy": {
+    "allowEnvOverride": true,
+    "reservePerProcessWindow": 256,
+    "portNamespacePreferred": true
+  }
+}
