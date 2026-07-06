@@ -38,7 +38,16 @@ pub(crate) async fn run_optional_mixed_sink_probe(
     }
 
     let started = Instant::now();
-    match run_sink_probe(api, pipeline_id, cfg, "source", sink_port, 30).await {
+    // For multi-audio scenarios (a2, a3, …) the source ring has N audio tracks.
+    // RTMP supports exactly one audio track; using plain "source" encoding would
+    // fail validate_rtmp_output_audio_tracks.  Select track 0 explicitly so the
+    // probe output is always valid for RTMP.
+    let sink_encoding = if cfg.contains(".a1.") || !cfg.contains(".a") {
+        "source"
+    } else {
+        "source+atrack:0"
+    };
+    match run_sink_probe(api, pipeline_id, cfg, sink_encoding, sink_port, 30).await {
         Ok(probe) => {
             let status = if probe.passed { "pass" } else { "fail" };
             emit_mixed_result(

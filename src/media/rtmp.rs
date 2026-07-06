@@ -1632,6 +1632,28 @@ pub async fn start_rtmp_egress(
     // with the audio_router startup and falls back to the raw ingest tracks
     // (all N tracks), causing validate_rtmp_output_audio_tracks to reject
     // the routed single-track output as having "too many tracks".
+    //
+    // Even after the warmup there is a brief race: the warmup exits on the
+    // first packet, but the ingest probe (which triggers set_audio_tracks on
+    // the source ring) may complete slightly later.  We wait up to 500 ms for
+    // the output ring's audio_tracks to be populated before falling back to
+    // the ingest registry.  The audio_router sets them on the next burst after
+    // the source ring has been probed, so this delay is usually < 1 burst (~21ms).
+    {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        loop {
+            if ring_buffer.audio_tracks().is_some() {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::select! {
+                _ = cancel_token.cancelled() => return,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
+            }
+        }
+    }
     let output_audio_tracks =
         resolved_output_audio_tracks(&engine, &pipeline_id, &ring_buffer).await;
     if let Err(message) = validate_rtmp_output_audio_tracks(&output_audio_tracks) {
