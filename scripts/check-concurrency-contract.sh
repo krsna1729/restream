@@ -152,10 +152,10 @@ run_logged process-lifecycle-guards check_process_lifecycle_guards
 run_common_concurrency_checks run_logged
 run_logged build-harness-bins scripts/resource-limit cargo build --bin restream --bin test_harness
 
-run_harness_mode fault-resilience test/artifacts/concurrency-contract
+run_harness_mode fault.resilience test/artifacts/concurrency-contract
 
-run_harness_mode fault-egress-retry test/artifacts/concurrency-fault-egress-retry
+run_harness_mode fault.egress-retry test/artifacts/concurrency-fault-egress-retry
 
-run_harness_mode fault-output-stall test/artifacts/concurrency-fault-output-stall
+run_harness_mode fault.output-stall test/artifacts/concurrency-fault-output-stall
 
 run_harness_mode recovery test/artifacts/concurrency-recovery

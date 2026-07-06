@@ -37,12 +37,12 @@ Use the narrowest proof that can actually catch the bug:
 4. Live harness chaos tests
    - Use when the behavior crosses real sockets, child processes, FFmpeg, or
      OS-thread boundaries.
-   - Current live contract slices: `fault-resilience`, `fault-egress-retry`,
-     `fault-output-stall`, and `recovery`.
-     `fault-egress-retry` proves RTMP and SRT dead sinks surface `retrying`
+   - Current live contract slices: `fault.resilience`, `fault.egress-retry`,
+     `fault.output-stall`, and `recovery`.
+     `fault.egress-retry` proves RTMP and SRT dead sinks surface `retrying`
      first and then settle to `failed` once the configured retry budget is
      exhausted.
-     `fault-output-stall` proves a connected RTMP sink that stops draining media
+     `fault.output-stall` proves a connected RTMP sink that stops draining media
      surfaces `stalled` in both output status and health instead of looking
      healthy or failing immediately.
      `recovery` also covers hung HLS PUT destinations timing out, surfacing
@@ -93,11 +93,11 @@ bash ./scripts/check-concurrency-contract.sh
 ```
 
 The fast gate runs the loom targets, focused API tests, and harness unit tests.
-The full gate also builds the binaries and runs the live `fault-resilience`,
-`fault-egress-retry`, `fault-output-stall`, and `recovery` harness modes.
-`fault-egress-retry` owns the retry-budget exhaustion contract for RTMP and SRT
+The full gate also builds the binaries and runs the live `fault.resilience`,
+`fault.egress-retry`, `fault.output-stall`, and `recovery` harness modes.
+`fault.egress-retry` owns the retry-budget exhaustion contract for RTMP and SRT
 dead sinks.
-`fault-output-stall` owns the stalled-output contract for connected-but-not-
+`fault.output-stall` owns the stalled-output contract for connected-but-not-
 draining RTMP sinks. `recovery` is the focused reconnect/grace/retry contract
 so we can target that behavior directly without depending on the broader
 teardown bucket.
@@ -187,9 +187,9 @@ surface already covers it.
   - `live_reader_starts_after_existing_chunks`
 - `src/bin/test_harness.rs`
   - `kill_and_wait_child_terminates_spawned_process`
-  - `fault-egress-retry`
-  - `fault-output-stall`
-  - `fault-resilience`
+  - `fault.egress-retry`
+  - `fault.output-stall`
+  - `fault.resilience`
   - `recovery`
 
 ## Next Gaps

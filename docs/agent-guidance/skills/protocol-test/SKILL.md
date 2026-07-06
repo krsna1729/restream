@@ -11,15 +11,14 @@ Run the live protocol correctness matrix and media validation suites. Use after 
 
 1. Preflight: confirm no live pipeline is running (`pgrep -x restream`, `pgrep -x mediamtx`, `pgrep -x ffmpeg` all empty). Build the harness: `scripts/resource-limit cargo build --bin test_harness`.
 
-2. Run the protocol correctness modes relevant to the change (each is one harness invocation):
+2. Run the protocol correctness scenarios relevant to the change (each is one harness invocation). RTMP/SRT ingest correctness, cross-protocol egress, and HEVC coverage all run through the `mixed.*` scenario matrix now — a single scenario's output plan exercises RTMP, SRT, and HLS egress together:
    ```sh
-   scripts/resource-limit target/debug/test_harness correctness-rtmp
-   scripts/resource-limit target/debug/test_harness correctness-srt
-   scripts/resource-limit target/debug/test_harness correctness-srt-rtmp
+   scripts/resource-limit target/debug/test_harness mixed.live.rtmp.h264.a1.bf0
+   scripts/resource-limit target/debug/test_harness mixed.live.srt.h264.a1.bf0
    ```
-   For HEVC-affecting changes add `correctness-hevc-rtmp` and `correctness-hevc-srt`.
-   For B-frame/timestamp changes add `bframe-rtmp`.
-   For SRT encryption/policy changes add `correctness-srt-policy` and `srt-crypto-matrix`.
+   For HEVC-affecting changes add `mixed.live.srt.h265.a1.bf2` (and `.a2.bf2` for multi-audio).
+   For B-frame/timestamp changes add `timestamp.bframe`.
+   For SRT encryption/policy changes add `srt.policy` and `srt-crypto-matrix`.
    - If a mode fails: report failures and ask whether to continue to media validation.
 
 3. Run the bounded media validation suite: `scripts/resource-limit ./test/run-media-validation.sh`

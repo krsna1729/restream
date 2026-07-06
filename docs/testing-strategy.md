@@ -78,7 +78,7 @@ Existing synthetic builders to reuse: `test_video_packet` / `test_audio_packet` 
   memory and asserts with no ffmpeg or sockets. It is a unit test in the wrong place.
   **Move to `#[cfg(test)]`.**
 - **Burst accounting** and **B-frame timestamp counting**: extract the pure-logic
-  assertions from `burst-verify` / `bframe-rtmp` into unit tests.
+  assertions from `burst-verify` / `timestamp.bframe` into unit tests.
 
 ---
 
@@ -203,7 +203,7 @@ Phases 0–5 are complete.
      HTTP PUT sink)
    - `burst-graph` (ring buffer burst stats via `/api/v1/pipelines/:id/graph` API)
 5. **Fault resilience + file ingest coverage** — done. New test modes:
-   - `fault-resilience`: publisher disconnect detection (RTMP kill → input off, SRT kill →
+   - `fault.resilience`: publisher disconnect detection (RTMP kill → input off, SRT kill →
      input off, file-ingest stop → input off) and egress sink disappearance (RTMP sink
      gone → output error/reconnect, SRT sink gone → output error/reconnect).
    - `mixed.asset.file.h264.a1` and `mixed.asset.file.h264.a2`: file-ingest as input source with RTMP+SRT egress mixed-input load.

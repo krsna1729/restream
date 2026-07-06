@@ -506,7 +506,7 @@ docker run --rm \
 
 ```sh
 WORK_DIR=test/artifacts/agents/run-fault \
-target/debug/test_harness fault-resilience
+target/debug/test_harness fault.resilience
 ```
 
 ## Serial measurement run

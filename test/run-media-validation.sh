@@ -10,11 +10,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 mkdir -p test/artifacts/latest
-scripts/resource-limit cargo build --release --bin test_harness
+scripts/build-bench-harness.sh
 
 : > test/artifacts/latest/run.log
-for mode in correctness-rtmp correctness-srt egress in-process network; do
+# Canonical validation slices.
+for mode in \
+  mixed.live.rtmp.h264.a1.bf0 \
+  mixed.live.srt.h265.a1.bf0 \
+  mixed.live.rtmp.h264.a1.bf2
+do
   echo "== $mode ==" | tee -a test/artifacts/latest/run.log
-  target/release/test_harness "$mode" \
+  target/bench/test_harness "$mode" \
     | tee -a test/artifacts/latest/run.log
 done

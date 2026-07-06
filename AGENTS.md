@@ -30,6 +30,12 @@ Use the pinned Rust toolchain from `rust-toolchain.toml`.
 
 - Prefix Cargo and other heavy commands with `scripts/resource-limit`.
 - Use `--profile bench` instead of `--release` for local or agent builds.
+- Cargo hardcodes `target/release` as the output dir for a profile named
+  `bench` (long-standing `cargo bench` compatibility quirk); `cargo build
+  --profile bench` alone does not populate `target/bench/`. For measurement
+  harness modes that require binaries at `target/bench/`, build with
+  `scripts/build-bench-harness.sh` instead — the one canonical path to those
+  binaries.
 - Edit `public/ts/` and `public/input.css`; do not hand-edit generated files in `public/js/`.
 - Default frontend verification is `npm run test:frontend`; use Playwright when browser-only behavior is touched.
 
