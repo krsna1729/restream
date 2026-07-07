@@ -48,8 +48,8 @@ pub(super) use mixed_probes::{
     verify_mixed_stream, warm_mixed_stream,
 };
 pub(super) use mixed_reporting::{
-    count_log_matches, emit_mixed_result, emit_mixed_timing, file_tail_lines, log_mixed_ok,
-    safe_artifact_stem,
+    count_log_matches, emit_mixed_result, emit_mixed_timing, emit_mixed_timing_window,
+    file_tail_lines, log_mixed_ok, safe_artifact_stem,
 };
 pub(super) use mixed_runtime::{
     spawn_mixed_live_publisher, spawn_mixed_srt_multi_publisher, start_mixed_mediamtx,

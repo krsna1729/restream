@@ -2,6 +2,40 @@
 
 use super::*;
 
+fn emit_mixed_output_cell_timing(
+    env: &MixedEnv,
+    cfg: &str,
+    case: &MixedOutputCase,
+    label: &str,
+    index: usize,
+    selected_checks: &[&str],
+    failure_count: usize,
+    started_at: chrono::DateTime<Utc>,
+    started: Instant,
+    status: &str,
+) -> Result<(), String> {
+    emit_mixed_timing_window(
+        env,
+        cfg,
+        &format!("output.cell.{}", case.id()),
+        status,
+        started_at,
+        Utc::now(),
+        started.elapsed(),
+        Some(json!({
+            "cellId": case.id(),
+            "label": label,
+            "protocol": mixed_output_protocol_name(case.protocol()),
+            "encoding": case.encoding(),
+            "expectedDimensions": case.expected_dimensions(),
+            "expectedAudioTracks": case.expected_audio_tracks(),
+            "outputIndex": index,
+            "checks": selected_checks,
+            "failureCount": failure_count,
+        })),
+    )
+}
+
 pub(crate) async fn verify_mixed_output_dimensions(
     env: &MixedEnv,
     cfg: &str,
@@ -46,6 +80,10 @@ pub(crate) async fn verify_mixed_output_cases_inner(
     let index = env.n_per_group;
     let mut failures = Vec::new();
     for case in cases {
+        let cell_started_at = Utc::now();
+        let cell_started = Instant::now();
+        let cell_failures_before = failures.len();
+        let mut selected_checks = Vec::new();
         if skip_direct_srt_sinks
             && env.ffmpeg_srt_sink
             && matches!(case.protocol(), MixedOutputProtocol::Srt)
@@ -56,6 +94,7 @@ pub(crate) async fn verify_mixed_output_cases_inner(
         let label = format!("{} out{index}", case.id());
         let mut output_failed = false;
         if env.check_selected("ffprobe") {
+            selected_checks.push("ffprobe");
             let ffprobe_id = mixed_output_check_id(cfg, case.id(), "ffprobe");
             let ffprobe_result = verify_mixed_stream(
                 env,
@@ -75,11 +114,24 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                     output_failed = true;
                     failures.push(error);
                 } else {
+                    emit_mixed_output_cell_timing(
+                        env,
+                        cfg,
+                        case,
+                        &label,
+                        index,
+                        &selected_checks,
+                        1,
+                        cell_started_at,
+                        cell_started,
+                        "fail",
+                    )?;
                     return Err(error);
                 }
             }
         }
         if env.check_selected("ffprobe") && !output_failed {
+            selected_checks.push("audio_route");
             let audio_id = mixed_output_check_id(cfg, case.id(), "audio_route");
             let audio_result = verify_mixed_audio_route(
                 env,
@@ -97,11 +149,24 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                     output_failed = true;
                     failures.push(error);
                 } else {
+                    emit_mixed_output_cell_timing(
+                        env,
+                        cfg,
+                        case,
+                        &label,
+                        index,
+                        &selected_checks,
+                        1,
+                        cell_started_at,
+                        cell_started,
+                        "fail",
+                    )?;
                     return Err(error);
                 }
             }
         }
         if env.check_selected("ffprobe") && decode_scan && !output_failed {
+            selected_checks.push("decode_scan");
             let decode_id = mixed_output_check_id(cfg, case.id(), "decode_scan");
             let decode_result =
                 verify_mixed_decode_scan(env, cfg, &decode_id, &label, &url, resume).await;
@@ -109,11 +174,24 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                 if env.collect_failures {
                     failures.push(error);
                 } else {
+                    emit_mixed_output_cell_timing(
+                        env,
+                        cfg,
+                        case,
+                        &label,
+                        index,
+                        &selected_checks,
+                        1,
+                        cell_started_at,
+                        cell_started,
+                        "fail",
+                    )?;
                     return Err(error);
                 }
             }
         }
         if env.check_selected("signal") && !env.use_direct_signal_sinks() {
+            selected_checks.push("signal");
             let signal_id = mixed_output_check_id(cfg, case.id(), "signal");
             let signal_result =
                 verify_mixed_signal_quality(env, cfg, &signal_id, &label, &url, resume).await;
@@ -121,10 +199,39 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                 if env.collect_failures {
                     failures.push(error);
                 } else {
+                    emit_mixed_output_cell_timing(
+                        env,
+                        cfg,
+                        case,
+                        &label,
+                        index,
+                        &selected_checks,
+                        1,
+                        cell_started_at,
+                        cell_started,
+                        "fail",
+                    )?;
                     return Err(error);
                 }
             }
         }
+        let cell_failure_count = failures.len().saturating_sub(cell_failures_before);
+        emit_mixed_output_cell_timing(
+            env,
+            cfg,
+            case,
+            &label,
+            index,
+            &selected_checks,
+            cell_failure_count,
+            cell_started_at,
+            cell_started,
+            if cell_failure_count == 0 {
+                "pass"
+            } else {
+                "fail"
+            },
+        )?;
     }
     let status = if failures.is_empty() { "pass" } else { "fail" };
     emit_mixed_timing(
