@@ -178,4 +178,48 @@ mod tests {
         assert_eq!(record["cellId"], "rtmp.src.a0");
         assert_eq!(record["label"], "rtmp.src.a0 out2");
     }
+
+    #[test]
+    fn emit_mixed_result_keeps_canonical_status_when_extra_has_status_like_fields() {
+        let temp = std::env::temp_dir().join(format!(
+            "restream-mixed-reporting-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        let assertion_log = temp.join("assertions.jsonl");
+        let env = MixedEnv {
+            assertion_log: Some(assertion_log.clone()),
+            ..MixedEnv::from_env_with_default_work_dir("mixed.test", temp.clone())
+        };
+
+        emit_mixed_result(
+            &env,
+            "mixed.test",
+            "mixed.test.output.rtmp.src.a0.decode_scan",
+            "pass",
+            Duration::from_millis(42),
+            Some(json!({
+                "decodeExitStatus": 0,
+                "matchedPattern": Value::Null,
+            })),
+        )
+        .expect("assertion row");
+
+        let line = std::fs::read_to_string(&assertion_log)
+            .expect("assertion log")
+            .lines()
+            .next()
+            .expect("one line")
+            .to_string();
+        let row: Value = serde_json::from_str(&line).expect("valid json");
+        assert_eq!(row["status"], "pass");
+        assert_eq!(row["decodeExitStatus"], 0);
+
+        std::fs::remove_file(&assertion_log).ok();
+        std::fs::remove_dir_all(&temp).ok();
+    }
 }

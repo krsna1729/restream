@@ -318,7 +318,7 @@ pub(crate) async fn verify_mixed_decode_scan(
         Some(json!({
             "label": label,
             "url": url,
-            "status": status,
+            "decodeExitStatus": status,
             "matchedPattern": matched_pattern,
             "toleratedWarning": tolerated_warning,
             "stderr": stderr.lines().take(20).collect::<Vec<_>>(),
