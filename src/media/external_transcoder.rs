@@ -43,7 +43,7 @@ use tracing::{debug, error, info};
 
 use crate::domain::audio_routing::{AudioRouting, parse_audio_operation, parse_audio_routing};
 use crate::domain::output_spec::{StagePresetSpec, VideoCodecKind};
-use crate::domain::stage::{StageKey, StageKind};
+use crate::domain::stage::StageKey;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::mpegts::TsDemuxer;
 use crate::media::pipe_metrics::PipeMetrics;
@@ -719,7 +719,7 @@ async fn start_external_transcoder_stage_inner(
     }
 
     // ── wait for ingest metadata (video codec, audio tracks) ──────────────
-    let eager_raw_parameter_sets = matches!(stage_key.kind, StageKind::VideoPreset { .. });
+    let eager_raw_parameter_sets = codec_needs_parameter_sets(probe_codec);
     let Some((video_meta, audio_tracks)) = wait_for_stage_metadata(
         &engine,
         &pipeline_id,
@@ -1697,7 +1697,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stage_metadata_allows_codec_edge_stages_before_upstream_headers() {
+    async fn stage_metadata_requires_raw_parameter_sets_for_hevc_codec_edge_stages() {
         let engine = Arc::new(MediaEngine::new());
         engine
             .try_register_ingest("pipe-stage-codec-edge", "stream-key", "file")
@@ -1742,18 +1742,37 @@ mod tests {
         let upstream_ring = Arc::new(RingBuffer::new(1024));
         upstream_ring.set_codec_hint("hevc");
         let cancel = CancellationToken::new();
+        let engine_for_wait = engine.clone();
+        let ring_for_wait = upstream_ring.clone();
+        let cancel_for_wait = cancel.clone();
+        let wait = tokio::spawn(async move {
+            wait_for_stage_metadata(
+                &engine_for_wait,
+                "pipe-stage-codec-edge",
+                &ring_for_wait,
+                true,
+                true,
+                None,
+                &cancel_for_wait,
+            )
+            .await
+        });
 
-        let (video, audio_tracks) = wait_for_stage_metadata(
-            &engine,
-            "pipe-stage-codec-edge",
-            &upstream_ring,
-            true,
-            false,
-            None,
-            &cancel,
-        )
-        .await
-        .expect("codec-edge stages should not wait for upstream headers");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            !wait.is_finished(),
+            "HEVC codec-edge stages should wait until upstream raw parameter sets are cached"
+        );
+
+        upstream_ring.set_video_parameter_sets(vec![
+            0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0xBB,
+            0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
+        ]);
+
+        let (video, audio_tracks) = wait
+            .await
+            .expect("wait task should join")
+            .expect("codec-edge stage metadata should become ready once parameter sets exist");
 
         assert_eq!(video.codec, "hevc");
         assert_eq!(audio_tracks.len(), 1);
