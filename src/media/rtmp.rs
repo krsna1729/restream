@@ -1620,9 +1620,19 @@ pub async fn start_rtmp_egress(
             format!("rtmp_egress_warmup:{}", output_id),
             ring_buffer.clone(),
         );
+        let mut warmup_packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
         tokio::select! {
             _ = cancel_token.cancelled() => return,
-            _ = warmup.wait_for_data() => {}
+            _ = async {
+                loop {
+                    warmup.wait_for_data().await;
+                    warmup_packets.clear();
+                    let _ = warmup.pull_burst(&mut warmup_packets, MEDIA_PULL_BURST_PACKETS);
+                    if rtmp_warmup_ready(reader.current_ring(), &warmup_packets) {
+                        break;
+                    }
+                }
+            } => {}
         }
     }
 
@@ -2372,6 +2382,14 @@ fn rtmp_output_waits_for_video(ring_buffer: &RingBuffer) -> bool {
     !ring_buffer.codec_hint_str().is_empty() || ring_buffer.video_parameter_sets().is_some()
 }
 
+fn rtmp_warmup_ready(ring_buffer: &RingBuffer, packets: &[Arc<MediaPacket>]) -> bool {
+    !rtmp_output_waits_for_video(ring_buffer)
+        || ring_buffer.video_parameter_sets().is_some()
+        || packets
+            .iter()
+            .any(|packet| packet.media_type == MediaType::Video)
+}
+
 fn should_send_startup_audio_sequence_header(video_ready: bool, ring_buffer: &RingBuffer) -> bool {
     video_ready
         || !rtmp_output_waits_for_video(ring_buffer)
@@ -2597,6 +2615,58 @@ mod tests {
         assert!(
             should_send_startup_audio_sequence_header(false, &ring),
             "once the output ring has H.264 parameter sets, startup audio can follow the video config"
+        );
+    }
+
+    #[test]
+    fn warmup_does_not_unlock_codec_edge_output_on_audio_only_burst() {
+        let ring = Arc::new(RingBuffer::new(1024));
+        ring.set_codec_hint("h264");
+        let packets = vec![Arc::new(MediaPacket {
+            media_type: MediaType::Audio,
+            format: PayloadFormat::Raw,
+            is_keyframe: false,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            payload: Bytes::from_static(&[0x11, 0x22]),
+        })];
+
+        assert!(
+            !rtmp_warmup_ready(&ring, &packets),
+            "codec-edge warmup should keep waiting until video startup data exists"
+        );
+    }
+
+    #[test]
+    fn warmup_unlocks_codec_edge_output_once_video_startup_arrives() {
+        let ring = Arc::new(RingBuffer::new(1024));
+        ring.set_codec_hint("h264");
+        let video_packets = vec![Arc::new(MediaPacket {
+            media_type: MediaType::Video,
+            format: PayloadFormat::Raw,
+            is_keyframe: true,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x65]),
+        })];
+
+        assert!(
+            rtmp_warmup_ready(&ring, &video_packets),
+            "seeing a video burst should unlock RTMP warmup even before parameter sets are cached"
+        );
+
+        let parameter_set_ring = Arc::new(RingBuffer::new(1024));
+        parameter_set_ring.set_codec_hint("h264");
+        parameter_set_ring.set_video_parameter_sets(vec![
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+            0xCE, 0x38, 0x80,
+        ]);
+
+        assert!(
+            rtmp_warmup_ready(&parameter_set_ring, &[]),
+            "cached parameter sets should also satisfy RTMP warmup readiness"
         );
     }
 

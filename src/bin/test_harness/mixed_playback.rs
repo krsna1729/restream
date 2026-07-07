@@ -2,6 +2,74 @@
 
 use super::*;
 
+fn mixed_recording_scenario_token(cfg: &str) -> String {
+    cfg.replace('.', "_")
+}
+
+fn mixed_recording_name_matches_cfg(name: &str, cfg: &str) -> bool {
+    name.ends_with(".mp4")
+        && !name.ends_with(".tmp.mp4")
+        && name.contains(&mixed_recording_scenario_token(cfg))
+}
+
+async fn wait_for_mixed_recording_file(
+    media_dir: &Path,
+    before: &HashSet<String>,
+    cfg: &str,
+    timeout: Duration,
+) -> Result<PathBuf, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let files = media_dir_entries(media_dir)?;
+        if let Some(name) = files.iter().find(|name| {
+            !before.contains(*name) && mixed_recording_name_matches_cfg(name.as_str(), cfg)
+        }) {
+            return Ok(media_dir.join(name));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "no new recording for {cfg} appeared in {} within {}s",
+                media_dir.display(),
+                timeout.as_secs()
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn wait_for_api_media_file_named(
+    api: &RampApi,
+    name: &str,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let media = api.get_json("/api/v1/media").await?;
+        let files = media["files"]
+            .as_array()
+            .ok_or("/api/v1/media response missing files")?;
+        if let Some(file) = files.iter().find(|file| {
+            file["playName"].as_str() == Some(name) || file["name"].as_str() == Some(name)
+        }) {
+            return Ok(file.clone());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "recording {name} did not appear in /api/v1/media within {}s",
+                timeout.as_secs()
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+fn mixed_hls_preview_timeout(case: MixedInputCase) -> Duration {
+    match (case.codec(), case.is_multi_track()) {
+        (MixedVideoCodec::H265, true) => Duration::from_secs(60),
+        _ => Duration::from_secs(30),
+    }
+}
+
 pub(crate) async fn verify_mixed_hls_preview(
     env: &MixedEnv,
     api: &RampApi,
@@ -17,7 +85,7 @@ pub(crate) async fn verify_mixed_hls_preview(
     }
     let started = Instant::now();
     let (_status, playlist_body) =
-        wait_for_hls_playlist_ready(api, pipeline_id, Duration::from_secs(30)).await?;
+        wait_for_hls_playlist_ready(api, pipeline_id, mixed_hls_preview_timeout(case)).await?;
     let expected_audio_tracks = case.expected_audio_tracks();
     let audio_renditions = playlist_body.matches("#EXT-X-MEDIA:TYPE=AUDIO").count();
     if audio_renditions != expected_audio_tracks {
@@ -188,13 +256,15 @@ pub(crate) async fn verify_mixed_recording(
         .await?;
     wait_for_api_recording_state(api, pipeline_id, false, Duration::from_secs(20)).await?;
 
+    let recording_path =
+        wait_for_mixed_recording_file(&env.media_dir, &before_files, cfg, Duration::from_secs(30))
+            .await?;
+    let recording_name = recording_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("recording file missing file name")?;
     let recording_entry =
-        wait_for_api_media_file(api, &before_files, ".mp4", Duration::from_secs(30)).await?;
-    let recording_name = recording_entry["playName"]
-        .as_str()
-        .or_else(|| recording_entry["name"].as_str())
-        .ok_or("recording entry missing playName/name")?;
-    let recording_path = env.media_dir.join(recording_name);
+        wait_for_api_media_file_named(api, recording_name, Duration::from_secs(30)).await?;
     if !recording_path.exists() {
         return Err(format!(
             "recording listed by API but missing on disk: {}",
@@ -261,5 +331,30 @@ pub(crate) async fn verify_mixed_recording(
         Err(format!(
             "recording {cfg}: expected {expected_video_codec} with {expected_audio_tracks} audio tracks, got {video_codec} with {audio_tracks}"
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mixed_recording_name_match_requires_exact_scenario_token() {
+        assert!(mixed_recording_name_matches_cfg(
+            "recording_20260707T012755_mixed_asset_file_h265_a1_bf2.mp4",
+            "mixed.asset.file.h265.a1.bf2"
+        ));
+        assert!(!mixed_recording_name_matches_cfg(
+            "recording_20260707T012755_mixed_asset_file_h265_a1_bf0.mp4",
+            "mixed.asset.file.h265.a1.bf2"
+        ));
+    }
+
+    #[test]
+    fn mixed_recording_name_match_rejects_temporary_outputs() {
+        assert!(!mixed_recording_name_matches_cfg(
+            "recording_20260707T012755_mixed_asset_file_h265_a1_bf0.tmp.mp4",
+            "mixed.asset.file.h265.a1.bf0"
+        ));
     }
 }

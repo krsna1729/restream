@@ -382,6 +382,7 @@ impl Default for SignalTolerances {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn validate_signal_quality(
     blackdetect_log: &str,
     silencedetect_log: &str,

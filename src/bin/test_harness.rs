@@ -6737,37 +6737,6 @@ async fn wait_for_new_media_file(
     }
 }
 
-async fn wait_for_api_media_file(
-    api: &RampApi,
-    before: &HashSet<String>,
-    extension: &str,
-    timeout: Duration,
-) -> Result<Value, String> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let media = api.get_json("/api/v1/media").await?;
-        let files = media["files"]
-            .as_array()
-            .ok_or("/api/v1/media response missing files")?;
-        if let Some(file) = files.iter().find(|file| {
-            let candidate = file["playName"]
-                .as_str()
-                .or_else(|| file["name"].as_str())
-                .unwrap_or_default();
-            candidate.ends_with(extension) && !before.contains(candidate)
-        }) {
-            return Ok(file.clone());
-        }
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "no new {extension} media entry appeared in /api/v1/media within {}s",
-                timeout.as_secs()
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
 fn absolute_delta_secs(actual: f64, expected: f64) -> f64 {
     (actual - expected).abs()
 }

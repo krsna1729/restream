@@ -59,10 +59,11 @@ pub(super) use mixed_runtime::{
 pub(super) use mixed_signal::{
     PcmQualityReport, analyze_pcm_s16le, marker_gaps_from_intervals, max_audio_pts_gap_ms,
     nearest_marker_offsets_ms, parse_blackdetect_intervals, parse_silencedetect_intervals,
+    validate_signal_quality,
 };
 pub(super) use mixed_signal::{
     SignalTolerances, decode_pcm_quality, run_ffmpeg_filter_log, signal_report_json,
-    validate_signal_quality, validate_signal_quality_with_tolerances, verify_mixed_signal_quality,
+    validate_signal_quality_with_tolerances, verify_mixed_signal_quality,
 };
 pub(super) use mixed_sinks::{
     add_mixed_multi_output_cases, add_mixed_output_cases, finish_ffmpeg_signal_sinks,
@@ -1744,6 +1745,19 @@ pub(super) async fn run_mixed_live_config(
     verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, resume).await?;
     if !ffmpeg_signal_sinks.is_empty() {
         finish_ffmpeg_signal_sinks(env, &mut ffmpeg_signal_sinks, resume).await?;
+    }
+    if env.needs_live_output_progress_gate() {
+        // Mirror the file-ingest gate: under shared HEVC mixed fanout the last
+        // duplicated readers can still be wiring up while the first ffprobe or
+        // signal capture starts. Waiting for bytes-out keeps the live matrix
+        // from turning a startup lag into a false codec/output failure.
+        wait_for_outputs_progress(
+            api,
+            &pipeline_id,
+            &output_ids,
+            mixed_output_progress_timeout(output_ids.len()),
+        )
+        .await?;
     }
 
     let rss_min_audio_tracks = case.is_multi_track().then_some(2);
