@@ -282,7 +282,9 @@ pub struct RingBuffer {
     pub codec_hint: std::sync::OnceLock<String>,
     /// Raw Annex B parameter sets captured at ingest so late-joining live
     /// stages can seed H.264/H.265 decoders before the next keyframe arrives.
-    pub video_parameter_sets: std::sync::OnceLock<Vec<u8>>,
+    /// Stored behind ArcSwapOption so a later complete set can replace an
+    /// earlier partial cache on live ingest reconnects or delayed header arrival.
+    pub video_parameter_sets: ArcSwapOption<Vec<u8>>,
     /// Audio tracks metadata of packets in this ring.
     /// Stored behind ArcSwapOption so it can be updated when a publisher reconnects
     /// with a different track configuration (OnceLock would silently ignore updates).
@@ -326,7 +328,7 @@ impl RingBuffer {
             notify: Arc::new(tokio::sync::Notify::new()),
             readers: std::sync::Mutex::new(Vec::new()),
             codec_hint: std::sync::OnceLock::new(),
-            video_parameter_sets: std::sync::OnceLock::new(),
+            video_parameter_sets: ArcSwapOption::empty(),
             audio_tracks: ArcSwapOption::empty(),
             estimated_pkt_rate: std::sync::atomic::AtomicU32::new(0),
             next: ArcSwapOption::empty(),
@@ -407,13 +409,16 @@ impl RingBuffer {
         if bytes == 0 {
             return;
         }
-        if self.video_parameter_sets.set(parameter_sets).is_ok() {
-            debug!(bytes, "ring video parameter sets cached");
-        }
+        self.video_parameter_sets
+            .store(Some(std::sync::Arc::new(parameter_sets)));
+        debug!(bytes, "ring video parameter sets cached");
     }
 
-    pub fn video_parameter_sets(&self) -> Option<&[u8]> {
-        self.video_parameter_sets.get().map(|v| v.as_slice())
+    /// Returns a snapshot clone of the current parameter-set cache.
+    pub fn video_parameter_sets(&self) -> Option<Vec<u8>> {
+        self.video_parameter_sets
+            .load_full()
+            .map(|arc| (*arc).clone())
     }
 
     /// Set (or update) the audio track metadata for this ring.
@@ -1164,6 +1169,33 @@ mod tests {
 
         let snapshots = rb.reader_snapshots();
         assert_eq!(snapshots[0].overflow_count, 1);
+    }
+
+    #[test]
+    fn video_parameter_sets_cache_supports_late_complete_update() {
+        let rb = RingBuffer::new(16);
+        rb.set_video_parameter_sets(vec![
+            0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
+        ]);
+        assert_eq!(
+            rb.video_parameter_sets(),
+            Some(vec![
+                0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
+            ])
+        );
+
+        rb.set_video_parameter_sets(vec![
+            0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0xBB,
+            0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
+        ]);
+        assert_eq!(
+            rb.video_parameter_sets(),
+            Some(vec![
+                0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0xBB,
+                0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
+            ]),
+            "later complete parameter sets should replace an earlier partial cache"
+        );
     }
 
     // -- DtsEnforcer --

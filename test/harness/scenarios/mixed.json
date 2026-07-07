@@ -6,7 +6,7 @@
       "workflow": "mixed-scenario",
       "requires": {
         "portNamespace": true,
-        "benchProfile": false
+        "benchProfile": true
       },
       "artifact": {
         "relDir": "asset/file/h264/a1/bf0"
@@ -40,7 +40,7 @@
       "workflow": "mixed-scenario",
       "requires": {
         "portNamespace": true,
-        "benchProfile": false
+        "benchProfile": true
       },
       "artifact": {
         "relDir": "asset/file/h264/a1/bf2"
@@ -74,7 +74,7 @@
       "workflow": "mixed-scenario",
       "requires": {
         "portNamespace": true,
-        "benchProfile": false
+        "benchProfile": true
       },
       "artifact": {
         "relDir": "asset/file/h264/a2/bf0"
@@ -108,7 +108,7 @@
       "workflow": "mixed-scenario",
       "requires": {
         "portNamespace": true,
-        "benchProfile": false
+        "benchProfile": true
       },
       "artifact": {
         "relDir": "asset/file/h264/a2/bf2"
@@ -142,7 +142,7 @@
       "workflow": "mixed-scenario",
       "requires": {
         "portNamespace": true,
-        "benchProfile": false
+        "benchProfile": true
       },
       "artifact": {
         "relDir": "asset/file/h265/a1/bf0"
@@ -176,7 +176,7 @@
       "workflow": "mixed-scenario",
       "requires": {
         "portNamespace": true,
-        "benchProfile": false
+        "benchProfile": true
       },
       "artifact": {
         "relDir": "asset/file/h265/a1/bf2"
@@ -210,7 +210,7 @@
       "workflow": "mixed-scenario",
       "requires": {
         "portNamespace": true,
-        "benchProfile": false
+        "benchProfile": true
       },
       "artifact": {
         "relDir": "asset/file/h265/a2/bf0"
@@ -244,7 +244,7 @@
       "workflow": "mixed-scenario",
       "requires": {
         "portNamespace": true,
-        "benchProfile": false
+        "benchProfile": true
       },
       "artifact": {
         "relDir": "asset/file/h265/a2/bf2"

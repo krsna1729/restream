@@ -833,7 +833,7 @@ async fn start_external_transcoder_stage_inner(
         audio_tracks.clone(),
         PacketFeedConfig {
             video_sequence_header: video_sequence_header.as_ref().map(|v| v.to_vec()),
-            raw_video_parameter_sets: input_buffer.video_parameter_sets().map(|v| v.to_vec()),
+            raw_video_parameter_sets: input_buffer.video_parameter_sets(),
             ..PacketFeedConfig::default()
         },
     );
@@ -864,7 +864,7 @@ async fn start_external_transcoder_stage_inner(
                         && feeder.needs_raw_video_parameter_sets()
                         && let Some(parameter_sets) = reader.current_ring().video_parameter_sets()
                     {
-                        feeder.set_raw_video_parameter_sets_if_empty(parameter_sets);
+                        feeder.set_raw_video_parameter_sets_if_empty(&parameter_sets);
                     }
                     let in_bytes = pkt.payload.len() as u64;
                     if feeder.extend_ts_for_packet(&pkt, &mut ts_batch) {
@@ -1764,6 +1764,19 @@ mod tests {
             "HEVC codec-edge stages should wait until upstream raw parameter sets are cached"
         );
 
+        assert!(
+            crate::media::codec::annexb_parameter_sets(&[
+                0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
+            ])
+            .is_none(),
+            "partial HEVC parameter sets should be rejected before they reach the ring cache"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            !wait.is_finished(),
+            "HEVC codec-edge stages should keep waiting until VPS/SPS/PPS are all cached"
+        );
+
         upstream_ring.set_video_parameter_sets(vec![
             0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0xBB,
             0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
@@ -2569,6 +2582,15 @@ mod tests {
         let (video, audio_tracks, mut packets) =
             crate::test_fixtures::primary_av_packets_for_codec("h265")
                 .expect("single-audio HEVC fixture");
+        let continuation = packets
+            .iter()
+            .rev()
+            .take(96)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>();
 
         let engine = Arc::new(MediaEngine::new());
         engine
@@ -2620,6 +2642,8 @@ mod tests {
             None,
             stage_key,
         ));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        source_ring.push_batch(continuation);
 
         let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(6);
         let mut output_packets = Vec::new();
@@ -2645,7 +2669,7 @@ mod tests {
             output_packets
                 .iter()
                 .any(|packet| packet.media_type == MediaType::Video),
-            "external 720p HEVC stage should emit video even when it joins after packets are already buffered"
+            "external 720p HEVC stage should emit video once a prebuffered join receives live continuation"
         );
     }
 

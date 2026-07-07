@@ -3975,7 +3975,7 @@ pub fn start_shared_ts_muxer(
                                             && let Some(parameter_sets) =
                                                 reader.current_ring().video_parameter_sets()
                                         {
-                                            sps_pps_cache.extend_from_slice(parameter_sets);
+                                            sps_pps_cache.extend_from_slice(&parameter_sets);
                                         }
                                         match crate::media::codec::video_for_ts_into(
                                             &pkt.payload,

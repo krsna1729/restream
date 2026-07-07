@@ -60,7 +60,7 @@ pub async fn start_audio_router(
         output_buffer.set_codec_hint(hint);
     }
     if let Some(parameter_sets) = input_buffer.video_parameter_sets() {
-        output_buffer.set_video_parameter_sets(parameter_sets.to_vec());
+        output_buffer.set_video_parameter_sets(parameter_sets);
     }
     // Propagate audio track metadata to the output ring, applying the routing
     // transformation (e.g. SelectTracks re-indexes track_index values).
@@ -114,7 +114,7 @@ pub async fn start_audio_router(
                         && output_buffer.video_parameter_sets().is_none()
                     {
                         if let Some(parameter_sets) = reader.current_ring().video_parameter_sets() {
-                            output_buffer.set_video_parameter_sets(parameter_sets.to_vec());
+                            output_buffer.set_video_parameter_sets(parameter_sets);
                         } else if let Some(parameter_sets) =
                             crate::media::codec::annexb_parameter_sets(&pkt.payload)
                         {
@@ -345,7 +345,7 @@ pub async fn start_transcoder(
         audio_tracks.clone(),
         PacketFeedConfig {
             video_sequence_header: video_sequence_header.as_ref().map(|v| v.to_vec()),
-            raw_video_parameter_sets: input_buffer.video_parameter_sets().map(|v| v.to_vec()),
+            raw_video_parameter_sets: input_buffer.video_parameter_sets(),
             ..PacketFeedConfig::default()
         },
     );
@@ -815,12 +815,10 @@ mod tests {
         assert_eq!(out_ring.codec_hint_str(), "h264");
         assert_eq!(
             out_ring.video_parameter_sets(),
-            Some(
-                &[
-                    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01,
-                    0x68, 0xCE, 0x38, 0x80,
-                ][..]
-            )
+            Some(vec![
+                0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+                0xCE, 0x38, 0x80,
+            ])
         );
 
         cancel.cancel();

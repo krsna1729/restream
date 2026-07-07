@@ -18,6 +18,17 @@
       "badPatternsRef": "checks/ffmpeg-patterns.json#decodeBadPatterns",
       "fallbacksRef": "checks/ffmpeg-patterns.json#decodeFallbacks"
     },
+    "runtime-log": {
+      "executor": "assert.log.runtimeNoise",
+      "log": "${runtime.restreamLog}",
+      "patterns": [
+        "PPS id out of range",
+        "Could not find ref with POC",
+        "Skipping invalid undecodable NALU",
+        "Error parsing NAL"
+      ],
+      "purpose": "passing mixed scenarios must not self-heal through decoder-noise startup"
+    },
     "signal": {
       "executor": "probe.signal.avMarkers",
       "durationSecs": {
@@ -180,6 +191,7 @@
     "ffprobe",
     "audio-route",
     "decode-scan",
+    "runtime-log",
     "stage-sharing",
     "hls",
     "recording",

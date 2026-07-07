@@ -48,8 +48,8 @@ pub(super) use mixed_probes::{
     verify_mixed_stream, warm_mixed_stream,
 };
 pub(super) use mixed_reporting::{
-    count_log_matches, emit_mixed_result, emit_mixed_timing, emit_mixed_timing_window,
-    file_tail_lines, log_mixed_ok, safe_artifact_stem,
+    count_log_matches, effective_log_paths, emit_mixed_result, emit_mixed_timing,
+    emit_mixed_timing_window, file_tail_lines, log_mixed_ok, safe_artifact_stem,
 };
 pub(super) use mixed_runtime::{
     spawn_mixed_live_publisher, spawn_mixed_srt_multi_publisher, start_mixed_mediamtx,
@@ -251,6 +251,81 @@ fn mixed_matrix_default_check_names() -> Vec<String> {
         .iter()
         .map(|check| check.as_str().to_string())
         .collect()
+}
+
+const MIXED_RUNTIME_LOG_NOISE_PATTERNS: [&str; 4] = [
+    "PPS id out of range",
+    "Could not find ref with POC",
+    "Skipping invalid undecodable NALU",
+    "Error parsing NAL",
+];
+
+fn mixed_runtime_log_noise_matches(line: &str) -> bool {
+    MIXED_RUNTIME_LOG_NOISE_PATTERNS
+        .iter()
+        .any(|pattern| line.contains(pattern))
+}
+
+fn mixed_runtime_log_noise_lines(path: &Path, pipeline_id: &str) -> Vec<String> {
+    effective_log_paths(path)
+        .into_iter()
+        .filter_map(|candidate| std::fs::read_to_string(candidate).ok())
+        .flat_map(|content| {
+            content
+                .lines()
+                .filter(|line| line.contains(pipeline_id) && mixed_runtime_log_noise_matches(line))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn verify_mixed_runtime_log_hygiene(
+    env: &MixedEnv,
+    cfg: &str,
+    pipeline_id: &str,
+    elapsed: Duration,
+) -> Result<(), String> {
+    let matches = mixed_runtime_log_noise_lines(&env.restream_log, pipeline_id);
+    let id = mixed_scenario_check_id(cfg, "runtime_log");
+    if matches.is_empty() {
+        emit_mixed_result(
+            env,
+            cfg,
+            &id,
+            "pass",
+            elapsed,
+            Some(json!({
+                "pipelineId": pipeline_id,
+                "matchedLines": 0,
+            })),
+        )?;
+        log_mixed_ok(env, "runtime-log: clean")?;
+        return Ok(());
+    }
+
+    emit_mixed_result(
+        env,
+        cfg,
+        &id,
+        "fail",
+        elapsed,
+        Some(json!({
+            "pipelineId": pipeline_id,
+            "matchedLines": matches.len(),
+            "patterns": MIXED_RUNTIME_LOG_NOISE_PATTERNS,
+            "sample": matches.iter().take(5).cloned().collect::<Vec<_>>(),
+        })),
+    )?;
+    Err(format!(
+        "runtime-log: decoder noise detected for {pipeline_id}: {}",
+        matches
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" | ")
+    ))
 }
 
 fn apply_mixed_matrix_defaults(
@@ -1896,6 +1971,11 @@ pub(super) async fn run_mixed_anchor_config(
         log_mixed_ok(env, "lifecycle: all outputs stopped")?;
     }
 
+    if env.check_selected("runtime-log") {
+        let runtime_log_started = Instant::now();
+        verify_mixed_runtime_log_hygiene(env, cfg, &pipeline_id, runtime_log_started.elapsed())?;
+    }
+
     if let Some(error) = sink_probe_failure {
         return Err(error);
     }
@@ -2237,6 +2317,11 @@ pub(super) async fn run_mixed_file_config(
     api.post_empty(&format!("/api/v1/ingests/{ingest_id}/stop"))
         .await?;
 
+    if env.check_selected("runtime-log") {
+        let runtime_log_started = Instant::now();
+        verify_mixed_runtime_log_hygiene(env, cfg, &pipeline_id, runtime_log_started.elapsed())?;
+    }
+
     println!(
         "[{cfg}] done: {total} outputs, baseline={rss_baseline}kB peak={rss_peak}kB growth={growth_kb}kB"
     );
@@ -2253,4 +2338,52 @@ pub(super) async fn run_mixed_file_config(
         "rssPeakKb": rss_peak,
         "rssGrowthKb": growth_kb,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_log_noise_matcher_only_flags_decoder_noise_patterns() {
+        assert!(mixed_runtime_log_noise_matches(
+            "[hevc @ 0x1] PPS id out of range: 0"
+        ));
+        assert!(mixed_runtime_log_noise_matches(
+            "[hevc @ 0x1] Could not find ref with POC 0"
+        ));
+        assert!(!mixed_runtime_log_noise_matches(
+            "stage exit pipeline=pipe encoding=720p"
+        ));
+    }
+
+    #[test]
+    fn runtime_log_noise_scan_scopes_to_pipeline_id() {
+        let temp = std::env::temp_dir().join(format!(
+            "restream-mixed-runtime-log-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        let log_path = temp.join("restream.log");
+        std::fs::write(
+            &log_path,
+            concat!(
+                "INFO pipeline_id=pipe-ok normal line\n",
+                "ERROR pipeline_id=pipe-bad [hevc @ 0x1] PPS id out of range: 0\n",
+                "ERROR pipeline_id=pipe-other [hevc @ 0x1] PPS id out of range: 0\n"
+            ),
+        )
+        .expect("log write");
+
+        let matches = mixed_runtime_log_noise_lines(&log_path, "pipe-bad");
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].contains("pipe-bad"));
+
+        std::fs::remove_file(&log_path).ok();
+        std::fs::remove_dir_all(&temp).ok();
+    }
 }

@@ -2360,7 +2360,7 @@ fn startup_video_sequence_header(
     ingest_sequence_header: Option<Bytes>,
 ) -> Option<Bytes> {
     if let Some(parameter_sets) = ring_buffer.video_parameter_sets()
-        && let Some(sequence_header) = codec::build_avcc_sequence_header(parameter_sets)
+        && let Some(sequence_header) = codec::build_avcc_sequence_header(&parameter_sets)
     {
         return Some(sequence_header);
     }

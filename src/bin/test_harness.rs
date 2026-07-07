@@ -207,10 +207,9 @@ fn mixed_input_mode_spec(case: MixedInputCase) -> HarnessModeSpec {
         name: case.scenario_id().to_string(),
         suite_default: false,
         requires_port_namespace: true,
-        requires_bench_profile: matches!(
-            case.protocol(),
-            MixedInputProtocol::Rtmp | MixedInputProtocol::Srt
-        ),
+        // Mixed scenarios always emit timing/resource evidence and should run
+        // under one harness-level profile policy rather than varying by cell.
+        requires_bench_profile: true,
     }
 }
 
@@ -9795,6 +9794,7 @@ stream|index=1|codec_type=audio\n";
                 "ffprobe",
                 "audio-route",
                 "decode-scan",
+                "runtime-log",
                 "stage-sharing",
                 "hls",
                 "recording",
@@ -10102,6 +10102,18 @@ stream|index=1|codec_type=audio\n";
             assert!(
                 !spec.suite_default,
                 "{mode} is covered by mixed.matrix and should not duplicate default suite work"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_input_modes_share_one_bench_profile_policy() {
+        for case in mixed_input_cases() {
+            let mode = mixed_input_mode_name(*case);
+            let spec = mode_spec(&mode).unwrap_or_else(|| panic!("{mode} must be listed"));
+            assert!(
+                spec.requires_bench_profile,
+                "{mode} should inherit the mixed harness bench-profile requirement"
             );
         }
     }

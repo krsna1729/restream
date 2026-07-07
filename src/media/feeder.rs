@@ -62,6 +62,7 @@ pub struct TsPacketFeeder {
     audio_sample_rates: Vec<u32>,
     audio_channels: Vec<u32>,
     has_video: bool,
+    waiting_for_video_startup: bool,
     nalu_len_size: usize,
     sps_pps_cache: Vec<u8>,
     video_conv_buf: Vec<u8>,
@@ -100,6 +101,7 @@ impl TsPacketFeeder {
             audio_sample_rates,
             audio_channels,
             has_video: video.is_some(),
+            waiting_for_video_startup: video.is_some(),
             nalu_len_size,
             sps_pps_cache,
             video_conv_buf: Vec::new(),
@@ -125,16 +127,27 @@ impl TsPacketFeeder {
 
     pub fn extend_ts_for_packet(&mut self, packet: &MediaPacket, output: &mut Vec<u8>) -> bool {
         let (payload, stream_idx) = match packet.media_type {
-            MediaType::Video => match video_for_ts_into(
-                &packet.payload,
-                packet.format,
-                &mut self.nalu_len_size,
-                &mut self.sps_pps_cache,
-                &mut self.video_conv_buf,
-            ) {
-                Some(payload) => (payload, 0),
-                None => return false,
-            },
+            MediaType::Video => {
+                if self.waiting_for_video_startup {
+                    match prepare_video_startup_packet(packet, &mut self.sps_pps_cache) {
+                        VideoStartupAction::Skip => return false,
+                        VideoStartupAction::Emit => {}
+                    }
+                }
+                match video_for_ts_into(
+                    &packet.payload,
+                    packet.format,
+                    &mut self.nalu_len_size,
+                    &mut self.sps_pps_cache,
+                    &mut self.video_conv_buf,
+                ) {
+                    Some(payload) => {
+                        self.waiting_for_video_startup = false;
+                        (payload, 0)
+                    }
+                    None => return false,
+                }
+            }
             MediaType::Audio => {
                 let Some(track_index) = self
                     .audio_track_indices
@@ -185,6 +198,41 @@ fn parse_video_sequence_header(flv_sequence_header: &[u8]) -> (usize, Vec<u8>) {
         crate::media::codec::parse_avcc_config(&flv_sequence_header[5..])
     } else {
         (4, Vec::new())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VideoStartupAction {
+    Skip,
+    Emit,
+}
+
+fn prepare_video_startup_packet(
+    packet: &MediaPacket,
+    sps_pps_cache: &mut Vec<u8>,
+) -> VideoStartupAction {
+    match packet.format {
+        crate::media::ring_buffer::PayloadFormat::Raw => {
+            if let Some(parameter_sets) =
+                crate::media::codec::annexb_parameter_sets(&packet.payload)
+            {
+                *sps_pps_cache = parameter_sets;
+            }
+            if packet.is_keyframe {
+                VideoStartupAction::Emit
+            } else {
+                VideoStartupAction::Skip
+            }
+        }
+        crate::media::ring_buffer::PayloadFormat::Flv => {
+            if packet.payload.len() > 1 && packet.payload[1] == 0 {
+                VideoStartupAction::Emit
+            } else if packet.is_keyframe {
+                VideoStartupAction::Emit
+            } else {
+                VideoStartupAction::Skip
+            }
+        }
     }
 }
 
@@ -468,5 +516,126 @@ mod tests {
             .expect("remuxed output should contain video");
         assert!(remuxed.payload.starts_with(&parameter_sets));
         assert!(remuxed.payload.ends_with(&packet.payload));
+    }
+
+    #[test]
+    fn feeder_skips_pre_keyframe_raw_video_until_clean_startup_boundary() {
+        let video = VideoMeta {
+            codec: "hevc".to_string(),
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            bw: None,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+            level: None,
+            pixel_format: None,
+        };
+        let parameter_sets = vec![
+            0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0xBB,
+            0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
+        ];
+        let mut feeder = TsPacketFeeder::new(
+            Some(&video),
+            Arc::new(Vec::new()),
+            PacketFeedConfig {
+                raw_video_parameter_sets: Some(parameter_sets),
+                ..PacketFeedConfig::default()
+            },
+        );
+        let pre_keyframe = MediaPacket {
+            media_type: MediaType::Video,
+            format: crate::media::ring_buffer::PayloadFormat::Raw,
+            is_keyframe: false,
+            track_index: 0,
+            pts: 33,
+            dts: 33,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x02, 0x01, 0xDD]),
+        };
+        let keyframe = MediaPacket {
+            media_type: MediaType::Video,
+            format: crate::media::ring_buffer::PayloadFormat::Raw,
+            is_keyframe: true,
+            track_index: 0,
+            pts: 66,
+            dts: 66,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0xEE]),
+        };
+
+        let mut output = Vec::new();
+        assert!(!feeder.extend_ts_for_packet(&pre_keyframe, &mut output));
+        assert!(output.is_empty());
+        assert!(feeder.extend_ts_for_packet(&keyframe, &mut output));
+        assert!(
+            !output.is_empty(),
+            "once the first keyframe arrives, the feeder should start emitting TS"
+        );
+    }
+
+    #[test]
+    fn feeder_keeps_waiting_after_parameter_sets_only_raw_packet() {
+        let video = VideoMeta {
+            codec: "hevc".to_string(),
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            bw: None,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+            level: None,
+            pixel_format: None,
+        };
+        let mut feeder = TsPacketFeeder::new(
+            Some(&video),
+            Arc::new(Vec::new()),
+            PacketFeedConfig::default(),
+        );
+        let parameter_sets_only = MediaPacket {
+            media_type: MediaType::Video,
+            format: crate::media::ring_buffer::PayloadFormat::Raw,
+            is_keyframe: false,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            payload: Bytes::from_static(&[
+                0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0xBB,
+                0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
+            ]),
+        };
+        let delta = MediaPacket {
+            media_type: MediaType::Video,
+            format: crate::media::ring_buffer::PayloadFormat::Raw,
+            is_keyframe: false,
+            track_index: 0,
+            pts: 33,
+            dts: 33,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x02, 0x01, 0xDD]),
+        };
+        let keyframe = MediaPacket {
+            media_type: MediaType::Video,
+            format: crate::media::ring_buffer::PayloadFormat::Raw,
+            is_keyframe: true,
+            track_index: 0,
+            pts: 66,
+            dts: 66,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0xEE]),
+        };
+
+        let mut output = Vec::new();
+        assert!(
+            !feeder.extend_ts_for_packet(&parameter_sets_only, &mut output),
+            "parameter sets alone should prime the cache but not unlock startup"
+        );
+        assert!(!feeder.extend_ts_for_packet(&delta, &mut output));
+        assert!(
+            output.is_empty(),
+            "delta frames must stay suppressed until a true random-access frame arrives"
+        );
+        assert!(feeder.extend_ts_for_packet(&keyframe, &mut output));
+        assert!(!output.is_empty());
     }
 }

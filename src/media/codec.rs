@@ -206,6 +206,11 @@ pub(crate) fn annexb_parameter_sets(payload: &[u8]) -> Option<Vec<u8>> {
 
     let mut parameter_sets = Vec::new();
     let mut kind = AnnexbCodecKind::Unknown;
+    let mut has_h264_sps = false;
+    let mut has_h264_pps = false;
+    let mut has_h265_vps = false;
+    let mut has_h265_sps = false;
+    let mut has_h265_pps = false;
     for nalu in nalus {
         if nalu.is_empty() {
             continue;
@@ -222,6 +227,8 @@ pub(crate) fn annexb_parameter_sets(payload: &[u8]) -> Option<Vec<u8>> {
             7 | 8 => {
                 if matches!(kind, AnnexbCodecKind::Unknown | AnnexbCodecKind::H264) {
                     kind = AnnexbCodecKind::H264;
+                    has_h264_sps |= h264_nal_type == 7;
+                    has_h264_pps |= h264_nal_type == 8;
                     parameter_sets.extend_from_slice(&[0, 0, 0, 1]);
                     parameter_sets.extend_from_slice(nalu);
                 }
@@ -231,6 +238,9 @@ pub(crate) fn annexb_parameter_sets(payload: &[u8]) -> Option<Vec<u8>> {
                     && matches!(kind, AnnexbCodecKind::Unknown | AnnexbCodecKind::H265)
                 {
                     kind = AnnexbCodecKind::H265;
+                    has_h265_vps |= h265_nal_type == 32;
+                    has_h265_sps |= h265_nal_type == 33;
+                    has_h265_pps |= h265_nal_type == 34;
                     parameter_sets.extend_from_slice(&[0, 0, 0, 1]);
                     parameter_sets.extend_from_slice(nalu);
                 }
@@ -238,7 +248,13 @@ pub(crate) fn annexb_parameter_sets(payload: &[u8]) -> Option<Vec<u8>> {
         }
     }
 
-    (!parameter_sets.is_empty()).then_some(parameter_sets)
+    match kind {
+        AnnexbCodecKind::Unknown => None,
+        AnnexbCodecKind::H264 => (has_h264_sps && has_h264_pps).then_some(parameter_sets),
+        AnnexbCodecKind::H265 => {
+            (has_h265_vps && has_h265_sps && has_h265_pps).then_some(parameter_sets)
+        }
+    }
 }
 
 fn raw_annexb_is_keyframe(payload: &[u8]) -> bool {
@@ -1277,6 +1293,49 @@ mod tests {
         assert!(matches!(result, Cow::Borrowed(_)));
         assert_eq!(cache, payload[..17]);
         assert_eq!(&*result, &payload);
+    }
+
+    #[test]
+    fn annexb_parameter_sets_rejects_partial_h264_parameter_sets() {
+        let payload = [
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x65,
+            0x88, 0x80,
+        ];
+
+        assert!(
+            annexb_parameter_sets(&payload).is_none(),
+            "partial H.264 parameter sets should not be cached"
+        );
+    }
+
+    #[test]
+    fn annexb_parameter_sets_rejects_partial_h265_parameter_sets() {
+        let payload = [
+            0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC,
+            0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0xDD,
+        ];
+
+        assert!(
+            annexb_parameter_sets(&payload).is_none(),
+            "partial HEVC parameter sets should not be cached"
+        );
+    }
+
+    #[test]
+    fn annexb_parameter_sets_accepts_complete_h265_parameter_sets() {
+        let payload = [
+            0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0xBB,
+            0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC, 0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0xDD,
+        ];
+
+        let parameter_sets = annexb_parameter_sets(&payload).expect("complete HEVC headers");
+        assert_eq!(
+            parameter_sets,
+            vec![
+                0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0xBB,
+                0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC
+            ]
+        );
     }
 
     #[test]

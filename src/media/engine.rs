@@ -1145,7 +1145,7 @@ impl MediaEngine {
             new_rb.set_codec_hint(hint);
         }
         if let Some(parameter_sets) = old_rb.video_parameter_sets() {
-            new_rb.set_video_parameter_sets(parameter_sets.to_vec());
+            new_rb.set_video_parameter_sets(parameter_sets);
         }
         if let Some(audio_tracks) = old_rb.audio_tracks() {
             new_rb.set_audio_tracks(audio_tracks.to_vec());
@@ -6199,7 +6199,7 @@ mod tests {
         assert_eq!(new_ring.codec_hint_str(), "hevc");
         assert_eq!(
             new_ring.video_parameter_sets(),
-            Some(&[0, 0, 0, 1, 0x40, 0x01, 0x0c, 0x01][..])
+            Some(vec![0, 0, 0, 1, 0x40, 0x01, 0x0c, 0x01])
         );
         let tracks = new_ring
             .audio_tracks()

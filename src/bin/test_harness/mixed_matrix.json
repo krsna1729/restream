@@ -298,6 +298,7 @@
       "ffprobe",
       "audio-route",
       "decode-scan",
+      "runtime-log",
       "stage-sharing",
       "hls",
       "recording",

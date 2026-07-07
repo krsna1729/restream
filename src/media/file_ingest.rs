@@ -73,6 +73,42 @@ impl LoopTimestampState {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LoopStartupGate {
+    waiting_for_video_startup: bool,
+}
+
+impl LoopStartupGate {
+    fn new(has_video: bool) -> Self {
+        Self {
+            waiting_for_video_startup: has_video,
+        }
+    }
+
+    fn filter_packet(&mut self, packet: &MediaPacket, ring_buffer: &Arc<RingBuffer>) -> bool {
+        if !self.waiting_for_video_startup {
+            return true;
+        }
+
+        match packet.media_type {
+            MediaType::Audio => false,
+            MediaType::Video => {
+                if let Some(parameter_sets) =
+                    crate::media::codec::annexb_parameter_sets(&packet.payload)
+                {
+                    ring_buffer.set_video_parameter_sets(parameter_sets);
+                }
+                if packet.is_keyframe {
+                    self.waiting_for_video_startup = false;
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct ContinuousTimestampState {
     offset_ms: i64,
@@ -528,6 +564,9 @@ fn run_internal_file_ingest_once(
 ) -> Result<(), String> {
     let mut ictx = format::input_with_interrupt(&file_path, || cancel.is_cancelled())
         .map_err(|e| format!("Failed to open input file: {e}"))?;
+    let has_video_stream = ictx
+        .streams()
+        .any(|stream| stream.parameters().medium() == media::Type::Video);
 
     if let Some(seek_ms) = seek_ms {
         ictx.seek(seek_ms.saturating_mul(1000), ..)
@@ -576,6 +615,7 @@ fn run_internal_file_ingest_once(
     let mut demuxer = TsDemuxer::new();
     let mut packets = Vec::with_capacity(16);
     let mut probe_sent = false;
+    let mut startup_gate = LoopStartupGate::new(has_video_stream);
     drain_remuxed_ts(
         engine,
         runtime_handle,
@@ -588,6 +628,7 @@ fn run_internal_file_ingest_once(
         ingest_metrics,
         cached_keyframe_times,
         timestamps,
+        &mut startup_gate,
         &mut probe_sent,
     );
 
@@ -644,6 +685,7 @@ fn run_internal_file_ingest_once(
             ingest_metrics,
             cached_keyframe_times,
             timestamps,
+            &mut startup_gate,
             &mut probe_sent,
         );
     }
@@ -662,6 +704,7 @@ fn run_internal_file_ingest_once(
         ingest_metrics,
         cached_keyframe_times,
         timestamps,
+        &mut startup_gate,
         &mut probe_sent,
     );
 
@@ -672,6 +715,7 @@ fn run_internal_file_ingest_once(
         ring_buffer,
         cached_keyframe_times,
         timestamps,
+        &mut startup_gate,
     );
     maybe_publish_probe(
         engine,
@@ -739,6 +783,7 @@ fn drain_remuxed_ts(
     ingest_metrics: &Arc<StageMetrics>,
     cached_keyframe_times: &KeyframeTimes,
     timestamps: &mut LoopTimestampState,
+    startup_gate: &mut LoopStartupGate,
     probe_sent: &mut bool,
 ) {
     let mut buf = [0u8; 64 * 1024];
@@ -756,6 +801,7 @@ fn drain_remuxed_ts(
             ring_buffer,
             cached_keyframe_times,
             timestamps,
+            startup_gate,
         );
         maybe_publish_probe(engine, runtime_handle, pipeline_id, demuxer, probe_sent);
         bytes_received.fetch_add(read as u64, Ordering::Relaxed);
@@ -769,8 +815,14 @@ fn push_demuxed_packets(
     ring_buffer: &Arc<RingBuffer>,
     cached_keyframe_times: &KeyframeTimes,
     timestamps: &mut LoopTimestampState,
+    startup_gate: &mut LoopStartupGate,
 ) {
     if demuxer.drain_into(packets) == 0 {
+        return;
+    }
+
+    packets.retain(|pkt| startup_gate.filter_packet(pkt, ring_buffer));
+    if packets.is_empty() {
         return;
     }
 
@@ -847,10 +899,10 @@ mod tests {
     use super::prime_input_container_metadata;
     use super::prime_input_video_startup_state_from_packet;
     use super::spawn_internal_file_ingest;
-    use super::{ContinuousTimestampState, LoopTimestampState};
+    use super::{ContinuousTimestampState, LoopStartupGate, LoopTimestampState};
     use crate::media::engine::MediaEngine;
     use crate::media::mpegts::TsDemuxer;
-    use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat};
+    use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, RingBuffer};
     use bytes::Bytes;
     use ffmpeg_next::format;
     use std::sync::Arc;
@@ -1023,6 +1075,38 @@ mod tests {
         assert_eq!(reordered_b.dts, 66);
     }
 
+    #[test]
+    fn loop_startup_gate_waits_for_keyframe_before_releasing_packets() {
+        let ring = Arc::new(RingBuffer::new(64));
+        let mut gate = LoopStartupGate::new(true);
+        let delta_video = MediaPacket {
+            media_type: MediaType::Video,
+            format: PayloadFormat::Raw,
+            is_keyframe: false,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x02, 0x01, 0xDD]),
+        };
+        let mut keyframe_video = test_packet(MediaType::Video, 0, 33, 33);
+        keyframe_video.is_keyframe = true;
+        let audio = test_packet(MediaType::Audio, 0, 10, 10);
+
+        assert!(
+            !gate.filter_packet(&audio, &ring),
+            "audio must stay gated until the loop reaches a clean video boundary"
+        );
+        assert!(
+            !gate.filter_packet(&delta_video, &ring),
+            "delta video must not start a fresh file-ingest loop"
+        );
+        assert!(gate.filter_packet(&keyframe_video, &ring));
+        assert!(
+            gate.filter_packet(&audio, &ring),
+            "once a loop starts on a keyframe, audio may flow again"
+        );
+    }
+
     fn test_packet(media_type: MediaType, track_index: u32, pts: i64, dts: i64) -> MediaPacket {
         MediaPacket {
             media_type,
@@ -1111,7 +1195,7 @@ mod tests {
         sleep(Duration::from_secs(2)).await;
 
         let (cached_video, _) = engine.get_sequence_headers(pipeline_id).await;
-        let ring_parameter_sets = ring_buffer.video_parameter_sets().map(|sets| sets.to_vec());
+        let ring_parameter_sets = ring_buffer.video_parameter_sets();
         let ring_sequence_header = ring_parameter_sets
             .as_deref()
             .and_then(crate::media::codec::build_avcc_sequence_header);

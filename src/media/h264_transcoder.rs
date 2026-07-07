@@ -151,7 +151,7 @@ pub async fn start_h264_transcoder(
         audio_tracks.clone(),
         PacketFeedConfig {
             video_sequence_header: video_sequence_header.as_ref().map(|v| v.to_vec()),
-            raw_video_parameter_sets: input_buffer.video_parameter_sets().map(|v| v.to_vec()),
+            raw_video_parameter_sets: input_buffer.video_parameter_sets(),
             ..PacketFeedConfig::default()
         },
     );
@@ -179,7 +179,7 @@ pub async fn start_h264_transcoder(
                         && feeder.needs_raw_video_parameter_sets()
                         && let Some(parameter_sets) = reader.current_ring().video_parameter_sets()
                     {
-                        feeder.set_raw_video_parameter_sets_if_empty(parameter_sets);
+                        feeder.set_raw_video_parameter_sets_if_empty(&parameter_sets);
                     }
                     let in_bytes = pkt.payload.len() as u64;
                     if feeder.extend_ts_for_packet(pkt, &mut ts_batch) {

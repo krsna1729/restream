@@ -77,4 +77,12 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn external_stage_preroll_keeps_buffered_join_window() {
+        assert_eq!(
+            ext_stage_keyframe_preroll_packets(),
+            DEFAULT_KEYFRAME_PREROLL_PACKETS
+        );
+    }
 }

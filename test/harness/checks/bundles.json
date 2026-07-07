@@ -13,6 +13,7 @@
         "ffprobe",
         "audio-route",
         "decode-scan",
+        "runtime-log",
         "sink-probe"
       ],
       "purpose": "stream shape, decode health, packet-level sink sanity"
@@ -97,6 +98,7 @@
         "ffprobe",
         "audio-route",
         "decode-scan",
+        "runtime-log",
         "signal",
         "stage-sharing",
         "hls",
