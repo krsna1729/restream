@@ -298,7 +298,6 @@
       "ffprobe",
       "audio-route",
       "decode-scan",
-      "signal",
       "stage-sharing",
       "hls",
       "recording",
@@ -307,8 +306,80 @@
       "lifecycle",
       "sink-probe",
       "hls-put-probe",
-      "burst-graph",
-      "soak-drift"
+      "burst-graph"
+    ],
+    "signalSentinels": [
+      {
+        "id": "mixed.asset.file.h264.a1.bf0",
+        "rationale": "file H.264 single-track signal baseline",
+        "checks": [
+          "signal",
+          "soak-drift"
+        ]
+      },
+      {
+        "id": "mixed.asset.file.h265.a2.bf2",
+        "rationale": "file HEVC BF2 multi-audio codec-edge signal sentinel",
+        "checks": [
+          "signal",
+          "soak-drift"
+        ]
+      },
+      {
+        "id": "mixed.live.rtmp.h264.a1.bf0",
+        "rationale": "live RTMP H.264 BF0 signal baseline",
+        "checks": [
+          "signal",
+          "soak-drift"
+        ]
+      },
+      {
+        "id": "mixed.live.rtmp.h264.a1.bf2",
+        "rationale": "live RTMP H.264 BF2 reorder signal sentinel",
+        "checks": [
+          "signal",
+          "soak-drift"
+        ]
+      },
+      {
+        "id": "mixed.live.srt.h264.a2.bf0",
+        "rationale": "live SRT H.264 multi-audio signal baseline",
+        "checks": [
+          "signal",
+          "soak-drift"
+        ]
+      },
+      {
+        "id": "mixed.live.srt.h265.a2.bf2",
+        "rationale": "live SRT HEVC BF2 multi-audio codec-edge signal sentinel",
+        "checks": [
+          "signal",
+          "soak-drift"
+        ]
+      }
+    ],
+    "signalBatches": [
+      {
+        "group": "live-rtmp",
+        "cases": [
+          "mixed.live.rtmp.h264.a1.bf0",
+          "mixed.live.rtmp.h264.a1.bf2"
+        ]
+      },
+      {
+        "group": "live-srt",
+        "cases": [
+          "mixed.live.srt.h264.a2.bf0",
+          "mixed.live.srt.h265.a2.bf2"
+        ]
+      },
+      {
+        "group": "file-ingest",
+        "cases": [
+          "mixed.asset.file.h264.a1.bf0",
+          "mixed.asset.file.h265.a2.bf2"
+        ]
+      }
     ],
     "fastBreadth": [
       {

@@ -90,6 +90,30 @@
         "path": "${runtime.artifactRoot}/scenario.json"
       }
     },
+    "mixed.signal": {
+      "version": 1,
+      "id": "mixed.signal",
+      "runtimeProfile": "mixedSignal",
+      "batches": "scenarios/mixed.json#signalBatches",
+      "selection": {
+        "env": "MIXED_SIGNAL_GROUPS",
+        "default": "all"
+      },
+      "execution": {
+        "stackPolicy": "perBatch",
+        "maxConcurrentPipelinesPerBatch": 2,
+        "continueOnFail": true
+      },
+      "defaultsUnlessOverridden": {
+        "nPerGroup": 1,
+        "skipLoad": true,
+        "collectFailures": true,
+        "assertionLog": "${runtime.artifactRoot}/assertions.jsonl"
+      },
+      "artifact": {
+        "path": "${runtime.artifactRoot}/scenario.json"
+      }
+    },
     "mixed.matrix": {
       "version": 1,
       "id": "mixed.matrix",

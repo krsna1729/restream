@@ -301,6 +301,7 @@ impl MixedSharedBatchGroup {
 }
 
 pub(crate) const MIXED_MATRIX_MODE: &str = "mixed.matrix";
+pub(crate) const MIXED_SIGNAL_MODE: &str = "mixed.signal";
 pub(crate) const MIXED_FAST_BREADTH_MODE: &str = "mixed.fast-breadth";
 const MIXED_ARTIFACT_ROOT: &str = "test/artifacts/mixed";
 
@@ -393,6 +394,10 @@ pub(crate) struct MixedDslMatrix<'a> {
     pub(crate) outputs: MixedDslOutputMatrices<'a>,
     #[serde(rename = "defaultChecks")]
     pub(crate) default_checks: Vec<&'a str>,
+    #[serde(rename = "signalSentinels")]
+    pub(crate) signal_sentinels: Vec<MixedDslFastBreadth<'a>>,
+    #[serde(rename = "signalBatches")]
+    pub(crate) signal_batches: Vec<MixedDslFastBreadthBatch<'a>>,
     #[serde(rename = "fastBreadth")]
     pub(crate) fast_breadth: Vec<MixedDslFastBreadth<'a>>,
     #[serde(rename = "fastBreadthBatches")]
@@ -516,6 +521,8 @@ pub(crate) fn mixed_dsl_manifest() -> Result<MixedDslManifest<'static>, String> 
 }
 
 static MIXED_INPUT_CASES_FROM_DSL: OnceLock<Vec<MixedInputCase>> = OnceLock::new();
+static MIXED_SIGNAL_SENTINELS_FROM_DSL: OnceLock<Vec<MixedFastBreadthCase>> = OnceLock::new();
+static MIXED_SIGNAL_BATCHES_FROM_DSL: OnceLock<Vec<MixedFastBreadthBatch>> = OnceLock::new();
 static MIXED_FAST_BREADTH_CASES_FROM_DSL: OnceLock<Vec<MixedFastBreadthCase>> = OnceLock::new();
 static MIXED_FAST_BREADTH_BATCHES_FROM_DSL: OnceLock<Vec<MixedFastBreadthBatch>> = OnceLock::new();
 static SINGLE_TRACK_MIXED_OUTPUT_CASES_FROM_DSL: OnceLock<Vec<MixedOutputCase>> = OnceLock::new();
@@ -543,6 +550,44 @@ pub(crate) fn mixed_fast_breadth_cases() -> &'static [MixedFastBreadthCase] {
                 checks: row
                     .check_specs()
                     .unwrap_or_else(|error| panic!("invalid fast-breadth checks: {error}")),
+            })
+            .collect()
+    })
+}
+
+pub(crate) fn mixed_signal_sentinels() -> &'static [MixedFastBreadthCase] {
+    MIXED_SIGNAL_SENTINELS_FROM_DSL.get_or_init(|| {
+        let manifest = mixed_dsl_manifest().expect("embedded mixed_matrix.json should parse");
+        manifest
+            .mixed
+            .signal_sentinels
+            .iter()
+            .map(|row| MixedFastBreadthCase {
+                case: mixed_input_case_from_manifest(row.id),
+                rationale: row.rationale.clone(),
+                checks: row
+                    .check_specs()
+                    .unwrap_or_else(|error| panic!("invalid signal-sentinel checks: {error}")),
+            })
+            .collect()
+    })
+}
+
+pub(crate) fn mixed_signal_batches() -> &'static [MixedFastBreadthBatch] {
+    MIXED_SIGNAL_BATCHES_FROM_DSL.get_or_init(|| {
+        let manifest = mixed_dsl_manifest().expect("embedded mixed_matrix.json should parse");
+        manifest
+            .mixed
+            .signal_batches
+            .iter()
+            .map(|batch| MixedFastBreadthBatch {
+                group: MixedSharedBatchGroup::from_str(batch.group)
+                    .unwrap_or_else(|| panic!("{} is not a signal batch group", batch.group)),
+                cases: batch
+                    .cases
+                    .iter()
+                    .map(|case| mixed_input_case_from_manifest(case))
+                    .collect(),
             })
             .collect()
     })
@@ -647,8 +692,16 @@ pub(crate) fn mixed_fast_breadth_selected(case: MixedInputCase) -> &'static Mixe
         .unwrap_or_else(|| panic!("missing fast-breadth selection for {}", case.scenario_id()))
 }
 
-pub(crate) fn parse_mixed_fast_breadth_groups(
+pub(crate) fn mixed_signal_selected(case: MixedInputCase) -> &'static MixedFastBreadthCase {
+    mixed_signal_sentinels()
+        .iter()
+        .find(|selected| selected.case == case)
+        .unwrap_or_else(|| panic!("missing signal sentinel for {}", case.scenario_id()))
+}
+
+fn parse_mixed_shared_batch_groups(
     value: &str,
+    env_name: &str,
 ) -> Result<Vec<MixedSharedBatchGroup>, String> {
     let mut groups = Vec::new();
     for item in value
@@ -658,7 +711,7 @@ pub(crate) fn parse_mixed_fast_breadth_groups(
     {
         let group = MixedSharedBatchGroup::from_str(item).ok_or_else(|| {
             format!(
-                "unknown MIXED_FAST_BREADTH_GROUPS entry '{item}'; expected one of: live-rtmp, live-srt, file-ingest"
+                "unknown {env_name} entry '{item}'; expected one of: live-rtmp, live-srt, file-ingest"
             )
         })?;
         if !groups.contains(&group) {
@@ -666,9 +719,19 @@ pub(crate) fn parse_mixed_fast_breadth_groups(
         }
     }
     if groups.is_empty() {
-        return Err("MIXED_FAST_BREADTH_GROUPS must select at least one batch group".to_string());
+        return Err(format!("{env_name} must select at least one batch group"));
     }
     Ok(groups)
+}
+
+pub(crate) fn parse_mixed_fast_breadth_groups(
+    value: &str,
+) -> Result<Vec<MixedSharedBatchGroup>, String> {
+    parse_mixed_shared_batch_groups(value, "MIXED_FAST_BREADTH_GROUPS")
+}
+
+pub(crate) fn parse_mixed_signal_groups(value: &str) -> Result<Vec<MixedSharedBatchGroup>, String> {
+    parse_mixed_shared_batch_groups(value, "MIXED_SIGNAL_GROUPS")
 }
 
 pub(crate) fn selected_mixed_fast_breadth_batches()
@@ -693,6 +756,28 @@ pub(crate) fn selected_mixed_fast_breadth_batches()
     }
 }
 
+pub(crate) fn selected_mixed_signal_batches() -> Result<Vec<&'static MixedFastBreadthBatch>, String>
+{
+    let requested = std::env::var("MIXED_SIGNAL_GROUPS")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    match requested {
+        Some(value) => {
+            let groups = parse_mixed_signal_groups(&value)?;
+            Ok(groups
+                .into_iter()
+                .map(|group| {
+                    mixed_signal_batches()
+                        .iter()
+                        .find(|batch| batch.group == group)
+                        .expect("every signal batch group should have one batch")
+                })
+                .collect())
+        }
+        None => Ok(mixed_signal_batches().iter().collect()),
+    }
+}
+
 pub(crate) fn mixed_input_default_work_dir(case: MixedInputCase) -> PathBuf {
     PathBuf::from(MIXED_ARTIFACT_ROOT).join(case.artifact_rel_dir())
 }
@@ -703,6 +788,10 @@ pub(crate) fn mixed_matrix_default_work_dir() -> PathBuf {
 
 pub(crate) fn mixed_fast_breadth_default_work_dir() -> PathBuf {
     PathBuf::from(MIXED_ARTIFACT_ROOT).join("fast-breadth")
+}
+
+pub(crate) fn mixed_signal_default_work_dir() -> PathBuf {
+    PathBuf::from(MIXED_ARTIFACT_ROOT).join("signal")
 }
 
 /// Expected unique processing-stage counts for a mixed scenario.

@@ -23,6 +23,14 @@
             "benchProfile": true
           }
         },
+        "mixed.signal": {
+          "suiteRef": "suites.json#suites.mixed.signal",
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          }
+        },
         "mixed.fast-breadth": {
           "suiteRef": "suites.json#suites.mixed-fast-breadth",
           "suiteDefault": false,

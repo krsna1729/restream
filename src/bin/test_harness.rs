@@ -488,6 +488,8 @@ async fn run() -> Result<(), String> {
     ensure_measurement_profile(&command, &raw[1..])?;
     let result = if command == MIXED_MATRIX_MODE {
         mixed_input_matrix_correctness().await
+    } else if command == MIXED_SIGNAL_MODE {
+        mixed_signal_correctness().await
     } else if command == MIXED_FAST_BREADTH_MODE {
         mixed_fast_breadth_correctness().await
     } else if let Some(case) = mixed_input_case_for_command(&command) {
@@ -536,12 +538,17 @@ async fn run() -> Result<(), String> {
 }
 
 fn mixed_command_artifact_path(command: &str) -> Option<PathBuf> {
-    if command == MIXED_MATRIX_MODE || command == MIXED_FAST_BREADTH_MODE {
+    if command == MIXED_MATRIX_MODE
+        || command == MIXED_SIGNAL_MODE
+        || command == MIXED_FAST_BREADTH_MODE
+    {
         let work_dir = std::env::var_os("WORK_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 if command == MIXED_FAST_BREADTH_MODE {
                     mixed_fast_breadth_default_work_dir()
+                } else if command == MIXED_SIGNAL_MODE {
+                    mixed_signal_default_work_dir()
                 } else {
                     mixed_matrix_default_work_dir()
                 }
@@ -9186,6 +9193,7 @@ stream|index=1|codec_type=audio\n";
         ));
         for spec in all_mode_specs() {
             if spec.name == MIXED_MATRIX_MODE
+                || spec.name == MIXED_SIGNAL_MODE
                 || spec.name == MIXED_FAST_BREADTH_MODE
                 || spec.name == "generic-sweeps"
                 || mixed_input_case_for_command(&spec.name).is_some()
@@ -9462,7 +9470,63 @@ stream|index=1|codec_type=audio\n";
     }
 
     #[test]
-    fn mixed_matrix_defaults_include_signal_and_continue_on_failure() {
+    fn mixed_signal_group_parser_rejects_unknown_groups() {
+        let error = parse_mixed_signal_groups("live-rtmp,nope").unwrap_err();
+        assert!(error.contains("unknown MIXED_SIGNAL_GROUPS entry 'nope'"));
+    }
+
+    #[test]
+    fn mixed_signal_defaults_to_shared_batch_execution() {
+        let mixed_source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bin/test_harness/mixed_runner.rs"
+        ));
+
+        assert!(
+            mixed_source.contains("mixed_signal_correctness"),
+            "mixed.signal should route through its shared-batch runner"
+        );
+        assert!(
+            mixed_source.contains("\"mode\": MIXED_SIGNAL_MODE"),
+            "mixed.signal result metadata should report its mode"
+        );
+        assert!(
+            mixed_source.contains("\"signalRationale\""),
+            "mixed.signal results should disclose why each sentinel case exists"
+        );
+        assert!(
+            mixed_source.contains("\"sharedBatches\""),
+            "mixed.signal coverage should report shared batch group coverage"
+        );
+        assert!(
+            mixed_source.contains("root.join(\"assertions.jsonl\")"),
+            "mixed.signal should emit machine-readable assertion rows by default"
+        );
+    }
+
+    #[test]
+    fn mixed_shared_batches_delete_finished_pipelines() {
+        let mixed_source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bin/test_harness/mixed_runner.rs"
+        ));
+
+        assert!(
+            mixed_source.contains("delete_pipeline_v1(api, pipeline_id).await?"),
+            "shared mixed cases should delete finished pipelines so later waves do not accumulate dead state"
+        );
+        assert!(
+            mixed_source.contains("\"scenario.pipeline_cleanup\""),
+            "pipeline cleanup should emit timing so post-run analysis can confirm the amortization step"
+        );
+        assert!(
+            mixed_source.contains("config[\"pipelineDeleted\"] = json!(true);"),
+            "mixed case results should disclose successful pipeline cleanup"
+        );
+    }
+
+    #[test]
+    fn mixed_matrix_defaults_exclude_signal_and_continue_on_failure() {
         let mixed_source = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/src/bin/test_harness/mixed_runner.rs"
@@ -9485,8 +9549,12 @@ stream|index=1|codec_type=audio\n";
             "mixed.matrix should aggregate per-scenario failures in final report"
         );
         assert!(
-            mixed_default_checks().contains(&MixedCheck::Signal),
-            "mixed.matrix default checks must include signal validation"
+            !mixed_default_checks().contains(&MixedCheck::Signal),
+            "mixed.matrix default checks should leave signal validation to mixed.signal"
+        );
+        assert!(
+            !mixed_default_checks().contains(&MixedCheck::SoakDrift),
+            "mixed.matrix default checks should leave soak drift with signal validation"
         );
     }
 
@@ -9683,7 +9751,7 @@ stream|index=1|codec_type=audio\n";
     }
 
     #[test]
-    fn mixed_scenario_plan_expands_without_losing_signal() {
+    fn mixed_scenario_plan_expands_without_signal_cost() {
         let plans: Vec<_> = mixed_input_cases()
             .iter()
             .copied()
@@ -9727,7 +9795,6 @@ stream|index=1|codec_type=audio\n";
                 "ffprobe",
                 "audio-route",
                 "decode-scan",
-                "signal",
                 "stage-sharing",
                 "hls",
                 "recording",
@@ -9737,7 +9804,6 @@ stream|index=1|codec_type=audio\n";
                 "sink-probe",
                 "hls-put-probe",
                 "burst-graph",
-                "soak-drift",
             ]
         );
     }
@@ -9786,6 +9852,45 @@ stream|index=1|codec_type=audio\n";
             .map(|batch| (batch.group, batch.cases.to_vec()))
             .collect();
         assert_eq!(dsl_batches, rust_batches);
+
+        let dsl_signal: Vec<_> = manifest
+            .mixed
+            .signal_sentinels
+            .iter()
+            .map(|row| (row.id, row.rationale.as_str(), row.check_specs().unwrap()))
+            .collect();
+        let rust_signal: Vec<_> = mixed_signal_sentinels()
+            .iter()
+            .map(|row| {
+                (
+                    row.case.scenario_id(),
+                    row.rationale.as_str(),
+                    row.checks.to_vec(),
+                )
+            })
+            .collect();
+        assert_eq!(dsl_signal, rust_signal);
+
+        let dsl_signal_batches: Vec<_> = manifest
+            .mixed
+            .signal_batches
+            .iter()
+            .map(|batch| {
+                (
+                    MixedSharedBatchGroup::from_str(batch.group).unwrap(),
+                    batch
+                        .cases
+                        .iter()
+                        .map(|id| mixed_input_case_for_command(id).unwrap())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        let rust_signal_batches: Vec<_> = mixed_signal_batches()
+            .iter()
+            .map(|batch| (batch.group, batch.cases.to_vec()))
+            .collect();
+        assert_eq!(dsl_signal_batches, rust_signal_batches);
     }
 
     #[test]
@@ -9986,6 +10091,8 @@ stream|index=1|codec_type=audio\n";
     fn mixed_input_suite_default_runs_aggregate_not_duplicate_rows() {
         let matrix_spec = mode_spec("mixed.matrix").expect("mixed.matrix must be listed");
         assert!(matrix_spec.suite_default);
+        let signal_spec = mode_spec(MIXED_SIGNAL_MODE).expect("mixed.signal must be listed");
+        assert!(!signal_spec.suite_default);
         let fast_spec =
             mode_spec(MIXED_FAST_BREADTH_MODE).expect("mixed.fast-breadth must be listed");
         assert!(!fast_spec.suite_default);

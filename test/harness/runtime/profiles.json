@@ -38,6 +38,14 @@
       "collectFailures": true,
       "assertionLog": "${artifactRoot}/assertions.jsonl"
     },
+    "mixedSignal": {
+      "extends": "mixed",
+      "artifactRoot": "test/artifacts/mixed/signal",
+      "nPerGroup": 1,
+      "skipLoad": true,
+      "collectFailures": true,
+      "assertionLog": "${artifactRoot}/assertions.jsonl"
+    },
     "bitrateSweep": {
       "extends": "mixed",
       "artifactRoot": "test/artifacts/bitrate-sweep",

@@ -180,7 +180,6 @@
     "ffprobe",
     "audio-route",
     "decode-scan",
-    "signal",
     "stage-sharing",
     "hls",
     "recording",
@@ -189,7 +188,6 @@
     "lifecycle",
     "sink-probe",
     "hls-put-probe",
-    "burst-graph",
-    "soak-drift"
+    "burst-graph"
   ]
 }
