@@ -1,9 +1,9 @@
 //! Domain-level error types for stage and runtime failures.
 //!
-//! These are distinct from the thin `StageError` newtype in
-//! `media::ffmpeg::backend`, which is an execution-layer detail. The domain
-//! error types here carry structured fields that can be surfaced in API
-//! responses and used by the health/alert layer.
+//! `StageError` is the structured domain error used in health snapshots and
+//! output status explanations. The thin `BackendError` in
+//! `media::ffmpeg::backend` is an execution-layer detail that can be converted
+//! to `StageError` when surfacing to the API/health layer.
 
 use std::fmt;
 
@@ -12,7 +12,7 @@ use std::fmt;
 /// Used in health snapshots and output status explanations to give operators
 /// enough context to understand why a stage failed without reading raw logs.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DomainStageError {
+pub struct StageError {
     /// Short machine-readable code, e.g. `"metadata_timeout"`, `"connect_refused"`.
     pub code: String,
     /// Human-readable description of the failure.
@@ -23,7 +23,7 @@ pub struct DomainStageError {
     pub stderr_tail: Option<String>,
 }
 
-impl DomainStageError {
+impl StageError {
     pub fn new(code: impl Into<String>, message: impl Into<String>, retryable: bool) -> Self {
         Self {
             code: code.into(),
@@ -47,7 +47,7 @@ impl DomainStageError {
     }
 }
 
-impl fmt::Display for DomainStageError {
+impl fmt::Display for StageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[{}] {}", self.code, self.message)?;
         if let Some(tail) = &self.stderr_tail {
@@ -57,7 +57,13 @@ impl fmt::Display for DomainStageError {
     }
 }
 
-impl std::error::Error for DomainStageError {}
+impl std::error::Error for StageError {}
+
+impl From<String> for StageError {
+    fn from(value: String) -> Self {
+        Self::permanent("backend_error", value)
+    }
+}
 
 /// A runtime-level error that describes a failure in the media graph.
 ///
@@ -125,10 +131,8 @@ mod tests {
 
     #[test]
     fn domain_stage_error_display() {
-        let err = DomainStageError::retryable(
-            "metadata_timeout",
-            "Timed out waiting for ingest metadata",
-        );
+        let err =
+            StageError::retryable("metadata_timeout", "Timed out waiting for ingest metadata");
         assert_eq!(
             err.to_string(),
             "[metadata_timeout] Timed out waiting for ingest metadata"
@@ -139,10 +143,18 @@ mod tests {
 
     #[test]
     fn domain_stage_error_with_stderr() {
-        let err = DomainStageError::permanent("connect_refused", "Remote refused connection")
+        let err = StageError::permanent("connect_refused", "Remote refused connection")
             .with_stderr("Connection refused\nNo route to host");
         assert!(err.to_string().contains("stderr:"));
         assert!(!err.retryable);
+    }
+
+    #[test]
+    fn stage_error_from_string() {
+        let err = StageError::from("ffmpeg exited with code 1".to_string());
+        assert_eq!(err.code, "backend_error");
+        assert!(!err.retryable);
+        assert!(err.message.contains("ffmpeg exited"));
     }
 
     #[test]

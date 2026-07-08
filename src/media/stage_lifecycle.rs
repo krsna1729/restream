@@ -1,51 +1,15 @@
 //! First-class stage lifecycle state.
 //!
-//! Replaces the coarse `StageRegistered`/`StageStopped` event pair with explicit
-//! phases so that outputs can explain why they are waiting on an upstream stage.
+//! `StagePhase` and `StageBackendKind` are defined in `domain::state` and
+//! re-exported here so existing imports from `media::stage_lifecycle` continue
+//! to work.
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::domain::stage::StageKey;
+pub use crate::domain::state::{StageBackendKind, StagePhase};
 use serde::Serialize;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum StageBackendKind {
-    AudioRouter,
-    ExternalFfmpeg,
-    InternalFfmpeg,
-    HlsSegmenter,
-    Recording,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "phase")]
-pub enum StagePhase {
-    Registered,
-    WaitingForDependency {
-        dependency: StageKey,
-    },
-    WaitingForMetadata,
-    WaitingForParameterSets,
-    WaitingForKeyframe,
-    WaitingForCapacity {
-        backend: StageBackendKind,
-    },
-    CapacityAcquired {
-        backend: StageBackendKind,
-    },
-    BackendSpawned {
-        backend: StageBackendKind,
-        pid: Option<u32>,
-    },
-    FirstInput,
-    FirstOutput,
-    Producing,
-    Failed,
-    Stopping,
-    Stopped,
-}
 
 #[derive(Clone, Debug)]
 pub struct StageLifecycleSnapshot {

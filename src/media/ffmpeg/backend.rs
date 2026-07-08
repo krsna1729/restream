@@ -28,18 +28,22 @@ pub struct StageRunContext {
 }
 
 /// Error type returned by backend adapters.
+///
+/// This is a thin execution-layer error. It can be converted to the structured
+/// `StageError` in `domain::errors` via its `From<String>` impl when surfacing
+/// to the API/health layer.
 #[derive(Debug, Clone)]
-pub struct StageError(pub String);
+pub struct BackendError(pub String);
 
-impl std::fmt::Display for StageError {
+impl std::fmt::Display for BackendError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl std::error::Error for StageError {}
+impl std::error::Error for BackendError {}
 
-impl From<String> for StageError {
+impl From<String> for BackendError {
     fn from(value: String) -> Self {
         Self(value)
     }
@@ -57,7 +61,7 @@ pub trait FfmpegStageBackend: Send {
         input: StageInputPump,
         output: StageOutputNormalizer,
         ctx: StageRunContext,
-    ) -> impl std::future::Future<Output = Result<(), StageError>> + Send;
+    ) -> impl std::future::Future<Output = Result<(), BackendError>> + Send;
 }
 
 /// External-process FFmpeg backend adapter.
@@ -71,7 +75,7 @@ impl FfmpegStageBackend for ExternalFfmpegBackend {
         input: StageInputPump,
         output: StageOutputNormalizer,
         ctx: StageRunContext,
-    ) -> Result<(), StageError> {
+    ) -> Result<(), BackendError> {
         crate::media::external_transcoder::run_external_ffmpeg_backend(plan, input, output, ctx)
             .await
     }
@@ -88,7 +92,7 @@ impl FfmpegStageBackend for InternalFfmpegBackend {
         input: StageInputPump,
         output: StageOutputNormalizer,
         ctx: StageRunContext,
-    ) -> Result<(), StageError> {
+    ) -> Result<(), BackendError> {
         crate::media::transcoder::run_internal_ffmpeg_backend(plan, input, output, ctx).await
     }
 }

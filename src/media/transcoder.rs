@@ -8,7 +8,7 @@
 use crate::domain::output_spec::StagePresetSpec;
 use crate::domain::stage::StageKey;
 use crate::media::engine::AudioMeta;
-use crate::media::ffmpeg::backend::{StageError, StageRunContext};
+use crate::media::ffmpeg::backend::{BackendError, StageRunContext};
 use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ffmpeg::stage_output::StageOutputNormalizer;
 use crate::media::ffmpeg::stage_plan::FfmpegStagePlan;
@@ -490,7 +490,7 @@ pub async fn run_internal_ffmpeg_backend(
     input_pump: StageInputPump,
     output_normalizer: StageOutputNormalizer,
     ctx: StageRunContext,
-) -> Result<(), StageError> {
+) -> Result<(), BackendError> {
     let source_ring = input_pump.source_ring();
     let output_ring = output_normalizer.output_ring();
 

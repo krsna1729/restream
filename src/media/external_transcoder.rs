@@ -46,7 +46,7 @@ use tracing::{debug, error, info};
 use crate::domain::audio_routing::{AudioRouting, parse_audio_operation, parse_audio_routing};
 use crate::domain::output_spec::{StagePresetSpec, VideoCodecKind};
 use crate::domain::stage::StageKey;
-use crate::media::ffmpeg::backend::{StageError, StageRunContext};
+use crate::media::ffmpeg::backend::{BackendError, StageRunContext};
 use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ffmpeg::stage_output::StageOutputNormalizer;
 use crate::media::ffmpeg::stage_plan::FfmpegStagePlan;
@@ -1010,7 +1010,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
     input_pump: StageInputPump,
     mut output_normalizer: StageOutputNormalizer,
     ctx: StageRunContext,
-) -> Result<(), StageError> {
+) -> Result<(), BackendError> {
     let source_ring = input_pump.source_ring();
     let pipeline_id = ctx.pipeline_id.clone();
     let stage_key = ctx.stage_key.clone();
@@ -1036,7 +1036,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
                     stage = %stage_key,
                     "external ffmpeg semaphore closed: {e}"
                 );
-                return Err(StageError(e.to_string()));
+                return Err(BackendError(e.to_string()));
             }
         },
         _ = ctx.cancel.cancelled() => {
@@ -1103,7 +1103,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
                     pipeline_id: pipeline_id.clone(),
                     encoding: encoding.clone(),
                 });
-            return Err(StageError(e.to_string()));
+            return Err(BackendError(e.to_string()));
         }
     };
 
@@ -1120,7 +1120,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
                     pipeline_id: pipeline_id.clone(),
                     encoding: encoding.clone(),
                 });
-            return Err(StageError("stdin unavailable".into()));
+            return Err(BackendError("stdin unavailable".into()));
         }
     };
     let stdout = match child.stdout.take() {
@@ -1136,7 +1136,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
                     pipeline_id: pipeline_id.clone(),
                     encoding: encoding.clone(),
                 });
-            return Err(StageError("stdout unavailable".into()));
+            return Err(BackendError("stdout unavailable".into()));
         }
     };
     let stderr = match child.stderr.take() {
@@ -1145,7 +1145,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
             error!(correlation_id=%correlation_id, pipeline_id=%pipeline_id, stage_encoding=%encoding, "[ext-transcoder] ffmpeg stderr unavailable");
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err(StageError("stderr unavailable".into()));
+            return Err(BackendError("stderr unavailable".into()));
         }
     };
 
@@ -1193,7 +1193,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
                 pipeline_id: pipeline_id.clone(),
                 encoding: encoding.clone(),
             });
-        return Err(StageError("metadata wait failed".into()));
+        return Err(BackendError("metadata wait failed".into()));
     };
 
     // stdout demux task → output normalizer

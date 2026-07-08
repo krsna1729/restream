@@ -8,6 +8,52 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use crate::domain::stage::StageKey;
+
+/// Backend kind for a media stage, used in lifecycle tracking.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StageBackendKind {
+    AudioRouter,
+    ExternalFfmpeg,
+    InternalFfmpeg,
+    HlsSegmenter,
+    Recording,
+}
+
+/// First-class stage lifecycle phase.
+///
+/// Replaces the coarse `StageRegistered`/`StageStopped` event pair with
+/// explicit phases so that outputs can explain why they are waiting on an
+/// upstream stage.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "phase")]
+pub enum StagePhase {
+    Registered,
+    WaitingForDependency {
+        dependency: StageKey,
+    },
+    WaitingForMetadata,
+    WaitingForParameterSets,
+    WaitingForKeyframe,
+    WaitingForCapacity {
+        backend: StageBackendKind,
+    },
+    CapacityAcquired {
+        backend: StageBackendKind,
+    },
+    BackendSpawned {
+        backend: StageBackendKind,
+        pid: Option<u32>,
+    },
+    FirstInput,
+    FirstOutput,
+    Producing,
+    Failed,
+    Stopping,
+    Stopped,
+}
+
 /// Whether a user has requested an output to run or stop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

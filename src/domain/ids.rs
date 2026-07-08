@@ -92,6 +92,16 @@ string_id!(
     JobId
 );
 
+string_id!(
+    /// Unique identifier for a pipeline.
+    PipelineId
+);
+
+string_id!(
+    /// Unique identifier for a stage within a pipeline's media graph.
+    StageId
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +136,22 @@ mod tests {
         assert_eq!(json, "\"job_xyz\"");
         let back: JobId = serde_json::from_str(&json).unwrap();
         assert_eq!(back, id);
+    }
+
+    #[test]
+    fn pipeline_id_roundtrip() {
+        let id = PipelineId::new("pipe_42");
+        assert_eq!(id.as_str(), "pipe_42");
+        assert_eq!(PipelineId::from("pipe_42"), id);
+        assert_eq!(&id, "pipe_42");
+    }
+
+    #[test]
+    fn stage_id_roundtrip() {
+        let id = StageId::new("video:720p");
+        assert_eq!(id.as_str(), "video:720p");
+        assert_eq!(id.to_string(), "video:720p");
+        assert_eq!(StageId::from("video:720p".to_string()), id);
     }
 
     #[test]
