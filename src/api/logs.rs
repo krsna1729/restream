@@ -173,7 +173,9 @@ pub async fn logs_handler(
         order: query.order,
     };
 
-    let logs = db::list_app_logs(&state.db, &filters)
+    let logs = state
+        .log_service
+        .list_logs(&filters)
         .await
         .unwrap_or_default();
     let has_more = logs.len() >= filters.limit.unwrap_or(200).clamp(1, 1000) as usize;

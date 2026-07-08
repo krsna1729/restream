@@ -11,8 +11,8 @@ use tracing::warn;
 
 use super::state::{
     AppState, MAX_PASSWORD_LEN, PASSWORD_META_KEY, SESSION_MAX_AGE_SECONDS, STREAM_KEYS,
-    check_field_len, clear_session_cookie, get_ingest_host, get_session_token_from_headers,
-    hash_session_token, make_session_cookie, to_hex,
+    check_field_len, clear_session_cookie, get_session_token_from_headers, hash_session_token,
+    make_session_cookie, to_hex,
 };
 use crate::db;
 
@@ -114,7 +114,7 @@ pub async fn login_post_handler(
     if let Some(r) = check_field_len("password", &password, MAX_PASSWORD_LEN) {
         return r;
     }
-    let stored_hash = match db::get_meta(&state.db, PASSWORD_META_KEY).await {
+    let stored_hash = match state.auth_service.get_password_hash().await {
         Ok(Some(hash)) => hash,
         _ => {
             return (
@@ -146,7 +146,9 @@ pub async fn login_post_handler(
     let token_hash = hash_session_token(&token);
 
     let ts = chrono::Utc::now().timestamp_millis();
-    if db::create_session(&state.db, &token_hash, ts)
+    if state
+        .auth_service
+        .create_session(&token_hash, ts)
         .await
         .is_err()
     {
@@ -175,7 +177,7 @@ pub async fn logout_handler(
     if let Some(token) = get_session_token_from_headers(&headers) {
         let token_hash = hash_session_token(&token);
         state.sessions.write().await.remove(&token_hash);
-        if let Err(e) = db::delete_session(&state.db, &token_hash).await {
+        if let Err(e) = state.auth_service.delete_session(&token_hash).await {
             warn!(err = %e, "failed to delete session from DB");
         }
     }
@@ -217,7 +219,7 @@ pub async fn change_password_handler(
             .into_response();
     }
 
-    let stored_hash = match db::get_meta(&state.db, PASSWORD_META_KEY).await {
+    let stored_hash = match state.auth_service.get_password_hash().await {
         Ok(Some(hash)) => hash,
         _ => {
             return (
@@ -251,7 +253,9 @@ pub async fn change_password_handler(
         )
             .into_response();
     }
-    if db::set_meta(&state.db, PASSWORD_META_KEY, &new_hash)
+    if state
+        .auth_service
+        .set_password_hash(&new_hash)
         .await
         .is_err()
     {
@@ -306,10 +310,7 @@ pub async fn stream_keys_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    let host = match get_ingest_host(&state.db).await {
-        Ok(host) => host,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
+    let host = state.pipeline_service.get_ingest_host().await;
     let mut keys = Vec::new();
     for &(key, label) in STREAM_KEYS {
         keys.push(serde_json::json!({

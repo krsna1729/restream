@@ -13,8 +13,8 @@ use tracing::warn;
 use crate::alerts;
 use crate::application::ports::{SqliteMetaStore, SqlitePipelineStore};
 use crate::application::services::{
-    FileIngestService, HealthService, IngestService, MediaLibraryService, OutputService,
-    PipelineService, SettingsService,
+    AuthService, FileIngestService, HealthService, IngestService, LogService, MediaLibraryService,
+    OutputService, PipelineService, SettingsService,
 };
 use crate::application::srt_ingest::refresh_policy_store;
 use crate::media::engine::MediaEngine;
@@ -85,10 +85,12 @@ pub struct AppState {
     pub pipeline_service: PipelineService,
     pub output_service: OutputService,
     pub ingest_service: IngestService,
+    pub auth_service: AuthService,
     pub settings_service: SettingsService,
     pub health_service: HealthService,
     pub file_ingest_service: FileIngestService,
     pub media_library_service: MediaLibraryService,
+    pub log_service: LogService,
     pub alert_tracker: alerts::AlertTracker,
     pub log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     #[cfg(feature = "agent-execution")]
