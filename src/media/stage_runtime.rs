@@ -16,7 +16,6 @@ use crate::media::engine::MediaEngine;
 use crate::media::ffmpeg::backend::{
     ExternalFfmpegBackend, FfmpegStageBackend, InternalFfmpegBackend, StageRunContext,
 };
-use crate::media::ffmpeg::operation_compiler::compile_operation;
 use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ffmpeg::stage_output::StageOutputNormalizer;
 use crate::media::ffmpeg::stage_plan::{
@@ -268,7 +267,6 @@ impl StageRuntimeManager {
             tracing::warn!(stage = %key, "no ffmpeg plan for stage");
             return;
         };
-        let _operation = compile_operation(&plan);
         let pipeline_id = key.pipeline.to_string();
         let output_ring = handle.ring.clone();
         let engine = self.engine.clone();
