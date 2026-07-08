@@ -57,6 +57,7 @@ use crate::media::engine::MediaEngine;
 use crate::media::hls_fmp4::{Fmp4HlsStore, parse_fmp4_segment_name};
 use crate::media::security::IngestSecurityService;
 use crate::media::srt::{SrtIngestPolicyStore, serialize_pipeline_srt_ingest_policy};
+use crate::planner::hls_preview::{HlsPreviewGraph, plan_hls_preview};
 use crate::types::{Ingest, Pipeline};
 
 /// Maximum byte lengths for user-supplied string fields stored in SQLite.
@@ -6660,86 +6661,6 @@ async fn recording_stop_handler(
     Json(serde_json::json!({ "enabled": false, "active": false })).into_response()
 }
 
-fn is_hevc_hls_preview_codec(codec: &str) -> bool {
-    codec.eq_ignore_ascii_case("hevc") || codec.eq_ignore_ascii_case("h265")
-}
-
-async fn select_hls_preview_ring(
-    state: &Arc<AppState>,
-    pipeline_id: &str,
-    cancel_token: &CancellationToken,
-) -> (
-    Arc<crate::media::ring_buffer::RingBuffer>,
-    Option<Arc<crate::media::ring_buffer::RingBuffer>>,
-    Option<crate::media::engine::VideoMeta>,
-) {
-    let source_ring = state.engine.get_or_create_pipeline(pipeline_id).await;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
-
-    loop {
-        let ingest_codec = state.engine.ingest_video_codec(pipeline_id).await;
-        let codec_hint = source_ring.codec_hint_str();
-        let resolved_codec = ingest_codec
-            .as_deref()
-            .or((!codec_hint.is_empty()).then_some(codec_hint));
-
-        match resolved_codec {
-            Some(codec) if is_hevc_hls_preview_codec(codec) => {
-                let source_video = {
-                    let ingests = state.engine.ingests.active.read().await;
-                    ingests
-                        .get(pipeline_id)
-                        .and_then(|ingest| ingest.video.clone())
-                };
-                let profile = crate::media::profiles::get("720p").await;
-                let mut preview_video = source_video.unwrap_or_default();
-                preview_video.codec = "h264".to_string();
-                if profile.width > 0 {
-                    preview_video.width = profile.width;
-                }
-                if profile.height > 0 {
-                    preview_video.height = profile.height;
-                }
-                preview_video.profile = None;
-                preview_video.level = None;
-                preview_video.pixel_format = Some("yuv420p".to_string());
-                let preview_ring = Arc::new(crate::media::ring_buffer::RingBuffer::new(16_384));
-                preview_ring.set_codec_hint("h264");
-                preview_ring.set_audio_tracks(Vec::new());
-                let stage_key = crate::domain::stage::StageKey::new(
-                    pipeline_id,
-                    crate::domain::stage::StageKind::codec_edge(
-                        "hevc_preview_h264",
-                        crate::domain::stage::StageKind::source(),
-                    ),
-                );
-                let engine = state.engine.clone();
-                let pid = pipeline_id.to_string();
-                let preview_ring_clone = preview_ring.clone();
-                let source_ring_clone = source_ring.clone();
-                let cancel = cancel_token.clone();
-                tokio::spawn(async move {
-                    crate::media::external_transcoder::start_external_transcoder_video_only_stage(
-                        pid,
-                        "720p".to_string(),
-                        source_ring_clone,
-                        preview_ring_clone,
-                        engine,
-                        cancel,
-                        None,
-                        stage_key,
-                    )
-                    .await;
-                });
-                return (preview_ring, Some(source_ring), Some(preview_video));
-            }
-            Some(_) => return (source_ring, None, None),
-            None if tokio::time::Instant::now() >= deadline => return (source_ring, None, None),
-            None => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
-        }
-    }
-}
-
 async fn get_or_start_hls_preview_store(
     state: &Arc<AppState>,
     pipeline_id: &str,
@@ -6761,8 +6682,17 @@ async fn get_or_start_hls_preview_store(
                 .get_hls_preview_cancel_token(pipeline_id)
                 .await
                 .unwrap();
-            let (ring_buf, audio_ring_buf, preview_video_meta) =
-                select_hls_preview_ring(state, pipeline_id, &cancel_token).await;
+            let graph =
+                match plan_hls_preview(state.engine.clone(), pipeline_id, cancel_token.clone())
+                    .await
+                {
+                    Some(g) => g,
+                    None => HlsPreviewGraph {
+                        video_ring: state.engine.get_or_create_pipeline(pipeline_id).await,
+                        audio_ring: None,
+                        video_meta: None,
+                    },
+                };
             let store_c = store.clone();
             tokio::spawn(async move {
                 // Served preview HLS intentionally uses native fMP4 per rendition.
@@ -6771,11 +6701,11 @@ async fn get_or_start_hls_preview_store(
                 crate::media::hls_fmp4::start_hls_fmp4_segmenter(
                     pid.clone(),
                     store_c,
-                    ring_buf,
-                    audio_ring_buf,
+                    graph.video_ring,
+                    graph.audio_ring,
                     engine_c.clone(),
                     cancel_token,
-                    preview_video_meta,
+                    graph.video_meta,
                 )
                 .await;
                 engine_c.shutdown_hls_preview_segmenter(&pid).await;

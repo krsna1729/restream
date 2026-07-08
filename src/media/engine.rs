@@ -2431,11 +2431,7 @@ impl MediaEngine {
 
             needed.insert(StageKey::new(
                 pipeline_id.as_str(),
-                StageKind::video_preset("1080p"),
-            ));
-            needed.insert(StageKey::new(
-                pipeline_id.as_str(),
-                StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("1080p")),
+                StageKind::preview("720p", StageKind::source()),
             ));
         }
 
@@ -3037,11 +3033,7 @@ mod tests {
 
         assert!(stages.contains(&StageKey::new(
             "pipe-preview-hevc",
-            StageKind::video_preset("1080p")
-        )));
-        assert!(stages.contains(&StageKey::new(
-            "pipe-preview-hevc",
-            StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("1080p"))
+            StageKind::preview("720p", StageKind::source())
         )));
     }
 

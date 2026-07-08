@@ -94,6 +94,10 @@ pub enum StageKind {
         operation: String,
         upstream: Box<StageKind>,
     },
+    Preview {
+        preset: String,
+        upstream: Box<StageKind>,
+    },
     Hls,
     Recording,
 }
@@ -123,6 +127,13 @@ impl StageKind {
         }
     }
 
+    pub fn preview(preset: impl Into<String>, upstream: StageKind) -> Self {
+        Self::Preview {
+            preset: preset.into(),
+            upstream: Box::new(upstream),
+        }
+    }
+
     pub fn hls() -> Self {
         Self::Hls
     }
@@ -147,6 +158,7 @@ impl StageKind {
                 "hevc_to_h264" => "HEVC -> H.264".to_string(),
                 other => format!("Codec edge: {other}"),
             },
+            Self::Preview { preset, .. } => format!("Preview: {preset}"),
         }
     }
 
@@ -158,18 +170,29 @@ impl StageKind {
             Self::Hls => "hls",
             Self::Recording => "recording",
             Self::VideoPreset { .. } => "transcoder",
+            Self::Preview { .. } => "preview",
         }
     }
 
     pub fn upstream(&self) -> Option<&StageKind> {
         match self {
-            Self::AudioRoute { upstream, .. } | Self::CodecEdge { upstream, .. } => Some(upstream),
+            Self::AudioRoute { upstream, .. }
+            | Self::CodecEdge { upstream, .. }
+            | Self::Preview { upstream, .. } => Some(upstream),
             _ => None,
         }
     }
 
+    pub fn is_preview(&self) -> bool {
+        matches!(self, Self::Preview { .. })
+    }
+
     pub fn is_video_preset(&self) -> bool {
         matches!(self, Self::VideoPreset { .. })
+    }
+
+    pub fn is_video_processing(&self) -> bool {
+        matches!(self, Self::VideoPreset { .. } | Self::Preview { .. })
     }
 
     pub fn audio_operation(&self) -> Option<&str> {
@@ -204,6 +227,7 @@ impl fmt::Display for StageKind {
                 operation,
                 upstream,
             } => write!(f, "{operation}:from:{upstream}"),
+            Self::Preview { preset, upstream } => write!(f, "preview:{preset}:from:{upstream}"),
         }
     }
 }

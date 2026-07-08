@@ -203,6 +203,11 @@ impl StageRuntimeManager {
         self.spawn_ffmpeg(handle, source_ring, None, false);
     }
 
+    /// Spawn a browser-preview stage that converts to H.264 video only.
+    pub fn spawn_preview_stage(&self, handle: StageHandle, source_ring: Arc<RingBuffer>) {
+        self.spawn_ffmpeg(handle, source_ring, Some("h264"), false);
+    }
+
     fn spawn_ffmpeg(
         &self,
         handle: StageHandle,
@@ -351,9 +356,11 @@ impl StageRuntimeManager {
     ) {
         // Codec hint: video presets re-encode, so output is always H.264 unless
         // the source is HEVC and we are preserving it. Codec-edge stages always
-        // emit H.264. Audio stages inherit from the source ring.
+        // emit H.264. Preview stages always emit H.264.
         if key.kind.is_video_preset() {
             output_ring.set_codec_hint(input_codec_override.unwrap_or("h264"));
+        } else if key.kind.is_preview() {
+            output_ring.set_codec_hint("h264");
         } else if matches!(key.kind, StageKind::CodecEdge { .. }) {
             output_ring.set_codec_hint("h264");
         } else if let Some(oc) = input_codec_override {
@@ -385,6 +392,12 @@ impl StageRuntimeManager {
                 })
                 .unwrap_or_default()
         };
+
+        // Preview stages are video-only — never propagate audio tracks.
+        if key.kind.is_preview() {
+            output_ring.set_audio_tracks(Vec::new());
+            return;
+        }
 
         if !input_tracks.is_empty() {
             let output_tracks = if let Some(audio_op) = key.kind.audio_operation() {
@@ -461,6 +474,31 @@ pub fn build_ffmpeg_stage_plan(
                 output_codec: VideoCodecKind::H264,
                 output_profile: None,
                 include_audio,
+                startup: StageStartupPolicy {
+                    keyframe_preroll_packets: 128,
+                    require_video_parameter_sets: true,
+                    wait_for_first_keyframe: true,
+                },
+                timeline: TimelinePolicy::default(),
+            })
+        }
+        StageKind::Preview { preset, .. } => {
+            let preview_input = StageInputSpec {
+                codec_hint: input_codec,
+                video_meta: None,
+                audio_tracks: Vec::new(),
+            };
+            Some(FfmpegStagePlan {
+                stage_key: key.clone(),
+                pipeline_id: key.pipeline.to_string(),
+                input: preview_input,
+                video: VideoStageOp::Preview {
+                    preset: preset.clone(),
+                },
+                audio: AudioStageOp::Drop,
+                output_codec: VideoCodecKind::H264,
+                output_profile: None,
+                include_audio: false,
                 startup: StageStartupPolicy {
                     keyframe_preroll_packets: 128,
                     require_video_parameter_sets: true,
