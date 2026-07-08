@@ -1608,25 +1608,16 @@ pub async fn start_rtmp_egress(
     // closes for inactivity before the first packet ever arrives — under
     // high output fanout this manifests as a repeating connect/drop/retry
     // storm. Mirrors the same gate in start_srt_egress.
-    if !ring_buffer.codec_hint_str().is_empty() {
-        let mut warmup = Reader::new(
-            format!("rtmp_egress_warmup:{}", output_id),
+    engine
+        .wait_for_upstream_warmup(
+            &output_id,
+            &registration,
             ring_buffer.clone(),
-        );
-        let mut warmup_packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
-        tokio::select! {
-            _ = cancel_token.cancelled() => return,
-            _ = async {
-                loop {
-                    warmup.wait_for_data().await;
-                    warmup_packets.clear();
-                    let _ = warmup.pull_burst(&mut warmup_packets, MEDIA_PULL_BURST_PACKETS);
-                    if rtmp_warmup_ready(reader.current_ring(), &warmup_packets) {
-                        break;
-                    }
-                }
-            } => {}
-        }
+            cancel_token.clone(),
+        )
+        .await;
+    if cancel_token.is_cancelled() {
+        return;
     }
 
     // Resolve audio tracks AFTER warmup so that audio-router stages (which
@@ -2374,13 +2365,16 @@ fn startup_video_sequence_header(
 fn rtmp_output_waits_for_video(ring_buffer: &RingBuffer) -> bool {
     !ring_buffer.codec_hint_str().is_empty() || ring_buffer.video_parameter_sets().is_some()
 }
-
-fn rtmp_warmup_ready(ring_buffer: &RingBuffer, packets: &[Arc<MediaPacket>]) -> bool {
+#[cfg(test)]
+fn rtmp_warmup_ready(
+    ring_buffer: &RingBuffer,
+    packets: &[Arc<crate::media::ring_buffer::MediaPacket>],
+) -> bool {
     !rtmp_output_waits_for_video(ring_buffer)
         || ring_buffer.video_parameter_sets().is_some()
         || packets
             .iter()
-            .any(|packet| packet.media_type == MediaType::Video)
+            .any(|packet| packet.media_type == crate::media::ring_buffer::MediaType::Video)
 }
 
 fn should_send_startup_audio_sequence_header(video_ready: bool, ring_buffer: &RingBuffer) -> bool {

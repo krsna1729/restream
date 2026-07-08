@@ -3942,14 +3942,22 @@ async fn wait_for_outputs_progress(
             if bytes_out > 0 || metrics_bytes > 0 || packets_out > 0 {
                 progressed += 1;
             } else {
+                let name = entry["outputName"].as_str().unwrap_or("unknown");
+                let encoding = entry["encoding"].as_str().unwrap_or("unknown");
+                let url = entry["targetUrl"].as_str().unwrap_or("unknown");
                 let phase = entry["phase"].as_str().unwrap_or("unknown");
-                let status = entry["status"]
-                    .as_str()
-                    .or_else(|| entry["rawStatus"].as_str())
-                    .unwrap_or("unknown");
+                let terminal_stage = entry["terminalStage"].as_str().unwrap_or("none");
+                let blocked_by_stage = entry["blockedBy"]["stage"].as_str().unwrap_or("none");
+                let blocked_by_phase = entry["blockedBy"]["phase"].as_str().unwrap_or("none");
+                let backend = entry["blockedBy"]["backend"].as_str().unwrap_or("none");
+                let wait_ms = entry["blockedBy"]["capacityWaitMs"]
+                    .as_u64()
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "none".to_string());
                 let last_error = entry["lastError"].as_str().unwrap_or("");
                 stalled.push(format!(
-                    "{output_id}[phase={phase},status={status},bytesOut={bytes_out},metricsBytesOut={metrics_bytes},packetsOut={packets_out},lastError={last_error}]"
+                    "{} output_{} encoding={} url={}\n  phase={}\n  terminalStage={}\n  blockedBy={}\n  blockedByPhase={}\n  backend={} waitMs={}\n  lastError={}",
+                    name, output_id, encoding, url, phase, terminal_stage, blocked_by_stage, blocked_by_phase, backend, wait_ms, last_error
                 ));
             }
         }

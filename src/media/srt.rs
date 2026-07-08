@@ -4133,23 +4133,17 @@ pub async fn start_srt_egress(
 
     let use_bonding = all_addrs.len() > 1;
 
-    // Pre-connect warmup: wait for the upstream ring to have data before
-    // connecting to MediaMTX. Transcoded/routed rings (codec_hint set) go
-    // through a multi-stage chain that takes seconds to warm up. Connecting
-    // before any data is ready results in an idle publisher that MediaMTX
-    // closes for inactivity before the first packet ever arrives. Runs here,
-    // ahead of socket creation, because it needs `.await` and the connect
-    // step below does not (see spawn_blocking rationale).
-    if !use_bonding && !ring_buffer.codec_hint_str().is_empty() {
-        let mut warmup = crate::media::ring_buffer::Reader::new(
-            format!("srt_egress_warmup:{}", output_id),
-            ring_buffer.clone(),
-        );
-        tokio::select! {
-            _ = cancel_token.cancelled() => {
-                return;
-            }
-            _ = warmup.wait_for_data() => {}
+    if !use_bonding {
+        engine
+            .wait_for_upstream_warmup(
+                &output_id,
+                &registration,
+                ring_buffer.clone(),
+                cancel_token.clone(),
+            )
+            .await;
+        if cancel_token.is_cancelled() {
+            return;
         }
     }
 

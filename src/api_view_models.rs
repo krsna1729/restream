@@ -131,12 +131,15 @@ pub(crate) fn egress_runtime_json(
     let status = MediaEngine::egress_effective_status(egress, has_ingest);
     let mut value = serde_json::json!({
         "outputId": egress.output_id.clone(),
+        "outputName": egress.output_name.clone(),
+        "encoding": egress.encoding.clone(),
         "pipelineId": egress.pipeline_id.clone(),
         "protocol": egress.protocol.clone(),
         "targetAddr": egress.target_addr.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "status": status,
         "rawStatus": egress.status.clone(),
         "phase": egress.phase.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        "terminalStage": egress.terminal_stage_key.as_ref().map(|k| k.to_string()),
         "uptimeSecs": egress.start_instant.elapsed().as_secs_f64(),
         "bytesOut": egress.bytes_sent.load(Ordering::Relaxed),
         "lastProgressAt": MediaEngine::epoch_ms_to_rfc3339(last_progress_ms),
@@ -159,6 +162,21 @@ pub(crate) fn egress_runtime_json(
         value["targetUrl"] = serde_json::Value::String(egress.target_url.clone());
     }
     value
+}
+
+#[allow(dead_code)]
+pub(crate) fn output_runtime_explanation_json(
+    explanation: &crate::domain::stage::OutputRuntimeExplanation,
+) -> serde_json::Value {
+    serde_json::json!({
+        "outputId": explanation.output_id.to_string(),
+        "outputName": explanation.output_name,
+        "encoding": explanation.encoding,
+        "url": explanation.url,
+        "phase": explanation.phase.as_str(),
+        "terminalStage": explanation.terminal_stage.as_ref().map(|k| k.to_string()),
+        "blockedBy": explanation.blocked_by.as_ref().map(|k| k.to_string()),
+    })
 }
 
 pub(crate) fn recent_egress_runtime_json(

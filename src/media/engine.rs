@@ -19,7 +19,7 @@ use crate::media::engine_registries::{
 use crate::media::hls::HlsStore;
 use crate::media::hls_fmp4::Fmp4HlsStore;
 pub use crate::media::pipe_metrics::PipeMetrics;
-use crate::media::ring_buffer::{RingBuffer, default_ring_capacity};
+use crate::media::ring_buffer::{MediaType, Reader, RingBuffer, default_ring_capacity};
 pub use crate::media::stage_metrics::StageMetrics;
 use crate::media::ts_chunk_ring::TsChunkRing;
 
@@ -284,6 +284,8 @@ pub struct ActiveEgress {
     pub prev_sample_time: std::sync::Mutex<Instant>,
     pub bitrate_kbps: std::sync::Mutex<Option<f64>>,
     pub terminal_stage_key: Option<StageKey>,
+    pub output_name: String,
+    pub encoding: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1119,6 +1121,49 @@ impl MediaEngine {
         })
     }
 
+    /// Wait for the upstream media ring to have data and parameter sets ready before connecting.
+    /// This prevents zero-byte startup stalls where egress connects before transcoder is producing.
+    pub async fn wait_for_upstream_warmup(
+        &self,
+        output_id: &str,
+        registration: &EgressRegistration,
+        ring_buffer: Arc<RingBuffer>,
+        cancel_token: CancellationToken,
+    ) {
+        if ring_buffer.codec_hint_str().is_empty() {
+            return;
+        }
+
+        self.update_egress_phase_if_current(output_id, registration, "waitingUpstream")
+            .await;
+
+        let mut warmup = Reader::new(format!("egress_warmup:{}", output_id), ring_buffer.clone());
+
+        let mut warmup_packets = Vec::with_capacity(crate::media::MEDIA_PULL_BURST_PACKETS);
+        tokio::select! {
+            _ = cancel_token.cancelled() => {}
+            _ = async {
+                loop {
+                    warmup.wait_for_data().await;
+                    warmup_packets.clear();
+                    let _ = warmup.pull_burst(&mut warmup_packets, crate::media::MEDIA_PULL_BURST_PACKETS);
+
+                    if ring_buffer.video_parameter_sets().is_some() {
+                        break;
+                    }
+
+                    if warmup_packets.iter().any(|p| p.media_type == MediaType::Video) {
+                        break;
+                    }
+
+                    if !warmup_packets.is_empty() && ring_buffer.video_parameter_sets().is_none() {
+                        break;
+                    }
+                }
+            } => {}
+        }
+    }
+
     pub async fn register_input_queue(&self, key: StageKey, queue: Arc<MemoryQueue>) {
         self.stages.input_queues.write().await.insert(key, queue);
     }
@@ -1719,6 +1764,26 @@ impl MediaEngine {
         url: &str,
         terminal_stage_key: Option<StageKey>,
     ) -> EgressRegistration {
+        self.register_egress_attempt_with_meta(
+            output_id,
+            pipeline_id,
+            url,
+            None,
+            None,
+            terminal_stage_key,
+        )
+        .await
+    }
+
+    pub async fn register_egress_attempt_with_meta(
+        &self,
+        output_id: &str,
+        pipeline_id: &str,
+        url: &str,
+        output_name: Option<&str>,
+        encoding: Option<&str>,
+        terminal_stage_key: Option<StageKey>,
+    ) -> EgressRegistration {
         self.egresses.retry.write().await.remove(output_id);
 
         let mut tokens = self.egresses.cancel_tokens.write().await;
@@ -1759,6 +1824,8 @@ impl MediaEngine {
                 prev_sample_time: std::sync::Mutex::new(now),
                 bitrate_kbps: std::sync::Mutex::new(None),
                 terminal_stage_key,
+                output_name: output_name.unwrap_or("").to_string(),
+                encoding: encoding.unwrap_or("").to_string(),
             },
         );
 

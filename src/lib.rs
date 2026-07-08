@@ -649,13 +649,14 @@ pub async fn run_app(config: Arc<AppConfig>) {
                     let (ring_buf, terminal_stage_key) =
                         crate::application::egress::prepare_output_ring(&engine, output).await;
 
-                    // Register egress and get an attempt-scoped handle so stale
-                    // workers cannot later scribble over a replacement session.
+                    let encoding_str = output.encoding_string();
                     let registration = engine
-                        .register_egress_attempt(
+                        .register_egress_attempt_with_meta(
                             &output.id,
                             &output.pipeline_id,
                             &output.url,
+                            Some(&output.name),
+                            Some(&encoding_str),
                             terminal_stage_key,
                         )
                         .await;
