@@ -410,6 +410,7 @@ pub struct MediaEngine {
     pub file_ingests: FileIngestRegistry,
     pub stages: StageRegistry,
     pub runtime: RuntimeInfra,
+    pub config: Arc<crate::AppConfig>,
 }
 
 impl Default for MediaEngine {
@@ -420,6 +421,10 @@ impl Default for MediaEngine {
 
 impl MediaEngine {
     pub fn new() -> Self {
+        Self::new_with_config(Arc::new(crate::AppConfig::from_env()))
+    }
+
+    pub fn new_with_config(config: Arc<crate::AppConfig>) -> Self {
         // Initialize FFmpeg once. On failure, emit a human-readable message
         // and exit — a panic here produces an unreadable backtrace with no
         // context about what went wrong or which library is missing.
@@ -436,7 +441,8 @@ impl MediaEngine {
             hls: HlsRegistry::new(),
             file_ingests: FileIngestRegistry::new(),
             stages: StageRegistry::new(),
-            runtime: RuntimeInfra::new(),
+            runtime: RuntimeInfra::new(&config),
+            config,
         }
     }
 

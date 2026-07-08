@@ -63,7 +63,7 @@ fn main() {
     // and eliminates any race between cached-path write and transcoder-stage
     // spawning.
     restream::ffmpeg_extract::ensure_ffmpeg_extracted();
-
+    let config = std::sync::Arc::new(restream::AppConfig::from_env());
     let worker_threads = runtime_worker_threads();
     let max_blocking_threads = runtime_max_blocking_threads();
     tokio::runtime::Builder::new_multi_thread()
@@ -72,7 +72,7 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed to build tokio runtime")
-        .block_on(restream::run_app());
+        .block_on(restream::run_app(config));
 
     restream::ffmpeg_extract::cleanup_ffmpeg();
 }

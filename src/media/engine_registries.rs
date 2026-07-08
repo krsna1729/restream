@@ -178,65 +178,19 @@ pub struct RuntimeInfra {
 
 impl Default for RuntimeInfra {
     fn default() -> Self {
-        Self::new()
+        Self::new(&crate::AppConfig::default())
     }
 }
 
 static EXTERNAL_FFMPEG_PERMITS: OnceLock<usize> = OnceLock::new();
 
 pub fn external_ffmpeg_child_limit() -> usize {
-    *EXTERNAL_FFMPEG_PERMITS.get_or_init(|| {
-        // Explicit override wins.
-        if let Ok(value) = std::env::var("RESTREAM_EXTERNAL_FFMPEG_PERMITS")
-            && let Some(v) = value.parse::<usize>().ok().filter(|&v| v >= 1)
-        {
-            tracing::info!(
-                "external_ffmpeg_permits={} (explicit RESTREAM_EXTERNAL_FFMPEG_PERMITS={})",
-                v,
-                value
-            );
-            return v;
-        }
-
-        let cpus = std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(1);
-        let reserve = std::env::var("RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(2)
-            .min(cpus.saturating_sub(1));
-        let per_child = std::env::var("RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(2)
-            .max(1);
-        let hard_cap = std::env::var("RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(usize::MAX);
-        let derived = cpus
-            .saturating_sub(reserve)
-            .max(1)
-            .div_ceil(per_child)
-            .max(1);
-        let permits = derived.min(hard_cap).max(1);
-
-        tracing::info!(
-            "external_ffmpeg_permits={} (derived from cpus={}, reserve={}, per_child={}, hard_cap={})",
-            permits,
-            cpus,
-            reserve,
-            per_child,
-            if hard_cap == usize::MAX { "none".to_string() } else { hard_cap.to_string() }
-        );
-        permits
-    })
+    *EXTERNAL_FFMPEG_PERMITS.get_or_init(|| crate::AppConfig::from_env().external_ffmpeg_permits)
 }
 
 impl RuntimeInfra {
-    pub fn new() -> Self {
-        let external_ffmpeg_permits = external_ffmpeg_child_limit();
+    pub fn new(config: &crate::AppConfig) -> Self {
+        let external_ffmpeg_permits = config.external_ffmpeg_permits;
         Self {
             listener_stats: Arc::new(ListenerSocketStats::default()),
             os_threads: std::sync::Mutex::new(Vec::new()),

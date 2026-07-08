@@ -196,7 +196,10 @@ fn planned_mixed_stage_count(
             StageKind::VideoPreset { .. } => counts.video += 1,
             StageKind::AudioRoute { .. } => counts.audio += 1,
             StageKind::CodecEdge { .. } => counts.codec_edge += 1,
-            StageKind::Source | StageKind::Hls | StageKind::Recording => {}
+            StageKind::Source
+            | StageKind::Hls
+            | StageKind::Recording
+            | StageKind::Preview { .. } => {}
         }
     }
     counts

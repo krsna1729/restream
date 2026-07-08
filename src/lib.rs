@@ -44,6 +44,7 @@ pub mod api;
 pub(crate) mod api_runtime_views;
 pub mod api_view_models;
 pub mod application;
+pub mod config;
 pub mod db;
 pub mod diag;
 pub mod domain;
@@ -52,6 +53,7 @@ pub mod ffmpeg_extract;
 pub mod logging;
 pub mod media;
 pub mod planner;
+pub use config::AppConfig;
 pub mod runtime_info;
 pub mod test_fixtures;
 pub mod types;
@@ -89,6 +91,7 @@ pub unsafe extern "C" fn avcodec_close(
     0
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServerPorts {
     pub http: u16,
     pub rtmp: u16,
@@ -330,17 +333,15 @@ fn set_rlimit(limit: u64) {
     }
 }
 
-pub async fn run_app() {
-    let tuning = RuntimeTuning::from_env();
+pub async fn run_app(config: Arc<AppConfig>) {
+    let tuning = config.tuning;
 
     // Elevate limits for high fd count (500+ egress streams)
     set_rlimit(tuning.nofile_limit);
 
     // Initialize database — use create_pool() so per-connection PRAGMAs
     // (busy_timeout, synchronous, cache_size, …) apply to every pooled connection.
-    let db_url = std::env::var("RESTREAM_DB_PATH")
-        .map(|p| format!("sqlite:{}?mode=rwc", p))
-        .unwrap_or_else(|_| "sqlite:data.db?mode=rwc".to_string());
+    let db_url = format!("sqlite:{}?mode=rwc", config.db_path);
     let pool = db::create_pool(&db_url)
         .await
         .expect("Failed to connect to SQLite database");
@@ -389,7 +390,7 @@ pub async fn run_app() {
     let sessions = Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new()));
     crate::api::initialize_auth(&pool, &sessions).await;
     crate::application::transcode_profiles::load_transcode_profiles(&meta_store).await;
-    let engine = Arc::new(MediaEngine::new());
+    let engine = Arc::new(MediaEngine::new_with_config(config.clone()));
     let pipeline_lookup: Arc<dyn crate::application::ports::PipelineStore> =
         Arc::new(pipeline_store);
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -406,10 +407,11 @@ pub async fn run_app() {
     // Keep a clone of sessions for the reconciler's hourly prune tick.
     let sessions_for_reconciler = sessions.clone();
 
-    let ports = ServerPorts::from_env();
+    let ports = &config.ports;
 
-    let media_dir = std::env::var("RESTREAM_MEDIA_DIR").unwrap_or_else(|_| "media".to_string());
+    let media_dir = config.media_dir.clone();
     let reconciler_media_dir = media_dir.clone();
+    let reconciler_config = config.clone();
     let state = Arc::new(crate::api::AppState {
         db: pool.clone(),
         security: security.clone(),
@@ -541,10 +543,7 @@ pub async fn run_app() {
         if reconciler_tick.is_multiple_of(session_prune_every_ticks) {
             // DB prune
             let _ = db::prune_expired_sessions(&pool, 30 * 24 * 60 * 60 * 1000).await;
-            let log_retention_days = std::env::var("RESTREAM_LOG_RETENTION_DAYS")
-                .ok()
-                .and_then(|v| v.parse::<i64>().ok())
-                .unwrap_or(7);
+            let log_retention_days = reconciler_config.log_retention_days as i64;
             let _ = db::delete_app_logs_older_than(&pool, log_retention_days).await;
             // In-memory prune: remove tokens that no longer exist in DB.
             // Skip the retain if the DB call fails — an empty result would

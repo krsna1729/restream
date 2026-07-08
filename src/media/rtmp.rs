@@ -789,7 +789,8 @@ pub async fn start_rtmp_server_on(
     port: u16,
 ) {
     let addr = format!("0.0.0.0:{port}");
-    let listener = match bind_rtmp_listener_with_backlog(port) {
+    let backlog = engine.config.rtmp_backlog as i32;
+    let listener = match bind_rtmp_listener_with_backlog(port, backlog) {
         Ok(l) => l,
         Err(e) => {
             error!("Failed to bind TCP listener on {}: {:?}", addr, e);
@@ -825,20 +826,12 @@ pub async fn start_rtmp_server_on(
     }
 }
 
-fn rtmp_listener_backlog() -> i32 {
-    std::env::var("RESTREAM_RTMP_LISTENER_BACKLOG")
-        .ok()
-        .and_then(|value| value.parse::<i32>().ok())
-        .unwrap_or(1024)
-        .max(1)
-}
-
-fn bind_rtmp_listener_with_backlog(port: u16) -> Result<TcpListener, std::io::Error> {
+fn bind_rtmp_listener_with_backlog(port: u16, backlog: i32) -> Result<TcpListener, std::io::Error> {
     let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
     socket.set_reuse_address(true)?;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     socket.bind(&SockAddr::from(addr))?;
-    socket.listen(rtmp_listener_backlog())?;
+    socket.listen(backlog)?;
     socket.set_nonblocking(true)?;
     TcpListener::from_std(std::net::TcpListener::from(socket))
 }

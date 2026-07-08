@@ -73,6 +73,16 @@ impl ExternalStdinSink {
         pipe_metrics: Arc<PipeMetrics>,
         timing_clock: crate::media::timing::Clock,
     ) -> Self {
+        // Increase the stdin pipe buffer so a full input burst fits without
+        // back-pressure stalls.  256 KB accommodates ~90 packets (a 3-second
+        // 18-stream burst) while staying well below the Linux 1 MB max.
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            let fd = stdin.as_raw_fd();
+            const PIPE_BUF_SIZE: libc::c_int = 256 * 1024;
+            let _ = unsafe { libc::fcntl(fd, libc::F_SETPIPE_SZ, PIPE_BUF_SIZE) };
+        }
         Self {
             stdin,
             pipe_metrics,
@@ -82,17 +92,40 @@ impl ExternalStdinSink {
 }
 
 impl crate::media::ffmpeg::stage_input::StageByteSink for ExternalStdinSink {
-    async fn write_ts(&mut self, bytes: &[u8], _cancel: &CancellationToken) -> Result<(), String> {
+    async fn write_ts(&mut self, bytes: &[u8], cancel: &CancellationToken) -> Result<(), String> {
         if bytes.is_empty() {
             return Ok(());
         }
         let t0 = self.timing_clock.now();
-        let result = self.stdin.write_all(bytes).await;
-        let write_us = self.timing_clock.delta_us(t0);
-        if write_us > PIPE_STALL_THRESHOLD_US {
-            self.pipe_metrics.record_stall(write_us);
+        let mut remaining = bytes;
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    let write_us = self.timing_clock.delta_us(t0);
+                    if write_us > PIPE_STALL_THRESHOLD_US {
+                        self.pipe_metrics.record_stall(write_us);
+                    }
+                    return Err("cancelled: stdin write interrupted".to_string());
+                }
+                result = self.stdin.write(remaining) => {
+                    match result {
+                        Ok(0) => return Err("stdin write returned 0 (pipe closed)".to_string()),
+                        Ok(n) => {
+                            remaining = &remaining[n..];
+                            if remaining.is_empty() {
+                                let write_us = self.timing_clock.delta_us(t0);
+                                if write_us > PIPE_STALL_THRESHOLD_US {
+                                    self.pipe_metrics.record_stall(write_us);
+                                }
+                                return Ok(());
+                            }
+                        }
+                        Err(e) => return Err(format!("stdin write failed: {e}")),
+                    }
+                }
+            }
         }
-        result.map_err(|e| format!("stdin write failed: {e}"))
     }
 }
 
@@ -114,6 +147,7 @@ fn build_stage_ffmpeg_args_inner(
     input_codec: &str,
     probe_codec: &str,
     include_audio: bool,
+    threads: Option<u32>,
 ) -> Vec<String> {
     // Strip the internal stage-key prefix ("video:720p" → "720p").
     // Audio stages receive the selected upstream video ring, so they copy video
@@ -128,11 +162,7 @@ fn build_stage_ffmpeg_args_inner(
     };
     let (analyze_duration_us, probe_size_bytes) =
         startup_policy::ext_stage_probe_budget(VideoCodecKind::from_codec_name(probe_codec));
-    let ffmpeg_threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(2)
-        .max(1);
+    let ffmpeg_threads = threads.unwrap_or(2).max(1);
 
     let mut args = vec![
         "-nostdin".to_string(),
@@ -142,8 +172,6 @@ fn build_stage_ffmpeg_args_inner(
         "warning".to_string(),
         "-threads".to_string(),
         ffmpeg_threads.to_string(),
-        "-fflags".to_string(),
-        "nobuffer".to_string(),
         "-flags".to_string(),
         "low_delay".to_string(),
         "-analyzeduration".to_string(),
@@ -266,7 +294,10 @@ fn build_stage_ffmpeg_args_inner(
 }
 
 pub fn build_stage_ffmpeg_args(preset: &str, input_codec: &str) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, true)
+    let threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok());
+    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, true, threads)
 }
 
 /// Like [`build_stage_ffmpeg_args`], but sizes FFmpeg's input probe budget from
@@ -278,11 +309,17 @@ pub fn build_stage_ffmpeg_args_for_input(
     input_codec: &str,
     probe_codec: &str,
 ) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, true)
+    let threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok());
+    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, true, threads)
 }
 
 pub fn build_stage_ffmpeg_video_only_args(preset: &str, input_codec: &str) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, false)
+    let threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok());
+    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, false, threads)
 }
 
 pub fn build_stage_ffmpeg_video_only_args_for_input(
@@ -290,7 +327,10 @@ pub fn build_stage_ffmpeg_video_only_args_for_input(
     input_codec: &str,
     probe_codec: &str,
 ) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, false)
+    let threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok());
+    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, false, threads)
 }
 
 fn stage_audio_routing(preset: &str) -> Option<AudioRouting> {
@@ -542,9 +582,21 @@ async fn start_external_transcoder_stage_inner(
         hint => hint,
     };
     let args = if include_audio {
-        build_stage_ffmpeg_args_for_input(&encoding, input_codec, probe_codec)
+        build_stage_ffmpeg_args_inner(
+            &encoding,
+            input_codec,
+            probe_codec,
+            true,
+            engine.config.ffmpeg_threads,
+        )
     } else {
-        build_stage_ffmpeg_video_only_args_for_input(&encoding, input_codec, probe_codec)
+        build_stage_ffmpeg_args_inner(
+            &encoding,
+            input_codec,
+            probe_codec,
+            false,
+            engine.config.ffmpeg_threads,
+        )
     };
     let correlation_id = crate::logging::next_correlation_id("stage");
     lifecycle.transition(
@@ -772,6 +824,7 @@ async fn start_external_transcoder_stage_inner(
                 }
             }
             if !all.is_empty() {
+                let stderr_text = String::from_utf8_lossy(&all).trim().to_string();
                 error!(
                     correlation_id = %stderr_correlation_id,
                     pipeline_id = %stderr_pipeline_id,
@@ -779,7 +832,7 @@ async fn start_external_transcoder_stage_inner(
                     stage_backend = "external_ffmpeg",
                     "[ext-transcoder] ffmpeg stderr ({}): {}",
                     label,
-                    String::from_utf8_lossy(&all).trim()
+                    stderr_text
                 );
             }
         });
@@ -910,8 +963,12 @@ async fn start_external_transcoder_stage_inner(
         );
     }
 
-    let _ = stdin_sink.stdin.shutdown().await;
-    if tokio::time::timeout(std::time::Duration::from_millis(500), child.wait())
+    // Close stdin so FFmpeg sees EOF and can flush its output.
+    drop(stdin_sink.stdin);
+    // Give FFmpeg generous time to decode, encode, and flush after EOF.
+    // The old 500 ms budget frequently killed the process before it could
+    // produce output, especially with 18-stream (2v + 16a) input.
+    if tokio::time::timeout(std::time::Duration::from_secs(30), child.wait())
         .await
         .is_err()
     {
@@ -1299,7 +1356,11 @@ mod tests {
                 "0:v:1",
                 "-map",
                 "0:a",
-                "-c",
+                "-c:v",
+                "copy",
+                "-bsf:v",
+                "hevc_mp4toannexb",
+                "-c:a",
                 "copy",
                 "-t",
                 &seconds.to_string(),
@@ -2220,7 +2281,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "HEVC browser preview no longer transcodes directly from the 4K source ring"]
     async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
         let ts_sample = extract_2v16a_hevc_ts_sample();
         let mut demuxer = TsDemuxer::new();
@@ -2256,6 +2316,16 @@ mod tests {
         let source_ring = Arc::new(RingBuffer::new(16_384));
         source_ring.set_codec_hint("hevc");
         source_ring.set_audio_tracks(audio_tracks);
+        // Extract parameter sets from the pre-demuxed packets so the stage's
+        // metadata wait loop can find them (required for HEVC).
+        let found_ps = packets.iter().find_map(|p| {
+            (p.media_type == MediaType::Video)
+                .then(|| crate::media::codec::annexb_parameter_sets(&p.payload))
+                .flatten()
+        });
+        if let Some(ps) = found_ps {
+            source_ring.set_video_parameter_sets(ps);
+        }
         let output_ring = Arc::new(RingBuffer::new(16_384));
         let mut reader = Reader::new_live("test_ext_720p_output".to_string(), output_ring.clone());
         let cancel = CancellationToken::new();
@@ -2290,27 +2360,44 @@ mod tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
+
+        // Feed all input.  With 18 streams (2v + 16a) FFmpeg holds output
+        // until stdin closes, so we cancel to send EOF and trigger a flush.
         source_ring.push_batch(packets.drain(..));
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-        let mut output_packets = Vec::new();
-        while let Ok(Some(packet)) = reader.pull() {
-            output_packets.push(packet);
-        }
-
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         cancel.cancel();
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut output_packets = Vec::new();
+        loop {
+            while let Ok(Some(packet)) = reader.pull() {
+                output_packets.push(packet);
+            }
+            if output_packets
+                .iter()
+                .any(|p| p.media_type == MediaType::Video && p.is_keyframe)
+            {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
 
         assert!(
             output_packets
                 .iter()
                 .any(|packet| packet.media_type == MediaType::Video),
-            "external 720p HEVC preview stage should emit live video packets"
+            "external 720p HEVC preview stage should emit video packets after close (got {} packets)",
+            output_packets.len()
         );
         assert!(
             output_packets
                 .iter()
                 .any(|packet| packet.media_type == MediaType::Video && packet.is_keyframe),
-            "external 720p HEVC preview stage should emit a live keyframe"
+            "external 720p HEVC preview stage should emit a keyframe after close (got {} packets)",
+            output_packets.len()
         );
     }
 
@@ -3017,7 +3104,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "diagnostic: current live HEVC + 16 audio preview stage still stalls without EOF"]
     async fn external_720p_stage_emits_live_packets_for_2v16a_hevc_with_longer_input() {
         let ts_sample = extract_2v16a_hevc_ts_sample_for_duration(5);
         let mut demuxer = TsDemuxer::new();
@@ -3055,6 +3141,15 @@ mod tests {
         let source_ring = Arc::new(RingBuffer::new(32_768));
         source_ring.set_codec_hint("hevc");
         source_ring.set_audio_tracks(audio_tracks);
+        // Extract parameter sets from the pre-demuxed packets so the stage's
+        // metadata wait loop can find them (required for HEVC).
+        if let Some(ps) = packets.iter().find_map(|p| {
+            (p.media_type == MediaType::Video)
+                .then(|| crate::media::codec::annexb_parameter_sets(&p.payload))
+                .flatten()
+        }) {
+            source_ring.set_video_parameter_sets(ps);
+        }
         let output_ring = Arc::new(RingBuffer::new(32_768));
         let mut reader =
             Reader::new_live("test_ext_720p_long_output".to_string(), output_ring.clone());
@@ -3091,8 +3186,15 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
 
+        // Feed all input; wait for the pump to drain the ring to stdin
+        // before cancelling, otherwise FFmpeg gets EOF with no input data.
         source_ring.push_batch(packets.drain(..));
-        let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        cancel.cancel();
+
+        // The 18-stream (2v + 16a) MPEG-TS muxer is slow to flush; 5 seconds
+        // of input also takes longer to process.
+        let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut output_packets = Vec::new();
         loop {
             while let Ok(Some(packet)) = reader.pull() {
@@ -3110,13 +3212,12 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
 
-        cancel.cancel();
-
         assert!(
             output_packets
                 .iter()
                 .any(|packet| packet.media_type == MediaType::Video),
-            "external 720p HEVC preview stage should emit live video packets with longer 2v16a input"
+            "external 720p HEVC preview stage should emit live video packets with longer 2v16a input (got {} packets)",
+            output_packets.len()
         );
     }
 
