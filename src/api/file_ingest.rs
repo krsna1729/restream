@@ -282,7 +282,9 @@ pub async fn custom_encoding_get(
         return Ok(response);
     }
 
-    let args = crate::db::get_meta(&state.db, "custom_encoding")
+    let args = state
+        .settings_service
+        .get_meta("custom_encoding")
         .await
         .unwrap_or(None)
         .unwrap_or_default();
@@ -307,6 +309,9 @@ pub async fn custom_encoding_put(
     if let Some(r) = check_field_len("ffmpeg_args", &payload.ffmpeg_args, MAX_FFMPEG_ARGS_LEN) {
         return Ok(r);
     }
-    let _ = crate::db::set_meta(&state.db, "custom_encoding", &payload.ffmpeg_args).await;
+    let _ = state
+        .settings_service
+        .set_meta("custom_encoding", &payload.ffmpeg_args)
+        .await;
     Ok(Json(serde_json::json!({ "ffmpegArgs": payload.ffmpeg_args })).into_response())
 }

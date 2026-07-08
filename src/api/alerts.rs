@@ -7,7 +7,6 @@ use axum::{
 use std::sync::Arc;
 
 use crate::alerts;
-use crate::db;
 
 use super::state::{AppState, recording_enabled_map, require_authenticated};
 
@@ -19,10 +18,11 @@ pub async fn aggregate_alerts_handler(
         return response;
     }
 
-    let pipeline_ids: Vec<String> = match db::list_pipelines(&state.db).await {
-        Ok(rows) => rows.into_iter().map(|r| r.id).collect(),
-        Err(_) => vec![],
-    };
+    let pipeline_ids = state
+        .pipeline_service
+        .list_pipeline_ids()
+        .await
+        .unwrap_or_default();
     let recording_enabled = recording_enabled_map(&state, &pipeline_ids).await;
     let snapshot = crate::api_runtime_views::health_snapshot(
         &state.engine,

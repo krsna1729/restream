@@ -18,7 +18,6 @@ use crate::application::ingest::{
 };
 use crate::application::ports::{IngestLookup, SqliteIngestLookup, SqlitePipelineStore};
 use crate::application::services::ApiError;
-use crate::db;
 use crate::types::{Ingest, Pipeline};
 
 use super::state::{
@@ -545,7 +544,7 @@ pub async fn ingests_delete_handler(
     let _ = state.engine.stop_file_ingest_child(&id).await;
     state.engine.clear_file_ingest_running(&id).await;
 
-    let _ = db::delete_ingest(&state.db, &id).await;
+    let _ = state.ingest_service.delete_ingest(&id).await;
     Json(serde_json::json!({"deleted": true})).into_response()
 }
 

@@ -15,7 +15,6 @@ use tracing::{error, warn};
 use crate::alerts;
 use crate::application::ingest::load_pipeline_file_ingest_state;
 use crate::application::ports::SqliteIngestLookup;
-use crate::db;
 use crate::diag;
 use crate::events;
 
@@ -77,10 +76,7 @@ pub async fn build_file_diagnostics_context(
     state: &AppState,
     pipeline_id: &str,
 ) -> Option<diag::FileDiagnosticsContext> {
-    let pipeline = db::get_pipeline(&state.db, pipeline_id)
-        .await
-        .ok()
-        .flatten()?;
+    let pipeline = state.pipeline_service.get_by_id(pipeline_id).await.ok()?;
     let ingest = load_pipeline_file_ingest_state(
         &SqliteIngestLookup::new(state.db.clone()),
         &state.engine,
@@ -811,7 +807,11 @@ pub async fn v1_overview_handler(
         return response;
     }
 
-    let pipelines = db::list_pipelines(&state.db).await.unwrap_or_default();
+    let pipelines = state
+        .pipeline_service
+        .list_pipelines()
+        .await
+        .unwrap_or_default();
     let pipeline_ids: Vec<String> = pipelines.iter().map(|p| p.id.clone()).collect();
     let recording_enabled = recording_enabled_map(&state, &pipeline_ids).await;
     let snapshot = crate::api_runtime_views::health_snapshot(
