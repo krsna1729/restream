@@ -76,8 +76,8 @@ impl Default for AppConfig {
             ffmpeg_threads: None,
             avio_capacity: 512 * 1024,
             hls_min_segment_ms: 1.0,
-            hls_segment_capacity_bytes: 10_485_760,
-            hls_max_segments: 10,
+            hls_segment_capacity_bytes: 8 * 1024 * 1024,
+            hls_max_segments: 20,
             recording_threads: None,
             ts_ring_capacity: 256,
             ring_capacity: 1024,
@@ -105,8 +105,8 @@ impl AppConfig {
 
         let hls_min_segment_ms = env_u64("RESTREAM_HLS_MIN_SEGMENT_MS", 1000) as f64 / 1000.0;
         let hls_segment_capacity_bytes =
-            env_usize("RESTREAM_HLS_SEGMENT_CAPACITY_BYTES", 10_485_760).max(188);
-        let hls_max_segments = env_usize("RESTREAM_HLS_MAX_SEGMENTS", 10).max(1);
+            env_usize("RESTREAM_HLS_SEGMENT_CAPACITY_BYTES", 8 * 1024 * 1024).max(188);
+        let hls_max_segments = env_usize("RESTREAM_HLS_MAX_SEGMENTS", 20).max(1);
 
         let recording_threads = std::env::var("RESTREAM_RECORDING_FFMPEG_THREADS")
             .ok()
