@@ -11,7 +11,6 @@ use std::sync::Arc;
 use crate::alerts;
 use crate::api_view_models;
 use crate::application::services::ApiError;
-use crate::db;
 use crate::domain::srt_ingest::SrtPipelineIngestConfig;
 use crate::media::srt::serialize_pipeline_srt_ingest_policy;
 
@@ -20,9 +19,9 @@ use super::file_ingest::{
     validate_pipeline_file_ingest_payload,
 };
 use super::state::{
-    AppState, DEFAULT_INGEST_HOST, MAX_NAME_LEN, MAX_STREAM_KEY_LEN, MAX_URL_LEN, STREAM_KEYS,
-    check_field_len, get_ingest_host, get_session_token_from_headers, recording_enabled_map,
-    refresh_srt_ingest_policy_store, require_authenticated, to_hex,
+    AppState, MAX_NAME_LEN, MAX_STREAM_KEY_LEN, MAX_URL_LEN, STREAM_KEYS, check_field_len,
+    get_session_token_from_headers, recording_enabled_map, refresh_srt_ingest_policy_store,
+    require_authenticated, to_hex,
 };
 
 #[derive(Deserialize)]
@@ -145,7 +144,11 @@ pub async fn pipelines_post_handler(
     let stream_key = if let Some(ref key) = payload.stream_key {
         key.clone()
     } else {
-        let active_pipelines = db::list_pipelines(&state.db).await.unwrap_or_default();
+        let active_pipelines = state
+            .pipeline_service
+            .list_pipelines()
+            .await
+            .unwrap_or_default();
         let used: HashSet<String> = active_pipelines.into_iter().map(|p| p.stream_key).collect();
         let found = STREAM_KEYS.iter().find(|&&(key, _)| !used.contains(key));
         match found {
@@ -160,7 +163,7 @@ pub async fn pipelines_post_handler(
         }
     };
 
-    if let Ok(active_pipelines) = db::list_pipelines(&state.db).await
+    if let Ok(active_pipelines) = state.pipeline_service.list_pipelines().await
         && active_pipelines.iter().any(|p| p.stream_key == stream_key)
     {
         return (
@@ -184,15 +187,16 @@ pub async fn pipelines_post_handler(
         None => None,
     };
 
-    match db::create_pipeline(
-        &state.db,
-        &id,
-        &payload.name,
-        &stream_key,
-        input_source,
-        srt_ingest_policy.as_deref(),
-    )
-    .await
+    match state
+        .pipeline_service
+        .create_pipeline(
+            &id,
+            &payload.name,
+            &stream_key,
+            input_source,
+            srt_ingest_policy.as_deref(),
+        )
+        .await
     {
         Ok(pipeline) => {
             refresh_srt_ingest_policy_store(&state).await;
@@ -207,9 +211,7 @@ pub async fn pipelines_post_handler(
                 Ok(file_ingest) => file_ingest,
                 Err(response) => return response,
             };
-            let ingest_host = get_ingest_host(&state.db)
-                .await
-                .unwrap_or_else(|_| DEFAULT_INGEST_HOST.to_string());
+            let ingest_host = state.pipeline_service.get_ingest_host().await;
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!({
@@ -285,9 +287,9 @@ pub async fn pipelines_update_handler(
             .into_response();
     }
 
-    let existing = match db::get_pipeline(&state.db, &id).await {
-        Ok(Some(p)) => p,
-        _ => return (StatusCode::NOT_FOUND, "Pipeline not found").into_response(),
+    let existing = match state.pipeline_service.get_by_id(&id).await {
+        Ok(p) => p,
+        Err(_) => return (StatusCode::NOT_FOUND, "Pipeline not found").into_response(),
     };
 
     let existing_stream_key = existing.stream_key.clone();
@@ -309,7 +311,7 @@ pub async fn pipelines_update_handler(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
-    if let Ok(active_pipelines) = db::list_pipelines(&state.db).await
+    if let Ok(active_pipelines) = state.pipeline_service.list_pipelines().await
         && active_pipelines
             .iter()
             .any(|p| p.id != id && p.stream_key == stream_key)
@@ -321,17 +323,18 @@ pub async fn pipelines_update_handler(
             .into_response();
     }
 
-    match db::update_pipeline(
-        &state.db,
-        &id,
-        &payload.name,
-        &stream_key,
-        input_source.as_deref(),
-        srt_ingest_policy.as_deref(),
-    )
-    .await
+    match state
+        .pipeline_service
+        .update_pipeline(
+            &id,
+            &payload.name,
+            &stream_key,
+            input_source.as_deref(),
+            srt_ingest_policy.as_deref(),
+        )
+        .await
     {
-        Ok(Some(updated)) => {
+        Ok(updated) => {
             refresh_srt_ingest_policy_store(&state).await;
             let file_ingest = match apply_pipeline_file_ingest_payload(
                 &state,
@@ -344,9 +347,7 @@ pub async fn pipelines_update_handler(
                 Ok(file_ingest) => file_ingest,
                 Err(response) => return response,
             };
-            let ingest_host = get_ingest_host(&state.db)
-                .await
-                .unwrap_or_else(|_| DEFAULT_INGEST_HOST.to_string());
+            let ingest_host = state.pipeline_service.get_ingest_host().await;
             Json(serde_json::json!({
                 "message": "Pipeline updated",
                 "pipeline": api_view_models::pipeline_response_json_with_file_ingest(
@@ -388,14 +389,14 @@ pub async fn pipelines_delete_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    if let Ok(outputs) = db::list_outputs(&state.db).await {
+    if let Ok(outputs) = state.output_service.list_outputs().await {
         for output in outputs.iter().filter(|o| o.pipeline_id == id) {
             state.engine.unregister_egress(&output.id).await;
         }
     }
 
-    if let Ok(Some(pipeline)) = db::get_pipeline(&state.db, &id).await
-        && let Ok(ingests) = db::list_ingests(&state.db).await
+    if let Ok(pipeline) = state.pipeline_service.get_by_id(&id).await
+        && let Ok(ingests) = state.ingest_service.list_ingests().await
     {
         for ingest in ingests
             .iter()
@@ -411,7 +412,7 @@ pub async fn pipelines_delete_handler(
     state.engine.shutdown_hls_preview_segmenter(&id).await;
     state.engine.shutdown_hls_segmenter(&id).await;
 
-    match db::delete_pipeline(&state.db, &id).await {
+    match state.pipeline_service.delete_pipeline(&id).await {
         Ok(true) => {
             refresh_srt_ingest_policy_store(&state).await;
             Json(serde_json::json!({"message": format!("Pipeline {} deleted", id)})).into_response()
