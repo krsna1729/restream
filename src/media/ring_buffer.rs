@@ -55,8 +55,6 @@ use tracing::{debug, info, warn};
 use super::MEDIA_PRODUCER_BATCH_PACKETS;
 
 pub const DEFAULT_RING_CAPACITY: usize = 1024;
-const MIN_RING_CAPACITY: usize = 64;
-const MAX_RING_CAPACITY: usize = 16_384;
 static RING_CAPACITY: OnceLock<usize> = OnceLock::new();
 
 pub fn default_ring_capacity() -> usize {

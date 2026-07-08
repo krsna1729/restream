@@ -27,7 +27,6 @@ const AVIO_BUFFER_SIZE: usize = 32768;
 // across all config×bitrate combinations, 0 blocked_writes throughout.
 // Operators running very high latency links (> 1 s) can raise this with
 // RESTREAM_AVIO_QUEUE_CAPACITY (bytes).
-const DEFAULT_AVIO_QUEUE_CAPACITY: usize = 512 * 1024;
 
 fn default_avio_queue_capacity() -> usize {
     static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();

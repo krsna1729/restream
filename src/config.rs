@@ -75,7 +75,7 @@ impl Default for AppConfig {
             rtmp_backlog: 1024,
             ffmpeg_threads: None,
             avio_capacity: 512 * 1024,
-            hls_min_segment_ms: 2.0,
+            hls_min_segment_ms: 1.0,
             hls_segment_capacity_bytes: 10_485_760,
             hls_max_segments: 10,
             recording_threads: None,
@@ -103,7 +103,7 @@ impl AppConfig {
         let avio_capacity = env_usize("RESTREAM_AVIO_QUEUE_CAPACITY", 512 * 1024)
             .clamp(64 * 1024, 16 * 1024 * 1024);
 
-        let hls_min_segment_ms = env_u64("RESTREAM_HLS_MIN_SEGMENT_MS", 2000) as f64 / 1000.0;
+        let hls_min_segment_ms = env_u64("RESTREAM_HLS_MIN_SEGMENT_MS", 1000) as f64 / 1000.0;
         let hls_segment_capacity_bytes =
             env_usize("RESTREAM_HLS_SEGMENT_CAPACITY_BYTES", 10_485_760).max(188);
         let hls_max_segments = env_usize("RESTREAM_HLS_MAX_SEGMENTS", 10).max(1);

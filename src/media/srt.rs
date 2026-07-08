@@ -72,9 +72,6 @@ use crate::types::Pipeline;
 // (~12 MB at 250 ms latency × 8 Mb/s) is the actual jitter absorber; this ring
 // only bridges the gap between the muxer thread and the SRT socket write.
 // At ~400 chunks/s for an 8 Mb/s stream, 256 slots ≈ 640 ms of absorption.
-const DEFAULT_TS_RING_CAPACITY: usize = 256;
-const MIN_TS_RING_CAPACITY: usize = 32;
-const MAX_TS_RING_CAPACITY: usize = 16_384;
 static TS_RING_CAPACITY: OnceLock<usize> = OnceLock::new();
 pub struct SrtIngestPolicyStore {
     inner: RwLock<SrtIngestPolicySnapshot>,
