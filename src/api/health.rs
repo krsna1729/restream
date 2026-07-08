@@ -2,8 +2,6 @@ use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::db;
-
 use super::state::{AppState, recording_enabled_map, require_authenticated};
 
 #[derive(Deserialize)]
@@ -90,10 +88,11 @@ pub fn merge_dashboard_runtime_focus_pipeline(
 }
 
 pub async fn list_dashboard_runtime_pipeline_ids(state: &AppState) -> Vec<String> {
-    match db::list_pipelines(&state.db).await {
-        Ok(rows) => rows.into_iter().map(|row| row.id).collect(),
-        Err(_) => vec![],
-    }
+    state
+        .pipeline_service
+        .list_pipeline_ids()
+        .await
+        .unwrap_or_default()
 }
 
 pub async fn v1_engine_health_handler(

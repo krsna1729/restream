@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::alerts;
 use crate::api_view_models;
+use crate::application::services::ApiError;
 use crate::db;
 use crate::domain::srt_ingest::SrtPipelineIngestConfig;
 use crate::media::srt::serialize_pipeline_srt_ingest_policy;
@@ -46,11 +47,9 @@ pub async fn pipelines_get_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    match db::list_pipelines(&state.db).await {
+    match state.pipeline_service.list_pipelines().await {
         Ok(pipelines) => {
-            let ingest_host = get_ingest_host(&state.db)
-                .await
-                .unwrap_or_else(|_| DEFAULT_INGEST_HOST.to_string());
+            let ingest_host = state.pipeline_service.get_ingest_host().await;
             let pipelines = pipelines
                 .iter()
                 .map(|pipeline| {
@@ -77,18 +76,15 @@ pub async fn pipeline_detail_handler(
         return response;
     }
 
-    let pipeline = match db::get_pipeline(&state.db, &id).await {
-        Ok(Some(pipeline)) => pipeline,
-        Ok(None) => return (StatusCode::NOT_FOUND, "Pipeline not found").into_response(),
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    let pipeline = match state.pipeline_service.get_by_id(&id).await {
+        Ok(pipeline) => pipeline,
+        Err(e) => return e.into_response(),
     };
-    let outputs = match db::list_outputs_for_pipeline(&state.db, &id).await {
+    let outputs = match state.output_service.list_for_pipeline(&id).await {
         Ok(outputs) => outputs,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let ingest_host = get_ingest_host(&state.db)
-        .await
-        .unwrap_or_else(|_| DEFAULT_INGEST_HOST.to_string());
+    let ingest_host = state.pipeline_service.get_ingest_host().await;
 
     Json(serde_json::json!({
         "pipeline": api_view_models::pipeline_response_json(
@@ -447,23 +443,23 @@ pub async fn pipeline_graph_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(pipeline_id): Path<String>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, ApiError> {
     if let Some(response) = require_authenticated(&state, &headers).await {
-        return response;
+        return Ok(response);
     }
-    if !db::list_pipelines(&state.db)
+    if state
+        .pipeline_service
+        .get_by_id(&pipeline_id)
         .await
-        .unwrap_or_default()
-        .iter()
-        .any(|pipeline| pipeline.id == pipeline_id)
+        .is_err()
     {
-        return (StatusCode::NOT_FOUND, "Pipeline not found").into_response();
+        return Ok((StatusCode::NOT_FOUND, "Pipeline not found").into_response());
     }
 
-    let outputs = db::list_outputs(&state.db).await.unwrap_or_default();
+    let outputs = state.output_service.list_outputs().await?;
     let graph =
         crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &outputs).await;
-    Json(graph).into_response()
+    Ok(Json(graph).into_response())
 }
 
 pub async fn pipeline_alerts_handler(
@@ -500,9 +496,18 @@ pub async fn v1_pipeline_summary_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(pipeline_id): Path<String>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, ApiError> {
     if let Some(response) = require_authenticated(&state, &headers).await {
-        return response;
+        return Ok(response);
+    }
+
+    if state
+        .pipeline_service
+        .get_by_id(&pipeline_id)
+        .await
+        .is_err()
+    {
+        return Ok((StatusCode::NOT_FOUND, "Pipeline not found").into_response());
     }
 
     let recording_enabled = recording_enabled_map(&state, std::slice::from_ref(&pipeline_id)).await;
@@ -517,19 +522,11 @@ pub async fn v1_pipeline_summary_handler(
 
     let generated_at = snapshot["generatedAt"].as_str().unwrap_or("").to_string();
 
-    let exists = db::list_pipelines(&state.db)
-        .await
-        .unwrap_or_default()
-        .iter()
-        .any(|p| p.id == pipeline_id);
-    if !exists {
-        return (StatusCode::NOT_FOUND, "Pipeline not found").into_response();
-    }
-
     let pip = &snapshot["pipelines"][&pipeline_id];
-    let pipeline_outputs = db::list_outputs(&state.db)
-        .await
-        .unwrap_or_default()
+    let pipeline_outputs = state
+        .output_service
+        .list_outputs()
+        .await?
         .into_iter()
         .filter(|output| output.pipeline_id == pipeline_id)
         .collect::<Vec<_>>();
@@ -585,7 +582,7 @@ pub async fn v1_pipeline_summary_handler(
         })
         .unwrap_or(0);
 
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "generatedAt": generated_at,
         "pipelineId": pipeline_id,
         "input": pip["input"],
@@ -611,5 +608,5 @@ pub async fn v1_pipeline_summary_handler(
         },
         "alerts": alert_list,
     }))
-    .into_response()
+    .into_response())
 }

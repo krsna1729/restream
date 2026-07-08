@@ -17,12 +17,13 @@ use crate::application::ingest::{
     ResolveFileIngestError, clear_stream_key_file_ingests, resolve_file_ingest_context,
 };
 use crate::application::ports::{IngestLookup, SqliteIngestLookup, SqlitePipelineStore};
+use crate::application::services::ApiError;
 use crate::db;
 use crate::types::{Ingest, Pipeline};
 
 use super::state::{
     AppState, MAX_NAME_LEN, MAX_STREAM_KEY_LEN, check_field_len, get_session_token_from_headers,
-    to_hex,
+    require_authenticated, to_hex,
 };
 
 #[derive(Deserialize)]
@@ -394,16 +395,12 @@ pub async fn run_file_ingest_task(
 pub async fn ingests_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
-    let ingests = db::list_ingests(&state.db).await.unwrap_or_default();
+    let ingests = state.ingest_service.list_ingests().await?;
     let mut res = Vec::new();
     for i in ingests {
         let running = state.engine.is_file_ingest_running(&i.id).await;
@@ -418,32 +415,28 @@ pub async fn ingests_get_handler(
             "running": running
         }));
     }
-    Json(res).into_response()
+    Ok(Json(res).into_response())
 }
 
 pub async fn ingests_post_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<IngestPayload>,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
     if let Some(r) = check_field_len("filename", &payload.filename, MAX_NAME_LEN) {
-        return r;
+        return Ok(r);
     }
     if let Some(r) = check_field_len("stream_key", &payload.stream_key, MAX_STREAM_KEY_LEN) {
-        return r;
+        return Ok(r);
     }
     if let Some(ref s) = payload.start_time
         && let Some(r) = check_field_len("start_time", s, 64)
     {
-        return r;
+        return Ok(r);
     }
     let id = format!("ingest_{}", to_hex(&rand::random::<[u8; 8]>()));
     let loop_val = payload.loop_flag.unwrap_or(false);
@@ -451,31 +444,30 @@ pub async fn ingests_post_handler(
     let live_optimized = payload.live_optimized.unwrap_or(false);
     let target_gop_seconds = sanitize_target_gop_seconds(payload.target_gop_seconds);
 
-    match db::create_ingest(
-        &state.db,
-        &id,
-        &payload.filename,
-        &payload.stream_key,
-        loop_val,
-        &start_time,
-        live_optimized,
-        target_gop_seconds,
-    )
-    .await
-    {
-        Ok(ingest) => Json(serde_json::json!({
-            "id": ingest.id,
-            "filename": ingest.filename,
-            "streamKey": ingest.stream_key,
-            "loop": ingest.loop_flag,
-            "startTime": ingest.start_time,
-            "liveOptimized": ingest.live_optimized,
-            "targetGopSeconds": ingest.target_gop_seconds,
-            "running": false
-        }))
-        .into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
+    let ingest = state
+        .ingest_service
+        .create_ingest(
+            &id,
+            &payload.filename,
+            &payload.stream_key,
+            loop_val,
+            &start_time,
+            live_optimized,
+            target_gop_seconds,
+        )
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "id": ingest.id,
+        "filename": ingest.filename,
+        "streamKey": ingest.stream_key,
+        "loop": ingest.loop_flag,
+        "startTime": ingest.start_time,
+        "liveOptimized": ingest.live_optimized,
+        "targetGopSeconds": ingest.target_gop_seconds,
+        "running": false
+    }))
+    .into_response())
 }
 
 pub async fn ingests_update_handler(
@@ -483,53 +475,46 @@ pub async fn ingests_update_handler(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(payload): Json<IngestPayload>,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
     if let Some(ref s) = payload.start_time
         && let Some(r) = check_field_len("start_time", s, 64)
     {
-        return r;
+        return Ok(r);
     }
     let loop_val = payload.loop_flag.unwrap_or(false);
     let start_time = payload.start_time.unwrap_or_default();
     let live_optimized = payload.live_optimized.unwrap_or(false);
     let target_gop_seconds = sanitize_target_gop_seconds(payload.target_gop_seconds);
 
-    match db::update_ingest(
-        &state.db,
-        &id,
-        &payload.filename,
-        &payload.stream_key,
-        loop_val,
-        &start_time,
-        live_optimized,
-        target_gop_seconds,
-    )
-    .await
-    {
-        Ok(Some(ingest)) => {
-            let running = state.engine.is_file_ingest_running(&ingest.id).await;
-            Json(serde_json::json!({
-                "id": ingest.id,
-                "filename": ingest.filename,
-                "streamKey": ingest.stream_key,
-                "loop": ingest.loop_flag,
-                "startTime": ingest.start_time,
-                "liveOptimized": ingest.live_optimized,
-                "targetGopSeconds": ingest.target_gop_seconds,
-                "running": running
-            }))
-            .into_response()
-        }
-        _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
+    let ingest = state
+        .ingest_service
+        .update_ingest(
+            &id,
+            &payload.filename,
+            &payload.stream_key,
+            loop_val,
+            &start_time,
+            live_optimized,
+            target_gop_seconds,
+        )
+        .await?;
+
+    let running = state.engine.is_file_ingest_running(&ingest.id).await;
+    Ok(Json(serde_json::json!({
+        "id": ingest.id,
+        "filename": ingest.filename,
+        "streamKey": ingest.stream_key,
+        "loop": ingest.loop_flag,
+        "startTime": ingest.start_time,
+        "liveOptimized": ingest.live_optimized,
+        "targetGopSeconds": ingest.target_gop_seconds,
+        "running": running
+    }))
+    .into_response())
 }
 
 pub async fn ingests_delete_handler(

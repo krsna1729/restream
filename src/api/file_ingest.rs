@@ -14,13 +14,12 @@ use crate::application::ingest::{
     load_pipeline_file_ingest_state, persist_pipeline_file_ingest, remove_pipeline_file_ingest,
 };
 use crate::application::ports::{IngestLookup, SqliteIngestLookup, SqlitePipelineStore};
-use crate::db;
-use crate::types::Pipeline;
+use crate::application::services::ApiError;
 
 use super::ingests::{run_file_ingest_task, sanitize_target_gop_seconds, spawn_file_ingest_child};
 use super::state::{
     AppState, MAX_FFMPEG_ARGS_LEN, MAX_NAME_LEN, check_field_len, get_session_token_from_headers,
-    to_hex,
+    require_authenticated, to_hex,
 };
 
 #[derive(Deserialize, Clone)]
@@ -60,7 +59,7 @@ pub fn validate_pipeline_file_ingest_payload(
 
 pub async fn apply_pipeline_file_ingest_payload(
     state: &Arc<AppState>,
-    pipeline: &Pipeline,
+    pipeline: &crate::types::Pipeline,
     previous_stream_key: Option<&str>,
     payload: Option<Option<PipelineFileIngestPayload>>,
 ) -> Result<crate::application::ingest::PipelineFileIngestState, Response> {
@@ -145,36 +144,24 @@ pub async fn pipeline_file_ingest_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(pipeline_id): Path<String>,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
-    let pipeline = match db::get_pipeline(&state.db, &pipeline_id).await {
-        Ok(Some(pipeline)) => pipeline,
-        _ => return (StatusCode::NOT_FOUND, "Pipeline not found").into_response(),
-    };
+    let pipeline = state.pipeline_service.get_by_id(&pipeline_id).await?;
 
-    let file_ingest = match load_pipeline_file_ingest_state(
-        &SqliteIngestLookup::new(state.db.clone()),
-        &state.engine,
-        &pipeline,
-    )
-    .await
-    {
-        Ok(file_ingest) => file_ingest,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
+    let ingest_store = SqliteIngestLookup::new(state.db.clone());
+    let file_ingest_state =
+        load_pipeline_file_ingest_state(&ingest_store, &state.engine, &pipeline)
+            .await
+            .map_err(|_| ApiError::internal("load pipeline file ingest state"))?;
 
-    Json(api_view_models::file_ingest_response(
-        file_ingest.ingest,
-        file_ingest.running,
+    Ok(Json(api_view_models::file_ingest_response(
+        file_ingest_state.ingest,
+        file_ingest_state.running,
     ))
-    .into_response()
+    .into_response())
 }
 
 pub async fn pipeline_file_ingest_put_handler(
@@ -182,51 +169,44 @@ pub async fn pipeline_file_ingest_put_handler(
     headers: HeaderMap,
     Path(pipeline_id): Path<String>,
     Json(payload): Json<PipelineFileIngestPayload>,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
     if let Some(r) = check_field_len("filename", &payload.filename, MAX_NAME_LEN) {
-        return r;
+        return Ok(r);
     }
     if let Some(ref start_time) = payload.start_time
         && let Some(r) = check_field_len("start_time", start_time, 64)
     {
-        return r;
+        return Ok(r);
     }
     if payload.filename.trim().is_empty() {
-        return (
+        return Ok((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Filename cannot be empty"})),
         )
-            .into_response();
+            .into_response());
     }
 
-    let pipeline = match db::get_pipeline(&state.db, &pipeline_id).await {
-        Ok(Some(pipeline)) => pipeline,
-        _ => return (StatusCode::NOT_FOUND, "Pipeline not found").into_response(),
-    };
+    let pipeline = state.pipeline_service.get_by_id(&pipeline_id).await?;
 
+    let ingest_store = SqliteIngestLookup::new(state.db.clone());
+    let pipeline_store = SqlitePipelineStore::new(state.db.clone());
     if clear_stream_key_file_ingests(
-        &SqlitePipelineStore::new(state.db.clone()),
-        &SqliteIngestLookup::new(state.db.clone()),
+        &pipeline_store,
+        &ingest_store,
         &state.engine,
         &pipeline.stream_key,
     )
     .await
     .is_err()
     {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return Err(ApiError::internal("clear stream key file ingests"));
     }
 
-    let ingest_store = SqliteIngestLookup::new(state.db.clone());
-    let pipeline_store = SqlitePipelineStore::new(state.db.clone());
-    let saved = match persist_pipeline_file_ingest(
+    let saved = persist_pipeline_file_ingest(
         &ingest_store,
         &ingest_store,
         &pipeline_store,
@@ -240,77 +220,73 @@ pub async fn pipeline_file_ingest_put_handler(
         },
         || format!("ingest_{}", to_hex(&rand::random::<[u8; 8]>())),
     )
-    .await
-    {
+    .await;
+
+    let saved = match saved {
         Ok(saved) => saved,
         Err(PersistFileIngestError::IngestLookup(_))
         | Err(PersistFileIngestError::IngestWrite(_))
         | Err(PersistFileIngestError::PipelineStore(_)) => {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return Err(ApiError::internal("persist pipeline file ingest"));
         }
     };
 
-    Json(api_view_models::file_ingest_response(Some(saved), false)).into_response()
+    Ok(Json(api_view_models::file_ingest_response(Some(saved), false)).into_response())
 }
 
 pub async fn pipeline_file_ingest_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(pipeline_id): Path<String>,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
-    let pipeline = match db::get_pipeline(&state.db, &pipeline_id).await {
-        Ok(Some(pipeline)) => pipeline,
-        _ => return (StatusCode::NOT_FOUND, "Pipeline not found").into_response(),
-    };
+    let pipeline = state.pipeline_service.get_by_id(&pipeline_id).await?;
 
+    let ingest_store = SqliteIngestLookup::new(state.db.clone());
+    let pipeline_store = SqlitePipelineStore::new(state.db.clone());
     if clear_stream_key_file_ingests(
-        &SqlitePipelineStore::new(state.db.clone()),
-        &SqliteIngestLookup::new(state.db.clone()),
+        &pipeline_store,
+        &ingest_store,
         &state.engine,
         &pipeline.stream_key,
     )
     .await
     .is_err()
     {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-    let ingest_store = SqliteIngestLookup::new(state.db.clone());
-    let pipeline_store = SqlitePipelineStore::new(state.db.clone());
-    if remove_pipeline_file_ingest(&ingest_store, &ingest_store, &pipeline_store, &pipeline)
-        .await
-        .is_err()
-    {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return Err(ApiError::internal("clear stream key file ingests"));
     }
 
-    Json(serde_json::json!({"deleted": true})).into_response()
+    if crate::application::ingest::remove_pipeline_file_ingest(
+        &ingest_store,
+        &ingest_store,
+        &pipeline_store,
+        &pipeline,
+    )
+    .await
+    .is_err()
+    {
+        return Err(ApiError::internal("remove pipeline file ingest"));
+    }
+
+    Ok(Json(serde_json::json!({"deleted": true})).into_response())
 }
 
 pub async fn custom_encoding_get(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
-    let args = db::get_meta(&state.db, "custom_encoding")
+    let args = crate::db::get_meta(&state.db, "custom_encoding")
         .await
         .unwrap_or(None)
         .unwrap_or_default();
-    Json(serde_json::json!({ "ffmpegArgs": args })).into_response()
+    Ok(Json(serde_json::json!({ "ffmpegArgs": args })).into_response())
 }
 
 #[derive(Deserialize)]
@@ -323,18 +299,14 @@ pub async fn custom_encoding_put(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<CustomEncodingPayload>,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
     if let Some(r) = check_field_len("ffmpeg_args", &payload.ffmpeg_args, MAX_FFMPEG_ARGS_LEN) {
-        return r;
+        return Ok(r);
     }
-    let _ = db::set_meta(&state.db, "custom_encoding", &payload.ffmpeg_args).await;
-    Json(serde_json::json!({ "ffmpegArgs": payload.ffmpeg_args })).into_response()
+    let _ = crate::db::set_meta(&state.db, "custom_encoding", &payload.ffmpeg_args).await;
+    Ok(Json(serde_json::json!({ "ffmpegArgs": payload.ffmpeg_args })).into_response())
 }

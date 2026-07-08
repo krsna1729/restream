@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::api_view_models;
+use crate::application::services::ApiError;
 use crate::db;
 use crate::domain::output_spec::{OutputConfig, OutputUrlScheme};
 
@@ -195,87 +196,82 @@ pub async fn outputs_create_handler(
     headers: HeaderMap,
     Path(pipeline_id): Path<String>,
     Json(payload): Json<OutputPayload>,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
     if let Some(r) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
-        return r;
+        return Ok(r);
     }
     if let Some(r) = check_field_len("url", &payload.url, MAX_URL_LEN) {
-        return r;
+        return Ok(r);
     }
     let output_config = payload.config.clone();
     let output_encoding = payload.encoding_string();
     if let Some(r) = check_field_len("config", &output_encoding, MAX_ENCODING_LEN) {
-        return r;
+        return Ok(r);
     }
     if let Some(monitoring_url) = payload.monitoring_url.as_deref()
         && let Some(r) = check_field_len("monitoring_url", monitoring_url, MAX_URL_LEN)
     {
-        return r;
+        return Ok(r);
     }
     if output_config.is_custom_output() {
-        return (
+        return Ok((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "error": CUSTOM_OUTPUT_ENCODING_ERROR
             })),
         )
-            .into_response();
+            .into_response());
     }
     let url = payload.url.trim();
     if !is_supported_output_url(url) {
-        return (
+        return Ok((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "error": OUTPUT_URL_SCHEME_ERROR
             })),
         )
-            .into_response();
+            .into_response());
     }
     let monitoring_url = normalize_monitoring_url(payload.monitoring_url.as_deref());
     if let Some(ref url) = monitoring_url
         && !is_supported_monitoring_url(url)
     {
-        return (
+        return Ok((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "error": MONITORING_URL_SCHEME_ERROR
             })),
         )
-            .into_response();
+            .into_response());
     }
 
     let id = format!("output_{}", to_hex(&rand::random::<[u8; 8]>()));
 
-    match db::create_output(
-        &state.db,
-        &id,
-        &pipeline_id,
-        &payload.name,
-        &payload.url,
-        monitoring_url.as_deref(),
-        "stopped",
-        &output_config,
-    )
-    .await
-    {
-        Ok(output) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "message": "Output created",
-                "output": api_view_models::output_response_json(&output)
-            })),
+    let output = state
+        .output_service
+        .create_output(
+            &id,
+            &pipeline_id,
+            &payload.name,
+            &payload.url,
+            monitoring_url.as_deref(),
+            "stopped",
+            &output_config,
         )
-            .into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
+        .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "message": "Output created",
+            "output": api_view_models::output_response_json(&output)
+        })),
+    )
+        .into_response())
 }
 
 pub async fn outputs_update_handler(
@@ -283,171 +279,150 @@ pub async fn outputs_update_handler(
     headers: HeaderMap,
     Path((pipeline_id, output_id)): Path<(String, String)>,
     Json(payload): Json<OutputPayload>,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
     if let Some(r) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
-        return r;
+        return Ok(r);
     }
     if let Some(r) = check_field_len("url", &payload.url, MAX_URL_LEN) {
-        return r;
+        return Ok(r);
     }
     let output_config = payload.config.clone();
     let output_encoding = payload.encoding_string();
     if let Some(r) = check_field_len("config", &output_encoding, MAX_ENCODING_LEN) {
-        return r;
+        return Ok(r);
     }
     if let Some(monitoring_url) = payload.monitoring_url.as_deref()
         && let Some(r) = check_field_len("monitoring_url", monitoring_url, MAX_URL_LEN)
     {
-        return r;
+        return Ok(r);
     }
     if output_config.is_custom_output() {
-        return (
+        return Ok((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "error": CUSTOM_OUTPUT_ENCODING_ERROR
             })),
         )
-            .into_response();
+            .into_response());
     }
     let url = payload.url.trim();
     if !is_supported_output_url(url) {
-        return (
+        return Ok((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "error": OUTPUT_URL_SCHEME_ERROR
             })),
         )
-            .into_response();
+            .into_response());
     }
     let monitoring_url = normalize_monitoring_url(payload.monitoring_url.as_deref());
     if let Some(ref url) = monitoring_url
         && !is_supported_monitoring_url(url)
     {
-        return (
+        return Ok((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "error": MONITORING_URL_SCHEME_ERROR
             })),
         )
-            .into_response();
+            .into_response());
     }
-    let existing = match db::get_output(&state.db, &pipeline_id, &output_id).await {
-        Ok(Some(output)) => output,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "Output not found" })),
-            )
-                .into_response();
-        }
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
+    let existing = state
+        .output_service
+        .get_by_id(&pipeline_id, &output_id)
+        .await?;
     if existing.desired_state == "running"
         && (existing.url != payload.url || existing.config != output_config)
     {
-        return (
+        return Ok((
             StatusCode::CONFLICT,
             Json(serde_json::json!({
                 "error": "Cannot change output transport URL or config while the output is running"
             })),
         )
-            .into_response();
+            .into_response());
     }
 
-    match db::update_output(
-        &state.db,
-        &pipeline_id,
-        &output_id,
-        &payload.name,
-        &payload.url,
-        monitoring_url.as_deref(),
-        &output_config,
-    )
-    .await
-    {
-        Ok(Some(updated)) => Json(serde_json::json!({
-            "message": "Output updated",
-            "output": api_view_models::output_response_json(&updated)
-        }))
-        .into_response(),
-        _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
+    let updated = state
+        .output_service
+        .update_output(
+            &pipeline_id,
+            &output_id,
+            &payload.name,
+            &payload.url,
+            monitoring_url.as_deref(),
+            &output_config,
+        )
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "message": "Output updated",
+        "output": api_view_models::output_response_json(&updated)
+    }))
+    .into_response())
 }
 
 pub async fn outputs_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path((pipeline_id, output_id)): Path<(String, String)>,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
     state.engine.unregister_egress(&output_id).await;
-    match db::delete_output(&state.db, &pipeline_id, &output_id).await {
-        Ok(true) => Json(serde_json::json!({"message": "Output deleted"})).into_response(),
-        _ => (StatusCode::NOT_FOUND, "Output not found").into_response(),
-    }
+    state
+        .output_service
+        .delete_output(&pipeline_id, &output_id)
+        .await?;
+    Ok(Json(serde_json::json!({"message": "Output deleted"})).into_response())
 }
 
 pub async fn outputs_start_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path((pipeline_id, output_id)): Path<(String, String)>,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
-    match db::set_output_desired_state(&state.db, &pipeline_id, &output_id, "running").await {
-        Ok(output) => Json(serde_json::json!({
-            "message": "Output started",
-            "desiredState": "running",
-            "output": api_view_models::output_response_json(&output)
-        }))
-        .into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
+    let output = state
+        .output_service
+        .request_start(&pipeline_id, &output_id)
+        .await?;
+    Ok(Json(serde_json::json!({
+        "message": "Output started",
+        "desiredState": "running",
+        "output": api_view_models::output_response_json(&output)
+    }))
+    .into_response())
 }
 
 pub async fn outputs_stop_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path((pipeline_id, output_id)): Path<(String, String)>,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
-    match db::set_output_desired_state(&state.db, &pipeline_id, &output_id, "stopped").await {
-        Ok(output) => Json(serde_json::json!({
-            "message": "Output stopped",
-            "desiredState": "stopped",
-            "output": api_view_models::output_response_json(&output)
-        }))
-        .into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
+    let output = state
+        .output_service
+        .request_stop(&pipeline_id, &output_id)
+        .await?;
+    Ok(Json(serde_json::json!({
+        "message": "Output stopped",
+        "desiredState": "stopped",
+        "output": api_view_models::output_response_json(&output)
+    }))
+    .into_response())
 }
 
 pub async fn output_status_handler(

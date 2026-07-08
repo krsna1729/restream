@@ -9,14 +9,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
-use crate::application::ports::SqliteMetaStore;
-use crate::application::recording::{
-    load_recording_settings, recording_enabled_meta_key, spawn_recording_task,
-};
+use crate::application::services::ApiError;
 use crate::db;
 
 use super::state::{
-    AppState, MAX_NAME_LEN, check_field_len, get_session_token_from_headers, to_hex,
+    AppState, MAX_NAME_LEN, check_field_len, get_session_token_from_headers, require_authenticated,
+    to_hex,
 };
 
 #[derive(Deserialize)]
@@ -29,84 +27,44 @@ pub async fn recording_start_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
     headers: HeaderMap,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
-    let pipeline = match db::get_pipeline(&state.db, &pipeline_id).await {
-        Ok(Some(p)) => p,
-        _ => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Pipeline not found"})),
-            )
-                .into_response();
-        }
-    };
+    let pipeline = state.pipeline_service.get_by_id(&pipeline_id).await?;
 
-    let meta_key = recording_enabled_meta_key(&pipeline_id);
-    let _ = db::set_meta(&state.db, &meta_key, "1").await;
-
-    let has_ingest = state
-        .engine
-        .ingests
-        .active
-        .read()
-        .await
-        .contains_key(&pipeline_id);
-    if has_ingest && !state.engine.is_recording_active(&pipeline_id).await {
-        let recording_settings =
-            load_recording_settings(&SqliteMetaStore::new(state.db.clone())).await;
-        spawn_recording_task(
-            state.engine.clone(),
+    let active = state
+        .media_library_service
+        .recording_start(
+            &state.engine,
+            &pipeline_id,
             pipeline.name.clone(),
-            pipeline_id.clone(),
             pipeline.input_source.clone(),
-            state.media_dir.clone(),
-            recording_settings,
+            &state.media_dir,
         )
-        .await;
-    }
+        .await?;
 
-    let active = state.engine.is_recording_active(&pipeline_id).await;
-    Json(serde_json::json!({ "enabled": true, "active": active })).into_response()
+    Ok(Json(serde_json::json!({ "enabled": true, "active": active })).into_response())
 }
 
 pub async fn recording_stop_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
     headers: HeaderMap,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
-    match db::get_pipeline(&state.db, &pipeline_id).await {
-        Ok(Some(_)) => {}
-        _ => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Pipeline not found"})),
-            )
-                .into_response();
-        }
-    };
+    let _ = state.pipeline_service.get_by_id(&pipeline_id).await?;
 
-    let meta_key = recording_enabled_meta_key(&pipeline_id);
-    let _ = db::set_meta(&state.db, &meta_key, "0").await;
+    state
+        .media_library_service
+        .recording_stop(&state.engine, &pipeline_id)
+        .await?;
 
-    state.engine.unregister_recording(&pipeline_id).await;
-
-    Json(serde_json::json!({ "enabled": false, "active": false })).into_response()
+    Ok(Json(serde_json::json!({ "enabled": false, "active": false })).into_response())
 }
 
 pub async fn media_list_handler(
