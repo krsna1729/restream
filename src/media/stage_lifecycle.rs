@@ -107,7 +107,10 @@ impl StageLifecycle {
         let mut inner = self.inner.lock().expect("stage lifecycle lock poisoned");
         if inner.first_input_at.is_none() {
             inner.first_input_at = Some(Instant::now());
-            if matches!(inner.phase, StagePhase::BackendSpawned { .. }) {
+            if matches!(
+                inner.phase,
+                StagePhase::BackendSpawned { .. } | StagePhase::StartingBackend { .. }
+            ) {
                 inner.phase = StagePhase::FirstInput;
             }
         }
@@ -117,7 +120,10 @@ impl StageLifecycle {
         let mut inner = self.inner.lock().expect("stage lifecycle lock poisoned");
         if inner.first_output_at.is_none() {
             inner.first_output_at = Some(Instant::now());
-            if matches!(inner.phase, StagePhase::FirstInput) {
+            if matches!(
+                inner.phase,
+                StagePhase::FirstInput | StagePhase::RunningNoOutputYet
+            ) {
                 inner.phase = StagePhase::FirstOutput;
             }
         }
@@ -127,7 +133,10 @@ impl StageLifecycle {
         let mut inner = self.inner.lock().expect("stage lifecycle lock poisoned");
         if matches!(
             inner.phase,
-            StagePhase::FirstOutput | StagePhase::FirstInput | StagePhase::BackendSpawned { .. }
+            StagePhase::FirstOutput
+                | StagePhase::FirstInput
+                | StagePhase::RunningNoOutputYet
+                | StagePhase::BackendSpawned { .. }
         ) {
             inner.phase = StagePhase::Producing;
         }
@@ -172,6 +181,7 @@ fn backend_kind_from_phase(phase: &StagePhase) -> Option<StageBackendKind> {
     match phase {
         StagePhase::WaitingForCapacity { backend }
         | StagePhase::CapacityAcquired { backend }
+        | StagePhase::StartingBackend { backend }
         | StagePhase::BackendSpawned { backend, .. } => Some(backend.clone()),
         _ => None,
     }

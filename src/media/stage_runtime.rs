@@ -86,6 +86,7 @@ impl StageRuntimeSnapshot {
 
 fn phase_name(phase: &StagePhase) -> String {
     match phase {
+        StagePhase::Planned => "planned".to_string(),
         StagePhase::Registered => "registered".to_string(),
         StagePhase::WaitingForDependency { .. } => "waitingForDependency".to_string(),
         StagePhase::WaitingForMetadata => "waitingForMetadata".to_string(),
@@ -93,8 +94,10 @@ fn phase_name(phase: &StagePhase) -> String {
         StagePhase::WaitingForKeyframe => "waitingForKeyframe".to_string(),
         StagePhase::WaitingForCapacity { .. } => "waitingForCapacity".to_string(),
         StagePhase::CapacityAcquired { .. } => "capacityAcquired".to_string(),
+        StagePhase::StartingBackend { .. } => "startingBackend".to_string(),
         StagePhase::BackendSpawned { .. } => "backendSpawned".to_string(),
         StagePhase::FirstInput => "firstInput".to_string(),
+        StagePhase::RunningNoOutputYet => "runningNoOutputYet".to_string(),
         StagePhase::FirstOutput => "firstOutput".to_string(),
         StagePhase::Producing => "producing".to_string(),
         StagePhase::Failed => "failed".to_string(),

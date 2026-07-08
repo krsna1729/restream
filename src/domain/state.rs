@@ -29,6 +29,9 @@ pub enum StageBackendKind {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "phase")]
 pub enum StagePhase {
+    /// Stage exists in the graph plan but has not been registered yet.
+    Planned,
+    /// Stage has been registered in the runtime manager.
     Registered,
     WaitingForDependency {
         dependency: StageKey,
@@ -42,11 +45,17 @@ pub enum StagePhase {
     CapacityAcquired {
         backend: StageBackendKind,
     },
+    /// Backend is being started (e.g. spawning FFmpeg process).
+    StartingBackend {
+        backend: StageBackendKind,
+    },
     BackendSpawned {
         backend: StageBackendKind,
         pid: Option<u32>,
     },
     FirstInput,
+    /// Backend is running and has received input but has not produced output yet.
+    RunningNoOutputYet,
     FirstOutput,
     Producing,
     Failed,

@@ -1063,6 +1063,28 @@ impl MediaEngine {
         })
     }
 
+    /// Return runtime snapshots for all stages belonging to the given pipeline.
+    pub async fn pipeline_stage_runtime_snapshots(
+        &self,
+        pipeline_id: &str,
+    ) -> Vec<crate::media::stage_runtime::StageRuntimeSnapshot> {
+        let lifecycles = self.stages.lifecycles.read().await;
+        let keys: Vec<StageKey> = lifecycles
+            .keys()
+            .filter(|k| k.pipeline.as_str() == pipeline_id)
+            .cloned()
+            .collect();
+        drop(lifecycles);
+
+        let mut snapshots = Vec::with_capacity(keys.len());
+        for key in keys {
+            if let Some(snap) = self.stage_runtime_snapshot(&key).await {
+                snapshots.push(snap);
+            }
+        }
+        snapshots
+    }
+
     /// Returns the blocking upstream stage snapshot for an egress when its
     /// terminal stage is not yet producing. `None` means the stage is healthy,
     /// unknown, or already producing.

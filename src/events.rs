@@ -42,6 +42,36 @@ pub enum EventKind {
         pipeline_id: String,
         encoding: String,
     },
+    StageWaitingForCapacity {
+        #[serde(rename = "pipelineId")]
+        pipeline_id: String,
+        encoding: String,
+        backend: String,
+    },
+    StageBackendSpawned {
+        #[serde(rename = "pipelineId")]
+        pipeline_id: String,
+        encoding: String,
+        backend: String,
+        #[serde(skip_serializing)]
+        pid: Option<u32>,
+    },
+    StageFirstInput {
+        #[serde(rename = "pipelineId")]
+        pipeline_id: String,
+        encoding: String,
+    },
+    StageFirstOutput {
+        #[serde(rename = "pipelineId")]
+        pipeline_id: String,
+        encoding: String,
+    },
+    StageFailed {
+        #[serde(rename = "pipelineId")]
+        pipeline_id: String,
+        encoding: String,
+        error: String,
+    },
     StageStopped {
         #[serde(rename = "pipelineId")]
         pipeline_id: String,
@@ -74,7 +104,12 @@ impl EventKind {
         match self {
             Self::IngestConnected { .. } => "ingest.connected",
             Self::IngestDisconnected { .. } => "ingest.disconnected",
-            Self::StageRegistered { .. } => "stage.started",
+            Self::StageRegistered { .. } => "stage.registered",
+            Self::StageWaitingForCapacity { .. } => "stage.waitingForCapacity",
+            Self::StageBackendSpawned { .. } => "stage.backendSpawned",
+            Self::StageFirstInput { .. } => "stage.firstInput",
+            Self::StageFirstOutput { .. } => "stage.firstOutput",
+            Self::StageFailed { .. } => "stage.failed",
             Self::StageStopped { .. } => "stage.stopped",
             Self::EgressStarted { .. } => "egress.started",
             Self::EgressStopped { .. } => "egress.stopped",
@@ -87,6 +122,11 @@ impl EventKind {
             Self::IngestConnected { pipeline_id, .. }
             | Self::IngestDisconnected { pipeline_id, .. }
             | Self::StageRegistered { pipeline_id, .. }
+            | Self::StageWaitingForCapacity { pipeline_id, .. }
+            | Self::StageBackendSpawned { pipeline_id, .. }
+            | Self::StageFirstInput { pipeline_id, .. }
+            | Self::StageFirstOutput { pipeline_id, .. }
+            | Self::StageFailed { pipeline_id, .. }
             | Self::StageStopped { pipeline_id, .. }
             | Self::EgressStarted { pipeline_id, .. }
             | Self::EgressStopped { pipeline_id, .. }
@@ -111,7 +151,28 @@ impl EventKind {
             Self::IngestDisconnected { protocol, .. } => {
                 format!("{} publisher disconnected", protocol.to_uppercase())
             }
-            Self::StageRegistered { encoding, .. } => format!("Stage started: {}", encoding),
+            Self::StageRegistered { encoding, .. } => format!("Stage registered: {}", encoding),
+            Self::StageWaitingForCapacity {
+                encoding, backend, ..
+            } => {
+                format!("Stage waiting for capacity: {} ({})", encoding, backend)
+            }
+            Self::StageBackendSpawned {
+                encoding, backend, ..
+            } => {
+                format!("Stage backend spawned: {} ({})", encoding, backend)
+            }
+            Self::StageFirstInput { encoding, .. } => {
+                format!("Stage first input: {}", encoding)
+            }
+            Self::StageFirstOutput { encoding, .. } => {
+                format!("Stage first output: {}", encoding)
+            }
+            Self::StageFailed {
+                encoding, error, ..
+            } => {
+                format!("Stage failed: {} ({})", encoding, error)
+            }
             Self::StageStopped { encoding, .. } => format!("Stage stopped: {}", encoding),
             Self::EgressStarted { output_id, .. } => format!("Output started: {}", output_id),
             Self::EgressStopped { output_id, .. } => format!("Output stopped: {}", output_id),
@@ -298,7 +359,7 @@ mod tests {
                 encoding: "720p".into()
             }
             .event_type(),
-            "stage.started"
+            "stage.registered"
         );
         assert_eq!(
             EventKind::StageStopped {
@@ -400,6 +461,25 @@ mod tests {
             }
             .message()
             .contains("720p")
+        );
+
+        assert!(
+            EventKind::StageWaitingForCapacity {
+                pipeline_id: "p".into(),
+                encoding: "720p".into(),
+                backend: "externalFfmpeg".into()
+            }
+            .message()
+            .contains("waiting for capacity")
+        );
+
+        assert!(
+            EventKind::StageFirstOutput {
+                pipeline_id: "p".into(),
+                encoding: "720p".into()
+            }
+            .message()
+            .contains("first output")
         );
 
         assert!(
