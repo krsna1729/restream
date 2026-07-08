@@ -25,6 +25,7 @@ pub async fn prepare_output_ring(
         ingest_video_codec.as_deref(),
         std::slice::from_ref(output),
         false,
+        &engine.config.backend_policy,
     );
 
     let mut current_bufs = std::collections::HashMap::new();

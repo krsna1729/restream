@@ -18,7 +18,8 @@ pub enum StageBackend {
 /// Per-stage-family backend policy.
 ///
 /// Targeted controls so that each stage family can graduate independently.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The default is all-external (no internal FFmpeg backends enabled).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BackendPolicy {
     pub internal_video_presets: bool,
     pub internal_hevc_to_h264: bool,
@@ -87,12 +88,7 @@ mod tests {
     use super::*;
 
     fn default_policy() -> BackendPolicy {
-        BackendPolicy {
-            internal_video_presets: false,
-            internal_hevc_to_h264: false,
-            internal_hls_preview: false,
-            internal_complex_audio: false,
-        }
+        BackendPolicy::default()
     }
 
     #[test]

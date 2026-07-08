@@ -43,11 +43,21 @@ pub struct StageHandle {
 #[derive(Clone)]
 pub struct StageRuntimeManager {
     engine: Arc<MediaEngine>,
+    /// Backend selection policy, injected from `AppConfig` at construction time.
+    /// Never re-reads env vars during execution.
+    policy: BackendPolicy,
 }
 
 impl StageRuntimeManager {
+    /// Create a manager using the engine's embedded `AppConfig` as the policy source.
     pub fn new(engine: Arc<MediaEngine>) -> Self {
-        Self { engine }
+        let policy = engine.config.backend_policy.clone();
+        Self { engine, policy }
+    }
+
+    /// Create a manager with an explicitly provided policy (useful in tests).
+    pub fn with_policy(engine: Arc<MediaEngine>, policy: BackendPolicy) -> Self {
+        Self { engine, policy }
     }
 
     /// Ensure a stage exists for the given key, creating its output ring,
@@ -94,7 +104,7 @@ impl StageRuntimeManager {
         self.initialize_stage_metadata(&key, &source_ring, input_codec_override, &output_ring)
             .await;
 
-        let backend_kind = backend_kind_for_stage(&key.kind);
+        let backend_kind = backend_kind_for_stage(&key.kind, &self.policy);
         let lifecycle = self
             .engine
             .get_or_create_stage_lifecycle_with_backend(
@@ -132,7 +142,7 @@ impl StageRuntimeManager {
 
     /// Compute the backend policy choice for a stage without acquiring permits.
     pub fn select_backend(&self, kind: &StageKind) -> StageBackend {
-        BackendPolicy::from_env().select_backend(kind)
+        self.policy.select_backend(kind)
     }
 
     /// Spawn the selected backend for a freshly-created stage. This consumes the
@@ -340,9 +350,9 @@ impl StageRuntimeManager {
     }
 }
 
-fn backend_kind_for_stage(kind: &StageKind) -> StageBackendKind {
+fn backend_kind_for_stage(kind: &StageKind, policy: &BackendPolicy) -> StageBackendKind {
     use crate::planner::backend_policy::StageBackend;
-    match BackendPolicy::from_env().select_backend(kind) {
+    match policy.select_backend(kind) {
         StageBackend::AudioRouter => StageBackendKind::AudioRouter,
         StageBackend::InternalFfmpeg => StageBackendKind::InternalFfmpeg,
         StageBackend::ExternalFfmpeg => StageBackendKind::ExternalFfmpeg,
