@@ -43,6 +43,7 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
                 egress,
                 true,
                 ingests.contains_key(egress.pipeline_id.as_str()),
+                None,
             )
         })
         .collect();
@@ -183,7 +184,12 @@ pub(crate) async fn pipeline_telemetry(
         .values()
         .filter(|egress| egress.pipeline_id == pipeline_id)
         .map(|egress| {
-            api_view_models::egress_runtime_json(egress, true, ingests.contains_key(pipeline_id))
+            api_view_models::egress_runtime_json(
+                egress,
+                true,
+                ingests.contains_key(pipeline_id),
+                None,
+            )
         })
         .collect();
 

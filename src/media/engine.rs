@@ -18,14 +18,10 @@ use crate::media::engine_registries::{
 };
 use crate::media::hls::HlsStore;
 use crate::media::hls_fmp4::Fmp4HlsStore;
-use crate::media::ring_buffer::{
-    RingBuffer, default_ring_capacity, default_transcoder_ring_capacity,
-};
-use crate::media::ts_chunk_ring::TsChunkRing;
-use crate::planner::backend_policy::{BackendPolicy, StageBackend};
-
 pub use crate::media::pipe_metrics::PipeMetrics;
+use crate::media::ring_buffer::{RingBuffer, default_ring_capacity};
 pub use crate::media::stage_metrics::StageMetrics;
+use crate::media::ts_chunk_ring::TsChunkRing;
 
 pub(crate) const EGRESS_PROGRESS_STALE_MS: u64 = 10_000;
 pub(crate) const INGEST_FLAP_WINDOW_MS: u64 = 30_000;
@@ -287,6 +283,7 @@ pub struct ActiveEgress {
     pub prev_bytes_sent: AtomicU64,
     pub prev_sample_time: std::sync::Mutex<Instant>,
     pub bitrate_kbps: std::sync::Mutex<Option<f64>>,
+    pub terminal_stage_key: Option<StageKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -968,6 +965,94 @@ impl MediaEngine {
         self.stages.metrics.write().await.remove(key);
     }
 
+    pub async fn get_or_create_stage_lifecycle(
+        &self,
+        key: StageKey,
+        initial: crate::media::stage_lifecycle::StagePhase,
+    ) -> Arc<crate::media::stage_lifecycle::StageLifecycle> {
+        let mut lifecycles = self.stages.lifecycles.write().await;
+        lifecycles
+            .entry(key)
+            .or_insert_with(|| {
+                Arc::new(crate::media::stage_lifecycle::StageLifecycle::new(initial))
+            })
+            .clone()
+    }
+
+    pub async fn get_or_create_stage_lifecycle_with_backend(
+        &self,
+        key: StageKey,
+        initial: crate::media::stage_lifecycle::StagePhase,
+        backend: crate::media::stage_lifecycle::StageBackendKind,
+    ) -> Arc<crate::media::stage_lifecycle::StageLifecycle> {
+        let mut lifecycles = self.stages.lifecycles.write().await;
+        lifecycles
+            .entry(key.clone())
+            .or_insert_with(|| {
+                Arc::new(
+                    crate::media::stage_lifecycle::StageLifecycle::new_with_backend(
+                        initial, backend,
+                    ),
+                )
+            })
+            .clone()
+    }
+
+    pub async fn remove_stage_lifecycle(&self, key: &StageKey) {
+        self.stages.lifecycles.write().await.remove(key);
+    }
+
+    pub async fn stage_lifecycle_snapshot(
+        &self,
+        key: &StageKey,
+    ) -> Option<crate::media::stage_lifecycle::StageLifecycleSnapshot> {
+        self.stages
+            .lifecycles
+            .read()
+            .await
+            .get(key)
+            .map(|lc| lc.snapshot())
+    }
+
+    /// Returns the blocking upstream stage snapshot for an egress when its
+    /// terminal stage is not yet producing. `None` means the stage is healthy,
+    /// unknown, or already producing.
+    pub async fn egress_blocked_by_snapshot(
+        &self,
+        egress: &ActiveEgress,
+    ) -> Option<crate::media::stage_runtime::StageRuntimeSnapshot> {
+        use std::sync::atomic::Ordering;
+
+        let key = egress.terminal_stage_key.as_ref()?;
+        let lifecycle = self.stage_lifecycle_snapshot(key).await?;
+        if matches!(
+            lifecycle.phase,
+            crate::media::stage_lifecycle::StagePhase::Producing
+        ) {
+            return None;
+        }
+        let metrics = self
+            .stages
+            .metrics
+            .read()
+            .await
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(crate::media::stage_metrics::StageMetrics::new()));
+        Some(crate::media::stage_runtime::StageRuntimeSnapshot {
+            key: key.clone(),
+            backend: lifecycle.backend.clone(),
+            phase: lifecycle.phase.clone(),
+            bytes_in: metrics.bytes_in.load(Ordering::Relaxed),
+            bytes_out: metrics.bytes_out.load(Ordering::Relaxed),
+            packets_in: metrics.packets_in.load(Ordering::Relaxed),
+            packets_out: metrics.packets_out.load(Ordering::Relaxed),
+            first_input_at: lifecycle.first_input_at,
+            first_output_at: lifecycle.first_output_at,
+            last_error: lifecycle.last_error.clone(),
+        })
+    }
+
     pub async fn register_input_queue(&self, key: StageKey, queue: Arc<MemoryQueue>) {
         self.stages.input_queues.write().await.insert(key, queue);
     }
@@ -1195,166 +1280,16 @@ impl MediaEngine {
         input_codec_override: Option<&str>,
     ) -> Arc<RingBuffer> {
         let key = StageKey::new(pipeline_id, stage_kind.clone());
+        let manager = crate::media::stage_runtime::StageRuntimeManager::new(self.clone());
+        let (handle, created) = manager
+            .ensure_stage(key.clone(), source_buffer.clone(), input_codec_override)
+            .await;
 
-        // Use a single write-lock acquisition to atomically check-and-insert.
-        // The previous read-lock-then-write-lock pattern had a TOCTOU window:
-        // two concurrent callers could both see the key absent, then both create
-        // a ring buffer and spawn a transcoder task — the second insert would
-        // overwrite the first, leaving an orphaned transcoder eating CPU/memory.
-        let mut buffers = self.stages.buffers.write().await;
-        if let Some((rb, token)) = buffers.get(&key)
-            && !token.is_cancelled()
-        {
-            return rb.clone();
-        }
-        // Cancelled stage — fall through and replace it
-
-        let output_buf = Arc::new(RingBuffer::new(default_transcoder_ring_capacity()));
-        let cancel = CancellationToken::new();
-        buffers.insert(key.clone(), (output_buf.clone(), cancel.clone()));
-        drop(buffers); // release write lock before spawning
-
-        // Set codec_hint SYNCHRONOUSLY before spawning — downstream stages
-        // (e.g. audio routers, SRT egress warmup) may query it before the
-        // spawned task runs.
-        // • video:* stages: always re-encode with libx264 → always "h264"
-        // • audio:* stages: passthrough → inherit hint from source_buffer
-        if stage_kind.is_video_preset() {
-            // Preserve the input codec: H.265 source → H.265 output, H.264 → H.264.
-            // input_codec_override carries the ingest codec ("hevc" or "h265") so
-            // the ring is tagged correctly for downstream audio stages and egress.
-            // Falls back to "h264" when no override is provided (H.264 ingest).
-            output_buf.set_codec_hint(input_codec_override.unwrap_or("h264"));
-        } else if let Some(oc) = input_codec_override {
-            output_buf.set_codec_hint(oc);
-        } else {
-            let hint = source_buffer.codec_hint_str();
-            if !hint.is_empty() {
-                output_buf.set_codec_hint(hint);
-            }
+        if created {
+            manager.spawn_stage(handle.clone(), source_buffer.clone(), input_codec_override);
         }
 
-        // Set audio_tracks metadata
-        let input_tracks = if let Some(tracks) = source_buffer.audio_tracks() {
-            std::sync::Arc::new(tracks.to_vec())
-        } else {
-            let ingests = self.ingests.active.read().await;
-            ingests
-                .get(pipeline_id)
-                .map(|i| {
-                    let lock = i.audio_tracks.lock().unwrap_or_else(|e| e.into_inner());
-                    if lock.is_empty()
-                        && let Some(audio) = i.audio.clone()
-                    {
-                        std::sync::Arc::new(vec![audio])
-                    } else {
-                        std::sync::Arc::clone(&lock)
-                    }
-                })
-                .unwrap_or_default()
-        };
-
-        // Only eagerly propagate audio_tracks when we have real data.
-        // For lightweight audio-router stages on live SRT/RTMP ingest, the
-        // ingest audio_tracks may not yet be known at output-wiring time.
-        // Setting empty tracks here would poison the ArcSwapOption and prevent
-        // start_audio_router() from installing the correct tracks once the
-        // ingest stream has been probed.  The audio_router stage handles the
-        // late-binding case by setting tracks on the output ring at startup.
-        if !input_tracks.is_empty() {
-            let output_tracks = if let Some(audio_op) = stage_kind.audio_operation() {
-                let routing = crate::domain::audio_routing::parse_audio_operation(audio_op);
-                crate::media::transcoder::apply_audio_routing(&routing, &input_tracks)
-            } else {
-                (*input_tracks).clone()
-            };
-            if !output_tracks.is_empty() {
-                output_buf.set_audio_tracks(output_tracks);
-            }
-        }
-
-        let encoding_str = stage_kind.to_string();
-        info!(pipeline_id = %pipeline_id, encoding = %encoding_str, "spawning transcoder stage");
-        self.runtime
-            .event_log
-            .emit(crate::events::EventKind::StageStarted {
-                pipeline_id: pipeline_id.to_string(),
-                encoding: encoding_str.clone(),
-            });
-
-        let pid = pipeline_id.to_string();
-        let enc = encoding_str.clone();
-        let ob = output_buf.clone();
-        let self_clone = self.clone();
-        let codec_override = input_codec_override.map(String::from);
-
-        // ── Backend dispatch ───────────────────────────────────────────────
-        // atrack audio stages are pure packet filters — no mux/demux, no codec
-        // work. Remap/downmix require DSP decode→filter→encode and run through
-        // the FFmpeg stage backend.
-        // video: stages (video:720p etc.): external subprocess FFmpeg by default;
-        //   override with RESTREAM_USE_INTERNAL_TRANSCODER=1.
-        let backend_policy = BackendPolicy::from_env();
-        if let Some(audio_op) = stage_kind.audio_operation() {
-            let routing = crate::domain::audio_routing::parse_audio_operation(audio_op);
-            if backend_policy.select_backend(&stage_kind) == StageBackend::AudioRouter {
-                info!(pipeline_id = %pipeline_id, encoding = %encoding_str, "spawning audio-router stage");
-                tokio::spawn(async move {
-                    crate::media::transcoder::start_audio_router(
-                        pid,
-                        routing,
-                        source_buffer,
-                        ob,
-                        self_clone,
-                        cancel,
-                        key,
-                    )
-                    .await;
-                });
-                return output_buf;
-            }
-            // Channel-level DSP routes fall through to the selected FFmpeg backend.
-        }
-
-        let backend = backend_policy.select_backend(&stage_kind);
-
-        info!(pipeline_id = %pipeline_id, encoding = %encoding_str, "spawning transcoder stage");
-
-        if backend == StageBackend::InternalFfmpeg {
-            if stage_kind.is_video_preset() {
-                info!(encoding = %encoding_str, "using in-process decode->scale->encode loop");
-            }
-            let int_stage_key = key.clone();
-            tokio::spawn(async move {
-                crate::media::transcoder::start_transcoder(
-                    pid,
-                    enc,
-                    source_buffer,
-                    ob,
-                    self_clone,
-                    cancel,
-                    int_stage_key,
-                )
-                .await;
-            });
-        } else {
-            let ext_stage_key = key.clone();
-            tokio::spawn(async move {
-                crate::media::external_transcoder::start_external_transcoder_stage(
-                    pid,
-                    enc,
-                    source_buffer,
-                    ob,
-                    self_clone,
-                    cancel,
-                    codec_override,
-                    ext_stage_key,
-                )
-                .await;
-            });
-        }
-
-        output_buf
+        handle.ring
     }
 
     /// Get or create a shared H.265→H.264 transcoder stage for a pipeline.
@@ -1369,89 +1304,16 @@ impl MediaEngine {
         source_buffer: Arc<RingBuffer>,
     ) -> Arc<RingBuffer> {
         let key = StageKey::new(pipeline_id, StageKind::codec_edge("hevc_to_h264", upstream));
+        let manager = crate::media::stage_runtime::StageRuntimeManager::new(self.clone());
+        let (handle, created) = manager
+            .ensure_stage(key.clone(), source_buffer.clone(), None)
+            .await;
 
-        // Single write-lock to avoid the TOCTOU race (see get_or_create_transcoder).
-        let mut buffers = self.stages.buffers.write().await;
-        if let Some((rb, token)) = buffers.get(&key)
-            && !token.is_cancelled()
-        {
-            return rb.clone();
+        if created {
+            manager.spawn_codec_edge_stage(handle.clone(), source_buffer.clone());
         }
 
-        let output_buf = Arc::new(RingBuffer::new(default_transcoder_ring_capacity()));
-        // hevc_to_h264 stage always produces H.264 — tag the ring so consumers
-        // can initialize their TsMuxer / PMT with the correct codec.
-        output_buf.set_codec_hint("h264");
-
-        // Inherit audio tracks from source_buffer (codec-edge stages do not
-        // do audio routing, so tracks pass through unchanged).
-        // Only set when non-empty — same reasoning as get_or_create_transcoder.
-        let input_tracks = if let Some(tracks) = source_buffer.audio_tracks() {
-            std::sync::Arc::new(tracks)
-        } else {
-            let ingests = self.ingests.active.read().await;
-            ingests
-                .get(pipeline_id)
-                .map(|i| {
-                    let lock = i.audio_tracks.lock().unwrap_or_else(|e| e.into_inner());
-                    if lock.is_empty()
-                        && let Some(audio) = i.audio.clone()
-                    {
-                        std::sync::Arc::new(vec![audio])
-                    } else {
-                        std::sync::Arc::clone(&lock)
-                    }
-                })
-                .unwrap_or_default()
-        };
-        if !input_tracks.is_empty() {
-            output_buf.set_audio_tracks((*input_tracks).clone());
-        }
-        let cancel = CancellationToken::new();
-        buffers.insert(key.clone(), (output_buf.clone(), cancel.clone()));
-        drop(buffers); // release write lock before spawning
-
-        info!(pipeline_id = %pipeline_id, "spawning shared H.265→H.264 transcoder");
-        self.runtime
-            .event_log
-            .emit(crate::events::EventKind::StageStarted {
-                pipeline_id: pipeline_id.to_string(),
-                encoding: key.kind.to_string(),
-            });
-
-        let pid = pipeline_id.to_string();
-        let ob = output_buf.clone();
-        let self_clone = self.clone();
-        let backend = BackendPolicy::from_env().select_backend(&key.kind);
-        if backend == StageBackend::InternalFfmpeg {
-            tokio::spawn(async move {
-                crate::media::h264_transcoder::start_h264_transcoder(
-                    pid,
-                    source_buffer,
-                    ob,
-                    self_clone,
-                    cancel,
-                    key,
-                )
-                .await;
-            });
-        } else {
-            tokio::spawn(async move {
-                crate::media::external_transcoder::start_external_transcoder_stage(
-                    pid,
-                    "h264".to_string(),
-                    source_buffer,
-                    ob,
-                    self_clone,
-                    cancel,
-                    None,
-                    key,
-                )
-                .await;
-            });
-        }
-
-        output_buf
+        handle.ring
     }
 
     /// Return the active processing stages for a pipeline as (kind, is_alive) pairs.
@@ -1789,6 +1651,7 @@ impl MediaEngine {
         output_id: &str,
         pipeline_id: &str,
         url: &str,
+        terminal_stage_key: Option<StageKey>,
     ) -> EgressRegistration {
         self.egresses.retry.write().await.remove(output_id);
 
@@ -1829,6 +1692,7 @@ impl MediaEngine {
                 prev_bytes_sent: AtomicU64::new(0),
                 prev_sample_time: std::sync::Mutex::new(now),
                 bitrate_kbps: std::sync::Mutex::new(None),
+                terminal_stage_key,
             },
         );
 
@@ -1847,7 +1711,7 @@ impl MediaEngine {
         pipeline_id: &str,
         url: &str,
     ) -> CancellationToken {
-        self.register_egress_attempt(output_id, pipeline_id, url)
+        self.register_egress_attempt(output_id, pipeline_id, url, None)
             .await
             .cancel_token
     }
@@ -3754,12 +3618,12 @@ mod tests {
         let engine = MediaEngine::new();
 
         let first = engine
-            .register_egress_attempt("out-race", "pipe-1", "rtmp://example.com/live/one")
+            .register_egress_attempt("out-race", "pipe-1", "rtmp://example.com/live/one", None)
             .await;
         engine.unregister_egress("out-race").await;
 
         let replacement = engine
-            .register_egress_attempt("out-race", "pipe-1", "srt://example.com:10080")
+            .register_egress_attempt("out-race", "pipe-1", "srt://example.com:10080", None)
             .await;
 
         assert!(
@@ -3786,12 +3650,12 @@ mod tests {
             .unwrap();
 
         let first = engine
-            .register_egress_attempt("out-race", "pipe-1", "rtmp://example.com/live/one")
+            .register_egress_attempt("out-race", "pipe-1", "rtmp://example.com/live/one", None)
             .await;
         engine.unregister_egress("out-race").await;
 
         let replacement = engine
-            .register_egress_attempt("out-race", "pipe-1", "rtmp://example.com/live/two")
+            .register_egress_attempt("out-race", "pipe-1", "rtmp://example.com/live/two", None)
             .await;
 
         assert!(
@@ -3834,7 +3698,7 @@ mod tests {
     async fn stale_egress_queue_removal_cannot_drop_replacement_queue() {
         let engine = MediaEngine::new();
         let first = engine
-            .register_egress_attempt("out-race", "pipe-1", "srt://example.com:10080")
+            .register_egress_attempt("out-race", "pipe-1", "srt://example.com:10080", None)
             .await;
         let first_queue = Arc::new(MemoryQueue::new());
         assert!(
@@ -3845,7 +3709,7 @@ mod tests {
         engine.unregister_egress("out-race").await;
 
         let replacement = engine
-            .register_egress_attempt("out-race", "pipe-1", "srt://example.com:10081")
+            .register_egress_attempt("out-race", "pipe-1", "srt://example.com:10081", None)
             .await;
         let replacement_queue = Arc::new(MemoryQueue::new());
         assert!(
@@ -3874,6 +3738,100 @@ mod tests {
                 .clone(),
             &replacement_queue
         ));
+    }
+
+    #[tokio::test]
+    async fn egress_registration_stores_terminal_stage_key() {
+        let engine = MediaEngine::new();
+        let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
+        let reg = engine
+            .register_egress_attempt(
+                "out-1",
+                "pipe-1",
+                "rtmp://example.com/live/key",
+                Some(key.clone()),
+            )
+            .await;
+        assert!(reg.attempt_id > 0);
+        let stored = engine
+            .with_active_egress("out-1", |e| e.terminal_stage_key.clone())
+            .await;
+        assert_eq!(stored, Some(Some(key)));
+    }
+
+    #[tokio::test]
+    async fn egress_blocked_by_phase_reports_waiting_upstream_stage() {
+        use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
+
+        let engine = MediaEngine::new();
+        let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
+        let lc = engine
+            .get_or_create_stage_lifecycle(key.clone(), StagePhase::Registered)
+            .await;
+        lc.transition(StagePhase::WaitingForCapacity {
+            backend: StageBackendKind::ExternalFfmpeg,
+        });
+
+        engine
+            .register_egress_attempt(
+                "out-1",
+                "pipe-1",
+                "rtmp://example.com/live/key",
+                Some(key.clone()),
+            )
+            .await;
+
+        let blocked = {
+            let egresses = engine.egresses.active.read().await;
+            let egress = egresses.get("out-1").unwrap();
+            engine.egress_blocked_by_snapshot(egress).await
+        };
+        assert!(
+            matches!(
+                blocked,
+                Some(crate::media::stage_runtime::StageRuntimeSnapshot {
+                    phase: StagePhase::WaitingForCapacity { .. },
+                    ..
+                })
+            ),
+            "expected blocked by WaitingForCapacity, got {blocked:?}"
+        );
+
+        lc.transition(StagePhase::Producing);
+        let blocked = {
+            let egresses = engine.egresses.active.read().await;
+            let egress = egresses.get("out-1").unwrap();
+            engine.egress_blocked_by_snapshot(egress).await
+        };
+        assert_eq!(blocked, None, "producing stage must not block egress");
+    }
+
+    #[tokio::test]
+    async fn health_snapshot_includes_blocked_by_for_waiting_terminal_stage() {
+        use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
+
+        let engine = MediaEngine::new();
+        engine
+            .try_register_ingest("pipe-1", "stream-key", "srt")
+            .await
+            .unwrap();
+        let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
+        let lc = engine
+            .get_or_create_stage_lifecycle(key.clone(), StagePhase::Registered)
+            .await;
+        lc.transition(StagePhase::WaitingForCapacity {
+            backend: StageBackendKind::ExternalFfmpeg,
+        });
+
+        engine
+            .register_egress_attempt("out-1", "pipe-1", "rtmp://example.com/live/key", Some(key))
+            .await;
+
+        let snapshot =
+            test_health_snapshot(&engine, &["pipe-1".to_string()], &HashMap::new()).await;
+        let output = &snapshot["pipelines"]["pipe-1"]["outputs"]["out-1"];
+        assert_eq!(output["blockedBy"]["phase"], "waitingForCapacity");
+        assert_eq!(output["blockedBy"]["backend"], "externalFfmpeg");
     }
 
     #[tokio::test]

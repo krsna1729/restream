@@ -312,6 +312,7 @@ mod tests {
                 "out1",
                 "pipe1",
                 &format!("http://{addr}/upload?cid=abc&file=out.m3u8"),
+                None,
             )
             .await;
         let uploader = tokio::spawn(start_hls_put_upload(
@@ -405,6 +406,7 @@ mod tests {
                 "out1",
                 "pipe1",
                 &format!("http://{addr}/upload?cid=abc&file=out.m3u8"),
+                None,
             )
             .await;
 

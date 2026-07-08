@@ -225,7 +225,7 @@ fn persist_runtime_event(event: crate::events::Event) {
             seq,
             "publisher disconnected",
         ),
-        EventKind::StageStarted {
+        EventKind::StageRegistered {
             pipeline_id,
             encoding,
         } => info!(
@@ -647,13 +647,18 @@ pub async fn run_app() {
 
                     // Resolve the stage graph for this output and return the ring
                     // the protocol-specific sender should read from.
-                    let ring_buf =
+                    let (ring_buf, terminal_stage_key) =
                         crate::application::egress::prepare_output_ring(&engine, output).await;
 
                     // Register egress and get an attempt-scoped handle so stale
                     // workers cannot later scribble over a replacement session.
                     let registration = engine
-                        .register_egress_attempt(&output.id, &output.pipeline_id, &output.url)
+                        .register_egress_attempt(
+                            &output.id,
+                            &output.pipeline_id,
+                            &output.url,
+                            terminal_stage_key,
+                        )
                         .await;
 
                     let job_id = next_output_job_id(&output.id);

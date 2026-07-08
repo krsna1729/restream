@@ -2722,6 +2722,7 @@ mod tests {
                 "out-id",
                 "pipe-id",
                 "srt://127.0.0.1:12345?streamid=publish:live/mykey",
+                None,
             )
             .await;
         start_srt_egress(

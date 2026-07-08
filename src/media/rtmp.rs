@@ -2800,7 +2800,7 @@ mod tests {
 
         let engine = Arc::new(MediaEngine::new());
         let registration = engine
-            .register_egress_attempt("out-warmup", "pipe-warmup", "rtmp://ignored/app/key")
+            .register_egress_attempt("out-warmup", "pipe-warmup", "rtmp://ignored/app/key", None)
             .await;
 
         let ring_c = ring.clone();

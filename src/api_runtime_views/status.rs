@@ -17,7 +17,9 @@ pub(crate) async fn output_status(
     let recent = engine.egresses.recent.read().await.get(output_id).cloned();
     let egresses = engine.egresses.active.read().await;
     if let Some(egress) = egresses.get(output_id) {
-        let mut value = api_view_models::egress_runtime_json(egress, false, true);
+        let blocked_by = engine.egress_blocked_by_snapshot(egress).await;
+        let mut value =
+            api_view_models::egress_runtime_json(egress, false, true, blocked_by.as_ref());
         api_view_models::apply_recent_egress_instability_json(&mut value, recent.as_ref());
         api_view_models::apply_egress_retry_state_json(&mut value, retry.as_ref());
         value["totalSize"] = serde_json::json!(egress.bytes_sent.load(Ordering::Relaxed));
@@ -108,9 +110,14 @@ pub(crate) async fn health_snapshot(
                 let bitrate_kbps = MediaEngine::sample_egress_bitrate_kbps(egress);
 
                 let has_ingest = ingests.contains_key(pipeline_id.as_str());
+                let blocked_by = engine.egress_blocked_by_snapshot(egress).await;
 
-                let mut output_json =
-                    api_view_models::egress_runtime_json(egress, false, has_ingest);
+                let mut output_json = api_view_models::egress_runtime_json(
+                    egress,
+                    false,
+                    has_ingest,
+                    blocked_by.as_ref(),
+                );
                 api_view_models::apply_recent_egress_instability_json(
                     &mut output_json,
                     recent_egresses.get(output_id),

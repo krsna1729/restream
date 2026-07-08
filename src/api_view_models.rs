@@ -123,6 +123,7 @@ pub(crate) fn egress_runtime_json(
     egress: &ActiveEgress,
     include_target_url: bool,
     has_ingest: bool,
+    blocked_by: Option<&crate::media::stage_runtime::StageRuntimeSnapshot>,
 ) -> serde_json::Value {
     let last_progress_ms = egress.last_progress_ms.load(Ordering::Relaxed);
     let last_error_ms = egress.last_error_ms.load(Ordering::Relaxed);
@@ -143,6 +144,7 @@ pub(crate) fn egress_runtime_json(
         "lastError": egress.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "lastErrorAt": MediaEngine::epoch_ms_to_rfc3339(last_error_ms),
         "failurePhase": egress.failure_phase.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        "blockedBy": blocked_by.map(crate::media::stage_runtime::StageRuntimeSnapshot::to_json),
         "recentFailureCount": 0,
         "flapping": false,
         "retrying": false,
@@ -897,7 +899,7 @@ pub(crate) fn processing_graph_egress_details(
     has_ingest: bool,
 ) -> serde_json::Value {
     let bytes = egress.bytes_sent.load(Ordering::Relaxed);
-    let mut details = egress_runtime_json(egress, true, has_ingest);
+    let mut details = egress_runtime_json(egress, true, has_ingest, None);
     details["totalSize"] = serde_json::json!(bytes);
     details["bitrateKbps"] = serde_json::json!(
         *egress

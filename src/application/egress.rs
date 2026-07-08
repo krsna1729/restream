@@ -2,12 +2,18 @@
 //! into the runtime ring and transcoder wiring owned by the media engine.
 
 use crate::application::output_path::OutputPath;
+use crate::domain::stage::StageKey;
 use crate::media::engine::MediaEngine;
 use crate::media::ring_buffer::RingBuffer;
 use crate::types::Output;
 use std::sync::Arc;
 
-pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> Arc<RingBuffer> {
+/// Prepare the output ring and return the terminal stage key for dependency
+/// tracking.
+pub async fn prepare_output_ring(
+    engine: &Arc<MediaEngine>,
+    output: &Output,
+) -> (Arc<RingBuffer>, Option<StageKey>) {
     let source_buf = engine.get_or_create_pipeline(&output.pipeline_id).await;
     let encoding = output.encoding_string();
     let output_path = OutputPath::resolve(output.pipeline_id.as_str(), &encoding, &output.url);
@@ -41,13 +47,18 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
         video_buf.clone()
     };
 
-    if let Some(stage) = output_path.routed_audio_stage(ingest_video_codec.as_deref()) {
+    let terminal_buf = if let Some(stage) =
+        output_path.routed_audio_stage(ingest_video_codec.as_deref())
+    {
         engine
             .get_or_create_transcoder(&output.pipeline_id, stage.kind, protocol_buf.clone(), None)
             .await
     } else {
         protocol_buf
-    }
+    };
+
+    let terminal_key = output_path.terminal_stage_key(ingest_video_codec.as_deref());
+    (terminal_buf, Some(terminal_key))
 }
 
 #[cfg(test)]
@@ -74,9 +85,13 @@ mod tests {
         let source = engine.get_or_create_pipeline("pipe-source").await;
         let output = test_output("pipe-source", "source", "srt://example:9000");
 
-        let ring = prepare_output_ring(&engine, &output).await;
+        let (ring, terminal_key) = prepare_output_ring(&engine, &output).await;
 
         assert!(Arc::ptr_eq(&source, &ring));
+        assert_eq!(
+            terminal_key,
+            Some(StageKey::new("pipe-source", StageKind::source()))
+        );
     }
 
     #[tokio::test]
@@ -103,10 +118,17 @@ mod tests {
             .await;
         let output = test_output("pipe-hevc", "source", "rtmp://example/live/test");
 
-        let ring = prepare_output_ring(&engine, &output).await;
+        let (ring, terminal_key) = prepare_output_ring(&engine, &output).await;
 
         assert!(Arc::ptr_eq(&expected, &ring));
         assert_eq!(ring.codec_hint_str(), "h264");
+        assert_eq!(
+            terminal_key,
+            Some(StageKey::new(
+                "pipe-hevc",
+                StageKind::codec_edge("hevc_to_h264", StageKind::source())
+            ))
+        );
     }
 
     #[tokio::test]
@@ -131,8 +153,8 @@ mod tests {
         let output_a = test_output("pipe-hevc-audio", "720p+atrack:0", "rtmp://example/live/a");
         let output_b = test_output("pipe-hevc-audio", "720p+atrack:1", "rtmp://example/live/b");
 
-        let ring_a = prepare_output_ring(&engine, &output_a).await;
-        let ring_b = prepare_output_ring(&engine, &output_b).await;
+        let (ring_a, _) = prepare_output_ring(&engine, &output_a).await;
+        let (ring_b, _) = prepare_output_ring(&engine, &output_b).await;
         let stages = engine.active_transcoder_stages("pipe-hevc-audio").await;
 
         assert!(

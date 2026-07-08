@@ -89,6 +89,13 @@ impl OutputPath {
             .unwrap_or_else(|| self.stage_plan.terminal_kind().clone())
     }
 
+    pub fn terminal_stage_key(&self, ingest_video_codec: Option<&str>) -> StageKey {
+        StageKey::new(
+            self.stage_plan.pipeline().clone(),
+            self.terminal_stage_kind(ingest_video_codec),
+        )
+    }
+
     pub fn needed_stage_keys(&self, ingest_video_codec: Option<&str>) -> Vec<StageKey> {
         let mut stages = Vec::new();
         if let Some(stage) = self.video_stage() {
