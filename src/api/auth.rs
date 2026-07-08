@@ -9,12 +9,12 @@ use std::sync::Arc;
 use tokio::sync::RwLock as TokioRwLock;
 use tracing::warn;
 
-use crate::db;
 use super::state::{
-    AppState, PASSWORD_META_KEY, SESSION_MAX_AGE_SECONDS, MAX_PASSWORD_LEN,
-    check_field_len, clear_session_cookie, get_session_token_from_headers,
-    hash_session_token, make_session_cookie, to_hex, get_ingest_host, STREAM_KEYS,
+    AppState, MAX_PASSWORD_LEN, PASSWORD_META_KEY, SESSION_MAX_AGE_SECONDS, STREAM_KEYS,
+    check_field_len, clear_session_cookie, get_ingest_host, get_session_token_from_headers,
+    hash_session_token, make_session_cookie, to_hex,
 };
+use crate::db;
 
 #[derive(Deserialize)]
 pub struct LoginPayload {
@@ -67,7 +67,10 @@ pub fn verify_password(password: &str, stored: &str) -> bool {
     hex_hash == stored_hash
 }
 
-pub async fn initialize_auth(db_pool: &sqlx::SqlitePool, sessions_set: &TokioRwLock<std::collections::HashSet<String>>) {
+pub async fn initialize_auth(
+    db_pool: &sqlx::SqlitePool,
+    sessions_set: &TokioRwLock<std::collections::HashSet<String>>,
+) {
     if let Ok(None) = db::get_meta(db_pool, PASSWORD_META_KEY).await {
         let admin_hash = hash_password("admin");
         let _ = db::set_meta(db_pool, PASSWORD_META_KEY, &admin_hash).await;

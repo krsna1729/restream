@@ -125,10 +125,7 @@ pub async fn request_is_authenticated(state: &AppState, headers: &HeaderMap) -> 
     }
 }
 
-pub async fn require_authenticated(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Option<Response> {
+pub async fn require_authenticated(state: &AppState, headers: &HeaderMap) -> Option<Response> {
     if request_is_authenticated(state, headers).await {
         None
     } else {

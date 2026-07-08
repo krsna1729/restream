@@ -39,23 +39,23 @@ fn agent_execution_unavailable() -> axum::response::Response {
 #[cfg(feature = "agent-plane")]
 use super::state::{recording_enabled_map, to_hex};
 #[cfg(feature = "agent-plane")]
-use sysinfo::{Disks, System};
+use super::telemetry::system_status;
 #[cfg(feature = "agent-plane")]
-use std::path::{Path as FsPath, PathBuf};
-#[cfg(feature = "agent-plane")]
-use crate::types::{Ingest, Pipeline};
-#[cfg(feature = "agent-plane")]
-use crate::domain::output_spec::OutputUrlScheme;
+use crate::alerts;
 #[cfg(feature = "agent-plane")]
 use crate::api_view_models;
 #[cfg(feature = "agent-plane")]
 use crate::application::settings::load_settings_snapshot;
 #[cfg(feature = "agent-plane")]
+use crate::domain::output_spec::OutputUrlScheme;
+#[cfg(feature = "agent-plane")]
 use crate::events;
 #[cfg(feature = "agent-plane")]
-use crate::alerts;
+use crate::types::{Ingest, Pipeline};
 #[cfg(feature = "agent-plane")]
-use super::telemetry::system_status;
+use std::path::{Path as FsPath, PathBuf};
+#[cfg(feature = "agent-plane")]
+use sysinfo::{Disks, System};
 
 #[cfg(feature = "agent-plane")]
 pub async fn agent_capabilities_handler(
@@ -295,18 +295,18 @@ pub async fn agent_graph_diff_preview_handler(
 }
 
 #[cfg(feature = "agent-execution")]
-use crate::application::ports::SqliteMetaStore;
+use super::outputs::{
+    CUSTOM_OUTPUT_ENCODING_ERROR, MONITORING_URL_SCHEME_ERROR, OUTPUT_URL_SCHEME_ERROR,
+    is_supported_monitoring_url, is_supported_output_url, normalize_monitoring_url,
+};
+#[cfg(feature = "agent-execution")]
+use super::state::MAX_ENCODING_LEN;
 #[cfg(feature = "agent-execution")]
 use super::state::MAX_NAME_LEN;
 #[cfg(feature = "agent-execution")]
 use super::state::MAX_URL_LEN;
 #[cfg(feature = "agent-execution")]
-use super::state::MAX_ENCODING_LEN;
-#[cfg(feature = "agent-execution")]
-use super::outputs::{
-    is_supported_output_url, is_supported_monitoring_url, normalize_monitoring_url,
-    CUSTOM_OUTPUT_ENCODING_ERROR, MONITORING_URL_SCHEME_ERROR, OUTPUT_URL_SCHEME_ERROR,
-};
+use crate::application::ports::SqliteMetaStore;
 #[cfg(feature = "agent-execution")]
 use crate::domain::output_spec::OutputConfig;
 

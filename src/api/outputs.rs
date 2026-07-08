@@ -13,8 +13,8 @@ use crate::db;
 use crate::domain::output_spec::{OutputConfig, OutputUrlScheme};
 
 use super::state::{
-    AppState, check_field_len, get_session_token_from_headers, require_authenticated,
-    to_hex, MAX_NAME_LEN, MAX_URL_LEN, MAX_ENCODING_LEN,
+    AppState, MAX_ENCODING_LEN, MAX_NAME_LEN, MAX_URL_LEN, check_field_len,
+    get_session_token_from_headers, require_authenticated, to_hex,
 };
 
 #[derive(Deserialize)]

@@ -2,62 +2,62 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     http::{HeaderValue, header},
-    routing::{get, post, patch, delete, put},
+    routing::{delete, get, patch, post, put},
 };
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
 
-use super::state::AppState;
+use super::agent::{
+    agent_capabilities_handler, agent_context_handler, agent_graph_diff_preview_handler,
+    agent_investigation_handler, agent_operation_apply_handler, agent_operation_approve_handler,
+    agent_operation_create_handler, agent_operation_get_handler, agent_operation_verify_handler,
+    agent_plan_handler, agent_plan_validate_handler, agent_verify_handler,
+};
+use super::alerts::aggregate_alerts_handler;
 use super::auth::{
-    login_post_handler, logout_handler, change_password_handler, audio_caps_handler,
+    audio_caps_handler, change_password_handler, login_post_handler, logout_handler,
     stream_keys_handler,
 };
-use super::static_assets::{
-    login_get_handler, login_html_redirect_handler, settings_html_redirect_handler,
-    status_html_redirect_handler, logo_handler, css_handler, spa_fallback_handler,
-};
-use super::settings::{config_get_handler, config_patch_handler};
-use super::telemetry::{
-    v1_dashboard_runtime_handler, v1_events_handler, v1_overview_handler,
-    v1_engine_telemetry_handler, v1_pipeline_telemetry_handler, v1_stage_telemetry_handler,
-    pipeline_diagnostics_sse_handler, status_get_handler, status_sbom_get_handler,
-    v1_engine_health_handler, healthz_get_handler, metrics_system_handler,
-};
-use super::outputs::{
-    youtube_monitoring_status_handler, outputs_create_handler, outputs_update_handler,
-    outputs_delete_handler, outputs_start_handler, outputs_stop_handler, output_status_handler,
-};
-use super::pipelines::{
-    pipelines_get_handler, pipelines_post_handler, pipeline_detail_handler,
-    pipelines_update_handler, pipelines_delete_handler, pipeline_probe_handler,
-    pipeline_graph_handler, pipeline_alerts_handler, v1_pipeline_summary_handler,
-};
 use super::file_ingest::{
+    custom_encoding_get, custom_encoding_put, pipeline_file_ingest_delete_handler,
     pipeline_file_ingest_get_handler, pipeline_file_ingest_put_handler,
-    pipeline_file_ingest_delete_handler, custom_encoding_get, custom_encoding_put,
-};
-use super::logs::{logs_handler, logs_stream_handler};
-use super::alerts::aggregate_alerts_handler;
-use super::agent::{
-    agent_capabilities_handler, agent_context_handler, agent_investigation_handler,
-    agent_plan_handler, agent_plan_validate_handler, agent_graph_diff_preview_handler,
-    agent_operation_create_handler, agent_operation_get_handler, agent_operation_approve_handler,
-    agent_operation_apply_handler, agent_operation_verify_handler, agent_verify_handler,
-};
-use super::ingests::{
-    ingests_get_handler, ingests_post_handler, ingests_update_handler,
-    ingests_delete_handler, ingests_start_handler, ingests_stop_handler,
-};
-use super::media_library::{
-    recording_start_handler, recording_stop_handler, media_list_handler,
-    media_analysis_handler, media_rename_handler, media_delete_handler, media_file_handler,
 };
 use super::hls::{
-    hls_playlist_handler, hls_master_handler, hls_video_playlist_handler,
-    hls_video_init_handler, hls_video_segment_handler, hls_audio_playlist_handler,
-    hls_audio_init_handler, hls_audio_segment_handler, hls_segment_handler,
+    hls_audio_init_handler, hls_audio_playlist_handler, hls_audio_segment_handler,
+    hls_master_handler, hls_playlist_handler, hls_segment_handler, hls_video_init_handler,
+    hls_video_playlist_handler, hls_video_segment_handler,
+};
+use super::ingests::{
+    ingests_delete_handler, ingests_get_handler, ingests_post_handler, ingests_start_handler,
+    ingests_stop_handler, ingests_update_handler,
+};
+use super::logs::{logs_handler, logs_stream_handler};
+use super::media_library::{
+    media_analysis_handler, media_delete_handler, media_file_handler, media_list_handler,
+    media_rename_handler, recording_start_handler, recording_stop_handler,
+};
+use super::outputs::{
+    output_status_handler, outputs_create_handler, outputs_delete_handler, outputs_start_handler,
+    outputs_stop_handler, outputs_update_handler, youtube_monitoring_status_handler,
+};
+use super::pipelines::{
+    pipeline_alerts_handler, pipeline_detail_handler, pipeline_graph_handler,
+    pipeline_probe_handler, pipelines_delete_handler, pipelines_get_handler,
+    pipelines_post_handler, pipelines_update_handler, v1_pipeline_summary_handler,
+};
+use super::settings::{config_get_handler, config_patch_handler};
+use super::state::AppState;
+use super::static_assets::{
+    css_handler, login_get_handler, login_html_redirect_handler, logo_handler,
+    settings_html_redirect_handler, spa_fallback_handler, status_html_redirect_handler,
+};
+use super::telemetry::{
+    healthz_get_handler, metrics_system_handler, pipeline_diagnostics_sse_handler,
+    status_get_handler, status_sbom_get_handler, v1_dashboard_runtime_handler,
+    v1_engine_health_handler, v1_engine_telemetry_handler, v1_events_handler, v1_overview_handler,
+    v1_pipeline_telemetry_handler, v1_stage_telemetry_handler,
 };
 
 pub fn create_router(state: Arc<AppState>) -> Router {

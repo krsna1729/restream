@@ -8,22 +8,19 @@ use serde::Deserialize;
 use std::path::Path as FsPath;
 use std::sync::Arc;
 
-use crate::db;
 use crate::api_view_models;
-use crate::application::ports::{IngestLookup, SqliteIngestLookup, SqlitePipelineStore};
 use crate::application::ingest::{
-    FileIngestConfig, PersistFileIngestError,
-    clear_stream_key_file_ingests, load_pipeline_file_ingest_state, persist_pipeline_file_ingest,
-    remove_pipeline_file_ingest,
+    FileIngestConfig, PersistFileIngestError, clear_stream_key_file_ingests,
+    load_pipeline_file_ingest_state, persist_pipeline_file_ingest, remove_pipeline_file_ingest,
 };
+use crate::application::ports::{IngestLookup, SqliteIngestLookup, SqlitePipelineStore};
+use crate::db;
 use crate::types::Pipeline;
 
+use super::ingests::{run_file_ingest_task, sanitize_target_gop_seconds, spawn_file_ingest_child};
 use super::state::{
-    AppState, check_field_len, get_session_token_from_headers, to_hex,
-    MAX_NAME_LEN, MAX_FFMPEG_ARGS_LEN,
-};
-use super::ingests::{
-    sanitize_target_gop_seconds, spawn_file_ingest_child, run_file_ingest_task,
+    AppState, MAX_FFMPEG_ARGS_LEN, MAX_NAME_LEN, check_field_len, get_session_token_from_headers,
+    to_hex,
 };
 
 #[derive(Deserialize, Clone)]
@@ -37,7 +34,9 @@ pub struct PipelineFileIngestPayload {
     pub target_gop_seconds: Option<u32>,
 }
 
-pub fn validate_pipeline_file_ingest_payload(payload: &PipelineFileIngestPayload) -> Option<Response> {
+pub fn validate_pipeline_file_ingest_payload(
+    payload: &PipelineFileIngestPayload,
+) -> Option<Response> {
     if let Some(r) = check_field_len("filename", &payload.filename, MAX_NAME_LEN) {
         return Some(r);
     }

@@ -13,15 +13,15 @@ use tokio::io::AsyncReadExt;
 use tracing::{error, warn};
 
 use crate::alerts;
+use crate::application::ingest::load_pipeline_file_ingest_state;
+use crate::application::ports::SqliteIngestLookup;
 use crate::db;
 use crate::diag;
 use crate::events;
-use crate::application::ports::SqliteIngestLookup;
-use crate::application::ingest::load_pipeline_file_ingest_state;
 
 use super::state::{
-    AppState, check_field_len, get_session_token_from_headers, require_authenticated,
-    recording_enabled_map, EngineCpuSample, ENGINE_CPU_SAMPLE, MAX_URL_LEN,
+    AppState, ENGINE_CPU_SAMPLE, EngineCpuSample, MAX_URL_LEN, check_field_len,
+    get_session_token_from_headers, recording_enabled_map, require_authenticated,
 };
 
 pub fn default_events_limit() -> usize {
@@ -675,7 +675,9 @@ pub fn selected_cpu_flags(flags: &str) -> Vec<String> {
         "svm",
         "hypervisor",
     ];
-    let available = flags.split_whitespace().collect::<std::collections::BTreeSet<_>>();
+    let available = flags
+        .split_whitespace()
+        .collect::<std::collections::BTreeSet<_>>();
     USEFUL_FLAGS
         .iter()
         .filter(|flag| available.contains(**flag))

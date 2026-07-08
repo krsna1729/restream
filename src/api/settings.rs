@@ -21,8 +21,7 @@ use crate::domain::srt_ingest::SrtGlobalIngestConfig;
 use crate::domain::transcode_profile::TranscodeProfiles;
 
 use super::state::{
-    AppState, get_session_token_from_headers, refresh_srt_ingest_policy_store,
-    DEFAULT_INGEST_HOST,
+    AppState, DEFAULT_INGEST_HOST, get_session_token_from_headers, refresh_srt_ingest_policy_store,
 };
 
 #[derive(Deserialize)]

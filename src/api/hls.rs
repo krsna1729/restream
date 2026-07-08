@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State, OriginalUri},
+    extract::{OriginalUri, Path, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -141,7 +141,10 @@ pub fn build_hls_master_playlist(
     playlist
 }
 
-pub fn build_hls_audio_track_name(track: &crate::media::engine::AudioMeta, ordinal: usize) -> String {
+pub fn build_hls_audio_track_name(
+    track: &crate::media::engine::AudioMeta,
+    ordinal: usize,
+) -> String {
     if let Some(title) = track
         .title
         .as_deref()

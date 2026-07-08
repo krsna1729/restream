@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::alerts;
 use crate::db;
 
-use super::state::{AppState, require_authenticated, recording_enabled_map};
+use super::state::{AppState, recording_enabled_map, require_authenticated};
 
 pub async fn aggregate_alerts_handler(
     State(state): State<Arc<AppState>>,

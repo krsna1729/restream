@@ -9,13 +9,14 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
-use crate::db;
-use crate::application::recording::{recording_enabled_meta_key, load_recording_settings, spawn_recording_task};
 use crate::application::ports::SqliteMetaStore;
+use crate::application::recording::{
+    load_recording_settings, recording_enabled_meta_key, spawn_recording_task,
+};
+use crate::db;
 
 use super::state::{
-    AppState, check_field_len, get_session_token_from_headers, to_hex,
-    MAX_NAME_LEN,
+    AppState, MAX_NAME_LEN, check_field_len, get_session_token_from_headers, to_hex,
 };
 
 #[derive(Deserialize)]
@@ -59,10 +60,8 @@ pub async fn recording_start_handler(
         .await
         .contains_key(&pipeline_id);
     if has_ingest && !state.engine.is_recording_active(&pipeline_id).await {
-        let recording_settings = load_recording_settings(
-            &SqliteMetaStore::new(state.db.clone()),
-        )
-        .await;
+        let recording_settings =
+            load_recording_settings(&SqliteMetaStore::new(state.db.clone())).await;
         spawn_recording_task(
             state.engine.clone(),
             pipeline.name.clone(),

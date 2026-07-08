@@ -49,10 +49,7 @@ pub fn serve_embedded(path: &str) -> Response {
     }
 }
 
-pub async fn login_get_handler(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Response {
+pub async fn login_get_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if let Some(token) = get_session_token_from_headers(&headers)
         && state.is_authenticated(&token).await
     {
