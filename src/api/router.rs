@@ -24,6 +24,7 @@ use super::file_ingest::{
     custom_encoding_get, custom_encoding_put, pipeline_file_ingest_delete_handler,
     pipeline_file_ingest_get_handler, pipeline_file_ingest_put_handler,
 };
+use super::health::{healthz_get_handler, v1_engine_health_handler};
 use super::hls::{
     hls_audio_init_handler, hls_audio_playlist_handler, hls_audio_segment_handler,
     hls_master_handler, hls_playlist_handler, hls_segment_handler, hls_video_init_handler,
@@ -54,10 +55,10 @@ use super::static_assets::{
     settings_html_redirect_handler, spa_fallback_handler, status_html_redirect_handler,
 };
 use super::telemetry::{
-    healthz_get_handler, metrics_system_handler, pipeline_diagnostics_sse_handler,
-    status_get_handler, status_sbom_get_handler, v1_dashboard_runtime_handler,
-    v1_engine_health_handler, v1_engine_telemetry_handler, v1_events_handler, v1_overview_handler,
-    v1_pipeline_telemetry_handler, v1_stage_telemetry_handler,
+    metrics_system_handler, pipeline_diagnostics_sse_handler, status_get_handler,
+    status_sbom_get_handler, v1_dashboard_runtime_handler, v1_engine_telemetry_handler,
+    v1_events_handler, v1_overview_handler, v1_pipeline_telemetry_handler,
+    v1_stage_telemetry_handler,
 };
 
 pub fn create_router(state: Arc<AppState>) -> Router {

@@ -2,6 +2,7 @@ pub mod agent;
 pub mod alerts;
 pub mod auth;
 pub mod file_ingest;
+pub mod health;
 pub mod hls;
 pub mod ingests;
 pub mod logs;
