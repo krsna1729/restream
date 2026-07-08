@@ -2,6 +2,7 @@ use sqlx::SqlitePool;
 
 use crate::db;
 use crate::domain::output_spec::OutputConfig;
+use crate::domain::state::DesiredOutputState;
 use crate::types::Output;
 
 use super::error::{ApiError, ApiResult};
@@ -83,15 +84,27 @@ impl OutputService {
             .map_err(|e| ApiError::internal(format!("delete output: {e}")))
     }
 
+    /// Set the output's desired state to `running`, resuming any stopped egress.
     pub async fn request_start(&self, pipeline_id: &str, id: &str) -> ApiResult<Output> {
-        db::set_output_desired_state(&self.db, pipeline_id, id, "running")
-            .await
-            .map_err(|e| ApiError::internal(format!("request start: {e}")))
+        db::set_output_desired_state(
+            &self.db,
+            pipeline_id,
+            id,
+            DesiredOutputState::Running.as_str(),
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("request start: {e}")))
     }
 
+    /// Set the output's desired state to `stopped`, halting any active egress.
     pub async fn request_stop(&self, pipeline_id: &str, id: &str) -> ApiResult<Output> {
-        db::set_output_desired_state(&self.db, pipeline_id, id, "stopped")
-            .await
-            .map_err(|e| ApiError::internal(format!("request stop: {e}")))
+        db::set_output_desired_state(
+            &self.db,
+            pipeline_id,
+            id,
+            DesiredOutputState::Stopped.as_str(),
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("request stop: {e}")))
     }
 }

@@ -159,6 +159,7 @@ pub struct OutputStageSweepInput<'a> {
 
 pub fn collect_needed_stage_keys<'a>(
     outputs: impl IntoIterator<Item = OutputStageSweepInput<'a>>,
+    policy: &crate::planner::backend_policy::BackendPolicy,
 ) -> HashSet<StageKey> {
     let mut needed_stages = HashSet::new();
     for output in outputs {
@@ -177,6 +178,7 @@ pub fn collect_needed_stage_keys<'a>(
                 output.ingest_video_codec.as_deref(),
                 &[dummy_output],
                 false,
+                policy,
             );
             for stage in plan.stages {
                 if stage.kind != crate::domain::stage::StageKind::Source {
@@ -352,26 +354,29 @@ mod tests {
 
     #[test]
     fn stage_sweep_collects_only_needed_stage_keys() {
-        let stages = collect_needed_stage_keys([
-            OutputStageSweepInput {
-                pipeline_id: "pipe",
-                encoding: "720p+atrack:0".to_string(),
-                url: "rtmp://example/live",
-                desired_state: "running",
-                is_active: false,
-                effective_has_ingest: true,
-                ingest_video_codec: Some("hevc".to_string()),
-            },
-            OutputStageSweepInput {
-                pipeline_id: "pipe",
-                encoding: "source".to_string(),
-                url: "srt://example:9000",
-                desired_state: "stopped",
-                is_active: false,
-                effective_has_ingest: true,
-                ingest_video_codec: Some("hevc".to_string()),
-            },
-        ]);
+        let stages = collect_needed_stage_keys(
+            [
+                OutputStageSweepInput {
+                    pipeline_id: "pipe",
+                    encoding: "720p+atrack:0".to_string(),
+                    url: "rtmp://example/live",
+                    desired_state: "running",
+                    is_active: false,
+                    effective_has_ingest: true,
+                    ingest_video_codec: Some("hevc".to_string()),
+                },
+                OutputStageSweepInput {
+                    pipeline_id: "pipe",
+                    encoding: "source".to_string(),
+                    url: "srt://example:9000",
+                    desired_state: "stopped",
+                    is_active: false,
+                    effective_has_ingest: true,
+                    ingest_video_codec: Some("hevc".to_string()),
+                },
+            ],
+            &crate::planner::backend_policy::BackendPolicy::default(),
+        );
 
         assert!(stages.contains(&StageKey::new("pipe", StageKind::video_preset("720p"))));
         assert!(stages.contains(&StageKey::new(
@@ -500,6 +505,48 @@ mod tests {
                 }
                 Ok(self.pipelines.clone())
             })
+        }
+
+        fn get_pipeline<'a>(
+            &'a self,
+            id: &'a str,
+        ) -> crate::application::ports::PipelineLookupFuture<'a> {
+            Box::pin(async move { Ok(self.pipelines.iter().find(|p| p.id == id).cloned()) })
+        }
+
+        fn create_pipeline<'a>(
+            &'a self,
+            _id: &'a str,
+            _name: &'a str,
+            _stream_key: &'a str,
+            _input_source: Option<&'a str>,
+            _srt_ingest_policy: Option<&'a str>,
+        ) -> crate::application::ports::PipelineCreateFuture<'a> {
+            Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
+        }
+
+        fn update_pipeline<'a>(
+            &'a self,
+            _id: &'a str,
+            _name: &'a str,
+            _stream_key: &'a str,
+            _input_source: Option<&'a str>,
+            _srt_ingest_policy: Option<&'a str>,
+        ) -> crate::application::ports::PipelineUpdateFuture<'a> {
+            Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
+        }
+
+        fn delete_pipeline<'a>(
+            &'a self,
+            _id: &'a str,
+        ) -> crate::application::ports::PipelineDeleteFuture<'a> {
+            Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
+        }
+
+        fn get_ingest_host<'a>(
+            &'a self,
+        ) -> crate::application::ports::PipelineIngestHostFuture<'a> {
+            Box::pin(async move { Ok(None) })
         }
 
         fn update_pipeline_input_source<'a>(

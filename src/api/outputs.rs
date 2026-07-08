@@ -13,6 +13,8 @@ use crate::application::services::ApiError;
 use crate::db;
 use crate::domain::output_spec::{OutputConfig, OutputUrlScheme};
 
+use crate::domain::state::DesiredOutputState;
+
 use super::state::{
     AppState, MAX_ENCODING_LEN, MAX_NAME_LEN, MAX_URL_LEN, check_field_len,
     get_session_token_from_headers, require_authenticated, to_hex,
@@ -259,7 +261,7 @@ pub async fn outputs_create_handler(
             &payload.name,
             &payload.url,
             monitoring_url.as_deref(),
-            "stopped",
+            DesiredOutputState::Stopped.as_str(),
             &output_config,
         )
         .await?;

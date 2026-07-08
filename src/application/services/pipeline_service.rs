@@ -1,39 +1,52 @@
-use sqlx::SqlitePool;
+use std::sync::Arc;
 
-use crate::db;
+use crate::application::ports::{PipelineStore, SqlitePipelineStore};
 use crate::types::Pipeline;
 
 use super::error::{ApiError, ApiResult};
 
 /// Application service for pipeline CRUD and read operations.
 ///
-/// API handlers call this instead of `db::*` directly. In Phase 5
-/// this will depend on a repository trait instead of `SqlitePool`.
+/// Depends on `PipelineStore` — a port trait — rather than `SqlitePool`
+/// directly. The default constructor wires it through `SqlitePipelineStore`;
+/// tests can inject any implementation.
 #[derive(Clone)]
 pub struct PipelineService {
-    db: SqlitePool,
+    store: Arc<dyn PipelineStore>,
 }
 
 impl PipelineService {
-    pub fn new(db: SqlitePool) -> Self {
-        Self { db }
+    /// Create a service backed by SQLite via `SqlitePipelineStore`.
+    pub fn new(db: sqlx::SqlitePool) -> Self {
+        Self {
+            store: Arc::new(SqlitePipelineStore::new(db)),
+        }
+    }
+
+    /// Create a service backed by any `PipelineStore` implementation.
+    /// Useful for tests with an in-memory or mock store.
+    pub fn with_store(store: Arc<dyn PipelineStore>) -> Self {
+        Self { store }
     }
 
     pub async fn list_pipelines(&self) -> ApiResult<Vec<Pipeline>> {
-        db::list_pipelines(&self.db)
+        self.store
+            .list_pipelines()
             .await
             .map_err(|e| ApiError::internal(format!("list pipelines: {e}")))
     }
 
     pub async fn get_by_id(&self, id: &str) -> ApiResult<Pipeline> {
-        db::get_pipeline(&self.db, id)
+        self.store
+            .get_pipeline(id)
             .await
             .map_err(|e| ApiError::internal(format!("get pipeline: {e}")))?
             .ok_or_else(|| ApiError::not_found(format!("pipeline {id} not found")))
     }
 
     pub async fn get_by_stream_key(&self, stream_key: &str) -> ApiResult<Option<Pipeline>> {
-        db::get_pipeline_by_stream_key(&self.db, stream_key)
+        self.store
+            .get_pipeline_by_stream_key(stream_key)
             .await
             .map_err(|e| ApiError::internal(format!("get pipeline by stream key: {e}")))
     }
@@ -46,16 +59,10 @@ impl PipelineService {
         input_source: Option<&str>,
         srt_ingest_policy: Option<&str>,
     ) -> ApiResult<Pipeline> {
-        db::create_pipeline(
-            &self.db,
-            id,
-            name,
-            stream_key,
-            input_source,
-            srt_ingest_policy,
-        )
-        .await
-        .map_err(|e| ApiError::internal(format!("create pipeline: {e}")))
+        self.store
+            .create_pipeline(id, name, stream_key, input_source, srt_ingest_policy)
+            .await
+            .map_err(|e| ApiError::internal(format!("create pipeline: {e}")))
     }
 
     pub async fn update_pipeline(
@@ -66,21 +73,16 @@ impl PipelineService {
         input_source: Option<&str>,
         srt_ingest_policy: Option<&str>,
     ) -> ApiResult<Pipeline> {
-        db::update_pipeline(
-            &self.db,
-            id,
-            name,
-            stream_key,
-            input_source,
-            srt_ingest_policy,
-        )
-        .await
-        .map_err(|e| ApiError::internal(format!("update pipeline: {e}")))?
-        .ok_or_else(|| ApiError::not_found(format!("pipeline {id} not found")))
+        self.store
+            .update_pipeline(id, name, stream_key, input_source, srt_ingest_policy)
+            .await
+            .map_err(|e| ApiError::internal(format!("update pipeline: {e}")))?
+            .ok_or_else(|| ApiError::not_found(format!("pipeline {id} not found")))
     }
 
     pub async fn delete_pipeline(&self, id: &str) -> ApiResult<bool> {
-        db::delete_pipeline(&self.db, id)
+        self.store
+            .delete_pipeline(id)
             .await
             .map_err(|e| ApiError::internal(format!("delete pipeline: {e}")))
     }
@@ -91,17 +93,17 @@ impl PipelineService {
         input_source: Option<&str>,
     ) -> ApiResult<Pipeline> {
         let pipeline = self.get_by_id(id).await?;
-        db::update_pipeline(
-            &self.db,
-            id,
-            &pipeline.name,
-            &pipeline.stream_key,
-            input_source,
-            pipeline.srt_ingest_policy.as_deref(),
-        )
-        .await
-        .map_err(|e| ApiError::internal(format!("set input source: {e}")))?
-        .ok_or_else(|| ApiError::not_found(format!("pipeline {id} not found")))
+        self.store
+            .update_pipeline(
+                id,
+                &pipeline.name,
+                &pipeline.stream_key,
+                input_source,
+                pipeline.srt_ingest_policy.as_deref(),
+            )
+            .await
+            .map_err(|e| ApiError::internal(format!("set input source: {e}")))?
+            .ok_or_else(|| ApiError::not_found(format!("pipeline {id} not found")))
     }
 
     /// List all pipeline IDs (used by health and settings).
@@ -112,7 +114,8 @@ impl PipelineService {
 
     /// Return the configured ingest host, or the default.
     pub async fn get_ingest_host(&self) -> String {
-        db::get_ingest_host(&self.db)
+        self.store
+            .get_ingest_host()
             .await
             .ok()
             .flatten()

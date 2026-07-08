@@ -11,6 +11,12 @@ pub type PipelineLookupFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Pipeline>, PipelineStoreError>> + Send + 'a>>;
 pub type PipelineListFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<Pipeline>, PipelineStoreError>> + Send + 'a>>;
+pub type PipelineCreateFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Pipeline, PipelineStoreError>> + Send + 'a>>;
+pub type PipelineDeleteFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<bool, PipelineStoreError>> + Send + 'a>>;
+pub type PipelineIngestHostFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<String>, PipelineStoreError>> + Send + 'a>>;
 pub type IngestLookupFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Ingest>, IngestLookupError>> + Send + 'a>>;
 pub type IngestCatalogFuture<'a> =
@@ -111,8 +117,27 @@ impl fmt::Display for MetaLookupError {
 impl std::error::Error for MetaLookupError {}
 
 pub trait PipelineStore: Send + Sync {
+    fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a>;
     fn get_pipeline_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineLookupFuture<'a>;
     fn list_pipelines<'a>(&'a self) -> PipelineListFuture<'a>;
+    fn create_pipeline<'a>(
+        &'a self,
+        id: &'a str,
+        name: &'a str,
+        stream_key: &'a str,
+        input_source: Option<&'a str>,
+        srt_ingest_policy: Option<&'a str>,
+    ) -> PipelineCreateFuture<'a>;
+    fn update_pipeline<'a>(
+        &'a self,
+        id: &'a str,
+        name: &'a str,
+        stream_key: &'a str,
+        input_source: Option<&'a str>,
+        srt_ingest_policy: Option<&'a str>,
+    ) -> PipelineUpdateFuture<'a>;
+    fn delete_pipeline<'a>(&'a self, id: &'a str) -> PipelineDeleteFuture<'a>;
+    fn get_ingest_host<'a>(&'a self) -> PipelineIngestHostFuture<'a>;
     fn update_pipeline_input_source<'a>(
         &'a self,
         pipeline: &'a Pipeline,
@@ -194,6 +219,14 @@ impl SqliteMetaStore {
 }
 
 impl PipelineStore for SqlitePipelineStore {
+    fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a> {
+        Box::pin(async move {
+            crate::db::get_pipeline(&self.pool, id)
+                .await
+                .map_err(|err| PipelineStoreError::new(err.to_string()))
+        })
+    }
+
     fn get_pipeline_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineLookupFuture<'a> {
         Box::pin(async move {
             crate::db::get_pipeline_by_stream_key(&self.pool, stream_key)
@@ -205,6 +238,66 @@ impl PipelineStore for SqlitePipelineStore {
     fn list_pipelines<'a>(&'a self) -> PipelineListFuture<'a> {
         Box::pin(async move {
             crate::db::list_pipelines(&self.pool)
+                .await
+                .map_err(|err| PipelineStoreError::new(err.to_string()))
+        })
+    }
+
+    fn create_pipeline<'a>(
+        &'a self,
+        id: &'a str,
+        name: &'a str,
+        stream_key: &'a str,
+        input_source: Option<&'a str>,
+        srt_ingest_policy: Option<&'a str>,
+    ) -> PipelineCreateFuture<'a> {
+        Box::pin(async move {
+            crate::db::create_pipeline(
+                &self.pool,
+                id,
+                name,
+                stream_key,
+                input_source,
+                srt_ingest_policy,
+            )
+            .await
+            .map_err(|err| PipelineStoreError::new(err.to_string()))
+        })
+    }
+
+    fn update_pipeline<'a>(
+        &'a self,
+        id: &'a str,
+        name: &'a str,
+        stream_key: &'a str,
+        input_source: Option<&'a str>,
+        srt_ingest_policy: Option<&'a str>,
+    ) -> PipelineUpdateFuture<'a> {
+        Box::pin(async move {
+            crate::db::update_pipeline(
+                &self.pool,
+                id,
+                name,
+                stream_key,
+                input_source,
+                srt_ingest_policy,
+            )
+            .await
+            .map_err(|err| PipelineStoreError::new(err.to_string()))
+        })
+    }
+
+    fn delete_pipeline<'a>(&'a self, id: &'a str) -> PipelineDeleteFuture<'a> {
+        Box::pin(async move {
+            crate::db::delete_pipeline(&self.pool, id)
+                .await
+                .map_err(|err| PipelineStoreError::new(err.to_string()))
+        })
+    }
+
+    fn get_ingest_host<'a>(&'a self) -> PipelineIngestHostFuture<'a> {
+        Box::pin(async move {
+            crate::db::get_ingest_host(&self.pool)
                 .await
                 .map_err(|err| PipelineStoreError::new(err.to_string()))
         })

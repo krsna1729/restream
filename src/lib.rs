@@ -1113,7 +1113,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
                 stage_inputs.push(output_stage_sweep_input(output, &snapshot));
             }
             let needed_stages: std::collections::HashSet<StageKey> =
-                collect_needed_stage_keys(stage_inputs);
+                collect_needed_stage_keys(stage_inputs, &engine.config.backend_policy);
             let mut needed_stages = needed_stages;
             needed_stages.extend(engine.active_hls_preview_stage_keys().await);
             engine.sweep_unused_transcoder_stages(&needed_stages).await;

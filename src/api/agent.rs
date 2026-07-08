@@ -7,6 +7,7 @@ use axum::{
 use std::sync::Arc;
 
 use crate::db;
+use crate::domain::state::DesiredOutputState;
 
 use super::state::{AppState, require_authenticated};
 
@@ -706,7 +707,11 @@ async fn apply_agent_add_output(
         .config
         .as_ref()
         .ok_or_else(|| "change is missing required field 'config'".to_string())?;
-    let desired_state = change.desired_state.as_deref().unwrap_or("stopped").trim();
+    let desired_state = change
+        .desired_state
+        .as_deref()
+        .unwrap_or(DesiredOutputState::Stopped.as_str())
+        .trim();
     validate_output_fields(name, url, monitoring_url.as_deref(), config, desired_state)?;
 
     let output_id = change

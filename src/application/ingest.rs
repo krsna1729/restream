@@ -295,6 +295,48 @@ mod tests {
             Box::pin(async move { Ok(self.pipelines.values().cloned().collect()) })
         }
 
+        fn get_pipeline<'a>(
+            &'a self,
+            id: &'a str,
+        ) -> crate::application::ports::PipelineLookupFuture<'a> {
+            Box::pin(async move { Ok(self.pipelines.values().find(|p| p.id == id).cloned()) })
+        }
+
+        fn create_pipeline<'a>(
+            &'a self,
+            _id: &'a str,
+            _name: &'a str,
+            _stream_key: &'a str,
+            _input_source: Option<&'a str>,
+            _srt_ingest_policy: Option<&'a str>,
+        ) -> crate::application::ports::PipelineCreateFuture<'a> {
+            Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
+        }
+
+        fn update_pipeline<'a>(
+            &'a self,
+            _id: &'a str,
+            _name: &'a str,
+            _stream_key: &'a str,
+            _input_source: Option<&'a str>,
+            _srt_ingest_policy: Option<&'a str>,
+        ) -> crate::application::ports::PipelineUpdateFuture<'a> {
+            Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
+        }
+
+        fn delete_pipeline<'a>(
+            &'a self,
+            _id: &'a str,
+        ) -> crate::application::ports::PipelineDeleteFuture<'a> {
+            Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
+        }
+
+        fn get_ingest_host<'a>(
+            &'a self,
+        ) -> crate::application::ports::PipelineIngestHostFuture<'a> {
+            Box::pin(async move { Ok(None) })
+        }
+
         fn update_pipeline_input_source<'a>(
             &'a self,
             pipeline: &'a Pipeline,
