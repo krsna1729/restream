@@ -103,6 +103,57 @@ impl AppState {
         let sessions = self.sessions.read().await;
         sessions.contains(&token_hash)
     }
+
+    /// Construct an AppState with all default services wired, for testing.
+    pub fn test_new(
+        db: SqlitePool,
+        security: Arc<IngestSecurityService>,
+        ingest_policy_store: Arc<SrtIngestPolicyStore>,
+        sessions: Arc<TokioRwLock<HashSet<String>>>,
+        engine: Arc<MediaEngine>,
+        log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
+        media_dir: String,
+    ) -> Self {
+        let pipeline_service = PipelineService::new(db.clone());
+        let output_service = OutputService::new(db.clone());
+        let ingest_service = IngestService::new(db.clone());
+        let auth_service = AuthService::new(db.clone());
+        let settings_service = SettingsService::new(db.clone());
+        let health_service = HealthService::new(db.clone());
+        let file_ingest_service = FileIngestService::new(db.clone(), pipeline_service.clone());
+        let media_library_service = MediaLibraryService::new(db.clone(), pipeline_service.clone());
+        let log_service = LogService::new(db.clone());
+
+        Self {
+            db,
+            security,
+            ingest_policy_store,
+            sessions,
+            engine,
+            ingest_disconnect_grace_ms: 5000,
+            ports: PortConfig {
+                rtmp: 1935,
+                srt: 10080,
+            },
+            media_dir,
+            db_path: "data.db".to_string(),
+            srt_passphrase: None,
+            srt_pbkeylen: 16,
+            pipeline_service,
+            output_service,
+            ingest_service,
+            auth_service,
+            settings_service,
+            health_service,
+            file_ingest_service,
+            media_library_service,
+            log_service,
+            alert_tracker: alerts::AlertTracker::new(),
+            log_broadcast,
+            #[cfg(feature = "agent-execution")]
+            agent_execution: Arc::new(crate::agent_execution::AgentExecutionStore::default()),
+        }
+    }
 }
 
 pub fn check_field_len(field: &str, s: &str, max: usize) -> Option<Response> {

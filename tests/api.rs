@@ -39,23 +39,15 @@ async fn test_app_with_engine() -> (axum::Router, SqlitePool, Arc<MediaEngine>) 
     let (log_broadcast, _) = broadcast::channel(32);
     let engine = Arc::new(MediaEngine::new());
 
-    let state = Arc::new(api::AppState {
-        db: pool.clone(),
+    let state = Arc::new(api::AppState::test_new(
+        pool.clone(),
         security,
         ingest_policy_store,
         sessions,
-        engine: engine.clone(),
-        ingest_disconnect_grace_ms: restream::RuntimeTuning::default().ingest_disconnect_grace_ms,
-        ports: api::PortConfig {
-            rtmp: 1935,
-            srt: 10080,
-        },
-        media_dir: "media".to_string(),
-        alert_tracker: restream::alerts::AlertTracker::new(),
+        engine.clone(),
         log_broadcast,
-        #[cfg(feature = "agent-execution")]
-        agent_execution: Arc::new(restream::agent_execution::AgentExecutionStore::default()),
-    });
+        "media".to_string(),
+    ));
 
     (api::create_router(state), pool, engine)
 }
@@ -86,23 +78,15 @@ async fn authenticated_app_with_temp_media()
     std::fs::create_dir_all(&temp_dir).unwrap();
     let media_dir = temp_dir.to_string_lossy().to_string();
 
-    let state = Arc::new(api::AppState {
-        db: pool.clone(),
+    let state = Arc::new(api::AppState::test_new(
+        pool.clone(),
         security,
         ingest_policy_store,
         sessions,
         engine,
-        ingest_disconnect_grace_ms: restream::RuntimeTuning::default().ingest_disconnect_grace_ms,
-        ports: api::PortConfig {
-            rtmp: 1935,
-            srt: 10080,
-        },
-        media_dir,
-        alert_tracker: restream::alerts::AlertTracker::new(),
         log_broadcast,
-        #[cfg(feature = "agent-execution")]
-        agent_execution: Arc::new(restream::agent_execution::AgentExecutionStore::default()),
-    });
+        media_dir,
+    ));
 
     let app = api::create_router(state);
     let cookie = login(&app).await;
@@ -134,23 +118,15 @@ async fn authenticated_app_with_temp_media_and_engine() -> (
     std::fs::create_dir_all(&temp_dir).unwrap();
     let media_dir = temp_dir.to_string_lossy().to_string();
 
-    let state = Arc::new(api::AppState {
-        db: pool.clone(),
+    let state = Arc::new(api::AppState::test_new(
+        pool.clone(),
         security,
         ingest_policy_store,
         sessions,
-        engine: engine.clone(),
-        ingest_disconnect_grace_ms: restream::RuntimeTuning::default().ingest_disconnect_grace_ms,
-        ports: api::PortConfig {
-            rtmp: 1935,
-            srt: 10080,
-        },
-        media_dir,
-        alert_tracker: restream::alerts::AlertTracker::new(),
+        engine.clone(),
         log_broadcast,
-        #[cfg(feature = "agent-execution")]
-        agent_execution: Arc::new(restream::agent_execution::AgentExecutionStore::default()),
-    });
+        media_dir,
+    ));
 
     let app = api::create_router(state);
     let cookie = login(&app).await;
@@ -1907,24 +1883,15 @@ async fn health_shows_registered_egress() {
             &[],
         ));
         let (log_broadcast, _) = broadcast::channel(32);
-        let state = Arc::new(api::AppState {
-            db: pool.clone(),
+        let state = Arc::new(api::AppState::test_new(
+            pool.clone(),
             security,
             ingest_policy_store,
             sessions,
-            engine: engine.clone(),
-            ingest_disconnect_grace_ms: restream::RuntimeTuning::default()
-                .ingest_disconnect_grace_ms,
-            ports: api::PortConfig {
-                rtmp: 1935,
-                srt: 10080,
-            },
-            media_dir: "media".to_string(),
-            alert_tracker: restream::alerts::AlertTracker::new(),
+            engine.clone(),
             log_broadcast,
-            #[cfg(feature = "agent-execution")]
-            agent_execution: Arc::new(restream::agent_execution::AgentExecutionStore::default()),
-        });
+            "media".to_string(),
+        ));
         api::create_router(state)
     };
     let cookie = login(&app).await;
