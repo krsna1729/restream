@@ -163,9 +163,25 @@ pub fn collect_needed_stage_keys<'a>(
     let mut needed_stages = HashSet::new();
     for output in outputs {
         if output.effective_has_ingest && (output.is_active || output.desired_state == "running") {
-            let output_path = OutputPath::resolve(output.pipeline_id, &output.encoding, output.url);
-            for stage in output_path.needed_stage_keys(output.ingest_video_codec.as_deref()) {
-                needed_stages.insert(stage);
+            let dummy_output = Output {
+                id: "".to_string(),
+                pipeline_id: output.pipeline_id.to_string(),
+                name: "".to_string(),
+                url: output.url.to_string(),
+                monitoring_url: None,
+                desired_state: output.desired_state.to_string(),
+                config: crate::domain::output_spec::OutputConfig::parse(&output.encoding),
+            };
+            let plan = crate::planner::graph_plan::plan_pipeline_graph(
+                output.pipeline_id,
+                output.ingest_video_codec.as_deref(),
+                &[dummy_output],
+                false,
+            );
+            for stage in plan.stages {
+                if stage.kind != crate::domain::stage::StageKind::Source {
+                    needed_stages.insert(stage.key);
+                }
             }
         }
     }

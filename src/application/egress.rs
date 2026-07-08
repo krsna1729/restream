@@ -2,7 +2,7 @@
 //! into the runtime ring and transcoder wiring owned by the media engine.
 
 use crate::application::output_path::OutputPath;
-use crate::domain::stage::StageKey;
+use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::ring_buffer::RingBuffer;
 use crate::types::Output;
@@ -20,44 +20,71 @@ pub async fn prepare_output_ring(
     let ingest_video_codec = engine.ingest_video_codec(&output.pipeline_id).await;
     let ingest_codec_override = output_path.ingest_codec_override(ingest_video_codec.as_deref());
 
-    let video_buf = if let Some(stage) = output_path.video_stage() {
-        engine
-            .get_or_create_transcoder(
-                &output.pipeline_id,
-                stage.kind,
-                source_buf.clone(),
-                ingest_codec_override,
-            )
-            .await
-    } else {
-        source_buf.clone()
-    };
+    let plan = crate::planner::graph_plan::plan_pipeline_graph(
+        &output.pipeline_id,
+        ingest_video_codec.as_deref(),
+        std::slice::from_ref(output),
+        false,
+    );
 
-    let protocol_buf = if output_path.needs_rtmp_h264_conv(ingest_video_codec.as_deref()) {
-        engine
-            .get_or_create_h264_transcoder(
-                &output.pipeline_id,
-                output_path
-                    .codec_edge_upstream_kind(ingest_video_codec.as_deref())
-                    .clone(),
-                video_buf.clone(),
-            )
-            .await
-    } else {
-        video_buf.clone()
-    };
+    let mut current_bufs = std::collections::HashMap::new();
+    current_bufs.insert(
+        StageKey::new(output.pipeline_id.as_str(), StageKind::Source),
+        source_buf.clone(),
+    );
 
-    let terminal_buf = if let Some(stage) =
-        output_path.routed_audio_stage(ingest_video_codec.as_deref())
-    {
-        engine
-            .get_or_create_transcoder(&output.pipeline_id, stage.kind, protocol_buf.clone(), None)
-            .await
-    } else {
-        protocol_buf
-    };
+    for stage in &plan.stages {
+        if stage.kind == StageKind::Source {
+            continue;
+        }
+
+        let input_key = stage.input.as_ref().unwrap();
+        let input_buf = current_bufs
+            .get(input_key)
+            .cloned()
+            .unwrap_or_else(|| source_buf.clone());
+
+        let stage_buf = match &stage.kind {
+            StageKind::VideoPreset { .. } => {
+                engine
+                    .get_or_create_transcoder(
+                        &output.pipeline_id,
+                        stage.kind.clone(),
+                        input_buf,
+                        ingest_codec_override,
+                    )
+                    .await
+            }
+            StageKind::CodecEdge { operation, .. } if operation == "hevc_to_h264" => {
+                engine
+                    .get_or_create_h264_transcoder(
+                        &output.pipeline_id,
+                        input_key.kind.clone(),
+                        input_buf,
+                    )
+                    .await
+            }
+            _ => {
+                engine
+                    .get_or_create_transcoder(
+                        &output.pipeline_id,
+                        stage.kind.clone(),
+                        input_buf,
+                        None,
+                    )
+                    .await
+            }
+        };
+
+        current_bufs.insert(stage.key.clone(), stage_buf);
+    }
 
     let terminal_key = output_path.terminal_stage_key(ingest_video_codec.as_deref());
+    let terminal_buf = current_bufs
+        .get(&terminal_key)
+        .cloned()
+        .unwrap_or(source_buf);
+
     (terminal_buf, Some(terminal_key))
 }
 

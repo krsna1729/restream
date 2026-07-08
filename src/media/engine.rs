@@ -2550,22 +2550,23 @@ impl MediaEngine {
                 continue;
             }
 
-            let Some(ingest) = ingests.get(&pipeline_id) else {
-                continue;
-            };
-            let Some(video) = ingest.video.as_ref() else {
-                continue;
-            };
-            if !(video.codec.eq_ignore_ascii_case("hevc")
-                || video.codec.eq_ignore_ascii_case("h265"))
-            {
-                continue;
-            }
+            let ingest = ingests.get(&pipeline_id);
+            let ingest_codec = ingest
+                .and_then(|i| i.video.as_ref())
+                .map(|v| v.codec.as_str());
 
-            needed.insert(StageKey::new(
-                pipeline_id.as_str(),
-                StageKind::preview("720p", StageKind::source()),
-            ));
+            let plan = crate::planner::graph_plan::plan_pipeline_graph(
+                &pipeline_id,
+                ingest_codec,
+                &[],
+                true,
+            );
+
+            for stage in plan.stages {
+                if stage.kind.is_preview() {
+                    needed.insert(stage.key);
+                }
+            }
         }
 
         needed
