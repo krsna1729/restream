@@ -604,24 +604,35 @@ async fn start_external_transcoder_stage_inner(
             backend: crate::media::stage_lifecycle::StageBackendKind::ExternalFfmpeg,
         },
     );
-    let ffmpeg_permit = match engine.runtime.external_ffmpeg_semaphore.acquire().await {
-        Ok(permit) => permit,
-        Err(error) => {
-            error!(
+    let ffmpeg_permit = tokio::select! {
+        permit = engine.runtime.external_ffmpeg_semaphore.acquire() => match permit {
+            Ok(p) => p,
+            Err(error) => {
+                error!(
+                    correlation_id = %correlation_id,
+                    pipeline_id = %pipeline_id,
+                    stage_encoding = %encoding,
+                    stage_backend = "external_ffmpeg",
+                    err = %error,
+                    "[ext-transcoder] external ffmpeg semaphore closed"
+                );
+                engine
+                    .runtime
+                    .event_log
+                    .emit(crate::events::EventKind::StageStopped {
+                        pipeline_id: pipeline_id.clone(),
+                        encoding: encoding.clone(),
+                    });
+                return;
+            }
+        },
+        _ = cancel.cancelled() => {
+            tracing::info!(
                 correlation_id = %correlation_id,
                 pipeline_id = %pipeline_id,
                 stage_encoding = %encoding,
-                stage_backend = "external_ffmpeg",
-                err = %error,
-                "[ext-transcoder] external ffmpeg semaphore closed"
+                "[ext-transcoder] external ffmpeg wait cancelled"
             );
-            engine
-                .runtime
-                .event_log
-                .emit(crate::events::EventKind::StageStopped {
-                    pipeline_id: pipeline_id.clone(),
-                    encoding: encoding.clone(),
-                });
             return;
         }
     };
@@ -1026,15 +1037,25 @@ pub(crate) async fn run_external_ffmpeg_backend(
     lifecycle.transition(StagePhase::WaitingForCapacity {
         backend: StageBackendKind::ExternalFfmpeg,
     });
-    let _ffmpeg_permit = match ctx.engine.runtime.external_ffmpeg_semaphore.acquire().await {
-        Ok(p) => p,
-        Err(e) => {
-            error!(
+    let _ffmpeg_permit = tokio::select! {
+        permit = ctx.engine.runtime.external_ffmpeg_semaphore.acquire() => match permit {
+            Ok(p) => p,
+            Err(e) => {
+                error!(
+                    pipeline_id = %pipeline_id,
+                    stage = %stage_key,
+                    "external ffmpeg semaphore closed: {e}"
+                );
+                return Err(StageError(e.to_string()));
+            }
+        },
+        _ = ctx.cancel.cancelled() => {
+            info!(
                 pipeline_id = %pipeline_id,
                 stage = %stage_key,
-                "external ffmpeg semaphore closed: {e}"
+                "external ffmpeg wait cancelled"
             );
-            return Err(StageError(e.to_string()));
+            return Ok(());
         }
     };
     lifecycle.transition(StagePhase::CapacityAcquired {

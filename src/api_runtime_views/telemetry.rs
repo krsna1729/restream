@@ -18,6 +18,16 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
     let input_queues = engine.stages.input_queues.read().await;
     let egress_queues = engine.egresses.queues.read().await;
 
+    // Fetch lifecycle snapshots for all registered stages.
+    let mut lifecycle_snapshots = std::collections::HashMap::new();
+    for key in stage_metrics.keys() {
+        if let Some(snap) = engine.stage_runtime_snapshot(key).await {
+            lifecycle_snapshots.insert(key.clone(), snap);
+        }
+    }
+    drop(stage_metrics); // re-borrow below
+    let stage_metrics = engine.stages.metrics.read().await;
+
     let ingest_arr: Vec<serde_json::Value> = ingests
         .iter()
         .map(|(pid, ingest)| api_view_models::ingest_telemetry_json(pid, ingest))
@@ -32,6 +42,7 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
                 pipe_metrics.get(key).map(|pm| pm.snapshot()),
                 None,
                 None,
+                lifecycle_snapshots.get(key),
             )
         })
         .collect();
@@ -147,6 +158,17 @@ pub(crate) async fn pipeline_telemetry(
     let pipelines = engine.ingests.pipelines.read().await;
     let buffers = engine.stages.buffers.read().await;
 
+    // Pre-fetch lifecycle snapshots for stages belonging to this pipeline.
+    let mut lifecycle_snapshots = std::collections::HashMap::new();
+    for key in all_stage_metrics
+        .keys()
+        .filter(|k| k.pipeline.as_str() == pipeline_id)
+    {
+        if let Some(snap) = engine.stage_runtime_snapshot(key).await {
+            lifecycle_snapshots.insert(key.clone(), snap);
+        }
+    }
+
     let ingest = ingests
         .get(pipeline_id)
         .map(api_view_models::pipeline_ingest_telemetry_json);
@@ -165,6 +187,7 @@ pub(crate) async fn pipeline_telemetry(
                 all_pipe_metrics.get(key).map(|pm| pm.snapshot()),
                 None,
                 None,
+                lifecycle_snapshots.get(key),
             );
             if let Some((ring, token)) = buffers.get(key) {
                 val["active"] = serde_json::json!(!token.is_cancelled());
@@ -216,10 +239,14 @@ pub(crate) async fn stage_telemetry_by_display(
     let all_pipe_metrics = engine.stages.pipe_metrics.read().await;
     let pipe = all_pipe_metrics.get(key).map(|pm| pm.snapshot());
 
+    // Fetch lifecycle snapshot for detailed phase/capacity info.
+    let lifecycle = engine.stage_runtime_snapshot(key).await;
+
     Some(api_view_models::single_stage_telemetry_json(
         chrono::Utc::now().to_rfc3339(),
         key,
         metrics.snapshot(),
         pipe,
+        lifecycle.as_ref(),
     ))
 }

@@ -584,6 +584,7 @@ pub(crate) fn stage_telemetry_row_json(
     pipe_metrics: Option<serde_json::Value>,
     active: Option<bool>,
     payload_stats: Option<serde_json::Value>,
+    lifecycle: Option<&crate::media::stage_runtime::StageRuntimeSnapshot>,
 ) -> serde_json::Value {
     let mut value = serde_json::json!({
         "stageKey": key.to_string(),
@@ -599,6 +600,9 @@ pub(crate) fn stage_telemetry_row_json(
     }
     if let Some(payload_stats) = payload_stats {
         value["payloadStats"] = payload_stats;
+    }
+    if let Some(snap) = lifecycle {
+        value["lifecycle"] = snap.to_json();
     }
     value
 }
@@ -780,8 +784,9 @@ pub(crate) fn single_stage_telemetry_json(
     key: &StageKey,
     metrics: serde_json::Value,
     pipe_metrics: Option<serde_json::Value>,
+    lifecycle: Option<&crate::media::stage_runtime::StageRuntimeSnapshot>,
 ) -> serde_json::Value {
-    let mut value = stage_telemetry_row_json(key, metrics, pipe_metrics, None, None);
+    let mut value = stage_telemetry_row_json(key, metrics, pipe_metrics, None, None, lifecycle);
     value["generatedAt"] = serde_json::Value::String(generated_at);
     value
 }
@@ -1219,6 +1224,7 @@ mod tests {
             Some(serde_json::json!({"drops": 2})),
             Some(true),
             Some(serde_json::json!({"payloadBytes": 256})),
+            None,
         );
 
         assert_eq!(value["stageKey"], "telemetry-pipe:video:720p");
