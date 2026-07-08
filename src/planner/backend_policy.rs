@@ -1,11 +1,12 @@
 //! Backend selection for runtime stages.
 //!
 //! The engine owns stage lifecycles; this module owns the policy choice for how
-//! a typed stage should run.
+//! a typed stage should run. Per-stage backend families are controlled via
+//! `RESTREAM_INTERNAL_VIDEO_PRESETS`, `RESTREAM_INTERNAL_HEVC_TO_H264`,
+//! `RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX`.
 
 use crate::domain::audio_routing::{AudioRouting, parse_audio_operation};
 use crate::domain::stage::StageKind;
-use tracing::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StageBackend {
@@ -16,8 +17,7 @@ pub enum StageBackend {
 
 /// Per-stage-family backend policy.
 ///
-/// Replace the old `RESTREAM_USE_INTERNAL_TRANSCODER` global flag with
-/// targeted controls so that each stage family can graduate independently.
+/// Targeted controls so that each stage family can graduate independently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendPolicy {
     pub internal_video_presets: bool,
@@ -37,31 +37,11 @@ fn env_bool(name: &str) -> Option<bool> {
 
 impl BackendPolicy {
     pub fn from_env() -> Self {
-        // Check the old global flag first for backward compatibility.
-        let global_internal = env_bool("RESTREAM_USE_INTERNAL_TRANSCODER");
-
-        if global_internal == Some(true) {
-            warn!(
-                "RESTREAM_USE_INTERNAL_TRANSCODER=1 is deprecated, \
-                 use per-stage controls: RESTREAM_INTERNAL_VIDEO_PRESETS, \
-                 RESTREAM_INTERNAL_HEVC_TO_H264, RESTREAM_INTERNAL_HLS_PREVIEW, \
-                 RESTREAM_INTERNAL_AUDIO_COMPLEX"
-            );
-        }
-
         Self {
-            internal_video_presets: env_bool("RESTREAM_INTERNAL_VIDEO_PRESETS")
-                .or(global_internal)
-                .unwrap_or(false),
-            internal_hevc_to_h264: env_bool("RESTREAM_INTERNAL_HEVC_TO_H264")
-                .or(global_internal)
-                .unwrap_or(false),
-            internal_hls_preview: env_bool("RESTREAM_INTERNAL_HLS_PREVIEW")
-                .or(global_internal)
-                .unwrap_or(false),
-            internal_complex_audio: env_bool("RESTREAM_INTERNAL_AUDIO_COMPLEX")
-                .or(global_internal)
-                .unwrap_or(false),
+            internal_video_presets: env_bool("RESTREAM_INTERNAL_VIDEO_PRESETS").unwrap_or(false),
+            internal_hevc_to_h264: env_bool("RESTREAM_INTERNAL_HEVC_TO_H264").unwrap_or(false),
+            internal_hls_preview: env_bool("RESTREAM_INTERNAL_HLS_PREVIEW").unwrap_or(false),
+            internal_complex_audio: env_bool("RESTREAM_INTERNAL_AUDIO_COMPLEX").unwrap_or(false),
         }
     }
 

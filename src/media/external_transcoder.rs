@@ -30,9 +30,11 @@
 //! # Backend selection
 //!
 //! By default every non-passthrough encoding uses this external backend.
-//! Set `RESTREAM_USE_INTERNAL_TRANSCODER=1` to switch to the in-process FFmpeg
-//! backend (`src/media/transcoder.rs`). The internal backend uses libavcodec
-//! via Rust FFI; prefer the external backend until the FFI layer hardens.
+//! Individual stage families can be switched to the in-process FFmpeg backend
+//! (`src/media/transcoder.rs`) via per-stage env flags:
+//! `RESTREAM_INTERNAL_VIDEO_PRESETS`, `RESTREAM_INTERNAL_HEVC_TO_H264`,
+//! `RESTREAM_INTERNAL_HLS_PREVIEW`, `RESTREAM_INTERNAL_AUDIO_COMPLEX`.
+//! Prefer the external backend until the internal FFI layer reaches parity.
 
 use std::process::Stdio;
 use std::sync::Arc;

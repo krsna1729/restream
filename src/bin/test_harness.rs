@@ -2369,13 +2369,17 @@ impl BranchMatrixEnv {
             summary_json: work_dir.join("branch-matrix-results.json"),
             summary_csv: work_dir.join("branch-matrix-results.csv"),
             summary_md: work_dir.join("branch-matrix-summary.md"),
-            backend: if std::env::var("RESTREAM_USE_INTERNAL_TRANSCODER")
-                .ok()
-                .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            {
-                "internal".to_string()
-            } else {
-                "external".to_string()
+            backend: {
+                let policy = restream::planner::backend_policy::BackendPolicy::from_env();
+                if policy.internal_video_presets
+                    || policy.internal_hevc_to_h264
+                    || policy.internal_hls_preview
+                    || policy.internal_complex_audio
+                {
+                    "internal".to_string()
+                } else {
+                    "external".to_string()
+                }
             },
             srt_variants: vec![harness_srt_crypto_from_env()],
             scenario_filter: parse_string_set("BRANCH_MATRIX_SCENARIOS"),
