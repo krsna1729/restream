@@ -4,6 +4,7 @@
 //! preview requests, providing a single source of truth for transcoders,
 //! HLS previews, and recordings.
 
+use crate::domain::ids::{OutputId, PipelineId};
 use crate::domain::stage::{StageKey, StageKind};
 use crate::planner::backend_policy::{BackendPolicy, StageBackend};
 use crate::runtime::graph::{GraphRole, StageGraphPlan};
@@ -14,20 +15,25 @@ pub fn plan_pipeline_graph(
     ingest_codec: Option<&str>,
     outputs: &[Output],
     hls_preview_active: bool,
+    policy: &BackendPolicy,
 ) -> StageGraphPlan {
-    let terminal_stage = StageKey::new(pipeline_id, StageKind::Source);
+    let pipeline_id_typed = PipelineId::new(pipeline_id);
+    let terminal_stage = StageKey::new(pipeline_id_typed.clone(), StageKind::Source);
+    let output_id_typed = outputs
+        .first()
+        .map(|o| OutputId::new(&o.id))
+        .unwrap_or_else(|| OutputId::new(""));
+
     let mut plan = StageGraphPlan::new(
-        pipeline_id,
+        pipeline_id_typed.clone(),
         GraphRole::Output {
-            output_id: String::new(),
+            output_id: output_id_typed,
         },
         terminal_stage,
     );
-    let policy = BackendPolicy::from_env();
-
     // 1. Source stage is always present
     plan.add_stage(
-        StageKey::new(pipeline_id, StageKind::Source),
+        StageKey::new(pipeline_id_typed.clone(), StageKind::Source),
         StageBackend::AudioRouter, // Source doesn't run a transcoder
     );
 
@@ -50,8 +56,10 @@ pub fn plan_pipeline_graph(
     if hls_preview_active {
         if let Some(codec) = ingest_codec {
             if codec.eq_ignore_ascii_case("hevc") || codec.eq_ignore_ascii_case("h265") {
-                let preview_key =
-                    StageKey::new(pipeline_id, StageKind::preview("720p", StageKind::source()));
+                let preview_key = StageKey::new(
+                    pipeline_id_typed.clone(),
+                    StageKind::preview("720p", StageKind::source()),
+                );
                 let backend = policy.select_backend(&preview_key.kind);
                 plan.add_stage(preview_key, backend);
             }
@@ -69,20 +77,24 @@ pub fn plan_pipeline_graph(
 pub fn plan_hls_preview_graph(
     pipeline_id: &str,
     ingest_codec: Option<&str>,
+    policy: &BackendPolicy,
 ) -> Option<StageGraphPlan> {
     let codec = ingest_codec?;
     if !is_hevc_preview_codec(codec) {
         return None;
     }
 
-    let preview_key = StageKey::new(pipeline_id, StageKind::preview("720p", StageKind::source()));
-    let policy = BackendPolicy::from_env();
+    let pipeline_id_typed = PipelineId::new(pipeline_id);
+    let preview_key = StageKey::new(
+        pipeline_id_typed.clone(),
+        StageKind::preview("720p", StageKind::source()),
+    );
     let terminal = preview_key.clone();
 
-    let mut plan = StageGraphPlan::new(pipeline_id, GraphRole::HlsPreview, terminal);
+    let mut plan = StageGraphPlan::new(pipeline_id_typed.clone(), GraphRole::HlsPreview, terminal);
 
     plan.add_stage(
-        StageKey::new(pipeline_id, StageKind::Source),
+        StageKey::new(pipeline_id_typed, StageKind::Source),
         StageBackend::AudioRouter,
     );
     let backend = policy.select_backend(&preview_key.kind);
@@ -101,7 +113,8 @@ mod tests {
 
     #[test]
     fn plan_hls_preview_graph_returns_plan_for_hevc() {
-        let plan = plan_hls_preview_graph("pipe_1", Some("hevc"));
+        let policy = BackendPolicy::default();
+        let plan = plan_hls_preview_graph("pipe_1", Some("hevc"), &policy);
         assert!(plan.is_some());
         let plan = plan.unwrap();
         assert_eq!(plan.role, GraphRole::HlsPreview);
@@ -120,23 +133,25 @@ mod tests {
 
     #[test]
     fn plan_hls_preview_graph_returns_none_for_h264() {
-        assert!(plan_hls_preview_graph("pipe_1", Some("h264")).is_none());
+        let policy = BackendPolicy::default();
+        assert!(plan_hls_preview_graph("pipe_1", Some("h264"), &policy).is_none());
     }
 
     #[test]
     fn plan_hls_preview_graph_returns_none_for_missing_codec() {
-        assert!(plan_hls_preview_graph("pipe_1", None).is_none());
+        let policy = BackendPolicy::default();
+        assert!(plan_hls_preview_graph("pipe_1", None, &policy).is_none());
     }
 
     #[test]
     fn graph_role_hls_output_variant_exists() {
         let role = GraphRole::HlsOutput {
-            output_id: "out_1".to_string(),
+            output_id: OutputId::new("out_1"),
         };
         assert_eq!(
             role,
             GraphRole::HlsOutput {
-                output_id: "out_1".to_string()
+                output_id: OutputId::new("out_1")
             }
         );
     }

@@ -1,11 +1,12 @@
+use crate::domain::ids::{OutputId, PipelineId};
 use crate::domain::stage::{StageKey, StageKind};
 use crate::planner::backend_policy::StageBackend;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GraphRole {
-    Output { output_id: String },
+    Output { output_id: OutputId },
     HlsPreview,
-    HlsOutput { output_id: String },
+    HlsOutput { output_id: OutputId },
     Recording,
     Diagnostic,
 }
@@ -26,7 +27,7 @@ pub struct StageEdge {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StageGraphPlan {
-    pub pipeline_id: String,
+    pub pipeline_id: PipelineId,
     pub role: GraphRole,
     pub terminal_stage: StageKey,
     pub stages: Vec<StagePlan>,
@@ -34,9 +35,9 @@ pub struct StageGraphPlan {
 }
 
 impl StageGraphPlan {
-    pub fn new(pipeline_id: &str, role: GraphRole, terminal_stage: StageKey) -> Self {
+    pub fn new(pipeline_id: PipelineId, role: GraphRole, terminal_stage: StageKey) -> Self {
         Self {
-            pipeline_id: pipeline_id.to_string(),
+            pipeline_id,
             role,
             terminal_stage,
             stages: Vec::new(),
@@ -52,20 +53,20 @@ impl StageGraphPlan {
         let input = match &kind {
             StageKind::Source => None,
             StageKind::VideoPreset { .. } => {
-                Some(StageKey::new(self.pipeline_id.as_str(), StageKind::Source))
+                Some(StageKey::new(self.pipeline_id.clone(), StageKind::Source))
             }
             StageKind::AudioRoute { upstream, .. } => {
-                Some(StageKey::new(self.pipeline_id.as_str(), *upstream.clone()))
+                Some(StageKey::new(self.pipeline_id.clone(), *upstream.clone()))
             }
             StageKind::CodecEdge { upstream, .. } => {
-                Some(StageKey::new(self.pipeline_id.as_str(), *upstream.clone()))
+                Some(StageKey::new(self.pipeline_id.clone(), *upstream.clone()))
             }
             StageKind::Preview { upstream, .. } => {
-                Some(StageKey::new(self.pipeline_id.as_str(), *upstream.clone()))
+                Some(StageKey::new(self.pipeline_id.clone(), *upstream.clone()))
             }
-            StageKind::Hls => Some(StageKey::new(self.pipeline_id.as_str(), StageKind::Source)),
+            StageKind::Hls => Some(StageKey::new(self.pipeline_id.clone(), StageKind::Source)),
             StageKind::Recording => {
-                Some(StageKey::new(self.pipeline_id.as_str(), StageKind::Source))
+                Some(StageKey::new(self.pipeline_id.clone(), StageKind::Source))
             }
         };
 
