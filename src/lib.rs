@@ -508,6 +508,20 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let media_dir = config.media_dir.clone();
     let reconciler_media_dir = media_dir.clone();
     let reconciler_config = config.clone();
+    let pipeline_service = crate::application::services::PipelineService::new(pool.clone());
+    let output_service = crate::application::services::OutputService::new(pool.clone());
+    let ingest_service = crate::application::services::IngestService::new(pool.clone());
+    let settings_service = crate::application::services::SettingsService::new(pool.clone());
+    let health_service = crate::application::services::HealthService::new(pool.clone());
+    let file_ingest_service = crate::application::services::FileIngestService::new(
+        pool.clone(),
+        pipeline_service.clone(),
+    );
+    let media_library_service = crate::application::services::MediaLibraryService::new(
+        pool.clone(),
+        pipeline_service.clone(),
+    );
+
     let state = Arc::new(crate::api::AppState {
         db: pool.clone(),
         security: security.clone(),
@@ -523,6 +537,13 @@ pub async fn run_app(config: Arc<AppConfig>) {
         db_path: config.db_path.clone(),
         srt_passphrase: config.srt_passphrase.clone(),
         srt_pbkeylen: config.srt_pbkeylen,
+        pipeline_service,
+        output_service,
+        ingest_service,
+        settings_service,
+        health_service,
+        file_ingest_service,
+        media_library_service,
         alert_tracker: crate::alerts::AlertTracker::new(),
         log_broadcast: logging_handles.broadcast_tx.clone(),
         #[cfg(feature = "agent-execution")]
