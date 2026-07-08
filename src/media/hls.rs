@@ -266,10 +266,22 @@ pub async fn start_hls_segmenter(
     let metrics = engine
         .get_or_create_stage_metrics(hls_stage_key.clone())
         .await;
+    let lifecycle = engine
+        .get_or_create_stage_lifecycle(
+            hls_stage_key.clone(),
+            crate::media::stage_lifecycle::StagePhase::Registered,
+        )
+        .await;
+    let _lifecycle_guard =
+        crate::media::stage_lifecycle::StageLifecycleGuard::new(lifecycle.clone());
+    lifecycle.transition(crate::media::stage_lifecycle::StagePhase::BackendSpawned {
+        backend: crate::media::stage_lifecycle::StageBackendKind::HlsSegmenter,
+        pid: None,
+    });
     engine
         .runtime
         .event_log
-        .emit(crate::events::EventKind::StageStarted {
+        .emit(crate::events::EventKind::StageRegistered {
             pipeline_id: pipeline_id.clone(),
             encoding: "hls".to_string(),
         });
@@ -338,6 +350,7 @@ pub async fn start_hls_segmenter(
                             let (video, audio_tracks) = loop {
                                 if cancel_token.is_cancelled() {
                                     engine.remove_stage_metrics(&hls_stage_key).await;
+                                    engine.remove_stage_lifecycle(&hls_stage_key).await;
                                     engine.runtime.event_log.emit(crate::events::EventKind::StageStopped {
                                         pipeline_id: pipeline_id.clone(),
                                         encoding: "hls".to_string(),
@@ -430,6 +443,7 @@ pub async fn start_hls_segmenter(
     }
 
     engine.remove_stage_metrics(&hls_stage_key).await;
+    engine.remove_stage_lifecycle(&hls_stage_key).await;
     engine
         .runtime
         .event_log

@@ -269,13 +269,19 @@ fn run_ffmpeg_h264_stage(
     // Build x264 encoder options: CRF mode for quality-based encoding
     // instead of fixed bitrate. CRF 23 is x264's default.
 
+    let stream_count = 1 + audio_track_counter as usize;
+    let normalizer_metrics = Arc::new(crate::media::stage_metrics::StageMetrics::new());
+    let mut normalizer = crate::media::ffmpeg::stage_output::StageOutputNormalizer::new(
+        out_ring,
+        stream_count,
+        normalizer_metrics,
+    )
+    .with_video_track_count(1);
+
     let mut encoder: Option<ffmpeg_next::codec::encoder::video::Encoder> = None;
     let mut scaler: Option<ffmpeg_next::software::scaling::Context> = None;
     let mut enc_frame = ffmpeg_next::frame::Video::empty();
     let mut enc_pkt = ffmpeg_next::Packet::empty();
-    let mut pts_counter: i64 = 0;
-    let mut fps_den: i64 = 1;
-    let mut fps_num: i64 = 30;
 
     for (stream, pkt) in ictx.packets() {
         if cancel.is_cancelled() {
@@ -309,10 +315,7 @@ fn run_ffmpeg_h264_stage(
             };
             let is_keyframe = pkt.is_key();
             let payload = Bytes::from_owner(OwnedFfmpegPacket(pkt));
-            if let Some(parameter_sets) = crate::media::codec::annexb_parameter_sets(&payload) {
-                out_ring.set_video_parameter_sets(parameter_sets);
-            }
-            out_ring.push(MediaPacket {
+            normalizer.push(MediaPacket {
                 media_type,
                 track_index,
                 pts: pts_ms,
@@ -327,6 +330,8 @@ fn run_ffmpeg_h264_stage(
         if stream.index() != video_idx {
             continue;
         }
+
+        let video_tb = stream.time_base();
 
         // Video: decode H.265 → encode H.264
         if decoder.send_packet(&pkt).is_err() {
@@ -377,8 +382,6 @@ fn run_ffmpeg_h264_stage(
                 } else {
                     (30, 1)
                 };
-                fps_num = fn_ as i64;
-                fps_den = fd as i64;
 
                 // Allocate encoder context with the H.264 codec so codec_id
                 // and codec_type are set correctly (avcodec_alloc_context3
@@ -407,7 +410,9 @@ fn run_ffmpeg_h264_stage(
                 enc_video.set_width(out_w);
                 enc_video.set_height(out_h);
                 enc_video.set_format(Pixel::YUV420P);
-                enc_video.set_time_base(ffmpeg_next::Rational::new(fd, fn_));
+                // Use millisecond time base so encoder output timestamps are in ms,
+                // matching the shared stage timeline and copied audio timestamps.
+                enc_video.set_time_base(ffmpeg_next::Rational::new(1, 1000));
                 enc_video.set_frame_rate(Some(ffmpeg_next::Rational::new(fn_, fd)));
                 enc_video.set_gop(profile.gop);
                 enc_video.set_max_b_frames(profile.bframes);
@@ -443,43 +448,43 @@ fn run_ffmpeg_h264_stage(
             };
             let Some(sw) = scaler.as_mut() else { continue };
 
+            // Use source-derived timestamp for the frame so encoded video shares
+            // the same clock origin as copied audio.
+            let source_pts_ms = dec_frame.pts().and_then(|pts| {
+                if video_tb.1 != 0 {
+                    Some((pts as i128 * video_tb.0 as i128 * 1000 / video_tb.1 as i128) as i64)
+                } else {
+                    Some(pts)
+                }
+            });
+
             if sw.run(&dec_frame, &mut enc_frame).is_err() {
                 continue;
             }
-            enc_frame.set_pts(Some(pts_counter));
+            enc_frame.set_pts(source_pts_ms);
             // Decoded frames may retain source I/P/B tags; clear them at the
             // transcode boundary so x264 uses this encoder's GOP/B-frame policy.
             enc_frame.set_kind(ffmpeg_next::util::picture::Type::None);
-            pts_counter += 1;
 
             if enc.send_frame(&enc_frame).is_err() {
                 continue;
             }
             while enc.receive_packet(&mut enc_pkt).is_ok() {
-                let pts_ms = enc_pkt.pts().unwrap_or(0) * fps_den * 1000 / fps_num;
+                let pts_ms = enc_pkt.pts().unwrap_or(0);
                 // DTS can differ from PTS when B-frames are enabled: the encoder
                 // returns the decode timestamp separately.  Setting dts=pts would
                 // break B-frame reordering in downstream muxers (TS, MP4).
-                let dts_raw = enc_pkt.dts().unwrap_or_else(|| enc_pkt.pts().unwrap_or(0));
-                let dts_ms = dts_raw * fps_den * 1000 / fps_num;
+                let dts_ms = enc_pkt.dts().unwrap_or(pts_ms);
                 // enc_pkt is reused across iterations; clone() calls av_packet_ref (refcount
                 // bump only, no data copy) so the ring buffer holds the AVBufferRef alive.
-                out_ring.push(MediaPacket {
+                normalizer.push(MediaPacket {
                     media_type: MediaType::Video,
                     track_index: 0,
                     pts: pts_ms,
                     dts: dts_ms,
                     is_keyframe: enc_pkt.is_key(),
                     format: PayloadFormat::Raw,
-                    payload: {
-                        let payload = Bytes::from_owner(OwnedFfmpegPacket(enc_pkt.clone()));
-                        if let Some(parameter_sets) =
-                            crate::media::codec::annexb_parameter_sets(&payload)
-                        {
-                            out_ring.set_video_parameter_sets(parameter_sets);
-                        }
-                        payload
-                    },
+                    payload: Bytes::from_owner(OwnedFfmpegPacket(enc_pkt.clone())),
                 });
             }
         }
@@ -489,10 +494,9 @@ fn run_ffmpeg_h264_stage(
     if let Some(enc) = encoder.as_mut() {
         let _ = enc.send_eof();
         while enc.receive_packet(&mut enc_pkt).is_ok() {
-            let pts_ms = enc_pkt.pts().unwrap_or(0) * fps_den * 1000 / fps_num;
-            let dts_raw = enc_pkt.dts().unwrap_or_else(|| enc_pkt.pts().unwrap_or(0));
-            let dts_ms = dts_raw * fps_den * 1000 / fps_num;
-            out_ring.push(MediaPacket {
+            let pts_ms = enc_pkt.pts().unwrap_or(0);
+            let dts_ms = enc_pkt.dts().unwrap_or(pts_ms);
+            normalizer.push(MediaPacket {
                 media_type: MediaType::Video,
                 track_index: 0,
                 pts: pts_ms,

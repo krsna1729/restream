@@ -8,12 +8,14 @@
 use crate::domain::output_spec::StagePresetSpec;
 use crate::domain::stage::StageKey;
 use crate::media::engine::AudioMeta;
-use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
+use crate::media::ffmpeg::backend::{StageError, StageRunContext};
+use crate::media::ffmpeg::stage_input::StageInputPump;
+use crate::media::ffmpeg::stage_output::StageOutputNormalizer;
+use crate::media::ffmpeg::stage_plan::FfmpegStagePlan;
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
+
 use crate::media::stage_metrics::StageMetrics;
-use crate::media::{
-    MEDIA_PRODUCER_BATCH_PACKETS, MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES,
-};
+use crate::media::{MEDIA_PRODUCER_BATCH_PACKETS, MEDIA_PULL_BURST_PACKETS};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -35,6 +37,30 @@ impl AsRef<[u8]> for OwnedFfmpegPacket {
 
 use crate::domain::audio_routing::{AudioRouting, parse_audio_routing};
 
+/// Byte sink that writes MPEG-TS batches into an in-process `MemoryQueue`.
+struct InternalMemoryQueueSink {
+    queue: Arc<crate::media::avio::MemoryQueue>,
+    cancel: CancellationToken,
+}
+
+impl InternalMemoryQueueSink {
+    fn new(queue: Arc<crate::media::avio::MemoryQueue>, cancel: CancellationToken) -> Self {
+        Self { queue, cancel }
+    }
+}
+
+impl crate::media::ffmpeg::stage_input::StageByteSink for InternalMemoryQueueSink {
+    async fn write_ts(&mut self, bytes: &[u8], _cancel: &CancellationToken) -> Result<(), String> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        if !self.queue.write_cancellable(bytes, &self.cancel).await {
+            return Err("input queue closed or cancelled".into());
+        }
+        Ok(())
+    }
+}
+
 /// Lightweight audio routing stage — no FFmpeg, no MPEG-TS round-trip.
 ///
 /// Handles `SelectTracks` by filtering/re-indexing `MediaPacket`s in a tight
@@ -52,6 +78,18 @@ pub async fn start_audio_router(
     stage_key: StageKey,
 ) {
     let stage_metrics = engine.get_or_create_stage_metrics(stage_key.clone()).await;
+    let lifecycle = engine
+        .get_or_create_stage_lifecycle(
+            stage_key.clone(),
+            crate::media::stage_lifecycle::StagePhase::Registered,
+        )
+        .await;
+    let _lifecycle_guard =
+        crate::media::stage_lifecycle::StageLifecycleGuard::new(lifecycle.clone());
+    lifecycle.transition(crate::media::stage_lifecycle::StagePhase::BackendSpawned {
+        backend: crate::media::stage_lifecycle::StageBackendKind::AudioRouter,
+        pid: None,
+    });
 
     // Inherit the codec_hint from the input ring so downstream egresses
     // (SRT, RTMP) build correct PMT even after passing through the audio router.
@@ -96,6 +134,8 @@ pub async fn start_audio_router(
     );
     let mut _pushed_count: u64 = 0;
     let mut first_push_logged = false;
+    let mut first_input_recorded = false;
+    let mut first_output_recorded = false;
     // Pre-allocated batches — reused across bursts so the Vec capacity
     // is retained (no re-allocation on the hot path after the first burst).
     let mut out_batch: Vec<MediaPacket> = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
@@ -107,6 +147,10 @@ pub async fn start_audio_router(
             _ = reader.wait_for_data() => {
                 if reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS).is_err() {
                     continue;
+                }
+                if !first_input_recorded {
+                    first_input_recorded = true;
+                    lifecycle.record_first_input();
                 }
                 for pkt in packets.drain(..) {
                     stage_metrics.record_in(pkt.payload.len() as u64);
@@ -182,6 +226,10 @@ pub async fn start_audio_router(
                 }
                 // One write-index store + one Notify for the entire burst.
                 if !out_batch.is_empty() {
+                    if !first_output_recorded {
+                        first_output_recorded = true;
+                        lifecycle.record_first_output();
+                    }
                     output_buffer.push_drained_batch_capped(&mut out_batch);
                 }
             }
@@ -189,6 +237,7 @@ pub async fn start_audio_router(
     }
 
     engine.remove_stage_metrics(&stage_key).await;
+    engine.remove_stage_lifecycle(&stage_key).await;
     engine
         .runtime
         .event_log
@@ -282,6 +331,12 @@ pub async fn start_transcoder(
 
     let input_queue = Arc::new(crate::media::avio::MemoryQueue::new());
     let stage_metrics = engine.get_or_create_stage_metrics(stage_key.clone()).await;
+    let stage_lifecycle = engine
+        .get_or_create_stage_lifecycle(
+            stage_key.clone(),
+            crate::media::stage_lifecycle::StagePhase::Registered,
+        )
+        .await;
     engine
         .register_input_queue(stage_key.clone(), input_queue.clone())
         .await;
@@ -295,7 +350,14 @@ pub async fn start_transcoder(
     let pipeline_id_clone = pipeline_id.clone();
     let out_buf = output_buffer.clone();
     let stage_metrics_for_thread = stage_metrics.clone();
+    let stage_lifecycle_for_thread = stage_lifecycle.clone();
     let handle = std::thread::spawn(move || {
+        stage_lifecycle_for_thread.transition(
+            crate::media::stage_lifecycle::StagePhase::BackendSpawned {
+                backend: crate::media::stage_lifecycle::StageBackendKind::InternalFfmpeg,
+                pid: None,
+            },
+        );
         let use_internal = std::env::var("RESTREAM_USE_INTERNAL_TRANSCODER")
             .map(|v| {
                 matches!(
@@ -327,9 +389,11 @@ pub async fn start_transcoder(
         }));
         match result {
             Ok(Err(e)) => {
+                stage_lifecycle_for_thread.record_error(e);
                 error!(pipeline_id = %pipeline_id_clone, preset = %preset_clone, err = ?e, "FFmpeg transcode thread failed")
             }
             Err(_) => {
+                stage_lifecycle_for_thread.record_error("FFmpeg transcode thread panicked");
                 error!(pipeline_id = %pipeline_id_clone, preset = %preset_clone, "FFmpeg transcode thread panicked")
             }
             _ => {}
@@ -339,53 +403,31 @@ pub async fn start_transcoder(
     engine.register_os_thread(handle);
 
     // Forward source RingBuffer packets to input_queue, muxed as MPEG-TS.
-    let (video_sequence_header, _) = engine.get_sequence_headers(&pipeline_id).await;
-    let mut feeder = TsPacketFeeder::new(
-        video_meta.as_ref(),
-        audio_tracks.clone(),
-        PacketFeedConfig {
-            video_sequence_header: video_sequence_header.as_ref().map(|v| v.to_vec()),
-            raw_video_parameter_sets: input_buffer.video_parameter_sets(),
-            ..PacketFeedConfig::default()
-        },
-    );
-    let mut reader = Reader::new(
+    let mut input_pump = crate::media::ffmpeg::stage_input::StageInputPump::new(
         format!("transcoder:{}:{}", pipeline_id, preset),
         input_buffer,
-    );
-    // Accumulation buffer: collect all muxed TS bytes for a burst, then
-    // write them in a single queue.write() call (one lock acquisition per
-    // burst instead of one per packet).
-    let mut ts_batch: Vec<u8> = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
-    let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
-    loop {
-        tokio::select! {
-            _ = cancel_token.cancelled() => break,
-            _ = reader.wait_for_data() => {
-                // Clear at top so ts_batch never carries stale bytes if a
-                // future continue path skips the end-of-arm clear (M6 fix).
-                ts_batch.clear();
-                packets.clear();
-                if reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS).is_ok() {
-                    for pkt in &packets {
-                        if feeder.extend_ts_for_packet(pkt, &mut ts_batch) {
-                            stage_metrics.record_in(pkt.payload.len() as u64);
-                        }
-                    }
-                    // One lock acquisition for the whole burst.
-                    if !ts_batch.is_empty()
-                        && !input_queue.write_cancellable(&ts_batch, &cancel_token).await
-                    {
-                        break;
-                    }
-                }
-            }
-        }
+        crate::media::startup_policy::internal_transcoder_keyframe_preroll_packets(),
+        video_meta.as_ref(),
+        &audio_tracks,
+        true,
+        stage_metrics.clone(),
+    )
+    .with_lifecycle(stage_lifecycle.clone());
+
+    let mut queue_sink = InternalMemoryQueueSink::new(input_queue.clone(), cancel_token.clone());
+    if let Err(e) = input_pump.pump_to(&mut queue_sink, &cancel_token).await {
+        error!(
+            pipeline_id = %pipeline_id,
+            preset = %preset,
+            "internal transcoder input pump failed: {}",
+            e
+        );
     }
 
     input_queue.close();
     engine.remove_input_queue(&stage_key).await;
     engine.remove_stage_metrics(&stage_key).await;
+    engine.remove_stage_lifecycle(&stage_key).await;
     engine
         .runtime
         .event_log
@@ -395,10 +437,52 @@ pub async fn start_transcoder(
         });
 }
 
+/// Backend entry point for the in-process FFmpeg adapter. The internal paths
+/// already create and use `StageInputPump` and `StageOutputNormalizer`
+/// internally; this function is the thin `FfmpegStageBackend` wrapper that
+/// bridges from the trait to those existing implementations.
+pub async fn run_internal_ffmpeg_backend(
+    plan: FfmpegStagePlan,
+    input_pump: StageInputPump,
+    output_normalizer: StageOutputNormalizer,
+    ctx: StageRunContext,
+) -> Result<(), StageError> {
+    let source_ring = input_pump.source_ring();
+    let output_ring = output_normalizer.output_ring();
+
+    if matches!(
+        plan.video,
+        crate::media::ffmpeg::stage_plan::VideoStageOp::CodecEdge { .. }
+    ) {
+        crate::media::h264_transcoder::start_h264_transcoder(
+            ctx.pipeline_id.clone(),
+            source_ring,
+            output_ring,
+            ctx.engine,
+            ctx.cancel,
+            ctx.stage_key,
+        )
+        .await;
+    } else {
+        start_transcoder(
+            ctx.pipeline_id,
+            ctx.stage_key.kind.to_string(),
+            source_ring,
+            output_ring,
+            ctx.engine,
+            ctx.cancel,
+            ctx.stage_key,
+        )
+        .await;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
+    use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
     use crate::media::engine::AudioMeta;
     use crate::media::ring_buffer::PayloadFormat;
     use std::sync::Arc;
@@ -1061,6 +1145,17 @@ fn run_ffmpeg_transcoder_stage_with_metrics(
         }
     }
 
+    let stream_count = stream_meta.iter().filter(|m| m.is_some()).count().max(1);
+    let normalizer_metrics = metrics
+        .clone()
+        .unwrap_or_else(|| Arc::new(StageMetrics::new()));
+    let mut normalizer = crate::media::ffmpeg::stage_output::StageOutputNormalizer::new(
+        out_ring,
+        stream_count,
+        normalizer_metrics,
+    )
+    .with_video_track_count(1);
+
     let mut batch: Vec<MediaPacket> = Vec::with_capacity(MEDIA_PRODUCER_BATCH_PACKETS);
     for (stream, packet) in ictx.packets() {
         if token.is_cancelled() {
@@ -1101,16 +1196,13 @@ fn run_ffmpeg_transcoder_stage_with_metrics(
             format: PayloadFormat::Raw,
             payload: bytes::Bytes::from_owner(OwnedFfmpegPacket(packet)),
         };
-        if let Some(metrics) = &metrics {
-            metrics.record_out(output_packet.payload.len() as u64);
-        }
         batch.push(output_packet);
         if batch.len() >= MEDIA_PRODUCER_BATCH_PACKETS {
-            out_ring.push_drained_batch_capped(&mut batch);
+            normalizer.push_batch(&mut batch);
         }
     }
     if !batch.is_empty() {
-        out_ring.push_drained_batch_capped(&mut batch);
+        normalizer.push_batch(&mut batch);
     }
 
     Ok(())
@@ -1197,13 +1289,21 @@ fn run_ffmpeg_transcode_with_scale_with_metrics(
         _ => return Err("Unsupported video codec for internal transcoding"),
     };
 
+    let stream_count = 1 + audio_track_counter as usize;
+    let normalizer_metrics = metrics
+        .clone()
+        .unwrap_or_else(|| Arc::new(StageMetrics::new()));
+    let mut normalizer = crate::media::ffmpeg::stage_output::StageOutputNormalizer::new(
+        out_ring,
+        stream_count,
+        normalizer_metrics,
+    )
+    .with_video_track_count(1);
+
     let mut encoder: Option<ffmpeg_next::codec::encoder::video::Encoder> = None;
     let mut scaler: Option<ffmpeg_next::software::scaling::Context> = None;
     let mut enc_frame = ffmpeg_next::frame::Video::empty();
     let mut enc_pkt = ffmpeg_next::Packet::empty();
-    let mut pts_counter: i64 = 0;
-    let mut fps_den: i64 = 1;
-    let mut fps_num: i64 = 30;
 
     for (stream, pkt) in ictx.packets() {
         if token.is_cancelled() {
@@ -1241,10 +1341,7 @@ fn run_ffmpeg_transcode_with_scale_with_metrics(
                 format: PayloadFormat::Raw,
                 payload: bytes::Bytes::from_owner(OwnedFfmpegPacket(pkt)),
             };
-            if let Some(metrics) = &metrics {
-                metrics.record_out(output_packet.payload.len() as u64);
-            }
-            out_ring.push(output_packet);
+            normalizer.push(output_packet);
             continue;
         }
 
@@ -1252,6 +1349,7 @@ fn run_ffmpeg_transcode_with_scale_with_metrics(
             continue;
         }
 
+        let video_tb = stream.time_base();
         if decoder.send_packet(&pkt).is_err() {
             continue;
         }
@@ -1289,8 +1387,6 @@ fn run_ffmpeg_transcode_with_scale_with_metrics(
                 } else {
                     (30, 1)
                 };
-                fps_num = fn_ as i64;
-                fps_den = fd as i64;
 
                 // SAFETY: avcodec_alloc_context3 allocates an FFmpeg
                 // AVCodecContext. The `enc_codec` pointer was obtained from
@@ -1314,7 +1410,9 @@ fn run_ffmpeg_transcode_with_scale_with_metrics(
                 enc_video.set_width(out_w);
                 enc_video.set_height(out_h);
                 enc_video.set_format(Pixel::YUV420P);
-                enc_video.set_time_base(ffmpeg_next::Rational::new(fd, fn_));
+                // Use millisecond time base so encoder output timestamps are in ms,
+                // matching the shared stage timeline and copied audio timestamps.
+                enc_video.set_time_base(ffmpeg_next::Rational::new(1, 1000));
                 enc_video.set_frame_rate(Some(ffmpeg_next::Rational::new(fn_, fd)));
                 enc_video.set_gop(profile.gop);
                 enc_video.set_max_b_frames(profile.bframes);
@@ -1346,32 +1444,40 @@ fn run_ffmpeg_transcode_with_scale_with_metrics(
                 continue;
             };
 
+            // Use source-derived timestamp for the frame so encoded video shares
+            // the same clock origin as copied audio.
+            let source_pts_ms = dec_frame.pts().map(|pts| {
+                if video_tb.1 != 0 {
+                    (pts as i128 * video_tb.0 as i128 * 1000 / video_tb.1 as i128) as i64
+                } else {
+                    pts
+                }
+            });
+
             let frame_to_encode = if let Some(ref mut sw) = scaler {
                 if sw.run(&dec_frame, &mut enc_frame).is_err() {
                     continue;
                 }
-                enc_frame.set_pts(Some(pts_counter));
+                enc_frame.set_pts(source_pts_ms);
                 // Drop source picture-type hints so the new encoder can choose
                 // GOP/B-frame placement from its own settings.
                 enc_frame.set_kind(ffmpeg_next::util::picture::Type::None);
                 &enc_frame
             } else {
-                dec_frame.set_pts(Some(pts_counter));
+                dec_frame.set_pts(source_pts_ms);
                 // Even without scaling, a decode/re-encode stage should not
                 // preserve source I/P/B tags across the encoder boundary.
                 dec_frame.set_kind(ffmpeg_next::util::picture::Type::None);
                 &dec_frame
             };
-            pts_counter += 1;
 
             if enc.send_frame(frame_to_encode).is_err() {
                 continue;
             }
 
             while enc.receive_packet(&mut enc_pkt).is_ok() {
-                let pts_ms = enc_pkt.pts().unwrap_or(0) * fps_den * 1000 / fps_num;
-                let dts_raw = enc_pkt.dts().unwrap_or_else(|| enc_pkt.pts().unwrap_or(0));
-                let dts_ms = dts_raw * fps_den * 1000 / fps_num;
+                let pts_ms = enc_pkt.pts().unwrap_or(0);
+                let dts_ms = enc_pkt.dts().unwrap_or(pts_ms);
                 // enc_pkt is reused across iterations; clone() calls av_packet_ref (refcount
                 // bump only, no data copy) so the ring buffer holds the AVBufferRef alive.
                 let output_packet = MediaPacket {
@@ -1383,10 +1489,7 @@ fn run_ffmpeg_transcode_with_scale_with_metrics(
                     format: PayloadFormat::Raw,
                     payload: bytes::Bytes::from_owner(OwnedFfmpegPacket(enc_pkt.clone())),
                 };
-                if let Some(metrics) = &metrics {
-                    metrics.record_out(output_packet.payload.len() as u64);
-                }
-                out_ring.push(output_packet);
+                normalizer.push(output_packet);
             }
         }
     }
@@ -1394,9 +1497,8 @@ fn run_ffmpeg_transcode_with_scale_with_metrics(
     if let Some(enc) = encoder.as_mut() {
         let _ = enc.send_eof();
         while enc.receive_packet(&mut enc_pkt).is_ok() {
-            let pts_ms = enc_pkt.pts().unwrap_or(0) * fps_den * 1000 / fps_num;
-            let dts_raw = enc_pkt.dts().unwrap_or_else(|| enc_pkt.pts().unwrap_or(0));
-            let dts_ms = dts_raw * fps_den * 1000 / fps_num;
+            let pts_ms = enc_pkt.pts().unwrap_or(0);
+            let dts_ms = enc_pkt.dts().unwrap_or(pts_ms);
             let output_packet = MediaPacket {
                 media_type: MediaType::Video,
                 track_index: 0,
@@ -1406,10 +1508,7 @@ fn run_ffmpeg_transcode_with_scale_with_metrics(
                 format: PayloadFormat::Raw,
                 payload: bytes::Bytes::from_owner(OwnedFfmpegPacket(enc_pkt.clone())),
             };
-            if let Some(metrics) = &metrics {
-                metrics.record_out(output_packet.payload.len() as u64);
-            }
-            out_ring.push(output_packet);
+            normalizer.push(output_packet);
         }
     }
 

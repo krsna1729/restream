@@ -1,0 +1,578 @@
+//! First-class stage runtime scheduler.
+//!
+//! Centralizes stage creation, lifecycle registration, metrics, and backend
+//! selection so that outputs, HLS preview, recording, and diagnostics all use
+//! the same admission path. This is the runtime scheduler layer described in
+//! `docs/architecture.md` and `docs/implementation.md`.
+
+use std::sync::Arc;
+
+use tokio_util::sync::CancellationToken;
+use tracing::info;
+
+use crate::domain::audio_routing::{AudioRouting, parse_audio_operation};
+use crate::domain::stage::{StageKey, StageKind};
+use crate::media::engine::MediaEngine;
+use crate::media::ffmpeg::backend::{
+    ExternalFfmpegBackend, FfmpegStageBackend, InternalFfmpegBackend, StageRunContext,
+};
+use crate::media::ffmpeg::operation_compiler::compile_operation;
+use crate::media::ffmpeg::stage_input::StageInputPump;
+use crate::media::ffmpeg::stage_output::StageOutputNormalizer;
+use crate::media::ffmpeg::stage_plan::{
+    AudioStageOp, CodecEdgeOp, FfmpegStagePlan, StageInputSpec, StageStartupPolicy, TimelinePolicy,
+    VideoCodecKind, VideoStageOp,
+};
+use crate::media::ring_buffer::{RingBuffer, default_transcoder_ring_capacity};
+use crate::media::stage_lifecycle::{StageBackendKind, StageLifecycle, StagePhase};
+use crate::media::stage_metrics::StageMetrics;
+use crate::planner::backend_policy::{BackendPolicy, StageBackend};
+
+/// Handle to an admitted stage. Consumers read from `ring`; the runtime manager
+/// owns the lifecycle, metrics, and cancellation token.
+#[derive(Clone)]
+pub struct StageHandle {
+    pub key: StageKey,
+    pub ring: Arc<RingBuffer>,
+    pub cancel: CancellationToken,
+    pub lifecycle: Arc<StageLifecycle>,
+    pub metrics: Arc<StageMetrics>,
+}
+
+/// Combined snapshot of a stage's lifecycle and throughput state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StageRuntimeSnapshot {
+    pub key: StageKey,
+    pub backend: StageBackendKind,
+    pub phase: StagePhase,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub packets_in: u64,
+    pub packets_out: u64,
+    pub first_input_at: Option<std::time::Instant>,
+    pub first_output_at: Option<std::time::Instant>,
+    pub last_error: Option<String>,
+}
+
+impl StageRuntimeSnapshot {
+    /// Serialize to a JSON value matching the API status contract.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "stage": self.key.to_string(),
+            "backend": serde_json::to_value(&self.backend).unwrap_or_default(),
+            "phase": phase_name(&self.phase),
+            "phaseDetail": serde_json::to_value(&self.phase).unwrap_or_default(),
+            "bytesIn": self.bytes_in,
+            "bytesOut": self.bytes_out,
+            "packetsIn": self.packets_in,
+            "packetsOut": self.packets_out,
+            "lastError": self.last_error,
+        })
+    }
+}
+
+fn phase_name(phase: &StagePhase) -> String {
+    match phase {
+        StagePhase::Registered => "registered".to_string(),
+        StagePhase::WaitingForDependency { .. } => "waitingForDependency".to_string(),
+        StagePhase::WaitingForMetadata => "waitingForMetadata".to_string(),
+        StagePhase::WaitingForParameterSets => "waitingForParameterSets".to_string(),
+        StagePhase::WaitingForKeyframe => "waitingForKeyframe".to_string(),
+        StagePhase::WaitingForCapacity { .. } => "waitingForCapacity".to_string(),
+        StagePhase::CapacityAcquired { .. } => "capacityAcquired".to_string(),
+        StagePhase::BackendSpawned { .. } => "backendSpawned".to_string(),
+        StagePhase::FirstInput => "firstInput".to_string(),
+        StagePhase::FirstOutput => "firstOutput".to_string(),
+        StagePhase::Producing => "producing".to_string(),
+        StagePhase::Failed => "failed".to_string(),
+        StagePhase::Stopping => "stopping".to_string(),
+        StagePhase::Stopped => "stopped".to_string(),
+    }
+}
+
+/// Runtime scheduler for media graph stages.
+#[derive(Clone)]
+pub struct StageRuntimeManager {
+    engine: Arc<MediaEngine>,
+}
+
+impl StageRuntimeManager {
+    pub fn new(engine: Arc<MediaEngine>) -> Self {
+        Self { engine }
+    }
+
+    /// Ensure a stage exists for the given key, creating its output ring,
+    /// lifecycle, and metrics if absent. Returns the existing handle and `false`
+    /// if the stage is already alive, or a freshly-created handle and `true`.
+    ///
+    /// `input_codec_override` is the codec hint of the *source* ring when it
+    /// differs from the ingest codec (e.g. an HEVC source ring feeding a
+    /// downstream H.264 stage).
+    pub async fn ensure_stage(
+        &self,
+        key: StageKey,
+        source_ring: Arc<RingBuffer>,
+        input_codec_override: Option<&str>,
+    ) -> (StageHandle, bool) {
+        // Single write-lock acquisition to atomically check-and-insert, avoiding
+        // the TOCTOU race where two callers create duplicate stages.
+        let mut buffers = self.engine.stages.buffers.write().await;
+        if let Some((rb, token)) = buffers.get(&key)
+            && !token.is_cancelled()
+        {
+            let lifecycle = self
+                .engine
+                .get_or_create_stage_lifecycle(key.clone(), StagePhase::Registered)
+                .await;
+            let metrics = self.engine.get_or_create_stage_metrics(key.clone()).await;
+            return (
+                StageHandle {
+                    key,
+                    ring: rb.clone(),
+                    cancel: token.clone(),
+                    lifecycle,
+                    metrics,
+                },
+                false,
+            );
+        }
+
+        let output_ring = Arc::new(RingBuffer::new(default_transcoder_ring_capacity()));
+        let cancel = CancellationToken::new();
+        buffers.insert(key.clone(), (output_ring.clone(), cancel.clone()));
+        drop(buffers); // release write lock before any await-heavy setup
+
+        self.initialize_stage_metadata(&key, &source_ring, input_codec_override, &output_ring)
+            .await;
+
+        let backend_kind = backend_kind_for_stage(&key.kind);
+        let lifecycle = self
+            .engine
+            .get_or_create_stage_lifecycle_with_backend(
+                key.clone(),
+                StagePhase::Registered,
+                backend_kind,
+            )
+            .await;
+        let metrics = self.engine.get_or_create_stage_metrics(key.clone()).await;
+
+        info!(
+            pipeline_id = %key.pipeline,
+            stage = %key,
+            "stage registered"
+        );
+        self.engine
+            .runtime
+            .event_log
+            .emit(crate::events::EventKind::StageRegistered {
+                pipeline_id: key.pipeline.to_string(),
+                encoding: key.kind.to_string(),
+            });
+
+        (
+            StageHandle {
+                key,
+                ring: output_ring,
+                cancel,
+                lifecycle,
+                metrics,
+            },
+            true,
+        )
+    }
+
+    /// Compute the backend policy choice for a stage without acquiring permits.
+    pub fn select_backend(&self, kind: &StageKind) -> StageBackend {
+        BackendPolicy::from_env().select_backend(kind)
+    }
+
+    /// Spawn the selected backend for a freshly-created stage. This consumes the
+    /// handle and starts the long-lived worker; existing stages must not be
+    /// respawned.
+    pub fn spawn_stage(
+        &self,
+        handle: StageHandle,
+        source_ring: Arc<RingBuffer>,
+        input_codec_override: Option<&str>,
+    ) {
+        self.spawn_ffmpeg(handle, source_ring, input_codec_override, true);
+    }
+
+    /// Spawn a codec-edge (HEVC→H.264) stage. The edge is always video-only.
+    pub fn spawn_codec_edge_stage(&self, handle: StageHandle, source_ring: Arc<RingBuffer>) {
+        self.spawn_ffmpeg(handle, source_ring, None, false);
+    }
+
+    fn spawn_ffmpeg(
+        &self,
+        handle: StageHandle,
+        source_ring: Arc<RingBuffer>,
+        input_codec_override: Option<&str>,
+        include_audio: bool,
+    ) {
+        let key = handle.key.clone();
+        let backend = self.select_backend(&key.kind);
+
+        if let Some(audio_op) = key.kind.audio_operation() {
+            if backend == StageBackend::AudioRouter {
+                let pipeline_id = key.pipeline.to_string();
+                let output_ring = handle.ring.clone();
+                let engine = self.engine.clone();
+                let cancel = handle.cancel.clone();
+                let routing = parse_audio_operation(audio_op);
+                info!(
+                    pipeline_id = %pipeline_id,
+                    stage = %key,
+                    "spawning audio-router stage"
+                );
+                tokio::spawn(async move {
+                    crate::media::transcoder::start_audio_router(
+                        pipeline_id,
+                        routing,
+                        source_ring,
+                        output_ring,
+                        engine,
+                        cancel,
+                        key,
+                    )
+                    .await;
+                });
+                return;
+            }
+        }
+
+        let Some(plan) =
+            build_ffmpeg_stage_plan(&key, &source_ring, input_codec_override, include_audio)
+        else {
+            tracing::warn!(stage = %key, "no ffmpeg plan for stage");
+            return;
+        };
+        let _operation = compile_operation(&plan);
+        let pipeline_id = key.pipeline.to_string();
+        let output_ring = handle.ring.clone();
+        let engine = self.engine.clone();
+        let cancel = handle.cancel.clone();
+        let lifecycle = handle.lifecycle.clone();
+        let metrics = handle.metrics.clone();
+
+        let input_pump = StageInputPump::new(
+            key.to_string(),
+            source_ring.clone(),
+            plan.startup.keyframe_preroll_packets,
+            plan.input.video_meta.as_ref(),
+            &plan.input.audio_tracks,
+            include_audio,
+            metrics.clone(),
+        )
+        .with_lifecycle(lifecycle.clone());
+
+        let stream_count = 1 + plan.input.audio_tracks.len();
+        let output_normalizer =
+            StageOutputNormalizer::new(output_ring, stream_count, metrics.clone());
+
+        let ctx = StageRunContext {
+            stage_key: key.clone(),
+            pipeline_id: pipeline_id.clone(),
+            cancel: cancel.clone(),
+            lifecycle,
+            metrics,
+            engine,
+        };
+
+        match backend {
+            StageBackend::InternalFfmpeg => {
+                info!(
+                    pipeline_id = %pipeline_id,
+                    stage = %key,
+                    "spawning internal ffmpeg stage"
+                );
+                tokio::spawn(async move {
+                    if let Err(e) = InternalFfmpegBackend
+                        .run(plan, input_pump, output_normalizer, ctx)
+                        .await
+                    {
+                        tracing::error!(stage = %key, error = %e, "internal ffmpeg stage failed");
+                    }
+                });
+            }
+            StageBackend::ExternalFfmpeg => {
+                info!(
+                    pipeline_id = %pipeline_id,
+                    stage = %key,
+                    "spawning external ffmpeg stage"
+                );
+                tokio::spawn(async move {
+                    if let Err(e) = ExternalFfmpegBackend
+                        .run(plan, input_pump, output_normalizer, ctx)
+                        .await
+                    {
+                        tracing::error!(stage = %key, error = %e, "external ffmpeg stage failed");
+                    }
+                });
+            }
+            StageBackend::AudioRouter => {
+                // Audio-router path handled above; unreachable but keeps exhaustiveness.
+            }
+        }
+    }
+
+    /// Return a runtime snapshot for a stage, if one is registered.
+    pub async fn snapshot(&self, key: &StageKey) -> Option<StageRuntimeSnapshot> {
+        let lifecycle = self.engine.stage_lifecycle_snapshot(key).await?;
+        let metrics = self.engine.stages.metrics.read().await.get(key)?.clone();
+        let bytes_in = metrics.bytes_in.load(std::sync::atomic::Ordering::Relaxed);
+        let bytes_out = metrics.bytes_out.load(std::sync::atomic::Ordering::Relaxed);
+        let packets_in = metrics
+            .packets_in
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let packets_out = metrics
+            .packets_out
+            .load(std::sync::atomic::Ordering::Relaxed);
+        Some(StageRuntimeSnapshot {
+            key: key.clone(),
+            backend: lifecycle.backend.clone(),
+            phase: lifecycle.phase.clone(),
+            bytes_in,
+            bytes_out,
+            packets_in,
+            packets_out,
+            first_input_at: lifecycle.first_input_at,
+            first_output_at: lifecycle.first_output_at,
+            last_error: lifecycle.last_error.clone(),
+        })
+    }
+
+    async fn initialize_stage_metadata(
+        &self,
+        key: &StageKey,
+        source_ring: &Arc<RingBuffer>,
+        input_codec_override: Option<&str>,
+        output_ring: &Arc<RingBuffer>,
+    ) {
+        // Codec hint: video presets re-encode, so output is always H.264 unless
+        // the source is HEVC and we are preserving it. Codec-edge stages always
+        // emit H.264. Audio stages inherit from the source ring.
+        if key.kind.is_video_preset() {
+            output_ring.set_codec_hint(input_codec_override.unwrap_or("h264"));
+        } else if matches!(key.kind, StageKind::CodecEdge { .. }) {
+            output_ring.set_codec_hint("h264");
+        } else if let Some(oc) = input_codec_override {
+            output_ring.set_codec_hint(oc);
+        } else {
+            let hint = source_ring.codec_hint_str();
+            if !hint.is_empty() {
+                output_ring.set_codec_hint(hint);
+            }
+        }
+
+        // Audio track propagation. Only set when we have real data; empty
+        // tracks would poison late-binding audio routers.
+        let input_tracks = if let Some(tracks) = source_ring.audio_tracks() {
+            std::sync::Arc::new(tracks.to_vec())
+        } else {
+            let ingests = self.engine.ingests.active.read().await;
+            ingests
+                .get(key.pipeline.as_str())
+                .map(|i| {
+                    let lock = i.audio_tracks.lock().unwrap_or_else(|e| e.into_inner());
+                    if lock.is_empty()
+                        && let Some(audio) = i.audio.clone()
+                    {
+                        std::sync::Arc::new(vec![audio])
+                    } else {
+                        std::sync::Arc::clone(&lock)
+                    }
+                })
+                .unwrap_or_default()
+        };
+
+        if !input_tracks.is_empty() {
+            let output_tracks = if let Some(audio_op) = key.kind.audio_operation() {
+                let routing = parse_audio_operation(audio_op);
+                crate::media::transcoder::apply_audio_routing(&routing, &input_tracks)
+            } else {
+                (*input_tracks).clone()
+            };
+            if !output_tracks.is_empty() {
+                output_ring.set_audio_tracks(output_tracks);
+            }
+        }
+    }
+}
+
+fn backend_kind_for_stage(kind: &StageKind) -> StageBackendKind {
+    use crate::planner::backend_policy::StageBackend;
+    match BackendPolicy::from_env().select_backend(kind) {
+        StageBackend::AudioRouter => StageBackendKind::AudioRouter,
+        StageBackend::InternalFfmpeg => StageBackendKind::InternalFfmpeg,
+        StageBackend::ExternalFfmpeg => StageBackendKind::ExternalFfmpeg,
+    }
+}
+
+/// Build a backend-neutral FFmpeg plan from a stage key and source ring.
+/// Returns `None` for stages that are not FFmpeg-backed (e.g. pure audio-router).
+pub fn build_ffmpeg_stage_plan(
+    key: &StageKey,
+    source_ring: &Arc<RingBuffer>,
+    input_codec_override: Option<&str>,
+    include_audio: bool,
+) -> Option<FfmpegStagePlan> {
+    let input_codec = input_codec_override
+        .map(VideoCodecKind::from_codec_name)
+        .unwrap_or_else(|| VideoCodecKind::from_codec_name(&source_ring.codec_hint_str()));
+    let audio_tracks = source_ring
+        .audio_tracks()
+        .map(|t| t.to_vec())
+        .unwrap_or_default();
+    let input = StageInputSpec {
+        codec_hint: input_codec.clone(),
+        video_meta: None,
+        audio_tracks,
+    };
+
+    match &key.kind {
+        StageKind::VideoPreset { preset } => Some(FfmpegStagePlan {
+            stage_key: key.clone(),
+            pipeline_id: key.pipeline.to_string(),
+            input,
+            video: VideoStageOp::ScalePreset {
+                preset: preset.clone(),
+            },
+            audio: AudioStageOp::Passthrough,
+            output_codec: input_codec,
+            output_profile: None,
+            include_audio,
+            startup: StageStartupPolicy {
+                keyframe_preroll_packets: 64,
+                require_video_parameter_sets: true,
+                wait_for_first_keyframe: true,
+            },
+            timeline: TimelinePolicy::default(),
+        }),
+        StageKind::CodecEdge { operation, .. } if operation == "hevc_to_h264" => {
+            Some(FfmpegStagePlan {
+                stage_key: key.clone(),
+                pipeline_id: key.pipeline.to_string(),
+                input,
+                video: VideoStageOp::CodecEdge {
+                    op: CodecEdgeOp::HevcToH264,
+                },
+                audio: AudioStageOp::Passthrough,
+                output_codec: VideoCodecKind::H264,
+                output_profile: None,
+                include_audio,
+                startup: StageStartupPolicy {
+                    keyframe_preroll_packets: 128,
+                    require_video_parameter_sets: true,
+                    wait_for_first_keyframe: true,
+                },
+                timeline: TimelinePolicy::default(),
+            })
+        }
+        StageKind::AudioRoute { operation, .. } => {
+            let routing = parse_audio_operation(operation);
+            let audio_op = audio_stage_op_from_routing(&routing)?;
+            Some(FfmpegStagePlan {
+                stage_key: key.clone(),
+                pipeline_id: key.pipeline.to_string(),
+                input,
+                video: VideoStageOp::Passthrough,
+                audio: audio_op,
+                output_codec: input_codec,
+                output_profile: None,
+                include_audio,
+                startup: StageStartupPolicy {
+                    keyframe_preroll_packets: 0,
+                    require_video_parameter_sets: false,
+                    wait_for_first_keyframe: false,
+                },
+                timeline: TimelinePolicy::default(),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn audio_stage_op_from_routing(routing: &AudioRouting) -> Option<AudioStageOp> {
+    match routing {
+        AudioRouting::Passthrough => Some(AudioStageOp::Passthrough),
+        AudioRouting::SelectTracks { tracks } => Some(AudioStageOp::SelectTracks(tracks.clone())),
+        AudioRouting::Downmix { track } => Some(AudioStageOp::Downmix { track: *track }),
+        AudioRouting::Remap { track, left, right } => Some(AudioStageOp::Remap {
+            track: *track,
+            channels: vec![*left, *right],
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::stage::StageKind;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn ensure_stage_creates_ring_and_returns_existing_on_reuse() {
+        let engine = Arc::new(MediaEngine::new());
+        let manager = StageRuntimeManager::new(engine.clone());
+        let source = Arc::new(RingBuffer::new(16));
+        let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
+
+        let (handle1, created1) = manager
+            .ensure_stage(key.clone(), source.clone(), None)
+            .await;
+        assert!(created1);
+        assert_eq!(handle1.ring.codec_hint_str(), "h264");
+
+        let (handle2, created2) = manager
+            .ensure_stage(key.clone(), source.clone(), None)
+            .await;
+        assert!(!created2);
+        assert!(Arc::ptr_eq(&handle1.ring, &handle2.ring));
+    }
+
+    #[tokio::test]
+    async fn snapshot_reflects_lifecycle_and_metrics() {
+        let engine = Arc::new(MediaEngine::new());
+        let manager = StageRuntimeManager::new(engine.clone());
+        let source = Arc::new(RingBuffer::new(16));
+        let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
+
+        let (handle, _) = manager.ensure_stage(key.clone(), source, None).await;
+        handle.metrics.record_in_batch(2, 1024);
+        handle.metrics.record_out(512);
+        handle.lifecycle.transition(StagePhase::WaitingForCapacity {
+            backend: StageBackendKind::ExternalFfmpeg,
+        });
+
+        let snap = manager.snapshot(&key).await.expect("snapshot exists");
+        assert_eq!(snap.key, key);
+        assert_eq!(snap.bytes_in, 1024);
+        assert_eq!(snap.bytes_out, 512);
+        assert_eq!(snap.packets_in, 2);
+        assert_eq!(snap.packets_out, 1);
+        assert!(matches!(
+            snap.phase,
+            StagePhase::WaitingForCapacity {
+                backend: StageBackendKind::ExternalFfmpeg,
+            }
+        ));
+    }
+
+    #[test]
+    fn phase_name_uses_camel_case() {
+        assert_eq!(
+            phase_name(&StagePhase::WaitingForCapacity {
+                backend: StageBackendKind::ExternalFfmpeg,
+            }),
+            "waitingForCapacity"
+        );
+        assert_eq!(phase_name(&StagePhase::Producing), "producing");
+        assert_eq!(
+            phase_name(&StagePhase::WaitingForDependency {
+                dependency: StageKey::new("p", StageKind::source()),
+            }),
+            "waitingForDependency"
+        );
+    }
+}

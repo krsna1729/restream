@@ -24,8 +24,12 @@ pub mod ring_buffer;
 pub mod rtmp;
 pub mod security;
 pub mod srt;
+pub mod stage_lifecycle;
 pub mod stage_metrics;
+pub mod stage_runtime;
 pub mod startup_policy;
+
+pub mod ffmpeg;
 pub mod tcp_stats;
 pub mod timing;
 pub mod transcoder;
