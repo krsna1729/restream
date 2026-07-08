@@ -168,5 +168,28 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS recordings (
+            recording_id   TEXT PRIMARY KEY,
+            pipeline_id    TEXT NOT NULL,
+            started_at     TEXT NOT NULL,
+            ended_at       TEXT,
+            status         TEXT NOT NULL DEFAULT 'recording',
+            temp_path      TEXT,
+            final_path     TEXT,
+            codec_summary  TEXT,
+            error          TEXT,
+            FOREIGN KEY(pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
+        );",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_recordings_pipeline ON recordings(pipeline_id, started_at DESC);",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }

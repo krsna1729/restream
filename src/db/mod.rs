@@ -10,6 +10,7 @@ pub(crate) mod meta_repo;
 pub(crate) mod migrations;
 pub mod output_repo;
 pub mod pipeline_repo;
+pub mod recording_repo;
 mod schema;
 pub(crate) mod session_repo;
 
@@ -18,6 +19,7 @@ pub use job_repo::*;
 pub use log_repo::*;
 pub use output_repo::*;
 pub use pipeline_repo::*;
+pub use recording_repo::*;
 pub use schema::*;
 pub use session_repo::*;
 
