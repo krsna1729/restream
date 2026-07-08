@@ -76,6 +76,12 @@ impl IngestService {
         .ok_or_else(|| ApiError::not_found(format!("ingest {id} not found")))
     }
 
+    pub async fn list_for_filename(&self, filename: &str) -> ApiResult<Vec<Ingest>> {
+        db::list_ingests_for_filename(&self.db, filename)
+            .await
+            .map_err(|e| ApiError::internal(format!("list ingests for filename: {e}")))
+    }
+
     pub async fn delete_ingest(&self, id: &str) -> ApiResult<bool> {
         db::delete_ingest(&self.db, id)
             .await

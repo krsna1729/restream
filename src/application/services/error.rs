@@ -1,3 +1,5 @@
+use std::fmt;
+
 use axum::{
     Json,
     http::StatusCode,
@@ -12,6 +14,16 @@ pub enum ApiError {
     NotFound(String),
     Conflict(String),
     Internal(String),
+}
+
+impl fmt::Display for ApiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound(msg) => write!(f, "not found: {msg}"),
+            Self::Conflict(msg) => write!(f, "conflict: {msg}"),
+            Self::Internal(msg) => write!(f, "internal: {msg}"),
+        }
+    }
 }
 
 impl ApiError {

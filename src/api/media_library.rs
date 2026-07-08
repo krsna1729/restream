@@ -10,7 +10,6 @@ use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use crate::application::services::ApiError;
-use crate::db;
 
 use super::state::{
     AppState, MAX_NAME_LEN, check_field_len, get_session_token_from_headers, require_authenticated,
@@ -147,7 +146,9 @@ pub async fn media_list_handler(
                 continue;
             }
         }
-        let ingests = db::list_ingests_for_filename(&state.db, &name)
+        let ingests = state
+            .ingest_service
+            .list_for_filename(&name)
             .await
             .unwrap_or_default();
         let lower_name = name.to_ascii_lowercase();
@@ -395,7 +396,9 @@ pub async fn media_delete_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    let ingests = db::list_ingests_for_filename(&state.db, &filename)
+    let ingests = state
+        .ingest_service
+        .list_for_filename(&filename)
         .await
         .unwrap_or_default();
     if !ingests.is_empty() {
@@ -543,21 +546,24 @@ pub async fn media_rename_handler(
         completed.push((from.clone(), to.clone()));
     }
 
-    let ingests = db::list_ingests_for_filename(&state.db, &filename)
+    let ingests = state
+        .ingest_service
+        .list_for_filename(&filename)
         .await
         .unwrap_or_default();
     for ingest in &ingests {
-        if let Err(error) = db::update_ingest(
-            &state.db,
-            &ingest.id,
-            new_name,
-            &ingest.stream_key,
-            ingest.loop_flag,
-            &ingest.start_time,
-            ingest.live_optimized,
-            ingest.target_gop_seconds,
-        )
-        .await
+        if let Err(error) = state
+            .ingest_service
+            .update_ingest(
+                &ingest.id,
+                new_name,
+                &ingest.stream_key,
+                ingest.loop_flag,
+                &ingest.start_time,
+                ingest.live_optimized,
+                ingest.target_gop_seconds,
+            )
+            .await
         {
             for (rollback_from, rollback_to) in completed.into_iter().rev() {
                 let _ = tokio::fs::rename(rollback_to, rollback_from).await;
