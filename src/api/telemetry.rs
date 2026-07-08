@@ -188,7 +188,15 @@ pub async fn pipeline_diagnostics_sse_handler(
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(32);
     tokio::spawn(async move {
         let _permit = permit;
-        diag::run_diagnostics(engine, pipeline_id, probe_protocol, file_context, tx).await;
+        diag::run_diagnostics(
+            engine,
+            pipeline_id,
+            probe_protocol,
+            state.media_dir.clone(),
+            file_context,
+            tx,
+        )
+        .await;
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);

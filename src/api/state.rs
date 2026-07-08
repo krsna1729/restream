@@ -75,6 +75,9 @@ pub struct AppState {
     pub ingest_disconnect_grace_ms: u64,
     pub ports: PortConfig,
     pub media_dir: String,
+    pub db_path: String,
+    pub srt_passphrase: Option<String>,
+    pub srt_pbkeylen: i32,
     pub alert_tracker: alerts::AlertTracker,
     pub log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     #[cfg(feature = "agent-execution")]
@@ -165,8 +168,14 @@ pub async fn get_ingest_host(db_pool: &SqlitePool) -> Result<String, sqlx::Error
 pub async fn refresh_srt_ingest_policy_store(state: &AppState) {
     let meta_store = SqliteMetaStore::new(state.db.clone());
     let pipeline_store = SqlitePipelineStore::new(state.db.clone());
-    if let Err(error) =
-        refresh_policy_store(&state.ingest_policy_store, &meta_store, &pipeline_store).await
+    if let Err(error) = refresh_policy_store(
+        &state.ingest_policy_store,
+        &meta_store,
+        &pipeline_store,
+        state.srt_passphrase.clone(),
+        state.srt_pbkeylen,
+    )
+    .await
     {
         warn!(err = %error, "failed to refresh SRT ingest policy store");
     }

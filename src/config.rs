@@ -24,6 +24,12 @@ pub struct AppConfig {
     pub transcoder_ring_capacity: usize,
     pub require_srt_bonding: bool,
     pub external_ffmpeg_permits: usize,
+    pub ffmpeg_bin_path: Option<String>,
+    pub log_dir: String,
+    pub no_color: bool,
+    pub srt_passphrase: Option<String>,
+    pub srt_pbkeylen: i32,
+    pub use_internal_file_ingest: bool,
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -84,6 +90,12 @@ impl Default for AppConfig {
             transcoder_ring_capacity: 512,
             require_srt_bonding: false,
             external_ffmpeg_permits: derived_permits,
+            ffmpeg_bin_path: None,
+            log_dir: "logs".to_string(),
+            no_color: false,
+            srt_passphrase: None,
+            srt_pbkeylen: 16,
+            use_internal_file_ingest: false,
         }
     }
 }
@@ -116,6 +128,16 @@ impl AppConfig {
         let transcoder_ring_capacity =
             env_usize("RESTREAM_TRANSCODER_RING_CAPACITY", 512).clamp(64, 16384);
         let require_srt_bonding = std::env::var_os("RESTREAM_REQUIRE_SRT_BONDING").is_some();
+        let ffmpeg_bin_path = std::env::var("FFMPEG_BIN_PATH").ok();
+        let log_dir = std::env::var("RESTREAM_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
+        let no_color = std::env::var_os("NO_COLOR").is_some();
+        let srt_passphrase = std::env::var("RESTREAM_SRT_PASSPHRASE").ok();
+        let srt_pbkeylen = std::env::var("RESTREAM_SRT_PBKEYLEN")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(16);
+        let use_internal_file_ingest =
+            std::env::var_os("RESTREAM_USE_INTERNAL_FILE_INGEST").is_some();
 
         // Calculate external_ffmpeg_permits:
         let permits = if let Ok(value) = std::env::var("RESTREAM_EXTERNAL_FFMPEG_PERMITS")
@@ -167,6 +189,12 @@ impl AppConfig {
             transcoder_ring_capacity,
             require_srt_bonding,
             external_ffmpeg_permits: permits,
+            ffmpeg_bin_path,
+            log_dir,
+            no_color,
+            srt_passphrase,
+            srt_pbkeylen,
+            use_internal_file_ingest,
         }
     }
 }

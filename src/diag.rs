@@ -35,9 +35,8 @@ pub struct FileDiagnosticsContext {
     pub analysis_error: Option<String>,
 }
 
-fn media_root_path() -> PathBuf {
-    let configured = std::env::var("RESTREAM_MEDIA_DIR").unwrap_or_else(|_| "media".to_string());
-    let configured_path = PathBuf::from(&configured);
+fn media_root_path(media_dir: &str) -> PathBuf {
+    let configured_path = PathBuf::from(media_dir);
     let absolute = if configured_path.is_absolute() {
         configured_path
     } else {
@@ -240,7 +239,7 @@ async fn check_engine_status(idx: u32, engine: &Arc<MediaEngine>, pipeline_id: &
     .with_issues(issues)
 }
 
-async fn check_system_resources(idx: u32) -> DiagResult {
+async fn check_system_resources(idx: u32, media_dir: &str) -> DiagResult {
     let start = Instant::now();
     let mut sys = System::new_all();
     sys.refresh_all();
@@ -250,7 +249,7 @@ async fn check_system_resources(idx: u32) -> DiagResult {
     let used_mem = sys.used_memory();
     let mem_pct = (used_mem * 100).checked_div(total_mem).unwrap_or(0);
 
-    let media_root = media_root_path();
+    let media_root = media_root_path(media_dir);
     let disks = Disks::new_with_refreshed_list();
     let selected_disk = disk_for_path(&disks, &media_root).map(|(disk, _)| disk);
     let (total_disk, used_disk, disk_scope, mount_point) = if let Some(disk) = selected_disk {
@@ -1166,6 +1165,7 @@ pub async fn run_diagnostics(
     engine: Arc<MediaEngine>,
     pipeline_id: String,
     probe_protocol: String,
+    media_dir: String,
     file_context: Option<FileDiagnosticsContext>,
     tx: tokio::sync::mpsc::Sender<String>,
 ) {
@@ -1244,7 +1244,7 @@ pub async fn run_diagnostics(
             8,
             "System Resources",
             "CPU, RAM, and disk utilization",
-            check_system_resources(8)
+            check_system_resources(8, &media_dir)
         );
     } else {
         run_check!(
@@ -1286,7 +1286,7 @@ pub async fn run_diagnostics(
             6,
             "System Resources",
             "CPU, RAM, and disk utilization",
-            check_system_resources(6)
+            check_system_resources(6, &media_dir)
         );
 
         run_check!(
@@ -1328,6 +1328,7 @@ mod tests {
             engine,
             "pipe-test".to_string(),
             "rtmp".to_string(),
+            "media".to_string(),
             None,
             tx,
         )

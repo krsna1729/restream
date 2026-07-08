@@ -32,7 +32,7 @@ pub async fn load_settings_snapshot(
     let ingest_host = crate::db::get_ingest_host(pool).await?.unwrap_or_default();
     let meta_store = SqliteMetaStore::new(pool.clone());
     let recording_settings = load_recording_settings(&meta_store).await;
-    let srt_ingest = load_global_srt_ingest_config(&meta_store).await;
+    let srt_ingest = load_global_srt_ingest_config(&meta_store, None, 16).await;
     let transcode_profiles = crate::media::profiles::current_effective().await;
 
     Ok(SettingsSnapshot {

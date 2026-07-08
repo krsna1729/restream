@@ -2,13 +2,17 @@
 //! that connect persisted settings and pipeline catalogs to runtime enforcement.
 
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
-use crate::domain::srt_ingest::{DEFAULT_SRT_PBKEYLEN, SrtGlobalIngestConfig, SrtGlobalIngestMode};
+use crate::domain::srt_ingest::{SrtGlobalIngestConfig, SrtGlobalIngestMode};
 use crate::media::srt::SrtIngestPolicyStore;
 use tracing::warn;
 
 pub const SRT_INGEST_GLOBAL_CONFIG_META_KEY: &str = "srt_ingest_global_config";
 
-pub async fn load_global_srt_ingest_config(meta_store: &dyn MetaStore) -> SrtGlobalIngestConfig {
+pub async fn load_global_srt_ingest_config(
+    meta_store: &dyn MetaStore,
+    srt_passphrase: Option<String>,
+    srt_pbkeylen: i32,
+) -> SrtGlobalIngestConfig {
     let from_store = meta_store
         .get_meta(SRT_INGEST_GLOBAL_CONFIG_META_KEY)
         .await
@@ -16,7 +20,7 @@ pub async fn load_global_srt_ingest_config(meta_store: &dyn MetaStore) -> SrtGlo
         .flatten()
         .and_then(|raw| serde_json::from_str::<SrtGlobalIngestConfig>(&raw).ok());
     let mut config = from_store
-        .or_else(legacy_srt_global_config_from_env)
+        .or_else(|| srt_global_config_from_appconfig(srt_passphrase, srt_pbkeylen))
         .unwrap_or_default();
     if let Err(error) = config.validate() {
         warn!(err = %error, "invalid global SRT ingest config; falling back to plaintext");
@@ -28,8 +32,10 @@ pub async fn load_global_srt_ingest_config(meta_store: &dyn MetaStore) -> SrtGlo
 pub async fn load_policy_store(
     meta_store: &dyn MetaStore,
     pipeline_catalog: &dyn PipelineStore,
+    srt_passphrase: Option<String>,
+    srt_pbkeylen: i32,
 ) -> Result<SrtIngestPolicyStore, PipelineStoreError> {
-    let global = load_global_srt_ingest_config(meta_store).await;
+    let global = load_global_srt_ingest_config(meta_store, srt_passphrase, srt_pbkeylen).await;
     let pipelines = pipeline_catalog.list_pipelines().await?;
     Ok(SrtIngestPolicyStore::new(global, &pipelines))
 }
@@ -38,22 +44,23 @@ pub async fn refresh_policy_store(
     policy_store: &SrtIngestPolicyStore,
     meta_store: &dyn MetaStore,
     pipeline_catalog: &dyn PipelineStore,
+    srt_passphrase: Option<String>,
+    srt_pbkeylen: i32,
 ) -> Result<(), PipelineStoreError> {
-    let global = load_global_srt_ingest_config(meta_store).await;
+    let global = load_global_srt_ingest_config(meta_store, srt_passphrase, srt_pbkeylen).await;
     let pipelines = pipeline_catalog.list_pipelines().await?;
     policy_store.replace(global, &pipelines);
     Ok(())
 }
 
-fn legacy_srt_global_config_from_env() -> Option<SrtGlobalIngestConfig> {
-    let passphrase = std::env::var("RESTREAM_SRT_PASSPHRASE").ok()?;
+fn srt_global_config_from_appconfig(
+    passphrase: Option<String>,
+    pbkeylen: i32,
+) -> Option<SrtGlobalIngestConfig> {
+    let passphrase = passphrase?;
     if passphrase.is_empty() {
         return None;
     }
-    let pbkeylen = std::env::var("RESTREAM_SRT_PBKEYLEN")
-        .ok()
-        .and_then(|value| value.parse::<i32>().ok())
-        .unwrap_or(DEFAULT_SRT_PBKEYLEN);
     Some(SrtGlobalIngestConfig {
         mode: SrtGlobalIngestMode::Encrypted,
         passphrase: Some(passphrase),
@@ -134,7 +141,7 @@ mod tests {
             ),
         };
 
-        let config = load_global_srt_ingest_config(&store).await;
+        let config = load_global_srt_ingest_config(&store, None, 16).await;
 
         assert_eq!(config.mode, SrtGlobalIngestMode::Encrypted);
         assert_eq!(config.passphrase.as_deref(), Some("secret-pass-123"));
@@ -154,7 +161,7 @@ mod tests {
             ),
         };
 
-        let config = load_global_srt_ingest_config(&store).await;
+        let config = load_global_srt_ingest_config(&store, None, 16).await;
 
         assert_eq!(config, SrtGlobalIngestConfig::default());
     }
@@ -186,7 +193,7 @@ mod tests {
             }],
         };
 
-        let policy_store = load_policy_store(&store, &catalog).await.unwrap();
+        let policy_store = load_policy_store(&store, &catalog, None, 16).await.unwrap();
 
         assert_eq!(
             policy_store.global_config().mode,
@@ -235,9 +242,11 @@ mod tests {
                 ),
             }],
         };
-        let policy_store = load_policy_store(&initial_store, &catalog).await.unwrap();
+        let policy_store = load_policy_store(&initial_store, &catalog, None, 16)
+            .await
+            .unwrap();
 
-        refresh_policy_store(&policy_store, &updated_store, &catalog)
+        refresh_policy_store(&policy_store, &updated_store, &catalog, None, 16)
             .await
             .unwrap();
 

@@ -57,13 +57,13 @@ fn main() {
         std::process::exit(2);
     }
 
-    // Extract embedded FFmpeg binary synchronously BEFORE the async runtime
-    // spawns any threads. Must be called before ffmpeg_bin_path() consumers
-    // run — this guarantees single-threaded initialization of the OnceLock
-    // and eliminates any race between cached-path write and transcoder-stage
-    // spawning.
-    restream::ffmpeg_extract::ensure_ffmpeg_extracted();
     let config = std::sync::Arc::new(restream::AppConfig::from_env());
+
+    // Initialise FFmpeg binary path from config (synchronous, before any
+    // async task can race with it). Must happen before ffmpeg_bin_path()
+    // consumers run — OnceLock init is thread-safe but we keep it on the
+    // main thread for clarity.
+    restream::ffmpeg_extract::init(config.ffmpeg_bin_path.clone());
     let worker_threads = runtime_worker_threads();
     let max_blocking_threads = runtime_max_blocking_threads();
     tokio::runtime::Builder::new_multi_thread()

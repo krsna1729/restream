@@ -1488,7 +1488,7 @@ async fn agent_storage_summary(state: &AppState, media: &serde_json::Value) -> s
         "mediaFileCount": media_file_count,
         "mediaBytes": media_bytes,
         "disk": selected_disk,
-        "databasePath": std::env::var("RESTREAM_DB_PATH").unwrap_or_else(|_| "data.db".to_string()),
+        "databasePath": state.db_path,
     })
 }
 

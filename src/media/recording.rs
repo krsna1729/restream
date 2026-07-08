@@ -137,10 +137,13 @@ pub(crate) fn load_conversion_state(ts_path: &Path) -> Option<RecordingConversio
 }
 
 fn build_recording_remux_args(input_path: &Path, output_path: &Path) -> Vec<String> {
-    let ffmpeg_threads = crate::AppConfig::from_env()
-        .recording_threads
-        .unwrap_or(2)
-        .max(1);
+    static FFMPEG_THREADS: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    let ffmpeg_threads = *FFMPEG_THREADS.get_or_init(|| {
+        crate::AppConfig::from_env()
+            .recording_threads
+            .unwrap_or(2)
+            .max(1)
+    });
     vec![
         "-y".to_string(),
         "-nostdin".to_string(),

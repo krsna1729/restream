@@ -20,18 +20,26 @@ use std::sync::OnceLock;
 use tracing::{info, warn};
 
 static FFMPEG_BIN_PATH: OnceLock<PathBuf> = OnceLock::new();
+static CONFIGURED_FFMPEG_PATH: OnceLock<Option<String>> = OnceLock::new();
+
+/// Initialise the FFmpeg binary path from [`crate::AppConfig`].
+///
+/// Must be called once at startup, before any consumer calls
+/// [`ensure_ffmpeg_extracted`] or [`ffmpeg_bin_path`].
+pub fn init(configured: Option<String>) {
+    let _ = CONFIGURED_FFMPEG_PATH.set(configured);
+    let _ = FFMPEG_BIN_PATH.get_or_init(resolve_ffmpeg_bin_path);
+}
 
 fn resolve_ffmpeg_bin_path() -> PathBuf {
-    if let Ok(user_path) = std::env::var("FFMPEG_BIN_PATH") {
-        let path = PathBuf::from(&user_path);
+    let configured = CONFIGURED_FFMPEG_PATH.get().and_then(|opt| opt.as_ref());
+    if let Some(user_path) = configured {
+        let path = PathBuf::from(user_path);
         if path.exists() && path.is_file() {
-            info!(
-                "[startup] FFMPEG_BIN_PATH is set — using external FFmpeg: {}",
-                path.display()
-            );
+            info!("[startup] configured FFmpeg binary: {}", path.display());
             path
         } else {
-            warn!(path = %user_path, "FFMPEG_BIN_PATH set but file does not exist; using embedded FFmpeg");
+            warn!(path = %user_path, "configured FFmpeg binary does not exist; using embedded FFmpeg");
             extract_embedded()
         }
     } else {
@@ -39,18 +47,17 @@ fn resolve_ffmpeg_bin_path() -> PathBuf {
     }
 }
 
-/// Resolve the FFmpeg binary path, extracting the embedded one only if needed.
+/// Return the resolved FFmpeg binary path, initialising it via [`init`]
+/// on first call if [`init`] was not called explicitly.
 ///
-/// If `FFMPEG_BIN_PATH` is set in the environment the provided path is used
-/// as-is. Otherwise the embedded `public/bin/ffmpeg` is extracted to a per-PID
-/// temp directory, made executable, and cached.
-///
-/// Subsequent calls return the cached path immediately.
-///
-/// Must be called before any consumer calls [`ffmpeg_bin_path`].
+/// Prefer calling [`init`] with the configured path at startup so the
+/// `OnceLock` is seeded before any consumer runs.
 pub fn ensure_ffmpeg_extracted() -> &'static Path {
     FFMPEG_BIN_PATH
-        .get_or_init(resolve_ffmpeg_bin_path)
+        .get_or_init(|| {
+            let _ = CONFIGURED_FFMPEG_PATH.set(None);
+            resolve_ffmpeg_bin_path()
+        })
         .as_path()
 }
 

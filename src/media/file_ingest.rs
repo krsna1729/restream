@@ -157,7 +157,8 @@ impl ContinuousTimestampState {
 }
 
 pub fn use_internal_file_ingest() -> bool {
-    crate::env_flag_enabled("RESTREAM_USE_INTERNAL_FILE_INGEST")
+    static USE_INTERNAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *USE_INTERNAL.get_or_init(|| crate::AppConfig::from_env().use_internal_file_ingest)
 }
 
 pub fn parse_start_time_ms(input: &str) -> Result<Option<i64>, String> {

@@ -361,7 +361,8 @@ impl<'a> MakeWriter<'a> for SplitWriter {
 /// tracing macros are used.
 ///
 /// `db_pool` is used by the background drain task that batch-writes to app_logs.
-pub fn init(db_pool: SqlitePool) -> LoggingHandles {
+/// `log_dir` and `no_color` are read from [`AppConfig`] (not from the environment).
+pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> LoggingHandles {
     // ── channel plumbing ──
     let (db_tx, mut db_rx) = tokio::sync::mpsc::channel::<AppLogEntry>(4096);
     let (broadcast_tx, _) = broadcast::channel::<LogBroadcast>(256);
@@ -371,12 +372,11 @@ pub fn init(db_pool: SqlitePool) -> LoggingHandles {
     let bc_spans = SpanStore::default();
 
     // ── file sink ──
-    let log_dir = std::env::var("RESTREAM_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
     let (file_writer, file_guard) = if log_dir.is_empty() {
         // Disabled — write to a sink that discards everything.
         tracing_appender::non_blocking(std::io::sink())
     } else {
-        let appender = tracing_appender::rolling::daily(&log_dir, "restream.log");
+        let appender = tracing_appender::rolling::daily(log_dir, "restream.log");
         tracing_appender::non_blocking(appender)
     };
 
@@ -397,7 +397,7 @@ pub fn init(db_pool: SqlitePool) -> LoggingHandles {
         .with_writer(SplitWriter)
         .with_target(true)
         .with_thread_ids(false)
-        .with_ansi(std::env::var("NO_COLOR").is_err());
+        .with_ansi(!no_color);
 
     let fmt_layer_file = tracing_subscriber::fmt::layer()
         .with_writer(file_writer)

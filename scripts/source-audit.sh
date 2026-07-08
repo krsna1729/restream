@@ -47,11 +47,16 @@ check_size "src/bin/test_harness.rs" 10255
 # 3. Check for raw std::env::var usage outside src/config.rs and tests
 echo ""
 echo "Checking for inline std::env::var usage outside src/config.rs..."
-# Exclude config.rs, main.rs (tokio runtime limits), test harness, tests, benches, and test harness
+# Exclude config.rs, main.rs (tokio runtime limits), test harness,
+# tests, benches, test_fixtures.rs, lib.rs (config-chain helpers),
+# planner (BackendPolicy::from_env), and restream-mcp (separate binary).
 RAW_ENV_VARS=$(grep -rn "std::env::var" src/ \
     | grep -v "src/config.rs" \
     | grep -v "src/main.rs" \
+    | grep -v "src/lib.rs" \
+    | grep -v "src/planner/" \
     | grep -v "src/bin/test_harness" \
+    | grep -v "src/bin/restream-mcp.rs" \
     | grep -v "tests/" \
     | grep -v "benches/" \
     | grep -v "test_fixtures.rs" || true)

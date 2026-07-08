@@ -296,10 +296,7 @@ fn build_stage_ffmpeg_args_inner(
 }
 
 pub fn build_stage_ffmpeg_args(preset: &str, input_codec: &str) -> Vec<String> {
-    let threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok());
-    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, true, threads)
+    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, true, None)
 }
 
 /// Like [`build_stage_ffmpeg_args`], but sizes FFmpeg's input probe budget from
@@ -311,17 +308,11 @@ pub fn build_stage_ffmpeg_args_for_input(
     input_codec: &str,
     probe_codec: &str,
 ) -> Vec<String> {
-    let threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok());
-    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, true, threads)
+    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, true, None)
 }
 
 pub fn build_stage_ffmpeg_video_only_args(preset: &str, input_codec: &str) -> Vec<String> {
-    let threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok());
-    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, false, threads)
+    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, false, None)
 }
 
 pub fn build_stage_ffmpeg_video_only_args_for_input(
@@ -329,10 +320,7 @@ pub fn build_stage_ffmpeg_video_only_args_for_input(
     input_codec: &str,
     probe_codec: &str,
 ) -> Vec<String> {
-    let threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok());
-    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, false, threads)
+    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, false, None)
 }
 
 fn stage_audio_routing(preset: &str) -> Option<AudioRouting> {

@@ -353,7 +353,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     // Init logging before any other tasks so all subsequent tracing macros route
     // through the subscriber. Must be called after the DB pool is ready because
     // the DbLayer drain task needs it.
-    let logging_handles = crate::logging::init(pool.clone());
+    let logging_handles = crate::logging::init(pool.clone(), &config.log_dir, config.no_color);
 
     let now_rfc = chrono::Utc::now().to_rfc3339();
     db::reset_running_jobs(&pool, &now_rfc)
@@ -370,8 +370,16 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let pipeline_store = crate::application::ports::SqlitePipelineStore::new(pool.clone());
     let pipeline_catalog: Arc<dyn crate::application::ports::PipelineStore> =
         Arc::new(pipeline_store.clone());
+    let srt_passphrase = config.srt_passphrase.clone();
+    let srt_pbkeylen = config.srt_pbkeylen;
     let srt_ingest_policy_store = Arc::new(
-        match crate::application::srt_ingest::load_policy_store(&meta_store, &pipeline_store).await
+        match crate::application::srt_ingest::load_policy_store(
+            &meta_store,
+            &pipeline_store,
+            srt_passphrase.clone(),
+            srt_pbkeylen,
+        )
+        .await
         {
             Ok(store) => store,
             Err(error) => {
@@ -380,8 +388,12 @@ pub async fn run_app(config: Arc<AppConfig>) {
                     "pipeline catalog error initializing SRT ingest policy store"
                 );
                 crate::media::srt::SrtIngestPolicyStore::new(
-                    crate::application::srt_ingest::load_global_srt_ingest_config(&meta_store)
-                        .await,
+                    crate::application::srt_ingest::load_global_srt_ingest_config(
+                        &meta_store,
+                        srt_passphrase.clone(),
+                        srt_pbkeylen,
+                    )
+                    .await,
                     &[],
                 )
             }
@@ -424,6 +436,9 @@ pub async fn run_app(config: Arc<AppConfig>) {
             srt: ports.srt,
         },
         media_dir,
+        db_path: config.db_path.clone(),
+        srt_passphrase: config.srt_passphrase.clone(),
+        srt_pbkeylen: config.srt_pbkeylen,
         alert_tracker: crate::alerts::AlertTracker::new(),
         log_broadcast: logging_handles.broadcast_tx.clone(),
         #[cfg(feature = "agent-execution")]
