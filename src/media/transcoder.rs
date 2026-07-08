@@ -38,13 +38,16 @@ impl AsRef<[u8]> for OwnedFfmpegPacket {
 use crate::domain::audio_routing::{AudioRouting, parse_audio_routing};
 
 /// Byte sink that writes MPEG-TS batches into an in-process `MemoryQueue`.
-struct InternalMemoryQueueSink {
+pub(crate) struct InternalMemoryQueueSink {
     queue: Arc<crate::media::avio::MemoryQueue>,
     cancel: CancellationToken,
 }
 
 impl InternalMemoryQueueSink {
-    fn new(queue: Arc<crate::media::avio::MemoryQueue>, cancel: CancellationToken) -> Self {
+    pub(crate) fn new(
+        queue: Arc<crate::media::avio::MemoryQueue>,
+        cancel: CancellationToken,
+    ) -> Self {
         Self { queue, cancel }
     }
 }
@@ -295,6 +298,7 @@ pub async fn start_transcoder(
     cancel_token: CancellationToken,
     stage_key: StageKey,
 ) {
+    let needs_scale = preset.starts_with("video:");
     start_transcoder_inner(
         pipeline_id,
         preset,
@@ -305,6 +309,7 @@ pub async fn start_transcoder(
         stage_key,
         None,
         None,
+        needs_scale,
     )
     .await
 }
@@ -320,6 +325,7 @@ pub async fn start_transcoder_inner(
     stage_key: StageKey,
     shared_pump: Option<crate::media::ffmpeg::stage_input::StageInputPump>,
     shared_normalizer: Option<StageOutputNormalizer>,
+    needs_scale: bool,
 ) {
     // Wait for ingest metadata when creating our own pump
     let (video_meta, audio_tracks) = if shared_pump.is_none() {
@@ -389,17 +395,8 @@ pub async fn start_transcoder_inner(
                 pid: None,
             },
         );
-        let use_internal = std::env::var("RESTREAM_USE_INTERNAL_TRANSCODER")
-            .map(|v| {
-                matches!(
-                    v.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            })
-            .unwrap_or(false);
-
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if use_internal && preset_clone.starts_with("video:") {
+            if needs_scale {
                 let video_preset = preset_clone.strip_prefix("video:").unwrap_or(&preset_clone);
                 run_ffmpeg_transcode_with_scale_with_normalizer(
                     input_queue_clone,
@@ -508,10 +505,15 @@ pub async fn run_internal_ffmpeg_backend(
             ctx.engine,
             ctx.cancel,
             ctx.stage_key,
+            Some(input_pump),
             Some(output_normalizer),
         )
         .await;
     } else {
+        let needs_scale = matches!(
+            plan.video,
+            crate::media::ffmpeg::stage_plan::VideoStageOp::ScalePreset { .. }
+        );
         start_transcoder_inner(
             ctx.pipeline_id,
             ctx.stage_key.kind.to_string(),
@@ -522,6 +524,7 @@ pub async fn run_internal_ffmpeg_backend(
             ctx.stage_key,
             Some(input_pump),
             Some(output_normalizer),
+            needs_scale,
         )
         .await;
     }

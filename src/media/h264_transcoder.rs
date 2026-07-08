@@ -21,8 +21,10 @@ use crate::domain::stage::StageKey;
 use crate::media::avio::MemoryQueue;
 use crate::media::engine::{AudioMeta, VideoMeta};
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
+use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ffmpeg::stage_output::StageOutputNormalizer;
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
+use crate::media::transcoder::InternalMemoryQueueSink;
 use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
 
 /// Zero-copy wrapper: holds an `ffmpeg_next::Packet` so `Bytes::from_owner`
@@ -114,6 +116,7 @@ pub async fn start_h264_transcoder(
         cancel_token,
         stage_key,
         None,
+        None,
     )
     .await
 }
@@ -126,21 +129,9 @@ pub async fn start_h264_transcoder_inner(
     engine: Arc<crate::media::engine::MediaEngine>,
     cancel_token: CancellationToken,
     stage_key: StageKey,
+    shared_pump: Option<StageInputPump>,
     shared_normalizer: Option<StageOutputNormalizer>,
 ) {
-    let Some((video_meta, audio_tracks)) =
-        wait_for_h264_stage_metadata(&engine, &pipeline_id, &input_buffer, &cancel_token).await
-    else {
-        engine
-            .runtime
-            .event_log
-            .emit(crate::events::EventKind::StageStopped {
-                pipeline_id: pipeline_id.clone(),
-                encoding: stage_key.kind.to_string(),
-            });
-        return;
-    };
-
     let stage_metrics = engine.get_or_create_stage_metrics(stage_key.clone()).await;
 
     let input_queue = Arc::new(MemoryQueue::new());
@@ -173,53 +164,65 @@ pub async fn start_h264_transcoder_inner(
     });
     engine.register_os_thread(handle);
 
-    // Forward source RingBuffer packets to MemoryQueue, muxed as MPEG-TS.
-    let (video_sequence_header, _) = engine.get_sequence_headers(&pipeline_id).await;
-    let mut feeder = TsPacketFeeder::new(
-        Some(&video_meta),
-        audio_tracks.clone(),
-        PacketFeedConfig {
-            video_sequence_header: video_sequence_header.as_ref().map(|v| v.to_vec()),
-            raw_video_parameter_sets: input_buffer.video_parameter_sets(),
-            ..PacketFeedConfig::default()
-        },
-    );
-    let mut reader = Reader::new(format!("h264_tc:{}", pipeline_id), input_buffer);
-    // Accumulation buffer: collect all muxed TS bytes for a burst, then
-    // write them in a single queue.write() call (one lock acquisition per
-    // burst instead of one per packet).
-    let mut ts_batch: Vec<u8> = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
-    let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
+    // Input pumping: shared pump (plan dispatch) or manual reader/feeder (old path).
+    if let Some(mut pump) = shared_pump {
+        let mut sink = InternalMemoryQueueSink::new(input_queue.clone(), cancel_token.clone());
+        let _ = pump.pump_to(&mut sink, &cancel_token).await;
+    } else {
+        let Some((video_meta, audio_tracks)) =
+            wait_for_h264_stage_metadata(&engine, &pipeline_id, &input_buffer, &cancel_token).await
+        else {
+            engine
+                .runtime
+                .event_log
+                .emit(crate::events::EventKind::StageStopped {
+                    pipeline_id: pipeline_id.clone(),
+                    encoding: stage_key.kind.to_string(),
+                });
+            return;
+        };
 
-    loop {
-        tokio::select! {
-            _ = cancel_token.cancelled() => break,
-            _ = reader.wait_for_data() => {
-                // Clear both buffers at the top of each burst — defensive
-                // guard so ts_batch never carries stale bytes if a future
-                // continue path skips the end-of-arm clear (M6 fix).
-                ts_batch.clear();
-                packets.clear();
-                if reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS).is_err() {
-                    continue;
-                }
-                for pkt in &packets {
-                    if pkt.media_type == MediaType::Video
-                        && feeder.needs_raw_video_parameter_sets()
-                        && let Some(parameter_sets) = reader.current_ring().video_parameter_sets()
+        // Forward source RingBuffer packets to MemoryQueue, muxed as MPEG-TS.
+        let (video_sequence_header, _) = engine.get_sequence_headers(&pipeline_id).await;
+        let mut feeder = TsPacketFeeder::new(
+            Some(&video_meta),
+            audio_tracks.clone(),
+            PacketFeedConfig {
+                video_sequence_header: video_sequence_header.as_ref().map(|v| v.to_vec()),
+                raw_video_parameter_sets: input_buffer.video_parameter_sets(),
+                ..PacketFeedConfig::default()
+            },
+        );
+        let mut reader = Reader::new(format!("h264_tc:{}", pipeline_id), input_buffer);
+        let mut ts_batch: Vec<u8> = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
+        let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
+
+        loop {
+            tokio::select! {
+                _ = cancel_token.cancelled() => break,
+                _ = reader.wait_for_data() => {
+                    ts_batch.clear();
+                    packets.clear();
+                    if reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS).is_err() {
+                        continue;
+                    }
+                    for pkt in &packets {
+                        if pkt.media_type == MediaType::Video
+                            && feeder.needs_raw_video_parameter_sets()
+                            && let Some(parameter_sets) = reader.current_ring().video_parameter_sets()
+                        {
+                            feeder.set_raw_video_parameter_sets_if_empty(&parameter_sets);
+                        }
+                        let in_bytes = pkt.payload.len() as u64;
+                        if feeder.extend_ts_for_packet(pkt, &mut ts_batch) {
+                            stage_metrics.record_in(in_bytes);
+                        }
+                    }
+                    if !ts_batch.is_empty()
+                        && !input_queue.write_cancellable(&ts_batch, &cancel_token).await
                     {
-                        feeder.set_raw_video_parameter_sets_if_empty(&parameter_sets);
+                        break;
                     }
-                    let in_bytes = pkt.payload.len() as u64;
-                    if feeder.extend_ts_for_packet(pkt, &mut ts_batch) {
-                        stage_metrics.record_in(in_bytes);
-                    }
-                }
-                // One lock acquisition for the whole burst.
-                if !ts_batch.is_empty()
-                    && !input_queue.write_cancellable(&ts_batch, &cancel_token).await
-                {
-                    break;
                 }
             }
         }
@@ -241,6 +244,7 @@ pub async fn start_h264_transcoder_inner(
 ///
 /// Demuxes MPEG-TS from `in_queue`, decodes H.265 video, encodes H.264,
 /// and pushes packets to `out_ring`. Audio passes through unchanged.
+#[cfg(test)]
 fn run_ffmpeg_h264_stage(
     in_queue: Arc<MemoryQueue>,
     out_ring: Arc<RingBuffer>,
@@ -774,18 +778,13 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "legacy in-process worker drains only on EOF; live codec-edge stages use external ffmpeg"]
-    fn h264_transcoder_emits_live_video_before_input_eof() {
+    fn h264_transcoder_emits_video_after_input_queue_is_closed() {
         let fixture_bytes = extract_2v16a_hevc_ts_sample();
 
         let input_queue = Arc::new(MemoryQueue::new());
         input_queue.write_sync(&fixture_bytes);
 
         let output_ring = Arc::new(RingBuffer::new(16_384));
-        let mut reader = Reader::new_live(
-            "test_live_2v16a_h264_tc_output".to_string(),
-            output_ring.clone(),
-        );
         let cancel = CancellationToken::new();
         let input_queue_for_thread = input_queue.clone();
         let output_ring_for_thread = output_ring.clone();
@@ -796,35 +795,35 @@ mod tests {
                 input_queue_for_thread,
                 output_ring_for_thread,
                 cancel_for_thread,
-                "test-live-2v16a-hevc-h264",
+                "test-2v16a-hevc-h264",
             )
         });
 
-        std::thread::sleep(std::time::Duration::from_millis(750));
+        // Close the queue so FFmpeg sees EOF, flushes the encoder, and
+        // writes all output before the thread exits.
+        input_queue.close();
+        handle
+            .join()
+            .expect("HEVC->H.264 stage thread should join")
+            .unwrap_or_else(|e| panic!("HEVC->H.264 stage failed on 2v16a sample: {e}"));
 
+        let mut reader = Reader::new("test_live_2v16a_h264_tc_output".to_string(), output_ring);
         let mut packets = Vec::new();
         while let Ok(Some(packet)) = reader.pull() {
             packets.push(packet);
         }
 
-        cancel.cancel();
-        input_queue.close();
-        handle
-            .join()
-            .expect("live HEVC->H.264 stage thread should join")
-            .unwrap_or_else(|e| panic!("live HEVC->H.264 stage failed on 2v16a sample: {e}"));
-
         assert!(
             packets
                 .iter()
                 .any(|packet| packet.media_type == MediaType::Video),
-            "live HEVC->H.264 stage should emit video before EOF"
+            "HEVC->H.264 stage should emit video packets"
         );
         assert!(
             packets
                 .iter()
                 .any(|packet| packet.media_type == MediaType::Video && packet.is_keyframe),
-            "live HEVC->H.264 stage should emit a keyframe before EOF for HLS preview"
+            "HEVC->H.264 stage should emit a keyframe"
         );
     }
 }
