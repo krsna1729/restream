@@ -26,7 +26,7 @@ pub(crate) async fn output_status(
         value["bitrateKbps"] = serde_json::json!(MediaEngine::sample_egress_bitrate_kbps(egress));
         value["startedAt"] = serde_json::Value::String(egress.started_at.clone());
 
-        let explanation = crate::domain::stage::OutputRuntimeExplanation {
+        let explanation = crate::runtime::output::OutputRuntimeExplanation {
             output_id: crate::domain::ids::OutputId::new(&egress.output_id),
             output_name: egress.output_name.clone(),
             encoding: egress.encoding.clone(),

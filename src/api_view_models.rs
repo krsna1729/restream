@@ -123,7 +123,7 @@ pub(crate) fn egress_runtime_json(
     egress: &ActiveEgress,
     include_target_url: bool,
     has_ingest: bool,
-    blocked_by: Option<&crate::media::stage_runtime::StageRuntimeSnapshot>,
+    blocked_by: Option<&crate::runtime::stage::StageRuntimeSnapshot>,
 ) -> serde_json::Value {
     let last_progress_ms = egress.last_progress_ms.load(Ordering::Relaxed);
     let last_error_ms = egress.last_error_ms.load(Ordering::Relaxed);
@@ -147,7 +147,7 @@ pub(crate) fn egress_runtime_json(
         "lastError": egress.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "lastErrorAt": MediaEngine::epoch_ms_to_rfc3339(last_error_ms),
         "failurePhase": egress.failure_phase.lock().unwrap_or_else(|e| e.into_inner()).clone(),
-        "blockedBy": blocked_by.map(crate::media::stage_runtime::StageRuntimeSnapshot::to_json),
+        "blockedBy": blocked_by.map(crate::runtime::stage::StageRuntimeSnapshot::to_json),
         "recentFailureCount": 0,
         "flapping": false,
         "retrying": false,
@@ -165,7 +165,7 @@ pub(crate) fn egress_runtime_json(
 }
 
 pub(crate) fn output_runtime_explanation_json(
-    explanation: &crate::domain::stage::OutputRuntimeExplanation,
+    explanation: &crate::runtime::output::OutputRuntimeExplanation,
 ) -> serde_json::Value {
     serde_json::json!({
         "outputId": explanation.output_id.to_string(),
@@ -601,7 +601,7 @@ pub(crate) fn stage_telemetry_row_json(
     pipe_metrics: Option<serde_json::Value>,
     active: Option<bool>,
     payload_stats: Option<serde_json::Value>,
-    lifecycle: Option<&crate::media::stage_runtime::StageRuntimeSnapshot>,
+    lifecycle: Option<&crate::runtime::stage::StageRuntimeSnapshot>,
 ) -> serde_json::Value {
     let mut value = serde_json::json!({
         "stageKey": key.to_string(),
@@ -801,7 +801,7 @@ pub(crate) fn single_stage_telemetry_json(
     key: &StageKey,
     metrics: serde_json::Value,
     pipe_metrics: Option<serde_json::Value>,
-    lifecycle: Option<&crate::media::stage_runtime::StageRuntimeSnapshot>,
+    lifecycle: Option<&crate::runtime::stage::StageRuntimeSnapshot>,
 ) -> serde_json::Value {
     let mut value = stage_telemetry_row_json(key, metrics, pipe_metrics, None, None, lifecycle);
     value["generatedAt"] = serde_json::Value::String(generated_at);

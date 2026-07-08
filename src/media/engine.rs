@@ -1025,7 +1025,7 @@ impl MediaEngine {
     pub async fn stage_runtime_snapshot(
         &self,
         key: &StageKey,
-    ) -> Option<crate::media::stage_runtime::StageRuntimeSnapshot> {
+    ) -> Option<crate::runtime::stage::StageRuntimeSnapshot> {
         use std::sync::atomic::Ordering;
 
         let lifecycle = self.stage_lifecycle_snapshot(key).await?;
@@ -1046,7 +1046,7 @@ impl MediaEngine {
             (None, None, None)
         };
 
-        Some(crate::media::stage_runtime::StageRuntimeSnapshot {
+        Some(crate::runtime::stage::StageRuntimeSnapshot {
             key: key.clone(),
             backend: lifecycle.backend.clone(),
             phase: lifecycle.phase.clone(),
@@ -1067,7 +1067,7 @@ impl MediaEngine {
     pub async fn pipeline_stage_runtime_snapshots(
         &self,
         pipeline_id: &str,
-    ) -> Vec<crate::media::stage_runtime::StageRuntimeSnapshot> {
+    ) -> Vec<crate::runtime::stage::StageRuntimeSnapshot> {
         let lifecycles = self.stages.lifecycles.read().await;
         let keys: Vec<StageKey> = lifecycles
             .keys()
@@ -1091,7 +1091,7 @@ impl MediaEngine {
     pub async fn egress_blocked_by_snapshot(
         &self,
         egress: &ActiveEgress,
-    ) -> Option<crate::media::stage_runtime::StageRuntimeSnapshot> {
+    ) -> Option<crate::runtime::stage::StageRuntimeSnapshot> {
         use std::sync::atomic::Ordering;
 
         let key = egress.terminal_stage_key.as_ref()?;
@@ -1126,7 +1126,7 @@ impl MediaEngine {
             (None, None, None)
         };
 
-        Some(crate::media::stage_runtime::StageRuntimeSnapshot {
+        Some(crate::runtime::stage::StageRuntimeSnapshot {
             key: key.clone(),
             backend: lifecycle.backend.clone(),
             phase: lifecycle.phase.clone(),
@@ -3937,7 +3937,7 @@ mod tests {
         assert!(
             matches!(
                 blocked,
-                Some(crate::media::stage_runtime::StageRuntimeSnapshot {
+                Some(crate::runtime::stage::StageRuntimeSnapshot {
                     phase: StagePhase::WaitingForCapacity { .. },
                     ..
                 })

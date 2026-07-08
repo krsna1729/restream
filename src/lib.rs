@@ -53,6 +53,7 @@ pub mod ffmpeg_extract;
 pub mod logging;
 pub mod media;
 pub mod planner;
+pub mod runtime;
 pub use config::AppConfig;
 pub mod runtime_info;
 pub mod test_fixtures;
