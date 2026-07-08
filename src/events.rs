@@ -37,7 +37,7 @@ pub enum EventKind {
         pipeline_id: String,
         protocol: String,
     },
-    StageStarted {
+    StageRegistered {
         #[serde(rename = "pipelineId")]
         pipeline_id: String,
         encoding: String,
@@ -74,7 +74,7 @@ impl EventKind {
         match self {
             Self::IngestConnected { .. } => "ingest.connected",
             Self::IngestDisconnected { .. } => "ingest.disconnected",
-            Self::StageStarted { .. } => "stage.started",
+            Self::StageRegistered { .. } => "stage.started",
             Self::StageStopped { .. } => "stage.stopped",
             Self::EgressStarted { .. } => "egress.started",
             Self::EgressStopped { .. } => "egress.stopped",
@@ -86,7 +86,7 @@ impl EventKind {
         match self {
             Self::IngestConnected { pipeline_id, .. }
             | Self::IngestDisconnected { pipeline_id, .. }
-            | Self::StageStarted { pipeline_id, .. }
+            | Self::StageRegistered { pipeline_id, .. }
             | Self::StageStopped { pipeline_id, .. }
             | Self::EgressStarted { pipeline_id, .. }
             | Self::EgressStopped { pipeline_id, .. }
@@ -111,7 +111,7 @@ impl EventKind {
             Self::IngestDisconnected { protocol, .. } => {
                 format!("{} publisher disconnected", protocol.to_uppercase())
             }
-            Self::StageStarted { encoding, .. } => format!("Stage started: {}", encoding),
+            Self::StageRegistered { encoding, .. } => format!("Stage started: {}", encoding),
             Self::StageStopped { encoding, .. } => format!("Stage stopped: {}", encoding),
             Self::EgressStarted { output_id, .. } => format!("Output started: {}", output_id),
             Self::EgressStopped { output_id, .. } => format!("Output stopped: {}", output_id),
@@ -293,7 +293,7 @@ mod tests {
             "ingest.disconnected"
         );
         assert_eq!(
-            EventKind::StageStarted {
+            EventKind::StageRegistered {
                 pipeline_id: "p".into(),
                 encoding: "720p".into()
             }
@@ -365,7 +365,7 @@ mod tests {
         };
         assert!(ingest.output_id().is_none());
 
-        let stage = EventKind::StageStarted {
+        let stage = EventKind::StageRegistered {
             pipeline_id: "p".into(),
             encoding: "source".into(),
         };
@@ -394,7 +394,7 @@ mod tests {
         );
 
         assert!(
-            EventKind::StageStarted {
+            EventKind::StageRegistered {
                 pipeline_id: "p".into(),
                 encoding: "720p".into()
             }

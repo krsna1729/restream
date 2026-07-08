@@ -21,6 +21,10 @@ pub fn ext_stage_keyframe_preroll_packets() -> usize {
     DEFAULT_KEYFRAME_PREROLL_PACKETS
 }
 
+pub fn internal_transcoder_keyframe_preroll_packets() -> usize {
+    DEFAULT_KEYFRAME_PREROLL_PACKETS
+}
+
 pub fn srt_egress_keyframe_preroll_packets(encoding: &str) -> usize {
     let spec = OutputEncodingSpec::parse(encoding);
     match spec.video() {

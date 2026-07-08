@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 use tokio::sync::RwLock as TokioRwLock;
 use tokio_util::sync::CancellationToken;
@@ -18,6 +19,7 @@ use crate::media::hls::HlsStore;
 use crate::media::hls_fmp4::Fmp4HlsStore;
 use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::ring_buffer::RingBuffer;
+use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
 use crate::media::ts_chunk_ring::TsChunkRing;
 
@@ -143,6 +145,7 @@ pub struct StageRegistry {
     pub input_queues: TokioRwLock<HashMap<StageKey, Arc<MemoryQueue>>>,
     pub pipe_metrics: TokioRwLock<HashMap<StageKey, Arc<PipeMetrics>>>,
     pub ts_muxers: TokioRwLock<HashMap<String, Arc<TsChunkRing>>>,
+    pub lifecycles: TokioRwLock<HashMap<StageKey, Arc<StageLifecycle>>>,
 }
 
 impl Default for StageRegistry {
@@ -159,6 +162,7 @@ impl StageRegistry {
             input_queues: TokioRwLock::new(HashMap::new()),
             pipe_metrics: TokioRwLock::new(HashMap::new()),
             ts_muxers: TokioRwLock::new(HashMap::new()),
+            lifecycles: TokioRwLock::new(HashMap::new()),
         }
     }
 }
@@ -178,6 +182,58 @@ impl Default for RuntimeInfra {
     }
 }
 
+static EXTERNAL_FFMPEG_PERMITS: OnceLock<usize> = OnceLock::new();
+
+pub fn external_ffmpeg_child_limit() -> usize {
+    *EXTERNAL_FFMPEG_PERMITS.get_or_init(|| {
+        // Explicit override wins.
+        if let Ok(value) = std::env::var("RESTREAM_EXTERNAL_FFMPEG_PERMITS")
+            && let Some(v) = value.parse::<usize>().ok().filter(|&v| v >= 1)
+        {
+            tracing::info!(
+                "external_ffmpeg_permits={} (explicit RESTREAM_EXTERNAL_FFMPEG_PERMITS={})",
+                v,
+                value
+            );
+            return v;
+        }
+
+        let cpus = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1);
+        let reserve = std::env::var("RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(2)
+            .min(cpus.saturating_sub(1));
+        let per_child = std::env::var("RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(2)
+            .max(1);
+        let hard_cap = std::env::var("RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(usize::MAX);
+        let derived = cpus
+            .saturating_sub(reserve)
+            .max(1)
+            .div_ceil(per_child)
+            .max(1);
+        let permits = derived.min(hard_cap).max(1);
+
+        tracing::info!(
+            "external_ffmpeg_permits={} (derived from cpus={}, reserve={}, per_child={}, hard_cap={})",
+            permits,
+            cpus,
+            reserve,
+            per_child,
+            if hard_cap == usize::MAX { "none".to_string() } else { hard_cap.to_string() }
+        );
+        permits
+    })
+}
+
 impl RuntimeInfra {
     pub fn new() -> Self {
         let external_ffmpeg_permits = external_ffmpeg_child_limit();
@@ -192,30 +248,4 @@ impl RuntimeInfra {
             event_log: Arc::new(EventLog::new()),
         }
     }
-}
-
-fn external_ffmpeg_child_limit() -> usize {
-    let cpus = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1);
-    let reserve = std::env::var("RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(2)
-        .min(cpus.saturating_sub(1));
-    let per_child = std::env::var("RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(2)
-        .max(1);
-    let derived = cpus
-        .saturating_sub(reserve)
-        .max(1)
-        .div_ceil(per_child)
-        .max(1);
-    let hard_cap = std::env::var("RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(usize::MAX);
-    derived.min(hard_cap).max(1)
 }

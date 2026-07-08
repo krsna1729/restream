@@ -3936,10 +3936,13 @@ async fn wait_for_outputs_progress(
                 progressed += 1;
             } else {
                 let phase = entry["phase"].as_str().unwrap_or("unknown");
-                let state = entry["state"].as_str().unwrap_or("unknown");
+                let status = entry["status"]
+                    .as_str()
+                    .or_else(|| entry["rawStatus"].as_str())
+                    .unwrap_or("unknown");
                 let last_error = entry["lastError"].as_str().unwrap_or("");
                 stalled.push(format!(
-                    "{output_id}[phase={phase},state={state},bytesOut={bytes_out},metricsBytesOut={metrics_bytes},packetsOut={packets_out},lastError={last_error}]"
+                    "{output_id}[phase={phase},status={status},bytesOut={bytes_out},metricsBytesOut={metrics_bytes},packetsOut={packets_out},lastError={last_error}]"
                 ));
             }
         }

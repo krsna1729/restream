@@ -918,6 +918,7 @@ impl Reader {
 /// Audio packets at millisecond granularity can share timestamps (e.g. two AAC
 /// frames in the same millisecond). This enforcer bumps colliding DTS by 1 and
 /// adjusts PTS to maintain PTS >= DTS.
+#[derive(Debug, Clone)]
 pub struct DtsEnforcer {
     last_dts: Vec<i64>,
 }
