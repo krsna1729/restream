@@ -69,6 +69,7 @@ impl BackendPolicy {
             {
                 StageBackend::InternalFfmpeg
             }
+            StageKind::Preview { .. } if self.internal_hls_preview => StageBackend::InternalFfmpeg,
             _ => StageBackend::ExternalFfmpeg,
         }
     }
@@ -199,5 +200,28 @@ mod tests {
         let stage = StageKind::audio_route("downmix:0", StageKind::source());
 
         assert_eq!(policy.select_backend(&stage), StageBackend::InternalFfmpeg);
+    }
+
+    #[test]
+    fn preview_uses_external_by_default() {
+        let policy = default_policy();
+
+        assert_eq!(
+            policy.select_backend(&StageKind::preview("h264", StageKind::source())),
+            StageBackend::ExternalFfmpeg
+        );
+    }
+
+    #[test]
+    fn preview_uses_internal_when_enabled() {
+        let policy = BackendPolicy {
+            internal_hls_preview: true,
+            ..default_policy()
+        };
+
+        assert_eq!(
+            policy.select_backend(&StageKind::preview("h264", StageKind::source())),
+            StageBackend::InternalFfmpeg
+        );
     }
 }

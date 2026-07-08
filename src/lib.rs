@@ -355,6 +355,26 @@ pub async fn run_app(config: Arc<AppConfig>) {
     // the DbLayer drain task needs it.
     let logging_handles = crate::logging::init(pool.clone(), &config.log_dir, config.no_color);
 
+    info!(
+        event_class = "lifecycle",
+        event_type = "restream.config.effective",
+        http_port = config.ports.http,
+        rtmp_port = config.ports.rtmp,
+        srt_port = config.ports.srt,
+        db_path = %config.db_path,
+        media_dir = %config.media_dir,
+        log_dir = %config.log_dir,
+        external_ffmpeg_permits = config.external_ffmpeg_permits,
+        ffmpeg_threads = ?config.ffmpeg_threads,
+        recording_threads = ?config.recording_threads,
+        internal_video_presets = config.backend_policy.internal_video_presets,
+        internal_hevc_to_h264 = config.backend_policy.internal_hevc_to_h264,
+        internal_hls_preview = config.backend_policy.internal_hls_preview,
+        internal_complex_audio = config.backend_policy.internal_complex_audio,
+        require_srt_bonding = config.require_srt_bonding,
+        "effective startup configuration",
+    );
+
     let now_rfc = chrono::Utc::now().to_rfc3339();
     db::reset_running_jobs(&pool, &now_rfc)
         .await
