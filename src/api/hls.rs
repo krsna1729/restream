@@ -6,7 +6,6 @@ use axum::{
 use std::sync::Arc;
 
 use crate::media::hls_fmp4::{Fmp4HlsStore, parse_fmp4_segment_name};
-use crate::planner::hls_preview::{HlsPreviewGraph, plan_hls_preview};
 
 use super::state::{AppState, require_hls_access};
 
@@ -14,58 +13,13 @@ pub async fn get_or_start_hls_preview_store(
     state: &Arc<AppState>,
     pipeline_id: &str,
 ) -> Result<Arc<Fmp4HlsStore>, Response> {
-    let has_ingest = state
-        .engine
-        .ingests
-        .active
-        .read()
+    crate::application::hls_preview::ensure_hls_preview(state.engine.clone(), pipeline_id)
         .await
-        .contains_key(pipeline_id);
-    if has_ingest {
-        let (store, already_running) = state.engine.ensure_hls_preview_segmenter(pipeline_id).await;
-        if !already_running {
-            let engine_c = state.engine.clone();
-            let pid = pipeline_id.to_string();
-            let cancel_token = state
-                .engine
-                .get_hls_preview_cancel_token(pipeline_id)
-                .await
-                .unwrap();
-            let graph =
-                match plan_hls_preview(state.engine.clone(), pipeline_id, cancel_token.clone())
-                    .await
-                {
-                    Some(g) => g,
-                    None => HlsPreviewGraph {
-                        video_ring: state.engine.get_or_create_pipeline(pipeline_id).await,
-                        audio_ring: None,
-                        video_meta: None,
-                    },
-                };
-            let store_c = store.clone();
-            tokio::spawn(async move {
-                crate::media::hls_fmp4::start_hls_fmp4_segmenter(
-                    pid.clone(),
-                    store_c,
-                    graph.video_ring,
-                    graph.audio_ring,
-                    engine_c.clone(),
-                    cancel_token,
-                    graph.video_meta,
-                )
-                .await;
-                engine_c.shutdown_hls_preview_segmenter(&pid).await;
-            });
-        }
-        state.engine.touch_hls_preview(pipeline_id).await;
-        return Ok(store);
-    }
-
-    let Some(store) = state.engine.get_hls_preview_store(pipeline_id).await else {
-        return Err((StatusCode::NOT_FOUND, "No HLS stream").into_response());
-    };
-    state.engine.touch_hls_preview(pipeline_id).await;
-    Ok(store)
+        .map_err(|err| match err {
+            crate::application::hls_preview::HlsPreviewError::NoStream => {
+                (StatusCode::NOT_FOUND, "No HLS stream").into_response()
+            }
+        })
 }
 
 pub fn quote_hls_attr(value: &str) -> String {
