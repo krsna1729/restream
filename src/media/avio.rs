@@ -31,13 +31,7 @@ const DEFAULT_AVIO_QUEUE_CAPACITY: usize = 512 * 1024;
 
 fn default_avio_queue_capacity() -> usize {
     static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *CAP.get_or_init(|| {
-        std::env::var("RESTREAM_AVIO_QUEUE_CAPACITY")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(DEFAULT_AVIO_QUEUE_CAPACITY)
-            .clamp(64 * 1024, 16 * 1024 * 1024)
-    })
+    *CAP.get_or_init(|| crate::AppConfig::from_env().avio_capacity)
 }
 
 pub struct MemoryQueue {

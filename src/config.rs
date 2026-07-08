@@ -79,9 +79,9 @@ impl Default for AppConfig {
             hls_segment_capacity_bytes: 10_485_760,
             hls_max_segments: 10,
             recording_threads: None,
-            ts_ring_capacity: 4096,
-            ring_capacity: 8192,
-            transcoder_ring_capacity: 8192,
+            ts_ring_capacity: 256,
+            ring_capacity: 1024,
+            transcoder_ring_capacity: 512,
             require_srt_bonding: false,
             external_ffmpeg_permits: derived_permits,
         }
@@ -111,9 +111,10 @@ impl AppConfig {
         let recording_threads = std::env::var("RESTREAM_RECORDING_FFMPEG_THREADS")
             .ok()
             .and_then(|v| v.parse::<u32>().ok());
-        let ts_ring_capacity = env_usize("RESTREAM_TS_RING_CAPACITY", 4096);
-        let ring_capacity = env_usize("RESTREAM_RING_CAPACITY", 8192);
-        let transcoder_ring_capacity = env_usize("RESTREAM_TRANSCODER_RING_CAPACITY", 8192);
+        let ts_ring_capacity = env_usize("RESTREAM_TS_RING_CAPACITY", 256).clamp(32, 16384);
+        let ring_capacity = env_usize("RESTREAM_RING_CAPACITY", 1024).clamp(64, 16384);
+        let transcoder_ring_capacity =
+            env_usize("RESTREAM_TRANSCODER_RING_CAPACITY", 512).clamp(64, 16384);
         let require_srt_bonding = std::env::var_os("RESTREAM_REQUIRE_SRT_BONDING").is_some();
 
         // Calculate external_ffmpeg_permits:

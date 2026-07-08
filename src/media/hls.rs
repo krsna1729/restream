@@ -46,27 +46,13 @@ impl Default for HlsConfig {
 
 impl HlsConfig {
     pub fn from_env() -> Self {
-        let defaults = Self::default();
+        let config = crate::AppConfig::from_env();
         Self {
-            min_segment_secs: env_u64("RESTREAM_HLS_MIN_SEGMENT_MS")
-                .map(|ms| ms.max(1) as f64 / 1000.0)
-                .unwrap_or(defaults.min_segment_secs),
-            segment_capacity: env_usize("RESTREAM_HLS_SEGMENT_CAPACITY_BYTES")
-                .map(|bytes| bytes.max(188))
-                .unwrap_or(defaults.segment_capacity),
-            max_segments: env_usize("RESTREAM_HLS_MAX_SEGMENTS")
-                .map(|segments| segments.max(1))
-                .unwrap_or(defaults.max_segments),
+            min_segment_secs: config.hls_min_segment_ms,
+            segment_capacity: config.hls_segment_capacity_bytes,
+            max_segments: config.hls_max_segments,
         }
     }
-}
-
-fn env_u64(name: &str) -> Option<u64> {
-    std::env::var(name).ok()?.parse().ok()
-}
-
-fn env_usize(name: &str) -> Option<usize> {
-    std::env::var(name).ok()?.parse().ok()
 }
 
 struct HlsSegment {

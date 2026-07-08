@@ -60,13 +60,7 @@ const MAX_RING_CAPACITY: usize = 16_384;
 static RING_CAPACITY: OnceLock<usize> = OnceLock::new();
 
 pub fn default_ring_capacity() -> usize {
-    *RING_CAPACITY.get_or_init(|| {
-        std::env::var("RESTREAM_RING_CAPACITY")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(DEFAULT_RING_CAPACITY)
-            .clamp(MIN_RING_CAPACITY, MAX_RING_CAPACITY)
-    })
+    *RING_CAPACITY.get_or_init(|| crate::AppConfig::from_env().ring_capacity)
 }
 
 // Transcoder output rings hold demuxed frames from the FFmpeg child process.
@@ -79,13 +73,7 @@ pub const DEFAULT_TRANSCODER_RING_CAPACITY: usize = 512;
 static TRANSCODER_RING_CAPACITY: OnceLock<usize> = OnceLock::new();
 
 pub fn default_transcoder_ring_capacity() -> usize {
-    *TRANSCODER_RING_CAPACITY.get_or_init(|| {
-        std::env::var("RESTREAM_TRANSCODER_RING_CAPACITY")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(DEFAULT_TRANSCODER_RING_CAPACITY)
-            .clamp(MIN_RING_CAPACITY, MAX_RING_CAPACITY)
-    })
+    *TRANSCODER_RING_CAPACITY.get_or_init(|| crate::AppConfig::from_env().transcoder_ring_capacity)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

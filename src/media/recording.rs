@@ -137,9 +137,8 @@ pub(crate) fn load_conversion_state(ts_path: &Path) -> Option<RecordingConversio
 }
 
 fn build_recording_remux_args(input_path: &Path, output_path: &Path) -> Vec<String> {
-    let ffmpeg_threads = std::env::var("RESTREAM_RECORDING_FFMPEG_THREADS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
+    let ffmpeg_threads = crate::AppConfig::from_env()
+        .recording_threads
         .unwrap_or(2)
         .max(1);
     vec![

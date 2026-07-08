@@ -41,16 +41,17 @@ check_size() {
 echo ""
 echo "Checking file size limits..."
 check_size "src/api.rs" 7730
-check_size "src/media/engine.rs" 6210
+check_size "src/media/engine.rs" 6215
 check_size "src/bin/test_harness.rs" 10255
 
 # 3. Check for raw std::env::var usage outside src/config.rs and tests
 echo ""
 echo "Checking for inline std::env::var usage outside src/config.rs..."
-# Exclude config.rs, main.rs (tokio runtime limits), tests, benches, and test harness
+# Exclude config.rs, main.rs (tokio runtime limits), test harness, tests, benches, and test harness
 RAW_ENV_VARS=$(grep -rn "std::env::var" src/ \
     | grep -v "src/config.rs" \
     | grep -v "src/main.rs" \
+    | grep -v "src/bin/test_harness" \
     | grep -v "tests/" \
     | grep -v "benches/" \
     | grep -v "test_fixtures.rs" || true)

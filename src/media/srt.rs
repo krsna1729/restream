@@ -149,13 +149,7 @@ fn build_policy_snapshot(
 }
 
 fn ts_ring_capacity() -> usize {
-    *TS_RING_CAPACITY.get_or_init(|| {
-        std::env::var("RESTREAM_TS_RING_CAPACITY")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(DEFAULT_TS_RING_CAPACITY)
-            .clamp(MIN_TS_RING_CAPACITY, MAX_TS_RING_CAPACITY)
-    })
+    *TS_RING_CAPACITY.get_or_init(|| crate::AppConfig::from_env().ts_ring_capacity)
 }
 
 // Raw SRT Types & FFI Bindings
@@ -2687,7 +2681,7 @@ mod tests {
                 srt_close(listener);
                 srt_cleanup();
             }
-            if std::env::var_os("RESTREAM_REQUIRE_SRT_BONDING").is_some() {
+            if crate::AppConfig::from_env().require_srt_bonding {
                 panic!(
                     "RESTREAM_REQUIRE_SRT_BONDING is set, but linked libsrt rejected \
                      SRTO_GROUPCONNECT: {error}. Rebuild libsrt with ENABLE_BONDING=ON."
