@@ -51,6 +51,7 @@ pub enum StagePhase {
 pub struct StageLifecycleSnapshot {
     pub phase: StagePhase,
     pub backend: StageBackendKind,
+    pub phase_started_at: Option<Instant>,
     pub first_input_at: Option<Instant>,
     pub first_output_at: Option<Instant>,
     pub last_error: Option<String>,
@@ -60,6 +61,7 @@ pub struct StageLifecycleSnapshot {
 struct StageLifecycleInner {
     phase: StagePhase,
     backend: StageBackendKind,
+    phase_started_at: Option<Instant>,
     first_input_at: Option<Instant>,
     first_output_at: Option<Instant>,
     last_error: Option<String>,
@@ -109,6 +111,7 @@ impl StageLifecycle {
             inner: Arc::new(Mutex::new(StageLifecycleInner {
                 phase: initial,
                 backend: StageBackendKind::ExternalFfmpeg,
+                phase_started_at: Some(Instant::now()),
                 first_input_at: None,
                 first_output_at: None,
                 last_error: None,
@@ -121,6 +124,7 @@ impl StageLifecycle {
             inner: Arc::new(Mutex::new(StageLifecycleInner {
                 phase: initial,
                 backend,
+                phase_started_at: Some(Instant::now()),
                 first_input_at: None,
                 first_output_at: None,
                 last_error: None,
@@ -134,6 +138,7 @@ impl StageLifecycle {
             inner.backend = backend;
         }
         inner.phase = phase;
+        inner.phase_started_at = Some(Instant::now());
     }
 
     pub fn record_first_input(&self) {
@@ -177,6 +182,7 @@ impl StageLifecycle {
         StageLifecycleSnapshot {
             phase: inner.phase.clone(),
             backend: inner.backend.clone(),
+            phase_started_at: inner.phase_started_at,
             first_input_at: inner.first_input_at,
             first_output_at: inner.first_output_at,
             last_error: inner.last_error.clone(),

@@ -52,12 +52,15 @@ pub struct StageRuntimeSnapshot {
     pub first_input_at: Option<std::time::Instant>,
     pub first_output_at: Option<std::time::Instant>,
     pub last_error: Option<String>,
+    pub capacity_permits_total: Option<usize>,
+    pub capacity_permits_available: Option<usize>,
+    pub capacity_wait_ms: Option<u64>,
 }
 
 impl StageRuntimeSnapshot {
     /// Serialize to a JSON value matching the API status contract.
     pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut obj = serde_json::json!({
             "stage": self.key.to_string(),
             "backend": serde_json::to_value(&self.backend).unwrap_or_default(),
             "phase": phase_name(&self.phase),
@@ -67,7 +70,17 @@ impl StageRuntimeSnapshot {
             "packetsIn": self.packets_in,
             "packetsOut": self.packets_out,
             "lastError": self.last_error,
-        })
+        });
+        if let Some(total) = self.capacity_permits_total {
+            obj["capacityPermitsTotal"] = serde_json::json!(total);
+        }
+        if let Some(avail) = self.capacity_permits_available {
+            obj["capacityPermitsAvailable"] = serde_json::json!(avail);
+        }
+        if let Some(wait_ms) = self.capacity_wait_ms {
+            obj["capacityWaitMs"] = serde_json::json!(wait_ms);
+        }
+        obj
     }
 }
 
@@ -333,6 +346,22 @@ impl StageRuntimeManager {
         let packets_out = metrics
             .packets_out
             .load(std::sync::atomic::Ordering::Relaxed);
+
+        let (capacity_permits_total, capacity_permits_available, capacity_wait_ms) = if matches!(
+            lifecycle.phase,
+            StagePhase::WaitingForCapacity { .. } | StagePhase::CapacityAcquired { .. }
+        ) {
+            let semaphore = &self.engine.runtime.external_ffmpeg_semaphore;
+            let total = Some(crate::media::engine_registries::external_ffmpeg_child_limit());
+            let available = Some(semaphore.available_permits());
+            let wait_ms = lifecycle
+                .phase_started_at
+                .map(|t| std::cmp::min(t.elapsed().as_millis(), u64::MAX as u128) as u64);
+            (total, available, wait_ms)
+        } else {
+            (None, None, None)
+        };
+
         Some(StageRuntimeSnapshot {
             key: key.clone(),
             backend: lifecycle.backend.clone(),
@@ -344,6 +373,9 @@ impl StageRuntimeManager {
             first_input_at: lifecycle.first_input_at,
             first_output_at: lifecycle.first_output_at,
             last_error: lifecycle.last_error.clone(),
+            capacity_permits_total,
+            capacity_permits_available,
+            capacity_wait_ms,
         })
     }
 

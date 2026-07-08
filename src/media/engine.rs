@@ -1039,6 +1039,22 @@ impl MediaEngine {
             .get(key)
             .cloned()
             .unwrap_or_else(|| Arc::new(crate::media::stage_metrics::StageMetrics::new()));
+        let (capacity_permits_total, capacity_permits_available, capacity_wait_ms) = if matches!(
+            lifecycle.phase,
+            crate::media::stage_lifecycle::StagePhase::WaitingForCapacity { .. }
+                | crate::media::stage_lifecycle::StagePhase::CapacityAcquired { .. }
+        ) {
+            let semaphore = &self.runtime.external_ffmpeg_semaphore;
+            let total = Some(crate::media::engine_registries::external_ffmpeg_child_limit());
+            let available = Some(semaphore.available_permits());
+            let wait_ms = lifecycle
+                .phase_started_at
+                .map(|t| std::cmp::min(t.elapsed().as_millis(), u64::MAX as u128) as u64);
+            (total, available, wait_ms)
+        } else {
+            (None, None, None)
+        };
+
         Some(crate::media::stage_runtime::StageRuntimeSnapshot {
             key: key.clone(),
             backend: lifecycle.backend.clone(),
@@ -1050,6 +1066,9 @@ impl MediaEngine {
             first_input_at: lifecycle.first_input_at,
             first_output_at: lifecycle.first_output_at,
             last_error: lifecycle.last_error.clone(),
+            capacity_permits_total,
+            capacity_permits_available,
+            capacity_wait_ms,
         })
     }
 
