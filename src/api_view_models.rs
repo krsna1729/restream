@@ -164,7 +164,6 @@ pub(crate) fn egress_runtime_json(
     value
 }
 
-#[allow(dead_code)]
 pub(crate) fn output_runtime_explanation_json(
     explanation: &crate::domain::stage::OutputRuntimeExplanation,
 ) -> serde_json::Value {

@@ -25,6 +25,24 @@ pub(crate) async fn output_status(
         value["totalSize"] = serde_json::json!(egress.bytes_sent.load(Ordering::Relaxed));
         value["bitrateKbps"] = serde_json::json!(MediaEngine::sample_egress_bitrate_kbps(egress));
         value["startedAt"] = serde_json::Value::String(egress.started_at.clone());
+
+        let explanation = crate::domain::stage::OutputRuntimeExplanation {
+            output_id: crate::domain::ids::OutputId::new(&egress.output_id),
+            output_name: egress.output_name.clone(),
+            encoding: egress.encoding.clone(),
+            url: egress.target_url.clone(),
+            phase: crate::domain::state::EgressPhase::from(
+                egress
+                    .phase
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_str(),
+            ),
+            terminal_stage: egress.terminal_stage_key.clone(),
+            blocked_by: blocked_by.map(|b| b.key),
+        };
+        value["explanation"] = api_view_models::output_runtime_explanation_json(&explanation);
+
         return Some(value);
     }
     drop(egresses);
