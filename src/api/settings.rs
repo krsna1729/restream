@@ -12,10 +12,9 @@ use crate::api_view_models;
 use crate::application::ingest::load_pipeline_file_ingest_state;
 use crate::application::ingest_security::save_ingest_security_config;
 use crate::application::ports::{SqliteIngestLookup, SqliteMetaStore};
-use crate::application::settings::load_settings_snapshot;
+use crate::application::recording::RecordingSettings;
 use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
 use crate::application::transcode_profiles::save_transcode_profiles;
-use crate::db;
 use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::domain::srt_ingest::SrtGlobalIngestConfig;
 use crate::domain::transcode_profile::TranscodeProfiles;
@@ -54,19 +53,21 @@ pub async fn config_get_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    let ingest_host = match db::get_ingest_host(&state.db).await {
-        Ok(host) => host.unwrap_or_default(),
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
+    let ingest_host = state
+        .settings_service
+        .get_ingest_host_raw()
+        .await
+        .unwrap_or_default();
     let effective_ingest_host = if ingest_host.is_empty() {
         DEFAULT_INGEST_HOST
     } else {
         &ingest_host
     };
-    let raw_pipelines = match db::list_pipelines(&state.db).await {
-        Ok(p) => p,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
+    let raw_pipelines = state
+        .settings_service
+        .list_pipelines()
+        .await
+        .unwrap_or_default();
 
     let mut pipelines = Vec::with_capacity(raw_pipelines.len());
     let ingest_lookup = SqliteIngestLookup::new(state.db.clone());
@@ -86,16 +87,20 @@ pub async fn config_get_handler(
         ));
     }
 
-    let outputs = db::list_outputs(&state.db).await.unwrap_or_default();
-    let settings = match load_settings_snapshot(&state.db, &state.security).await {
-        Ok(settings) => settings,
+    let outputs = state
+        .settings_service
+        .list_outputs()
+        .await
+        .unwrap_or_default();
+    let settings = match state.settings_service.load_snapshot(&state.security).await {
+        Ok(s) => s,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     let is_dashboard_view = query.view.as_deref() == Some("dashboard");
     let jobs_json = if is_dashboard_view {
         Vec::new()
     } else {
-        let jobs = db::list_jobs(&state.db).await.unwrap_or_default();
+        let jobs = state.settings_service.list_jobs().await.unwrap_or_default();
         if query.jobs.as_deref() == Some("latest") {
             api_view_models::latest_job_response_json_list(&jobs)
         } else {
@@ -150,11 +155,11 @@ pub async fn config_patch_handler(
             )
                 .into_response();
         }
-        let _ = db::set_meta(&state.db, "server_name", name).await;
+        let _ = state.settings_service.set_server_name(name).await;
     }
 
     if let Some(ref host) = payload.ingest_host
-        && db::set_ingest_host(&state.db, host).await.is_err()
+        && state.settings_service.set_ingest_host(host).await.is_err()
     {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -192,7 +197,9 @@ pub async fn config_patch_handler(
             Ok(value) => value,
             Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
-        if db::set_meta(&state.db, SRT_INGEST_GLOBAL_CONFIG_META_KEY, &raw_json)
+        if state
+            .settings_service
+            .set_meta(SRT_INGEST_GLOBAL_CONFIG_META_KEY, &raw_json)
             .await
             .is_err()
         {
@@ -219,7 +226,7 @@ pub async fn config_patch_handler(
         }
     }
 
-    let settings = match load_settings_snapshot(&state.db, &state.security).await {
+    let settings = match state.settings_service.load_snapshot(&state.security).await {
         Ok(settings) => settings,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
