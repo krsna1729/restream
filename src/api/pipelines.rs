@@ -434,8 +434,12 @@ pub async fn pipeline_probe_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    match state.engine.probe_snapshot(&pipeline_id).await {
-        Some(probe) => Json(probe).into_response(),
+    let ingests = state.engine.ingests.active.read().await;
+    match ingests.get(&pipeline_id) {
+        Some(ingest) => {
+            let probe = crate::api_view_models::probe_snapshot(&pipeline_id, ingest);
+            Json(probe).into_response()
+        }
         None => (StatusCode::NOT_FOUND, "No active ingest for this pipeline").into_response(),
     }
 }

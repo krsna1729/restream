@@ -2345,13 +2345,6 @@ impl MediaEngine {
         }
     }
 
-    /// Build a probe snapshot for a pipeline's active ingest.
-    pub async fn probe_snapshot(&self, pipeline_id: &str) -> Option<serde_json::Value> {
-        let ingests = self.ingests.active.read().await;
-        let ingest = ingests.get(pipeline_id)?;
-        Some(crate::api_view_models::probe_snapshot(pipeline_id, ingest))
-    }
-
     /// Update publisher transport quality metrics.
     pub async fn update_publisher_quality(&self, pipeline_id: &str, quality: PublisherQuality) {
         let mut ingests = self.ingests.active.write().await;
@@ -2582,6 +2575,7 @@ impl MediaEngine {
                 ingest_codec,
                 &[],
                 true,
+                &self.config.backend_policy,
             );
 
             for stage in plan.stages {
