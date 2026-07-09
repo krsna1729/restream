@@ -284,7 +284,8 @@ impl StageRuntimeManager {
 
             let stream_count = 1 + plan.input.audio_tracks.len();
             let output_normalizer =
-                StageOutputNormalizer::new(output_ring, stream_count, metrics.clone());
+                StageOutputNormalizer::new(output_ring, stream_count, metrics.clone())
+                    .with_lifecycle(lifecycle.clone());
 
             let ctx = StageRunContext {
                 stage_key: key.clone(),

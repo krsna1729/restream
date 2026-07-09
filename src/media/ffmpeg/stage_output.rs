@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::media::ring_buffer::{MediaPacket, MediaType, RingBuffer};
+use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
 
 use super::timeline::{NormalizedTs, StageTimeline};
@@ -18,6 +19,7 @@ pub struct StageOutputNormalizer {
     timeline: StageTimeline,
     out_ring: Arc<RingBuffer>,
     metrics: Arc<StageMetrics>,
+    lifecycle: Option<Arc<StageLifecycle>>,
     has_emitted: bool,
     video_track_count: usize,
 }
@@ -28,9 +30,15 @@ impl StageOutputNormalizer {
             timeline: StageTimeline::new(stream_count),
             out_ring,
             metrics,
+            lifecycle: None,
             has_emitted: false,
             video_track_count: 1,
         }
+    }
+
+    pub fn with_lifecycle(mut self, lifecycle: Arc<StageLifecycle>) -> Self {
+        self.lifecycle = Some(lifecycle);
+        self
     }
 
     /// Configure the number of video tracks. Audio tracks are assumed to start
@@ -64,6 +72,9 @@ impl StageOutputNormalizer {
 
         if !self.has_emitted {
             self.has_emitted = true;
+            if let Some(lifecycle) = &self.lifecycle {
+                lifecycle.record_first_output();
+            }
         }
 
         self.metrics.record_out(packet.payload.len() as u64);
@@ -110,5 +121,50 @@ impl StageOutputSink {
                     .with_video_track_count(1)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::media::ring_buffer::PayloadFormat;
+    use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
+    use bytes::Bytes;
+
+    fn video_packet(pts: i64) -> MediaPacket {
+        MediaPacket {
+            media_type: MediaType::Video,
+            track_index: 0,
+            pts,
+            dts: pts,
+            is_keyframe: true,
+            format: PayloadFormat::Raw,
+            payload: Bytes::from_static(&[0, 0, 1, 9]),
+        }
+    }
+
+    #[test]
+    fn normalizer_records_first_output_once() {
+        let ring = Arc::new(RingBuffer::new(8));
+        let lifecycle = Arc::new(StageLifecycle::new(StagePhase::BackendSpawned {
+            backend: StageBackendKind::InternalFfmpeg,
+            pid: None,
+        }));
+        let mut normalizer = StageOutputNormalizer::new(ring, 1, Arc::new(StageMetrics::new()))
+            .with_lifecycle(lifecycle.clone());
+
+        normalizer.push(video_packet(10));
+
+        let first_snapshot = lifecycle.snapshot();
+        assert_eq!(first_snapshot.phase, StagePhase::FirstOutput);
+        let first_output_at = first_snapshot
+            .first_output_at
+            .expect("first packet should record first_output_at");
+
+        normalizer.push(video_packet(20));
+
+        let second_snapshot = lifecycle.snapshot();
+        assert_eq!(second_snapshot.phase, StagePhase::FirstOutput);
+        assert_eq!(second_snapshot.first_output_at, Some(first_output_at));
     }
 }

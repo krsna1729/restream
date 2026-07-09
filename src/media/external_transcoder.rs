@@ -269,7 +269,6 @@ pub(crate) async fn run_external_ffmpeg_backend(
 
     // stdout demux task → output normalizer
     let cancel_out = ctx.cancel.clone();
-    let out_lifecycle = lifecycle.clone();
     let out_pipe_metrics = pipe_metrics.clone();
     let out_timing_clock = timing_clock;
     tokio::spawn(async move {
@@ -277,7 +276,6 @@ pub(crate) async fn run_external_ffmpeg_backend(
         let mut demuxer = TsDemuxer::new();
         let mut buf = vec![0u8; MEDIA_TS_BATCH_TARGET_BYTES];
         let mut pkts = Vec::with_capacity(MEDIA_PRODUCER_BATCH_PACKETS);
-        let mut first_output_recorded = false;
         loop {
             let t0 = out_timing_clock.now();
             let result = stdout.read(&mut buf).await;
@@ -290,10 +288,6 @@ pub(crate) async fn run_external_ffmpeg_backend(
                     }
                     demuxer.feed(&buf[..n]);
                     demuxer.drain_into(&mut pkts);
-                    if !pkts.is_empty() && !first_output_recorded {
-                        first_output_recorded = true;
-                        out_lifecycle.record_first_output();
-                    }
                     for pkt in pkts.drain(..) {
                         output_normalizer.push(pkt);
                     }

@@ -122,7 +122,10 @@ impl StageLifecycle {
             inner.first_output_at = Some(Instant::now());
             if matches!(
                 inner.phase,
-                StagePhase::FirstInput | StagePhase::RunningNoOutputYet
+                StagePhase::StartingBackend { .. }
+                    | StagePhase::BackendSpawned { .. }
+                    | StagePhase::FirstInput
+                    | StagePhase::RunningNoOutputYet
             ) {
                 inner.phase = StagePhase::FirstOutput;
             }
@@ -216,6 +219,20 @@ mod tests {
 
         lc.record_producing();
         assert_eq!(lc.current_phase(), StagePhase::Producing);
+    }
+
+    #[test]
+    fn first_output_can_transition_directly_from_backend_spawned() {
+        let lc = StageLifecycle::new(StagePhase::BackendSpawned {
+            backend: StageBackendKind::InternalFfmpeg,
+            pid: None,
+        });
+
+        lc.record_first_output();
+
+        let snapshot = lc.snapshot();
+        assert_eq!(snapshot.phase, StagePhase::FirstOutput);
+        assert!(snapshot.first_output_at.is_some());
     }
 
     #[test]
