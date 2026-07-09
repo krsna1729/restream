@@ -73,6 +73,31 @@ pub fn plan_pipeline_graph(
     plan
 }
 
+/// Plan a persistent HLS output graph.
+///
+/// HLS output uses the same terminal media stages as RTMP/SRT egress, followed
+/// by the protocol segmenter/uploader. Keeping a dedicated role lets runtime
+/// and diagnostics distinguish persistent HLS output planning from generic
+/// output and browser-preview planning without forking stage vocabulary.
+pub fn plan_hls_output_graph(
+    pipeline_id: &str,
+    ingest_codec: Option<&str>,
+    output: &Output,
+    policy: &BackendPolicy,
+) -> StageGraphPlan {
+    let mut plan = plan_pipeline_graph(
+        pipeline_id,
+        ingest_codec,
+        std::slice::from_ref(output),
+        false,
+        policy,
+    );
+    plan.role = GraphRole::HlsOutput {
+        output_id: OutputId::new(&output.id),
+    };
+    plan
+}
+
 /// Plan the HLS preview graph for a pipeline.
 ///
 /// This is a pure planning function — it does not create ring buffers or
@@ -188,14 +213,27 @@ mod tests {
 
     #[test]
     fn graph_role_hls_output_variant_exists() {
-        let role = GraphRole::HlsOutput {
-            output_id: OutputId::new("out_1"),
+        let policy = BackendPolicy::default();
+        let output = Output {
+            id: "out_1".to_string(),
+            pipeline_id: "pipe_1".to_string(),
+            name: "HLS Output".to_string(),
+            url: "https://example.com/live/out.m3u8".to_string(),
+            monitoring_url: None,
+            desired_state: DesiredOutputState::Running,
+            config: crate::domain::output_spec::OutputConfig::parse("720p"),
         };
+        let plan = plan_hls_output_graph("pipe_1", Some("hevc"), &output, &policy);
+
         assert_eq!(
-            role,
+            plan.role,
             GraphRole::HlsOutput {
                 output_id: OutputId::new("out_1")
             }
+        );
+        assert_eq!(
+            plan.terminal_stage,
+            StageKey::new("pipe_1", StageKind::video_preset("720p"))
         );
     }
 }

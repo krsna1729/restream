@@ -1,7 +1,7 @@
 //! Application-layer output preparation that turns persisted output settings
 //! into the runtime ring and transcoder wiring owned by the media engine.
 
-use crate::domain::output_spec::{EgressProtocol, VideoCodecKind};
+use crate::domain::output_spec::{EgressProtocol, OutputUrlScheme, VideoCodecKind};
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::ring_buffer::RingBuffer;
@@ -23,13 +23,23 @@ pub async fn prepare_output_ring(
     let ingest_codec_override =
         (EgressProtocol::from_url(&output.url).is_rtmp() && ingest_is_hevc).then_some("hevc");
 
-    let plan = crate::planner::graph_plan::plan_pipeline_graph(
-        &output.pipeline_id,
-        ingest_video_codec.as_deref(),
-        std::slice::from_ref(output),
-        false,
-        &engine.config.backend_policy,
-    );
+    let url_scheme = OutputUrlScheme::from_url(&output.url);
+    let plan = if url_scheme.is_hls_family() {
+        crate::planner::graph_plan::plan_hls_output_graph(
+            &output.pipeline_id,
+            ingest_video_codec.as_deref(),
+            output,
+            &engine.config.backend_policy,
+        )
+    } else {
+        crate::planner::graph_plan::plan_pipeline_graph(
+            &output.pipeline_id,
+            ingest_video_codec.as_deref(),
+            std::slice::from_ref(output),
+            false,
+            &engine.config.backend_policy,
+        )
+    };
 
     let mut current_bufs = std::collections::HashMap::new();
     current_bufs.insert(
