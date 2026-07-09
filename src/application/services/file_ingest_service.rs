@@ -159,6 +159,17 @@ impl FileIngestService {
         self.pipeline_service.get_by_id(id).await
     }
 
+    pub async fn load_pipeline_file_ingest_state(
+        &self,
+        engine: &Arc<MediaEngine>,
+        pipeline: &Pipeline,
+    ) -> ApiResult<PipelineFileIngestState> {
+        let ingest_store = SqliteIngestLookup::new(self.db.clone());
+        load_pipeline_file_ingest_state(&ingest_store, engine, pipeline)
+            .await
+            .map_err(|_| ApiError::internal("load pipeline file ingest state"))
+    }
+
     pub async fn delete_ingest_with_runtime_cleanup(&self, engine: &Arc<MediaEngine>, id: &str) {
         let ingest_store = SqliteIngestLookup::new(self.db.clone());
         let pipeline_store = SqlitePipelineStore::new(self.db.clone());
@@ -600,9 +611,7 @@ impl FileIngestService {
             }
         }
 
-        load_pipeline_file_ingest_state(&ingest_store, engine, pipeline)
-            .await
-            .map_err(|_| ApiError::internal("load pipeline file ingest state"))
+        self.load_pipeline_file_ingest_state(engine, pipeline).await
     }
 }
 

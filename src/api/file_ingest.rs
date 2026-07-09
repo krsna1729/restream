@@ -87,7 +87,7 @@ pub async fn pipeline_file_ingest_get_handler(
     let pipeline = state.file_ingest_service.get_pipeline(&pipeline_id).await?;
     let file_ingest_state = state
         .file_ingest_service
-        .apply_file_ingest_payload(&state.engine, &pipeline, None, None)
+        .load_pipeline_file_ingest_state(&state.engine, &pipeline)
         .await?;
 
     Ok(Json(api_view_models::file_ingest_response(

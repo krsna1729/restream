@@ -9,9 +9,8 @@ use std::sync::Arc;
 use tracing::warn;
 
 use crate::api_view_models;
-use crate::application::ingest::load_pipeline_file_ingest_state;
 use crate::application::ingest_security::save_ingest_security_config;
-use crate::application::ports::{SqliteIngestLookup, SqliteMetaStore};
+use crate::application::ports::SqliteMetaStore;
 
 use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
 use crate::application::transcode_profiles::save_transcode_profiles;
@@ -70,13 +69,15 @@ pub async fn config_get_handler(
         .unwrap_or_default();
 
     let mut pipelines = Vec::with_capacity(raw_pipelines.len());
-    let ingest_lookup = SqliteIngestLookup::new(state.db.clone());
     for pipeline in &raw_pipelines {
-        let file_ingest =
-            match load_pipeline_file_ingest_state(&ingest_lookup, &state.engine, pipeline).await {
-                Ok(file_ingest) => file_ingest,
-                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            };
+        let file_ingest = match state
+            .file_ingest_service
+            .load_pipeline_file_ingest_state(&state.engine, pipeline)
+            .await
+        {
+            Ok(file_ingest) => file_ingest,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
         pipelines.push(api_view_models::pipeline_response_json_with_file_ingest(
             pipeline,
             effective_ingest_host,
