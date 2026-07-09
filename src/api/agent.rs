@@ -50,13 +50,15 @@ use crate::application::ports::SqliteMetaStore;
 #[cfg(feature = "agent-plane")]
 use crate::application::settings::load_settings_snapshot;
 #[cfg(feature = "agent-plane")]
+use crate::db;
+#[cfg(feature = "agent-plane")]
 use crate::domain::output_spec::OutputUrlScheme;
 #[cfg(feature = "agent-plane")]
 use crate::events;
 #[cfg(feature = "agent-plane")]
 use crate::types::{Ingest, Pipeline};
 #[cfg(feature = "agent-plane")]
-use std::path::{Path as FsPath, PathBuf};
+use std::path::Path as FsPath;
 #[cfg(feature = "agent-plane")]
 use sysinfo::{Disks, System};
 
@@ -308,8 +310,6 @@ use super::state::MAX_ENCODING_LEN;
 use super::state::MAX_NAME_LEN;
 #[cfg(feature = "agent-execution")]
 use super::state::MAX_URL_LEN;
-#[cfg(feature = "agent-execution")]
-use crate::application::ports::SqliteMetaStore;
 #[cfg(feature = "agent-execution")]
 use crate::domain::output_spec::OutputConfig;
 
@@ -725,18 +725,19 @@ async fn apply_agent_add_output(
         .output_id
         .clone()
         .unwrap_or_else(|| format!("output_agent_{}", to_hex(&rand::random::<[u8; 8]>())));
-    let output = db::create_output(
-        &state.db,
-        &output_id,
-        pipeline_id,
-        name.trim(),
-        url,
-        monitoring_url.as_deref(),
-        DesiredOutputState::from(desired_state),
-        config,
-    )
-    .await
-    .map_err(|err| format!("failed to create output: {err}"))?;
+    let output = state
+        .output_service
+        .create_output(
+            &output_id,
+            pipeline_id,
+            name.trim(),
+            url,
+            monitoring_url.as_deref(),
+            desired_state,
+            config,
+        )
+        .await
+        .map_err(|err| format!("failed to create output: {err}"))?;
 
     Ok(serde_json::json!({
         "kind": "addOutput",
@@ -755,10 +756,11 @@ async fn apply_agent_update_output(
     change: &crate::agent_plane::ProposedChange,
 ) -> Result<serde_json::Value, String> {
     let output_id = required_change_field(change.output_id.as_deref(), "outputId")?;
-    let existing = db::get_output(&state.db, pipeline_id, output_id)
+    let existing = state
+        .output_service
+        .get_by_id(pipeline_id, output_id)
         .await
-        .map_err(|err| format!("failed to read output: {err}"))?
-        .ok_or_else(|| format!("output '{output_id}' not found on pipeline '{pipeline_id}'"))?;
+        .map_err(|err| format!("failed to read output: {err}"))?;
     let name = change.name.as_deref().unwrap_or(&existing.name);
     let url = change.url.as_deref().unwrap_or(&existing.url).trim();
     let monitoring_url = change
@@ -775,23 +777,35 @@ async fn apply_agent_update_output(
         .trim();
     validate_output_fields(name, url, monitoring_url.as_deref(), config, desired_state)?;
 
-    let mut updated = db::update_output(
-        &state.db,
-        pipeline_id,
-        output_id,
-        name.trim(),
-        url,
-        monitoring_url.as_deref(),
-        config,
-    )
-    .await
-    .map_err(|err| format!("failed to update output: {err}"))?
-    .ok_or_else(|| format!("output '{output_id}' not found on pipeline '{pipeline_id}'"))?;
+    let mut updated = state
+        .output_service
+        .update_output(
+            pipeline_id,
+            output_id,
+            name.trim(),
+            url,
+            monitoring_url.as_deref(),
+            config,
+        )
+        .await
+        .map_err(|err| format!("failed to update output: {err}"))?;
     let desired_state = DesiredOutputState::from(desired_state);
     if desired_state != existing.desired_state {
-        updated = db::set_output_desired_state(&state.db, pipeline_id, output_id, desired_state)
-            .await
-            .map_err(|err| format!("failed to update desired state: {err}"))?;
+        updated = match desired_state {
+            DesiredOutputState::Running => state
+                .output_service
+                .request_start(pipeline_id, output_id)
+                .await
+                .map_err(|err| format!("failed to update desired state: {err}"))?,
+            DesiredOutputState::Stopped => state
+                .output_service
+                .request_stop(pipeline_id, output_id)
+                .await
+                .map_err(|err| format!("failed to update desired state: {err}"))?,
+            DesiredOutputState::Failed => {
+                return Err("agent output updates cannot request failed state".to_string());
+            }
+        };
     }
 
     Ok(serde_json::json!({
@@ -811,12 +825,15 @@ async fn apply_agent_remove_output(
     change: &crate::agent_plane::ProposedChange,
 ) -> Result<serde_json::Value, String> {
     let output_id = required_change_field(change.output_id.as_deref(), "outputId")?;
-    let existing = db::get_output(&state.db, pipeline_id, output_id)
+    let existing = state
+        .output_service
+        .get_by_id(pipeline_id, output_id)
         .await
-        .map_err(|err| format!("failed to read output: {err}"))?
-        .ok_or_else(|| format!("output '{output_id}' not found on pipeline '{pipeline_id}'"))?;
+        .map_err(|err| format!("failed to read output: {err}"))?;
     state.engine.unregister_egress(output_id).await;
-    let deleted = db::delete_output(&state.db, pipeline_id, output_id)
+    let deleted = state
+        .output_service
+        .delete_output(pipeline_id, output_id)
         .await
         .map_err(|err| format!("failed to delete output: {err}"))?;
     if !deleted {
@@ -842,13 +859,26 @@ async fn apply_agent_desired_state(
     desired_state: DesiredOutputState,
 ) -> Result<serde_json::Value, String> {
     let output_id = required_change_field(change.output_id.as_deref(), "outputId")?;
-    let existing = db::get_output(&state.db, pipeline_id, output_id)
+    let existing = state
+        .output_service
+        .get_by_id(pipeline_id, output_id)
         .await
-        .map_err(|err| format!("failed to read output: {err}"))?
-        .ok_or_else(|| format!("output '{output_id}' not found on pipeline '{pipeline_id}'"))?;
-    let output = db::set_output_desired_state(&state.db, pipeline_id, output_id, desired_state)
-        .await
-        .map_err(|err| format!("failed to set desired state: {err}"))?;
+        .map_err(|err| format!("failed to read output: {err}"))?;
+    let output = match desired_state {
+        DesiredOutputState::Running => state
+            .output_service
+            .request_start(pipeline_id, output_id)
+            .await
+            .map_err(|err| format!("failed to set desired state: {err}"))?,
+        DesiredOutputState::Stopped => state
+            .output_service
+            .request_stop(pipeline_id, output_id)
+            .await
+            .map_err(|err| format!("failed to set desired state: {err}"))?,
+        DesiredOutputState::Failed => {
+            return Err("agent output actions cannot request failed state".to_string());
+        }
+    };
     Ok(serde_json::json!({
         "kind": change.kind,
         "pipelineId": pipeline_id,

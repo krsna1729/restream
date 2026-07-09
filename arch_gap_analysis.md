@@ -112,7 +112,7 @@ runtime config.
 | Criterion | Status | Evidence |
 |---|---|---|
 | Services exist | ✅ Present | `src/application/services/*` includes pipeline, output, ingest, file ingest, media library, settings, health, auth, logs. |
-| Handlers no longer call SQL directly | ⚠️ Partial | `api/logs.rs` delegates persisted list/backfill behavior to `LogService`, and auth initialization uses `AuthService`; `api/agent.rs` and some state/helper code still call `db::*` directly. |
+| Handlers no longer call SQL directly | ⚠️ Partial | Logs/auth/settings/output mutations delegate to services, including agent output add/update/remove/start/stop paths; `api/agent.rs` read/context helpers and some state/helper code still call `db::*` directly. |
 | Handlers do not call low-level media constructors | ⚠️ Mostly | `api/hls.rs` delegates to `application::hls_preview`, but other API/runtime views still take `MediaEngine` directly for read models. |
 | Services testable without Axum request types | ✅ Mostly | Service structs do not depend on Axum types. |
 
@@ -262,7 +262,7 @@ convergence and later harness/reporting phases.
 | Phase | Status | Notes |
 |---|---|---|
 | Phase 13 — Harness v2 reporting | ❌ Not complete | Harness prints some dependency-chain fields, but `HarnessOutputCell`, `HarnessOutputRegistry`, root-cause summary, schema-versioned artifact index, and `outputs.json` contract are not present. |
-| Phase 14 — Agent/MCP cleanup | ❌ Not complete | Agent HTTP routes still call `db::*` directly and duplicate DTO boundaries; agent graph preview uses `OutputPath` and API runtime views, not one shared application read-model/planner layer. |
+| Phase 14 — Agent/MCP cleanup | ❌ Not complete | Agent output mutations now use `OutputService`, but agent context/read routes still call `db::*` directly and duplicate DTO boundaries; agent graph preview uses `OutputPath` and API runtime views, not one shared application read-model/planner layer. |
 | Phase 15 — Large-file split | ❌ Not complete | Major files remain large: `test_harness.rs` ~10k lines, `engine.rs` ~6.4k, `srt.rs` ~4.6k, `mpegts.rs` ~4.0k, `rtmp.rs` ~3.6k, `external_transcoder.rs` ~2.8k. |
 | Phase 16 — Rollout policy | ❌ Not complete | Not audited as implemented; internal backend remains policy-gated and parity work is ongoing. |
 
@@ -286,10 +286,11 @@ convergence and later harness/reporting phases.
 ### P1 — Layering and Ownership
 
 3. **API/service/repository boundary remains mixed**
-   - Route modules exist, but `api/agent.rs` and some helper paths still call
-     `db::*` directly. `PipelineService`, `OutputService`, `IngestService`,
-     `HealthService`, `LogService`, `AuthService`, and `SettingsService` are
-     now port-trait backed.
+   - Route modules exist, but `api/agent.rs` read/context helpers and some
+     helper paths still call `db::*` directly. Agent output mutations now use
+     `OutputService`, and `PipelineService`, `OutputService`, `IngestService`,
+     `HealthService`, `LogService`, `AuthService`, and `SettingsService` are now
+     port-trait backed.
 
 4. **HLS preview is no longer an API one-off, but still not a pure graph service**
    - `application::hls_preview` owns orchestration, but it directly calls
@@ -319,7 +320,7 @@ convergence and later harness/reporting phases.
 | Ph 1 Core contracts | A | Types exist, output desired-state, job status, and active/recent egress lifecycle state are typed; string conversion is now kept at DB/API edges. |
 | Ph 2 Config | A- | Production env parsing is centralized in config, startup logs a comprehensive redacted effective-config summary, and recording remux receives typed config; static media fallback readers remain. |
 | Ph 3 API split | A | Route module split is complete. |
-| Ph 4 App services | B+ | Logs, auth initialization, pipeline, output, ingest, and health checks are service-backed; agent and some helper paths still contain direct DB/application work. |
+| Ph 4 App services | A- | Logs, auth initialization, pipeline, output, ingest, health checks, and agent output mutations are service-backed; agent read/context helpers still contain direct DB/application work. |
 | Ph 5 Repositories | A | Repo modules exist, pipeline/output/ingest/health/log/auth/settings services are port-trait backed, and output/job/recording state maps at repository boundaries. |
 | Ph 6 Graph planner | A- | Planner drives output preparation, graph rendering, diagnostics, and preview planning, with harness stage-sharing tests; recording/agent consumers remain. |
 | Ph 7 Stage lifecycle | B+ | Lifecycle/capacity visibility strong; runtime object model still split. |
