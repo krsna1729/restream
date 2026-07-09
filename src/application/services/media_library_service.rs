@@ -175,7 +175,9 @@ impl MediaLibraryService {
         filename: &str,
         canonical_path: &Path,
     ) -> Result<(), MediaDeleteError> {
-        let ingests = db::list_ingests_for_filename(&self.db, filename)
+        let ingests = self
+            .ingest_service
+            .list_for_filename(filename)
             .await
             .unwrap_or_default();
         if !ingests.is_empty() {
