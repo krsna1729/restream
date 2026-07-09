@@ -1,13 +1,17 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
+use tokio::io::AsyncReadExt;
 use tokio::process::{Child, ChildStderr, ChildStdout, Command};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, warn};
 
 use crate::application::ingest::{
-    FileIngestConfig, PipelineFileIngestState, clear_stream_key_file_ingests,
-    load_pipeline_file_ingest_state, persist_pipeline_file_ingest, remove_pipeline_file_ingest,
+    FileIngestConfig, PipelineFileIngestState, ResolveFileIngestError,
+    clear_stream_key_file_ingests, load_pipeline_file_ingest_state, persist_pipeline_file_ingest,
+    remove_pipeline_file_ingest, resolve_file_ingest_context,
 };
 use crate::application::ports::{
     IngestLookup, IngestWriter, SqliteIngestLookup, SqlitePipelineStore,
@@ -30,6 +34,18 @@ pub struct SpawnedFileIngestChild {
     pub child: Child,
     pub stdout: ChildStdout,
     pub stderr: ChildStderr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileIngestStartError {
+    NotFound,
+    MissingPipelineForStreamKey,
+    IngestLookup,
+    PipelineStore(String),
+    AlreadyRunning,
+    MediaFileNotFound,
+    PipelineAlreadyActive,
+    Spawn(String),
 }
 
 pub struct FileIngestService {
@@ -182,6 +198,333 @@ impl FileIngestService {
         engine.clear_file_ingest_running(id).await;
 
         Ok(ingest)
+    }
+
+    pub async fn start_ingest(
+        &self,
+        engine: Arc<MediaEngine>,
+        media_dir: &Path,
+        id: &str,
+    ) -> Result<Ingest, FileIngestStartError> {
+        let resolved = match resolve_file_ingest_context(
+            &SqliteIngestLookup::new(self.db.clone()),
+            &SqlitePipelineStore::new(self.db.clone()),
+            id,
+        )
+        .await
+        {
+            Ok(Some(context)) => context,
+            Ok(None) => return Err(FileIngestStartError::NotFound),
+            Err(ResolveFileIngestError::MissingPipelineForStreamKey(_)) => {
+                return Err(FileIngestStartError::MissingPipelineForStreamKey);
+            }
+            Err(ResolveFileIngestError::IngestLookup(_)) => {
+                return Err(FileIngestStartError::IngestLookup);
+            }
+            Err(ResolveFileIngestError::PipelineStore(err)) => {
+                return Err(FileIngestStartError::PipelineStore(err.to_string()));
+            }
+        };
+        let ingest = resolved.ingest;
+        let pipeline = resolved.pipeline;
+
+        if engine.is_file_ingest_running(id).await {
+            return Err(FileIngestStartError::AlreadyRunning);
+        }
+
+        let file_path = media_dir.join(&ingest.filename);
+        if !file_path.exists() {
+            return Err(FileIngestStartError::MediaFileNotFound);
+        }
+
+        let ring_buffer = engine.get_or_create_pipeline(&pipeline.id).await;
+        let Some(registration) = engine
+            .try_register_ingest_attempt(&pipeline.id, &ingest.stream_key, "file")
+            .await
+        else {
+            return Err(FileIngestStartError::PipelineAlreadyActive);
+        };
+
+        engine.mark_file_ingest_running(&ingest.id).await;
+
+        if crate::media::file_ingest::use_internal_file_ingest(&engine.config)
+            && !ingest.live_optimized
+        {
+            if let Err(err) = crate::media::file_ingest::spawn_internal_file_ingest(
+                engine.clone(),
+                tokio::runtime::Handle::current(),
+                ingest.id.clone(),
+                pipeline.id.clone(),
+                file_path,
+                ingest.start_time.clone(),
+                ingest.loop_flag,
+                ring_buffer,
+                registration,
+            ) {
+                engine.clear_file_ingest_running(&ingest.id).await;
+                engine.unregister_ingest(&pipeline.id).await;
+                return Err(FileIngestStartError::Spawn(err));
+            }
+        } else {
+            let spawned = match Self::spawn_file_ingest_child(&ingest, &file_path) {
+                Ok(child) => child,
+                Err(err) => {
+                    engine.clear_file_ingest_running(&ingest.id).await;
+                    engine.unregister_ingest(&pipeline.id).await;
+                    return Err(FileIngestStartError::Spawn(err));
+                }
+            };
+
+            tokio::spawn(Self::run_file_ingest_task(
+                engine.clone(),
+                ingest.clone(),
+                pipeline,
+                file_path,
+                ring_buffer,
+                registration,
+                spawned,
+            ));
+        }
+
+        Ok(ingest)
+    }
+
+    async fn pump_file_ingest_stdout(
+        engine: Arc<MediaEngine>,
+        pipeline: Pipeline,
+        ring_buffer: Arc<crate::media::ring_buffer::RingBuffer>,
+        mut stdout: ChildStdout,
+        cancel: CancellationToken,
+        timestamps: &mut crate::media::file_ingest::ContinuousTimestampState,
+    ) -> Result<(), String> {
+        let (bytes_received, ingest_metrics, cached_keyframe_times) = {
+            engine
+                .with_active_ingest(&pipeline.id, |ingest| {
+                    (
+                        ingest.bytes_received.clone(),
+                        ingest.metrics.clone(),
+                        ingest.keyframe_times.clone(),
+                    )
+                })
+                .await
+                .ok_or_else(|| format!("Active ingest missing for pipeline {}", pipeline.id))?
+        };
+
+        let mut demuxer = crate::media::mpegts::TsDemuxer::new();
+        let mut packets = Vec::with_capacity(crate::media::MEDIA_PRODUCER_BATCH_PACKETS);
+        let mut probe_sent = false;
+        let mut buf = vec![0u8; 64 * 1024];
+
+        loop {
+            let read = tokio::select! {
+                _ = cancel.cancelled() => break,
+                res = stdout.read(&mut buf) => res,
+            }
+            .map_err(|e| format!("Failed to read ffmpeg stdout: {e}"))?;
+
+            if read == 0 {
+                break;
+            }
+
+            demuxer.feed(&buf[..read]);
+            if demuxer.drain_into(&mut packets) > 0 {
+                for pkt in &mut packets {
+                    timestamps.apply(pkt);
+                    if pkt.media_type == crate::media::ring_buffer::MediaType::Video
+                        && let Some(parameter_sets) =
+                            crate::media::codec::annexb_parameter_sets(&pkt.payload)
+                    {
+                        ring_buffer.set_video_parameter_sets(parameter_sets);
+                    }
+                    if pkt.media_type == crate::media::ring_buffer::MediaType::Video
+                        && pkt.is_keyframe
+                    {
+                        let mut times = cached_keyframe_times
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        times.push(pkt.pts);
+                        if times.len() > 30 {
+                            times.remove(0);
+                        }
+                    }
+                }
+                ring_buffer.push_drained_batch_capped(&mut packets);
+            }
+
+            if !probe_sent && let Some(probe) = demuxer.take_probe() {
+                probe_sent = true;
+                let first_audio = probe.audio_tracks.first().cloned();
+                let video_sequence_header = probe.video_sequence_header.clone();
+                let selected_video_track_index = probe.video.as_ref().map(|_| 0);
+                engine
+                    .update_ingest_meta(&pipeline.id, probe.video, first_audio, None)
+                    .await;
+                if let Some(sequence_header) = video_sequence_header {
+                    engine
+                        .cache_sequence_header(&pipeline.id, true, sequence_header)
+                        .await;
+                }
+                engine
+                    .update_ingest_video_track_selection(
+                        &pipeline.id,
+                        probe.video_track_count,
+                        selected_video_track_index,
+                    )
+                    .await;
+                if !probe.audio_tracks.is_empty() {
+                    engine
+                        .update_ingest_audio_tracks(&pipeline.id, probe.audio_tracks)
+                        .await;
+                }
+            }
+
+            bytes_received.fetch_add(read as u64, std::sync::atomic::Ordering::Relaxed);
+            ingest_metrics.record_in(read as u64);
+        }
+
+        Ok(())
+    }
+
+    async fn log_file_ingest_stderr(
+        ingest_id: &str,
+        mut stderr: ChildStderr,
+    ) -> Result<(), std::io::Error> {
+        const STDERR_CAP: usize = 64 * 1024;
+        let mut buf = [0u8; 4096];
+        let mut all = Vec::new();
+        let mut truncated = false;
+
+        loop {
+            match stderr.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    let remaining = STDERR_CAP.saturating_sub(all.len());
+                    if remaining > 0 {
+                        all.extend_from_slice(&buf[..n.min(remaining)]);
+                    } else if !truncated {
+                        truncated = true;
+                        warn!(ingest_id = %ingest_id, cap = STDERR_CAP, "ffmpeg stderr truncated");
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        if !all.is_empty() {
+            warn!(ingest_id = %ingest_id, stderr = %String::from_utf8_lossy(&all).trim(), "ffmpeg stderr");
+        }
+
+        Ok(())
+    }
+
+    async fn run_file_ingest_task(
+        engine: Arc<MediaEngine>,
+        ingest: Ingest,
+        pipeline: Pipeline,
+        file_path: PathBuf,
+        ring_buffer: Arc<crate::media::ring_buffer::RingBuffer>,
+        registration: crate::media::engine::IngestRegistration,
+        mut spawned: SpawnedFileIngestChild,
+    ) {
+        let cancel = registration.cancel_token.clone();
+        let mut timestamps = crate::media::file_ingest::ContinuousTimestampState::default();
+        loop {
+            engine
+                .file_ingests
+                .children
+                .write()
+                .await
+                .insert(ingest.id.clone(), spawned.child);
+
+            let stderr_id = ingest.id.clone();
+            let stdout_fut = Self::pump_file_ingest_stdout(
+                engine.clone(),
+                pipeline.clone(),
+                ring_buffer.clone(),
+                spawned.stdout,
+                cancel.clone(),
+                &mut timestamps,
+            );
+            let stderr_fut = Self::log_file_ingest_stderr(&stderr_id, spawned.stderr);
+            let (stdout_res, stderr_res) = tokio::join!(stdout_fut, stderr_fut);
+
+            let mut exit_status = None;
+            if let Some(mut child) = engine.take_file_ingest_child(&ingest.id).await {
+                exit_status = child.wait().await.ok();
+            }
+
+            if let Err(err) = stdout_res
+                && !cancel.is_cancelled()
+            {
+                error!(ingest_id = %ingest.id, err = %err, "file-ingest stdout reader failed");
+                engine
+                    .record_ingest_disconnect_if_current(
+                        &pipeline.id,
+                        &registration,
+                        Some("stdout"),
+                        Some(err.to_string()),
+                        true,
+                    )
+                    .await;
+            }
+            if let Err(err) = stderr_res
+                && !cancel.is_cancelled()
+            {
+                error!(ingest_id = %ingest.id, err = %err, "file-ingest stderr reader failed");
+                engine
+                    .record_ingest_disconnect_if_current(
+                        &pipeline.id,
+                        &registration,
+                        Some("stderr"),
+                        Some(err.to_string()),
+                        true,
+                    )
+                    .await;
+            }
+
+            if let Some(status) = exit_status
+                && !status.success()
+                && !cancel.is_cancelled()
+            {
+                warn!(ingest_id = %ingest.id, status = %status, "ffmpeg exited unsuccessfully");
+                engine
+                    .record_ingest_disconnect_if_current(
+                        &pipeline.id,
+                        &registration,
+                        Some("exit"),
+                        Some(format!("ffmpeg exited with status {status}")),
+                        true,
+                    )
+                    .await;
+            } else if exit_status.is_some() && !cancel.is_cancelled() && !ingest.loop_flag {
+                engine
+                    .record_ingest_disconnect_if_current(
+                        &pipeline.id,
+                        &registration,
+                        Some("eof"),
+                        Some("file ingest reached end of input".to_string()),
+                        false,
+                    )
+                    .await;
+            }
+
+            if cancel.is_cancelled() || !ingest.loop_flag {
+                break;
+            }
+
+            match Self::spawn_file_ingest_child(&ingest, &file_path) {
+                Ok(next) => spawned = next,
+                Err(err) => {
+                    error!(ingest_id = %ingest.id, err = %err, "file-ingest restart failed");
+                    break;
+                }
+            }
+        }
+
+        engine.clear_file_ingest_running(&ingest.id).await;
+        engine
+            .unregister_ingest_if_current(&pipeline.id, &registration)
+            .await;
     }
 
     pub async fn apply_file_ingest_payload(
@@ -388,5 +731,74 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn start_ingest_returns_not_found_for_missing_ingest() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        let engine = Arc::new(MediaEngine::new());
+
+        let err = service(pool)
+            .start_ingest(engine, std::env::temp_dir().as_path(), "missing")
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, FileIngestStartError::NotFound);
+    }
+
+    #[tokio::test]
+    async fn start_ingest_requires_pipeline_for_stream_key() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        crate::db::create_ingest(
+            &pool,
+            "ing-orphan",
+            "clip.mp4",
+            "missing-stream-key",
+            false,
+            "",
+            false,
+            crate::types::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+        )
+        .await
+        .unwrap();
+        let engine = Arc::new(MediaEngine::new());
+
+        let err = service(pool)
+            .start_ingest(engine, std::env::temp_dir().as_path(), "ing-orphan")
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, FileIngestStartError::MissingPipelineForStreamKey);
+    }
+
+    #[tokio::test]
+    async fn start_ingest_rejects_already_running_ingest_before_file_check() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        setup_ingest(&pool, "ing-running").await;
+        let engine = Arc::new(MediaEngine::new());
+        engine.mark_file_ingest_running("ing-running").await;
+
+        let err = service(pool)
+            .start_ingest(engine, std::env::temp_dir().as_path(), "ing-running")
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, FileIngestStartError::AlreadyRunning);
+    }
+
+    #[tokio::test]
+    async fn start_ingest_rejects_missing_media_file() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        setup_ingest(&pool, "ing-missing-media").await;
+        let engine = Arc::new(MediaEngine::new());
+
+        let err = service(pool)
+            .start_ingest(engine, std::env::temp_dir().as_path(), "ing-missing-media")
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, FileIngestStartError::MediaFileNotFound);
     }
 }
