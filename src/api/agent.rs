@@ -38,7 +38,9 @@ fn agent_execution_unavailable() -> axum::response::Response {
 }
 
 #[cfg(feature = "agent-plane")]
-use super::state::{recording_enabled_map, to_hex};
+use super::state::recording_enabled_map;
+#[cfg(feature = "agent-execution")]
+use super::state::to_hex;
 #[cfg(feature = "agent-plane")]
 use super::telemetry::system_status;
 #[cfg(feature = "agent-plane")]

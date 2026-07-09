@@ -9,8 +9,10 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
-use crate::application::output_path::OutputPath;
 use crate::domain::output_spec::{OutputConfig, OutputUrlScheme};
+use crate::domain::state::DesiredOutputState;
+use crate::planner::backend_policy::BackendPolicy;
+use crate::planner::graph_plan::plan_pipeline_graph;
 use crate::types::{Ingest, Output, Pipeline};
 
 const OUTPUT_URL_SCHEME_ERROR: &str =
@@ -768,7 +770,15 @@ fn graph_preview(request: &PlanRequest, current_graph: Option<&Value>) -> GraphP
         .into_iter()
         .flatten()
         .filter_map(|node| node.get("stageKey").and_then(|v| v.as_str()))
-        .map(ToOwned::to_owned)
+        .flat_map(|stage_key| {
+            [
+                stage_key.to_string(),
+                stage_key
+                    .split_once(':')
+                    .map(|(_, kind)| kind.to_string())
+                    .unwrap_or_else(|| stage_key.to_string()),
+            ]
+        })
         .collect();
 
     let mut candidate_stages = HashSet::new();
@@ -780,20 +790,7 @@ fn graph_preview(request: &PlanRequest, current_graph: Option<&Value>) -> GraphP
         else {
             continue;
         };
-        if let Some(config) = change_output_config(change) {
-            let encoding = config.to_encoding_string();
-            let output_path =
-                OutputPath::resolve(pid, &encoding, change.url.as_deref().unwrap_or(""));
-            if let Some(stage) = output_path.video_stage() {
-                candidate_stages.insert(stage.kind.to_string());
-            }
-            if let Some(stage) = output_path.audio_stage() {
-                candidate_stages.insert(stage.kind.to_string());
-            }
-            if let Some(stage) = output_path.codec_edge_candidate_stage() {
-                candidate_stages.insert(stage.kind.to_string());
-            }
-        }
+        candidate_stages.extend(planned_candidate_stage_kinds(pid, change));
     }
 
     let mut added_nodes: Vec<Value> = candidate_stages
@@ -829,6 +826,38 @@ fn graph_preview(request: &PlanRequest, current_graph: Option<&Value>) -> GraphP
     }
 }
 
+fn planned_candidate_stage_kinds(pipeline_id: &str, change: &ProposedChange) -> Vec<String> {
+    let Some(config) = change_output_config(change) else {
+        return Vec::new();
+    };
+    let output = Output {
+        id: change
+            .output_id
+            .clone()
+            .unwrap_or_else(|| "agent-preview-output".to_string()),
+        pipeline_id: pipeline_id.to_string(),
+        name: change
+            .name
+            .clone()
+            .unwrap_or_else(|| "Agent preview output".to_string()),
+        url: change.url.clone().unwrap_or_default(),
+        monitoring_url: change.monitoring_url.clone(),
+        desired_state: change
+            .desired_state
+            .as_deref()
+            .map(DesiredOutputState::from)
+            .unwrap_or(DesiredOutputState::Stopped),
+        config: config.clone(),
+    };
+    let policy = BackendPolicy::default();
+    plan_pipeline_graph(pipeline_id, Some("hevc"), &[output], false, &policy)
+        .stages
+        .into_iter()
+        .filter(|stage| stage.kind != crate::domain::stage::StageKind::Source)
+        .map(|stage| stage.kind.to_string())
+        .collect()
+}
+
 fn impact_preview(request: &PlanRequest) -> ImpactPreview {
     let mut affected_pipelines = HashSet::new();
     let mut affected_outputs = HashSet::new();
@@ -842,17 +871,7 @@ fn impact_preview(request: &PlanRequest) -> ImpactPreview {
             .or(request.pipeline_id.as_deref())
         {
             affected_pipelines.insert(pid.to_string());
-            if let Some(config) = change_output_config(change) {
-                let encoding = config.to_encoding_string();
-                let output_path =
-                    OutputPath::resolve(pid, &encoding, change.url.as_deref().unwrap_or(""));
-                if let Some(stage) = output_path.video_stage() {
-                    shared_stage_candidates.insert(stage.kind.to_string());
-                }
-                if let Some(stage) = output_path.audio_stage() {
-                    shared_stage_candidates.insert(stage.kind.to_string());
-                }
-            }
+            shared_stage_candidates.extend(planned_candidate_stage_kinds(pid, change));
         }
         if let Some(output_id) = &change.output_id {
             affected_outputs.insert(output_id.clone());
@@ -998,6 +1017,39 @@ mod tests {
                 .iter()
                 .any(|stage| stage.starts_with("audio:atrack:0"))
         );
+        assert!(stages.iter().any(|stage| stage.starts_with("hevc_to_h264")));
+    }
+
+    #[test]
+    fn graph_preview_uses_planner_stage_keys_when_filtering_existing_graph() {
+        let req = PlanRequest {
+            intent: "add 720p rtmp output".to_string(),
+            pipeline_id: Some("pipe-a".to_string()),
+            proposed_changes: vec![ProposedChange {
+                kind: "addOutput".to_string(),
+                pipeline_id: None,
+                output_id: Some("out-a".to_string()),
+                name: None,
+                url: Some("rtmp://example/live/key".to_string()),
+                monitoring_url: None,
+                config: Some(OutputConfig::parse("720p")),
+                desired_state: Some("running".to_string()),
+            }],
+        };
+        let current_graph = serde_json::json!({
+            "nodes": [
+                {"stageKey": "pipe-a:video:720p"}
+            ]
+        });
+
+        let preview = graph_preview(&req, Some(&current_graph));
+        let stages = preview
+            .added_nodes
+            .iter()
+            .filter_map(|node| node["stageKey"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(!stages.contains(&"video:720p"));
         assert!(stages.iter().any(|stage| stage.starts_with("hevc_to_h264")));
     }
 }
