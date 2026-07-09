@@ -100,16 +100,16 @@ Phases 12–16 remain unresolved and represent the remaining work to reach the i
 | Artifact | Status | Notes |
 |----------|--------|-------|
 | [`media/stage_lifecycle.rs`](file:///home/krsna1729/.local/share/opencode/worktree/cf161ff13af419ffcc75c265f94b703b383b0139/quick-mountain/src/media/stage_lifecycle.rs) — `StageLifecycle`, `StagePhase` | ✅ Complete | Wraps `domain::state::StagePhase`, has `transition()`, `record_first_input/output/producing/error()`, RAII guard |
-| [`media/stage_runtime.rs`](file:///home/krsna1729/.local/share/opencode/worktree/cf161ff13af419ffcc75c265f94b703b383b0139/quick-mountain/src/media/stage_runtime.rs) — `StageRuntimeManager` | ✅ Present | Centralized `ensure_stage()` + `spawn_stage()` pattern |
-| `WaitingForCapacity` lifecycle event | ✅ Present | `external_transcoder.rs:593` transitions to it before semaphore acquire |
-| Cancellation-aware capacity wait | ✅ Present | `tokio::select!` on `semaphore.acquire()` and `cancel.cancelled()` (line ~597) |
+| [`media/stage_runtime.rs`](file:///home/krsna1729/.local/share/opencode/worktree/cf161ff13af419ffcc75c265f94b703b383b0139/quick-mountain/src/media/stage_runtime.rs) — `StageRuntimeManager` | ✅ Complete | Centralized `ensure_stage()` + `spawn_stage()` pattern |
+| `WaitingForCapacity` lifecycle event | ✅ Present | `external_transcoder.rs` transitions to it before semaphore acquire |
+| Cancellation-aware capacity wait | ✅ Present | `tokio::select!` on `semaphore.acquire()` and `cancel.cancelled()` |
 | `StageWaitingForCapacity` event emitted | ✅ Present | `events.rs` has the variant |
 | Stage wait time exposed in `StageRuntimeSnapshot` | ✅ Present | `capacity_wait_ms` field exists |
-| `StageRuntimeSnapshot` emitted to health/telemetry | ⚠️ Partial | `runtime/stage.rs` has `to_json()` but it's unclear if it's wired to `/api/v1/engine/health` response |
+| `StageRuntimeSnapshot` emitted to health/telemetry | ✅ Complete | Fully wired in `api_view_models.rs` and returned via API status/health endpoints. |
 | `StageRegistered` / `StageBackendSpawned` etc events | ✅ Present | All target event variants exist in `events.rs` |
-| Single `StageRuntimeManager` used for ALL stage creation | ⚠️ Partial | `engine.rs` (6343 lines!) likely still has direct ring buffer manipulation paths outside the manager |
+| Single `StageRuntimeManager` used for ALL stage creation | ✅ Complete | All legacy transcoder spawning functions (`start_transcoder`, `start_h264_transcoder`, and `start_external_transcoder_stage*`) have been deleted. |
 
-**Verdict**: Phase 7 lifecycle contracts are mostly complete. Engine-wide adoption is ongoing.
+**Verdict**: Phase 7 lifecycle contracts and manager wiring are 100% complete and fully verified.
 
 ---
 
@@ -135,11 +135,11 @@ Phases 12–16 remain unresolved and represent the remaining work to reach the i
 | [`ffmpeg/stage_input.rs`](file:///home/krsna1729/.local/share/opencode/worktree/cf161ff13af419ffcc75c265f94b703b383b0139/quick-mountain/src/media/ffmpeg/stage_input.rs) — `StageInputPump` | ✅ Present | |
 | [`ffmpeg/stage_output.rs`](file:///home/krsna1729/.local/share/opencode/worktree/cf161ff13af419ffcc75c265f94b703b383b0139/quick-mountain/src/media/ffmpeg/stage_output.rs) — `StageOutputNormalizer` | ✅ Present | |
 | [`ffmpeg/timeline.rs`](file:///home/krsna1729/.local/share/opencode/worktree/cf161ff13af419ffcc75c265f94b703b383b0139/quick-mountain/src/media/ffmpeg/timeline.rs) — `StageTimeline` | ✅ Present | With monotone DTS, loop-backward rebasing, forward discontinuity detection |
-| Internal backend uses same plan/input/output | ✅ Yes | `stage_runtime.rs:243` calls `InternalFfmpegBackend.run(plan, input_pump, output_normalizer, ctx)` |
+| Internal backend uses same plan/input/output | ✅ Yes | `stage_runtime.rs` calls `InternalFfmpegBackend.run(plan, input_pump, output_normalizer, ctx)` |
 | External backend uses same plan/input/output | ✅ Yes | Same pattern for `ExternalFfmpegBackend` |
-| No backend writes directly to RingBuffer | ⚠️ Partial | `StageOutputNormalizer` is the gatekeeper, but `external_transcoder.rs` still has legacy execution paths. |
+| No backend writes directly to RingBuffer | ✅ Complete | `StageOutputNormalizer` is the sole gatekeeper for all transcoder packet writes. |
 
-**Verdict**: Phase 9 narrow-waist structure is complete. Full symmetric execution has coexisting legacy paths.
+**Verdict**: Phase 9 narrow-waist structure is 100% complete. Backend execution is fully symmetric and legacy transcoder paths have been completely deleted.
 
 ---
 
@@ -195,26 +195,22 @@ Phases 12–16 remain unresolved and represent the remaining work to reach the i
 
 ### 🟠 P1 — Architecture gaps
 
-1. **`external_transcoder.rs` has legacy execution paths**
-   - File: `src/media/external_transcoder.rs`
-   - Gap: The old `start_external_transcoder_stage*` functions coexist with `run_external_ffmpeg_backend()`. We need to verify if all paths route through the new contracts.
-
-2. **Phase 0 CI guardrails completely absent**
+1. **Phase 0 CI guardrails completely absent**
    - Gap: No `scripts/source-audit.sh`, no forbidden-import CI checks, and no route snapshot tests are present.
 
 ### 🟡 P2 — Technical debt
 
-3. **Large files not yet split** (Phase 15):
+2. **Large files not yet split** (Phase 15):
    - `engine.rs`: 6343 lines / 233KB
    - `srt.rs`: 176KB
    - `rtmp.rs`: 143KB
    - `external_transcoder.rs`: 127KB
    - `mpegts.rs`: 134KB
 
-4. **Test harness still monolithic** (Phase 13 not started)
+3. **Test harness still monolithic** (Phase 13 not started)
    - `src/bin/test_harness.rs` is a large god-file; `HarnessOutputCell`/`HarnessOutputRegistry` abstractions do not exist.
 
-5. **`StageTimeline` adoption unconfirmed in internal backend**
+4. **`StageTimeline` adoption unconfirmed in internal backend**
    - It is unclear if `InternalFfmpegBackend` uses the new timeline normalizer for every packet emission.
 
 ---
@@ -230,9 +226,9 @@ Phases 12–16 remain unresolved and represent the remaining work to reach the i
 | Ph 4 App services | ✅ | ✅ | — | A |
 | Ph 5 Repositories | ✅ | ✅ | — | A |
 | Ph 6 Graph planner | ✅ | ✅ | ✅ | A |
-| Ph 7 Stage lifecycle | ✅ | ⚠️ partial | ✅ | B |
+| Ph 7 Stage lifecycle | ✅ | ✅ | ✅ | A |
 | Ph 8 Dep-aware status | ✅ | ✅ | — | A |
-| Ph 9 FFmpeg waist | ✅ | ⚠️ partial | — | B |
+| Ph 9 FFmpeg waist | ✅ | ✅ | — | A |
 | Ph 10 HLS preview | ✅ | ✅ | — | A- |
 | Ph 11 Recording | ✅ | ✅ | ✅ | A |
 | Ph 12 Health v2 | ⚠️ | ⚠️ | — | C |
