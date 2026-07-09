@@ -57,12 +57,12 @@ features complete, but broad architectural convergence is still partial.
 | Source inventory doc / CI | ✅ Present | `scripts/source-audit.sh` checks forbidden imports, no-growth file-size baselines, and env reads; it emits `target/source-audit.json` and now runs in the CI architecture-guardrails job. |
 | Smoke CI matrix | ✅ Present | `.github/workflows/ci.yml` runs fmt, strict lib clippy, workspace clippy, API contract, concurrency contract, test hygiene, coverage, integration harness modes, and Playwright. |
 | Forbidden-import CI check | ✅ Present | `ARCHITECTURE_GUARDRAILS.md` documents the boundary rules, and CI runs `scripts/source-audit.sh` to reject `src/media` imports from API modules. |
-| Regression fixture preservation | ⚠️ Partial | Checked-in fixture discipline is documented and scripted via `scripts/check-fixture-discipline.sh`, but the specific historical failure artifacts listed in `impl.md` are not yet all linked as a guardrail set. |
+| Regression fixture preservation | ✅ Present | `docs/regression-artifacts.md` links the specific historical failure classes from `impl.md` to checked-in fixtures, harness replay paths, generated-artifact locations, and proof gates; `docs/testing.md` and `ARCHITECTURE_GUARDRAILS.md` link the index. |
 
-**Verdict**: Mostly complete. CI now enforces source inventory and dependency
-direction guardrails, and the smoke matrix is broad. The remaining Phase 0 gap
-is linking the named historical failure artifacts into the regression-fixture
-documentation.
+**Verdict**: Complete for the phase scope. CI enforces source inventory and
+dependency-direction guardrails, the smoke matrix is broad, and the named
+historical failure artifacts are linked into the regression-fixture
+documentation without committing generated run directories.
 
 ---
 
@@ -218,9 +218,9 @@ legacy ring escape hatches have been removed.
 | Criterion | Status | Evidence |
 |---|---|---|
 | `GraphRole::HlsPreview` | ✅ Present | `runtime/graph.rs`. |
-| HLS preview planning | ✅ Present | `planner::graph_plan::plan_hls_preview_graph()` now models H264 as `source -> fMP4 segmenter` and HEVC as `source -> preview -> fMP4 segmenter`, and `MediaEngine::ensure_hls_preview_runtime()` owns preview graph planning, store/cancel setup, segmenter task spawning, and active preview stage-key reporting. |
+| HLS preview planning | ✅ Present | `planner::graph_plan::plan_hls_preview_graph()` now models H264 as `source -> fMP4 segmenter` and HEVC as `source -> preview -> fMP4 segmenter`, and `media/hls_preview_runtime.rs::MediaEngine::ensure_hls_preview_runtime()` owns preview graph planning, store/cancel setup, segmenter task spawning, and active preview stage-key reporting. |
 | API no longer directly creates preview ring/backend | ✅ Complete | `api/hls.rs` delegates preview startup, playlist/segment reads, and blocked-cause selection to `application::hls_preview`; it only handles auth, path extraction, and HTTP response mapping. |
-| Runtime/application service owns preview orchestration | ✅ Present | `application/hls_preview.rs` owns request/serving policy, while `MediaEngine::ensure_hls_preview_runtime()` owns preview graph planning, store/cancel setup, and fMP4 segmenter spawning. |
+| Runtime/application service owns preview orchestration | ✅ Present | `application/hls_preview.rs` owns request/serving policy, while `media/hls_preview_runtime.rs` owns preview graph planning, store/cancel setup, and fMP4 segmenter spawning. |
 | Actual keys in health match spawned keys | ✅ Tested | Engine tests cover `active_hls_preview_stage_keys_*` through the same `plan_hls_preview_graph()` contract used by preview startup. |
 | HLS blocked-stage cause surfaced | ✅ Tested | Application and API tests cover HLS playlist blocked-stage cause, and engine tests prove blocked preview causes come from graph-planned stage keys rather than preview-name heuristics. |
 
@@ -314,18 +314,10 @@ convergence and later harness/reporting phases.
 
 ### P2 — Guardrails and Large-File Debt
 
-6. **Architecture drift checks exist and are CI-wired, but artifact fixture
-   preservation is not fully linked**
-   - `scripts/source-audit.sh` runs locally and in CI, emits
-     `target/source-audit.json`, and enforces dependency-direction and
-     no-growth large-file guardrails. The remaining guardrail gap is linking the
-     named historical failure artifacts from `impl.md` into regression-fixture
-     documentation.
-
-7. **Large files still dominate reasoning cost**
+6. **Large files still dominate reasoning cost**
    - The Phase 15 split remains important once contract convergence is stronger.
 
-8. **Harness semantic model is still incomplete**
+7. **Harness semantic model is still incomplete**
    - The harness now consumes dependency-aware status in at least one progress
      path, but it lacks persisted output-cell identity and structured root-cause
      reporting.
@@ -336,7 +328,7 @@ convergence and later harness/reporting phases.
 
 | Phase | Current Grade | Honest Status |
 |---|---:|---|
-| Ph 0 Guardrails | B | Source audit, forbidden-import guardrails, broad CI smoke gates, and source-audit inventory are wired; historical failure artifact links remain incomplete. |
+| Ph 0 Guardrails | A | Source audit, forbidden-import guardrails, broad CI smoke gates, source-audit inventory, and historical failure artifact links are wired. |
 | Ph 1 Core contracts | A | Types exist, output desired-state, job status, and active/recent egress lifecycle state are typed; string conversion is now kept at DB/API edges. |
 | Ph 2 Config | A | Production env parsing is centralized in config, startup logs a comprehensive redacted effective-config summary, and runtime media paths receive typed config for recording remux, HLS stores, file-ingest backend selection, AVIO queues, rings, SRT TS chunk rings, and external FFmpeg capacity reporting. |
 | Ph 3 API split | A | Route module split is complete. |

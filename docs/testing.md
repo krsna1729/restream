@@ -105,6 +105,12 @@ on ad-hoc local artifacts. Tests, benches, and harness publishers should resolve
 those assets through `src/test_fixtures.rs` so missing files fail loudly and new
 fixtures are added to one explicit contract.
 
+Historical architecture-regression artifacts are indexed in
+[`regression-artifacts.md`](regression-artifacts.md). The index maps each known
+failure class to its durable fixture, harness replay command, generated-artifact
+location, or proof gate; generated `test/artifacts/` run directories remain
+uncommitted.
+
 ## Parallelism Policy
 
 Keep correctness throughput high, but treat measurement fidelity as a separate

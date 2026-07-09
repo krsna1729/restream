@@ -15,6 +15,7 @@ pub mod file_ingest;
 pub mod h264_transcoder;
 pub mod hls;
 pub mod hls_fmp4;
+pub mod hls_preview_runtime;
 pub mod hls_upload;
 pub mod mpegts;
 pub mod pipe_metrics;

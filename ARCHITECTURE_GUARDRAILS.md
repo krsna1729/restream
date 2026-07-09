@@ -24,6 +24,13 @@ The audit enforces:
 The script also writes `target/source-audit.json` with line counts, route-module
 count, repository-module count, feature-cfg count, and forbidden-import counts.
 
+## Regression Artifacts
+
+Historical failure classes that drove the architecture phases are indexed in
+[`docs/regression-artifacts.md`](docs/regression-artifacts.md). The index links
+each failure class to a checked-in fixture, harness mode, proof gate, or
+documented generated-artifact location.
+
 ## Related Gates
 
 - API boundary changes: `./scripts/check-api-contract.sh`
