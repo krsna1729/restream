@@ -14,7 +14,7 @@ use crate::application::ingest::{
     remove_pipeline_file_ingest, resolve_file_ingest_context,
 };
 use crate::application::ports::{
-    IngestLookup, IngestWriter, SqliteIngestLookup, SqlitePipelineStore,
+    IngestLookup, IngestWriter, PipelineStore, SqliteIngestLookup, SqlitePipelineStore,
 };
 use crate::media::engine::MediaEngine;
 use crate::types::{Ingest, Pipeline};
@@ -49,14 +49,33 @@ pub enum FileIngestStartError {
 }
 
 pub struct FileIngestService {
-    db: SqlitePool,
+    ingest_lookup: Arc<dyn IngestLookup>,
+    ingest_writer: Arc<dyn IngestWriter>,
+    pipeline_store: Arc<dyn PipelineStore>,
     pipeline_service: PipelineService,
 }
 
 impl FileIngestService {
     pub fn new(db: SqlitePool, pipeline_service: PipelineService) -> Self {
+        let ingest_store = Arc::new(SqliteIngestLookup::new(db.clone()));
         Self {
-            db,
+            ingest_lookup: ingest_store.clone(),
+            ingest_writer: ingest_store,
+            pipeline_store: Arc::new(SqlitePipelineStore::new(db)),
+            pipeline_service,
+        }
+    }
+
+    pub fn with_ports(
+        ingest_lookup: Arc<dyn IngestLookup>,
+        ingest_writer: Arc<dyn IngestWriter>,
+        pipeline_store: Arc<dyn PipelineStore>,
+        pipeline_service: PipelineService,
+    ) -> Self {
+        Self {
+            ingest_lookup,
+            ingest_writer,
+            pipeline_store,
             pipeline_service,
         }
     }
@@ -164,20 +183,16 @@ impl FileIngestService {
         engine: &Arc<MediaEngine>,
         pipeline: &Pipeline,
     ) -> ApiResult<PipelineFileIngestState> {
-        let ingest_store = SqliteIngestLookup::new(self.db.clone());
-        load_pipeline_file_ingest_state(&ingest_store, engine, pipeline)
+        load_pipeline_file_ingest_state(self.ingest_lookup.as_ref(), engine, pipeline)
             .await
             .map_err(|_| ApiError::internal("load pipeline file ingest state"))
     }
 
     pub async fn delete_ingest_with_runtime_cleanup(&self, engine: &Arc<MediaEngine>, id: &str) {
-        let ingest_store = SqliteIngestLookup::new(self.db.clone());
-        let pipeline_store = SqlitePipelineStore::new(self.db.clone());
-
-        if let Ok(Some(ingest)) = ingest_store.get_ingest(id).await {
+        if let Ok(Some(ingest)) = self.ingest_lookup.get_ingest(id).await {
             let _ = clear_stream_key_file_ingests(
-                &pipeline_store,
-                &ingest_store,
+                self.pipeline_store.as_ref(),
+                self.ingest_lookup.as_ref(),
                 engine,
                 &ingest.stream_key,
             )
@@ -185,7 +200,7 @@ impl FileIngestService {
         }
         let _ = engine.stop_file_ingest_child(id).await;
         engine.clear_file_ingest_running(id).await;
-        let _ = ingest_store.delete_ingest(id).await;
+        let _ = self.ingest_writer.delete_ingest(id).await;
     }
 
     pub async fn stop_ingest_with_runtime_cleanup(
@@ -193,17 +208,21 @@ impl FileIngestService {
         engine: &Arc<MediaEngine>,
         id: &str,
     ) -> ApiResult<Ingest> {
-        let ingest_store = SqliteIngestLookup::new(self.db.clone());
-        let pipeline_store = SqlitePipelineStore::new(self.db.clone());
-        let ingest = ingest_store
+        let ingest = self
+            .ingest_lookup
             .get_ingest(id)
             .await
             .map_err(|err| ApiError::internal(format!("get ingest: {err}")))?
             .ok_or_else(|| ApiError::not_found("Ingest not found"))?;
 
-        clear_stream_key_file_ingests(&pipeline_store, &ingest_store, engine, &ingest.stream_key)
-            .await
-            .map_err(|err| ApiError::internal(format!("clear file ingest state: {err:?}")))?;
+        clear_stream_key_file_ingests(
+            self.pipeline_store.as_ref(),
+            self.ingest_lookup.as_ref(),
+            engine,
+            &ingest.stream_key,
+        )
+        .await
+        .map_err(|err| ApiError::internal(format!("clear file ingest state: {err:?}")))?;
 
         let _ = engine.stop_file_ingest_child(id).await;
         engine.clear_file_ingest_running(id).await;
@@ -218,8 +237,8 @@ impl FileIngestService {
         id: &str,
     ) -> Result<Ingest, FileIngestStartError> {
         let resolved = match resolve_file_ingest_context(
-            &SqliteIngestLookup::new(self.db.clone()),
-            &SqlitePipelineStore::new(self.db.clone()),
+            self.ingest_lookup.as_ref(),
+            self.pipeline_store.as_ref(),
             id,
         )
         .await
@@ -545,15 +564,12 @@ impl FileIngestService {
         previous_stream_key: Option<&str>,
         payload: Option<Option<FileIngestConfigInput>>,
     ) -> ApiResult<PipelineFileIngestState> {
-        let ingest_store = SqliteIngestLookup::new(self.db.clone());
-        let pipeline_store = SqlitePipelineStore::new(self.db.clone());
-
         if let Some(previous_stream_key) =
             previous_stream_key.filter(|previous| *previous != pipeline.stream_key.as_str())
         {
             clear_stream_key_file_ingests(
-                &pipeline_store,
-                &ingest_store,
+                self.pipeline_store.as_ref(),
+                self.ingest_lookup.as_ref(),
                 engine,
                 previous_stream_key,
             )
@@ -563,8 +579,8 @@ impl FileIngestService {
 
         if let Some(payload) = payload {
             clear_stream_key_file_ingests(
-                &pipeline_store,
-                &ingest_store,
+                self.pipeline_store.as_ref(),
+                self.ingest_lookup.as_ref(),
                 engine,
                 &pipeline.stream_key,
             )
@@ -574,9 +590,9 @@ impl FileIngestService {
             match payload {
                 Some(input) => {
                     let _ = persist_pipeline_file_ingest(
-                        &ingest_store,
-                        &ingest_store,
-                        &pipeline_store,
+                        self.ingest_lookup.as_ref(),
+                        self.ingest_writer.as_ref(),
+                        self.pipeline_store.as_ref(),
                         pipeline,
                         &FileIngestConfig {
                             filename: input.filename,
@@ -600,9 +616,9 @@ impl FileIngestService {
                 }
                 None => {
                     remove_pipeline_file_ingest(
-                        &ingest_store,
-                        &ingest_store,
-                        &pipeline_store,
+                        self.ingest_lookup.as_ref(),
+                        self.ingest_writer.as_ref(),
+                        self.pipeline_store.as_ref(),
                         pipeline,
                     )
                     .await
