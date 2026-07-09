@@ -9876,7 +9876,7 @@ stream|index=1|codec_type=audio\n";
             .iter()
             .map(|batch| {
                 (
-                    MixedSharedBatchGroup::from_str(&batch.group).unwrap(),
+                    MixedSharedBatchGroup::from_str(batch.group).unwrap(),
                     batch
                         .cases
                         .iter()

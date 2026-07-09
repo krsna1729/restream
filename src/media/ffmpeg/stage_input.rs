@@ -42,28 +42,6 @@ pub struct StageInputPump {
     engine_refresh: Option<(Arc<MediaEngine>, String)>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn codec_hint_reports_ring_hint_without_exposing_ring() {
-        let ring = Arc::new(RingBuffer::new(8));
-        ring.set_codec_hint("hevc");
-        let pump = StageInputPump::new(
-            "test-pump".to_string(),
-            ring,
-            0,
-            None,
-            &[],
-            true,
-            Arc::new(StageMetrics::new()),
-        );
-
-        assert_eq!(pump.codec_hint(), "hevc");
-    }
-}
-
 pub trait StageByteSink {
     fn write_ts(
         &mut self,
@@ -223,5 +201,27 @@ impl StageInputPump {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codec_hint_reports_ring_hint_without_exposing_ring() {
+        let ring = Arc::new(RingBuffer::new(8));
+        ring.set_codec_hint("hevc");
+        let pump = StageInputPump::new(
+            "test-pump".to_string(),
+            ring,
+            0,
+            None,
+            &[],
+            true,
+            Arc::new(StageMetrics::new()),
+        );
+
+        assert_eq!(pump.codec_hint(), "hevc");
     }
 }

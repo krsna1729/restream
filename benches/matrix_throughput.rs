@@ -2,6 +2,7 @@ use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_mai
 use restream::domain::stage::{StageKey, StageKind};
 use restream::media::codec::{audio_for_ts, video_for_ts};
 use restream::media::engine::{AudioMeta, MediaEngine, VideoMeta};
+use restream::media::hls::HlsSegmenterStart;
 use restream::media::mpegts::TsMuxer;
 use restream::media::ring_buffer::{DtsEnforcer, MediaPacket, MediaType, Reader, RingBuffer};
 
@@ -204,10 +205,10 @@ async fn setup_matrix_path(
             .get_or_create_transcoder("pipe", stage_kind, source_ring.clone(), None)
             .await;
         let cancel = {
-            let buffers = engine.stages.buffers.read().await;
-            buffers
+            let runtimes = engine.stages.runtimes.read().await;
+            runtimes
                 .get(&StageKey::new("pipe", StageKind::video_preset("720p")))
-                .map(|(_, token)| token.clone())
+                .map(|runtime| runtime.cancel.clone())
                 .unwrap()
         };
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -304,7 +305,10 @@ async fn run_matrix_iteration(
             None,
             engine.clone(),
             cancel.clone(),
-            None,
+            HlsSegmenterStart {
+                video_meta_override: Some(video_meta.clone()),
+                planned_stage_key: None,
+            },
         ));
         tokio::time::sleep(Duration::from_millis(10)).await;
         Some((store, cancel, segmenter))
