@@ -1,232 +1,350 @@
 # Architecture Gap Analysis: Current Code vs. Ideal State
 
 > **Reference documents**: [arch.md](arch.md) · [impl.md](impl.md)
+>
+> Audit standard: this is a deep implementation audit, not a symbol-existence
+> checklist. A phase is marked complete only when the current code satisfies
+> the phase acceptance criteria and the stronger architectural intent in
+> `arch.md`.
 
 ---
 
 ## Executive Summary
 
-The codebase has completed end-to-end integration and wiring for **Phases 1–11** of the implementation plan.
-The core scaffolding (domain types, configuration injection, API routing split, application service layer, port/repository traits, graph planner, first-class stage lifecycles, and output status dependency tracking) has been fully resolved and wired. The system no longer leaks environment configuration reads at runtime, maintains strict boundary separation between media and API-level JSON schemas, and fully isolates database persistence through trait boundaries.
+The codebase has made substantial progress through Phases 1-12, and the most
+important Phase 12 alert gaps have now been closed: health exposes stage
+snapshots, output status carries `blockedBy`, alerts derive from causal fields,
+and `/api/v1/pipelines/:id/graph` exists.
 
-Phases 12–16 remain unresolved and represent the remaining work to reach the ideal state described in the reference architecture.
+However, **Phases 1-12 are not all truly complete in the ideal architecture
+sense**. Several phases have strong scaffolding but incomplete adoption:
+
+- typed contracts exist, but runtime/application code still stores and compares
+  raw string states in important paths;
+- configuration is centralized for startup/runtime config, but env parsing still
+  exists outside the central `AppConfig` path;
+- API route modules exist, but several handlers still call `db::*` directly;
+- application services exist, but most services still own `SqlitePool` and call
+  repositories directly rather than depending on port traits;
+- a graph planner exists and is used in some paths, but output preparation,
+  graph rendering, HLS preview, recording, diagnostics, agent preview, and
+  harness expectations are not all using one planner contract;
+- stage lifecycle and FFmpeg narrow-waist contracts exist, but some legacy
+  compatibility paths and direct ring writes remain;
+- recording metadata exists in the database, but the product/harness path still
+  depends partly on filename matching;
+- diagnostics remain below the Phase 12 target because the SSE endpoint does
+  not yet bundle graph plan, graph runtime state, backend stderr tail, recent
+  events, and relevant logs as first-class diagnostic context.
+
+Bottom line: **the codebase has not completed a full "Amit Singhal" pass for
+Phases 1-12**. The current honest state is: strong progress, several production
+features complete, but broad architectural convergence is still partial.
 
 ---
 
 ## Phase-by-Phase Status
 
 ### Phase 0 — Baseline & Guardrails
-| Task | Status |
-|------|--------|
-| Source inventory doc / CI | ❌ Not present (`scripts/source-audit.sh` absent) |
-| Smoke CI matrix | ❌ No evidence |
-| Forbidden-import CI check | ❌ No `ARCHITECTURE_GUARDRAILS.md` or CI check |
-| Regression fixture preservation | ❌ Not confirmed |
 
-**Verdict**: Phase 0 not started. The planned CI safety net does not exist.
+| Task | Status | Evidence |
+|---|---|---|
+| Source inventory doc / CI | ❌ Missing | No `scripts/source-audit.sh`; no generated architecture inventory found. |
+| Smoke CI matrix | ❌ Missing | No repo evidence for the `impl.md` smoke CI matrix. |
+| Forbidden-import CI check | ❌ Missing | No `ARCHITECTURE_GUARDRAILS.md`; no CI check for layer direction. |
+| Regression fixture preservation | ⚠️ Unconfirmed | Some docs mention fixture discipline, but the listed known failure artifacts are not linked as a guardrail set. |
 
----
-
-### Phase 1 — Core contracts (IDs, States, Errors)
-| Artifact | Status | Notes |
-|----------|--------|-------|
-| [`domain/ids.rs`](src/domain/ids.rs) | ✅ Complete | `PipelineId`, `OutputId`, `StageId`, `IngestId`, `RecordingId`, `JobId` — all with Display, From, AsRef, serde(transparent) and roundtrip tests |
-| [`domain/state.rs`](src/domain/state.rs) | ✅ Complete | `StagePhase`, `DesiredOutputState`, `EgressPhase`, `IngestPhase`, `RecordingPhase`, `JobStatus`, `HealthState` — all with as_str, From<&str>, Display, Default, and roundtrip tests |
-| [`domain/errors.rs`](src/domain/errors.rs) | ✅ Complete | `StageError { code, message, retryable, stderr_tail }`, `RuntimeError { code, message, entity, retryable }` |
-| `StageRuntimeSnapshot` | ✅ Complete | In [`runtime/stage.rs`](src/runtime/stage.rs) with `to_json()` and capacity fields |
-| `OutputRuntimeExplanation` | ✅ Complete | In [`runtime/output.rs`](src/runtime/output.rs) |
-| Typed IDs used internally | ✅ Complete | Typed `PipelineId` and `OutputId` are fully adopted in `StageGraphPlan` and `GraphRole`. |
-
-**Verdict**: Phase 1 types are fully integrated and wired through both the application services, planning layers, and runtime components.
+**Verdict**: Not started as a phase. Local checks are strong, but architectural
+drift is not enforced by CI.
 
 ---
 
-### Phase 2 — Centralized config
-| Artifact | Status | Notes |
-|----------|--------|-------|
-| [`config.rs`](src/config.rs) `AppConfig::from_env()` | ✅ Complete | Reads all major env vars at startup. |
-| `BackendPolicy` with per-stage flags | ✅ Complete | `internal_video_presets`, `internal_hevc_to_h264`, `internal_hls_preview`, `internal_complex_audio` |
-| `AppConfig` passed into runtime services | ✅ Complete | Placed into `StageRuntimeManager`, graph planner functions, and call sites. |
-| No media module calls `std::env::var` | ✅ Complete | No environment lookups occur at runtime; policy is constructor-injected from AppConfig. |
+### Phase 1 — Core Contracts
 
-**Verdict**: Phase 2 is fully resolved. Leaks of `BackendPolicy::from_env()` have been eradicated.
+| Artifact / criterion | Status | Evidence |
+|---|---|---|
+| Typed IDs | ✅ Present | `src/domain/ids.rs` defines `PipelineId`, `OutputId`, `StageId`, `IngestId`, `RecordingId`, `JobId`. |
+| Typed states | ✅ Present | `src/domain/state.rs` defines `DesiredOutputState`, `EgressPhase`, `StagePhase`, `IngestPhase`, `RecordingPhase`, `JobStatus`, `HealthState`. |
+| Runtime errors | ✅ Present | `src/domain/errors.rs` defines `StageError` and `RuntimeError`. |
+| `StageRuntimeSnapshot` | ✅ Present | `src/runtime/stage.rs`, including phase serialization and capacity fields. |
+| `OutputRuntimeExplanation` | ✅ Present | `src/runtime/output.rs` and API status wiring. |
+| No new code writes raw string states except at DB/API boundary | ❌ Not met | `ActiveEgress.status`, `ActiveEgress.phase`, `RecentEgressOutcome.status/raw_status/phase`, `types::Output.desired_state`, and `application/reconcile.rs` still use raw string states. |
 
----
-
-### Phase 3 — API split into route modules
-| Artifact | Status | Notes |
-|----------|--------|-------|
-| `api/mod.rs`, `api/router.rs`, `api/state.rs`, `api/auth.rs` | ✅ Complete | Decoupled API entry points |
-| `api/pipelines.rs`, `api/outputs.rs`, `api/ingests.rs` | ✅ Complete | Routing modules |
-| `api/file_ingest.rs`, `api/media_library.rs`, `api/hls.rs` | ✅ Complete | Secondary route handlers |
-| `api/health.rs`, `api/logs.rs`, `api/alerts.rs`, `api/settings.rs`, `api/agent.rs` | ✅ Complete | System status and coordination |
-
-**Verdict**: Phase 3 routing split remains clean and successfully verified.
+**Verdict**: **Partial**. Contracts exist and are useful, but adoption is not
+complete. The ideal contract boundary has not replaced string state in runtime
+and application logic.
 
 ---
 
-### Phase 4 — Application service layer
-| Service | Status | Notes |
-|---------|--------|-------|
-| [`PipelineService`](src/application/services/pipeline_service.rs) | ✅ Complete | Now decouples SQLite database via the `PipelineStore` port trait. |
-| [`OutputService`](src/application/services/output_service.rs) | ✅ Complete | Fully uses `DesiredOutputState` enum mappings instead of raw strings. |
+### Phase 2 — Centralized Config
 
-**Verdict**: Phase 4 is fully integrated. Services now interface cleanly with persistence abstractions.
+| Artifact / criterion | Status | Evidence |
+|---|---|---|
+| `AppConfig::from_env()` | ✅ Present | `src/config.rs` centralizes many runtime settings. |
+| Per-stage backend flags | ✅ Present | `BackendPolicy` has `internal_video_presets`, `internal_hevc_to_h264`, `internal_hls_preview`, `internal_complex_audio`. |
+| Runtime receives typed config | ✅ Mostly | `MediaEngine` carries config and graph planning uses `engine.config.backend_policy`. |
+| No env reads outside config/startup/test harness | ❌ Not met | `BackendPolicy::from_env()` parses env directly; `ServerPorts::from_env()` and `RuntimeTuning::from_env()` live in `lib.rs`; harness and MCP env reads are expected, but some production-adjacent parsing remains outside `src/config.rs`. |
+| Startup logs show effective config | ⚠️ Unclear | Not verified as a comprehensive config dump. |
 
----
-
-### Phase 5 — Repository modules
-| Artifact | Status | Notes |
-|----------|--------|-------|
-| `db/pipeline_repo.rs`, `db/output_repo.rs`, `db/ingest_repo.rs` | ✅ Complete | CRUD repositories |
-| Repository traits in `application::ports` | ✅ Complete | Trait `PipelineStore` holds complete contract; SQLite implementations are encapsulated. |
-| String states converted at repository boundary | ✅ Complete | `OutputService` request operations utilize typed enum constraints. |
-
-**Verdict**: Phase 5 is fully resolved. Pipeline Service dependencies are isolated behind port interfaces.
+**Verdict**: **Mostly complete for runtime behavior, partial for the ideal**.
+Env parsing has been consolidated significantly, but the “single central config
+module” criterion is not strictly met.
 
 ---
 
-### Phase 6 — Runtime graph plan as single planning model
-| Artifact | Status | Notes |
-|----------|--------|-------|
-| [`runtime/graph.rs`](src/runtime/graph.rs) | ✅ Complete | Uses typed IDs (`PipelineId`, `OutputId`). |
-| [`planner/graph_plan.rs`](src/planner/graph_plan.rs) | ✅ Complete | Pure graph planners compiled and unit tested. |
+### Phase 3 — API Split Into Route Modules
 
-**Verdict**: Phase 6 has been completed with correct type safety.
+| Artifact / criterion | Status | Evidence |
+|---|---|---|
+| Route modules exist | ✅ Complete | `src/api/{router,state,auth,pipelines,outputs,ingests,file_ingest,media_library,hls,health,logs,alerts,telemetry,settings,agent,static_assets}.rs`. |
+| `api.rs` thin or gone | ✅ Complete | `src/api/mod.rs` is the module index. |
+| Route behavior preserved | ✅ Tested | API tests cover health, graph, alerts, logs, pipelines, outputs, ingests, HLS, etc. |
 
----
-
-### Phase 7 — First-class stage lifecycle
-| Artifact | Status | Notes |
-|----------|--------|-------|
-| [`media/stage_lifecycle.rs`](src/media/stage_lifecycle.rs) — `StageLifecycle`, `StagePhase` | ✅ Complete | Wraps `domain::state::StagePhase`, has `transition()`, `record_first_input/output/producing/error()`, RAII guard |
-| [`media/stage_runtime.rs`](src/media/stage_runtime.rs) — `StageRuntimeManager` | ✅ Complete | Centralized `ensure_stage()` + `spawn_stage()` pattern |
-| `WaitingForCapacity` lifecycle event | ✅ Present | `external_transcoder.rs` transitions to it before semaphore acquire |
-| Cancellation-aware capacity wait | ✅ Present | `tokio::select!` on `semaphore.acquire()` and `cancel.cancelled()` |
-| `StageWaitingForCapacity` event emitted | ✅ Present | `events.rs` has the variant |
-| Stage wait time exposed in `StageRuntimeSnapshot` | ✅ Present | `capacity_wait_ms` field exists |
-| `StageRuntimeSnapshot` emitted to health/telemetry | ✅ Complete | Fully wired in `api_view_models.rs` and returned via API status/health endpoints. |
-| `StageRegistered` / `StageBackendSpawned` etc events | ✅ Present | All target event variants exist in `events.rs` |
-| Single `StageRuntimeManager` used for ALL stage creation | ✅ Complete | All legacy transcoder spawning functions (`start_transcoder`, `start_h264_transcoder`, and `start_external_transcoder_stage*`) have been deleted. |
-
-**Verdict**: Phase 7 lifecycle contracts and manager wiring are 100% complete and fully verified.
+**Verdict**: **Complete** for the phase scope.
 
 ---
 
-### Phase 8 — Dependency-aware output status
-| Artifact | Status | Notes |
-|----------|--------|-------|
-| [`runtime/output.rs`](src/runtime/output.rs) — `OutputRuntimeExplanation` | ✅ Created | `output_id`, `output_name`, `encoding`, `url`, `phase`, `terminal_stage`, `blocked_by` |
-| `OutputRuntimeExplanation` wired to API | ✅ Present | `api_runtime_views/status.rs:29-44` constructs it and sets `value["explanation"]` |
-| `terminal_stage` on egress registration | ✅ Present | `egress.terminal_stage_key` referenced at line 41 |
-| Common upstream-wait phases | ✅ `EgressPhase::WaitingUpstream` defined | |
-| `blocked_by` populated from engine snapshot | ✅ Present | `engine.egress_blocked_by_snapshot(egress)` called |
+### Phase 4 — Application Service Layer
 
-**Verdict**: Phase 8 contract types and API wiring are complete.
+| Criterion | Status | Evidence |
+|---|---|---|
+| Services exist | ✅ Present | `src/application/services/*` includes pipeline, output, ingest, file ingest, media library, settings, health, auth, logs. |
+| Handlers no longer call SQL directly | ❌ Not met | `api/agent.rs`, `api/logs.rs`, `api/auth.rs`, and other route code still call `db::*` directly. |
+| Handlers do not call low-level media constructors | ⚠️ Mostly | `api/hls.rs` delegates to `application::hls_preview`, but other API/runtime views still take `MediaEngine` directly for read models. |
+| Services testable without Axum request types | ✅ Mostly | Service structs do not depend on Axum types. |
 
----
-
-### Phase 9 — FFmpeg narrow waist
-| Artifact | Status | Notes |
-|----------|--------|-------|
-| [`media/ffmpeg/`](src/media/ffmpeg) directory | ✅ Exists | 8 files |
-| [`ffmpeg/backend.rs`](src/media/ffmpeg/backend.rs) — `FfmpegStageBackend` trait | ✅ Complete | `ExternalFfmpegBackend` + `InternalFfmpegBackend` both impl the trait |
-| [`ffmpeg/stage_plan.rs`](src/media/ffmpeg/stage_plan.rs) — `FfmpegStagePlan` | ✅ Present | |
-| [`ffmpeg/stage_input.rs`](src/media/ffmpeg/stage_input.rs) — `StageInputPump` | ✅ Present | |
-| [`ffmpeg/stage_output.rs`](src/media/ffmpeg/stage_output.rs) — `StageOutputNormalizer` | ✅ Present | |
-| [`ffmpeg/timeline.rs`](src/media/ffmpeg/timeline.rs) — `StageTimeline` | ✅ Present | With monotone DTS, loop-backward rebasing, forward discontinuity detection |
-| Internal backend uses same plan/input/output | ✅ Yes | `stage_runtime.rs` calls `InternalFfmpegBackend.run(plan, input_pump, output_normalizer, ctx)` |
-| External backend uses same plan/input/output | ✅ Yes | Same pattern for `ExternalFfmpegBackend` |
-| No backend writes directly to RingBuffer | ✅ Complete | `StageOutputNormalizer` is the sole gatekeeper for all transcoder packet writes. |
-
-**Verdict**: Phase 9 narrow-waist structure is 100% complete. Backend execution is fully symmetric and legacy transcoder paths have been completely deleted.
+**Verdict**: **Partial**. The service layer exists, but handlers are not yet
+thin adapters everywhere.
 
 ---
 
-### Phase 10 — HLS preview joins graph runtime
-| Artifact | Status | Notes |
-|----------|--------|-------|
-| `GraphRole::HlsPreview` | ✅ Present | |
-| `plan_hls_preview_graph()` | ✅ Present and tested | |
-| HLS preview creation through application service | ✅ Yes | `api/hls.rs` delegates to service layer. |
+### Phase 5 — Repository Modules and Persistence Cleanup
 
-**Verdict**: Phase 10 is 100% complete and fully verified by integration tests.
+| Criterion | Status | Evidence |
+|---|---|---|
+| `db/` repository modules exist | ✅ Complete | `db/{pipeline_repo,output_repo,ingest_repo,job_repo,session_repo,meta_repo,log_repo,recording_repo,schema,migrations}.rs`. |
+| `db.rs` is only module index / pool / schema helper | ✅ Mostly | `src/db/mod.rs` is thin and re-exports repositories. |
+| Application services depend on repository traits | ❌ Partial only | `PipelineService` depends on `PipelineStore`, but `OutputService`, `IngestService`, `HealthService`, `SettingsService`, `LogService`, and `AuthService` still hold `SqlitePool` and call `db::*`. |
+| String states converted at repository boundary | ⚠️ Partial | `recording_repo` maps `RecordingPhase`; `output_repo` still stores/returns `desired_state: String` in `types::Output`. |
 
----
-
-### Phase 11 — Recording lifecycle and metadata
-| Artifact | Status | Notes |
-|----------|--------|-------|
-| `RecordingPhase` & `RecordingId` | ✅ Complete | Integrated domain contract |
-| `recordings` database table | ✅ Complete | SQLite schema table created at startup |
-| `db/recording_repo.rs` | ✅ Complete | Fully implemented SQLite recording persistence with 100% unit test coverage |
-
-**Verdict**: Phase 11 is fully completed and wired into the database layer.
+**Verdict**: **Partial**. Repository files exist, but port isolation and typed
+state conversion are incomplete.
 
 ---
 
-### Phase 12 — Health, alerts, and diagnostics v2
-| Artifact | Status | Notes |
-|----------|--------|-------|
-| Stage snapshots in health | ⚠️ Partial | `StageRuntimeSnapshot.to_json()` exists |
-| Dependency chain in output status | ✅ Complete | `explanation.blocked_by` is wired |
-| Backend capacity metrics in health | ⚠️ Partial | Fields exist on snapshot |
-| `alerts.rs` derives from new causal fields | ❌ Unresolved | `alerts.rs` (28KB) needs audit |
-| `/api/v1/pipelines/:id/graph` endpoint | ❌ Unresolved | Not yet implemented |
+### Phase 6 — Runtime Graph Plan as Single Planning Model
 
-**Verdict**: Phase 12 is partially started; full causal alert derivation and graph endpoint remain open.
+| Criterion | Status | Evidence |
+|---|---|---|
+| `StageGraphPlan`, `GraphRole`, `StagePlan` | ✅ Present | `src/runtime/graph.rs`. |
+| Output graph planner | ✅ Present | `planner::graph_plan::plan_pipeline_graph()`. |
+| HLS preview planner | ✅ Present | `planner::graph_plan::plan_hls_preview_graph()` and `planner/hls_preview.rs`. |
+| HLS output and recording planned by same graph | ⚠️ Partial | `GraphRole::HlsOutput` and `Recording` exist, but output/HLS/recording execution is not all driven by one graph planner path. |
+| Diagnostics/harness use same planner | ❌ Not met | Graph API uses `api_runtime_views::graph` and `OutputPath` directly; harness uses `OutputPath` helper logic; diagnostics do not expose planner snapshots as first-class output. |
+| Stage-sharing tests compare against graph planner | ⚠️ Partial | Some planning tests exist, but harness expectations still duplicate output-path logic. |
+
+**Verdict**: **Partial**. There is a real planner, but it is not yet the single
+planning model across all consumers.
 
 ---
 
-### Phases 13–16 — Test harness v2, agent cleanup, large-file split, rollout
+### Phase 7 — First-Class Stage Lifecycle
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Stage lifecycle tracking | ✅ Present | `src/media/stage_lifecycle.rs` and lifecycle snapshots. |
+| Stage runtime manager | ✅ Present | `src/media/stage_runtime.rs` owns `ensure_stage()` / `spawn_stage()`. |
+| Capacity wait visible and cancellation-aware | ✅ Present | `external_transcoder.rs` transitions to `WaitingForCapacity` and waits with `tokio::select!`. |
+| Capacity metrics in snapshots | ✅ Present | `StageRuntimeSnapshot` includes total/available permits and wait duration. |
+| Stage events beyond `StageStarted` | ✅ Present | `events.rs` has `StageRegistered`, `StageWaitingForCapacity`, `StageBackendSpawned`, `StageFirstInput`, `StageFirstOutput`, `StageFailed`, `StageStopped`. |
+| Wrap current stage maps into a single `StageRuntime` map | ⚠️ Partial | Registries and `StageRuntimeManager` exist, but `MediaEngine` still owns separate buffers, metrics, queues, lifecycles, pipe metrics, and handles. |
+| Existing `StageStarted` semantics removed | ✅ Mostly | New event names exist; no `StageStarted` variant found. |
+
+**Verdict**: **Mostly complete, not ideal complete**. Lifecycle observability is
+real, but the runtime object model is still split across registries and engine
+state.
+
+---
+
+### Phase 8 — Dependency-Aware Output Status
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Terminal stage key on egress registration | ✅ Present | `ActiveEgress.terminal_stage_key`. |
+| `OutputRuntimeExplanation` in API status | ✅ Present | `api_runtime_views/status.rs` fills `value["explanation"]`. |
+| `blockedBy` stage snapshot | ✅ Present | `egress_runtime_json()` serializes `blockedBy` via `StageRuntimeSnapshot::to_json()`. |
+| Common upstream-wait phase | ✅ Present | `waitingUpstream` is used when egress waits on upstream readiness. |
+| Harness progress failures consume dependency status | ✅ Present | `src/bin/test_harness.rs` prints `terminalStage`, `blockedBy`, `blockedByPhase`, backend, waitMs, and lastError. |
+
+**Verdict**: **Largely complete**. This phase meets its main operator-facing
+goal. Remaining ideal work is to type the runtime egress phases internally
+instead of storing them as strings.
+
+---
+
+### Phase 9 — FFmpeg Narrow Waist
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Shared FFmpeg plan/backend/input/output/timeline modules | ✅ Present | `src/media/ffmpeg/{backend,stage_plan,stage_input,stage_output,timeline,operation,operation_compiler}.rs`. |
+| External backend uses shared contracts | ✅ Present | `run_external_ffmpeg_backend()` takes `FfmpegStagePlan`, `StageInputPump`, `StageOutputNormalizer`, `StageRunContext`. |
+| Internal backend uses shared trait | ✅ Present | `InternalFfmpegBackend` implements `FfmpegStageBackend`. |
+| Per-stage internal/backend policy | ✅ Present | `BackendPolicy` per stage family. |
+| No backend writes directly to `RingBuffer` | ❌ Not fully met | `StageOutputNormalizer::output_ring()` is still exposed as a compatibility helper; `transcoder.rs` obtains `output_ring` from it and legacy internal functions still push through an output buffer in places. |
+| Legacy compatibility paths gone | ⚠️ Partial | Comments in `external_transcoder.rs` say old `start_external_transcoder_stage*` functions are compatibility wrappers; `start_transcoder_inner` and `start_h264_transcoder_inner` still exist. |
+
+**Verdict**: **Mostly complete structurally, partial against the strict ideal**.
+The narrow-waist contracts are real, but escape hatches and legacy inner
+functions remain.
+
+---
+
+### Phase 10 — HLS Preview Joins Graph Runtime
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| `GraphRole::HlsPreview` | ✅ Present | `runtime/graph.rs`. |
+| HLS preview planning | ✅ Present | `planner::graph_plan::plan_hls_preview_graph()` and `planner::hls_preview::plan_hls_preview()`. |
+| API no longer directly creates preview ring/backend | ✅ Mostly | `api/hls.rs` delegates to `application::hls_preview::ensure_hls_preview()`. |
+| Runtime/application service owns preview orchestration | ✅ Present | `application/hls_preview.rs` plans preview and spawns fMP4 segmenter. |
+| Actual keys in health match spawned keys | ✅ Tested | Engine tests cover `active_hls_preview_stage_keys_*`. |
+| HLS blocked-stage cause surfaced | ✅ Tested | API test covers HLS playlist blocked-stage cause. |
+
+**Verdict**: **Largely complete**. Remaining architectural cleanup is that the
+application preview service still calls `MediaEngine::ensure_hls_preview_segmenter()`
+and spawns the segmenter directly rather than going through a fully isolated
+runtime graph service.
+
+---
+
+### Phase 11 — Recording Lifecycle and Metadata
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Recording ID and phase types | ✅ Present | `RecordingId`, `RecordingPhase`. |
+| Recording metadata table | ✅ Present | `db/schema.rs` creates `recordings`. |
+| Recording repository | ✅ Present | `db/recording_repo.rs` with create/update/list/delete tests. |
+| Runtime writes lifecycle metadata | ✅ Present | `media/recording.rs` builds service metadata and updates lifecycle state. |
+| Media API returns metadata including pipeline/status | ⚠️ Partial | Repository exists; media-library surfacing needs continued verification and is not fully described by one read model. |
+| Harness filters by pipeline/recording ID first | ⚠️ Partial | Harness rejects `.tmp.mp4`, but still has filename-token matching logic in `mixed_playback.rs`. |
+
+**Verdict**: **Mostly complete at persistence/runtime level, partial at product
+and harness consumption level**.
+
+---
+
+### Phase 12 — Health, Alerts, and Diagnostics v2
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Stage snapshots in health | ✅ Complete | `api_runtime_views/status.rs` uses `StageRuntimeSnapshot::to_json()`. |
+| Dependency chain in output status | ✅ Complete | `blockedBy`, `terminalStage`, and `explanation` are present. |
+| Backend capacity metrics in health | ✅ Complete | `capacityPermitsTotal`, `capacityPermitsAvailable`, `capacityWaitMs`. |
+| Ring reader lag | ✅ Complete | Health and graph expose reader `lagSlots`, overflow count, packet age. |
+| Keyframe wait information | ⚠️ Partial | Stage phases include `waitingForKeyframe`; HLS/preview alerts now derive from it. Broader source GOP/keyframe diagnostic context lives separately. |
+| Alerts derive from causal fields | ✅ Complete for listed tasks | `alerts.rs` covers output blocked by stage, capacity wait, input/no-output, preview keyframe wait, SRT drops, and ring lag, with recommended actions. |
+| `/api/v1/pipelines/:id/graph` endpoint | ✅ Present | `api/pipelines.rs::pipeline_graph_handler` and `api_runtime_views::processing_graph()`. |
+| Graph endpoint shows desired and runtime graph | ⚠️ Partial | It renders a runtime-oriented processing graph; it does not clearly expose a separate desired graph plan and runtime graph state pair. |
+| Diagnostics endpoint includes graph plan/runtime/stderr/events/logs | ❌ Not met | Diagnostics SSE runs checks; graph, events, logs, and stderr tail are available elsewhere, but not bundled as the Phase 12 diagnostic context. |
+
+**Verdict**: **Mostly complete for health and alerts; partial for diagnostics**.
+The alertable health goal is now substantially met, but the diagnostics v2
+contract remains unfinished.
+
+---
+
+## Phases 13-16 Snapshot
+
 | Phase | Status | Notes |
-|-------|--------|-------|
-| Phase 13 — Harness v2 semantic model | ❌ Unresolved | `HarnessOutputCell`, `HarnessOutputRegistry` not found in `src/bin/` |
-| Phase 14 — Agent/MCP cleanup | ❌ Unresolved | Agent modules exist but connection to new service contracts is unconfirmed |
-| Phase 15 — Large-file split | ❌ Unresolved | `engine.rs` (233KB!), `external_transcoder.rs` (127KB), `rtmp.rs` (143KB), `srt.rs` (176KB), `mpegts.rs` (134KB), `test_harness.rs` not yet split |
-| Phase 16 — Rollout policy | ❌ Unresolved | Not started |
+|---|---|---|
+| Phase 13 — Harness v2 reporting | ❌ Not complete | Harness prints some dependency-chain fields, but `HarnessOutputCell`, `HarnessOutputRegistry`, root-cause summary, schema-versioned artifact index, and `outputs.json` contract are not present. |
+| Phase 14 — Agent/MCP cleanup | ❌ Not complete | Agent HTTP routes still call `db::*` directly and duplicate DTO boundaries; agent graph preview uses `OutputPath` and API runtime views, not one shared application read-model/planner layer. |
+| Phase 15 — Large-file split | ❌ Not complete | Major files remain large: `test_harness.rs` ~10k lines, `engine.rs` ~6.4k, `srt.rs` ~4.6k, `mpegts.rs` ~4.0k, `rtmp.rs` ~3.6k, `external_transcoder.rs` ~2.8k. |
+| Phase 16 — Rollout policy | ❌ Not complete | Not audited as implemented; internal backend remains policy-gated and parity work is ongoing. |
 
 ---
 
-## Critical Remaining Gaps (Priority Order)
+## Critical Remaining Gaps
 
-### 🔴 P0 — Operational correctness blockers
-*None. All previously identified P0 correctness blockers (BackendPolicy env leaks, cross-layer view model imports, string state literals, and typed ID propagation in StageGraphPlan) have been resolved.*
+### P0 — Highest-Value Architectural Correctness
 
-### 🟠 P1 — Architecture gaps
+1. **Diagnostics v2 is not complete**
+   - The code has health, graph, events, logs, and alerts separately, but the
+     diagnostics endpoint does not yet produce the `impl.md` bundle: graph plan,
+     graph runtime state, backend stderr tail, recent events, and relevant logs.
 
-1. **Phase 0 CI guardrails completely absent**
-   - Gap: No `scripts/source-audit.sh`, no forbidden-import CI checks, and no route snapshot tests are present.
+2. **Single graph planner is not yet the one source of truth**
+   - Output preparation uses the planner, but graph rendering, harness expected
+     stage generation, recording, diagnostics, agent impact previews, and HLS
+     output are not all unified behind one `StageGraphPlan` contract.
 
-### 🟡 P2 — Technical debt
+3. **String runtime state remains in core logic**
+   - `ActiveEgress`, `RecentEgressOutcome`, `types::Output`, and reconcile logic
+     still use raw strings for statuses/phases. This violates the Phase 1
+     acceptance criterion and keeps schema drift risk alive.
 
-2. **Large files not yet split** (Phase 15):
-   - `engine.rs`: 6343 lines / 233KB
-   - `srt.rs`: 176KB
-   - `rtmp.rs`: 143KB
-   - `external_transcoder.rs`: 127KB
-   - `mpegts.rs`: 134KB
+### P1 — Layering and Ownership
 
-3. **Test harness still monolithic** (Phase 13 not started)
-   - `src/bin/test_harness.rs` is a large god-file; `HarnessOutputCell`/`HarnessOutputRegistry` abstractions do not exist.
+4. **API/service/repository boundary remains mixed**
+   - Route modules exist, but `api/agent.rs`, `api/logs.rs`, `api/auth.rs`, and
+     several services still call `db::*` directly. Only `PipelineService` is
+     clearly port-trait backed.
+
+5. **FFmpeg narrow waist still has compatibility escape hatches**
+   - `StageOutputNormalizer::output_ring()` and legacy inner functions mean the
+     “all backend writes through normalizer” rule is not fully sealed.
+
+6. **HLS preview is no longer an API one-off, but still not a pure graph service**
+   - `application::hls_preview` owns orchestration, but it directly calls
+     `MediaEngine` segmenter methods and spawns the segmenter task.
+
+### P2 — Guardrails and Large-File Debt
+
+7. **No architecture drift CI**
+   - No source audit script, route inventory, forbidden import check, or file
+     growth guard exists.
+
+8. **Large files still dominate reasoning cost**
+   - The Phase 15 split remains important once contract convergence is stronger.
+
+9. **Harness semantic model is still incomplete**
+   - The harness now consumes dependency-aware status in at least one progress
+     path, but it lacks persisted output-cell identity and structured root-cause
+     reporting.
 
 ---
 
 ## Summary Scorecard
 
-| Phase | Files/Types | Runtime Wiring | Tests | Grade |
-|-------|-------------|---------------|-------|-------|
-| Ph 0 Guardrails | ❌ | ❌ | ❌ | F |
-| Ph 1 Contracts | ✅ | ✅ | ✅ | A |
-| Ph 2 Config | ✅ | ✅ | ✅ | A |
-| Ph 3 API split | ✅ | ✅ | ✅ | A |
-| Ph 4 App services | ✅ | ✅ | ✅ | A |
-| Ph 5 Repositories | ✅ | ✅ | ✅ | A |
-| Ph 6 Graph planner | ✅ | ✅ | ✅ | A |
-| Ph 7 Stage lifecycle | ✅ | ✅ | ✅ | A |
-| Ph 8 Dep-aware status | ✅ | ✅ | ✅ | A |
-| Ph 9 FFmpeg waist | ✅ | ✅ | ✅ | A |
-| Ph 10 HLS preview | ✅ | ✅ | ✅ | A |
-| Ph 11 Recording | ✅ | ✅ | ✅ | A |
-| Ph 12 Health v2 | ⚠️ | ⚠️ | — | C |
-| Ph 13–16 | ❌ | ❌ | — | F |
+| Phase | Current Grade | Honest Status |
+|---|---:|---|
+| Ph 0 Guardrails | F | Not started. |
+| Ph 1 Core contracts | B- | Types exist; adoption incomplete. |
+| Ph 2 Config | B | Mostly centralized; env parsing still split. |
+| Ph 3 API split | A | Route module split is complete. |
+| Ph 4 App services | C+ | Services exist; handlers still contain direct DB/application work. |
+| Ph 5 Repositories | C+ | Repo modules exist; port isolation partial. |
+| Ph 6 Graph planner | C+ | Planner exists; not single source for all roles. |
+| Ph 7 Stage lifecycle | B+ | Lifecycle/capacity visibility strong; runtime object model still split. |
+| Ph 8 Dependency-aware status | A- | Operator-facing dependency status is largely complete. |
+| Ph 9 FFmpeg waist | B | Shared contracts strong; direct-write/compatibility paths remain. |
+| Ph 10 HLS preview | A- | API one-off removed; runtime service boundary still not ideal. |
+| Ph 11 Recording metadata | B | Metadata exists; consumption/harness still partly filename-based. |
+| Ph 12 Health/alerts/diagnostics | B | Health/alerts mostly complete; diagnostics v2 partial. |
+| Ph 13 Harness v2 | D | Some dependency fields printed; semantic model missing. |
+| Ph 14 Agent/MCP cleanup | D | Agent still crosses DB/API/runtime boundaries. |
+| Ph 15 Large-file split | F | Not done. |
+| Ph 16 Rollout policy | F | Not done. |
+
+---
+
+## Answer to “Did We Truly Finish Phases 1-12?”
+
+No. We finished several important implementation slices, and Phases 3, 8, 10,
+and the health/alerts portion of Phase 12 are in good shape. But a full,
+architecture-grade pass across Phases 1-12 is not complete.
+
+The main reason is not missing Rust structs. It is incomplete convergence:
+older string-state, direct DB, direct media-engine, duplicated planning, and
+compatibility backend paths still coexist with the new contracts. The next
+highest-value work is to seal those seams rather than add more surface area.
