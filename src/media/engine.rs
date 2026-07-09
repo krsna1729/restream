@@ -891,6 +891,7 @@ impl MediaEngine {
         // one so migrating readers pick up exactly where they left off.
         let old_write_idx = old_rb.get_write_idx();
         let new_rb = Arc::new(RingBuffer::new_continuing(needed, old_write_idx));
+        let seeded_packets = new_rb.seed_readable_tail_from(&old_rb);
         new_rb.set_estimated_pkt_rate(pkt_rate);
         if let Some(hint) = old_rb.codec_hint.get() {
             new_rb.set_codec_hint(hint);
@@ -921,6 +922,7 @@ impl MediaEngine {
             video_fps = format!("{video_fps:.0}"),
             audio_track_count,
             new_capacity = needed,
+            seeded_packets,
             headroom_secs = format!("{:.1}", needed as f64 / pkt_rate),
             "adaptive ring resize: readers migrate in-place, no egress reconnect"
         );

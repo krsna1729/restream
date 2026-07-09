@@ -331,6 +331,48 @@ impl RingBuffer {
         ring
     }
 
+    /// Seed this continuing ring with the readable tail from `old_ring`.
+    ///
+    /// Adaptive resizing keeps the global write-index timeline intact so active
+    /// readers can migrate without gaps. Late readers created after the resize
+    /// also need a real preroll window; otherwise `fast_forward()` has no
+    /// keyframe to target and starts them at the live edge. This copies only the
+    /// still-readable tail (`capacity - 1` packets) into the matching indices of
+    /// the grown ring without advancing the write cursor.
+    pub fn seed_readable_tail_from(&self, old_ring: &RingBuffer) -> usize {
+        let old_write_idx = old_ring.get_write_idx();
+        let tail_capacity = self
+            .capacity
+            .saturating_sub(1)
+            .min(old_ring.capacity.saturating_sub(1));
+        let start_idx = old_write_idx.saturating_sub(tail_capacity);
+        let mut copied = 0usize;
+        let mut last_keyframe_idx = usize::MAX;
+
+        for idx in start_idx..old_write_idx {
+            let Some(packet) = old_ring.read_at(idx) else {
+                continue;
+            };
+            let slot_idx = idx % self.capacity;
+            self.slots[slot_idx]
+                .published_at_us
+                .store(self.elapsed_us().max(1), Ordering::Release);
+            self.slots[slot_idx].data.store(Some(packet.clone()));
+            if packet.media_type == MediaType::Video && packet.is_keyframe {
+                last_keyframe_idx = idx;
+            }
+            copied += 1;
+        }
+
+        if last_keyframe_idx != usize::MAX {
+            self.last_keyframe_idx
+                .val
+                .store(last_keyframe_idx, Ordering::Release);
+        }
+        self.write_idx.val.store(old_write_idx, Ordering::Release);
+        copied
+    }
+
     /// Forward all waiting readers to `new_ring` and mark this ring as superseded.
     ///
     /// After this call, `self` receives no new data (the caller must redirect the
@@ -646,6 +688,7 @@ pub struct Reader {
     buffer: Arc<RingBuffer>,
     pub info: Arc<ReaderInfo>,
     read_idx: usize,
+    migration_preroll_packets: usize,
 }
 
 impl Drop for Reader {
@@ -673,7 +716,12 @@ impl Drop for Reader {
 }
 
 impl Reader {
-    fn register(name: String, buffer: Arc<RingBuffer>, start_idx: usize) -> Self {
+    fn register(
+        name: String,
+        buffer: Arc<RingBuffer>,
+        start_idx: usize,
+        migration_preroll_packets: usize,
+    ) -> Self {
         let info = Arc::new(ReaderInfo::new(name.clone(), start_idx));
 
         {
@@ -685,6 +733,7 @@ impl Reader {
             buffer,
             info,
             read_idx: start_idx,
+            migration_preroll_packets,
         }
     }
 
@@ -697,7 +746,7 @@ impl Reader {
     pub fn new(name: String, buffer: Arc<RingBuffer>) -> Self {
         let current_write = buffer.get_write_idx();
         let start_idx = buffer.fast_forward(current_write);
-        let reader = Self::register(name, buffer, start_idx);
+        let reader = Self::register(name, buffer, start_idx, 0);
         info!(reader = %reader.info.name, start_idx, "ring reader registered");
         reader
     }
@@ -717,7 +766,7 @@ impl Reader {
         } else {
             keyframe_start
         };
-        let reader = Self::register(name, buffer, start_idx);
+        let reader = Self::register(name, buffer, start_idx, 0);
         info!(
             reader = %reader.info.name,
             start_idx,
@@ -727,9 +776,34 @@ impl Reader {
         reader
     }
 
+    pub(crate) fn new_stage_input(
+        name: String,
+        buffer: Arc<RingBuffer>,
+        preroll_packets: usize,
+    ) -> Self {
+        let current_write = buffer.get_write_idx();
+        let keyframe_start = buffer.fast_forward(current_write);
+        let oldest_available = current_write.saturating_sub(buffer.capacity.saturating_sub(1));
+        let start_idx = if keyframe_start < current_write {
+            keyframe_start
+                .saturating_sub(preroll_packets)
+                .max(oldest_available)
+        } else {
+            keyframe_start
+        };
+        let reader = Self::register(name, buffer, start_idx, preroll_packets);
+        info!(
+            reader = %reader.info.name,
+            start_idx,
+            preroll_packets,
+            "ring reader registered (stage input)"
+        );
+        reader
+    }
+
     pub fn new_live(name: String, buffer: Arc<RingBuffer>) -> Self {
         let current_write = buffer.get_write_idx();
-        let reader = Self::register(name, buffer, current_write);
+        let reader = Self::register(name, buffer, current_write, 0);
         info!(reader = %reader.info.name, start_idx = current_write, "ring reader registered (live edge)");
         reader
     }
@@ -864,6 +938,7 @@ impl Reader {
 
     /// Migrate this reader to `new_ring`, carrying `read_idx` forward.
     fn migrate_to(&mut self, new_ring: Arc<RingBuffer>) {
+        let old_read_idx = self.read_idx;
         // Drain any final unread slots in the old ring before switching.
         // In practice the old ring is sealed only after write_idx stabilises,
         // so lag is 0 or very small.
@@ -873,6 +948,18 @@ impl Reader {
         // Re-register reader with new ring so active_reader_count() is accurate.
         if let Ok(mut guard) = new_ring.readers.lock() {
             guard.push(Arc::downgrade(&self.info));
+        }
+        let new_write_idx = new_ring.get_write_idx();
+        if self.migration_preroll_packets > 0 && old_read_idx == new_write_idx {
+            let keyframe_start = new_ring.fast_forward(new_write_idx);
+            if keyframe_start < new_write_idx {
+                let oldest_available =
+                    new_write_idx.saturating_sub(new_ring.capacity.saturating_sub(1));
+                self.read_idx = keyframe_start
+                    .saturating_sub(self.migration_preroll_packets)
+                    .max(oldest_available);
+                self.info.read_idx.store(self.read_idx, Ordering::Relaxed);
+            }
         }
         // Remove from old ring's reader list (best-effort; Weak will expire anyway).
         if let Ok(mut guard) = old.readers.lock() {
@@ -1072,6 +1159,7 @@ mod tests {
             buffer: rb.clone(),
             info,
             read_idx: 0,
+            migration_preroll_packets: 0,
         };
 
         // Push 20 packets with a keyframe at index 15
@@ -1884,6 +1972,66 @@ mod tests {
             Arc::as_ptr(&reader.buffer),
             Arc::as_ptr(&new_ring),
             "reader migrated to new ring"
+        );
+    }
+
+    #[test]
+    fn continuing_ring_seed_preserves_late_reader_keyframe_preroll() {
+        let old_ring = Arc::new(RingBuffer::new(16));
+        for i in 0i64..10 {
+            old_ring.push(video_packet(i * 33, i * 33, i == 0 || i == 6));
+        }
+
+        let old_write_idx = old_ring.get_write_idx();
+        let new_ring = Arc::new(RingBuffer::new_continuing(64, old_write_idx));
+        let copied = new_ring.seed_readable_tail_from(&old_ring);
+
+        assert_eq!(copied, 10);
+        assert_eq!(new_ring.get_write_idx(), old_write_idx);
+        assert_eq!(new_ring.fast_forward(old_write_idx), 6);
+
+        let mut late_reader =
+            Reader::new_with_keyframe_preroll("late_scaled_stage".to_string(), new_ring, 2);
+        let first = late_reader.pull().unwrap().unwrap();
+        assert_eq!(
+            first.pts,
+            4 * 33,
+            "preroll starts before the copied keyframe"
+        );
+
+        let mut output = vec![first];
+        assert_eq!(late_reader.pull_burst(&mut output, 32).unwrap(), 5);
+        assert!(
+            output
+                .iter()
+                .any(|packet| packet.media_type == MediaType::Video && packet.is_keyframe),
+            "late reader must receive the copied startup keyframe"
+        );
+    }
+
+    #[tokio::test]
+    async fn stage_input_reader_rewinds_to_seeded_keyframe_after_resize_migration() {
+        let old_ring = Arc::new(RingBuffer::new(16));
+        for i in 0i64..10 {
+            old_ring.push(video_packet(i * 33, i * 33, i == 0 || i == 6));
+        }
+
+        let old_write_idx = old_ring.get_write_idx();
+        let mut reader =
+            Reader::new_stage_input("pre_resize_stage".to_string(), old_ring.clone(), 2);
+        reader.read_idx = old_write_idx;
+        reader.info.read_idx.store(old_write_idx, Ordering::Relaxed);
+
+        let new_ring = Arc::new(RingBuffer::new_continuing(64, old_write_idx));
+        new_ring.seed_readable_tail_from(&old_ring);
+        old_ring.seal_and_forward(new_ring);
+
+        reader.wait_for_data().await;
+        let first = reader.pull().unwrap().unwrap();
+        assert_eq!(
+            first.pts,
+            4 * 33,
+            "stage reader should rewind into seeded keyframe preroll after resize"
         );
     }
 }

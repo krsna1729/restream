@@ -695,6 +695,90 @@ fn rtmp_shaped_h264_packets_drive_source_stage() {
 }
 
 #[test]
+fn prebuffered_h264_packets_drive_internal_scaled_stage() {
+    configure_ffmpeg_test_logging();
+    let _ = tracing_subscriber::fmt::try_init();
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    rt.block_on(async {
+        let engine = Arc::new(MediaEngine::new());
+        let source = engine.get_or_create_pipeline("prebuffered-h264").await;
+        let policy = restream::planner::backend_policy::BackendPolicy {
+            internal_video_presets: true,
+            ..restream::planner::backend_policy::BackendPolicy::default()
+        };
+        let manager = restream::media::stage_runtime::StageRuntimeManager::with_policy(
+            engine.clone(),
+            policy,
+        );
+        let stage_key = StageKey::new("prebuffered-h264", StageKind::video_preset("720p"));
+        let (handle, is_new) = manager
+            .ensure_stage(stage_key.clone(), source.clone(), None)
+            .await;
+        assert!(is_new);
+        let output = handle.ring.clone();
+        let cancel = handle.cancel.clone();
+
+        engine
+            .try_register_ingest("prebuffered-h264", "stream-key", "srt")
+            .await
+            .unwrap();
+
+        let (video, audio_tracks, mut packets) = load_primary_transport_packets("h264");
+        engine
+            .update_ingest_meta(
+                "prebuffered-h264",
+                Some(video),
+                audio_tracks.first().cloned(),
+                None,
+            )
+            .await;
+        engine
+            .update_ingest_audio_tracks("prebuffered-h264", audio_tracks.clone())
+            .await;
+        source.set_codec_hint("h264");
+        source.set_audio_tracks(audio_tracks);
+        if let Some(parameter_sets) = packets.iter().find_map(|packet| {
+            if packet.media_type != MediaType::Video {
+                return None;
+            }
+            let header = restream::media::codec::build_avcc_sequence_header(&packet.payload)?;
+            let (_, parameter_sets) = restream::media::codec::parse_avcc_config(&header[5..]);
+            (!parameter_sets.is_empty()).then_some(parameter_sets)
+        }) {
+            source.set_video_parameter_sets(parameter_sets);
+        }
+        assert!(
+            source.video_parameter_sets().is_some(),
+            "fixture should seed source ring H.264 parameter sets for a late-start scaled stage"
+        );
+        source.push_batch(packets.drain(..));
+
+        let mut reader = Reader::new("prebuffered_h264_internal_720p".to_string(), output.clone());
+        manager.spawn_stage(handle, source.clone(), None);
+
+        let packets = collect_packets_with_deadline(&mut reader, 20, Duration::from_secs(6)).await;
+
+        cancel.cancel();
+
+        let snapshot = manager.snapshot(&stage_key).await;
+        assert!(
+            packets
+                .iter()
+                .any(|packet| packet.media_type == MediaType::Video),
+            "expected prebuffered H.264 packets to drive the internal scaled stage; snapshot={snapshot:?}"
+        );
+        assert!(
+            matches!(
+                snapshot.map(|snapshot| snapshot.phase),
+                Some(restream::media::stage_lifecycle::StagePhase::FirstOutput)
+                    | Some(restream::media::stage_lifecycle::StagePhase::Producing)
+            ),
+            "internal scaled stage should leave backendSpawned after emitting output"
+        );
+    });
+}
+
+#[test]
 fn rtmp_shaped_hevc_packets_drive_h264_edge_stage() {
     configure_ffmpeg_test_logging();
     let _ = tracing_subscriber::fmt::try_init();

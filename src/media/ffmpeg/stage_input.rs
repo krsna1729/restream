@@ -60,7 +60,7 @@ impl StageInputPump {
         include_audio: bool,
         metrics: Arc<StageMetrics>,
     ) -> Self {
-        let reader = Reader::new_with_keyframe_preroll(name, ring, preroll_packets);
+        let reader = Reader::new_stage_input(name, ring, preroll_packets);
 
         let feeder = TsPacketFeeder::new(
             video_meta,

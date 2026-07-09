@@ -171,6 +171,9 @@ impl TsPacketFeeder {
                 }
             }
             MediaType::Audio => {
+                if self.has_video && self.waiting_for_video_startup {
+                    return false;
+                }
                 let Some(track_index) = self
                     .audio_track_indices
                     .iter()
@@ -308,6 +311,53 @@ mod tests {
 
         assert!(!feeder.extend_ts_for_packet(&packet, &mut output));
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn feeder_holds_audio_until_video_startup_packet() {
+        let video = video_meta();
+        let audio_tracks = Arc::new(vec![audio_track(0)]);
+        let mut feeder = TsPacketFeeder::new(
+            Some(&video),
+            audio_tracks,
+            PacketFeedConfig {
+                raw_video_parameter_sets: Some(vec![
+                    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01,
+                    0x68, 0xCE, 0x38, 0x80,
+                ]),
+                ..PacketFeedConfig::default()
+            },
+        );
+        let audio = MediaPacket {
+            media_type: MediaType::Audio,
+            format: crate::media::ring_buffer::PayloadFormat::Raw,
+            is_keyframe: false,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            payload: Bytes::from_static(&[0x11; 32]),
+        };
+        let keyframe = MediaPacket {
+            media_type: MediaType::Video,
+            format: crate::media::ring_buffer::PayloadFormat::Raw,
+            is_keyframe: true,
+            track_index: 0,
+            pts: 33,
+            dts: 33,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80]),
+        };
+        let mut output = Vec::new();
+
+        assert!(
+            !feeder.extend_ts_for_packet(&audio, &mut output),
+            "audio must not lead the TS stream before video startup"
+        );
+        assert!(output.is_empty());
+        assert!(
+            feeder.extend_ts_for_packet(&keyframe, &mut output),
+            "first keyframe should unlock video startup"
+        );
+        assert!(!output.is_empty());
     }
 
     #[test]
