@@ -253,7 +253,7 @@ metadata-less entries.
 | Dependency chain in output status | ✅ Complete | `blockedBy`, `terminalStage`, and `explanation` are present. |
 | Backend capacity metrics in health | ✅ Complete | `capacityPermitsTotal`, `capacityPermitsAvailable`, `capacityWaitMs`. |
 | Ring reader lag | ✅ Complete | Health and graph expose reader `lagSlots`, overflow count, packet age. |
-| Keyframe wait information | ⚠️ Partial | Stage phases include `waitingForKeyframe`; HLS/preview alerts now derive from it. Broader source GOP/keyframe diagnostic context lives separately. |
+| Keyframe wait information | ✅ Complete for Phase 12 | Stage phases include `waitingForKeyframe`; health serializes the phase, and HLS/preview alerts derive recommended actions from it. Broader source GOP analysis remains adjacent diagnostics depth, not a Phase 12 blocker. |
 | Alerts derive from causal fields | ✅ Complete for listed tasks | `alerts.rs` covers output blocked by stage, capacity wait, input/no-output, preview keyframe wait, SRT drops, and ring lag, with recommended actions. |
 | `/api/v1/pipelines/:id/graph` endpoint | ✅ Present | `api/pipelines.rs::pipeline_graph_handler` and `api_runtime_views::processing_graph()`. |
 | Graph endpoint shows desired and runtime graph | ✅ Complete | `/graph` preserves legacy `nodes`/`edges` and adds `desiredGraph` plus `runtimeGraph`. |
@@ -337,7 +337,7 @@ convergence and later harness/reporting phases.
 | Ph 9 FFmpeg waist | A | Shared FFmpeg plan/backend/input/output contracts are the backend entry path, and legacy input/output ring escape hatches are removed. |
 | Ph 10 HLS preview | A- | API one-off removed and preview startup/health keys share the dedicated graph planner; runtime service boundary still not ideal. |
 | Ph 11 Recording metadata | A- | Media API consumes persisted recording metadata and mixed harness now uses pipeline/recording identity first; filename-token matching remains only as fallback compatibility. |
-| Ph 12 Health/alerts/diagnostics | A- | Health, alerts, graph, and causal diagnostics bundle are complete; legacy SSE diagnostics remains a separate probe. |
+| Ph 12 Health/alerts/diagnostics | A | Health, alerts, graph, and the causal diagnostics context bundle meet the Phase 12 acceptance criteria; the legacy SSE diagnostics probe remains as an active probe path beside the read-only context endpoint. |
 | Ph 13 Harness v2 | D | Some dependency fields printed; semantic model missing. |
 | Ph 14 Agent/MCP cleanup | D | Agent still crosses DB/API/runtime boundaries. |
 | Ph 15 Large-file split | F | Not done. |
