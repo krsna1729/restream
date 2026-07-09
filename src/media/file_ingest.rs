@@ -573,7 +573,7 @@ fn run_internal_file_ingest_once(
             .map_err(|e| format!("Failed to seek input file: {e}"))?;
     }
 
-    let queue = MemoryQueue::new();
+    let queue = MemoryQueue::new_with_capacity(engine.config.avio_capacity);
     let mut custom_output =
         CustomOutput::new(&queue, "mpegts").map_err(|e| format!("TS mux setup failed: {e}"))?;
     let octx = custom_output

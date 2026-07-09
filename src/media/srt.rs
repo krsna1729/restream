@@ -2012,7 +2012,9 @@ impl SrtServer {
             .get_or_create_ts_muxer_stage(pipeline_id, "play", ring_buf.clone())
             .await;
 
-        let out_queue = Arc::new(crate::media::avio::MemoryQueue::new());
+        let out_queue = Arc::new(crate::media::avio::MemoryQueue::new_with_capacity(
+            self.engine.config.avio_capacity,
+        ));
 
         // Sender thread: reads MPEG-TS from out_queue, sends via SRT.
         // Wrapped in catch_unwind so a panic cannot crash the process (AGENTS.md).
@@ -4406,7 +4408,9 @@ pub async fn start_srt_egress(
         .await;
     egress_phase!("sending");
 
-    let out_queue = Arc::new(crate::media::avio::MemoryQueue::new());
+    let out_queue = Arc::new(crate::media::avio::MemoryQueue::new_with_capacity(
+        engine.config.avio_capacity,
+    ));
     if !engine
         .register_egress_queue_if_current(&output_id, &registration, out_queue.clone())
         .await

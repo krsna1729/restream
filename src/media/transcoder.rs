@@ -300,7 +300,9 @@ async fn run_internal_video_stage(
     output_normalizer: StageOutputNormalizer,
     needs_scale: bool,
 ) {
-    let input_queue = Arc::new(crate::media::avio::MemoryQueue::new());
+    let input_queue = Arc::new(crate::media::avio::MemoryQueue::new_with_capacity(
+        engine.config.avio_capacity,
+    ));
     let stage_lifecycle = engine
         .get_or_create_stage_lifecycle(
             stage_key.clone(),

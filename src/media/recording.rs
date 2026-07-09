@@ -407,7 +407,9 @@ pub async fn start_recording(
             encoding: "recording".to_string(),
         });
 
-    let queue = Arc::new(crate::media::avio::MemoryQueue::new());
+    let queue = Arc::new(crate::media::avio::MemoryQueue::new_with_capacity(
+        engine.config.avio_capacity,
+    ));
 
     // Guard: close the queue on drop so the OS writer thread always unblocks,
     // even if this async fn is cancelled or panics before reaching queue.close().

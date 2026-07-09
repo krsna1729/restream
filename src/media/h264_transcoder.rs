@@ -56,7 +56,7 @@ pub(crate) async fn run_h264_codec_edge_stage(
     mut input_pump: StageInputPump,
     output_normalizer: StageOutputNormalizer,
 ) {
-    let input_queue = Arc::new(MemoryQueue::new());
+    let input_queue = Arc::new(MemoryQueue::new_with_capacity(engine.config.avio_capacity));
     engine
         .register_input_queue(stage_key.clone(), input_queue.clone())
         .await;

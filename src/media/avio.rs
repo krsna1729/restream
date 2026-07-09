@@ -21,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 const AVIO_BUFFER_SIZE: usize = 32768;
+pub const DEFAULT_AVIO_QUEUE_CAPACITY: usize = 512 * 1024;
 
 // 512 KB absorbs bursts between the async TS reader and the blocking SRT/RTMP
 // sender thread. Scale-test evidence: max per-queue HWM = 398 KB at 8 Mb/s
@@ -29,8 +30,7 @@ const AVIO_BUFFER_SIZE: usize = 32768;
 // RESTREAM_AVIO_QUEUE_CAPACITY (bytes).
 
 fn default_avio_queue_capacity() -> usize {
-    static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *CAP.get_or_init(|| crate::AppConfig::from_env().avio_capacity)
+    DEFAULT_AVIO_QUEUE_CAPACITY
 }
 
 pub struct MemoryQueue {
@@ -598,6 +598,12 @@ mod tests {
         let mut output = [0u8; 6];
         assert_eq!(queue.read(&mut output), output.len());
         assert_eq!(&output, b"abcdef");
+    }
+
+    #[test]
+    fn explicit_capacity_is_reported_in_stats() {
+        let queue = MemoryQueue::new_with_capacity(12345);
+        assert_eq!(queue.stats().capacity, 12345);
     }
 
     #[tokio::test]
