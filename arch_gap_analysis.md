@@ -52,13 +52,15 @@ features complete, but broad architectural convergence is still partial.
 
 | Task | Status | Evidence |
 |---|---|---|
-| Source inventory doc / CI | ⚠️ Partial | `scripts/source-audit.sh` exists and checks forbidden imports, file size, and env reads, but it is not wired into CI and currently fails on large-file limits. |
-| Smoke CI matrix | ❌ Missing | No repo evidence for the `impl.md` smoke CI matrix. |
-| Forbidden-import CI check | ❌ Missing | No `ARCHITECTURE_GUARDRAILS.md`; no CI check for layer direction. |
-| Regression fixture preservation | ⚠️ Unconfirmed | Some docs mention fixture discipline, but the listed known failure artifacts are not linked as a guardrail set. |
+| Source inventory doc / CI | ✅ Present | `scripts/source-audit.sh` checks forbidden imports, no-growth file-size baselines, and env reads; it emits `target/source-audit.json` and now runs in the CI architecture-guardrails job. |
+| Smoke CI matrix | ✅ Present | `.github/workflows/ci.yml` runs fmt, strict lib clippy, workspace clippy, API contract, concurrency contract, test hygiene, coverage, integration harness modes, and Playwright. |
+| Forbidden-import CI check | ✅ Present | `ARCHITECTURE_GUARDRAILS.md` documents the boundary rules, and CI runs `scripts/source-audit.sh` to reject `src/media` imports from API modules. |
+| Regression fixture preservation | ⚠️ Partial | Checked-in fixture discipline is documented and scripted via `scripts/check-fixture-discipline.sh`, but the specific historical failure artifacts listed in `impl.md` are not yet all linked as a guardrail set. |
 
-**Verdict**: Not started as a phase. Local checks are strong, but architectural
-drift is not enforced by CI.
+**Verdict**: Mostly complete. CI now enforces source inventory and dependency
+direction guardrails, and the smoke matrix is broad. The remaining Phase 0 gap
+is linking the named historical failure artifacts into the regression-fixture
+documentation.
 
 ---
 

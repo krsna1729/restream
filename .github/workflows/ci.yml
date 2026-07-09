@@ -65,6 +65,19 @@ jobs:
       - name: Rust clippy (warn only for all targets)
         run: scripts/resource-limit cargo clippy --workspace --all-targets
 
+  architecture-guardrails:
+    name: Architecture guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run source audit
+        run: ./scripts/source-audit.sh
+      - name: Upload source audit inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-audit
+          path: target/source-audit.json
+
   api-contract:
     name: API contract gate
     runs-on: ubuntu-latest

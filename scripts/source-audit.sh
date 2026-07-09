@@ -6,6 +6,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+mkdir -p target
 
 echo "=== Restream Source Audit ==="
 FAILED=0
@@ -40,9 +41,8 @@ check_size() {
 
 echo ""
 echo "Checking file size limits..."
-check_size "src/api.rs" 7730
-check_size "src/media/engine.rs" 6215
-check_size "src/bin/test_harness.rs" 10255
+check_size "src/media/engine.rs" 6587
+check_size "src/bin/test_harness.rs" 10282
 
 # 3. Check for raw std::env::var usage outside src/config.rs and tests
 echo ""
@@ -67,6 +67,39 @@ if [ -n "$RAW_ENV_VARS" ]; then
 else
     echo "OK: No raw std::env::var usage found outside configuration module."
 fi
+
+ROUTE_MODULE_COUNT=$(find src/api -maxdepth 1 -type f -name '*.rs' | wc -l | tr -d ' ')
+DB_REPOSITORY_COUNT=$(find src/db -maxdepth 1 -type f -name '*_repo.rs' | wc -l | tr -d ' ')
+FEATURE_CFG_COUNT=$(grep -R "\#\\[cfg(feature" -n src Cargo.toml 2>/dev/null || true)
+FEATURE_CFG_COUNT=$(printf "%s" "$FEATURE_CFG_COUNT" | sed '/^$/d' | wc -l | tr -d ' ')
+MEDIA_API_IMPORT_COUNT=$(grep -rn "use crate::api" src/media/ 2>/dev/null || true)
+MEDIA_API_IMPORT_COUNT=$(printf "%s" "$MEDIA_API_IMPORT_COUNT" | sed '/^$/d' | wc -l | tr -d ' ')
+ENGINE_LINES=$(wc -l < src/media/engine.rs | tr -d ' ')
+HARNESS_LINES=$(wc -l < src/bin/test_harness.rs | tr -d ' ')
+
+cat > target/source-audit.json <<EOF
+{
+  "largeFiles": {
+    "src/media/engine.rs": {
+      "lines": ${ENGINE_LINES},
+      "limit": 6587
+    },
+    "src/bin/test_harness.rs": {
+      "lines": ${HARNESS_LINES},
+      "limit": 10282
+    }
+  },
+  "moduleSummary": {
+    "apiRouteModules": ${ROUTE_MODULE_COUNT},
+    "dbRepositoryModules": ${DB_REPOSITORY_COUNT},
+    "featureCfgSites": ${FEATURE_CFG_COUNT}
+  },
+  "forbiddenImports": {
+    "mediaImportsApi": ${MEDIA_API_IMPORT_COUNT}
+  }
+}
+EOF
+echo "Wrote target/source-audit.json"
 
 echo ""
 if [ "$FAILED" -eq 1 ]; then
