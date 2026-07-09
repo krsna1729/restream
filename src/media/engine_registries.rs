@@ -149,7 +149,6 @@ pub struct StageRuntime {
 pub struct StageRegistry {
     pub runtimes: TokioRwLock<HashMap<StageKey, StageRuntime>>,
     pub metrics: TokioRwLock<HashMap<StageKey, Arc<StageMetrics>>>,
-    pub input_queues: TokioRwLock<HashMap<StageKey, Arc<MemoryQueue>>>,
     pub ts_muxers: TokioRwLock<HashMap<String, Arc<TsChunkRing>>>,
     pub lifecycles: TokioRwLock<HashMap<StageKey, Arc<StageLifecycle>>>,
 }
@@ -165,7 +164,6 @@ impl StageRegistry {
         Self {
             runtimes: TokioRwLock::new(HashMap::new()),
             metrics: TokioRwLock::new(HashMap::new()),
-            input_queues: TokioRwLock::new(HashMap::new()),
             ts_muxers: TokioRwLock::new(HashMap::new()),
             lifecycles: TokioRwLock::new(HashMap::new()),
         }

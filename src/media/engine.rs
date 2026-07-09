@@ -1254,14 +1254,12 @@ impl MediaEngine {
         if let Some(runtime) = self.stages.runtimes.write().await.get_mut(&key) {
             runtime.input_queue = Some(queue.clone());
         }
-        self.stages.input_queues.write().await.insert(key, queue);
     }
 
     pub async fn remove_input_queue(&self, key: &StageKey) {
         if let Some(runtime) = self.stages.runtimes.write().await.get_mut(key) {
             runtime.input_queue = None;
         }
-        self.stages.input_queues.write().await.remove(key);
     }
 
     pub async fn register_egress_queue(&self, output_id: &str, queue: Arc<MemoryQueue>) {
@@ -1586,11 +1584,9 @@ impl MediaEngine {
             return;
         }
         let mut metrics = self.stages.metrics.write().await;
-        let mut input_queues = self.stages.input_queues.write().await;
         let mut lifecycles = self.stages.lifecycles.write().await;
         for key in keys {
             metrics.remove(key);
-            input_queues.remove(key);
             lifecycles.remove(key);
         }
     }
