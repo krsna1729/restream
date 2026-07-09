@@ -133,12 +133,13 @@ thin adapters everywhere.
 | Criterion | Status | Evidence |
 |---|---|---|
 | `db/` repository modules exist | ✅ Complete | `db/{pipeline_repo,output_repo,ingest_repo,job_repo,session_repo,meta_repo,log_repo,recording_repo,schema,migrations}.rs`. |
-| `db.rs` is only module index / pool / schema helper | ✅ Mostly | `src/db/mod.rs` is thin and re-exports repositories. |
+| `db.rs` is only module index / pool / schema helper | ✅ Complete | `src/db/mod.rs` is thin and re-exports repositories plus pool/schema helpers. |
 | Application services depend on repository traits | ✅ Mostly | `PipelineService` and `HealthService` depend on `PipelineStore`, `OutputService` depends on `OutputStore`, `IngestService` depends on `IngestLookup`/`IngestWriter`, `LogService` depends on `LogStore`, `AuthService` depends on meta/session ports, `SettingsService` depends on meta/ingest-host/job ports, `AgentService` depends on pipeline/output/job/ingest/meta ports, `FileIngestService` depends on ingest/pipeline ports, and `MediaLibraryService` now uses meta and recording ports for recording settings and recording metadata. |
 | String states converted at repository boundary | ✅ Mostly | `recording_repo` maps `RecordingPhase`, `output_repo` maps SQLite `desired_state` text into `DesiredOutputState`, and `job_repo` maps SQLite `status` text into `JobStatus`. |
 
-**Verdict**: **Partial**. Repository files exist, but port isolation and typed
-state conversion are incomplete.
+**Verdict**: **Complete for the phase scope**. Repository files exist, service
+read/write dependencies are port-backed, and the main persisted state strings
+are converted at repository/API boundaries.
 
 ---
 
