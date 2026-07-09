@@ -46,6 +46,8 @@ use crate::alerts;
 #[cfg(feature = "agent-plane")]
 use crate::api_view_models;
 #[cfg(feature = "agent-plane")]
+use crate::application::ports::SqliteMetaStore;
+#[cfg(feature = "agent-plane")]
 use crate::application::settings::load_settings_snapshot;
 #[cfg(feature = "agent-plane")]
 use crate::domain::output_spec::OutputUrlScheme;
@@ -548,7 +550,8 @@ async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let sys = System::new_all();
     status["os"] = system_status(&sys);
 
-    let settings = load_settings_snapshot(&state.db, &state.security)
+    let settings_store = SqliteMetaStore::new(state.db.clone());
+    let settings = load_settings_snapshot(&settings_store, &settings_store, &state.security)
         .await
         .ok();
     let custom_encoding_len = db::get_meta(&state.db, "custom_encoding")

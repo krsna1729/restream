@@ -3,7 +3,7 @@
 
 use crate::domain::output_spec::OutputConfig;
 use crate::logging::types::{AppLogFilters, AppLogRow};
-use crate::types::{Ingest, Output, Pipeline};
+use crate::types::{Ingest, Job, Output, Pipeline};
 use sqlx::SqlitePool;
 use std::fmt;
 use std::future::Future;
@@ -37,6 +37,8 @@ pub type SessionWriteFuture<'a> =
     Pin<Box<dyn Future<Output = Result<(), SessionStoreError>> + Send + 'a>>;
 pub type SessionListFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<String>, SessionStoreError>> + Send + 'a>>;
+pub type JobListFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<Job>, JobStoreError>> + Send + 'a>>;
 pub type PipelineUpdateFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Pipeline>, PipelineStoreError>> + Send + 'a>>;
 pub type OutputLookupFuture<'a> =
@@ -199,6 +201,27 @@ impl fmt::Display for SessionStoreError {
 
 impl std::error::Error for SessionStoreError {}
 
+#[derive(Debug, Clone)]
+pub struct JobStoreError {
+    message: String,
+}
+
+impl JobStoreError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for JobStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for JobStoreError {}
+
 pub trait PipelineStore: Send + Sync {
     fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a>;
     fn get_pipeline_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineLookupFuture<'a>;
@@ -303,6 +326,11 @@ pub trait MetaStoreWriter: Send + Sync {
     fn set_meta<'a>(&'a self, key: &'a str, value: &'a str) -> MetaWriteFuture<'a>;
 }
 
+pub trait IngestHostStore: Send + Sync {
+    fn get_ingest_host<'a>(&'a self) -> MetaLookupFuture<'a>;
+    fn set_ingest_host<'a>(&'a self, host: &'a str) -> MetaWriteFuture<'a>;
+}
+
 pub trait SessionStore: Send + Sync {
     fn create_session<'a>(&'a self, token: &'a str, ts: i64) -> SessionWriteFuture<'a>;
     fn delete_session<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a>;
@@ -312,6 +340,10 @@ pub trait SessionStore: Send + Sync {
 
 pub trait LogStore: Send + Sync {
     fn list_app_logs<'a>(&'a self, filters: &'a AppLogFilters) -> LogListFuture<'a>;
+}
+
+pub trait JobStore: Send + Sync {
+    fn list_jobs<'a>(&'a self) -> JobListFuture<'a>;
 }
 
 #[derive(Clone)]
@@ -336,6 +368,11 @@ pub struct SqliteMetaStore {
 
 #[derive(Clone)]
 pub struct SqliteSessionStore {
+    pool: SqlitePool,
+}
+
+#[derive(Clone)]
+pub struct SqliteJobStore {
     pool: SqlitePool,
 }
 
@@ -369,6 +406,12 @@ impl SqliteMetaStore {
 }
 
 impl SqliteSessionStore {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+impl SqliteJobStore {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -706,6 +749,24 @@ impl MetaStoreWriter for SqliteMetaStore {
     }
 }
 
+impl IngestHostStore for SqliteMetaStore {
+    fn get_ingest_host<'a>(&'a self) -> MetaLookupFuture<'a> {
+        Box::pin(async move {
+            crate::db::get_ingest_host(&self.pool)
+                .await
+                .map_err(|err| MetaLookupError::new(err.to_string()))
+        })
+    }
+
+    fn set_ingest_host<'a>(&'a self, host: &'a str) -> MetaWriteFuture<'a> {
+        Box::pin(async move {
+            crate::db::set_ingest_host(&self.pool, host)
+                .await
+                .map_err(|err| MetaLookupError::new(err.to_string()))
+        })
+    }
+}
+
 impl SessionStore for SqliteSessionStore {
     fn create_session<'a>(&'a self, token: &'a str, ts: i64) -> SessionWriteFuture<'a> {
         Box::pin(async move {
@@ -736,6 +797,16 @@ impl SessionStore for SqliteSessionStore {
             crate::db::list_sessions(&self.pool)
                 .await
                 .map_err(|err| SessionStoreError::new(err.to_string()))
+        })
+    }
+}
+
+impl JobStore for SqliteJobStore {
+    fn list_jobs<'a>(&'a self) -> JobListFuture<'a> {
+        Box::pin(async move {
+            crate::db::list_jobs(&self.pool)
+                .await
+                .map_err(|err| JobStoreError::new(err.to_string()))
         })
     }
 }

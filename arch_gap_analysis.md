@@ -50,7 +50,7 @@ features complete, but broad architectural convergence is still partial.
 
 | Task | Status | Evidence |
 |---|---|---|
-| Source inventory doc / CI | ❌ Missing | No `scripts/source-audit.sh`; no generated architecture inventory found. |
+| Source inventory doc / CI | ⚠️ Partial | `scripts/source-audit.sh` exists and checks forbidden imports, file size, and env reads, but it is not wired into CI and currently fails on large-file limits. |
 | Smoke CI matrix | ❌ Missing | No repo evidence for the `impl.md` smoke CI matrix. |
 | Forbidden-import CI check | ❌ Missing | No `ARCHITECTURE_GUARDRAILS.md`; no CI check for layer direction. |
 | Regression fixture preservation | ⚠️ Unconfirmed | Some docs mention fixture discipline, but the listed known failure artifacts are not linked as a guardrail set. |
@@ -83,13 +83,14 @@ and application logic.
 |---|---|---|
 | `AppConfig::from_env()` | ✅ Present | `src/config.rs` centralizes many runtime settings. |
 | Per-stage backend flags | ✅ Present | `BackendPolicy` has `internal_video_presets`, `internal_hevc_to_h264`, `internal_hls_preview`, `internal_complex_audio`. |
-| Runtime receives typed config | ✅ Complete | `MediaEngine` carries config and graph planning uses `engine.config.backend_policy`. |
+| Runtime receives typed config | ⚠️ Mostly | `MediaEngine` carries config and graph planning uses `engine.config.backend_policy`; recording remux argument construction still calls `AppConfig::from_env()` internally. |
 | No env reads outside config/startup/test harness | ✅ Mostly | `ServerPorts::from_env()`, `RuntimeTuning::from_env()`, `BackendPolicy::from_env()`, and `AppConfig::from_env()` are implemented in `src/config.rs`; remaining env reads are startup/thread setup, test harness, tests, or process utilities. |
 | Startup logs show effective config | ✅ Present | Startup emits `restream.config.effective` with a redacted `AppConfig::effective_summary()` covering ports, tuning, paths, logging, backend policy, FFmpeg, buffers, SRT, and RTMP settings. |
 
-**Verdict**: **Complete**. Production runtime env parsing is centralized in
+**Verdict**: **Mostly complete**. Production runtime env parsing is centralized in
 `src/config.rs`, and startup now emits a comprehensive redacted effective config
-summary.
+summary. The remaining gap is passing typed config into the recording remux path
+instead of letting that path call `AppConfig::from_env()` internally.
 
 ---
 
@@ -125,7 +126,7 @@ thin adapters everywhere.
 |---|---|---|
 | `db/` repository modules exist | ✅ Complete | `db/{pipeline_repo,output_repo,ingest_repo,job_repo,session_repo,meta_repo,log_repo,recording_repo,schema,migrations}.rs`. |
 | `db.rs` is only module index / pool / schema helper | ✅ Mostly | `src/db/mod.rs` is thin and re-exports repositories. |
-| Application services depend on repository traits | ⚠️ Partial | `PipelineService` and `HealthService` depend on `PipelineStore`, `OutputService` depends on `OutputStore`, `IngestService` depends on `IngestLookup`/`IngestWriter`, `LogService` depends on `LogStore`, and `AuthService` depends on meta/session ports; `SettingsService` still holds `SqlitePool` and calls `db::*`. |
+| Application services depend on repository traits | ✅ Mostly | `PipelineService` and `HealthService` depend on `PipelineStore`, `OutputService` depends on `OutputStore`, `IngestService` depends on `IngestLookup`/`IngestWriter`, `LogService` depends on `LogStore`, `AuthService` depends on meta/session ports, and `SettingsService` depends on meta/ingest-host/job ports. |
 | String states converted at repository boundary | ⚠️ Partial | `recording_repo` maps `RecordingPhase`; `output_repo` still stores/returns `desired_state: String` in `types::Output`. |
 
 **Verdict**: **Partial**. Repository files exist, but port isolation and typed
@@ -284,10 +285,10 @@ convergence and later harness/reporting phases.
 ### P1 — Layering and Ownership
 
 3. **API/service/repository boundary remains mixed**
-   - Route modules exist, but `api/agent.rs` and some services still call
+   - Route modules exist, but `api/agent.rs` and some helper paths still call
      `db::*` directly. `PipelineService`, `OutputService`, `IngestService`,
-     `HealthService`, `LogService`, and `AuthService` are now port-trait
-     backed.
+     `HealthService`, `LogService`, `AuthService`, and `SettingsService` are
+     now port-trait backed.
 
 4. **HLS preview is no longer an API one-off, but still not a pure graph service**
    - `application::hls_preview` owns orchestration, but it directly calls
@@ -295,9 +296,9 @@ convergence and later harness/reporting phases.
 
 ### P2 — Guardrails and Large-File Debt
 
-6. **No architecture drift CI**
-   - No source audit script, route inventory, forbidden import check, or file
-     growth guard exists.
+6. **Architecture drift checks exist locally but are not CI-grade**
+   - `scripts/source-audit.sh` exists, but it is not wired into CI and currently
+     fails on large-file limits for `engine.rs` and `test_harness.rs`.
 
 7. **Large files still dominate reasoning cost**
    - The Phase 15 split remains important once contract convergence is stronger.
@@ -315,10 +316,10 @@ convergence and later harness/reporting phases.
 |---|---:|---|
 | Ph 0 Guardrails | F | Not started. |
 | Ph 1 Core contracts | A- | Types exist, reconciliation consumes typed desired-state logic, and active/recent egress lifecycle state is typed; DB output desired-state strings remain at the row boundary. |
-| Ph 2 Config | A | Production env parsing is centralized in config, and startup logs a comprehensive redacted effective-config summary. |
+| Ph 2 Config | A- | Production env parsing is centralized in config, and startup logs a comprehensive redacted effective-config summary; recording remux still reads `AppConfig::from_env()` internally. |
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | B+ | Logs, auth initialization, pipeline, output, ingest, and health checks are service-backed; agent and some helper paths still contain direct DB/application work. |
-| Ph 5 Repositories | A- | Repo modules exist, and pipeline/output/ingest/health/log/auth services are port-trait backed; settings still holds `SqlitePool` directly. |
+| Ph 5 Repositories | A- | Repo modules exist, and pipeline/output/ingest/health/log/auth/settings services are port-trait backed; raw output desired-state strings remain at the row boundary. |
 | Ph 6 Graph planner | A- | Planner drives output preparation, graph rendering, diagnostics, and preview planning, with harness stage-sharing tests; recording/agent consumers remain. |
 | Ph 7 Stage lifecycle | B+ | Lifecycle/capacity visibility strong; runtime object model still split. |
 | Ph 8 Dependency-aware status | A | Operator-facing dependency status is complete for the phase scope, with typed internal egress lifecycle state. |
