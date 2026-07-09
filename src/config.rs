@@ -360,6 +360,36 @@ mod tests {
         }
     }
 
+    fn with_env_overlay(vars: &[(&str, &str)], removed: &[&str], f: impl FnOnce()) {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous_vars = vars
+            .iter()
+            .map(|(name, _)| ((*name).to_string(), std::env::var(name).ok()))
+            .collect::<Vec<_>>();
+        let previous_removed = removed
+            .iter()
+            .map(|name| ((*name).to_string(), std::env::var(name).ok()))
+            .collect::<Vec<_>>();
+        unsafe {
+            for (name, value) in vars {
+                std::env::set_var(name, value);
+            }
+            for name in removed {
+                std::env::remove_var(name);
+            }
+        }
+        f();
+        unsafe {
+            for (name, value) in previous_vars.into_iter().chain(previous_removed) {
+                if let Some(value) = value {
+                    std::env::set_var(name, value);
+                } else {
+                    std::env::remove_var(name);
+                }
+            }
+        }
+    }
+
     #[test]
     fn server_ports_are_loaded_by_config_module() {
         with_env_vars(
@@ -411,6 +441,23 @@ mod tests {
                 assert!(policy.internal_hevc_to_h264);
                 assert!(policy.internal_hls_preview);
                 assert!(!policy.internal_complex_audio);
+            },
+        );
+    }
+
+    #[test]
+    fn legacy_global_internal_transcoder_env_does_not_enable_stage_families() {
+        with_env_overlay(
+            &[("RESTREAM_USE_INTERNAL_TRANSCODER", "1")],
+            &[
+                "RESTREAM_INTERNAL_VIDEO_PRESETS",
+                "RESTREAM_INTERNAL_HEVC_TO_H264",
+                "RESTREAM_INTERNAL_HLS_PREVIEW",
+                "RESTREAM_INTERNAL_AUDIO_COMPLEX",
+            ],
+            || {
+                let policy = BackendPolicy::from_env();
+                assert_eq!(policy, BackendPolicy::default());
             },
         );
     }

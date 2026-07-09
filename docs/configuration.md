@@ -11,7 +11,7 @@ in SQLite.
 | Dashboard/API listener | `0.0.0.0:3030` | `RESTREAM_HTTP_PORT` (port only) |
 | RTMP listener | `0.0.0.0:1935` | `RESTREAM_RTMP_PORT` |
 | SRT listener | `0.0.0.0:10080` | `RESTREAM_SRT_PORT` |
-| Transcoder backend | External FFmpeg subprocess | `RESTREAM_USE_INTERNAL_TRANSCODER` (`1`/`true`/`yes`/`on` to enable in-process backend) |
+| Transcoder backend | External FFmpeg subprocess | `RESTREAM_INTERNAL_VIDEO_PRESETS`, `RESTREAM_INTERNAL_HEVC_TO_H264`, `RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX` (`1`/`true`/`yes`/`on` enable each in-process stage family independently) |
 | File-ingest backend | External embedded FFmpeg subprocess | `RESTREAM_USE_INTERNAL_FILE_INGEST` (`1`/`true`/`yes`/`on` to enable in-process remux + demux for passthrough file ingest) |
 | External transcoder and file-ingest executable | Embedded `public/bin/ffmpeg`, extracted to `/tmp/restream-ffmpeg/ffmpeg` at startup | `FFMPEG_BIN_PATH` |
 | SQLite database | `data.db` | `RESTREAM_DB_PATH` |
@@ -151,9 +151,12 @@ source+downmix:1
 Built-in video profiles are `source`, `720p`, `1080p`, and the internal `h264`
 conversion profile. `source` is passthrough and bypasses the video transcoder.
 For non-source built-in video profiles, the default backend is an external
-FFmpeg subprocess that performs decode/scale/encode. When
-`RESTREAM_USE_INTERNAL_TRANSCODER=1`, the in-process backend performs
-decode/scale/encode for built-in video profiles (audio streams are copied).
+FFmpeg subprocess that performs decode/scale/encode. Set
+`RESTREAM_INTERNAL_VIDEO_PRESETS=1` to opt those video-preset stages into the
+in-process backend; audio streams are copied. HEVC-to-H.264 bridge stages,
+HLS preview transcode stages, and complex audio stages are controlled
+separately by `RESTREAM_INTERNAL_HEVC_TO_H264`,
+`RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX`.
 `custom` remains stored configuration only. It is rejected by output
 create/update so operators do not accidentally select a passthrough path that
 looks like custom FFmpeg execution.

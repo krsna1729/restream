@@ -137,7 +137,7 @@ libsrt calls:
 
 - SRT accept loop (blocks on `srt_accept()`)
 - SRT egress sender (blocks on `srt_send()`)
-- Internal transcoder video stage (`RESTREAM_USE_INTERNAL_TRANSCODER=1`): libavcodec decode+encode via MemoryQueue
+- Internal transcoder video stage (`RESTREAM_INTERNAL_VIDEO_PRESETS=1`): libavcodec decode+encode via MemoryQueue
 - `hevc_to_h264` stage: libavcodec H.265→H.264 in-process, one OS thread per unique RTMP encoding with H.265 ingest (keyed `hevc_to_h264:from:<upstream>`)
 - MPEG-TS recording (raw TS write via MemoryQueue)
 
@@ -180,7 +180,7 @@ Tokio worker count = `num_cpus` (tokio default, not configurable).
 | Ext transcoder stdout reader | tokio task | 1 per `(pipeline, video_preset)` | FFmpeg stdout → TsDemuxer → output_ring |
 | Ext transcoder stderr logger | tokio task | 1 per `(pipeline, video_preset)` | Drains and logs FFmpeg stderr |
 | Ext FFmpeg subprocess | child process | 1 per `(pipeline, video_preset)` | Lives while stage is active |
-| Int transcoder OS thread | `std::thread` | 1 per `(pipeline, video_preset)` when `RESTREAM_USE_INTERNAL_TRANSCODER=1` | libavcodec decode+encode via MemoryQueue |
+| Int transcoder OS thread | `std::thread` | 1 per `(pipeline, video_preset)` when `RESTREAM_INTERNAL_VIDEO_PRESETS=1` | libavcodec decode+encode via MemoryQueue |
 | `hevc_to_h264` OS thread | `std::thread` | 1 per unique RTMP encoding with H.265 ingest | libavcodec H.265→H.264 in-process; keyed `hevc_to_h264:from:<upstream>` |
 | `hevc_to_h264` feeder task | tokio task | 1 per unique RTMP encoding with H.265 ingest | upstream ring (source or preset output) → TsMuxer → MemoryQueue |
 | Audio-routing stage | tokio task | 1 per `(pipeline, audio_key)` | Pure SelectTracks / Remap filter; no OS thread |

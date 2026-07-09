@@ -950,7 +950,10 @@ Useful env vars:
 - `RESOURCE_SWEEP_SAMPLE_SECS=6`
 - `RESOURCE_SWEEP_SETTLE_SECS=4`
 - `RESOURCE_SWEEP_LIFECYCLE=isolated|continuous|cumulative`
-- `RESTREAM_USE_INTERNAL_TRANSCODER=1` to capture the internal-backend baseline
+- `RESTREAM_INTERNAL_VIDEO_PRESETS=1` to capture the internal video-preset
+  backend baseline; add `RESTREAM_INTERNAL_HEVC_TO_H264=1`,
+  `RESTREAM_INTERNAL_HLS_PREVIEW=1`, or `RESTREAM_INTERNAL_AUDIO_COMPLEX=1`
+  only for the stage family under test
 - `HARNESS_SRT_PASSPHRASE=0123456789abcd` and `HARNESS_SRT_PBKEYLEN=16` to
   rerun the matrix with encrypted SRT ingest
 

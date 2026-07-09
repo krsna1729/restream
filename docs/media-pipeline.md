@@ -134,10 +134,13 @@ the next reconciler cycle.
 
 ### Internal transcoder (opt-in)
 
-Set `RESTREAM_USE_INTERNAL_TRANSCODER=1` to use the in-process libavcodec path
-(`src/media/transcoder.rs`). The data flow is identical — the same
-`source_ring → output_ring` contract holds — but uses `MemoryQueue`/`avio`
-callbacks instead of a subprocess pipe.
+Set `RESTREAM_INTERNAL_VIDEO_PRESETS=1` to use the in-process libavcodec path
+(`src/media/transcoder.rs`) for video-preset stages. HEVC-to-H.264 bridge
+stages, HLS preview transcode stages, and complex audio stages have separate
+rollout flags: `RESTREAM_INTERNAL_HEVC_TO_H264`,
+`RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX`. The
+data flow is identical — the same `source_ring → output_ring` contract holds —
+but uses `MemoryQueue`/`avio` callbacks instead of a subprocess pipe.
 
 Current behavior: for `video:*` presets, the internal path uses
 `run_ffmpeg_transcode_with_scale` and performs decode→scale→encode in-process
@@ -145,7 +148,8 @@ Current behavior: for `video:*` presets, the internal path uses
 passed through. Source passthrough still bypasses the video transcoder.
 
 The external FFmpeg subprocess backend remains the default and is still the
-most battle-tested path for production deployments.
+most battle-tested path for production deployments. The legacy global
+`RESTREAM_USE_INTERNAL_TRANSCODER` switch is not used for backend selection.
 
 ### Muxing stages summary
 
@@ -179,8 +183,8 @@ most battle-tested path for production deployments.
 
 The external transcoder stage applies `scale=WxH` and re-encodes preserving the
 input codec: `libx265 -preset veryfast` for H.265 input, `libx264 -preset
-veryfast` for H.264 input. The internal transcoder (when enabled with
-`RESTREAM_USE_INTERNAL_TRANSCODER=1`) uses the same preset table via
+veryfast` for H.264 input. The internal video-preset backend (when enabled
+with `RESTREAM_INTERNAL_VIDEO_PRESETS=1`) uses the same preset table via
 `run_ffmpeg_transcode_with_scale`.
 
 | Preset | Resolution | Scale filter |

@@ -1749,7 +1749,7 @@
       "parse": "mbps"
     },
     "branchBackend": {
-      "env": "RESTREAM_USE_INTERNAL_TRANSCODER",
+      "env": "RESTREAM_INTERNAL_VIDEO_PRESETS",
       "variants": [
         "external",
         "internal"

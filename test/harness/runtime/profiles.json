@@ -101,7 +101,10 @@
     "BITRATE_SWEEP_NO_CLEANUP": "noCleanup",
     "BRANCH_MATRIX_EGRESS_COUNT": "egressCount",
     "BRANCH_MATRIX_SCENARIOS": "scenarioFilter",
-    "RESTREAM_USE_INTERNAL_TRANSCODER": "backendInternal",
+    "RESTREAM_INTERNAL_VIDEO_PRESETS": "internalVideoPresets",
+    "RESTREAM_INTERNAL_HEVC_TO_H264": "internalHevcToH264",
+    "RESTREAM_INTERNAL_HLS_PREVIEW": "internalHlsPreview",
+    "RESTREAM_INTERNAL_AUDIO_COMPLEX": "internalComplexAudio",
     "SRT_CRYPTO_VARIANTS": "srtCryptoVariants",
     "HARNESS_SRT_CRYPTO_VARIANTS": "srtCryptoVariants"
   }
