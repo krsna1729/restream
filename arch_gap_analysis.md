@@ -29,12 +29,13 @@ sense**. Several phases have strong scaffolding but incomplete adoption:
   paths are port-backed, but settings still owns `SqlitePool` and some helper
   paths call repositories directly;
 - a graph planner exists and now drives output preparation, graph rendering,
-  HLS preview, and diagnostics; harness expectations are pinned to it by tests,
-  but recording and agent preview are not yet fully graph-plan driven;
+  HLS preview, diagnostics, agent previews, and harness stage-count
+  expectations, but recording and HLS-output execution are not yet fully
+  graph-plan driven;
 - stage lifecycle and FFmpeg narrow-waist contracts exist, but some legacy
   compatibility paths and direct ring writes remain;
-- recording metadata exists in the database, but the product/harness path still
-  depends partly on filename matching;
+- recording metadata exists in the database, and the product/harness path now
+  uses recording identity first with filename matching only as fallback;
 - diagnostics now expose the Phase 12 causal context bundle, while the legacy
   SSE check endpoint remains a separate active-ingest probe.
 
@@ -143,12 +144,12 @@ state conversion are incomplete.
 | Output graph planner | ✅ Present | `planner::graph_plan::plan_pipeline_graph()`. |
 | HLS preview planner | ✅ Present | `planner::graph_plan::plan_hls_preview_graph()` and `planner/hls_preview.rs`. |
 | HLS output and recording planned by same graph | ⚠️ Partial | `GraphRole::HlsOutput` and `Recording` exist, but output/HLS/recording execution is not all driven by one graph planner path. |
-| Diagnostics/harness/agent preview use same planner | ⚠️ Partial | Graph API, diagnostics, and agent graph/impact preview consume `StageGraphPlan`; harness expectations still duplicate output-path logic. |
+| Diagnostics/harness/agent preview use same planner | ✅ Present | Graph API, diagnostics, agent graph/impact preview, and mixed harness stage-count expectations consume `StageGraphPlan`; no harness stage-count proof imports `OutputPath`. |
 | Stage-sharing tests compare against graph planner | ✅ Present | Mixed harness expected stage counts are compared with `plan_pipeline_graph()` and duplicate-output sharing in `mixed_manifest` tests. |
 
 **Verdict**: **Mostly complete for output execution, graph rendering,
-diagnostics, HLS preview planning, and harness stage-sharing proof; still
-partial for recording and agent preview**.
+diagnostics, HLS preview planning, agent preview, and harness stage-sharing
+proof; still partial for recording and HLS-output execution convergence**.
 
 ---
 
@@ -277,7 +278,7 @@ convergence and later harness/reporting phases.
 
 1. **Single graph planner is not yet the one source of truth**
    - Output preparation, graph rendering, diagnostics, HLS preview, agent
-     graph/impact preview, and harness stage-sharing tests now use or prove
+     graph/impact preview, and harness stage-count tests now use or prove
      `StageGraphPlan`, but recording execution and HLS output are not all
      unified behind one graph-plan contract.
 
@@ -325,7 +326,7 @@ convergence and later harness/reporting phases.
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | A- | Logs, auth initialization, pipeline, output, ingest, health checks, and agent output mutations are service-backed; agent read/context helpers still contain direct DB/application work. |
 | Ph 5 Repositories | A | Repo modules exist, pipeline/output/ingest/health/log/auth/settings services are port-trait backed, and output/job/recording state maps at repository boundaries. |
-| Ph 6 Graph planner | A- | Planner drives output preparation, graph rendering, diagnostics, HLS preview planning, and agent graph/impact preview, with harness stage-sharing tests; recording/HLS-output execution remain. |
+| Ph 6 Graph planner | A- | Planner drives output preparation, graph rendering, diagnostics, HLS preview planning, agent graph/impact preview, and harness stage-count expectations; recording/HLS-output execution remain. |
 | Ph 7 Stage lifecycle | B+ | Lifecycle/capacity visibility strong; runtime object model still split. |
 | Ph 8 Dependency-aware status | A | Operator-facing dependency status is complete for the phase scope, with typed internal egress lifecycle state. |
 | Ph 9 FFmpeg waist | A | Shared FFmpeg plan/backend/input/output contracts are the backend entry path, and legacy input/output ring escape hatches are removed. |

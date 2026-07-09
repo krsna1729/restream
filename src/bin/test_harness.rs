@@ -170,28 +170,47 @@ fn planned_mixed_stage_count(
     case: MixedInputCase,
     duplicates_per_output: usize,
 ) -> MixedStageCount {
-    use restream::application::output_path::OutputPath;
-    use restream::domain::stage::{StageKey, StageKind};
+    use restream::domain::output_spec::OutputConfig;
+    use restream::domain::stage::StageKind;
+    use restream::domain::state::DesiredOutputState;
+    use restream::planner::backend_policy::BackendPolicy;
+    use restream::planner::graph_plan::plan_pipeline_graph;
+    use restream::types::Output;
 
-    let mut stages = HashSet::<StageKey>::new();
-    let ingest_codec = case.expected_video_codec();
-    for output_case in mixed_output_cases_for_input(case) {
-        let url = match output_case.protocol() {
-            MixedOutputProtocol::Rtmp => "rtmp://example/live/out",
-            MixedOutputProtocol::Srt => "srt://example:9000?streamid=publish:live/out",
-        };
-        for _ in 0..duplicates_per_output {
-            let path = OutputPath::resolve("pipe", output_case.encoding(), url);
-            stages.extend(path.needed_stage_keys(Some(ingest_codec)));
-        }
-    }
+    let outputs = mixed_output_cases_for_input(case)
+        .iter()
+        .flat_map(|output_case| {
+            (0..duplicates_per_output).map(move |duplicate| {
+                let url = match output_case.protocol() {
+                    MixedOutputProtocol::Rtmp => "rtmp://example/live/out",
+                    MixedOutputProtocol::Srt => "srt://example:9000?streamid=publish:live/out",
+                };
+                Output {
+                    id: format!("{}-{duplicate}", output_case.id()),
+                    pipeline_id: "pipe".to_string(),
+                    name: output_case.id().to_string(),
+                    url: url.to_string(),
+                    monitoring_url: None,
+                    desired_state: DesiredOutputState::Running,
+                    config: OutputConfig::parse(output_case.encoding()),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    let plan = plan_pipeline_graph(
+        "pipe",
+        Some(case.expected_video_codec()),
+        &outputs,
+        false,
+        &BackendPolicy::default(),
+    );
 
     let mut counts = MixedStageCount {
         video: 0,
         audio: 0,
         codec_edge: 0,
     };
-    for stage in stages {
+    for stage in plan.stages {
         match stage.kind {
             StageKind::VideoPreset { .. } => counts.video += 1,
             StageKind::AudioRoute { .. } => counts.audio += 1,
