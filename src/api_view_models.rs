@@ -137,7 +137,7 @@ pub(crate) fn egress_runtime_json(
         "protocol": egress.protocol.clone(),
         "targetAddr": egress.target_addr.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "status": status,
-        "rawStatus": egress.status.clone(),
+        "rawStatus": egress.status.as_str(),
         "phase": egress.phase.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "terminalStage": egress.terminal_stage_key.as_ref().map(|k| k.to_string()),
         "uptimeSecs": egress.start_instant.elapsed().as_secs_f64(),

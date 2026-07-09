@@ -108,6 +108,48 @@ impl From<String> for DesiredOutputState {
     }
 }
 
+/// Coarse lifecycle state of an active or recently active egress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum EgressStatus {
+    #[default]
+    Running,
+    Stopped,
+    Failed,
+}
+
+impl EgressStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl fmt::Display for EgressStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for EgressStatus {
+    fn from(s: &str) -> Self {
+        match s {
+            "stopped" => Self::Stopped,
+            "failed" => Self::Failed,
+            _ => Self::Running,
+        }
+    }
+}
+
+impl From<String> for EgressStatus {
+    fn from(s: String) -> Self {
+        Self::from(s.as_str())
+    }
+}
+
 /// Observable runtime phase of an egress output.
 ///
 /// This is what operators see when they query output status. It is separate
@@ -431,6 +473,23 @@ mod tests {
         assert!(!EgressPhase::Sending.is_terminal());
         assert!(EgressPhase::Sending.is_active());
         assert!(!EgressPhase::Retrying.is_active());
+    }
+
+    #[test]
+    fn egress_status_roundtrip() {
+        for (s, expected) in [
+            ("running", EgressStatus::Running),
+            ("stopped", EgressStatus::Stopped),
+            ("failed", EgressStatus::Failed),
+            ("unknown", EgressStatus::Running),
+        ] {
+            let status = EgressStatus::from(s);
+            assert_eq!(status, expected, "from({s:?})");
+            if s != "unknown" {
+                assert_eq!(status.as_str(), s);
+                assert_eq!(status.to_string(), s);
+            }
+        }
     }
 
     #[test]

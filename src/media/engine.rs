@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 use crate::domain::stage::{StageKey, StageKind};
+use crate::domain::state::EgressStatus;
 use crate::media::avio::MemoryQueue;
 use crate::media::engine_registries::{
     EgressRegistry, FileIngestRegistry, HlsRegistry, IngestRegistry, RecordingRegistry,
@@ -269,7 +270,7 @@ pub struct ActiveEgress {
     pub protocol: String,
     pub target_url: String,
     pub target_addr: Arc<std::sync::Mutex<Option<String>>>,
-    pub status: String, // "running" | "stopped" | "failed"
+    pub status: EgressStatus,
     pub phase: Arc<std::sync::Mutex<String>>,
     pub started_at: String,
     pub start_instant: Instant,
@@ -623,8 +624,8 @@ impl MediaEngine {
         if phase == "failed" {
             return "failed".to_string();
         }
-        if egress.status != "running" {
-            return egress.status.clone();
+        if egress.status != EgressStatus::Running {
+            return egress.status.to_string();
         }
         if egress.target_url.starts_with("hls://") && phase == "segmenting" {
             return "running".to_string();
@@ -841,7 +842,7 @@ impl MediaEngine {
                 .unwrap_or_else(|e| e.into_inner())
                 .clone(),
             status: Self::recent_egress_status(egress, has_ingest),
-            raw_status: egress.status.clone(),
+            raw_status: egress.status.to_string(),
             phase,
             started_at: egress.started_at.clone(),
             uptime_secs: egress.start_instant.elapsed().as_secs_f64(),
@@ -929,7 +930,7 @@ impl MediaEngine {
                 output_id: output_id.clone(),
                 pipeline_id: egress.pipeline_id.clone(),
                 protocol: egress.protocol.clone(),
-                status: egress.status.clone(),
+                status: egress.status.to_string(),
                 phase: egress
                     .phase
                     .lock()
@@ -1898,7 +1899,7 @@ impl MediaEngine {
                 protocol: Self::egress_protocol_from_url(url).to_string(),
                 target_url: url.to_string(),
                 target_addr: Arc::new(std::sync::Mutex::new(None)),
-                status: "running".to_string(),
+                status: EgressStatus::Running,
                 phase: Arc::new(std::sync::Mutex::new("starting".to_string())),
                 started_at: chrono::Utc::now().to_rfc3339(),
                 start_instant: now,
