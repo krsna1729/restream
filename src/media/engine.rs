@@ -2627,16 +2627,16 @@ impl MediaEngine {
                 .and_then(|i| i.video.as_ref())
                 .map(|v| v.codec.as_str());
 
-            let plan = crate::planner::graph_plan::plan_pipeline_graph(
+            let Some(plan) = crate::planner::graph_plan::plan_hls_preview_graph(
                 &pipeline_id,
                 ingest_codec,
-                &[],
-                true,
                 &self.config.backend_policy,
-            );
+            ) else {
+                continue;
+            };
 
             for stage in plan.stages {
-                if stage.kind.is_preview() {
+                if stage.kind != StageKind::Source {
                     needed.insert(stage.key);
                 }
             }

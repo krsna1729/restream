@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::{MediaEngine, VideoMeta};
 use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_runtime::StageRuntimeManager;
+use crate::planner::graph_plan::plan_hls_preview_graph;
 
 /// Resolved HLS preview graph.
 pub struct HlsPreviewGraph {
@@ -53,10 +53,18 @@ pub async fn plan_hls_preview(
         }
 
         match resolved_codec {
-            Some(codec) if is_hevc_preview_codec(codec) => {
+            Some(codec) => {
+                let preview_plan =
+                    plan_hls_preview_graph(pipeline_id, Some(codec), &engine.config.backend_policy);
+                let Some(preview_plan) = preview_plan else {
+                    return Some(HlsPreviewGraph {
+                        video_ring: source_ring,
+                        audio_ring: None,
+                        video_meta: None,
+                    });
+                };
                 let preview_video = build_preview_video_meta(&engine, pipeline_id).await;
-                let key =
-                    StageKey::new(pipeline_id, StageKind::preview("720p", StageKind::source()));
+                let key = preview_plan.terminal_stage;
                 let manager = StageRuntimeManager::new(engine.clone());
                 let (handle, created) = manager
                     .ensure_stage(key.clone(), source_ring.clone(), None)
@@ -72,23 +80,12 @@ pub async fn plan_hls_preview(
                     video_meta: preview_video,
                 });
             }
-            Some(_) => {
-                return Some(HlsPreviewGraph {
-                    video_ring: source_ring,
-                    audio_ring: None,
-                    video_meta: None,
-                });
-            }
             None if tokio::time::Instant::now() >= deadline => {
                 return None;
             }
             None => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
         }
     }
-}
-
-fn is_hevc_preview_codec(codec: &str) -> bool {
-    codec.eq_ignore_ascii_case("hevc") || codec.eq_ignore_ascii_case("h265")
 }
 
 async fn build_preview_video_meta(engine: &MediaEngine, pipeline_id: &str) -> Option<VideoMeta> {
