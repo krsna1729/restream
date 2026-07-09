@@ -12,10 +12,8 @@ use tokio::process::{ChildStderr, ChildStdout};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
-use crate::application::ingest::{
-    ResolveFileIngestError, clear_stream_key_file_ingests, resolve_file_ingest_context,
-};
-use crate::application::ports::{IngestLookup, SqliteIngestLookup, SqlitePipelineStore};
+use crate::application::ingest::{ResolveFileIngestError, resolve_file_ingest_context};
+use crate::application::ports::{SqliteIngestLookup, SqlitePipelineStore};
 use crate::application::services::{
     ApiError, FileIngestService, file_ingest_service::SpawnedFileIngestChild,
 };
@@ -430,22 +428,10 @@ pub async fn ingests_delete_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    if let Ok(Some(ingest)) = SqliteIngestLookup::new(state.db.clone())
-        .get_ingest(&id)
-        .await
-    {
-        let _ = clear_stream_key_file_ingests(
-            &SqlitePipelineStore::new(state.db.clone()),
-            &SqliteIngestLookup::new(state.db.clone()),
-            &state.engine,
-            &ingest.stream_key,
-        )
+    state
+        .file_ingest_service
+        .delete_ingest_with_runtime_cleanup(&state.engine, &id)
         .await;
-    }
-    let _ = state.engine.stop_file_ingest_child(&id).await;
-    state.engine.clear_file_ingest_running(&id).await;
-
-    let _ = state.ingest_service.delete_ingest(&id).await;
     Json(serde_json::json!({"deleted": true})).into_response()
 }
 
@@ -597,29 +583,18 @@ pub async fn ingests_stop_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    let ingest = match SqliteIngestLookup::new(state.db.clone())
-        .get_ingest(&id)
+    let ingest = match state
+        .file_ingest_service
+        .stop_ingest_with_runtime_cleanup(&state.engine, &id)
         .await
     {
-        Ok(Some(ingest)) => ingest,
-        Ok(None) => return (StatusCode::NOT_FOUND, "Ingest not found").into_response(),
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Ok(ingest) => ingest,
+        Err(ApiError::NotFound(_)) => {
+            return (StatusCode::NOT_FOUND, "Ingest not found").into_response();
+        }
+        Err(ApiError::Internal(_)) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(ApiError::Conflict(_)) => return StatusCode::CONFLICT.into_response(),
     };
-
-    if clear_stream_key_file_ingests(
-        &SqlitePipelineStore::new(state.db.clone()),
-        &SqliteIngestLookup::new(state.db.clone()),
-        &state.engine,
-        &ingest.stream_key,
-    )
-    .await
-    .is_err()
-    {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-
-    let _ = state.engine.stop_file_ingest_child(&id).await;
-    state.engine.clear_file_ingest_running(&id).await;
 
     Json(serde_json::json!({
         "id": ingest.id,

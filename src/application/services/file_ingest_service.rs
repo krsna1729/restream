@@ -9,7 +9,9 @@ use crate::application::ingest::{
     FileIngestConfig, PipelineFileIngestState, clear_stream_key_file_ingests,
     load_pipeline_file_ingest_state, persist_pipeline_file_ingest, remove_pipeline_file_ingest,
 };
-use crate::application::ports::{SqliteIngestLookup, SqlitePipelineStore};
+use crate::application::ports::{
+    IngestLookup, IngestWriter, SqliteIngestLookup, SqlitePipelineStore,
+};
 use crate::media::engine::MediaEngine;
 use crate::types::{Ingest, Pipeline};
 
@@ -141,6 +143,47 @@ impl FileIngestService {
         self.pipeline_service.get_by_id(id).await
     }
 
+    pub async fn delete_ingest_with_runtime_cleanup(&self, engine: &Arc<MediaEngine>, id: &str) {
+        let ingest_store = SqliteIngestLookup::new(self.db.clone());
+        let pipeline_store = SqlitePipelineStore::new(self.db.clone());
+
+        if let Ok(Some(ingest)) = ingest_store.get_ingest(id).await {
+            let _ = clear_stream_key_file_ingests(
+                &pipeline_store,
+                &ingest_store,
+                engine,
+                &ingest.stream_key,
+            )
+            .await;
+        }
+        let _ = engine.stop_file_ingest_child(id).await;
+        engine.clear_file_ingest_running(id).await;
+        let _ = ingest_store.delete_ingest(id).await;
+    }
+
+    pub async fn stop_ingest_with_runtime_cleanup(
+        &self,
+        engine: &Arc<MediaEngine>,
+        id: &str,
+    ) -> ApiResult<Ingest> {
+        let ingest_store = SqliteIngestLookup::new(self.db.clone());
+        let pipeline_store = SqlitePipelineStore::new(self.db.clone());
+        let ingest = ingest_store
+            .get_ingest(id)
+            .await
+            .map_err(|err| ApiError::internal(format!("get ingest: {err}")))?
+            .ok_or_else(|| ApiError::not_found("Ingest not found"))?;
+
+        clear_stream_key_file_ingests(&pipeline_store, &ingest_store, engine, &ingest.stream_key)
+            .await
+            .map_err(|err| ApiError::internal(format!("clear file ingest state: {err:?}")))?;
+
+        let _ = engine.stop_file_ingest_child(id).await;
+        engine.clear_file_ingest_running(id).await;
+
+        Ok(ingest)
+    }
+
     pub async fn apply_file_ingest_payload(
         &self,
         engine: &Arc<MediaEngine>,
@@ -223,6 +266,7 @@ impl FileIngestService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::services::PipelineService;
 
     fn ingest_with(live_optimized: bool) -> Ingest {
         Ingest {
@@ -239,6 +283,29 @@ mod tests {
     fn has_arg_pair(args: &[String], first: &str, second: &str) -> bool {
         args.windows(2)
             .any(|window| window[0] == first && window[1] == second)
+    }
+
+    fn service(pool: SqlitePool) -> FileIngestService {
+        FileIngestService::new(pool.clone(), PipelineService::new(pool))
+    }
+
+    async fn setup_ingest(pool: &SqlitePool, ingest_id: &str) {
+        crate::db::setup_database_schema(pool).await.unwrap();
+        crate::db::create_pipeline(pool, "pipe-1", "Pipeline", "stream-key", None, None)
+            .await
+            .unwrap();
+        crate::db::create_ingest(
+            pool,
+            ingest_id,
+            "clip.mp4",
+            "stream-key",
+            false,
+            "",
+            false,
+            crate::types::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+        )
+        .await
+        .unwrap();
     }
 
     #[test]
@@ -284,5 +351,42 @@ mod tests {
             "-force_key_frames",
             "expr:gte(t,n_forced*1)"
         ));
+    }
+
+    #[tokio::test]
+    async fn stop_ingest_with_runtime_cleanup_clears_running_state() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        setup_ingest(&pool, "ing-stop").await;
+        let engine = Arc::new(MediaEngine::new());
+        engine.mark_file_ingest_running("ing-stop").await;
+
+        let ingest = service(pool)
+            .stop_ingest_with_runtime_cleanup(&engine, "ing-stop")
+            .await
+            .unwrap();
+
+        assert_eq!(ingest.id, "ing-stop");
+        assert!(!engine.is_file_ingest_running("ing-stop").await);
+    }
+
+    #[tokio::test]
+    async fn delete_ingest_with_runtime_cleanup_deletes_and_clears_running_state() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        setup_ingest(&pool, "ing-delete").await;
+        let engine = Arc::new(MediaEngine::new());
+        engine.mark_file_ingest_running("ing-delete").await;
+        let service = service(pool.clone());
+
+        service
+            .delete_ingest_with_runtime_cleanup(&engine, "ing-delete")
+            .await;
+
+        assert!(!engine.is_file_ingest_running("ing-delete").await);
+        assert!(
+            crate::db::get_ingest(&pool, "ing-delete")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }
