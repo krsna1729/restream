@@ -2,6 +2,8 @@
 
 use super::*;
 
+#[path = "mixed_artifact_index.rs"]
+mod mixed_artifact_index;
 #[path = "mixed_artifacts.rs"]
 mod mixed_artifacts;
 #[path = "mixed_checks.rs"]
@@ -33,6 +35,7 @@ mod mixed_telemetry;
 #[path = "output_helpers.rs"]
 mod output_helpers;
 
+pub(super) use mixed_artifact_index::{mixed_artifact_index_path, write_mixed_artifact_index};
 pub(super) use mixed_artifacts::{HarnessOutputCell, HarnessOutputRegistry, infer_output_protocol};
 pub(super) use mixed_checks::{verify_mixed_output_cases_inner, verify_mixed_output_dimensions};
 pub(super) use mixed_control::{
@@ -234,6 +237,10 @@ impl MixedEnv {
 
     pub(super) fn outputs_json_path(&self) -> PathBuf {
         self.work_dir.join("outputs.json")
+    }
+
+    pub(super) fn artifact_index_path(&self) -> PathBuf {
+        mixed_artifact_index_path(self)
     }
 
     pub(super) fn register_output_cell(&self, cell: HarnessOutputCell) -> Result<(), String> {
@@ -1655,6 +1662,7 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
         config["pipelineDeleted"] = json!(true);
     }
 
+    write_mixed_artifact_index(&env)?;
     Ok(json!({
         "passed": true,
         "mode": mixed_input_mode_name(case),
@@ -1687,6 +1695,7 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
             "timingJsonl": env.timing_log,
             "rssSummary": env.rss_summary,
             "outputsJson": env.outputs_json_path(),
+            "artifactIndexJson": env.artifact_index_path(),
             "summary": env.summary_log,
             "restreamLog": env.restream_log,
             "mediamtxLog": env.mediamtx_log,
@@ -1719,6 +1728,7 @@ pub(super) fn ensure_mixed_artifacts(env: &MixedEnv) -> Result<(), String> {
             .map_err(|_| "mixed output registry lock poisoned".to_string())?
             .write_outputs_json(&env.outputs_json_path())?;
     }
+    write_mixed_artifact_index(env)?;
     Ok(())
 }
 
@@ -2085,6 +2095,7 @@ pub(super) async fn run_mixed_anchor_config(
         return Err(error);
     }
 
+    write_mixed_artifact_index(env)?;
     let mut result = json!({
         "scenario": cfg,
         "pipelineId": pipeline_id,
@@ -2098,6 +2109,7 @@ pub(super) async fn run_mixed_anchor_config(
         "outputMatrix": mixed_output_matrix_json(output_cases),
         "artifacts": {
             "outputsJson": env.outputs_json_path(),
+            "artifactIndexJson": env.artifact_index_path(),
         },
         "outputs": env.output_registry_json(),
     });
@@ -2250,6 +2262,7 @@ pub(super) async fn run_mixed_live_config(
         return Err(error);
     }
 
+    write_mixed_artifact_index(env)?;
     let mut result = json!({
         "scenario": cfg,
         "pipelineId": pipeline_id,
@@ -2264,6 +2277,7 @@ pub(super) async fn run_mixed_live_config(
         "outputMatrix": mixed_output_matrix_json(output_cases),
         "artifacts": {
             "outputsJson": env.outputs_json_path(),
+            "artifactIndexJson": env.artifact_index_path(),
         },
         "outputs": env.output_registry_json(),
     });
@@ -2441,6 +2455,7 @@ pub(super) async fn run_mixed_file_config(
         "[{cfg}] done: {total} outputs, baseline={rss_baseline}kB peak={rss_peak}kB growth={growth_kb}kB"
     );
 
+    write_mixed_artifact_index(env)?;
     Ok(json!({
         "scenario": cfg,
         "inputCase": case.scenario_id(),
@@ -2451,6 +2466,7 @@ pub(super) async fn run_mixed_file_config(
         "recording": recording,
         "artifacts": {
             "outputsJson": env.outputs_json_path(),
+            "artifactIndexJson": env.artifact_index_path(),
         },
         "outputs": env.output_registry_json(),
         "rssBaselineKb": rss_baseline,
