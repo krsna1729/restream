@@ -219,15 +219,15 @@ legacy ring escape hatches have been removed.
 |---|---|---|
 | `GraphRole::HlsPreview` | ✅ Present | `runtime/graph.rs`. |
 | HLS preview planning | ✅ Present | `planner::graph_plan::plan_hls_preview_graph()` now models H264 as `source -> fMP4 segmenter` and HEVC as `source -> preview -> fMP4 segmenter`, and `MediaEngine::ensure_hls_preview_runtime()` owns preview graph planning, store/cancel setup, segmenter task spawning, and active preview stage-key reporting. |
-| API no longer directly creates preview ring/backend | ✅ Mostly | `api/hls.rs` delegates to `application::hls_preview::ensure_hls_preview()`. |
-| Runtime/application service owns preview orchestration | ✅ Present | `application/hls_preview.rs` owns request policy, while `MediaEngine::ensure_hls_preview_runtime()` owns preview graph planning, store/cancel setup, and fMP4 segmenter spawning. |
+| API no longer directly creates preview ring/backend | ✅ Complete | `api/hls.rs` delegates preview startup, playlist/segment reads, and blocked-cause selection to `application::hls_preview`; it only handles auth, path extraction, and HTTP response mapping. |
+| Runtime/application service owns preview orchestration | ✅ Present | `application/hls_preview.rs` owns request/serving policy, while `MediaEngine::ensure_hls_preview_runtime()` owns preview graph planning, store/cancel setup, and fMP4 segmenter spawning. |
 | Actual keys in health match spawned keys | ✅ Tested | Engine tests cover `active_hls_preview_stage_keys_*` through the same `plan_hls_preview_graph()` contract used by preview startup. |
-| HLS blocked-stage cause surfaced | ✅ Tested | API test covers HLS playlist blocked-stage cause, and engine tests prove blocked preview causes come from graph-planned stage keys rather than preview-name heuristics. |
+| HLS blocked-stage cause surfaced | ✅ Tested | Application and API tests cover HLS playlist blocked-stage cause, and engine tests prove blocked preview causes come from graph-planned stage keys rather than preview-name heuristics. |
 
-**Verdict**: **Near A-grade**. Preview stage creation, segmenter spawning, and
-health key reporting now share the dedicated graph planner through a runtime
-entry point. Remaining cleanup is limited to preview serving endpoints that
-still touch preview stores/blocked-cause runtime helpers directly.
+**Verdict**: **A-grade for the phase scope**. API handlers no longer construct
+preview rings/backends or read preview stores directly; preview startup,
+segmenter spawning, playlist/segment serving policy, blocked-cause selection,
+and health key reporting now flow through the application/runtime graph path.
 
 ---
 
@@ -312,13 +312,6 @@ convergence and later harness/reporting phases.
      `HealthService`, `LogService`, `AuthService`, and `SettingsService` are now
      port-trait backed.
 
-4. **HLS preview is no longer an API one-off, but preview serving still touches
-   runtime helpers directly**
-   - `application::hls_preview` now delegates graph planning, store/cancel
-     setup, and segmenter spawning to `MediaEngine::ensure_hls_preview_runtime`.
-     The remaining cleanup is moving preview playlist/segment store access and
-     blocked-cause shaping behind a narrower runtime/service read API.
-
 ### P2 — Guardrails and Large-File Debt
 
 6. **Architecture drift checks exist and are CI-wired, but artifact fixture
@@ -353,7 +346,7 @@ convergence and later harness/reporting phases.
 | Ph 7 Stage lifecycle | A- | Lifecycle/capacity visibility is strong and shared FFmpeg stages now use first-class `StageRuntime` objects as the ring/cancellation authority; lifecycle/metrics side maps remain during migration. |
 | Ph 8 Dependency-aware status | A | Operator-facing dependency status is complete for the phase scope, with typed internal egress lifecycle state. |
 | Ph 9 FFmpeg waist | A | Shared FFmpeg plan/backend/input/output contracts are the backend entry path, and legacy input/output ring escape hatches are removed. |
-| Ph 10 HLS preview | A- | API one-off removed, preview startup/spawn and health keys share the dedicated graph planner through a runtime entry point; preview serving endpoints still touch runtime store helpers directly. |
+| Ph 10 HLS preview | A | API one-off removed; preview startup/spawn, playlist/segment serving policy, blocked-cause selection, and health keys share the application/runtime graph path. |
 | Ph 11 Recording metadata | A | Media API consumes persisted recording metadata and mixed harness now requires pipeline/recording identity; filename-token matching fallback has been removed. |
 | Ph 12 Health/alerts/diagnostics | A | Health, alerts, graph, and the causal diagnostics context bundle meet the Phase 12 acceptance criteria; the legacy SSE diagnostics probe remains as an active probe path beside the read-only context endpoint. |
 | Ph 13 Harness v2 | D | Some dependency fields printed; semantic model missing. |
