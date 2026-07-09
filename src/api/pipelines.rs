@@ -12,7 +12,10 @@ use crate::alerts;
 use crate::api_view_models;
 use crate::application::services::ApiError;
 use crate::domain::srt_ingest::SrtPipelineIngestConfig;
+use crate::logging::types::AppLogFilters;
 use crate::media::srt::serialize_pipeline_srt_ingest_policy;
+use crate::planner::backend_policy::StageBackend;
+use crate::runtime::graph::{GraphRole, StageGraphPlan};
 
 use super::file_ingest::{
     PipelineFileIngestPayload, apply_pipeline_file_ingest_payload,
@@ -461,8 +464,34 @@ pub async fn pipeline_graph_handler(
     }
 
     let outputs = state.output_service.list_outputs().await?;
-    let graph =
-        crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &outputs).await;
+    let pipeline_outputs = outputs
+        .into_iter()
+        .filter(|output| output.pipeline_id == pipeline_id)
+        .collect::<Vec<_>>();
+    let mut graph =
+        crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
+            .await;
+    let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
+    let desired_graph = crate::planner::graph_plan::plan_pipeline_graph(
+        &pipeline_id,
+        ingest_codec.as_deref(),
+        &pipeline_outputs,
+        false,
+        &state.engine.config.backend_policy,
+    );
+    if let Some(graph_obj) = graph.as_object_mut() {
+        graph_obj.insert(
+            "desiredGraph".to_string(),
+            stage_graph_plan_json(&desired_graph),
+        );
+        graph_obj.insert(
+            "runtimeGraph".to_string(),
+            serde_json::json!({
+                "nodes": graph_obj.get("nodes").cloned().unwrap_or_default(),
+                "edges": graph_obj.get("edges").cloned().unwrap_or_default(),
+            }),
+        );
+    }
     Ok(Json(graph).into_response())
 }
 
@@ -494,6 +523,94 @@ pub async fn pipeline_alerts_handler(
         "alerts": alert_list,
     }))
     .into_response()
+}
+
+pub async fn pipeline_diagnostics_context_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(pipeline_id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
+    }
+
+    if state
+        .pipeline_service
+        .get_by_id(&pipeline_id)
+        .await
+        .is_err()
+    {
+        return Ok((StatusCode::NOT_FOUND, "Pipeline not found").into_response());
+    }
+
+    let recording_enabled = recording_enabled_map(&state, std::slice::from_ref(&pipeline_id)).await;
+    let health = crate::api_runtime_views::health_snapshot(
+        &state.engine,
+        std::slice::from_ref(&pipeline_id),
+        &recording_enabled,
+        0,
+    )
+    .await;
+    let generated_at = health["generatedAt"].as_str().unwrap_or("").to_string();
+
+    let pipeline_outputs = state
+        .output_service
+        .list_outputs()
+        .await?
+        .into_iter()
+        .filter(|output| output.pipeline_id == pipeline_id)
+        .collect::<Vec<_>>();
+    let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
+    let desired_graph = crate::planner::graph_plan::plan_pipeline_graph(
+        &pipeline_id,
+        ingest_codec.as_deref(),
+        &pipeline_outputs,
+        false,
+        &state.engine.config.backend_policy,
+    );
+    let runtime_graph =
+        crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
+            .await;
+
+    let mut alert_list = alerts::derive_alerts(&health);
+    state
+        .alert_tracker
+        .track_pipeline(&pipeline_id, &mut alert_list);
+    let recent_events = state.engine.recent_events(100, Some(&pipeline_id));
+    let recent_logs = state
+        .log_service
+        .list_logs(&AppLogFilters {
+            pipeline_id: Some(pipeline_id.clone()),
+            limit: Some(100),
+            order: Some("desc".to_string()),
+            ..empty_log_filters()
+        })
+        .await?;
+    let backend_stderr_tail = state
+        .log_service
+        .list_logs(&AppLogFilters {
+            pipeline_id: Some(pipeline_id.clone()),
+            prefix: Some("[ext-transcoder] ffmpeg stderr".to_string()),
+            limit: Some(20),
+            order: Some("desc".to_string()),
+            ..empty_log_filters()
+        })
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "generatedAt": generated_at,
+        "pipelineId": pipeline_id,
+        "health": health,
+        "graph": {
+            "desired": stage_graph_plan_json(&desired_graph),
+            "runtime": runtime_graph,
+        },
+        "alerts": alert_list,
+        "recentEvents": recent_events,
+        "recentLogs": recent_logs,
+        "backendStderrTail": backend_stderr_tail,
+    }))
+    .into_response())
 }
 
 pub async fn v1_pipeline_summary_handler(
@@ -613,4 +730,75 @@ pub async fn v1_pipeline_summary_handler(
         "alerts": alert_list,
     }))
     .into_response())
+}
+
+fn empty_log_filters() -> AppLogFilters {
+    AppLogFilters {
+        after_id: None,
+        level: Some("debug".to_string()),
+        since: None,
+        until: None,
+        target: None,
+        scope: None,
+        pipeline_id: None,
+        output_id: None,
+        event_class: None,
+        prefix: None,
+        limit: None,
+        order: None,
+    }
+}
+
+fn stage_graph_plan_json(plan: &StageGraphPlan) -> serde_json::Value {
+    serde_json::json!({
+        "pipelineId": plan.pipeline_id.as_str(),
+        "role": graph_role_json(&plan.role),
+        "terminalStage": plan.terminal_stage.to_string(),
+        "stages": plan
+            .stages
+            .iter()
+            .map(|stage| {
+                serde_json::json!({
+                    "stage": stage.key.to_string(),
+                    "kind": stage.kind.to_string(),
+                    "backend": stage_backend_name(stage.backend),
+                    "input": stage.input.as_ref().map(|input| input.to_string()),
+                })
+            })
+            .collect::<Vec<_>>(),
+        "edges": plan
+            .edges
+            .iter()
+            .map(|edge| {
+                serde_json::json!({
+                    "from": edge.from.to_string(),
+                    "to": edge.to.to_string(),
+                })
+            })
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn graph_role_json(role: &GraphRole) -> serde_json::Value {
+    match role {
+        GraphRole::Output { output_id } => serde_json::json!({
+            "kind": "output",
+            "outputId": output_id.as_str(),
+        }),
+        GraphRole::HlsPreview => serde_json::json!({ "kind": "hlsPreview" }),
+        GraphRole::HlsOutput { output_id } => serde_json::json!({
+            "kind": "hlsOutput",
+            "outputId": output_id.as_str(),
+        }),
+        GraphRole::Recording => serde_json::json!({ "kind": "recording" }),
+        GraphRole::Diagnostic => serde_json::json!({ "kind": "diagnostic" }),
+    }
+}
+
+fn stage_backend_name(backend: StageBackend) -> &'static str {
+    match backend {
+        StageBackend::AudioRouter => "audioRouter",
+        StageBackend::InternalFfmpeg => "internalFfmpeg",
+        StageBackend::ExternalFfmpeg => "externalFfmpeg",
+    }
 }

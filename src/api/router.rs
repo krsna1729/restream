@@ -44,9 +44,10 @@ use super::outputs::{
     outputs_stop_handler, outputs_update_handler, youtube_monitoring_status_handler,
 };
 use super::pipelines::{
-    pipeline_alerts_handler, pipeline_detail_handler, pipeline_graph_handler,
-    pipeline_probe_handler, pipelines_delete_handler, pipelines_get_handler,
-    pipelines_post_handler, pipelines_update_handler, v1_pipeline_summary_handler,
+    pipeline_alerts_handler, pipeline_detail_handler, pipeline_diagnostics_context_handler,
+    pipeline_graph_handler, pipeline_probe_handler, pipelines_delete_handler,
+    pipelines_get_handler, pipelines_post_handler, pipelines_update_handler,
+    v1_pipeline_summary_handler,
 };
 use super::settings::{config_get_handler, config_patch_handler};
 use super::state::AppState;
@@ -193,6 +194,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/pipelines/:pipeline_id/summary",
             get(v1_pipeline_summary_handler),
+        )
+        .route(
+            "/api/v1/pipelines/:pipeline_id/diagnostics/context",
+            get(pipeline_diagnostics_context_handler),
         )
         .route(
             "/api/v1/pipelines/:pipeline_id/diagnostics",

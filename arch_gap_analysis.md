@@ -14,7 +14,8 @@
 The codebase has made substantial progress through Phases 1-12, and the most
 important Phase 12 alert gaps have now been closed: health exposes stage
 snapshots, output status carries `blockedBy`, alerts derive from causal fields,
-and `/api/v1/pipelines/:id/graph` exists.
+`/api/v1/pipelines/:id/graph` exists, and the diagnostics context endpoint now
+bundles graph, health, alerts, events, relevant logs, and backend stderr tail.
 
 However, **Phases 1-12 are not all truly complete in the ideal architecture
 sense**. Several phases have strong scaffolding but incomplete adoption:
@@ -27,15 +28,14 @@ sense**. Several phases have strong scaffolding but incomplete adoption:
 - application services exist, but most services still own `SqlitePool` and call
   repositories directly rather than depending on port traits;
 - a graph planner exists and is used in some paths, but output preparation,
-  graph rendering, HLS preview, recording, diagnostics, agent preview, and
+  HLS preview, recording, agent preview, and
   harness expectations are not all using one planner contract;
 - stage lifecycle and FFmpeg narrow-waist contracts exist, but some legacy
   compatibility paths and direct ring writes remain;
 - recording metadata exists in the database, but the product/harness path still
   depends partly on filename matching;
-- diagnostics remain below the Phase 12 target because the SSE endpoint does
-  not yet bundle graph plan, graph runtime state, backend stderr tail, recent
-  events, and relevant logs as first-class diagnostic context.
+- diagnostics now expose the Phase 12 causal context bundle, while the legacy
+  SSE check endpoint remains a separate active-ingest probe.
 
 Bottom line: **the codebase has not completed a full "Amit Singhal" pass for
 Phases 1-12**. The current honest state is: strong progress, several production
@@ -140,7 +140,7 @@ state conversion are incomplete.
 | Output graph planner | ✅ Present | `planner::graph_plan::plan_pipeline_graph()`. |
 | HLS preview planner | ✅ Present | `planner::graph_plan::plan_hls_preview_graph()` and `planner/hls_preview.rs`. |
 | HLS output and recording planned by same graph | ⚠️ Partial | `GraphRole::HlsOutput` and `Recording` exist, but output/HLS/recording execution is not all driven by one graph planner path. |
-| Diagnostics/harness use same planner | ❌ Not met | Graph API uses `api_runtime_views::graph` and `OutputPath` directly; harness uses `OutputPath` helper logic; diagnostics do not expose planner snapshots as first-class output. |
+| Diagnostics/harness use same planner | ⚠️ Partial | Graph API and diagnostics expose `StageGraphPlan`, but harness expectations still duplicate output-path logic and other consumers are not all graph-plan driven. |
 | Stage-sharing tests compare against graph planner | ⚠️ Partial | Some planning tests exist, but harness expectations still duplicate output-path logic. |
 
 **Verdict**: **Partial**. There is a real planner, but it is not yet the single
@@ -244,12 +244,12 @@ and harness consumption level**.
 | Keyframe wait information | ⚠️ Partial | Stage phases include `waitingForKeyframe`; HLS/preview alerts now derive from it. Broader source GOP/keyframe diagnostic context lives separately. |
 | Alerts derive from causal fields | ✅ Complete for listed tasks | `alerts.rs` covers output blocked by stage, capacity wait, input/no-output, preview keyframe wait, SRT drops, and ring lag, with recommended actions. |
 | `/api/v1/pipelines/:id/graph` endpoint | ✅ Present | `api/pipelines.rs::pipeline_graph_handler` and `api_runtime_views::processing_graph()`. |
-| Graph endpoint shows desired and runtime graph | ⚠️ Partial | It renders a runtime-oriented processing graph; it does not clearly expose a separate desired graph plan and runtime graph state pair. |
-| Diagnostics endpoint includes graph plan/runtime/stderr/events/logs | ❌ Not met | Diagnostics SSE runs checks; graph, events, logs, and stderr tail are available elsewhere, but not bundled as the Phase 12 diagnostic context. |
+| Graph endpoint shows desired and runtime graph | ✅ Complete | `/graph` preserves legacy `nodes`/`edges` and adds `desiredGraph` plus `runtimeGraph`. |
+| Diagnostics endpoint includes graph plan/runtime/stderr/events/logs | ✅ Complete | `/diagnostics/context` returns health, desired/runtime graph, alerts, recent events, relevant logs, and backend stderr tail. The SSE diagnostics probe remains separate. |
 
-**Verdict**: **Mostly complete for health and alerts; partial for diagnostics**.
-The alertable health goal is now substantially met, but the diagnostics v2
-contract remains unfinished.
+**Verdict**: **Phase 12 is now A-grade for health, alerts, and the causal
+diagnostics bundle**. Remaining adjacent work belongs mostly to Phase 6 planner
+convergence and later harness/reporting phases.
 
 ---
 
@@ -268,46 +268,42 @@ contract remains unfinished.
 
 ### P0 — Highest-Value Architectural Correctness
 
-1. **Diagnostics v2 is not complete**
-   - The code has health, graph, events, logs, and alerts separately, but the
-     diagnostics endpoint does not yet produce the `impl.md` bundle: graph plan,
-     graph runtime state, backend stderr tail, recent events, and relevant logs.
+1. **Single graph planner is not yet the one source of truth**
+   - Output preparation, graph rendering, and diagnostics now expose
+     `StageGraphPlan`, but harness expected stage generation, recording, agent
+     impact previews, and HLS output are not all unified behind one graph-plan
+     contract.
 
-2. **Single graph planner is not yet the one source of truth**
-   - Output preparation uses the planner, but graph rendering, harness expected
-     stage generation, recording, diagnostics, agent impact previews, and HLS
-     output are not all unified behind one `StageGraphPlan` contract.
-
-3. **String runtime state remains in core logic**
+2. **String runtime state remains in core logic**
    - `ActiveEgress`, `RecentEgressOutcome`, `types::Output`, and reconcile logic
      still use raw strings for statuses/phases. This violates the Phase 1
      acceptance criterion and keeps schema drift risk alive.
 
 ### P1 — Layering and Ownership
 
-4. **API/service/repository boundary remains mixed**
+3. **API/service/repository boundary remains mixed**
    - Route modules exist, but `api/agent.rs`, `api/logs.rs`, `api/auth.rs`, and
      several services still call `db::*` directly. Only `PipelineService` is
      clearly port-trait backed.
 
-5. **FFmpeg narrow waist still has compatibility escape hatches**
+4. **FFmpeg narrow waist still has compatibility escape hatches**
    - `StageOutputNormalizer::output_ring()` and legacy inner functions mean the
      “all backend writes through normalizer” rule is not fully sealed.
 
-6. **HLS preview is no longer an API one-off, but still not a pure graph service**
+5. **HLS preview is no longer an API one-off, but still not a pure graph service**
    - `application::hls_preview` owns orchestration, but it directly calls
      `MediaEngine` segmenter methods and spawns the segmenter task.
 
 ### P2 — Guardrails and Large-File Debt
 
-7. **No architecture drift CI**
+6. **No architecture drift CI**
    - No source audit script, route inventory, forbidden import check, or file
      growth guard exists.
 
-8. **Large files still dominate reasoning cost**
+7. **Large files still dominate reasoning cost**
    - The Phase 15 split remains important once contract convergence is stronger.
 
-9. **Harness semantic model is still incomplete**
+8. **Harness semantic model is still incomplete**
    - The harness now consumes dependency-aware status in at least one progress
      path, but it lacks persisted output-cell identity and structured root-cause
      reporting.
@@ -324,13 +320,13 @@ contract remains unfinished.
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | C+ | Services exist; handlers still contain direct DB/application work. |
 | Ph 5 Repositories | C+ | Repo modules exist; port isolation partial. |
-| Ph 6 Graph planner | C+ | Planner exists; not single source for all roles. |
+| Ph 6 Graph planner | B- | Planner is now visible through graph/diagnostics APIs, but not yet the single source for all consumers. |
 | Ph 7 Stage lifecycle | B+ | Lifecycle/capacity visibility strong; runtime object model still split. |
 | Ph 8 Dependency-aware status | A- | Operator-facing dependency status is largely complete. |
 | Ph 9 FFmpeg waist | B | Shared contracts strong; direct-write/compatibility paths remain. |
 | Ph 10 HLS preview | A- | API one-off removed; runtime service boundary still not ideal. |
 | Ph 11 Recording metadata | B | Metadata exists; consumption/harness still partly filename-based. |
-| Ph 12 Health/alerts/diagnostics | B | Health/alerts mostly complete; diagnostics v2 partial. |
+| Ph 12 Health/alerts/diagnostics | A- | Health, alerts, graph, and causal diagnostics bundle are complete; legacy SSE diagnostics remains a separate probe. |
 | Ph 13 Harness v2 | D | Some dependency fields printed; semantic model missing. |
 | Ph 14 Agent/MCP cleanup | D | Agent still crosses DB/API/runtime boundaries. |
 | Ph 15 Large-file split | F | Not done. |

@@ -1706,9 +1706,95 @@ async fn pipeline_graph_returns_dag() {
     let graph = body_json(resp).await;
     assert!(graph["nodes"].is_array());
     assert!(graph["edges"].is_array());
+    assert_eq!(graph["desiredGraph"]["pipelineId"], pid);
+    assert!(graph["desiredGraph"]["stages"].is_array());
+    assert!(graph["desiredGraph"]["edges"].is_array());
+    assert!(graph["runtimeGraph"]["nodes"].is_array());
+    assert!(graph["runtimeGraph"]["edges"].is_array());
     // Source ring buffer node should always be present
     let nodes = graph["nodes"].as_array().unwrap();
     assert!(nodes.iter().any(|n| n["type"] == "ring_buffer"));
+}
+
+#[tokio::test]
+async fn pipeline_diagnostics_context_returns_causal_bundle() {
+    let (app, pool, engine) = test_app_with_engine().await;
+    let cookie = login(&app).await;
+
+    db::create_pipeline(
+        &pool,
+        "pipe-diagctx",
+        "Diag Context",
+        "diagctx-key",
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    db::create_output(
+        &pool,
+        "out-diagctx",
+        "pipe-diagctx",
+        "RTMP 720p",
+        "rtmp://example.test/live/diagctx",
+        None,
+        "running",
+        &OutputConfig::parse("720p"),
+    )
+    .await
+    .unwrap();
+    db::append_app_log_batch(
+        &pool,
+        &[AppLogEntry {
+            ts: "2026-07-09T00:00:00Z".to_string(),
+            level: "WARN".to_string(),
+            target: "restream::media::external_transcoder".to_string(),
+            message: "[ext-transcoder] ffmpeg stderr (video:720p): synthetic warning".to_string(),
+            fields: None,
+            pipeline_id: Some("pipe-diagctx".to_string()),
+            output_id: None,
+            event_type: Some("stage.stderr".to_string()),
+            event_class: Some("lifecycle".to_string()),
+        }],
+    )
+    .await
+    .unwrap();
+    engine
+        .runtime
+        .event_log
+        .emit(restream::events::EventKind::StageRegistered {
+            pipeline_id: "pipe-diagctx".to_string(),
+            encoding: "video:720p".to_string(),
+        });
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/pipelines/pipe-diagctx/diagnostics/context",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+
+    assert_eq!(body["pipelineId"], "pipe-diagctx");
+    assert_eq!(body["graph"]["desired"]["pipelineId"], "pipe-diagctx");
+    assert!(body["graph"]["desired"]["stages"].as_array().unwrap().len() >= 2);
+    assert!(body["graph"]["runtime"]["nodes"].is_array());
+    assert!(body["health"]["pipelines"]["pipe-diagctx"].is_object());
+    assert!(body["alerts"].is_array());
+    assert_eq!(body["recentEvents"].as_array().unwrap().len(), 1);
+    assert_eq!(body["recentLogs"].as_array().unwrap().len(), 1);
+    assert_eq!(body["backendStderrTail"].as_array().unwrap().len(), 1);
+    assert!(
+        body["backendStderrTail"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("synthetic warning")
+    );
 }
 
 #[tokio::test]
@@ -3392,6 +3478,10 @@ async fn v1_pipeline_list_detail_and_graph_endpoints_return_payloads() {
     let graph = body_json(resp).await;
     assert!(graph["nodes"].is_array());
     assert!(graph["edges"].is_array());
+    assert_eq!(graph["desiredGraph"]["pipelineId"], "pipe-v1");
+    assert!(graph["desiredGraph"]["stages"].is_array());
+    assert!(graph["runtimeGraph"]["nodes"].is_array());
+    assert!(graph["runtimeGraph"]["edges"].is_array());
 }
 
 #[tokio::test]
@@ -3421,6 +3511,18 @@ async fn v1_pipeline_detail_and_diagnostics_return_404_for_unknown_pipeline() {
         .oneshot(auth_req(
             "GET",
             "/api/v1/pipelines/missing/diagnostics",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let (app, cookie) = authenticated_app().await;
+    let resp = app
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/pipelines/missing/diagnostics/context",
             &cookie,
             None,
         ))
