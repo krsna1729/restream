@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::application::ports::SqliteMetaStore;
@@ -32,6 +33,39 @@ pub struct MediaLibraryService {
     db: SqlitePool,
     pipeline_service: PipelineService,
     ingest_service: IngestService,
+}
+
+#[derive(Clone)]
+struct MediaDirEntry {
+    name: String,
+    size: u64,
+    modified_at: String,
+    modified_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaLibraryFile {
+    pub name: String,
+    pub size: u64,
+    pub modified_at: String,
+    pub ingest_count: usize,
+    pub kind: String,
+    pub source_name: String,
+    pub source_size: u64,
+    pub converted_name: Option<String>,
+    pub converted_size: Option<u64>,
+    pub play_name: Option<String>,
+    pub conversion_status: Option<String>,
+    pub conversion_error: Option<String>,
+    pub conversion_updated_at: Option<String>,
+    pub recording_id: Option<String>,
+    pub pipeline_id: Option<String>,
+    pub recording_status: Option<String>,
+    pub recording_started_at: Option<String>,
+    pub recording_ended_at: Option<String>,
+    pub recording_codec_summary: Option<String>,
+    pub recording_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +104,165 @@ impl MediaLibraryService {
 
     pub async fn get_pipeline(&self, id: &str) -> ApiResult<Pipeline> {
         self.pipeline_service.get_by_id(id).await
+    }
+
+    pub async fn list_media_files(&self, media_dir: &str) -> Vec<MediaLibraryFile> {
+        let mut entries = HashMap::<String, MediaDirEntry>::new();
+        if let Ok(mut media_dir_entries) = tokio::fs::read_dir(media_dir).await {
+            while let Ok(Some(entry)) = media_dir_entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if media_filename_is_supported(&name)
+                    && let Ok(metadata) = entry.metadata().await
+                {
+                    let (modified_at, modified_ms) = entry_modified(&metadata);
+                    entries.insert(
+                        name.clone(),
+                        MediaDirEntry {
+                            name,
+                            size: metadata.len(),
+                            modified_at,
+                            modified_ms,
+                        },
+                    );
+                }
+            }
+        }
+
+        let mut files = Vec::new();
+        let mut consumed = HashSet::new();
+        let mut names = entries.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        let recording_metadata = self
+            .recording_metadata_by_filename(names.clone())
+            .await
+            .unwrap_or_default();
+
+        for name in names {
+            if !consumed.insert(name.clone()) {
+                continue;
+            }
+            let Some(entry) = entries.get(&name).cloned() else {
+                continue;
+            };
+            if name.ends_with(".mp4") {
+                let companion_source_name = Path::new(&name)
+                    .with_extension("ts")
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string());
+                if let Some(companion_source_name) = companion_source_name
+                    && crate::media::recording::is_recording_source_filename(&companion_source_name)
+                    && entries.contains_key(&companion_source_name)
+                {
+                    continue;
+                }
+            }
+
+            let ingests = self
+                .ingest_service
+                .list_for_filename(&name)
+                .await
+                .unwrap_or_default();
+            let lower_name = name.to_ascii_lowercase();
+            let recording_meta = recording_metadata.get(&name);
+            let kind = if recording_meta.is_some() || lower_name.contains("recording") {
+                "recording"
+            } else {
+                "source"
+            };
+
+            if crate::media::recording::is_recording_source_filename(&name) {
+                let source_path = Path::new(media_dir).join(&name);
+                let converted_name = crate::media::recording::build_mp4_path(&source_path)
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .filter(|candidate| entries.contains_key(candidate));
+                let converted_entry = converted_name
+                    .as_ref()
+                    .and_then(|candidate| entries.get(candidate).cloned());
+                if let Some(converted_name) = &converted_name {
+                    consumed.insert(converted_name.clone());
+                }
+                let conversion_state = crate::media::recording::load_conversion_state(&source_path);
+                let conversion_status = if converted_entry.is_some() {
+                    Some("ready".to_string())
+                } else {
+                    conversion_state.as_ref().map(|state| match state.status {
+                        crate::media::recording::RecordingConversionStatus::Converting => {
+                            "converting".to_string()
+                        }
+                        crate::media::recording::RecordingConversionStatus::Ready => {
+                            "ready".to_string()
+                        }
+                        crate::media::recording::RecordingConversionStatus::Failed => {
+                            "failed".to_string()
+                        }
+                    })
+                };
+                let conversion_error = conversion_state
+                    .as_ref()
+                    .and_then(|state| state.error.clone());
+                let conversion_updated_at = conversion_state
+                    .as_ref()
+                    .map(|state| state.updated_at.clone());
+                let converted_size = converted_entry.as_ref().map(|value| value.size);
+                let total_size = entry.size + converted_size.unwrap_or(0);
+                let modified_at = converted_entry
+                    .as_ref()
+                    .filter(|value| value.modified_ms > entry.modified_ms)
+                    .map(|value| value.modified_at.clone())
+                    .unwrap_or_else(|| entry.modified_at.clone());
+
+                files.push(MediaLibraryFile {
+                    name,
+                    size: total_size,
+                    modified_at,
+                    ingest_count: ingests.len(),
+                    kind: kind.to_string(),
+                    source_name: entry.name,
+                    source_size: entry.size,
+                    converted_name: converted_entry.as_ref().map(|value| value.name.clone()),
+                    converted_size,
+                    play_name: converted_entry.as_ref().map(|value| value.name.clone()),
+                    conversion_status,
+                    conversion_error,
+                    conversion_updated_at,
+                    recording_id: recording_meta.map(|row| row.recording_id.clone()),
+                    pipeline_id: recording_meta.map(|row| row.pipeline_id.clone()),
+                    recording_status: recording_meta.map(|row| row.status.clone()),
+                    recording_started_at: recording_meta.map(|row| row.started_at.clone()),
+                    recording_ended_at: recording_meta.and_then(|row| row.ended_at.clone()),
+                    recording_codec_summary: recording_meta
+                        .and_then(|row| row.codec_summary.clone()),
+                    recording_error: recording_meta.and_then(|row| row.error.clone()),
+                });
+                continue;
+            }
+
+            files.push(MediaLibraryFile {
+                name,
+                size: entry.size,
+                modified_at: entry.modified_at,
+                ingest_count: ingests.len(),
+                kind: kind.to_string(),
+                source_name: entry.name.clone(),
+                source_size: entry.size,
+                converted_name: None,
+                converted_size: None,
+                play_name: Some(entry.name),
+                conversion_status: None,
+                conversion_error: None,
+                conversion_updated_at: None,
+                recording_id: recording_meta.map(|row| row.recording_id.clone()),
+                pipeline_id: recording_meta.map(|row| row.pipeline_id.clone()),
+                recording_status: recording_meta.map(|row| row.status.clone()),
+                recording_started_at: recording_meta.map(|row| row.started_at.clone()),
+                recording_ended_at: recording_meta.and_then(|row| row.ended_at.clone()),
+                recording_codec_summary: recording_meta.and_then(|row| row.codec_summary.clone()),
+                recording_error: recording_meta.and_then(|row| row.error.clone()),
+            });
+        }
+
+        files
     }
 
     pub async fn recording_start(
@@ -288,6 +481,30 @@ async fn rollback_renames(completed: Vec<(PathBuf, PathBuf)>) {
     }
 }
 
+fn media_filename_is_supported(filename: &str) -> bool {
+    matches!(
+        filename
+            .rsplit('.')
+            .next()
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref(),
+        Some("ts" | "mkv" | "mp4" | "mov")
+    )
+}
+
+fn entry_modified(metadata: &std::fs::Metadata) -> (String, i64) {
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or_default();
+    let modified_at = chrono::DateTime::from_timestamp_millis(modified_ms)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default();
+    (modified_at, modified_ms)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +557,67 @@ mod tests {
         assert_eq!(metadata["finished.mp4"].recording_id, "rec-1");
         assert_eq!(metadata["recording_1.ts"].pipeline_id, "pipe-1");
         assert!(!metadata.contains_key("other.mp4"));
+    }
+
+    #[tokio::test]
+    async fn list_media_files_groups_recording_companions_and_ingest_counts() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        crate::db::create_ingest(
+            &pool,
+            "ing-list",
+            "recording_20260709T010203_demo.ts",
+            "stream-key",
+            false,
+            "",
+            false,
+            crate::types::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+        )
+        .await
+        .unwrap();
+        let service = MediaLibraryService::new(
+            pool.clone(),
+            PipelineService::new(pool.clone()),
+            IngestService::new(pool),
+        );
+        let temp_dir = tempfile_dir("media-list-service");
+        let source = temp_dir.join("recording_20260709T010203_demo.ts");
+        let converted = temp_dir.join("recording_20260709T010203_demo.mp4");
+        let state = temp_dir.join("recording_20260709T010203_demo.ts.conversion.json");
+        std::fs::write(&source, b"source").unwrap();
+        std::fs::write(&converted, b"converted").unwrap();
+        std::fs::write(
+            &state,
+            serde_json::to_vec(&crate::media::recording::RecordingConversionState {
+                status: crate::media::recording::RecordingConversionStatus::Ready,
+                updated_at: "2026-07-09T01:02:03Z".to_string(),
+                error: None,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let files = service.list_media_files(temp_dir.to_str().unwrap()).await;
+
+        assert_eq!(files.len(), 1);
+        let file = &files[0];
+        assert_eq!(file.name, "recording_20260709T010203_demo.ts");
+        assert_eq!(file.kind, "recording");
+        assert_eq!(file.ingest_count, 1);
+        assert_eq!(
+            file.converted_name.as_deref(),
+            Some("recording_20260709T010203_demo.mp4")
+        );
+        assert_eq!(
+            file.play_name.as_deref(),
+            Some("recording_20260709T010203_demo.mp4")
+        );
+        assert_eq!(file.conversion_status.as_deref(), Some("ready"));
+        assert_eq!(
+            file.size,
+            b"source".len() as u64 + b"converted".len() as u64
+        );
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 
     #[tokio::test]
