@@ -49,7 +49,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -73,7 +73,6 @@ use crate::types::Pipeline;
 // (~12 MB at 250 ms latency × 8 Mb/s) is the actual jitter absorber; this ring
 // only bridges the gap between the muxer thread and the SRT socket write.
 // At ~400 chunks/s for an 8 Mb/s stream, 256 slots ≈ 640 ms of absorption.
-static TS_RING_CAPACITY: OnceLock<usize> = OnceLock::new();
 pub struct SrtIngestPolicyStore {
     inner: RwLock<SrtIngestPolicySnapshot>,
 }
@@ -144,10 +143,6 @@ fn build_policy_snapshot(
         global,
         per_stream_key,
     }
-}
-
-fn ts_ring_capacity() -> usize {
-    *TS_RING_CAPACITY.get_or_init(|| crate::AppConfig::from_env().ts_ring_capacity)
 }
 
 // Raw SRT Types & FFI Bindings
@@ -3837,7 +3832,10 @@ pub fn start_shared_ts_muxer(
     engine: Arc<MediaEngine>,
     cancel: CancellationToken,
 ) -> Arc<TsChunkRing> {
-    let ts_ring = Arc::new(TsChunkRing::new(ts_ring_capacity(), cancel.clone()));
+    let ts_ring = Arc::new(TsChunkRing::new(
+        engine.config.ts_ring_capacity,
+        cancel.clone(),
+    ));
     let ts_ring_clone = ts_ring.clone();
     let pipeline_id_str = pipeline_id.to_string();
 

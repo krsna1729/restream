@@ -3,7 +3,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 use tokio::sync::RwLock as TokioRwLock;
 use tokio_util::sync::CancellationToken;
@@ -180,12 +179,6 @@ impl Default for RuntimeInfra {
     fn default() -> Self {
         Self::new(&crate::AppConfig::default())
     }
-}
-
-static EXTERNAL_FFMPEG_PERMITS: OnceLock<usize> = OnceLock::new();
-
-pub fn external_ffmpeg_child_limit() -> usize {
-    *EXTERNAL_FFMPEG_PERMITS.get_or_init(|| crate::AppConfig::from_env().external_ffmpeg_permits)
 }
 
 impl RuntimeInfra {

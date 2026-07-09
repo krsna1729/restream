@@ -1026,7 +1026,7 @@ impl MediaEngine {
                 | crate::media::stage_lifecycle::StagePhase::CapacityAcquired { .. }
         ) {
             let semaphore = &self.runtime.external_ffmpeg_semaphore;
-            let total = Some(crate::media::engine_registries::external_ffmpeg_child_limit());
+            let total = Some(self.config.external_ffmpeg_permits);
             let available = Some(semaphore.available_permits());
             let wait_ms = lifecycle
                 .phase_started_at
@@ -1106,7 +1106,7 @@ impl MediaEngine {
                 | crate::media::stage_lifecycle::StagePhase::CapacityAcquired { .. }
         ) {
             let semaphore = &self.runtime.external_ffmpeg_semaphore;
-            let total = Some(crate::media::engine_registries::external_ffmpeg_child_limit());
+            let total = Some(self.config.external_ffmpeg_permits);
             let available = Some(semaphore.available_permits());
             let wait_ms = lifecycle
                 .phase_started_at
@@ -1168,8 +1168,7 @@ impl MediaEngine {
                             | crate::media::stage_lifecycle::StagePhase::CapacityAcquired { .. }
                     ) {
                         let semaphore = &self.runtime.external_ffmpeg_semaphore;
-                        let total =
-                            Some(crate::media::engine_registries::external_ffmpeg_child_limit());
+                        let total = Some(self.config.external_ffmpeg_permits);
                         let available = Some(semaphore.available_permits());
                         let wait_ms = lifecycle.phase_started_at.map(|t| {
                             std::cmp::min(t.elapsed().as_millis(), u64::MAX as u128) as u64
@@ -3965,7 +3964,10 @@ mod tests {
     async fn egress_blocked_by_phase_reports_waiting_upstream_stage() {
         use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
 
-        let engine = MediaEngine::new();
+        let engine = MediaEngine::new_with_config(Arc::new(crate::AppConfig {
+            external_ffmpeg_permits: 3,
+            ..Default::default()
+        }));
         let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
         let lc = engine
             .get_or_create_stage_lifecycle(key.clone(), StagePhase::Registered)
@@ -3993,10 +3995,11 @@ mod tests {
                 blocked,
                 Some(crate::runtime::stage::StageRuntimeSnapshot {
                     phase: StagePhase::WaitingForCapacity { .. },
+                    capacity_permits_total: Some(3),
                     ..
                 })
             ),
-            "expected blocked by WaitingForCapacity, got {blocked:?}"
+            "expected blocked by WaitingForCapacity with configured permits, got {blocked:?}"
         );
 
         lc.transition(StagePhase::Producing);
@@ -6269,6 +6272,23 @@ mod tests {
 
         let ring = engine.get_or_create_pipeline("typed-ring").await;
         assert_eq!(ring.capacity(), 2048);
+    }
+
+    #[tokio::test]
+    async fn ts_muxer_ring_uses_engine_typed_config_capacity() {
+        let config = Arc::new(crate::AppConfig {
+            ts_ring_capacity: 96,
+            ..Default::default()
+        });
+        let engine = Arc::new(MediaEngine::new_with_config(config));
+        let source = Arc::new(RingBuffer::new(16));
+
+        let ts_ring = engine
+            .get_or_create_ts_muxer_stage("typed-ts", "source", source)
+            .await;
+
+        assert_eq!(ts_ring.ring.capacity(), 96);
+        ts_ring.cancel.cancel();
     }
 
     #[tokio::test]
