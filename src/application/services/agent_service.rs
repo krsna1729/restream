@@ -1,4 +1,9 @@
-use crate::application::ports::SqliteMetaStore;
+use std::sync::Arc;
+
+use crate::application::ports::{
+    IngestHostStore, IngestLookup, JobStore, MetaStore, OutputStore, PipelineStore,
+    SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqliteOutputStore, SqlitePipelineStore,
+};
 use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
 use crate::media::security::IngestSecurityService;
 use crate::types::{Ingest, Job, Output, Pipeline};
@@ -26,30 +31,50 @@ pub struct AgentPipelineOutputCatalog {
 /// cross-source settings reads live here instead of in the handler module.
 #[derive(Clone)]
 pub struct AgentService {
-    db: SqlitePool,
+    pipeline_store: Arc<dyn PipelineStore>,
+    output_store: Arc<dyn OutputStore>,
+    job_store: Arc<dyn JobStore>,
+    ingest_store: Arc<dyn IngestLookup>,
+    meta_store: Arc<dyn MetaStore>,
+    ingest_host_store: Arc<dyn IngestHostStore>,
 }
 
 impl AgentService {
     pub fn new(db: SqlitePool) -> Self {
-        Self { db }
+        let meta_store = Arc::new(SqliteMetaStore::new(db.clone()));
+        Self {
+            pipeline_store: Arc::new(SqlitePipelineStore::new(db.clone())),
+            output_store: Arc::new(SqliteOutputStore::new(db.clone())),
+            job_store: Arc::new(SqliteJobStore::new(db.clone())),
+            ingest_store: Arc::new(SqliteIngestLookup::new(db)),
+            meta_store: meta_store.clone(),
+            ingest_host_store: meta_store,
+        }
     }
 
     pub async fn load_context_catalog(
         &self,
         security: &IngestSecurityService,
     ) -> AgentContextCatalog {
-        let pipelines = crate::db::list_pipelines(&self.db)
+        let pipelines = self
+            .pipeline_store
+            .list_pipelines()
             .await
             .unwrap_or_default();
-        let outputs = crate::db::list_outputs(&self.db).await.unwrap_or_default();
-        let jobs = crate::db::list_jobs(&self.db).await.unwrap_or_default();
-        let ingests = crate::db::list_ingests(&self.db).await.unwrap_or_default();
+        let outputs = self.output_store.list_outputs().await.unwrap_or_default();
+        let jobs = self.job_store.list_jobs().await.unwrap_or_default();
+        let ingests = self.ingest_store.list_ingests().await.unwrap_or_default();
 
-        let settings_store = SqliteMetaStore::new(self.db.clone());
-        let settings = load_settings_snapshot(&settings_store, &settings_store, security)
-            .await
-            .ok();
-        let custom_encoding_len = crate::db::get_meta(&self.db, "custom_encoding")
+        let settings = load_settings_snapshot(
+            self.meta_store.as_ref(),
+            self.ingest_host_store.as_ref(),
+            security,
+        )
+        .await
+        .ok();
+        let custom_encoding_len = self
+            .meta_store
+            .get_meta("custom_encoding")
             .await
             .ok()
             .flatten()
@@ -78,10 +103,14 @@ impl AgentService {
     pub async fn try_load_pipeline_output_catalog(
         &self,
     ) -> Result<AgentPipelineOutputCatalog, String> {
-        let pipelines = crate::db::list_pipelines(&self.db)
+        let pipelines = self
+            .pipeline_store
+            .list_pipelines()
             .await
             .map_err(|error| format!("failed to list pipelines: {error}"))?;
-        let outputs = crate::db::list_outputs(&self.db)
+        let outputs = self
+            .output_store
+            .list_outputs()
             .await
             .map_err(|error| format!("failed to list outputs: {error}"))?;
 
