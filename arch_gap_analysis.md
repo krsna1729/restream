@@ -36,7 +36,7 @@ sense**. Several phases have strong scaffolding but incomplete adoption:
 - stage lifecycle and FFmpeg narrow-waist contracts exist, but some legacy
   compatibility paths and direct ring writes remain;
 - recording metadata exists in the database, and the product/harness path now
-  uses recording identity first with filename matching only as fallback;
+  requires recording metadata identity instead of filename-token matching;
 - diagnostics now expose the Phase 12 causal context bundle, while the legacy
   SSE check endpoint remains a separate active-ingest probe.
 
@@ -237,12 +237,12 @@ rather than going through a fully isolated runtime graph service.
 | Recording repository | ✅ Present | `db/recording_repo.rs` with create/update/list/delete tests. |
 | Runtime writes lifecycle metadata | ✅ Present | `media/recording.rs` builds service metadata and updates lifecycle state. |
 | Media API returns metadata including pipeline/status | ✅ Present | `/api/v1/media` attaches persisted `recordingId`, `pipelineId`, status, timing, codec, and error fields via `MediaLibraryService::recording_metadata_by_filename()`. |
-| Harness filters by pipeline/recording ID first | ✅ Present | Mixed harness recording checks snapshot API media recording identities, select new entries by `pipelineId`/`recordingId`, reject `.tmp.mp4`, and keep filename-token matching only as metadata-less fallback. |
+| Harness filters by pipeline/recording ID first | ✅ Complete | Mixed harness recording checks snapshot API media recording identities, selects new entries by `pipelineId`/`recordingId`, rejects `.tmp.mp4`, and no longer falls back to filename-token matching for metadata-less entries. |
 
-**Verdict**: **Largely complete**. Recording metadata is persisted, surfaced in
-the product API, and now consumed identity-first by mixed harness recording
-checks. Filename-token matching remains only as a compatibility fallback for
-metadata-less entries.
+**Verdict**: **Complete for the phase scope**. Recording metadata is persisted,
+surfaced in the product API, and consumed as the mixed harness recording
+identity. Filename-token matching is no longer used as a compatibility fallback
+for metadata-less entries.
 
 ---
 
@@ -337,7 +337,7 @@ convergence and later harness/reporting phases.
 | Ph 8 Dependency-aware status | A | Operator-facing dependency status is complete for the phase scope, with typed internal egress lifecycle state. |
 | Ph 9 FFmpeg waist | A | Shared FFmpeg plan/backend/input/output contracts are the backend entry path, and legacy input/output ring escape hatches are removed. |
 | Ph 10 HLS preview | A- | API one-off removed and preview startup/health keys share the dedicated graph planner; runtime service boundary still not ideal. |
-| Ph 11 Recording metadata | A- | Media API consumes persisted recording metadata and mixed harness now uses pipeline/recording identity first; filename-token matching remains only as fallback compatibility. |
+| Ph 11 Recording metadata | A | Media API consumes persisted recording metadata and mixed harness now requires pipeline/recording identity; filename-token matching fallback has been removed. |
 | Ph 12 Health/alerts/diagnostics | A | Health, alerts, graph, and the causal diagnostics context bundle meet the Phase 12 acceptance criteria; the legacy SSE diagnostics probe remains as an active probe path beside the read-only context endpoint. |
 | Ph 13 Harness v2 | D | Some dependency fields printed; semantic model missing. |
 | Ph 14 Agent/MCP cleanup | D | Agent still crosses DB/API/runtime boundaries. |

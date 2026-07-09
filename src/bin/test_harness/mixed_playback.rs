@@ -2,16 +2,6 @@
 
 use super::*;
 
-fn mixed_recording_scenario_token(cfg: &str) -> String {
-    cfg.replace('.', "_")
-}
-
-fn mixed_recording_name_matches_cfg(name: &str, cfg: &str) -> bool {
-    name.ends_with(".mp4")
-        && !name.ends_with(".tmp.mp4")
-        && name.contains(&mixed_recording_scenario_token(cfg))
-}
-
 fn media_recording_play_name(entry: &Value) -> Option<&str> {
     entry["playName"]
         .as_str()
@@ -20,10 +10,7 @@ fn media_recording_play_name(entry: &Value) -> Option<&str> {
 }
 
 fn media_recording_identity(entry: &Value) -> Option<String> {
-    entry["recordingId"]
-        .as_str()
-        .map(str::to_string)
-        .or_else(|| media_recording_play_name(entry).map(str::to_string))
+    entry["recordingId"].as_str().map(str::to_string)
 }
 
 async fn api_media_recording_identities(api: &RampApi) -> Result<HashSet<String>, String> {
@@ -38,11 +25,22 @@ async fn api_media_recording_identities(api: &RampApi) -> Result<HashSet<String>
         .collect())
 }
 
+fn is_new_recording_for_pipeline(
+    entry: &Value,
+    pipeline_id: &str,
+    before: &HashSet<String>,
+) -> bool {
+    entry["pipelineId"].as_str() == Some(pipeline_id)
+        && media_recording_play_name(entry).is_some()
+        && media_recording_identity(entry)
+            .as_ref()
+            .is_some_and(|identity| !before.contains(identity))
+}
+
 async fn wait_for_api_recording_for_pipeline(
     api: &RampApi,
     pipeline_id: &str,
     before: &HashSet<String>,
-    cfg: &str,
     timeout: Duration,
 ) -> Result<Value, String> {
     let deadline = Instant::now() + timeout;
@@ -51,28 +49,15 @@ async fn wait_for_api_recording_for_pipeline(
         let files = media["files"]
             .as_array()
             .ok_or("/api/v1/media response missing files")?;
-        if let Some(entry) = files.iter().find(|entry| {
-            entry["pipelineId"].as_str() == Some(pipeline_id)
-                && media_recording_play_name(entry).is_some()
-                && media_recording_identity(entry)
-                    .as_ref()
-                    .is_some_and(|identity| !before.contains(identity))
-        }) {
-            return Ok(entry.clone());
-        }
-        if let Some(entry) = files.iter().find(|entry| {
-            media_recording_play_name(entry).is_some_and(|name| {
-                mixed_recording_name_matches_cfg(name, cfg)
-                    && media_recording_identity(entry)
-                        .as_ref()
-                        .is_none_or(|identity| !before.contains(identity))
-            })
-        }) {
+        if let Some(entry) = files
+            .iter()
+            .find(|entry| is_new_recording_for_pipeline(entry, pipeline_id, before))
+        {
             return Ok(entry.clone());
         }
         if Instant::now() >= deadline {
             return Err(format!(
-                "no new recording for pipeline {pipeline_id} / {cfg} appeared in /api/v1/media within {}s",
+                "no new metadata-identified recording for pipeline {pipeline_id} appeared in /api/v1/media within {}s",
                 timeout.as_secs()
             ));
         }
@@ -277,7 +262,6 @@ pub(crate) async fn verify_mixed_recording(
         api,
         pipeline_id,
         &before_recordings,
-        cfg,
         Duration::from_secs(30),
     )
     .await?;
@@ -358,27 +342,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mixed_recording_name_match_requires_exact_scenario_token() {
-        assert!(mixed_recording_name_matches_cfg(
-            "recording_20260707T012755_mixed_asset_file_h265_a1_bf2.mp4",
-            "mixed.asset.file.h265.a1.bf2"
-        ));
-        assert!(!mixed_recording_name_matches_cfg(
-            "recording_20260707T012755_mixed_asset_file_h265_a1_bf0.mp4",
-            "mixed.asset.file.h265.a1.bf2"
-        ));
-    }
-
-    #[test]
-    fn mixed_recording_name_match_rejects_temporary_outputs() {
-        assert!(!mixed_recording_name_matches_cfg(
-            "recording_20260707T012755_mixed_asset_file_h265_a1_bf0.tmp.mp4",
-            "mixed.asset.file.h265.a1.bf0"
-        ));
-    }
-
-    #[test]
-    fn media_recording_identity_prefers_recording_id() {
+    fn media_recording_identity_uses_recording_id() {
         let entry = json!({
             "name": "recording_20260707T012755_pipe.mp4",
             "playName": "recording_20260707T012755_pipe.mp4",
@@ -386,6 +350,54 @@ mod tests {
         });
 
         assert_eq!(media_recording_identity(&entry).as_deref(), Some("rec-123"));
+    }
+
+    #[test]
+    fn media_recording_identity_rejects_metadata_less_filename_fallback() {
+        let entry = json!({
+            "name": "recording_20260707T012755_pipe.mp4",
+            "playName": "recording_20260707T012755_pipe.mp4",
+        });
+
+        assert_eq!(media_recording_identity(&entry), None);
+    }
+
+    #[test]
+    fn new_recording_selection_requires_pipeline_and_recording_id() {
+        let mut before = HashSet::new();
+        before.insert("old-rec".to_string());
+        let valid = json!({
+            "pipelineId": "pipe-1",
+            "recordingId": "new-rec",
+            "playName": "recording_20260707T012755_pipe.mp4",
+        });
+        let missing_id = json!({
+            "pipelineId": "pipe-1",
+            "playName": "recording_20260707T012755_pipe.mp4",
+        });
+        let old_id = json!({
+            "pipelineId": "pipe-1",
+            "recordingId": "old-rec",
+            "playName": "recording_20260707T012755_pipe.mp4",
+        });
+        let wrong_pipeline = json!({
+            "pipelineId": "pipe-2",
+            "recordingId": "new-rec",
+            "playName": "recording_20260707T012755_pipe.mp4",
+        });
+
+        assert!(is_new_recording_for_pipeline(&valid, "pipe-1", &before));
+        assert!(!is_new_recording_for_pipeline(
+            &missing_id,
+            "pipe-1",
+            &before
+        ));
+        assert!(!is_new_recording_for_pipeline(&old_id, "pipe-1", &before));
+        assert!(!is_new_recording_for_pipeline(
+            &wrong_pipeline,
+            "pipe-1",
+            &before
+        ));
     }
 
     #[test]
