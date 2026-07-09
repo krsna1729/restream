@@ -4,10 +4,10 @@
 //! output state, including packetizer, recording, and preview branches.
 
 use crate::api_view_models;
-use crate::application::output_path::OutputPath;
 use crate::domain::output_spec::VideoCodecKind;
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
+use crate::planner::graph_plan::plan_pipeline_graph;
 use crate::types::Output;
 use std::collections::HashSet;
 
@@ -112,17 +112,26 @@ pub(crate) async fn processing_graph(
     let ingest_video_codec = ingest
         .and_then(|ingest| ingest.video.as_ref())
         .map(|video| video.codec.as_str());
-    let visible_stage_keys: HashSet<StageKey> = pipeline_outputs
+    let visible_outputs = pipeline_outputs
         .iter()
         .filter(|output| {
             ingest.is_some()
                 && (output.desired_state == "running" || egresses.contains_key(&output.id))
         })
-        .flat_map(|output| {
-            let encoding = output.encoding_string();
-            OutputPath::resolve(pipeline_id, &encoding, &output.url)
-                .needed_stage_keys(ingest_video_codec)
-        })
+        .map(|output| (*output).to_owned())
+        .collect::<Vec<_>>();
+    let visible_stage_plan = plan_pipeline_graph(
+        pipeline_id,
+        ingest_video_codec,
+        &visible_outputs,
+        false,
+        &engine.config.backend_policy,
+    );
+    let visible_stage_keys: HashSet<StageKey> = visible_stage_plan
+        .stages
+        .iter()
+        .filter(|stage| stage.kind != StageKind::Source)
+        .map(|stage| stage.key.clone())
         .collect();
 
     for (key, (stage_ring, token)) in transcoder_buffers.iter() {
@@ -199,8 +208,15 @@ pub(crate) async fn processing_graph(
             egress.map(|egress| egress.metrics.snapshot()),
         ));
 
-        let output_path = OutputPath::resolve(pipeline_id, &encoding, &output.url);
-        let terminal_kind = output_path.terminal_stage_kind(ingest_is_hevc.then_some("hevc"));
+        let output_for_plan = [(*output).to_owned()];
+        let output_stage_plan = plan_pipeline_graph(
+            pipeline_id,
+            ingest_is_hevc.then_some("hevc"),
+            &output_for_plan,
+            false,
+            &engine.config.backend_policy,
+        );
+        let terminal_kind = output_stage_plan.terminal_stage.kind;
         let terminal_node_id = if matches!(terminal_kind, StageKind::Source) {
             rb_node_id.clone()
         } else {

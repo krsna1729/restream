@@ -1,7 +1,7 @@
 //! Application-layer output preparation that turns persisted output settings
 //! into the runtime ring and transcoder wiring owned by the media engine.
 
-use crate::application::output_path::OutputPath;
+use crate::domain::output_spec::{EgressProtocol, VideoCodecKind};
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::ring_buffer::RingBuffer;
@@ -15,10 +15,13 @@ pub async fn prepare_output_ring(
     output: &Output,
 ) -> (Arc<RingBuffer>, Option<StageKey>) {
     let source_buf = engine.get_or_create_pipeline(&output.pipeline_id).await;
-    let encoding = output.encoding_string();
-    let output_path = OutputPath::resolve(output.pipeline_id.as_str(), &encoding, &output.url);
     let ingest_video_codec = engine.ingest_video_codec(&output.pipeline_id).await;
-    let ingest_codec_override = output_path.ingest_codec_override(ingest_video_codec.as_deref());
+    let ingest_is_hevc = ingest_video_codec
+        .as_deref()
+        .map(VideoCodecKind::from_codec_name)
+        .is_some_and(VideoCodecKind::is_hevc);
+    let ingest_codec_override =
+        (EgressProtocol::from_url(&output.url).is_rtmp() && ingest_is_hevc).then_some("hevc");
 
     let plan = crate::planner::graph_plan::plan_pipeline_graph(
         &output.pipeline_id,
@@ -80,7 +83,7 @@ pub async fn prepare_output_ring(
         current_bufs.insert(stage.key.clone(), stage_buf);
     }
 
-    let terminal_key = output_path.terminal_stage_key(ingest_video_codec.as_deref());
+    let terminal_key = plan.terminal_stage.clone();
     let terminal_buf = current_bufs
         .get(&terminal_key)
         .cloned()

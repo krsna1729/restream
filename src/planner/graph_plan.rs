@@ -38,13 +38,16 @@ pub fn plan_pipeline_graph(
     );
 
     // 2. Add outputs stages
-    for output in outputs {
+    for (index, output) in outputs.iter().enumerate() {
         let encoding = output.encoding_string();
         let output_path = crate::application::output_path::OutputPath::resolve(
             pipeline_id,
             &encoding,
             &output.url,
         );
+        if index == 0 {
+            plan.terminal_stage = output_path.terminal_stage_key(ingest_codec);
+        }
 
         for stage_key in output_path.needed_stage_keys(ingest_codec) {
             let backend = policy.select_backend(&stage_key.kind);
@@ -61,7 +64,10 @@ pub fn plan_pipeline_graph(
             StageKind::preview("720p", StageKind::source()),
         );
         let backend = policy.select_backend(&preview_key.kind);
-        plan.add_stage(preview_key, backend);
+        plan.add_stage(preview_key.clone(), backend);
+        if outputs.is_empty() {
+            plan.terminal_stage = preview_key;
+        }
     }
 
     plan
@@ -139,6 +145,44 @@ mod tests {
     fn plan_hls_preview_graph_returns_none_for_missing_codec() {
         let policy = BackendPolicy::default();
         assert!(plan_hls_preview_graph("pipe_1", None, &policy).is_none());
+    }
+
+    #[test]
+    fn plan_pipeline_graph_sets_terminal_stage_from_output_path() {
+        let policy = BackendPolicy::default();
+        let output = Output {
+            id: "out_1".to_string(),
+            pipeline_id: "pipe_1".to_string(),
+            name: "Output".to_string(),
+            url: "rtmp://example/live".to_string(),
+            monitoring_url: None,
+            desired_state: "running".to_string(),
+            config: crate::domain::output_spec::OutputConfig::parse("720p+atrack:0"),
+        };
+
+        let plan = plan_pipeline_graph("pipe_1", Some("hevc"), &[output], false, &policy);
+
+        assert_eq!(
+            plan.terminal_stage,
+            StageKey::new(
+                "pipe_1",
+                StageKind::audio_route(
+                    "atrack:0",
+                    StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("720p")),
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn plan_pipeline_graph_sets_preview_terminal_when_preview_only() {
+        let policy = BackendPolicy::default();
+        let plan = plan_pipeline_graph("pipe_1", Some("hevc"), &[], true, &policy);
+
+        assert_eq!(
+            plan.terminal_stage,
+            StageKey::new("pipe_1", StageKind::preview("720p", StageKind::source()))
+        );
     }
 
     #[test]

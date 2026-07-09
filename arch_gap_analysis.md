@@ -27,9 +27,9 @@ sense**. Several phases have strong scaffolding but incomplete adoption:
 - API route modules exist, but several handlers still call `db::*` directly;
 - application services exist, but most services still own `SqlitePool` and call
   repositories directly rather than depending on port traits;
-- a graph planner exists and is used in some paths, but output preparation,
-  HLS preview, recording, agent preview, and
-  harness expectations are not all using one planner contract;
+- a graph planner exists and now drives output preparation, graph rendering,
+  HLS preview, and diagnostics, but recording, agent preview, and harness
+  expectations are not all using one planner contract;
 - stage lifecycle and FFmpeg narrow-waist contracts exist, but some legacy
   compatibility paths and direct ring writes remain;
 - recording metadata exists in the database, but the product/harness path still
@@ -140,11 +140,12 @@ state conversion are incomplete.
 | Output graph planner | ✅ Present | `planner::graph_plan::plan_pipeline_graph()`. |
 | HLS preview planner | ✅ Present | `planner::graph_plan::plan_hls_preview_graph()` and `planner/hls_preview.rs`. |
 | HLS output and recording planned by same graph | ⚠️ Partial | `GraphRole::HlsOutput` and `Recording` exist, but output/HLS/recording execution is not all driven by one graph planner path. |
-| Diagnostics/harness use same planner | ⚠️ Partial | Graph API and diagnostics expose `StageGraphPlan`, but harness expectations still duplicate output-path logic and other consumers are not all graph-plan driven. |
+| Diagnostics/harness use same planner | ⚠️ Partial | Graph API and diagnostics expose `StageGraphPlan`, and graph rendering now consumes planner stage/terminal output; harness expectations still duplicate output-path logic. |
 | Stage-sharing tests compare against graph planner | ⚠️ Partial | Some planning tests exist, but harness expectations still duplicate output-path logic. |
 
-**Verdict**: **Partial**. There is a real planner, but it is not yet the single
-planning model across all consumers.
+**Verdict**: **Mostly complete for output execution, graph rendering,
+diagnostics, and HLS preview planning; still partial for recording, agent
+preview, and harness expectations**.
 
 ---
 
@@ -269,7 +270,7 @@ convergence and later harness/reporting phases.
 ### P0 — Highest-Value Architectural Correctness
 
 1. **Single graph planner is not yet the one source of truth**
-   - Output preparation, graph rendering, and diagnostics now expose
+   - Output preparation, graph rendering, diagnostics, and HLS preview now use
      `StageGraphPlan`, but harness expected stage generation, recording, agent
      impact previews, and HLS output are not all unified behind one graph-plan
      contract.
@@ -320,7 +321,7 @@ convergence and later harness/reporting phases.
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | C+ | Services exist; handlers still contain direct DB/application work. |
 | Ph 5 Repositories | C+ | Repo modules exist; port isolation partial. |
-| Ph 6 Graph planner | B- | Planner is now visible through graph/diagnostics APIs, but not yet the single source for all consumers. |
+| Ph 6 Graph planner | B+ | Planner drives output preparation, graph rendering, diagnostics, and preview planning; harness/recording/agent consumers remain. |
 | Ph 7 Stage lifecycle | B+ | Lifecycle/capacity visibility strong; runtime object model still split. |
 | Ph 8 Dependency-aware status | A- | Operator-facing dependency status is largely complete. |
 | Ph 9 FFmpeg waist | B | Shared contracts strong; direct-write/compatibility paths remain. |
