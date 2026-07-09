@@ -157,6 +157,9 @@ pub(crate) async fn ffprobe_video_packets(url: &str, output_path: &Path) -> Resu
         .map_err(|e| e.to_string())?;
     std::fs::write(output_path, &output.stdout).map_err(|e| e.to_string())?;
     let stderr_path = artifact_path("bframe-ffprobe.log");
+    if let Some(parent) = stderr_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     std::fs::write(&stderr_path, &output.stderr).map_err(|e| e.to_string())?;
     if !output.status.success() {
         return Err(format!(

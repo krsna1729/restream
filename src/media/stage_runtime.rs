@@ -164,9 +164,9 @@ impl StageRuntimeManager {
         self.spawn_ffmpeg(handle, source_ring, input_codec_override, true);
     }
 
-    /// Spawn a codec-edge (HEVC→H.264) stage. The edge is always video-only.
+    /// Spawn a codec-edge (HEVC→H.264) stage with audio passthrough.
     pub fn spawn_codec_edge_stage(&self, handle: StageHandle, source_ring: Arc<RingBuffer>) {
-        self.spawn_ffmpeg(handle, source_ring, None, false);
+        self.spawn_ffmpeg(handle, source_ring, None, true);
     }
 
     /// Spawn a browser-preview stage that converts to H.264 video only.
@@ -735,6 +735,51 @@ mod tests {
         let (handle, created) = manager.ensure_stage(key, source, None).await;
         assert!(created);
         assert_eq!(handle.ring.capacity(), 768);
+    }
+
+    #[test]
+    fn codec_edge_plan_can_passthrough_audio_tracks() {
+        let key = StageKey::new(
+            "pipe-codec-edge",
+            StageKind::codec_edge("hevc_to_h264", StageKind::source()),
+        );
+        let video = VideoMeta {
+            codec: "hevc".to_string(),
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            bw: None,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+            level: None,
+            pixel_format: None,
+        };
+        let audio = AudioMeta {
+            codec: "aac".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            channel_layout: None,
+            track_index: 0,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+        };
+
+        let plan = build_ffmpeg_stage_plan(&key, Some(video), vec![audio], None, true)
+            .expect("codec edge plan");
+
+        assert!(plan.include_audio);
+        assert_eq!(plan.input.audio_tracks.len(), 1);
+        assert!(matches!(
+            plan.video,
+            VideoStageOp::CodecEdge {
+                op: CodecEdgeOp::HevcToH264
+            }
+        ));
+        assert!(matches!(plan.audio, AudioStageOp::Passthrough));
     }
 
     #[tokio::test]
