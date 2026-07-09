@@ -241,6 +241,7 @@ pub async fn start_audio_router(
 
     engine.remove_stage_metrics(&stage_key).await;
     engine.remove_stage_lifecycle(&stage_key).await;
+    engine.remove_stage_runtime(&stage_key).await;
     engine
         .runtime
         .event_log
@@ -375,6 +376,7 @@ async fn run_internal_video_stage(
     engine.remove_input_queue(&stage_key).await;
     engine.remove_stage_metrics(&stage_key).await;
     engine.remove_stage_lifecycle(&stage_key).await;
+    engine.remove_stage_runtime(&stage_key).await;
     engine
         .runtime
         .event_log

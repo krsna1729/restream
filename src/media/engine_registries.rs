@@ -138,7 +138,18 @@ impl FileIngestRegistry {
     }
 }
 
+#[derive(Clone)]
+pub struct StageRuntime {
+    pub ring: Arc<RingBuffer>,
+    pub cancel: CancellationToken,
+    pub lifecycle: Arc<StageLifecycle>,
+    pub metrics: Arc<StageMetrics>,
+    pub input_queue: Option<Arc<MemoryQueue>>,
+    pub pipe_metrics: Option<Arc<PipeMetrics>>,
+}
+
 pub struct StageRegistry {
+    pub runtimes: TokioRwLock<HashMap<StageKey, StageRuntime>>,
     pub buffers: TokioRwLock<HashMap<StageKey, TranscoderBuffer>>,
     pub metrics: TokioRwLock<HashMap<StageKey, Arc<StageMetrics>>>,
     pub input_queues: TokioRwLock<HashMap<StageKey, Arc<MemoryQueue>>>,
@@ -156,6 +167,7 @@ impl Default for StageRegistry {
 impl StageRegistry {
     pub fn new() -> Self {
         Self {
+            runtimes: TokioRwLock::new(HashMap::new()),
             buffers: TokioRwLock::new(HashMap::new()),
             metrics: TokioRwLock::new(HashMap::new()),
             input_queues: TokioRwLock::new(HashMap::new()),

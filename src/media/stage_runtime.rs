@@ -13,6 +13,7 @@ use tracing::info;
 use crate::domain::audio_routing::{AudioRouting, parse_audio_operation};
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
+use crate::media::engine_registries::StageRuntime;
 use crate::media::ffmpeg::backend::{
     ExternalFfmpegBackend, FfmpegStageBackend, InternalFfmpegBackend, StageRunContext,
 };
@@ -73,17 +74,32 @@ impl StageRuntimeManager {
         source_ring: Arc<RingBuffer>,
         input_codec_override: Option<&str>,
     ) -> (StageHandle, bool) {
+        let backend_kind = backend_kind_for_stage(&key.kind, &self.policy);
+        let lifecycle = self
+            .engine
+            .get_or_create_stage_lifecycle_with_backend(
+                key.clone(),
+                StagePhase::Registered,
+                backend_kind,
+            )
+            .await;
+        let metrics = self.engine.get_or_create_stage_metrics(key.clone()).await;
+
         // Single write-lock acquisition to atomically check-and-insert, avoiding
         // the TOCTOU race where two callers create duplicate stages.
+        let mut runtimes = self.engine.stages.runtimes.write().await;
         let mut buffers = self.engine.stages.buffers.write().await;
         if let Some((rb, token)) = buffers.get(&key)
             && !token.is_cancelled()
         {
-            let lifecycle = self
-                .engine
-                .get_or_create_stage_lifecycle(key.clone(), StagePhase::Registered)
-                .await;
-            let metrics = self.engine.get_or_create_stage_metrics(key.clone()).await;
+            runtimes.entry(key.clone()).or_insert_with(|| StageRuntime {
+                ring: rb.clone(),
+                cancel: token.clone(),
+                lifecycle: lifecycle.clone(),
+                metrics: metrics.clone(),
+                input_queue: None,
+                pipe_metrics: None,
+            });
             return (
                 StageHandle {
                     key,
@@ -99,21 +115,22 @@ impl StageRuntimeManager {
         let output_ring = Arc::new(RingBuffer::new(self.engine.config.transcoder_ring_capacity));
         let cancel = CancellationToken::new();
         buffers.insert(key.clone(), (output_ring.clone(), cancel.clone()));
-        drop(buffers); // release write lock before any await-heavy setup
+        runtimes.insert(
+            key.clone(),
+            StageRuntime {
+                ring: output_ring.clone(),
+                cancel: cancel.clone(),
+                lifecycle: lifecycle.clone(),
+                metrics: metrics.clone(),
+                input_queue: None,
+                pipe_metrics: None,
+            },
+        );
+        drop(buffers);
+        drop(runtimes); // release write locks before any await-heavy setup
 
         self.initialize_stage_metadata(&key, &source_ring, input_codec_override, &output_ring)
             .await;
-
-        let backend_kind = backend_kind_for_stage(&key.kind, &self.policy);
-        let lifecycle = self
-            .engine
-            .get_or_create_stage_lifecycle_with_backend(
-                key.clone(),
-                StagePhase::Registered,
-                backend_kind,
-            )
-            .await;
-        let metrics = self.engine.get_or_create_stage_metrics(key.clone()).await;
 
         info!(
             pipeline_id = %key.pipeline,
@@ -236,6 +253,7 @@ impl StageRuntimeManager {
                 engine.remove_stage_metrics(&key).await;
                 engine.remove_pipe_metrics(&key).await;
                 engine.remove_stage_lifecycle(&key).await;
+                engine.remove_stage_runtime(&key).await;
                 return;
             };
 
@@ -672,6 +690,16 @@ mod tests {
             .await;
         assert!(!created2);
         assert!(Arc::ptr_eq(&handle1.ring, &handle2.ring));
+        let runtimes = engine.stages.runtimes.read().await;
+        let runtime = runtimes.get(&key).expect("stage runtime registered");
+        assert!(Arc::ptr_eq(&runtime.ring, &handle1.ring));
+        handle1.cancel.cancel();
+        assert!(
+            runtime.cancel.is_cancelled(),
+            "runtime and handle must share one cancellation token"
+        );
+        assert!(Arc::ptr_eq(&runtime.lifecycle, &handle1.lifecycle));
+        assert!(Arc::ptr_eq(&runtime.metrics, &handle1.metrics));
     }
 
     #[tokio::test]

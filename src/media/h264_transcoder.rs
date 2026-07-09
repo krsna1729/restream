@@ -91,6 +91,7 @@ pub(crate) async fn run_h264_codec_edge_stage(
     input_queue.close();
     engine.remove_input_queue(&stage_key).await;
     engine.remove_stage_metrics(&stage_key).await;
+    engine.remove_stage_runtime(&stage_key).await;
     engine
         .runtime
         .event_log

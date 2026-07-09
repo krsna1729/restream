@@ -166,12 +166,13 @@ boundaries**.
 | Capacity wait visible and cancellation-aware | ✅ Present | `external_transcoder.rs` transitions to `WaitingForCapacity` and waits with `tokio::select!`. |
 | Capacity metrics in snapshots | ✅ Present | `StageRuntimeSnapshot` includes total/available permits and wait duration. |
 | Stage events beyond `StageStarted` | ✅ Present | `events.rs` has `StageRegistered`, `StageWaitingForCapacity`, `StageBackendSpawned`, `StageFirstInput`, `StageFirstOutput`, `StageFailed`, `StageStopped`. |
-| Wrap current stage maps into a single `StageRuntime` map | ⚠️ Partial | Registries and `StageRuntimeManager` exist, but `MediaEngine` still owns separate buffers, metrics, queues, lifecycles, pipe metrics, and handles. |
+| Wrap current stage maps into a single `StageRuntime` map | ⚠️ Mostly | `StageRegistry.runtimes` now stores a first-class runtime object with ring, cancel token, lifecycle, metrics, input queue, and pipe metrics for shared FFmpeg stages. Compatibility maps remain for existing call sites while ownership is migrated. |
 | Existing `StageStarted` semantics removed | ✅ Mostly | New event names exist; no `StageStarted` variant found. |
 
-**Verdict**: **Mostly complete, not ideal complete**. Lifecycle observability is
-real, but the runtime object model is still split across registries and engine
-state.
+**Verdict**: **Near A-grade, not ideal complete**. Lifecycle observability is
+real, and shared FFmpeg stages now have first-class runtime objects. Remaining
+work is retiring the compatibility maps and extending the same runtime-object
+ownership to every stage family.
 
 ---
 
@@ -332,7 +333,7 @@ convergence and later harness/reporting phases.
 | Ph 4 App services | A- | Logs, auth initialization, pipeline, output, ingest, health checks, and agent output mutations are service-backed; agent read/context helpers still contain direct DB/application work. |
 | Ph 5 Repositories | A | Repo modules exist, pipeline/output/ingest/health/log/auth/settings services are port-trait backed, and output/job/recording state maps at repository boundaries. |
 | Ph 6 Graph planner | A- | Planner drives output preparation, HLS output terminal-stage prep, recording lifecycle registration, graph rendering, diagnostics, HLS preview planning, agent graph/impact preview, and harness stage-count expectations; recording writer and HLS segmenter/uploader boundaries remain. |
-| Ph 7 Stage lifecycle | B+ | Lifecycle/capacity visibility strong; runtime object model still split. |
+| Ph 7 Stage lifecycle | A- | Lifecycle/capacity visibility is strong and shared FFmpeg stages now have first-class `StageRuntime` objects; compatibility maps remain during migration. |
 | Ph 8 Dependency-aware status | A | Operator-facing dependency status is complete for the phase scope, with typed internal egress lifecycle state. |
 | Ph 9 FFmpeg waist | A | Shared FFmpeg plan/backend/input/output contracts are the backend entry path, and legacy input/output ring escape hatches are removed. |
 | Ph 10 HLS preview | A- | API one-off removed and preview startup/health keys share the dedicated graph planner; runtime service boundary still not ideal. |

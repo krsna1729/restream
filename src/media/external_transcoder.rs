@@ -624,6 +624,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
     ctx.engine.remove_stage_metrics(&stage_key).await;
     ctx.engine.remove_pipe_metrics(&stage_key).await;
     ctx.engine.remove_stage_lifecycle(&stage_key).await;
+    ctx.engine.remove_stage_runtime(&stage_key).await;
     ctx.engine
         .runtime
         .event_log

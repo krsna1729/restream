@@ -963,6 +963,10 @@ impl MediaEngine {
         self.stages.metrics.write().await.remove(key);
     }
 
+    pub async fn remove_stage_runtime(&self, key: &StageKey) {
+        self.stages.runtimes.write().await.remove(key);
+    }
+
     pub async fn get_or_create_stage_lifecycle(
         &self,
         key: StageKey,
@@ -1243,10 +1247,16 @@ impl MediaEngine {
     }
 
     pub async fn register_input_queue(&self, key: StageKey, queue: Arc<MemoryQueue>) {
+        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(&key) {
+            runtime.input_queue = Some(queue.clone());
+        }
         self.stages.input_queues.write().await.insert(key, queue);
     }
 
     pub async fn remove_input_queue(&self, key: &StageKey) {
+        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(key) {
+            runtime.input_queue = None;
+        }
         self.stages.input_queues.write().await.remove(key);
     }
 
@@ -1300,10 +1310,16 @@ impl MediaEngine {
     }
 
     pub async fn register_pipe_metrics(&self, key: StageKey, metrics: Arc<PipeMetrics>) {
+        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(&key) {
+            runtime.pipe_metrics = Some(metrics.clone());
+        }
         self.stages.pipe_metrics.write().await.insert(key, metrics);
     }
 
     pub async fn remove_pipe_metrics(&self, key: &StageKey) {
+        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(key) {
+            runtime.pipe_metrics = None;
+        }
         self.stages.pipe_metrics.write().await.remove(key);
     }
 
@@ -1528,15 +1544,19 @@ impl MediaEngine {
     /// instead of surviving until the next reconciler creates a replacement stage.
     pub async fn cleanup_pipeline_stages(&self, pipeline_id: &str) {
         let mut buffers = self.stages.buffers.write().await;
+        let mut removed = Vec::new();
         // Cancel all still-running stages then remove every entry for this pipeline.
         buffers.retain(|key, (_rb, token)| {
             if key.pipeline.as_str() == pipeline_id {
                 token.cancel();
+                removed.push(key.clone());
                 false
             } else {
                 true
             }
         });
+        drop(buffers);
+        self.remove_stage_artifacts(&removed).await;
     }
 
     pub async fn sweep_unused_transcoder_stages(
@@ -1544,15 +1564,37 @@ impl MediaEngine {
         active_keys: &std::collections::HashSet<StageKey>,
     ) {
         let mut buffers = self.stages.buffers.write().await;
+        let mut removed = Vec::new();
         buffers.retain(|key, (_rb, token)| {
             if !active_keys.contains(key) {
                 debug!("Sweeping unused transcoder stage: {}", key);
                 token.cancel();
+                removed.push(key.clone());
                 false
             } else {
                 true
             }
         });
+        drop(buffers);
+        self.remove_stage_artifacts(&removed).await;
+    }
+
+    async fn remove_stage_artifacts(&self, keys: &[StageKey]) {
+        if keys.is_empty() {
+            return;
+        }
+        let mut runtimes = self.stages.runtimes.write().await;
+        let mut metrics = self.stages.metrics.write().await;
+        let mut input_queues = self.stages.input_queues.write().await;
+        let mut pipe_metrics = self.stages.pipe_metrics.write().await;
+        let mut lifecycles = self.stages.lifecycles.write().await;
+        for key in keys {
+            runtimes.remove(key);
+            metrics.remove(key);
+            input_queues.remove(key);
+            pipe_metrics.remove(key);
+            lifecycles.remove(key);
+        }
     }
 
     pub async fn get_or_create_ts_muxer_stage(
@@ -4697,6 +4739,20 @@ mod tests {
         let stages = engine.active_transcoder_stages("pipe-sweep").await;
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].0, StageKind::video_preset("720p"));
+        let runtime_keys: Vec<_> = engine
+            .stages
+            .runtimes
+            .read()
+            .await
+            .keys()
+            .filter(|key| key.pipeline.as_str() == "pipe-sweep")
+            .cloned()
+            .collect();
+        assert_eq!(
+            runtime_keys,
+            vec![StageKey::new("pipe-sweep", StageKind::video_preset("720p"))],
+            "runtime registry must remove swept stage objects"
+        );
         // s2 was swept and cancelled
         let _ = (s1, s2);
     }
@@ -4724,6 +4780,16 @@ mod tests {
         assert!(
             stages_after.is_empty(),
             "unused codec-edge stages must be removed from the shared stage registry"
+        );
+        assert!(
+            engine
+                .stages
+                .runtimes
+                .read()
+                .await
+                .keys()
+                .all(|key| key.pipeline.as_str() != "pipe-sweep-codec"),
+            "codec-edge runtime objects must be removed with swept stages"
         );
     }
 
