@@ -31,7 +31,7 @@
 
 #[cfg(any(feature = "mcp-http-backend", feature = "mcp-embedded"))]
 pub mod agent_backends;
-#[cfg(feature = "mcp-core")]
+#[cfg(feature = "agent-plane")]
 pub mod agent_core;
 #[cfg(feature = "agent-execution")]
 pub mod agent_execution;

@@ -8,6 +8,10 @@ use tracing::{info, warn};
 
 pub const TRANSCODE_PROFILES_META_KEY: &str = "transcode_profiles";
 
+pub fn default_transcode_profiles() -> TranscodeProfiles {
+    crate::media::profiles::built_in_defaults()
+}
+
 pub async fn load_transcode_profiles(meta_store: &dyn MetaStore) {
     let profiles = match meta_store.get_meta(TRANSCODE_PROFILES_META_KEY).await {
         Ok(Some(json_str)) => match serde_json::from_str::<TranscodeProfiles>(&json_str) {
@@ -17,20 +21,20 @@ pub async fn load_transcode_profiles(meta_store: &dyn MetaStore) {
             }
             Ok(_) => {
                 warn!("meta store has empty profiles, using defaults");
-                crate::media::profiles::built_in_defaults()
+                default_transcode_profiles()
             }
             Err(error) => {
                 warn!(err = %error, "failed to parse profiles, using defaults");
-                crate::media::profiles::built_in_defaults()
+                default_transcode_profiles()
             }
         },
         Ok(None) => {
             info!("no persisted profiles found, using built-in defaults");
-            crate::media::profiles::built_in_defaults()
+            default_transcode_profiles()
         }
         Err(error) => {
             warn!(err = %error, "failed to load profiles, using defaults");
-            crate::media::profiles::built_in_defaults()
+            default_transcode_profiles()
         }
     };
 

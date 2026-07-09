@@ -586,7 +586,7 @@ async fn build_agent_context(state: &AppState) -> serde_json::Value {
         "transcodeProfiles": settings
             .as_ref()
             .map(|settings| settings.transcode_profiles.clone())
-            .unwrap_or_else(crate::media::profiles::built_in_defaults),
+            .unwrap_or_else(crate::application::transcode_profiles::default_transcode_profiles),
         "customEncoding": {
             "configured": custom_encoding_len > 0,
             "byteLength": custom_encoding_len,
@@ -1393,7 +1393,6 @@ async fn agent_dependency_summary(
     recording_enabled: &std::collections::HashMap<String, bool>,
     health: &serde_json::Value,
 ) -> serde_json::Value {
-    let hls_config = crate::media::hls::HlsConfig::from_app_config(&state.engine.config);
     let mut hls = Vec::new();
     let mut recordings = Vec::new();
     for pipeline in pipelines {
@@ -1422,12 +1421,11 @@ async fn agent_dependency_summary(
     }
 
     let mut file_ingest = Vec::new();
-    let file_ingest_backend =
-        if crate::media::file_ingest::use_internal_file_ingest(&state.engine.config) {
-            "internal"
-        } else {
-            "ffmpeg-subprocess"
-        };
+    let file_ingest_backend = if state.engine.config.use_internal_file_ingest {
+        "internal"
+    } else {
+        "ffmpeg-subprocess"
+    };
     for ingest in ingests {
         let media_path = FsPath::new(&state.media_dir).join(&ingest.filename);
         let runtime = state
@@ -1457,9 +1455,9 @@ async fn agent_dependency_summary(
     serde_json::json!({
         "hls": {
             "config": {
-                "minSegmentSecs": hls_config.min_segment_secs,
-                "segmentCapacity": hls_config.segment_capacity,
-                "maxSegments": hls_config.max_segments,
+                "minSegmentSecs": state.engine.config.hls_min_segment_ms,
+                "segmentCapacity": state.engine.config.hls_segment_capacity_bytes,
+                "maxSegments": state.engine.config.hls_max_segments,
             },
             "outputCount": hls_output_count,
             "pipelines": hls,

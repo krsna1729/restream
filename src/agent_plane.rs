@@ -4,7 +4,7 @@
 //! phase-4 agent support out of the core runtime while still exposing typed,
 //! testable planning primitives when the feature is enabled.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -17,6 +17,8 @@ use crate::types::{Ingest, Output, Pipeline};
 
 const OUTPUT_URL_SCHEME_ERROR: &str =
     "Supported schemes are rtmp://, rtmps://, srt://, hls://, http://, and https://";
+
+pub use crate::agent_core::types::{InvestigationRequest, PlanRequest, ProposedChange};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,42 +35,6 @@ pub struct AgentCapabilities {
     pub schemas: Value,
     pub redaction: Value,
     pub notes: Vec<&'static str>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InvestigationRequest {
-    pub workflow: Option<String>,
-    pub pipeline_id: Option<String>,
-    pub output_id: Option<String>,
-    #[serde(default = "default_event_limit")]
-    pub event_limit: usize,
-}
-
-fn default_event_limit() -> usize {
-    100
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanRequest {
-    pub intent: String,
-    pub pipeline_id: Option<String>,
-    #[serde(default)]
-    pub proposed_changes: Vec<ProposedChange>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProposedChange {
-    pub kind: String,
-    pub pipeline_id: Option<String>,
-    pub output_id: Option<String>,
-    pub name: Option<String>,
-    pub url: Option<String>,
-    pub monitoring_url: Option<String>,
-    pub config: Option<OutputConfig>,
-    pub desired_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

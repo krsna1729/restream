@@ -5,52 +5,16 @@
 //! transitions, audit events, idempotency lookups, and redacted public views;
 //! API handlers still perform the actual runtime mutations through core APIs.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::agent_plane::{PlanRequest, PlanResponse, ProposedChange};
+use crate::agent_core::types::PlanRequest;
+use crate::agent_plane::PlanResponse;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OperationCreateRequest {
-    pub intent: String,
-    pub pipeline_id: Option<String>,
-    #[serde(default)]
-    pub proposed_changes: Vec<ProposedChange>,
-    pub idempotency_key: Option<String>,
-    pub actor: Option<String>,
-    pub agent_id: Option<String>,
-    pub tool_identity: Option<String>,
-    pub incident_id: Option<String>,
-    #[serde(default)]
-    pub incident_links: Vec<String>,
-}
-
-impl OperationCreateRequest {
-    pub fn plan_request(&self) -> PlanRequest {
-        PlanRequest {
-            intent: self.intent.clone(),
-            pipeline_id: self.pipeline_id.clone(),
-            proposed_changes: self.proposed_changes.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApprovalRequest {
-    pub approved_by: String,
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VerifyRequest {
-    pub operation_id: String,
-}
+pub use crate::agent_core::types::{ApprovalRequest, OperationCreateRequest, VerifyRequest};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -44,9 +44,10 @@ The current A-grade evidence across Phases 1-12 is:
   check endpoint remains as a separate active-ingest probe path.
 
 Bottom line: **Phases 1-12 have completed the requested "Amit Singhal" pass for
-their phase-scope criteria**. The current honest state is that later roadmap
-work remains in Phases 13-16: harness v2 reporting, agent/MCP boundary cleanup,
-large-file splits, and rollout policy.
+their phase-scope criteria**. Phase 13 harness reporting and Phase 14
+Agent/MCP boundary cleanup now also meet their acceptance criteria. The current
+honest state is that later roadmap work remains in Phases 15-16: large-file
+splits and rollout policy.
 
 ---
 
@@ -284,7 +285,7 @@ convergence and later harness/reporting phases.
 | Phase | Status | Notes |
 |---|---|---|
 | Phase 13 — Harness v2 reporting | ✅ Complete | Harness now has `HarnessOutputCell`, `HarnessOutputRegistry`, per-scenario `outputs.json`, scenario result embedding, semantic cell labels in progress stalls, matrix `root-cause-summary.json` grouping, schema-versioned assertion rows, per-scenario `artifact-index.json` with file metadata/checksums, and probe failure API snapshots carrying output status plus engine health. |
-| Phase 14 — Agent/MCP cleanup | ❌ Not complete | Agent output mutations now use `OutputService`, agent context/catalog reads use port-backed `AgentService`, and agent graph/impact preview use `StageGraphPlan`; shared DTO and MCP/HTTP boundary cleanup remains outside the Phase 1-12 scope. |
+| Phase 14 — Agent/MCP cleanup | ✅ Complete | Shared agent command/query DTOs live in `agent_core::types`, HTTP/execution modules re-export those DTOs instead of duplicating structs, MCP backends consume the same shared types, agent context/catalog reads use port-backed `AgentService`, agent output mutations use `OutputService`, agent graph/impact preview use `StageGraphPlan`, and agent API read/plan paths no longer import media internals. |
 | Phase 15 — Large-file split | ❌ Not complete | Major files remain large: `test_harness.rs` ~10k lines, `engine.rs` ~6.4k, `srt.rs` ~4.6k, `mpegts.rs` ~4.0k, `rtmp.rs` ~3.6k, `external_transcoder.rs` ~2.8k. |
 | Phase 16 — Rollout policy | ❌ Not complete | Not audited as implemented; internal backend remains policy-gated and parity work is ongoing. |
 
@@ -362,7 +363,7 @@ convergence and later harness/reporting phases.
 | Ph 11 Recording metadata | A | Media API consumes persisted recording metadata and mixed harness now requires pipeline/recording identity; filename-token matching fallback has been removed. |
 | Ph 12 Health/alerts/diagnostics | A | Health, alerts, graph, and the causal diagnostics context bundle meet the Phase 12 acceptance criteria; the legacy SSE diagnostics probe remains as an active probe path beside the read-only context endpoint. |
 | Ph 13 Harness v2 | A | Output-cell registry, `outputs.json`, semantic progress-stall labels, matrix root-cause grouping, assertion schema versioning, artifact indexing, and probe failure API snapshots are implemented. |
-| Ph 14 Agent/MCP cleanup | D | Agent still crosses DB/API/runtime boundaries. |
+| Ph 14 Agent/MCP cleanup | A | Shared DTOs live in `agent_core::types`; MCP and HTTP/execution share command/query payloads where feature boundaries permit; agent graph/impact preview uses the shared planner; agent reads use service/runtime read models; agent API read/plan paths have no direct media-internal imports. |
 | Ph 15 Large-file split | F | Not done. |
 | Ph 16 Rollout policy | F | Not done. |
 
@@ -380,5 +381,5 @@ families, output status is dependency-aware, FFmpeg execution goes through the
 shared waist, HLS preview and recording identity are graph/metadata-driven, and
 health/alerts/diagnostics expose causal runtime state.
 
-The remaining non-A work in this document starts after Phase 12: harness v2
-reporting, agent/MCP boundary cleanup, large-file splits, and rollout policy.
+The remaining non-A work in this document starts after Phase 14: large-file
+splits and rollout policy.

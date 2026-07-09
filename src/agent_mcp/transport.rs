@@ -44,12 +44,9 @@ impl Default for TransportConfig {
     }
 }
 
-pub async fn run_server<B: AgentBackend>(
-    config: TransportConfig,
-    backend: Arc<B>,
-) -> Result<(), AgentError>
+pub async fn run_server<B>(config: TransportConfig, backend: Arc<B>) -> Result<(), AgentError>
 where
-    B: 'static,
+    B: AgentBackend + 'static,
 {
     match config.mode {
         TransportMode::Stdio => {
@@ -230,12 +227,9 @@ struct HttpTransportState<B: AgentBackend> {
     allowed_origins: Arc<Vec<String>>,
 }
 
-async fn run_http_server<B: AgentBackend>(
-    config: TransportConfig,
-    backend: Arc<B>,
-) -> Result<(), AgentError>
+async fn run_http_server<B>(config: TransportConfig, backend: Arc<B>) -> Result<(), AgentError>
 where
-    B: 'static,
+    B: AgentBackend + 'static,
 {
     let bind_addr = config.bind_addr.clone();
     let state = Arc::new(HttpTransportState {
@@ -282,7 +276,7 @@ async fn http_post_handler<B: AgentBackend>(
     body: Bytes,
 ) -> Response {
     if let Err(response) = validate_http_headers(&headers, &state.allowed_origins) {
-        return response;
+        return *response;
     }
 
     let request: Value = match serde_json::from_slice(&body) {
@@ -423,16 +417,22 @@ async fn process_http_jsonrpc<B: AgentBackend>(
     }
 }
 
-fn validate_http_headers(headers: &HeaderMap, allowed_origins: &[String]) -> Result<(), Response> {
+fn validate_http_headers(
+    headers: &HeaderMap,
+    allowed_origins: &[String],
+) -> Result<(), Box<Response>> {
     if let Some(origin) = headers.get(ORIGIN) {
         let Ok(origin_str) = origin.to_str() else {
-            return Err(plain_response(
+            return Err(Box::new(plain_response(
                 StatusCode::FORBIDDEN,
                 "invalid Origin header",
-            ));
+            )));
         };
         if !origin_is_allowed(origin_str, allowed_origins) {
-            return Err(plain_response(StatusCode::FORBIDDEN, "Origin not allowed"));
+            return Err(Box::new(plain_response(
+                StatusCode::FORBIDDEN,
+                "Origin not allowed",
+            )));
         }
     }
 
@@ -440,16 +440,16 @@ fn validate_http_headers(headers: &HeaderMap, allowed_origins: &[String]) -> Res
         match version.to_str() {
             Ok(value) if value == PROTOCOL_VERSION => {}
             Ok(_) => {
-                return Err(plain_response(
+                return Err(Box::new(plain_response(
                     StatusCode::BAD_REQUEST,
                     "unsupported MCP protocol version",
-                ));
+                )));
             }
             Err(_) => {
-                return Err(plain_response(
+                return Err(Box::new(plain_response(
                     StatusCode::BAD_REQUEST,
                     "invalid MCP protocol version header",
-                ));
+                )));
             }
         }
     }
@@ -756,7 +756,7 @@ mod tests {
         let HttpOutcome::Json(payload) = response else {
             panic!("expected JSON response");
         };
-        assert!(payload["result"]["tools"].as_array().unwrap().len() >= 1);
+        assert!(!payload["result"]["tools"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -801,7 +801,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let payload: Value = serde_json::from_str(&response.text().await.expect("response text"))
             .expect("json body");
-        assert!(payload["result"]["tools"].as_array().unwrap().len() >= 1);
+        assert!(!payload["result"]["tools"].as_array().unwrap().is_empty());
 
         server.abort();
         let _ = server.await;
