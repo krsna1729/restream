@@ -52,7 +52,10 @@ global transcoder switch no longer selects backends, runtime graph stage nodes
 carry lifecycle/capacity details for the UI and harness, and CI now runs a
 non-blocking internal-backend rollout smoke lane with per-case allowed-failure
 accounting. The remaining non-A roadmap work is Phase 16 live parity evidence
-and promotion policy for internal backend parity.
+and promotion policy for internal backend parity. Current live evidence shows
+the external constrained-capacity path now fails causally as
+`waitingForCapacity` with backend and wait time attached, while the internal
+backend smoke lane still has two explicit allowed-failure promotion blockers.
 
 ---
 
@@ -292,7 +295,7 @@ convergence and later harness/reporting phases.
 | Phase 13 — Harness v2 reporting | ✅ Complete | Harness now has `HarnessOutputCell`, `HarnessOutputRegistry`, per-scenario `outputs.json`, scenario result embedding, semantic cell labels in progress stalls, matrix `root-cause-summary.json` grouping, schema-versioned assertion rows, per-scenario `artifact-index.json` with file metadata/checksums, and probe failure API snapshots carrying output status plus engine health. |
 | Phase 14 — Agent/MCP cleanup | ✅ Complete | Shared agent command/query DTOs live in `agent_core::types`, HTTP/execution modules re-export those DTOs instead of duplicating structs, MCP backends consume the same shared types, agent context/catalog reads use port-backed `AgentService`, agent output mutations use `OutputService`, agent graph/impact preview use `StageGraphPlan`, and agent API read/plan paths no longer import media internals. |
 | Phase 15 — Large-file split | ✅ Complete | No Rust source file now exceeds the 2,000-line ideal. The final split set covers runtime snapshots, HLS lifecycle/consumer ownership, engine test modules, MPEG-TS codec probing/tests, external FFmpeg process/argument helpers, SRT egress/policy/stream-id/monitor/tests, RTMP FLV/tests, mixed matrix orchestration, harness core/sinks/HLS PUT/media probes/fault recovery/live modes/resource sweep/suite helpers, and the test-harness root. |
-| Phase 16 — Rollout policy | 🟡 Partial | Per-stage backend policy is implemented and tested, the legacy global internal-transcoder switch is ignored, runtime graph stage nodes expose lifecycle/capacity details, the UI renders those details, and CI has a non-blocking internal-backend rollout smoke lane with per-case allowed-failure accounting. Still missing: live parity evidence for the promotion gates and promotion of the smoke lane from non-blocking to blocking. |
+| Phase 16 — Rollout policy | 🟡 Partial | Per-stage backend policy is implemented and tested, the legacy global internal-transcoder switch is ignored, runtime graph stage nodes expose lifecycle/capacity details, the UI renders those details, and CI has a non-blocking internal-backend rollout smoke lane with per-case allowed-failure accounting. Live external-capacity evidence now includes `RESTREAM_EXTERNAL_FFMPEG_PERMITS=2 ONLY_CHECKS=load,ffprobe scripts/run-bench-harness.sh mixed.live.srt.h264.a2.bf0` passing and `RESTREAM_EXTERNAL_FFMPEG_PERMITS=1 ONLY_CHECKS=load,ffprobe scripts/run-bench-harness.sh mixed.live.srt.h264.a2.bf0` failing causally with terminal outputs blocked by `waitingForCapacity`, `backend=externalFfmpeg`, and nonzero `waitMs` instead of an unknown stall. Internal smoke evidence includes one passed file-loop/timestamp case plus two allowed failures: internal live startup blocked at `backendSpawned`, and the HEVC-to-H264 codec edge timing out on RTMP decode scan. Still missing: promotion criteria that turn this smoke lane blocking, full default/recording-inclusive constrained external matrix proof, and green internal live/codec parity evidence. |
 
 ---
 
@@ -376,7 +379,7 @@ convergence and later harness/reporting phases.
 | Ph 13 Harness v2 | A | Output-cell registry, `outputs.json`, semantic progress-stall labels, matrix root-cause grouping, assertion schema versioning, artifact indexing, and probe failure API snapshots are implemented. |
 | Ph 14 Agent/MCP cleanup | A | Shared DTOs live in `agent_core::types`; MCP and HTTP/execution share command/query payloads where feature boundaries permit; agent graph/impact preview uses the shared planner; agent reads use service/runtime read models; agent API read/plan paths have no direct media-internal imports. |
 | Ph 15 Large-file split | A | No Rust source file exceeds 2,000 lines; `engine.rs`, `mpegts.rs`, `external_transcoder.rs`, `srt.rs`, `rtmp.rs`, `test_harness.rs`, `mixed_runner.rs`, and the extracted engine/harness modules are all below the ideal cap through responsibility-based splits. |
-| Ph 16 Rollout policy | B- | Per-stage policy, runtime graph lifecycle rollout, non-blocking internal backend smoke CI, and allowed-failure accounting are implemented and tested, but parity promotion gates and live matrix evidence are still missing. |
+| Ph 16 Rollout policy | B | Per-stage policy, runtime graph lifecycle rollout, non-blocking internal backend smoke CI, and allowed-failure accounting are implemented and tested. Live evidence now proves the external constrained-capacity path surfaces causal `waitingForCapacity` with backend/wait details, and the internal smoke artifact records one pass plus two explicit allowed failures. It is not A because the full default/recording-inclusive constrained external matrix is not green and the internal live startup / HEVC codec-edge gates are not ready to make CI blocking. |
 
 ---
 
@@ -393,6 +396,8 @@ shared waist, HLS preview and recording identity are graph/metadata-driven, and
 health/alerts/diagnostics expose causal runtime state.
 
 The remaining non-A work in this document is Phase 16 rollout policy: make the
-internal backend smoke lane blocking only after the promotion criteria pass, and
-prove the constrained-capacity/default external matrix behavior plus internal
-backend parity gates with live harness evidence.
+internal backend smoke lane blocking only after the promotion criteria pass,
+prove the default/recording-inclusive constrained external matrix behavior, and
+close the two live internal-backend blockers currently tracked as allowed
+failures: live startup stuck at `backendSpawned`, and HEVC-to-H264 RTMP decode
+scan timeout.
