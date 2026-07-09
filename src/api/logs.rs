@@ -66,6 +66,7 @@ pub fn log_stream_prefix_matches(prefix: Option<&str>, message: &str) -> bool {
         .any(|part| message.starts_with(part))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn log_broadcast_matches_stream_filters(
     entry: &crate::logging::LogBroadcast,
     target: Option<&str>,

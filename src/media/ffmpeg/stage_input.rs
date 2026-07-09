@@ -194,10 +194,10 @@ impl StageInputPump {
                         }
                     }
 
-                    if !ts_batch.is_empty() {
-                        if let Err(e) = sink.write_ts(&ts_batch, cancel).await {
-                            return Err(format!("stage byte sink write error: {e:?}"));
-                        }
+                    if !ts_batch.is_empty()
+                        && let Err(e) = sink.write_ts(&ts_batch, cancel).await
+                    {
+                        return Err(format!("stage byte sink write error: {e:?}"));
                     }
                 }
             }

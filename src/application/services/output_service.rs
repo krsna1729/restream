@@ -39,6 +39,7 @@ impl OutputService {
             .ok_or_else(|| ApiError::not_found(format!("output {id} not found")))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_output(
         &self,
         id: &str,

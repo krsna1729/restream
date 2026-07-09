@@ -2,6 +2,7 @@
 
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
 fn emit_mixed_output_cell_timing(
     env: &MixedEnv,
     cfg: &str,

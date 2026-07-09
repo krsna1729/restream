@@ -27,6 +27,7 @@ impl IngestService {
             .ok_or_else(|| ApiError::not_found(format!("ingest {id} not found")))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_ingest(
         &self,
         id: &str,
@@ -51,6 +52,7 @@ impl IngestService {
         .map_err(|e| ApiError::internal(format!("create ingest: {e}")))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_ingest(
         &self,
         id: &str,

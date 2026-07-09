@@ -62,6 +62,7 @@ pub(crate) fn emit_mixed_timing(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_mixed_timing_window(
     env: &MixedEnv,
     cfg: &str,
