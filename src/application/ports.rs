@@ -2,6 +2,7 @@
 //! catalog capabilities that orchestration code depends on.
 
 use crate::domain::output_spec::OutputConfig;
+use crate::logging::types::{AppLogFilters, AppLogRow};
 use crate::types::{Ingest, Output, Pipeline};
 use sqlx::SqlitePool;
 use std::fmt;
@@ -44,6 +45,8 @@ pub type OutputUpdateFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Output>, OutputStoreError>> + Send + 'a>>;
 pub type OutputDeleteFuture<'a> =
     Pin<Box<dyn Future<Output = Result<bool, OutputStoreError>> + Send + 'a>>;
+pub type LogListFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<AppLogRow>, LogStoreError>> + Send + 'a>>;
 
 #[derive(Debug, Clone)]
 pub struct PipelineStoreError {
@@ -86,6 +89,27 @@ impl fmt::Display for OutputStoreError {
 }
 
 impl std::error::Error for OutputStoreError {}
+
+#[derive(Debug, Clone)]
+pub struct LogStoreError {
+    message: String,
+}
+
+impl LogStoreError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for LogStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for LogStoreError {}
 
 #[derive(Debug, Clone)]
 pub struct IngestLookupError {
@@ -254,6 +278,10 @@ pub trait MetaStoreWriter: Send + Sync {
     fn set_meta<'a>(&'a self, key: &'a str, value: &'a str) -> MetaWriteFuture<'a>;
 }
 
+pub trait LogStore: Send + Sync {
+    fn list_app_logs<'a>(&'a self, filters: &'a AppLogFilters) -> LogListFuture<'a>;
+}
+
 #[derive(Clone)]
 pub struct SqlitePipelineStore {
     pool: SqlitePool,
@@ -271,6 +299,11 @@ pub struct SqliteIngestLookup {
 
 #[derive(Clone)]
 pub struct SqliteMetaStore {
+    pool: SqlitePool,
+}
+
+#[derive(Clone)]
+pub struct SqliteLogStore {
     pool: SqlitePool,
 }
 
@@ -293,6 +326,12 @@ impl SqliteIngestLookup {
 }
 
 impl SqliteMetaStore {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+impl SqliteLogStore {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -620,6 +659,16 @@ impl MetaStoreWriter for SqliteMetaStore {
             crate::db::set_meta(&self.pool, key, value)
                 .await
                 .map_err(|err| MetaLookupError::new(err.to_string()))
+        })
+    }
+}
+
+impl LogStore for SqliteLogStore {
+    fn list_app_logs<'a>(&'a self, filters: &'a AppLogFilters) -> LogListFuture<'a> {
+        Box::pin(async move {
+            crate::db::list_app_logs(&self.pool, filters)
+                .await
+                .map_err(|err| LogStoreError::new(err.to_string()))
         })
     }
 }

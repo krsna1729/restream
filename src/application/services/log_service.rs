@@ -1,22 +1,29 @@
-use sqlx::SqlitePool;
+use std::sync::Arc;
 
-use crate::db;
+use crate::application::ports::{LogStore, SqliteLogStore};
 use crate::logging::types::{AppLogFilters, AppLogRow};
 
 use super::error::{ApiError, ApiResult};
 
 #[derive(Clone)]
 pub struct LogService {
-    db: SqlitePool,
+    store: Arc<dyn LogStore>,
 }
 
 impl LogService {
-    pub fn new(db: SqlitePool) -> Self {
-        Self { db }
+    pub fn new(db: sqlx::SqlitePool) -> Self {
+        Self {
+            store: Arc::new(SqliteLogStore::new(db)),
+        }
+    }
+
+    pub fn with_store(store: Arc<dyn LogStore>) -> Self {
+        Self { store }
     }
 
     pub async fn list_logs(&self, filters: &AppLogFilters) -> ApiResult<Vec<AppLogRow>> {
-        db::list_app_logs(&self.db, filters)
+        self.store
+            .list_app_logs(filters)
             .await
             .map_err(|e| ApiError::internal(format!("list logs: {e}")))
     }
@@ -55,6 +62,7 @@ impl LogService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::ports::{LogListFuture, LogStore, LogStoreError};
     use crate::logging::types::AppLogEntry;
 
     fn entry(message: &str, pipeline_id: Option<&str>) -> AppLogEntry {
@@ -86,6 +94,77 @@ mod tests {
             limit: Some(limit),
             order: Some("asc".to_string()),
         }
+    }
+
+    #[derive(Clone)]
+    struct FakeLogStore {
+        rows: Arc<Vec<AppLogRow>>,
+    }
+
+    impl FakeLogStore {
+        fn row(id: i64, message: &str, pipeline_id: Option<&str>) -> AppLogRow {
+            AppLogRow {
+                id,
+                ts: "2026-07-09T00:00:00Z".to_string(),
+                level: "INFO".to_string(),
+                target: "restream::tests".to_string(),
+                message: message.to_string(),
+                fields: None,
+                pipeline_id: pipeline_id.map(str::to_string),
+                output_id: None,
+                event_type: Some("test.event".to_string()),
+            }
+        }
+    }
+
+    impl LogStore for FakeLogStore {
+        fn list_app_logs<'a>(&'a self, filters: &'a AppLogFilters) -> LogListFuture<'a> {
+            Box::pin(async move {
+                if filters.target.as_deref() == Some("fail") {
+                    return Err(LogStoreError::new("log store failed"));
+                }
+                let mut rows = self
+                    .rows
+                    .iter()
+                    .filter(|row| match filters.scope.as_deref() {
+                        Some("restream") => row.pipeline_id.is_none() && row.output_id.is_none(),
+                        Some("pipeline") => row.pipeline_id.is_some() && row.output_id.is_none(),
+                        Some("output") => row.output_id.is_some(),
+                        _ => true,
+                    })
+                    .filter(|row| {
+                        filters
+                            .pipeline_id
+                            .as_ref()
+                            .is_none_or(|pipeline_id| row.pipeline_id.as_ref() == Some(pipeline_id))
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                rows.sort_by_key(|row| row.id);
+                Ok(rows)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_backfill_merge_uses_injected_log_store() {
+        let service = LogService::with_store(Arc::new(FakeLogStore {
+            rows: Arc::new(vec![
+                FakeLogStore::row(1, "restream event", None),
+                FakeLogStore::row(2, "pipeline event", Some("pipe-1")),
+                FakeLogStore::row(3, "other pipeline event", Some("pipe-2")),
+            ]),
+        }));
+
+        let backfill = service
+            .list_stream_backfill(&filters_for_pipeline("pipe-1", 10), true)
+            .await;
+
+        let messages = backfill
+            .iter()
+            .map(|row| row.message.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(messages, vec!["restream event", "pipeline event"]);
     }
 
     #[tokio::test]
