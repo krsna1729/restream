@@ -270,6 +270,64 @@ impl AppConfig {
             use_internal_file_ingest,
         }
     }
+
+    pub fn effective_summary(&self) -> serde_json::Value {
+        serde_json::json!({
+            "ports": {
+                "http": self.ports.http,
+                "rtmp": self.ports.rtmp,
+                "srt": self.ports.srt,
+            },
+            "tuning": {
+                "nofileLimit": self.tuning.nofile_limit,
+                "reconcilerIntervalMs": self.tuning.reconciler_interval_ms,
+                "ingestDisconnectGraceMs": self.tuning.ingest_disconnect_grace_ms,
+                "outputMaxRetries": self.tuning.output_max_retries,
+                "outputRetryBaseMs": self.tuning.output_retry_base_ms,
+                "outputRetryMaxMs": self.tuning.output_retry_max_ms,
+                "hlsIdleTimeoutMs": self.tuning.hls_idle_timeout_ms,
+            },
+            "paths": {
+                "db": self.db_path,
+                "media": self.media_dir,
+                "logs": self.log_dir,
+                "ffmpegBin": self.ffmpeg_bin_path,
+            },
+            "logging": {
+                "retentionDays": self.log_retention_days,
+                "noColor": self.no_color,
+            },
+            "backendPolicy": {
+                "internalVideoPresets": self.backend_policy.internal_video_presets,
+                "internalHevcToH264": self.backend_policy.internal_hevc_to_h264,
+                "internalHlsPreview": self.backend_policy.internal_hls_preview,
+                "internalComplexAudio": self.backend_policy.internal_complex_audio,
+                "useInternalFileIngest": self.use_internal_file_ingest,
+            },
+            "ffmpeg": {
+                "externalPermits": self.external_ffmpeg_permits,
+                "threads": self.ffmpeg_threads,
+                "recordingThreads": self.recording_threads,
+            },
+            "buffers": {
+                "avioCapacity": self.avio_capacity,
+                "hlsMinSegmentMs": self.hls_min_segment_ms,
+                "hlsSegmentCapacityBytes": self.hls_segment_capacity_bytes,
+                "hlsMaxSegments": self.hls_max_segments,
+                "tsRingCapacity": self.ts_ring_capacity,
+                "ringCapacity": self.ring_capacity,
+                "transcoderRingCapacity": self.transcoder_ring_capacity,
+            },
+            "srt": {
+                "requireBonding": self.require_srt_bonding,
+                "passphraseConfigured": self.srt_passphrase.is_some(),
+                "pbkeylen": self.srt_pbkeylen,
+            },
+            "rtmp": {
+                "backlog": self.rtmp_backlog,
+            },
+        })
+    }
 }
 
 #[cfg(test)]
@@ -355,5 +413,28 @@ mod tests {
                 assert!(!policy.internal_complex_audio);
             },
         );
+    }
+
+    #[test]
+    fn effective_summary_covers_runtime_knobs_without_secret_values() {
+        let config = AppConfig {
+            srt_passphrase: Some("super-secret".to_string()),
+            ffmpeg_bin_path: Some("/usr/bin/ffmpeg".to_string()),
+            ..AppConfig::default()
+        };
+
+        let summary = config.effective_summary();
+        assert_eq!(summary["ports"]["http"], 3030);
+        assert_eq!(summary["tuning"]["reconcilerIntervalMs"], 1000);
+        assert_eq!(summary["paths"]["ffmpegBin"], "/usr/bin/ffmpeg");
+        assert_eq!(summary["backendPolicy"]["internalHlsPreview"], false);
+        assert_eq!(
+            summary["ffmpeg"]["externalPermits"],
+            config.external_ffmpeg_permits
+        );
+        assert_eq!(summary["buffers"]["ringCapacity"], 1024);
+        assert_eq!(summary["srt"]["passphraseConfigured"], true);
+        assert_eq!(summary["srt"]["pbkeylen"], 16);
+        assert!(!summary.to_string().contains("super-secret"));
     }
 }

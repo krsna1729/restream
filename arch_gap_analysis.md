@@ -84,10 +84,10 @@ and application logic.
 | Per-stage backend flags | ✅ Present | `BackendPolicy` has `internal_video_presets`, `internal_hevc_to_h264`, `internal_hls_preview`, `internal_complex_audio`. |
 | Runtime receives typed config | ✅ Complete | `MediaEngine` carries config and graph planning uses `engine.config.backend_policy`. |
 | No env reads outside config/startup/test harness | ✅ Mostly | `ServerPorts::from_env()`, `RuntimeTuning::from_env()`, `BackendPolicy::from_env()`, and `AppConfig::from_env()` are implemented in `src/config.rs`; remaining env reads are startup/thread setup, test harness, tests, or process utilities. |
-| Startup logs show effective config | ⚠️ Unclear | Not verified as a comprehensive config dump. |
+| Startup logs show effective config | ✅ Present | Startup emits `restream.config.effective` with a redacted `AppConfig::effective_summary()` covering ports, tuning, paths, logging, backend policy, FFmpeg, buffers, SRT, and RTMP settings. |
 
-**Verdict**: **Mostly complete**. Production runtime env parsing is centralized
-in `src/config.rs`; the remaining ideal gap is a comprehensive startup config
+**Verdict**: **Complete**. Production runtime env parsing is centralized in
+`src/config.rs`, and startup now emits a comprehensive redacted effective config
 summary.
 
 ---
@@ -318,7 +318,7 @@ convergence and later harness/reporting phases.
 |---|---:|---|
 | Ph 0 Guardrails | F | Not started. |
 | Ph 1 Core contracts | A- | Types exist, reconciliation consumes typed desired-state logic, and active/recent egress lifecycle state is typed; DB output desired-state strings remain at the row boundary. |
-| Ph 2 Config | A- | Production env parsing is centralized in config; startup summary remains unclear. |
+| Ph 2 Config | A | Production env parsing is centralized in config, and startup logs a comprehensive redacted effective-config summary. |
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | B | Logs and auth initialization are service-backed; agent and some helper paths still contain direct DB/application work. |
 | Ph 5 Repositories | C+ | Repo modules exist; port isolation partial. |
