@@ -12,6 +12,7 @@
 
 use ffmpeg_next as ffmpeg;
 use std::collections::VecDeque;
+use std::ffi::CString;
 use std::os::raw::{c_int, c_void};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -367,10 +368,12 @@ impl CustomInput {
             (*raw_ctx).max_analyze_duration = 2_000_000; // 2s in microseconds
 
             let mut raw_ctx_mut = raw_ctx;
+            let format_name = CString::new("mpegts").expect("static format name");
+            let input_format = ffmpeg::ffi::av_find_input_format(format_name.as_ptr());
             let open_res = ffmpeg::ffi::avformat_open_input(
                 &mut raw_ctx_mut,
                 std::ptr::null(),
-                std::ptr::null_mut(),
+                input_format,
                 std::ptr::null_mut(),
             );
 

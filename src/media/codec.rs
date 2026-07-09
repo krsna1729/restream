@@ -257,7 +257,7 @@ pub(crate) fn annexb_parameter_sets(payload: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-fn raw_annexb_is_keyframe(payload: &[u8]) -> bool {
+pub(crate) fn raw_annexb_is_keyframe(payload: &[u8]) -> bool {
     split_annexb_nalus(payload).iter().any(|nalu| {
         if nalu.is_empty() {
             return false;

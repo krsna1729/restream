@@ -243,7 +243,7 @@ fn prepare_video_startup_packet(
             {
                 *sps_pps_cache = parameter_sets;
             }
-            if packet.is_keyframe {
+            if crate::media::codec::raw_annexb_is_keyframe(&packet.payload) {
                 VideoStartupAction::Emit
             } else {
                 VideoStartupAction::Skip
@@ -667,7 +667,7 @@ mod tests {
         let parameter_sets_only = MediaPacket {
             media_type: MediaType::Video,
             format: crate::media::ring_buffer::PayloadFormat::Raw,
-            is_keyframe: false,
+            is_keyframe: true,
             track_index: 0,
             pts: 0,
             dts: 0,
@@ -698,7 +698,7 @@ mod tests {
         let mut output = Vec::new();
         assert!(
             !feeder.extend_ts_for_packet(&parameter_sets_only, &mut output),
-            "parameter sets alone should prime the cache but not unlock startup"
+            "parameter sets alone should prime the cache but not unlock startup, even when TS random-access marks the PES as a keyframe"
         );
         assert!(!feeder.extend_ts_for_packet(&delta, &mut output));
         assert!(
