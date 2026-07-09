@@ -13,6 +13,8 @@ pub enum StageBackend {
     AudioRouter,
     InternalFfmpeg,
     ExternalFfmpeg,
+    HlsSegmenter,
+    Recording,
 }
 
 /// Per-stage-family backend policy.
@@ -53,6 +55,8 @@ impl BackendPolicy {
                 StageBackend::InternalFfmpeg
             }
             StageKind::Preview { .. } if self.internal_hls_preview => StageBackend::InternalFfmpeg,
+            StageKind::Hls => StageBackend::HlsSegmenter,
+            StageKind::Recording => StageBackend::Recording,
             _ => StageBackend::ExternalFfmpeg,
         }
     }
@@ -200,6 +204,20 @@ mod tests {
         assert_eq!(
             policy.select_backend(&StageKind::preview("h264", StageKind::source())),
             StageBackend::InternalFfmpeg
+        );
+    }
+
+    #[test]
+    fn terminal_service_stages_use_named_backends() {
+        let policy = default_policy();
+
+        assert_eq!(
+            policy.select_backend(&StageKind::hls()),
+            StageBackend::HlsSegmenter
+        );
+        assert_eq!(
+            policy.select_backend(&StageKind::recording()),
+            StageBackend::Recording
         );
     }
 }

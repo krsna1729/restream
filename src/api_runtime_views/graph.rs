@@ -8,7 +8,7 @@ use crate::domain::output_spec::VideoCodecKind;
 use crate::domain::stage::{StageKey, StageKind};
 use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
-use crate::planner::graph_plan::plan_pipeline_graph;
+use crate::planner::graph_plan::{plan_pipeline_graph, plan_recording_graph};
 use crate::types::Output;
 use std::collections::HashSet;
 
@@ -278,7 +278,8 @@ pub(crate) async fn processing_graph(
 
     if let Some(token) = rec_tokens.get(pipeline_id) {
         let rec_id = format!("{pipeline_id}_recording");
-        let rec_stage_key = StageKey::new(pipeline_id, StageKind::recording());
+        let rec_stage_key =
+            plan_recording_graph(pipeline_id, &engine.config.backend_policy).terminal_stage;
         nodes.push(api_view_models::processing_graph_node(
             rec_id.clone(),
             "recording",

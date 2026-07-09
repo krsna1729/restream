@@ -132,6 +132,31 @@ pub fn plan_hls_preview_graph(
     Some(plan)
 }
 
+/// Plan the recording graph for a pipeline.
+///
+/// Recordings consume the source stage and write an input-scoped media artifact.
+/// The writer itself lives outside the FFmpeg stage runner, but its lifecycle
+/// and diagnostics should still use the shared graph vocabulary.
+pub fn plan_recording_graph(pipeline_id: &str, policy: &BackendPolicy) -> StageGraphPlan {
+    let pipeline_id_typed = PipelineId::new(pipeline_id);
+    let recording_key = StageKey::new(pipeline_id_typed.clone(), StageKind::recording());
+    let mut plan = StageGraphPlan::new(
+        pipeline_id_typed.clone(),
+        GraphRole::Recording,
+        recording_key.clone(),
+    );
+
+    plan.add_stage(
+        StageKey::new(pipeline_id_typed, StageKind::Source),
+        StageBackend::AudioRouter,
+    );
+    plan.add_stage(
+        recording_key,
+        policy.select_backend(&StageKind::recording()),
+    );
+    plan
+}
+
 fn is_hevc_preview_codec(codec: &str) -> bool {
     codec.eq_ignore_ascii_case("hevc") || codec.eq_ignore_ascii_case("h265")
 }
@@ -209,6 +234,25 @@ mod tests {
             plan.terminal_stage,
             StageKey::new("pipe_1", StageKind::preview("720p", StageKind::source()))
         );
+    }
+
+    #[test]
+    fn plan_recording_graph_uses_recording_role_and_backend() {
+        let policy = BackendPolicy::default();
+        let plan = plan_recording_graph("pipe_1", &policy);
+
+        assert_eq!(plan.role, GraphRole::Recording);
+        assert_eq!(
+            plan.terminal_stage,
+            StageKey::new("pipe_1", StageKind::recording())
+        );
+        assert!(plan.stages.iter().any(|stage| {
+            stage.kind == StageKind::recording() && stage.backend == StageBackend::Recording
+        }));
+        assert!(plan.edges.iter().any(|edge| {
+            edge.from == StageKey::new("pipe_1", StageKind::source())
+                && edge.to == StageKey::new("pipe_1", StageKind::recording())
+        }));
     }
 
     #[test]

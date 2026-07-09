@@ -800,5 +800,7 @@ fn stage_backend_name(backend: StageBackend) -> &'static str {
         StageBackend::AudioRouter => "audioRouter",
         StageBackend::InternalFfmpeg => "internalFfmpeg",
         StageBackend::ExternalFfmpeg => "externalFfmpeg",
+        StageBackend::HlsSegmenter => "hlsSegmenter",
+        StageBackend::Recording => "recording",
     }
 }

@@ -314,7 +314,9 @@ impl StageRuntimeManager {
                         tracing::error!(stage = %key, error = %e, "external ffmpeg stage failed");
                     }
                 }
-                StageBackend::AudioRouter => {}
+                StageBackend::AudioRouter
+                | StageBackend::HlsSegmenter
+                | StageBackend::Recording => {}
             }
         });
     }
@@ -504,6 +506,8 @@ fn backend_kind_for_stage(kind: &StageKind, policy: &BackendPolicy) -> StageBack
         StageBackend::AudioRouter => StageBackendKind::AudioRouter,
         StageBackend::InternalFfmpeg => StageBackendKind::InternalFfmpeg,
         StageBackend::ExternalFfmpeg => StageBackendKind::ExternalFfmpeg,
+        StageBackend::HlsSegmenter => StageBackendKind::HlsSegmenter,
+        StageBackend::Recording => StageBackendKind::Recording,
     }
 }
 

@@ -379,10 +379,11 @@ pub async fn start_recording(
 
     info!(filename = %filename, "recording started");
 
-    let rec_stage_key = crate::domain::stage::StageKey::new(
-        pipeline_id.as_str(),
-        crate::domain::stage::StageKind::recording(),
+    let recording_plan = crate::planner::graph_plan::plan_recording_graph(
+        &pipeline_id,
+        &engine.config.backend_policy,
     );
+    let rec_stage_key = recording_plan.terminal_stage;
     let stage_metrics = engine
         .get_or_create_stage_metrics(rec_stage_key.clone())
         .await;
