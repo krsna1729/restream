@@ -44,10 +44,10 @@ The current A-grade evidence across Phases 1-12 is:
   check endpoint remains as a separate active-ingest probe path.
 
 Bottom line: **Phases 1-12 have completed the requested "Amit Singhal" pass for
-their phase-scope criteria**. Phase 13 harness reporting and Phase 14
-Agent/MCP boundary cleanup now also meet their acceptance criteria. The current
-honest state is that later roadmap work remains in Phases 15-16: large-file
-splits and rollout policy.
+their phase-scope criteria**. Phase 13 harness reporting, Phase 14 Agent/MCP
+boundary cleanup, and Phase 15 large-file splitting now also meet their
+acceptance criteria. The current honest state is that later roadmap work
+remains in Phase 16: rollout policy.
 
 ---
 
@@ -286,7 +286,7 @@ convergence and later harness/reporting phases.
 |---|---|---|
 | Phase 13 — Harness v2 reporting | ✅ Complete | Harness now has `HarnessOutputCell`, `HarnessOutputRegistry`, per-scenario `outputs.json`, scenario result embedding, semantic cell labels in progress stalls, matrix `root-cause-summary.json` grouping, schema-versioned assertion rows, per-scenario `artifact-index.json` with file metadata/checksums, and probe failure API snapshots carrying output status plus engine health. |
 | Phase 14 — Agent/MCP cleanup | ✅ Complete | Shared agent command/query DTOs live in `agent_core::types`, HTTP/execution modules re-export those DTOs instead of duplicating structs, MCP backends consume the same shared types, agent context/catalog reads use port-backed `AgentService`, agent output mutations use `OutputService`, agent graph/impact preview use `StageGraphPlan`, and agent API read/plan paths no longer import media internals. |
-| Phase 15 — Large-file split | 🔶 In progress | `engine.rs`, `mpegts.rs`, `external_transcoder.rs`, `srt.rs`, and `rtmp.rs` are now below the 2,000-line ideal after responsibility-based splits for runtime snapshots, HLS lifecycle/consumer ownership, engine tests, MPEG-TS codec probing/tests, external FFmpeg process/argument helpers, SRT egress/policy/stream-id/monitor/tests, and RTMP FLV/tests. `test_harness.rs` has started shrinking via mixed adaptive-ring and mode-spec helper modules but remains ~10k and needs continued harness module extraction. |
+| Phase 15 — Large-file split | ✅ Complete | No Rust source file now exceeds the 2,000-line ideal. The final split set covers runtime snapshots, HLS lifecycle/consumer ownership, engine test modules, MPEG-TS codec probing/tests, external FFmpeg process/argument helpers, SRT egress/policy/stream-id/monitor/tests, RTMP FLV/tests, mixed matrix orchestration, harness core/sinks/HLS PUT/media probes/fault recovery/live modes/resource sweep/suite helpers, and the test-harness root. |
 | Phase 16 — Rollout policy | ❌ Not complete | Not audited as implemented; internal backend remains policy-gated and parity work is ongoing. |
 
 ---
@@ -331,15 +331,14 @@ convergence and later harness/reporting phases.
 
 ### P2 — Guardrails and Large-File Debt
 
-6. **Harness size still dominates reasoning cost**
-   - Phase 15 is now well underway: `engine.rs`, `mpegts.rs`,
-     `external_transcoder.rs`, `srt.rs`, and `rtmp.rs` are under the 2,000-line
-     ideal after responsibility-based runtime, HLS, codec-probing,
-     process-helper, SRT helper/test, RTMP FLV/test, and test-module splits.
-     Mixed adaptive-ring plus mode-spec helpers have also been split out of
-     `test_harness.rs`, but the harness root remains ~10k lines. The repository
-     still needs continued responsibility-based harness extraction before Phase
-     15 reaches the ideal.
+6. **Large-file debt cleared for Phase 15**
+   - `engine.rs`, `mpegts.rs`, `external_transcoder.rs`, `srt.rs`, `rtmp.rs`,
+     `test_harness.rs`, `mixed_runner.rs`, and the extracted engine/harness
+     modules are all under the 2,000-line ideal. The split files now map to
+     concrete responsibilities instead of arbitrary chunks: runtime/HLS/test
+     ownership, protocol helpers, external FFmpeg process helpers, mixed matrix
+     orchestration, harness core/sinks/probes/modes/suite, and engine lifecycle
+     versus stage tests.
 
 7. **Harness reporting is now complete for Phase 13 scope**
    - The harness now persists output-cell identity through `outputs.json` and
@@ -371,7 +370,7 @@ convergence and later harness/reporting phases.
 | Ph 12 Health/alerts/diagnostics | A | Health, alerts, graph, and the causal diagnostics context bundle meet the Phase 12 acceptance criteria; the legacy SSE diagnostics probe remains as an active probe path beside the read-only context endpoint. |
 | Ph 13 Harness v2 | A | Output-cell registry, `outputs.json`, semantic progress-stall labels, matrix root-cause grouping, assertion schema versioning, artifact indexing, and probe failure API snapshots are implemented. |
 | Ph 14 Agent/MCP cleanup | A | Shared DTOs live in `agent_core::types`; MCP and HTTP/execution share command/query payloads where feature boundaries permit; agent graph/impact preview uses the shared planner; agent reads use service/runtime read models; agent API read/plan paths have no direct media-internal imports. |
-| Ph 15 Large-file split | B | `engine.rs`, `mpegts.rs`, `external_transcoder.rs`, `srt.rs`, and `rtmp.rs` are below 2,000 lines via responsibility-based splits; mixed adaptive-ring and mode-spec helpers have moved out of `test_harness.rs`; `test_harness.rs` still remains ~10k lines and blocks an A-grade Phase 15. |
+| Ph 15 Large-file split | A | No Rust source file exceeds 2,000 lines; `engine.rs`, `mpegts.rs`, `external_transcoder.rs`, `srt.rs`, `rtmp.rs`, `test_harness.rs`, `mixed_runner.rs`, and the extracted engine/harness modules are all below the ideal cap through responsibility-based splits. |
 | Ph 16 Rollout policy | F | Not done. |
 
 ---
@@ -388,5 +387,4 @@ families, output status is dependency-aware, FFmpeg execution goes through the
 shared waist, HLS preview and recording identity are graph/metadata-driven, and
 health/alerts/diagnostics expose causal runtime state.
 
-The remaining non-A work in this document starts after Phase 14: large-file
-splits and rollout policy.
+The remaining non-A work in this document starts after Phase 15: rollout policy.
