@@ -689,6 +689,41 @@ fn mux_demux_round_trip() {
 }
 
 #[test]
+fn h265_demux_requires_irap_for_keyframe_even_with_random_access_bit() {
+    let video = VideoMeta {
+        codec: "hevc".to_string(),
+        width: 320,
+        height: 240,
+        fps: 30.0,
+        bw: None,
+        pid: None,
+        language: None,
+        title: None,
+        profile: None,
+        level: None,
+        pixel_format: None,
+    };
+
+    let mut muxer = TsMuxer::new(Some(&video), &[]);
+    let trail_r_payload = vec![0x00, 0x00, 0x00, 0x01, 0x02u8, 0x01, 0xDD];
+    let ts = muxer.mux_packet(MediaType::Video, 0, 0, 0, true, &trail_r_payload);
+
+    let mut demuxer = TsDemuxer::new();
+    demuxer.feed(ts);
+    demuxer.flush();
+    let packets = demuxer.drain();
+    let video_packet = packets
+        .iter()
+        .find(|packet| packet.media_type == MediaType::Video)
+        .expect("demuxed HEVC video packet");
+
+    assert!(
+        !video_packet.is_keyframe,
+        "HEVC random_access alone must not mark non-IRAP payloads keyframe"
+    );
+}
+
+#[test]
 fn mux_demux_two_audio_tracks_round_trip() {
     // TsMuxer assigns separate PIDs to each audio track.
     // TsDemuxer must recover both with distinct track_index values

@@ -396,7 +396,7 @@ impl TsDemuxer {
 
         let is_keyframe = match kind {
             StreamKind::H264 => random_access || h264_is_keyframe(&payload),
-            StreamKind::H265 => random_access || h265_is_keyframe(&payload),
+            StreamKind::H265 => h265_is_keyframe(&payload),
             _ => false,
         };
 
