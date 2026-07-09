@@ -83,10 +83,12 @@ pub(crate) struct MixedProbeSpec<'a> {
     pub(crate) url: &'a str,
     pub(crate) expected: &'a str,
     pub(crate) cookie: Option<&'a str>,
+    pub(crate) cell: Option<HarnessOutputCell>,
 }
 
 pub(crate) async fn verify_mixed_stream(
     env: &MixedEnv,
+    api: &RampApi,
     spec: MixedProbeSpec<'_>,
     resume: &mut MixedResume,
 ) -> Result<(), String> {
@@ -126,6 +128,7 @@ pub(crate) async fn verify_mixed_stream(
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
+    let api_snapshot = mixed_probe_failure_snapshot(api, spec.cell.as_ref()).await;
     let message = format!(
         "ffprobe: {} - expected {}, got '{}'",
         spec.label,
@@ -149,6 +152,7 @@ pub(crate) async fn verify_mixed_stream(
             "got": last,
             "url": spec.url,
             "ffprobe_stderr": last_error,
+            "apiSnapshot": api_snapshot,
         })),
     )?;
     Err(message)
@@ -178,12 +182,14 @@ pub(crate) async fn warm_mixed_stream(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn verify_mixed_audio_route(
     env: &MixedEnv,
+    api: &RampApi,
     cfg: &str,
     id: &str,
     label: &str,
     url: &str,
     expected_dimensions: &str,
     expected_audio_tracks: usize,
+    cell: Option<HarnessOutputCell>,
     resume: &mut MixedResume,
 ) -> Result<(), String> {
     if !resume.allows(id) {
@@ -232,6 +238,7 @@ pub(crate) async fn verify_mixed_audio_route(
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 
+    let api_snapshot = mixed_probe_failure_snapshot(api, cell.as_ref()).await;
     let message = format!(
         "{label}: expected {expected_dimensions} with {expected_audio_tracks} audio tracks, got '{}' with {} audio tracks",
         if last_dimensions.is_empty() {
@@ -258,6 +265,7 @@ pub(crate) async fn verify_mixed_audio_route(
             "audio_tracks": last_audio_tracks,
             "url": url,
             "ffprobe_stderr": last_error,
+            "apiSnapshot": api_snapshot,
         })),
     )?;
     Err(message)
@@ -265,50 +273,55 @@ pub(crate) async fn verify_mixed_audio_route(
 
 pub(crate) async fn verify_mixed_decode_scan(
     env: &MixedEnv,
-    cfg: &str,
-    id: &str,
-    label: &str,
-    url: &str,
+    api: &RampApi,
+    spec: MixedProbeSpec<'_>,
     resume: &mut MixedResume,
 ) -> Result<(), String> {
-    if !resume.allows(id) {
+    if !resume.allows(&spec.id) {
         return Ok(());
     }
 
     let started = Instant::now();
-    let (passed, status, matched_pattern, stderr) = ffmpeg_decode_scan(label, url).await?;
+    let (passed, status, matched_pattern, stderr) =
+        ffmpeg_decode_scan(spec.label, spec.url).await?;
     let mut fallback_validation = None;
-    let tolerated_warning = if decode_scan_needs_video_dts_fallback(url, status, matched_pattern) {
-        let packets_path = env.work_dir.join(format!(
-            "{}.decode-scan.ffprobe.json",
-            safe_artifact_stem(&format!("{cfg}-{label}"))
-        ));
-        match ffprobe_video_packets(url, &packets_path).await {
-            Ok(packet_probe) => {
-                let packet_count = count_video_packets(&packet_probe);
-                let dts_monotone = video_dts_monotone(&packet_probe);
-                fallback_validation = Some(json!({
-                    "packetsPath": packets_path,
-                    "packetCount": packet_count,
-                    "videoDtsMonotone": dts_monotone,
-                }));
-                packet_count > 0 && dts_monotone
+    let tolerated_warning =
+        if decode_scan_needs_video_dts_fallback(spec.url, status, matched_pattern) {
+            let packets_path = env.work_dir.join(format!(
+                "{}.decode-scan.ffprobe.json",
+                safe_artifact_stem(&format!("{}-{}", spec.cfg, spec.label))
+            ));
+            match ffprobe_video_packets(spec.url, &packets_path).await {
+                Ok(packet_probe) => {
+                    let packet_count = count_video_packets(&packet_probe);
+                    let dts_monotone = video_dts_monotone(&packet_probe);
+                    fallback_validation = Some(json!({
+                        "packetsPath": packets_path,
+                        "packetCount": packet_count,
+                        "videoDtsMonotone": dts_monotone,
+                    }));
+                    packet_count > 0 && dts_monotone
+                }
+                Err(error) => {
+                    fallback_validation = Some(json!({
+                        "packetsPath": packets_path,
+                        "error": error,
+                    }));
+                    false
+                }
             }
-            Err(error) => {
-                fallback_validation = Some(json!({
-                    "packetsPath": packets_path,
-                    "error": error,
-                }));
-                false
-            }
-        }
+        } else {
+            false
+        };
+    let api_snapshot = if passed || tolerated_warning {
+        Value::Null
     } else {
-        false
+        mixed_probe_failure_snapshot(api, spec.cell.as_ref()).await
     };
     emit_mixed_result(
         env,
-        cfg,
-        id,
+        spec.cfg,
+        &spec.id,
         if passed || tolerated_warning {
             "pass"
         } else {
@@ -316,13 +329,14 @@ pub(crate) async fn verify_mixed_decode_scan(
         },
         started.elapsed(),
         Some(json!({
-            "label": label,
-            "url": url,
+            "label": spec.label,
+            "url": spec.url,
             "decodeExitStatus": status,
             "matchedPattern": matched_pattern,
             "toleratedWarning": tolerated_warning,
             "stderr": stderr.lines().take(20).collect::<Vec<_>>(),
             "videoDtsFallback": fallback_validation,
+            "apiSnapshot": api_snapshot,
         })),
     )?;
 
@@ -331,19 +345,48 @@ pub(crate) async fn verify_mixed_decode_scan(
             log_mixed_ok(
                 env,
                 &format!(
-                    "{label}: decode scan tolerated muxer DTS warning after packet DTS validation"
+                    "{}: decode scan tolerated muxer DTS warning after packet DTS validation",
+                    spec.label
                 ),
             )?;
         } else {
-            log_mixed_ok(env, &format!("{label}: decode scan clean"))?;
+            log_mixed_ok(env, &format!("{}: decode scan clean", spec.label))?;
         }
         Ok(())
     } else {
         Err(format!(
-            "{label}: decode scan failed status={status:?} matched={matched_pattern:?}: {}",
+            "{}: decode scan failed status={status:?} matched={matched_pattern:?}: {}",
+            spec.label,
             stderr.lines().take(5).collect::<Vec<_>>().join(" | ")
         ))
     }
+}
+
+async fn mixed_probe_failure_snapshot(api: &RampApi, cell: Option<&HarnessOutputCell>) -> Value {
+    let status = if let Some(cell) = cell {
+        api.get_json(&format!(
+            "/api/v1/pipelines/{}/outputs/{}/status",
+            cell.pipeline_id, cell.output_id
+        ))
+        .await
+        .ok()
+    } else {
+        None
+    };
+    let health = api.get_json("/api/v1/engine/health").await.ok();
+    mixed_probe_failure_snapshot_json(cell, status, health)
+}
+
+fn mixed_probe_failure_snapshot_json(
+    cell: Option<&HarnessOutputCell>,
+    status: Option<Value>,
+    health: Option<Value>,
+) -> Value {
+    json!({
+        "cell": cell,
+        "outputStatus": status,
+        "engineHealth": health,
+    })
 }
 
 pub(crate) fn decode_scan_needs_video_dts_fallback(
@@ -405,4 +448,45 @@ pub(crate) async fn ffmpeg_decode_scan(
         .copied();
     let passed = output.status.success() && matched_pattern.is_none();
     Ok((passed, output.status.code(), matched_pattern, stderr))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_failure_snapshot_includes_cell_status_and_health() {
+        let cell = HarnessOutputCell {
+            scenario_id: "mixed.live.rtmp.h264.a1.bf0".to_string(),
+            batch_group: "rtmp.src.a0".to_string(),
+            wave: 1,
+            pipeline_id: "pipe".to_string(),
+            output_id: "out".to_string(),
+            output_name: "rtmp.src.a0-1".to_string(),
+            cell_id: "rtmp.src.a0".to_string(),
+            duplicate_index: 1,
+            protocol: "rtmp".to_string(),
+            encoding: "source".to_string(),
+            selected_audio_track: None,
+            publish_url: "rtmp://127.0.0.1/live/out".to_string(),
+            read_url: None,
+            expected_dimensions: Some("1920x1080".to_string()),
+            expected_audio_tracks: Some(1),
+            terminal_stage: Some("egress:rtmp.src.a0".to_string()),
+        };
+
+        let snapshot = mixed_probe_failure_snapshot_json(
+            Some(&cell),
+            Some(json!({"status": "retrying", "blockedBy": "stage"})),
+            Some(json!({"pipelines": {"pipe": {"outputs": {"out": {"phase": "starting"}}}}})),
+        );
+
+        assert_eq!(snapshot["cell"]["outputId"], "out");
+        assert_eq!(snapshot["cell"]["cellId"], "rtmp.src.a0");
+        assert_eq!(snapshot["outputStatus"]["status"], "retrying");
+        assert_eq!(
+            snapshot["engineHealth"]["pipelines"]["pipe"]["outputs"]["out"]["phase"],
+            "starting"
+        );
+    }
 }

@@ -259,6 +259,17 @@ impl MixedEnv {
             .and_then(|registry| registry.get(output_id).map(HarnessOutputCell::label))
     }
 
+    pub(super) fn output_cell(
+        &self,
+        cell_id: &str,
+        duplicate_index: usize,
+    ) -> Option<HarnessOutputCell> {
+        self.output_registry
+            .lock()
+            .ok()
+            .and_then(|registry| registry.find_cell(cell_id, duplicate_index).cloned())
+    }
+
     pub(super) fn output_registry_json(&self) -> Value {
         self.output_registry
             .lock()
@@ -1893,7 +1904,7 @@ pub(super) async fn run_mixed_anchor_config(
     let rss = record_mixed_rss_delta(env, cfg, restream_pid, rss_baseline, total, None).await?;
 
     if env.check_selected("ffprobe") {
-        verify_mixed_output_dimensions(env, cfg, output_cases, resume).await?;
+        verify_mixed_output_dimensions(env, api, cfg, output_cases, resume).await?;
     } else if env.check_selected("lifecycle") {
         warm_mixed_stream(
             &format!("rtmp.720p.a0 out{n} lifecycle warmup"),
@@ -1910,6 +1921,7 @@ pub(super) async fn run_mixed_anchor_config(
     if env.check_selected("hls") {
         verify_mixed_stream(
             env,
+            api,
             MixedProbeSpec {
                 cfg,
                 id: mixed_scenario_check_id(cfg, "hls_transport_mtx"),
@@ -1920,12 +1932,14 @@ pub(super) async fn run_mixed_anchor_config(
                 ),
                 expected: "1920x1080",
                 cookie: None,
+                cell: None,
             },
             resume,
         )
         .await?;
         verify_mixed_stream(
             env,
+            api,
             MixedProbeSpec {
                 cfg,
                 id: mixed_scenario_check_id(cfg, "hls_transport_restream"),
@@ -1936,6 +1950,7 @@ pub(super) async fn run_mixed_anchor_config(
                 ),
                 expected: "1920x1080",
                 cookie: api.cookie.as_deref(),
+                cell: None,
             },
             resume,
         )
@@ -2231,6 +2246,7 @@ pub(super) async fn run_mixed_live_config(
 
     verify_mixed_output_cases_inner(
         env,
+        api,
         cfg,
         output_cases,
         resume,
@@ -2415,8 +2431,16 @@ pub(super) async fn run_mixed_file_config(
     if !ffmpeg_srt_sinks.is_empty() {
         finish_ffmpeg_srt_sinks(&mut ffmpeg_srt_sinks).await?;
     }
-    verify_mixed_output_cases_inner(env, cfg, output_cases, resume, case.is_multi_track(), true)
-        .await?;
+    verify_mixed_output_cases_inner(
+        env,
+        api,
+        cfg,
+        output_cases,
+        resume,
+        case.is_multi_track(),
+        true,
+    )
+    .await?;
 
     println!("[{cfg}] sustaining {total} outputs for {duration_secs}s");
     tokio::time::sleep(Duration::from_secs(duration_secs)).await;

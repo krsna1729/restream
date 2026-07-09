@@ -283,7 +283,7 @@ convergence and later harness/reporting phases.
 
 | Phase | Status | Notes |
 |---|---|---|
-| Phase 13 — Harness v2 reporting | 🔶 In progress | Harness now has `HarnessOutputCell`, `HarnessOutputRegistry`, per-scenario `outputs.json`, scenario result embedding, semantic cell labels in progress stalls, matrix `root-cause-summary.json` grouping, schema-versioned assertion rows, and per-scenario `artifact-index.json` with file metadata/checksums. Probe snapshot enrichment and complete failure summaries remain. |
+| Phase 13 — Harness v2 reporting | ✅ Complete | Harness now has `HarnessOutputCell`, `HarnessOutputRegistry`, per-scenario `outputs.json`, scenario result embedding, semantic cell labels in progress stalls, matrix `root-cause-summary.json` grouping, schema-versioned assertion rows, per-scenario `artifact-index.json` with file metadata/checksums, and probe failure API snapshots carrying output status plus engine health. |
 | Phase 14 — Agent/MCP cleanup | ❌ Not complete | Agent output mutations now use `OutputService`, agent context/catalog reads use port-backed `AgentService`, and agent graph/impact preview use `StageGraphPlan`; shared DTO and MCP/HTTP boundary cleanup remains outside the Phase 1-12 scope. |
 | Phase 15 — Large-file split | ❌ Not complete | Major files remain large: `test_harness.rs` ~10k lines, `engine.rs` ~6.4k, `srt.rs` ~4.6k, `mpegts.rs` ~4.0k, `rtmp.rs` ~3.6k, `external_transcoder.rs` ~2.8k. |
 | Phase 16 — Rollout policy | ❌ Not complete | Not audited as implemented; internal backend remains policy-gated and parity work is ongoing. |
@@ -333,14 +333,14 @@ convergence and later harness/reporting phases.
 6. **Large files still dominate reasoning cost**
    - The Phase 15 split remains important once contract convergence is stronger.
 
-7. **Harness reporting is now split, but still incomplete**
+7. **Harness reporting is now complete for Phase 13 scope**
    - The harness now persists output-cell identity through `outputs.json` and
      uses semantic cell labels in progress stalls; matrix progress and final
      summaries now include `root-cause-summary.json` grouped by repeated
      failure class, assertion rows now carry a stable schema version, and
      scenario artifacts now include `artifact-index.json` with path, existence,
-     size, and SHA-256 metadata. It still lacks probe/status snapshot
-     enrichment for every failure path.
+     size, and SHA-256 metadata. Probe failures now enrich assertion rows with
+     the semantic cell, output status snapshot, and engine health snapshot.
 
 ---
 
@@ -361,7 +361,7 @@ convergence and later harness/reporting phases.
 | Ph 10 HLS preview | A | API one-off removed; preview startup/spawn, playlist/segment serving policy, blocked-cause selection, and health keys share the application/runtime graph path. |
 | Ph 11 Recording metadata | A | Media API consumes persisted recording metadata and mixed harness now requires pipeline/recording identity; filename-token matching fallback has been removed. |
 | Ph 12 Health/alerts/diagnostics | A | Health, alerts, graph, and the causal diagnostics context bundle meet the Phase 12 acceptance criteria; the legacy SSE diagnostics probe remains as an active probe path beside the read-only context endpoint. |
-| Ph 13 Harness v2 | B+ | Output-cell registry, `outputs.json`, semantic progress-stall labels, matrix root-cause grouping, assertion schema versioning, and artifact indexing exist; full failure snapshot enrichment remains. |
+| Ph 13 Harness v2 | A | Output-cell registry, `outputs.json`, semantic progress-stall labels, matrix root-cause grouping, assertion schema versioning, artifact indexing, and probe failure API snapshots are implemented. |
 | Ph 14 Agent/MCP cleanup | D | Agent still crosses DB/API/runtime boundaries. |
 | Ph 15 Large-file split | F | Not done. |
 | Ph 16 Rollout policy | F | Not done. |

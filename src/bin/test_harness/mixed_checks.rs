@@ -39,6 +39,7 @@ fn emit_mixed_output_cell_timing(
 
 pub(crate) async fn verify_mixed_output_dimensions(
     env: &MixedEnv,
+    api: &RampApi,
     cfg: &str,
     cases: &[MixedOutputCase],
     resume: &mut MixedResume,
@@ -51,6 +52,7 @@ pub(crate) async fn verify_mixed_output_dimensions(
         let url = mixed_output_read_url(env, cfg, case, index);
         verify_mixed_stream(
             env,
+            api,
             MixedProbeSpec {
                 cfg,
                 id: mixed_output_check_id(cfg, case.id(), "ffprobe"),
@@ -58,6 +60,7 @@ pub(crate) async fn verify_mixed_output_dimensions(
                 url: &url,
                 expected: case.expected_dimensions(),
                 cookie: None,
+                cell: env.output_cell(case.id(), index),
             },
             resume,
         )
@@ -68,6 +71,7 @@ pub(crate) async fn verify_mixed_output_dimensions(
 
 pub(crate) async fn verify_mixed_output_cases_inner(
     env: &MixedEnv,
+    api: &RampApi,
     cfg: &str,
     cases: &[MixedOutputCase],
     resume: &mut MixedResume,
@@ -93,12 +97,14 @@ pub(crate) async fn verify_mixed_output_cases_inner(
         }
         let url = mixed_output_read_url(env, cfg, case, index);
         let label = format!("{} out{index}", case.id());
+        let cell = env.output_cell(case.id(), index);
         let mut output_failed = false;
         if env.check_selected("ffprobe") {
             selected_checks.push("ffprobe");
             let ffprobe_id = mixed_output_check_id(cfg, case.id(), "ffprobe");
             let ffprobe_result = verify_mixed_stream(
                 env,
+                api,
                 MixedProbeSpec {
                     cfg,
                     id: ffprobe_id,
@@ -106,6 +112,7 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                     url: &url,
                     expected: case.expected_dimensions(),
                     cookie: None,
+                    cell: cell.clone(),
                 },
                 resume,
             )
@@ -136,12 +143,14 @@ pub(crate) async fn verify_mixed_output_cases_inner(
             let audio_id = mixed_output_check_id(cfg, case.id(), "audio_route");
             let audio_result = verify_mixed_audio_route(
                 env,
+                api,
                 cfg,
                 &audio_id,
                 &label,
                 &url,
                 case.expected_dimensions(),
                 case.expected_audio_tracks(),
+                cell.clone(),
                 resume,
             )
             .await;
@@ -169,8 +178,21 @@ pub(crate) async fn verify_mixed_output_cases_inner(
         if env.check_selected("ffprobe") && decode_scan && !output_failed {
             selected_checks.push("decode_scan");
             let decode_id = mixed_output_check_id(cfg, case.id(), "decode_scan");
-            let decode_result =
-                verify_mixed_decode_scan(env, cfg, &decode_id, &label, &url, resume).await;
+            let decode_result = verify_mixed_decode_scan(
+                env,
+                api,
+                MixedProbeSpec {
+                    cfg,
+                    id: decode_id,
+                    label: &label,
+                    url: &url,
+                    expected: case.expected_dimensions(),
+                    cookie: None,
+                    cell,
+                },
+                resume,
+            )
+            .await;
             if let Err(error) = decode_result {
                 if env.collect_failures {
                     failures.push(error);

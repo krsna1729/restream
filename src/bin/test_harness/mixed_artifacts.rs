@@ -58,6 +58,16 @@ impl HarnessOutputRegistry {
         self.by_output_id.get(output_id)
     }
 
+    pub(crate) fn find_cell(
+        &self,
+        cell_id: &str,
+        duplicate_index: usize,
+    ) -> Option<&HarnessOutputCell> {
+        self.by_output_id
+            .values()
+            .find(|cell| cell.cell_id == cell_id && cell.duplicate_index == duplicate_index)
+    }
+
     pub(crate) fn to_json(&self) -> Value {
         let mut cells: Vec<_> = self.by_output_id.values().cloned().collect();
         cells.sort_by(|a, b| {
