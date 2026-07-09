@@ -103,12 +103,14 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         .collect();
     let transcoder_rings: Vec<serde_json::Value> = runtimes
         .iter()
-        .map(|(key, runtime)| {
-            api_view_models::transcoder_ring_telemetry_json(
-                key,
-                &runtime.ring,
-                !runtime.cancel.is_cancelled(),
-            )
+        .filter_map(|(key, runtime)| {
+            runtime.ring.as_ref().map(|ring| {
+                api_view_models::transcoder_ring_telemetry_json(
+                    key,
+                    ring,
+                    !runtime.cancel.is_cancelled(),
+                )
+            })
         })
         .collect();
     let ts_muxer_rings: Vec<serde_json::Value> = ts_muxers
@@ -238,7 +240,9 @@ pub(crate) async fn pipeline_telemetry(
         );
         if let Some(runtime) = runtimes.get(key) {
             val["active"] = serde_json::json!(!runtime.cancel.is_cancelled());
-            val["payloadStats"] = api_view_models::ring_payload_stats_json(&runtime.ring);
+            if let Some(ring) = runtime.ring.as_ref() {
+                val["payloadStats"] = api_view_models::ring_payload_stats_json(ring);
+            }
         }
         val.as_object_mut()
             .expect("stage telemetry rows are objects")

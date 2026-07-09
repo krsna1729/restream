@@ -253,13 +253,12 @@ pub async fn start_hls_segmenter(
     let hls_stage_key = start
         .planned_stage_key
         .unwrap_or_else(|| StageKey::new(pipeline_id.as_str(), StageKind::hls()));
-    let metrics = engine
-        .get_or_create_stage_metrics(hls_stage_key.clone())
-        .await;
-    let lifecycle = engine
-        .get_or_create_stage_lifecycle(
+    let (lifecycle, metrics) = engine
+        .get_or_create_non_ring_stage_runtime(
             hls_stage_key.clone(),
             crate::media::stage_lifecycle::StagePhase::Registered,
+            crate::media::stage_lifecycle::StageBackendKind::HlsSegmenter,
+            cancel_token.clone(),
         )
         .await;
     let _lifecycle_guard =
@@ -339,8 +338,7 @@ pub async fn start_hls_segmenter(
                         if feeder.is_none() {
                             let (video, audio_tracks) = loop {
                                 if cancel_token.is_cancelled() {
-                                    engine.remove_stage_metrics(&hls_stage_key).await;
-                                    engine.remove_stage_lifecycle(&hls_stage_key).await;
+                                    engine.remove_stage_runtime(&hls_stage_key).await;
                                     engine.runtime.event_log.emit(crate::events::EventKind::StageStopped {
                                         pipeline_id: pipeline_id.clone(),
                                         encoding: "hls".to_string(),
@@ -432,8 +430,7 @@ pub async fn start_hls_segmenter(
         }
     }
 
-    engine.remove_stage_metrics(&hls_stage_key).await;
-    engine.remove_stage_lifecycle(&hls_stage_key).await;
+    engine.remove_stage_runtime(&hls_stage_key).await;
     engine
         .runtime
         .event_log
@@ -891,6 +888,36 @@ mod tests {
                     snapshot.backend,
                     crate::media::stage_lifecycle::StageBackendKind::HlsSegmenter
                 );
+                let runtime = engine
+                    .stages
+                    .runtimes
+                    .read()
+                    .await
+                    .get(&planned_key)
+                    .cloned()
+                    .expect("planned HLS stage should be runtime-backed");
+                assert!(
+                    runtime.ring.is_none(),
+                    "HLS segmenters are non-ring protocol stages"
+                );
+                assert!(
+                    !engine
+                        .stages
+                        .metrics
+                        .read()
+                        .await
+                        .contains_key(&planned_key),
+                    "HLS metrics should be owned by StageRuntime, not the side map"
+                );
+                assert!(
+                    !engine
+                        .stages
+                        .lifecycles
+                        .read()
+                        .await
+                        .contains_key(&planned_key),
+                    "HLS lifecycle should be owned by StageRuntime, not the side map"
+                );
                 break;
             }
             assert!(
@@ -902,6 +929,15 @@ mod tests {
 
         cancel.cancel();
         task.await.expect("segmenter task should stop cleanly");
+        assert!(
+            !engine
+                .stages
+                .runtimes
+                .read()
+                .await
+                .contains_key(&planned_key),
+            "HLS runtime should be removed on shutdown"
+        );
     }
 
     #[tokio::test]

@@ -138,7 +138,7 @@ impl FileIngestRegistry {
 
 #[derive(Clone)]
 pub struct StageRuntime {
-    pub ring: Arc<RingBuffer>,
+    pub ring: Option<Arc<RingBuffer>>,
     pub cancel: CancellationToken,
     pub lifecycle: Arc<StageLifecycle>,
     pub metrics: Arc<StageMetrics>,

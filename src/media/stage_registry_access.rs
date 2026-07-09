@@ -5,12 +5,14 @@ use std::sync::atomic::Ordering;
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::avio::MemoryQueue;
 use crate::media::engine::{ActiveEgress, MediaEngine, hls_preview_registry_key};
+use crate::media::engine_registries::StageRuntime;
 use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::stage_lifecycle::{
     StageBackendKind, StageLifecycle, StageLifecycleSnapshot, StagePhase,
 };
 use crate::media::stage_metrics::StageMetrics;
 use crate::runtime::stage::StageRuntimeSnapshot;
+use tokio_util::sync::CancellationToken;
 
 impl MediaEngine {
     pub async fn register_input_queue(&self, key: StageKey, queue: Arc<MemoryQueue>) {
@@ -35,6 +37,36 @@ impl MediaEngine {
         if let Some(runtime) = self.stages.runtimes.write().await.get_mut(key) {
             runtime.pipe_metrics = None;
         }
+    }
+
+    pub async fn get_or_create_non_ring_stage_runtime(
+        &self,
+        key: StageKey,
+        initial: StagePhase,
+        backend: StageBackendKind,
+        cancel: CancellationToken,
+    ) -> (Arc<StageLifecycle>, Arc<StageMetrics>) {
+        let mut runtimes = self.stages.runtimes.write().await;
+        if let Some(runtime) = runtimes.get(&key)
+            && !runtime.cancel.is_cancelled()
+        {
+            return (runtime.lifecycle.clone(), runtime.metrics.clone());
+        }
+
+        let lifecycle = Arc::new(StageLifecycle::new_with_backend(initial, backend));
+        let metrics = Arc::new(StageMetrics::new());
+        runtimes.insert(
+            key,
+            StageRuntime {
+                ring: None,
+                cancel,
+                lifecycle: lifecycle.clone(),
+                metrics: metrics.clone(),
+                input_queue: None,
+                pipe_metrics: None,
+            },
+        );
+        (lifecycle, metrics)
     }
 
     pub async fn get_or_create_stage_metrics(&self, key: StageKey) -> Arc<StageMetrics> {

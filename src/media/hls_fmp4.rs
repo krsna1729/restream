@@ -327,13 +327,12 @@ pub async fn start_hls_fmp4_segmenter(
     let hls_stage_key = start
         .planned_stage_key
         .unwrap_or_else(|| StageKey::new(pipeline_id.as_str(), StageKind::hls()));
-    let metrics = engine
-        .get_or_create_stage_metrics(hls_stage_key.clone())
-        .await;
-    let lifecycle = engine
-        .get_or_create_stage_lifecycle(
+    let (lifecycle, metrics) = engine
+        .get_or_create_non_ring_stage_runtime(
             hls_stage_key.clone(),
             crate::media::stage_lifecycle::StagePhase::Registered,
+            crate::media::stage_lifecycle::StageBackendKind::HlsSegmenter,
+            cancel_token.clone(),
         )
         .await;
     let _lifecycle_guard =
@@ -402,8 +401,7 @@ pub async fn start_hls_fmp4_segmenter(
                                 preview_video_meta.clone(),
                             )
                             .await else {
-                                engine.remove_stage_metrics(&hls_stage_key).await;
-                                engine.remove_stage_lifecycle(&hls_stage_key).await;
+                                engine.remove_stage_runtime(&hls_stage_key).await;
                                 engine.runtime.event_log.emit(crate::events::EventKind::StageStopped {
                                     pipeline_id: pipeline_id.clone(),
                                     encoding: "hls".to_string(),
@@ -516,8 +514,7 @@ pub async fn start_hls_fmp4_segmenter(
         }
     }
 
-    engine.remove_stage_metrics(&hls_stage_key).await;
-    engine.remove_stage_lifecycle(&hls_stage_key).await;
+    engine.remove_stage_runtime(&hls_stage_key).await;
     engine
         .runtime
         .event_log

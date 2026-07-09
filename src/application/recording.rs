@@ -298,10 +298,41 @@ mod tests {
             crate::domain::stage::StageKind::recording(),
         );
         wait_for_recording_stage_snapshot(&engine, &planned_key).await;
+        let runtime = engine
+            .stages
+            .runtimes
+            .read()
+            .await
+            .get(&planned_key)
+            .cloned()
+            .expect("recording stage should be runtime-backed");
+        assert!(
+            runtime.ring.is_none(),
+            "recording writer is a non-ring protocol stage"
+        );
+        assert!(
+            !engine
+                .stages
+                .metrics
+                .read()
+                .await
+                .contains_key(&planned_key),
+            "recording metrics should be owned by StageRuntime, not the side map"
+        );
+        assert!(
+            !engine
+                .stages
+                .lifecycles
+                .read()
+                .await
+                .contains_key(&planned_key),
+            "recording lifecycle should be owned by StageRuntime, not the side map"
+        );
 
         cancel_token.cancel();
         wait_for_recording_shutdown(&engine, "pipeline-launch").await;
         assert!(!engine.is_recording_active("pipeline-launch").await);
+        wait_for_recording_runtime_removed(&engine, &planned_key).await;
 
         let _ = std::fs::remove_dir_all(media_dir);
     }
@@ -358,6 +389,16 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("recording task did not shut down in time");
+    }
+
+    async fn wait_for_recording_runtime_removed(engine: &Arc<MediaEngine>, key: &StageKey) {
+        for _ in 0..50 {
+            if !engine.stages.runtimes.read().await.contains_key(key) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("recording runtime was not removed on shutdown");
     }
 
     async fn wait_for_recording_stage_snapshot(engine: &Arc<MediaEngine>, key: &StageKey) {

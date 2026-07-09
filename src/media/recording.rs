@@ -393,13 +393,12 @@ pub async fn start_recording(
 
     info!(filename = %filename, "recording started");
 
-    let stage_metrics = engine
-        .get_or_create_stage_metrics(rec_stage_key.clone())
-        .await;
-    let lifecycle = engine
-        .get_or_create_stage_lifecycle(
+    let (lifecycle, stage_metrics) = engine
+        .get_or_create_non_ring_stage_runtime(
             rec_stage_key.clone(),
             crate::media::stage_lifecycle::StagePhase::Registered,
+            crate::media::stage_lifecycle::StageBackendKind::Recording,
+            cancel_token.clone(),
         )
         .await;
     let _lifecycle_guard =
@@ -569,8 +568,7 @@ pub async fn start_recording(
         ));
     }
 
-    engine.remove_stage_metrics(&rec_stage_key).await;
-    engine.remove_stage_lifecycle(&rec_stage_key).await;
+    engine.remove_stage_runtime(&rec_stage_key).await;
     engine
         .runtime
         .event_log

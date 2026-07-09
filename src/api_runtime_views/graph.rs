@@ -136,6 +136,9 @@ pub(crate) async fn processing_graph(
 
     for (key, runtime) in stage_runtimes.iter() {
         if key.pipeline.as_str() == pipeline_id && visible_stage_keys.contains(key) {
+            let Some(ring) = runtime.ring.as_ref() else {
+                continue;
+            };
             let kind = &key.kind;
             let stage_key_str = kind.to_string();
             let stage_id = kind.graph_node_id(pipeline_id);
@@ -150,7 +153,7 @@ pub(crate) async fn processing_graph(
                 Some(runtime.metrics.snapshot()),
                 queue_stats.map(|stats| serde_json::json!(stats)),
                 pipe_stats,
-                api_view_models::ring_payload_stats_json(&runtime.ring),
+                api_view_models::ring_payload_stats_json(ring),
             ));
 
             if let Some(upstream) = kind.upstream() {

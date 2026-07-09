@@ -1246,7 +1246,7 @@ impl MediaEngine {
         let runtimes = self.stages.runtimes.read().await;
         runtimes
             .iter()
-            .filter(|(key, _)| key.pipeline.as_str() == pipeline_id)
+            .filter(|(key, runtime)| key.pipeline.as_str() == pipeline_id && runtime.ring.is_some())
             .map(|(key, runtime)| (key.kind.clone(), !runtime.cancel.is_cancelled()))
             .collect()
     }
@@ -1286,7 +1286,7 @@ impl MediaEngine {
         let mut runtimes = self.stages.runtimes.write().await;
         let mut removed = Vec::new();
         runtimes.retain(|key, runtime| {
-            if !active_keys.contains(key) {
+            if runtime.ring.is_some() && !active_keys.contains(key) {
                 debug!("Sweeping unused transcoder stage: {}", key);
                 runtime.cancel.cancel();
                 removed.push(key.clone());

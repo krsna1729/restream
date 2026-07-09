@@ -90,11 +90,12 @@ impl StageRuntimeManager {
         let mut runtimes = self.engine.stages.runtimes.write().await;
         if let Some(runtime) = runtimes.get(&key)
             && !runtime.cancel.is_cancelled()
+            && let Some(ring) = runtime.ring.as_ref()
         {
             return (
                 StageHandle {
                     key,
-                    ring: runtime.ring.clone(),
+                    ring: ring.clone(),
                     cancel: runtime.cancel.clone(),
                     lifecycle: runtime.lifecycle.clone(),
                     metrics: runtime.metrics.clone(),
@@ -108,7 +109,7 @@ impl StageRuntimeManager {
         runtimes.insert(
             key.clone(),
             StageRuntime {
-                ring: output_ring.clone(),
+                ring: Some(output_ring.clone()),
                 cancel: cancel.clone(),
                 lifecycle: lifecycle.clone(),
                 metrics: metrics.clone(),
@@ -681,7 +682,8 @@ mod tests {
         assert!(Arc::ptr_eq(&handle1.ring, &handle2.ring));
         let runtimes = engine.stages.runtimes.read().await;
         let runtime = runtimes.get(&key).expect("stage runtime registered");
-        assert!(Arc::ptr_eq(&runtime.ring, &handle1.ring));
+        let runtime_ring = runtime.ring.as_ref().expect("ring-backed runtime");
+        assert!(Arc::ptr_eq(runtime_ring, &handle1.ring));
         handle1.cancel.cancel();
         assert!(
             runtime.cancel.is_cancelled(),
@@ -713,7 +715,8 @@ mod tests {
         assert!(!handle2.cancel.is_cancelled());
         let runtimes = engine.stages.runtimes.read().await;
         let runtime = runtimes.get(&key).expect("replacement runtime registered");
-        assert!(Arc::ptr_eq(&runtime.ring, &handle2.ring));
+        let runtime_ring = runtime.ring.as_ref().expect("ring-backed runtime");
+        assert!(Arc::ptr_eq(runtime_ring, &handle2.ring));
         assert!(!runtime.cancel.is_cancelled());
     }
 

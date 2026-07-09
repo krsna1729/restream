@@ -172,16 +172,17 @@ plus writer start identity, agent preview, and harness stage-sharing proof**.
 | Capacity wait visible and cancellation-aware | ✅ Present | `external_transcoder.rs` transitions to `WaitingForCapacity` and waits with `tokio::select!`. |
 | Capacity metrics in snapshots | ✅ Present | `StageRuntimeSnapshot` includes total/available permits and wait duration. |
 | Stage events beyond `StageStarted` | ✅ Present | `events.rs` has `StageRegistered`, `StageWaitingForCapacity`, `StageBackendSpawned`, `StageFirstInput`, `StageFirstOutput`, `StageFailed`, `StageStopped`. |
-| Wrap current stage maps into a single `StageRuntime` map | ⚠️ Mostly | `StageRegistry.runtimes` now stores the authoritative runtime object with ring, cancel token, lifecycle, metrics, input queue, and pipe metrics for shared FFmpeg stages. The old transcoder buffer map plus pipe-metrics and input-queue side maps are retired, and `media::stage_registry_access` resolves runtime-backed health/status, telemetry, graph reads, snapshots, and metrics/lifecycle accessors through `StageRuntime` first. Lifecycle and metrics side maps remain for map-only HLS/recording stage families while ownership is migrated. |
+| Wrap current stage maps into a single `StageRuntime` map | ✅ Complete for phases 1-12 | `StageRegistry.runtimes` now stores the authoritative runtime object with optional ring, cancel token, lifecycle, metrics, input queue, and pipe metrics. Shared FFmpeg stages are ring-backed runtimes; HLS segmenters and recording writers are non-ring runtimes. The old transcoder buffer map plus pipe-metrics/input-queue side maps are retired, and lifecycle/metrics side maps are compatibility fallback paths rather than production ownership for shared FFmpeg, HLS, or recording stage families. |
 | Existing `StageStarted` semantics removed | ✅ Mostly | New event names exist; no `StageStarted` variant found. |
 
-**Verdict**: **Near A-grade, not ideal complete**. Lifecycle observability is
-real, and shared FFmpeg stages now use the first-class runtime object as the
+**Verdict**: **A-grade for the phase scope**. Lifecycle observability is real,
+and shared FFmpeg stages now use the first-class runtime object as the
 ring/cancellation/lifecycle/metrics/input-queue/pipe-metrics authority through
 the split `media::stage_registry_access` module for runtime-backed accessors,
-snapshots, health/status, telemetry, and graph reads.
-Remaining work is retiring the lifecycle/metrics side maps for map-only stage
-families and extending the same runtime-object ownership to every stage family.
+snapshots, health/status, telemetry, and graph reads. HLS segmenters and
+recording writers now use non-ring `StageRuntime` entries, so the runtime
+registry owns their lifecycle and metrics without pretending they have output
+rings.
 
 ---
 
@@ -346,7 +347,7 @@ convergence and later harness/reporting phases.
 | Ph 4 App services | A | Logs, auth initialization, settings reads/writes, pipeline, output, ingest, health checks, media-library operations, pipeline-scoped output reads, graph desired-plan selection, runtime health/status/graph/telemetry read models, and agent catalog/plan reads/output mutations are service-backed. |
 | Ph 5 Repositories | A | Repo modules exist, pipeline/output/ingest/health/log/auth/settings/agent/file-ingest/media-library services are port-trait backed, and output/job/recording state maps at repository boundaries. |
 | Ph 6 Graph planner | A | Planner drives output preparation, HLS output terminal-stage prep, persistent HLS segmenter lifecycle/uploader identity, per-output HLS diagnostic graphs with protocol segmenter nodes, recording lifecycle/writer start identity, graph rendering, diagnostics, HLS preview planning, agent graph/impact preview, and harness stage-count expectations. |
-| Ph 7 Stage lifecycle | A- | Lifecycle/capacity visibility is strong and shared FFmpeg stages now use first-class `StageRuntime` objects as the ring/cancellation/lifecycle/metrics/input-queue/pipe-metrics authority through `media::stage_registry_access` for runtime-backed accessors, snapshots, health/status, telemetry, and graph reads; lifecycle/metrics side maps remain for map-only stage families during migration. |
+| Ph 7 Stage lifecycle | A | Lifecycle/capacity visibility is strong and shared FFmpeg stages now use first-class ring-backed `StageRuntime` objects as the ring/cancellation/lifecycle/metrics/input-queue/pipe-metrics authority through `media::stage_registry_access`; HLS and recording use non-ring `StageRuntime` entries, so lifecycle/metrics side maps are compatibility fallback paths rather than production ownership for phase-scope stage families. |
 | Ph 8 Dependency-aware status | A | Operator-facing dependency status is complete for the phase scope, with typed internal egress lifecycle state. |
 | Ph 9 FFmpeg waist | A | Shared FFmpeg plan/backend/input/output contracts are the backend entry path, and legacy input/output ring escape hatches are removed. |
 | Ph 10 HLS preview | A | API one-off removed; preview startup/spawn, playlist/segment serving policy, blocked-cause selection, and health keys share the application/runtime graph path. |
