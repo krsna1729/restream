@@ -1244,10 +1244,9 @@ fn agent_desired_vs_actual(
             {
                 pending_count += 1;
                 "pendingInput"
-            } else if output.desired_state == DesiredOutputState::Running && actual == "running" {
-                converged_count += 1;
-                "converged"
-            } else if output.desired_state == DesiredOutputState::Stopped && actual != "running" {
+            } else if (output.desired_state == DesiredOutputState::Running && actual == "running")
+                || (output.desired_state == DesiredOutputState::Stopped && actual != "running")
+            {
                 converged_count += 1;
                 "converged"
             } else {
@@ -1284,9 +1283,7 @@ fn agent_desired_vs_actual(
         let recording_active = pipeline_health["recording"]["active"]
             .as_bool()
             .unwrap_or(false);
-        let recording_reason = if !recording_desired && !recording_active {
-            "converged"
-        } else if recording_desired && recording_active {
+        let recording_reason = if recording_desired == recording_active {
             "converged"
         } else if recording_desired && input_status != "on" {
             "pendingInput"
@@ -1419,7 +1416,7 @@ async fn agent_dependency_summary(
     recording_enabled: &std::collections::HashMap<String, bool>,
     health: &serde_json::Value,
 ) -> serde_json::Value {
-    let hls_config = crate::media::hls::HlsConfig::from_env();
+    let hls_config = crate::media::hls::HlsConfig::from_app_config(&state.engine.config);
     let mut hls = Vec::new();
     let mut recordings = Vec::new();
     for pipeline in pipelines {

@@ -124,6 +124,7 @@ pub struct PlanResponse {
     pub impact: ImpactPreview,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn redacted_context(
     pipelines: &[Pipeline],
     outputs: &[Output],
@@ -450,6 +451,7 @@ fn fingerprint(raw: &str) -> Value {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn investigation_response(
     request: InvestigationRequest,
     pipeline_exists: bool,
@@ -733,15 +735,15 @@ pub fn validate_plan(
             ));
         }
 
-        if let Some(config) = change_output_config(change) {
-            if config.is_custom_output() {
-                errors.push(issue(
-                    "error",
-                    "customEncodingUnsupported",
-                    "Custom output encoding is not available in the runtime planner yet.",
-                    Some("config"),
-                ));
-            }
+        if let Some(config) = change_output_config(change)
+            && config.is_custom_output()
+        {
+            errors.push(issue(
+                "error",
+                "customEncodingUnsupported",
+                "Custom output encoding is not available in the runtime planner yet.",
+                Some("config"),
+            ));
         }
 
         if let Some(desired_state) = change.desired_state.as_deref()

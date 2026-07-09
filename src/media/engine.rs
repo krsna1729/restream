@@ -2541,19 +2541,21 @@ impl MediaEngine {
     }
 
     pub async fn get_or_create_hls_store(&self, pipeline_id: &str) -> Arc<HlsStore> {
+        let hls_config = crate::media::hls::HlsConfig::from_app_config(&self.config);
         let mut stores = self.hls.stores.write().await;
         stores
             .entry(pipeline_id.to_string())
-            .or_insert_with(|| Arc::new(HlsStore::new()))
+            .or_insert_with(|| Arc::new(HlsStore::with_config(hls_config)))
             .clone()
     }
 
     pub async fn get_or_create_hls_preview_store(&self, pipeline_id: &str) -> Arc<Fmp4HlsStore> {
         let preview_key = hls_preview_registry_key(pipeline_id);
+        let hls_config = crate::media::hls::HlsConfig::from_app_config(&self.config);
         let mut stores = self.hls.preview_stores.write().await;
         stores
             .entry(preview_key)
-            .or_insert_with(|| Arc::new(Fmp4HlsStore::new()))
+            .or_insert_with(|| Arc::new(Fmp4HlsStore::with_config(hls_config)))
             .clone()
     }
 
@@ -5108,6 +5110,32 @@ mod tests {
             "token must be Some after ensure_hls_segmenter registers the pipeline"
         );
         engine.shutdown_hls_segmenter("pipe-hls").await;
+    }
+
+    #[tokio::test]
+    async fn hls_stores_use_engine_typed_config() {
+        let config = Arc::new(crate::AppConfig {
+            hls_min_segment_ms: 0.25,
+            hls_segment_capacity_bytes: 256 * 1024,
+            hls_max_segments: 7,
+            ..crate::AppConfig::default()
+        });
+        let engine = Arc::new(MediaEngine::new_with_config(config));
+
+        let hls_store = engine.get_or_create_hls_store("pipe-hls-config").await;
+        let preview_store = engine
+            .get_or_create_hls_preview_store("pipe-hls-preview-config")
+            .await;
+
+        assert_eq!(
+            hls_store.config(),
+            crate::media::hls::HlsConfig {
+                min_segment_secs: 0.25,
+                segment_capacity: 256 * 1024,
+                max_segments: 7,
+            }
+        );
+        assert_eq!(preview_store.config(), hls_store.config());
     }
 
     #[tokio::test]

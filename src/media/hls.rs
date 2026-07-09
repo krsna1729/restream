@@ -45,8 +45,7 @@ impl Default for HlsConfig {
 }
 
 impl HlsConfig {
-    pub fn from_env() -> Self {
-        let config = crate::AppConfig::from_env();
+    pub fn from_app_config(config: &crate::AppConfig) -> Self {
         Self {
             min_segment_secs: config.hls_min_segment_ms,
             segment_capacity: config.hls_segment_capacity_bytes,
@@ -100,9 +99,7 @@ impl Default for HlsStore {
 
 impl HlsStore {
     pub fn new() -> Self {
-        let config = HlsConfig::from_env();
-        tracing::info!(?config, "loaded config");
-        Self::with_config(config)
+        Self::with_config(HlsConfig::default())
     }
 
     pub fn with_config(config: HlsConfig) -> Self {
@@ -450,19 +447,7 @@ pub async fn start_hls_segmenter(
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::{Mutex, MutexGuard};
     use tokio_util::sync::CancellationToken;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    fn with_env_lock<T>(f: impl FnOnce() -> T) -> T {
-        let guard: MutexGuard<'_, ()> = ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let result = f();
-        drop(guard);
-        result
-    }
 
     fn test_store() -> HlsStore {
         HlsStore::with_config(HlsConfig::default())
@@ -757,53 +742,19 @@ mod tests {
     }
 
     #[test]
-    fn hls_config_from_env_uses_defaults_when_unset() {
-        with_env_lock(|| {
-            unsafe {
-                std::env::remove_var("RESTREAM_HLS_MIN_SEGMENT_MS");
-                std::env::remove_var("RESTREAM_HLS_SEGMENT_CAPACITY_BYTES");
-                std::env::remove_var("RESTREAM_HLS_MAX_SEGMENTS");
-            }
-            let cfg = HlsConfig::from_env();
-            let defaults = HlsConfig::default();
-            assert_eq!(cfg.min_segment_secs, defaults.min_segment_secs);
-            assert_eq!(cfg.segment_capacity, defaults.segment_capacity);
-            assert_eq!(cfg.max_segments, defaults.max_segments);
-        });
-    }
+    fn hls_config_maps_from_app_config() {
+        let app_config = crate::AppConfig {
+            hls_min_segment_ms: 0.5,
+            hls_segment_capacity_bytes: 524_288,
+            hls_max_segments: 9,
+            ..crate::AppConfig::default()
+        };
 
-    #[test]
-    fn hls_config_from_env_reads_env_vars() {
-        with_env_lock(|| {
-            unsafe {
-                std::env::set_var("RESTREAM_HLS_MIN_SEGMENT_MS", "500");
-                std::env::set_var("RESTREAM_HLS_MAX_SEGMENTS", "5");
-            }
-            let cfg = HlsConfig::from_env();
-            unsafe {
-                std::env::remove_var("RESTREAM_HLS_MIN_SEGMENT_MS");
-                std::env::remove_var("RESTREAM_HLS_MAX_SEGMENTS");
-            }
-            assert!((cfg.min_segment_secs - 0.5).abs() < 0.001);
-            assert_eq!(cfg.max_segments, 5);
-        });
-    }
+        let cfg = HlsConfig::from_app_config(&app_config);
 
-    #[test]
-    fn hls_config_from_env_reads_env_vars_when_set_to_custom_capacity() {
-        with_env_lock(|| {
-            unsafe {
-                std::env::set_var("RESTREAM_HLS_SEGMENT_CAPACITY_BYTES", "524288");
-                std::env::set_var("RESTREAM_HLS_MAX_SEGMENTS", "9");
-            }
-            let cfg = HlsConfig::from_env();
-            unsafe {
-                std::env::remove_var("RESTREAM_HLS_SEGMENT_CAPACITY_BYTES");
-                std::env::remove_var("RESTREAM_HLS_MAX_SEGMENTS");
-            }
-            assert_eq!(cfg.segment_capacity, 524288);
-            assert_eq!(cfg.max_segments, 9);
-        });
+        assert_eq!(cfg.min_segment_secs, 0.5);
+        assert_eq!(cfg.segment_capacity, 524_288);
+        assert_eq!(cfg.max_segments, 9);
     }
 
     #[test]

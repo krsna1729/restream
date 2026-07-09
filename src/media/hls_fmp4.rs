@@ -145,9 +145,7 @@ impl Default for Fmp4HlsStore {
 
 impl Fmp4HlsStore {
     pub fn new() -> Self {
-        let config = HlsConfig::from_env();
-        tracing::info!(?config, "loaded fmp4 hls config");
-        Self::with_config(config)
+        Self::with_config(HlsConfig::default())
     }
 
     pub fn with_config(config: HlsConfig) -> Self {
