@@ -117,7 +117,7 @@ runtime compatibility readers.
 | Criterion | Status | Evidence |
 |---|---|---|
 | Services exist | ✅ Present | `src/application/services/*` includes pipeline, output, ingest, file ingest, media library, settings, health, auth, logs, and agent context catalog assembly; `FileIngestService` now owns file-ingest start/stop/delete orchestration, pipeline-file-ingest persistence/read models, and FFmpeg argument/process setup; `MediaLibraryService` owns recording metadata lookup, media-library list read models, recording companion artifact planning, media delete execution, media rename execution, and ingest retargeting after rename. |
-| Handlers no longer call SQL directly | ⚠️ Partial | Logs/auth/settings/output mutations delegate to services, and agent context catalog reads now go through `AgentService`; remaining `api/agent.rs` read/helper endpoints and some state/helper code still call `db::*` directly. |
+| Handlers no longer call SQL directly | ⚠️ Mostly | Logs/auth/settings/output mutations delegate to services, agent context/catalog/plan reads now go through `AgentService`, and media-library read models/deletes/renames delegate to `MediaLibraryService`; remaining state/helper code still constructs persistence ports directly. |
 | Handlers do not call low-level media constructors | ⚠️ Mostly | `api/hls.rs` delegates to `application::hls_preview`; file-ingest start/stop/delete plus pipeline-file-ingest persistence/read models moved into `FileIngestService`; media-library list read models, recording companion artifact planning, delete execution, rename execution, and ingest retargeting moved into `MediaLibraryService`. API/runtime read models still take `MediaEngine` or perform feature policy directly. |
 | Services testable without Axum request types | ✅ Mostly | Service structs do not depend on Axum types. |
 
@@ -303,9 +303,10 @@ convergence and later harness/reporting phases.
      models now live in `FileIngestService`, and media-library recording
      list read models, companion artifact planning, and delete/rename execution
      now live in
-     `MediaLibraryService`, but `api/agent.rs` read/helper endpoints,
-     API/runtime read models, and some helper paths still call `db::*` or
-     orchestrate runtime work directly. Agent output mutations now use
+     `MediaLibraryService`, and agent catalog/plan reads now go through
+     `AgentService`, but API/runtime read models and some helper paths still
+     construct persistence ports directly or orchestrate runtime work directly.
+     Agent output mutations now use
      `OutputService`, and `PipelineService`, `OutputService`, `IngestService`,
      `HealthService`, `LogService`, `AuthService`, and `SettingsService` are now
      port-trait backed.
@@ -342,7 +343,7 @@ convergence and later harness/reporting phases.
 | Ph 1 Core contracts | A | Types exist, output desired-state, job status, and active/recent egress lifecycle state are typed; string conversion is now kept at DB/API edges. |
 | Ph 2 Config | A | Production env parsing is centralized in config, startup logs a comprehensive redacted effective-config summary, and runtime media paths receive typed config for recording remux, HLS stores, file-ingest backend selection, AVIO queues, rings, SRT TS chunk rings, and external FFmpeg capacity reporting. |
 | Ph 3 API split | A | Route module split is complete. |
-| Ph 4 App services | A- | Logs, auth initialization, pipeline, output, ingest, health checks, and agent output mutations are service-backed; agent read/context helpers still contain direct DB/application work. |
+| Ph 4 App services | A- | Logs, auth initialization, pipeline, output, ingest, health checks, media-library operations, and agent catalog/plan reads/output mutations are service-backed; API/runtime read models still contain direct application/runtime work. |
 | Ph 5 Repositories | A | Repo modules exist, pipeline/output/ingest/health/log/auth/settings services are port-trait backed, and output/job/recording state maps at repository boundaries. |
 | Ph 6 Graph planner | A- | Planner drives output preparation, HLS output terminal-stage prep, recording lifecycle registration, graph rendering, diagnostics, HLS preview planning, agent graph/impact preview, and harness stage-count expectations; recording writer and HLS segmenter/uploader boundaries remain. |
 | Ph 7 Stage lifecycle | A- | Lifecycle/capacity visibility is strong and shared FFmpeg stages now use first-class `StageRuntime` objects as the ring/cancellation authority; lifecycle/metrics side maps remain during migration. |

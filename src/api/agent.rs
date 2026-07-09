@@ -50,8 +50,6 @@ use crate::api_view_models;
 #[cfg(feature = "agent-plane")]
 use crate::application::services::AgentService;
 #[cfg(feature = "agent-plane")]
-use crate::db;
-#[cfg(feature = "agent-plane")]
 use crate::domain::output_spec::OutputUrlScheme;
 #[cfg(feature = "agent-plane")]
 use crate::events;
@@ -118,8 +116,11 @@ pub async fn agent_investigation_handler(
         return response;
     }
 
-    let pipelines = db::list_pipelines(&state.db).await.unwrap_or_default();
-    let outputs = db::list_outputs(&state.db).await.unwrap_or_default();
+    let catalog = AgentService::new(state.db.clone())
+        .load_pipeline_output_catalog()
+        .await;
+    let pipelines = catalog.pipelines;
+    let outputs = catalog.outputs;
     let pipeline_exists = request
         .pipeline_id
         .as_deref()
@@ -617,12 +618,11 @@ async fn execute_agent_operation(
     record: &crate::agent_execution::OperationRecord,
 ) -> Result<AgentOperationApplyOutcome, String> {
     let request = record.request.plan_request();
-    let pipelines = db::list_pipelines(&state.db)
-        .await
-        .map_err(|err| format!("failed to list pipelines: {err}"))?;
-    let outputs = db::list_outputs(&state.db)
-        .await
-        .map_err(|err| format!("failed to list outputs: {err}"))?;
+    let catalog = AgentService::new(state.db.clone())
+        .try_load_pipeline_output_catalog()
+        .await?;
+    let pipelines = catalog.pipelines;
+    let outputs = catalog.outputs;
     let validation = crate::agent_plane::validate_plan(&request, &pipelines, &outputs);
     if !validation.valid {
         return Err(format!(
@@ -955,12 +955,15 @@ async fn verify_agent_operation(
     state: &AppState,
     record: &crate::agent_execution::OperationRecord,
 ) -> serde_json::Value {
-    let pipelines = db::list_pipelines(&state.db).await.unwrap_or_default();
+    let catalog = AgentService::new(state.db.clone())
+        .load_pipeline_output_catalog()
+        .await;
+    let pipelines = catalog.pipelines;
     let pipeline_ids: Vec<String> = pipelines
         .iter()
         .map(|pipeline| pipeline.id.clone())
         .collect();
-    let outputs = db::list_outputs(&state.db).await.unwrap_or_default();
+    let outputs = catalog.outputs;
     let recording_enabled = recording_enabled_map(state, &pipeline_ids).await;
     let health = crate::api_runtime_views::health_snapshot(
         &state.engine,
@@ -1135,7 +1138,10 @@ fn agent_change_output_id(
 
 #[cfg(feature = "agent-execution")]
 async fn current_agent_alert_count(state: &AppState) -> usize {
-    let pipelines = db::list_pipelines(&state.db).await.unwrap_or_default();
+    let catalog = AgentService::new(state.db.clone())
+        .load_pipeline_output_catalog()
+        .await;
+    let pipelines = catalog.pipelines;
     let pipeline_ids: Vec<String> = pipelines
         .iter()
         .map(|pipeline| pipeline.id.clone())
@@ -1153,43 +1159,10 @@ async fn current_agent_alert_count(state: &AppState) -> usize {
 
 #[cfg(feature = "agent-plane")]
 async fn agent_media_inventory(state: &AppState) -> serde_json::Value {
-    let mut files = Vec::new();
-    if let Ok(mut entries) = tokio::fs::read_dir(&state.media_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if (name.ends_with(".ts")
-                || name.ends_with(".mkv")
-                || name.ends_with(".mp4")
-                || name.ends_with(".mov"))
-                && let Ok(metadata) = entry.metadata().await
-            {
-                let modified = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .and_then(|d| chrono::DateTime::from_timestamp_millis(d.as_millis() as i64))
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_default();
-
-                let ingests = db::list_ingests_for_filename(&state.db, &name)
-                    .await
-                    .unwrap_or_default();
-                let lower_name = name.to_ascii_lowercase();
-                let kind = if lower_name.ends_with(".ts") || lower_name.ends_with(".mkv") {
-                    "recording"
-                } else {
-                    "source"
-                };
-                files.push(serde_json::json!({
-                    "name": name,
-                    "size": metadata.len(),
-                    "modifiedAt": modified,
-                    "ingestCount": ingests.len(),
-                    "kind": kind
-                }));
-            }
-        }
-    }
+    let files = state
+        .media_library_service
+        .list_media_files(&state.media_dir)
+        .await;
     serde_json::json!({
         "mediaDir": state.media_dir,
         "files": files,
@@ -1542,8 +1515,11 @@ async fn build_agent_plan(
     state: &AppState,
     request: crate::agent_plane::PlanRequest,
 ) -> crate::agent_plane::PlanResponse {
-    let pipelines = db::list_pipelines(&state.db).await.unwrap_or_default();
-    let outputs = db::list_outputs(&state.db).await.unwrap_or_default();
+    let catalog = AgentService::new(state.db.clone())
+        .load_pipeline_output_catalog()
+        .await;
+    let pipelines = catalog.pipelines;
+    let outputs = catalog.outputs;
     let current_graph = if let Some(pid) = request.pipeline_id.as_deref()
         && pipelines.iter().any(|p| p.id == pid)
     {

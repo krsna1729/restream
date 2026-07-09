@@ -14,6 +14,12 @@ pub struct AgentContextCatalog {
     pub custom_encoding_len: usize,
 }
 
+#[derive(Debug)]
+pub struct AgentPipelineOutputCatalog {
+    pub pipelines: Vec<Pipeline>,
+    pub outputs: Vec<Output>,
+}
+
 /// Application service for read-only agent context assembly.
 ///
 /// The API layer still owns response shaping and redaction, but persistence and
@@ -58,6 +64,28 @@ impl AgentService {
             settings,
             custom_encoding_len,
         }
+    }
+
+    pub async fn load_pipeline_output_catalog(&self) -> AgentPipelineOutputCatalog {
+        self.try_load_pipeline_output_catalog()
+            .await
+            .unwrap_or_else(|_| AgentPipelineOutputCatalog {
+                pipelines: Vec::new(),
+                outputs: Vec::new(),
+            })
+    }
+
+    pub async fn try_load_pipeline_output_catalog(
+        &self,
+    ) -> Result<AgentPipelineOutputCatalog, String> {
+        let pipelines = crate::db::list_pipelines(&self.db)
+            .await
+            .map_err(|error| format!("failed to list pipelines: {error}"))?;
+        let outputs = crate::db::list_outputs(&self.db)
+            .await
+            .map_err(|error| format!("failed to list outputs: {error}"))?;
+
+        Ok(AgentPipelineOutputCatalog { pipelines, outputs })
     }
 }
 
@@ -129,5 +157,34 @@ mod tests {
         assert_eq!(catalog.ingests.len(), 1);
         assert_eq!(catalog.settings.unwrap().server_name, "Agent Test");
         assert_eq!(catalog.custom_encoding_len, "scale=1280:720".len());
+    }
+
+    #[tokio::test]
+    async fn agent_service_loads_pipeline_output_catalog() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        crate::db::create_pipeline(&pool, "pipe-1", "Pipeline", "key-1", None, None)
+            .await
+            .unwrap();
+        crate::db::create_output(
+            &pool,
+            "out-1",
+            "pipe-1",
+            "Output",
+            "rtmp://example/live",
+            None,
+            DesiredOutputState::Running,
+            &OutputConfig::parse("source"),
+        )
+        .await
+        .unwrap();
+
+        let service = AgentService::new(pool);
+        let catalog = service.load_pipeline_output_catalog().await;
+
+        assert_eq!(catalog.pipelines.len(), 1);
+        assert_eq!(catalog.pipelines[0].id, "pipe-1");
+        assert_eq!(catalog.outputs.len(), 1);
+        assert_eq!(catalog.outputs[0].id, "out-1");
     }
 }
