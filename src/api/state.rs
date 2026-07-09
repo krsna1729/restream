@@ -120,7 +120,8 @@ impl AppState {
         let settings_service = SettingsService::new(db.clone());
         let health_service = HealthService::new(db.clone());
         let file_ingest_service = FileIngestService::new(db.clone(), pipeline_service.clone());
-        let media_library_service = MediaLibraryService::new(db.clone(), pipeline_service.clone());
+        let media_library_service =
+            MediaLibraryService::new(db.clone(), pipeline_service.clone(), ingest_service.clone());
         let log_service = LogService::new(db.clone());
 
         Self {

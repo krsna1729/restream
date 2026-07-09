@@ -116,9 +116,9 @@ runtime compatibility readers.
 
 | Criterion | Status | Evidence |
 |---|---|---|
-| Services exist | ✅ Present | `src/application/services/*` includes pipeline, output, ingest, file ingest, media library, settings, health, auth, logs, and agent context catalog assembly; `FileIngestService` now owns file-ingest start/stop/delete orchestration, pipeline-file-ingest persistence/read models, and FFmpeg argument/process setup; `MediaLibraryService` owns recording metadata lookup, recording companion artifact planning, and media delete execution. |
+| Services exist | ✅ Present | `src/application/services/*` includes pipeline, output, ingest, file ingest, media library, settings, health, auth, logs, and agent context catalog assembly; `FileIngestService` now owns file-ingest start/stop/delete orchestration, pipeline-file-ingest persistence/read models, and FFmpeg argument/process setup; `MediaLibraryService` owns recording metadata lookup, recording companion artifact planning, media delete execution, media rename execution, and ingest retargeting after rename. |
 | Handlers no longer call SQL directly | ⚠️ Partial | Logs/auth/settings/output mutations delegate to services, and agent context catalog reads now go through `AgentService`; remaining `api/agent.rs` read/helper endpoints and some state/helper code still call `db::*` directly. |
-| Handlers do not call low-level media constructors | ⚠️ Mostly | `api/hls.rs` delegates to `application::hls_preview`; file-ingest start/stop/delete plus pipeline-file-ingest persistence/read models moved into `FileIngestService`; media-library recording companion artifact planning and delete execution moved into `MediaLibraryService`. Media-library rename/list policy and API/runtime read models still take `MediaEngine` or perform feature policy directly. |
+| Handlers do not call low-level media constructors | ⚠️ Mostly | `api/hls.rs` delegates to `application::hls_preview`; file-ingest start/stop/delete plus pipeline-file-ingest persistence/read models moved into `FileIngestService`; media-library recording companion artifact planning, delete execution, rename execution, and ingest retargeting moved into `MediaLibraryService`. Media-library list/read-model policy and API/runtime read models still take `MediaEngine` or perform feature policy directly. |
 | Services testable without Axum request types | ✅ Mostly | Service structs do not depend on Axum types. |
 
 **Verdict**: **Partial**. The service layer exists, but handlers are not yet
@@ -301,10 +301,10 @@ convergence and later harness/reporting phases.
    - Route modules exist, agent context catalog reads now use `AgentService`,
      and file-ingest start/stop/delete plus pipeline-file-ingest persistence/read
      models now live in `FileIngestService`, and media-library recording
-     companion artifact planning plus delete execution now live in
+     companion artifact planning plus delete/rename execution now live in
      `MediaLibraryService`, but `api/agent.rs` read/helper endpoints,
-     media-library rename/list policy, and some helper paths still call `db::*`
-     or orchestrate runtime work directly. Agent output mutations now use
+     media-library list/read-model policy, and some helper paths still call
+     `db::*` or orchestrate runtime work directly. Agent output mutations now use
      `OutputService`, and `PipelineService`, `OutputService`, `IngestService`,
      `HealthService`, `LogService`, `AuthService`, and `SettingsService` are now
      port-trait backed.
@@ -315,9 +315,13 @@ convergence and later harness/reporting phases.
 
 ### P2 — Guardrails and Large-File Debt
 
-6. **Architecture drift checks exist locally but are not CI-grade**
-   - `scripts/source-audit.sh` exists, but it is not wired into CI and currently
-     fails on large-file limits for `engine.rs` and `test_harness.rs`.
+6. **Architecture drift checks exist and are CI-wired, but artifact fixture
+   preservation is not fully linked**
+   - `scripts/source-audit.sh` runs locally and in CI, emits
+     `target/source-audit.json`, and enforces dependency-direction and
+     no-growth large-file guardrails. The remaining guardrail gap is linking the
+     named historical failure artifacts from `impl.md` into regression-fixture
+     documentation.
 
 7. **Large files still dominate reasoning cost**
    - The Phase 15 split remains important once contract convergence is stronger.
@@ -333,7 +337,7 @@ convergence and later harness/reporting phases.
 
 | Phase | Current Grade | Honest Status |
 |---|---:|---|
-| Ph 0 Guardrails | F | Not started. |
+| Ph 0 Guardrails | B | Source audit, forbidden-import guardrails, broad CI smoke gates, and source-audit inventory are wired; historical failure artifact links remain incomplete. |
 | Ph 1 Core contracts | A | Types exist, output desired-state, job status, and active/recent egress lifecycle state are typed; string conversion is now kept at DB/API edges. |
 | Ph 2 Config | A | Production env parsing is centralized in config, startup logs a comprehensive redacted effective-config summary, and runtime media paths receive typed config for recording remux, HLS stores, file-ingest backend selection, AVIO queues, rings, SRT TS chunk rings, and external FFmpeg capacity reporting. |
 | Ph 3 API split | A | Route module split is complete. |

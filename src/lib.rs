@@ -457,6 +457,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let media_library_service = crate::application::services::MediaLibraryService::new(
         pool.clone(),
         pipeline_service.clone(),
+        ingest_service.clone(),
     );
     let log_service = crate::application::services::LogService::new(pool.clone());
     let auth_service = crate::application::services::AuthService::new(pool.clone());

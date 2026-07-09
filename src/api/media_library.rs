@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::application::services::{
     ApiError,
-    media_library_service::{MediaDeleteError, MediaRenamePlanError},
+    media_library_service::{MediaDeleteError, MediaRenameError},
 };
 
 use super::state::{AppState, get_session_token_from_headers, require_authenticated};
@@ -507,77 +507,46 @@ pub async fn media_rename_handler(
             .into_response();
     }
 
-    let rename_pairs = match state.media_library_service.rename_pairs_for_media(
-        &filename,
-        &source_path,
-        &destination_path,
-    ) {
-        Ok(rename_pairs) => rename_pairs,
-        Err(MediaRenamePlanError::ConvertedExists) => {
+    let updated_ingests = match state
+        .media_library_service
+        .rename_media_file(&filename, new_name, &source_path, &destination_path)
+        .await
+    {
+        Ok(updated_ingests) => updated_ingests,
+        Err(MediaRenameError::ConvertedExists) => {
             return (
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({"error": "A converted MP4 with that name already exists"})),
             )
                 .into_response();
         }
-        Err(MediaRenamePlanError::ConversionStateExists) => {
+        Err(MediaRenameError::ConversionStateExists) => {
             return (
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({"error": "A conversion state file with that name already exists"})),
             )
                 .into_response();
         }
-    };
-
-    let mut completed = Vec::new();
-    for (from, to) in &rename_pairs {
-        if let Err(error) = tokio::fs::rename(from, to).await {
-            for (rollback_from, rollback_to) in completed.into_iter().rev() {
-                let _ = tokio::fs::rename(rollback_to, rollback_from).await;
-            }
+        Err(MediaRenameError::Io(error)) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": format!("Failed to rename media file: {error}")})),
             )
                 .into_response();
         }
-        completed.push((from.clone(), to.clone()));
-    }
-
-    let ingests = state
-        .ingest_service
-        .list_for_filename(&filename)
-        .await
-        .unwrap_or_default();
-    for ingest in &ingests {
-        if let Err(error) = state
-            .ingest_service
-            .update_ingest(
-                &ingest.id,
-                new_name,
-                &ingest.stream_key,
-                ingest.loop_flag,
-                &ingest.start_time,
-                ingest.live_optimized,
-                ingest.target_gop_seconds,
-            )
-            .await
-        {
-            for (rollback_from, rollback_to) in completed.into_iter().rev() {
-                let _ = tokio::fs::rename(rollback_to, rollback_from).await;
-            }
+        Err(MediaRenameError::IngestUpdate(error)) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": format!("Failed to update ingest references: {error}")})),
             )
                 .into_response();
         }
-    }
+    };
 
     Json(serde_json::json!({
         "renamed": true,
         "name": new_name,
-        "updatedIngests": ingests.len()
+        "updatedIngests": updated_ingests
     }))
     .into_response()
 }

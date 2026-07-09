@@ -14,6 +14,7 @@ use crate::media::engine::MediaEngine;
 use crate::types::Pipeline;
 
 use super::error::{ApiError, ApiResult};
+use super::ingest_service::IngestService;
 use super::pipeline_service::PipelineService;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,12 +31,21 @@ pub struct MediaRecordingMetadata {
 pub struct MediaLibraryService {
     db: SqlitePool,
     pipeline_service: PipelineService,
+    ingest_service: IngestService,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaRenamePlanError {
     ConvertedExists,
     ConversionStateExists,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaRenameError {
+    ConvertedExists,
+    ConversionStateExists,
+    Io(String),
+    IngestUpdate(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,10 +56,15 @@ pub enum MediaDeleteError {
 }
 
 impl MediaLibraryService {
-    pub fn new(db: SqlitePool, pipeline_service: PipelineService) -> Self {
+    pub fn new(
+        db: SqlitePool,
+        pipeline_service: PipelineService,
+        ingest_service: IngestService,
+    ) -> Self {
         Self {
             db,
             pipeline_service,
+            ingest_service,
         }
     }
 
@@ -211,6 +226,64 @@ impl MediaLibraryService {
         }
         Ok(rename_pairs)
     }
+
+    pub async fn rename_media_file(
+        &self,
+        filename: &str,
+        new_name: &str,
+        source_path: &Path,
+        destination_path: &Path,
+    ) -> Result<usize, MediaRenameError> {
+        let rename_pairs = self
+            .rename_pairs_for_media(filename, source_path, destination_path)
+            .map_err(|error| match error {
+                MediaRenamePlanError::ConvertedExists => MediaRenameError::ConvertedExists,
+                MediaRenamePlanError::ConversionStateExists => {
+                    MediaRenameError::ConversionStateExists
+                }
+            })?;
+
+        let mut completed = Vec::new();
+        for (from, to) in &rename_pairs {
+            if let Err(error) = tokio::fs::rename(from, to).await {
+                rollback_renames(completed).await;
+                return Err(MediaRenameError::Io(error.to_string()));
+            }
+            completed.push((from.clone(), to.clone()));
+        }
+
+        let ingests = self
+            .ingest_service
+            .list_for_filename(filename)
+            .await
+            .unwrap_or_default();
+        for ingest in &ingests {
+            if let Err(error) = self
+                .ingest_service
+                .update_ingest(
+                    &ingest.id,
+                    new_name,
+                    &ingest.stream_key,
+                    ingest.loop_flag,
+                    &ingest.start_time,
+                    ingest.live_optimized,
+                    ingest.target_gop_seconds,
+                )
+                .await
+            {
+                rollback_renames(completed).await;
+                return Err(MediaRenameError::IngestUpdate(error.to_string()));
+            }
+        }
+
+        Ok(ingests.len())
+    }
+}
+
+async fn rollback_renames(completed: Vec<(PathBuf, PathBuf)>) {
+    for (rollback_from, rollback_to) in completed.into_iter().rev() {
+        let _ = tokio::fs::rename(rollback_to, rollback_from).await;
+    }
 }
 
 #[cfg(test)]
@@ -243,7 +316,11 @@ mod tests {
         .await
         .unwrap();
 
-        MediaLibraryService::new(pool.clone(), PipelineService::new(pool))
+        MediaLibraryService::new(
+            pool.clone(),
+            PipelineService::new(pool.clone()),
+            IngestService::new(pool),
+        )
     }
 
     #[tokio::test]
@@ -334,6 +411,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rename_media_file_moves_companions_and_updates_ingests() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        crate::db::create_ingest(
+            &pool,
+            "ing-rename",
+            "recording_20260709T010203_demo.ts",
+            "stream-key",
+            true,
+            "00:00:01",
+            true,
+            crate::types::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+        )
+        .await
+        .unwrap();
+        let service = MediaLibraryService::new(
+            pool.clone(),
+            PipelineService::new(pool.clone()),
+            IngestService::new(pool.clone()),
+        );
+        let temp_dir = tempfile_dir("media-rename-exec");
+        let source = temp_dir.join("recording_20260709T010203_demo.ts");
+        let converted = temp_dir.join("recording_20260709T010203_demo.mp4");
+        let state = temp_dir.join("recording_20260709T010203_demo.ts.conversion.json");
+        let destination = temp_dir.join("recording_20260709T010203_renamed.ts");
+        std::fs::write(&source, b"source").unwrap();
+        std::fs::write(&converted, b"converted").unwrap();
+        std::fs::write(&state, b"state").unwrap();
+
+        let updated = service
+            .rename_media_file(
+                "recording_20260709T010203_demo.ts",
+                "recording_20260709T010203_renamed.ts",
+                &std::fs::canonicalize(&source).unwrap(),
+                &destination,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated, 1);
+        assert!(!source.exists());
+        assert!(!converted.exists());
+        assert!(!state.exists());
+        assert!(destination.exists());
+        assert!(
+            temp_dir
+                .join("recording_20260709T010203_renamed.mp4")
+                .exists()
+        );
+        assert!(
+            temp_dir
+                .join("recording_20260709T010203_renamed.ts.conversion.json")
+                .exists()
+        );
+        let renamed_ingests =
+            crate::db::list_ingests_for_filename(&pool, "recording_20260709T010203_renamed.ts")
+                .await
+                .unwrap();
+        assert_eq!(renamed_ingests.len(), 1);
+        assert_eq!(renamed_ingests[0].id, "ing-rename");
+        assert!(renamed_ingests[0].loop_flag);
+        assert!(renamed_ingests[0].live_optimized);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
     async fn delete_media_file_removes_recording_companions() {
         let service = service_with_pipeline().await;
         let temp_dir = tempfile_dir("media-delete-exec");
@@ -374,7 +517,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let service = MediaLibraryService::new(pool.clone(), PipelineService::new(pool));
+        let service = MediaLibraryService::new(
+            pool.clone(),
+            PipelineService::new(pool.clone()),
+            IngestService::new(pool),
+        );
         let temp_dir = tempfile_dir("media-delete-ingest");
         let file = temp_dir.join("clip.mp4");
         std::fs::write(&file, b"source").unwrap();
