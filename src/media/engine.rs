@@ -1008,6 +1008,9 @@ impl MediaEngine {
         &self,
         key: &StageKey,
     ) -> Option<crate::media::stage_lifecycle::StageLifecycleSnapshot> {
+        if let Some(runtime) = self.stages.runtimes.read().await.get(key).cloned() {
+            return Some(runtime.lifecycle.snapshot());
+        }
         self.stages
             .lifecycles
             .read()
@@ -1016,14 +1019,36 @@ impl MediaEngine {
             .map(|lc| lc.snapshot())
     }
 
-    pub async fn stage_runtime_snapshot(
+    async fn stage_snapshot_parts(
         &self,
         key: &StageKey,
-    ) -> Option<crate::runtime::stage::StageRuntimeSnapshot> {
+    ) -> Option<(
+        crate::media::stage_lifecycle::StageLifecycleSnapshot,
+        Arc<crate::media::stage_metrics::StageMetrics>,
+    )> {
+        if let Some(runtime) = self.stages.runtimes.read().await.get(key).cloned() {
+            return Some((runtime.lifecycle.snapshot(), runtime.metrics.clone()));
+        }
+        let lifecycle = self.stage_lifecycle_snapshot(key).await?;
+        let metrics = self
+            .stages
+            .metrics
+            .read()
+            .await
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(crate::media::stage_metrics::StageMetrics::new()));
+        Some((lifecycle, metrics))
+    }
+
+    fn build_stage_runtime_snapshot(
+        &self,
+        key: &StageKey,
+        lifecycle: crate::media::stage_lifecycle::StageLifecycleSnapshot,
+        metrics: Arc<crate::media::stage_metrics::StageMetrics>,
+    ) -> crate::runtime::stage::StageRuntimeSnapshot {
         use std::sync::atomic::Ordering;
 
-        let lifecycle = self.stage_lifecycle_snapshot(key).await?;
-        let metrics = self.stages.metrics.read().await.get(key).cloned()?;
         let (capacity_permits_total, capacity_permits_available, capacity_wait_ms) = if matches!(
             lifecycle.phase,
             crate::media::stage_lifecycle::StagePhase::WaitingForCapacity { .. }
@@ -1040,7 +1065,7 @@ impl MediaEngine {
             (None, None, None)
         };
 
-        Some(crate::runtime::stage::StageRuntimeSnapshot {
+        crate::runtime::stage::StageRuntimeSnapshot {
             key: key.clone(),
             backend: lifecycle.backend.clone(),
             phase: lifecycle.phase.clone(),
@@ -1054,7 +1079,15 @@ impl MediaEngine {
             capacity_permits_total,
             capacity_permits_available,
             capacity_wait_ms,
-        })
+        }
+    }
+
+    pub async fn stage_runtime_snapshot(
+        &self,
+        key: &StageKey,
+    ) -> Option<crate::runtime::stage::StageRuntimeSnapshot> {
+        let (lifecycle, metrics) = self.stage_snapshot_parts(key).await?;
+        Some(self.build_stage_runtime_snapshot(key, lifecycle, metrics))
     }
 
     /// Return runtime snapshots for all stages belonging to the given pipeline.
@@ -1062,13 +1095,25 @@ impl MediaEngine {
         &self,
         pipeline_id: &str,
     ) -> Vec<crate::runtime::stage::StageRuntimeSnapshot> {
-        let lifecycles = self.stages.lifecycles.read().await;
-        let keys: Vec<StageKey> = lifecycles
-            .keys()
-            .filter(|k| k.pipeline.as_str() == pipeline_id)
-            .cloned()
-            .collect();
-        drop(lifecycles);
+        let mut keys = std::collections::HashSet::new();
+        {
+            let runtimes = self.stages.runtimes.read().await;
+            keys.extend(
+                runtimes
+                    .keys()
+                    .filter(|k| k.pipeline.as_str() == pipeline_id)
+                    .cloned(),
+            );
+        }
+        {
+            let lifecycles = self.stages.lifecycles.read().await;
+            keys.extend(
+                lifecycles
+                    .keys()
+                    .filter(|k| k.pipeline.as_str() == pipeline_id)
+                    .cloned(),
+            );
+        }
 
         let mut snapshots = Vec::with_capacity(keys.len());
         for key in keys {
@@ -1086,55 +1131,15 @@ impl MediaEngine {
         &self,
         egress: &ActiveEgress,
     ) -> Option<crate::runtime::stage::StageRuntimeSnapshot> {
-        use std::sync::atomic::Ordering;
-
         let key = egress.terminal_stage_key.as_ref()?;
-        let lifecycle = self.stage_lifecycle_snapshot(key).await?;
+        let (lifecycle, metrics) = self.stage_snapshot_parts(key).await?;
         if matches!(
             lifecycle.phase,
             crate::media::stage_lifecycle::StagePhase::Producing
         ) {
             return None;
         }
-        let metrics = self
-            .stages
-            .metrics
-            .read()
-            .await
-            .get(key)
-            .cloned()
-            .unwrap_or_else(|| Arc::new(crate::media::stage_metrics::StageMetrics::new()));
-        let (capacity_permits_total, capacity_permits_available, capacity_wait_ms) = if matches!(
-            lifecycle.phase,
-            crate::media::stage_lifecycle::StagePhase::WaitingForCapacity { .. }
-                | crate::media::stage_lifecycle::StagePhase::CapacityAcquired { .. }
-        ) {
-            let semaphore = &self.runtime.external_ffmpeg_semaphore;
-            let total = Some(self.config.external_ffmpeg_permits);
-            let available = Some(semaphore.available_permits());
-            let wait_ms = lifecycle
-                .phase_started_at
-                .map(|t| std::cmp::min(t.elapsed().as_millis(), u64::MAX as u128) as u64);
-            (total, available, wait_ms)
-        } else {
-            (None, None, None)
-        };
-
-        Some(crate::runtime::stage::StageRuntimeSnapshot {
-            key: key.clone(),
-            backend: lifecycle.backend.clone(),
-            phase: lifecycle.phase.clone(),
-            bytes_in: metrics.bytes_in.load(Ordering::Relaxed),
-            bytes_out: metrics.bytes_out.load(Ordering::Relaxed),
-            packets_in: metrics.packets_in.load(Ordering::Relaxed),
-            packets_out: metrics.packets_out.load(Ordering::Relaxed),
-            first_input_at: lifecycle.first_input_at,
-            first_output_at: lifecycle.first_output_at,
-            last_error: lifecycle.last_error.clone(),
-            capacity_permits_total,
-            capacity_permits_available,
-            capacity_wait_ms,
-        })
+        Some(self.build_stage_runtime_snapshot(key, lifecycle, metrics))
     }
 
     /// Returns the blocking upstream stage snapshot for an HLS preview when
@@ -1143,8 +1148,6 @@ impl MediaEngine {
         &self,
         pipeline_id: &str,
     ) -> Option<crate::runtime::stage::StageRuntimeSnapshot> {
-        use std::sync::atomic::Ordering;
-
         let mut keys: Vec<_> = self
             .active_hls_preview_stage_keys()
             .await
@@ -1154,7 +1157,7 @@ impl MediaEngine {
         keys.sort_by_key(|key| key.to_string());
 
         for key in keys {
-            let Some(lifecycle) = self.stage_lifecycle_snapshot(&key).await else {
+            let Some((lifecycle, metrics)) = self.stage_snapshot_parts(&key).await else {
                 continue;
             };
             if matches!(
@@ -1163,46 +1166,7 @@ impl MediaEngine {
             ) {
                 continue;
             }
-
-            let metrics = self
-                .stages
-                .metrics
-                .read()
-                .await
-                .get(&key)
-                .cloned()
-                .unwrap_or_else(|| Arc::new(crate::media::stage_metrics::StageMetrics::new()));
-            let (capacity_permits_total, capacity_permits_available, capacity_wait_ms) = if matches!(
-                lifecycle.phase,
-                crate::media::stage_lifecycle::StagePhase::WaitingForCapacity { .. }
-                    | crate::media::stage_lifecycle::StagePhase::CapacityAcquired { .. }
-            ) {
-                let semaphore = &self.runtime.external_ffmpeg_semaphore;
-                let total = Some(self.config.external_ffmpeg_permits);
-                let available = Some(semaphore.available_permits());
-                let wait_ms = lifecycle
-                    .phase_started_at
-                    .map(|t| std::cmp::min(t.elapsed().as_millis(), u64::MAX as u128) as u64);
-                (total, available, wait_ms)
-            } else {
-                (None, None, None)
-            };
-
-            return Some(crate::runtime::stage::StageRuntimeSnapshot {
-                key: key.clone(),
-                backend: lifecycle.backend.clone(),
-                phase: lifecycle.phase.clone(),
-                bytes_in: metrics.bytes_in.load(Ordering::Relaxed),
-                bytes_out: metrics.bytes_out.load(Ordering::Relaxed),
-                packets_in: metrics.packets_in.load(Ordering::Relaxed),
-                packets_out: metrics.packets_out.load(Ordering::Relaxed),
-                first_input_at: lifecycle.first_input_at,
-                first_output_at: lifecycle.first_output_at,
-                last_error: lifecycle.last_error.clone(),
-                capacity_permits_total,
-                capacity_permits_available,
-                capacity_wait_ms,
-            });
+            return Some(self.build_stage_runtime_snapshot(&key, lifecycle, metrics));
         }
         None
     }
@@ -4110,6 +4074,31 @@ mod tests {
             engine.egress_blocked_by_snapshot(egress).await
         };
         assert_eq!(blocked, None, "producing stage must not block egress");
+    }
+
+    #[tokio::test]
+    async fn stage_runtime_snapshot_reads_runtime_after_side_maps_removed() {
+        use crate::media::ring_buffer::RingBuffer;
+        use crate::media::stage_lifecycle::StagePhase;
+        use crate::media::stage_runtime::StageRuntimeManager;
+
+        let engine = Arc::new(MediaEngine::new());
+        let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
+        let manager = StageRuntimeManager::new(engine.clone());
+        let (handle, _) = manager
+            .ensure_stage(key.clone(), Arc::new(RingBuffer::new(4)), None)
+            .await;
+        handle.metrics.record_in(42);
+        handle.lifecycle.transition(StagePhase::RunningNoOutputYet);
+        engine.stages.metrics.write().await.remove(&key);
+        engine.stages.lifecycles.write().await.remove(&key);
+
+        let snapshot = engine
+            .stage_runtime_snapshot(&key)
+            .await
+            .expect("runtime-backed stage should not depend on side maps");
+        assert_eq!(snapshot.phase, StagePhase::RunningNoOutputYet);
+        assert_eq!(snapshot.bytes_in, 42);
     }
 
     #[tokio::test]
