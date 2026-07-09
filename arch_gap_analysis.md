@@ -286,7 +286,7 @@ convergence and later harness/reporting phases.
 |---|---|---|
 | Phase 13 — Harness v2 reporting | ✅ Complete | Harness now has `HarnessOutputCell`, `HarnessOutputRegistry`, per-scenario `outputs.json`, scenario result embedding, semantic cell labels in progress stalls, matrix `root-cause-summary.json` grouping, schema-versioned assertion rows, per-scenario `artifact-index.json` with file metadata/checksums, and probe failure API snapshots carrying output status plus engine health. |
 | Phase 14 — Agent/MCP cleanup | ✅ Complete | Shared agent command/query DTOs live in `agent_core::types`, HTTP/execution modules re-export those DTOs instead of duplicating structs, MCP backends consume the same shared types, agent context/catalog reads use port-backed `AgentService`, agent output mutations use `OutputService`, agent graph/impact preview use `StageGraphPlan`, and agent API read/plan paths no longer import media internals. |
-| Phase 15 — Large-file split | 🔶 In progress | `engine.rs` has started shrinking via a responsibility-based runtime snapshot split (`runtime::snapshots`). Major files still exceed the ideal 2,000-line target: `test_harness.rs` ~10k lines, `engine.rs` ~6.1k, `srt.rs` ~4.6k, `mpegts.rs` ~4.0k, `rtmp.rs` ~3.6k, `external_transcoder.rs` ~2.8k. |
+| Phase 15 — Large-file split | 🔶 In progress | `engine.rs` has started shrinking via a responsibility-based runtime snapshot split (`runtime::snapshots`), and `test_harness.rs` has started shrinking via a mixed adaptive-ring helper module. Major files still exceed the ideal 2,000-line target: `test_harness.rs` ~10k lines, `engine.rs` ~6.1k, `srt.rs` ~4.6k, `mpegts.rs` ~4.0k, `rtmp.rs` ~3.6k, `external_transcoder.rs` ~2.8k. |
 | Phase 16 — Rollout policy | ❌ Not complete | Not audited as implemented; internal backend remains policy-gated and parity work is ongoing. |
 
 ---
@@ -333,8 +333,9 @@ convergence and later harness/reporting phases.
 
 6. **Large files still dominate reasoning cost**
    - Phase 15 is now underway with runtime snapshot contracts split out of
-     `engine.rs`, but the repository still needs further responsibility-based
-     splits before it reaches the 2,000-line ideal.
+     `engine.rs` and mixed adaptive-ring helpers split out of
+     `test_harness.rs`, but the repository still needs further
+     responsibility-based splits before it reaches the 2,000-line ideal.
 
 7. **Harness reporting is now complete for Phase 13 scope**
    - The harness now persists output-cell identity through `outputs.json` and
@@ -366,7 +367,7 @@ convergence and later harness/reporting phases.
 | Ph 12 Health/alerts/diagnostics | A | Health, alerts, graph, and the causal diagnostics context bundle meet the Phase 12 acceptance criteria; the legacy SSE diagnostics probe remains as an active probe path beside the read-only context endpoint. |
 | Ph 13 Harness v2 | A | Output-cell registry, `outputs.json`, semantic progress-stall labels, matrix root-cause grouping, assertion schema versioning, artifact indexing, and probe failure API snapshots are implemented. |
 | Ph 14 Agent/MCP cleanup | A | Shared DTOs live in `agent_core::types`; MCP and HTTP/execution share command/query payloads where feature boundaries permit; agent graph/impact preview uses the shared planner; agent reads use service/runtime read models; agent API read/plan paths have no direct media-internal imports. |
-| Ph 15 Large-file split | D | Started with `runtime::snapshots` extracted from `engine.rs`; the major large files still exceed the 2,000-line ideal and need additional responsibility-based splits. |
+| Ph 15 Large-file split | D | Started with `runtime::snapshots` extracted from `engine.rs` and mixed adaptive-ring helpers extracted from `test_harness.rs`; the major large files still exceed the 2,000-line ideal and need additional responsibility-based splits. |
 | Ph 16 Rollout policy | F | Not done. |
 
 ---

@@ -36,6 +36,8 @@ mod catalog;
 mod fault_manifest;
 #[path = "test_harness/fault_runner.rs"]
 mod fault_runner;
+#[path = "test_harness/mixed_adaptive_ring.rs"]
+mod mixed_adaptive_ring;
 #[path = "test_harness/mixed_manifest.rs"]
 mod mixed_manifest;
 #[path = "test_harness/mixed_runner.rs"]
@@ -48,6 +50,7 @@ mod workflow_exec;
 use catalog::HarnessCatalog;
 use fault_manifest::*;
 use fault_runner::*;
+pub(crate) use mixed_adaptive_ring::*;
 use mixed_manifest::*;
 use mixed_runner::*;
 use output_progress::*;
@@ -113,59 +116,6 @@ fn mixed_output_check_id(scenario: &str, row_id: &str, check: &str) -> String {
 
 fn mixed_output_instance_name(scenario: &str, row_id: &str, index: usize) -> String {
     format!("{scenario}-{row_id}-{index}")
-}
-
-/// Parsed source-ring telemetry used by the mixed adaptive-ring readiness gate.
-#[derive(Debug, Clone, Copy)]
-struct MixedAdaptiveRingSnapshot {
-    capacity: u64,
-    depth_secs: f64,
-    overflows: u64,
-    resized: bool,
-    adequate: bool,
-    passed: bool,
-}
-
-impl MixedAdaptiveRingSnapshot {
-    fn to_json(self) -> Value {
-        json!({
-            "ringCapacity": self.capacity,
-            "bufferDepthSecs": self.depth_secs,
-            "ringResized": self.resized,
-            "adequate": self.adequate,
-            "overflows": self.overflows,
-        })
-    }
-}
-
-fn mixed_adaptive_ring_snapshot(telemetry: &Value) -> MixedAdaptiveRingSnapshot {
-    let capacity = telemetry["sourceRing"]["capacity"].as_u64().unwrap_or(0);
-    let depth_secs = telemetry["sourceRing"]["bufferDepthSecs"]
-        .as_f64()
-        .unwrap_or(0.0);
-    let overflows = telemetry["sourceRing"]["readers"]
-        .as_array()
-        .map(|readers| {
-            readers
-                .iter()
-                .map(|reader| reader["overflowCount"].as_u64().unwrap_or(0))
-                .sum()
-        })
-        .unwrap_or(0);
-    // 2 audio tracks x 50 pkt/s + video is roughly 130 pkt/s, so 780 slots is
-    // enough for the minimum 5-second depth. A capacity above 1024 additionally
-    // proves the adaptive resize path fired.
-    let resized = capacity > 1024;
-    let adequate = depth_secs >= 5.0 || capacity >= 780;
-    let passed = adequate && overflows == 0;
-    MixedAdaptiveRingSnapshot {
-        capacity,
-        depth_secs,
-        overflows,
-        resized,
-        adequate,
-        passed,
-    }
 }
 
 #[cfg(test)]
@@ -9574,41 +9524,6 @@ stream|index=1|codec_type=audio\n";
             mixed_progress_output_ids(&output_ids, "helper-hls"),
             vec!["rtmp-a".to_string(), "srt-a".to_string()]
         );
-    }
-
-    #[test]
-    fn mixed_adaptive_ring_snapshot_accepts_capacity_or_depth_without_overflow() {
-        let resized = mixed_adaptive_ring_snapshot(&json!({
-            "sourceRing": {
-                "capacity": 2048,
-                "bufferDepthSecs": 0.5,
-                "readers": [{"overflowCount": 0}]
-            }
-        }));
-        assert!(resized.resized);
-        assert!(resized.adequate);
-        assert!(resized.passed);
-
-        let deep_enough = mixed_adaptive_ring_snapshot(&json!({
-            "sourceRing": {
-                "capacity": 512,
-                "bufferDepthSecs": 5.1,
-                "readers": [{"overflowCount": 0}]
-            }
-        }));
-        assert!(!deep_enough.resized);
-        assert!(deep_enough.adequate);
-        assert!(deep_enough.passed);
-
-        let overflowed = mixed_adaptive_ring_snapshot(&json!({
-            "sourceRing": {
-                "capacity": 2048,
-                "bufferDepthSecs": 5.1,
-                "readers": [{"overflowCount": 1}]
-            }
-        }));
-        assert!(overflowed.adequate);
-        assert!(!overflowed.passed);
     }
 
     #[test]
