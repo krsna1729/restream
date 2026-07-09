@@ -4,7 +4,7 @@ use restream::media::codec::{audio_for_ts, video_for_ts};
 use restream::media::engine::{AudioMeta, MediaEngine, VideoMeta};
 use restream::media::mpegts::TsMuxer;
 use restream::media::ring_buffer::{DtsEnforcer, MediaPacket, MediaType, Reader, RingBuffer};
-use restream::media::transcoder::start_transcoder;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
@@ -125,7 +125,10 @@ async fn setup_matrix_path(
     Vec<MediaPacket>,
     usize,
 ) {
-    let engine = Arc::new(MediaEngine::new());
+    let mut config = restream::AppConfig::from_env();
+    config.backend_policy.internal_video_presets = true;
+    config.backend_policy.internal_hevc_to_h264 = true;
+    let engine = Arc::new(MediaEngine::new_with_config(Arc::new(config)));
     let source_ring = engine.get_or_create_pipeline("pipe").await;
 
     // Register active ingest
@@ -196,19 +199,19 @@ async fn setup_matrix_path(
     }
 
     let (target_ring, transcoder_cancel, transcoder_handle) = if trans {
-        let trans_ring = Arc::new(RingBuffer::new(4096));
-        let cancel = CancellationToken::new();
-        let handle = tokio::spawn(start_transcoder(
-            "pipe".to_string(),
-            "720p".to_string(),
-            source_ring.clone(),
-            trans_ring.clone(),
-            engine.clone(),
-            cancel.clone(),
-            StageKey::new("pipe", StageKind::video_preset("720p")),
-        ));
+        let stage_kind = StageKind::video_preset("720p");
+        let trans_ring = engine
+            .get_or_create_transcoder("pipe", stage_kind, source_ring.clone(), None)
+            .await;
+        let cancel = {
+            let buffers = engine.stages.buffers.read().await;
+            buffers
+                .get(&StageKey::new("pipe", StageKind::video_preset("720p")))
+                .map(|(_, token)| token.clone())
+                .unwrap()
+        };
         tokio::time::sleep(Duration::from_millis(50)).await;
-        (trans_ring, Some(cancel), Some(handle))
+        (trans_ring, Some(cancel), None)
     } else {
         (source_ring.clone(), None, None)
     };
