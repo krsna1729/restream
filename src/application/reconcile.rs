@@ -3,6 +3,7 @@
 
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
 use crate::domain::stage::StageKey;
+use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
 use crate::types::Output;
 use std::collections::HashSet;
@@ -48,7 +49,7 @@ pub fn decide_output_start_action(
     failure: Option<OutputFailureWindow>,
     policy: OutputRetryPolicy,
 ) -> OutputStartAction {
-    if desired_state != "running" || is_active {
+    if DesiredOutputState::from(desired_state) != DesiredOutputState::Running || is_active {
         return OutputStartAction::NotApplicable;
     }
     if !effective_has_ingest {
@@ -82,12 +83,12 @@ pub fn decide_output_stop_action(
     is_active: bool,
     effective_has_ingest: bool,
 ) -> OutputStopAction {
-    if desired_state == "running" && is_active && !effective_has_ingest {
-        OutputStopAction::StopBecauseIngestLost
-    } else if desired_state == "stopped" && is_active {
-        OutputStopAction::StopRequested
-    } else {
-        OutputStopAction::KeepRunning
+    match DesiredOutputState::from(desired_state) {
+        DesiredOutputState::Running if is_active && !effective_has_ingest => {
+            OutputStopAction::StopBecauseIngestLost
+        }
+        DesiredOutputState::Stopped if is_active => OutputStopAction::StopRequested,
+        _ => OutputStopAction::KeepRunning,
     }
 }
 
@@ -162,7 +163,10 @@ pub fn collect_needed_stage_keys<'a>(
 ) -> HashSet<StageKey> {
     let mut needed_stages = HashSet::new();
     for output in outputs {
-        if output.effective_has_ingest && (output.is_active || output.desired_state == "running") {
+        if output.effective_has_ingest
+            && (output.is_active
+                || DesiredOutputState::from(output.desired_state) == DesiredOutputState::Running)
+        {
             let dummy_output = Output {
                 id: "".to_string(),
                 pipeline_id: output.pipeline_id.to_string(),

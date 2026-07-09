@@ -68,7 +68,7 @@ drift is not enforced by CI.
 | Runtime errors | ✅ Present | `src/domain/errors.rs` defines `StageError` and `RuntimeError`. |
 | `StageRuntimeSnapshot` | ✅ Present | `src/runtime/stage.rs`, including phase serialization and capacity fields. |
 | `OutputRuntimeExplanation` | ✅ Present | `src/runtime/output.rs` and API status wiring. |
-| No new code writes raw string states except at DB/API boundary | ❌ Not met | `ActiveEgress.status`, `ActiveEgress.phase`, `RecentEgressOutcome.status/raw_status/phase`, `types::Output.desired_state`, and `application/reconcile.rs` still use raw string states. |
+| No new code writes raw string states except at DB/API boundary | ⚠️ Partial | Reconciliation now converts desired output state to `DesiredOutputState`, but `ActiveEgress.status`, `ActiveEgress.phase`, `RecentEgressOutcome.status/raw_status/phase`, and `types::Output.desired_state` still store raw strings. |
 
 **Verdict**: **Partial**. Contracts exist and are useful, but adoption is not
 complete. The ideal contract boundary has not replaced string state in runtime
@@ -316,7 +316,7 @@ convergence and later harness/reporting phases.
 | Phase | Current Grade | Honest Status |
 |---|---:|---|
 | Ph 0 Guardrails | F | Not started. |
-| Ph 1 Core contracts | B- | Types exist; adoption incomplete. |
+| Ph 1 Core contracts | B | Types exist and reconciliation now consumes typed desired-state logic; runtime string-state storage remains. |
 | Ph 2 Config | B | Mostly centralized; env parsing still split. |
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | C+ | Services exist; handlers still contain direct DB/application work. |
