@@ -22,27 +22,33 @@ else
     echo "OK: No forbidden imports found."
 fi
 
-# 2. Check for god file growth
-check_size() {
-    local file="$1"
-    local max_lines="$2"
-    if [ ! -f "$file" ]; then
-        echo "WARN: File $file does not exist"
-        return
-    fi
-    local lines
-    lines=$(wc -l < "$file" | tr -d ' ')
-    echo "File $file: $lines lines (limit: $max_lines)"
-    if [ "$lines" -gt "$max_lines" ]; then
-        echo "FAIL: File $file exceeds size limit of $max_lines lines!" >&2
-        FAILED=1
-    fi
-}
-
 echo ""
 echo "Checking file size limits..."
-check_size "src/media/engine.rs" 6587
-check_size "src/bin/test_harness.rs" 10282
+SOURCE_LINE_LIMIT=2000
+LARGE_FILE_REPORT=target/source-audit-large-files.jsonl
+: > "$LARGE_FILE_REPORT"
+while IFS= read -r -d '' file; do
+    lines=$(wc -l < "$file" | tr -d ' ')
+    printf '{"file":"%s","lines":%s,"limit":%s}\n' \
+        "$file" "$lines" "$SOURCE_LINE_LIMIT" >> "$LARGE_FILE_REPORT"
+    if [ "$lines" -gt "$SOURCE_LINE_LIMIT" ]; then
+        echo "FAIL: $file has $lines lines (limit: $SOURCE_LINE_LIMIT)" >&2
+        FAILED=1
+    fi
+done < <(find src public/ts -type f \( -name '*.rs' -o -name '*.ts' \) -print0)
+
+LARGEST_FILES=$(
+    sort -t: -k2,2nr <(
+        while IFS= read -r -d '' file; do
+            lines=$(wc -l < "$file" | tr -d ' ')
+            printf '%s:%s\n' "$file" "$lines"
+        done < <(find src public/ts -type f \( -name '*.rs' -o -name '*.ts' \) -print0)
+    ) | head -20
+)
+
+if [ "$FAILED" -eq 0 ]; then
+    echo "OK: All Rust/TypeScript source files are at or below ${SOURCE_LINE_LIMIT} lines."
+fi
 
 # 3. Check for raw std::env::var usage outside src/config.rs and tests
 echo ""
@@ -74,21 +80,23 @@ FEATURE_CFG_COUNT=$(grep -R "\#\\[cfg(feature" -n src Cargo.toml 2>/dev/null || 
 FEATURE_CFG_COUNT=$(printf "%s" "$FEATURE_CFG_COUNT" | sed '/^$/d' | wc -l | tr -d ' ')
 MEDIA_API_IMPORT_COUNT=$(grep -rn "use crate::api" src/media/ 2>/dev/null || true)
 MEDIA_API_IMPORT_COUNT=$(printf "%s" "$MEDIA_API_IMPORT_COUNT" | sed '/^$/d' | wc -l | tr -d ' ')
-ENGINE_LINES=$(wc -l < src/media/engine.rs | tr -d ' ')
-HARNESS_LINES=$(wc -l < src/bin/test_harness.rs | tr -d ' ')
+LARGEST_FILES_JSON=$(
+    awk -F: '
+        BEGIN { print "[" }
+        {
+            gsub(/\\/,"\\\\",$1);
+            gsub(/"/,"\\\"",$1);
+            printf "%s    {\"file\":\"%s\",\"lines\":%s,\"limit\":%s}", sep, $1, $2, limit;
+            sep = ",\n";
+        }
+        END { print "\n  ]" }
+    ' limit="$SOURCE_LINE_LIMIT" <<< "$LARGEST_FILES"
+)
 
 cat > target/source-audit.json <<EOF
 {
-  "largeFiles": {
-    "src/media/engine.rs": {
-      "lines": ${ENGINE_LINES},
-      "limit": 6587
-    },
-    "src/bin/test_harness.rs": {
-      "lines": ${HARNESS_LINES},
-      "limit": 10282
-    }
-  },
+  "sourceLineLimit": ${SOURCE_LINE_LIMIT},
+  "largestFiles": ${LARGEST_FILES_JSON},
   "moduleSummary": {
     "apiRouteModules": ${ROUTE_MODULE_COUNT},
     "dbRepositoryModules": ${DB_REPOSITORY_COUNT},
