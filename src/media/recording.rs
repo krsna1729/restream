@@ -9,6 +9,7 @@
 //! FFmpeg subprocess when that binary exposes the MP4 muxer.
 
 use crate::application::recording::RecordingSettings;
+use crate::domain::stage::StageKey;
 use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::mpegts::TsServiceMetadata;
@@ -26,6 +27,15 @@ use tracing::{error, info, warn};
 
 const MIN_DURATION_SECS: u64 = 5;
 const MP4_MUXER_NAME: &str = "mov";
+
+pub struct RecordingStart {
+    pub pipeline_name: String,
+    pub pipeline_id: String,
+    pub input_source: Option<String>,
+    pub media_dir: String,
+    pub settings: RecordingSettings,
+    pub stage_key: StageKey,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -354,17 +364,21 @@ fn build_recording_service_metadata(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn start_recording(
-    pipeline_name: String,
-    pipeline_id: String,
-    input_source: Option<String>,
-    media_dir: String,
-    recording_settings: RecordingSettings,
+    start: RecordingStart,
     ring_buffer: Arc<RingBuffer>,
     engine: Arc<MediaEngine>,
     cancel_token: CancellationToken,
 ) {
+    let RecordingStart {
+        pipeline_name,
+        pipeline_id,
+        input_source,
+        media_dir,
+        settings,
+        stage_key: rec_stage_key,
+    } = start;
+
     let _ = fs::create_dir_all(&media_dir);
     let filename = build_filename(&pipeline_name);
     let file_path = format!("{}/{}", media_dir, filename);
@@ -379,11 +393,6 @@ pub async fn start_recording(
 
     info!(filename = %filename, "recording started");
 
-    let recording_plan = crate::planner::graph_plan::plan_recording_graph(
-        &pipeline_id,
-        &engine.config.backend_policy,
-    );
-    let rec_stage_key = recording_plan.terminal_stage;
     let stage_metrics = engine
         .get_or_create_stage_metrics(rec_stage_key.clone())
         .await;
@@ -555,7 +564,7 @@ pub async fn start_recording(
         let ffmpeg_threads = normalize_recording_threads(engine.config.recording_threads);
         tokio::spawn(remux_recording_to_mp4(
             PathBuf::from(&file_path),
-            recording_settings,
+            settings,
             ffmpeg_threads,
         ));
     }

@@ -4,6 +4,7 @@
 use crate::application::ports::{MetaLookupError, MetaStore, MetaStoreWriter};
 use crate::application::reconcile::RecordingCommand;
 use crate::media::engine::MediaEngine;
+use crate::media::recording::RecordingStart;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -79,14 +80,22 @@ pub async fn spawn_recording_task(
     let cancel_token_for_task = cancel_token.clone();
     let engine_for_task = engine.clone();
     let pipeline_id_for_cleanup = pipeline_id.clone();
+    let recording_plan = crate::planner::graph_plan::plan_recording_graph(
+        &pipeline_id,
+        &engine.config.backend_policy,
+    );
+    let stage_key = recording_plan.terminal_stage;
 
     tokio::spawn(async move {
         crate::media::recording::start_recording(
-            pipeline_name,
-            pipeline_id.clone(),
-            input_source,
-            media_dir,
-            recording_settings,
+            RecordingStart {
+                pipeline_name,
+                pipeline_id: pipeline_id.clone(),
+                input_source,
+                media_dir,
+                settings: recording_settings,
+                stage_key,
+            },
             ring_buffer,
             engine_for_task.clone(),
             cancel_token_for_task,
@@ -143,6 +152,7 @@ pub async fn apply_recording_commands(
 mod tests {
     use super::*;
     use crate::application::ports::{MetaLookupFuture, MetaWriteFuture};
+    use crate::domain::stage::StageKey;
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -283,6 +293,11 @@ mod tests {
         .await;
 
         assert!(engine.is_recording_active("pipeline-launch").await);
+        let planned_key = StageKey::new(
+            "pipeline-launch",
+            crate::domain::stage::StageKind::recording(),
+        );
+        wait_for_recording_stage_snapshot(&engine, &planned_key).await;
 
         cancel_token.cancel();
         wait_for_recording_shutdown(&engine, "pipeline-launch").await;
@@ -343,5 +358,20 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("recording task did not shut down in time");
+    }
+
+    async fn wait_for_recording_stage_snapshot(engine: &Arc<MediaEngine>, key: &StageKey) {
+        for _ in 0..50 {
+            if let Some(snapshot) = engine.stage_runtime_snapshot(key).await {
+                assert_eq!(snapshot.key, *key);
+                assert_eq!(
+                    snapshot.backend,
+                    crate::media::stage_lifecycle::StageBackendKind::Recording
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("recording stage snapshot did not appear for planned key");
     }
 }
