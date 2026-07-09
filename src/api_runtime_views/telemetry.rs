@@ -4,49 +4,86 @@
 //! runtime layer continues to own the underlying counters and registries.
 
 use crate::api_view_models;
+use crate::domain::stage::StageKey;
 use crate::media::engine::MediaEngine;
+use crate::media::pipe_metrics::PipeMetrics;
+use crate::media::stage_metrics::StageMetrics;
+use std::collections::HashSet;
+use std::sync::Arc;
+
+async fn stage_telemetry_keys(engine: &MediaEngine) -> Vec<StageKey> {
+    let mut keys = HashSet::new();
+    {
+        let runtimes = engine.stages.runtimes.read().await;
+        keys.extend(runtimes.keys().cloned());
+    }
+    {
+        let metrics = engine.stages.metrics.read().await;
+        keys.extend(metrics.keys().cloned());
+    }
+    let mut keys: Vec<_> = keys.into_iter().collect();
+    keys.sort_by_key(|key| key.to_string());
+    keys
+}
+
+async fn stage_metrics_for(engine: &MediaEngine, key: &StageKey) -> Option<Arc<StageMetrics>> {
+    if let Some(runtime) = engine.stages.runtimes.read().await.get(key).cloned() {
+        return Some(runtime.metrics);
+    }
+    engine.stages.metrics.read().await.get(key).cloned()
+}
+
+async fn stage_pipe_metrics_for(engine: &MediaEngine, key: &StageKey) -> Option<Arc<PipeMetrics>> {
+    engine
+        .stages
+        .runtimes
+        .read()
+        .await
+        .get(key)
+        .and_then(|runtime| runtime.pipe_metrics.clone())
+}
 
 pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value {
     let generated_at = chrono::Utc::now().to_rfc3339();
     let ingests = engine.ingests.active.read().await;
     let egresses = engine.egresses.active.read().await;
-    let stage_metrics = engine.stages.metrics.read().await;
     let runtimes = engine.stages.runtimes.read().await;
     let pipelines = engine.ingests.pipelines.read().await;
     let ts_muxers = engine.stages.ts_muxers.read().await;
     let egress_queues = engine.egresses.queues.read().await;
+    let stage_keys = stage_telemetry_keys(engine).await;
 
     // Fetch lifecycle snapshots for all registered stages.
     let mut lifecycle_snapshots = std::collections::HashMap::new();
-    for key in stage_metrics.keys() {
+    for key in &stage_keys {
         if let Some(snap) = engine.stage_runtime_snapshot(key).await {
             lifecycle_snapshots.insert(key.clone(), snap);
         }
     }
-    drop(stage_metrics); // re-borrow below
-    let stage_metrics = engine.stages.metrics.read().await;
 
     let ingest_arr: Vec<serde_json::Value> = ingests
         .iter()
         .map(|(pid, ingest)| api_view_models::ingest_telemetry_json(pid, ingest))
         .collect();
 
-    let stage_arr: Vec<serde_json::Value> = stage_metrics
-        .iter()
-        .map(|(key, metrics)| {
-            api_view_models::stage_telemetry_row_json(
-                key,
-                metrics.snapshot(),
-                runtimes
-                    .get(key)
-                    .and_then(|runtime| runtime.pipe_metrics.as_ref())
-                    .map(|pm| pm.snapshot()),
-                None,
-                None,
-                lifecycle_snapshots.get(key),
-            )
-        })
-        .collect();
+    let mut stage_arr = Vec::with_capacity(stage_keys.len());
+    for key in &stage_keys {
+        let Some(metrics) = stage_metrics_for(engine, key).await else {
+            continue;
+        };
+        let row = api_view_models::stage_telemetry_row_json(
+            key,
+            metrics.snapshot(),
+            runtimes
+                .get(key)
+                .and_then(|runtime| runtime.pipe_metrics.as_ref())
+                .map(|pm| pm.snapshot()),
+            None,
+            None,
+            lifecycle_snapshots.get(key),
+        );
+        stage_arr.push(row);
+    }
 
     let egress_arr: Vec<serde_json::Value> = egresses
         .values()
@@ -159,16 +196,17 @@ pub(crate) async fn pipeline_telemetry(
     let generated_at = chrono::Utc::now().to_rfc3339();
     let ingests = engine.ingests.active.read().await;
     let egresses = engine.egresses.active.read().await;
-    let all_stage_metrics = engine.stages.metrics.read().await;
     let pipelines = engine.ingests.pipelines.read().await;
     let runtimes = engine.stages.runtimes.read().await;
+    let stage_keys: Vec<_> = stage_telemetry_keys(engine)
+        .await
+        .into_iter()
+        .filter(|key| key.pipeline.as_str() == pipeline_id)
+        .collect();
 
     // Pre-fetch lifecycle snapshots for stages belonging to this pipeline.
     let mut lifecycle_snapshots = std::collections::HashMap::new();
-    for key in all_stage_metrics
-        .keys()
-        .filter(|k| k.pipeline.as_str() == pipeline_id)
-    {
+    for key in &stage_keys {
         if let Some(snap) = engine.stage_runtime_snapshot(key).await {
             lifecycle_snapshots.insert(key.clone(), snap);
         }
@@ -182,34 +220,34 @@ pub(crate) async fn pipeline_telemetry(
         .get(pipeline_id)
         .map(|ring| api_view_models::pipeline_source_ring_json(ring));
 
-    let stages: Vec<serde_json::Value> = all_stage_metrics
-        .iter()
-        .filter(|(key, _)| key.pipeline.as_str() == pipeline_id)
-        .map(|(key, metrics)| {
-            let mut val = api_view_models::stage_telemetry_row_json(
-                key,
-                metrics.snapshot(),
-                runtimes
-                    .get(key)
-                    .and_then(|runtime| runtime.pipe_metrics.as_ref())
-                    .map(|pm| pm.snapshot()),
-                None,
-                None,
-                lifecycle_snapshots.get(key),
-            );
-            if let Some(runtime) = runtimes.get(key) {
-                val["active"] = serde_json::json!(!runtime.cancel.is_cancelled());
-                val["payloadStats"] = api_view_models::ring_payload_stats_json(&runtime.ring);
-            }
-            val.as_object_mut()
-                .expect("stage telemetry rows are objects")
-                .remove("stageKey");
-            val.as_object_mut()
-                .expect("stage telemetry rows are objects")
-                .remove("pipelineId");
-            val
-        })
-        .collect();
+    let mut stages = Vec::with_capacity(stage_keys.len());
+    for key in &stage_keys {
+        let Some(metrics) = stage_metrics_for(engine, key).await else {
+            continue;
+        };
+        let mut val = api_view_models::stage_telemetry_row_json(
+            key,
+            metrics.snapshot(),
+            runtimes
+                .get(key)
+                .and_then(|runtime| runtime.pipe_metrics.as_ref())
+                .map(|pm| pm.snapshot()),
+            None,
+            None,
+            lifecycle_snapshots.get(key),
+        );
+        if let Some(runtime) = runtimes.get(key) {
+            val["active"] = serde_json::json!(!runtime.cancel.is_cancelled());
+            val["payloadStats"] = api_view_models::ring_payload_stats_json(&runtime.ring);
+        }
+        val.as_object_mut()
+            .expect("stage telemetry rows are objects")
+            .remove("stageKey");
+        val.as_object_mut()
+            .expect("stage telemetry rows are objects")
+            .remove("pipelineId");
+        stages.push(val);
+    }
 
     let pipeline_egresses: Vec<serde_json::Value> = egresses
         .values()
@@ -238,23 +276,21 @@ pub(crate) async fn stage_telemetry_by_display(
     engine: &MediaEngine,
     display: &str,
 ) -> Option<serde_json::Value> {
-    let all_stage_metrics = engine.stages.metrics.read().await;
-    let key = all_stage_metrics
-        .keys()
+    let key = stage_telemetry_keys(engine)
+        .await
+        .into_iter()
         .find(|key| key.to_string() == display)?;
-    let metrics = all_stage_metrics.get(key)?;
-    let runtimes = engine.stages.runtimes.read().await;
-    let pipe = runtimes
-        .get(key)
-        .and_then(|runtime| runtime.pipe_metrics.as_ref())
+    let metrics = stage_metrics_for(engine, &key).await?;
+    let pipe = stage_pipe_metrics_for(engine, &key)
+        .await
         .map(|pm| pm.snapshot());
 
     // Fetch lifecycle snapshot for detailed phase/capacity info.
-    let lifecycle = engine.stage_runtime_snapshot(key).await;
+    let lifecycle = engine.stage_runtime_snapshot(&key).await;
 
     Some(api_view_models::single_stage_telemetry_json(
         chrono::Utc::now().to_rfc3339(),
-        key,
+        &key,
         metrics.snapshot(),
         pipe,
         lifecycle.as_ref(),
@@ -268,6 +304,7 @@ mod tests {
     use crate::media::avio::MemoryQueue;
     use crate::media::pipe_metrics::PipeMetrics;
     use crate::media::ring_buffer::RingBuffer;
+    use crate::media::stage_lifecycle::StagePhase;
     use crate::media::stage_runtime::StageRuntimeManager;
     use std::sync::Arc;
 
@@ -316,5 +353,47 @@ mod tests {
             .expect("runtime input queue should be present");
         assert_eq!(queue["lenBytes"], b"queued bytes".len() as u64);
         assert_eq!(queue["capacityBytes"], 128);
+    }
+
+    #[tokio::test]
+    async fn telemetry_reads_runtime_stage_after_metrics_side_map_removed() {
+        let engine = Arc::new(MediaEngine::new());
+        let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
+        let manager = StageRuntimeManager::new(engine.clone());
+        let (handle, _) = manager
+            .ensure_stage(key.clone(), Arc::new(RingBuffer::new(4)), None)
+            .await;
+        handle.metrics.record_in(64);
+        handle.metrics.record_out(32);
+        handle.lifecycle.transition(StagePhase::RunningNoOutputYet);
+        engine.stages.metrics.write().await.remove(&key);
+        engine.stages.lifecycles.write().await.remove(&key);
+
+        let engine_view = engine_telemetry(&engine).await;
+        let stage = engine_view["stages"]
+            .as_array()
+            .expect("engine stages should be serialized")
+            .iter()
+            .find(|stage| stage["stageKey"] == key.to_string())
+            .expect("runtime-backed stage should appear in engine telemetry");
+        assert_eq!(stage["metrics"]["bytesIn"], 64);
+        assert_eq!(stage["metrics"]["bytesOut"], 32);
+        assert_eq!(stage["lifecycle"]["phase"], "runningNoOutputYet");
+
+        let pipeline_view = pipeline_telemetry(&engine, "pipe-1").await;
+        let stage = pipeline_view["stages"]
+            .as_array()
+            .expect("pipeline stages should be serialized")
+            .iter()
+            .find(|stage| stage["kind"] == key.kind.to_string())
+            .expect("runtime-backed stage should appear in pipeline telemetry");
+        assert_eq!(stage["metrics"]["bytesIn"], 64);
+        assert_eq!(stage["lifecycle"]["phase"], "runningNoOutputYet");
+
+        let single = stage_telemetry_by_display(&engine, &key.to_string())
+            .await
+            .expect("runtime-backed stage should resolve by display key");
+        assert_eq!(single["metrics"]["bytesOut"], 32);
+        assert_eq!(single["lifecycle"]["phase"], "runningNoOutputYet");
     }
 }

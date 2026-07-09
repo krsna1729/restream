@@ -147,7 +147,7 @@ pub(crate) async fn processing_graph(
                 kind.graph_label(),
                 stage_key_str,
                 !runtime.cancel.is_cancelled(),
-                all_stage_metrics.get(key).map(|metrics| metrics.snapshot()),
+                Some(runtime.metrics.snapshot()),
                 queue_stats.map(|stats| serde_json::json!(stats)),
                 pipe_stats,
                 api_view_models::ring_payload_stats_json(&runtime.ring),
