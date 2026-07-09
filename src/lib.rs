@@ -708,8 +708,10 @@ pub async fn run_app(config: Arc<AppConfig>) {
 
                     // Resolve the stage graph for this output and return the ring
                     // the protocol-specific sender should read from.
-                    let (ring_buf, terminal_stage_key) =
+                    let prepared_output =
                         crate::application::egress::prepare_output_ring(&engine, output).await;
+                    let ring_buf = prepared_output.ring.clone();
+                    let terminal_stage_key = Some(prepared_output.terminal_stage_key.clone());
 
                     let encoding_str = output.encoding_string();
                     let registration = engine
@@ -751,6 +753,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
                     let tuning_c = tuning;
                     let output_correlation_id_c = output_correlation_id.clone();
                     let registration_c = registration.clone();
+                    let terminal_stage_key_c = prepared_output.terminal_stage_key.clone();
 
                     tokio::spawn(async move {
                         // Unsupported URL: reject immediately before the panic-safe
@@ -872,7 +875,12 @@ pub async fn run_app(config: Arc<AppConfig>) {
                                                 None,
                                                 eng2.clone(),
                                                 hls_cancel,
-                                                None,
+                                                crate::media::hls::HlsSegmenterStart {
+                                                    video_meta_override: None,
+                                                    planned_stage_key: Some(
+                                                        terminal_stage_key_c.clone(),
+                                                    ),
+                                                },
                                             )
                                             .await;
                                             eng2.shutdown_hls_segmenter(&pid2).await;

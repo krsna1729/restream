@@ -30,12 +30,13 @@ use shiguredo_mp4::{
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use crate::domain::stage::{StageKey, StageKind};
 use crate::media::codec::{
     adts_frame_count, annexb_to_avcc_into, build_aac_sequence_header, build_avcc_sequence_header,
     strip_adts,
 };
 use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
-use crate::media::hls::HlsConfig;
+use crate::media::hls::{HlsConfig, HlsSegmenterStart};
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
 
 const VIDEO_TIMESCALE: u32 = 90_000;
@@ -321,12 +322,11 @@ pub async fn start_hls_fmp4_segmenter(
     audio_ring_buffer: Option<Arc<RingBuffer>>,
     engine: Arc<MediaEngine>,
     cancel_token: CancellationToken,
-    video_meta_override: Option<VideoMeta>,
+    start: HlsSegmenterStart,
 ) {
-    let hls_stage_key = crate::domain::stage::StageKey::new(
-        pipeline_id.as_str(),
-        crate::domain::stage::StageKind::hls(),
-    );
+    let hls_stage_key = start
+        .planned_stage_key
+        .unwrap_or_else(|| StageKey::new(pipeline_id.as_str(), StageKind::hls()));
     let metrics = engine
         .get_or_create_stage_metrics(hls_stage_key.clone())
         .await;
@@ -360,7 +360,7 @@ pub async fn start_hls_fmp4_segmenter(
         engine.get_sequence_headers(&pipeline_id).await;
     let config = store.config();
     let min_segment_ms = (config.min_segment_secs * 1000.0).round() as i64;
-    let preview_video_meta = video_meta_override.clone();
+    let preview_video_meta = start.video_meta_override.clone();
 
     let mut video_state: Option<VideoRenditionState> = None;
     let mut audio_states: HashMap<u32, AudioRenditionState> = HashMap::new();

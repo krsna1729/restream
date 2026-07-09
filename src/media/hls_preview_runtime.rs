@@ -42,7 +42,10 @@ impl MediaEngine {
                     graph.audio_ring,
                     engine.clone(),
                     cancel_token,
-                    graph.video_meta,
+                    crate::media::hls::HlsSegmenterStart {
+                        video_meta_override: graph.video_meta,
+                        planned_stage_key: None,
+                    },
                 )
                 .await;
                 engine.shutdown_hls_preview_segmenter(&pid).await;

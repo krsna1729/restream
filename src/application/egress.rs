@@ -8,12 +8,18 @@ use crate::media::ring_buffer::RingBuffer;
 use crate::types::Output;
 use std::sync::Arc;
 
-/// Prepare the output ring and return the terminal stage key for dependency
-/// tracking.
-pub async fn prepare_output_ring(
-    engine: &Arc<MediaEngine>,
-    output: &Output,
-) -> (Arc<RingBuffer>, Option<StageKey>) {
+/// Prepared runtime attachment point for an output.
+pub struct PreparedOutput {
+    /// Ring the protocol-specific sender reads from.
+    pub ring: Arc<RingBuffer>,
+    /// Media stage that feeds the protocol adapter.
+    pub media_stage_key: StageKey,
+    /// Terminal graph stage reported in dependency status.
+    pub terminal_stage_key: StageKey,
+}
+
+/// Prepare the output ring and graph terminal stage for dependency tracking.
+pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> PreparedOutput {
     let source_buf = engine.get_or_create_pipeline(&output.pipeline_id).await;
     let ingest_video_codec = engine.ingest_video_codec(&output.pipeline_id).await;
     let ingest_is_hevc = ingest_video_codec
@@ -96,21 +102,26 @@ pub async fn prepare_output_ring(
         current_bufs.insert(stage.key.clone(), stage_buf);
     }
 
-    let terminal_key = match &plan.terminal_stage.kind {
+    let terminal_stage_key = plan.terminal_stage.clone();
+    let media_stage_key = match &terminal_stage_key.kind {
         StageKind::Hls | StageKind::HlsSegmenter { .. } => plan
             .stages
             .iter()
-            .find(|stage| stage.key == plan.terminal_stage)
+            .find(|stage| stage.key == terminal_stage_key)
             .and_then(|stage| stage.input.clone())
             .unwrap_or_else(|| StageKey::new(output.pipeline_id.as_str(), StageKind::Source)),
-        _ => plan.terminal_stage.clone(),
+        _ => terminal_stage_key.clone(),
     };
     let terminal_buf = current_bufs
-        .get(&terminal_key)
+        .get(&media_stage_key)
         .cloned()
         .unwrap_or(source_buf);
 
-    (terminal_buf, Some(terminal_key))
+    PreparedOutput {
+        ring: terminal_buf,
+        media_stage_key,
+        terminal_stage_key,
+    }
 }
 
 #[cfg(test)]
@@ -138,12 +149,16 @@ mod tests {
         let source = engine.get_or_create_pipeline("pipe-source").await;
         let output = test_output("pipe-source", "source", "srt://example:9000");
 
-        let (ring, terminal_key) = prepare_output_ring(&engine, &output).await;
+        let prepared = prepare_output_ring(&engine, &output).await;
 
-        assert!(Arc::ptr_eq(&source, &ring));
+        assert!(Arc::ptr_eq(&source, &prepared.ring));
         assert_eq!(
-            terminal_key,
-            Some(StageKey::new("pipe-source", StageKind::source()))
+            prepared.media_stage_key,
+            StageKey::new("pipe-source", StageKind::source())
+        );
+        assert_eq!(
+            prepared.terminal_stage_key,
+            StageKey::new("pipe-source", StageKind::source())
         );
     }
 
@@ -171,16 +186,23 @@ mod tests {
             .await;
         let output = test_output("pipe-hevc", "source", "rtmp://example/live/test");
 
-        let (ring, terminal_key) = prepare_output_ring(&engine, &output).await;
+        let prepared = prepare_output_ring(&engine, &output).await;
 
-        assert!(Arc::ptr_eq(&expected, &ring));
-        assert_eq!(ring.codec_hint_str(), "h264");
+        assert!(Arc::ptr_eq(&expected, &prepared.ring));
+        assert_eq!(prepared.ring.codec_hint_str(), "h264");
         assert_eq!(
-            terminal_key,
-            Some(StageKey::new(
+            prepared.media_stage_key,
+            StageKey::new(
                 "pipe-hevc",
                 StageKind::codec_edge("hevc_to_h264", StageKind::source())
-            ))
+            )
+        );
+        assert_eq!(
+            prepared.terminal_stage_key,
+            StageKey::new(
+                "pipe-hevc",
+                StageKind::codec_edge("hevc_to_h264", StageKind::source())
+            )
         );
     }
 
@@ -206,8 +228,8 @@ mod tests {
         let output_a = test_output("pipe-hevc-audio", "720p+atrack:0", "rtmp://example/live/a");
         let output_b = test_output("pipe-hevc-audio", "720p+atrack:1", "rtmp://example/live/b");
 
-        let (ring_a, _) = prepare_output_ring(&engine, &output_a).await;
-        let (ring_b, _) = prepare_output_ring(&engine, &output_b).await;
+        let ring_a = prepare_output_ring(&engine, &output_a).await.ring;
+        let ring_b = prepare_output_ring(&engine, &output_b).await.ring;
         let stages = engine.active_transcoder_stages("pipe-hevc-audio").await;
 
         assert!(
@@ -239,7 +261,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_hls_output_ring_uses_media_terminal_not_protocol_segmenter() {
+    async fn prepare_hls_output_ring_reports_protocol_segmenter_terminal() {
         let engine = Arc::new(MediaEngine::new());
         let source = engine.get_or_create_pipeline("pipe-hls-output").await;
         let output = test_output(
@@ -248,12 +270,19 @@ mod tests {
             "https://upload.example.test/live/out.m3u8",
         );
 
-        let (ring, terminal_key) = prepare_output_ring(&engine, &output).await;
+        let prepared = prepare_output_ring(&engine, &output).await;
 
-        assert!(Arc::ptr_eq(&source, &ring));
+        assert!(Arc::ptr_eq(&source, &prepared.ring));
         assert_eq!(
-            terminal_key,
-            Some(StageKey::new("pipe-hls-output", StageKind::source()))
+            prepared.media_stage_key,
+            StageKey::new("pipe-hls-output", StageKind::source())
+        );
+        assert_eq!(
+            prepared.terminal_stage_key,
+            StageKey::new(
+                "pipe-hls-output",
+                StageKind::hls_segmenter(StageKind::source())
+            )
         );
         let stages = engine.active_transcoder_stages("pipe-hls-output").await;
         assert!(

@@ -16,6 +16,7 @@ use std::time::Instant;
 use bytes::{Bytes, BytesMut};
 use tokio_util::sync::CancellationToken;
 
+use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::ring_buffer::{MediaType, Reader, RingBuffer};
@@ -27,6 +28,13 @@ const SEGMENT_CAPACITY: usize = 8 * 1024 * 1024;
 // Keep a longer live window so preview clients can still fetch segments that are
 // still referenced by the playlist while the stream is moving forward.
 const MAX_SEGMENTS: usize = 20;
+
+#[derive(Debug, Clone, Default)]
+pub struct HlsSegmenterStart {
+    pub video_meta_override: Option<VideoMeta>,
+    pub planned_stage_key: Option<StageKey>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HlsConfig {
     pub min_segment_secs: f64,
@@ -240,12 +248,11 @@ pub async fn start_hls_segmenter(
     audio_ring_buffer: Option<Arc<RingBuffer>>,
     engine: Arc<MediaEngine>,
     cancel_token: CancellationToken,
-    video_meta_override: Option<VideoMeta>,
+    start: HlsSegmenterStart,
 ) {
-    let hls_stage_key = crate::domain::stage::StageKey::new(
-        pipeline_id.as_str(),
-        crate::domain::stage::StageKind::hls(),
-    );
+    let hls_stage_key = start
+        .planned_stage_key
+        .unwrap_or_else(|| StageKey::new(pipeline_id.as_str(), StageKind::hls()));
     let metrics = engine
         .get_or_create_stage_metrics(hls_stage_key.clone())
         .await;
@@ -284,7 +291,7 @@ pub async fn start_hls_segmenter(
     let mut segment_start = Instant::now();
     let mut got_first_keyframe = false;
     let mut ts_packet_buf = Vec::<u8>::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
-    let preview_video_meta = video_meta_override.clone();
+    let preview_video_meta = start.video_meta_override.clone();
 
     loop {
         tokio::select! {
@@ -798,7 +805,10 @@ mod tests {
             Some(source_ring.clone()),
             engine,
             cancel.clone(),
-            Some(video.clone()),
+            HlsSegmenterStart {
+                video_meta_override: Some(video.clone()),
+                planned_stage_key: None,
+            },
         ));
 
         let reader_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -843,6 +853,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hls_segmenter_registers_planned_protocol_stage_key() {
+        let store = Arc::new(HlsStore::with_config(HlsConfig {
+            min_segment_secs: 0.0,
+            segment_capacity: 2 * 1024 * 1024,
+            max_segments: 8,
+        }));
+        let engine = Arc::new(MediaEngine::new());
+        let source_ring = Arc::new(RingBuffer::new(256));
+        let cancel = CancellationToken::new();
+        let planned_key = StageKey::new(
+            "hls-planned-key",
+            StageKind::hls_segmenter(StageKind::source()),
+        );
+
+        let task = tokio::spawn(start_hls_segmenter(
+            "hls-planned-key".to_string(),
+            store,
+            source_ring,
+            None,
+            engine.clone(),
+            cancel.clone(),
+            HlsSegmenterStart {
+                video_meta_override: Some(VideoMeta {
+                    codec: "h264".to_string(),
+                    ..Default::default()
+                }),
+                planned_stage_key: Some(planned_key.clone()),
+            },
+        ));
+
+        let snapshot_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if let Some(snapshot) = engine.stage_runtime_snapshot(&planned_key).await {
+                assert_eq!(snapshot.key, planned_key);
+                assert_eq!(
+                    snapshot.backend,
+                    crate::media::stage_lifecycle::StageBackendKind::HlsSegmenter
+                );
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < snapshot_deadline,
+                "HLS segmenter did not register the planned graph stage key"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        cancel.cancel();
+        task.await.expect("segmenter task should stop cleanly");
+    }
+
+    #[tokio::test]
     async fn hls_segment_boundaries_preserve_non_decreasing_dts_per_stream() {
         let store = Arc::new(HlsStore::with_config(HlsConfig {
             min_segment_secs: 0.0,
@@ -874,7 +936,10 @@ mod tests {
             None,
             engine,
             cancel.clone(),
-            Some(video),
+            HlsSegmenterStart {
+                video_meta_override: Some(video),
+                planned_stage_key: None,
+            },
         ));
 
         let attach_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
