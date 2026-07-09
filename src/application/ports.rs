@@ -24,6 +24,8 @@ pub type IngestCatalogFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<Ingest>, IngestLookupError>> + Send + 'a>>;
 pub type IngestWriteFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Ingest, IngestWriteError>> + Send + 'a>>;
+pub type IngestUpdateFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<Ingest>, IngestWriteError>> + Send + 'a>>;
 pub type IngestDeleteFuture<'a> =
     Pin<Box<dyn Future<Output = Result<bool, IngestWriteError>> + Send + 'a>>;
 pub type MetaLookupFuture<'a> =
@@ -213,6 +215,8 @@ pub trait OutputStore: Send + Sync {
 pub trait IngestLookup: Send + Sync {
     fn get_ingest<'a>(&'a self, id: &'a str) -> IngestLookupFuture<'a>;
     fn get_ingest_by_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestLookupFuture<'a>;
+    fn list_ingests<'a>(&'a self) -> IngestCatalogFuture<'a>;
+    fn list_ingests_for_filename<'a>(&'a self, filename: &'a str) -> IngestCatalogFuture<'a>;
     fn list_ingests_for_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestCatalogFuture<'a>;
 }
 
@@ -238,7 +242,7 @@ pub trait IngestWriter: Send + Sync {
         start_time: &'a str,
         live_optimized: bool,
         target_gop_seconds: u32,
-    ) -> IngestWriteFuture<'a>;
+    ) -> IngestUpdateFuture<'a>;
     fn delete_ingest<'a>(&'a self, id: &'a str) -> IngestDeleteFuture<'a>;
 }
 
@@ -513,6 +517,22 @@ impl IngestLookup for SqliteIngestLookup {
         })
     }
 
+    fn list_ingests<'a>(&'a self) -> IngestCatalogFuture<'a> {
+        Box::pin(async move {
+            crate::db::list_ingests(&self.pool)
+                .await
+                .map_err(|err| IngestLookupError::new(err.to_string()))
+        })
+    }
+
+    fn list_ingests_for_filename<'a>(&'a self, filename: &'a str) -> IngestCatalogFuture<'a> {
+        Box::pin(async move {
+            crate::db::list_ingests_for_filename(&self.pool, filename)
+                .await
+                .map_err(|err| IngestLookupError::new(err.to_string()))
+        })
+    }
+
     fn list_ingests_for_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestCatalogFuture<'a> {
         Box::pin(async move {
             crate::db::list_ingests_for_stream_key(&self.pool, stream_key)
@@ -558,7 +578,7 @@ impl IngestWriter for SqliteIngestLookup {
         start_time: &'a str,
         live_optimized: bool,
         target_gop_seconds: u32,
-    ) -> IngestWriteFuture<'a> {
+    ) -> IngestUpdateFuture<'a> {
         Box::pin(async move {
             crate::db::update_ingest(
                 &self.pool,
@@ -571,8 +591,7 @@ impl IngestWriter for SqliteIngestLookup {
                 target_gop_seconds,
             )
             .await
-            .map_err(|err| IngestWriteError::new(err.to_string()))?
-            .ok_or_else(|| IngestWriteError::new("ingest not found"))
+            .map_err(|err| IngestWriteError::new(err.to_string()))
         })
     }
 

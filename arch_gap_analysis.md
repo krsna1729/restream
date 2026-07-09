@@ -124,7 +124,7 @@ thin adapters everywhere.
 |---|---|---|
 | `db/` repository modules exist | ✅ Complete | `db/{pipeline_repo,output_repo,ingest_repo,job_repo,session_repo,meta_repo,log_repo,recording_repo,schema,migrations}.rs`. |
 | `db.rs` is only module index / pool / schema helper | ✅ Mostly | `src/db/mod.rs` is thin and re-exports repositories. |
-| Application services depend on repository traits | ⚠️ Partial | `PipelineService` depends on `PipelineStore`, and `OutputService` now depends on `OutputStore`; `IngestService`, `HealthService`, `SettingsService`, `LogService`, and `AuthService` still hold `SqlitePool` and call `db::*`. |
+| Application services depend on repository traits | ⚠️ Partial | `PipelineService` depends on `PipelineStore`, `OutputService` depends on `OutputStore`, and `IngestService` depends on `IngestLookup`/`IngestWriter`; `HealthService`, `SettingsService`, `LogService`, and `AuthService` still hold `SqlitePool` and call `db::*`. |
 | String states converted at repository boundary | ⚠️ Partial | `recording_repo` maps `RecordingPhase`; `output_repo` still stores/returns `desired_state: String` in `types::Output`. |
 
 **Verdict**: **Partial**. Repository files exist, but port isolation and typed
@@ -284,8 +284,8 @@ convergence and later harness/reporting phases.
 
 3. **API/service/repository boundary remains mixed**
    - Route modules exist, but `api/agent.rs` and several services still call
-     `db::*` directly. `PipelineService` and `OutputService` are now
-     port-trait backed.
+     `db::*` directly. `PipelineService`, `OutputService`, and `IngestService`
+     are now port-trait backed.
 
 4. **HLS preview is no longer an API one-off, but still not a pure graph service**
    - `application::hls_preview` owns orchestration, but it directly calls
@@ -315,8 +315,8 @@ convergence and later harness/reporting phases.
 | Ph 1 Core contracts | A- | Types exist, reconciliation consumes typed desired-state logic, and active/recent egress lifecycle state is typed; DB output desired-state strings remain at the row boundary. |
 | Ph 2 Config | A | Production env parsing is centralized in config, and startup logs a comprehensive redacted effective-config summary. |
 | Ph 3 API split | A | Route module split is complete. |
-| Ph 4 App services | B+ | Logs, auth initialization, pipeline, and output operations are service-backed; agent and some helper paths still contain direct DB/application work. |
-| Ph 5 Repositories | B- | Repo modules exist, and pipeline/output services are port-trait backed; several services still hold `SqlitePool` directly. |
+| Ph 4 App services | B+ | Logs, auth initialization, pipeline, output, and ingest operations are service-backed; agent and some helper paths still contain direct DB/application work. |
+| Ph 5 Repositories | B | Repo modules exist, and pipeline/output/ingest services are port-trait backed; several services still hold `SqlitePool` directly. |
 | Ph 6 Graph planner | A- | Planner drives output preparation, graph rendering, diagnostics, and preview planning, with harness stage-sharing tests; recording/agent consumers remain. |
 | Ph 7 Stage lifecycle | B+ | Lifecycle/capacity visibility strong; runtime object model still split. |
 | Ph 8 Dependency-aware status | A | Operator-facing dependency status is complete for the phase scope, with typed internal egress lifecycle state. |

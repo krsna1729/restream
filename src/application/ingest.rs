@@ -147,7 +147,10 @@ pub async fn persist_pipeline_file_ingest(
                 config.target_gop_seconds,
             )
             .await
-            .map_err(PersistFileIngestError::IngestWrite)?,
+            .map_err(PersistFileIngestError::IngestWrite)?
+            .ok_or_else(|| {
+                PersistFileIngestError::IngestWrite(IngestWriteError::new("ingest not found"))
+            })?,
         None => ingest_writer
             .create_ingest(
                 &id_factory(),
@@ -236,8 +239,8 @@ pub async fn authenticate_srt_stream_key(
 mod tests {
     use super::*;
     use crate::application::ports::{
-        IngestCatalogFuture, IngestDeleteFuture, IngestLookupFuture, IngestWriteFuture,
-        PipelineLookupFuture,
+        IngestCatalogFuture, IngestDeleteFuture, IngestLookupFuture, IngestUpdateFuture,
+        IngestWriteFuture, PipelineLookupFuture,
     };
     use crate::domain::ingest_security::IngestSecurityConfig;
     use crate::media::security::IngestSecurityService;
@@ -403,16 +406,20 @@ mod tests {
             start_time: &'a str,
             live_optimized: bool,
             target_gop_seconds: u32,
-        ) -> IngestWriteFuture<'a> {
-            self.create_ingest(
-                id,
-                filename,
-                stream_key,
-                loop_flag,
-                start_time,
-                live_optimized,
-                target_gop_seconds,
-            )
+        ) -> IngestUpdateFuture<'a> {
+            Box::pin(async move {
+                self.create_ingest(
+                    id,
+                    filename,
+                    stream_key,
+                    loop_flag,
+                    start_time,
+                    live_optimized,
+                    target_gop_seconds,
+                )
+                .await
+                .map(Some)
+            })
         }
 
         fn delete_ingest<'a>(&'a self, id: &'a str) -> IngestDeleteFuture<'a> {
@@ -462,6 +469,29 @@ mod tests {
                     .by_stream_key
                     .get(stream_key)
                     .and_then(|ingests| ingests.last().cloned()))
+            })
+        }
+
+        fn list_ingests<'a>(&'a self) -> IngestCatalogFuture<'a> {
+            Box::pin(async move {
+                if let Some(message) = self.error {
+                    return Err(IngestLookupError::new(message));
+                }
+                Ok(self.by_id.values().cloned().collect())
+            })
+        }
+
+        fn list_ingests_for_filename<'a>(&'a self, filename: &'a str) -> IngestCatalogFuture<'a> {
+            Box::pin(async move {
+                if let Some(message) = self.error {
+                    return Err(IngestLookupError::new(message));
+                }
+                Ok(self
+                    .by_id
+                    .values()
+                    .filter(|ingest| ingest.filename == filename)
+                    .cloned()
+                    .collect())
             })
         }
 
