@@ -20,7 +20,7 @@ use tracing::{error, info};
 use crate::domain::stage::StageKey;
 use crate::media::avio::MemoryQueue;
 use crate::media::ffmpeg::stage_input::StageInputPump;
-use crate::media::ffmpeg::stage_output::StageOutputNormalizer;
+use crate::media::ffmpeg::stage_output::{StageOutputNormalizer, StageOutputSink};
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, RingBuffer};
 use crate::media::transcoder::InternalMemoryQueueSink;
 
@@ -49,7 +49,6 @@ impl AsRef<[u8]> for OwnedFfmpegPacket {
 pub async fn start_h264_transcoder_inner(
     pipeline_id: String,
     _input_buffer: Arc<RingBuffer>,
-    output_buffer: Arc<RingBuffer>,
     engine: Arc<crate::media::engine::MediaEngine>,
     cancel_token: CancellationToken,
     stage_key: StageKey,
@@ -63,7 +62,6 @@ pub async fn start_h264_transcoder_inner(
 
     // Spawn OS thread for FFmpeg decode→encode
     let iq_clone = input_queue.clone();
-    let out_clone = output_buffer.clone();
     let cancel_clone = cancel_token.clone();
     let cancel_on_exit = cancel_token.clone();
     let pid = pipeline_id.clone();
@@ -71,10 +69,9 @@ pub async fn start_h264_transcoder_inner(
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_ffmpeg_h264_stage_with_normalizer(
                 iq_clone,
-                out_clone,
                 cancel_clone,
                 &pid,
-                Some(output_normalizer),
+                StageOutputSink::Existing(output_normalizer),
             )
         }));
         match result {
@@ -113,15 +110,19 @@ fn run_ffmpeg_h264_stage(
     cancel: CancellationToken,
     _pipeline_id: &str,
 ) -> Result<(), &'static str> {
-    run_ffmpeg_h264_stage_with_normalizer(in_queue, out_ring, cancel, _pipeline_id, None)
+    run_ffmpeg_h264_stage_with_normalizer(
+        in_queue,
+        cancel,
+        _pipeline_id,
+        StageOutputSink::from_ring(out_ring, None),
+    )
 }
 
 fn run_ffmpeg_h264_stage_with_normalizer(
     in_queue: Arc<MemoryQueue>,
-    out_ring: Arc<RingBuffer>,
     cancel: CancellationToken,
     _pipeline_id: &str,
-    existing_normalizer: Option<StageOutputNormalizer>,
+    output_sink: StageOutputSink,
 ) -> Result<(), &'static str> {
     use crate::media::avio::CustomInput;
     use ffmpeg_next::format::Pixel;
@@ -175,17 +176,7 @@ fn run_ffmpeg_h264_stage_with_normalizer(
     // instead of fixed bitrate. CRF 23 is x264's default.
 
     let stream_count = 1 + audio_track_counter as usize;
-    let mut normalizer = if let Some(n) = existing_normalizer {
-        n
-    } else {
-        let normalizer_metrics = Arc::new(crate::media::stage_metrics::StageMetrics::new());
-        crate::media::ffmpeg::stage_output::StageOutputNormalizer::new(
-            out_ring,
-            stream_count,
-            normalizer_metrics,
-        )
-        .with_video_track_count(1)
-    };
+    let mut normalizer = output_sink.into_normalizer(stream_count);
 
     let mut encoder: Option<ffmpeg_next::codec::encoder::video::Encoder> = None;
     let mut scaler: Option<ffmpeg_next::software::scaling::Context> = None;

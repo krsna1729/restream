@@ -10,7 +10,7 @@ use crate::domain::stage::StageKey;
 use crate::media::engine::AudioMeta;
 use crate::media::ffmpeg::backend::{BackendError, StageRunContext};
 use crate::media::ffmpeg::stage_input::StageInputPump;
-use crate::media::ffmpeg::stage_output::StageOutputNormalizer;
+use crate::media::ffmpeg::stage_output::{StageOutputNormalizer, StageOutputSink};
 use crate::media::ffmpeg::stage_plan::FfmpegStagePlan;
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
 
@@ -295,7 +295,6 @@ pub async fn start_transcoder_inner(
     pipeline_id: String,
     preset: String,
     _input_buffer: Arc<RingBuffer>,
-    output_buffer: Arc<RingBuffer>,
     engine: Arc<crate::media::engine::MediaEngine>,
     cancel_token: CancellationToken,
     stage_key: StageKey,
@@ -304,7 +303,6 @@ pub async fn start_transcoder_inner(
     needs_scale: bool,
 ) {
     let input_queue = Arc::new(crate::media::avio::MemoryQueue::new());
-    let stage_metrics = engine.get_or_create_stage_metrics(stage_key.clone()).await;
     let stage_lifecycle = engine
         .get_or_create_stage_lifecycle(
             stage_key.clone(),
@@ -322,8 +320,6 @@ pub async fn start_transcoder_inner(
     let cancel_token_clone = cancel_token.clone();
     let cancel_on_exit = cancel_token.clone();
     let pipeline_id_clone = pipeline_id.clone();
-    let out_buf = output_buffer.clone();
-    let stage_metrics_for_thread = stage_metrics.clone();
     let stage_lifecycle_for_thread = stage_lifecycle.clone();
     let handle = std::thread::spawn(move || {
         stage_lifecycle_for_thread.transition(
@@ -337,20 +333,16 @@ pub async fn start_transcoder_inner(
                 let video_preset = preset_clone.strip_prefix("video:").unwrap_or(&preset_clone);
                 run_ffmpeg_transcode_with_scale_with_normalizer(
                     input_queue_clone,
-                    out_buf,
                     video_preset,
                     cancel_token_clone,
-                    Some(stage_metrics_for_thread),
-                    Some(output_normalizer),
+                    StageOutputSink::Existing(output_normalizer),
                 )
             } else {
                 run_ffmpeg_transcoder_stage_with_normalizer(
                     input_queue_clone,
-                    out_buf,
                     &preset_clone,
                     cancel_token_clone,
-                    Some(stage_metrics_for_thread),
-                    Some(output_normalizer),
+                    StageOutputSink::Existing(output_normalizer),
                 )
             }
         }));
@@ -403,7 +395,6 @@ pub async fn run_internal_ffmpeg_backend(
     ctx: StageRunContext,
 ) -> Result<(), BackendError> {
     let source_ring = input_pump.source_ring();
-    let output_ring = output_normalizer.output_ring();
 
     if matches!(
         plan.video,
@@ -412,7 +403,6 @@ pub async fn run_internal_ffmpeg_backend(
         crate::media::h264_transcoder::start_h264_transcoder_inner(
             ctx.pipeline_id.clone(),
             source_ring,
-            output_ring,
             ctx.engine,
             ctx.cancel,
             ctx.stage_key,
@@ -429,7 +419,6 @@ pub async fn run_internal_ffmpeg_backend(
             ctx.pipeline_id,
             ctx.stage_key.kind.to_string(),
             source_ring,
-            output_ring,
             ctx.engine,
             ctx.cancel,
             ctx.stage_key,
@@ -1065,16 +1054,19 @@ fn run_ffmpeg_transcoder_stage_with_metrics(
     token: CancellationToken,
     metrics: Option<Arc<StageMetrics>>,
 ) -> Result<(), &'static str> {
-    run_ffmpeg_transcoder_stage_with_normalizer(in_queue, out_ring, preset, token, metrics, None)
+    run_ffmpeg_transcoder_stage_with_normalizer(
+        in_queue,
+        preset,
+        token,
+        StageOutputSink::from_ring(out_ring, metrics),
+    )
 }
 
 fn run_ffmpeg_transcoder_stage_with_normalizer(
     in_queue: Arc<crate::media::avio::MemoryQueue>,
-    out_ring: Arc<RingBuffer>,
     preset: &str,
     token: CancellationToken,
-    metrics: Option<Arc<StageMetrics>>,
-    existing_normalizer: Option<StageOutputNormalizer>,
+    output_sink: StageOutputSink,
 ) -> Result<(), &'static str> {
     use crate::media::avio::CustomInput;
 
@@ -1121,19 +1113,7 @@ fn run_ffmpeg_transcoder_stage_with_normalizer(
     }
 
     let stream_count = stream_meta.iter().filter(|m| m.is_some()).count().max(1);
-    let mut normalizer = if let Some(n) = existing_normalizer {
-        n
-    } else {
-        let normalizer_metrics = metrics
-            .clone()
-            .unwrap_or_else(|| Arc::new(StageMetrics::new()));
-        crate::media::ffmpeg::stage_output::StageOutputNormalizer::new(
-            out_ring,
-            stream_count,
-            normalizer_metrics,
-        )
-        .with_video_track_count(1)
-    };
+    let mut normalizer = output_sink.into_normalizer(stream_count);
 
     let mut batch: Vec<MediaPacket> = Vec::with_capacity(MEDIA_PRODUCER_BATCH_PACKETS);
     for (stream, packet) in ictx.packets() {
@@ -1206,21 +1186,17 @@ fn run_ffmpeg_transcode_with_scale_with_metrics(
 ) -> Result<(), &'static str> {
     run_ffmpeg_transcode_with_scale_with_normalizer(
         in_queue,
-        out_ring,
         video_preset,
         token,
-        metrics,
-        None,
+        StageOutputSink::from_ring(out_ring, metrics),
     )
 }
 
 fn run_ffmpeg_transcode_with_scale_with_normalizer(
     in_queue: Arc<crate::media::avio::MemoryQueue>,
-    out_ring: Arc<RingBuffer>,
     video_preset: &str,
     token: CancellationToken,
-    metrics: Option<Arc<StageMetrics>>,
-    existing_normalizer: Option<StageOutputNormalizer>,
+    output_sink: StageOutputSink,
 ) -> Result<(), &'static str> {
     use crate::media::avio::CustomInput;
     use ffmpeg_next::format::Pixel;
@@ -1287,19 +1263,7 @@ fn run_ffmpeg_transcode_with_scale_with_normalizer(
     };
 
     let stream_count = 1 + audio_track_counter as usize;
-    let mut normalizer = if let Some(n) = existing_normalizer {
-        n
-    } else {
-        let normalizer_metrics = metrics
-            .clone()
-            .unwrap_or_else(|| Arc::new(StageMetrics::new()));
-        crate::media::ffmpeg::stage_output::StageOutputNormalizer::new(
-            out_ring,
-            stream_count,
-            normalizer_metrics,
-        )
-        .with_video_track_count(1)
-    };
+    let mut normalizer = output_sink.into_normalizer(stream_count);
 
     let mut encoder: Option<ffmpeg_next::codec::encoder::video::Encoder> = None;
     let mut scaler: Option<ffmpeg_next::software::scaling::Context> = None;

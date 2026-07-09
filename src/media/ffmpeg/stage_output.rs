@@ -40,12 +40,6 @@ impl StageOutputNormalizer {
         self
     }
 
-    /// Access the destination ring. Temporary compatibility helper while
-    /// existing backend functions still write directly to rings.
-    pub fn output_ring(&self) -> Arc<RingBuffer> {
-        self.out_ring.clone()
-    }
-
     pub fn timeline(&mut self) -> &mut StageTimeline {
         &mut self.timeline
     }
@@ -90,6 +84,31 @@ impl StageOutputNormalizer {
         match media_type {
             MediaType::Video => track_index as usize,
             MediaType::Audio => self.video_track_count + track_index as usize,
+        }
+    }
+}
+
+pub(crate) enum StageOutputSink {
+    Existing(StageOutputNormalizer),
+    Ring {
+        out_ring: Arc<RingBuffer>,
+        metrics: Option<Arc<StageMetrics>>,
+    },
+}
+
+impl StageOutputSink {
+    pub(crate) fn from_ring(out_ring: Arc<RingBuffer>, metrics: Option<Arc<StageMetrics>>) -> Self {
+        Self::Ring { out_ring, metrics }
+    }
+
+    pub(crate) fn into_normalizer(self, stream_count: usize) -> StageOutputNormalizer {
+        match self {
+            Self::Existing(normalizer) => normalizer,
+            Self::Ring { out_ring, metrics } => {
+                let normalizer_metrics = metrics.unwrap_or_else(|| Arc::new(StageMetrics::new()));
+                StageOutputNormalizer::new(out_ring, stream_count, normalizer_metrics)
+                    .with_video_track_count(1)
+            }
         }
     }
 }

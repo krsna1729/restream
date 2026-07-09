@@ -191,8 +191,8 @@ instead of storing them as strings.
 | External backend uses shared contracts | ✅ Present | `run_external_ffmpeg_backend()` takes `FfmpegStagePlan`, `StageInputPump`, `StageOutputNormalizer`, `StageRunContext`. |
 | Internal backend uses shared trait | ✅ Present | `InternalFfmpegBackend` implements `FfmpegStageBackend`. |
 | Per-stage internal/backend policy | ✅ Present | `BackendPolicy` per stage family. |
-| No backend writes directly to `RingBuffer` | ❌ Not fully met | `StageOutputNormalizer::output_ring()` is still exposed as a compatibility helper; `transcoder.rs` obtains `output_ring` from it and legacy internal functions still push through an output buffer in places. |
-| Legacy compatibility paths gone | ⚠️ Partial | Comments in `external_transcoder.rs` say old `start_external_transcoder_stage*` functions are compatibility wrappers; `start_transcoder_inner` and `start_h264_transcoder_inner` still exist. |
+| No backend writes directly to `RingBuffer` | ⚠️ Mostly | `StageOutputNormalizer::output_ring()` is gone and internal backend dispatch passes an existing normalizer through `StageOutputSink`; test-facing helper entry points still accept rings at the boundary. |
+| Legacy compatibility paths gone | ⚠️ Partial | External wrapper functions are gone; internal `start_transcoder_inner` / `start_h264_transcoder_inner` remain as backend bridge functions, and `StageInputPump::source_ring()` remains an input-side compatibility seam. |
 
 **Verdict**: **Mostly complete structurally, partial against the strict ideal**.
 The narrow-waist contracts are real, but escape hatches and legacy inner
@@ -288,8 +288,9 @@ convergence and later harness/reporting phases.
      clearly port-trait backed.
 
 4. **FFmpeg narrow waist still has compatibility escape hatches**
-   - `StageOutputNormalizer::output_ring()` and legacy inner functions mean the
-     “all backend writes through normalizer” rule is not fully sealed.
+   - The output-side ring escape hatch is sealed, but internal bridge functions
+     and `StageInputPump::source_ring()` mean the narrow waist is not fully
+     sealed yet.
 
 5. **HLS preview is no longer an API one-off, but still not a pure graph service**
    - `application::hls_preview` owns orchestration, but it directly calls
@@ -324,7 +325,7 @@ convergence and later harness/reporting phases.
 | Ph 6 Graph planner | A- | Planner drives output preparation, graph rendering, diagnostics, and preview planning, with harness stage-sharing tests; recording/agent consumers remain. |
 | Ph 7 Stage lifecycle | B+ | Lifecycle/capacity visibility strong; runtime object model still split. |
 | Ph 8 Dependency-aware status | A- | Operator-facing dependency status is largely complete. |
-| Ph 9 FFmpeg waist | B | Shared contracts strong; direct-write/compatibility paths remain. |
+| Ph 9 FFmpeg waist | B+ | Output-side normalizer escape hatch removed; input-side and bridge compatibility paths remain. |
 | Ph 10 HLS preview | A- | API one-off removed; runtime service boundary still not ideal. |
 | Ph 11 Recording metadata | B | Metadata exists; consumption/harness still partly filename-based. |
 | Ph 12 Health/alerts/diagnostics | A- | Health, alerts, graph, and causal diagnostics bundle are complete; legacy SSE diagnostics remains a separate probe. |
