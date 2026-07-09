@@ -210,9 +210,6 @@ Phases 12–16 remain unresolved and represent the remaining work to reach the i
 3. **Test harness still monolithic** (Phase 13 not started)
    - `src/bin/test_harness.rs` is a large god-file; `HarnessOutputCell`/`HarnessOutputRegistry` abstractions do not exist.
 
-4. **`StageTimeline` adoption confirmed in internal backend**
-   - Audited internal backends (`transcoder.rs` and `h264_transcoder.rs`) and confirmed that they construct and route all packet emissions through `StageOutputNormalizer` (which wraps `StageTimeline`), ensuring correct timeline normalization across all backend variants.
-
 ---
 
 ## Summary Scorecard
