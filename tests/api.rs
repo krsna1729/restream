@@ -4557,20 +4557,30 @@ async fn agent_graph_diff_preview_returns_404_when_compiled_out() {
 async fn hls_playlist_route_returns_blocked_stage_cause_when_applicable() {
     use http_body_util::BodyExt;
     use restream::domain::stage::StageKind;
+    use restream::media::engine::VideoMeta;
     use restream::media::ring_buffer::RingBuffer;
     use restream::media::stage_lifecycle::StagePhase;
 
     let (app, _, engine) = test_app_with_engine().await;
     let cookie = login(&app).await;
 
-    // Register active ingest and store
+    // Register active ingest and preview consumer/store.
     engine
         .try_register_ingest("test_blocked_pipe", "stream-key", "rtmp")
         .await
         .unwrap();
     engine
-        .get_or_create_hls_preview_store("test_blocked_pipe")
+        .update_ingest_meta(
+            "test_blocked_pipe",
+            Some(VideoMeta {
+                codec: "hevc".to_string(),
+                ..Default::default()
+            }),
+            None,
+            None,
+        )
         .await;
+    engine.ensure_hls_preview_runtime("test_blocked_pipe").await;
 
     // Register a blocked preview stage
     let stage_key = StageKey::new(
