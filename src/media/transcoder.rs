@@ -18,7 +18,7 @@ use crate::media::stage_metrics::StageMetrics;
 use crate::media::{MEDIA_PRODUCER_BATCH_PACKETS, MEDIA_PULL_BURST_PACKETS};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 /// Zero-copy wrapper: holds an `ffmpeg_next::Packet` so `bytes::Bytes::from_owner`
 /// can serve the encoded/demuxed buffer to ring-buffer readers without a `memcpy`.
@@ -362,12 +362,21 @@ async fn run_internal_video_stage(
 
     let mut queue_sink = InternalMemoryQueueSink::new(input_queue.clone(), cancel_token.clone());
     if let Err(e) = input_pump.pump_to(&mut queue_sink, &cancel_token).await {
-        error!(
-            pipeline_id = %pipeline_id,
-            preset = %preset,
-            "internal transcoder shared pump failed: {}",
-            e
-        );
+        if cancel_token.is_cancelled() && e.contains("closed or cancelled") {
+            debug!(
+                pipeline_id = %pipeline_id,
+                preset = %preset,
+                "internal transcoder shared pump stopped during cancellation: {}",
+                e
+            );
+        } else {
+            error!(
+                pipeline_id = %pipeline_id,
+                preset = %preset,
+                "internal transcoder shared pump failed: {}",
+                e
+            );
+        }
     }
 
     input_queue.close();

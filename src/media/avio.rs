@@ -360,12 +360,12 @@ impl CustomInput {
 
             (*raw_ctx).pb = avio_ctx;
             (*raw_ctx).flags |= ffmpeg::ffi::AVFMT_FLAG_CUSTOM_IO;
-            // MPEG-TS over in-memory pipes still needs enough lead-in to see
-            // the first AAC headers. The smaller probe budget produced
-            // "could not find codec parameters" warnings in clean test
-            // fixtures and occasionally left audio metadata incomplete.
-            (*raw_ctx).probesize = 1 << 20; // 1 MiB
-            (*raw_ctx).max_analyze_duration = 2_000_000; // 2s in microseconds
+            // Keep the internal live probe bounded. A 1 MiB stream-info probe
+            // can consume live TS indefinitely before the transcoder reaches
+            // its packet loop; 256 KiB is still enough to keep fixture logs
+            // quiet while allowing H.264 live stages to start promptly.
+            (*raw_ctx).probesize = 256 * 1024;
+            (*raw_ctx).max_analyze_duration = 500_000;
 
             let mut raw_ctx_mut = raw_ctx;
             let format_name = CString::new("mpegts").expect("static format name");
