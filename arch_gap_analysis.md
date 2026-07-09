@@ -68,7 +68,7 @@ drift is not enforced by CI.
 | Runtime errors | ✅ Present | `src/domain/errors.rs` defines `StageError` and `RuntimeError`. |
 | `StageRuntimeSnapshot` | ✅ Present | `src/runtime/stage.rs`, including phase serialization and capacity fields. |
 | `OutputRuntimeExplanation` | ✅ Present | `src/runtime/output.rs` and API status wiring. |
-| No new code writes raw string states except at DB/API boundary | ⚠️ Partial | Reconciliation now converts desired output state to `DesiredOutputState`, active egress status/phase are typed, and recent egress raw status/phase are typed; `RecentEgressOutcome.status` and `types::Output.desired_state` still store raw strings. |
+| No new code writes raw string states except at DB/API boundary | ⚠️ Partial | Reconciliation now converts desired output state to `DesiredOutputState`; active egress status/phase and recent egress status/raw status/phase are typed. `types::Output.desired_state` still stores raw strings at the DB row boundary. |
 
 **Verdict**: **Partial**. Contracts exist and are useful, but adoption is not
 complete. The ideal contract boundary has not replaced string state in runtime
@@ -276,10 +276,9 @@ convergence and later harness/reporting phases.
      graph-plan contract.
 
 2. **String runtime state remains in core logic**
-   - Active egress status/phase and recent raw status/phase are now typed, but
-     `RecentEgressOutcome.status` and `types::Output.desired_state` still use
-     raw strings. This violates the Phase 1 acceptance criterion and keeps
-     schema drift risk alive.
+   - Active egress status/phase and recent egress status/raw status/phase are
+     now typed, but `types::Output.desired_state` still uses raw strings at the
+     DB row boundary. This is the remaining Phase 1 string-state adoption gap.
 
 ### P1 — Layering and Ownership
 
@@ -318,7 +317,7 @@ convergence and later harness/reporting phases.
 | Phase | Current Grade | Honest Status |
 |---|---:|---|
 | Ph 0 Guardrails | F | Not started. |
-| Ph 1 Core contracts | A- | Types exist, reconciliation consumes typed desired-state logic, active egress status/phase are typed, and recent raw status/phase are typed; computed recent status and DB output desired-state strings remain. |
+| Ph 1 Core contracts | A- | Types exist, reconciliation consumes typed desired-state logic, and active/recent egress lifecycle state is typed; DB output desired-state strings remain at the row boundary. |
 | Ph 2 Config | A- | Production env parsing is centralized in config; startup summary remains unclear. |
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | B | Logs and auth initialization are service-backed; agent and some helper paths still contain direct DB/application work. |

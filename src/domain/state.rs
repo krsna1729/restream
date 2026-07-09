@@ -150,6 +150,54 @@ impl From<String> for EgressStatus {
     }
 }
 
+/// Operator-facing computed status for an egress output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum EgressRuntimeStatus {
+    #[default]
+    Running,
+    Stopped,
+    Failed,
+    Stalled,
+    Retrying,
+}
+
+impl EgressRuntimeStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+            Self::Stalled => "stalled",
+            Self::Retrying => "retrying",
+        }
+    }
+}
+
+impl fmt::Display for EgressRuntimeStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for EgressRuntimeStatus {
+    fn from(s: &str) -> Self {
+        match s {
+            "stopped" => Self::Stopped,
+            "failed" => Self::Failed,
+            "stalled" => Self::Stalled,
+            "retrying" => Self::Retrying,
+            _ => Self::Running,
+        }
+    }
+}
+
+impl From<String> for EgressRuntimeStatus {
+    fn from(s: String) -> Self {
+        Self::from(s.as_str())
+    }
+}
+
 /// Observable runtime phase of an egress output.
 ///
 /// This is what operators see when they query output status. It is separate
@@ -514,6 +562,25 @@ mod tests {
             ("unknown", EgressStatus::Running),
         ] {
             let status = EgressStatus::from(s);
+            assert_eq!(status, expected, "from({s:?})");
+            if s != "unknown" {
+                assert_eq!(status.as_str(), s);
+                assert_eq!(status.to_string(), s);
+            }
+        }
+    }
+
+    #[test]
+    fn egress_runtime_status_roundtrip() {
+        for (s, expected) in [
+            ("running", EgressRuntimeStatus::Running),
+            ("stopped", EgressRuntimeStatus::Stopped),
+            ("failed", EgressRuntimeStatus::Failed),
+            ("stalled", EgressRuntimeStatus::Stalled),
+            ("retrying", EgressRuntimeStatus::Retrying),
+            ("unknown", EgressRuntimeStatus::Running),
+        ] {
+            let status = EgressRuntimeStatus::from(s);
             assert_eq!(status, expected, "from({s:?})");
             if s != "unknown" {
                 assert_eq!(status.as_str(), s);

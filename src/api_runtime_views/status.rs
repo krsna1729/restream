@@ -313,7 +313,7 @@ pub(crate) async fn health_summary_snapshot(
                     "status": if retry_state.is_some() {
                         "retrying".to_string()
                     } else {
-                        outcome.status.clone()
+                        outcome.status.to_string()
                     },
                     "uptimeSecs": outcome.uptime_secs,
                     "totalSize": outcome.bytes_sent,

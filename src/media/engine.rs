@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 use crate::domain::stage::{StageKey, StageKind};
-use crate::domain::state::{EgressPhase, EgressStatus};
+use crate::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
 use crate::media::avio::MemoryQueue;
 use crate::media::engine_registries::{
     EgressRegistry, FileIngestRegistry, HlsRegistry, IngestRegistry, RecordingRegistry,
@@ -309,7 +309,7 @@ pub struct RecentEgressOutcome {
     pub protocol: String,
     pub target_url: String,
     pub target_addr: Option<String>,
-    pub status: String,
+    pub status: EgressRuntimeStatus,
     pub raw_status: EgressStatus,
     pub phase: EgressPhase,
     pub started_at: String,
@@ -667,7 +667,7 @@ impl MediaEngine {
         }
     }
 
-    fn recent_egress_status(egress: &ActiveEgress, has_ingest: bool) -> String {
+    fn recent_egress_status(egress: &ActiveEgress, has_ingest: bool) -> EgressRuntimeStatus {
         let phase = *egress.phase.lock().unwrap_or_else(|e| e.into_inner());
         if phase == EgressPhase::Failed
             || egress
@@ -676,12 +676,12 @@ impl MediaEngine {
                 .unwrap_or_else(|e| e.into_inner())
                 .is_some()
         {
-            return "failed".to_string();
+            return EgressRuntimeStatus::Failed;
         }
         if !has_ingest {
-            return "stopped".to_string();
+            return EgressRuntimeStatus::Stopped;
         }
-        Self::egress_effective_status(egress, has_ingest)
+        EgressRuntimeStatus::from(Self::egress_effective_status(egress, has_ingest))
     }
 
     /// Register an OS thread JoinHandle so it can be joined at shutdown.

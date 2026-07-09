@@ -188,7 +188,7 @@ pub(crate) fn recent_egress_runtime_json(
         "pipelineId": outcome.pipeline_id,
         "protocol": outcome.protocol,
         "targetAddr": outcome.target_addr,
-        "status": outcome.status,
+        "status": outcome.status.as_str(),
         "rawStatus": outcome.raw_status.as_str(),
         "phase": outcome.phase.as_str(),
         "uptimeSecs": outcome.uptime_secs,
@@ -966,7 +966,7 @@ mod tests {
     use super::*;
     use crate::domain::srt_ingest::{SrtPipelineIngestConfig, SrtPipelineIngestMode};
     use crate::domain::stage::StageKind;
-    use crate::domain::state::{EgressPhase, EgressStatus};
+    use crate::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
     use crate::media::engine::RecentIngestOutcome;
     use crate::media::srt::serialize_pipeline_srt_ingest_policy;
     use crate::media::stage_metrics::StageMetrics;
@@ -1071,7 +1071,7 @@ mod tests {
             protocol: "rtmp".to_string(),
             target_url: "rtmp://example/live/key".to_string(),
             target_addr: None,
-            status: "failed".to_string(),
+            status: EgressRuntimeStatus::Failed,
             raw_status: EgressStatus::Running,
             phase: EgressPhase::Failed,
             started_at: chrono::Utc::now().to_rfc3339(),
