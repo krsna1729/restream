@@ -29,7 +29,7 @@ pub(crate) const INGEST_FLAP_WINDOW_MS: u64 = 30_000;
 pub(crate) const EGRESS_FLAP_WINDOW_MS: u64 = 30_000;
 const HLS_PREVIEW_KEY_PREFIX: &str = "__preview__:";
 
-fn hls_preview_registry_key(pipeline_id: &str) -> String {
+pub(crate) fn hls_preview_registry_key(pipeline_id: &str) -> String {
     format!("{HLS_PREVIEW_KEY_PREFIX}{pipeline_id}")
 }
 
@@ -994,18 +994,6 @@ impl MediaEngine {
         }
     }
 
-    pub async fn register_input_queue(&self, key: StageKey, queue: Arc<MemoryQueue>) {
-        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(&key) {
-            runtime.input_queue = Some(queue.clone());
-        }
-    }
-
-    pub async fn remove_input_queue(&self, key: &StageKey) {
-        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(key) {
-            runtime.input_queue = None;
-        }
-    }
-
     pub async fn register_egress_queue(&self, output_id: &str, queue: Arc<MemoryQueue>) {
         self.egresses
             .queues
@@ -1053,18 +1041,6 @@ impl MediaEngine {
         }
         self.egresses.queues.write().await.remove(output_id);
         true
-    }
-
-    pub async fn register_pipe_metrics(&self, key: StageKey, metrics: Arc<PipeMetrics>) {
-        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(&key) {
-            runtime.pipe_metrics = Some(metrics.clone());
-        }
-    }
-
-    pub async fn remove_pipe_metrics(&self, key: &StageKey) {
-        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(key) {
-            runtime.pipe_metrics = None;
-        }
     }
 
     pub async fn is_file_ingest_running(&self, id: &str) -> bool {
@@ -2386,44 +2362,6 @@ impl MediaEngine {
             .keys()
             .filter_map(|key| pipeline_id_from_hls_preview_registry_key(key).map(str::to_string))
             .collect()
-    }
-
-    pub async fn active_hls_preview_stage_keys(&self) -> std::collections::HashSet<StageKey> {
-        let preview_ids = self.hls_preview_pipeline_ids().await;
-        let consumers = self.hls.consumers.read().await;
-        let ingests = self.ingests.active.read().await;
-        let mut needed = std::collections::HashSet::new();
-
-        for pipeline_id in preview_ids {
-            let preview_key = hls_preview_registry_key(&pipeline_id);
-            let Some(consumer) = consumers.get(&preview_key) else {
-                continue;
-            };
-            if consumer.cancel_token.is_cancelled() {
-                continue;
-            }
-
-            let ingest = ingests.get(&pipeline_id);
-            let ingest_codec = ingest
-                .and_then(|i| i.video.as_ref())
-                .map(|v| v.codec.as_str());
-
-            let Some(plan) = crate::planner::graph_plan::plan_hls_preview_graph(
-                &pipeline_id,
-                ingest_codec,
-                &self.config.backend_policy,
-            ) else {
-                continue;
-            };
-
-            for stage in plan.stages {
-                if stage.kind != StageKind::Source {
-                    needed.insert(stage.key);
-                }
-            }
-        }
-
-        needed
     }
 
     pub async fn should_shutdown_hls_segmenter(&self, pipeline_id: &str, timeout_ms: u64) -> bool {

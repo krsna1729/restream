@@ -2,8 +2,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::domain::stage::StageKey;
-use crate::media::engine::{ActiveEgress, MediaEngine};
+use crate::domain::stage::{StageKey, StageKind};
+use crate::media::avio::MemoryQueue;
+use crate::media::engine::{ActiveEgress, MediaEngine, hls_preview_registry_key};
+use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::stage_lifecycle::{
     StageBackendKind, StageLifecycle, StageLifecycleSnapshot, StagePhase,
 };
@@ -11,6 +13,30 @@ use crate::media::stage_metrics::StageMetrics;
 use crate::runtime::stage::StageRuntimeSnapshot;
 
 impl MediaEngine {
+    pub async fn register_input_queue(&self, key: StageKey, queue: Arc<MemoryQueue>) {
+        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(&key) {
+            runtime.input_queue = Some(queue.clone());
+        }
+    }
+
+    pub async fn remove_input_queue(&self, key: &StageKey) {
+        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(key) {
+            runtime.input_queue = None;
+        }
+    }
+
+    pub async fn register_pipe_metrics(&self, key: StageKey, metrics: Arc<PipeMetrics>) {
+        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(&key) {
+            runtime.pipe_metrics = Some(metrics.clone());
+        }
+    }
+
+    pub async fn remove_pipe_metrics(&self, key: &StageKey) {
+        if let Some(runtime) = self.stages.runtimes.write().await.get_mut(key) {
+            runtime.pipe_metrics = None;
+        }
+    }
+
     pub async fn get_or_create_stage_metrics(&self, key: StageKey) -> Arc<StageMetrics> {
         if let Some(runtime) = self.stages.runtimes.read().await.get(&key).cloned() {
             return runtime.metrics;
@@ -212,5 +238,43 @@ impl MediaEngine {
             return Some(self.build_stage_runtime_snapshot(&key, lifecycle, metrics));
         }
         None
+    }
+
+    pub async fn active_hls_preview_stage_keys(&self) -> HashSet<StageKey> {
+        let preview_ids = self.hls_preview_pipeline_ids().await;
+        let consumers = self.hls.consumers.read().await;
+        let ingests = self.ingests.active.read().await;
+        let mut needed = HashSet::new();
+
+        for pipeline_id in preview_ids {
+            let preview_key = hls_preview_registry_key(&pipeline_id);
+            let Some(consumer) = consumers.get(&preview_key) else {
+                continue;
+            };
+            if consumer.cancel_token.is_cancelled() {
+                continue;
+            }
+
+            let ingest = ingests.get(&pipeline_id);
+            let ingest_codec = ingest
+                .and_then(|i| i.video.as_ref())
+                .map(|v| v.codec.as_str());
+
+            let Some(plan) = crate::planner::graph_plan::plan_hls_preview_graph(
+                &pipeline_id,
+                ingest_codec,
+                &self.config.backend_policy,
+            ) else {
+                continue;
+            };
+
+            for stage in plan.stages {
+                if stage.kind != StageKind::Source {
+                    needed.insert(stage.key);
+                }
+            }
+        }
+
+        needed
     }
 }
