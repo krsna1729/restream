@@ -28,8 +28,8 @@ sense**. Several phases have strong scaffolding but incomplete adoption:
   services, but some state/helper paths still construct persistence ports
   directly;
 - application services exist, and the main pipeline/output/ingest/health/log/auth
-  paths are port-backed, but settings still owns `SqlitePool` and some helper
-  paths call repositories directly;
+  paths are port-backed, and some helper paths still construct repositories
+  directly;
 - a graph planner exists and now drives output preparation, graph rendering,
   HLS preview, HLS output terminal-stage preparation, diagnostics, agent
   previews, recording terminal-stage/lifecycle registration, and harness
@@ -118,7 +118,7 @@ runtime compatibility readers.
 
 | Criterion | Status | Evidence |
 |---|---|---|
-| Services exist | ✅ Present | `src/application/services/*` includes pipeline, output, ingest, file ingest, media library, settings, health, auth, logs, and agent context catalog assembly; `AgentService` now owns context/catalog reads through repository ports; `FileIngestService` now owns file-ingest start/stop/delete orchestration, pipeline-file-ingest persistence/read models, and FFmpeg argument/process setup; `MediaLibraryService` owns recording metadata lookup, media-library list read models, recording companion artifact planning, media delete execution, media rename execution, and ingest retargeting after rename. |
+| Services exist | ✅ Present | `src/application/services/*` includes pipeline, output, ingest, file ingest, media library, settings, health, auth, logs, and agent context catalog assembly; `SettingsService` now owns settings PATCH persistence; `AgentService` now owns context/catalog reads through repository ports; `FileIngestService` now owns file-ingest start/stop/delete orchestration, pipeline-file-ingest persistence/read models, and FFmpeg argument/process setup; `MediaLibraryService` owns recording metadata lookup, media-library list read models, recording companion artifact planning, media delete execution, media rename execution, and ingest retargeting after rename. |
 | Handlers no longer call SQL directly | ⚠️ Mostly | Logs/auth/settings/output mutations delegate to services, agent context/catalog/plan reads now go through port-backed `AgentService`, and media-library read models/deletes/renames delegate to `MediaLibraryService`; remaining state/helper code still constructs persistence ports directly. |
 | Handlers do not call low-level media constructors | ⚠️ Mostly | `api/hls.rs` delegates to `application::hls_preview`; file-ingest start/stop/delete plus pipeline-file-ingest persistence/read models moved into `FileIngestService`; media-library list read models, recording companion artifact planning, delete execution, rename execution, and ingest retargeting moved into `MediaLibraryService`. API/runtime read models still take `MediaEngine` or perform feature policy directly. |
 | Services testable without Axum request types | ✅ Mostly | Service structs do not depend on Axum types. |
@@ -332,7 +332,7 @@ convergence and later harness/reporting phases.
 | Ph 1 Core contracts | A | Types exist, output desired-state, job status, and active/recent egress lifecycle state are typed; string conversion is now kept at DB/API edges. |
 | Ph 2 Config | A | Production env parsing is centralized in config, startup logs a comprehensive redacted effective-config summary, and runtime media paths receive typed config for recording remux, HLS stores, file-ingest backend selection, AVIO queues, rings, SRT TS chunk rings, and external FFmpeg capacity reporting. |
 | Ph 3 API split | A | Route module split is complete. |
-| Ph 4 App services | A- | Logs, auth initialization, pipeline, output, ingest, health checks, media-library operations, and agent catalog/plan reads/output mutations are service-backed; API/runtime read models still contain direct application/runtime work. |
+| Ph 4 App services | A- | Logs, auth initialization, settings reads/writes, pipeline, output, ingest, health checks, media-library operations, and agent catalog/plan reads/output mutations are service-backed; API/runtime read models still contain direct application/runtime work. |
 | Ph 5 Repositories | A | Repo modules exist, pipeline/output/ingest/health/log/auth/settings/agent services are port-trait backed, and output/job/recording state maps at repository boundaries. |
 | Ph 6 Graph planner | A- | Planner drives output preparation, HLS output terminal-stage prep, recording lifecycle registration, graph rendering, diagnostics, HLS preview planning, agent graph/impact preview, and harness stage-count expectations; recording writer and HLS segmenter/uploader boundaries remain. |
 | Ph 7 Stage lifecycle | A- | Lifecycle/capacity visibility is strong and shared FFmpeg stages now use first-class `StageRuntime` objects as the ring/cancellation authority; lifecycle/metrics side maps remain during migration. |

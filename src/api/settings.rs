@@ -9,11 +9,8 @@ use std::sync::Arc;
 use tracing::warn;
 
 use crate::api_view_models;
-use crate::application::ingest_security::save_ingest_security_config;
-use crate::application::ports::SqliteMetaStore;
 
 use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
-use crate::application::transcode_profiles::save_transcode_profiles;
 use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::domain::srt_ingest::SrtGlobalIngestConfig;
 use crate::domain::transcode_profile::TranscodeProfiles;
@@ -171,7 +168,9 @@ pub async fn config_patch_handler(
         }
         sec.normalize();
         state.security.update_config(sec.clone());
-        if save_ingest_security_config(&SqliteMetaStore::new(state.db.clone()), &sec)
+        if state
+            .settings_service
+            .save_ingest_security_config(&sec)
             .await
             .is_err()
         {
@@ -180,12 +179,11 @@ pub async fn config_patch_handler(
     }
 
     if let Some(ref recording_settings) = payload.recording_settings
-        && crate::application::recording::save_recording_settings(
-            &SqliteMetaStore::new(state.db.clone()),
-            recording_settings,
-        )
-        .await
-        .is_err()
+        && state
+            .settings_service
+            .save_recording_settings(recording_settings)
+            .await
+            .is_err()
     {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -219,8 +217,10 @@ pub async fn config_patch_handler(
                     .into_response();
             }
         }
-        if let Err(e) =
-            save_transcode_profiles(&SqliteMetaStore::new(state.db.clone()), profiles).await
+        if let Err(e) = state
+            .settings_service
+            .save_transcode_profiles(profiles)
+            .await
         {
             warn!(err = %e, "failed to save transcode profiles");
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save profiles").into_response();

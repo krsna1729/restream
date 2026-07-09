@@ -3,7 +3,13 @@ use std::sync::Arc;
 use crate::application::ports::{
     IngestHostStore, JobStore, MetaStore, MetaStoreWriter, SqliteJobStore, SqliteMetaStore,
 };
+use crate::application::recording::{RecordingSettings, save_recording_settings};
 use crate::application::settings::load_settings_snapshot;
+use crate::application::{
+    ingest_security::save_ingest_security_config, transcode_profiles::save_transcode_profiles,
+};
+use crate::domain::ingest_security::IngestSecurityConfig;
+use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::media::security::IngestSecurityService;
 use crate::types::{Job, Output, Pipeline};
 
@@ -112,6 +118,27 @@ impl SettingsService {
             .await
             .map(|_| ())
             .map_err(|e| ApiError::internal(format!("set meta: {e}")))
+    }
+
+    pub async fn save_ingest_security_config(
+        &self,
+        config: &IngestSecurityConfig,
+    ) -> ApiResult<()> {
+        save_ingest_security_config(self.meta_writer.as_ref(), config)
+            .await
+            .map_err(|e| ApiError::internal(format!("save ingest security config: {e}")))
+    }
+
+    pub async fn save_recording_settings(&self, settings: &RecordingSettings) -> ApiResult<()> {
+        save_recording_settings(self.meta_writer.as_ref(), settings)
+            .await
+            .map_err(|e| ApiError::internal(format!("save recording settings: {e}")))
+    }
+
+    pub async fn save_transcode_profiles(&self, profiles: &TranscodeProfiles) -> ApiResult<()> {
+        save_transcode_profiles(self.meta_writer.as_ref(), profiles)
+            .await
+            .map_err(|e| ApiError::internal(format!("save transcode profiles: {e}")))
     }
 }
 
@@ -226,12 +253,19 @@ mod tests {
             .set_meta("custom_encoding", "-c:v copy")
             .await
             .unwrap();
+        service
+            .save_recording_settings(&RecordingSettings {
+                retain_source_ts: true,
+            })
+            .await
+            .unwrap();
 
         let security = IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG);
         let snapshot = service.load_snapshot(&security).await.unwrap();
 
         assert_eq!(snapshot.server_name, "Studio");
         assert_eq!(snapshot.ingest_host, "edge.local");
+        assert!(snapshot.recording_settings.retain_source_ts);
         assert_eq!(
             service
                 .get_meta("custom_encoding")
