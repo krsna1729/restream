@@ -404,34 +404,17 @@ pub(crate) async fn ffmpeg_decode_scan(
     url: &str,
 ) -> Result<(bool, Option<i32>, Option<&'static str>, String), String> {
     let mut command = Command::new("ffmpeg");
-    command.args([
-        "-nostdin",
-        "-hide_banner",
-        "-v",
-        "warning",
-        "-i",
-        url,
-        "-t",
-        "5",
-        "-map",
-        "0",
-        "-f",
-        "null",
-        "-",
-    ]);
+    command.args(decode_scan_ffmpeg_args(url));
     let child = command
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| e.to_string())?;
-    let output = tokio::time::timeout(Duration::from_secs(45), child.wait_with_output())
-        .await
-        .map_err(|_| format!("decode scan timed out: {label}: {url}"))?
-        .map_err(|e| e.to_string())?;
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let (status, stderr) = wait_for_decode_scan(child, label, url).await?;
     let stderr_lower = stderr.to_ascii_lowercase();
     let bad_patterns = [
+        "timeout",
         "non-monoton",
         "non monoton",
         "invalid data",
@@ -446,13 +429,89 @@ pub(crate) async fn ffmpeg_decode_scan(
         .iter()
         .find(|pattern| stderr_lower.contains(**pattern))
         .copied();
-    let passed = output.status.success() && matched_pattern.is_none();
-    Ok((passed, output.status.code(), matched_pattern, stderr))
+    let passed = status.is_some_and(|status| status.success()) && matched_pattern.is_none();
+    Ok((
+        passed,
+        status.and_then(|status| status.code()),
+        matched_pattern,
+        stderr,
+    ))
+}
+
+fn decode_scan_ffmpeg_args(url: &str) -> Vec<&str> {
+    vec![
+        "-nostdin",
+        "-hide_banner",
+        "-v",
+        "warning",
+        // Bound live input consumption directly. Placing -t only after -i
+        // limits output timestamps and can hang on RTMP/SRT streams whose
+        // decode start recovers after a sparse or discontinuous timestamp span.
+        "-t",
+        "5",
+        "-i",
+        url,
+        "-map",
+        "0",
+        "-f",
+        "null",
+        "-",
+    ]
+}
+
+async fn wait_for_decode_scan(
+    mut child: Child,
+    label: &str,
+    url: &str,
+) -> Result<(Option<ExitStatus>, String), String> {
+    let mut stderr_pipe = child
+        .stderr
+        .take()
+        .ok_or_else(|| "decode scan stderr pipe missing".to_string())?;
+    let stderr_task = tokio::spawn(async move {
+        let mut stderr = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut stderr).await;
+        String::from_utf8_lossy(&stderr).to_string()
+    });
+
+    let status = match tokio::time::timeout(Duration::from_secs(45), child.wait()).await {
+        Ok(Ok(status)) => Some(status),
+        Ok(Err(error)) => return Err(error.to_string()),
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            None
+        }
+    };
+
+    let stderr = stderr_task.await.unwrap_or_default();
+    if status.is_none() {
+        Ok((
+            None,
+            format!("decode scan timeout after 45s: {label}: {url}\n{stderr}"),
+        ))
+    } else {
+        Ok((status, stderr))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_scan_bounds_live_input_before_opening_url() {
+        let args = decode_scan_ffmpeg_args("rtmp://127.0.0.1/live/out");
+
+        let input_pos = args.iter().position(|arg| *arg == "-i").unwrap();
+        let duration_pos = args.iter().position(|arg| *arg == "-t").unwrap();
+
+        assert!(
+            duration_pos < input_pos,
+            "decode scan should bound live input consumption, not only output duration"
+        );
+        assert_eq!(args[input_pos + 1], "rtmp://127.0.0.1/live/out");
+    }
 
     #[test]
     fn probe_failure_snapshot_includes_cell_status_and_health() {
