@@ -10,6 +10,7 @@
 use crate::application::ingest::{IngestAuthError, authenticate_publish_stream_key};
 use crate::application::ports::PipelineStore;
 use crate::domain::output_spec::OutputUrlScheme;
+use crate::domain::state::EgressPhase;
 use reqwest::Url;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
@@ -1660,7 +1661,7 @@ pub async fn start_rtmp_egress(
     }
     let mut output_audio_track = output_audio_tracks.first().cloned();
 
-    egress_phase!("connecting");
+    egress_phase!(EgressPhase::Connecting);
     egress_target_addr!(format!("{}:{}", parts.host, parts.port));
     info!(
         "[rtmp-egress] Connecting to {}:{} via {} (app: {}, key: {})",
@@ -1684,7 +1685,7 @@ pub async fn start_rtmp_egress(
     };
 
     // Perform handshake
-    egress_phase!("handshaking");
+    egress_phase!(EgressPhase::Handshaking);
     let mut handshake = Handshake::new(PeerType::Client);
     let c0_c1 = match handshake.generate_outbound_p0_and_p1() {
         Ok(bytes) => bytes,
@@ -1772,7 +1773,7 @@ pub async fn start_rtmp_egress(
     }
 
     // Request connection
-    egress_phase!("connecting_app");
+    egress_phase!(EgressPhase::ConnectingApp);
     let conn_pkt = match session.request_connection(parts.app.clone()) {
         Ok(ClientSessionResult::OutboundResponse(p)) => p,
         _ => {
@@ -1879,7 +1880,7 @@ pub async fn start_rtmp_egress(
                         ClientSessionResult::RaisedEvent(event) => {
                             match event {
                                 ClientSessionEvent::ConnectionRequestAccepted => {
-                                    egress_phase!("publishing");
+                                    egress_phase!(EgressPhase::Publishing);
                                     let pub_pkt = match session.request_publishing(parts.stream_key.clone(), PublishRequestType::Live) {
                                         Ok(ClientSessionResult::OutboundResponse(p)) => p,
                                         _ => {
@@ -1894,7 +1895,7 @@ pub async fn start_rtmp_egress(
                                 }
                                 ClientSessionEvent::PublishRequestAccepted => {
                                     info!("Stream publishing accepted on target");
-                                    egress_phase!("sending");
+                                    egress_phase!(EgressPhase::Sending);
                                     if let Some(metadata) = rtmp_publish_metadata(
                                         &engine,
                                         &pipeline_id,

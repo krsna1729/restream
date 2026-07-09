@@ -4,6 +4,7 @@ use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 use restream::domain::srt_ingest::SrtGlobalIngestConfig;
+use restream::domain::state::EgressPhase;
 use restream::media::engine::MediaEngine;
 use restream::media::security::IngestSecurityService;
 use restream::{api, db};
@@ -134,7 +135,7 @@ async fn active_output_status_matches_health_runtime_fields() {
     engine
         .update_egress_target_addr(&oid, "203.0.113.10:1935".to_string())
         .await;
-    engine.update_egress_phase(&oid, "sending").await;
+    engine.update_egress_phase(&oid, EgressPhase::Sending).await;
     engine.record_egress_progress(&oid, 4096).await;
     {
         let egresses = engine.egresses.active.read().await;
@@ -233,7 +234,7 @@ async fn stalled_output_status_matches_health_runtime_fields() {
     engine
         .update_egress_target_addr(&oid, "203.0.113.10:1935".to_string())
         .await;
-    engine.update_egress_phase(&oid, "sending").await;
+    engine.update_egress_phase(&oid, EgressPhase::Sending).await;
     {
         let mut egresses = engine.egresses.active.write().await;
         let active = egresses.get_mut(&oid).expect("active egress");

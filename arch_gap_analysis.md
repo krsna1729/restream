@@ -75,11 +75,11 @@ documentation without committing generated run directories.
 | Runtime errors | ✅ Present | `src/domain/errors.rs` defines `StageError` and `RuntimeError`. |
 | `StageRuntimeSnapshot` | ✅ Present | `src/runtime/stage.rs`, including phase serialization and capacity fields. |
 | `OutputRuntimeExplanation` | ✅ Present | `src/runtime/output.rs` and API status wiring. |
-| No new code writes raw string states except at DB/API boundary | ✅ Mostly | `types::Output.desired_state` is now `DesiredOutputState`, `types::Job.status` is now `JobStatus`, reconciliation and graph/runtime comparisons use enums directly, and active/recent egress status/phase are typed. API payload validation still accepts/serializes strings at the edge. |
+| No new code writes raw string states except at DB/API boundary | ✅ Complete | `types::Output.desired_state` is `DesiredOutputState`, `types::Job.status` is `JobStatus`, reconciliation and graph/runtime comparisons use enums directly, active/recent egress status/phase are typed, and runtime egress phase update APIs now accept `EgressPhase` instead of raw strings. API payload validation still accepts/serializes strings at the edge. |
 
-**Verdict**: **Partial**. Contracts exist and are useful, but adoption is not
-complete. The ideal contract boundary has not replaced string state in runtime
-and application logic.
+**Verdict**: **Complete for the phase scope**. Contracts exist and the main
+runtime/application state transitions now use typed state; string conversion is
+kept at DB/API boundaries or diagnostic labels rather than lifecycle state.
 
 ---
 
@@ -291,10 +291,11 @@ convergence and later harness/reporting phases.
      `StageGraphPlan`, but the recording writer and HLS segmenter/uploader
      service boundaries are not all unified behind one graph-plan contract.
 
-2. **Typed state adoption is now strong, but not a substitute for planner convergence**
+2. **Typed state adoption is now complete for the phase scope, but not a substitute for planner convergence**
    - Active egress status/phase, recent egress status/raw status/phase, output
-     desired state, and job status are now typed. The remaining P0 blocker is
-     unified graph planning/execution rather than row-state typing.
+     desired state, job status, and egress phase transitions are now typed. The
+     remaining P0 blocker is unified graph planning/execution rather than
+     row-state typing.
 
 ### P1 — Layering and Ownership
 

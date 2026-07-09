@@ -4112,7 +4112,7 @@ pub async fn start_srt_egress(
         pbkeylen: parsed.pbkeylen.unwrap_or(16),
     });
 
-    egress_phase!("resolving");
+    egress_phase!(EgressPhase::Resolving);
     let addr = match resolve_host(host_port).await {
         Some(a) => a,
         None => {
@@ -4148,7 +4148,7 @@ pub async fn start_srt_egress(
         }
     }
 
-    egress_phase!("connecting");
+    egress_phase!(EgressPhase::Connecting);
 
     // srt_connect/srt_connect_group block the calling OS thread until the
     // handshake completes or times out. Running that inline on a Tokio
@@ -4404,7 +4404,7 @@ pub async fn start_srt_egress(
     let shared_muxer = engine
         .get_or_create_ts_muxer_stage(&pipeline_id, &encoding, ring_buffer.clone())
         .await;
-    egress_phase!("sending");
+    egress_phase!(EgressPhase::Sending);
 
     let out_queue = Arc::new(crate::media::avio::MemoryQueue::new_with_capacity(
         engine.config.avio_capacity,

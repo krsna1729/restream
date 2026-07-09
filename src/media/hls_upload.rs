@@ -11,6 +11,7 @@ use tracing::error;
 
 use reqwest::{Client, Url};
 
+use crate::domain::state::EgressPhase;
 use crate::media::engine::{EgressRegistration, MediaEngine};
 use crate::media::hls::HlsStore;
 
@@ -28,7 +29,7 @@ pub async fn start_hls_put_upload(
     registration: EgressRegistration,
 ) {
     engine
-        .update_egress_phase_if_current(&output_id, &registration, "uploading")
+        .update_egress_phase_if_current(&output_id, &registration, EgressPhase::Uploading)
         .await;
     let playlist_url = match Url::parse(&target_url) {
         Ok(url) => url,

@@ -1220,7 +1220,7 @@ impl MediaEngine {
             return;
         }
 
-        self.update_egress_phase_if_current(output_id, registration, "waitingUpstream")
+        self.update_egress_phase_if_current(output_id, registration, EgressPhase::WaitingUpstream)
             .await;
 
         let mut warmup = Reader::new(format!("egress_warmup:{}", output_id), ring_buffer.clone());
@@ -2061,10 +2061,10 @@ impl MediaEngine {
         true
     }
 
-    pub async fn update_egress_phase(&self, output_id: &str, phase: &str) {
+    pub async fn update_egress_phase(&self, output_id: &str, phase: EgressPhase) {
         let egresses = self.egresses.active.read().await;
         if let Some(egress) = egresses.get(output_id) {
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::from(phase);
+            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = phase;
         }
     }
 
@@ -2072,10 +2072,10 @@ impl MediaEngine {
         &self,
         output_id: &str,
         registration: &EgressRegistration,
-        phase: &str,
+        phase: EgressPhase,
     ) -> bool {
         self.with_current_egress(output_id, registration, |egress| {
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::from(phase);
+            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = phase;
         })
         .await
         .is_some()
@@ -2767,7 +2767,7 @@ impl MediaEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::state::DesiredOutputState;
+    use crate::domain::state::{DesiredOutputState, EgressPhase as EP};
     use crate::media::avio::MemoryQueue;
     use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader};
     use bytes::Bytes;
@@ -3637,7 +3637,7 @@ mod tests {
         engine
             .register_egress("output-1", "pipeline-1", "hls://localhost/hls/test")
             .await;
-        engine.update_egress_phase("output-1", "segmenting").await;
+        engine.update_egress_phase("output-1", EP::Segmenting).await;
         {
             let mut egresses = engine.egresses.active.write().await;
             let egress = egresses.get_mut("output-1").unwrap();
@@ -4180,7 +4180,7 @@ mod tests {
         engine
             .update_egress_target_addr("out-1", "203.0.113.10:10080".to_string())
             .await;
-        engine.update_egress_phase("out-1", "sending").await;
+        engine.update_egress_phase("out-1", EP::Sending).await;
         engine
             .update_egress_quality(
                 "out-1",
@@ -5810,7 +5810,7 @@ mod tests {
         engine
             .register_egress("out-1", "pipe-1", "rtmp://127.0.0.1:1935/live/key")
             .await;
-        engine.update_egress_phase("out-1", "sending").await;
+        engine.update_egress_phase("out-1", EP::Sending).await;
         engine.record_egress_progress("out-1", 5000).await;
 
         let status = crate::api_runtime_views::output_status(&engine, "out-1")
@@ -5859,7 +5859,7 @@ mod tests {
         engine
             .register_egress("out-1", "pipe-1", "rtmp://127.0.0.1:1935/live/key")
             .await;
-        engine.update_egress_phase("out-1", "sending").await;
+        engine.update_egress_phase("out-1", EP::Sending).await;
         engine.record_egress_progress("out-1", 2048).await;
         engine
             .record_egress_error("out-1", "send", "connection reset by peer")
@@ -5894,7 +5894,7 @@ mod tests {
                 "srt://example.com:10080?streamid=live/test",
             )
             .await;
-        engine.update_egress_phase("out-1", "sending").await;
+        engine.update_egress_phase("out-1", EP::Sending).await;
         engine
             .record_egress_error("out-1", "connect", "connection failed")
             .await;
@@ -6001,7 +6001,7 @@ mod tests {
         engine
             .register_egress("out-1", "pipe-1", "rtmp://127.0.0.1:1935/live/key")
             .await;
-        engine.update_egress_phase("out-1", "sending").await;
+        engine.update_egress_phase("out-1", EP::Sending).await;
         engine.record_egress_progress("out-1", 4096).await;
         engine
             .update_egress_retry_state("out-1", 2, 20_000, 15_000)
@@ -6095,7 +6095,7 @@ mod tests {
         engine
             .register_egress("out-1", "pipe-1", "rtmp://127.0.0.1:1935/live/key")
             .await;
-        engine.update_egress_phase("out-1", "sending").await;
+        engine.update_egress_phase("out-1", EP::Sending).await;
         engine.record_egress_progress("out-1", 4096).await;
 
         let status = crate::api_runtime_views::output_status(&engine, "out-1")

@@ -8,7 +8,7 @@ use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 use restream::domain::output_spec::OutputConfig;
 use restream::domain::srt_ingest::SrtGlobalIngestConfig;
 use restream::domain::stage::{StageKey, StageKind};
-use restream::domain::state::DesiredOutputState;
+use restream::domain::state::{DesiredOutputState, EgressPhase};
 use restream::logging::types::AppLogEntry;
 use restream::media::engine::{AudioMeta, MediaEngine, VideoMeta};
 use restream::media::security::IngestSecurityService;
@@ -2078,7 +2078,7 @@ async fn output_status_and_health_preserve_recent_egress_failure_after_unregiste
     engine
         .register_egress(&oid, &pid, "rtmp://dest/live/k")
         .await;
-    engine.update_egress_phase(&oid, "sending").await;
+    engine.update_egress_phase(&oid, EgressPhase::Sending).await;
     engine.record_egress_progress(&oid, 1316).await;
     engine
         .record_egress_error(&oid, "send", "connection reset by peer")
@@ -2168,7 +2168,7 @@ async fn active_output_status_ignores_stale_retry_state_after_restart() {
     engine
         .register_egress(&oid, &pid, "rtmp://dest/live/k")
         .await;
-    engine.update_egress_phase(&oid, "sending").await;
+    engine.update_egress_phase(&oid, EgressPhase::Sending).await;
     engine.record_egress_progress(&oid, 2048).await;
     engine
         .update_egress_retry_state(&oid, 2, 20_000, 15_000)
@@ -2269,7 +2269,7 @@ async fn recovered_output_surfaces_flapping_after_repeated_sink_failures() {
     engine
         .register_egress(&oid, &pid, "rtmp://dest/live/k")
         .await;
-    engine.update_egress_phase(&oid, "sending").await;
+    engine.update_egress_phase(&oid, EgressPhase::Sending).await;
     engine.record_egress_progress(&oid, 4096).await;
 
     let resp = app

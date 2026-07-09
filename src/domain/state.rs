@@ -218,6 +218,8 @@ pub enum EgressPhase {
     Handshaking,
     /// RTMP application connection is in progress.
     ConnectingApp,
+    /// RTMP publish request has been accepted and media publishing is active.
+    Publishing,
     /// Connected and actively sending media.
     Sending,
     /// HLS output is segmenting locally.
@@ -241,6 +243,7 @@ impl EgressPhase {
             Self::Connecting => "connecting",
             Self::Handshaking => "handshaking",
             Self::ConnectingApp => "connecting_app",
+            Self::Publishing => "publishing",
             Self::Sending => "sending",
             Self::Segmenting => "segmenting",
             Self::Uploading => "uploading",
@@ -274,6 +277,7 @@ impl From<&str> for EgressPhase {
             "connecting" => Self::Connecting,
             "handshaking" => Self::Handshaking,
             "connecting_app" | "connectingApp" => Self::ConnectingApp,
+            "publishing" => Self::Publishing,
             "sending" => Self::Sending,
             "segmenting" => Self::Segmenting,
             "uploading" => Self::Uploading,
@@ -534,6 +538,7 @@ mod tests {
             ("connecting", EgressPhase::Connecting),
             ("handshaking", EgressPhase::Handshaking),
             ("connecting_app", EgressPhase::ConnectingApp),
+            ("publishing", EgressPhase::Publishing),
             ("sending", EgressPhase::Sending),
             ("segmenting", EgressPhase::Segmenting),
             ("uploading", EgressPhase::Uploading),

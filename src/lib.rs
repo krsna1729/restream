@@ -899,7 +899,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
                                             .update_egress_phase_if_current(
                                                 &output_id_c,
                                                 &registration_c,
-                                                "segmenting",
+                                                crate::domain::state::EgressPhase::Segmenting,
                                             )
                                             .await;
                                         registration_c.cancel_token.cancelled().await;
