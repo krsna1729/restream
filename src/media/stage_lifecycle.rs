@@ -99,6 +99,18 @@ impl StageLifecycle {
         if let Some(backend) = backend_kind_from_phase(&phase) {
             inner.backend = backend;
         }
+        if inner.first_input_at.is_some()
+            && matches!(
+                phase,
+                StagePhase::StartingBackend { .. } | StagePhase::BackendSpawned { .. }
+            )
+            && matches!(
+                inner.phase,
+                StagePhase::FirstInput | StagePhase::FirstOutput | StagePhase::Producing
+            )
+        {
+            return;
+        }
         inner.phase = phase;
         inner.phase_started_at = Some(Instant::now());
     }
@@ -233,6 +245,24 @@ mod tests {
         let snapshot = lc.snapshot();
         assert_eq!(snapshot.phase, StagePhase::FirstOutput);
         assert!(snapshot.first_output_at.is_some());
+    }
+
+    #[test]
+    fn backend_spawned_transition_does_not_regress_after_first_input() {
+        let lc = StageLifecycle::new(StagePhase::BackendSpawned {
+            backend: StageBackendKind::InternalFfmpeg,
+            pid: None,
+        });
+
+        lc.record_first_input();
+        lc.transition(StagePhase::BackendSpawned {
+            backend: StageBackendKind::InternalFfmpeg,
+            pid: None,
+        });
+
+        let snapshot = lc.snapshot();
+        assert_eq!(snapshot.phase, StagePhase::FirstInput);
+        assert!(snapshot.first_input_at.is_some());
     }
 
     #[test]

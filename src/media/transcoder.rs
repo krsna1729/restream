@@ -313,6 +313,10 @@ async fn run_internal_video_stage(
     engine
         .register_input_queue(stage_key.clone(), input_queue.clone())
         .await;
+    stage_lifecycle.transition(crate::media::stage_lifecycle::StagePhase::BackendSpawned {
+        backend: crate::media::stage_lifecycle::StageBackendKind::InternalFfmpeg,
+        pid: None,
+    });
 
     // Spawn thread to run FFmpeg processing: demux input MPEG-TS, push packets
     // directly to the output RingBuffer (no output mux/demux round-trip).
@@ -323,12 +327,6 @@ async fn run_internal_video_stage(
     let pipeline_id_clone = pipeline_id.clone();
     let stage_lifecycle_for_thread = stage_lifecycle.clone();
     let handle = std::thread::spawn(move || {
-        stage_lifecycle_for_thread.transition(
-            crate::media::stage_lifecycle::StagePhase::BackendSpawned {
-                backend: crate::media::stage_lifecycle::StageBackendKind::InternalFfmpeg,
-                pid: None,
-            },
-        );
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if needs_scale {
                 let video_preset = preset_clone.strip_prefix("video:").unwrap_or(&preset_clone);
