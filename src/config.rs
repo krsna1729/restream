@@ -53,6 +53,79 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+fn env_bool(name: &str) -> Option<bool> {
+    std::env::var(name).ok().map(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+impl ServerPorts {
+    pub fn from_env() -> Self {
+        Self {
+            http: std::env::var("RESTREAM_HTTP_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3030),
+            rtmp: std::env::var("RESTREAM_RTMP_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1935),
+            srt: std::env::var("RESTREAM_SRT_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10080),
+        }
+    }
+}
+
+impl RuntimeTuning {
+    pub fn from_env() -> Self {
+        let defaults = Self::default();
+        Self {
+            nofile_limit: env_u64("RESTREAM_NOFILE_LIMIT", defaults.nofile_limit).max(1),
+            reconciler_interval_ms: env_u64(
+                "RESTREAM_RECONCILE_INTERVAL_MS",
+                defaults.reconciler_interval_ms,
+            )
+            .max(100),
+            ingest_disconnect_grace_ms: env_u64(
+                "RESTREAM_INGEST_DISCONNECT_GRACE_MS",
+                defaults.ingest_disconnect_grace_ms,
+            ),
+            output_max_retries: env_u32("RESTREAM_OUTPUT_MAX_RETRIES", defaults.output_max_retries),
+            output_retry_base_ms: env_u64(
+                "RESTREAM_OUTPUT_RETRY_BASE_MS",
+                defaults.output_retry_base_ms,
+            )
+            .max(1),
+            output_retry_max_ms: env_u64(
+                "RESTREAM_OUTPUT_RETRY_MAX_MS",
+                defaults.output_retry_max_ms,
+            )
+            .max(1),
+            hls_idle_timeout_ms: env_u64(
+                "RESTREAM_HLS_IDLE_TIMEOUT_MS",
+                defaults.hls_idle_timeout_ms,
+            )
+            .max(1),
+        }
+    }
+}
+
+impl BackendPolicy {
+    pub fn from_env() -> Self {
+        Self {
+            internal_video_presets: env_bool("RESTREAM_INTERNAL_VIDEO_PRESETS").unwrap_or(false),
+            internal_hevc_to_h264: env_bool("RESTREAM_INTERNAL_HEVC_TO_H264").unwrap_or(false),
+            internal_hls_preview: env_bool("RESTREAM_INTERNAL_HLS_PREVIEW").unwrap_or(false),
+            internal_complex_audio: env_bool("RESTREAM_INTERNAL_AUDIO_COMPLEX").unwrap_or(false),
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         let ports = ServerPorts {
@@ -196,5 +269,91 @@ impl AppConfig {
             srt_pbkeylen,
             use_internal_file_ingest,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_env_vars(vars: &[(&str, &str)], f: impl FnOnce()) {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous = vars
+            .iter()
+            .map(|(name, _)| ((*name).to_string(), std::env::var(name).ok()))
+            .collect::<Vec<_>>();
+        unsafe {
+            for (name, value) in vars {
+                std::env::set_var(name, value);
+            }
+        }
+        f();
+        unsafe {
+            for (name, value) in previous {
+                if let Some(value) = value {
+                    std::env::set_var(name, value);
+                } else {
+                    std::env::remove_var(name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn server_ports_are_loaded_by_config_module() {
+        with_env_vars(
+            &[
+                ("RESTREAM_HTTP_PORT", "4040"),
+                ("RESTREAM_RTMP_PORT", "2935"),
+                ("RESTREAM_SRT_PORT", "11080"),
+            ],
+            || {
+                let ports = ServerPorts::from_env();
+                assert_eq!(ports.http, 4040);
+                assert_eq!(ports.rtmp, 2935);
+                assert_eq!(ports.srt, 11080);
+            },
+        );
+    }
+
+    #[test]
+    fn runtime_tuning_is_loaded_by_config_module() {
+        with_env_vars(
+            &[
+                ("RESTREAM_NOFILE_LIMIT", "1234"),
+                ("RESTREAM_RECONCILE_INTERVAL_MS", "5"),
+                ("RESTREAM_OUTPUT_RETRY_BASE_MS", "0"),
+                ("RESTREAM_HLS_IDLE_TIMEOUT_MS", "90000"),
+            ],
+            || {
+                let tuning = RuntimeTuning::from_env();
+                assert_eq!(tuning.nofile_limit, 1234);
+                assert_eq!(tuning.reconciler_interval_ms, 100);
+                assert_eq!(tuning.output_retry_base_ms, 1);
+                assert_eq!(tuning.hls_idle_timeout_ms, 90000);
+            },
+        );
+    }
+
+    #[test]
+    fn backend_policy_is_loaded_by_config_module() {
+        with_env_vars(
+            &[
+                ("RESTREAM_INTERNAL_VIDEO_PRESETS", "true"),
+                ("RESTREAM_INTERNAL_HEVC_TO_H264", "1"),
+                ("RESTREAM_INTERNAL_HLS_PREVIEW", "yes"),
+                ("RESTREAM_INTERNAL_AUDIO_COMPLEX", "off"),
+            ],
+            || {
+                let policy = BackendPolicy::from_env();
+                assert!(policy.internal_video_presets);
+                assert!(policy.internal_hevc_to_h264);
+                assert!(policy.internal_hls_preview);
+                assert!(!policy.internal_complex_audio);
+            },
+        );
     }
 }

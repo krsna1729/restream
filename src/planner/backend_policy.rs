@@ -2,8 +2,8 @@
 //!
 //! The engine owns stage lifecycles; this module owns the policy choice for how
 //! a typed stage should run. Per-stage backend families are controlled via
-//! `RESTREAM_INTERNAL_VIDEO_PRESETS`, `RESTREAM_INTERNAL_HEVC_TO_H264`,
-//! `RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX`.
+//! Runtime configuration supplies the per-stage backend toggles; this module
+//! owns only the policy decision for a typed stage.
 
 use crate::domain::audio_routing::{AudioRouting, parse_audio_operation};
 use crate::domain::stage::StageKind;
@@ -27,25 +27,7 @@ pub struct BackendPolicy {
     pub internal_complex_audio: bool,
 }
 
-fn env_bool(name: &str) -> Option<bool> {
-    std::env::var(name).ok().map(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
-
 impl BackendPolicy {
-    pub fn from_env() -> Self {
-        Self {
-            internal_video_presets: env_bool("RESTREAM_INTERNAL_VIDEO_PRESETS").unwrap_or(false),
-            internal_hevc_to_h264: env_bool("RESTREAM_INTERNAL_HEVC_TO_H264").unwrap_or(false),
-            internal_hls_preview: env_bool("RESTREAM_INTERNAL_HLS_PREVIEW").unwrap_or(false),
-            internal_complex_audio: env_bool("RESTREAM_INTERNAL_AUDIO_COMPLEX").unwrap_or(false),
-        }
-    }
-
     pub fn select_backend(&self, stage: &StageKind) -> StageBackend {
         match stage {
             StageKind::AudioRoute { operation, .. } => {

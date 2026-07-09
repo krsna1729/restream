@@ -82,13 +82,13 @@ and application logic.
 |---|---|---|
 | `AppConfig::from_env()` | ✅ Present | `src/config.rs` centralizes many runtime settings. |
 | Per-stage backend flags | ✅ Present | `BackendPolicy` has `internal_video_presets`, `internal_hevc_to_h264`, `internal_hls_preview`, `internal_complex_audio`. |
-| Runtime receives typed config | ✅ Mostly | `MediaEngine` carries config and graph planning uses `engine.config.backend_policy`. |
-| No env reads outside config/startup/test harness | ❌ Not met | `BackendPolicy::from_env()` parses env directly; `ServerPorts::from_env()` and `RuntimeTuning::from_env()` live in `lib.rs`; harness and MCP env reads are expected, but some production-adjacent parsing remains outside `src/config.rs`. |
+| Runtime receives typed config | ✅ Complete | `MediaEngine` carries config and graph planning uses `engine.config.backend_policy`. |
+| No env reads outside config/startup/test harness | ✅ Mostly | `ServerPorts::from_env()`, `RuntimeTuning::from_env()`, `BackendPolicy::from_env()`, and `AppConfig::from_env()` are implemented in `src/config.rs`; remaining env reads are startup/thread setup, test harness, tests, or process utilities. |
 | Startup logs show effective config | ⚠️ Unclear | Not verified as a comprehensive config dump. |
 
-**Verdict**: **Mostly complete for runtime behavior, partial for the ideal**.
-Env parsing has been consolidated significantly, but the “single central config
-module” criterion is not strictly met.
+**Verdict**: **Mostly complete**. Production runtime env parsing is centralized
+in `src/config.rs`; the remaining ideal gap is a comprehensive startup config
+summary.
 
 ---
 
@@ -318,7 +318,7 @@ convergence and later harness/reporting phases.
 |---|---:|---|
 | Ph 0 Guardrails | F | Not started. |
 | Ph 1 Core contracts | B | Types exist and reconciliation now consumes typed desired-state logic; runtime string-state storage remains. |
-| Ph 2 Config | B | Mostly centralized; env parsing still split. |
+| Ph 2 Config | A- | Production env parsing is centralized in config; startup summary remains unclear. |
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | C+ | Services exist; handlers still contain direct DB/application work. |
 | Ph 5 Repositories | C+ | Repo modules exist; port isolation partial. |

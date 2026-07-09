@@ -110,25 +110,6 @@ pub struct RuntimeTuning {
     pub hls_idle_timeout_ms: u64,
 }
 
-impl ServerPorts {
-    pub fn from_env() -> Self {
-        Self {
-            http: std::env::var("RESTREAM_HTTP_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(3030),
-            rtmp: std::env::var("RESTREAM_RTMP_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(1935),
-            srt: std::env::var("RESTREAM_SRT_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10080),
-        }
-    }
-}
-
 impl Default for RuntimeTuning {
     fn default() -> Self {
         Self {
@@ -144,38 +125,6 @@ impl Default for RuntimeTuning {
 }
 
 impl RuntimeTuning {
-    pub fn from_env() -> Self {
-        let defaults = Self::default();
-        Self {
-            nofile_limit: env_u64("RESTREAM_NOFILE_LIMIT", defaults.nofile_limit).max(1),
-            reconciler_interval_ms: env_u64(
-                "RESTREAM_RECONCILE_INTERVAL_MS",
-                defaults.reconciler_interval_ms,
-            )
-            .max(100),
-            ingest_disconnect_grace_ms: env_u64(
-                "RESTREAM_INGEST_DISCONNECT_GRACE_MS",
-                defaults.ingest_disconnect_grace_ms,
-            ),
-            output_max_retries: env_u32("RESTREAM_OUTPUT_MAX_RETRIES", defaults.output_max_retries),
-            output_retry_base_ms: env_u64(
-                "RESTREAM_OUTPUT_RETRY_BASE_MS",
-                defaults.output_retry_base_ms,
-            )
-            .max(1),
-            output_retry_max_ms: env_u64(
-                "RESTREAM_OUTPUT_RETRY_MAX_MS",
-                defaults.output_retry_max_ms,
-            )
-            .max(1),
-            hls_idle_timeout_ms: env_u64(
-                "RESTREAM_HLS_IDLE_TIMEOUT_MS",
-                defaults.hls_idle_timeout_ms,
-            )
-            .max(1),
-        }
-    }
-
     fn session_prune_every_ticks(&self) -> u64 {
         let ticks = 3_600_000u64.div_ceil(self.reconciler_interval_ms);
         ticks.max(1)
@@ -352,20 +301,6 @@ fn persist_runtime_event(event: crate::events::Event) {
             "output failed",
         ),
     }
-}
-
-fn env_u64(name: &str, default: u64) -> u64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
-fn env_u32(name: &str, default: u32) -> u32 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
 }
 
 pub fn env_flag_enabled(name: &str) -> bool {
