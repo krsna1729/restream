@@ -24,7 +24,9 @@ sense**. Several phases have strong scaffolding but incomplete adoption:
   through the application/repository boundary;
 - configuration is centralized for startup/runtime config, but env parsing still
   exists outside the central `AppConfig` path;
-- API route modules exist, but several handlers still call `db::*` directly;
+- API route modules exist, and direct SQL calls have mostly moved behind
+  services, but some state/helper paths still construct persistence ports
+  directly;
 - application services exist, and the main pipeline/output/ingest/health/log/auth
   paths are port-backed, but settings still owns `SqlitePool` and some helper
   paths call repositories directly;
