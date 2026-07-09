@@ -136,14 +136,15 @@ pub(crate) fn load_conversion_state(ts_path: &Path) -> Option<RecordingConversio
     serde_json::from_slice(&bytes).ok()
 }
 
-fn build_recording_remux_args(input_path: &Path, output_path: &Path) -> Vec<String> {
-    static FFMPEG_THREADS: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    let ffmpeg_threads = *FFMPEG_THREADS.get_or_init(|| {
-        crate::AppConfig::from_env()
-            .recording_threads
-            .unwrap_or(2)
-            .max(1)
-    });
+fn normalize_recording_threads(recording_threads: Option<u32>) -> u32 {
+    recording_threads.unwrap_or(2).max(1)
+}
+
+fn build_recording_remux_args(
+    input_path: &Path,
+    output_path: &Path,
+    ffmpeg_threads: u32,
+) -> Vec<String> {
     vec![
         "-y".to_string(),
         "-nostdin".to_string(),
@@ -219,7 +220,11 @@ fn ffmpeg_supports_mp4_muxer() -> bool {
     })
 }
 
-async fn remux_recording_to_mp4(ts_path: PathBuf, settings: RecordingSettings) {
+async fn remux_recording_to_mp4(
+    ts_path: PathBuf,
+    settings: RecordingSettings,
+    ffmpeg_threads: u32,
+) {
     if !ffmpeg_supports_mp4_muxer() {
         write_conversion_state(
             &ts_path,
@@ -238,7 +243,7 @@ async fn remux_recording_to_mp4(ts_path: PathBuf, settings: RecordingSettings) {
     let mp4_path = build_mp4_path(&ts_path);
     let temp_path = build_mp4_temp_path(&mp4_path);
     let ffmpeg_path = crate::ffmpeg_extract::ffmpeg_bin_path().to_path_buf();
-    let args = build_recording_remux_args(&ts_path, &temp_path);
+    let args = build_recording_remux_args(&ts_path, &temp_path, ffmpeg_threads);
     let _ = tokio::fs::remove_file(&temp_path).await;
 
     info!(
@@ -544,9 +549,11 @@ pub async fn start_recording(
             None,
         )
         .await;
+        let ffmpeg_threads = normalize_recording_threads(engine.config.recording_threads);
         tokio::spawn(remux_recording_to_mp4(
             PathBuf::from(&file_path),
             recording_settings,
+            ffmpeg_threads,
         ));
     }
 
@@ -714,9 +721,10 @@ mod tests {
     fn build_recording_remux_args_targets_faststart_mp4_copy() {
         let input = Path::new("/tmp/input.ts");
         let output = Path::new("/tmp/output.tmp.mp4");
-        let args = build_recording_remux_args(input, output);
+        let args = build_recording_remux_args(input, output, 3);
 
         assert!(args.windows(2).any(|pair| pair == ["-i", "/tmp/input.ts"]));
+        assert!(args.windows(2).any(|pair| pair == ["-threads", "3"]));
         assert!(args.windows(2).any(|pair| pair == ["-c", "copy"]));
         assert!(
             args.windows(2)
@@ -766,7 +774,7 @@ mod tests {
         std::fs::copy(&fixture, &source).expect("fixture should copy");
 
         write_conversion_state(&source, RecordingConversionStatus::Converting, None).await;
-        remux_recording_to_mp4(source.clone(), settings).await;
+        remux_recording_to_mp4(source.clone(), settings, 2).await;
 
         let mp4_path = build_mp4_path(&source);
         let state_path = build_conversion_state_path(&source);
