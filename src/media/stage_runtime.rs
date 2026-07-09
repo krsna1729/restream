@@ -22,7 +22,7 @@ use crate::media::ffmpeg::stage_plan::{
     AudioStageOp, CodecEdgeOp, FfmpegStagePlan, StageInputSpec, StageStartupPolicy, TimelinePolicy,
     VideoCodecKind, VideoStageOp,
 };
-use crate::media::ring_buffer::{RingBuffer, default_transcoder_ring_capacity};
+use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_lifecycle::{StageBackendKind, StageLifecycle, StagePhase};
 use crate::media::stage_metrics::StageMetrics;
 use crate::planner::backend_policy::{BackendPolicy, StageBackend};
@@ -96,7 +96,7 @@ impl StageRuntimeManager {
             );
         }
 
-        let output_ring = Arc::new(RingBuffer::new(default_transcoder_ring_capacity()));
+        let output_ring = Arc::new(RingBuffer::new(self.engine.config.transcoder_ring_capacity));
         let cancel = CancellationToken::new();
         buffers.insert(key.clone(), (output_ring.clone(), cancel.clone()));
         drop(buffers); // release write lock before any await-heavy setup
@@ -672,6 +672,22 @@ mod tests {
             .await;
         assert!(!created2);
         assert!(Arc::ptr_eq(&handle1.ring, &handle2.ring));
+    }
+
+    #[tokio::test]
+    async fn ensure_stage_uses_engine_typed_transcoder_ring_capacity() {
+        let config = Arc::new(crate::AppConfig {
+            transcoder_ring_capacity: 768,
+            ..Default::default()
+        });
+        let engine = Arc::new(MediaEngine::new_with_config(config));
+        let manager = StageRuntimeManager::new(engine);
+        let source = Arc::new(RingBuffer::new(16));
+        let key = StageKey::new("pipe-typed", StageKind::video_preset("720p"));
+
+        let (handle, created) = manager.ensure_stage(key, source, None).await;
+        assert!(created);
+        assert_eq!(handle.ring.capacity(), 768);
     }
 
     #[tokio::test]

@@ -47,7 +47,6 @@
 use arc_swap::ArcSwapOption;
 use bytes::Bytes;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 use tracing::{debug, info, warn};
@@ -55,10 +54,9 @@ use tracing::{debug, info, warn};
 use super::MEDIA_PRODUCER_BATCH_PACKETS;
 
 pub const DEFAULT_RING_CAPACITY: usize = 1024;
-static RING_CAPACITY: OnceLock<usize> = OnceLock::new();
 
 pub fn default_ring_capacity() -> usize {
-    *RING_CAPACITY.get_or_init(|| crate::AppConfig::from_env().ring_capacity)
+    DEFAULT_RING_CAPACITY
 }
 
 // Transcoder output rings hold demuxed frames from the FFmpeg child process.
@@ -68,10 +66,9 @@ pub fn default_ring_capacity() -> usize {
 // much larger than the source ring — 512 slots already dominate memory at high
 // bitrates. Scale-test evidence: no transcoder ring overflows across 15 cases.
 pub const DEFAULT_TRANSCODER_RING_CAPACITY: usize = 512;
-static TRANSCODER_RING_CAPACITY: OnceLock<usize> = OnceLock::new();
 
 pub fn default_transcoder_ring_capacity() -> usize {
-    *TRANSCODER_RING_CAPACITY.get_or_init(|| crate::AppConfig::from_env().transcoder_ring_capacity)
+    DEFAULT_TRANSCODER_RING_CAPACITY
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

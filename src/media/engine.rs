@@ -20,7 +20,7 @@ use crate::media::engine_registries::{
 use crate::media::hls::HlsStore;
 use crate::media::hls_fmp4::Fmp4HlsStore;
 pub use crate::media::pipe_metrics::PipeMetrics;
-use crate::media::ring_buffer::{MediaType, Reader, RingBuffer, default_ring_capacity};
+use crate::media::ring_buffer::{MediaType, Reader, RingBuffer};
 pub use crate::media::stage_metrics::StageMetrics;
 use crate::media::ts_chunk_ring::TsChunkRing;
 
@@ -1369,7 +1369,7 @@ impl MediaEngine {
         if let Some(rb) = pipelines.get(pipeline_id) {
             return rb.clone();
         }
-        let rb = Arc::new(RingBuffer::new(default_ring_capacity()));
+        let rb = Arc::new(RingBuffer::new(self.config.ring_capacity));
         pipelines.insert(pipeline_id.to_string(), rb.clone());
         rb
     }
@@ -1377,7 +1377,7 @@ impl MediaEngine {
     /// Called after stream probe: sizes the source ring for 5 s jitter headroom.
     ///
     /// Formula: `needed = ceil(pkt_rate × HEADROOM_SECS)`, clamped to
-    /// `[default_ring_capacity(), MAX_RING_CAPACITY]`.  If the ring is already
+    /// `[configured ring capacity, MAX_RING_CAPACITY]`.  If the ring is already
     /// large enough no action is taken.  Otherwise the ring is always swapped in,
     /// even if egress readers are already attached — those readers are cancelled so
     /// the reconciler restarts them (within ~1 s) onto the new correctly-sized ring.
@@ -1398,7 +1398,7 @@ impl MediaEngine {
 
         let pkt_rate = video_fps.max(0.0) + audio_track_count as f64 * AUDIO_PKT_RATE;
         let needed = ((pkt_rate * HEADROOM_SECS).ceil() as usize)
-            .max(default_ring_capacity())
+            .max(self.config.ring_capacity)
             .min(MAX_RING_CAPACITY);
 
         let mut pipelines = self.ingests.pipelines.write().await;
@@ -6254,9 +6254,21 @@ mod tests {
         );
 
         let ring = engine.get_or_create_pipeline("p").await;
-        assert_eq!(ring.capacity(), default_ring_capacity());
+        assert_eq!(ring.capacity(), engine.config.ring_capacity);
         let depth = ring.buffer_depth_secs().unwrap();
         assert!((12.0..=13.0).contains(&depth), "depth={depth}");
+    }
+
+    #[tokio::test]
+    async fn source_ring_uses_engine_typed_config_capacity() {
+        let config = Arc::new(crate::AppConfig {
+            ring_capacity: 2048,
+            ..Default::default()
+        });
+        let engine = MediaEngine::new_with_config(config);
+
+        let ring = engine.get_or_create_pipeline("typed-ring").await;
+        assert_eq!(ring.capacity(), 2048);
     }
 
     #[tokio::test]
