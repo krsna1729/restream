@@ -1145,60 +1145,64 @@ impl MediaEngine {
     ) -> Option<crate::runtime::stage::StageRuntimeSnapshot> {
         use std::sync::atomic::Ordering;
 
-        let buffers = self.stages.buffers.read().await;
-        for key in buffers.keys() {
-            if key.pipeline.as_str() == pipeline_id {
-                let kind_str = key.kind.to_string();
-                if (kind_str.contains("preview") || kind_str.contains("hevc_to_h264"))
-                    && let Some(lifecycle) = self.stage_lifecycle_snapshot(key).await
-                    && !matches!(
-                        lifecycle.phase,
-                        crate::media::stage_lifecycle::StagePhase::Producing
-                    )
-                {
-                    let metrics = self
-                        .stages
-                        .metrics
-                        .read()
-                        .await
-                        .get(key)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            Arc::new(crate::media::stage_metrics::StageMetrics::new())
-                        });
-                    let (capacity_permits_total, capacity_permits_available, capacity_wait_ms) = if matches!(
-                        lifecycle.phase,
-                        crate::media::stage_lifecycle::StagePhase::WaitingForCapacity { .. }
-                            | crate::media::stage_lifecycle::StagePhase::CapacityAcquired { .. }
-                    ) {
-                        let semaphore = &self.runtime.external_ffmpeg_semaphore;
-                        let total = Some(self.config.external_ffmpeg_permits);
-                        let available = Some(semaphore.available_permits());
-                        let wait_ms = lifecycle.phase_started_at.map(|t| {
-                            std::cmp::min(t.elapsed().as_millis(), u64::MAX as u128) as u64
-                        });
-                        (total, available, wait_ms)
-                    } else {
-                        (None, None, None)
-                    };
+        let mut keys: Vec<_> = self
+            .active_hls_preview_stage_keys()
+            .await
+            .into_iter()
+            .filter(|key| key.pipeline.as_str() == pipeline_id)
+            .collect();
+        keys.sort_by_key(|key| key.to_string());
 
-                    return Some(crate::runtime::stage::StageRuntimeSnapshot {
-                        key: key.clone(),
-                        backend: lifecycle.backend.clone(),
-                        phase: lifecycle.phase.clone(),
-                        bytes_in: metrics.bytes_in.load(Ordering::Relaxed),
-                        bytes_out: metrics.bytes_out.load(Ordering::Relaxed),
-                        packets_in: metrics.packets_in.load(Ordering::Relaxed),
-                        packets_out: metrics.packets_out.load(Ordering::Relaxed),
-                        first_input_at: lifecycle.first_input_at,
-                        first_output_at: lifecycle.first_output_at,
-                        last_error: lifecycle.last_error.clone(),
-                        capacity_permits_total,
-                        capacity_permits_available,
-                        capacity_wait_ms,
-                    });
-                }
+        for key in keys {
+            let Some(lifecycle) = self.stage_lifecycle_snapshot(&key).await else {
+                continue;
+            };
+            if matches!(
+                lifecycle.phase,
+                crate::media::stage_lifecycle::StagePhase::Producing
+            ) {
+                continue;
             }
+
+            let metrics = self
+                .stages
+                .metrics
+                .read()
+                .await
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| Arc::new(crate::media::stage_metrics::StageMetrics::new()));
+            let (capacity_permits_total, capacity_permits_available, capacity_wait_ms) = if matches!(
+                lifecycle.phase,
+                crate::media::stage_lifecycle::StagePhase::WaitingForCapacity { .. }
+                    | crate::media::stage_lifecycle::StagePhase::CapacityAcquired { .. }
+            ) {
+                let semaphore = &self.runtime.external_ffmpeg_semaphore;
+                let total = Some(self.config.external_ffmpeg_permits);
+                let available = Some(semaphore.available_permits());
+                let wait_ms = lifecycle
+                    .phase_started_at
+                    .map(|t| std::cmp::min(t.elapsed().as_millis(), u64::MAX as u128) as u64);
+                (total, available, wait_ms)
+            } else {
+                (None, None, None)
+            };
+
+            return Some(crate::runtime::stage::StageRuntimeSnapshot {
+                key: key.clone(),
+                backend: lifecycle.backend.clone(),
+                phase: lifecycle.phase.clone(),
+                bytes_in: metrics.bytes_in.load(Ordering::Relaxed),
+                bytes_out: metrics.bytes_out.load(Ordering::Relaxed),
+                packets_in: metrics.packets_in.load(Ordering::Relaxed),
+                packets_out: metrics.packets_out.load(Ordering::Relaxed),
+                first_input_at: lifecycle.first_input_at,
+                first_output_at: lifecycle.first_output_at,
+                last_error: lifecycle.last_error.clone(),
+                capacity_permits_total,
+                capacity_permits_available,
+                capacity_wait_ms,
+            });
         }
         None
     }
@@ -3321,6 +3325,70 @@ mod tests {
             "pipe-preview-h264",
             StageKind::hls_segmenter(StageKind::source())
         )));
+    }
+
+    #[tokio::test]
+    async fn preview_blocked_by_snapshot_uses_graph_planned_keys() {
+        use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
+
+        let engine = MediaEngine::new_with_config(Arc::new(crate::AppConfig {
+            external_ffmpeg_permits: 3,
+            ..Default::default()
+        }));
+        let pipeline_id = "pipe-preview-blocked";
+        engine
+            .try_register_ingest(pipeline_id, "stream-key", "rtmp")
+            .await
+            .unwrap();
+        engine
+            .update_ingest_meta(
+                pipeline_id,
+                Some(VideoMeta {
+                    codec: "hevc".to_string(),
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+            .await;
+        let _ = engine.ensure_hls_preview_segmenter(pipeline_id).await;
+
+        let rogue_key = StageKey::new(
+            pipeline_id,
+            StageKind::preview("720p", StageKind::video_preset("rogue")),
+        );
+        engine.stages.buffers.write().await.insert(
+            rogue_key.clone(),
+            (Arc::new(RingBuffer::new(16)), CancellationToken::new()),
+        );
+        let rogue_lifecycle = engine
+            .get_or_create_stage_lifecycle(rogue_key, StagePhase::Registered)
+            .await;
+        rogue_lifecycle.transition(StagePhase::WaitingForCapacity {
+            backend: StageBackendKind::ExternalFfmpeg,
+        });
+
+        assert_eq!(
+            engine.preview_blocked_by_snapshot(pipeline_id).await,
+            None,
+            "unplanned preview-looking stages must not drive HLS preview blocked cause"
+        );
+
+        let planned_key =
+            StageKey::new(pipeline_id, StageKind::preview("720p", StageKind::source()));
+        let planned_lifecycle = engine
+            .get_or_create_stage_lifecycle(planned_key.clone(), StagePhase::Registered)
+            .await;
+        planned_lifecycle.transition(StagePhase::WaitingForCapacity {
+            backend: StageBackendKind::ExternalFfmpeg,
+        });
+
+        let blocked = engine
+            .preview_blocked_by_snapshot(pipeline_id)
+            .await
+            .expect("planned preview stage should be reported as blocked");
+        assert_eq!(blocked.key, planned_key);
+        assert_eq!(blocked.capacity_permits_total, Some(3));
     }
 
     #[tokio::test]

@@ -218,7 +218,7 @@ legacy ring escape hatches have been removed.
 | API no longer directly creates preview ring/backend | ✅ Mostly | `api/hls.rs` delegates to `application::hls_preview::ensure_hls_preview()`. |
 | Runtime/application service owns preview orchestration | ✅ Present | `application/hls_preview.rs` plans preview and spawns fMP4 segmenter. |
 | Actual keys in health match spawned keys | ✅ Tested | Engine tests cover `active_hls_preview_stage_keys_*` through the same `plan_hls_preview_graph()` contract used by preview startup. |
-| HLS blocked-stage cause surfaced | ✅ Tested | API test covers HLS playlist blocked-stage cause. |
+| HLS blocked-stage cause surfaced | ✅ Tested | API test covers HLS playlist blocked-stage cause, and engine tests prove blocked preview causes come from graph-planned stage keys rather than preview-name heuristics. |
 
 **Verdict**: **Largely complete**. Preview stage creation and health key
 reporting now share the dedicated graph planner; remaining architectural cleanup
