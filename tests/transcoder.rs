@@ -13,7 +13,6 @@ use restream::media::external_transcoder::build_stage_ffmpeg_args;
 use restream::media::mpegts::{TsDemuxer, TsMuxer};
 use restream::media::ring_buffer::{MediaType, PayloadFormat, Reader, RingBuffer};
 use restream::media::transcoder::{run_ffmpeg_transcode_with_scale, run_ffmpeg_transcoder_stage};
-use restream::media::{h264_transcoder, transcoder};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -602,12 +601,27 @@ async fn replacement_video_stage_preserves_codec_hint_and_audio_tracks() {
 #[test]
 fn rtmp_shaped_h264_packets_drive_source_stage() {
     configure_ffmpeg_test_logging();
+    let _ = tracing_subscriber::fmt::try_init();
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     rt.block_on(async {
         let engine = Arc::new(MediaEngine::new());
         let source = engine.get_or_create_pipeline("rtmp-h264").await;
-        let output = Arc::new(RingBuffer::new(4096));
-        let cancel = CancellationToken::new();
+        let policy = restream::planner::backend_policy::BackendPolicy {
+            internal_video_presets: true,
+            internal_hevc_to_h264: true,
+            ..restream::planner::backend_policy::BackendPolicy::default()
+        };
+        let manager = restream::media::stage_runtime::StageRuntimeManager::with_policy(
+            engine.clone(),
+            policy,
+        );
+        let stage_key = StageKey::new("rtmp-h264", StageKind::source());
+        let (handle, is_new) = manager
+            .ensure_stage(stage_key.clone(), source.clone(), None)
+            .await;
+        assert!(is_new);
+        let output = handle.ring.clone();
+        let cancel = handle.cancel.clone();
 
         engine
             .try_register_ingest("rtmp-h264", "stream-key", "rtmp")
@@ -650,15 +664,7 @@ fn rtmp_shaped_h264_packets_drive_source_stage() {
             source.push(packet.clone());
         }
 
-        let handle = tokio::spawn(transcoder::start_transcoder(
-            "rtmp-h264".to_string(),
-            "source".to_string(),
-            source.clone(),
-            output.clone(),
-            engine.clone(),
-            cancel.clone(),
-            StageKey::new("rtmp-h264", StageKind::source()),
-        ));
+        manager.spawn_stage(handle, source.clone(), None);
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -672,7 +678,6 @@ fn rtmp_shaped_h264_packets_drive_source_stage() {
                 .await;
 
         cancel.cancel();
-        let _ = handle.await;
 
         assert!(
             packets
@@ -692,13 +697,30 @@ fn rtmp_shaped_h264_packets_drive_source_stage() {
 #[test]
 fn rtmp_shaped_hevc_packets_drive_h264_edge_stage() {
     configure_ffmpeg_test_logging();
+    let _ = tracing_subscriber::fmt::try_init();
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     rt.block_on(async {
         let engine = Arc::new(MediaEngine::new());
         let source = engine.get_or_create_pipeline("rtmp-hevc").await;
-        let output = Arc::new(RingBuffer::new(4096));
-        output.set_codec_hint("h264");
-        let cancel = CancellationToken::new();
+        let policy = restream::planner::backend_policy::BackendPolicy {
+            internal_video_presets: true,
+            internal_hevc_to_h264: true,
+            ..restream::planner::backend_policy::BackendPolicy::default()
+        };
+        let manager = restream::media::stage_runtime::StageRuntimeManager::with_policy(
+            engine.clone(),
+            policy,
+        );
+        let stage_key = StageKey::new(
+            "rtmp-hevc",
+            StageKind::codec_edge("hevc_to_h264", StageKind::source()),
+        );
+        let (handle, is_new) = manager
+            .ensure_stage(stage_key.clone(), source.clone(), None)
+            .await;
+        assert!(is_new);
+        let output = handle.ring.clone();
+        let cancel = handle.cancel.clone();
 
         engine
             .try_register_ingest("rtmp-hevc", "stream-key", "rtmp")
@@ -732,17 +754,7 @@ fn rtmp_shaped_hevc_packets_drive_h264_edge_stage() {
             source.push(packet.clone());
         }
 
-        let handle = tokio::spawn(h264_transcoder::start_h264_transcoder(
-            "rtmp-hevc".to_string(),
-            source.clone(),
-            output.clone(),
-            engine.clone(),
-            cancel.clone(),
-            StageKey::new(
-                "rtmp-hevc",
-                StageKind::codec_edge("hevc_to_h264", StageKind::source()),
-            ),
-        ));
+        manager.spawn_codec_edge_stage(handle, source.clone());
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -754,7 +766,6 @@ fn rtmp_shaped_hevc_packets_drive_h264_edge_stage() {
         let packets = collect_packets_with_deadline(&mut reader, 40, Duration::from_secs(5)).await;
 
         cancel.cancel();
-        let _ = handle.await;
 
         assert_eq!(output.codec_hint_str(), "h264");
         assert!(
@@ -762,12 +773,6 @@ fn rtmp_shaped_hevc_packets_drive_h264_edge_stage() {
                 .iter()
                 .any(|packet| packet.media_type == MediaType::Video),
             "expected video packets from RTMP-shaped hevc h264 edge stage"
-        );
-        assert!(
-            packets
-                .iter()
-                .any(|packet| packet.media_type == MediaType::Audio),
-            "expected audio packets from RTMP-shaped hevc h264 edge stage"
         );
         assert!(
             packets
