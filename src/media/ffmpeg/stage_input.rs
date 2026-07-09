@@ -42,6 +42,28 @@ pub struct StageInputPump {
     engine_refresh: Option<(Arc<MediaEngine>, String)>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codec_hint_reports_ring_hint_without_exposing_ring() {
+        let ring = Arc::new(RingBuffer::new(8));
+        ring.set_codec_hint("hevc");
+        let pump = StageInputPump::new(
+            "test-pump".to_string(),
+            ring,
+            0,
+            None,
+            &[],
+            true,
+            Arc::new(StageMetrics::new()),
+        );
+
+        assert_eq!(pump.codec_hint(), "hevc");
+    }
+}
+
 pub trait StageByteSink {
     fn write_ts(
         &mut self,
@@ -107,10 +129,9 @@ impl StageInputPump {
         self
     }
 
-    /// Access the source ring the pump reads from. This is a temporary
-    /// compatibility helper while existing backend functions still take rings.
-    pub fn source_ring(&self) -> Arc<RingBuffer> {
-        self.reader.current_ring().clone()
+    /// Return the current input codec hint without exposing the source ring.
+    pub fn codec_hint(&self) -> String {
+        self.reader.current_ring().codec_hint_str().to_string()
     }
 
     /// Read from the input ring, feed MPEG-TS bytes to `sink`, until

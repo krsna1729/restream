@@ -394,16 +394,13 @@ fn external_output_stream_idx(
 /// the stage entry and restart it on the next reconciler cycle.
 ///
 /// Run an external FFmpeg stage using the shared input pump and output
-/// normalizer. This is the real `FfmpegStageBackend` implementation; the old
-/// `start_external_transcoder_stage*` functions are kept as compatibility
-/// wrappers around the same body.
+/// normalizer. This is the real `FfmpegStageBackend` implementation.
 pub(crate) async fn run_external_ffmpeg_backend(
     plan: FfmpegStagePlan,
     input_pump: StageInputPump,
     mut output_normalizer: StageOutputNormalizer,
     ctx: StageRunContext,
 ) -> Result<(), BackendError> {
-    let source_ring = input_pump.source_ring();
     let pipeline_id = ctx.pipeline_id.clone();
     let stage_key = ctx.stage_key.clone();
     let encoding = stage_key.kind.to_string();
@@ -412,7 +409,8 @@ pub(crate) async fn run_external_ffmpeg_backend(
     let include_audio = plan.include_audio;
     let input_codec = plan.input.codec_hint.as_str();
     let output_codec = plan.output_codec.as_str();
-    let probe_codec = match source_ring.codec_hint_str() {
+    let input_codec_hint = input_pump.codec_hint();
+    let probe_codec = match input_codec_hint.as_str() {
         "" => input_codec,
         hint => hint,
     };

@@ -21,8 +21,11 @@ use crate::domain::stage::StageKey;
 use crate::media::avio::MemoryQueue;
 use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ffmpeg::stage_output::{StageOutputNormalizer, StageOutputSink};
-use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, RingBuffer};
+use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat};
 use crate::media::transcoder::InternalMemoryQueueSink;
+
+#[cfg(test)]
+use crate::media::ring_buffer::RingBuffer;
 
 /// Zero-copy wrapper: holds an `ffmpeg_next::Packet` so `Bytes::from_owner`
 /// can serve the encoded/demuxed buffer to ring-buffer readers without a `memcpy`.
@@ -48,7 +51,6 @@ impl AsRef<[u8]> for OwnedFfmpegPacket {
 #[allow(clippy::too_many_arguments)]
 pub async fn start_h264_transcoder_inner(
     pipeline_id: String,
-    _input_buffer: Arc<RingBuffer>,
     engine: Arc<crate::media::engine::MediaEngine>,
     cancel_token: CancellationToken,
     stage_key: StageKey,

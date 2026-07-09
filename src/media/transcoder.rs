@@ -294,7 +294,6 @@ pub fn apply_audio_routing(routing: &AudioRouting, input_tracks: &[AudioMeta]) -
 pub async fn start_transcoder_inner(
     pipeline_id: String,
     preset: String,
-    _input_buffer: Arc<RingBuffer>,
     engine: Arc<crate::media::engine::MediaEngine>,
     cancel_token: CancellationToken,
     stage_key: StageKey,
@@ -394,15 +393,12 @@ pub async fn run_internal_ffmpeg_backend(
     output_normalizer: StageOutputNormalizer,
     ctx: StageRunContext,
 ) -> Result<(), BackendError> {
-    let source_ring = input_pump.source_ring();
-
     if matches!(
         plan.video,
         crate::media::ffmpeg::stage_plan::VideoStageOp::CodecEdge { .. }
     ) {
         crate::media::h264_transcoder::start_h264_transcoder_inner(
             ctx.pipeline_id.clone(),
-            source_ring,
             ctx.engine,
             ctx.cancel,
             ctx.stage_key,
@@ -418,7 +414,6 @@ pub async fn run_internal_ffmpeg_backend(
         start_transcoder_inner(
             ctx.pipeline_id,
             ctx.stage_key.kind.to_string(),
-            source_ring,
             ctx.engine,
             ctx.cancel,
             ctx.stage_key,
