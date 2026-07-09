@@ -92,6 +92,11 @@ pub fn plan_hls_output_graph(
         false,
         policy,
     );
+    let media_terminal = plan.terminal_stage.clone();
+    let hls_kind = StageKind::hls_segmenter(media_terminal.kind.clone());
+    let hls_key = StageKey::new(PipelineId::new(pipeline_id), hls_kind.clone());
+    plan.add_stage(hls_key.clone(), policy.select_backend(&hls_kind));
+    plan.terminal_stage = hls_key;
     plan.role = GraphRole::HlsOutput {
         output_id: OutputId::new(&output.id),
     };
@@ -297,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn graph_role_hls_output_variant_exists() {
+    fn hls_output_graph_terminates_at_protocol_segmenter() {
         let policy = BackendPolicy::default();
         let output = Output {
             id: "out_1".to_string(),
@@ -318,7 +323,25 @@ mod tests {
         );
         assert_eq!(
             plan.terminal_stage,
-            StageKey::new("pipe_1", StageKind::video_preset("720p"))
+            StageKey::new(
+                "pipe_1",
+                StageKind::hls_segmenter(StageKind::video_preset("720p"))
+            )
+        );
+        assert!(plan.stages.iter().any(|stage| {
+            stage.kind == StageKind::hls_segmenter(StageKind::video_preset("720p"))
+                && stage.backend == StageBackend::HlsSegmenter
+        }));
+        assert!(
+            plan.edges.iter().any(|edge| {
+                edge.from == StageKey::new("pipe_1", StageKind::video_preset("720p"))
+                    && edge.to
+                        == StageKey::new(
+                            "pipe_1",
+                            StageKind::hls_segmenter(StageKind::video_preset("720p")),
+                        )
+            }),
+            "HLS output graph should show media stage feeding protocol segmenter"
         );
     }
 }

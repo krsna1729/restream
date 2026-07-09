@@ -51,6 +51,9 @@ pub async fn prepare_output_ring(
         if stage.kind == StageKind::Source {
             continue;
         }
+        if matches!(stage.kind, StageKind::Hls | StageKind::HlsSegmenter { .. }) {
+            continue;
+        }
 
         let input_key = stage.input.as_ref().unwrap();
         let input_buf = current_bufs
@@ -93,7 +96,15 @@ pub async fn prepare_output_ring(
         current_bufs.insert(stage.key.clone(), stage_buf);
     }
 
-    let terminal_key = plan.terminal_stage.clone();
+    let terminal_key = match &plan.terminal_stage.kind {
+        StageKind::Hls | StageKind::HlsSegmenter { .. } => plan
+            .stages
+            .iter()
+            .find(|stage| stage.key == plan.terminal_stage)
+            .and_then(|stage| stage.input.clone())
+            .unwrap_or_else(|| StageKey::new(output.pipeline_id.as_str(), StageKind::Source)),
+        _ => plan.terminal_stage.clone(),
+    };
     let terminal_buf = current_bufs
         .get(&terminal_key)
         .cloned()
@@ -224,6 +235,30 @@ mod tests {
                 .count(),
             2,
             "audio selection should happen after the shared codec edge"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_hls_output_ring_uses_media_terminal_not_protocol_segmenter() {
+        let engine = Arc::new(MediaEngine::new());
+        let source = engine.get_or_create_pipeline("pipe-hls-output").await;
+        let output = test_output(
+            "pipe-hls-output",
+            "source",
+            "https://upload.example.test/live/out.m3u8",
+        );
+
+        let (ring, terminal_key) = prepare_output_ring(&engine, &output).await;
+
+        assert!(Arc::ptr_eq(&source, &ring));
+        assert_eq!(
+            terminal_key,
+            Some(StageKey::new("pipe-hls-output", StageKind::source()))
+        );
+        let stages = engine.active_transcoder_stages("pipe-hls-output").await;
+        assert!(
+            stages.is_empty(),
+            "protocol segmenter stages must not be spawned through the FFmpeg runtime"
         );
     }
 }

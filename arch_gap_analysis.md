@@ -150,15 +150,16 @@ are converted at repository/API boundaries.
 | `StageGraphPlan`, `GraphRole`, `StagePlan` | ✅ Present | `src/runtime/graph.rs`. |
 | Output graph planner | ✅ Present | `planner::graph_plan::plan_pipeline_graph()`. |
 | HLS preview planner | ✅ Present | `planner::graph_plan::plan_hls_preview_graph()` and `planner/hls_preview.rs`. |
-| HLS output and recording planned by same graph | ⚠️ Partial | HLS output terminal-stage preparation uses `plan_hls_output_graph()` and `GraphRole::HlsOutput`; recording lifecycle registration and graph rendering use `plan_recording_graph()` and `GraphRole::Recording`; the recording writer and HLS segmenter/uploader service boundaries are not yet fully graph-runtime driven. |
+| HLS output and recording planned by same graph | ⚠️ Partial | HLS output terminal-stage preparation uses `plan_hls_output_graph()` and `GraphRole::HlsOutput`, and HLS output desired graphs now terminate at a protocol segmenter node fed by the prepared media stage; recording lifecycle registration and graph rendering use `plan_recording_graph()` and `GraphRole::Recording`; the recording writer and HLS segmenter/uploader execution boundaries are not yet fully graph-runtime driven. |
 | Diagnostics/harness/agent preview use same planner | ✅ Present | Graph API, diagnostics, agent graph/impact preview, and mixed harness stage-count expectations consume `StageGraphPlan`; diagnostics and `/graph` now expose per-output desired graphs that preserve HLS-output roles; no harness stage-count proof imports `OutputPath`. |
 | Stage-sharing tests compare against graph planner | ✅ Present | Mixed harness expected stage counts are compared with `plan_pipeline_graph()` and duplicate-output sharing in `mixed_manifest` tests. |
 
 **Verdict**: **Mostly complete for output execution, graph rendering,
 diagnostics, HLS preview planning, HLS output terminal-stage/per-output
-diagnostic planning, recording terminal-stage/lifecycle planning, agent preview,
-and harness stage-sharing proof; still partial for the recording writer and HLS
-segmenter/uploader service boundaries**.
+diagnostic planning with protocol segmenter nodes, recording
+terminal-stage/lifecycle planning, agent preview, and harness stage-sharing
+proof; still partial for the recording writer and HLS segmenter/uploader
+execution boundaries**.
 
 ---
 
@@ -344,7 +345,7 @@ convergence and later harness/reporting phases.
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | A- | Logs, auth initialization, settings reads/writes, pipeline, output, ingest, health checks, media-library operations, graph desired-plan selection, and agent catalog/plan reads/output mutations are service-backed; API/runtime read models still contain direct runtime snapshot work. |
 | Ph 5 Repositories | A | Repo modules exist, pipeline/output/ingest/health/log/auth/settings/agent/file-ingest/media-library services are port-trait backed, and output/job/recording state maps at repository boundaries. |
-| Ph 6 Graph planner | A- | Planner drives output preparation, HLS output terminal-stage prep, per-output HLS diagnostic graphs, recording lifecycle registration, graph rendering, diagnostics, HLS preview planning, agent graph/impact preview, and harness stage-count expectations; recording writer and HLS segmenter/uploader execution boundaries remain. |
+| Ph 6 Graph planner | A- | Planner drives output preparation, HLS output terminal-stage prep, per-output HLS diagnostic graphs with protocol segmenter nodes, recording lifecycle registration, graph rendering, diagnostics, HLS preview planning, agent graph/impact preview, and harness stage-count expectations; recording writer and HLS segmenter/uploader execution boundaries remain. |
 | Ph 7 Stage lifecycle | A- | Lifecycle/capacity visibility is strong and shared FFmpeg stages now use first-class `StageRuntime` objects as the ring/cancellation/lifecycle/metrics/input-queue/pipe-metrics authority for runtime-backed health/status, telemetry, and graph reads; lifecycle/metrics side maps remain for map-only stage families during migration. |
 | Ph 8 Dependency-aware status | A | Operator-facing dependency status is complete for the phase scope, with typed internal egress lifecycle state. |
 | Ph 9 FFmpeg waist | A | Shared FFmpeg plan/backend/input/output contracts are the backend entry path, and legacy input/output ring escape hatches are removed. |
