@@ -48,10 +48,11 @@ their phase-scope criteria**. Phase 13 harness reporting, Phase 14 Agent/MCP
 boundary cleanup, and Phase 15 large-file splitting now also meet their
 acceptance criteria. Phase 16 rollout work is now partially implemented:
 per-stage internal-backend policy is the active configuration model, the legacy
-global transcoder switch no longer selects backends, and runtime graph stage
-nodes carry lifecycle/capacity details for the UI and harness. The remaining
-non-A roadmap work is Phase 16 live/CI rollout evidence for internal backend
-parity.
+global transcoder switch no longer selects backends, runtime graph stage nodes
+carry lifecycle/capacity details for the UI and harness, and CI now runs a
+non-blocking internal-backend rollout smoke lane. The remaining non-A roadmap
+work is Phase 16 live parity evidence and promotion/allowed-failure policy for
+internal backend parity.
 
 ---
 
@@ -291,7 +292,7 @@ convergence and later harness/reporting phases.
 | Phase 13 — Harness v2 reporting | ✅ Complete | Harness now has `HarnessOutputCell`, `HarnessOutputRegistry`, per-scenario `outputs.json`, scenario result embedding, semantic cell labels in progress stalls, matrix `root-cause-summary.json` grouping, schema-versioned assertion rows, per-scenario `artifact-index.json` with file metadata/checksums, and probe failure API snapshots carrying output status plus engine health. |
 | Phase 14 — Agent/MCP cleanup | ✅ Complete | Shared agent command/query DTOs live in `agent_core::types`, HTTP/execution modules re-export those DTOs instead of duplicating structs, MCP backends consume the same shared types, agent context/catalog reads use port-backed `AgentService`, agent output mutations use `OutputService`, agent graph/impact preview use `StageGraphPlan`, and agent API read/plan paths no longer import media internals. |
 | Phase 15 — Large-file split | ✅ Complete | No Rust source file now exceeds the 2,000-line ideal. The final split set covers runtime snapshots, HLS lifecycle/consumer ownership, engine test modules, MPEG-TS codec probing/tests, external FFmpeg process/argument helpers, SRT egress/policy/stream-id/monitor/tests, RTMP FLV/tests, mixed matrix orchestration, harness core/sinks/HLS PUT/media probes/fault recovery/live modes/resource sweep/suite helpers, and the test-harness root. |
-| Phase 16 — Rollout policy | 🟡 Partial | Per-stage backend policy is implemented and tested, the legacy global internal-transcoder switch is ignored, runtime graph stage nodes expose lifecycle/capacity details, and the UI renders those details. Still missing: internal backend CI lanes, live parity evidence for the promotion gates, and allowed-failure accounting for internal runs. |
+| Phase 16 — Rollout policy | 🟡 Partial | Per-stage backend policy is implemented and tested, the legacy global internal-transcoder switch is ignored, runtime graph stage nodes expose lifecycle/capacity details, the UI renders those details, and CI has a non-blocking internal-backend rollout smoke lane. Still missing: live parity evidence for the promotion gates and allowed-failure accounting for internal runs. |
 
 ---
 
@@ -375,7 +376,7 @@ convergence and later harness/reporting phases.
 | Ph 13 Harness v2 | A | Output-cell registry, `outputs.json`, semantic progress-stall labels, matrix root-cause grouping, assertion schema versioning, artifact indexing, and probe failure API snapshots are implemented. |
 | Ph 14 Agent/MCP cleanup | A | Shared DTOs live in `agent_core::types`; MCP and HTTP/execution share command/query payloads where feature boundaries permit; agent graph/impact preview uses the shared planner; agent reads use service/runtime read models; agent API read/plan paths have no direct media-internal imports. |
 | Ph 15 Large-file split | A | No Rust source file exceeds 2,000 lines; `engine.rs`, `mpegts.rs`, `external_transcoder.rs`, `srt.rs`, `rtmp.rs`, `test_harness.rs`, `mixed_runner.rs`, and the extracted engine/harness modules are all below the ideal cap through responsibility-based splits. |
-| Ph 16 Rollout policy | C | Per-stage policy and runtime graph lifecycle rollout are implemented and tested, but internal backend CI/parity gates and live matrix evidence are still missing. |
+| Ph 16 Rollout policy | C+ | Per-stage policy, runtime graph lifecycle rollout, and a non-blocking internal backend smoke CI lane are implemented and tested, but parity promotion gates, allowed-failure accounting, and live matrix evidence are still missing. |
 
 ---
 
@@ -391,7 +392,8 @@ families, output status is dependency-aware, FFmpeg execution goes through the
 shared waist, HLS preview and recording identity are graph/metadata-driven, and
 health/alerts/diagnostics expose causal runtime state.
 
-The remaining non-A work in this document is Phase 16 rollout policy: add and
-run the internal backend CI/promote gates, prove the constrained-capacity and
-default external matrix behavior with live harness evidence, and capture
-allowed-failure accounting for internal-transcoder runs until parity is reached.
+The remaining non-A work in this document is Phase 16 rollout policy: make the
+internal backend smoke lane blocking only after the promotion criteria pass,
+prove the constrained-capacity and default external matrix behavior with live
+harness evidence, and capture allowed-failure accounting for internal-transcoder
+runs until parity is reached.
