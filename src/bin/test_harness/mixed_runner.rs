@@ -175,9 +175,12 @@ impl MixedEnv {
             restream_db_path: std::env::var_os("RESTREAM_DB_PATH")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| default_work_db_path(&work_dir, &format!("{log_stem}.db"))),
-            assertion_log: std::env::var_os("ASSERTION_LOG")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from),
+            assertion_log: Some(
+                std::env::var_os("ASSERTION_LOG")
+                    .filter(|value| !value.is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| work_dir.join("assertions.jsonl")),
+            ),
             only_checks: std::env::var("ONLY_CHECKS")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
