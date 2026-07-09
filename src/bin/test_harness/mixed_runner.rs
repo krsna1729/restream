@@ -18,6 +18,8 @@ mod mixed_playback;
 mod mixed_probes;
 #[path = "mixed_reporting.rs"]
 mod mixed_reporting;
+#[path = "mixed_root_cause.rs"]
+mod mixed_root_cause;
 #[path = "mixed_runtime.rs"]
 mod mixed_runtime;
 #[path = "mixed_signal.rs"]
@@ -53,6 +55,9 @@ pub(super) use mixed_probes::{
 pub(super) use mixed_reporting::{
     count_log_matches, effective_log_paths, emit_mixed_result, emit_mixed_timing,
     emit_mixed_timing_window, file_tail_lines, log_mixed_ok, safe_artifact_stem,
+};
+pub(super) use mixed_root_cause::{
+    mixed_root_cause_summary_json, mixed_root_cause_summary_path, write_mixed_root_cause_summary,
 };
 pub(super) use mixed_runtime::{
     spawn_mixed_live_publisher, spawn_mixed_srt_multi_publisher, start_mixed_mediamtx,
@@ -517,6 +522,7 @@ fn write_matrix_scenario_progress(
     rows: &[MatrixCaseProgress],
     failures: &[String],
 ) -> Result<(), String> {
+    let root_cause_summary_path = write_mixed_root_cause_summary(path, failures)?;
     let progress = matrix_progress_totals(rows);
     let total_cases = progress["totalCases"].as_u64().unwrap_or(0);
     let completed_cases = progress["completedCases"].as_u64().unwrap_or(0);
@@ -536,8 +542,12 @@ fn write_matrix_scenario_progress(
             "passed": passed,
             "progress": progress,
             "failures": failures,
+            "rootCauseSummary": mixed_root_cause_summary_json(failures),
             "continueOnScenarioFailure": !fail_fast,
             "failFastOptOutEnv": "MIXED_MATRIX_FAIL_FAST",
+            "artifacts": {
+                "rootCauseSummaryJson": root_cause_summary_path,
+            },
             "caseProgress": matrix_case_progress_json(rows),
             "updatedAt": Utc::now().to_rfc3339(),
         }),
@@ -644,12 +654,17 @@ async fn mixed_input_matrix_correctness_serial() -> Result<Value, String> {
         )?;
     }
     let progress = matrix_progress_totals(&case_progress);
+    let root_cause_summary_path = mixed_root_cause_summary_path(&scenario_path);
 
     Ok(json!({
         "passed": failures.is_empty(),
         "mode": MIXED_MATRIX_MODE,
         "progress": progress,
         "caseProgress": matrix_case_progress_json(&case_progress),
+        "rootCauseSummary": mixed_root_cause_summary_json(&failures),
+        "artifacts": {
+            "rootCauseSummaryJson": root_cause_summary_path,
+        },
         "coverage": {
             "selectedInputCases": mixed_input_cases().len(),
             "totalInputCases": mixed_input_cases().len(),
@@ -972,12 +987,17 @@ async fn mixed_input_matrix_correctness_shared() -> Result<Value, String> {
         }
     }
     let progress = matrix_progress_totals(&case_progress);
+    let root_cause_summary_path = mixed_root_cause_summary_path(&scenario_path);
 
     Ok(json!({
         "passed": failures.is_empty(),
         "mode": MIXED_MATRIX_MODE,
         "progress": progress,
         "caseProgress": matrix_case_progress_json(&case_progress),
+        "rootCauseSummary": mixed_root_cause_summary_json(&failures),
+        "artifacts": {
+            "rootCauseSummaryJson": root_cause_summary_path,
+        },
         "coverage": {
             "selectedInputCases": mixed_input_cases().len(),
             "totalInputCases": mixed_input_cases().len(),
@@ -2499,6 +2519,52 @@ mod tests {
         assert_eq!(
             env.output_cell_label("output-1").expect("cell label"),
             "mixed.asset.file.h264.a1.bf0 / rtmp.source / out1"
+        );
+
+        std::fs::remove_dir_all(temp).ok();
+    }
+
+    #[test]
+    fn matrix_progress_writes_root_cause_summary_artifact() {
+        let temp = std::env::temp_dir().join(format!(
+            "restream-mixed-root-cause-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        let scenario_path = temp.join("scenario.json");
+        let rows = matrix_case_progress_rows();
+        let failures = vec![
+            "mixed input case mixed.live.rtmp.h265.a2.bf2 failed: stream 0 has DTS gap 0.900000s"
+                .to_string(),
+        ];
+
+        write_matrix_scenario_progress(&scenario_path, "shared-batch", false, &rows, &failures)
+            .expect("progress json");
+
+        let scenario_body = std::fs::read_to_string(&scenario_path).expect("scenario.json");
+        let scenario: Value = serde_json::from_str(&scenario_body).expect("valid scenario json");
+        assert_eq!(
+            scenario["rootCauseSummary"]["causes"][0]["cause"],
+            "timestamp_discontinuity"
+        );
+        assert_eq!(
+            scenario["artifacts"]["rootCauseSummaryJson"],
+            temp.join("root-cause-summary.json")
+                .to_string_lossy()
+                .as_ref()
+        );
+
+        let summary_body = std::fs::read_to_string(temp.join("root-cause-summary.json"))
+            .expect("root cause summary");
+        let summary: Value = serde_json::from_str(&summary_body).expect("valid summary json");
+        assert_eq!(summary["totalFailures"], 1);
+        assert_eq!(
+            summary["causes"][0]["scenarios"][0],
+            "mixed.live.rtmp.h265.a2.bf2"
         );
 
         std::fs::remove_dir_all(temp).ok();
