@@ -12,34 +12,37 @@ fn mixed_recording_name_matches_cfg(name: &str, cfg: &str) -> bool {
         && name.contains(&mixed_recording_scenario_token(cfg))
 }
 
-async fn wait_for_mixed_recording_file(
-    media_dir: &Path,
-    before: &HashSet<String>,
-    cfg: &str,
-    timeout: Duration,
-) -> Result<PathBuf, String> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let files = media_dir_entries(media_dir)?;
-        if let Some(name) = files.iter().find(|name| {
-            !before.contains(*name) && mixed_recording_name_matches_cfg(name.as_str(), cfg)
-        }) {
-            return Ok(media_dir.join(name));
-        }
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "no new recording for {cfg} appeared in {} within {}s",
-                media_dir.display(),
-                timeout.as_secs()
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
+fn media_recording_play_name(entry: &Value) -> Option<&str> {
+    entry["playName"]
+        .as_str()
+        .or_else(|| entry["name"].as_str())
+        .filter(|name| name.ends_with(".mp4") && !name.ends_with(".tmp.mp4"))
 }
 
-async fn wait_for_api_media_file_named(
+fn media_recording_identity(entry: &Value) -> Option<String> {
+    entry["recordingId"]
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| media_recording_play_name(entry).map(str::to_string))
+}
+
+async fn api_media_recording_identities(api: &RampApi) -> Result<HashSet<String>, String> {
+    let media = api.get_json("/api/v1/media").await?;
+    let files = media["files"]
+        .as_array()
+        .ok_or("/api/v1/media response missing files")?;
+    Ok(files
+        .iter()
+        .filter(|file| media_recording_play_name(file).is_some())
+        .filter_map(media_recording_identity)
+        .collect())
+}
+
+async fn wait_for_api_recording_for_pipeline(
     api: &RampApi,
-    name: &str,
+    pipeline_id: &str,
+    before: &HashSet<String>,
+    cfg: &str,
     timeout: Duration,
 ) -> Result<Value, String> {
     let deadline = Instant::now() + timeout;
@@ -48,14 +51,28 @@ async fn wait_for_api_media_file_named(
         let files = media["files"]
             .as_array()
             .ok_or("/api/v1/media response missing files")?;
-        if let Some(file) = files.iter().find(|file| {
-            file["playName"].as_str() == Some(name) || file["name"].as_str() == Some(name)
+        if let Some(entry) = files.iter().find(|entry| {
+            entry["pipelineId"].as_str() == Some(pipeline_id)
+                && media_recording_play_name(entry).is_some()
+                && media_recording_identity(entry)
+                    .as_ref()
+                    .is_some_and(|identity| !before.contains(identity))
         }) {
-            return Ok(file.clone());
+            return Ok(entry.clone());
+        }
+        if let Some(entry) = files.iter().find(|entry| {
+            media_recording_play_name(entry).is_some_and(|name| {
+                mixed_recording_name_matches_cfg(name, cfg)
+                    && media_recording_identity(entry)
+                        .as_ref()
+                        .is_none_or(|identity| !before.contains(identity))
+            })
+        }) {
+            return Ok(entry.clone());
         }
         if Instant::now() >= deadline {
             return Err(format!(
-                "recording {name} did not appear in /api/v1/media within {}s",
+                "no new recording for pipeline {pipeline_id} / {cfg} appeared in /api/v1/media within {}s",
                 timeout.as_secs()
             ));
         }
@@ -247,7 +264,7 @@ pub(crate) async fn verify_mixed_recording(
     }
 
     let started = Instant::now();
-    let before_files = media_dir_entries(&env.media_dir)?;
+    let before_recordings = api_media_recording_identities(api).await?;
     api.post_empty(&format!("/api/v1/pipelines/{pipeline_id}/recording/start"))
         .await?;
     wait_for_api_recording_state(api, pipeline_id, true, Duration::from_secs(10)).await?;
@@ -256,15 +273,17 @@ pub(crate) async fn verify_mixed_recording(
         .await?;
     wait_for_api_recording_state(api, pipeline_id, false, Duration::from_secs(20)).await?;
 
-    let recording_path =
-        wait_for_mixed_recording_file(&env.media_dir, &before_files, cfg, Duration::from_secs(30))
-            .await?;
-    let recording_name = recording_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or("recording file missing file name")?;
-    let recording_entry =
-        wait_for_api_media_file_named(api, recording_name, Duration::from_secs(30)).await?;
+    let recording_entry = wait_for_api_recording_for_pipeline(
+        api,
+        pipeline_id,
+        &before_recordings,
+        cfg,
+        Duration::from_secs(30),
+    )
+    .await?;
+    let recording_name =
+        media_recording_play_name(&recording_entry).ok_or("recording file missing file name")?;
+    let recording_path = env.media_dir.join(recording_name);
     if !recording_path.exists() {
         return Err(format!(
             "recording listed by API but missing on disk: {}",
@@ -356,5 +375,26 @@ mod tests {
             "recording_20260707T012755_mixed_asset_file_h265_a1_bf0.tmp.mp4",
             "mixed.asset.file.h265.a1.bf0"
         ));
+    }
+
+    #[test]
+    fn media_recording_identity_prefers_recording_id() {
+        let entry = json!({
+            "name": "recording_20260707T012755_pipe.mp4",
+            "playName": "recording_20260707T012755_pipe.mp4",
+            "recordingId": "rec-123",
+        });
+
+        assert_eq!(media_recording_identity(&entry).as_deref(), Some("rec-123"));
+    }
+
+    #[test]
+    fn media_recording_play_name_rejects_temporary_outputs() {
+        let entry = json!({
+            "name": "recording_20260707T012755_pipe.tmp.mp4",
+            "playName": "recording_20260707T012755_pipe.tmp.mp4",
+        });
+
+        assert_eq!(media_recording_play_name(&entry), None);
     }
 }
