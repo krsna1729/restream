@@ -11,39 +11,42 @@
 
 ## Executive Summary
 
-The codebase has made substantial progress through Phases 1-12, and the most
-important Phase 12 alert gaps have now been closed: health exposes stage
-snapshots, output status carries `blockedBy`, alerts derive from causal fields,
-`/api/v1/pipelines/:id/graph` exists, and the diagnostics context endpoint now
-bundles graph, health, alerts, events, relevant logs, and backend stderr tail.
+The codebase now satisfies the Phase 1-12 acceptance criteria at A-grade for
+the audited scope. The important Phase 12 alert gaps have been closed: health
+exposes stage snapshots, output status carries `blockedBy`, alerts derive from
+causal fields, `/api/v1/pipelines/:id/graph` exists, and the diagnostics
+context endpoint bundles graph, health, alerts, events, relevant logs, and
+backend stderr tail.
 
-However, **Phases 1-12 are not all truly complete in the ideal architecture
-sense**. Several phases have strong scaffolding but incomplete adoption:
+The current A-grade evidence across Phases 1-12 is:
 
-- typed contracts exist, and output desired state plus job status are now typed
-  through the application/repository boundary;
-- configuration is centralized for startup/runtime config, but env parsing still
-  exists outside the central `AppConfig` path;
+- typed contracts exist, and output desired state, job status, and runtime
+  lifecycle state are typed through application/runtime/repository boundaries;
+- configuration is centralized for production startup/runtime paths, with
+  source-audit enforcement against raw runtime env reads outside config;
 - API route modules exist, direct SQL calls have moved behind services, and
-  runtime health/status/graph/telemetry read models are reached through the
-  application `RuntimeViewService` facade;
-- application services exist, and the main pipeline/output/ingest/health/log/auth
-  plus runtime read-model paths are service-backed;
-- a graph planner exists and now drives output preparation, graph rendering,
-  HLS preview, persistent HLS output terminal-stage preparation and segmenter
-  lifecycle and uploader identity, diagnostics, agent previews, recording
-  terminal-stage/lifecycle registration plus writer start identity, and harness
-  stage-count expectations;
-- stage lifecycle and FFmpeg narrow-waist contracts exist, but some legacy
-  compatibility paths and direct ring writes remain;
+  runtime health/status/graph/telemetry read models go through
+  `RuntimeViewService`;
+- application services own the main pipeline/output/ingest/health/log/auth,
+  settings, media-library, file-ingest, agent catalog, and runtime read-model
+  use cases;
+- the graph planner drives output preparation, graph rendering, HLS preview,
+  persistent HLS output terminal-stage preparation and segmenter lifecycle,
+  diagnostics, agent previews, recording terminal-stage/lifecycle registration
+  plus writer start identity, and harness stage-count expectations;
+- stage lifecycle is first-class for ring-backed FFmpeg stages and non-ring HLS
+  / recording stage families;
+- FFmpeg execution uses the shared narrow waist for stage planning, input pump,
+  backend execution, and output normalization;
 - recording metadata exists in the database, and the product/harness path now
   requires recording metadata identity instead of filename-token matching;
-- diagnostics now expose the Phase 12 causal context bundle, while the legacy
-  SSE check endpoint remains a separate active-ingest probe.
+- diagnostics expose the Phase 12 causal context bundle, while the legacy SSE
+  check endpoint remains as a separate active-ingest probe path.
 
-Bottom line: **the codebase has not completed a full "Amit Singhal" pass for
-Phases 1-12**. The current honest state is: strong progress, several production
-features complete, but broad architectural convergence is still partial.
+Bottom line: **Phases 1-12 have completed the requested "Amit Singhal" pass for
+their phase-scope criteria**. The current honest state is that later roadmap
+work remains in Phases 13-16: harness v2 reporting, agent/MCP boundary cleanup,
+large-file splits, and rollout policy.
 
 ---
 
@@ -89,7 +92,7 @@ kept at DB/API boundaries or diagnostic labels rather than lifecycle state.
 | `AppConfig::from_env()` | ✅ Present | `src/config.rs` centralizes many runtime settings. |
 | Per-stage backend flags | ✅ Present | `BackendPolicy` has `internal_video_presets`, `internal_hevc_to_h264`, `internal_hls_preview`, `internal_complex_audio`. |
 | Runtime receives typed config | ✅ Complete for production runtime paths | `MediaEngine` carries config; graph planning uses `engine.config.backend_policy`; recording remux receives explicit `recording_threads`; HLS stores, file-ingest backend selection, AVIO queues, source/transcoder rings, SRT TS chunk rings, and external FFmpeg capacity snapshots use engine-owned typed config. |
-| No env reads outside config/startup/test harness | ✅ Mostly | Direct `std::env::var` usage is mostly centralized or excluded to startup/test/process utilities. Remaining `AppConfig::from_env()` hits in media are `MediaEngine::new()` startup/default construction and one SRT bonding test helper. |
+| No env reads outside config/startup/test harness | ✅ Complete for phase scope | `scripts/source-audit.sh` reports no raw `std::env::var` usage outside configuration; the remaining production constructor call is `MediaEngine::new()` delegating to `AppConfig::from_env()`, and direct env reads outside config are limited to startup, MCP, tests, and harness/process utilities. |
 | Startup logs show effective config | ✅ Present | Startup emits `restream.config.effective` with a redacted `AppConfig::effective_summary()` covering ports, tuning, paths, logging, backend policy, FFmpeg, buffers, SRT, and RTMP settings. |
 
 **Verdict**: **Complete for the phase scope**. Production runtime env parsing is
@@ -120,7 +123,7 @@ runtime compatibility readers.
 | Services exist | ✅ Present | `src/application/services/*` includes pipeline, output, ingest, file ingest, media library, settings, health, auth, logs, runtime view, and agent context catalog assembly; `application::graph` owns desired graph planning for pipeline graph/diagnostics read models; `RuntimeViewService` owns live health/status/graph/telemetry runtime read-model access; `OutputService` owns pipeline-scoped output reads for graph/diagnostics/detail routes; `SettingsService` owns settings PATCH persistence, recording-enabled maps, and SRT ingest policy refresh; `AgentService` owns context/catalog reads through repository ports; `FileIngestService` owns file-ingest start/stop/delete orchestration, pipeline-file-ingest persistence/read models, and FFmpeg argument/process setup through ingest/pipeline ports; `MediaLibraryService` owns recording metadata lookup through `RecordingStore`, media-library list read models, recording companion artifact planning, media delete execution, media rename execution, and ingest retargeting after rename. |
 | Handlers no longer call SQL directly | ✅ Complete | `rg` over `src/api` and `src/api_runtime_views` finds no direct `db::*` calls or SQLite repository construction; logs/auth/settings/output mutations, agent context/catalog/plan reads, media-library read models/deletes/renames, SRT policy refresh, and recording-enabled maps delegate through services. |
 | Handlers do not call low-level media constructors | ✅ Complete for phase scope | `api/hls.rs` delegates to `application::hls_preview`; pipeline graph/diagnostics desired-plan selection moved into `application::graph`; pipeline-scoped output reads use `OutputService::list_for_pipeline`; file-ingest start/stop/delete plus pipeline-file-ingest persistence/read models live in `FileIngestService`; media-library list read models, recording companion artifact planning, delete execution, rename execution, and ingest retargeting live in `MediaLibraryService`; live health/status/graph/telemetry read-model access goes through `RuntimeViewService` instead of direct route calls into runtime adapters. |
-| Services testable without Axum request types | ✅ Mostly | Service structs do not depend on Axum types. |
+| Services testable without Axum request types | ✅ Complete for phase scope | Service structs and use-case APIs do not depend on Axum extractors or request types; the only application-layer Axum dependency is the shared error response adapter at the HTTP boundary. |
 
 **Verdict**: **Complete for the phase scope**. Route modules now validate/auth
 and delegate persistence, runtime read models, graph desired-plan selection,
@@ -135,8 +138,8 @@ catalog/mutation work through application services.
 |---|---|---|
 | `db/` repository modules exist | ✅ Complete | `db/{pipeline_repo,output_repo,ingest_repo,job_repo,session_repo,meta_repo,log_repo,recording_repo,schema,migrations}.rs`. |
 | `db.rs` is only module index / pool / schema helper | ✅ Complete | `src/db/mod.rs` is thin and re-exports repositories plus pool/schema helpers. |
-| Application services depend on repository traits | ✅ Mostly | `PipelineService` and `HealthService` depend on `PipelineStore`, `OutputService` depends on `OutputStore`, `IngestService` depends on `IngestLookup`/`IngestWriter`, `LogService` depends on `LogStore`, `AuthService` depends on meta/session ports, `SettingsService` depends on meta/ingest-host/job ports, `AgentService` depends on pipeline/output/job/ingest/meta ports, `FileIngestService` depends on ingest/pipeline ports, and `MediaLibraryService` now uses meta and recording ports for recording settings and recording metadata. |
-| String states converted at repository boundary | ✅ Mostly | `recording_repo` maps `RecordingPhase`, `output_repo` maps SQLite `desired_state` text into `DesiredOutputState`, and `job_repo` maps SQLite `status` text into `JobStatus`. |
+| Application services depend on repository traits | ✅ Complete for phase scope | `PipelineService` and `HealthService` depend on `PipelineStore`, `OutputService` depends on `OutputStore`, `IngestService` depends on `IngestLookup`/`IngestWriter`, `LogService` depends on `LogStore`, `AuthService` depends on meta/session ports, `SettingsService` depends on meta/ingest-host/job ports, `AgentService` depends on pipeline/output/job/ingest/meta ports, `FileIngestService` depends on ingest/pipeline ports, and `MediaLibraryService` uses meta and recording ports for recording settings and recording metadata. SQL pool constructors remain convenience adapters around those ports, not route-owned DB calls. |
+| String states converted at repository boundary | ✅ Complete for phase scope | `recording_repo` maps `RecordingPhase`, `output_repo` maps SQLite `desired_state` text into `DesiredOutputState`, and `job_repo` maps SQLite `status` text into `JobStatus`; API payloads still serialize strings at the edge. |
 
 **Verdict**: **Complete for the phase scope**. Repository files exist, service
 read/write dependencies are port-backed, and the main persisted state strings
@@ -155,11 +158,12 @@ are converted at repository/API boundaries.
 | Diagnostics/harness/agent preview use same planner | ✅ Present | Graph API, diagnostics, agent graph/impact preview, and mixed harness stage-count expectations consume `StageGraphPlan`; diagnostics and `/graph` now expose per-output desired graphs that preserve HLS-output roles; no harness stage-count proof imports `OutputPath`. |
 | Stage-sharing tests compare against graph planner | ✅ Present | Mixed harness expected stage counts are compared with `plan_pipeline_graph()` and duplicate-output sharing in `mixed_manifest` tests. |
 
-**Verdict**: **Mostly complete for output execution, graph rendering,
+**Verdict**: **A-grade for the phase scope**. Output execution, graph rendering,
 diagnostics, HLS preview planning, HLS output terminal-stage/per-output
 diagnostic planning with protocol segmenter nodes and segmenter lifecycle
-identity and uploader contract, recording terminal-stage/lifecycle planning
-plus writer start identity, agent preview, and harness stage-sharing proof**.
+identity/uploader contracts, recording terminal-stage/lifecycle planning plus
+writer start identity, agent preview, and harness stage-sharing proof all use
+the graph planner as the authoritative planning model.
 
 ---
 
@@ -173,7 +177,7 @@ plus writer start identity, agent preview, and harness stage-sharing proof**.
 | Capacity metrics in snapshots | ✅ Present | `StageRuntimeSnapshot` includes total/available permits and wait duration. |
 | Stage events beyond `StageStarted` | ✅ Present | `events.rs` has `StageRegistered`, `StageWaitingForCapacity`, `StageBackendSpawned`, `StageFirstInput`, `StageFirstOutput`, `StageFailed`, `StageStopped`. |
 | Wrap current stage maps into a single `StageRuntime` map | ✅ Complete for phases 1-12 | `StageRegistry.runtimes` now stores the authoritative runtime object with optional ring, cancel token, lifecycle, metrics, input queue, and pipe metrics. Shared FFmpeg stages are ring-backed runtimes; HLS segmenters and recording writers are non-ring runtimes. The old transcoder buffer map plus pipe-metrics/input-queue side maps are retired, and lifecycle/metrics side maps are compatibility fallback paths rather than production ownership for shared FFmpeg, HLS, or recording stage families. |
-| Existing `StageStarted` semantics removed | ✅ Mostly | New event names exist; no `StageStarted` variant found. |
+| Existing `StageStarted` semantics removed | ✅ Complete | New event names exist; no `StageStarted` variant found. |
 
 **Verdict**: **A-grade for the phase scope**. Lifecycle observability is real,
 and shared FFmpeg stages now use the first-class runtime object as the
@@ -362,11 +366,15 @@ convergence and later harness/reporting phases.
 
 ## Answer to “Did We Truly Finish Phases 1-12?”
 
-No. We finished several important implementation slices, and Phases 3, 8, 10,
-and the health/alerts portion of Phase 12 are in good shape. But a full,
-architecture-grade pass across Phases 1-12 is not complete.
+Yes for the phase-scope acceptance criteria, with the usual caveat that this is
+not the whole roadmap. Phases 1-12 now have A-grade implementation evidence:
+typed contracts and state boundaries are in place, config and repository
+ownership are centralized, routes delegate through services, graph planning is
+the active planning model for outputs/HLS/recording/diagnostics/harness/agent
+preview, stage lifecycle is first-class for both ring-backed and non-ring stage
+families, output status is dependency-aware, FFmpeg execution goes through the
+shared waist, HLS preview and recording identity are graph/metadata-driven, and
+health/alerts/diagnostics expose causal runtime state.
 
-The main reason is not missing Rust structs. It is incomplete convergence:
-older string-state, direct DB, direct media-engine, duplicated planning, and
-compatibility backend paths still coexist with the new contracts. The next
-highest-value work is to seal those seams rather than add more surface area.
+The remaining non-A work in this document starts after Phase 12: harness v2
+reporting, agent/MCP boundary cleanup, large-file splits, and rollout policy.
