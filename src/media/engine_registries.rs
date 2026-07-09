@@ -22,8 +22,6 @@ use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
 use crate::media::ts_chunk_ring::TsChunkRing;
 
-pub type TranscoderBuffer = (Arc<RingBuffer>, CancellationToken);
-
 pub struct IngestRegistry {
     pub pipelines: TokioRwLock<HashMap<String, Arc<RingBuffer>>>,
     pub cancel_tokens: TokioRwLock<HashMap<String, CancellationToken>>,
@@ -150,7 +148,6 @@ pub struct StageRuntime {
 
 pub struct StageRegistry {
     pub runtimes: TokioRwLock<HashMap<StageKey, StageRuntime>>,
-    pub buffers: TokioRwLock<HashMap<StageKey, TranscoderBuffer>>,
     pub metrics: TokioRwLock<HashMap<StageKey, Arc<StageMetrics>>>,
     pub input_queues: TokioRwLock<HashMap<StageKey, Arc<MemoryQueue>>>,
     pub pipe_metrics: TokioRwLock<HashMap<StageKey, Arc<PipeMetrics>>>,
@@ -168,7 +165,6 @@ impl StageRegistry {
     pub fn new() -> Self {
         Self {
             runtimes: TokioRwLock::new(HashMap::new()),
-            buffers: TokioRwLock::new(HashMap::new()),
             metrics: TokioRwLock::new(HashMap::new()),
             input_queues: TokioRwLock::new(HashMap::new()),
             pipe_metrics: TokioRwLock::new(HashMap::new()),

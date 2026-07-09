@@ -21,7 +21,7 @@ pub(crate) async fn processing_graph(
     let ingests = engine.ingests.active.read().await;
     let egresses = engine.egresses.active.read().await;
     let pipelines = engine.ingests.pipelines.read().await;
-    let transcoder_buffers = engine.stages.buffers.read().await;
+    let stage_runtimes = engine.stages.runtimes.read().await;
     let rec_tokens = engine.recordings.cancel_tokens.read().await;
     let all_stage_metrics = engine.stages.metrics.read().await;
     let all_input_queues = engine.stages.input_queues.read().await;
@@ -136,7 +136,7 @@ pub(crate) async fn processing_graph(
         .map(|stage| stage.key.clone())
         .collect();
 
-    for (key, (stage_ring, token)) in transcoder_buffers.iter() {
+    for (key, runtime) in stage_runtimes.iter() {
         if key.pipeline.as_str() == pipeline_id && visible_stage_keys.contains(key) {
             let kind = &key.kind;
             let stage_key_str = kind.to_string();
@@ -148,11 +148,11 @@ pub(crate) async fn processing_graph(
                 kind.graph_type(),
                 kind.graph_label(),
                 stage_key_str,
-                !token.is_cancelled(),
+                !runtime.cancel.is_cancelled(),
                 all_stage_metrics.get(key).map(|metrics| metrics.snapshot()),
                 queue_stats.map(|stats| serde_json::json!(stats)),
                 pipe_stats,
-                api_view_models::ring_payload_stats_json(stage_ring),
+                api_view_models::ring_payload_stats_json(&runtime.ring),
             ));
 
             if let Some(upstream) = kind.upstream() {

@@ -12,7 +12,7 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
     let egresses = engine.egresses.active.read().await;
     let stage_metrics = engine.stages.metrics.read().await;
     let pipe_metrics = engine.stages.pipe_metrics.read().await;
-    let buffers = engine.stages.buffers.read().await;
+    let runtimes = engine.stages.runtimes.read().await;
     let pipelines = engine.ingests.pipelines.read().await;
     let ts_muxers = engine.stages.ts_muxers.read().await;
     let input_queues = engine.stages.input_queues.read().await;
@@ -63,10 +63,14 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         .iter()
         .map(|(pipeline_id, ring)| api_view_models::source_ring_telemetry_json(pipeline_id, ring))
         .collect();
-    let transcoder_rings: Vec<serde_json::Value> = buffers
+    let transcoder_rings: Vec<serde_json::Value> = runtimes
         .iter()
-        .map(|(key, (ring, token))| {
-            api_view_models::transcoder_ring_telemetry_json(key, ring, !token.is_cancelled())
+        .map(|(key, runtime)| {
+            api_view_models::transcoder_ring_telemetry_json(
+                key,
+                &runtime.ring,
+                !runtime.cancel.is_cancelled(),
+            )
         })
         .collect();
     let ts_muxer_rings: Vec<serde_json::Value> = ts_muxers
@@ -132,7 +136,7 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         ingest_arr,
         stage_arr,
         egress_arr,
-        buffers.len(),
+        runtimes.len(),
         api_view_models::memory_accounting_json(
             retained_payload_bytes,
             source_rings,
@@ -156,7 +160,7 @@ pub(crate) async fn pipeline_telemetry(
     let all_stage_metrics = engine.stages.metrics.read().await;
     let all_pipe_metrics = engine.stages.pipe_metrics.read().await;
     let pipelines = engine.ingests.pipelines.read().await;
-    let buffers = engine.stages.buffers.read().await;
+    let runtimes = engine.stages.runtimes.read().await;
 
     // Pre-fetch lifecycle snapshots for stages belonging to this pipeline.
     let mut lifecycle_snapshots = std::collections::HashMap::new();
@@ -189,9 +193,9 @@ pub(crate) async fn pipeline_telemetry(
                 None,
                 lifecycle_snapshots.get(key),
             );
-            if let Some((ring, token)) = buffers.get(key) {
-                val["active"] = serde_json::json!(!token.is_cancelled());
-                val["payloadStats"] = api_view_models::ring_payload_stats_json(ring);
+            if let Some(runtime) = runtimes.get(key) {
+                val["active"] = serde_json::json!(!runtime.cancel.is_cancelled());
+                val["payloadStats"] = api_view_models::ring_payload_stats_json(&runtime.ring);
             }
             val.as_object_mut()
                 .expect("stage telemetry rows are objects")

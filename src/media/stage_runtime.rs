@@ -88,25 +88,16 @@ impl StageRuntimeManager {
         // Single write-lock acquisition to atomically check-and-insert, avoiding
         // the TOCTOU race where two callers create duplicate stages.
         let mut runtimes = self.engine.stages.runtimes.write().await;
-        let mut buffers = self.engine.stages.buffers.write().await;
-        if let Some((rb, token)) = buffers.get(&key)
-            && !token.is_cancelled()
+        if let Some(runtime) = runtimes.get(&key)
+            && !runtime.cancel.is_cancelled()
         {
-            runtimes.entry(key.clone()).or_insert_with(|| StageRuntime {
-                ring: rb.clone(),
-                cancel: token.clone(),
-                lifecycle: lifecycle.clone(),
-                metrics: metrics.clone(),
-                input_queue: None,
-                pipe_metrics: None,
-            });
             return (
                 StageHandle {
                     key,
-                    ring: rb.clone(),
-                    cancel: token.clone(),
-                    lifecycle,
-                    metrics,
+                    ring: runtime.ring.clone(),
+                    cancel: runtime.cancel.clone(),
+                    lifecycle: runtime.lifecycle.clone(),
+                    metrics: runtime.metrics.clone(),
                 },
                 false,
             );
@@ -114,7 +105,6 @@ impl StageRuntimeManager {
 
         let output_ring = Arc::new(RingBuffer::new(self.engine.config.transcoder_ring_capacity));
         let cancel = CancellationToken::new();
-        buffers.insert(key.clone(), (output_ring.clone(), cancel.clone()));
         runtimes.insert(
             key.clone(),
             StageRuntime {
@@ -126,7 +116,6 @@ impl StageRuntimeManager {
                 pipe_metrics: None,
             },
         );
-        drop(buffers);
         drop(runtimes); // release write locks before any await-heavy setup
 
         self.initialize_stage_metadata(&key, &source_ring, input_codec_override, &output_ring)
@@ -700,6 +689,32 @@ mod tests {
         );
         assert!(Arc::ptr_eq(&runtime.lifecycle, &handle1.lifecycle));
         assert!(Arc::ptr_eq(&runtime.metrics, &handle1.metrics));
+    }
+
+    #[tokio::test]
+    async fn ensure_stage_replaces_cancelled_runtime() {
+        let engine = Arc::new(MediaEngine::new());
+        let manager = StageRuntimeManager::new(engine.clone());
+        let source = Arc::new(RingBuffer::new(16));
+        let key = StageKey::new("pipe-replace", StageKind::video_preset("720p"));
+
+        let (handle1, created1) = manager
+            .ensure_stage(key.clone(), source.clone(), None)
+            .await;
+        assert!(created1);
+        handle1.cancel.cancel();
+
+        let (handle2, created2) = manager
+            .ensure_stage(key.clone(), source.clone(), None)
+            .await;
+
+        assert!(created2, "cancelled runtime should be replaced");
+        assert!(!Arc::ptr_eq(&handle1.ring, &handle2.ring));
+        assert!(!handle2.cancel.is_cancelled());
+        let runtimes = engine.stages.runtimes.read().await;
+        let runtime = runtimes.get(&key).expect("replacement runtime registered");
+        assert!(Arc::ptr_eq(&runtime.ring, &handle2.ring));
+        assert!(!runtime.cancel.is_cancelled());
     }
 
     #[tokio::test]

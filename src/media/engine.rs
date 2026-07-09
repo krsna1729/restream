@@ -1527,11 +1527,11 @@ impl MediaEngine {
 
     /// Return the active processing stages for a pipeline as (kind, is_alive) pairs.
     pub async fn active_transcoder_stages(&self, pipeline_id: &str) -> Vec<(StageKind, bool)> {
-        let buffers = self.stages.buffers.read().await;
-        buffers
+        let runtimes = self.stages.runtimes.read().await;
+        runtimes
             .iter()
             .filter(|(key, _)| key.pipeline.as_str() == pipeline_id)
-            .map(|(k, (_, token))| (k.kind.clone(), !token.is_cancelled()))
+            .map(|(key, runtime)| (key.kind.clone(), !runtime.cancel.is_cancelled()))
             .collect()
     }
 
@@ -1540,26 +1540,26 @@ impl MediaEngine {
         pipelines.remove(pipeline_id);
     }
 
-    /// Remove all transcoder stage entries for a pipeline from `transcoder_buffers`.
+    /// Remove all transcoder stage entries for a pipeline from the runtime registry.
     ///
     /// Stages whose cancel tokens have already fired are cleaned up lazily by
     /// `get_or_create_transcoder`. This function does the eager sweep on pipeline
     /// deletion so the `Arc<RingBuffer>` for every stage is freed immediately
     /// instead of surviving until the next reconciler creates a replacement stage.
     pub async fn cleanup_pipeline_stages(&self, pipeline_id: &str) {
-        let mut buffers = self.stages.buffers.write().await;
+        let mut runtimes = self.stages.runtimes.write().await;
         let mut removed = Vec::new();
         // Cancel all still-running stages then remove every entry for this pipeline.
-        buffers.retain(|key, (_rb, token)| {
+        runtimes.retain(|key, runtime| {
             if key.pipeline.as_str() == pipeline_id {
-                token.cancel();
+                runtime.cancel.cancel();
                 removed.push(key.clone());
                 false
             } else {
                 true
             }
         });
-        drop(buffers);
+        drop(runtimes);
         self.remove_stage_artifacts(&removed).await;
     }
 
@@ -1567,19 +1567,19 @@ impl MediaEngine {
         &self,
         active_keys: &std::collections::HashSet<StageKey>,
     ) {
-        let mut buffers = self.stages.buffers.write().await;
+        let mut runtimes = self.stages.runtimes.write().await;
         let mut removed = Vec::new();
-        buffers.retain(|key, (_rb, token)| {
+        runtimes.retain(|key, runtime| {
             if !active_keys.contains(key) {
                 debug!("Sweeping unused transcoder stage: {}", key);
-                token.cancel();
+                runtime.cancel.cancel();
                 removed.push(key.clone());
                 false
             } else {
                 true
             }
         });
-        drop(buffers);
+        drop(runtimes);
         self.remove_stage_artifacts(&removed).await;
     }
 
@@ -1587,13 +1587,11 @@ impl MediaEngine {
         if keys.is_empty() {
             return;
         }
-        let mut runtimes = self.stages.runtimes.write().await;
         let mut metrics = self.stages.metrics.write().await;
         let mut input_queues = self.stages.input_queues.write().await;
         let mut pipe_metrics = self.stages.pipe_metrics.write().await;
         let mut lifecycles = self.stages.lifecycles.write().await;
         for key in keys {
-            runtimes.remove(key);
             metrics.remove(key);
             input_queues.remove(key);
             pipe_metrics.remove(key);
@@ -3357,10 +3355,6 @@ mod tests {
             pipeline_id,
             StageKind::preview("720p", StageKind::video_preset("rogue")),
         );
-        engine.stages.buffers.write().await.insert(
-            rogue_key.clone(),
-            (Arc::new(RingBuffer::new(16)), CancellationToken::new()),
-        );
         let rogue_lifecycle = engine
             .get_or_create_stage_lifecycle(rogue_key, StagePhase::Registered)
             .await;
@@ -4747,8 +4741,8 @@ mod tests {
             .get_or_create_transcoder("pipe-typed", StageKind::video_preset("720p"), source, None)
             .await;
 
-        let buffers = engine.stages.buffers.read().await;
-        let key = buffers
+        let runtimes = engine.stages.runtimes.read().await;
+        let key = runtimes
             .keys()
             .find(|key| key.pipeline.as_str() == "pipe-typed")
             .expect("typed registry should contain created stage");
