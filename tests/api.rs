@@ -1710,6 +1710,7 @@ async fn pipeline_graph_returns_dag() {
     assert_eq!(graph["desiredGraph"]["pipelineId"], pid);
     assert!(graph["desiredGraph"]["stages"].is_array());
     assert!(graph["desiredGraph"]["edges"].is_array());
+    assert!(graph["desiredOutputGraphs"].is_array());
     assert!(graph["runtimeGraph"]["nodes"].is_array());
     assert!(graph["runtimeGraph"]["edges"].is_array());
     // Source ring buffer node should always be present
@@ -1741,6 +1742,18 @@ async fn pipeline_diagnostics_context_returns_causal_bundle() {
         None,
         DesiredOutputState::Running,
         &OutputConfig::parse("720p"),
+    )
+    .await
+    .unwrap();
+    db::create_output(
+        &pool,
+        "out-diagctx-hls",
+        "pipe-diagctx",
+        "HLS Upload",
+        "https://upload.example.test/live/out.m3u8",
+        None,
+        DesiredOutputState::Running,
+        &OutputConfig::parse("source"),
     )
     .await
     .unwrap();
@@ -1784,6 +1797,10 @@ async fn pipeline_diagnostics_context_returns_causal_bundle() {
     assert_eq!(body["pipelineId"], "pipe-diagctx");
     assert_eq!(body["graph"]["desired"]["pipelineId"], "pipe-diagctx");
     assert!(body["graph"]["desired"]["stages"].as_array().unwrap().len() >= 2);
+    let desired_outputs = body["graph"]["desiredOutputs"].as_array().unwrap();
+    assert!(desired_outputs.iter().any(|graph| {
+        graph["role"]["kind"] == "hlsOutput" && graph["role"]["outputId"] == "out-diagctx-hls"
+    }));
     assert!(body["graph"]["runtime"]["nodes"].is_array());
     assert!(body["health"]["pipelines"]["pipe-diagctx"].is_object());
     assert!(body["alerts"].is_array());

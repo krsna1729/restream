@@ -479,11 +479,18 @@ pub async fn pipeline_graph_handler(
         false,
         &state.engine.config.backend_policy,
     );
+    let desired_output_graphs = desired_output_graphs(
+        &pipeline_id,
+        ingest_codec.as_deref(),
+        &pipeline_outputs,
+        &state.engine.config.backend_policy,
+    );
     if let Some(graph_obj) = graph.as_object_mut() {
         graph_obj.insert(
             "desiredGraph".to_string(),
             stage_graph_plan_json(&desired_graph),
         );
+        graph_obj.insert("desiredOutputGraphs".to_string(), desired_output_graphs);
         graph_obj.insert(
             "runtimeGraph".to_string(),
             serde_json::json!({
@@ -568,6 +575,12 @@ pub async fn pipeline_diagnostics_context_handler(
         false,
         &state.engine.config.backend_policy,
     );
+    let desired_output_graphs = desired_output_graphs(
+        &pipeline_id,
+        ingest_codec.as_deref(),
+        &pipeline_outputs,
+        &state.engine.config.backend_policy,
+    );
     let runtime_graph =
         crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
             .await;
@@ -603,6 +616,7 @@ pub async fn pipeline_diagnostics_context_handler(
         "health": health,
         "graph": {
             "desired": stage_graph_plan_json(&desired_graph),
+            "desiredOutputs": desired_output_graphs,
             "runtime": runtime_graph,
         },
         "alerts": alert_list,
@@ -777,6 +791,40 @@ fn stage_graph_plan_json(plan: &StageGraphPlan) -> serde_json::Value {
             })
             .collect::<Vec<_>>(),
     })
+}
+
+fn desired_output_graphs(
+    pipeline_id: &str,
+    ingest_codec: Option<&str>,
+    outputs: &[crate::types::Output],
+    policy: &crate::planner::backend_policy::BackendPolicy,
+) -> serde_json::Value {
+    serde_json::Value::Array(
+        outputs
+            .iter()
+            .map(|output| {
+                let plan = if crate::domain::output_spec::OutputUrlScheme::from_url(&output.url)
+                    .is_hls_family()
+                {
+                    crate::planner::graph_plan::plan_hls_output_graph(
+                        pipeline_id,
+                        ingest_codec,
+                        output,
+                        policy,
+                    )
+                } else {
+                    crate::planner::graph_plan::plan_pipeline_graph(
+                        pipeline_id,
+                        ingest_codec,
+                        std::slice::from_ref(output),
+                        false,
+                        policy,
+                    )
+                };
+                stage_graph_plan_json(&plan)
+            })
+            .collect(),
+    )
 }
 
 fn graph_role_json(role: &GraphRole) -> serde_json::Value {
