@@ -1445,6 +1445,12 @@ async fn agent_dependency_summary(
     }
 
     let mut file_ingest = Vec::new();
+    let file_ingest_backend =
+        if crate::media::file_ingest::use_internal_file_ingest(&state.engine.config) {
+            "internal"
+        } else {
+            "ffmpeg-subprocess"
+        };
     for ingest in ingests {
         let media_path = FsPath::new(&state.media_dir).join(&ingest.filename);
         let runtime = state
@@ -1457,7 +1463,7 @@ async fn agent_dependency_summary(
             "mediaExists": media_path.exists(),
             "markedActive": runtime.marked_active,
             "childRegistered": runtime.child_registered,
-            "backend": if crate::media::file_ingest::use_internal_file_ingest() { "internal" } else { "ffmpeg-subprocess" },
+            "backend": file_ingest_backend,
             "loop": ingest.loop_flag,
             "startTime": ingest.start_time,
             "liveOptimized": ingest.live_optimized,
@@ -1486,7 +1492,7 @@ async fn agent_dependency_summary(
         },
         "fileIngest": {
             "configured": file_ingest.len(),
-            "backend": if crate::media::file_ingest::use_internal_file_ingest() { "internal" } else { "ffmpeg-subprocess" },
+            "backend": file_ingest_backend,
             "ingests": file_ingest,
         },
         "ingestSecurity": {

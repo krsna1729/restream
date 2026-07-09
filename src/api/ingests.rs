@@ -623,7 +623,9 @@ pub async fn ingests_start_handler(
 
     state.engine.mark_file_ingest_running(&ingest.id).await;
 
-    if crate::media::file_ingest::use_internal_file_ingest() && !ingest.live_optimized {
+    if crate::media::file_ingest::use_internal_file_ingest(&state.engine.config)
+        && !ingest.live_optimized
+    {
         if let Err(e) = crate::media::file_ingest::spawn_internal_file_ingest(
             state.engine.clone(),
             tokio::runtime::Handle::current(),

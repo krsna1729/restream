@@ -156,9 +156,8 @@ impl ContinuousTimestampState {
     }
 }
 
-pub fn use_internal_file_ingest() -> bool {
-    static USE_INTERNAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *USE_INTERNAL.get_or_init(|| crate::AppConfig::from_env().use_internal_file_ingest)
+pub fn use_internal_file_ingest(config: &crate::AppConfig) -> bool {
+    config.use_internal_file_ingest
 }
 
 pub fn parse_start_time_ms(input: &str) -> Result<Option<i64>, String> {
@@ -908,6 +907,21 @@ mod tests {
     use ffmpeg_next::format;
     use std::sync::Arc;
     use tokio::time::{Duration, sleep};
+
+    #[test]
+    fn internal_file_ingest_flag_uses_typed_config() {
+        let disabled = crate::AppConfig {
+            use_internal_file_ingest: false,
+            ..crate::AppConfig::default()
+        };
+        let enabled = crate::AppConfig {
+            use_internal_file_ingest: true,
+            ..crate::AppConfig::default()
+        };
+
+        assert!(!super::use_internal_file_ingest(&disabled));
+        assert!(super::use_internal_file_ingest(&enabled));
+    }
 
     #[test]
     fn empty_start_time_is_none() {

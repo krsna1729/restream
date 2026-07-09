@@ -85,15 +85,16 @@ and application logic.
 |---|---|---|
 | `AppConfig::from_env()` | ✅ Present | `src/config.rs` centralizes many runtime settings. |
 | Per-stage backend flags | ✅ Present | `BackendPolicy` has `internal_video_presets`, `internal_hevc_to_h264`, `internal_hls_preview`, `internal_complex_audio`. |
-| Runtime receives typed config | ⚠️ Mostly | `MediaEngine` carries config, graph planning uses `engine.config.backend_policy`, recording remux receives explicit `recording_threads`, and HLS stores are created from engine-owned typed config; several non-HLS static media fallbacks still call `AppConfig::from_env()`. |
+| Runtime receives typed config | ⚠️ Mostly | `MediaEngine` carries config, graph planning uses `engine.config.backend_policy`, recording remux receives explicit `recording_threads`, HLS stores are created from engine-owned typed config, and file-ingest backend selection uses typed config; several static capacity fallbacks still call `AppConfig::from_env()`. |
 | No env reads outside config/startup/test harness | ⚠️ Partial | Direct `std::env::var` usage is mostly centralized or excluded to startup/test/process utilities, but `AppConfig::from_env()` is still called from a few media compatibility paths. |
 | Startup logs show effective config | ✅ Present | Startup emits `restream.config.effective` with a redacted `AppConfig::effective_summary()` covering ports, tuning, paths, logging, backend policy, FFmpeg, buffers, SRT, and RTMP settings. |
 
 **Verdict**: **Mostly complete**. Production runtime env parsing is centralized in
 `src/config.rs`, and startup now emits a comprehensive redacted effective config
-summary. HLS store config now flows from `MediaEngine.config`; the remaining
-gap is removing static `AppConfig::from_env()` compatibility readers from
-non-HLS media modules after their values are carried through runtime config.
+summary. HLS store config and file-ingest backend selection now flow from
+`MediaEngine.config`; the remaining gap is removing static capacity-oriented
+`AppConfig::from_env()` compatibility readers from media modules after their
+values are carried through runtime config.
 
 ---
 
@@ -326,7 +327,7 @@ convergence and later harness/reporting phases.
 |---|---:|---|
 | Ph 0 Guardrails | F | Not started. |
 | Ph 1 Core contracts | A | Types exist, output desired-state, job status, and active/recent egress lifecycle state are typed; string conversion is now kept at DB/API edges. |
-| Ph 2 Config | A- | Production env parsing is centralized in config, startup logs a comprehensive redacted effective-config summary, recording remux and HLS stores receive typed config; static non-HLS media fallback readers remain. |
+| Ph 2 Config | A- | Production env parsing is centralized in config, startup logs a comprehensive redacted effective-config summary, recording remux, HLS stores, and file-ingest backend selection receive typed config; static capacity fallback readers remain. |
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | A- | Logs, auth initialization, pipeline, output, ingest, health checks, and agent output mutations are service-backed; agent read/context helpers still contain direct DB/application work. |
 | Ph 5 Repositories | A | Repo modules exist, pipeline/output/ingest/health/log/auth/settings services are port-trait backed, and output/job/recording state maps at repository boundaries. |
