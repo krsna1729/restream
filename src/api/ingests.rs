@@ -2,7 +2,7 @@ use axum::{
     Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::IntoResponse,
 };
 use serde::Deserialize;
 use std::path::{Path as FsPath, PathBuf};

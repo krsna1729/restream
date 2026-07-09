@@ -9,8 +9,6 @@ use std::collections::HashMap;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};
 use sysinfo::{Disks, Networks, System};
-use tokio::io::AsyncReadExt;
-use tracing::{error, warn};
 
 use crate::alerts;
 use crate::application::ingest::load_pipeline_file_ingest_state;
@@ -24,8 +22,8 @@ use super::health::{
     select_dashboard_runtime_pipeline_ids,
 };
 use super::state::{
-    AppState, ENGINE_CPU_SAMPLE, EngineCpuSample, MAX_URL_LEN, check_field_len,
-    get_session_token_from_headers, recording_enabled_map, require_authenticated,
+    AppState, ENGINE_CPU_SAMPLE, EngineCpuSample, get_session_token_from_headers,
+    recording_enabled_map, require_authenticated,
 };
 
 pub fn default_events_limit() -> usize {

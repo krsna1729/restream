@@ -1,6 +1,5 @@
 use sqlx::SqlitePool;
 
-use crate::application::ports::SqliteMetaStore;
 use crate::application::settings::load_settings_snapshot;
 use crate::db;
 use crate::media::security::IngestSecurityService;

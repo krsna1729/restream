@@ -2,7 +2,7 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     http::{HeaderValue, header},
-    routing::{delete, get, patch, post, put},
+    routing::{get, patch, post, put},
 };
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;

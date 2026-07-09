@@ -6,7 +6,7 @@ use axum::{
 };
 use std::sync::Arc;
 
-use crate::db;
+#[cfg(feature = "agent-plane")]
 use crate::domain::state::DesiredOutputState;
 
 use super::state::{AppState, require_authenticated};

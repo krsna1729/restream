@@ -10,7 +10,7 @@ use crate::db;
 use crate::media::engine::MediaEngine;
 use crate::types::Pipeline;
 
-use super::error::{ApiError, ApiResult};
+use super::error::ApiResult;
 use super::pipeline_service::PipelineService;
 
 pub struct MediaLibraryService {

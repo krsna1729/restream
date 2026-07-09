@@ -1,9 +1,4 @@
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::IntoResponse,
-};
+use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use std::sync::Arc;
 
 use crate::alerts;

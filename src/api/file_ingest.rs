@@ -5,7 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use std::path::Path as FsPath;
+
 use std::sync::Arc;
 
 use crate::api_view_models;
@@ -13,13 +13,12 @@ use crate::application::ingest::{
     FileIngestConfig, PersistFileIngestError, clear_stream_key_file_ingests,
     load_pipeline_file_ingest_state, persist_pipeline_file_ingest, remove_pipeline_file_ingest,
 };
-use crate::application::ports::{IngestLookup, SqliteIngestLookup, SqlitePipelineStore};
+use crate::application::ports::{SqliteIngestLookup, SqlitePipelineStore};
 use crate::application::services::ApiError;
 
-use super::ingests::{run_file_ingest_task, sanitize_target_gop_seconds, spawn_file_ingest_child};
+use super::ingests::sanitize_target_gop_seconds;
 use super::state::{
-    AppState, MAX_FFMPEG_ARGS_LEN, MAX_NAME_LEN, check_field_len, get_session_token_from_headers,
-    require_authenticated, to_hex,
+    AppState, MAX_FFMPEG_ARGS_LEN, MAX_NAME_LEN, check_field_len, require_authenticated, to_hex,
 };
 
 #[derive(Deserialize, Clone)]

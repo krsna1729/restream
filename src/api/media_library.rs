@@ -6,15 +6,12 @@ use axum::{
 };
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path as FsPath, PathBuf};
+
 use std::sync::Arc;
 
 use crate::application::services::ApiError;
 
-use super::state::{
-    AppState, MAX_NAME_LEN, check_field_len, get_session_token_from_headers, require_authenticated,
-    to_hex,
-};
+use super::state::{AppState, get_session_token_from_headers, require_authenticated};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

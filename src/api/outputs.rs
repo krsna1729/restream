@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::api_view_models;
 use crate::application::services::ApiError;
-use crate::db;
+
 use crate::domain::output_spec::{OutputConfig, OutputUrlScheme};
 
 use crate::domain::state::DesiredOutputState;
