@@ -6,10 +6,9 @@ use axum::{
 };
 use serde::Deserialize;
 use std::path::{Path as FsPath, PathBuf};
-use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
-use tokio::process::{Child, ChildStderr, ChildStdout, Command};
+use tokio::process::{ChildStderr, ChildStdout};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
@@ -17,7 +16,9 @@ use crate::application::ingest::{
     ResolveFileIngestError, clear_stream_key_file_ingests, resolve_file_ingest_context,
 };
 use crate::application::ports::{IngestLookup, SqliteIngestLookup, SqlitePipelineStore};
-use crate::application::services::ApiError;
+use crate::application::services::{
+    ApiError, FileIngestService, file_ingest_service::SpawnedFileIngestChild,
+};
 use crate::types::{Ingest, Pipeline};
 
 use super::state::{
@@ -41,106 +42,6 @@ pub fn sanitize_target_gop_seconds(value: Option<u32>) -> u32 {
     value
         .unwrap_or(crate::types::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS)
         .max(1)
-}
-
-pub struct SpawnedFileIngestChild {
-    pub child: Child,
-    pub stdout: ChildStdout,
-    pub stderr: ChildStderr,
-}
-
-pub fn build_file_ingest_args(ingest: &Ingest, file_path: &FsPath) -> Vec<String> {
-    let mut args = vec![
-        "-nostdin".into(),
-        "-hide_banner".into(),
-        "-loglevel".into(),
-        "warning".into(),
-        "-re".into(),
-    ];
-    if ingest.loop_flag {
-        args.extend(["-stream_loop".into(), "-1".into()]);
-    }
-    if !ingest.start_time.is_empty() {
-        args.extend(["-ss".into(), ingest.start_time.clone()]);
-    }
-    args.extend(["-i".into(), file_path.to_string_lossy().into_owned()]);
-    if ingest.live_optimized {
-        let target_gop_seconds = ingest.target_gop_seconds.max(1);
-        args.extend([
-            "-map".into(),
-            "0:v:0".into(),
-            "-map".into(),
-            "0:a?".into(),
-            "-c:v".into(),
-            "libx264".into(),
-            "-preset".into(),
-            "veryfast".into(),
-            "-tune".into(),
-            "zerolatency".into(),
-            "-pix_fmt".into(),
-            "yuv420p".into(),
-            "-sc_threshold".into(),
-            "0".into(),
-            "-force_key_frames".into(),
-            format!("expr:gte(t,n_forced*{target_gop_seconds})"),
-            "-c:a".into(),
-            "aac".into(),
-            "-b:a".into(),
-            "192k".into(),
-            "-ar".into(),
-            "48000".into(),
-        ]);
-    } else {
-        args.extend(["-map".into(), "0".into(), "-c".into(), "copy".into()]);
-    }
-    args.extend([
-        "-mpegts_flags".into(),
-        "resend_headers+pat_pmt_at_frames".into(),
-        "-pes_payload_size".into(),
-        "0".into(),
-        "-omit_video_pes_length".into(),
-        "0".into(),
-        "-flush_packets".into(),
-        "1".into(),
-        "-muxdelay".into(),
-        "0".into(),
-        "-muxpreload".into(),
-        "0".into(),
-        "-f".into(),
-        "mpegts".into(),
-        "pipe:1".into(),
-    ]);
-    args
-}
-
-pub fn spawn_file_ingest_child(
-    ingest: &Ingest,
-    file_path: &FsPath,
-) -> Result<SpawnedFileIngestChild, String> {
-    let ffmpeg_bin = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
-    let args = build_file_ingest_args(ingest, file_path);
-    let mut child = Command::new(ffmpeg_bin)
-        .args(&args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn ffmpeg: {e}"))?;
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to capture ffmpeg stdout".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Failed to capture ffmpeg stderr".to_string())?;
-
-    Ok(SpawnedFileIngestChild {
-        child,
-        stdout,
-        stderr,
-    })
 }
 
 async fn pump_file_ingest_stdout(
@@ -375,7 +276,7 @@ pub async fn run_file_ingest_task(
             break;
         }
 
-        match spawn_file_ingest_child(&ingest, &file_path) {
+        match FileIngestService::spawn_file_ingest_child(&ingest, &file_path) {
             Ok(next) => spawned = next,
             Err(err) => {
                 error!(ingest_id = %ingest.id, err = %err, "file-ingest restart failed");
@@ -646,7 +547,7 @@ pub async fn ingests_start_handler(
                 .into_response();
         }
     } else {
-        let spawned = match spawn_file_ingest_child(&ingest, &file_path) {
+        let spawned = match FileIngestService::spawn_file_ingest_child(&ingest, &file_path) {
             Ok(child) => child,
             Err(e) => {
                 state.engine.clear_file_ingest_running(&ingest.id).await;

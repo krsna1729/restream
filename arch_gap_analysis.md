@@ -114,9 +114,9 @@ runtime compatibility readers.
 
 | Criterion | Status | Evidence |
 |---|---|---|
-| Services exist | ✅ Present | `src/application/services/*` includes pipeline, output, ingest, file ingest, media library, settings, health, auth, logs, and agent context catalog assembly. |
+| Services exist | ✅ Present | `src/application/services/*` includes pipeline, output, ingest, file ingest, media library, settings, health, auth, logs, and agent context catalog assembly; `FileIngestService` now owns file-ingest FFmpeg argument/process setup. |
 | Handlers no longer call SQL directly | ⚠️ Partial | Logs/auth/settings/output mutations delegate to services, and agent context catalog reads now go through `AgentService`; remaining `api/agent.rs` read/helper endpoints and some state/helper code still call `db::*` directly. |
-| Handlers do not call low-level media constructors | ⚠️ Mostly | `api/hls.rs` delegates to `application::hls_preview`, but other API/runtime views still take `MediaEngine` directly for read models. |
+| Handlers do not call low-level media constructors | ⚠️ Mostly | `api/hls.rs` delegates to `application::hls_preview`, and file-ingest FFmpeg argument/process setup moved into `FileIngestService`; file-ingest start still performs runtime registration/spawn orchestration in `api/ingests.rs`, and other API/runtime views still take `MediaEngine` directly for read models. |
 | Services testable without Axum request types | ✅ Mostly | Service structs do not depend on Axum types. |
 
 **Verdict**: **Partial**. The service layer exists, but handlers are not yet
@@ -296,9 +296,11 @@ convergence and later harness/reporting phases.
 ### P1 — Layering and Ownership
 
 3. **API/service/repository boundary remains mixed**
-   - Route modules exist, and agent context catalog reads now use
-     `AgentService`, but `api/agent.rs` read/helper endpoints and some helper
-     paths still call `db::*` directly. Agent output mutations now use
+   - Route modules exist, agent context catalog reads now use `AgentService`,
+     and file-ingest FFmpeg argument/process setup now lives in
+     `FileIngestService`, but `api/agent.rs` read/helper endpoints,
+     file-ingest runtime start orchestration, and some helper paths still call
+     `db::*` or orchestrate runtime work directly. Agent output mutations now use
      `OutputService`, and `PipelineService`, `OutputService`, `IngestService`,
      `HealthService`, `LogService`, `AuthService`, and `SettingsService` are now
      port-trait backed.
