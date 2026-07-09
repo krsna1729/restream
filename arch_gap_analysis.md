@@ -32,10 +32,9 @@ sense**. Several phases have strong scaffolding but incomplete adoption:
   directly;
 - a graph planner exists and now drives output preparation, graph rendering,
   HLS preview, persistent HLS output terminal-stage preparation and segmenter
-  lifecycle identity, diagnostics, agent previews, recording terminal-stage/
-  lifecycle registration plus writer start identity, and harness stage-count
-  expectations, but the HLS uploader service boundary is not yet fully
-  graph-runtime driven;
+  lifecycle and uploader identity, diagnostics, agent previews, recording
+  terminal-stage/lifecycle registration plus writer start identity, and harness
+  stage-count expectations;
 - stage lifecycle and FFmpeg narrow-waist contracts exist, but some legacy
   compatibility paths and direct ring writes remain;
 - recording metadata exists in the database, and the product/harness path now
@@ -151,16 +150,15 @@ are converted at repository/API boundaries.
 | `StageGraphPlan`, `GraphRole`, `StagePlan` | ✅ Present | `src/runtime/graph.rs`. |
 | Output graph planner | ✅ Present | `planner::graph_plan::plan_pipeline_graph()`. |
 | HLS preview planner | ✅ Present | `planner::graph_plan::plan_hls_preview_graph()` and `planner/hls_preview.rs`. |
-| HLS output and recording planned by same graph | ⚠️ Partial | HLS output terminal-stage preparation uses `plan_hls_output_graph()` and `GraphRole::HlsOutput`, and persistent HLS output segmenters now register lifecycle/metrics under the planned protocol segmenter key fed by the prepared media stage; recording lifecycle registration, writer start identity, and graph rendering use `plan_recording_graph()` and `GraphRole::Recording`; the HLS uploader execution boundary is not yet fully graph-runtime driven. |
+| HLS output and recording planned by same graph | ✅ Complete for phase scope | HLS output terminal-stage preparation uses `plan_hls_output_graph()` and `GraphRole::HlsOutput`, persistent HLS output segmenters register lifecycle/metrics under the planned protocol segmenter key fed by the prepared media stage, and HLS upload start validates the same graph terminal key as the egress registration; recording lifecycle registration, writer start identity, and graph rendering use `plan_recording_graph()` and `GraphRole::Recording`. |
 | Diagnostics/harness/agent preview use same planner | ✅ Present | Graph API, diagnostics, agent graph/impact preview, and mixed harness stage-count expectations consume `StageGraphPlan`; diagnostics and `/graph` now expose per-output desired graphs that preserve HLS-output roles; no harness stage-count proof imports `OutputPath`. |
 | Stage-sharing tests compare against graph planner | ✅ Present | Mixed harness expected stage counts are compared with `plan_pipeline_graph()` and duplicate-output sharing in `mixed_manifest` tests. |
 
 **Verdict**: **Mostly complete for output execution, graph rendering,
 diagnostics, HLS preview planning, HLS output terminal-stage/per-output
 diagnostic planning with protocol segmenter nodes and segmenter lifecycle
-identity, recording terminal-stage/lifecycle planning plus writer start
-identity, agent preview, and harness stage-sharing proof; still partial for the
-HLS uploader execution boundary**.
+identity and uploader contract, recording terminal-stage/lifecycle planning
+plus writer start identity, agent preview, and harness stage-sharing proof**.
 
 ---
 
@@ -288,22 +286,20 @@ convergence and later harness/reporting phases.
 
 ## Critical Remaining Gaps
 
-### P0 — Highest-Value Architectural Correctness
+### P0 — Phase 1-12 Correctness Blockers Cleared
 
-1. **Single graph planner is not yet the one source of truth**
+1. **Single graph planner convergence is now complete for Phase 6 scope**
    - Output preparation, graph rendering, diagnostics, HLS preview, agent
      graph/impact preview, HLS output terminal-stage preparation, recording
      lifecycle registration, and harness stage-count tests now use or prove
      `StageGraphPlan`, and persistent HLS segmenter lifecycle now uses the
      planned protocol stage key, and recording writer start now receives the
-     planned recording stage key, but the HLS uploader boundary is not unified
-     behind one graph-plan contract.
+     planned recording stage key, and HLS upload start validates the planned
+     HLS terminal stage key.
 
-2. **Typed state adoption is now complete for the phase scope, but not a substitute for planner convergence**
+2. **Typed state adoption is complete for the phase scope**
    - Active egress status/phase, recent egress status/raw status/phase, output
-     desired state, job status, and egress phase transitions are now typed. The
-     remaining P0 blocker is unified graph planning/execution rather than
-     row-state typing.
+     desired state, job status, and egress phase transitions are now typed.
 
 ### P1 — Layering and Ownership
 
@@ -349,7 +345,7 @@ convergence and later harness/reporting phases.
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | A- | Logs, auth initialization, settings reads/writes, pipeline, output, ingest, health checks, media-library operations, pipeline-scoped output reads, graph desired-plan selection, and agent catalog/plan reads/output mutations are service-backed; API/runtime read models still contain direct runtime snapshot work. |
 | Ph 5 Repositories | A | Repo modules exist, pipeline/output/ingest/health/log/auth/settings/agent/file-ingest/media-library services are port-trait backed, and output/job/recording state maps at repository boundaries. |
-| Ph 6 Graph planner | A- | Planner drives output preparation, HLS output terminal-stage prep, persistent HLS segmenter lifecycle identity, per-output HLS diagnostic graphs with protocol segmenter nodes, recording lifecycle/writer start identity, graph rendering, diagnostics, HLS preview planning, agent graph/impact preview, and harness stage-count expectations; HLS uploader execution boundary remains. |
+| Ph 6 Graph planner | A | Planner drives output preparation, HLS output terminal-stage prep, persistent HLS segmenter lifecycle/uploader identity, per-output HLS diagnostic graphs with protocol segmenter nodes, recording lifecycle/writer start identity, graph rendering, diagnostics, HLS preview planning, agent graph/impact preview, and harness stage-count expectations. |
 | Ph 7 Stage lifecycle | A- | Lifecycle/capacity visibility is strong and shared FFmpeg stages now use first-class `StageRuntime` objects as the ring/cancellation/lifecycle/metrics/input-queue/pipe-metrics authority through `media::stage_registry_access` for runtime-backed accessors, snapshots, health/status, telemetry, and graph reads; lifecycle/metrics side maps remain for map-only stage families during migration. |
 | Ph 8 Dependency-aware status | A | Operator-facing dependency status is complete for the phase scope, with typed internal egress lifecycle state. |
 | Ph 9 FFmpeg waist | A | Shared FFmpeg plan/backend/input/output contracts are the backend entry path, and legacy input/output ring escape hatches are removed. |

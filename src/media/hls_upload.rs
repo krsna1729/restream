@@ -11,6 +11,7 @@ use tracing::error;
 
 use reqwest::{Client, Url};
 
+use crate::domain::stage::StageKey;
 use crate::domain::state::EgressPhase;
 use crate::media::engine::{EgressRegistration, MediaEngine};
 use crate::media::hls::HlsStore;
@@ -20,14 +21,45 @@ const HLS_SEGMENT_CONTENT_TYPE: &str = "video/mp2t";
 const UPLOAD_INTERVAL: Duration = Duration::from_millis(500);
 const HLS_UPLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+pub struct HlsUploadStart {
+    pub output_id: String,
+    pub pipeline_id: String,
+    pub target_url: String,
+    pub terminal_stage_key: StageKey,
+}
+
 pub async fn start_hls_put_upload(
-    output_id: String,
-    pipeline_id: String,
-    target_url: String,
+    start: HlsUploadStart,
     store: Arc<HlsStore>,
     engine: Arc<MediaEngine>,
     registration: EgressRegistration,
 ) {
+    let HlsUploadStart {
+        output_id,
+        pipeline_id,
+        target_url,
+        terminal_stage_key,
+    } = start;
+
+    let terminal_matches = engine
+        .with_active_egress(&output_id, |egress| {
+            egress.attempt_id == registration.attempt_id
+                && egress.terminal_stage_key.as_ref() == Some(&terminal_stage_key)
+        })
+        .await
+        .unwrap_or(false);
+    if !terminal_matches {
+        engine
+            .record_egress_error_if_current(
+                &output_id,
+                &registration,
+                "hls_terminal_stage_mismatch",
+                format!("expected terminal stage {terminal_stage_key}"),
+            )
+            .await;
+        return;
+    }
+
     engine
         .update_egress_phase_if_current(&output_id, &registration, EgressPhase::Uploading)
         .await;
@@ -238,6 +270,12 @@ mod tests {
     use axum::routing::put;
     use std::sync::Mutex;
 
+    use crate::domain::stage::{StageKey, StageKind};
+
+    fn planned_hls_key(pipeline_id: &str) -> StageKey {
+        StageKey::new(pipeline_id, StageKind::hls_segmenter(StageKind::source()))
+    }
+
     #[test]
     fn derives_segment_url_from_file_query() {
         let playlist =
@@ -308,18 +346,22 @@ mod tests {
         let store = Arc::new(HlsStore::new());
         store.push_segment(1.2, bytes::Bytes::from_static(b"segment-0"));
         let engine = Arc::new(MediaEngine::new());
+        let terminal_stage_key = planned_hls_key("pipe1");
         let registration = engine
             .register_egress_attempt(
                 "out1",
                 "pipe1",
                 &format!("http://{addr}/upload?cid=abc&file=out.m3u8"),
-                None,
+                Some(terminal_stage_key.clone()),
             )
             .await;
         let uploader = tokio::spawn(start_hls_put_upload(
-            "out1".to_string(),
-            "pipe1".to_string(),
-            format!("http://{addr}/upload?cid=abc&file=out.m3u8"),
+            HlsUploadStart {
+                output_id: "out1".to_string(),
+                pipeline_id: "pipe1".to_string(),
+                target_url: format!("http://{addr}/upload?cid=abc&file=out.m3u8"),
+                terminal_stage_key,
+            },
             store,
             engine,
             registration.clone(),
@@ -402,21 +444,25 @@ mod tests {
         let store = Arc::new(HlsStore::new());
         store.push_segment(1.2, bytes::Bytes::from_static(b"segment-0"));
         let engine = Arc::new(MediaEngine::new());
+        let terminal_stage_key = planned_hls_key("pipe1");
         let registration = engine
             .register_egress_attempt(
                 "out1",
                 "pipe1",
                 &format!("http://{addr}/upload?cid=abc&file=out.m3u8"),
-                None,
+                Some(terminal_stage_key.clone()),
             )
             .await;
 
         tokio::time::timeout(
             Duration::from_secs(2),
             start_hls_put_upload(
-                "out1".to_string(),
-                "pipe1".to_string(),
-                format!("http://{addr}/upload?cid=abc&file=out.m3u8"),
+                HlsUploadStart {
+                    output_id: "out1".to_string(),
+                    pipeline_id: "pipe1".to_string(),
+                    target_url: format!("http://{addr}/upload?cid=abc&file=out.m3u8"),
+                    terminal_stage_key,
+                },
                 store,
                 engine,
                 registration,
@@ -424,5 +470,53 @@ mod tests {
         )
         .await
         .expect("uploader should exit promptly after an upload error");
+    }
+
+    #[tokio::test]
+    async fn uploader_rejects_terminal_stage_mismatch() {
+        let store = Arc::new(HlsStore::new());
+        store.push_segment(1.2, bytes::Bytes::from_static(b"segment-0"));
+        let engine = Arc::new(MediaEngine::new());
+        let registered_key = planned_hls_key("pipe1");
+        let registration = engine
+            .register_egress_attempt(
+                "out1",
+                "pipe1",
+                "http://127.0.0.1:9/upload?file=out.m3u8",
+                Some(registered_key),
+            )
+            .await;
+
+        start_hls_put_upload(
+            HlsUploadStart {
+                output_id: "out1".to_string(),
+                pipeline_id: "pipe1".to_string(),
+                target_url: "http://127.0.0.1:9/upload?file=out.m3u8".to_string(),
+                terminal_stage_key: StageKey::new(
+                    "pipe1",
+                    StageKind::hls_segmenter(StageKind::video_preset("720p")),
+                ),
+            },
+            store,
+            engine.clone(),
+            registration,
+        )
+        .await;
+
+        let error = engine
+            .with_active_egress("out1", |egress| {
+                egress
+                    .last_error
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone()
+            })
+            .await
+            .flatten()
+            .expect("terminal mismatch should record an egress error");
+        assert!(
+            error.contains("expected terminal stage"),
+            "unexpected mismatch error: {error}"
+        );
     }
 }

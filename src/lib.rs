@@ -867,6 +867,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
                                         let pid2 = pipeline_id_c.clone();
                                         let rb2 = ring_buf.clone();
                                         let store_for_segmenter = store.clone();
+                                        let segmenter_stage_key = terminal_stage_key_c.clone();
                                         tokio::spawn(async move {
                                             crate::media::hls::start_hls_segmenter(
                                                 pid2.clone(),
@@ -877,9 +878,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
                                                 hls_cancel,
                                                 crate::media::hls::HlsSegmenterStart {
                                                     video_meta_override: None,
-                                                    planned_stage_key: Some(
-                                                        terminal_stage_key_c.clone(),
-                                                    ),
+                                                    planned_stage_key: Some(segmenter_stage_key),
                                                 },
                                             )
                                             .await;
@@ -894,9 +893,12 @@ pub async fn run_app(config: Arc<AppConfig>) {
                                             | crate::domain::output_spec::OutputUrlScheme::Https
                                     ) {
                                         crate::media::hls_upload::start_hls_put_upload(
-                                            output_id_c.clone(),
-                                            pipeline_id_c.clone(),
-                                            url_c.clone(),
+                                            crate::media::hls_upload::HlsUploadStart {
+                                                output_id: output_id_c.clone(),
+                                                pipeline_id: pipeline_id_c.clone(),
+                                                target_url: url_c.clone(),
+                                                terminal_stage_key: terminal_stage_key_c.clone(),
+                                            },
                                             store,
                                             engine_c.clone(),
                                             registration_c.clone(),
