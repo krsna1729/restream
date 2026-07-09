@@ -1317,14 +1317,12 @@ impl MediaEngine {
         if let Some(runtime) = self.stages.runtimes.write().await.get_mut(&key) {
             runtime.pipe_metrics = Some(metrics.clone());
         }
-        self.stages.pipe_metrics.write().await.insert(key, metrics);
     }
 
     pub async fn remove_pipe_metrics(&self, key: &StageKey) {
         if let Some(runtime) = self.stages.runtimes.write().await.get_mut(key) {
             runtime.pipe_metrics = None;
         }
-        self.stages.pipe_metrics.write().await.remove(key);
     }
 
     pub async fn is_file_ingest_running(&self, id: &str) -> bool {
@@ -1589,12 +1587,10 @@ impl MediaEngine {
         }
         let mut metrics = self.stages.metrics.write().await;
         let mut input_queues = self.stages.input_queues.write().await;
-        let mut pipe_metrics = self.stages.pipe_metrics.write().await;
         let mut lifecycles = self.stages.lifecycles.write().await;
         for key in keys {
             metrics.remove(key);
             input_queues.remove(key);
-            pipe_metrics.remove(key);
             lifecycles.remove(key);
         }
     }

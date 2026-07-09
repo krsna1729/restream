@@ -25,7 +25,6 @@ pub(crate) async fn processing_graph(
     let rec_tokens = engine.recordings.cancel_tokens.read().await;
     let all_stage_metrics = engine.stages.metrics.read().await;
     let all_input_queues = engine.stages.input_queues.read().await;
-    let all_pipe_metrics = engine.stages.pipe_metrics.read().await;
     let ts_muxers = engine.stages.ts_muxers.read().await;
 
     let mut nodes = Vec::new();
@@ -142,7 +141,7 @@ pub(crate) async fn processing_graph(
             let stage_key_str = kind.to_string();
             let stage_id = kind.graph_node_id(pipeline_id);
             let queue_stats = all_input_queues.get(key).map(|queue| queue.stats());
-            let pipe_stats = all_pipe_metrics.get(key).map(|pipe| pipe.snapshot());
+            let pipe_stats = runtime.pipe_metrics.as_ref().map(|pipe| pipe.snapshot());
             nodes.push(api_view_models::processing_graph_stage_node(
                 stage_id.clone(),
                 kind.graph_type(),

@@ -11,7 +11,6 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
     let ingests = engine.ingests.active.read().await;
     let egresses = engine.egresses.active.read().await;
     let stage_metrics = engine.stages.metrics.read().await;
-    let pipe_metrics = engine.stages.pipe_metrics.read().await;
     let runtimes = engine.stages.runtimes.read().await;
     let pipelines = engine.ingests.pipelines.read().await;
     let ts_muxers = engine.stages.ts_muxers.read().await;
@@ -39,7 +38,10 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
             api_view_models::stage_telemetry_row_json(
                 key,
                 metrics.snapshot(),
-                pipe_metrics.get(key).map(|pm| pm.snapshot()),
+                runtimes
+                    .get(key)
+                    .and_then(|runtime| runtime.pipe_metrics.as_ref())
+                    .map(|pm| pm.snapshot()),
                 None,
                 None,
                 lifecycle_snapshots.get(key),
@@ -158,7 +160,6 @@ pub(crate) async fn pipeline_telemetry(
     let ingests = engine.ingests.active.read().await;
     let egresses = engine.egresses.active.read().await;
     let all_stage_metrics = engine.stages.metrics.read().await;
-    let all_pipe_metrics = engine.stages.pipe_metrics.read().await;
     let pipelines = engine.ingests.pipelines.read().await;
     let runtimes = engine.stages.runtimes.read().await;
 
@@ -188,7 +189,10 @@ pub(crate) async fn pipeline_telemetry(
             let mut val = api_view_models::stage_telemetry_row_json(
                 key,
                 metrics.snapshot(),
-                all_pipe_metrics.get(key).map(|pm| pm.snapshot()),
+                runtimes
+                    .get(key)
+                    .and_then(|runtime| runtime.pipe_metrics.as_ref())
+                    .map(|pm| pm.snapshot()),
                 None,
                 None,
                 lifecycle_snapshots.get(key),
@@ -239,9 +243,11 @@ pub(crate) async fn stage_telemetry_by_display(
         .keys()
         .find(|key| key.to_string() == display)?;
     let metrics = all_stage_metrics.get(key)?;
-
-    let all_pipe_metrics = engine.stages.pipe_metrics.read().await;
-    let pipe = all_pipe_metrics.get(key).map(|pm| pm.snapshot());
+    let runtimes = engine.stages.runtimes.read().await;
+    let pipe = runtimes
+        .get(key)
+        .and_then(|runtime| runtime.pipe_metrics.as_ref())
+        .map(|pm| pm.snapshot());
 
     // Fetch lifecycle snapshot for detailed phase/capacity info.
     let lifecycle = engine.stage_runtime_snapshot(key).await;
@@ -253,4 +259,36 @@ pub(crate) async fn stage_telemetry_by_display(
         pipe,
         lifecycle.as_ref(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::stage::{StageKey, StageKind};
+    use crate::media::pipe_metrics::PipeMetrics;
+    use crate::media::ring_buffer::RingBuffer;
+    use crate::media::stage_runtime::StageRuntimeManager;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn stage_telemetry_reads_pipe_metrics_from_stage_runtime() {
+        let engine = Arc::new(MediaEngine::new());
+        let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
+        let manager = StageRuntimeManager::new(engine.clone());
+        manager
+            .ensure_stage(key.clone(), Arc::new(RingBuffer::new(4)), None)
+            .await;
+        let pipe_metrics = Arc::new(PipeMetrics::default());
+        pipe_metrics.record_stall(1_500);
+        engine
+            .register_pipe_metrics(key.clone(), pipe_metrics.clone())
+            .await;
+
+        let telemetry = stage_telemetry_by_display(&engine, &key.to_string())
+            .await
+            .expect("stage telemetry should exist");
+
+        assert_eq!(telemetry["pipeMetrics"]["stalls"], 1);
+        assert_eq!(telemetry["pipeMetrics"]["stallUs"], 1_500);
+    }
 }

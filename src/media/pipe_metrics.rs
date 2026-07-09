@@ -4,9 +4,9 @@
 //! because it only exists for the external transcoder: internal and
 //! MemoryQueue-backed stages have no kernel pipe to observe.
 //!
-//! The engine stores `Arc<PipeMetrics>` in its `pipe_metrics` registry keyed by
-//! the same typed stage identity as `transcoder_buffers`. The processing graph
-//! reads it to populate `pipeMetrics` on transcoder nodes.
+//! The engine stores `Arc<PipeMetrics>` on the owning `StageRuntime`. The
+//! processing graph and telemetry read it from that runtime to populate
+//! `pipeMetrics` on transcoder nodes.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
