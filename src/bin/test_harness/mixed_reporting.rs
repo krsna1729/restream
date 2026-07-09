@@ -3,6 +3,8 @@
 use super::*;
 use chrono::{DateTime, Duration as ChronoDuration};
 
+pub(crate) const MIXED_ASSERTION_SCHEMA_VERSION: u32 = 1;
+
 pub(crate) fn safe_artifact_stem(value: &str) -> String {
     value
         .chars()
@@ -31,15 +33,19 @@ pub(crate) fn emit_mixed_result(
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let mut object = serde_json::Map::new();
+    if let Some(Value::Object(extra)) = extra {
+        object.extend(extra);
+    }
+    object.insert(
+        "schemaVersion".to_string(),
+        json!(MIXED_ASSERTION_SCHEMA_VERSION),
+    );
     object.insert("id".to_string(), json!(id));
     object.insert("suite".to_string(), json!("mixed"));
     object.insert("mode".to_string(), json!(cfg));
     object.insert("scenario".to_string(), json!(cfg));
     object.insert("status".to_string(), json!(status));
     object.insert("ms".to_string(), json!(elapsed.as_millis()));
-    if let Some(Value::Object(extra)) = extra {
-        object.extend(extra);
-    }
     append_line(path, &format!("{}\n", Value::Object(object))).map_err(|e| e.to_string())
 }
 
@@ -204,6 +210,8 @@ mod tests {
             "pass",
             Duration::from_millis(42),
             Some(json!({
+                "schemaVersion": 999,
+                "status": "fail",
                 "decodeExitStatus": 0,
                 "matchedPattern": Value::Null,
             })),
@@ -218,6 +226,7 @@ mod tests {
             .to_string();
         let row: Value = serde_json::from_str(&line).expect("valid json");
         assert_eq!(row["status"], "pass");
+        assert_eq!(row["schemaVersion"], MIXED_ASSERTION_SCHEMA_VERSION);
         assert_eq!(row["decodeExitStatus"], 0);
 
         std::fs::remove_file(&assertion_log).ok();
