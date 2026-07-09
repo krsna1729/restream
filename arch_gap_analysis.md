@@ -286,7 +286,7 @@ convergence and later harness/reporting phases.
 |---|---|---|
 | Phase 13 — Harness v2 reporting | ✅ Complete | Harness now has `HarnessOutputCell`, `HarnessOutputRegistry`, per-scenario `outputs.json`, scenario result embedding, semantic cell labels in progress stalls, matrix `root-cause-summary.json` grouping, schema-versioned assertion rows, per-scenario `artifact-index.json` with file metadata/checksums, and probe failure API snapshots carrying output status plus engine health. |
 | Phase 14 — Agent/MCP cleanup | ✅ Complete | Shared agent command/query DTOs live in `agent_core::types`, HTTP/execution modules re-export those DTOs instead of duplicating structs, MCP backends consume the same shared types, agent context/catalog reads use port-backed `AgentService`, agent output mutations use `OutputService`, agent graph/impact preview use `StageGraphPlan`, and agent API read/plan paths no longer import media internals. |
-| Phase 15 — Large-file split | 🔶 In progress | `engine.rs`, `mpegts.rs`, and `external_transcoder.rs` are now below the 2,000-line ideal after responsibility-based splits for runtime snapshots, HLS lifecycle/consumer ownership, engine tests, MPEG-TS codec probing/tests, and external FFmpeg process/argument helpers. `test_harness.rs` has started shrinking via mixed adaptive-ring and mode-spec helper modules. Major production files still exceed the ideal target: `srt.rs` ~4.6k and `rtmp.rs` ~3.6k; `test_harness.rs` remains ~10k and needs continued harness module extraction. |
+| Phase 15 — Large-file split | 🔶 In progress | `engine.rs`, `mpegts.rs`, `external_transcoder.rs`, `srt.rs`, and `rtmp.rs` are now below the 2,000-line ideal after responsibility-based splits for runtime snapshots, HLS lifecycle/consumer ownership, engine tests, MPEG-TS codec probing/tests, external FFmpeg process/argument helpers, SRT egress/policy/stream-id/monitor/tests, and RTMP FLV/tests. `test_harness.rs` has started shrinking via mixed adaptive-ring and mode-spec helper modules but remains ~10k and needs continued harness module extraction. |
 | Phase 16 — Rollout policy | ❌ Not complete | Not audited as implemented; internal backend remains policy-gated and parity work is ongoing. |
 
 ---
@@ -331,14 +331,15 @@ convergence and later harness/reporting phases.
 
 ### P2 — Guardrails and Large-File Debt
 
-6. **Large files still dominate reasoning cost**
-   - Phase 15 is now underway: `engine.rs`, `mpegts.rs`, and
-     `external_transcoder.rs` are under the 2,000-line ideal after
-     responsibility-based runtime, HLS, codec-probing, process-helper, and
-     test-module splits, and mixed adaptive-ring plus mode-spec helpers have
-     been split out of `test_harness.rs`. The repository still needs further
-     responsibility-based splits before all major production and harness files
-     reach the ideal.
+6. **Harness size still dominates reasoning cost**
+   - Phase 15 is now well underway: `engine.rs`, `mpegts.rs`,
+     `external_transcoder.rs`, `srt.rs`, and `rtmp.rs` are under the 2,000-line
+     ideal after responsibility-based runtime, HLS, codec-probing,
+     process-helper, SRT helper/test, RTMP FLV/test, and test-module splits.
+     Mixed adaptive-ring plus mode-spec helpers have also been split out of
+     `test_harness.rs`, but the harness root remains ~10k lines. The repository
+     still needs continued responsibility-based harness extraction before Phase
+     15 reaches the ideal.
 
 7. **Harness reporting is now complete for Phase 13 scope**
    - The harness now persists output-cell identity through `outputs.json` and
@@ -370,7 +371,7 @@ convergence and later harness/reporting phases.
 | Ph 12 Health/alerts/diagnostics | A | Health, alerts, graph, and the causal diagnostics context bundle meet the Phase 12 acceptance criteria; the legacy SSE diagnostics probe remains as an active probe path beside the read-only context endpoint. |
 | Ph 13 Harness v2 | A | Output-cell registry, `outputs.json`, semantic progress-stall labels, matrix root-cause grouping, assertion schema versioning, artifact indexing, and probe failure API snapshots are implemented. |
 | Ph 14 Agent/MCP cleanup | A | Shared DTOs live in `agent_core::types`; MCP and HTTP/execution share command/query payloads where feature boundaries permit; agent graph/impact preview uses the shared planner; agent reads use service/runtime read models; agent API read/plan paths have no direct media-internal imports. |
-| Ph 15 Large-file split | C | `engine.rs`, `mpegts.rs`, and `external_transcoder.rs` are below 2,000 lines via responsibility-based splits; mixed adaptive-ring and mode-spec helpers have moved out of `test_harness.rs`; remaining large production files and the harness still need responsibility-based extraction. |
+| Ph 15 Large-file split | B | `engine.rs`, `mpegts.rs`, `external_transcoder.rs`, `srt.rs`, and `rtmp.rs` are below 2,000 lines via responsibility-based splits; mixed adaptive-ring and mode-spec helpers have moved out of `test_harness.rs`; `test_harness.rs` still remains ~10k lines and blocks an A-grade Phase 15. |
 | Ph 16 Rollout policy | F | Not done. |
 
 ---
