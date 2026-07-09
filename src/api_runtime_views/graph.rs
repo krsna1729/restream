@@ -10,7 +10,7 @@ use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
 use crate::planner::graph_plan::{plan_pipeline_graph, plan_recording_graph};
 use crate::types::Output;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) async fn processing_graph(
     engine: &MediaEngine,
@@ -21,7 +21,6 @@ pub(crate) async fn processing_graph(
     let ingests = engine.ingests.active.read().await;
     let egresses = engine.egresses.active.read().await;
     let pipelines = engine.ingests.pipelines.read().await;
-    let stage_runtimes = engine.stages.runtimes.read().await;
     let rec_tokens = engine.recordings.cancel_tokens.read().await;
     let all_stage_metrics = engine.stages.metrics.read().await;
     let ts_muxers = engine.stages.ts_muxers.read().await;
@@ -133,7 +132,15 @@ pub(crate) async fn processing_graph(
         .filter(|stage| stage.kind != StageKind::Source)
         .map(|stage| stage.key.clone())
         .collect();
+    let lifecycle_snapshots: HashMap<StageKey, crate::runtime::stage::StageRuntimeSnapshot> =
+        engine
+            .pipeline_stage_runtime_snapshots(pipeline_id)
+            .await
+            .into_iter()
+            .map(|snapshot| (snapshot.key.clone(), snapshot))
+            .collect();
 
+    let stage_runtimes = engine.stages.runtimes.read().await;
     for (key, runtime) in stage_runtimes.iter() {
         if key.pipeline.as_str() == pipeline_id && visible_stage_keys.contains(key) {
             let Some(ring) = runtime.ring.as_ref() else {
@@ -149,6 +156,7 @@ pub(crate) async fn processing_graph(
                 kind.graph_type(),
                 kind.graph_label(),
                 stage_key_str,
+                lifecycle_snapshots.get(key),
                 !runtime.cancel.is_cancelled(),
                 Some(runtime.metrics.snapshot()),
                 queue_stats.map(|stats| serde_json::json!(stats)),

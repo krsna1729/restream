@@ -1719,6 +1719,76 @@ async fn pipeline_graph_returns_dag() {
 }
 
 #[tokio::test]
+async fn pipeline_graph_stage_nodes_include_lifecycle_details() {
+    let (app, pool, engine) = test_app_with_engine().await;
+    let cookie = login(&app).await;
+
+    db::create_pipeline(
+        &pool,
+        "pipe-graph-life",
+        "Graph Life",
+        "graph-life-key",
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    db::create_output(
+        &pool,
+        "out-graph-life",
+        "pipe-graph-life",
+        "RTMP 720p",
+        "rtmp://example.test/live/graph-life",
+        None,
+        DesiredOutputState::Running,
+        &OutputConfig::parse("720p"),
+    )
+    .await
+    .unwrap();
+
+    engine
+        .try_register_ingest("pipe-graph-life", "graph-life-key", "rtmp")
+        .await
+        .unwrap();
+    let stage_key = StageKey::new("pipe-graph-life", StageKind::video_preset("720p"));
+    let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine);
+    let (handle, _) = manager
+        .ensure_stage(
+            stage_key.clone(),
+            Arc::new(restream::media::ring_buffer::RingBuffer::new(8)),
+            None,
+        )
+        .await;
+    handle.lifecycle.transition(
+        restream::media::stage_lifecycle::StagePhase::WaitingForCapacity {
+            backend: restream::media::stage_lifecycle::StageBackendKind::ExternalFfmpeg,
+        },
+    );
+
+    let resp = app
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/pipelines/pipe-graph-life/graph",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let graph = body_json(resp).await;
+    let stage_node = graph["runtimeGraph"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["stageKey"] == stage_key.kind.to_string())
+        .expect("runtime graph should expose the video stage node");
+
+    assert_eq!(stage_node["details"]["phase"], "waitingForCapacity");
+    assert_eq!(stage_node["details"]["backend"], "externalFfmpeg");
+    assert!(stage_node["details"]["capacityWaitMs"].is_u64());
+}
+
+#[tokio::test]
 async fn pipeline_diagnostics_context_returns_causal_bundle() {
     let (app, pool, engine) = test_app_with_engine().await;
     let cookie = login(&app).await;
