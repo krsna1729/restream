@@ -33,6 +33,10 @@ pub type MetaLookupFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<String>, MetaLookupError>> + Send + 'a>>;
 pub type MetaWriteFuture<'a> =
     Pin<Box<dyn Future<Output = Result<String, MetaLookupError>> + Send + 'a>>;
+pub type SessionWriteFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<(), SessionStoreError>> + Send + 'a>>;
+pub type SessionListFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<String>, SessionStoreError>> + Send + 'a>>;
 pub type PipelineUpdateFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Pipeline>, PipelineStoreError>> + Send + 'a>>;
 pub type OutputLookupFuture<'a> =
@@ -174,6 +178,27 @@ impl fmt::Display for MetaLookupError {
 
 impl std::error::Error for MetaLookupError {}
 
+#[derive(Debug, Clone)]
+pub struct SessionStoreError {
+    message: String,
+}
+
+impl SessionStoreError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for SessionStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SessionStoreError {}
+
 pub trait PipelineStore: Send + Sync {
     fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a>;
     fn get_pipeline_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineLookupFuture<'a>;
@@ -278,6 +303,13 @@ pub trait MetaStoreWriter: Send + Sync {
     fn set_meta<'a>(&'a self, key: &'a str, value: &'a str) -> MetaWriteFuture<'a>;
 }
 
+pub trait SessionStore: Send + Sync {
+    fn create_session<'a>(&'a self, token: &'a str, ts: i64) -> SessionWriteFuture<'a>;
+    fn delete_session<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a>;
+    fn prune_expired_sessions<'a>(&'a self, max_age_ms: i64) -> SessionWriteFuture<'a>;
+    fn list_sessions<'a>(&'a self) -> SessionListFuture<'a>;
+}
+
 pub trait LogStore: Send + Sync {
     fn list_app_logs<'a>(&'a self, filters: &'a AppLogFilters) -> LogListFuture<'a>;
 }
@@ -299,6 +331,11 @@ pub struct SqliteIngestLookup {
 
 #[derive(Clone)]
 pub struct SqliteMetaStore {
+    pool: SqlitePool,
+}
+
+#[derive(Clone)]
+pub struct SqliteSessionStore {
     pool: SqlitePool,
 }
 
@@ -326,6 +363,12 @@ impl SqliteIngestLookup {
 }
 
 impl SqliteMetaStore {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+impl SqliteSessionStore {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -659,6 +702,40 @@ impl MetaStoreWriter for SqliteMetaStore {
             crate::db::set_meta(&self.pool, key, value)
                 .await
                 .map_err(|err| MetaLookupError::new(err.to_string()))
+        })
+    }
+}
+
+impl SessionStore for SqliteSessionStore {
+    fn create_session<'a>(&'a self, token: &'a str, ts: i64) -> SessionWriteFuture<'a> {
+        Box::pin(async move {
+            crate::db::create_session(&self.pool, token, ts)
+                .await
+                .map_err(|err| SessionStoreError::new(err.to_string()))
+        })
+    }
+
+    fn delete_session<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a> {
+        Box::pin(async move {
+            crate::db::delete_session(&self.pool, token)
+                .await
+                .map_err(|err| SessionStoreError::new(err.to_string()))
+        })
+    }
+
+    fn prune_expired_sessions<'a>(&'a self, max_age_ms: i64) -> SessionWriteFuture<'a> {
+        Box::pin(async move {
+            crate::db::prune_expired_sessions(&self.pool, max_age_ms)
+                .await
+                .map_err(|err| SessionStoreError::new(err.to_string()))
+        })
+    }
+
+    fn list_sessions<'a>(&'a self) -> SessionListFuture<'a> {
+        Box::pin(async move {
+            crate::db::list_sessions(&self.pool)
+                .await
+                .map_err(|err| SessionStoreError::new(err.to_string()))
         })
     }
 }

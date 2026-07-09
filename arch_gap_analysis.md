@@ -25,8 +25,9 @@ sense**. Several phases have strong scaffolding but incomplete adoption:
 - configuration is centralized for startup/runtime config, but env parsing still
   exists outside the central `AppConfig` path;
 - API route modules exist, but several handlers still call `db::*` directly;
-- application services exist, but most services still own `SqlitePool` and call
-  repositories directly rather than depending on port traits;
+- application services exist, and the main pipeline/output/ingest/health/log/auth
+  paths are port-backed, but settings still owns `SqlitePool` and some helper
+  paths call repositories directly;
 - a graph planner exists and now drives output preparation, graph rendering,
   HLS preview, and diagnostics; harness expectations are pinned to it by tests,
   but recording and agent preview are not yet fully graph-plan driven;
@@ -124,7 +125,7 @@ thin adapters everywhere.
 |---|---|---|
 | `db/` repository modules exist | ✅ Complete | `db/{pipeline_repo,output_repo,ingest_repo,job_repo,session_repo,meta_repo,log_repo,recording_repo,schema,migrations}.rs`. |
 | `db.rs` is only module index / pool / schema helper | ✅ Mostly | `src/db/mod.rs` is thin and re-exports repositories. |
-| Application services depend on repository traits | ⚠️ Partial | `PipelineService` and `HealthService` depend on `PipelineStore`, `OutputService` depends on `OutputStore`, `IngestService` depends on `IngestLookup`/`IngestWriter`, and `LogService` depends on `LogStore`; `SettingsService` and `AuthService` still hold `SqlitePool` and call `db::*`. |
+| Application services depend on repository traits | ⚠️ Partial | `PipelineService` and `HealthService` depend on `PipelineStore`, `OutputService` depends on `OutputStore`, `IngestService` depends on `IngestLookup`/`IngestWriter`, `LogService` depends on `LogStore`, and `AuthService` depends on meta/session ports; `SettingsService` still holds `SqlitePool` and calls `db::*`. |
 | String states converted at repository boundary | ⚠️ Partial | `recording_repo` maps `RecordingPhase`; `output_repo` still stores/returns `desired_state: String` in `types::Output`. |
 
 **Verdict**: **Partial**. Repository files exist, but port isolation and typed
@@ -285,7 +286,8 @@ convergence and later harness/reporting phases.
 3. **API/service/repository boundary remains mixed**
    - Route modules exist, but `api/agent.rs` and some services still call
      `db::*` directly. `PipelineService`, `OutputService`, `IngestService`,
-     `HealthService`, and `LogService` are now port-trait backed.
+     `HealthService`, `LogService`, and `AuthService` are now port-trait
+     backed.
 
 4. **HLS preview is no longer an API one-off, but still not a pure graph service**
    - `application::hls_preview` owns orchestration, but it directly calls
@@ -316,7 +318,7 @@ convergence and later harness/reporting phases.
 | Ph 2 Config | A | Production env parsing is centralized in config, and startup logs a comprehensive redacted effective-config summary. |
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | B+ | Logs, auth initialization, pipeline, output, ingest, and health checks are service-backed; agent and some helper paths still contain direct DB/application work. |
-| Ph 5 Repositories | B+ | Repo modules exist, and pipeline/output/ingest/health/log services are port-trait backed; settings/auth services still hold `SqlitePool` directly. |
+| Ph 5 Repositories | A- | Repo modules exist, and pipeline/output/ingest/health/log/auth services are port-trait backed; settings still holds `SqlitePool` directly. |
 | Ph 6 Graph planner | A- | Planner drives output preparation, graph rendering, diagnostics, and preview planning, with harness stage-sharing tests; recording/agent consumers remain. |
 | Ph 7 Stage lifecycle | B+ | Lifecycle/capacity visibility strong; runtime object model still split. |
 | Ph 8 Dependency-aware status | A | Operator-facing dependency status is complete for the phase scope, with typed internal egress lifecycle state. |
