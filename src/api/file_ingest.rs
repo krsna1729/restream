@@ -9,16 +9,11 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::api_view_models;
-use crate::application::ingest::{
-    FileIngestConfig, PersistFileIngestError, clear_stream_key_file_ingests,
-    load_pipeline_file_ingest_state, persist_pipeline_file_ingest, remove_pipeline_file_ingest,
-};
-use crate::application::ports::{SqliteIngestLookup, SqlitePipelineStore};
-use crate::application::services::ApiError;
+use crate::application::services::{ApiError, file_ingest_service::FileIngestConfigInput};
 
 use super::ingests::sanitize_target_gop_seconds;
 use super::state::{
-    AppState, MAX_FFMPEG_ARGS_LEN, MAX_NAME_LEN, check_field_len, require_authenticated, to_hex,
+    AppState, MAX_FFMPEG_ARGS_LEN, MAX_NAME_LEN, check_field_len, require_authenticated,
 };
 
 #[derive(Deserialize, Clone)]
@@ -56,87 +51,28 @@ pub fn validate_pipeline_file_ingest_payload(
     None
 }
 
+fn file_ingest_config_input(payload: PipelineFileIngestPayload) -> FileIngestConfigInput {
+    FileIngestConfigInput {
+        filename: payload.filename,
+        loop_flag: payload.loop_flag.unwrap_or(false),
+        start_time: payload.start_time.unwrap_or_default(),
+        live_optimized: payload.live_optimized.unwrap_or(false),
+        target_gop_seconds: sanitize_target_gop_seconds(payload.target_gop_seconds),
+    }
+}
+
 pub async fn apply_pipeline_file_ingest_payload(
     state: &Arc<AppState>,
     pipeline: &crate::types::Pipeline,
     previous_stream_key: Option<&str>,
     payload: Option<Option<PipelineFileIngestPayload>>,
 ) -> Result<crate::application::ingest::PipelineFileIngestState, Response> {
-    let ingest_store = SqliteIngestLookup::new(state.db.clone());
-    let pipeline_store = SqlitePipelineStore::new(state.db.clone());
-
-    if let Some(previous_stream_key) =
-        previous_stream_key.filter(|previous| *previous != pipeline.stream_key.as_str())
-        && clear_stream_key_file_ingests(
-            &pipeline_store,
-            &ingest_store,
-            &state.engine,
-            previous_stream_key,
-        )
+    let payload = payload.map(|payload| payload.map(file_ingest_config_input));
+    state
+        .file_ingest_service
+        .apply_file_ingest_payload(&state.engine, pipeline, previous_stream_key, payload)
         .await
-        .is_err()
-    {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
-    }
-
-    if let Some(payload) = payload {
-        if clear_stream_key_file_ingests(
-            &pipeline_store,
-            &ingest_store,
-            &state.engine,
-            &pipeline.stream_key,
-        )
-        .await
-        .is_err()
-        {
-            return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
-        }
-
-        match payload {
-            Some(payload) => {
-                let saved = persist_pipeline_file_ingest(
-                    &ingest_store,
-                    &ingest_store,
-                    &pipeline_store,
-                    pipeline,
-                    &FileIngestConfig {
-                        filename: payload.filename,
-                        loop_flag: payload.loop_flag.unwrap_or(false),
-                        start_time: payload.start_time.unwrap_or_default(),
-                        live_optimized: payload.live_optimized.unwrap_or(false),
-                        target_gop_seconds: sanitize_target_gop_seconds(payload.target_gop_seconds),
-                    },
-                    || format!("ingest_{}", to_hex(&rand::random::<[u8; 8]>())),
-                )
-                .await;
-                if matches!(
-                    saved,
-                    Err(PersistFileIngestError::IngestLookup(_))
-                        | Err(PersistFileIngestError::IngestWrite(_))
-                        | Err(PersistFileIngestError::PipelineStore(_))
-                ) {
-                    return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
-                }
-            }
-            None => {
-                if remove_pipeline_file_ingest(
-                    &ingest_store,
-                    &ingest_store,
-                    &pipeline_store,
-                    pipeline,
-                )
-                .await
-                .is_err()
-                {
-                    return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
-                }
-            }
-        }
-    }
-
-    load_pipeline_file_ingest_state(&ingest_store, &state.engine, pipeline)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        .map_err(IntoResponse::into_response)
 }
 
 pub async fn pipeline_file_ingest_get_handler(
@@ -148,13 +84,11 @@ pub async fn pipeline_file_ingest_get_handler(
         return Ok(response);
     }
 
-    let pipeline = state.pipeline_service.get_by_id(&pipeline_id).await?;
-
-    let ingest_store = SqliteIngestLookup::new(state.db.clone());
-    let file_ingest_state =
-        load_pipeline_file_ingest_state(&ingest_store, &state.engine, &pipeline)
-            .await
-            .map_err(|_| ApiError::internal("load pipeline file ingest state"))?;
+    let pipeline = state.file_ingest_service.get_pipeline(&pipeline_id).await?;
+    let file_ingest_state = state
+        .file_ingest_service
+        .apply_file_ingest_payload(&state.engine, &pipeline, None, None)
+        .await?;
 
     Ok(Json(api_view_models::file_ingest_response(
         file_ingest_state.ingest,
@@ -189,48 +123,22 @@ pub async fn pipeline_file_ingest_put_handler(
             .into_response());
     }
 
-    let pipeline = state.pipeline_service.get_by_id(&pipeline_id).await?;
+    let pipeline = state.file_ingest_service.get_pipeline(&pipeline_id).await?;
+    let file_ingest_state = state
+        .file_ingest_service
+        .apply_file_ingest_payload(
+            &state.engine,
+            &pipeline,
+            None,
+            Some(Some(file_ingest_config_input(payload))),
+        )
+        .await?;
 
-    let ingest_store = SqliteIngestLookup::new(state.db.clone());
-    let pipeline_store = SqlitePipelineStore::new(state.db.clone());
-    if clear_stream_key_file_ingests(
-        &pipeline_store,
-        &ingest_store,
-        &state.engine,
-        &pipeline.stream_key,
-    )
-    .await
-    .is_err()
-    {
-        return Err(ApiError::internal("clear stream key file ingests"));
-    }
-
-    let saved = persist_pipeline_file_ingest(
-        &ingest_store,
-        &ingest_store,
-        &pipeline_store,
-        &pipeline,
-        &FileIngestConfig {
-            filename: payload.filename.clone(),
-            loop_flag: payload.loop_flag.unwrap_or(false),
-            start_time: payload.start_time.unwrap_or_default(),
-            live_optimized: payload.live_optimized.unwrap_or(false),
-            target_gop_seconds: sanitize_target_gop_seconds(payload.target_gop_seconds),
-        },
-        || format!("ingest_{}", to_hex(&rand::random::<[u8; 8]>())),
-    )
-    .await;
-
-    let saved = match saved {
-        Ok(saved) => saved,
-        Err(PersistFileIngestError::IngestLookup(_))
-        | Err(PersistFileIngestError::IngestWrite(_))
-        | Err(PersistFileIngestError::PipelineStore(_)) => {
-            return Err(ApiError::internal("persist pipeline file ingest"));
-        }
-    };
-
-    Ok(Json(api_view_models::file_ingest_response(Some(saved), false)).into_response())
+    Ok(Json(api_view_models::file_ingest_response(
+        file_ingest_state.ingest,
+        file_ingest_state.running,
+    ))
+    .into_response())
 }
 
 pub async fn pipeline_file_ingest_delete_handler(
@@ -242,33 +150,11 @@ pub async fn pipeline_file_ingest_delete_handler(
         return Ok(response);
     }
 
-    let pipeline = state.pipeline_service.get_by_id(&pipeline_id).await?;
-
-    let ingest_store = SqliteIngestLookup::new(state.db.clone());
-    let pipeline_store = SqlitePipelineStore::new(state.db.clone());
-    if clear_stream_key_file_ingests(
-        &pipeline_store,
-        &ingest_store,
-        &state.engine,
-        &pipeline.stream_key,
-    )
-    .await
-    .is_err()
-    {
-        return Err(ApiError::internal("clear stream key file ingests"));
-    }
-
-    if crate::application::ingest::remove_pipeline_file_ingest(
-        &ingest_store,
-        &ingest_store,
-        &pipeline_store,
-        &pipeline,
-    )
-    .await
-    .is_err()
-    {
-        return Err(ApiError::internal("remove pipeline file ingest"));
-    }
+    let pipeline = state.file_ingest_service.get_pipeline(&pipeline_id).await?;
+    state
+        .file_ingest_service
+        .apply_file_ingest_payload(&state.engine, &pipeline, None, Some(None))
+        .await?;
 
     Ok(Json(serde_json::json!({"deleted": true})).into_response())
 }
