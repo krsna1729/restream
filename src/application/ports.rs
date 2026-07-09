@@ -1,7 +1,8 @@
 //! Application-layer port traits and adapter types defining the storage and
 //! catalog capabilities that orchestration code depends on.
 
-use crate::types::{Ingest, Pipeline};
+use crate::domain::output_spec::OutputConfig;
+use crate::types::{Ingest, Output, Pipeline};
 use sqlx::SqlitePool;
 use std::fmt;
 use std::future::Future;
@@ -31,6 +32,16 @@ pub type MetaWriteFuture<'a> =
     Pin<Box<dyn Future<Output = Result<String, MetaLookupError>> + Send + 'a>>;
 pub type PipelineUpdateFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<Pipeline>, PipelineStoreError>> + Send + 'a>>;
+pub type OutputLookupFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<Output>, OutputStoreError>> + Send + 'a>>;
+pub type OutputListFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<Output>, OutputStoreError>> + Send + 'a>>;
+pub type OutputCreateFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Output, OutputStoreError>> + Send + 'a>>;
+pub type OutputUpdateFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<Output>, OutputStoreError>> + Send + 'a>>;
+pub type OutputDeleteFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<bool, OutputStoreError>> + Send + 'a>>;
 
 #[derive(Debug, Clone)]
 pub struct PipelineStoreError {
@@ -52,6 +63,27 @@ impl fmt::Display for PipelineStoreError {
 }
 
 impl std::error::Error for PipelineStoreError {}
+
+#[derive(Debug, Clone)]
+pub struct OutputStoreError {
+    message: String,
+}
+
+impl OutputStoreError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for OutputStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for OutputStoreError {}
 
 #[derive(Debug, Clone)]
 pub struct IngestLookupError {
@@ -145,6 +177,39 @@ pub trait PipelineStore: Send + Sync {
     ) -> PipelineUpdateFuture<'a>;
 }
 
+pub trait OutputStore: Send + Sync {
+    fn list_outputs<'a>(&'a self) -> OutputListFuture<'a>;
+    fn list_outputs_for_pipeline<'a>(&'a self, pipeline_id: &'a str) -> OutputListFuture<'a>;
+    fn get_output<'a>(&'a self, pipeline_id: &'a str, id: &'a str) -> OutputLookupFuture<'a>;
+    #[allow(clippy::too_many_arguments)]
+    fn create_output<'a>(
+        &'a self,
+        id: &'a str,
+        pipeline_id: &'a str,
+        name: &'a str,
+        url: &'a str,
+        monitoring_url: Option<&'a str>,
+        desired_state: &'a str,
+        config: &'a OutputConfig,
+    ) -> OutputCreateFuture<'a>;
+    fn update_output<'a>(
+        &'a self,
+        pipeline_id: &'a str,
+        id: &'a str,
+        name: &'a str,
+        url: &'a str,
+        monitoring_url: Option<&'a str>,
+        config: &'a OutputConfig,
+    ) -> OutputUpdateFuture<'a>;
+    fn delete_output<'a>(&'a self, pipeline_id: &'a str, id: &'a str) -> OutputDeleteFuture<'a>;
+    fn set_output_desired_state<'a>(
+        &'a self,
+        pipeline_id: &'a str,
+        id: &'a str,
+        desired_state: &'a str,
+    ) -> OutputCreateFuture<'a>;
+}
+
 pub trait IngestLookup: Send + Sync {
     fn get_ingest<'a>(&'a self, id: &'a str) -> IngestLookupFuture<'a>;
     fn get_ingest_by_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestLookupFuture<'a>;
@@ -191,6 +256,11 @@ pub struct SqlitePipelineStore {
 }
 
 #[derive(Clone)]
+pub struct SqliteOutputStore {
+    pool: SqlitePool,
+}
+
+#[derive(Clone)]
 pub struct SqliteIngestLookup {
     pool: SqlitePool,
 }
@@ -201,6 +271,12 @@ pub struct SqliteMetaStore {
 }
 
 impl SqlitePipelineStore {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+impl SqliteOutputStore {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -319,6 +395,103 @@ impl PipelineStore for SqlitePipelineStore {
             )
             .await
             .map_err(|err| PipelineStoreError::new(err.to_string()))
+        })
+    }
+}
+
+impl OutputStore for SqliteOutputStore {
+    fn list_outputs<'a>(&'a self) -> OutputListFuture<'a> {
+        Box::pin(async move {
+            crate::db::list_outputs(&self.pool)
+                .await
+                .map_err(|err| OutputStoreError::new(err.to_string()))
+        })
+    }
+
+    fn list_outputs_for_pipeline<'a>(&'a self, pipeline_id: &'a str) -> OutputListFuture<'a> {
+        Box::pin(async move {
+            crate::db::list_outputs_for_pipeline(&self.pool, pipeline_id)
+                .await
+                .map_err(|err| OutputStoreError::new(err.to_string()))
+        })
+    }
+
+    fn get_output<'a>(&'a self, pipeline_id: &'a str, id: &'a str) -> OutputLookupFuture<'a> {
+        Box::pin(async move {
+            crate::db::get_output(&self.pool, pipeline_id, id)
+                .await
+                .map_err(|err| OutputStoreError::new(err.to_string()))
+        })
+    }
+
+    fn create_output<'a>(
+        &'a self,
+        id: &'a str,
+        pipeline_id: &'a str,
+        name: &'a str,
+        url: &'a str,
+        monitoring_url: Option<&'a str>,
+        desired_state: &'a str,
+        config: &'a OutputConfig,
+    ) -> OutputCreateFuture<'a> {
+        Box::pin(async move {
+            crate::db::create_output(
+                &self.pool,
+                id,
+                pipeline_id,
+                name,
+                url,
+                monitoring_url,
+                desired_state,
+                config,
+            )
+            .await
+            .map_err(|err| OutputStoreError::new(err.to_string()))
+        })
+    }
+
+    fn update_output<'a>(
+        &'a self,
+        pipeline_id: &'a str,
+        id: &'a str,
+        name: &'a str,
+        url: &'a str,
+        monitoring_url: Option<&'a str>,
+        config: &'a OutputConfig,
+    ) -> OutputUpdateFuture<'a> {
+        Box::pin(async move {
+            crate::db::update_output(
+                &self.pool,
+                pipeline_id,
+                id,
+                name,
+                url,
+                monitoring_url,
+                config,
+            )
+            .await
+            .map_err(|err| OutputStoreError::new(err.to_string()))
+        })
+    }
+
+    fn delete_output<'a>(&'a self, pipeline_id: &'a str, id: &'a str) -> OutputDeleteFuture<'a> {
+        Box::pin(async move {
+            crate::db::delete_output(&self.pool, pipeline_id, id)
+                .await
+                .map_err(|err| OutputStoreError::new(err.to_string()))
+        })
+    }
+
+    fn set_output_desired_state<'a>(
+        &'a self,
+        pipeline_id: &'a str,
+        id: &'a str,
+        desired_state: &'a str,
+    ) -> OutputCreateFuture<'a> {
+        Box::pin(async move {
+            crate::db::set_output_desired_state(&self.pool, pipeline_id, id, desired_state)
+                .await
+                .map_err(|err| OutputStoreError::new(err.to_string()))
         })
     }
 }
