@@ -118,7 +118,7 @@ runtime compatibility readers.
 
 | Criterion | Status | Evidence |
 |---|---|---|
-| Services exist | ✅ Present | `src/application/services/*` includes pipeline, output, ingest, file ingest, media library, settings, health, auth, logs, and agent context catalog assembly; `SettingsService` now owns settings PATCH persistence; `AgentService` now owns context/catalog reads through repository ports; `FileIngestService` now owns file-ingest start/stop/delete orchestration, pipeline-file-ingest persistence/read models, and FFmpeg argument/process setup; `MediaLibraryService` owns recording metadata lookup, media-library list read models, recording companion artifact planning, media delete execution, media rename execution, and ingest retargeting after rename. |
+| Services exist | ✅ Present | `src/application/services/*` includes pipeline, output, ingest, file ingest, media library, settings, health, auth, logs, and agent context catalog assembly; `SettingsService` now owns settings PATCH persistence, recording-enabled maps, and SRT ingest policy refresh; `AgentService` now owns context/catalog reads through repository ports; `FileIngestService` now owns file-ingest start/stop/delete orchestration, pipeline-file-ingest persistence/read models, and FFmpeg argument/process setup; `MediaLibraryService` owns recording metadata lookup, media-library list read models, recording companion artifact planning, media delete execution, media rename execution, and ingest retargeting after rename. |
 | Handlers no longer call SQL directly | ⚠️ Mostly | Logs/auth/settings/output mutations delegate to services, agent context/catalog/plan reads now go through port-backed `AgentService`, and media-library read models/deletes/renames delegate to `MediaLibraryService`; remaining state/helper code still constructs persistence ports directly. |
 | Handlers do not call low-level media constructors | ⚠️ Mostly | `api/hls.rs` delegates to `application::hls_preview`; file-ingest start/stop/delete plus pipeline-file-ingest persistence/read models moved into `FileIngestService`; media-library list read models, recording companion artifact planning, delete execution, rename execution, and ingest retargeting moved into `MediaLibraryService`. API/runtime read models still take `MediaEngine` or perform feature policy directly. |
 | Services testable without Axum request types | ✅ Mostly | Service structs do not depend on Axum types. |
@@ -305,7 +305,9 @@ convergence and later harness/reporting phases.
      list read models, companion artifact planning, and delete/rename execution
      now live in
      `MediaLibraryService`, and agent catalog/plan reads now go through
-     port-backed `AgentService`, but API/runtime read models and some helper paths still
+     port-backed `AgentService`; settings-backed helper paths for SRT policy
+     refresh and recording-enabled maps now go through `SettingsService`, but
+     API/runtime read models and some helper paths still
      construct persistence ports directly or orchestrate runtime work directly.
      Agent output mutations now use
      `OutputService`, and `PipelineService`, `OutputService`, `IngestService`,

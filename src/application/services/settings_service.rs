@@ -3,14 +3,17 @@ use std::sync::Arc;
 use crate::application::ports::{
     IngestHostStore, JobStore, MetaStore, MetaStoreWriter, SqliteJobStore, SqliteMetaStore,
 };
+use crate::application::recording::load_recording_enabled_map;
 use crate::application::recording::{RecordingSettings, save_recording_settings};
 use crate::application::settings::load_settings_snapshot;
+use crate::application::srt_ingest::load_global_srt_ingest_config;
 use crate::application::{
     ingest_security::save_ingest_security_config, transcode_profiles::save_transcode_profiles,
 };
 use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::media::security::IngestSecurityService;
+use crate::media::srt::SrtIngestPolicyStore;
 use crate::types::{Job, Output, Pipeline};
 
 use super::error::{ApiError, ApiResult};
@@ -140,6 +143,27 @@ impl SettingsService {
             .await
             .map_err(|e| ApiError::internal(format!("save transcode profiles: {e}")))
     }
+
+    pub async fn refresh_srt_ingest_policy_store(
+        &self,
+        policy_store: &SrtIngestPolicyStore,
+        srt_passphrase: Option<String>,
+        srt_pbkeylen: i32,
+    ) -> ApiResult<()> {
+        let global =
+            load_global_srt_ingest_config(self.meta_store.as_ref(), srt_passphrase, srt_pbkeylen)
+                .await;
+        let pipelines = self.list_pipelines().await?;
+        policy_store.replace(global, &pipelines);
+        Ok(())
+    }
+
+    pub async fn recording_enabled_map(
+        &self,
+        pipeline_ids: &[String],
+    ) -> std::collections::HashMap<String, bool> {
+        load_recording_enabled_map(self.meta_store.as_ref(), pipeline_ids).await
+    }
 }
 
 #[cfg(test)]
@@ -151,8 +175,11 @@ mod tests {
     use crate::application::ports::{
         JobListFuture, MetaLookupError, MetaLookupFuture, MetaWriteFuture,
     };
+    use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
     use crate::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
+    use crate::domain::srt_ingest::{SrtGlobalIngestConfig, SrtGlobalIngestMode};
     use crate::media::security::IngestSecurityService;
+    use crate::media::srt::SrtIngestPolicyStore;
     use crate::types::JobStatus;
 
     #[derive(Default)]
@@ -278,5 +305,25 @@ mod tests {
         assert_eq!(service.list_jobs().await.unwrap()[0].id, "job-1");
         assert!(service.list_pipelines().await.unwrap().is_empty());
         assert!(service.list_outputs().await.unwrap().is_empty());
+
+        let recording_enabled = service.recording_enabled_map(&["pipe-1".to_string()]).await;
+        assert_eq!(recording_enabled.get("pipe-1"), Some(&false));
+
+        service
+            .set_meta(
+                SRT_INGEST_GLOBAL_CONFIG_META_KEY,
+                r#"{"mode":"encrypted","passphrase":"global-pass-123","pbkeylen":24}"#,
+            )
+            .await
+            .unwrap();
+        let policy_store = SrtIngestPolicyStore::new(SrtGlobalIngestConfig::default(), &[]);
+        service
+            .refresh_srt_ingest_policy_store(&policy_store, None, 16)
+            .await
+            .unwrap();
+        assert_eq!(
+            policy_store.global_config().mode,
+            SrtGlobalIngestMode::Encrypted
+        );
     }
 }

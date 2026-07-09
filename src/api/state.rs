@@ -10,12 +10,10 @@ use tokio::sync::RwLock as TokioRwLock;
 use tracing::warn;
 
 use crate::alerts;
-use crate::application::ports::{SqliteMetaStore, SqlitePipelineStore};
 use crate::application::services::{
     AuthService, FileIngestService, HealthService, IngestService, LogService, MediaLibraryService,
     OutputService, PipelineService, SettingsService,
 };
-use crate::application::srt_ingest::refresh_policy_store;
 use crate::media::engine::MediaEngine;
 use crate::media::security::IngestSecurityService;
 use crate::media::srt::SrtIngestPolicyStore;
@@ -222,24 +220,15 @@ pub fn clear_session_cookie() -> String {
     )
 }
 
-pub async fn get_ingest_host(db_pool: &SqlitePool) -> Result<String, sqlx::Error> {
-    Ok(crate::db::get_ingest_host(db_pool)
-        .await?
-        .filter(|host| !host.is_empty())
-        .unwrap_or_else(|| DEFAULT_INGEST_HOST.to_string()))
-}
-
 pub async fn refresh_srt_ingest_policy_store(state: &AppState) {
-    let meta_store = SqliteMetaStore::new(state.db.clone());
-    let pipeline_store = SqlitePipelineStore::new(state.db.clone());
-    if let Err(error) = refresh_policy_store(
-        &state.ingest_policy_store,
-        &meta_store,
-        &pipeline_store,
-        state.srt_passphrase.clone(),
-        state.srt_pbkeylen,
-    )
-    .await
+    if let Err(error) = state
+        .settings_service
+        .refresh_srt_ingest_policy_store(
+            &state.ingest_policy_store,
+            state.srt_passphrase.clone(),
+            state.srt_pbkeylen,
+        )
+        .await
     {
         warn!(err = %error, "failed to refresh SRT ingest policy store");
     }
@@ -259,6 +248,8 @@ pub async fn recording_enabled_map(
     state: &AppState,
     pipeline_ids: &[String],
 ) -> std::collections::HashMap<String, bool> {
-    let meta_store = SqliteMetaStore::new(state.db.clone());
-    crate::application::recording::load_recording_enabled_map(&meta_store, pipeline_ids).await
+    state
+        .settings_service
+        .recording_enabled_map(pipeline_ids)
+        .await
 }
