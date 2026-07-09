@@ -52,18 +52,16 @@ pub fn plan_pipeline_graph(
         }
     }
 
-    // 3. Add HLS preview stage if active and ingest codec is HEVC/H.265
-    if hls_preview_active {
-        if let Some(codec) = ingest_codec {
-            if codec.eq_ignore_ascii_case("hevc") || codec.eq_ignore_ascii_case("h265") {
-                let preview_key = StageKey::new(
-                    pipeline_id_typed.clone(),
-                    StageKind::preview("720p", StageKind::source()),
-                );
-                let backend = policy.select_backend(&preview_key.kind);
-                plan.add_stage(preview_key, backend);
-            }
-        }
+    if hls_preview_active
+        && let Some(codec) = ingest_codec
+        && (codec.eq_ignore_ascii_case("hevc") || codec.eq_ignore_ascii_case("h265"))
+    {
+        let preview_key = StageKey::new(
+            pipeline_id_typed.clone(),
+            StageKind::preview("720p", StageKind::source()),
+        );
+        let backend = policy.select_backend(&preview_key.kind);
+        plan.add_stage(preview_key, backend);
     }
 
     plan

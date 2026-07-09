@@ -19,13 +19,10 @@ use tracing::{error, info};
 
 use crate::domain::stage::StageKey;
 use crate::media::avio::MemoryQueue;
-use crate::media::engine::{AudioMeta, VideoMeta};
-use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ffmpeg::stage_output::StageOutputNormalizer;
-use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
+use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, RingBuffer};
 use crate::media::transcoder::InternalMemoryQueueSink;
-use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
 
 /// Zero-copy wrapper: holds an `ffmpeg_next::Packet` so `Bytes::from_owner`
 /// can serve the encoded/demuxed buffer to ring-buffer readers without a `memcpy`.
@@ -42,98 +39,23 @@ impl AsRef<[u8]> for OwnedFfmpegPacket {
     }
 }
 
-async fn wait_for_h264_stage_metadata(
-    engine: &Arc<crate::media::engine::MediaEngine>,
-    pipeline_id: &str,
-    input_buffer: &Arc<RingBuffer>,
-    cancel_token: &CancellationToken,
-) -> Option<(VideoMeta, std::sync::Arc<Vec<AudioMeta>>)> {
-    loop {
-        if cancel_token.is_cancelled() {
-            return None;
-        }
-
-        let result = {
-            let ingests = engine.ingests.active.read().await;
-            ingests.get(pipeline_id).and_then(|ingest| {
-                let mut video = ingest.video.clone()?;
-                let input_codec = input_buffer.codec_hint_str();
-                if !input_codec.is_empty() {
-                    video.codec = input_codec.to_string();
-                }
-                if video.codec != "hevc" && video.codec != "h265" {
-                    return None;
-                }
-
-                let tracks = if let Some(ring_tracks) = input_buffer.audio_tracks()
-                    && !ring_tracks.is_empty()
-                {
-                    std::sync::Arc::new(ring_tracks.to_vec())
-                } else {
-                    let lock = ingest
-                        .audio_tracks
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    if lock.is_empty()
-                        && let Some(audio) = ingest.audio.clone()
-                    {
-                        std::sync::Arc::new(vec![audio])
-                    } else {
-                        std::sync::Arc::clone(&lock)
-                    }
-                };
-
-                Some((video, tracks))
-            })
-        };
-
-        if let Some(meta) = result {
-            return Some(meta);
-        }
-
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
-}
-
 /// Tokio task entry point for the shared H.265→H.264 transcoder.
 ///
 /// 1. Waits for ingest metadata (video + audio tracks).
 /// 2. Spawns a blocking OS thread for FFmpeg decode→encode.
 /// 3. Forwards source RingBuffer packets to the MemoryQueue as MPEG-TS.
-pub async fn start_h264_transcoder(
-    pipeline_id: String,
-    input_buffer: Arc<RingBuffer>,
-    output_buffer: Arc<RingBuffer>,
-    engine: Arc<crate::media::engine::MediaEngine>,
-    cancel_token: CancellationToken,
-    stage_key: StageKey,
-) {
-    start_h264_transcoder_inner(
-        pipeline_id,
-        input_buffer,
-        output_buffer,
-        engine,
-        cancel_token,
-        stage_key,
-        None,
-        None,
-    )
-    .await
-}
-
 #[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
 pub async fn start_h264_transcoder_inner(
     pipeline_id: String,
-    input_buffer: Arc<RingBuffer>,
+    _input_buffer: Arc<RingBuffer>,
     output_buffer: Arc<RingBuffer>,
     engine: Arc<crate::media::engine::MediaEngine>,
     cancel_token: CancellationToken,
     stage_key: StageKey,
-    shared_pump: Option<StageInputPump>,
-    shared_normalizer: Option<StageOutputNormalizer>,
+    mut input_pump: StageInputPump,
+    output_normalizer: StageOutputNormalizer,
 ) {
-    let stage_metrics = engine.get_or_create_stage_metrics(stage_key.clone()).await;
-
     let input_queue = Arc::new(MemoryQueue::new());
     engine
         .register_input_queue(stage_key.clone(), input_queue.clone())
@@ -152,7 +74,7 @@ pub async fn start_h264_transcoder_inner(
                 out_clone,
                 cancel_clone,
                 &pid,
-                shared_normalizer,
+                Some(output_normalizer),
             )
         }));
         match result {
@@ -164,69 +86,9 @@ pub async fn start_h264_transcoder_inner(
     });
     engine.register_os_thread(handle);
 
-    // Input pumping: shared pump (plan dispatch) or manual reader/feeder (old path).
-    if let Some(mut pump) = shared_pump {
-        let mut sink = InternalMemoryQueueSink::new(input_queue.clone(), cancel_token.clone());
-        let _ = pump.pump_to(&mut sink, &cancel_token).await;
-    } else {
-        let Some((video_meta, audio_tracks)) =
-            wait_for_h264_stage_metadata(&engine, &pipeline_id, &input_buffer, &cancel_token).await
-        else {
-            engine
-                .runtime
-                .event_log
-                .emit(crate::events::EventKind::StageStopped {
-                    pipeline_id: pipeline_id.clone(),
-                    encoding: stage_key.kind.to_string(),
-                });
-            return;
-        };
-
-        // Forward source RingBuffer packets to MemoryQueue, muxed as MPEG-TS.
-        let (video_sequence_header, _) = engine.get_sequence_headers(&pipeline_id).await;
-        let mut feeder = TsPacketFeeder::new(
-            Some(&video_meta),
-            audio_tracks.clone(),
-            PacketFeedConfig {
-                video_sequence_header: video_sequence_header.as_ref().map(|v| v.to_vec()),
-                raw_video_parameter_sets: input_buffer.video_parameter_sets(),
-                ..PacketFeedConfig::default()
-            },
-        );
-        let mut reader = Reader::new(format!("h264_tc:{}", pipeline_id), input_buffer);
-        let mut ts_batch: Vec<u8> = Vec::with_capacity(MEDIA_TS_BATCH_TARGET_BYTES);
-        let mut packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
-
-        loop {
-            tokio::select! {
-                _ = cancel_token.cancelled() => break,
-                _ = reader.wait_for_data() => {
-                    ts_batch.clear();
-                    packets.clear();
-                    if reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS).is_err() {
-                        continue;
-                    }
-                    for pkt in &packets {
-                        if pkt.media_type == MediaType::Video
-                            && feeder.needs_raw_video_parameter_sets()
-                            && let Some(parameter_sets) = reader.current_ring().video_parameter_sets()
-                        {
-                            feeder.set_raw_video_parameter_sets_if_empty(&parameter_sets);
-                        }
-                        let in_bytes = pkt.payload.len() as u64;
-                        if feeder.extend_ts_for_packet(pkt, &mut ts_batch) {
-                            stage_metrics.record_in(in_bytes);
-                        }
-                    }
-                    if !ts_batch.is_empty()
-                        && !input_queue.write_cancellable(&ts_batch, &cancel_token).await
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    // Input pumping: shared pump (plan dispatch)
+    let mut sink = InternalMemoryQueueSink::new(input_queue.clone(), cancel_token.clone());
+    let _ = input_pump.pump_to(&mut sink, &cancel_token).await;
 
     input_queue.close();
     engine.remove_input_queue(&stage_key).await;
@@ -497,11 +359,11 @@ fn run_ffmpeg_h264_stage_with_normalizer(
 
             // Use source-derived timestamp for the frame so encoded video shares
             // the same clock origin as copied audio.
-            let source_pts_ms = dec_frame.pts().and_then(|pts| {
+            let source_pts_ms = dec_frame.pts().map(|pts| {
                 if video_tb.1 != 0 {
-                    Some((pts as i128 * video_tb.0 as i128 * 1000 / video_tb.1 as i128) as i64)
+                    (pts as i128 * video_tb.0 as i128 * 1000 / video_tb.1 as i128) as i64
                 } else {
-                    Some(pts)
+                    pts
                 }
             });
 
@@ -561,6 +423,7 @@ fn run_ffmpeg_h264_stage_with_normalizer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::media::ring_buffer::Reader;
     use std::process::Command;
     use std::sync::Arc;
 
@@ -693,88 +556,6 @@ mod tests {
                 .any(|packet| packet.media_type == MediaType::Audio),
             "2v16a HEVC sample should preserve audio packets"
         );
-    }
-
-    #[tokio::test]
-    async fn h264_stage_metadata_prefers_upstream_ring_tracks_and_codec_hint() {
-        let engine = Arc::new(crate::media::engine::MediaEngine::new());
-        engine
-            .try_register_ingest("pipe-h264-stage-meta", "stream-key", "srt")
-            .await
-            .unwrap();
-
-        let ingest_audio = vec![
-            AudioMeta {
-                codec: "aac".to_string(),
-                sample_rate: 48000,
-                channels: 2,
-                channel_layout: None,
-                track_index: 0,
-                pid: Some(0x101),
-                language: None,
-                title: None,
-                profile: None,
-            },
-            AudioMeta {
-                codec: "aac".to_string(),
-                sample_rate: 48000,
-                channels: 2,
-                channel_layout: None,
-                track_index: 1,
-                pid: Some(0x102),
-                language: None,
-                title: None,
-                profile: None,
-            },
-        ];
-        engine
-            .update_ingest_meta(
-                "pipe-h264-stage-meta",
-                Some(VideoMeta {
-                    codec: "hevc".to_string(),
-                    width: 1920,
-                    height: 1080,
-                    fps: 30.0,
-                    bw: None,
-                    pid: None,
-                    language: None,
-                    title: None,
-                    profile: None,
-                    level: None,
-                    pixel_format: None,
-                }),
-                ingest_audio.first().cloned(),
-                None,
-            )
-            .await;
-        engine
-            .update_ingest_audio_tracks("pipe-h264-stage-meta", ingest_audio)
-            .await;
-
-        let upstream_ring = Arc::new(RingBuffer::new(32));
-        upstream_ring.set_codec_hint("hevc");
-        upstream_ring.set_audio_tracks(vec![AudioMeta {
-            codec: "aac".to_string(),
-            sample_rate: 48000,
-            channels: 2,
-            channel_layout: None,
-            track_index: 0,
-            pid: Some(0x102),
-            language: None,
-            title: None,
-            profile: None,
-        }]);
-
-        let cancel = CancellationToken::new();
-        let (video, audio_tracks) =
-            wait_for_h264_stage_metadata(&engine, "pipe-h264-stage-meta", &upstream_ring, &cancel)
-                .await
-                .expect("stage metadata");
-
-        assert_eq!(video.codec, "hevc");
-        assert_eq!(audio_tracks.len(), 1);
-        assert_eq!(audio_tracks[0].track_index, 0);
-        assert_eq!(audio_tracks[0].pid, Some(0x102));
     }
 
     #[test]

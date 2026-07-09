@@ -12,7 +12,7 @@ use tracing::info;
 
 use crate::domain::audio_routing::{AudioRouting, parse_audio_operation};
 use crate::domain::stage::{StageKey, StageKind};
-use crate::media::engine::MediaEngine;
+use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
 use crate::media::ffmpeg::backend::{
     ExternalFfmpegBackend, FfmpegStageBackend, InternalFfmpegBackend, StageRunContext,
 };
@@ -51,7 +51,7 @@ pub struct StageRuntimeManager {
 impl StageRuntimeManager {
     /// Create a manager using the engine's embedded `AppConfig` as the policy source.
     pub fn new(engine: Arc<MediaEngine>) -> Self {
-        let policy = engine.config.backend_policy.clone();
+        let policy = engine.config.backend_policy;
         Self { engine, policy }
     }
 
@@ -177,40 +177,34 @@ impl StageRuntimeManager {
         let key = handle.key.clone();
         let backend = self.select_backend(&key.kind);
 
-        if let Some(audio_op) = key.kind.audio_operation() {
-            if backend == StageBackend::AudioRouter {
-                let pipeline_id = key.pipeline.to_string();
-                let output_ring = handle.ring.clone();
-                let engine = self.engine.clone();
-                let cancel = handle.cancel.clone();
-                let routing = parse_audio_operation(audio_op);
-                info!(
-                    pipeline_id = %pipeline_id,
-                    stage = %key,
-                    "spawning audio-router stage"
-                );
-                tokio::spawn(async move {
-                    crate::media::transcoder::start_audio_router(
-                        pipeline_id,
-                        routing,
-                        source_ring,
-                        output_ring,
-                        engine,
-                        cancel,
-                        key,
-                    )
-                    .await;
-                });
-                return;
-            }
+        if let Some(audio_op) = key.kind.audio_operation()
+            && backend == StageBackend::AudioRouter
+        {
+            let pipeline_id = key.pipeline.to_string();
+            let output_ring = handle.ring.clone();
+            let engine = self.engine.clone();
+            let cancel = handle.cancel.clone();
+            let routing = parse_audio_operation(audio_op);
+            info!(
+                pipeline_id = %pipeline_id,
+                stage = %key,
+                "spawning audio-router stage"
+            );
+            tokio::spawn(async move {
+                crate::media::transcoder::start_audio_router(
+                    pipeline_id,
+                    routing,
+                    source_ring,
+                    output_ring,
+                    engine,
+                    cancel,
+                    key,
+                )
+                .await;
+            });
+            return;
         }
 
-        let Some(plan) =
-            build_ffmpeg_stage_plan(&key, &source_ring, input_codec_override, include_audio)
-        else {
-            tracing::warn!(stage = %key, "no ffmpeg plan for stage");
-            return;
-        };
         let pipeline_id = key.pipeline.to_string();
         let output_ring = handle.ring.clone();
         let engine = self.engine.clone();
@@ -218,65 +212,111 @@ impl StageRuntimeManager {
         let lifecycle = handle.lifecycle.clone();
         let metrics = handle.metrics.clone();
 
-        let input_pump = StageInputPump::new(
-            key.to_string(),
-            source_ring.clone(),
-            plan.startup.keyframe_preroll_packets,
-            plan.input.video_meta.as_ref(),
-            &plan.input.audio_tracks,
-            include_audio,
-            metrics.clone(),
-        )
-        .with_lifecycle(lifecycle.clone());
+        let input_codec_override = input_codec_override.map(|s| s.to_string());
 
-        let stream_count = 1 + plan.input.audio_tracks.len();
-        let output_normalizer =
-            StageOutputNormalizer::new(output_ring, stream_count, metrics.clone());
+        tokio::spawn(async move {
+            let input_codec_str = input_codec_override.as_deref().unwrap_or("h264");
+            let probe_codec = match source_ring.codec_hint_str() {
+                "" => input_codec_str,
+                hint => hint,
+            };
+            let eager_raw_parameter_sets = codec_needs_parameter_sets(probe_codec);
 
-        let ctx = StageRunContext {
-            stage_key: key.clone(),
-            pipeline_id: pipeline_id.clone(),
-            cancel: cancel.clone(),
-            lifecycle,
-            metrics,
-            engine,
-        };
+            let Some((video_meta, audio_tracks)) = wait_for_stage_metadata(
+                &engine,
+                &pipeline_id,
+                &source_ring,
+                include_audio,
+                eager_raw_parameter_sets,
+                input_codec_override.as_deref(),
+                &cancel,
+            )
+            .await
+            else {
+                engine.remove_stage_metrics(&key).await;
+                engine.remove_pipe_metrics(&key).await;
+                engine.remove_stage_lifecycle(&key).await;
+                return;
+            };
 
-        match backend {
-            StageBackend::InternalFfmpeg => {
-                info!(
-                    pipeline_id = %pipeline_id,
-                    stage = %key,
-                    "spawning internal ffmpeg stage"
-                );
-                tokio::spawn(async move {
+            if include_audio {
+                output_ring.set_audio_tracks((*audio_tracks).clone());
+            }
+
+            let Some(plan) = build_ffmpeg_stage_plan(
+                &key,
+                Some(video_meta.clone()),
+                (*audio_tracks).clone(),
+                input_codec_override.as_deref(),
+                include_audio,
+            ) else {
+                tracing::warn!(stage = %key, "no ffmpeg plan for stage");
+                return;
+            };
+
+            // Fetch the video sequence header from the engine's ingest state.
+            // For RTMP/FLV sources this contains the AVCC SPS/PPS needed by
+            // TsPacketFeeder; for TS/SRT sources it is typically None (the
+            // feeder obtains raw annex-B parameter sets from the ring or
+            // per-packet payload instead).
+            let (video_seq_header, _) = engine.get_sequence_headers(&pipeline_id).await;
+
+            let input_pump = StageInputPump::new(
+                key.to_string(),
+                source_ring.clone(),
+                plan.startup.keyframe_preroll_packets,
+                plan.input.video_meta.as_ref(),
+                &plan.input.audio_tracks,
+                include_audio,
+                metrics.clone(),
+            )
+            .with_video_sequence_header(video_seq_header)
+            .with_engine(engine.clone(), pipeline_id.clone())
+            .with_lifecycle(lifecycle.clone());
+
+            let stream_count = 1 + plan.input.audio_tracks.len();
+            let output_normalizer =
+                StageOutputNormalizer::new(output_ring, stream_count, metrics.clone());
+
+            let ctx = StageRunContext {
+                stage_key: key.clone(),
+                pipeline_id: pipeline_id.clone(),
+                cancel: cancel.clone(),
+                lifecycle,
+                metrics,
+                engine: engine.clone(),
+            };
+
+            match backend {
+                StageBackend::InternalFfmpeg => {
+                    info!(
+                        pipeline_id = %pipeline_id,
+                        stage = %key,
+                        "spawning internal ffmpeg stage"
+                    );
                     if let Err(e) = InternalFfmpegBackend
                         .run(plan, input_pump, output_normalizer, ctx)
                         .await
                     {
                         tracing::error!(stage = %key, error = %e, "internal ffmpeg stage failed");
                     }
-                });
-            }
-            StageBackend::ExternalFfmpeg => {
-                info!(
-                    pipeline_id = %pipeline_id,
-                    stage = %key,
-                    "spawning external ffmpeg stage"
-                );
-                tokio::spawn(async move {
+                }
+                StageBackend::ExternalFfmpeg => {
+                    info!(
+                        pipeline_id = %pipeline_id,
+                        stage = %key,
+                        "spawning external ffmpeg stage"
+                    );
                     if let Err(e) = ExternalFfmpegBackend
                         .run(plan, input_pump, output_normalizer, ctx)
                         .await
                     {
                         tracing::error!(stage = %key, error = %e, "external ffmpeg stage failed");
                     }
-                });
+                }
+                StageBackend::AudioRouter => {}
             }
-            StageBackend::AudioRouter => {
-                // Audio-router path handled above; unreachable but keeps exhaustiveness.
-            }
-        }
+        });
     }
 
     /// Return a runtime snapshot for a stage, if one is registered.
@@ -296,9 +336,7 @@ impl StageRuntimeManager {
         // emit H.264. Preview stages always emit H.264.
         if key.kind.is_video_preset() {
             output_ring.set_codec_hint(input_codec_override.unwrap_or("h264"));
-        } else if key.kind.is_preview() {
-            output_ring.set_codec_hint("h264");
-        } else if matches!(key.kind, StageKind::CodecEdge { .. }) {
+        } else if key.kind.is_preview() || matches!(key.kind, StageKind::CodecEdge { .. }) {
             output_ring.set_codec_hint("h264");
         } else if let Some(oc) = input_codec_override {
             output_ring.set_codec_hint(oc);
@@ -350,6 +388,116 @@ impl StageRuntimeManager {
     }
 }
 
+fn codec_needs_parameter_sets(codec: &str) -> bool {
+    matches!(
+        VideoCodecKind::from_codec_name(codec),
+        VideoCodecKind::H264 | VideoCodecKind::Hevc
+    )
+}
+
+fn stage_video_meta_ready(video: &VideoMeta) -> bool {
+    !video.codec.is_empty()
+        && (!codec_needs_parameter_sets(&video.codec) || (video.width > 0 && video.height > 0))
+}
+
+fn stage_audio_tracks_ready(audio_tracks: &[AudioMeta]) -> bool {
+    !audio_tracks.is_empty()
+        && audio_tracks
+            .iter()
+            .all(|track| track.sample_rate > 0 && track.channels > 0)
+}
+
+pub(crate) async fn wait_for_stage_metadata(
+    engine: &Arc<MediaEngine>,
+    pipeline_id: &str,
+    source_buffer: &Arc<RingBuffer>,
+    include_audio: bool,
+    eager_raw_parameter_sets: bool,
+    input_codec_override: Option<&str>,
+    cancel: &CancellationToken,
+) -> Option<(VideoMeta, std::sync::Arc<Vec<AudioMeta>>)> {
+    loop {
+        if cancel.is_cancelled() {
+            return None;
+        }
+
+        let ingest_result = {
+            let ingests = engine.ingests.active.read().await;
+            ingests.get(pipeline_id).and_then(|ingest| {
+                let mut video = ingest.video.clone()?;
+                if let Some(codec) = input_codec_override {
+                    video.codec = codec.to_string();
+                } else {
+                    let hint = source_buffer.codec_hint_str();
+                    if !hint.is_empty() {
+                        video.codec = hint.to_string();
+                    }
+                }
+                if !stage_video_meta_ready(&video) {
+                    return None;
+                }
+                let needs_raw_parameter_sets =
+                    eager_raw_parameter_sets && codec_needs_parameter_sets(&video.codec);
+                if needs_raw_parameter_sets {
+                    // Accept parameter sets from either the ring buffer (annex-B
+                    // for SRT/file-ingest sources), the engine's ingest video
+                    // sequence header (AVCC for RTMP/FLV sources), or check if
+                    // there are already packets present in the ring buffer (where
+                    // SPS/PPS are sent in-band inside the media payloads, e.g. HEVC RTMP).
+                    let ring_has_params = source_buffer.video_parameter_sets().is_some();
+                    let engine_has_seq_header = ingest
+                        .video_sequence_header
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .is_some();
+                    let ring_has_packets = source_buffer.get_write_idx() > 0;
+                    if !ring_has_params && !engine_has_seq_header && !ring_has_packets {
+                        return None;
+                    }
+                }
+
+                let audio_tracks = if include_audio {
+                    let ingest_audio_tracks = {
+                        let lock = ingest
+                            .audio_tracks
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        if lock.is_empty() {
+                            ingest
+                                .audio
+                                .clone()
+                                .map(|audio| std::sync::Arc::new(vec![audio]))
+                                .unwrap_or_default()
+                        } else {
+                            std::sync::Arc::clone(&lock)
+                        }
+                    };
+                    source_buffer
+                        .audio_tracks()
+                        .filter(|tracks| !tracks.is_empty())
+                        .map(|tracks| std::sync::Arc::new(tracks.to_vec()))
+                        .filter(|tracks| stage_audio_tracks_ready(tracks))
+                        .unwrap_or(ingest_audio_tracks)
+                } else {
+                    std::sync::Arc::new(Vec::new())
+                };
+
+                if include_audio && !stage_audio_tracks_ready(&audio_tracks) {
+                    return None;
+                }
+
+                Some((video, audio_tracks))
+            })
+        };
+
+        if let Some(meta) = ingest_result {
+            return Some(meta);
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
 fn backend_kind_for_stage(kind: &StageKind, policy: &BackendPolicy) -> StageBackendKind {
     use crate::planner::backend_policy::StageBackend;
     match policy.select_backend(kind) {
@@ -363,24 +511,40 @@ fn backend_kind_for_stage(kind: &StageKind, policy: &BackendPolicy) -> StageBack
 /// Returns `None` for stages that are not FFmpeg-backed (e.g. pure audio-router).
 pub fn build_ffmpeg_stage_plan(
     key: &StageKey,
-    source_ring: &Arc<RingBuffer>,
+    video_meta: Option<VideoMeta>,
+    audio_tracks: Vec<AudioMeta>,
     input_codec_override: Option<&str>,
     include_audio: bool,
 ) -> Option<FfmpegStagePlan> {
     let input_codec = input_codec_override
         .map(VideoCodecKind::from_codec_name)
-        .unwrap_or_else(|| VideoCodecKind::from_codec_name(&source_ring.codec_hint_str()));
-    let audio_tracks = source_ring
-        .audio_tracks()
-        .map(|t| t.to_vec())
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            let codec_name = video_meta.as_ref().map(|v| v.codec.as_str()).unwrap_or("");
+            VideoCodecKind::from_codec_name(codec_name)
+        });
     let input = StageInputSpec {
         codec_hint: input_codec.clone(),
-        video_meta: None,
+        video_meta: video_meta.clone(),
         audio_tracks,
     };
 
     match &key.kind {
+        StageKind::Source => Some(FfmpegStagePlan {
+            stage_key: key.clone(),
+            pipeline_id: key.pipeline.to_string(),
+            input,
+            video: VideoStageOp::Passthrough,
+            audio: AudioStageOp::Passthrough,
+            output_codec: input_codec,
+            output_profile: None,
+            include_audio,
+            startup: StageStartupPolicy {
+                keyframe_preroll_packets: 0,
+                require_video_parameter_sets: true,
+                wait_for_first_keyframe: true,
+            },
+            timeline: TimelinePolicy::default(),
+        }),
         StageKind::VideoPreset { preset } => Some(FfmpegStagePlan {
             stage_key: key.clone(),
             pipeline_id: key.pipeline.to_string(),
@@ -422,7 +586,7 @@ pub fn build_ffmpeg_stage_plan(
         StageKind::Preview { preset, .. } => {
             let preview_input = StageInputSpec {
                 codec_hint: input_codec,
-                video_meta: None,
+                video_meta,
                 audio_tracks: Vec::new(),
             };
             Some(FfmpegStagePlan {

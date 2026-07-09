@@ -170,11 +170,11 @@ pub async fn start_audio_router(
                     }
                     // Propagate audio_tracks from input ring as soon as they are
                     // available (late-arriving on live SRT/RTMP ingest).
-                    if output_buffer.audio_tracks().is_none() {
-                        if let Some(input_tracks) = reader.current_ring().audio_tracks() {
-                            let output_tracks = apply_audio_routing(&routing, &input_tracks);
-                            output_buffer.set_audio_tracks(output_tracks);
-                        }
+                    if output_buffer.audio_tracks().is_none()
+                        && let Some(input_tracks) = reader.current_ring().audio_tracks()
+                    {
+                        let output_tracks = apply_audio_routing(&routing, &input_tracks);
+                        output_buffer.set_audio_tracks(output_tracks);
                     }
                     let out = match &routing {
                         AudioRouting::Passthrough => Some((*pkt).clone()),
@@ -289,83 +289,20 @@ pub fn apply_audio_routing(routing: &AudioRouting, input_tracks: &[AudioMeta]) -
     }
 }
 
-pub async fn start_transcoder(
-    pipeline_id: String,
-    preset: String,
-    input_buffer: Arc<RingBuffer>,
-    output_buffer: Arc<RingBuffer>,
-    engine: Arc<crate::media::engine::MediaEngine>,
-    cancel_token: CancellationToken,
-    stage_key: StageKey,
-) {
-    let needs_scale = preset.starts_with("video:");
-    start_transcoder_inner(
-        pipeline_id,
-        preset,
-        input_buffer,
-        output_buffer,
-        engine,
-        cancel_token,
-        stage_key,
-        None,
-        None,
-        needs_scale,
-    )
-    .await
-}
-
 #[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
 pub async fn start_transcoder_inner(
     pipeline_id: String,
     preset: String,
-    input_buffer: Arc<RingBuffer>,
+    _input_buffer: Arc<RingBuffer>,
     output_buffer: Arc<RingBuffer>,
     engine: Arc<crate::media::engine::MediaEngine>,
     cancel_token: CancellationToken,
     stage_key: StageKey,
-    shared_pump: Option<crate::media::ffmpeg::stage_input::StageInputPump>,
-    shared_normalizer: Option<StageOutputNormalizer>,
+    mut input_pump: crate::media::ffmpeg::stage_input::StageInputPump,
+    output_normalizer: StageOutputNormalizer,
     needs_scale: bool,
 ) {
-    // Wait for ingest metadata when creating our own pump
-    let (video_meta, audio_tracks) = if shared_pump.is_none() {
-        let result = loop {
-            if cancel_token.is_cancelled() {
-                engine
-                    .runtime
-                    .event_log
-                    .emit(crate::events::EventKind::StageStopped {
-                        pipeline_id: pipeline_id.clone(),
-                        encoding: stage_key.kind.to_string(),
-                    });
-                return;
-            }
-            let result = {
-                let ingests = engine.ingests.active.read().await;
-                ingests.get(&pipeline_id).and_then(|i| {
-                    let video = i.video.clone();
-                    video.as_ref()?;
-                    let lock = i.audio_tracks.lock().unwrap_or_else(|e| e.into_inner());
-                    let tracks = if lock.is_empty()
-                        && let Some(audio) = i.audio.clone()
-                    {
-                        std::sync::Arc::new(vec![audio])
-                    } else {
-                        std::sync::Arc::clone(&lock)
-                    };
-                    Some((video, tracks))
-                })
-            };
-            if let Some(meta) = result {
-                break meta;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        };
-        (Some(result.0), Some(result.1))
-    } else {
-        (None, None)
-    };
-
     let input_queue = Arc::new(crate::media::avio::MemoryQueue::new());
     let stage_metrics = engine.get_or_create_stage_metrics(stage_key.clone()).await;
     let stage_lifecycle = engine
@@ -404,7 +341,7 @@ pub async fn start_transcoder_inner(
                     video_preset,
                     cancel_token_clone,
                     Some(stage_metrics_for_thread),
-                    shared_normalizer,
+                    Some(output_normalizer),
                 )
             } else {
                 run_ffmpeg_transcoder_stage_with_normalizer(
@@ -413,7 +350,7 @@ pub async fn start_transcoder_inner(
                     &preset_clone,
                     cancel_token_clone,
                     Some(stage_metrics_for_thread),
-                    shared_normalizer,
+                    Some(output_normalizer),
                 )
             }
         }));
@@ -432,40 +369,14 @@ pub async fn start_transcoder_inner(
     });
     engine.register_os_thread(handle);
 
-    if let Some(mut pump) = shared_pump {
-        let mut queue_sink =
-            InternalMemoryQueueSink::new(input_queue.clone(), cancel_token.clone());
-        if let Err(e) = pump.pump_to(&mut queue_sink, &cancel_token).await {
-            error!(
-                pipeline_id = %pipeline_id,
-                preset = %preset,
-                "internal transcoder shared pump failed: {}",
-                e
-            );
-        }
-    } else {
-        let (video_meta, audio_tracks) = (video_meta.unwrap(), audio_tracks.unwrap());
-        let mut input_pump = crate::media::ffmpeg::stage_input::StageInputPump::new(
-            format!("transcoder:{}:{}", pipeline_id, preset),
-            input_buffer,
-            crate::media::startup_policy::internal_transcoder_keyframe_preroll_packets(),
-            video_meta.as_ref(),
-            &audio_tracks,
-            true,
-            stage_metrics.clone(),
-        )
-        .with_lifecycle(stage_lifecycle.clone());
-
-        let mut queue_sink =
-            InternalMemoryQueueSink::new(input_queue.clone(), cancel_token.clone());
-        if let Err(e) = input_pump.pump_to(&mut queue_sink, &cancel_token).await {
-            error!(
-                pipeline_id = %pipeline_id,
-                preset = %preset,
-                "internal transcoder input pump failed: {}",
-                e
-            );
-        }
+    let mut queue_sink = InternalMemoryQueueSink::new(input_queue.clone(), cancel_token.clone());
+    if let Err(e) = input_pump.pump_to(&mut queue_sink, &cancel_token).await {
+        error!(
+            pipeline_id = %pipeline_id,
+            preset = %preset,
+            "internal transcoder shared pump failed: {}",
+            e
+        );
     }
 
     input_queue.close();
@@ -505,8 +416,8 @@ pub async fn run_internal_ffmpeg_backend(
             ctx.engine,
             ctx.cancel,
             ctx.stage_key,
-            Some(input_pump),
-            Some(output_normalizer),
+            input_pump,
+            output_normalizer,
         )
         .await;
     } else {
@@ -522,8 +433,8 @@ pub async fn run_internal_ffmpeg_backend(
             ctx.engine,
             ctx.cancel,
             ctx.stage_key,
-            Some(input_pump),
-            Some(output_normalizer),
+            input_pump,
+            output_normalizer,
             needs_scale,
         )
         .await;

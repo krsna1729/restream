@@ -69,21 +69,11 @@ pub struct StageInputSpec {
 }
 
 /// Startup discipline for the stage.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct StageStartupPolicy {
     pub keyframe_preroll_packets: usize,
     pub require_video_parameter_sets: bool,
     pub wait_for_first_keyframe: bool,
-}
-
-impl Default for StageStartupPolicy {
-    fn default() -> Self {
-        Self {
-            keyframe_preroll_packets: 0,
-            require_video_parameter_sets: false,
-            wait_for_first_keyframe: false,
-        }
-    }
 }
 
 /// Timeline normalization policy.

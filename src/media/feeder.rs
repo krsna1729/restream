@@ -125,6 +125,28 @@ impl TsPacketFeeder {
         true
     }
 
+    /// Parse an FLV/RTMP video sequence header (AVCC format) and use the
+    /// resulting SPS/PPS bytes and NALU-length-size to prime the feeder.
+    ///
+    /// This is the header stored by the RTMP handler in the engine's ingest
+    /// state (`cache_sequence_header`).  It must be called before processing
+    /// the first FLV-format video packet so that `video_for_ts_into` has the
+    /// SPS/PPS needed to build a correct Annex-B frame.
+    ///
+    /// Safe to call repeatedly: if the cache is already non-empty this is a
+    /// no-op, matching the "if empty" semantics of
+    /// `set_raw_video_parameter_sets_if_empty`.
+    pub fn set_video_sequence_header_from_avcc(&mut self, flv_sequence_header: &[u8]) {
+        if !self.needs_raw_video_parameter_sets() {
+            return;
+        }
+        let (nalu_len_size, sps_pps) = parse_video_sequence_header(flv_sequence_header);
+        if !sps_pps.is_empty() {
+            self.nalu_len_size = nalu_len_size;
+            self.sps_pps_cache = sps_pps;
+        }
+    }
+
     pub fn extend_ts_for_packet(&mut self, packet: &MediaPacket, output: &mut Vec<u8>) -> bool {
         let (payload, stream_idx) = match packet.media_type {
             MediaType::Video => {
@@ -225,9 +247,7 @@ fn prepare_video_startup_packet(
             }
         }
         crate::media::ring_buffer::PayloadFormat::Flv => {
-            if packet.payload.len() > 1 && packet.payload[1] == 0 {
-                VideoStartupAction::Emit
-            } else if packet.is_keyframe {
+            if (packet.payload.len() > 1 && packet.payload[1] == 0) || packet.is_keyframe {
                 VideoStartupAction::Emit
             } else {
                 VideoStartupAction::Skip
