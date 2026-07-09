@@ -7,7 +7,6 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::db;
 use crate::logging::types::AppLogFilters;
 
 use super::state::{AppState, get_session_token_from_headers};
@@ -112,40 +111,6 @@ pub fn log_broadcast_matches_stream_filters(
     log_stream_prefix_matches(prefix, &entry.message)
 }
 
-pub async fn list_logs_stream_backfill(
-    db_pool: &sqlx::SqlitePool,
-    filters: &AppLogFilters,
-    include_restream: bool,
-) -> Vec<crate::logging::types::AppLogRow> {
-    let limit = filters.limit.unwrap_or(200).clamp(1, 1000);
-    if !include_restream || filters.pipeline_id.is_none() || filters.output_id.is_some() {
-        return db::list_app_logs(db_pool, filters)
-            .await
-            .unwrap_or_default();
-    }
-
-    let mut restream_filters = filters.clone();
-    restream_filters.scope = Some("restream".to_string());
-    restream_filters.pipeline_id = None;
-    restream_filters.output_id = None;
-
-    let (pipeline_logs, restream_logs) = tokio::join!(
-        db::list_app_logs(db_pool, filters),
-        db::list_app_logs(db_pool, &restream_filters),
-    );
-
-    let mut merged = std::collections::BTreeMap::new();
-    for row in pipeline_logs
-        .unwrap_or_default()
-        .into_iter()
-        .chain(restream_logs.unwrap_or_default())
-    {
-        merged.insert(row.id, row);
-    }
-
-    merged.into_values().take(limit as usize).collect()
-}
-
 pub async fn logs_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -221,7 +186,7 @@ pub async fn logs_stream_handler(
 
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
 
-    let db_pool = state.db.clone();
+    let log_service = state.log_service.clone();
     let mut broadcast_rx = state.log_broadcast.subscribe();
 
     tokio::spawn(async move {
@@ -234,25 +199,25 @@ pub async fn logs_stream_handler(
             }
         };
         if let Some(since_id) = resume_from {
-            let backfill = list_logs_stream_backfill(
-                &db_pool,
-                &AppLogFilters {
-                    after_id: Some(since_id),
-                    level: Some(min_level.clone()),
-                    since: None,
-                    until: None,
-                    target: filter_target.clone(),
-                    scope: filter_scope.clone(),
-                    pipeline_id: filter_pipeline.clone(),
-                    output_id: filter_output.clone(),
-                    event_class: filter_event_class.clone(),
-                    prefix: filter_prefix.clone(),
-                    limit: Some(200),
-                    order: Some("asc".to_string()),
-                },
-                include_restream,
-            )
-            .await;
+            let backfill = log_service
+                .list_stream_backfill(
+                    &AppLogFilters {
+                        after_id: Some(since_id),
+                        level: Some(min_level.clone()),
+                        since: None,
+                        until: None,
+                        target: filter_target.clone(),
+                        scope: filter_scope.clone(),
+                        pipeline_id: filter_pipeline.clone(),
+                        output_id: filter_output.clone(),
+                        event_class: filter_event_class.clone(),
+                        prefix: filter_prefix.clone(),
+                        limit: Some(200),
+                        order: Some("asc".to_string()),
+                    },
+                    include_restream,
+                )
+                .await;
 
             for row in backfill {
                 let data = serde_json::json!({

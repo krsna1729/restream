@@ -109,7 +109,7 @@ summary.
 | Criterion | Status | Evidence |
 |---|---|---|
 | Services exist | ✅ Present | `src/application/services/*` includes pipeline, output, ingest, file ingest, media library, settings, health, auth, logs. |
-| Handlers no longer call SQL directly | ❌ Not met | `api/agent.rs`, `api/logs.rs`, `api/auth.rs`, and other route code still call `db::*` directly. |
+| Handlers no longer call SQL directly | ⚠️ Partial | `api/logs.rs` now delegates persisted list/backfill behavior to `LogService`; `api/agent.rs`, auth initialization, and some other route code still call `db::*` directly. |
 | Handlers do not call low-level media constructors | ⚠️ Mostly | `api/hls.rs` delegates to `application::hls_preview`, but other API/runtime views still take `MediaEngine` directly for read models. |
 | Services testable without Axum request types | ✅ Mostly | Service structs do not depend on Axum types. |
 
@@ -320,7 +320,7 @@ convergence and later harness/reporting phases.
 | Ph 1 Core contracts | B | Types exist and reconciliation now consumes typed desired-state logic; runtime string-state storage remains. |
 | Ph 2 Config | A- | Production env parsing is centralized in config; startup summary remains unclear. |
 | Ph 3 API split | A | Route module split is complete. |
-| Ph 4 App services | C+ | Services exist; handlers still contain direct DB/application work. |
+| Ph 4 App services | B- | Logs route family is service-backed; agent/auth and other handlers still contain direct DB/application work. |
 | Ph 5 Repositories | C+ | Repo modules exist; port isolation partial. |
 | Ph 6 Graph planner | A- | Planner drives output preparation, graph rendering, diagnostics, and preview planning, with harness stage-sharing tests; recording/agent consumers remain. |
 | Ph 7 Stage lifecycle | B+ | Lifecycle/capacity visibility strong; runtime object model still split. |
