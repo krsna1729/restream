@@ -38,6 +38,13 @@ pub enum MediaRenamePlanError {
     ConversionStateExists,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaDeleteError {
+    HasConfiguredIngests,
+    NotFound,
+    Io(String),
+}
+
 impl MediaLibraryService {
     pub fn new(db: SqlitePool, pipeline_service: PipelineService) -> Self {
         Self {
@@ -146,6 +153,33 @@ impl MediaLibraryService {
             }
         }
         delete_paths
+    }
+
+    pub async fn delete_media_file(
+        &self,
+        filename: &str,
+        canonical_path: &Path,
+    ) -> Result<(), MediaDeleteError> {
+        let ingests = db::list_ingests_for_filename(&self.db, filename)
+            .await
+            .unwrap_or_default();
+        if !ingests.is_empty() {
+            return Err(MediaDeleteError::HasConfiguredIngests);
+        }
+
+        let delete_paths = self.delete_paths_for_media(filename, canonical_path);
+        match tokio::fs::remove_file(canonical_path).await {
+            Ok(_) => {
+                for extra_path in delete_paths.into_iter().skip(1) {
+                    let _ = tokio::fs::remove_file(extra_path).await;
+                }
+                Ok(())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Err(MediaDeleteError::NotFound)
+            }
+            Err(error) => Err(MediaDeleteError::Io(error.to_string())),
+        }
     }
 
     pub fn rename_pairs_for_media(
@@ -296,6 +330,62 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err, MediaRenamePlanError::ConvertedExists);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn delete_media_file_removes_recording_companions() {
+        let service = service_with_pipeline().await;
+        let temp_dir = tempfile_dir("media-delete-exec");
+        let source = temp_dir.join("recording_20260709T010203_demo.ts");
+        let converted = temp_dir.join("recording_20260709T010203_demo.mp4");
+        let state = temp_dir.join("recording_20260709T010203_demo.ts.conversion.json");
+        std::fs::write(&source, b"source").unwrap();
+        std::fs::write(&converted, b"converted").unwrap();
+        std::fs::write(&state, b"state").unwrap();
+
+        service
+            .delete_media_file(
+                "recording_20260709T010203_demo.ts",
+                &std::fs::canonicalize(&source).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(!source.exists());
+        assert!(!converted.exists());
+        assert!(!state.exists());
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn delete_media_file_rejects_configured_ingests() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        crate::db::create_ingest(
+            &pool,
+            "ing-1",
+            "clip.mp4",
+            "stream-key",
+            false,
+            "",
+            false,
+            crate::types::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+        )
+        .await
+        .unwrap();
+        let service = MediaLibraryService::new(pool.clone(), PipelineService::new(pool));
+        let temp_dir = tempfile_dir("media-delete-ingest");
+        let file = temp_dir.join("clip.mp4");
+        std::fs::write(&file, b"source").unwrap();
+
+        let err = service
+            .delete_media_file("clip.mp4", &std::fs::canonicalize(&file).unwrap())
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, MediaDeleteError::HasConfiguredIngests);
+        assert!(file.exists());
         let _ = std::fs::remove_dir_all(temp_dir);
     }
 

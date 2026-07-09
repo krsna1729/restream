@@ -9,7 +9,10 @@ use std::collections::{HashMap, HashSet};
 
 use std::sync::Arc;
 
-use crate::application::services::{ApiError, media_library_service::MediaRenamePlanError};
+use crate::application::services::{
+    ApiError,
+    media_library_service::{MediaDeleteError, MediaRenamePlanError},
+};
 
 use super::state::{AppState, get_session_token_from_headers, require_authenticated};
 
@@ -413,19 +416,6 @@ pub async fn media_delete_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    let ingests = state
-        .ingest_service
-        .list_for_filename(&filename)
-        .await
-        .unwrap_or_default();
-    if !ingests.is_empty() {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "Cannot delete: file has configured ingests"})),
-        )
-            .into_response();
-    }
-
     let canonical_path = match media_path_under_root(&state.media_dir, &filename) {
         Ok(path) => path,
         Err(StatusCode::INTERNAL_SERVER_ERROR) => {
@@ -437,18 +427,25 @@ pub async fn media_delete_handler(
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid path").into_response(),
     };
 
-    let delete_paths = state
+    match state
         .media_library_service
-        .delete_paths_for_media(&filename, &canonical_path);
-
-    match tokio::fs::remove_file(&canonical_path).await {
-        Ok(_) => {
-            for extra_path in delete_paths.into_iter().skip(1) {
-                let _ = tokio::fs::remove_file(extra_path).await;
-            }
-            Json(serde_json::json!({ "deleted": true })).into_response()
+        .delete_media_file(&filename, &canonical_path)
+        .await
+    {
+        Ok(()) => Json(serde_json::json!({ "deleted": true })).into_response(),
+        Err(MediaDeleteError::HasConfiguredIngests) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "Cannot delete: file has configured ingests"})),
+        )
+            .into_response(),
+        Err(MediaDeleteError::NotFound) => {
+            (StatusCode::NOT_FOUND, "File not found").into_response()
         }
-        Err(_) => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(MediaDeleteError::Io(error)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to delete media file: {error}")})),
+        )
+            .into_response(),
     }
 }
 
