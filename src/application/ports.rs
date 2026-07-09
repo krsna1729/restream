@@ -1,6 +1,7 @@
 //! Application-layer port traits and adapter types defining the storage and
 //! catalog capabilities that orchestration code depends on.
 
+use crate::db::RecordingRow;
 use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;
 use crate::logging::types::{AppLogFilters, AppLogRow};
@@ -54,6 +55,8 @@ pub type OutputDeleteFuture<'a> =
     Pin<Box<dyn Future<Output = Result<bool, OutputStoreError>> + Send + 'a>>;
 pub type LogListFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<AppLogRow>, LogStoreError>> + Send + 'a>>;
+pub type RecordingListFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<RecordingRow>, RecordingStoreError>> + Send + 'a>>;
 
 #[derive(Debug, Clone)]
 pub struct PipelineStoreError {
@@ -223,6 +226,27 @@ impl fmt::Display for JobStoreError {
 
 impl std::error::Error for JobStoreError {}
 
+#[derive(Debug, Clone)]
+pub struct RecordingStoreError {
+    message: String,
+}
+
+impl RecordingStoreError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for RecordingStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RecordingStoreError {}
+
 pub trait PipelineStore: Send + Sync {
     fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a>;
     fn get_pipeline_by_stream_key<'a>(&'a self, stream_key: &'a str) -> PipelineLookupFuture<'a>;
@@ -347,6 +371,10 @@ pub trait JobStore: Send + Sync {
     fn list_jobs<'a>(&'a self) -> JobListFuture<'a>;
 }
 
+pub trait RecordingStore: Send + Sync {
+    fn list_recordings<'a>(&'a self) -> RecordingListFuture<'a>;
+}
+
 #[derive(Clone)]
 pub struct SqlitePipelineStore {
     pool: SqlitePool,
@@ -379,6 +407,11 @@ pub struct SqliteJobStore {
 
 #[derive(Clone)]
 pub struct SqliteLogStore {
+    pool: SqlitePool,
+}
+
+#[derive(Clone)]
+pub struct SqliteRecordingStore {
     pool: SqlitePool,
 }
 
@@ -419,6 +452,12 @@ impl SqliteJobStore {
 }
 
 impl SqliteLogStore {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+impl SqliteRecordingStore {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
@@ -822,6 +861,16 @@ impl LogStore for SqliteLogStore {
     }
 }
 
+impl RecordingStore for SqliteRecordingStore {
+    fn list_recordings<'a>(&'a self) -> RecordingListFuture<'a> {
+        Box::pin(async move {
+            crate::db::list_recordings(&self.pool)
+                .await
+                .map_err(|err| RecordingStoreError::new(err.to_string()))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -961,5 +1010,31 @@ mod tests {
 
         let value = crate::db::get_meta(&pool, "test-key").await.unwrap();
         assert_eq!(value.as_deref(), Some("test-value"));
+    }
+
+    #[tokio::test]
+    async fn sqlite_recording_store_lists_recordings() {
+        let pool = test_pool().await;
+        crate::db::create_pipeline(&pool, "pipe-1", "Pipeline", "stream-key", None, None)
+            .await
+            .unwrap();
+        crate::db::create_recording(
+            &pool,
+            &crate::domain::ids::RecordingId::from("rec-1"),
+            "pipe-1",
+            "2026-07-09T00:00:00Z",
+            Some("/media/recording_1.ts"),
+            Some("h264/aac"),
+        )
+        .await
+        .unwrap();
+        let store = SqliteRecordingStore::new(pool);
+
+        let rows = store.list_recordings().await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].recording_id, "rec-1");
+        assert_eq!(rows[0].pipeline_id, "pipe-1");
+        assert_eq!(rows[0].temp_path.as_deref(), Some("/media/recording_1.ts"));
     }
 }

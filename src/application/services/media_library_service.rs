@@ -6,11 +6,12 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
-use crate::application::ports::SqliteMetaStore;
+use crate::application::ports::{
+    MetaStore, MetaStoreWriter, RecordingStore, SqliteMetaStore, SqliteRecordingStore,
+};
 use crate::application::recording::{
     load_recording_settings, recording_enabled_meta_key, spawn_recording_task,
 };
-use crate::db;
 use crate::media::engine::MediaEngine;
 use crate::types::Pipeline;
 
@@ -30,7 +31,9 @@ pub struct MediaRecordingMetadata {
 }
 
 pub struct MediaLibraryService {
-    db: SqlitePool,
+    meta_store: Arc<dyn MetaStore>,
+    meta_writer: Arc<dyn MetaStoreWriter>,
+    recording_store: Arc<dyn RecordingStore>,
     pipeline_service: PipelineService,
     ingest_service: IngestService,
 }
@@ -95,8 +98,27 @@ impl MediaLibraryService {
         pipeline_service: PipelineService,
         ingest_service: IngestService,
     ) -> Self {
+        let meta_store = Arc::new(SqliteMetaStore::new(db.clone()));
         Self {
-            db,
+            meta_store: meta_store.clone(),
+            meta_writer: meta_store,
+            recording_store: Arc::new(SqliteRecordingStore::new(db)),
+            pipeline_service,
+            ingest_service,
+        }
+    }
+
+    pub fn with_stores(
+        meta_store: Arc<dyn MetaStore>,
+        meta_writer: Arc<dyn MetaStoreWriter>,
+        recording_store: Arc<dyn RecordingStore>,
+        pipeline_service: PipelineService,
+        ingest_service: IngestService,
+    ) -> Self {
+        Self {
+            meta_store,
+            meta_writer,
+            recording_store,
             pipeline_service,
             ingest_service,
         }
@@ -274,12 +296,11 @@ impl MediaLibraryService {
         media_dir: &str,
     ) -> ApiResult<bool> {
         let meta_key = recording_enabled_meta_key(pipeline_id);
-        let _ = db::set_meta(&self.db, &meta_key, "1").await;
+        let _ = self.meta_writer.set_meta(&meta_key, "1").await;
 
         let has_ingest = engine.ingests.active.read().await.contains_key(pipeline_id);
         if has_ingest && !engine.is_recording_active(pipeline_id).await {
-            let recording_settings =
-                load_recording_settings(&SqliteMetaStore::new(self.db.clone())).await;
+            let recording_settings = load_recording_settings(self.meta_store.as_ref()).await;
             spawn_recording_task(
                 engine.clone(),
                 pipeline_name,
@@ -300,7 +321,7 @@ impl MediaLibraryService {
         pipeline_id: &str,
     ) -> ApiResult<()> {
         let meta_key = recording_enabled_meta_key(pipeline_id);
-        let _ = db::set_meta(&self.db, &meta_key, "0").await;
+        let _ = self.meta_writer.set_meta(&meta_key, "0").await;
         engine.unregister_recording(pipeline_id).await;
         Ok(())
     }
@@ -314,7 +335,9 @@ impl MediaLibraryService {
             return Ok(HashMap::new());
         }
 
-        let rows = db::list_recordings(&self.db)
+        let rows = self
+            .recording_store
+            .list_recordings()
             .await
             .map_err(|e| ApiError::internal(format!("list recordings: {e}")))?;
         let mut metadata = HashMap::new();
