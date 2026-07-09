@@ -226,11 +226,11 @@ runtime graph service.
 | Recording metadata table | ✅ Present | `db/schema.rs` creates `recordings`. |
 | Recording repository | ✅ Present | `db/recording_repo.rs` with create/update/list/delete tests. |
 | Runtime writes lifecycle metadata | ✅ Present | `media/recording.rs` builds service metadata and updates lifecycle state. |
-| Media API returns metadata including pipeline/status | ⚠️ Partial | Repository exists; media-library surfacing needs continued verification and is not fully described by one read model. |
+| Media API returns metadata including pipeline/status | ✅ Present | `/api/v1/media` attaches persisted `recordingId`, `pipelineId`, status, timing, codec, and error fields via `MediaLibraryService::recording_metadata_by_filename()`. |
 | Harness filters by pipeline/recording ID first | ⚠️ Partial | Harness rejects `.tmp.mp4`, but still has filename-token matching logic in `mixed_playback.rs`. |
 
-**Verdict**: **Mostly complete at persistence/runtime level, partial at product
-and harness consumption level**.
+**Verdict**: **Mostly complete at persistence/runtime/product API level,
+partial at harness consumption level**.
 
 ---
 
@@ -327,7 +327,7 @@ convergence and later harness/reporting phases.
 | Ph 8 Dependency-aware status | A- | Operator-facing dependency status is largely complete. |
 | Ph 9 FFmpeg waist | B+ | Output-side normalizer escape hatch removed; input-side and bridge compatibility paths remain. |
 | Ph 10 HLS preview | A- | API one-off removed; runtime service boundary still not ideal. |
-| Ph 11 Recording metadata | B | Metadata exists; consumption/harness still partly filename-based. |
+| Ph 11 Recording metadata | B+ | Media API consumes persisted recording metadata; harness still partly filename-based. |
 | Ph 12 Health/alerts/diagnostics | A- | Health, alerts, graph, and causal diagnostics bundle are complete; legacy SSE diagnostics remains a separate probe. |
 | Ph 13 Harness v2 | D | Some dependency fields printed; semantic model missing. |
 | Ph 14 Agent/MCP cleanup | D | Agent still crosses DB/API/runtime boundaries. |

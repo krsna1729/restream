@@ -124,6 +124,11 @@ pub async fn media_list_handler(
     let mut consumed = HashSet::new();
     let mut names = entries.keys().cloned().collect::<Vec<_>>();
     names.sort();
+    let recording_metadata = state
+        .media_library_service
+        .recording_metadata_by_filename(names.clone())
+        .await
+        .unwrap_or_default();
     for name in names {
         if !consumed.insert(name.clone()) {
             continue;
@@ -149,7 +154,8 @@ pub async fn media_list_handler(
             .await
             .unwrap_or_default();
         let lower_name = name.to_ascii_lowercase();
-        let kind = if lower_name.contains("recording") {
+        let recording_meta = recording_metadata.get(&name);
+        let kind = if recording_meta.is_some() || lower_name.contains("recording") {
             "recording"
         } else {
             "source"
@@ -205,6 +211,13 @@ pub async fn media_list_handler(
                 "conversionStatus": conversion_status,
                 "conversionError": conversion_error,
                 "conversionUpdatedAt": conversion_updated_at,
+                "recordingId": recording_meta.map(|row| row.recording_id.clone()),
+                "pipelineId": recording_meta.map(|row| row.pipeline_id.clone()),
+                "recordingStatus": recording_meta.map(|row| row.status.clone()),
+                "recordingStartedAt": recording_meta.map(|row| row.started_at.clone()),
+                "recordingEndedAt": recording_meta.and_then(|row| row.ended_at.clone()),
+                "recordingCodecSummary": recording_meta.and_then(|row| row.codec_summary.clone()),
+                "recordingError": recording_meta.and_then(|row| row.error.clone()),
             }));
             continue;
         }
@@ -223,6 +236,13 @@ pub async fn media_list_handler(
             "conversionStatus": serde_json::Value::Null,
             "conversionError": serde_json::Value::Null,
             "conversionUpdatedAt": serde_json::Value::Null,
+            "recordingId": recording_meta.map(|row| row.recording_id.clone()),
+            "pipelineId": recording_meta.map(|row| row.pipeline_id.clone()),
+            "recordingStatus": recording_meta.map(|row| row.status.clone()),
+            "recordingStartedAt": recording_meta.map(|row| row.started_at.clone()),
+            "recordingEndedAt": recording_meta.and_then(|row| row.ended_at.clone()),
+            "recordingCodecSummary": recording_meta.and_then(|row| row.codec_summary.clone()),
+            "recordingError": recording_meta.and_then(|row| row.error.clone()),
         }));
     }
 

@@ -161,6 +161,18 @@ pub async fn list_recordings_by_status(
     .await
 }
 
+/// List all recordings, newest first.
+pub async fn list_recordings(pool: &SqlitePool) -> Result<Vec<RecordingRow>, sqlx::Error> {
+    sqlx::query_as::<_, RecordingRow>(
+        "SELECT recording_id, pipeline_id, started_at, ended_at, status,
+                temp_path, final_path, codec_summary, error
+         FROM recordings
+         ORDER BY started_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+}
+
 /// Delete a recording row by ID.
 pub async fn delete_recording(
     pool: &SqlitePool,
@@ -292,6 +304,38 @@ mod tests {
         assert_eq!(rows.len(), 2);
         // newest first
         assert_eq!(rows[0].recording_id, "rec-b");
+    }
+
+    #[tokio::test]
+    async fn list_recordings_returns_newest_first() {
+        let pool = test_pool().await;
+        make_pipeline(&pool).await;
+
+        create_recording(
+            &pool,
+            &RecordingId::from("rec-old"),
+            "p1",
+            "2026-01-01T00:00:00Z",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        create_recording(
+            &pool,
+            &RecordingId::from("rec-new"),
+            "p1",
+            "2026-01-02T00:00:00Z",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let rows = list_recordings(&pool).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].recording_id, "rec-new");
+        assert_eq!(rows[1].recording_id, "rec-old");
     }
 
     #[tokio::test]

@@ -2896,6 +2896,65 @@ async fn media_library_classifies_serves_and_deletes_files() {
 }
 
 #[tokio::test]
+async fn media_library_uses_recording_metadata_for_file_rows() {
+    let (app, cookie, temp_dir, pool) = authenticated_app_with_temp_media().await;
+    let final_path = temp_dir.join("session-final.mp4");
+    tokio::fs::write(&final_path, b"recording bytes")
+        .await
+        .unwrap();
+    db::create_pipeline(
+        &pool,
+        "pipe-rec",
+        "Recording Pipeline",
+        "rec-key",
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let recording_id = restream::domain::ids::RecordingId::from("rec-meta-1");
+    db::create_recording(
+        &pool,
+        &recording_id,
+        "pipe-rec",
+        "2026-07-09T00:00:00Z",
+        Some(temp_dir.join("session-temp.ts").to_string_lossy().as_ref()),
+        Some("h264/aac"),
+    )
+    .await
+    .unwrap();
+    db::finalize_recording(
+        &pool,
+        &recording_id,
+        "2026-07-09T00:01:00Z",
+        final_path.to_string_lossy().as_ref(),
+    )
+    .await
+    .unwrap();
+
+    let resp = app
+        .oneshot(auth_req("GET", "/api/v1/media", &cookie, None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let files = json["files"].as_array().unwrap();
+    let recording = files
+        .iter()
+        .find(|file| file["name"].as_str() == Some("session-final.mp4"))
+        .expect("recording metadata should attach to the final filename");
+
+    assert_eq!(recording["kind"], "recording");
+    assert_eq!(recording["recordingId"], "rec-meta-1");
+    assert_eq!(recording["pipelineId"], "pipe-rec");
+    assert_eq!(recording["recordingStatus"], "ready");
+    assert_eq!(recording["recordingStartedAt"], "2026-07-09T00:00:00Z");
+    assert_eq!(recording["recordingEndedAt"], "2026-07-09T00:01:00Z");
+    assert_eq!(recording["recordingCodecSummary"], "h264/aac");
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+#[tokio::test]
 async fn media_library_groups_recording_conversion_artifacts_and_renames_companions() {
     let (app, cookie, temp_dir, _pool) = authenticated_app_with_temp_media().await;
     let recording_ts = temp_dir.join("recording_20260629T235959_demo.ts");
