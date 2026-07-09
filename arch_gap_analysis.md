@@ -214,7 +214,7 @@ legacy ring escape hatches have been removed.
 | Criterion | Status | Evidence |
 |---|---|---|
 | `GraphRole::HlsPreview` | ✅ Present | `runtime/graph.rs`. |
-| HLS preview planning | ✅ Present | `planner::graph_plan::plan_hls_preview_graph()` now drives both preview stage creation and active preview stage-key reporting. |
+| HLS preview planning | ✅ Present | `planner::graph_plan::plan_hls_preview_graph()` now models H264 as `source -> fMP4 segmenter` and HEVC as `source -> preview -> fMP4 segmenter`, and drives both preview stage creation and active preview stage-key reporting. |
 | API no longer directly creates preview ring/backend | ✅ Mostly | `api/hls.rs` delegates to `application::hls_preview::ensure_hls_preview()`. |
 | Runtime/application service owns preview orchestration | ✅ Present | `application/hls_preview.rs` plans preview and spawns fMP4 segmenter. |
 | Actual keys in health match spawned keys | ✅ Tested | Engine tests cover `active_hls_preview_stage_keys_*` through the same `plan_hls_preview_graph()` contract used by preview startup. |

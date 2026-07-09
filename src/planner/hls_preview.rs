@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::domain::stage::StageKind;
 use crate::media::engine::{MediaEngine, VideoMeta};
 use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_runtime::StageRuntimeManager;
@@ -63,8 +64,19 @@ pub async fn plan_hls_preview(
                         video_meta: None,
                     });
                 };
+                let preview_stage_key = preview_plan
+                    .stages
+                    .iter()
+                    .find(|stage| matches!(stage.kind, StageKind::Preview { .. }))
+                    .map(|stage| stage.key.clone());
+                let Some(key) = preview_stage_key else {
+                    return Some(HlsPreviewGraph {
+                        video_ring: source_ring,
+                        audio_ring: None,
+                        video_meta: None,
+                    });
+                };
                 let preview_video = build_preview_video_meta(&engine, pipeline_id).await;
-                let key = preview_plan.terminal_stage;
                 let manager = StageRuntimeManager::new(engine.clone());
                 let (handle, created) = manager
                     .ensure_stage(key.clone(), source_ring.clone(), None)

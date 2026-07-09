@@ -50,6 +50,9 @@ pub enum StageKind {
         preset: String,
         upstream: Box<StageKind>,
     },
+    HlsSegmenter {
+        upstream: Box<StageKind>,
+    },
     Hls,
     Recording,
 }
@@ -90,6 +93,12 @@ impl StageKind {
         Self::Hls
     }
 
+    pub fn hls_segmenter(upstream: StageKind) -> Self {
+        Self::HlsSegmenter {
+            upstream: Box::new(upstream),
+        }
+    }
+
     pub fn recording() -> Self {
         Self::Recording
     }
@@ -103,6 +112,7 @@ impl StageKind {
         match self {
             Self::Source => "Source".to_string(),
             Self::Hls => "HLS Preview".to_string(),
+            Self::HlsSegmenter { .. } => "fMP4 Segmenter".to_string(),
             Self::Recording => "MKV Recording".to_string(),
             Self::VideoPreset { preset } => format!("Video: {preset}"),
             Self::AudioRoute { operation, .. } => format!("Audio: {operation}"),
@@ -119,7 +129,7 @@ impl StageKind {
             Self::AudioRoute { .. } => "audio_filter",
             Self::CodecEdge { .. } => "codec_edge",
             Self::Source => "source",
-            Self::Hls => "hls",
+            Self::Hls | Self::HlsSegmenter { .. } => "hls",
             Self::Recording => "recording",
             Self::VideoPreset { .. } => "transcoder",
             Self::Preview { .. } => "preview",
@@ -130,7 +140,8 @@ impl StageKind {
         match self {
             Self::AudioRoute { upstream, .. }
             | Self::CodecEdge { upstream, .. }
-            | Self::Preview { upstream, .. } => Some(upstream),
+            | Self::Preview { upstream, .. }
+            | Self::HlsSegmenter { upstream } => Some(upstream),
             _ => None,
         }
     }
@@ -169,6 +180,10 @@ impl fmt::Display for StageKind {
         match self {
             Self::Source => f.write_str("source"),
             Self::Hls => f.write_str("hls"),
+            Self::HlsSegmenter { upstream } if upstream.as_ref() == &StageKind::Source => {
+                f.write_str("hls")
+            }
+            Self::HlsSegmenter { upstream } => write!(f, "hls:from:{upstream}"),
             Self::Recording => f.write_str("recording"),
             Self::VideoPreset { preset } => write!(f, "video:{preset}"),
             Self::AudioRoute {

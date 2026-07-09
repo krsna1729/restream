@@ -3286,10 +3286,14 @@ mod tests {
             "pipe-preview-hevc",
             StageKind::preview("720p", StageKind::source())
         )));
+        assert!(stages.contains(&StageKey::new(
+            "pipe-preview-hevc",
+            StageKind::hls_segmenter(StageKind::preview("720p", StageKind::source()))
+        )));
     }
 
     #[tokio::test]
-    async fn active_hls_preview_stage_keys_skip_non_hevc_preview() {
+    async fn active_hls_preview_stage_keys_include_h264_segmenter() {
         let engine = MediaEngine::new();
         engine
             .try_register_ingest("pipe-preview-h264", "stream-key", "rtmp")
@@ -3312,10 +3316,11 @@ mod tests {
 
         let stages = engine.active_hls_preview_stage_keys().await;
 
-        assert!(
-            stages.is_empty(),
-            "preview keepalive should only add codec-edge stages for HEVC inputs"
-        );
+        assert_eq!(stages.len(), 1);
+        assert!(stages.contains(&StageKey::new(
+            "pipe-preview-h264",
+            StageKind::hls_segmenter(StageKind::source())
+        )));
     }
 
     #[tokio::test]

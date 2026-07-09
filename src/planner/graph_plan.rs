@@ -109,25 +109,31 @@ pub fn plan_hls_preview_graph(
     policy: &BackendPolicy,
 ) -> Option<StageGraphPlan> {
     let codec = ingest_codec?;
-    if !is_hevc_preview_codec(codec) {
-        return None;
-    }
-
     let pipeline_id_typed = PipelineId::new(pipeline_id);
-    let preview_key = StageKey::new(
-        pipeline_id_typed.clone(),
-        StageKind::preview("720p", StageKind::source()),
-    );
-    let terminal = preview_key.clone();
+    let source_kind = StageKind::source();
+    let terminal_kind = if is_hevc_preview_codec(codec) {
+        StageKind::hls_segmenter(StageKind::preview("720p", source_kind.clone()))
+    } else {
+        StageKind::hls_segmenter(source_kind.clone())
+    };
+    let terminal = StageKey::new(pipeline_id_typed.clone(), terminal_kind.clone());
 
     let mut plan = StageGraphPlan::new(pipeline_id_typed.clone(), GraphRole::HlsPreview, terminal);
 
     plan.add_stage(
-        StageKey::new(pipeline_id_typed, StageKind::Source),
+        StageKey::new(pipeline_id_typed.clone(), source_kind.clone()),
         StageBackend::AudioRouter,
     );
-    let backend = policy.select_backend(&preview_key.kind);
-    plan.add_stage(preview_key, backend);
+    if is_hevc_preview_codec(codec) {
+        let preview_key = StageKey::new(
+            pipeline_id_typed.clone(),
+            StageKind::preview("720p", source_kind),
+        );
+        let backend = policy.select_backend(&preview_key.kind);
+        plan.add_stage(preview_key, backend);
+    }
+    let hls_backend = policy.select_backend(&terminal_kind);
+    plan.add_stage(StageKey::new(pipeline_id_typed, terminal_kind), hls_backend);
 
     Some(plan)
 }
@@ -175,21 +181,56 @@ mod tests {
         assert_eq!(plan.role, GraphRole::HlsPreview);
         assert_eq!(
             plan.terminal_stage,
-            StageKey::new("pipe_1", StageKind::preview("720p", StageKind::source()))
+            StageKey::new(
+                "pipe_1",
+                StageKind::hls_segmenter(StageKind::preview("720p", StageKind::source()))
+            )
         );
-        assert_eq!(plan.stages.len(), 2);
+        assert_eq!(plan.stages.len(), 3);
         assert!(plan.stages.iter().any(|s| s.kind == StageKind::Source));
         assert!(
             plan.stages
                 .iter()
                 .any(|s| matches!(s.kind, StageKind::Preview { .. }))
         );
+        assert!(plan.stages.iter().any(|s| {
+            matches!(
+                s.kind,
+                StageKind::HlsSegmenter {
+                    ref upstream
+                } if matches!(upstream.as_ref(), StageKind::Preview { .. })
+            )
+        }));
+        assert!(plan.edges.iter().any(|edge| {
+            edge.from == StageKey::new("pipe_1", StageKind::preview("720p", StageKind::source()))
+                && edge.to
+                    == StageKey::new(
+                        "pipe_1",
+                        StageKind::hls_segmenter(StageKind::preview("720p", StageKind::source())),
+                    )
+        }));
     }
 
     #[test]
-    fn plan_hls_preview_graph_returns_none_for_h264() {
+    fn plan_hls_preview_graph_models_h264_source_to_segmenter() {
         let policy = BackendPolicy::default();
-        assert!(plan_hls_preview_graph("pipe_1", Some("h264"), &policy).is_none());
+        let plan = plan_hls_preview_graph("pipe_1", Some("h264"), &policy).unwrap();
+
+        assert_eq!(plan.role, GraphRole::HlsPreview);
+        assert_eq!(
+            plan.terminal_stage,
+            StageKey::new("pipe_1", StageKind::hls_segmenter(StageKind::source()))
+        );
+        assert_eq!(plan.stages.len(), 2);
+        assert!(plan.stages.iter().any(|s| s.kind == StageKind::Source));
+        assert!(plan.stages.iter().any(|s| {
+            s.kind == StageKind::hls_segmenter(StageKind::source())
+                && s.backend == StageBackend::HlsSegmenter
+        }));
+        assert!(plan.edges.iter().any(|edge| {
+            edge.from == StageKey::new("pipe_1", StageKind::source())
+                && edge.to == StageKey::new("pipe_1", StageKind::hls_segmenter(StageKind::source()))
+        }));
     }
 
     #[test]

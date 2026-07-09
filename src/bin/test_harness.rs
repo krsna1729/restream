@@ -217,6 +217,7 @@ fn planned_mixed_stage_count(
             StageKind::CodecEdge { .. } => counts.codec_edge += 1,
             StageKind::Source
             | StageKind::Hls
+            | StageKind::HlsSegmenter { .. }
             | StageKind::Recording
             | StageKind::Preview { .. } => {}
         }

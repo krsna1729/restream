@@ -55,7 +55,7 @@ impl BackendPolicy {
                 StageBackend::InternalFfmpeg
             }
             StageKind::Preview { .. } if self.internal_hls_preview => StageBackend::InternalFfmpeg,
-            StageKind::Hls => StageBackend::HlsSegmenter,
+            StageKind::Hls | StageKind::HlsSegmenter { .. } => StageBackend::HlsSegmenter,
             StageKind::Recording => StageBackend::Recording,
             _ => StageBackend::ExternalFfmpeg,
         }

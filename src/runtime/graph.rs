@@ -64,6 +64,9 @@ impl StageGraphPlan {
             StageKind::Preview { upstream, .. } => {
                 Some(StageKey::new(self.pipeline_id.clone(), *upstream.clone()))
             }
+            StageKind::HlsSegmenter { upstream } => {
+                Some(StageKey::new(self.pipeline_id.clone(), *upstream.clone()))
+            }
             StageKind::Hls => Some(StageKey::new(self.pipeline_id.clone(), StageKind::Source)),
             StageKind::Recording => {
                 Some(StageKey::new(self.pipeline_id.clone(), StageKind::Source))
