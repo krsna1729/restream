@@ -157,13 +157,25 @@ impl From<String> for EgressStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum EgressPhase {
+    /// Egress worker has been registered but has not begun protocol work.
+    Starting,
     /// Waiting for an upstream media stage to become ready.
     #[default]
     WaitingUpstream,
+    /// Resolving a remote host.
+    Resolving,
     /// Attempting to connect to the remote endpoint.
     Connecting,
+    /// RTMP handshake is in progress.
+    Handshaking,
+    /// RTMP application connection is in progress.
+    ConnectingApp,
     /// Connected and actively sending media.
     Sending,
+    /// HLS output is segmenting locally.
+    Segmenting,
+    /// HLS output is uploading playlist or segment objects.
+    Uploading,
     /// Temporarily failed and will retry.
     Retrying,
     /// Permanently failed, not retrying.
@@ -175,9 +187,15 @@ pub enum EgressPhase {
 impl EgressPhase {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Starting => "starting",
             Self::WaitingUpstream => "waitingUpstream",
+            Self::Resolving => "resolving",
             Self::Connecting => "connecting",
+            Self::Handshaking => "handshaking",
+            Self::ConnectingApp => "connecting_app",
             Self::Sending => "sending",
+            Self::Segmenting => "segmenting",
+            Self::Uploading => "uploading",
             Self::Retrying => "retrying",
             Self::Failed => "failed",
             Self::Stopped => "stopped",
@@ -189,7 +207,7 @@ impl EgressPhase {
     }
 
     pub fn is_active(&self) -> bool {
-        matches!(self, Self::Sending)
+        matches!(self, Self::Sending | Self::Segmenting | Self::Uploading)
     }
 }
 
@@ -202,9 +220,15 @@ impl fmt::Display for EgressPhase {
 impl From<&str> for EgressPhase {
     fn from(s: &str) -> Self {
         match s {
+            "starting" => Self::Starting,
             "waitingUpstream" | "waiting_upstream" => Self::WaitingUpstream,
+            "resolving" => Self::Resolving,
             "connecting" => Self::Connecting,
+            "handshaking" => Self::Handshaking,
+            "connecting_app" | "connectingApp" => Self::ConnectingApp,
             "sending" => Self::Sending,
+            "segmenting" => Self::Segmenting,
+            "uploading" => Self::Uploading,
             "retrying" => Self::Retrying,
             "failed" => Self::Failed,
             "stopped" => Self::Stopped,
@@ -456,9 +480,15 @@ mod tests {
     #[test]
     fn egress_phase_roundtrip() {
         for (s, expected) in [
+            ("starting", EgressPhase::Starting),
             ("waitingUpstream", EgressPhase::WaitingUpstream),
+            ("resolving", EgressPhase::Resolving),
             ("connecting", EgressPhase::Connecting),
+            ("handshaking", EgressPhase::Handshaking),
+            ("connecting_app", EgressPhase::ConnectingApp),
             ("sending", EgressPhase::Sending),
+            ("segmenting", EgressPhase::Segmenting),
+            ("uploading", EgressPhase::Uploading),
             ("retrying", EgressPhase::Retrying),
             ("failed", EgressPhase::Failed),
             ("stopped", EgressPhase::Stopped),

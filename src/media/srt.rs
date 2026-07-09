@@ -60,6 +60,7 @@ use crate::application::ports::PipelineStore;
 use crate::domain::srt_ingest::{
     ResolvedSrtIngestConfig, SrtGlobalIngestConfig, SrtPipelineIngestConfig,
 };
+use crate::domain::state::EgressPhase;
 use crate::media::engine::{EgressRegistration, MediaEngine, PublisherQuality};
 use crate::media::ring_buffer::{MediaPacket, MediaType, Reader, RingBuffer};
 use crate::media::startup_policy;
@@ -4490,7 +4491,7 @@ pub async fn start_srt_egress(
                         .to_string_lossy();
                     error!("srt_send failed for {}: {}", oid, err_str);
                     if let Some(ref phase) = egress_phase {
-                        *phase.lock().unwrap_or_else(|e| e.into_inner()) = "failed".to_string();
+                        *phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::Failed;
                     }
                     if let Some(ref failure_phase) = egress_failure_phase {
                         *failure_phase.lock().unwrap_or_else(|e| e.into_inner()) =

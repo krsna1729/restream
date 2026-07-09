@@ -68,7 +68,7 @@ drift is not enforced by CI.
 | Runtime errors | ✅ Present | `src/domain/errors.rs` defines `StageError` and `RuntimeError`. |
 | `StageRuntimeSnapshot` | ✅ Present | `src/runtime/stage.rs`, including phase serialization and capacity fields. |
 | `OutputRuntimeExplanation` | ✅ Present | `src/runtime/output.rs` and API status wiring. |
-| No new code writes raw string states except at DB/API boundary | ⚠️ Partial | Reconciliation now converts desired output state to `DesiredOutputState`, and `ActiveEgress.status` is typed as `EgressStatus`; `ActiveEgress.phase`, `RecentEgressOutcome.status/raw_status/phase`, and `types::Output.desired_state` still store raw strings. |
+| No new code writes raw string states except at DB/API boundary | ⚠️ Partial | Reconciliation now converts desired output state to `DesiredOutputState`, and active egress status/phase are typed as `EgressStatus`/`EgressPhase`; `RecentEgressOutcome.status/raw_status/phase` and `types::Output.desired_state` still store raw strings. |
 
 **Verdict**: **Partial**. Contracts exist and are useful, but adoption is not
 complete. The ideal contract boundary has not replaced string state in runtime
@@ -276,10 +276,9 @@ convergence and later harness/reporting phases.
      graph-plan contract.
 
 2. **String runtime state remains in core logic**
-   - `ActiveEgress.status` is now typed, but `ActiveEgress.phase`,
-     `RecentEgressOutcome`, and `types::Output` still use raw strings for
-     statuses/phases. This violates the Phase 1 acceptance criterion and keeps
-     schema drift risk alive.
+   - Active egress status/phase are now typed, but `RecentEgressOutcome` and
+     `types::Output` still use raw strings for statuses/phases. This violates
+     the Phase 1 acceptance criterion and keeps schema drift risk alive.
 
 ### P1 — Layering and Ownership
 
@@ -318,7 +317,7 @@ convergence and later harness/reporting phases.
 | Phase | Current Grade | Honest Status |
 |---|---:|---|
 | Ph 0 Guardrails | F | Not started. |
-| Ph 1 Core contracts | B+ | Types exist, reconciliation consumes typed desired-state logic, and active egress status is typed; runtime phase/recent-output string-state storage remains. |
+| Ph 1 Core contracts | B+ | Types exist, reconciliation consumes typed desired-state logic, and active egress status/phase are typed; recent-output and DB output string-state storage remains. |
 | Ph 2 Config | A- | Production env parsing is centralized in config; startup summary remains unclear. |
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | B | Logs and auth initialization are service-backed; agent and some helper paths still contain direct DB/application work. |

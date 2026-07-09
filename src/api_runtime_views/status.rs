@@ -31,13 +31,7 @@ pub(crate) async fn output_status(
             output_name: egress.output_name.clone(),
             encoding: egress.encoding.clone(),
             url: egress.target_url.clone(),
-            phase: crate::domain::state::EgressPhase::from(
-                egress
-                    .phase
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .as_str(),
-            ),
+            phase: *egress.phase.lock().unwrap_or_else(|e| e.into_inner()),
             terminal_stage: egress.terminal_stage_key.clone(),
             blocked_by: blocked_by.map(|b| b.key),
         };

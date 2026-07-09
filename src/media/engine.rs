@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 use crate::domain::stage::{StageKey, StageKind};
-use crate::domain::state::EgressStatus;
+use crate::domain::state::{EgressPhase, EgressStatus};
 use crate::media::avio::MemoryQueue;
 use crate::media::engine_registries::{
     EgressRegistry, FileIngestRegistry, HlsRegistry, IngestRegistry, RecordingRegistry,
@@ -271,7 +271,7 @@ pub struct ActiveEgress {
     pub target_url: String,
     pub target_addr: Arc<std::sync::Mutex<Option<String>>>,
     pub status: EgressStatus,
-    pub phase: Arc<std::sync::Mutex<String>>,
+    pub phase: Arc<std::sync::Mutex<EgressPhase>>,
     pub started_at: String,
     pub start_instant: Instant,
     pub bytes_sent: Arc<AtomicU64>,
@@ -616,18 +616,14 @@ impl MediaEngine {
             return "stopped".to_string();
         }
 
-        let phase = egress
-            .phase
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        if phase == "failed" {
+        let phase = *egress.phase.lock().unwrap_or_else(|e| e.into_inner());
+        if phase == EgressPhase::Failed {
             return "failed".to_string();
         }
         if egress.status != EgressStatus::Running {
             return egress.status.to_string();
         }
-        if egress.target_url.starts_with("hls://") && phase == "segmenting" {
+        if egress.target_url.starts_with("hls://") && phase == EgressPhase::Segmenting {
             return "running".to_string();
         }
 
@@ -672,12 +668,8 @@ impl MediaEngine {
     }
 
     fn recent_egress_status(egress: &ActiveEgress, has_ingest: bool) -> String {
-        let phase = egress
-            .phase
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        if phase == "failed"
+        let phase = *egress.phase.lock().unwrap_or_else(|e| e.into_inner());
+        if phase == EgressPhase::Failed
             || egress
                 .last_error
                 .lock()
@@ -793,11 +785,7 @@ impl MediaEngine {
         egress: &ActiveEgress,
         has_ingest: bool,
     ) -> RecentEgressOutcome {
-        let phase = egress
-            .phase
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let phase = *egress.phase.lock().unwrap_or_else(|e| e.into_inner());
         let last_error = egress
             .last_error
             .lock()
@@ -809,7 +797,8 @@ impl MediaEngine {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let ended_at_ms = Self::now_epoch_ms();
-        let had_error = phase == "failed" || last_error.is_some() || failure_phase.is_some();
+        let had_error =
+            phase == EgressPhase::Failed || last_error.is_some() || failure_phase.is_some();
         let (first_failure_at_ms, failure_count) = if had_error {
             previous
                 .filter(|previous| {
@@ -843,7 +832,7 @@ impl MediaEngine {
                 .clone(),
             status: Self::recent_egress_status(egress, has_ingest),
             raw_status: egress.status.to_string(),
-            phase,
+            phase: phase.to_string(),
             started_at: egress.started_at.clone(),
             uptime_secs: egress.start_instant.elapsed().as_secs_f64(),
             bytes_sent: egress.bytes_sent.load(Ordering::Relaxed),
@@ -935,7 +924,7 @@ impl MediaEngine {
                     .phase
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .clone(),
+                    .to_string(),
                 target_addr: egress
                     .target_addr
                     .lock()
@@ -1900,7 +1889,7 @@ impl MediaEngine {
                 target_url: url.to_string(),
                 target_addr: Arc::new(std::sync::Mutex::new(None)),
                 status: EgressStatus::Running,
-                phase: Arc::new(std::sync::Mutex::new("starting".to_string())),
+                phase: Arc::new(std::sync::Mutex::new(EgressPhase::Starting)),
                 started_at: chrono::Utc::now().to_rfc3339(),
                 start_instant: now,
                 bytes_sent: Arc::new(AtomicU64::new(0)),
@@ -2032,7 +2021,7 @@ impl MediaEngine {
     pub async fn update_egress_phase(&self, output_id: &str, phase: &str) {
         let egresses = self.egresses.active.read().await;
         if let Some(egress) = egresses.get(output_id) {
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = phase.to_string();
+            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::from(phase);
         }
     }
 
@@ -2043,7 +2032,7 @@ impl MediaEngine {
         phase: &str,
     ) -> bool {
         self.with_current_egress(output_id, registration, |egress| {
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = phase.to_string();
+            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::from(phase);
         })
         .await
         .is_some()
@@ -2098,11 +2087,11 @@ impl MediaEngine {
                 .last_progress_ms
                 .store(Self::now_epoch_ms(), Ordering::Relaxed);
             let active_phase = if egress.protocol == "hls" {
-                "uploading"
+                EgressPhase::Uploading
             } else {
-                "sending"
+                EgressPhase::Sending
             };
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = active_phase.to_string();
+            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = active_phase;
             *egress
                 .failure_phase
                 .lock()
@@ -2125,11 +2114,11 @@ impl MediaEngine {
                 .last_progress_ms
                 .store(Self::now_epoch_ms(), Ordering::Relaxed);
             let active_phase = if egress.protocol == "hls" {
-                "uploading"
+                EgressPhase::Uploading
             } else {
-                "sending"
+                EgressPhase::Sending
             };
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = active_phase.to_string();
+            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = active_phase;
             *egress
                 .failure_phase
                 .lock()
@@ -2204,7 +2193,7 @@ impl MediaEngine {
         if let Some(egress) = egresses.get(output_id) {
             let message = message.into();
             let pipeline_id = egress.pipeline_id.clone();
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = "failed".to_string();
+            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::Failed;
             *egress
                 .failure_phase
                 .lock()
@@ -2234,7 +2223,7 @@ impl MediaEngine {
         let message = message.into();
         self.with_current_egress(output_id, registration, |egress| {
             let pipeline_id = egress.pipeline_id.clone();
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = "failed".to_string();
+            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::Failed;
             *egress
                 .failure_phase
                 .lock()
@@ -3194,7 +3183,7 @@ mod tests {
                         .phase
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .clone(),
+                        .to_string(),
                 )
             })
             .await;
