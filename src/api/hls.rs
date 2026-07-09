@@ -297,7 +297,7 @@ pub async fn hls_playlist_handler(
             playlist,
         )
             .into_response(),
-        None => (StatusCode::NOT_FOUND, "No segments yet").into_response(),
+        None => no_segments_response(&state, &pipeline_id).await,
     }
 }
 
@@ -315,7 +315,7 @@ pub async fn hls_master_handler(
         Err(response) => return response,
     };
     if !store.has_video_playlist() && store.get_primary_playlist().is_none() {
-        return (StatusCode::NOT_FOUND, "No segments yet").into_response();
+        return no_segments_response(&state, &pipeline_id).await;
     }
     let (video, audio_tracks) = store.stream_metadata();
     let playlist = build_hls_master_playlist(video.as_ref(), &audio_tracks);
@@ -350,7 +350,7 @@ pub async fn hls_video_playlist_handler(
             playlist,
         )
             .into_response(),
-        None => (StatusCode::NOT_FOUND, "No segments yet").into_response(),
+        None => no_segments_response(&state, &pipeline_id).await,
     }
 }
 
@@ -381,7 +381,7 @@ pub async fn hls_audio_playlist_handler(
             playlist,
         )
             .into_response(),
-        None => (StatusCode::NOT_FOUND, "No segments yet").into_response(),
+        None => no_segments_response(&state, &pipeline_id).await,
     }
 }
 
@@ -487,5 +487,21 @@ pub async fn hls_audio_init_handler(
     match store.get_audio_init_segment(track_index) {
         Some(data) => (StatusCode::OK, [(header::CONTENT_TYPE, "audio/mp4")], data).into_response(),
         None => (StatusCode::NOT_FOUND, "No init segment").into_response(),
+    }
+}
+
+async fn no_segments_response(state: &AppState, pipeline_id: &str) -> Response {
+    if let Some(cause) = state.engine.preview_blocked_by_snapshot(pipeline_id).await {
+        (
+            StatusCode::NOT_FOUND,
+            format!(
+                "No segments yet: blocked by video stage: {} (phase: {})",
+                cause.key,
+                crate::runtime::stage::phase_name(&cause.phase)
+            ),
+        )
+            .into_response()
+    } else {
+        (StatusCode::NOT_FOUND, "No segments yet").into_response()
     }
 }

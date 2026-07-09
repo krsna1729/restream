@@ -4390,3 +4390,56 @@ async fn agent_graph_diff_preview_returns_404_when_compiled_out() {
         resp.status()
     );
 }
+
+#[tokio::test]
+async fn hls_playlist_route_returns_blocked_stage_cause_when_applicable() {
+    use http_body_util::BodyExt;
+    use restream::domain::stage::StageKind;
+    use restream::media::ring_buffer::RingBuffer;
+    use restream::media::stage_lifecycle::StagePhase;
+
+    let (app, _, engine) = test_app_with_engine().await;
+    let cookie = login(&app).await;
+
+    // Register active ingest and store
+    engine
+        .try_register_ingest("test_blocked_pipe", "stream-key", "rtmp")
+        .await
+        .unwrap();
+    engine
+        .get_or_create_hls_preview_store("test_blocked_pipe")
+        .await;
+
+    // Register a blocked preview stage
+    let stage_key = StageKey::new(
+        "test_blocked_pipe",
+        StageKind::preview("720p", StageKind::source()),
+    );
+    let source_ring = Arc::new(RingBuffer::new(16));
+    let manager = restream::media::stage_runtime::StageRuntimeManager::new(engine.clone());
+    let (handle, _) = manager
+        .ensure_stage(stage_key.clone(), source_ring, None)
+        .await;
+
+    // Transition stage to WaitingForCapacity
+    handle.lifecycle.transition(StagePhase::WaitingForCapacity {
+        backend: restream::media::stage_lifecycle::StageBackendKind::ExternalFfmpeg,
+    });
+
+    let resp = app
+        .oneshot(auth_req("GET", "/hls/test_blocked_pipe", &cookie, None))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let body_str = std::str::from_utf8(&body).unwrap();
+    assert!(
+        body_str.contains("blocked by video stage:"),
+        "body_str={body_str}"
+    );
+    assert!(
+        body_str.contains("waitingForCapacity"),
+        "body_str={body_str}"
+    );
+}
