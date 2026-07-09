@@ -42,14 +42,13 @@ impl AsRef<[u8]> for OwnedFfmpegPacket {
     }
 }
 
-/// Tokio task entry point for the shared H.265→H.264 transcoder.
+/// Backend implementation for the shared H.265→H.264 codec-edge stage.
 ///
 /// 1. Waits for ingest metadata (video + audio tracks).
 /// 2. Spawns a blocking OS thread for FFmpeg decode→encode.
 /// 3. Forwards source RingBuffer packets to the MemoryQueue as MPEG-TS.
-#[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
-pub async fn start_h264_transcoder_inner(
+pub(crate) async fn run_h264_codec_edge_stage(
     pipeline_id: String,
     engine: Arc<crate::media::engine::MediaEngine>,
     cancel_token: CancellationToken,

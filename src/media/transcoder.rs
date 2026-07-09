@@ -289,9 +289,8 @@ pub fn apply_audio_routing(routing: &AudioRouting, input_tracks: &[AudioMeta]) -
     }
 }
 
-#[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
-pub async fn start_transcoder_inner(
+async fn run_internal_video_stage(
     pipeline_id: String,
     preset: String,
     engine: Arc<crate::media::engine::MediaEngine>,
@@ -383,10 +382,7 @@ pub async fn start_transcoder_inner(
         });
 }
 
-/// Backend entry point for the in-process FFmpeg adapter. The internal paths
-/// already create and use `StageInputPump` and `StageOutputNormalizer`
-/// internally; this function is the thin `FfmpegStageBackend` wrapper that
-/// bridges from the trait to those existing implementations.
+/// Backend entry point for the in-process FFmpeg adapter.
 pub async fn run_internal_ffmpeg_backend(
     plan: FfmpegStagePlan,
     input_pump: StageInputPump,
@@ -397,7 +393,7 @@ pub async fn run_internal_ffmpeg_backend(
         plan.video,
         crate::media::ffmpeg::stage_plan::VideoStageOp::CodecEdge { .. }
     ) {
-        crate::media::h264_transcoder::start_h264_transcoder_inner(
+        crate::media::h264_transcoder::run_h264_codec_edge_stage(
             ctx.pipeline_id.clone(),
             ctx.engine,
             ctx.cancel,
@@ -411,7 +407,7 @@ pub async fn run_internal_ffmpeg_backend(
             plan.video,
             crate::media::ffmpeg::stage_plan::VideoStageOp::ScalePreset { .. }
         );
-        start_transcoder_inner(
+        run_internal_video_stage(
             ctx.pipeline_id,
             ctx.stage_key.kind.to_string(),
             ctx.engine,
