@@ -12,7 +12,7 @@ use tracing::warn;
 use crate::alerts;
 use crate::application::services::{
     AuthService, FileIngestService, HealthService, IngestService, LogService, MediaLibraryService,
-    OutputService, PipelineService, SettingsService,
+    OutputService, PipelineService, RuntimeViewService, SettingsService,
 };
 use crate::media::engine::MediaEngine;
 use crate::media::security::IngestSecurityService;
@@ -85,6 +85,7 @@ pub struct AppState {
     pub auth_service: AuthService,
     pub settings_service: SettingsService,
     pub health_service: HealthService,
+    pub runtime_view_service: RuntimeViewService,
     pub file_ingest_service: FileIngestService,
     pub media_library_service: MediaLibraryService,
     pub log_service: LogService,
@@ -117,6 +118,7 @@ impl AppState {
         let auth_service = AuthService::new(db.clone());
         let settings_service = SettingsService::new(db.clone());
         let health_service = HealthService::new(db.clone());
+        let runtime_view_service = RuntimeViewService::new();
         let file_ingest_service = FileIngestService::new(db.clone(), pipeline_service.clone());
         let media_library_service =
             MediaLibraryService::new(db.clone(), pipeline_service.clone(), ingest_service.clone());
@@ -143,6 +145,7 @@ impl AppState {
             auth_service,
             settings_service,
             health_service,
+            runtime_view_service,
             file_ingest_service,
             media_library_service,
             log_service,

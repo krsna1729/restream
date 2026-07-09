@@ -450,6 +450,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let ingest_service = crate::application::services::IngestService::new(pool.clone());
     let settings_service = crate::application::services::SettingsService::new(pool.clone());
     let health_service = crate::application::services::HealthService::new(pool.clone());
+    let runtime_view_service = crate::application::services::RuntimeViewService::new();
     let file_ingest_service = crate::application::services::FileIngestService::new(
         pool.clone(),
         pipeline_service.clone(),
@@ -483,6 +484,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         auth_service,
         settings_service,
         health_service,
+        runtime_view_service,
         file_ingest_service,
         media_library_service,
         log_service,

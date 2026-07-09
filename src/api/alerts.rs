@@ -19,13 +19,10 @@ pub async fn aggregate_alerts_handler(
         .await
         .unwrap_or_default();
     let recording_enabled = recording_enabled_map(&state, &pipeline_ids).await;
-    let snapshot = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        &pipeline_ids,
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let snapshot = state
+        .runtime_view_service
+        .health_snapshot(&state.engine, &pipeline_ids, &recording_enabled, 0)
+        .await;
     let generated_at = snapshot["generatedAt"].as_str().unwrap_or("").to_string();
     let mut alert_list = alerts::derive_alerts(&snapshot);
     state.alert_tracker.track(&mut alert_list);

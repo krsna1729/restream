@@ -464,9 +464,10 @@ pub async fn pipeline_graph_handler(
     }
 
     let pipeline_outputs = state.output_service.list_for_pipeline(&pipeline_id).await?;
-    let mut graph =
-        crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
-            .await;
+    let mut graph = state
+        .runtime_view_service
+        .processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
+        .await;
     let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
     let desired_graphs = crate::application::graph::desired_pipeline_graphs(
         &pipeline_id,
@@ -505,13 +506,15 @@ pub async fn pipeline_alerts_handler(
 
     let recording_enabled = recording_enabled_map(&state, std::slice::from_ref(&pipeline_id)).await;
 
-    let snapshot = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        std::slice::from_ref(&pipeline_id),
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let snapshot = state
+        .runtime_view_service
+        .health_snapshot(
+            &state.engine,
+            std::slice::from_ref(&pipeline_id),
+            &recording_enabled,
+            0,
+        )
+        .await;
     let generated_at = snapshot["generatedAt"].as_str().unwrap_or("").to_string();
     let mut alert_list = alerts::derive_alerts(&snapshot);
     state
@@ -543,13 +546,15 @@ pub async fn pipeline_diagnostics_context_handler(
     }
 
     let recording_enabled = recording_enabled_map(&state, std::slice::from_ref(&pipeline_id)).await;
-    let health = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        std::slice::from_ref(&pipeline_id),
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let health = state
+        .runtime_view_service
+        .health_snapshot(
+            &state.engine,
+            std::slice::from_ref(&pipeline_id),
+            &recording_enabled,
+            0,
+        )
+        .await;
     let generated_at = health["generatedAt"].as_str().unwrap_or("").to_string();
 
     let pipeline_outputs = state.output_service.list_for_pipeline(&pipeline_id).await?;
@@ -560,9 +565,10 @@ pub async fn pipeline_diagnostics_context_handler(
         &pipeline_outputs,
         &state.engine.config.backend_policy,
     );
-    let runtime_graph =
-        crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
-            .await;
+    let runtime_graph = state
+        .runtime_view_service
+        .processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
+        .await;
 
     let mut alert_list = alerts::derive_alerts(&health);
     state
@@ -626,21 +632,24 @@ pub async fn v1_pipeline_summary_handler(
 
     let recording_enabled = recording_enabled_map(&state, std::slice::from_ref(&pipeline_id)).await;
 
-    let snapshot = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        std::slice::from_ref(&pipeline_id),
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let snapshot = state
+        .runtime_view_service
+        .health_snapshot(
+            &state.engine,
+            std::slice::from_ref(&pipeline_id),
+            &recording_enabled,
+            0,
+        )
+        .await;
 
     let generated_at = snapshot["generatedAt"].as_str().unwrap_or("").to_string();
 
     let pip = &snapshot["pipelines"][&pipeline_id];
     let pipeline_outputs = state.output_service.list_for_pipeline(&pipeline_id).await?;
-    let graph =
-        crate::api_runtime_views::processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
-            .await;
+    let graph = state
+        .runtime_view_service
+        .processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
+        .await;
 
     let graph_nodes = graph["nodes"]
         .as_array()

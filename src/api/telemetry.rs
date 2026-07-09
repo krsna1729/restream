@@ -808,13 +808,10 @@ pub async fn v1_overview_handler(
         .unwrap_or_default();
     let pipeline_ids: Vec<String> = pipelines.iter().map(|p| p.id.clone()).collect();
     let recording_enabled = recording_enabled_map(&state, &pipeline_ids).await;
-    let snapshot = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        &pipeline_ids,
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let snapshot = state
+        .runtime_view_service
+        .health_snapshot(&state.engine, &pipeline_ids, &recording_enabled, 0)
+        .await;
 
     let alert_list = alerts::derive_alerts(&snapshot);
     let critical = alert_list
@@ -876,7 +873,13 @@ pub async fn v1_engine_telemetry_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    Json(crate::api_runtime_views::engine_telemetry(&state.engine).await).into_response()
+    Json(
+        state
+            .runtime_view_service
+            .engine_telemetry(&state.engine)
+            .await,
+    )
+    .into_response()
 }
 
 pub async fn v1_pipeline_telemetry_handler(
@@ -887,8 +890,13 @@ pub async fn v1_pipeline_telemetry_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    Json(crate::api_runtime_views::pipeline_telemetry(&state.engine, &pipeline_id).await)
-        .into_response()
+    Json(
+        state
+            .runtime_view_service
+            .pipeline_telemetry(&state.engine, &pipeline_id)
+            .await,
+    )
+    .into_response()
 }
 
 pub async fn v1_stage_telemetry_handler(
@@ -899,7 +907,11 @@ pub async fn v1_stage_telemetry_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
-    match crate::api_runtime_views::stage_telemetry_by_display(&state.engine, &stage_key).await {
+    match state
+        .runtime_view_service
+        .stage_telemetry_by_display(&state.engine, &stage_key)
+        .await
+    {
         Some(val) => Json(val).into_response(),
         None => (StatusCode::NOT_FOUND, "Stage not found").into_response(),
     }
