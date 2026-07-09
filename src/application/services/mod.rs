@@ -3,6 +3,7 @@
 //! Handlers should validate HTTP input, call these services, and serialize
 //! responses. Services own orchestration logic that is not HTTP-specific.
 
+pub mod agent_service;
 pub mod auth_service;
 pub mod error;
 pub mod file_ingest_service;
@@ -14,6 +15,7 @@ pub mod output_service;
 pub mod pipeline_service;
 pub mod settings_service;
 
+pub use agent_service::AgentService;
 pub use auth_service::AuthService;
 pub use error::{ApiError, ApiResult};
 pub use file_ingest_service::FileIngestService;

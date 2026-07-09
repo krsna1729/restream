@@ -48,9 +48,7 @@ use crate::alerts;
 #[cfg(feature = "agent-plane")]
 use crate::api_view_models;
 #[cfg(feature = "agent-plane")]
-use crate::application::ports::SqliteMetaStore;
-#[cfg(feature = "agent-plane")]
-use crate::application::settings::load_settings_snapshot;
+use crate::application::services::AgentService;
 #[cfg(feature = "agent-plane")]
 use crate::db;
 #[cfg(feature = "agent-plane")]
@@ -502,12 +500,14 @@ pub async fn agent_verify_handler(
 
 #[cfg(feature = "agent-plane")]
 async fn build_agent_context(state: &AppState) -> serde_json::Value {
-    let pipelines = db::list_pipelines(&state.db).await.unwrap_or_default();
+    let agent_service = AgentService::new(state.db.clone());
+    let catalog = agent_service.load_context_catalog(&state.security).await;
+    let pipelines = catalog.pipelines;
     let pipeline_ids: Vec<String> = pipelines.iter().map(|p| p.id.clone()).collect();
-    let outputs = db::list_outputs(&state.db).await.unwrap_or_default();
-    let jobs = db::list_jobs(&state.db).await.unwrap_or_default();
+    let outputs = catalog.outputs;
+    let jobs = catalog.jobs;
     let jobs_json = api_view_models::job_response_json_list(&jobs);
-    let ingests = db::list_ingests(&state.db).await.unwrap_or_default();
+    let ingests = catalog.ingests;
     let recording_enabled = recording_enabled_map(state, &pipeline_ids).await;
     let health = crate::api_runtime_views::health_snapshot(
         &state.engine,
@@ -552,16 +552,8 @@ async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let sys = System::new_all();
     status["os"] = system_status(&sys);
 
-    let settings_store = SqliteMetaStore::new(state.db.clone());
-    let settings = load_settings_snapshot(&settings_store, &settings_store, &state.security)
-        .await
-        .ok();
-    let custom_encoding_len = db::get_meta(&state.db, "custom_encoding")
-        .await
-        .ok()
-        .flatten()
-        .map(|value| value.len())
-        .unwrap_or(0);
+    let settings = catalog.settings;
+    let custom_encoding_len = catalog.custom_encoding_len;
     let configuration = serde_json::json!({
         "serverName": settings
             .as_ref()
