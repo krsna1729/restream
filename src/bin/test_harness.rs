@@ -397,6 +397,20 @@ async fn stop_child(child: &mut Child) {
 mod tests {
     use super::*;
 
+    fn mixed_runner_matrix_source() -> String {
+        [
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/bin/test_harness/mixed_runner.rs"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/bin/test_harness/mixed_matrix_runner.rs"
+            )),
+        ]
+        .join("\n")
+    }
+
     #[test]
     fn default_work_db_path_stays_under_work_dir() {
         let work_dir = Path::new("test/artifacts/example");
@@ -1037,10 +1051,7 @@ stream|index=1|codec_type=audio\n";
             env!("CARGO_MANIFEST_DIR"),
             "/src/bin/test_harness.rs"
         ));
-        let mixed_source = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/bin/test_harness/mixed_runner.rs"
-        ));
+        let mixed_source = mixed_runner_matrix_source();
         let source = format!("{root_source}\n{mixed_source}");
 
         assert!(
@@ -1059,10 +1070,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn mixed_matrix_defaults_to_shared_batch_execution() {
-        let mixed_source = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/bin/test_harness/mixed_runner.rs"
-        ));
+        let mixed_source = mixed_runner_matrix_source();
 
         assert!(
             mixed_source.contains("mixed_input_matrix_correctness_shared().await"),
@@ -1080,10 +1088,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn mixed_matrix_serial_opt_out_stays_explicit() {
-        let mixed_source = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/bin/test_harness/mixed_runner.rs"
-        ));
+        let mixed_source = mixed_runner_matrix_source();
 
         assert!(
             mixed_source.contains("MIXED_MATRIX_SERIAL"),
@@ -1107,10 +1112,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn mixed_signal_defaults_to_shared_batch_execution() {
-        let mixed_source = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/bin/test_harness/mixed_runner.rs"
-        ));
+        let mixed_source = mixed_runner_matrix_source();
 
         assert!(
             mixed_source.contains("mixed_signal_correctness"),
@@ -1157,10 +1159,7 @@ stream|index=1|codec_type=audio\n";
 
     #[test]
     fn mixed_matrix_defaults_exclude_signal_and_continue_on_failure() {
-        let mixed_source = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/bin/test_harness/mixed_runner.rs"
-        ));
+        let mixed_source = mixed_runner_matrix_source();
 
         assert!(
             mixed_source.contains("mixed_matrix_default_check_names"),
