@@ -359,6 +359,13 @@ jobs:
         env:
           INTERNAL_BACKEND_SMOKE_CONTINUE_ON_FAIL: "1"
         run: ./scripts/check-internal-backend-rollout-smoke.sh
+      - name: Upload internal backend smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: internal-backend-smoke
+          path: test/artifacts/internal-backend-smoke/
+          if-no-files-found: ignore
       - name: Upload test artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
