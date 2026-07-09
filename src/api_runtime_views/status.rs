@@ -215,23 +215,7 @@ pub(crate) async fn health_snapshot(
     for pipeline_id in pipeline_ids {
         for snap in engine.pipeline_stage_runtime_snapshots(pipeline_id).await {
             let key_str = snap.key.to_string();
-            stages_json.insert(
-                key_str,
-                serde_json::json!({
-                    "phase": snap.phase,
-                    "backend": snap.backend,
-                    "bytesIn": snap.bytes_in,
-                    "bytesOut": snap.bytes_out,
-                    "packetsIn": snap.packets_in,
-                    "packetsOut": snap.packets_out,
-                    "firstInputAt": snap.first_input_at.map(|t| format!("{:?}", t)),
-                    "firstOutputAt": snap.first_output_at.map(|t| format!("{:?}", t)),
-                    "lastError": snap.last_error,
-                    "capacityPermitsTotal": snap.capacity_permits_total,
-                    "capacityPermitsAvailable": snap.capacity_permits_available,
-                    "capacityWaitMs": snap.capacity_wait_ms,
-                }),
-            );
+            stages_json.insert(key_str, snap.to_json());
         }
     }
 
