@@ -961,3 +961,86 @@ pub(crate) fn mixed_output_protocol_name(protocol: MixedOutputProtocol) -> &'sta
         MixedOutputProtocol::Srt => "srt",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use restream::domain::output_spec::OutputConfig;
+    use restream::domain::stage::StageKind;
+    use restream::planner::backend_policy::BackendPolicy;
+    use restream::planner::graph_plan::plan_pipeline_graph;
+    use restream::types::Output;
+
+    fn planned_stage_count_from_graph(
+        case: MixedInputCase,
+        duplicates_per_output: usize,
+    ) -> MixedStageCount {
+        let outputs = mixed_output_cases_for_input(case)
+            .iter()
+            .flat_map(|output_case| {
+                (0..duplicates_per_output).map(move |duplicate| {
+                    let url = match output_case.protocol() {
+                        MixedOutputProtocol::Rtmp => "rtmp://example/live/out",
+                        MixedOutputProtocol::Srt => "srt://example:9000?streamid=publish:live/out",
+                    };
+                    Output {
+                        id: format!("{}-{duplicate}", output_case.id()),
+                        pipeline_id: "pipe".to_string(),
+                        name: output_case.id().to_string(),
+                        url: url.to_string(),
+                        monitoring_url: None,
+                        desired_state: "running".to_string(),
+                        config: OutputConfig::parse(output_case.encoding()),
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let plan = plan_pipeline_graph(
+            "pipe",
+            Some(case.expected_video_codec()),
+            &outputs,
+            false,
+            &BackendPolicy::default(),
+        );
+
+        let mut counts = MixedStageCount {
+            video: 0,
+            audio: 0,
+            codec_edge: 0,
+        };
+        for stage in plan.stages {
+            match stage.kind {
+                StageKind::VideoPreset { .. } => counts.video += 1,
+                StageKind::AudioRoute { .. } => counts.audio += 1,
+                StageKind::CodecEdge { .. } => counts.codec_edge += 1,
+                StageKind::Source
+                | StageKind::Hls
+                | StageKind::Recording
+                | StageKind::Preview { .. } => {}
+            }
+        }
+        counts
+    }
+
+    #[test]
+    fn mixed_expected_stage_counts_match_graph_planner() {
+        for case in mixed_input_cases() {
+            let expected = expected_mixed_stage_count(*case);
+            let single = planned_stage_count_from_graph(*case, 1);
+            let duplicated = planned_stage_count_from_graph(*case, 2);
+
+            assert_eq!(
+                single,
+                expected,
+                "{} expected stage count should match StageGraphPlan",
+                case.scenario_id()
+            );
+            assert_eq!(
+                duplicated,
+                expected,
+                "{} duplicate output rows should not add unique planned stages",
+                case.scenario_id()
+            );
+        }
+    }
+}
