@@ -59,6 +59,26 @@ pub(crate) async fn run_optional_mixed_sink_probe(
                 Some(probe.summary.clone()),
             )?;
             output_ids.push(probe.output_id.clone());
+            env.register_output_cell(HarnessOutputCell {
+                scenario_id: cfg.to_string(),
+                batch_group: "sink-probe".to_string(),
+                wave: 0,
+                pipeline_id: pipeline_id.to_string(),
+                output_id: probe.output_id.clone(),
+                output_name: format!("sink-{cfg}"),
+                cell_id: "sink-probe".to_string(),
+                duplicate_index: 1,
+                protocol: "rtmp".to_string(),
+                encoding: sink_encoding.to_string(),
+                selected_audio_track: sink_encoding
+                    .strip_prefix("source+atrack:")
+                    .and_then(|track| track.parse::<usize>().ok()),
+                publish_url: format!("rtmp://127.0.0.1:{sink_port}/live/sink-probe-{cfg}"),
+                read_url: None,
+                expected_dimensions: None,
+                expected_audio_tracks: Some(1),
+                terminal_stage: None,
+            })?;
             let failure = if probe.passed {
                 None
             } else {
@@ -114,6 +134,9 @@ pub(crate) async fn add_mixed_output_cases(
                 group: case.id(),
                 count: env.n_per_group,
                 encoding: case.encoding(),
+                selected_audio_track: case.selected_audio_track(),
+                expected_dimensions: Some(case.expected_dimensions()),
+                expected_audio_tracks: Some(case.expected_audio_tracks()),
             },
             |index| {
                 direct_urls
@@ -175,6 +198,9 @@ pub(crate) async fn add_mixed_multi_output_cases(
                         group: case.id(),
                         count: env.n_per_group,
                         encoding: case.encoding(),
+                        selected_audio_track: case.selected_audio_track(),
+                        expected_dimensions: Some(case.expected_dimensions()),
+                        expected_audio_tracks: Some(case.expected_audio_tracks()),
                     },
                     |index| {
                         direct_urls
@@ -196,6 +222,9 @@ pub(crate) async fn add_mixed_multi_output_cases(
                         group: case.id(),
                         count: env.n_per_group,
                         encoding: case.encoding(),
+                        selected_audio_track: case.selected_audio_track(),
+                        expected_dimensions: Some(case.expected_dimensions()),
+                        expected_audio_tracks: Some(case.expected_audio_tracks()),
                     },
                     |index| mixed_output_publish_url(env, cfg, case, index),
                     MixedSrtGroupValidation {

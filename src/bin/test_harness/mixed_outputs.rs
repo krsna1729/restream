@@ -9,6 +9,9 @@ pub(crate) struct MixedGroupSpec<'a> {
     pub(crate) group: &'a str,
     pub(crate) count: usize,
     pub(crate) encoding: &'a str,
+    pub(crate) selected_audio_track: Option<usize>,
+    pub(crate) expected_dimensions: Option<&'a str>,
+    pub(crate) expected_audio_tracks: Option<usize>,
 }
 
 pub(crate) async fn add_mixed_group<F>(
@@ -31,11 +34,30 @@ where
         pending.push(async move {
             let output_id = create_output(api, pipeline_id, &name, &url, encoding).await?;
             start_output(api, pipeline_id, &output_id).await?;
-            Ok::<_, String>(output_id)
+            Ok::<_, String>((index, name, url, output_id))
         });
     }
     while let Some(result) = pending.next().await {
-        output_ids.push(result?);
+        let (index, name, url, output_id) = result?;
+        output_ids.push(output_id.clone());
+        env.register_output_cell(HarnessOutputCell {
+            scenario_id: spec.cfg.to_string(),
+            batch_group: spec.group.to_string(),
+            wave: 0,
+            pipeline_id: pipeline_id.to_string(),
+            output_id,
+            output_name: name,
+            cell_id: spec.group.to_string(),
+            duplicate_index: index,
+            protocol: infer_output_protocol(&url),
+            encoding: spec.encoding.to_string(),
+            selected_audio_track: spec.selected_audio_track,
+            publish_url: url,
+            read_url: None,
+            expected_dimensions: spec.expected_dimensions.map(str::to_string),
+            expected_audio_tracks: spec.expected_audio_tracks,
+            terminal_stage: None,
+        })?;
     }
     println!(
         "[mixed-input] added {} {} outputs for {}",
@@ -132,6 +154,9 @@ pub(crate) async fn add_mixed_output_matrix_rows(
                 group: case.id(),
                 count: env.n_per_group,
                 encoding: case.encoding(),
+                selected_audio_track: case.selected_audio_track(),
+                expected_dimensions: Some(case.expected_dimensions()),
+                expected_audio_tracks: Some(case.expected_audio_tracks()),
             },
             |index| mixed_output_publish_url(env, cfg, case, index),
             output_ids,

@@ -2,6 +2,8 @@
 
 use super::*;
 
+#[path = "mixed_artifacts.rs"]
+mod mixed_artifacts;
 #[path = "mixed_checks.rs"]
 mod mixed_checks;
 #[path = "mixed_control.rs"]
@@ -29,6 +31,7 @@ mod mixed_telemetry;
 #[path = "output_helpers.rs"]
 mod output_helpers;
 
+pub(super) use mixed_artifacts::{HarnessOutputCell, HarnessOutputRegistry, infer_output_protocol};
 pub(super) use mixed_checks::{verify_mixed_output_cases_inner, verify_mixed_output_dimensions};
 pub(super) use mixed_control::{
     MixedResume, mixed_output_checks_need_live_progress_gate, mixed_output_progress_timeout,
@@ -113,6 +116,7 @@ pub(super) struct MixedEnv {
     pub(super) n_per_group: usize,
     pub(super) snapshot_sleep: Duration,
     pub(super) collect_failures: bool,
+    pub(super) output_registry: Arc<Mutex<HarnessOutputRegistry>>,
 }
 impl MixedEnv {
     pub(super) fn from_env_with_default_work_dir(
@@ -193,6 +197,7 @@ impl MixedEnv {
             collect_failures: std::env::var("COLLECT_FAILURES")
                 .ok()
                 .is_some_and(|value| value == "1"),
+            output_registry: Arc::new(Mutex::new(HarnessOutputRegistry::new())),
             work_dir,
         }
     }
@@ -220,6 +225,39 @@ impl MixedEnv {
 
     pub(super) fn needs_live_output_progress_gate(&self) -> bool {
         mixed_output_checks_need_live_progress_gate(self.only_checks.as_deref())
+    }
+
+    pub(super) fn outputs_json_path(&self) -> PathBuf {
+        self.work_dir.join("outputs.json")
+    }
+
+    pub(super) fn register_output_cell(&self, cell: HarnessOutputCell) -> Result<(), String> {
+        let mut registry = self
+            .output_registry
+            .lock()
+            .map_err(|_| "mixed output registry lock poisoned".to_string())?;
+        registry.insert(cell);
+        registry.write_outputs_json(&self.outputs_json_path())
+    }
+
+    pub(super) fn output_cell_label(&self, output_id: &str) -> Option<String> {
+        self.output_registry
+            .lock()
+            .ok()
+            .and_then(|registry| registry.get(output_id).map(HarnessOutputCell::label))
+    }
+
+    pub(super) fn output_registry_json(&self) -> Value {
+        self.output_registry
+            .lock()
+            .map(|registry| registry.to_json())
+            .unwrap_or_else(|_| {
+                json!({
+                    "schemaVersion": mixed_artifacts::MIXED_OUTPUTS_SCHEMA_VERSION,
+                    "outputs": [],
+                    "error": "mixed output registry lock poisoned",
+                })
+            })
     }
 }
 
@@ -1628,11 +1666,13 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
             "scaleCsv": env.scale_log,
             "timingJsonl": env.timing_log,
             "rssSummary": env.rss_summary,
+            "outputsJson": env.outputs_json_path(),
             "summary": env.summary_log,
             "restreamLog": env.restream_log,
             "mediamtxLog": env.mediamtx_log,
             "mediaDir": env.media_dir,
-        }
+        },
+        "outputs": env.output_registry_json(),
     }))
 }
 
@@ -1652,6 +1692,12 @@ pub(super) fn ensure_mixed_artifacts(env: &MixedEnv) -> Result<(), String> {
     }
     if !env.summary_log.exists() {
         std::fs::write(&env.summary_log, "").map_err(|e| e.to_string())?;
+    }
+    if !env.outputs_json_path().exists() {
+        env.output_registry
+            .lock()
+            .map_err(|_| "mixed output registry lock poisoned".to_string())?
+            .write_outputs_json(&env.outputs_json_path())?;
     }
     Ok(())
 }
@@ -1711,6 +1757,24 @@ pub(super) async fn run_mixed_anchor_config(
     .await?;
     start_output(api, &pipeline_id, &hls_output).await?;
     output_ids.push(hls_output.clone());
+    env.register_output_cell(HarnessOutputCell {
+        scenario_id: cfg.to_string(),
+        batch_group: "hls-preview".to_string(),
+        wave: 0,
+        pipeline_id: pipeline_id.clone(),
+        output_id: hls_output.clone(),
+        output_name: "hls-preview".to_string(),
+        cell_id: "hls-preview".to_string(),
+        duplicate_index: 1,
+        protocol: "hls".to_string(),
+        encoding: "source".to_string(),
+        selected_audio_track: None,
+        publish_url: format!("hls://{cfg}-preview"),
+        read_url: None,
+        expected_dimensions: None,
+        expected_audio_tracks: None,
+        terminal_stage: None,
+    })?;
 
     add_mixed_output_matrix_rows(
         env,
@@ -1786,11 +1850,12 @@ pub(super) async fn run_mixed_anchor_config(
         // rows. Gate the external reads on the actual RTMP/SRT egress rows so
         // the first ffprobe does not race outputs that are still starting up.
         let progress_output_ids = mixed_progress_output_ids(&output_ids, &hls_output);
-        wait_for_outputs_progress(
+        wait_for_outputs_progress_with_env(
             api,
             &pipeline_id,
             &progress_output_ids,
             mixed_output_progress_timeout(progress_output_ids.len()),
+            Some(env),
         )
         .await?;
     }
@@ -1885,6 +1950,26 @@ pub(super) async fn run_mixed_anchor_config(
                     Some(probe.summary.clone()),
                 )?;
                 output_ids.push(probe.output_id.clone());
+                env.register_output_cell(HarnessOutputCell {
+                    scenario_id: cfg.to_string(),
+                    batch_group: "hls-put".to_string(),
+                    wave: 0,
+                    pipeline_id: pipeline_id.clone(),
+                    output_id: probe.output_id.clone(),
+                    output_name: format!("hls-put-{cfg}"),
+                    cell_id: "hls-put".to_string(),
+                    duplicate_index: 1,
+                    protocol: "http".to_string(),
+                    encoding: "source".to_string(),
+                    selected_audio_track: None,
+                    publish_url: format!(
+                        "http://127.0.0.1:{put_port}/upload?cid=probe-{cfg}&copy=0&file=out.m3u8"
+                    ),
+                    read_url: None,
+                    expected_dimensions: None,
+                    expected_audio_tracks: None,
+                    terminal_stage: None,
+                })?;
                 hls_put_probe_result = Some(probe);
             }
             Err(e) => {
@@ -1991,6 +2076,10 @@ pub(super) async fn run_mixed_anchor_config(
         "extFfmpegRssKb": rss.ffmpeg.rss_kb,
         "recording": recording,
         "outputMatrix": mixed_output_matrix_json(output_cases),
+        "artifacts": {
+            "outputsJson": env.outputs_json_path(),
+        },
+        "outputs": env.output_registry_json(),
     });
     if let Some(summary) = hls_preview {
         result["hlsPreview"] = summary;
@@ -2083,11 +2172,12 @@ pub(super) async fn run_mixed_live_config(
         // duplicated readers can still be wiring up while the first ffprobe or
         // signal capture starts. Waiting for bytes-out keeps the live matrix
         // from turning a startup lag into a false codec/output failure.
-        wait_for_outputs_progress(
+        wait_for_outputs_progress_with_env(
             api,
             &pipeline_id,
             &output_ids,
             mixed_output_progress_timeout(output_ids.len()),
+            Some(env),
         )
         .await?;
     }
@@ -2152,6 +2242,10 @@ pub(super) async fn run_mixed_live_config(
         "audioTracks": 2,
         "recording": recording,
         "outputMatrix": mixed_output_matrix_json(output_cases),
+        "artifacts": {
+            "outputsJson": env.outputs_json_path(),
+        },
+        "outputs": env.output_registry_json(),
     });
     if case.is_multi_track() {
         result["audioTracks"] = json!(2);
@@ -2272,11 +2366,12 @@ pub(super) async fn run_mixed_file_config(
         // still in "connecting/stalled" even though they do become healthy a
         // few seconds later. Wait for real bytes-out once per scenario so the
         // first probed cell does not lose signal to a startup race.
-        wait_for_outputs_progress(
+        wait_for_outputs_progress_with_env(
             api,
             &pipeline_id,
             &output_ids,
             mixed_output_progress_timeout(output_ids.len()),
+            Some(env),
         )
         .await?;
     }
@@ -2334,6 +2429,10 @@ pub(super) async fn run_mixed_file_config(
         "outputCount": total,
         "outputMatrix": mixed_output_matrix_json(output_cases),
         "recording": recording,
+        "artifacts": {
+            "outputsJson": env.outputs_json_path(),
+        },
+        "outputs": env.output_registry_json(),
         "rssBaselineKb": rss_baseline,
         "rssPeakKb": rss_peak,
         "rssGrowthKb": growth_kb,
@@ -2355,6 +2454,54 @@ mod tests {
         assert!(!mixed_runtime_log_noise_matches(
             "stage exit pipeline=pipe encoding=720p"
         ));
+    }
+
+    #[test]
+    fn mixed_env_register_output_cell_writes_outputs_json() {
+        let temp = std::env::temp_dir().join(format!(
+            "restream-mixed-output-registry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        let env = MixedEnv::from_env_with_default_work_dir("mixed.registry", temp.clone());
+
+        env.register_output_cell(HarnessOutputCell {
+            scenario_id: "mixed.asset.file.h264.a1.bf0".to_string(),
+            batch_group: "rtmp.source".to_string(),
+            wave: 0,
+            pipeline_id: "pipe".to_string(),
+            output_id: "output-1".to_string(),
+            output_name: "rtmp.source-1".to_string(),
+            cell_id: "rtmp.source".to_string(),
+            duplicate_index: 1,
+            protocol: "rtmp".to_string(),
+            encoding: "source".to_string(),
+            selected_audio_track: None,
+            publish_url: "rtmp://127.0.0.1:1935/live/out".to_string(),
+            read_url: None,
+            expected_dimensions: Some("1920x1080".to_string()),
+            expected_audio_tracks: Some(1),
+            terminal_stage: None,
+        })
+        .expect("cell registered");
+
+        let body = std::fs::read_to_string(env.outputs_json_path()).expect("outputs.json");
+        let json: Value = serde_json::from_str(&body).expect("valid output registry json");
+        assert_eq!(
+            json["schemaVersion"],
+            mixed_artifacts::MIXED_OUTPUTS_SCHEMA_VERSION
+        );
+        assert_eq!(json["outputs"][0]["outputId"], "output-1");
+        assert_eq!(
+            env.output_cell_label("output-1").expect("cell label"),
+            "mixed.asset.file.h264.a1.bf0 / rtmp.source / out1"
+        );
+
+        std::fs::remove_dir_all(temp).ok();
     }
 
     #[test]

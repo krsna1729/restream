@@ -283,7 +283,7 @@ convergence and later harness/reporting phases.
 
 | Phase | Status | Notes |
 |---|---|---|
-| Phase 13 — Harness v2 reporting | ❌ Not complete | Harness prints some dependency-chain fields, but `HarnessOutputCell`, `HarnessOutputRegistry`, root-cause summary, schema-versioned artifact index, and `outputs.json` contract are not present. |
+| Phase 13 — Harness v2 reporting | 🔶 In progress | Harness now has `HarnessOutputCell`, `HarnessOutputRegistry`, per-scenario `outputs.json`, scenario result embedding, and semantic cell labels in progress stalls. Root-cause grouping, schema-versioned assertion/artifact indexes, probe snapshot enrichment, and complete failure summaries remain. |
 | Phase 14 — Agent/MCP cleanup | ❌ Not complete | Agent output mutations now use `OutputService`, agent context/catalog reads use port-backed `AgentService`, and agent graph/impact preview use `StageGraphPlan`; shared DTO and MCP/HTTP boundary cleanup remains outside the Phase 1-12 scope. |
 | Phase 15 — Large-file split | ❌ Not complete | Major files remain large: `test_harness.rs` ~10k lines, `engine.rs` ~6.4k, `srt.rs` ~4.6k, `mpegts.rs` ~4.0k, `rtmp.rs` ~3.6k, `external_transcoder.rs` ~2.8k. |
 | Phase 16 — Rollout policy | ❌ Not complete | Not audited as implemented; internal backend remains policy-gated and parity work is ongoing. |
@@ -333,10 +333,11 @@ convergence and later harness/reporting phases.
 6. **Large files still dominate reasoning cost**
    - The Phase 15 split remains important once contract convergence is stronger.
 
-7. **Harness semantic model is still incomplete**
-   - The harness now consumes dependency-aware status in at least one progress
-     path, but it lacks persisted output-cell identity and structured root-cause
-     reporting.
+7. **Harness reporting is now split, but still incomplete**
+   - The harness now persists output-cell identity through `outputs.json` and
+     uses semantic cell labels in progress stalls. It still lacks structured
+     root-cause grouping, schema-versioned assertion/artifact indexes, and
+     probe/status snapshot enrichment for every failure path.
 
 ---
 
@@ -357,7 +358,7 @@ convergence and later harness/reporting phases.
 | Ph 10 HLS preview | A | API one-off removed; preview startup/spawn, playlist/segment serving policy, blocked-cause selection, and health keys share the application/runtime graph path. |
 | Ph 11 Recording metadata | A | Media API consumes persisted recording metadata and mixed harness now requires pipeline/recording identity; filename-token matching fallback has been removed. |
 | Ph 12 Health/alerts/diagnostics | A | Health, alerts, graph, and the causal diagnostics context bundle meet the Phase 12 acceptance criteria; the legacy SSE diagnostics probe remains as an active probe path beside the read-only context endpoint. |
-| Ph 13 Harness v2 | D | Some dependency fields printed; semantic model missing. |
+| Ph 13 Harness v2 | C | Output-cell registry and `outputs.json` exist, and progress stalls name the semantic cell; root-cause grouping, artifact index, assertion schema versioning, and full failure snapshot enrichment remain. |
 | Ph 14 Agent/MCP cleanup | D | Agent still crosses DB/API/runtime boundaries. |
 | Ph 15 Large-file split | F | Not done. |
 | Ph 16 Rollout policy | F | Not done. |
