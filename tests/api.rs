@@ -8,6 +8,7 @@ use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 use restream::domain::output_spec::OutputConfig;
 use restream::domain::srt_ingest::SrtGlobalIngestConfig;
 use restream::domain::stage::{StageKey, StageKind};
+use restream::domain::state::DesiredOutputState;
 use restream::logging::types::AppLogEntry;
 use restream::media::engine::{AudioMeta, MediaEngine, VideoMeta};
 use restream::media::security::IngestSecurityService;
@@ -514,7 +515,7 @@ async fn custom_output_encoding_is_rejected_by_api() {
         "O",
         "rtmp://dest/live/key",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await
@@ -603,7 +604,7 @@ async fn output_crud_via_api() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(output.desired_state, "running");
+    assert_eq!(output.desired_state, DesiredOutputState::Running);
 
     // Stop
     let uri = format!("/api/v1/pipelines/p1/outputs/{}/stop", output_id);
@@ -641,7 +642,7 @@ async fn config_get_returns_structured_data() {
         "Out",
         "rtmp://dest/live",
         None,
-        "running",
+        DesiredOutputState::Running,
         &OutputConfig::default(),
     )
     .await
@@ -1738,7 +1739,7 @@ async fn pipeline_diagnostics_context_returns_causal_bundle() {
         "RTMP 720p",
         "rtmp://example.test/live/diagctx",
         None,
-        "running",
+        DesiredOutputState::Running,
         &OutputConfig::parse("720p"),
     )
     .await
@@ -3496,7 +3497,7 @@ async fn v1_pipeline_list_detail_and_graph_endpoints_return_payloads() {
         "Output V1",
         "rtmp://example/live/key",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await
@@ -4399,7 +4400,7 @@ async fn agent_operation_lifecycle_is_approval_gated_redacted_and_verified() {
         .unwrap()
         .unwrap();
     assert_eq!(output.url, raw_output_url);
-    assert_eq!(output.desired_state, "stopped");
+    assert_eq!(output.desired_state, DesiredOutputState::Stopped);
 
     let verified = app
         .oneshot(auth_req(

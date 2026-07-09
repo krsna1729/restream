@@ -2722,6 +2722,7 @@ impl MediaEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::state::DesiredOutputState;
     use crate::media::avio::MemoryQueue;
     use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader};
     use bytes::Bytes;
@@ -4297,7 +4298,7 @@ mod tests {
             name: "SRT Target".to_string(),
             url: "srt://example.com:9000?streamid=publish:live/test".to_string(),
             monitoring_url: None,
-            desired_state: "running".to_string(),
+            desired_state: DesiredOutputState::Running,
             config: crate::domain::output_spec::OutputConfig::parse("source"),
         };
 
@@ -4349,7 +4350,7 @@ mod tests {
             name: "Failed Target".to_string(),
             url: "rtmp://example/live/test".to_string(),
             monitoring_url: None,
-            desired_state: "running".to_string(),
+            desired_state: DesiredOutputState::Running,
             config: crate::domain::output_spec::OutputConfig::parse("source"),
         };
 
@@ -4393,7 +4394,7 @@ mod tests {
             name: "Graph RTMP".to_string(),
             url: "rtmp://example/live/test".to_string(),
             monitoring_url: None,
-            desired_state: "running".to_string(),
+            desired_state: DesiredOutputState::Running,
             config: crate::domain::output_spec::OutputConfig::parse("h264+atrack:1"),
         };
 

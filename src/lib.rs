@@ -65,6 +65,7 @@ use crate::application::reconcile::{
     load_output_runtime_snapshot, next_output_retry_count, output_stage_sweep_input,
 };
 use crate::domain::stage::StageKey;
+use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
 use futures_util::FutureExt as _;
 use std::collections::HashMap;
@@ -635,7 +636,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
             let snapshot =
                 load_output_runtime_snapshot(&engine, output, tuning.ingest_disconnect_grace_ms)
                     .await;
-            if snapshot.is_active || output.desired_state != "running" {
+            if snapshot.is_active || output.desired_state != DesiredOutputState::Running {
                 engine.clear_egress_retry_state(&output.id).await;
             }
             let now_str = chrono::Utc::now().to_rfc3339();
@@ -650,7 +651,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
             };
 
             match decide_output_start_action(
-                &output.desired_state,
+                output.desired_state,
                 snapshot.is_active,
                 snapshot.effective_has_ingest,
                 failure,
@@ -677,7 +678,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
                         &pool,
                         &output.pipeline_id,
                         &output.id,
-                        "failed",
+                        DesiredOutputState::Failed,
                     )
                     .await;
                     continue;
@@ -1002,7 +1003,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
             }
 
             match decide_output_stop_action(
-                &output.desired_state,
+                output.desired_state,
                 snapshot.is_active,
                 snapshot.effective_has_ingest,
             ) {

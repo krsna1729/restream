@@ -61,6 +61,7 @@ impl OutputService {
         desired_state: &str,
         config: &OutputConfig,
     ) -> ApiResult<Output> {
+        let desired_state = DesiredOutputState::from(desired_state);
         self.store
             .create_output(
                 id,
@@ -101,7 +102,7 @@ impl OutputService {
     /// Set the output's desired state to `running`, resuming any stopped egress.
     pub async fn request_start(&self, pipeline_id: &str, id: &str) -> ApiResult<Output> {
         self.store
-            .set_output_desired_state(pipeline_id, id, DesiredOutputState::Running.as_str())
+            .set_output_desired_state(pipeline_id, id, DesiredOutputState::Running)
             .await
             .map_err(|e| ApiError::internal(format!("request start: {e}")))
     }
@@ -109,7 +110,7 @@ impl OutputService {
     /// Set the output's desired state to `stopped`, halting any active egress.
     pub async fn request_stop(&self, pipeline_id: &str, id: &str) -> ApiResult<Output> {
         self.store
-            .set_output_desired_state(pipeline_id, id, DesiredOutputState::Stopped.as_str())
+            .set_output_desired_state(pipeline_id, id, DesiredOutputState::Stopped)
             .await
             .map_err(|e| ApiError::internal(format!("request stop: {e}")))
     }
@@ -165,7 +166,7 @@ mod tests {
             name: &'a str,
             url: &'a str,
             monitoring_url: Option<&'a str>,
-            desired_state: &'a str,
+            desired_state: DesiredOutputState,
             config: &'a OutputConfig,
         ) -> OutputCreateFuture<'a> {
             Box::pin(async move {
@@ -175,7 +176,7 @@ mod tests {
                     name: name.to_string(),
                     url: url.to_string(),
                     monitoring_url: monitoring_url.map(str::to_string),
-                    desired_state: desired_state.to_string(),
+                    desired_state,
                     config: config.clone(),
                 };
                 *self.output.lock().unwrap() = output.clone();
@@ -220,14 +221,14 @@ mod tests {
             &'a self,
             pipeline_id: &'a str,
             id: &'a str,
-            desired_state: &'a str,
+            desired_state: DesiredOutputState,
         ) -> OutputCreateFuture<'a> {
             Box::pin(async move {
                 let mut output = self.output.lock().unwrap();
                 if output.pipeline_id != pipeline_id || output.id != id {
                     return Err(OutputStoreError::new("not found"));
                 }
-                output.desired_state = desired_state.to_string();
+                output.desired_state = desired_state;
                 Ok(output.clone())
             })
         }
@@ -241,15 +242,15 @@ mod tests {
             name: "Output".to_string(),
             url: "rtmp://localhost/live/key".to_string(),
             monitoring_url: None,
-            desired_state: "running".to_string(),
+            desired_state: DesiredOutputState::Running,
             config: OutputConfig::default(),
         };
         let service = OutputService::with_store(Arc::new(FakeOutputStore::new(output)));
 
         let stopped = service.request_stop("pipe-1", "out-1").await.unwrap();
-        assert_eq!(stopped.desired_state, "stopped");
+        assert_eq!(stopped.desired_state, DesiredOutputState::Stopped);
 
         let running = service.request_start("pipe-1", "out-1").await.unwrap();
-        assert_eq!(running.desired_state, "running");
+        assert_eq!(running.desired_state, DesiredOutputState::Running);
     }
 }

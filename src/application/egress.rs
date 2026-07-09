@@ -96,6 +96,7 @@ pub async fn prepare_output_ring(
 mod tests {
     use super::*;
     use crate::domain::stage::StageKind;
+    use crate::domain::state::DesiredOutputState;
     use crate::media::engine::VideoMeta;
 
     fn test_output(pipeline_id: &str, encoding: &str, url: &str) -> Output {
@@ -105,7 +106,7 @@ mod tests {
             name: "Output".to_string(),
             url: url.to_string(),
             monitoring_url: None,
-            desired_state: "running".to_string(),
+            desired_state: DesiredOutputState::Running,
             config: crate::domain::output_spec::OutputConfig::parse(encoding),
         }
     }

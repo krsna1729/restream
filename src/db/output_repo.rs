@@ -1,4 +1,5 @@
 use crate::domain::output_spec::OutputConfig;
+use crate::domain::state::DesiredOutputState;
 use crate::types::Output;
 use sqlx::{AssertSqlSafe, FromRow, SqlitePool};
 
@@ -41,7 +42,7 @@ impl TryFrom<OutputRow> for Output {
             name: row.name,
             url: row.url,
             monitoring_url: row.monitoring_url,
-            desired_state: row.desired_state,
+            desired_state: DesiredOutputState::from(row.desired_state),
             config: deserialize_config(&row.config)?,
         })
     }
@@ -86,7 +87,7 @@ pub async fn create_output(
     name: &str,
     url: &str,
     monitoring_url: Option<&str>,
-    desired_state: &str,
+    desired_state: DesiredOutputState,
     config: &OutputConfig,
 ) -> Result<Output, sqlx::Error> {
     let config_json = serialize_config(config)?;
@@ -98,7 +99,7 @@ pub async fn create_output(
     .bind(name)
     .bind(url)
     .bind(monitoring_url)
-    .bind(desired_state)
+    .bind(desired_state.as_str())
     .bind(config_json)
     .execute(pool)
     .await?;
@@ -177,10 +178,10 @@ pub async fn set_output_desired_state(
     pool: &SqlitePool,
     pipeline_id: &str,
     id: &str,
-    desired_state: &str,
+    desired_state: DesiredOutputState,
 ) -> Result<Output, sqlx::Error> {
     sqlx::query("UPDATE outputs SET desired_state = ? WHERE id = ? AND pipeline_id = ?")
-        .bind(desired_state)
+        .bind(desired_state.as_str())
         .bind(id)
         .bind(pipeline_id)
         .execute(pool)

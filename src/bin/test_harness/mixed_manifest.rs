@@ -967,6 +967,7 @@ mod tests {
     use super::*;
     use restream::domain::output_spec::OutputConfig;
     use restream::domain::stage::StageKind;
+    use restream::domain::state::DesiredOutputState;
     use restream::planner::backend_policy::BackendPolicy;
     use restream::planner::graph_plan::plan_pipeline_graph;
     use restream::types::Output;
@@ -989,7 +990,7 @@ mod tests {
                         name: output_case.id().to_string(),
                         url: url.to_string(),
                         monitoring_url: None,
-                        desired_state: "running".to_string(),
+                        desired_state: DesiredOutputState::Running,
                         config: OutputConfig::parse(output_case.encoding()),
                     }
                 })

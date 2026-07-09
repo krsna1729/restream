@@ -2,6 +2,7 @@
 //! catalog capabilities that orchestration code depends on.
 
 use crate::domain::output_spec::OutputConfig;
+use crate::domain::state::DesiredOutputState;
 use crate::logging::types::{AppLogFilters, AppLogRow};
 use crate::types::{Ingest, Job, Output, Pipeline};
 use sqlx::SqlitePool;
@@ -263,7 +264,7 @@ pub trait OutputStore: Send + Sync {
         name: &'a str,
         url: &'a str,
         monitoring_url: Option<&'a str>,
-        desired_state: &'a str,
+        desired_state: DesiredOutputState,
         config: &'a OutputConfig,
     ) -> OutputCreateFuture<'a>;
     fn update_output<'a>(
@@ -280,7 +281,7 @@ pub trait OutputStore: Send + Sync {
         &'a self,
         pipeline_id: &'a str,
         id: &'a str,
-        desired_state: &'a str,
+        desired_state: DesiredOutputState,
     ) -> OutputCreateFuture<'a>;
 }
 
@@ -560,7 +561,7 @@ impl OutputStore for SqliteOutputStore {
         name: &'a str,
         url: &'a str,
         monitoring_url: Option<&'a str>,
-        desired_state: &'a str,
+        desired_state: DesiredOutputState,
         config: &'a OutputConfig,
     ) -> OutputCreateFuture<'a> {
         Box::pin(async move {
@@ -615,7 +616,7 @@ impl OutputStore for SqliteOutputStore {
         &'a self,
         pipeline_id: &'a str,
         id: &'a str,
-        desired_state: &'a str,
+        desired_state: DesiredOutputState,
     ) -> OutputCreateFuture<'a> {
         Box::pin(async move {
             crate::db::set_output_desired_state(&self.pool, pipeline_id, id, desired_state)

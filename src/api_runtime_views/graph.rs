@@ -6,6 +6,7 @@
 use crate::api_view_models;
 use crate::domain::output_spec::VideoCodecKind;
 use crate::domain::stage::{StageKey, StageKind};
+use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
 use crate::planner::graph_plan::plan_pipeline_graph;
 use crate::types::Output;
@@ -116,7 +117,8 @@ pub(crate) async fn processing_graph(
         .iter()
         .filter(|output| {
             ingest.is_some()
-                && (output.desired_state == "running" || egresses.contains_key(&output.id))
+                && (output.desired_state == DesiredOutputState::Running
+                    || egresses.contains_key(&output.id))
         })
         .map(|output| (*output).to_owned())
         .collect::<Vec<_>>();

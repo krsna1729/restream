@@ -43,13 +43,13 @@ pub enum OutputStartAction {
 }
 
 pub fn decide_output_start_action(
-    desired_state: &str,
+    desired_state: DesiredOutputState,
     is_active: bool,
     effective_has_ingest: bool,
     failure: Option<OutputFailureWindow>,
     policy: OutputRetryPolicy,
 ) -> OutputStartAction {
-    if DesiredOutputState::from(desired_state) != DesiredOutputState::Running || is_active {
+    if desired_state != DesiredOutputState::Running || is_active {
         return OutputStartAction::NotApplicable;
     }
     if !effective_has_ingest {
@@ -79,11 +79,11 @@ pub enum OutputStopAction {
 }
 
 pub fn decide_output_stop_action(
-    desired_state: &str,
+    desired_state: DesiredOutputState,
     is_active: bool,
     effective_has_ingest: bool,
 ) -> OutputStopAction {
-    match DesiredOutputState::from(desired_state) {
+    match desired_state {
         DesiredOutputState::Running if is_active && !effective_has_ingest => {
             OutputStopAction::StopBecauseIngestLost
         }
@@ -151,7 +151,7 @@ pub struct OutputStageSweepInput<'a> {
     pub pipeline_id: &'a str,
     pub encoding: String,
     pub url: &'a str,
-    pub desired_state: &'a str,
+    pub desired_state: DesiredOutputState,
     pub is_active: bool,
     pub effective_has_ingest: bool,
     pub ingest_video_codec: Option<String>,
@@ -164,8 +164,7 @@ pub fn collect_needed_stage_keys<'a>(
     let mut needed_stages = HashSet::new();
     for output in outputs {
         if output.effective_has_ingest
-            && (output.is_active
-                || DesiredOutputState::from(output.desired_state) == DesiredOutputState::Running)
+            && (output.is_active || output.desired_state == DesiredOutputState::Running)
         {
             let dummy_output = Output {
                 id: "".to_string(),
@@ -173,7 +172,7 @@ pub fn collect_needed_stage_keys<'a>(
                 name: "".to_string(),
                 url: output.url.to_string(),
                 monitoring_url: None,
-                desired_state: output.desired_state.to_string(),
+                desired_state: output.desired_state,
                 config: crate::domain::output_spec::OutputConfig::parse(&output.encoding),
             };
             let plan = crate::planner::graph_plan::plan_pipeline_graph(
@@ -201,7 +200,7 @@ pub fn output_stage_sweep_input<'a>(
         pipeline_id: output.pipeline_id.as_str(),
         encoding: output.encoding_string(),
         url: &output.url,
-        desired_state: &output.desired_state,
+        desired_state: output.desired_state,
         is_active: snapshot.is_active,
         effective_has_ingest: snapshot.effective_has_ingest,
         ingest_video_codec: snapshot.ingest_video_codec.clone(),
@@ -277,7 +276,7 @@ mod tests {
     #[test]
     fn start_action_waits_during_backoff_window() {
         let action = decide_output_start_action(
-            "running",
+            DesiredOutputState::Running,
             false,
             true,
             Some(OutputFailureWindow {
@@ -300,7 +299,7 @@ mod tests {
     #[test]
     fn start_action_marks_failed_after_max_retries() {
         let action = decide_output_start_action(
-            "running",
+            DesiredOutputState::Running,
             false,
             true,
             Some(OutputFailureWindow {
@@ -315,7 +314,13 @@ mod tests {
 
     #[test]
     fn start_action_skips_when_ingest_is_missing() {
-        let action = decide_output_start_action("running", false, false, None, test_retry_policy());
+        let action = decide_output_start_action(
+            DesiredOutputState::Running,
+            false,
+            false,
+            None,
+            test_retry_policy(),
+        );
 
         assert_eq!(action, OutputStartAction::SkipNoIngest);
     }
@@ -323,11 +328,11 @@ mod tests {
     #[test]
     fn stop_action_distinguishes_requested_stop_from_ingest_loss() {
         assert_eq!(
-            decide_output_stop_action("running", true, false),
+            decide_output_stop_action(DesiredOutputState::Running, true, false),
             OutputStopAction::StopBecauseIngestLost
         );
         assert_eq!(
-            decide_output_stop_action("stopped", true, true),
+            decide_output_stop_action(DesiredOutputState::Stopped, true, true),
             OutputStopAction::StopRequested
         );
     }
@@ -363,7 +368,7 @@ mod tests {
                     pipeline_id: "pipe",
                     encoding: "720p+atrack:0".to_string(),
                     url: "rtmp://example/live",
-                    desired_state: "running",
+                    desired_state: DesiredOutputState::Running,
                     is_active: false,
                     effective_has_ingest: true,
                     ingest_video_codec: Some("hevc".to_string()),
@@ -372,7 +377,7 @@ mod tests {
                     pipeline_id: "pipe",
                     encoding: "source".to_string(),
                     url: "srt://example:9000",
-                    desired_state: "stopped",
+                    desired_state: DesiredOutputState::Stopped,
                     is_active: false,
                     effective_has_ingest: true,
                     ingest_video_codec: Some("hevc".to_string()),
@@ -420,7 +425,7 @@ mod tests {
             name: "Output".to_string(),
             url: "rtmp://example/live/test".to_string(),
             monitoring_url: None,
-            desired_state: "running".to_string(),
+            desired_state: DesiredOutputState::Running,
             config: OutputConfig::parse("source"),
         };
 
@@ -445,7 +450,7 @@ mod tests {
             name: "Output".to_string(),
             url: "srt://example:9000".to_string(),
             monitoring_url: None,
-            desired_state: "running".to_string(),
+            desired_state: DesiredOutputState::Running,
             config: OutputConfig::parse("source"),
         };
 
@@ -464,7 +469,7 @@ mod tests {
             name: "Output".to_string(),
             url: "rtmp://example/live".to_string(),
             monitoring_url: None,
-            desired_state: "running".to_string(),
+            desired_state: DesiredOutputState::Running,
             config: OutputConfig::parse("720p"),
         };
         let snapshot = OutputRuntimeSnapshot {

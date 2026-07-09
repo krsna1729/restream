@@ -5,6 +5,7 @@
 //! and JSON payloads for pipelines, outputs, jobs, and file ingests.
 
 use crate::domain::output_spec::OutputConfig;
+use crate::domain::state::DesiredOutputState;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -49,7 +50,7 @@ pub struct Output {
     pub name: String,
     pub url: String,
     pub monitoring_url: Option<String>,
-    pub desired_state: String, // "running" | "stopped"
+    pub desired_state: DesiredOutputState,
     pub config: OutputConfig,
 }
 

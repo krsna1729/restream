@@ -337,7 +337,7 @@ pub async fn outputs_update_handler(
         .output_service
         .get_by_id(&pipeline_id, &output_id)
         .await?;
-    if existing.desired_state == "running"
+    if existing.desired_state == DesiredOutputState::Running
         && (existing.url != payload.url || existing.config != output_config)
     {
         return Ok((

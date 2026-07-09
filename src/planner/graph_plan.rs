@@ -114,6 +114,7 @@ fn is_hevc_preview_codec(codec: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::state::DesiredOutputState;
 
     #[test]
     fn plan_hls_preview_graph_returns_plan_for_hevc() {
@@ -156,7 +157,7 @@ mod tests {
             name: "Output".to_string(),
             url: "rtmp://example/live".to_string(),
             monitoring_url: None,
-            desired_state: "running".to_string(),
+            desired_state: DesiredOutputState::Running,
             config: crate::domain::output_spec::OutputConfig::parse("720p+atrack:0"),
         };
 

@@ -20,8 +20,9 @@ bundles graph, health, alerts, events, relevant logs, and backend stderr tail.
 However, **Phases 1-12 are not all truly complete in the ideal architecture
 sense**. Several phases have strong scaffolding but incomplete adoption:
 
-- typed contracts exist, but runtime/application code still stores and compares
-  raw string states in important paths;
+- typed contracts exist, and output desired state is now typed through the
+  application/repository boundary, but some row DTOs such as jobs still expose
+  raw status strings;
 - configuration is centralized for startup/runtime config, but env parsing still
   exists outside the central `AppConfig` path;
 - API route modules exist, but several handlers still call `db::*` directly;
@@ -69,7 +70,7 @@ drift is not enforced by CI.
 | Runtime errors | ✅ Present | `src/domain/errors.rs` defines `StageError` and `RuntimeError`. |
 | `StageRuntimeSnapshot` | ✅ Present | `src/runtime/stage.rs`, including phase serialization and capacity fields. |
 | `OutputRuntimeExplanation` | ✅ Present | `src/runtime/output.rs` and API status wiring. |
-| No new code writes raw string states except at DB/API boundary | ⚠️ Partial | Reconciliation now converts desired output state to `DesiredOutputState`; active egress status/phase and recent egress status/raw status/phase are typed. `types::Output.desired_state` still stores raw strings at the DB row boundary. |
+| No new code writes raw string states except at DB/API boundary | ⚠️ Mostly | `types::Output.desired_state` is now `DesiredOutputState`, reconciliation and graph/runtime comparisons use the enum directly, and active/recent egress status/phase are typed. `types::Job.status` still exposes raw strings from the row/API boundary. |
 
 **Verdict**: **Partial**. Contracts exist and are useful, but adoption is not
 complete. The ideal contract boundary has not replaced string state in runtime
@@ -128,7 +129,7 @@ thin adapters everywhere.
 | `db/` repository modules exist | ✅ Complete | `db/{pipeline_repo,output_repo,ingest_repo,job_repo,session_repo,meta_repo,log_repo,recording_repo,schema,migrations}.rs`. |
 | `db.rs` is only module index / pool / schema helper | ✅ Mostly | `src/db/mod.rs` is thin and re-exports repositories. |
 | Application services depend on repository traits | ✅ Mostly | `PipelineService` and `HealthService` depend on `PipelineStore`, `OutputService` depends on `OutputStore`, `IngestService` depends on `IngestLookup`/`IngestWriter`, `LogService` depends on `LogStore`, `AuthService` depends on meta/session ports, and `SettingsService` depends on meta/ingest-host/job ports. |
-| String states converted at repository boundary | ⚠️ Partial | `recording_repo` maps `RecordingPhase`; `output_repo` still stores/returns `desired_state: String` in `types::Output`. |
+| String states converted at repository boundary | ⚠️ Mostly | `recording_repo` maps `RecordingPhase`, and `output_repo` maps SQLite `desired_state` text into `DesiredOutputState`; `job_repo` still returns `types::Job.status` as a raw string. |
 
 **Verdict**: **Partial**. Repository files exist, but port isolation and typed
 state conversion are incomplete.
@@ -278,10 +279,10 @@ convergence and later harness/reporting phases.
      agent impact previews, and HLS output are not all unified behind one
      graph-plan contract.
 
-2. **String runtime state remains in core logic**
-   - Active egress status/phase and recent egress status/raw status/phase are
-     now typed, but `types::Output.desired_state` still uses raw strings at the
-     DB row boundary. This is the remaining Phase 1 string-state adoption gap.
+2. **Some row DTO state is still stringly**
+   - Active egress status/phase, recent egress status/raw status/phase, and
+     output desired state are now typed. `types::Job.status` still uses raw
+     strings at the row/API boundary.
 
 ### P1 — Layering and Ownership
 
@@ -316,11 +317,11 @@ convergence and later harness/reporting phases.
 | Phase | Current Grade | Honest Status |
 |---|---:|---|
 | Ph 0 Guardrails | F | Not started. |
-| Ph 1 Core contracts | A- | Types exist, reconciliation consumes typed desired-state logic, and active/recent egress lifecycle state is typed; DB output desired-state strings remain at the row boundary. |
+| Ph 1 Core contracts | A- | Types exist, output desired-state and active/recent egress lifecycle state are typed; job row status remains string-backed. |
 | Ph 2 Config | A- | Production env parsing is centralized in config, startup logs a comprehensive redacted effective-config summary, and recording remux receives typed config; static media fallback readers remain. |
 | Ph 3 API split | A | Route module split is complete. |
 | Ph 4 App services | B+ | Logs, auth initialization, pipeline, output, ingest, and health checks are service-backed; agent and some helper paths still contain direct DB/application work. |
-| Ph 5 Repositories | A- | Repo modules exist, and pipeline/output/ingest/health/log/auth/settings services are port-trait backed; raw output desired-state strings remain at the row boundary. |
+| Ph 5 Repositories | A- | Repo modules exist, pipeline/output/ingest/health/log/auth/settings services are port-trait backed, and output desired state maps at the repository boundary; job status remains string-backed. |
 | Ph 6 Graph planner | A- | Planner drives output preparation, graph rendering, diagnostics, and preview planning, with harness stage-sharing tests; recording/agent consumers remain. |
 | Ph 7 Stage lifecycle | B+ | Lifecycle/capacity visibility strong; runtime object model still split. |
 | Ph 8 Dependency-aware status | A | Operator-facing dependency status is complete for the phase scope, with typed internal egress lifecycle state. |

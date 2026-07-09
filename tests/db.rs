@@ -5,6 +5,7 @@
 use restream::{
     db,
     domain::output_spec::OutputConfig,
+    domain::state::DesiredOutputState,
     logging::types::{AppLogEntry, AppLogFilters},
     types::JobStatus,
 };
@@ -95,13 +96,13 @@ async fn output_crud() {
         "YouTube",
         "rtmp://yt/live",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await
     .unwrap();
     assert_eq!(o.id, "o1");
-    assert_eq!(o.desired_state, "stopped");
+    assert_eq!(o.desired_state, DesiredOutputState::Stopped);
 
     let fetched = db::get_output(&pool, "p1", "o1").await.unwrap().unwrap();
     assert_eq!(fetched.name, "YouTube");
@@ -124,10 +125,10 @@ async fn output_crud() {
     assert_eq!(updated.name, "Twitch");
     assert_eq!(updated.encoding_string(), "720p");
 
-    let started = db::set_output_desired_state(&pool, "p1", "o1", "running")
+    let started = db::set_output_desired_state(&pool, "p1", "o1", DesiredOutputState::Running)
         .await
         .unwrap();
-    assert_eq!(started.desired_state, "running");
+    assert_eq!(started.desired_state, DesiredOutputState::Running);
 
     assert!(db::delete_output(&pool, "p1", "o1").await.unwrap());
     assert!(db::get_output(&pool, "p1", "o1").await.unwrap().is_none());
@@ -146,7 +147,7 @@ async fn cascade_delete_removes_outputs() {
         "Out",
         "rtmp://x",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await
@@ -170,7 +171,7 @@ async fn job_lifecycle() {
         "Out",
         "rtmp://x",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await
@@ -225,7 +226,7 @@ async fn job_upsert_on_conflict() {
         "Out",
         "rtmp://x",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await
@@ -273,7 +274,7 @@ async fn stale_job_update_cannot_clobber_replacement_attempt() {
         "Out",
         "rtmp://x",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await
@@ -341,7 +342,7 @@ async fn multiple_stale_job_updates_cannot_clobber_newest_attempt() {
         "Out",
         "rtmp://x",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await
@@ -432,7 +433,7 @@ async fn app_logs_can_be_queried_by_output_scope() {
         "Out",
         "rtmp://x",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await
@@ -525,7 +526,7 @@ async fn filtered_app_logs_honor_prefix_and_event_class_filters() {
         "Out",
         "rtmp://x",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await
@@ -754,7 +755,7 @@ async fn reset_running_jobs() {
         "Out",
         "rtmp://x",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await
@@ -793,7 +794,7 @@ async fn cleanup_old_jobs_removes_only_old_terminal_jobs() {
         "Out",
         "rtmp://x",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await
@@ -805,7 +806,7 @@ async fn cleanup_old_jobs_removes_only_old_terminal_jobs() {
         "Out 2",
         "rtmp://y",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await
@@ -817,7 +818,7 @@ async fn cleanup_old_jobs_removes_only_old_terminal_jobs() {
         "Out 3",
         "rtmp://z",
         None,
-        "stopped",
+        DesiredOutputState::Stopped,
         &OutputConfig::default(),
     )
     .await

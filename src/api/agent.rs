@@ -691,8 +691,12 @@ async fn apply_agent_change(
         "addOutput" => apply_agent_add_output(state, pipeline_id, change).await,
         "updateOutput" => apply_agent_update_output(state, pipeline_id, change).await,
         "removeOutput" => apply_agent_remove_output(state, pipeline_id, change).await,
-        "startOutput" => apply_agent_desired_state(state, pipeline_id, change, "running").await,
-        "stopOutput" => apply_agent_desired_state(state, pipeline_id, change, "stopped").await,
+        "startOutput" => {
+            apply_agent_desired_state(state, pipeline_id, change, DesiredOutputState::Running).await
+        }
+        "stopOutput" => {
+            apply_agent_desired_state(state, pipeline_id, change, DesiredOutputState::Stopped).await
+        }
         other => Err(format!("unsupported change kind '{other}'")),
     }
 }
@@ -728,7 +732,7 @@ async fn apply_agent_add_output(
         name.trim(),
         url,
         monitoring_url.as_deref(),
-        desired_state,
+        DesiredOutputState::from(desired_state),
         config,
     )
     .await
@@ -767,7 +771,7 @@ async fn apply_agent_update_output(
     let desired_state = change
         .desired_state
         .as_deref()
-        .unwrap_or(&existing.desired_state)
+        .unwrap_or(existing.desired_state.as_str())
         .trim();
     validate_output_fields(name, url, monitoring_url.as_deref(), config, desired_state)?;
 
@@ -783,6 +787,7 @@ async fn apply_agent_update_output(
     .await
     .map_err(|err| format!("failed to update output: {err}"))?
     .ok_or_else(|| format!("output '{output_id}' not found on pipeline '{pipeline_id}'"))?;
+    let desired_state = DesiredOutputState::from(desired_state);
     if desired_state != existing.desired_state {
         updated = db::set_output_desired_state(&state.db, pipeline_id, output_id, desired_state)
             .await
@@ -834,7 +839,7 @@ async fn apply_agent_desired_state(
     state: &AppState,
     pipeline_id: &str,
     change: &crate::agent_plane::ProposedChange,
-    desired_state: &str,
+    desired_state: DesiredOutputState,
 ) -> Result<serde_json::Value, String> {
     let output_id = required_change_field(change.output_id.as_deref(), "outputId")?;
     let existing = db::get_output(&state.db, pipeline_id, output_id)
@@ -963,7 +968,7 @@ async fn verify_agent_operation(
             "addOutput" | "updateOutput" => {
                 if let Some(output) = output {
                     if let Some(desired) = change.desired_state.as_deref()
-                        && output.desired_state != desired
+                        && output.desired_state.as_str() != desired
                     {
                         (false, "desiredStateMismatch")
                     } else if change.desired_state.as_deref() == Some("running") {
@@ -1004,7 +1009,7 @@ async fn verify_agent_operation(
                 let input_status = health["pipelines"][pipeline_id]["input"]["status"]
                     .as_str()
                     .unwrap_or("off");
-                if output.is_some_and(|output| output.desired_state == "running")
+                if output.is_some_and(|output| output.desired_state == DesiredOutputState::Running)
                     && status == Some("running")
                 {
                     (true, "running")
@@ -1016,7 +1021,7 @@ async fn verify_agent_operation(
             }
             "stopOutput" => {
                 let status = runtime.and_then(|runtime| runtime["status"].as_str());
-                if output.is_some_and(|output| output.desired_state == "stopped")
+                if output.is_some_and(|output| output.desired_state == DesiredOutputState::Stopped)
                     && status != Some("running")
                 {
                     (true, "stopped")
@@ -1202,13 +1207,15 @@ fn agent_desired_vs_actual(
         for output in pipeline_outputs {
             let runtime = &pipeline_health["outputs"][&output.id];
             let actual = runtime["status"].as_str().unwrap_or("stopped");
-            let reason = if output.desired_state == "running" && input_status != "on" {
+            let reason = if output.desired_state == DesiredOutputState::Running
+                && input_status != "on"
+            {
                 pending_count += 1;
                 "pendingInput"
-            } else if output.desired_state == "running" && actual == "running" {
+            } else if output.desired_state == DesiredOutputState::Running && actual == "running" {
                 converged_count += 1;
                 "converged"
-            } else if output.desired_state == "stopped" && actual != "running" {
+            } else if output.desired_state == DesiredOutputState::Stopped && actual != "running" {
                 converged_count += 1;
                 "converged"
             } else {
@@ -1321,7 +1328,10 @@ fn agent_diagnostics_summary(
             .unwrap_or_default();
         let desired_running_outputs = outputs
             .iter()
-            .filter(|output| output.pipeline_id == pipeline.id && output.desired_state == "running")
+            .filter(|output| {
+                output.pipeline_id == pipeline.id
+                    && output.desired_state == DesiredOutputState::Running
+            })
             .count();
         let actual_running_outputs = pipeline_health["outputs"]
             .as_object()
