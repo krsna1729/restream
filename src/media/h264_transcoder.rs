@@ -42,6 +42,72 @@ impl AsRef<[u8]> for OwnedFfmpegPacket {
     }
 }
 
+fn ffmpeg_error_is_again(error: ffmpeg_next::Error) -> bool {
+    matches!(
+        error,
+        ffmpeg_next::Error::Other { errno } if errno == ffmpeg_next::error::EAGAIN
+    )
+}
+
+fn ffmpeg_error_is_eof(error: ffmpeg_next::Error) -> bool {
+    matches!(error, ffmpeg_next::Error::Eof)
+}
+
+fn drain_h264_encoder_packets(
+    enc: &mut ffmpeg_next::codec::encoder::video::Encoder,
+    enc_pkt: &mut ffmpeg_next::Packet,
+    normalizer: &mut StageOutputNormalizer,
+) -> usize {
+    let mut drained = 0;
+    loop {
+        match enc.receive_packet(enc_pkt) {
+            Ok(()) => {
+                let pts_ms = enc_pkt.pts().unwrap_or(0);
+                // DTS can differ from PTS when B-frames are enabled: the encoder
+                // returns the decode timestamp separately.  Setting dts=pts would
+                // break B-frame reordering in downstream muxers (TS, MP4).
+                let dts_ms = enc_pkt.dts().unwrap_or(pts_ms);
+                // enc_pkt is reused across iterations; clone() calls av_packet_ref (refcount
+                // bump only, no data copy) so the ring buffer holds the AVBufferRef alive.
+                normalizer.push(MediaPacket {
+                    media_type: MediaType::Video,
+                    track_index: 0,
+                    pts: pts_ms,
+                    dts: dts_ms,
+                    is_keyframe: enc_pkt.is_key(),
+                    format: PayloadFormat::Raw,
+                    payload: Bytes::from_owner(OwnedFfmpegPacket(enc_pkt.clone())),
+                });
+                drained += 1;
+            }
+            Err(error) if ffmpeg_error_is_again(error) || ffmpeg_error_is_eof(error) => break,
+            Err(_) => break,
+        }
+    }
+    drained
+}
+
+fn send_h264_frame_with_drain(
+    enc: &mut ffmpeg_next::codec::encoder::video::Encoder,
+    frame: &ffmpeg_next::frame::Video,
+    enc_pkt: &mut ffmpeg_next::Packet,
+    normalizer: &mut StageOutputNormalizer,
+) -> bool {
+    for _attempt in 0..2 {
+        match enc.send_frame(frame) {
+            Ok(()) => return true,
+            Err(error) if ffmpeg_error_is_again(error) => {
+                if drain_h264_encoder_packets(enc, enc_pkt, normalizer) == 0 {
+                    return false;
+                }
+            }
+            Err(error) if ffmpeg_error_is_eof(error) => return false,
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
 /// Backend implementation for the shared H.265→H.264 codec-edge stage.
 ///
 /// 1. Waits for ingest metadata (video + audio tracks).
@@ -235,159 +301,167 @@ fn run_ffmpeg_h264_stage_with_normalizer(
 
         let video_tb = stream.time_base();
 
-        // Video: decode H.265 → encode H.264
-        if decoder.send_packet(&pkt).is_err() {
-            continue;
-        }
+        // Video: decode H.265 → encode H.264. FFmpeg may return EAGAIN from
+        // send_packet when decoded frames must be drained first; do not drop
+        // that input packet.
+        let mut packet_sent = false;
+        for _attempt in 0..2 {
+            match decoder.send_packet(&pkt) {
+                Ok(()) => {
+                    packet_sent = true;
+                }
+                Err(error) if ffmpeg_error_is_again(error) => {}
+                Err(error) if ffmpeg_error_is_eof(error) => break,
+                Err(_) => break,
+            }
 
-        let mut dec_frame = ffmpeg_next::frame::Video::empty();
-        while decoder.receive_frame(&mut dec_frame).is_ok() {
-            // Lazy encoder + scaler init on first decoded frame
-            if encoder.is_none() {
-                let width = decoder.width();
-                let height = decoder.height();
-                let in_fmt = dec_frame.format();
+            let mut drained_frame = false;
+            let mut dec_frame = ffmpeg_next::frame::Video::empty();
+            loop {
+                match decoder.receive_frame(&mut dec_frame) {
+                    Ok(()) => {
+                        drained_frame = true;
+                    }
+                    Err(error) if ffmpeg_error_is_again(error) || ffmpeg_error_is_eof(error) => {
+                        break;
+                    }
+                    Err(_) => break,
+                }
 
-                // Load transcode profile from DB (via runtime cache)
-                let profile = crate::media::profiles::cache()
-                    .blocking_read()
-                    .get("h264")
-                    .cloned()
-                    .unwrap_or_default();
+                // Lazy encoder + scaler init on first decoded frame
+                if encoder.is_none() {
+                    let width = decoder.width();
+                    let height = decoder.height();
+                    let in_fmt = dec_frame.format();
 
-                // Resolve output dimensions: 0 = match source
-                let out_w = if profile.width > 0 {
-                    profile.width
-                } else {
-                    width
-                };
-                let out_h = if profile.height > 0 {
-                    profile.height
-                } else {
-                    height
-                };
+                    // Load transcode profile from DB (via runtime cache)
+                    let profile = crate::media::profiles::cache()
+                        .blocking_read()
+                        .get("h264")
+                        .cloned()
+                        .unwrap_or_default();
 
-                let sw = ffmpeg_next::software::scaling::Context::get(
-                    in_fmt,
-                    width,
-                    height,
-                    Pixel::YUV420P,
-                    out_w,
-                    out_h,
-                    ffmpeg_next::software::scaling::Flags::BILINEAR,
-                )
-                .map_err(|_| "failed to create scaler")?;
+                    // Resolve output dimensions: 0 = match source
+                    let out_w = if profile.width > 0 {
+                        profile.width
+                    } else {
+                        width
+                    };
+                    let out_h = if profile.height > 0 {
+                        profile.height
+                    } else {
+                        height
+                    };
 
-                let fr = stream.avg_frame_rate();
-                let (fn_, fd) = if fr.numerator() > 0 && fr.denominator() > 0 {
-                    (fr.numerator(), fr.denominator())
-                } else {
-                    (30, 1)
-                };
+                    let sw = ffmpeg_next::software::scaling::Context::get(
+                        in_fmt,
+                        width,
+                        height,
+                        Pixel::YUV420P,
+                        out_w,
+                        out_h,
+                        ffmpeg_next::software::scaling::Flags::BILINEAR,
+                    )
+                    .map_err(|_| "failed to create scaler")?;
 
-                // Allocate encoder context with the H.264 codec so codec_id
-                // and codec_type are set correctly (avcodec_alloc_context3
-                // with NULL leaves them unset, causing open to fail).
-                // SAFETY: avcodec_alloc_context3 is an FFmpeg allocation
-                // function. The `enc_codec` pointer was obtained from
-                // avcodec_find_encoder_by_name (a valid codec descriptor
-                // valid for the process lifetime). The returned AVCodecContext
-                // pointer is either null (allocation failure, handled) or
-                // a valid heap allocation owned by the caller.
-                // Context::wrap takes ownership and manages deallocation.
-                let enc_ctx = unsafe {
-                    let ptr = ffmpeg_next::ffi::avcodec_alloc_context3(
-                        enc_codec.as_ptr() as *mut ffmpeg_next::ffi::AVCodec
+                    let fr = stream.avg_frame_rate();
+                    let (fn_, fd) = if fr.numerator() > 0 && fr.denominator() > 0 {
+                        (fr.numerator(), fr.denominator())
+                    } else {
+                        (30, 1)
+                    };
+
+                    // Allocate encoder context with the H.264 codec so codec_id
+                    // and codec_type are set correctly (avcodec_alloc_context3
+                    // with NULL leaves them unset, causing open to fail).
+                    // SAFETY: avcodec_alloc_context3 is an FFmpeg allocation
+                    // function. The `enc_codec` pointer was obtained from
+                    // avcodec_find_encoder_by_name (a valid codec descriptor
+                    // valid for the process lifetime). The returned AVCodecContext
+                    // pointer is either null (allocation failure, handled) or
+                    // a valid heap allocation owned by the caller.
+                    // Context::wrap takes ownership and manages deallocation.
+                    let enc_ctx = unsafe {
+                        let ptr = ffmpeg_next::ffi::avcodec_alloc_context3(
+                            enc_codec.as_ptr() as *mut ffmpeg_next::ffi::AVCodec
+                        );
+                        if ptr.is_null() {
+                            return Err("failed to allocate encoder context");
+                        }
+                        ffmpeg_next::codec::Context::wrap(ptr, None)
+                    };
+                    let mut enc_video = enc_ctx
+                        .encoder()
+                        .video()
+                        .map_err(|_| "failed to get encoder video interface")?;
+
+                    enc_video.set_width(out_w);
+                    enc_video.set_height(out_h);
+                    enc_video.set_format(Pixel::YUV420P);
+                    // Use millisecond time base so encoder output timestamps are in ms,
+                    // matching the shared stage timeline and copied audio timestamps.
+                    enc_video.set_time_base(ffmpeg_next::Rational::new(1, 1000));
+                    enc_video.set_frame_rate(Some(ffmpeg_next::Rational::new(fn_, fd)));
+                    enc_video.set_gop(profile.gop);
+                    enc_video.set_max_b_frames(profile.bframes);
+                    if profile.bitrate > 0 {
+                        enc_video.set_bit_rate(profile.bitrate as usize);
+                        if profile.max_bitrate > 0 {
+                            enc_video.set_max_bit_rate(profile.max_bitrate as usize);
+                        }
+                    }
+
+                    let mut opts = ffmpeg_next::Dictionary::new();
+                    opts.set("preset", &profile.preset);
+                    opts.set("tune", &profile.tune);
+                    if profile.bitrate == 0 {
+                        opts.set("crf", &profile.crf.to_string());
+                    }
+
+                    info!(
+                        "[h264-tc] encoder: {}x{} preset={} tune={} crf={} bitrate={}",
+                        out_w, out_h, profile.preset, profile.tune, profile.crf, profile.bitrate
                     );
-                    if ptr.is_null() {
-                        return Err("failed to allocate encoder context");
-                    }
-                    ffmpeg_next::codec::Context::wrap(ptr, None)
+
+                    let opened = enc_video
+                        .open_as_with(enc_codec, opts)
+                        .map_err(|_| "failed to open encoder")?;
+
+                    scaler = Some(sw);
+                    encoder = Some(opened);
+                }
+
+                let Some(enc) = encoder.as_mut() else {
+                    continue;
                 };
-                let mut enc_video = enc_ctx
-                    .encoder()
-                    .video()
-                    .map_err(|_| "failed to get encoder video interface")?;
+                let Some(sw) = scaler.as_mut() else { continue };
 
-                enc_video.set_width(out_w);
-                enc_video.set_height(out_h);
-                enc_video.set_format(Pixel::YUV420P);
-                // Use millisecond time base so encoder output timestamps are in ms,
-                // matching the shared stage timeline and copied audio timestamps.
-                enc_video.set_time_base(ffmpeg_next::Rational::new(1, 1000));
-                enc_video.set_frame_rate(Some(ffmpeg_next::Rational::new(fn_, fd)));
-                enc_video.set_gop(profile.gop);
-                enc_video.set_max_b_frames(profile.bframes);
-                if profile.bitrate > 0 {
-                    enc_video.set_bit_rate(profile.bitrate as usize);
-                    if profile.max_bitrate > 0 {
-                        enc_video.set_max_bit_rate(profile.max_bitrate as usize);
+                // Use source-derived timestamp for the frame so encoded video shares
+                // the same clock origin as copied audio.
+                let source_pts_ms = dec_frame.pts().map(|pts| {
+                    if video_tb.1 != 0 {
+                        (pts as i128 * video_tb.0 as i128 * 1000 / video_tb.1 as i128) as i64
+                    } else {
+                        pts
                     }
-                }
-
-                let mut opts = ffmpeg_next::Dictionary::new();
-                opts.set("preset", &profile.preset);
-                opts.set("tune", &profile.tune);
-                if profile.bitrate == 0 {
-                    opts.set("crf", &profile.crf.to_string());
-                }
-
-                info!(
-                    "[h264-tc] encoder: {}x{} preset={} tune={} crf={} bitrate={}",
-                    out_w, out_h, profile.preset, profile.tune, profile.crf, profile.bitrate
-                );
-
-                let opened = enc_video
-                    .open_as_with(enc_codec, opts)
-                    .map_err(|_| "failed to open encoder")?;
-
-                scaler = Some(sw);
-                encoder = Some(opened);
-            }
-
-            let Some(enc) = encoder.as_mut() else {
-                continue;
-            };
-            let Some(sw) = scaler.as_mut() else { continue };
-
-            // Use source-derived timestamp for the frame so encoded video shares
-            // the same clock origin as copied audio.
-            let source_pts_ms = dec_frame.pts().map(|pts| {
-                if video_tb.1 != 0 {
-                    (pts as i128 * video_tb.0 as i128 * 1000 / video_tb.1 as i128) as i64
-                } else {
-                    pts
-                }
-            });
-
-            if sw.run(&dec_frame, &mut enc_frame).is_err() {
-                continue;
-            }
-            enc_frame.set_pts(source_pts_ms);
-            // Decoded frames may retain source I/P/B tags; clear them at the
-            // transcode boundary so x264 uses this encoder's GOP/B-frame policy.
-            enc_frame.set_kind(ffmpeg_next::util::picture::Type::None);
-
-            if enc.send_frame(&enc_frame).is_err() {
-                continue;
-            }
-            while enc.receive_packet(&mut enc_pkt).is_ok() {
-                let pts_ms = enc_pkt.pts().unwrap_or(0);
-                // DTS can differ from PTS when B-frames are enabled: the encoder
-                // returns the decode timestamp separately.  Setting dts=pts would
-                // break B-frame reordering in downstream muxers (TS, MP4).
-                let dts_ms = enc_pkt.dts().unwrap_or(pts_ms);
-                // enc_pkt is reused across iterations; clone() calls av_packet_ref (refcount
-                // bump only, no data copy) so the ring buffer holds the AVBufferRef alive.
-                normalizer.push(MediaPacket {
-                    media_type: MediaType::Video,
-                    track_index: 0,
-                    pts: pts_ms,
-                    dts: dts_ms,
-                    is_keyframe: enc_pkt.is_key(),
-                    format: PayloadFormat::Raw,
-                    payload: Bytes::from_owner(OwnedFfmpegPacket(enc_pkt.clone())),
                 });
+
+                if sw.run(&dec_frame, &mut enc_frame).is_err() {
+                    continue;
+                }
+                enc_frame.set_pts(source_pts_ms);
+                // Decoded frames may retain source I/P/B tags; clear them at the
+                // transcode boundary so x264 uses this encoder's GOP/B-frame policy.
+                enc_frame.set_kind(ffmpeg_next::util::picture::Type::None);
+
+                if !send_h264_frame_with_drain(enc, &enc_frame, &mut enc_pkt, &mut normalizer) {
+                    continue;
+                }
+                drain_h264_encoder_packets(enc, &mut enc_pkt, &mut normalizer);
+            }
+
+            if packet_sent || !drained_frame {
+                break;
             }
         }
     }
@@ -395,19 +469,7 @@ fn run_ffmpeg_h264_stage_with_normalizer(
     // Flush remaining encoder
     if let Some(enc) = encoder.as_mut() {
         let _ = enc.send_eof();
-        while enc.receive_packet(&mut enc_pkt).is_ok() {
-            let pts_ms = enc_pkt.pts().unwrap_or(0);
-            let dts_ms = enc_pkt.dts().unwrap_or(pts_ms);
-            normalizer.push(MediaPacket {
-                media_type: MediaType::Video,
-                track_index: 0,
-                pts: pts_ms,
-                dts: dts_ms,
-                is_keyframe: enc_pkt.is_key(),
-                format: PayloadFormat::Raw,
-                payload: Bytes::from_owner(OwnedFfmpegPacket(enc_pkt.clone())),
-            });
-        }
+        drain_h264_encoder_packets(enc, &mut enc_pkt, &mut normalizer);
     }
 
     Ok(())
