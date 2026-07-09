@@ -74,11 +74,11 @@ run_case "internal video preset live startup" \
     scripts/run-bench-harness.sh mixed.live.srt.h264.a1.bf0
 
 run_case "internal HEVC-to-H264 codec edge" \
-  true \
-  "Phase 16 promotion waits for HEVC RTMP selected-audio proof" \
+  false \
+  "Phase 16 HEVC RTMP selected-audio decode-scan proof is green" \
   env RESTREAM_INTERNAL_VIDEO_PRESETS=0 \
     RESTREAM_INTERNAL_HEVC_TO_H264=1 \
-    ONLY_CHECKS=load,ffprobe,stage-sharing \
+    ONLY_CHECKS=load,ffprobe,decode-scan,stage-sharing \
     scripts/run-bench-harness.sh mixed.live.srt.h265.a2.bf2
 
 echo "internal-backend-smoke: wrote $summary_tsv"

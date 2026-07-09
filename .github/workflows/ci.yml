@@ -355,7 +355,6 @@ jobs:
             --only-modes ramp-family,mixed-h264-rtmp,mixed-anchor,mixed-h265-srt,mixed-h264-srt-multi,mixed-h265-srt-multi \
             --continue-on-fail
       - name: Run internal backend rollout smoke
-        continue-on-error: true
         env:
           INTERNAL_BACKEND_SMOKE_CONTINUE_ON_FAIL: "1"
         run: ./scripts/check-internal-backend-rollout-smoke.sh
