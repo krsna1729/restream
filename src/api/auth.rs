@@ -10,11 +10,11 @@ use tokio::sync::RwLock as TokioRwLock;
 use tracing::warn;
 
 use super::state::{
-    AppState, MAX_PASSWORD_LEN, PASSWORD_META_KEY, SESSION_MAX_AGE_SECONDS, STREAM_KEYS,
-    check_field_len, clear_session_cookie, get_session_token_from_headers, hash_session_token,
-    make_session_cookie, to_hex,
+    AppState, MAX_PASSWORD_LEN, SESSION_MAX_AGE_SECONDS, STREAM_KEYS, check_field_len,
+    clear_session_cookie, get_session_token_from_headers, hash_session_token, make_session_cookie,
+    to_hex,
 };
-use crate::db;
+use crate::application::services::AuthService;
 
 #[derive(Deserialize)]
 pub struct LoginPayload {
@@ -71,13 +71,14 @@ pub async fn initialize_auth(
     db_pool: &sqlx::SqlitePool,
     sessions_set: &TokioRwLock<std::collections::HashSet<String>>,
 ) {
-    if let Ok(None) = db::get_meta(db_pool, PASSWORD_META_KEY).await {
-        let admin_hash = hash_password("admin");
-        let _ = db::set_meta(db_pool, PASSWORD_META_KEY, &admin_hash).await;
-    }
+    let auth_service = AuthService::new(db_pool.clone());
+    let admin_hash = hash_password("admin");
+    let _ = auth_service.ensure_password_hash(&admin_hash).await;
 
-    let _ = db::prune_expired_sessions(db_pool, 30 * 24 * 60 * 60 * 1000).await;
-    match db::list_sessions(db_pool).await {
+    let _ = auth_service
+        .prune_expired_sessions(30 * 24 * 60 * 60 * 1000)
+        .await;
+    match auth_service.list_sessions().await {
         Ok(tokens) => {
             let mut sessions = sessions_set.write().await;
             for token in tokens {
