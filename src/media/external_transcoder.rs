@@ -41,22 +41,21 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::domain::audio_routing::{AudioRouting, parse_audio_operation, parse_audio_routing};
 use crate::domain::output_spec::{StagePresetSpec, VideoCodecKind};
-use crate::domain::stage::StageKey;
+
 use crate::media::ffmpeg::backend::{BackendError, StageRunContext};
 use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ffmpeg::stage_output::StageOutputNormalizer;
 use crate::media::ffmpeg::stage_plan::FfmpegStagePlan;
 use crate::media::mpegts::TsDemuxer;
 use crate::media::pipe_metrics::PipeMetrics;
-use crate::media::ring_buffer::RingBuffer;
+
 use crate::media::stage_lifecycle::{StageBackendKind, StageLifecycleGuard, StagePhase};
 use crate::media::startup_policy;
 use crate::media::{MEDIA_PRODUCER_BATCH_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
-use crate::media::{engine::AudioMeta, engine::VideoMeta};
 
 /// Stdin writes or stdout reads exceeding this threshold are counted as stalls/idles.
 /// 1 ms filters normal async scheduling jitter while catching real back-pressure.
@@ -162,8 +161,14 @@ fn build_stage_ffmpeg_args_inner(
     } else {
         Some(crate::media::profiles::try_get_cached(encoding))
     };
-    let (analyze_duration_us, probe_size_bytes) =
+    let (mut analyze_duration_us, mut probe_size_bytes) =
         startup_policy::ext_stage_probe_budget(VideoCodecKind::from_codec_name(probe_codec));
+    if matches!(stage_spec.video_encoding(), "source" | "") {
+        // Source/passthrough stages copy streams without re-encoding, so they need
+        // a larger probe budget to fully resolve all stream parameters (especially audio).
+        analyze_duration_us = 1_000_000;
+        probe_size_bytes = 512 * 1024;
+    }
     let ffmpeg_threads = threads.unwrap_or(2).max(1);
 
     let mut args = vec![
@@ -352,102 +357,6 @@ fn audio_filter_complex(routing: &Option<AudioRouting>) -> Option<String> {
     }
 }
 
-async fn wait_for_stage_metadata(
-    engine: &Arc<crate::media::engine::MediaEngine>,
-    pipeline_id: &str,
-    source_buffer: &Arc<RingBuffer>,
-    include_audio: bool,
-    eager_raw_parameter_sets: bool,
-    input_codec_override: Option<&str>,
-    cancel: &CancellationToken,
-) -> Option<(VideoMeta, std::sync::Arc<Vec<AudioMeta>>)> {
-    loop {
-        if cancel.is_cancelled() {
-            return None;
-        }
-
-        let ingest_result = {
-            let ingests = engine.ingests.active.read().await;
-            ingests.get(pipeline_id).and_then(|ingest| {
-                let mut video = ingest.video.clone()?;
-                if let Some(codec) = input_codec_override {
-                    video.codec = codec.to_string();
-                } else {
-                    let hint = source_buffer.codec_hint_str();
-                    if !hint.is_empty() {
-                        video.codec = hint.to_string();
-                    }
-                }
-                if !stage_video_meta_ready(&video) {
-                    return None;
-                }
-                let needs_raw_parameter_sets =
-                    eager_raw_parameter_sets && codec_needs_parameter_sets(&video.codec);
-                if needs_raw_parameter_sets && source_buffer.video_parameter_sets().is_none() {
-                    return None;
-                }
-
-                let audio_tracks = if include_audio {
-                    let ingest_audio_tracks = {
-                        let lock = ingest
-                            .audio_tracks
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        if lock.is_empty() {
-                            ingest
-                                .audio
-                                .clone()
-                                .map(|audio| std::sync::Arc::new(vec![audio]))
-                                .unwrap_or_default()
-                        } else {
-                            std::sync::Arc::clone(&lock)
-                        }
-                    };
-                    source_buffer
-                        .audio_tracks()
-                        .filter(|tracks| !tracks.is_empty())
-                        .map(|tracks| std::sync::Arc::new(tracks.to_vec()))
-                        .filter(|tracks| stage_audio_tracks_ready(tracks))
-                        .unwrap_or(ingest_audio_tracks)
-                } else {
-                    std::sync::Arc::new(Vec::new())
-                };
-
-                if include_audio && !stage_audio_tracks_ready(&audio_tracks) {
-                    return None;
-                }
-
-                Some((video, audio_tracks))
-            })
-        };
-
-        if let Some(meta) = ingest_result {
-            return Some(meta);
-        }
-
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
-}
-
-fn stage_video_meta_ready(video: &VideoMeta) -> bool {
-    !video.codec.is_empty()
-        && (!codec_needs_parameter_sets(&video.codec) || (video.width > 0 && video.height > 0))
-}
-
-fn codec_needs_parameter_sets(codec: &str) -> bool {
-    matches!(
-        VideoCodecKind::from_codec_name(codec),
-        VideoCodecKind::H264 | VideoCodecKind::Hevc
-    )
-}
-
-fn stage_audio_tracks_ready(audio_tracks: &[AudioMeta]) -> bool {
-    !audio_tracks.is_empty()
-        && audio_tracks
-            .iter()
-            .all(|track| track.sample_rate > 0 && track.channels > 0)
-}
-
 #[cfg(test)]
 use crate::media::ring_buffer::MediaType;
 
@@ -484,523 +393,6 @@ fn external_output_stream_idx(
 /// closes. On exit the cancel token is triggered so the engine can clean up
 /// the stage entry and restart it on the next reconciler cycle.
 ///
-/// # Sharing
-///
-/// This function is called by `engine.get_or_create_transcoder` which ensures
-/// only one stage exists per `(pipeline, encoding)` key. All egress consumers
-/// receive an `Arc<RingBuffer>` pointing to the same `output_buffer`.
-#[allow(clippy::too_many_arguments)]
-pub async fn start_external_transcoder_stage(
-    pipeline_id: String,
-    encoding: String,
-    input_buffer: Arc<RingBuffer>,
-    output_buffer: Arc<RingBuffer>,
-    engine: Arc<crate::media::engine::MediaEngine>,
-    cancel: CancellationToken,
-    // Override the video codec used in the TsMuxer PMT, and selects the
-    // encoder in build_stage_ffmpeg_args.  Pass "hevc" when the source ring
-    // carries H.265 so the stage spawns libx265 and tags its output ring
-    // correctly.  None defaults to H.264 (libx264).
-    input_codec_override: Option<String>,
-    stage_key: StageKey,
-) {
-    start_external_transcoder_stage_inner(
-        pipeline_id,
-        encoding,
-        input_buffer,
-        output_buffer,
-        engine,
-        cancel,
-        input_codec_override,
-        stage_key,
-        true,
-    )
-    .await;
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn start_external_transcoder_video_only_stage(
-    pipeline_id: String,
-    encoding: String,
-    input_buffer: Arc<RingBuffer>,
-    output_buffer: Arc<RingBuffer>,
-    engine: Arc<crate::media::engine::MediaEngine>,
-    cancel: CancellationToken,
-    input_codec_override: Option<String>,
-    stage_key: StageKey,
-) {
-    start_external_transcoder_stage_inner(
-        pipeline_id,
-        encoding,
-        input_buffer,
-        output_buffer,
-        engine,
-        cancel,
-        input_codec_override,
-        stage_key,
-        false,
-    )
-    .await;
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn start_external_transcoder_stage_inner(
-    pipeline_id: String,
-    encoding: String,
-    input_buffer: Arc<RingBuffer>,
-    output_buffer: Arc<RingBuffer>,
-    engine: Arc<crate::media::engine::MediaEngine>,
-    cancel: CancellationToken,
-    input_codec_override: Option<String>,
-    stage_key: StageKey,
-    include_audio: bool,
-) {
-    let lifecycle = engine
-        .get_or_create_stage_lifecycle(
-            stage_key.clone(),
-            crate::media::stage_lifecycle::StagePhase::Registered,
-        )
-        .await;
-    let _lifecycle_guard =
-        crate::media::stage_lifecycle::StageLifecycleGuard::new(lifecycle.clone());
-
-    let input_codec = input_codec_override.as_deref().unwrap_or("h264");
-    // Probe the stream format using what the source ring actually carries.
-    // Codec-edge stages can encode H.264 while reading H.265 from stdin.
-    let probe_codec = match input_buffer.codec_hint_str() {
-        "" => input_codec,
-        hint => hint,
-    };
-    let args = if include_audio {
-        build_stage_ffmpeg_args_inner(
-            &encoding,
-            input_codec,
-            probe_codec,
-            true,
-            engine.config.ffmpeg_threads,
-        )
-    } else {
-        build_stage_ffmpeg_args_inner(
-            &encoding,
-            input_codec,
-            probe_codec,
-            false,
-            engine.config.ffmpeg_threads,
-        )
-    };
-    let correlation_id = crate::logging::next_correlation_id("stage");
-    lifecycle.transition(
-        crate::media::stage_lifecycle::StagePhase::WaitingForCapacity {
-            backend: crate::media::stage_lifecycle::StageBackendKind::ExternalFfmpeg,
-        },
-    );
-    let ffmpeg_permit = tokio::select! {
-        permit = engine.runtime.external_ffmpeg_semaphore.acquire() => match permit {
-            Ok(p) => p,
-            Err(error) => {
-                error!(
-                    correlation_id = %correlation_id,
-                    pipeline_id = %pipeline_id,
-                    stage_encoding = %encoding,
-                    stage_backend = "external_ffmpeg",
-                    err = %error,
-                    "[ext-transcoder] external ffmpeg semaphore closed"
-                );
-                engine
-                    .runtime
-                    .event_log
-                    .emit(crate::events::EventKind::StageStopped {
-                        pipeline_id: pipeline_id.clone(),
-                        encoding: encoding.clone(),
-                    });
-                return;
-            }
-        },
-        _ = cancel.cancelled() => {
-            tracing::info!(
-                correlation_id = %correlation_id,
-                pipeline_id = %pipeline_id,
-                stage_encoding = %encoding,
-                "[ext-transcoder] external ffmpeg wait cancelled"
-            );
-            return;
-        }
-    };
-    lifecycle.transition(
-        crate::media::stage_lifecycle::StagePhase::CapacityAcquired {
-            backend: crate::media::stage_lifecycle::StageBackendKind::ExternalFfmpeg,
-        },
-    );
-    info!(
-        correlation_id = %correlation_id,
-        pipeline_id = %pipeline_id,
-        stage_encoding = %encoding,
-        stage_backend = "external_ffmpeg",
-        include_audio,
-        "[ext-transcoder] stage start  pipeline={} encoding={}",
-        pipeline_id,
-        encoding
-    );
-
-    let ffmpeg_bin = crate::ffmpeg_extract::ffmpeg_bin_path();
-    let mut child = match Command::new(ffmpeg_bin)
-        .args(&args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => {
-            lifecycle.transition(crate::media::stage_lifecycle::StagePhase::BackendSpawned {
-                backend: crate::media::stage_lifecycle::StageBackendKind::ExternalFfmpeg,
-                pid: c.id(),
-            });
-            c
-        }
-        Err(e) => {
-            error!(
-                correlation_id = %correlation_id,
-                pipeline_id = %pipeline_id,
-                stage_encoding = %encoding,
-                stage_backend = "external_ffmpeg",
-                err = %e,
-                "[ext-transcoder] failed to spawn ffmpeg ({}:{}): {}",
-                pipeline_id,
-                encoding,
-                e
-            );
-            engine
-                .runtime
-                .event_log
-                .emit(crate::events::EventKind::StageStopped {
-                    pipeline_id: pipeline_id.clone(),
-                    encoding: encoding.clone(),
-                });
-            drop(ffmpeg_permit);
-            return;
-        }
-    };
-
-    // .take() returns None if the child exited between spawn() and here (rare but possible).
-    // Use pattern matching rather than .expect() to avoid a panic in that race.
-    let mut stdin = match child.stdin.take() {
-        Some(s) => s,
-        None => {
-            error!(
-                correlation_id = %correlation_id,
-                pipeline_id = %pipeline_id,
-                stage_encoding = %encoding,
-                stage_backend = "external_ffmpeg",
-                "[ext-transcoder] ffmpeg stdin unavailable ({}:{})",
-                pipeline_id,
-                encoding
-            );
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            cancel.cancel();
-            engine
-                .runtime
-                .event_log
-                .emit(crate::events::EventKind::StageStopped {
-                    pipeline_id: pipeline_id.clone(),
-                    encoding: encoding.clone(),
-                });
-            drop(ffmpeg_permit);
-            return;
-        }
-    };
-    let stdout = match child.stdout.take() {
-        Some(s) => s,
-        None => {
-            error!(
-                correlation_id = %correlation_id,
-                pipeline_id = %pipeline_id,
-                stage_encoding = %encoding,
-                stage_backend = "external_ffmpeg",
-                "[ext-transcoder] ffmpeg stdout unavailable ({}:{})",
-                pipeline_id,
-                encoding
-            );
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            cancel.cancel();
-            engine
-                .runtime
-                .event_log
-                .emit(crate::events::EventKind::StageStopped {
-                    pipeline_id: pipeline_id.clone(),
-                    encoding: encoding.clone(),
-                });
-            drop(ffmpeg_permit);
-            return;
-        }
-    };
-    let stderr = match child.stderr.take() {
-        Some(s) => s,
-        None => {
-            error!(
-                correlation_id = %correlation_id,
-                pipeline_id = %pipeline_id,
-                stage_encoding = %encoding,
-                stage_backend = "external_ffmpeg",
-                "[ext-transcoder] ffmpeg stderr unavailable ({}:{})",
-                pipeline_id,
-                encoding
-            );
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            cancel.cancel();
-            engine
-                .runtime
-                .event_log
-                .emit(crate::events::EventKind::StageStopped {
-                    pipeline_id: pipeline_id.clone(),
-                    encoding: encoding.clone(),
-                });
-            return;
-        }
-    };
-
-    // ── stage metrics ─────────────────────────────────────────────────────
-    let stage_metrics = engine.get_or_create_stage_metrics(stage_key.clone()).await;
-
-    // ── pipe metrics ──────────────────────────────────────────────────────
-    // Separate from stage_metrics: only subprocess-pipe stages have these.
-    // Trigger TSC calibration eagerly (200 µs busy-wait, once per process).
-    // Logs which path was chosen so operators can see it in the stage output.
-    if !timing::calibrate() {
-        info!(
-            correlation_id = %correlation_id,
-            pipeline_id = %pipeline_id,
-            stage_encoding = %encoding,
-            stage_backend = "external_ffmpeg",
-            "[ext-transcoder] pipe timing: Instant fallback \
-             (invariant TSC absent or calibration out of bounds)"
-        );
-    }
-    let timing_clock = timing::clock();
-    let pipe_metrics = Arc::new(PipeMetrics::default());
-    engine
-        .register_pipe_metrics(stage_key.clone(), pipe_metrics.clone())
-        .await;
-
-    // ── stderr logger ──────────────────────────────────────────────────────
-    // Stream stderr line-by-line so progress lines are visible immediately.
-    // Cap accumulation at 1 MB to avoid unbounded memory growth at
-    // ~17 MB/hour (60fps × ~80 bytes/line of libx264 progress output).
-    // Excess bytes are discarded; a truncation note is prepended on exit.
-    const STDERR_CAP: usize = 1 << 20; // 1 MB
-    let label = format!("{}:{}", pipeline_id, encoding);
-    {
-        let label = label.clone();
-        let stderr_correlation_id = correlation_id.clone();
-        let stderr_pipeline_id = pipeline_id.clone();
-        let stderr_encoding = encoding.clone();
-        let mut stderr = stderr;
-        tokio::spawn(async move {
-            let mut buf = [0u8; 4096];
-            let mut all: Vec<u8> = Vec::new();
-            let mut truncated = false;
-            loop {
-                match stderr.read(&mut buf).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let chunk = &buf[..n];
-                        let remaining = STDERR_CAP.saturating_sub(all.len());
-                        if remaining > 0 {
-                            all.extend_from_slice(&chunk[..n.min(remaining)]);
-                        } else if !truncated {
-                            truncated = true;
-                            error!(
-                                correlation_id = %stderr_correlation_id,
-                                pipeline_id = %stderr_pipeline_id,
-                                stage_encoding = %stderr_encoding,
-                                stage_backend = "external_ffmpeg",
-                                "[ext-transcoder] ffmpeg stderr ({}) truncated at 1 MB — \
-                                 further output discarded",
-                                label
-                            );
-                        }
-                    }
-                }
-            }
-            if !all.is_empty() {
-                let stderr_text = String::from_utf8_lossy(&all).trim().to_string();
-                error!(
-                    correlation_id = %stderr_correlation_id,
-                    pipeline_id = %stderr_pipeline_id,
-                    stage_encoding = %stderr_encoding,
-                    stage_backend = "external_ffmpeg",
-                    "[ext-transcoder] ffmpeg stderr ({}): {}",
-                    label,
-                    stderr_text
-                );
-            }
-        });
-    }
-
-    // ── wait for ingest metadata (video codec, audio tracks) ──────────────
-    let eager_raw_parameter_sets = codec_needs_parameter_sets(probe_codec);
-    let Some((video_meta, audio_tracks)) = wait_for_stage_metadata(
-        &engine,
-        &pipeline_id,
-        &input_buffer,
-        include_audio,
-        eager_raw_parameter_sets,
-        input_codec_override.as_deref(),
-        &cancel,
-    )
-    .await
-    else {
-        let _ = stdin.shutdown().await;
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-        engine.remove_stage_metrics(&stage_key).await;
-        engine.remove_pipe_metrics(&stage_key).await;
-        engine
-            .runtime
-            .event_log
-            .emit(crate::events::EventKind::StageStopped {
-                pipeline_id: pipeline_id.clone(),
-                encoding: encoding.clone(),
-            });
-        drop(ffmpeg_permit);
-        return;
-    };
-
-    // ── stdout task: demux MPEG-TS → output_ring ───────────────────────────
-    // Codec hint is set synchronously by get_or_create_transcoder before this
-    // task is spawned (OnceLock — set_codec_hint below is a no-op).
-    // Keep it here as a defensive fallback in case the stage is ever called
-    // outside the engine (e.g., tests).
-    let output_codec = if VideoCodecKind::from_codec_name(input_codec).is_hevc() {
-        "hevc"
-    } else {
-        "h264"
-    };
-    output_buffer.set_codec_hint(output_codec);
-    if !include_audio {
-        output_buffer.set_audio_tracks(Vec::new());
-    }
-    {
-        let out_ring = output_buffer.clone();
-        let cancel_out = cancel.clone();
-        let label_out = label.clone();
-        let out_audio_tracks = audio_tracks.clone();
-        let out_include_audio = include_audio;
-        let out_stage_metrics = stage_metrics.clone();
-        let out_pipe_metrics = pipe_metrics.clone();
-        let out_timing_clock = timing_clock;
-        let out_lifecycle = lifecycle.clone();
-        let mut stdout = stdout;
-        tokio::spawn(async move {
-            let mut demuxer = TsDemuxer::new();
-            let mut buf = vec![0u8; MEDIA_TS_BATCH_TARGET_BYTES];
-            let mut pkts = Vec::with_capacity(MEDIA_PRODUCER_BATCH_PACKETS);
-            let stream_count = 1 + if out_include_audio {
-                out_audio_tracks.len()
-            } else {
-                0
-            };
-            let mut normalizer = crate::media::ffmpeg::stage_output::StageOutputNormalizer::new(
-                out_ring,
-                stream_count,
-                out_stage_metrics,
-            )
-            .with_video_track_count(1);
-            let mut first_output_recorded = false;
-            loop {
-                let t0 = out_timing_clock.now();
-                let result = stdout.read(&mut buf).await;
-                let idle_us = out_timing_clock.delta_us(t0);
-                match result {
-                    Ok(0) | Err(_) => {
-                        debug!("stdout closed ({})", label_out);
-                        break;
-                    }
-                    Ok(n) => {
-                        if idle_us > PIPE_STALL_THRESHOLD_US {
-                            out_pipe_metrics.record_idle(idle_us);
-                        }
-                        demuxer.feed(&buf[..n]);
-                        demuxer.drain_into(&mut pkts);
-                        if !pkts.is_empty() && !first_output_recorded {
-                            first_output_recorded = true;
-                            out_lifecycle.record_first_output();
-                        }
-                        normalizer.push_batch(&mut pkts);
-                    }
-                }
-            }
-            // Signal shutdown so the engine can clean up the stage entry
-            cancel_out.cancel();
-        });
-    }
-
-    // ── stdin task: source_ring → StageInputPump → FFmpeg stdin ───────────
-    let video_meta_for_feeder = (!video_meta.codec.is_empty()).then_some(&video_meta);
-    let mut input_pump = crate::media::ffmpeg::stage_input::StageInputPump::new(
-        format!("ext-stage:{}:{}", pipeline_id, encoding),
-        input_buffer,
-        startup_policy::ext_stage_keyframe_preroll_packets(),
-        video_meta_for_feeder,
-        &audio_tracks,
-        include_audio,
-        stage_metrics.clone(),
-    )
-    .with_lifecycle(lifecycle.clone());
-
-    let mut stdin_sink = ExternalStdinSink::new(stdin, pipe_metrics.clone(), timing_clock);
-    if let Err(e) = input_pump.pump_to(&mut stdin_sink, &cancel).await {
-        error!(
-            correlation_id = %correlation_id,
-            pipeline_id = %pipeline_id,
-            stage_encoding = %encoding,
-            stage_backend = "external_ffmpeg",
-            "[ext-transcoder] input pump failed ({}:{}): {}",
-            pipeline_id,
-            encoding,
-            e
-        );
-    }
-
-    // Close stdin so FFmpeg sees EOF and can flush its output.
-    drop(stdin_sink.stdin);
-    // Give FFmpeg generous time to decode, encode, and flush after EOF.
-    // The old 500 ms budget frequently killed the process before it could
-    // produce output, especially with 18-stream (2v + 16a) input.
-    if tokio::time::timeout(std::time::Duration::from_secs(30), child.wait())
-        .await
-        .is_err()
-    {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-    }
-    cancel.cancel();
-
-    engine.remove_stage_metrics(&stage_key).await;
-    engine.remove_pipe_metrics(&stage_key).await;
-    engine.remove_stage_lifecycle(&stage_key).await;
-    engine
-        .runtime
-        .event_log
-        .emit(crate::events::EventKind::StageStopped {
-            pipeline_id: pipeline_id.clone(),
-            encoding: encoding.clone(),
-        });
-    drop(ffmpeg_permit);
-
-    info!(
-        correlation_id = %correlation_id,
-        pipeline_id = %pipeline_id,
-        stage_encoding = %encoding,
-        stage_backend = "external_ffmpeg",
-        "[ext-transcoder] stage exit   pipeline={} encoding={}",
-        pipeline_id,
-        encoding
-    );
-}
-
 /// Run an external FFmpeg stage using the shared input pump and output
 /// normalizer. This is the real `FfmpegStageBackend` implementation; the old
 /// `start_external_transcoder_stage*` functions are kept as compatibility
@@ -1019,6 +411,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
     let _lifecycle_guard = StageLifecycleGuard::new(lifecycle.clone());
     let include_audio = plan.include_audio;
     let input_codec = plan.input.codec_hint.as_str();
+    let output_codec = plan.output_codec.as_str();
     let probe_codec = match source_ring.codec_hint_str() {
         "" => input_codec,
         hint => hint,
@@ -1053,10 +446,11 @@ pub(crate) async fn run_external_ffmpeg_backend(
     });
 
     let args = if include_audio {
-        build_stage_ffmpeg_args_for_input(&encoding, input_codec, probe_codec)
+        build_stage_ffmpeg_args_for_input(&encoding, output_codec, probe_codec)
     } else {
-        build_stage_ffmpeg_video_only_args_for_input(&encoding, input_codec, probe_codec)
+        build_stage_ffmpeg_video_only_args_for_input(&encoding, output_codec, probe_codec)
     };
+    info!(?args, "FFMPEG ARGS");
     let correlation_id = crate::logging::next_correlation_id("stage");
 
     info!(
@@ -1107,7 +501,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
         }
     };
 
-    let mut stdin = match child.stdin.take() {
+    let stdin = match child.stdin.take() {
         Some(s) => s,
         None => {
             error!(correlation_id=%correlation_id, pipeline_id=%pipeline_id, stage_encoding=%encoding, "[ext-transcoder] ffmpeg stdin unavailable");
@@ -1149,7 +543,6 @@ pub(crate) async fn run_external_ffmpeg_backend(
         }
     };
 
-    let stage_metrics = ctx.metrics.clone();
     if !timing::calibrate() {
         info!(correlation_id=%correlation_id, pipeline_id=%pipeline_id, stage_encoding=%encoding, "[ext-transcoder] pipe timing: Instant fallback");
     }
@@ -1167,34 +560,6 @@ pub(crate) async fn run_external_ffmpeg_backend(
         pipeline_id.clone(),
         encoding.clone(),
     );
-
-    // Wait for metadata so the input pump and demuxer know the stream layout.
-    let eager_raw_parameter_sets = codec_needs_parameter_sets(probe_codec);
-    let Some((video_meta, audio_tracks)) = wait_for_stage_metadata(
-        &ctx.engine,
-        &pipeline_id,
-        &source_ring,
-        include_audio,
-        eager_raw_parameter_sets,
-        Some(input_codec),
-        &ctx.cancel,
-    )
-    .await
-    else {
-        let _ = stdin.shutdown().await;
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-        ctx.engine.remove_stage_metrics(&stage_key).await;
-        ctx.engine.remove_pipe_metrics(&stage_key).await;
-        ctx.engine
-            .runtime
-            .event_log
-            .emit(crate::events::EventKind::StageStopped {
-                pipeline_id: pipeline_id.clone(),
-                encoding: encoding.clone(),
-            });
-        return Err(BackendError("metadata wait failed".into()));
-    };
 
     // stdout demux task → output normalizer
     let cancel_out = ctx.cancel.clone();
@@ -1232,18 +597,7 @@ pub(crate) async fn run_external_ffmpeg_backend(
         cancel_out.cancel();
     });
 
-    // Rebuild input pump with discovered metadata and feed FFmpeg stdin.
-    let video_meta_for_feeder = (!video_meta.codec.is_empty()).then_some(&video_meta);
-    let mut input_pump = StageInputPump::new(
-        format!("ext-stage:{}:{}", pipeline_id, encoding),
-        source_ring,
-        startup_policy::ext_stage_keyframe_preroll_packets(),
-        video_meta_for_feeder,
-        &audio_tracks,
-        include_audio,
-        stage_metrics,
-    )
-    .with_lifecycle(lifecycle.clone());
+    let mut input_pump = input_pump;
 
     let mut stdin_sink = ExternalStdinSink::new(stdin, pipe_metrics.clone(), timing_clock);
     if let Err(e) = input_pump.pump_to(&mut stdin_sink, &ctx.cancel).await {
@@ -1259,7 +613,8 @@ pub(crate) async fn run_external_ffmpeg_backend(
     }
 
     let _ = stdin_sink.stdin.shutdown().await;
-    if tokio::time::timeout(std::time::Duration::from_millis(500), child.wait())
+    drop(stdin_sink);
+    if tokio::time::timeout(std::time::Duration::from_secs(30), child.wait())
         .await
         .is_err()
     {
@@ -1326,6 +681,8 @@ fn spawn_external_stderr_logger(
             }
         }
         if !all.is_empty() {
+            let text = String::from_utf8_lossy(&all).trim().to_string();
+
             error!(
                 correlation_id = %correlation_id,
                 pipeline_id = %pipeline_id,
@@ -1333,7 +690,7 @@ fn spawn_external_stderr_logger(
                 stage_backend = "external_ffmpeg",
                 "[ext-transcoder] ffmpeg stderr ({}): {}",
                 label,
-                String::from_utf8_lossy(&all).trim()
+                text
             );
         }
     });
@@ -1345,10 +702,11 @@ fn spawn_external_stderr_logger(
 mod tests {
     use super::*;
     use crate::domain::stage::{StageKey, StageKind};
-    use crate::media::engine::MediaEngine;
+    use crate::media::engine::{AudioMeta, MediaEngine};
     use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
     use crate::media::mpegts::TsDemuxer;
-    use crate::media::ring_buffer::{DtsEnforcer, MediaType, Reader};
+    use crate::media::ring_buffer::{DtsEnforcer, MediaType, Reader, RingBuffer};
+    use crate::media::stage_runtime::wait_for_stage_metadata;
     use proptest::prelude::*;
     use proptest::test_runner::Config as ProptestConfig;
     use tokio_util::sync::CancellationToken;
@@ -2307,6 +1665,7 @@ mod tests {
         let video = probe.video.expect("sample should contain video");
         let audio_tracks = probe.audio_tracks;
 
+        let _ = tracing_subscriber::fmt::try_init();
         let engine = Arc::new(MediaEngine::new());
         engine
             .try_register_ingest("pipe-ext-preview", "stream-key", "srt")
@@ -2337,31 +1696,27 @@ mod tests {
         if let Some(ps) = found_ps {
             source_ring.set_video_parameter_sets(ps);
         }
-        let output_ring = Arc::new(RingBuffer::new(16_384));
-        let mut reader = Reader::new_live("test_ext_720p_output".to_string(), output_ring.clone());
-        let cancel = CancellationToken::new();
         let stage_key = StageKey::new(
             "pipe-ext-preview",
             StageKind::codec_edge("hevc_to_h264", StageKind::source()),
         );
+        let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
+        let (handle, is_new) = manager
+            .ensure_stage(stage_key.clone(), source_ring.clone(), None)
+            .await;
+        assert!(is_new);
+        let output_ring = handle.ring.clone();
+        let mut reader = Reader::new_live("test_ext_720p_output".to_string(), output_ring);
+        let cancel = handle.cancel.clone();
 
-        tokio::spawn(start_external_transcoder_stage(
-            "pipe-ext-preview".to_string(),
-            "720p".to_string(),
-            source_ring.clone(),
-            output_ring,
-            engine,
-            cancel.clone(),
-            None,
-            stage_key,
-        ));
+        manager.spawn_codec_edge_stage(handle, source_ring.clone());
 
         let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
             if source_ring
                 .reader_snapshots()
                 .iter()
-                .any(|snapshot| snapshot.name.contains("ext-stage:pipe-ext-preview:720p"))
+                .any(|snapshot| snapshot.name.contains(&stage_key.to_string()))
             {
                 break;
             }
@@ -2595,32 +1950,25 @@ mod tests {
         }) {
             source_ring.set_video_parameter_sets(parameter_sets);
         }
-        let output_ring = Arc::new(RingBuffer::new(16_384));
-        let mut reader = Reader::new_live(
-            "test_ext_h264_marker_output".to_string(),
-            output_ring.clone(),
-        );
-        let cancel = CancellationToken::new();
         let stage_key = StageKey::new("pipe-ext-h264-marker", StageKind::video_preset("720p"));
+        let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
+        let (handle, is_new) = manager
+            .ensure_stage(stage_key.clone(), source_ring.clone(), None)
+            .await;
+        assert!(is_new);
+        let output_ring = handle.ring.clone();
+        let mut reader = Reader::new_live("test_ext_h264_marker_output".to_string(), output_ring);
+        let cancel = handle.cancel.clone();
 
-        tokio::spawn(start_external_transcoder_stage(
-            "pipe-ext-h264-marker".to_string(),
-            "video:720p".to_string(),
-            source_ring.clone(),
-            output_ring,
-            engine,
-            cancel.clone(),
-            None,
-            stage_key,
-        ));
+        manager.spawn_stage(handle, source_ring.clone(), None);
 
         let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
-            if source_ring.reader_snapshots().iter().any(|snapshot| {
-                snapshot
-                    .name
-                    .contains("ext-stage:pipe-ext-h264-marker:video:720p")
-            }) {
+            if source_ring
+                .reader_snapshots()
+                .iter()
+                .any(|snapshot| snapshot.name.contains(&stage_key.to_string()))
+            {
                 break;
             }
             assert!(
@@ -2718,35 +2066,29 @@ mod tests {
         }) {
             source_ring.set_video_parameter_sets(parameter_sets);
         }
-        let output_ring = Arc::new(RingBuffer::new(16_384));
-        let mut reader = Reader::new_live(
-            "test_ext_h264_marker_1080p_output".to_string(),
-            output_ring.clone(),
-        );
-        let cancel = CancellationToken::new();
         let stage_key = StageKey::new(
             "pipe-ext-h264-marker-1080p",
             StageKind::video_preset("1080p"),
         );
+        let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
+        let (handle, is_new) = manager
+            .ensure_stage(stage_key.clone(), source_ring.clone(), None)
+            .await;
+        assert!(is_new);
+        let output_ring = handle.ring.clone();
+        let mut reader =
+            Reader::new_live("test_ext_h264_marker_1080p_output".to_string(), output_ring);
+        let cancel = handle.cancel.clone();
 
-        tokio::spawn(start_external_transcoder_stage(
-            "pipe-ext-h264-marker-1080p".to_string(),
-            "video:1080p".to_string(),
-            source_ring.clone(),
-            output_ring,
-            engine,
-            cancel.clone(),
-            None,
-            stage_key,
-        ));
+        manager.spawn_stage(handle, source_ring.clone(), None);
 
         let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
-            if source_ring.reader_snapshots().iter().any(|snapshot| {
-                snapshot
-                    .name
-                    .contains("ext-stage:pipe-ext-h264-marker-1080p:video:1080p")
-            }) {
+            if source_ring
+                .reader_snapshots()
+                .iter()
+                .any(|snapshot| snapshot.name.contains(&stage_key.to_string()))
+            {
                 break;
             }
             assert!(
@@ -2847,35 +2189,29 @@ mod tests {
         }) {
             source_ring.set_video_parameter_sets(parameter_sets);
         }
-        let output_ring = Arc::new(RingBuffer::new(16_384));
-        let mut reader = Reader::new_live(
-            "test_ext_720p_single_audio_output".to_string(),
-            output_ring.clone(),
-        );
-        let cancel = CancellationToken::new();
         let stage_key = StageKey::new(
             "pipe-ext-hevc-single-audio",
             StageKind::codec_edge("hevc_to_h264", StageKind::source()),
         );
+        let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
+        let (handle, is_new) = manager
+            .ensure_stage(stage_key.clone(), source_ring.clone(), None)
+            .await;
+        assert!(is_new);
+        let output_ring = handle.ring.clone();
+        let mut reader =
+            Reader::new_live("test_ext_720p_single_audio_output".to_string(), output_ring);
+        let cancel = handle.cancel.clone();
 
-        tokio::spawn(start_external_transcoder_stage(
-            "pipe-ext-hevc-single-audio".to_string(),
-            "720p".to_string(),
-            source_ring.clone(),
-            output_ring,
-            engine,
-            cancel.clone(),
-            None,
-            stage_key,
-        ));
+        manager.spawn_codec_edge_stage(handle, source_ring.clone());
 
         let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
-            if source_ring.reader_snapshots().iter().any(|snapshot| {
-                snapshot
-                    .name
-                    .contains("ext-stage:pipe-ext-hevc-single-audio:720p")
-            }) {
+            if source_ring
+                .reader_snapshots()
+                .iter()
+                .any(|snapshot| snapshot.name.contains(&stage_key.to_string()))
+            {
                 break;
             }
             assert!(
@@ -2951,35 +2287,29 @@ mod tests {
         }) {
             source_ring.set_video_parameter_sets(parameter_sets);
         }
-        let output_ring = Arc::new(RingBuffer::new(16_384));
-        let mut reader = Reader::new_live(
-            "test_ext_h264_single_audio_output".to_string(),
-            output_ring.clone(),
-        );
-        let cancel = CancellationToken::new();
         let stage_key = StageKey::new(
             "pipe-ext-hevc-source-h264",
             StageKind::codec_edge("hevc_to_h264", StageKind::source()),
         );
+        let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
+        let (handle, is_new) = manager
+            .ensure_stage(stage_key.clone(), source_ring.clone(), None)
+            .await;
+        assert!(is_new);
+        let output_ring = handle.ring.clone();
+        let mut reader =
+            Reader::new_live("test_ext_h264_single_audio_output".to_string(), output_ring);
+        let cancel = handle.cancel.clone();
 
-        tokio::spawn(start_external_transcoder_stage(
-            "pipe-ext-hevc-source-h264".to_string(),
-            "h264".to_string(),
-            source_ring.clone(),
-            output_ring,
-            engine,
-            cancel.clone(),
-            None,
-            stage_key,
-        ));
+        manager.spawn_codec_edge_stage(handle, source_ring.clone());
 
         let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
-            if source_ring.reader_snapshots().iter().any(|snapshot| {
-                snapshot
-                    .name
-                    .contains("ext-stage:pipe-ext-hevc-source-h264:h264")
-            }) {
+            if source_ring
+                .reader_snapshots()
+                .iter()
+                .any(|snapshot| snapshot.name.contains(&stage_key.to_string()))
+            {
                 break;
             }
             assert!(
@@ -3062,27 +2392,21 @@ mod tests {
         }
         source_ring.push_batch(packets.drain(..));
 
-        let output_ring = Arc::new(RingBuffer::new(16_384));
-        let mut reader = Reader::new_live(
-            "test_ext_720p_prebuffered_output".to_string(),
-            output_ring.clone(),
-        );
-        let cancel = CancellationToken::new();
         let stage_key = StageKey::new(
             "pipe-ext-hevc-prebuffered",
             StageKind::codec_edge("hevc_to_h264", StageKind::source()),
         );
+        let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
+        let (handle, is_new) = manager
+            .ensure_stage(stage_key.clone(), source_ring.clone(), None)
+            .await;
+        assert!(is_new);
+        let output_ring = handle.ring.clone();
+        let mut reader =
+            Reader::new_live("test_ext_720p_prebuffered_output".to_string(), output_ring);
+        let cancel = handle.cancel.clone();
 
-        tokio::spawn(start_external_transcoder_stage(
-            "pipe-ext-hevc-prebuffered".to_string(),
-            "720p".to_string(),
-            source_ring.clone(),
-            output_ring,
-            engine,
-            cancel.clone(),
-            None,
-            stage_key,
-        ));
+        manager.spawn_codec_edge_stage(handle, source_ring.clone());
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         source_ring.push_batch(continuation);
 
@@ -3161,33 +2485,28 @@ mod tests {
         }) {
             source_ring.set_video_parameter_sets(ps);
         }
-        let output_ring = Arc::new(RingBuffer::new(32_768));
-        let mut reader =
-            Reader::new_live("test_ext_720p_long_output".to_string(), output_ring.clone());
-        let cancel = CancellationToken::new();
         let stage_key = StageKey::new(
             "pipe-ext-preview-long",
             StageKind::codec_edge("hevc_to_h264", StageKind::source()),
         );
+        let manager = crate::media::stage_runtime::StageRuntimeManager::new(engine);
+        let (handle, is_new) = manager
+            .ensure_stage(stage_key.clone(), source_ring.clone(), None)
+            .await;
+        assert!(is_new);
+        let output_ring = handle.ring.clone();
+        let mut reader = Reader::new_live("test_ext_720p_long_output".to_string(), output_ring);
+        let cancel = handle.cancel.clone();
 
-        tokio::spawn(start_external_transcoder_stage(
-            "pipe-ext-preview-long".to_string(),
-            "720p".to_string(),
-            source_ring.clone(),
-            output_ring,
-            engine,
-            cancel.clone(),
-            None,
-            stage_key,
-        ));
+        manager.spawn_codec_edge_stage(handle, source_ring.clone());
 
         let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
-            if source_ring.reader_snapshots().iter().any(|snapshot| {
-                snapshot
-                    .name
-                    .contains("ext-stage:pipe-ext-preview-long:720p")
-            }) {
+            if source_ring
+                .reader_snapshots()
+                .iter()
+                .any(|snapshot| snapshot.name.contains(&stage_key.to_string()))
+            {
                 break;
             }
             assert!(
