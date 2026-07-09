@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use sqlx::SqlitePool;
 
@@ -29,6 +30,12 @@ pub struct MediaRecordingMetadata {
 pub struct MediaLibraryService {
     db: SqlitePool,
     pipeline_service: PipelineService,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaRenamePlanError {
+    ConvertedExists,
+    ConversionStateExists,
 }
 
 impl MediaLibraryService {
@@ -125,6 +132,51 @@ impl MediaLibraryService {
         }
         Ok(metadata)
     }
+
+    pub fn delete_paths_for_media(&self, filename: &str, canonical_path: &Path) -> Vec<PathBuf> {
+        let mut delete_paths = vec![canonical_path.to_path_buf()];
+        if crate::media::recording::is_recording_source_filename(filename) {
+            let converted_path = crate::media::recording::build_mp4_path(canonical_path);
+            if converted_path.exists() {
+                delete_paths.push(converted_path);
+            }
+            let state_path = crate::media::recording::build_conversion_state_path(canonical_path);
+            if state_path.exists() {
+                delete_paths.push(state_path);
+            }
+        }
+        delete_paths
+    }
+
+    pub fn rename_pairs_for_media(
+        &self,
+        filename: &str,
+        source_path: &Path,
+        destination_path: &Path,
+    ) -> Result<Vec<(PathBuf, PathBuf)>, MediaRenamePlanError> {
+        let mut rename_pairs = vec![(source_path.to_path_buf(), destination_path.to_path_buf())];
+        if crate::media::recording::is_recording_source_filename(filename) {
+            let source_converted = crate::media::recording::build_mp4_path(source_path);
+            let destination_converted = crate::media::recording::build_mp4_path(destination_path);
+            if source_converted.exists() {
+                if destination_converted.exists() {
+                    return Err(MediaRenamePlanError::ConvertedExists);
+                }
+                rename_pairs.push((source_converted, destination_converted));
+            }
+
+            let source_state = crate::media::recording::build_conversion_state_path(source_path);
+            let destination_state =
+                crate::media::recording::build_conversion_state_path(destination_path);
+            if source_state.exists() {
+                if destination_state.exists() {
+                    return Err(MediaRenamePlanError::ConversionStateExists);
+                }
+                rename_pairs.push((source_state, destination_state));
+            }
+        }
+        Ok(rename_pairs)
+    }
 }
 
 #[cfg(test)]
@@ -175,5 +227,88 @@ mod tests {
         assert_eq!(metadata["finished.mp4"].recording_id, "rec-1");
         assert_eq!(metadata["recording_1.ts"].pipeline_id, "pipe-1");
         assert!(!metadata.contains_key("other.mp4"));
+    }
+
+    #[tokio::test]
+    async fn delete_paths_for_media_includes_recording_companions() {
+        let service = service_with_pipeline().await;
+        let temp_dir = tempfile_dir("media-delete-plan");
+        let source = temp_dir.join("recording_20260709T010203_demo.ts");
+        let converted = temp_dir.join("recording_20260709T010203_demo.mp4");
+        let state = temp_dir.join("recording_20260709T010203_demo.ts.conversion.json");
+        std::fs::write(&source, b"source").unwrap();
+        std::fs::write(&converted, b"converted").unwrap();
+        std::fs::write(&state, b"state").unwrap();
+
+        let paths = service.delete_paths_for_media(
+            "recording_20260709T010203_demo.ts",
+            &std::fs::canonicalize(&source).unwrap(),
+        );
+
+        assert_eq!(paths.len(), 3);
+        assert!(paths.iter().any(|path| path.ends_with(&converted)));
+        assert!(paths.iter().any(|path| path.ends_with(&state)));
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn rename_pairs_for_media_includes_recording_companions() {
+        let service = service_with_pipeline().await;
+        let temp_dir = tempfile_dir("media-rename-plan");
+        let source = temp_dir.join("recording_20260709T010203_demo.ts");
+        let converted = temp_dir.join("recording_20260709T010203_demo.mp4");
+        let state = temp_dir.join("recording_20260709T010203_demo.ts.conversion.json");
+        let destination = temp_dir.join("recording_20260709T010203_renamed.ts");
+        std::fs::write(&source, b"source").unwrap();
+        std::fs::write(&converted, b"converted").unwrap();
+        std::fs::write(&state, b"state").unwrap();
+
+        let pairs = service
+            .rename_pairs_for_media("recording_20260709T010203_demo.ts", &source, &destination)
+            .unwrap();
+
+        assert_eq!(pairs.len(), 3);
+        assert!(
+            pairs
+                .iter()
+                .any(|(_, to)| { to.ends_with("recording_20260709T010203_renamed.mp4") })
+        );
+        assert!(pairs.iter().any(|(_, to)| {
+            to.ends_with("recording_20260709T010203_renamed.ts.conversion.json")
+        }));
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn rename_pairs_for_media_reports_companion_conflict() {
+        let service = service_with_pipeline().await;
+        let temp_dir = tempfile_dir("media-rename-conflict");
+        let source = temp_dir.join("recording_20260709T010203_demo.ts");
+        let converted = temp_dir.join("recording_20260709T010203_demo.mp4");
+        let destination = temp_dir.join("recording_20260709T010203_renamed.ts");
+        let destination_converted = temp_dir.join("recording_20260709T010203_renamed.mp4");
+        std::fs::write(&source, b"source").unwrap();
+        std::fs::write(&converted, b"converted").unwrap();
+        std::fs::write(&destination_converted, b"existing").unwrap();
+
+        let err = service
+            .rename_pairs_for_media("recording_20260709T010203_demo.ts", &source, &destination)
+            .unwrap_err();
+
+        assert_eq!(err, MediaRenamePlanError::ConvertedExists);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    fn tempfile_dir(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "restream-{name}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
     }
 }

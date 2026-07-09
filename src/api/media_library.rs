@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use std::sync::Arc;
 
-use crate::application::services::ApiError;
+use crate::application::services::{ApiError, media_library_service::MediaRenamePlanError};
 
 use super::state::{AppState, get_session_token_from_headers, require_authenticated};
 
@@ -437,17 +437,9 @@ pub async fn media_delete_handler(
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid path").into_response(),
     };
 
-    let mut delete_paths = vec![canonical_path.clone()];
-    if crate::media::recording::is_recording_source_filename(&filename) {
-        let converted_path = crate::media::recording::build_mp4_path(&canonical_path);
-        if converted_path.exists() {
-            delete_paths.push(converted_path);
-        }
-        let state_path = crate::media::recording::build_conversion_state_path(&canonical_path);
-        if state_path.exists() {
-            delete_paths.push(state_path);
-        }
-    }
+    let delete_paths = state
+        .media_library_service
+        .delete_paths_for_media(&filename, &canonical_path);
 
     match tokio::fs::remove_file(&canonical_path).await {
         Ok(_) => {
@@ -518,35 +510,27 @@ pub async fn media_rename_handler(
             .into_response();
     }
 
-    let mut rename_pairs = vec![(source_path.clone(), destination_path.clone())];
-    if crate::media::recording::is_recording_source_filename(&filename) {
-        let source_converted = crate::media::recording::build_mp4_path(&source_path);
-        let destination_converted = crate::media::recording::build_mp4_path(&destination_path);
-        if source_converted.exists() {
-            if destination_converted.exists() {
-                return (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error": "A converted MP4 with that name already exists"})),
-                )
-                    .into_response();
-            }
-            rename_pairs.push((source_converted, destination_converted));
+    let rename_pairs = match state.media_library_service.rename_pairs_for_media(
+        &filename,
+        &source_path,
+        &destination_path,
+    ) {
+        Ok(rename_pairs) => rename_pairs,
+        Err(MediaRenamePlanError::ConvertedExists) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": "A converted MP4 with that name already exists"})),
+            )
+                .into_response();
         }
-
-        let source_state = crate::media::recording::build_conversion_state_path(&source_path);
-        let destination_state =
-            crate::media::recording::build_conversion_state_path(&destination_path);
-        if source_state.exists() {
-            if destination_state.exists() {
-                return (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error": "A conversion state file with that name already exists"})),
-                )
-                    .into_response();
-            }
-            rename_pairs.push((source_state, destination_state));
+        Err(MediaRenamePlanError::ConversionStateExists) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": "A conversion state file with that name already exists"})),
+            )
+                .into_response();
         }
-    }
+    };
 
     let mut completed = Vec::new();
     for (from, to) in &rename_pairs {
