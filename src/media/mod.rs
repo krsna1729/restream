@@ -9,6 +9,7 @@ pub mod codec;
 pub mod engine;
 pub mod engine_hls;
 pub mod engine_registries;
+mod engine_snapshots;
 pub mod external_transcoder;
 pub mod feeder;
 pub mod file_analysis;
