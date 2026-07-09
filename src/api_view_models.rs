@@ -971,6 +971,7 @@ mod tests {
     use crate::media::srt::serialize_pipeline_srt_ingest_policy;
     use crate::media::stage_metrics::StageMetrics;
     use crate::types::Job;
+    use crate::types::JobStatus;
 
     #[test]
     fn pipeline_response_helpers_preserve_pipeline_and_file_ingest_shape() {
@@ -1338,7 +1339,7 @@ mod tests {
                 pipeline_id: "pipe-1".to_string(),
                 output_id: "out-1".to_string(),
                 pid: Some(200),
-                status: "running".to_string(),
+                status: JobStatus::Running,
                 started_at: "2026-06-30T12:00:00Z".to_string(),
                 ended_at: None,
                 exit_code: None,
@@ -1349,7 +1350,7 @@ mod tests {
                 pipeline_id: "pipe-1".to_string(),
                 output_id: "out-1".to_string(),
                 pid: Some(100),
-                status: "stopped".to_string(),
+                status: JobStatus::Stopped,
                 started_at: "2026-06-30T11:00:00Z".to_string(),
                 ended_at: Some("2026-06-30T11:30:00Z".to_string()),
                 exit_code: Some(0),
@@ -1360,7 +1361,7 @@ mod tests {
                 pipeline_id: "pipe-1".to_string(),
                 output_id: "out-2".to_string(),
                 pid: Some(300),
-                status: "failed".to_string(),
+                status: JobStatus::Failed,
                 started_at: "2026-06-30T10:00:00Z".to_string(),
                 ended_at: Some("2026-06-30T10:10:00Z".to_string()),
                 exit_code: Some(1),

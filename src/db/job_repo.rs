@@ -1,5 +1,69 @@
 use crate::types::{Job, JobStatus};
-use sqlx::SqlitePool;
+use sqlx::{AssertSqlSafe, FromRow, SqlitePool};
+
+#[derive(FromRow)]
+struct JobRow {
+    id: String,
+    pipeline_id: String,
+    output_id: String,
+    pid: Option<i64>,
+    status: String,
+    started_at: String,
+    ended_at: Option<String>,
+    exit_code: Option<i64>,
+    exit_signal: Option<String>,
+}
+
+impl TryFrom<JobRow> for Job {
+    type Error = sqlx::Error;
+
+    fn try_from(row: JobRow) -> Result<Self, Self::Error> {
+        let status = JobStatus::try_from(row.status.as_str())
+            .map_err(|err| sqlx::Error::Protocol(format!("parse job status: {err}")))?;
+        Ok(Self {
+            id: row.id,
+            pipeline_id: row.pipeline_id,
+            output_id: row.output_id,
+            pid: row.pid,
+            status,
+            started_at: row.started_at,
+            ended_at: row.ended_at,
+            exit_code: row.exit_code,
+            exit_signal: row.exit_signal,
+        })
+    }
+}
+
+async fn fetch_job_optional(
+    pool: &SqlitePool,
+    query: &str,
+    binds: &[&str],
+) -> Result<Option<Job>, sqlx::Error> {
+    let mut sql = sqlx::query_as::<_, JobRow>(AssertSqlSafe(query.to_string()));
+    for bind in binds {
+        sql = sql.bind(*bind);
+    }
+    sql.fetch_optional(pool)
+        .await?
+        .map(Job::try_from)
+        .transpose()
+}
+
+async fn fetch_job_all(
+    pool: &SqlitePool,
+    query: &str,
+    binds: &[&str],
+) -> Result<Vec<Job>, sqlx::Error> {
+    let mut sql = sqlx::query_as::<_, JobRow>(AssertSqlSafe(query.to_string()));
+    for bind in binds {
+        sql = sql.bind(*bind);
+    }
+    sql.fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(Job::try_from)
+        .collect()
+}
 
 pub async fn create_job(
     pool: &SqlitePool,
@@ -37,11 +101,11 @@ pub async fn create_job(
 }
 
 pub async fn get_job(pool: &SqlitePool, id: &str) -> Result<Option<Job>, sqlx::Error> {
-    sqlx::query_as::<_, Job>(
+    fetch_job_optional(
+        pool,
         "SELECT id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal FROM jobs WHERE id = ?",
+        &[id],
     )
-    .bind(id)
-    .fetch_optional(pool)
     .await
 }
 
@@ -50,14 +114,12 @@ pub async fn get_running_job_for(
     pipeline_id: &str,
     output_id: &str,
 ) -> Result<Option<Job>, sqlx::Error> {
-    sqlx::query_as::<_, Job>(
+    fetch_job_optional(
+        pool,
         "SELECT id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal
          FROM jobs WHERE pipeline_id = ? AND output_id = ? AND status = ? LIMIT 1",
+        &[pipeline_id, output_id, JobStatus::Running.as_str()],
     )
-    .bind(pipeline_id)
-    .bind(output_id)
-    .bind(JobStatus::Running.as_str())
-    .fetch_optional(pool)
     .await
 }
 
@@ -91,22 +153,22 @@ pub async fn list_jobs_for_output(
     pipeline_id: &str,
     output_id: &str,
 ) -> Result<Vec<Job>, sqlx::Error> {
-    sqlx::query_as::<_, Job>(
+    fetch_job_all(
+        pool,
         "SELECT id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal
          FROM jobs WHERE pipeline_id = ? AND output_id = ? ORDER BY started_at DESC",
+        &[pipeline_id, output_id],
     )
-    .bind(pipeline_id)
-    .bind(output_id)
-    .fetch_all(pool)
     .await
 }
 
 pub async fn list_jobs(pool: &SqlitePool) -> Result<Vec<Job>, sqlx::Error> {
-    sqlx::query_as::<_, Job>(
+    fetch_job_all(
+        pool,
         "SELECT id, pipeline_id, output_id, pid, status, started_at, ended_at, exit_code, exit_signal
          FROM jobs ORDER BY started_at DESC, id DESC",
+        &[],
     )
-    .fetch_all(pool)
     .await
 }
 

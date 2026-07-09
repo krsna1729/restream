@@ -60,14 +60,14 @@ impl Output {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Job {
     pub id: String,
     pub pipeline_id: String,
     pub output_id: String,
     pub pid: Option<i64>,
-    pub status: String, // "running" | "stopped" | "failed"
+    pub status: JobStatus,
     pub started_at: String,
     pub ended_at: Option<String>,
     pub exit_code: Option<i64>,
@@ -119,7 +119,7 @@ impl TryFrom<&str> for JobStatus {
 
 impl Job {
     pub fn status_typed(&self) -> Option<JobStatus> {
-        JobStatus::try_from(self.status.as_str()).ok()
+        Some(self.status)
     }
 }
 
@@ -145,7 +145,7 @@ mod tests {
             pipeline_id: "pipe".to_string(),
             output_id: "out".to_string(),
             pid: Some(42),
-            status: "running".to_string(),
+            status: JobStatus::Running,
             started_at: "2024-01-01T00:00:00Z".to_string(),
             ended_at: None,
             exit_code: None,
