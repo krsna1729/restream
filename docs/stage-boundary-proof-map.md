@@ -16,17 +16,15 @@ cancellation, and diagnostics cross each boundary without losing causality.
 | Audio router boundary | Selected tracks, remap/downmix operations, prebuffer replay, EOS, and lifecycle cleanup preserve packet order and selected-track intent. | Audio-router unit tests for selected tracks, prebuffer replay, multi-track routing, and stage sharing. | Property-test generated selected-track operations over interleaved audio/video packets. |
 | HLS segmenter boundary | Segmenter uses the planned protocol stage key, does not publish segments before init, exposes keyframe/no-segment states, and cleans runtime ownership. | HLS planned-key tests, fMP4 proptests, HLS publish loom, uploader terminal-stage tests. | Unit-test lifecycle/alert mapping for keyframe wait and no-segment states from the same snapshot. |
 | Recording writer boundary | Recording metadata identity is persisted before failures, lifecycle is stage-owned, writer cleanup is visible, and media-library reads never rely on filename tokens. | Recording metadata tests, mixed harness recording identity proof, recording stage runtime ownership tests. | Add a pure service-level failure-before-output test that proves metadata identity survives writer failure. |
-| Runtime snapshot -> status/graph/alerts | Non-producing stage phases surface `blockedBy`, backend/capacity details, graph lifecycle details, diagnostics context, and alerts consistently. | Engine status tests, graph/status API tests, Phase 12 alert unit tests. | Table-test every non-producing `StagePhase` against status, graph details, and alert classification where applicable. |
+| Runtime snapshot -> status/graph/alerts | Non-producing stage phases surface `blockedBy`, backend/capacity details, graph lifecycle details, diagnostics context, and alerts consistently. | Engine status tests, graph/status API tests, Phase 12 alert unit tests, and a table-driven stage phase contract that compares status JSON, graph node details, and alert classification for every non-producing `StagePhase`. | Add endpoint-level regression only if the serializer boundary changes. |
 | Cancel/teardown -> observable cleanup | Cancellation wakes waiters, stops stages, removes runtime registry entries, and leaves operator-visible status causal rather than unknown. | AVIO/TS ring/ring migration loom, lifecycle guard tests, fault harness evidence. | Add targeted loom only where production wake/cancel ownership has no direct model yet; avoid duplicating covered ring primitives. |
 
 ## Priority Order
 
-1. **Status/graph/alert phase table**: unit tests ensuring every causal
-   non-producing phase has the same operator meaning across read models.
-2. **Planner terminal-key property proof**: generated encodings prove stage
+1. **Planner terminal-key property proof**: generated encodings prove stage
    identity remains qualified and stable for shared-stage topologies.
-3. **Audio-router selected-track property proof**: generated track layouts
+2. **Audio-router selected-track property proof**: generated track layouts
    prove packet selection and prebuffer replay do not regress.
-4. **Only then add loom** for any uncovered create/reuse/cancel interleaving
+3. **Only then add loom** for any uncovered create/reuse/cancel interleaving
    that is not already modeled by the ring, AVIO, TS chunk-ring, transcoder
    stage, or TS muxer stage loom suites.
