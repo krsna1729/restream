@@ -11,14 +11,19 @@
 
 ## Executive Summary
 
-The codebase now satisfies the Phase 1-12 acceptance criteria at A-grade for
-the audited scope. The important Phase 12 alert gaps have been closed: health
-exposes stage snapshots, output status carries `blockedBy`, alerts derive from
-causal fields, `/api/v1/pipelines/:id/graph` exists, and the diagnostics
-context endpoint bundles graph, health, alerts, events, relevant logs, and
-backend stderr tail.
+The codebase now satisfies the phase-scope acceptance criteria for Phases 0-16
+at A-grade. The important Phase 12 alert gaps have been closed: health exposes
+stage snapshots, output status carries `blockedBy`, alerts derive from causal
+fields, `/api/v1/pipelines/:id/graph` exists, and the diagnostics context
+endpoint bundles graph, health, alerts, events, relevant logs, and backend
+stderr tail.
 
-The current A-grade evidence across Phases 1-12 is:
+The expanded `impl.md` target continues beyond those original phases with the
+Addendum Phases A-I. That addendum is the active remaining work: A and B are now
+A-grade, C through G and I are close but still have named polish gaps, and H
+remains the broadest namespace/ownership split still short of the ideal point.
+
+The current A-grade evidence across Phases 0-16 is:
 
 - typed contracts exist, and output desired state, job status, and runtime
   lifecycle state are typed through application/runtime/repository boundaries;
@@ -43,8 +48,9 @@ The current A-grade evidence across Phases 1-12 is:
 - diagnostics expose the Phase 12 causal context bundle, while the legacy SSE
   check endpoint remains as a separate active-ingest probe path.
 
-Bottom line: **Phases 1-12 have completed the requested "Amit Singhal" pass for
-their phase-scope criteria**. Phase 13 harness reporting, Phase 14 Agent/MCP
+Bottom line: **Phases 0-16 have completed the requested deep implementation
+pass for their phase-scope criteria, while the expanded `impl.md` addendum is
+still being driven to A-grade**. Phase 13 harness reporting, Phase 14 Agent/MCP
 boundary cleanup, and Phase 15 large-file splitting now also meet their
 acceptance criteria. Phase 16 rollout work now also meets its phase acceptance
 criteria:
@@ -190,7 +196,7 @@ the graph planner as the authoritative planning model.
 | Capacity wait visible and cancellation-aware | ✅ Present | `external_transcoder.rs` transitions to `WaitingForCapacity` and waits with `tokio::select!`. |
 | Capacity metrics in snapshots | ✅ Present | `StageRuntimeSnapshot` includes total/available permits and wait duration. |
 | Stage events beyond `StageStarted` | ✅ Present | `events.rs` has `StageRegistered`, `StageWaitingForCapacity`, `StageBackendSpawned`, `StageFirstInput`, `StageFirstOutput`, `StageFailed`, `StageStopped`. |
-| Wrap current stage maps into a single `StageRuntime` map | ✅ Complete for phases 1-12 | `StageRegistry.runtimes` now stores the authoritative runtime object with optional ring, cancel token, lifecycle, metrics, input queue, and pipe metrics. Shared FFmpeg stages are ring-backed runtimes; HLS segmenters and recording writers are non-ring runtimes. The old transcoder buffer map plus pipe-metrics/input-queue side maps are retired, and lifecycle/metrics side maps are compatibility fallback paths rather than production ownership for shared FFmpeg, HLS, or recording stage families. |
+| Wrap current stage maps into a single `StageRuntime` map | ✅ Complete for current phase scope | `StageRegistry.runtimes` now stores the authoritative runtime object with optional ring, cancel token, lifecycle, metrics, input queue, and pipe metrics. Shared FFmpeg stages are ring-backed runtimes; HLS segmenters and recording writers are non-ring runtimes. The old transcoder buffer map plus pipe-metrics/input-queue side maps are retired, and lifecycle/metrics side maps are compatibility fallback paths rather than production ownership for shared FFmpeg, HLS, or recording stage families. |
 | Existing `StageStarted` semantics removed | ✅ Complete | New event names exist; no `StageStarted` variant found. |
 
 **Verdict**: **A-grade for the phase scope**. Lifecycle observability is real,
@@ -307,7 +313,7 @@ convergence and later harness/reporting phases.
 ## Addendum Phases A-I Snapshot
 
 `impl.md` continues beyond Phase 16 with a harness/codebase governance
-addendum. Those phases are now tracked separately below so Phase 1-16 progress
+addendum. Those phases are now tracked separately below so Phases 0-16 progress
 is not confused with the still-open addendum.
 
 | Phase | Status | Notes |
@@ -319,18 +325,19 @@ is not confused with the still-open addendum.
 | Phase E — Harness artifact index | ✅ Mostly complete | Mixed scenario `artifact-index.json` is atomically written and now includes run id, command, selected env, started timestamp, source revision, scenario/assertions/outputs/log/media/SQLite paths, plus existing file existence/size/SHA-256 entries. Matrix progress now also writes a root `artifact-index.json` that points to the root scenario/root-cause/assertion artifacts and every child case's scenario, outputs, logs, media directory, and per-scenario index. Remaining improvement: DB/table export for failed matrix runs. |
 | Phase F — Harness execution symmetry | ✅ Mostly complete | Manifest-backed modes and shared batch helpers expose much of the live/file execution shape. `ScenarioExecutor` is now explicit, scenario selection reports a named executor, `HlsPreviewTiming` and `ProbeSamplingPolicy` are typed, scenario/matrix artifacts report selected and supported policies, duplicate ffprobe sampling is policy-driven, and file-ingest HLS preview attaches before output fanout by default. Remaining improvement: move more of the legacy live/file body internals behind the executor step methods instead of delegating to the existing mature runner functions. |
 | Phase G — Harness/report module split | ✅ Mostly complete | `src/bin/test_harness.rs` is below 2,000 lines and command dispatch is split into focused harness modules for core, catalog, suites, probes, reports, artifacts, mixed runners, fault runners, resource sweeps, sinks, and live modes. The exact `api_client.rs`, `ports.rs`, `stacks.rs`, and `probes/mod.rs` names from `impl.md` are not used, but the ownership split is present. |
-| Phase H — Whole-codebase service and adapter split | ⚠️ Partial+ | Route modules, application services, runtime read-model service, graph planning, repository ports, and media FFmpeg/backend modules are split enough for Phases 1-16. Recording catalog concerns now live under `media/recording/catalog.rs`, and HLS packaging is namespaced under `media/hls/{fmp4,preview,upload}.rs` with legacy module paths preserved for callers. The larger idealized namespace split in `impl.md` (`RuntimeGraph`, registry modules, `media/protocols/*`, HLS TS submodule, and recording runtime/writer modules) is still not fully realized. |
+| Phase H — Whole-codebase service and adapter split | ⚠️ Partial+ | Route modules, application services, runtime read-model service, graph planning, repository ports, and media FFmpeg/backend modules are split enough for the current phase-scope baseline. Recording catalog concerns now live under `media/recording/catalog.rs`, and HLS packaging is namespaced under `media/hls/{fmp4,preview,upload}.rs` with legacy module paths preserved for callers. The larger idealized namespace split in `impl.md` (`RuntimeGraph`, registry modules, `media/protocols/*`, HLS TS submodule, and recording runtime/writer modules) is still not fully realized. |
 | Phase I — Harness as architectural governor | ✅ Mostly complete | Named governor tests now cover progress cell identity, dependency-chain failure text, timestamp discontinuity root-cause grouping, recording metadata identity, HLS no-segments preview-state evidence, planner-backed HLS preview, shared FFmpeg stage operation planning, per-stage backend policy, mixed fast-breadth defaults, and source-audit guardrails. Fast-breadth now writes mode-specific `scenario.json` and `root-cause-summary.json` before returning failure. Remaining piece: CI execution of `target/bench/test_harness mixed.fast-breadth` once runtime cost is acceptable. |
 
-**Verdict**: **Phases 1-16 are A-grade for their phase-scope acceptance
-criteria; addendum Phases A-G/I are close, while H and the remaining F
-executor-step decomposition are the main non-A addendum gaps.**
+**Verdict**: **Phases 0-16 are A-grade for their phase-scope acceptance
+criteria. The expanded `impl.md` ideal is not fully complete yet: addendum
+Phases C-G/I remain close, and H plus the remaining F executor-step
+decomposition are the main non-A addendum gaps.**
 
 ---
 
 ## Critical Remaining Gaps
 
-### P0 — Addendum Phase F/I Governor Gaps
+### P0 — Expanded Addendum Governor Gaps
 
 1. **Make harness execution symmetry explicit**
    - `ScenarioExecutor`, `HlsPreviewTiming`, and `ProbeSamplingPolicy` are now
@@ -341,9 +348,9 @@ executor-step decomposition are the main non-A addendum gaps.**
 2. **Promote `mixed.fast-breadth` to a CI governor lane**
    - Add the bench-profile CI command once runtime cost is acceptable.
 
-### P0 — Phase 1-12 Correctness Blockers Cleared
+### Completed Phase-Scope Correctness Evidence
 
-1. **Single graph planner convergence is now complete for Phase 6 scope**
+1. **Single graph planner convergence is complete for Phase 6 scope**
    - Output preparation, graph rendering, diagnostics, HLS preview, agent
      graph/impact preview, HLS output terminal-stage preparation, recording
      lifecycle registration, and harness stage-count tests now use or prove
@@ -427,23 +434,26 @@ executor-step decomposition are the main non-A addendum gaps.**
 | Phase E Artifact index | A- | Scenario and root aggregate artifact indexes have run identity, command/env/timestamp/revision, root/case scenario paths, assertion/root-cause/output/log/media/DB pointers, and file checksums where practical. Full A requires failed-run DB/table export. |
 | Phase F Execution symmetry | A- | Manifest-backed execution is strong, `ScenarioExecutor` selection is explicit, HLS preview timing and duplicate-probe sampling are typed/reporting policies, and file-ingest preview now follows the same before-fanout default as live scenarios. Full A requires migrating more live/file internals into the executor step methods. |
 | Phase G Harness split | A- | Harness root is small and modules are responsibility split; exact module names from `impl.md` are not fully mirrored. |
-| Phase H Whole-codebase split | A- | Services/routes/planner/runtime read models are split for Phase 1-16; recording catalog helpers now live in `media/recording/catalog.rs`; HLS fMP4, preview, and upload modules now live under `media/hls/`. Broader `RuntimeGraph`, registry, protocol, HLS TS, and recording runtime/writer namespace splits remain partial. |
+| Phase H Whole-codebase split | A- | Services/routes/planner/runtime read models are split for the current phase-scope baseline; recording catalog helpers now live in `media/recording/catalog.rs`; HLS fMP4, preview, and upload modules now live under `media/hls/`. Broader `RuntimeGraph`, registry, protocol, HLS TS, and recording runtime/writer namespace splits remain partial. |
 | Phase I Harness governor | A- | Exact named governor tests, stronger source-audit checks, and fast-breadth root-cause artifacts now exist; CI `mixed.fast-breadth` is still pending runtime-cost approval. |
 
 ---
 
-## Answer to “Did We Truly Finish Phases 1-12?”
+## Answer to the Expanded Goal
 
-Yes for the phase-scope acceptance criteria, with the usual caveat that this is
-not the whole roadmap. Phases 1-12 now have A-grade implementation evidence:
-typed contracts and state boundaries are in place, config and repository
-ownership are centralized, routes delegate through services, graph planning is
-the active planning model for outputs/HLS/recording/diagnostics/harness/agent
-preview, stage lifecycle is first-class for both ring-backed and non-ring stage
-families, output status is dependency-aware, FFmpeg execution goes through the
-shared waist, HLS preview and recording identity are graph/metadata-driven, and
-health/alerts/diagnostics expose causal runtime state.
+Yes for the phase-scope criteria through Phase 16; not yet for the full
+expanded `impl.md` ideal. Typed contracts and state boundaries are in place,
+config and repository ownership are centralized, routes delegate through
+services, graph planning is the active planning model for
+outputs/HLS/recording/diagnostics/harness/agent preview, stage lifecycle is
+first-class for both ring-backed and non-ring stage families, output status is
+dependency-aware, FFmpeg execution goes through the shared waist, HLS preview
+and recording identity are graph/metadata-driven, and health/alerts/diagnostics
+expose causal runtime state.
 
-The phase-scope work in this document is now A-grade through Phase 16. The
-addendum phases in `impl.md` are not all Grade A yet: A-E/G/I are close after
-the latest harness governance pass, while F/H remain the honest next targets.
+The current remaining work is the addendum: finish the typed harness API
+conversion, improve structured root-cause classification, preserve failed-run
+database evidence in artifact indexes, move more live/file execution internals
+behind executor steps, keep tightening harness/module ownership, continue the
+broader namespace split, and decide when `mixed.fast-breadth` is cheap enough
+to become a blocking CI governor lane.
