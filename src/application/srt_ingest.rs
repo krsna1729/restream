@@ -23,8 +23,12 @@ pub async fn load_global_srt_ingest_config(
         .or_else(|| srt_global_config_from_appconfig(srt_passphrase, srt_pbkeylen))
         .unwrap_or_default();
     if let Err(error) = config.validate() {
-        warn!(err = %error, "invalid global SRT ingest config; falling back to plaintext");
-        config = SrtGlobalIngestConfig::default();
+        if matches!(config.mode, SrtGlobalIngestMode::Encrypted) {
+            warn!(err = %error, "invalid encrypted SRT ingest config; preserving fail-closed policy");
+        } else {
+            warn!(err = %error, "invalid global SRT ingest config; falling back to plaintext");
+            config = SrtGlobalIngestConfig::default();
+        }
     }
     config
 }
@@ -203,12 +207,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_global_srt_ingest_config_falls_back_to_default() {
+    async fn invalid_encrypted_global_srt_ingest_config_fails_closed() {
         let store = FakeMetaStore {
             value: Some(
                 serde_json::json!({
                     "mode": "encrypted",
                     "passphrase": "short",
+                    "pbkeylen": 99
+                })
+                .to_string(),
+            ),
+        };
+
+        let config = load_global_srt_ingest_config(&store, None, 16).await;
+
+        assert_eq!(config.mode, SrtGlobalIngestMode::Encrypted);
+        assert!(config.resolve().is_err());
+    }
+
+    #[tokio::test]
+    async fn invalid_plaintext_global_srt_ingest_config_falls_back_to_default() {
+        let store = FakeMetaStore {
+            value: Some(
+                serde_json::json!({
+                    "mode": "plaintext",
                     "pbkeylen": 99
                 })
                 .to_string(),

@@ -79,3 +79,34 @@ fn build_policy_snapshot(
         per_stream_key,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::srt_ingest::{SrtGlobalIngestMode, SrtPipelineIngestConfig};
+    use crate::media::srt::serialize_pipeline_srt_ingest_policy;
+
+    fn pipeline_with_policy(policy: Option<String>) -> Pipeline {
+        Pipeline {
+            id: "pipeline-1".to_string(),
+            name: "Pipeline One".to_string(),
+            stream_key: "stream-one".to_string(),
+            input_source: None,
+            srt_ingest_policy: policy,
+        }
+    }
+
+    #[test]
+    fn invalid_encrypted_global_policy_does_not_fall_back_to_plaintext() {
+        let global = SrtGlobalIngestConfig {
+            mode: SrtGlobalIngestMode::Encrypted,
+            passphrase: Some("short".to_string()),
+            pbkeylen: 16,
+        };
+        let policy = serialize_pipeline_srt_ingest_policy(&SrtPipelineIngestConfig::default())
+            .expect("serialize inherited policy");
+        let store = SrtIngestPolicyStore::new(global, &[pipeline_with_policy(Some(policy))]);
+
+        assert_eq!(store.resolved_policy("stream-one"), None);
+    }
+}

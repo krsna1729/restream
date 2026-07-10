@@ -98,6 +98,7 @@ impl SrtGlobalIngestConfig {
                     .passphrase
                     .clone()
                     .ok_or_else(|| "missing SRT passphrase".to_string())?;
+                validate_srt_passphrase(&passphrase)?;
                 Ok(ResolvedSrtIngestConfig::Encrypted {
                     passphrase,
                     pbkeylen: normalize_srt_pbkeylen(self.pbkeylen)?,
@@ -140,13 +141,19 @@ impl SrtPipelineIngestConfig {
         match self.mode {
             SrtPipelineIngestMode::Inherit => global.resolve(),
             SrtPipelineIngestMode::Plaintext => Ok(ResolvedSrtIngestConfig::Plaintext),
-            SrtPipelineIngestMode::Encrypted => Ok(ResolvedSrtIngestConfig::Encrypted {
-                passphrase: self
+            SrtPipelineIngestMode::Encrypted => {
+                let passphrase = self
                     .passphrase
                     .clone()
-                    .ok_or_else(|| "missing per-pipeline SRT passphrase".to_string())?,
-                pbkeylen: normalize_srt_pbkeylen(self.pbkeylen.unwrap_or(DEFAULT_SRT_PBKEYLEN))?,
-            }),
+                    .ok_or_else(|| "missing per-pipeline SRT passphrase".to_string())?;
+                validate_srt_passphrase(&passphrase)?;
+                Ok(ResolvedSrtIngestConfig::Encrypted {
+                    passphrase,
+                    pbkeylen: normalize_srt_pbkeylen(
+                        self.pbkeylen.unwrap_or(DEFAULT_SRT_PBKEYLEN),
+                    )?,
+                })
+            }
         }
     }
 }
@@ -224,6 +231,35 @@ mod tests {
                 passphrase: "global-pass-123".to_string(),
                 pbkeylen: 24,
             }
+        );
+    }
+
+    #[test]
+    fn encrypted_global_resolve_rejects_malformed_secret() {
+        let global = SrtGlobalIngestConfig {
+            mode: SrtGlobalIngestMode::Encrypted,
+            passphrase: Some("short".to_string()),
+            pbkeylen: 16,
+        };
+
+        assert_eq!(
+            global.resolve().unwrap_err(),
+            "SRT passphrase must be 10-79 bytes"
+        );
+    }
+
+    #[test]
+    fn encrypted_pipeline_resolve_rejects_malformed_secret() {
+        let global = SrtGlobalIngestConfig::default();
+        let pipeline = SrtPipelineIngestConfig {
+            mode: SrtPipelineIngestMode::Encrypted,
+            passphrase: Some("short".to_string()),
+            pbkeylen: Some(16),
+        };
+
+        assert_eq!(
+            pipeline.resolve(&global).unwrap_err(),
+            "SRT passphrase must be 10-79 bytes"
         );
     }
 }

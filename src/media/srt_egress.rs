@@ -155,29 +155,46 @@ pub(super) fn apply_srt_crypto_socket(
     let enforced: c_int = 1;
     let pbkeylen = crypto.pbkeylen;
     unsafe {
-        srt_setsockopt(
-            sock,
-            0,
-            SRTO_PASSPHRASE,
-            passphrase.as_ptr() as *const c_void,
-            crypto.passphrase.len() as c_int,
-        );
-        srt_setsockopt(
-            sock,
-            0,
-            SRTO_PBKEYLEN,
-            &pbkeylen as *const _ as *const c_void,
-            std::mem::size_of::<c_int>() as c_int,
-        );
-        srt_setsockopt(
-            sock,
-            0,
-            SRTO_ENFORCEDENCRYPTION,
-            &enforced as *const _ as *const c_void,
-            std::mem::size_of::<c_int>() as c_int,
-        );
+        check_srt_option_result(
+            "SRTO_PASSPHRASE",
+            srt_setsockopt(
+                sock,
+                0,
+                SRTO_PASSPHRASE,
+                passphrase.as_ptr() as *const c_void,
+                crypto.passphrase.len() as c_int,
+            ),
+        )?;
+        check_srt_option_result(
+            "SRTO_PBKEYLEN",
+            srt_setsockopt(
+                sock,
+                0,
+                SRTO_PBKEYLEN,
+                &pbkeylen as *const _ as *const c_void,
+                std::mem::size_of::<c_int>() as c_int,
+            ),
+        )?;
+        check_srt_option_result(
+            "SRTO_ENFORCEDENCRYPTION",
+            srt_setsockopt(
+                sock,
+                0,
+                SRTO_ENFORCEDENCRYPTION,
+                &enforced as *const _ as *const c_void,
+                std::mem::size_of::<c_int>() as c_int,
+            ),
+        )?;
     }
     Ok(())
+}
+
+fn check_srt_option_result(option: &str, result: c_int) -> Result<(), String> {
+    if result >= 0 {
+        return Ok(());
+    }
+    let (code, message) = last_srt_error();
+    Err(format!("failed to set {option}: {message} ({code})"))
 }
 
 unsafe fn apply_srt_crypto_config(
@@ -188,24 +205,33 @@ unsafe fn apply_srt_crypto_config(
         std::ffi::CString::new(crypto.passphrase.as_str()).map_err(|_| "invalid SRT passphrase")?;
     let enforced: c_int = 1;
     unsafe {
-        srt_config_add(
-            config,
-            SRTO_PASSPHRASE,
-            passphrase.as_ptr() as *const c_void,
-            crypto.passphrase.len() as c_int,
-        );
-        srt_config_add(
-            config,
-            SRTO_PBKEYLEN,
-            &crypto.pbkeylen as *const _ as *const c_void,
-            std::mem::size_of::<c_int>() as c_int,
-        );
-        srt_config_add(
-            config,
-            SRTO_ENFORCEDENCRYPTION,
-            &enforced as *const _ as *const c_void,
-            std::mem::size_of::<c_int>() as c_int,
-        );
+        check_srt_option_result(
+            "SRTO_PASSPHRASE",
+            srt_config_add(
+                config,
+                SRTO_PASSPHRASE,
+                passphrase.as_ptr() as *const c_void,
+                crypto.passphrase.len() as c_int,
+            ),
+        )?;
+        check_srt_option_result(
+            "SRTO_PBKEYLEN",
+            srt_config_add(
+                config,
+                SRTO_PBKEYLEN,
+                &crypto.pbkeylen as *const _ as *const c_void,
+                std::mem::size_of::<c_int>() as c_int,
+            ),
+        )?;
+        check_srt_option_result(
+            "SRTO_ENFORCEDENCRYPTION",
+            srt_config_add(
+                config,
+                SRTO_ENFORCEDENCRYPTION,
+                &enforced as *const _ as *const c_void,
+                std::mem::size_of::<c_int>() as c_int,
+            ),
+        )?;
     }
     Ok(())
 }
