@@ -80,45 +80,177 @@ RAW_ENV_VARS=$(grep -rn "std::env::var" src/ \
     | grep -v "test_fixtures.rs" || true)
 
 if [ -n "$RAW_ENV_VARS" ]; then
-    echo "WARN: Found raw std::env::var usage outside src/config.rs (please refactor to AppConfig):"
-    echo "$RAW_ENV_VARS"
+    echo "FAIL: Found raw std::env::var usage outside approved config/test harness owners:" >&2
+    echo "$RAW_ENV_VARS" >&2
+    FAILED=1
 else
     echo "OK: No raw std::env::var usage found outside configuration module."
 fi
 
-ROUTE_MODULE_COUNT=$(find src/api -maxdepth 1 -type f -name '*.rs' | wc -l | tr -d ' ')
-DB_REPOSITORY_COUNT=$(find src/db -maxdepth 1 -type f -name '*_repo.rs' | wc -l | tr -d ' ')
-FEATURE_CFG_COUNT=$(grep -R "\#\\[cfg(feature" -n src Cargo.toml 2>/dev/null || true)
-FEATURE_CFG_COUNT=$(printf "%s" "$FEATURE_CFG_COUNT" | sed '/^$/d' | wc -l | tr -d ' ')
-MEDIA_API_IMPORT_COUNT=$(grep -rn "use crate::api" src/media/ 2>/dev/null || true)
-MEDIA_API_IMPORT_COUNT=$(printf "%s" "$MEDIA_API_IMPORT_COUNT" | sed '/^$/d' | wc -l | tr -d ' ')
-LARGEST_FILES_JSON=$(
-    awk -F: '
-        BEGIN { print "[" }
-        {
-            gsub(/\\/,"\\\\",$1);
-            gsub(/"/,"\\\"",$1);
-            printf "%s    {\"file\":\"%s\",\"lines\":%s,\"limit\":%s}", sep, $1, $2, limit;
-            sep = ",\n";
-        }
-        END { print "\n  ]" }
-    ' limit="$SOURCE_LINE_LIMIT" <<< "$LARGEST_FILES"
+echo ""
+echo "Checking API stage-start guardrails..."
+API_MANUAL_STAGE_STARTS=$(grep -REn \
+    "Command::new|ensure_ffmpeg|ffmpeg_bin_path|get_or_create_transcoder|get_or_create_h264_transcoder|spawn_ffmpeg|run_.*ffmpeg|external_transcoder" \
+    src/api/ || true)
+if [ -n "$API_MANUAL_STAGE_STARTS" ]; then
+    echo "FAIL: API route/view modules must not manually start FFmpeg/transcoder stages:" >&2
+    echo "$API_MANUAL_STAGE_STARTS" >&2
+    FAILED=1
+else
+    echo "OK: API modules do not start FFmpeg/transcoder stages."
+fi
+
+echo ""
+echo "Checking harness status-schema guardrails..."
+HARNESS_STATE_FIELD_READS=$(grep -REn '\["state"\]' src/bin/test_harness/ src/bin/test_harness.rs || true)
+if [ -n "$HARNESS_STATE_FIELD_READS" ]; then
+    echo "FAIL: Harness reads a non-schema output status field named state:" >&2
+    echo "$HARNESS_STATE_FIELD_READS" >&2
+    FAILED=1
+else
+    echo "OK: Harness does not read the removed output status state field."
+fi
+
+python3 - "$SOURCE_LINE_LIMIT" <<'PY'
+import json
+import pathlib
+import re
+import subprocess
+import sys
+
+line_limit = int(sys.argv[1])
+root = pathlib.Path(".")
+
+def rel(path: pathlib.Path) -> str:
+    return path.as_posix()
+
+def read(path: pathlib.Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+
+source_files = [
+    path
+    for base in [root / "src", root / "public" / "ts", root / "test"]
+    if base.exists()
+    for path in base.rglob("*")
+    if path.is_file()
+    and path.suffix in {".rs", ".ts", ".mjs", ".js"}
+    and "test/artifacts/" not in rel(path)
+    and "test/fixtures/" not in rel(path)
+]
+
+line_counts = [
+    {"file": rel(path), "lines": len(read(path).splitlines()), "limit": line_limit}
+    for path in source_files
+]
+line_counts.sort(key=lambda row: (-row["lines"], row["file"]))
+
+public_function_re = re.compile(r"\bpub(?:\([^)]*\))?\s+(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)")
+public_functions = []
+for path in sorted((root / "src").rglob("*.rs")):
+    names = public_function_re.findall(read(path))
+    if names:
+        public_functions.append(
+            {"module": rel(path), "count": len(names), "functions": sorted(names)}
+        )
+
+route_counts = []
+for path in sorted((root / "src" / "api").glob("*.rs")):
+    body = read(path)
+    count = body.count(".route(")
+    if count:
+        route_counts.append({"module": rel(path), "routes": count})
+
+def load_json(path: pathlib.Path):
+    return json.loads(read(path)) if path.exists() else {}
+
+modes = load_json(root / "test" / "harness" / "modes.json")
+suites = load_json(root / "test" / "harness" / "suites.json")
+mode_rows = []
+for group in modes.get("modeGroups", []):
+    for name, spec in group.get("modes", {}).items():
+        mode_rows.append(
+            {
+                "name": name,
+                "kind": group.get("kind"),
+                "group": group.get("group"),
+                "suiteRef": spec.get("suiteRef"),
+                "suiteDefault": bool(spec.get("suiteDefault", False)),
+                "benchProfile": bool(spec.get("requires", {}).get("benchProfile", False)),
+                "portNamespace": bool(spec.get("requires", {}).get("portNamespace", False)),
+            }
+        )
+dynamic_modes = modes.get("dynamicModes", [])
+
+env_re = re.compile(r"std::env::var(?:_os)?\(\s*\"([A-Za-z_][A-Za-z0-9_]*)\"")
+env_usage = []
+for path in sorted((root / "src").rglob("*.rs")):
+    for line_no, line in enumerate(read(path).splitlines(), start=1):
+        match = env_re.search(line)
+        if match:
+            env_usage.append({"file": rel(path), "line": line_no, "name": match.group(1)})
+
+media_api_imports = subprocess.run(
+    ["grep", "-rn", "use crate::api", "src/media/"],
+    text=True,
+    capture_output=True,
+)
+api_stage_starts = subprocess.run(
+    [
+        "grep",
+        "-REn",
+        r"Command::new|ensure_ffmpeg|ffmpeg_bin_path|get_or_create_transcoder|get_or_create_h264_transcoder|spawn_ffmpeg|run_.*ffmpeg|external_transcoder",
+        "src/api/",
+    ],
+    text=True,
+    capture_output=True,
+)
+harness_state_reads = subprocess.run(
+    ["grep", "-REn", r'\["state"\]', "src/bin/test_harness/", "src/bin/test_harness.rs"],
+    text=True,
+    capture_output=True,
 )
 
-cat > target/source-audit.json <<EOF
-{
-  "sourceLineLimit": ${SOURCE_LINE_LIMIT},
-  "largestFiles": ${LARGEST_FILES_JSON},
-  "moduleSummary": {
-    "apiRouteModules": ${ROUTE_MODULE_COUNT},
-    "dbRepositoryModules": ${DB_REPOSITORY_COUNT},
-    "featureCfgSites": ${FEATURE_CFG_COUNT}
-  },
-  "forbiddenImports": {
-    "mediaImportsApi": ${MEDIA_API_IMPORT_COUNT}
-  }
+feature_cfg_sites = []
+for path in [root / "Cargo.toml", *sorted((root / "src").rglob("*.rs"))]:
+    if path.exists():
+        for line_no, line in enumerate(read(path).splitlines(), start=1):
+            if "#[cfg(feature" in line or "required-features" in line:
+                feature_cfg_sites.append({"file": rel(path), "line": line_no, "text": line.strip()})
+
+report = {
+    "sourceLineLimit": line_limit,
+    "largestFiles": line_counts[:20],
+    "lineCounts": line_counts,
+    "publicFunctions": public_functions,
+    "routeCounts": route_counts,
+    "harnessInventory": {
+        "commandSurface": modes.get("commandSurface"),
+        "defaultCommand": modes.get("defaultCommand"),
+        "modeCount": len(mode_rows),
+        "modes": sorted(mode_rows, key=lambda row: row["name"]),
+        "dynamicModes": dynamic_modes,
+        "suiteCount": len(suites.get("suites", {})),
+        "suites": sorted(suites.get("suites", {}).keys()),
+    },
+    "envVarUsage": env_usage,
+    "moduleSummary": {
+        "apiRouteModules": len(list((root / "src" / "api").glob("*.rs"))),
+        "dbRepositoryModules": len(list((root / "src" / "db").glob("*_repo.rs"))),
+        "featureCfgSites": len(feature_cfg_sites),
+    },
+    "forbiddenImports": {
+        "mediaImportsApi": len([line for line in media_api_imports.stdout.splitlines() if line]),
+        "apiManualStageStarts": len([line for line in api_stage_starts.stdout.splitlines() if line]),
+        "harnessStateFieldReads": len([line for line in harness_state_reads.stdout.splitlines() if line]),
+    },
+    "featureCfgSites": feature_cfg_sites,
 }
-EOF
+
+pathlib.Path("target/source-audit.json").write_text(
+    json.dumps(report, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
 echo "Wrote target/source-audit.json"
 
 echo ""

@@ -3,7 +3,7 @@
 use super::*;
 use sha2::{Digest, Sha256};
 
-pub(crate) const MIXED_ARTIFACT_INDEX_SCHEMA_VERSION: u32 = 1;
+pub(crate) const MIXED_ARTIFACT_INDEX_SCHEMA_VERSION: u32 = 2;
 
 pub(crate) fn mixed_artifact_index_path(env: &MixedEnv) -> PathBuf {
     env.work_dir.join("artifact-index.json")
@@ -21,11 +21,77 @@ pub(crate) fn mixed_artifact_index_json(env: &MixedEnv) -> Value {
         .into_iter()
         .map(|(role, path)| mixed_artifact_entry(role, path))
         .collect::<Vec<_>>();
+    let assertion_log = env.assertion_log.clone();
     json!({
         "schemaVersion": MIXED_ARTIFACT_INDEX_SCHEMA_VERSION,
+        "runId": mixed_artifact_run_id(env),
+        "command": std::env::args().collect::<Vec<_>>(),
+        "env": mixed_artifact_env(),
+        "startedAt": Utc::now().to_rfc3339(),
+        "sourceRevision": mixed_artifact_source_revision(),
         "workDir": env.work_dir,
+        "scenarioJson": env.work_dir.join("scenario.json"),
+        "assertionsJsonl": assertion_log,
+        "outputsJson": [env.outputs_json_path()],
+        "stagesJson": Vec::<PathBuf>::new(),
+        "logs": [env.restream_log.clone(), env.mediamtx_log.clone()],
+        "media": [env.media_dir.clone()],
+        "sqliteDb": env.restream_db_path,
         "artifacts": artifacts,
     })
+}
+
+fn mixed_artifact_run_id(env: &MixedEnv) -> String {
+    std::env::var("RESTREAM_HARNESS_RUN_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            let work_name = env
+                .work_dir
+                .file_name()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+                .unwrap_or("mixed");
+            format!("{work_name}-{}", std::process::id())
+        })
+}
+
+fn mixed_artifact_env() -> std::collections::BTreeMap<String, String> {
+    [
+        "ASSERTION_LOG",
+        "COLLECT_FAILURES",
+        "MIXED_FAST_BREADTH_GROUPS",
+        "MIXED_SIGNAL_GROUPS",
+        "N_PER_GROUP",
+        "ONLY_CHECKS",
+        "RESTREAM_HARNESS_RUN_ID",
+        "RESTREAM_MEDIA_DIR",
+        "SKIP_LOAD",
+        "WORK_DIR",
+    ]
+    .into_iter()
+    .filter_map(|name| {
+        std::env::var(name)
+            .ok()
+            .map(|value| (name.to_string(), value))
+    })
+    .collect()
+}
+
+fn mixed_artifact_source_revision() -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--short=12", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let revision = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if revision.is_empty() {
+        None
+    } else {
+        Some(revision)
+    }
 }
 
 fn mixed_artifact_entries(env: &MixedEnv) -> Vec<(&'static str, PathBuf)> {
@@ -100,6 +166,27 @@ mod tests {
         let index = mixed_artifact_index_json(&env);
 
         assert_eq!(index["schemaVersion"], MIXED_ARTIFACT_INDEX_SCHEMA_VERSION);
+        assert!(
+            index["runId"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert!(index["command"].as_array().is_some());
+        assert!(index["env"].as_object().is_some());
+        assert!(
+            index["startedAt"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert_eq!(index["scenarioJson"], json!(temp.join("scenario.json")));
+        assert_eq!(index["outputsJson"][0], json!(env.outputs_json_path()));
+        assert_eq!(
+            index["assertionsJsonl"],
+            json!(env.assertion_log.as_ref().expect("assertion log"))
+        );
+        assert_eq!(index["logs"][0], json!(env.restream_log));
+        assert_eq!(index["media"][0], json!(env.media_dir));
+        assert_eq!(index["sqliteDb"], json!(env.restream_db_path));
         let artifacts = index["artifacts"].as_array().expect("artifact list");
         let outputs = artifacts
             .iter()
