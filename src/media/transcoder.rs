@@ -127,13 +127,14 @@ pub async fn start_audio_router(
         output_buffer.codec_hint_str(),
     );
 
-    let mut reader = Reader::new(
+    let mut reader = Reader::new_stage_input(
         format!(
             "audio-router:{}:{:?}",
             pipeline_id,
             std::mem::discriminant(&routing)
         ),
         input_buffer,
+        0,
     );
     let mut _pushed_count: u64 = 0;
     let mut first_push_logged = false;
@@ -668,6 +669,111 @@ mod tests {
         assert_eq!(out_pkts[0].media_type, MediaType::Video);
         assert_eq!(out_pkts[1].media_type, MediaType::Audio);
         assert_eq!(out_pkts[1].track_index, 0); // re-indexed to 0
+    }
+
+    #[tokio::test]
+    async fn audio_router_replays_prebuffered_upstream_stage() {
+        use crate::domain::stage::{StageKey, StageKind};
+        use crate::media::engine::MediaEngine;
+
+        let source_ring = Arc::new(RingBuffer::new(16));
+        let out_ring = Arc::new(RingBuffer::new(16));
+        let engine = Arc::new(MediaEngine::new());
+        let cancel = CancellationToken::new();
+        let stage_key = StageKey::new(
+            "prebuffered-audio-route",
+            StageKind::audio_route(
+                "atrack:1",
+                StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("720p")),
+            ),
+        );
+
+        source_ring.set_codec_hint("h264");
+        source_ring.set_audio_tracks(vec![
+            AudioMeta {
+                codec: "aac".to_string(),
+                channels: 2,
+                sample_rate: 48000,
+                track_index: 0,
+                channel_layout: None,
+                pid: Some(0x101),
+                language: None,
+                title: None,
+                profile: None,
+            },
+            AudioMeta {
+                codec: "aac".to_string(),
+                channels: 2,
+                sample_rate: 48000,
+                track_index: 1,
+                channel_layout: None,
+                pid: Some(0x102),
+                language: None,
+                title: None,
+                profile: None,
+            },
+        ]);
+        source_ring.push(MediaPacket {
+            media_type: MediaType::Video,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            is_keyframe: true,
+            format: PayloadFormat::Raw,
+            payload: bytes::Bytes::from_static(&[1, 2, 3]),
+        });
+        source_ring.push(MediaPacket {
+            media_type: MediaType::Audio,
+            track_index: 0,
+            pts: 10,
+            dts: 10,
+            is_keyframe: false,
+            format: PayloadFormat::Raw,
+            payload: bytes::Bytes::from_static(&[4, 5, 6]),
+        });
+        source_ring.push(MediaPacket {
+            media_type: MediaType::Audio,
+            track_index: 1,
+            pts: 20,
+            dts: 20,
+            is_keyframe: false,
+            format: PayloadFormat::Raw,
+            payload: bytes::Bytes::from_static(&[7, 8, 9]),
+        });
+        source_ring.mark_end_of_stream();
+
+        let handle = tokio::spawn(start_audio_router(
+            "prebuffered-audio-route".to_string(),
+            AudioRouting::SelectTracks { tracks: vec![1] },
+            source_ring,
+            out_ring.clone(),
+            engine,
+            cancel,
+            stage_key,
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("audio router should finish after upstream EOS")
+            .expect("audio router task should not panic");
+
+        let mut reader = Reader::new("prebuffered-router-output".to_string(), out_ring);
+        let mut out_pkts = Vec::new();
+        while let Ok(Some(pkt)) = reader.pull() {
+            out_pkts.push(pkt);
+        }
+
+        assert!(
+            out_pkts
+                .iter()
+                .any(|packet| packet.media_type == MediaType::Video),
+            "late audio router should replay prebuffered video"
+        );
+        assert!(
+            out_pkts
+                .iter()
+                .any(|packet| { packet.media_type == MediaType::Audio && packet.track_index == 0 }),
+            "late audio router should replay and re-index the selected audio track"
+        );
     }
 
     #[tokio::test]
