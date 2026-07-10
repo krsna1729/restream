@@ -1433,6 +1433,25 @@ fn mixed_hevc_output_progress_timeout_gets_codec_edge_budget() {
 }
 
 #[test]
+fn mixed_matrix_hevc_rows_do_not_share_capacity_wave() {
+    let h264_case = mixed_input_cases()
+        .iter()
+        .copied()
+        .find(|case| matches!(case.codec(), MixedVideoCodec::H264))
+        .expect("h264 mixed case");
+    let h265_case = mixed_input_cases()
+        .iter()
+        .copied()
+        .find(|case| matches!(case.codec(), MixedVideoCodec::H265))
+        .expect("h265 mixed case");
+
+    assert!(mixed_matrix_cases_can_share_wave(h264_case, h264_case));
+    assert!(!mixed_matrix_cases_can_share_wave(h264_case, h265_case));
+    assert!(!mixed_matrix_cases_can_share_wave(h265_case, h264_case));
+    assert!(!mixed_matrix_cases_can_share_wave(h265_case, h265_case));
+}
+
+#[test]
 fn mixed_input_planning_shares_stages_across_duplicate_outputs() {
     for case in mixed_input_cases() {
         let single = planned_mixed_stage_count(*case, 1);

@@ -15,6 +15,14 @@ pub(crate) fn mixed_matrix_default_check_names() -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn mixed_matrix_cases_can_share_wave(
+    first: MixedInputCase,
+    second: MixedInputCase,
+) -> bool {
+    !matches!(first.codec(), MixedVideoCodec::H265)
+        && !matches!(second.codec(), MixedVideoCodec::H265)
+}
+
 const MIXED_RUNTIME_LOG_NOISE_PATTERNS: [&str; 4] = [
     "PPS id out of range",
     "Could not find ref with POC",
@@ -551,7 +559,11 @@ pub(super) async fn mixed_input_matrix_correctness_shared() -> Result<Value, Str
         let mut wave_index = 0usize;
         while let Some(case_a) = cases_queue.pop_front() {
             wave_index += 1;
-            let case_b = cases_queue.pop_front();
+            let case_b = cases_queue
+                .front()
+                .copied()
+                .filter(|case_b| mixed_matrix_cases_can_share_wave(case_a, *case_b))
+                .and_then(|_| cases_queue.pop_front());
 
             matrix_mark_case_state(
                 &mut case_progress,
