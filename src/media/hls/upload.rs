@@ -11,7 +11,7 @@ use tracing::error;
 
 use reqwest::{Client, Url};
 
-use super::HlsStore;
+use super::{HlsStore, HlsStoreSnapshot};
 use crate::domain::stage::StageKey;
 use crate::domain::state::EgressPhase;
 use crate::media::engine::{EgressRegistration, MediaEngine};
@@ -20,6 +20,7 @@ const HLS_PLAYLIST_CONTENT_TYPE: &str = "application/vnd.apple.mpegurl";
 const HLS_SEGMENT_CONTENT_TYPE: &str = "video/mp2t";
 const UPLOAD_INTERVAL: Duration = Duration::from_millis(500);
 const HLS_UPLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const HLS_UPLOAD_RETRY_BACKOFF: Duration = Duration::from_secs(1);
 
 pub struct HlsUploadStart {
     pub output_id: String,
@@ -103,7 +104,9 @@ pub async fn start_hls_put_upload(
         let Some(snapshot) = store.snapshot() else {
             continue;
         };
+        prune_uploaded_segments(&mut uploaded_segments, &snapshot);
 
+        let mut upload_failed = false;
         for segment in snapshot.segments {
             if uploaded_segments.contains(&segment.index) {
                 continue;
@@ -139,9 +142,16 @@ pub async fn start_hls_put_upload(
                             err,
                         )
                         .await;
-                    return;
+                    upload_failed = true;
+                    break;
                 }
             }
+        }
+        if upload_failed {
+            if wait_for_upload_retry_backoff(&registration).await {
+                return;
+            }
+            continue;
         }
 
         let playlist_bytes = snapshot.playlist.into_bytes();
@@ -161,12 +171,30 @@ pub async fn start_hls_put_upload(
             engine
                 .record_egress_error_if_current(&output_id, &registration, "upload_playlist", err)
                 .await;
-            return;
+            if wait_for_upload_retry_backoff(&registration).await {
+                return;
+            }
         } else {
             engine
                 .record_egress_progress_if_current(&output_id, &registration, playlist_len)
                 .await;
         }
+    }
+}
+
+fn prune_uploaded_segments(uploaded_segments: &mut HashSet<u64>, snapshot: &HlsStoreSnapshot) {
+    uploaded_segments.retain(|index| {
+        snapshot
+            .segments
+            .iter()
+            .any(|segment| segment.index == *index)
+    });
+}
+
+async fn wait_for_upload_retry_backoff(registration: &EgressRegistration) -> bool {
+    tokio::select! {
+        _ = registration.cancel_token.cancelled() => true,
+        _ = tokio::time::sleep(HLS_UPLOAD_RETRY_BACKOFF) => false,
     }
 }
 
@@ -268,9 +296,11 @@ mod tests {
     use axum::extract::OriginalUri;
     use axum::http::{HeaderMap, StatusCode};
     use axum::routing::put;
+    use std::collections::HashMap;
     use std::sync::Mutex;
 
     use crate::domain::stage::{StageKey, StageKind};
+    use crate::media::hls::HlsSegmentSnapshot;
 
     fn planned_hls_key(pipeline_id: &str) -> StageKey {
         StageKey::new(pipeline_id, StageKind::hls_segmenter(StageKind::source()))
@@ -314,6 +344,32 @@ mod tests {
             segment.as_str(),
             "https://example.com/live/seg42.ts?hdnea=token&policy=abc"
         );
+    }
+
+    #[test]
+    fn uploaded_segment_tracking_is_pruned_to_current_snapshot() {
+        let mut uploaded_segments = HashSet::from([0, 1, 2, 3]);
+        let snapshot = HlsStoreSnapshot {
+            playlist: "#EXTM3U\n".to_string(),
+            segments: vec![
+                HlsSegmentSnapshot {
+                    index: 2,
+                    data: Bytes::new(),
+                },
+                HlsSegmentSnapshot {
+                    index: 3,
+                    data: Bytes::new(),
+                },
+                HlsSegmentSnapshot {
+                    index: 4,
+                    data: Bytes::new(),
+                },
+            ],
+        };
+
+        prune_uploaded_segments(&mut uploaded_segments, &snapshot);
+
+        assert_eq!(uploaded_segments, HashSet::from([2, 3]));
     }
 
     #[tokio::test]
@@ -433,8 +489,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn uploader_exits_after_upload_error() {
-        let app = Router::new().route("/*path", put(|| async { StatusCode::BAD_GATEWAY }));
+    async fn uploader_retries_after_transient_upload_error() {
+        let seen = Arc::new(Mutex::new(HashMap::<String, usize>::new()));
+        let seen_for_handler = seen.clone();
+        let app = Router::new().route(
+            "/*path",
+            put(move |uri: OriginalUri| {
+                let seen = seen_for_handler.clone();
+                async move {
+                    let uri = uri.0.to_string();
+                    let mut seen = seen.lock().unwrap();
+                    let count = seen.entry(uri.clone()).or_default();
+                    *count += 1;
+                    if uri.ends_with("file=seg0.ts") && *count == 1 {
+                        StatusCode::BAD_GATEWAY
+                    } else {
+                        StatusCode::NO_CONTENT
+                    }
+                }
+            }),
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -454,22 +528,42 @@ mod tests {
             )
             .await;
 
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            start_hls_put_upload(
-                HlsUploadStart {
-                    output_id: "out1".to_string(),
-                    pipeline_id: "pipe1".to_string(),
-                    target_url: format!("http://{addr}/upload?cid=abc&file=out.m3u8"),
-                    terminal_stage_key,
-                },
-                store,
-                engine,
-                registration,
-            ),
-        )
-        .await
-        .expect("uploader should exit promptly after an upload error");
+        let uploader = tokio::spawn(start_hls_put_upload(
+            HlsUploadStart {
+                output_id: "out1".to_string(),
+                pipeline_id: "pipe1".to_string(),
+                target_url: format!("http://{addr}/upload?cid=abc&file=out.m3u8"),
+                terminal_stage_key,
+            },
+            store,
+            engine,
+            registration.clone(),
+        ));
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+        loop {
+            let (segment_attempts, playlist_attempts) = {
+                let seen = seen.lock().unwrap();
+                (
+                    seen.get("/upload?cid=abc&file=seg0.ts")
+                        .copied()
+                        .unwrap_or(0),
+                    seen.get("/upload?cid=abc&file=out.m3u8")
+                        .copied()
+                        .unwrap_or(0),
+                )
+            };
+            if segment_attempts >= 2 && playlist_attempts >= 1 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for retried PUT upload"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        registration.cancel_token.cancel();
+        let _ = uploader.await;
     }
 
     #[tokio::test]
