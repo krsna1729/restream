@@ -65,15 +65,11 @@ pub(crate) async fn run_hls_put_probe(
         }
     }
 
-    let status = api
-        .get_json(&format!(
-            "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
-        ))
-        .await
-        .ok();
+    let status = api.get_output_status(pipeline_id, &output_id).await.ok();
     let status_ok = status
         .as_ref()
-        .is_some_and(|s| s["bytesOut"].as_u64().unwrap_or(0) > 0);
+        .is_some_and(|(status, _)| status.bytes_out > 0);
+    let status_json = status.as_ref().map(|(_, json)| json.clone());
 
     let _ = api
         .post_empty(&format!(
@@ -90,7 +86,7 @@ pub(crate) async fn run_hls_put_probe(
         "contentTypesCorrect": content_types_ok,
         "segmentDecodable": segment_ok,
         "artifactsFound": artifacts.is_ok(),
-        "outputStatus": status,
+        "outputStatus": status_json,
     });
 
     if !passed {

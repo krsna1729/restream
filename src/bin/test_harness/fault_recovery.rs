@@ -64,11 +64,8 @@ async fn fault_rtmp_egress_sink_disappear(
     let mut saw_retrying = retry.status_visible;
     while Instant::now() < recovery_deadline {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        if let Ok(status) = api
-            .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-            .await
-        {
-            recovery_status = status["status"].as_str().unwrap_or("unknown").to_string();
+        if let Ok((status, _)) = api.get_output_status(&pid, &oid).await {
+            recovery_status = status.status;
             if recovery_status == "retrying" {
                 saw_retrying = true;
             }
@@ -738,12 +735,8 @@ pub(crate) async fn observe_final_output(
     pipeline_id: &str,
     output_id: &str,
 ) -> FinalOutputObservation {
-    let status = api
-        .get_json(&format!(
-            "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
-        ))
-        .await
-        .ok();
+    let status = api.get_output_status(pipeline_id, output_id).await.ok();
+    let status_json = status.as_ref().map(|(_, json)| json.clone());
     let health = api.get_json("/api/v1/engine/health").await.ok();
     let output_health = health
         .as_ref()
@@ -751,25 +744,19 @@ pub(crate) async fn observe_final_output(
         .unwrap_or(Value::Null);
 
     FinalOutputObservation {
-        running: status.as_ref().and_then(|status| status["status"].as_str()) == Some("running"),
-        retrying: status
-            .as_ref()
-            .and_then(|status| status["retrying"].as_bool())
-            .unwrap_or(false),
+        running: status.as_ref().map(|(status, _)| status.status.as_str()) == Some("running"),
+        retrying: status.as_ref().is_some_and(|(status, _)| status.retrying),
         error_cleared: status
             .as_ref()
-            .is_some_and(|status| status["lastError"].is_null()),
+            .is_some_and(|(status, _)| status.last_error_is_empty()),
         recent_failure_count: status
             .as_ref()
-            .and_then(|status| status["recentFailureCount"].as_u64())
+            .map(|(status, _)| status.recent_failure_count)
             .unwrap_or(0),
-        flapping: status
-            .as_ref()
-            .and_then(|status| status["flapping"].as_bool())
-            .unwrap_or(false),
+        flapping: status.as_ref().is_some_and(|(status, _)| status.flapping),
         health_recent_failure_count: output_health["recentFailureCount"].as_u64().unwrap_or(0),
         health_flapping: output_health["flapping"].as_bool().unwrap_or(false),
-        status,
+        status: status_json,
         health: output_health,
     }
 }
@@ -813,24 +800,17 @@ pub(crate) async fn wait_for_output_retry_observation(
     let mut observation = OutputRetryObservation::default();
     while Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        if let Ok(status) = api
-            .get_json(&format!(
-                "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
-            ))
-            .await
-        {
-            observation.status_visible = status["status"].as_str() == Some("retrying")
-                && status["retrying"].as_bool() == Some(true);
-            observation.phase = status["phase"].as_str().unwrap_or("unknown").to_string();
-            observation.failure_phase = status["failurePhase"]
-                .as_str()
-                .unwrap_or("unknown")
-                .to_string();
-            observation.last_error = status["lastError"].as_str().unwrap_or("").to_string();
+        if let Ok((status, _)) = api.get_output_status(pipeline_id, output_id).await {
+            observation.status_visible = status.status == "retrying" && status.retrying;
+            observation.phase = status.phase;
+            observation.failure_phase = status
+                .failure_phase
+                .unwrap_or_else(|| "unknown".to_string());
+            observation.last_error = status.last_error.unwrap_or_default();
             observation.has_error = !observation.last_error.is_empty();
             if observation.status_visible {
-                observation.attempts = status["retryAttempts"].as_u64();
-                observation.backoff_ms = status["retryBackoffMs"].as_u64();
+                observation.attempts = status.retry_attempts;
+                observation.backoff_ms = status.retry_backoff_ms;
             }
         }
         if let Ok(health) = api.get_json("/api/v1/engine/health").await {
@@ -855,25 +835,20 @@ async fn wait_for_output_retry_or_cleanup_observation(
     let mut observation = OutputRetryObservation::default();
     while Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        match api
-            .get_json(&format!(
-                "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
-            ))
-            .await
-        {
+        match api.get_output_status(pipeline_id, output_id).await {
             Err(_) => {
                 observation.cleaned_up = true;
                 observation.phase = "cleaned-up".to_string();
                 break;
             }
-            Ok(status) => {
-                observation.status_visible = status["status"].as_str() == Some("retrying");
-                observation.phase = status["phase"].as_str().unwrap_or("unknown").to_string();
-                observation.last_error = status["lastError"].as_str().unwrap_or("").to_string();
+            Ok((status, _)) => {
+                observation.status_visible = status.status == "retrying";
+                observation.phase = status.phase;
+                observation.last_error = status.last_error.unwrap_or_default();
                 observation.has_error = !observation.last_error.is_empty();
                 if observation.status_visible {
-                    observation.attempts = status["retryAttempts"].as_u64();
-                    observation.backoff_ms = status["retryBackoffMs"].as_u64();
+                    observation.attempts = status.retry_attempts;
+                    observation.backoff_ms = status.retry_backoff_ms;
                 }
             }
         }
@@ -894,15 +869,10 @@ pub(crate) fn output_retry_or_cleanup_phase_ok(observation: &OutputRetryObservat
 }
 
 async fn output_running_without_retry(api: &RampApi, pipeline_id: &str, output_id: &str) -> bool {
-    api.get_json(&format!(
-        "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
-    ))
-    .await
-    .ok()
-    .is_some_and(|status| {
-        status["status"].as_str() == Some("running")
-            && !status["retrying"].as_bool().unwrap_or(false)
-    })
+    api.get_output_status(pipeline_id, output_id)
+        .await
+        .ok()
+        .is_some_and(|(status, _)| status.status == "running" && !status.retrying)
 }
 
 pub(crate) async fn wait_for_output_running(

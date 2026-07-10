@@ -99,13 +99,11 @@ pub(super) async fn recovery_live_cases(
                 .as_u64()
                 .is_some_and(|count| count >= 1);
 
-            let status = api
-                .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-                .await;
+            let status = api.get_output_status(&pid, &oid).await;
             match status {
-                Ok(status) => {
-                    saw_output_retrying |= status["retrying"].as_bool().unwrap_or(false);
-                    saw_output_nonrunning |= status["status"].as_str() != Some("running");
+                Ok((status, _)) => {
+                    saw_output_retrying |= status.retrying;
+                    saw_output_nonrunning |= status.status != "running";
                 }
                 Err(_) => {
                     saw_output_missing = true;
@@ -129,18 +127,14 @@ pub(super) async fn recovery_live_cases(
         }
 
         let final_connections = metrics.connections.load(Ordering::Relaxed);
-        let final_status = api
-            .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-            .await
-            .ok();
+        let final_status = api.get_output_status(&pid, &oid).await.ok();
         let final_status_running = final_status
             .as_ref()
-            .and_then(|status| status["status"].as_str())
+            .map(|(status, _)| status.status.as_str())
             == Some("running");
         let final_retrying = final_status
             .as_ref()
-            .and_then(|status| status["retrying"].as_bool())
-            .unwrap_or(false);
+            .is_some_and(|(status, _)| status.retrying);
         let final_health = api.get_json("/api/v1/engine/health").await.ok();
         let final_input = final_health
             .as_ref()
@@ -249,17 +243,11 @@ pub(super) async fn recovery_live_cases(
         let input_off = wait_for_api_input_off(api, &pid, Duration::from_secs(10)).await;
         tokio::time::sleep(Duration::from_millis(1_500)).await;
 
-        let gap_status = api
-            .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-            .await
-            .ok();
+        let gap_status = api.get_output_status(&pid, &oid).await.ok();
         let gap_health = api.get_json("/api/v1/engine/health").await.ok();
         let gap_output_retrying = gap_status
             .as_ref()
-            .map(|status| {
-                status["status"].as_str() == Some("retrying")
-                    && status["retrying"].as_bool() == Some(true)
-            })
+            .map(|(status, _)| status.status == "retrying" && status.retrying)
             .unwrap_or(false);
         let gap_health_retrying = gap_health
             .as_ref()
@@ -301,11 +289,8 @@ pub(super) async fn recovery_live_cases(
         let mut recovery_status = String::from("unknown");
         while Instant::now() < recovery_deadline {
             tokio::time::sleep(Duration::from_millis(500)).await;
-            if let Ok(status) = api
-                .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-                .await
-            {
-                recovery_status = status["status"].as_str().unwrap_or("unknown").to_string();
+            if let Ok((status, _)) = api.get_output_status(&pid, &oid).await {
+                recovery_status = status.status;
             }
             if recovery_metrics.video_count.load(Ordering::Relaxed) >= 10 {
                 recovered = true;
@@ -313,18 +298,14 @@ pub(super) async fn recovery_live_cases(
             }
         }
 
-        let final_status = api
-            .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-            .await
-            .ok();
+        let final_status = api.get_output_status(&pid, &oid).await.ok();
         let final_status_running = final_status
             .as_ref()
-            .and_then(|status| status["status"].as_str())
+            .map(|(status, _)| status.status.as_str())
             == Some("running");
         let final_retrying = final_status
             .as_ref()
-            .and_then(|status| status["retrying"].as_bool())
-            .unwrap_or(false);
+            .is_some_and(|(status, _)| status.retrying);
         let final_health = api.get_json("/api/v1/engine/health").await.ok();
         let final_input = final_health
             .as_ref()
@@ -452,16 +433,10 @@ pub(super) async fn recovery_live_cases(
         let mut final_bytes_out = 0u64;
         while Instant::now() < recovery_deadline {
             tokio::time::sleep(Duration::from_millis(500)).await;
-            if let Ok(status) = api
-                .get_json(&format!("/api/v1/pipelines/{pid}/outputs/{oid}/status"))
-                .await
-            {
-                recovery_status = status["status"].as_str().unwrap_or("unknown").to_string();
-                final_bytes_out = status["bytesOut"].as_u64().unwrap_or(0);
-                if recovery_status == "running"
-                    && !status["retrying"].as_bool().unwrap_or(false)
-                    && final_bytes_out > 0
-                {
+            if let Ok((status, _)) = api.get_output_status(&pid, &oid).await {
+                recovery_status = status.status.clone();
+                final_bytes_out = status.bytes_out;
+                if recovery_status == "running" && !status.retrying && final_bytes_out > 0 {
                     recovered = true;
                     break;
                 }

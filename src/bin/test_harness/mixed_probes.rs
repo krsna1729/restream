@@ -364,12 +364,10 @@ pub(crate) async fn verify_mixed_decode_scan(
 
 async fn mixed_probe_failure_snapshot(api: &RampApi, cell: Option<&HarnessOutputCell>) -> Value {
     let status = if let Some(cell) = cell {
-        api.get_json(&format!(
-            "/api/v1/pipelines/{}/outputs/{}/status",
-            cell.pipeline_id, cell.output_id
-        ))
-        .await
-        .ok()
+        api.get_output_status(&cell.pipeline_id, &cell.output_id)
+            .await
+            .map(|(_, status)| status)
+            .ok()
     } else {
         None
     };

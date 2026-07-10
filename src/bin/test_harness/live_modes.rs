@@ -587,12 +587,7 @@ pub(crate) async fn wait_for_output_stalled_status(
     let mut last_health = Value::Null;
 
     loop {
-        if let Ok(status) = api
-            .get_json(&format!(
-                "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
-            ))
-            .await
-        {
+        if let Ok((status_row, status)) = api.get_output_status(pipeline_id, output_id).await {
             last_status = status.clone();
             if let Ok(health) = api.get_json("/api/v1/engine/health").await
                 && let Some(output) = health["pipelines"][pipeline_id]["outputs"]
@@ -600,7 +595,6 @@ pub(crate) async fn wait_for_output_stalled_status(
                     .and_then(|outputs| outputs.get(output_id).cloned())
             {
                 last_health = output.clone();
-                let status_row = ApiOutputStatus::from_value(output_id, &status)?;
                 let health_row = ApiOutputStatus::from_value(output_id, &output)?;
                 let stalled_visible = status_row.status == "stalled"
                     && health_row.status == "stalled"

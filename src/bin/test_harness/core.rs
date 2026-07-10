@@ -896,6 +896,37 @@ impl RampApi {
             .map_err(|e| e.to_string())
     }
 
+    pub(crate) async fn get_output_status(
+        &self,
+        pipeline_id: &str,
+        output_id: &str,
+    ) -> Result<(ApiOutputStatus, Value), String> {
+        let value = self
+            .get_json(&format!(
+                "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
+            ))
+            .await?;
+        let status = ApiOutputStatus::from_value(output_id, &value)?;
+        Ok((status, value))
+    }
+
+    pub(crate) async fn get_output_status_or_not_found(
+        &self,
+        pipeline_id: &str,
+        output_id: &str,
+    ) -> Result<Option<(ApiOutputStatus, Value)>, String> {
+        let Some(value) = self
+            .get_json_or_not_found(&format!(
+                "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
+            ))
+            .await?
+        else {
+            return Ok(None);
+        };
+        let status = ApiOutputStatus::from_value(output_id, &value)?;
+        Ok(Some((status, value)))
+    }
+
     pub(crate) async fn get_text_response(
         &self,
         path: &str,

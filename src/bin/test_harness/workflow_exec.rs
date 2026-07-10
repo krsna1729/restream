@@ -608,24 +608,22 @@ async fn run_step(ctx: &mut WorkflowCtx<'_>, step: &Value) -> Result<(), String>
             let mut final_status = Value::Null;
             while Instant::now() < deadline {
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                let Some(status) = ctx
+                let Some((status, status_json)) = ctx
                     .api
-                    .get_json_or_not_found(&format!(
-                        "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
-                    ))
+                    .get_output_status_or_not_found(&pipeline_id, &output_id)
                     .await?
                 else {
                     continue;
                 };
-                if status["status"].as_str() == Some("retrying") {
+                if status.status == "retrying" {
                     saw_retrying = true;
                 }
-                if status["status"].as_str() == Some("failed") {
+                if status.status == "failed" {
                     saw_failed = true;
                 }
-                let matched =
-                    status.get(&until_field).and_then(Value::as_str) == Some(until_equals.as_str());
-                final_status = status;
+                let matched = status_json.get(&until_field).and_then(Value::as_str)
+                    == Some(until_equals.as_str());
+                final_status = status_json;
                 if matched {
                     break;
                 }
@@ -655,14 +653,12 @@ async fn run_step(ctx: &mut WorkflowCtx<'_>, step: &Value) -> Result<(), String>
             let timeout_secs = ctx.field_u64(step, "timeoutSecs")?;
             let deadline = Instant::now() + Duration::from_secs(timeout_secs);
             let status = loop {
-                if let Some(status) = ctx
+                if let Some((_status, status_json)) = ctx
                     .api
-                    .get_json_or_not_found(&format!(
-                        "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
-                    ))
+                    .get_output_status_or_not_found(&pipeline_id, &output_id)
                     .await?
                 {
-                    break status;
+                    break status_json;
                 }
                 if Instant::now() >= deadline {
                     return Err(format!("output {output_id} status never became visible"));
@@ -724,9 +720,7 @@ async fn run_step(ctx: &mut WorkflowCtx<'_>, step: &Value) -> Result<(), String>
 
             let gap_status = ctx
                 .api
-                .get_json(&format!(
-                    "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
-                ))
+                .get_output_status(&pipeline_id, &output_id)
                 .await
                 .ok();
             let gap_connections = {
@@ -737,14 +731,11 @@ async fn run_step(ctx: &mut WorkflowCtx<'_>, step: &Value) -> Result<(), String>
                 metrics.connections.load(Ordering::Relaxed)
             };
             let gap_status_running =
-                gap_status.as_ref().and_then(|s| s["status"].as_str()) == Some("running");
-            let gap_retrying = gap_status
-                .as_ref()
-                .and_then(|s| s["retrying"].as_bool())
-                .unwrap_or(false);
+                gap_status.as_ref().map(|(s, _)| s.status.as_str()) == Some("running");
+            let gap_retrying = gap_status.as_ref().is_some_and(|(s, _)| s.retrying);
             let gap_has_error = gap_status
                 .as_ref()
-                .and_then(|s| s["lastError"].as_str())
+                .and_then(|(s, _)| s.last_error.as_deref())
                 .is_some_and(|m| !m.is_empty());
             let gap_grace_active = gap_input["disconnectGraceActive"] == true;
             let gap_grace_remaining = disconnect_grace_remaining_bounded(&gap_input);
@@ -862,17 +853,12 @@ async fn run_step(ctx: &mut WorkflowCtx<'_>, step: &Value) -> Result<(), String>
             };
             let final_status = ctx
                 .api
-                .get_json(&format!(
-                    "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status"
-                ))
+                .get_output_status(&pipeline_id, &output_id)
                 .await
                 .ok();
             let final_status_running =
-                final_status.as_ref().and_then(|s| s["status"].as_str()) == Some("running");
-            let final_retrying = final_status
-                .as_ref()
-                .and_then(|s| s["retrying"].as_bool())
-                .unwrap_or(false);
+                final_status.as_ref().map(|(s, _)| s.status.as_str()) == Some("running");
+            let final_retrying = final_status.as_ref().is_some_and(|(s, _)| s.retrying);
             let final_health = ctx.api.get_json("/api/v1/engine/health").await.ok();
             let final_input = health_input_snapshot(final_health.as_ref(), &pipeline_id);
             let final_disconnect_cleared = input_disconnect_cleared(&final_input);
