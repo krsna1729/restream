@@ -9,12 +9,14 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use crate::agent_core::types::PlanRequest;
 use crate::agent_plane::PlanResponse;
 
 pub use crate::agent_core::types::{ApprovalRequest, OperationCreateRequest, VerifyRequest};
+
+const MAX_AGENT_EXECUTION_RECORDS: usize = 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,8 +94,8 @@ impl AgentExecutionStore {
         pre_alert_count: usize,
     ) -> StoreCreateResult {
         if let Some(key) = request.idempotency_key.as_deref()
-            && let Some(operation_id) = self.idempotency.lock().unwrap().get(key).cloned()
-            && let Some(record) = self.records.lock().unwrap().get(&operation_id).cloned()
+            && let Some(operation_id) = lock_or_recover(&self.idempotency).get(key).cloned()
+            && let Some(record) = lock_or_recover(&self.records).get(&operation_id).cloned()
         {
             return StoreCreateResult {
                 operation: public_record(&record),
@@ -169,15 +171,13 @@ impl AgentExecutionStore {
         };
 
         if let Some(key) = record.idempotency_key.clone() {
-            self.idempotency
-                .lock()
-                .unwrap()
-                .insert(key, operation_id.clone());
+            lock_or_recover(&self.idempotency).insert(key, operation_id.clone());
         }
-        self.records
-            .lock()
-            .unwrap()
-            .insert(operation_id.clone(), record.clone());
+        {
+            let mut records = lock_or_recover(&self.records);
+            records.insert(operation_id.clone(), record.clone());
+            self.enforce_record_limit(&mut records);
+        }
 
         StoreCreateResult {
             operation: public_record(&record),
@@ -186,7 +186,7 @@ impl AgentExecutionStore {
     }
 
     pub fn get(&self, operation_id: &str) -> Option<OperationRecord> {
-        self.records.lock().unwrap().get(operation_id).cloned()
+        lock_or_recover(&self.records).get(operation_id).cloned()
     }
 
     pub fn approve(
@@ -194,7 +194,7 @@ impl AgentExecutionStore {
         operation_id: &str,
         approval: ApprovalRequest,
     ) -> Result<OperationRecord, OperationStoreError> {
-        let mut records = self.records.lock().unwrap();
+        let mut records = lock_or_recover(&self.records);
         let record = records
             .get_mut(operation_id)
             .ok_or(OperationStoreError::NotFound)?;
@@ -227,7 +227,7 @@ impl AgentExecutionStore {
     }
 
     pub fn start_apply(&self, operation_id: &str) -> Result<OperationRecord, OperationStoreError> {
-        let mut records = self.records.lock().unwrap();
+        let mut records = lock_or_recover(&self.records);
         let record = records
             .get_mut(operation_id)
             .ok_or(OperationStoreError::NotFound)?;
@@ -317,13 +317,43 @@ impl AgentExecutionStore {
         operation_id: &str,
         f: impl FnOnce(&mut OperationRecord, String),
     ) -> Option<OperationRecord> {
-        let mut records = self.records.lock().unwrap();
+        let mut records = lock_or_recover(&self.records);
         let record = records.get_mut(operation_id)?;
         let ts = now();
         f(record, ts.clone());
         record.updated_at = ts;
         Some(record.clone())
     }
+
+    fn enforce_record_limit(&self, records: &mut HashMap<String, OperationRecord>) {
+        while records.len() > MAX_AGENT_EXECUTION_RECORDS {
+            let Some(operation_id) = oldest_operation_id(records) else {
+                return;
+            };
+            if let Some(record) = records.remove(&operation_id)
+                && let Some(key) = record.idempotency_key
+            {
+                lock_or_recover(&self.idempotency).remove(&key);
+            }
+        }
+    }
+}
+
+fn oldest_operation_id(records: &HashMap<String, OperationRecord>) -> Option<String> {
+    records
+        .values()
+        .min_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.operation_id.cmp(&right.operation_id))
+        })
+        .map(|record| record.operation_id.clone())
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 pub fn public_record(record: &OperationRecord) -> Value {
@@ -416,4 +446,153 @@ fn hex_prefix(bytes: &[u8], len: usize) -> String {
 
 fn now() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_core::types::ProposedChange;
+    use crate::agent_plane::{GraphPreview, ImpactPreview, ValidationResult};
+
+    fn test_request(idempotency_key: Option<String>) -> OperationCreateRequest {
+        OperationCreateRequest {
+            intent: "add output".to_string(),
+            pipeline_id: Some("pipe".to_string()),
+            proposed_changes: vec![ProposedChange {
+                kind: "addOutput".to_string(),
+                pipeline_id: Some("pipe".to_string()),
+                output_id: Some("out".to_string()),
+                name: Some("Output".to_string()),
+                url: Some("rtmp://example.test/live/out".to_string()),
+                monitoring_url: None,
+                config: None,
+                desired_state: Some("stopped".to_string()),
+            }],
+            idempotency_key,
+            actor: Some("test".to_string()),
+            agent_id: Some("agent".to_string()),
+            tool_identity: Some("unit-test".to_string()),
+            incident_id: None,
+            incident_links: Vec::new(),
+        }
+    }
+
+    fn test_plan() -> PlanResponse {
+        PlanResponse {
+            generated_at: "2026-01-01T00:00:00Z".to_string(),
+            plan_id: "plan-test".to_string(),
+            status: "draft",
+            intent: "add output".to_string(),
+            execution_enabled: true,
+            execution_note: "test",
+            steps: Vec::new(),
+            validation: ValidationResult {
+                valid: true,
+                errors: Vec::new(),
+                warnings: Vec::new(),
+            },
+            graph_preview: GraphPreview {
+                mode: "test",
+                added_nodes: Vec::new(),
+                removed_nodes: Vec::new(),
+                changed_edges: Vec::new(),
+                notes: Vec::new(),
+            },
+            impact: ImpactPreview {
+                affected_pipelines: vec!["pipe".to_string()],
+                affected_outputs: vec!["out".to_string()],
+                shared_stage_candidates: Vec::new(),
+                operator_summary: "test".to_string(),
+                engineering_notes: Vec::new(),
+            },
+        }
+    }
+
+    fn test_record(
+        operation_id: &str,
+        idempotency_key: Option<String>,
+        created_at: &str,
+    ) -> OperationRecord {
+        let request = test_request(idempotency_key.clone());
+        OperationRecord {
+            operation_id: operation_id.to_string(),
+            idempotency_key,
+            status: OperationStatus::AwaitingApproval,
+            plan_hash: plan_hash(&request.plan_request()),
+            request,
+            plan: test_plan(),
+            approval: None,
+            approval_required: true,
+            created_at: created_at.to_string(),
+            updated_at: created_at.to_string(),
+            actor: "test".to_string(),
+            agent_id: "agent".to_string(),
+            tool_identity: "unit-test".to_string(),
+            affected_objects: serde_json::json!({"pipelineIds": ["pipe"], "outputIds": ["out"]}),
+            warnings: Vec::new(),
+            progress_snapshots: Vec::new(),
+            state_transitions: Vec::new(),
+            audit_log: Vec::new(),
+            execution_result: None,
+            verification_result: None,
+            pre_apply_alert_count: Some(0),
+        }
+    }
+
+    #[test]
+    fn record_limit_evicts_oldest_and_removes_idempotency_key() {
+        let store = AgentExecutionStore::default();
+        {
+            let mut records = lock_or_recover(&store.records);
+            records.insert(
+                "old".to_string(),
+                test_record("old", Some("old-key".to_string()), "2026-01-01T00:00:00Z"),
+            );
+            for index in 0..MAX_AGENT_EXECUTION_RECORDS {
+                let operation_id = format!("new-{index}");
+                records.insert(
+                    operation_id.clone(),
+                    test_record(
+                        &operation_id,
+                        Some(format!("new-key-{index}")),
+                        "2026-01-02T00:00:00Z",
+                    ),
+                );
+            }
+        }
+        {
+            let mut idempotency = lock_or_recover(&store.idempotency);
+            idempotency.insert("old-key".to_string(), "old".to_string());
+            for index in 0..MAX_AGENT_EXECUTION_RECORDS {
+                idempotency.insert(format!("new-key-{index}"), format!("new-{index}"));
+            }
+        }
+
+        let mut records = lock_or_recover(&store.records);
+        store.enforce_record_limit(&mut records);
+        drop(records);
+
+        assert!(store.get("old").is_none());
+        assert_eq!(
+            lock_or_recover(&store.records).len(),
+            MAX_AGENT_EXECUTION_RECORDS
+        );
+        assert!(!lock_or_recover(&store.idempotency).contains_key("old-key"));
+    }
+
+    #[test]
+    fn poisoned_record_lock_does_not_panic_reads() {
+        let store = AgentExecutionStore::default();
+        lock_or_recover(&store.records).insert(
+            "op".to_string(),
+            test_record("op", Some("key".to_string()), "2026-01-01T00:00:00Z"),
+        );
+
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = store.records.lock().unwrap();
+            panic!("poison records lock");
+        });
+
+        assert!(store.get("op").is_some());
+    }
 }

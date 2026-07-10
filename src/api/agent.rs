@@ -718,7 +718,7 @@ async fn apply_agent_add_output(
 ) -> Result<serde_json::Value, String> {
     let name = required_change_field(change.name.as_deref(), "name")?;
     let url = required_change_field(change.url.as_deref(), "url")?.trim();
-    let monitoring_url = normalize_monitoring_url(change.monitoring_url.as_deref());
+    let monitoring_url = normalize_monitoring_url(change.monitoring_url.as_deref())?;
     let config = change
         .config
         .as_ref()
