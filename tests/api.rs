@@ -209,6 +209,22 @@ fn auth_req(
     }
 }
 
+fn auth_req_with_header(
+    method: &str,
+    uri: &str,
+    cookie: &str,
+    name: &'static str,
+    value: &'static str,
+) -> Request<axum::body::Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("Cookie", cookie)
+        .header(name, value)
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
+
 async fn body_json(resp: axum::http::Response<axum::body::Body>) -> serde_json::Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap()
@@ -3131,7 +3147,86 @@ async fn media_library_classifies_serves_and_deletes_files() {
             .and_then(|value| value.to_str().ok()),
         Some("video/mp2t")
     );
+    assert_eq!(
+        resp.headers()
+            .get(header::ACCEPT_RANGES)
+            .and_then(|value| value.to_str().ok()),
+        Some("bytes")
+    );
     assert_eq!(body_bytes(resp).await.as_ref(), b"ts source data");
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req("HEAD", "/media/sample-source.ts", &cookie, None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok()),
+        Some("14")
+    );
+    assert_eq!(body_bytes(resp).await.len(), 0);
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req_with_header(
+            "GET",
+            "/media/sample-source.ts",
+            &cookie,
+            "Range",
+            "bytes=3-8",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        resp.headers()
+            .get(header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok()),
+        Some("bytes 3-8/14")
+    );
+    assert_eq!(
+        resp.headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok()),
+        Some("6")
+    );
+    assert_eq!(body_bytes(resp).await.as_ref(), b"source");
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req_with_header(
+            "GET",
+            "/media/sample-source.ts",
+            &cookie,
+            "Range",
+            "bytes=-4",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(body_bytes(resp).await.as_ref(), b"data");
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req_with_header(
+            "GET",
+            "/media/sample-source.ts",
+            &cookie,
+            "Range",
+            "bytes=99-120",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(
+        resp.headers()
+            .get(header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok()),
+        Some("bytes */14")
+    );
 
     let resp = app
         .clone()

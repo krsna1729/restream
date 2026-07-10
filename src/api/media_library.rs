@@ -1,10 +1,15 @@
 use axum::{
     Json,
+    body::Body,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode, header},
-    response::IntoResponse,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
+use bytes::Bytes;
+use futures_util::stream;
 use serde::Deserialize;
+
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use std::sync::Arc;
 
@@ -190,6 +195,130 @@ pub fn media_path_under_root(
     Ok(canonical_path)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MediaByteRange {
+    pub start: u64,
+    pub end: u64,
+}
+
+pub fn parse_media_range_header(range: &str, size: u64) -> Result<Option<MediaByteRange>, ()> {
+    let Some(spec) = range.strip_prefix("bytes=") else {
+        return Ok(None);
+    };
+    if spec.contains(',') {
+        return Err(());
+    }
+    let Some((start_raw, end_raw)) = spec.split_once('-') else {
+        return Err(());
+    };
+    if start_raw.is_empty() {
+        let suffix_len = end_raw.parse::<u64>().map_err(|_| ())?;
+        if suffix_len == 0 {
+            return Err(());
+        }
+        if size == 0 {
+            return Err(());
+        }
+        let start = size.saturating_sub(suffix_len);
+        return Ok(Some(MediaByteRange {
+            start,
+            end: size - 1,
+        }));
+    }
+
+    let start = start_raw.parse::<u64>().map_err(|_| ())?;
+    let end = if end_raw.is_empty() {
+        size.checked_sub(1).ok_or(())?
+    } else {
+        end_raw.parse::<u64>().map_err(|_| ())?
+    };
+    if start >= size || end < start {
+        return Err(());
+    }
+    Ok(Some(MediaByteRange {
+        start,
+        end: end.min(size - 1),
+    }))
+}
+
+fn header_value(value: impl AsRef<str>) -> Option<HeaderValue> {
+    HeaderValue::from_str(value.as_ref()).ok()
+}
+
+fn media_range_not_satisfiable_response(size: u64) -> Response {
+    let mut response = (StatusCode::RANGE_NOT_SATISFIABLE, "Range not satisfiable").into_response();
+    response
+        .headers_mut()
+        .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if let Some(value) = header_value(format!("bytes */{size}")) {
+        response.headers_mut().insert(header::CONTENT_RANGE, value);
+    }
+    response
+}
+
+async fn media_file_response(
+    path: std::path::PathBuf,
+    filename: &str,
+    range_header: Option<&HeaderValue>,
+) -> Result<Response, std::io::Error> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let size = file.metadata().await?.len();
+    let range = match range_header.and_then(|value| value.to_str().ok()) {
+        Some(range) => match parse_media_range_header(range, size) {
+            Ok(range) => range,
+            Err(()) => return Ok(media_range_not_satisfiable_response(size)),
+        },
+        None => None,
+    };
+
+    let requested = range.unwrap_or(MediaByteRange {
+        start: 0,
+        end: size.saturating_sub(1),
+    });
+    let len = if size == 0 {
+        0
+    } else {
+        requested.end - requested.start + 1
+    };
+    if requested.start > 0 {
+        file.seek(std::io::SeekFrom::Start(requested.start)).await?;
+    }
+    let reader = file.take(len);
+    let body = Body::from_stream(stream::try_unfold(reader, |mut reader| async move {
+        let mut chunk = vec![0; 8192];
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok::<_, std::io::Error>(None);
+        }
+        chunk.truncate(read);
+        Ok(Some((Bytes::from(chunk), reader)))
+    }));
+    let status = if range.is_some() {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+    let mut response = (status, body).into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(media_content_type(filename)),
+    );
+    if let Some(value) = header_value(len.to_string()) {
+        headers.insert(header::CONTENT_LENGTH, value);
+    }
+    if range.is_some()
+        && let Some(value) = header_value(format!(
+            "bytes {}-{}/{}",
+            requested.start, requested.end, size
+        ))
+    {
+        headers.insert(header::CONTENT_RANGE, value);
+    }
+    Ok(response)
+}
+
 pub fn media_destination_path_under_root(
     media_dir: &str,
     filename: &str,
@@ -224,13 +353,8 @@ pub async fn media_file_handler(
         Ok(path) => path,
         Err(status) => return status.into_response(),
     };
-    match tokio::fs::read(path).await {
-        Ok(bytes) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, media_content_type(&filename))],
-            bytes,
-        )
-            .into_response(),
+    match media_file_response(path, &filename, headers.get(header::RANGE)).await {
+        Ok(response) => response,
         Err(_) => (StatusCode::NOT_FOUND, "File not found").into_response(),
     }
 }

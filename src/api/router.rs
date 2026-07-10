@@ -330,7 +330,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/api/v1/media/:filename",
             patch(media_rename_handler).delete(media_delete_handler),
         )
-        .route("/media/:filename", get(media_file_handler))
+        .route(
+            "/media/:filename",
+            get(media_file_handler).head(media_file_handler),
+        )
         .route("/healthz", get(healthz_get_handler))
         .route("/metrics/system", get(metrics_system_handler))
         .fallback(get(spa_fallback_handler))
