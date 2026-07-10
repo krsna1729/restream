@@ -145,6 +145,9 @@ mod tests {
     use crate::media::ring_buffer::PayloadFormat;
     use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
     use bytes::Bytes;
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+    use std::sync::atomic::Ordering;
 
     fn video_packet(pts: i64) -> MediaPacket {
         MediaPacket {
@@ -155,6 +158,29 @@ mod tests {
             is_keyframe: true,
             format: PayloadFormat::Raw,
             payload: Bytes::from_static(&[0, 0, 1, 9]),
+        }
+    }
+
+    fn generated_packet(
+        is_video: bool,
+        track_index: u32,
+        pts: i64,
+        dts: i64,
+        payload_len: usize,
+    ) -> MediaPacket {
+        let media_type = if is_video {
+            MediaType::Video
+        } else {
+            MediaType::Audio
+        };
+        MediaPacket {
+            media_type,
+            track_index,
+            pts,
+            dts,
+            is_keyframe: is_video,
+            format: PayloadFormat::Raw,
+            payload: Bytes::from(vec![0x55; payload_len.max(1)]),
         }
     }
 
@@ -248,5 +274,73 @@ mod tests {
             .expect("reader should start at inferred HEVC IDR");
         assert_eq!(packet.payload.as_ref(), &[0, 0, 0, 1, 0x26, 0x01]);
         assert!(packet.is_keyframe);
+    }
+
+    proptest! {
+        #[test]
+        fn normalizer_preserves_stage_boundary_timestamp_invariants(
+            packets in prop::collection::vec(
+                (
+                    any::<bool>(),
+                    0_u32..2,
+                    -5_000_i64..20_000,
+                    -5_000_i64..20_000,
+                    1_usize..32,
+                ),
+                1..64,
+            )
+        ) {
+            let ring = Arc::new(RingBuffer::new(128));
+            let metrics = Arc::new(StageMetrics::new());
+            let mut normalizer =
+                StageOutputNormalizer::new(ring.clone(), 4, metrics.clone())
+                    .with_video_track_count(2);
+            let mut reader =
+                crate::media::ring_buffer::Reader::new("normalizer-boundary-proptest".to_string(), ring);
+
+            normalizer.push(video_packet(0));
+            for (is_video, track, pts, dts, payload_len) in &packets {
+                normalizer.push(generated_packet(*is_video, *track, *pts, *dts, *payload_len));
+            }
+
+            let mut last_dts_by_stream: HashMap<usize, i64> = HashMap::new();
+            let mut pulled = 0_u64;
+
+            while let Some(packet) = reader.pull().expect("reader should not overflow") {
+                prop_assert!(
+                    packet.pts >= 0,
+                    "normalizer emitted negative PTS {} for packet {:?}",
+                    packet.pts,
+                    packet
+                );
+                prop_assert!(
+                    packet.dts >= 0,
+                    "normalizer emitted negative DTS {} for packet {:?}",
+                    packet.dts,
+                    packet
+                );
+                let stream_key = match packet.media_type {
+                    MediaType::Video => packet.track_index as usize,
+                    MediaType::Audio => 2 + packet.track_index as usize,
+                };
+                if let Some(previous_dts) = last_dts_by_stream.insert(stream_key, packet.dts) {
+                    prop_assert!(
+                        packet.dts >= previous_dts,
+                        "DTS regressed for stream {}: previous={}, current={}",
+                        stream_key,
+                        previous_dts,
+                        packet.dts
+                    );
+                }
+                pulled += 1;
+            }
+
+            prop_assert_eq!(pulled as usize, packets.len() + 1);
+            prop_assert_eq!(metrics.packets_out.load(Ordering::Relaxed), pulled);
+            let expected_bytes: u64 =
+                video_packet(0).payload.len() as u64
+                    + packets.iter().map(|(_, _, _, _, len)| *len as u64).sum::<u64>();
+            prop_assert_eq!(metrics.bytes_out.load(Ordering::Relaxed), expected_bytes);
+        }
     }
 }

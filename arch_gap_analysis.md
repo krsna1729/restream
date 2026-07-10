@@ -115,13 +115,14 @@ closing the phase and addendum criteria:
   The fix records `unknown` when the phase is absent so the artifact remains
   analyzable.
 
-Correctness proof added or verified for this pass now includes **11
+Correctness proof added or verified for this pass now includes **12
 proptest/property tests** and **18 loom model checks**:
 
 - Proptest/property coverage: ADTS frame counting, AVIO chunk round-trip,
   ingest and egress lifecycle health invariants, external-output DTS routing,
-  HLS segment-name/window/sample invariants, source-stage chunking order, and
-  ring migration no-loss/order invariants.
+  FFmpeg stage-output normalization invariants, HLS segment-name/window/sample
+  invariants, source-stage chunking order, and ring migration no-loss/order
+  invariants.
 - Loom coverage: HLS publish visibility, TS chunk-ring wake/cancel races, AVIO
   close/read wakeups, transcoder codec-edge replacement races, ring migration
   seal wakeups/no-loss behavior, and TS muxer stage replacement/registration
