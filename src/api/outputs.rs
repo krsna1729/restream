@@ -42,15 +42,38 @@ pub fn is_supported_output_url(url: &str) -> bool {
 pub const OUTPUT_URL_SCHEME_ERROR: &str = "Invalid URL scheme. Supported schemes are rtmp://, rtmps://, srt://, hls://, http://, and https://";
 pub const MONITORING_URL_SCHEME_ERROR: &str =
     "Invalid monitoring URL scheme. Supported schemes are http://, https://, and srt://";
+pub const OUTPUT_URL_PARSE_ERROR: &str = "Output URL must be a valid absolute URL with a host";
+pub const MONITORING_URL_PARSE_ERROR: &str =
+    "Monitoring URL must be a valid absolute URL with a host";
 pub const CUSTOM_OUTPUT_ENCODING_ERROR: &str =
     "Custom output encoding is not available yet; choose source or a preset encoding";
 
-pub fn normalize_monitoring_url(url: Option<&str>) -> Option<String> {
+fn normalize_supported_url(
+    url: &str,
+    supports: impl Fn(OutputUrlScheme) -> bool,
+) -> Option<String> {
+    let mut parsed = Url::parse(url.trim()).ok()?;
+    let scheme = OutputUrlScheme::from_url(parsed.as_str());
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    if !supports(scheme) {
+        return None;
+    }
+    parsed.set_host(Some(&host)).ok()?;
+    Some(parsed.to_string())
+}
+
+pub fn normalize_output_url(url: &str) -> Option<String> {
+    normalize_supported_url(url, OutputUrlScheme::is_supported_output)
+}
+
+pub fn normalize_monitoring_url(url: Option<&str>) -> Result<Option<String>, &'static str> {
     let trimmed = url.unwrap_or_default().trim();
     if trimmed.is_empty() {
-        None
+        Ok(None)
     } else {
-        Some(trimmed.to_string())
+        normalize_supported_url(trimmed, OutputUrlScheme::supports_monitoring)
+            .map(Some)
+            .ok_or(MONITORING_URL_PARSE_ERROR)
     }
 }
 
@@ -228,24 +251,32 @@ pub async fn outputs_create_handler(
         )
             .into_response());
     }
-    let url = payload.url.trim();
-    if !is_supported_output_url(url) {
+    let Some(url) = normalize_output_url(&payload.url) else {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": OUTPUT_URL_PARSE_ERROR
+            })),
+        )
+            .into_response());
+    };
+    let monitoring_url = match normalize_monitoring_url(payload.monitoring_url.as_deref()) {
+        Ok(url) => url,
+        Err(error) => {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": error
+                })),
+            )
+                .into_response());
+        }
+    };
+    if !is_supported_output_url(&url) {
         return Ok((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "error": OUTPUT_URL_SCHEME_ERROR
-            })),
-        )
-            .into_response());
-    }
-    let monitoring_url = normalize_monitoring_url(payload.monitoring_url.as_deref());
-    if let Some(ref url) = monitoring_url
-        && !is_supported_monitoring_url(url)
-    {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": MONITORING_URL_SCHEME_ERROR
             })),
         )
             .into_response());
@@ -259,7 +290,7 @@ pub async fn outputs_create_handler(
             &id,
             &pipeline_id,
             &payload.name,
-            &payload.url,
+            &url,
             monitoring_url.as_deref(),
             DesiredOutputState::Stopped.as_str(),
             &output_config,
@@ -311,24 +342,32 @@ pub async fn outputs_update_handler(
         )
             .into_response());
     }
-    let url = payload.url.trim();
-    if !is_supported_output_url(url) {
+    let Some(url) = normalize_output_url(&payload.url) else {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": OUTPUT_URL_PARSE_ERROR
+            })),
+        )
+            .into_response());
+    };
+    let monitoring_url = match normalize_monitoring_url(payload.monitoring_url.as_deref()) {
+        Ok(url) => url,
+        Err(error) => {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": error
+                })),
+            )
+                .into_response());
+        }
+    };
+    if !is_supported_output_url(&url) {
         return Ok((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "error": OUTPUT_URL_SCHEME_ERROR
-            })),
-        )
-            .into_response());
-    }
-    let monitoring_url = normalize_monitoring_url(payload.monitoring_url.as_deref());
-    if let Some(ref url) = monitoring_url
-        && !is_supported_monitoring_url(url)
-    {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": MONITORING_URL_SCHEME_ERROR
             })),
         )
             .into_response());
@@ -338,7 +377,7 @@ pub async fn outputs_update_handler(
         .get_by_id(&pipeline_id, &output_id)
         .await?;
     if existing.desired_state == DesiredOutputState::Running
-        && (existing.url != payload.url || existing.config != output_config)
+        && (existing.url != url || existing.config != output_config)
     {
         return Ok((
             StatusCode::CONFLICT,
@@ -355,7 +394,7 @@ pub async fn outputs_update_handler(
             &pipeline_id,
             &output_id,
             &payload.name,
-            &payload.url,
+            &url,
             monitoring_url.as_deref(),
             &output_config,
         )

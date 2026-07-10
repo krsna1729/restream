@@ -24,20 +24,18 @@ pub enum OutputUrlScheme {
 
 impl OutputUrlScheme {
     pub fn from_url(url: &str) -> Self {
-        if url.starts_with("rtmp://") {
-            Self::Rtmp
-        } else if url.starts_with("rtmps://") {
-            Self::Rtmps
-        } else if url.starts_with("srt://") {
-            Self::Srt
-        } else if url.starts_with("hls://") {
-            Self::Hls
-        } else if url.starts_with("http://") {
-            Self::Http
-        } else if url.starts_with("https://") {
-            Self::Https
-        } else {
-            Self::Unknown
+        match url::Url::parse(url.trim())
+            .ok()
+            .map(|parsed| parsed.scheme().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("rtmp") => Self::Rtmp,
+            Some("rtmps") => Self::Rtmps,
+            Some("srt") => Self::Srt,
+            Some("hls") => Self::Hls,
+            Some("http") => Self::Http,
+            Some("https") => Self::Https,
+            _ => Self::Unknown,
         }
     }
 
@@ -356,6 +354,10 @@ mod tests {
         assert_eq!(
             OutputUrlScheme::from_url("rtmps://example/live"),
             OutputUrlScheme::Rtmps
+        );
+        assert_eq!(
+            OutputUrlScheme::from_url(" RTMP://EXAMPLE/live "),
+            OutputUrlScheme::Rtmp
         );
         assert!(OutputUrlScheme::from_url("https://example/out").supports_monitoring());
         assert!(!OutputUrlScheme::from_url("hls://preview").supports_monitoring());

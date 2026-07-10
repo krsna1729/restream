@@ -677,6 +677,74 @@ async fn local_hls_output_is_accepted_by_api() {
 }
 
 #[tokio::test]
+async fn output_urls_are_parsed_normalized_and_host_required() {
+    let (app, pool) = test_app().await;
+    let cookie = login(&app).await;
+
+    db::create_pipeline(&pool, "p_url_norm", "P", "key_url_norm", None, None)
+        .await
+        .unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/pipelines/p_url_norm/outputs",
+            &cookie,
+            Some(r#"{"name":"Normalized","url":" RTMP://DEST.EXAMPLE/live/key ","monitoringUrl":" HTTPS://MONITOR.EXAMPLE/live ","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let json = body_json(resp).await;
+    let output_id = json["output"]["id"].as_str().unwrap();
+    assert_eq!(json["output"]["url"], "rtmp://dest.example/live/key");
+    assert_eq!(
+        json["output"]["monitoringUrl"],
+        "https://monitor.example/live"
+    );
+
+    let stored = db::get_output(&pool, "p_url_norm", output_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.url, "rtmp://dest.example/live/key");
+    assert_eq!(
+        stored.monitoring_url.as_deref(),
+        Some("https://monitor.example/live")
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "PATCH",
+            &format!("/api/v1/pipelines/p_url_norm/outputs/{output_id}"),
+            &cookie,
+            Some(r#"{"name":"Normalized","url":" SRT://SINK.EXAMPLE:9000?streamid=publish:live/key ","monitoringUrl":null,"config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(
+        json["output"]["url"],
+        "srt://sink.example:9000?streamid=publish:live/key"
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/pipelines/p_url_norm/outputs",
+            &cookie,
+            Some(r#"{"name":"Bad","url":"rtmp:///live/key","config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn custom_output_encoding_is_rejected_by_api() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;

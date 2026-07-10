@@ -2163,6 +2163,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "url",
  "webpki-roots",
  "wide",
 ]
