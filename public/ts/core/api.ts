@@ -69,6 +69,7 @@ interface ApiRequestOptions {
   body?: unknown;
   signal?: AbortSignal;
   showMutationLoading?: boolean;
+  silentStatuses?: number[];
 }
 
 async function apiRequest<T = unknown>(
@@ -78,6 +79,7 @@ async function apiRequest<T = unknown>(
     body = null,
     signal,
     showMutationLoading = true,
+    silentStatuses = [],
   }: ApiRequestOptions = {},
 ): Promise<T | null> {
   const normalizedMethod = String(method || "GET").toUpperCase();
@@ -108,6 +110,10 @@ async function apiRequest<T = unknown>(
 
   if (response.status === 401) {
     window.location.href = withBasePath("/login");
+    return null;
+  }
+
+  if (silentStatuses.includes(response.status)) {
     return null;
   }
 
@@ -192,6 +198,186 @@ async function getDashboardRuntimeSnapshot(
     ? `/api/v1/dashboard/runtime?${suffix}`
     : "/api/v1/dashboard/runtime";
   return apiRequest<DashboardRuntimeSnapshot>(url);
+}
+
+export interface OverviewSnapshot {
+  generatedAt: string;
+  totalPipelines: number;
+  activePipelines: number;
+  degradedPipelines: number;
+  failedOutputs: number;
+  alertCount: { critical: number; warning: number };
+  srtListener: Record<string, unknown> | null;
+}
+
+export type AlertSeverity = "critical" | "warning";
+export type AlertScope = "engine" | "pipeline" | "stage" | "output";
+
+export interface OperatorAlert {
+  id: string;
+  severity: AlertSeverity;
+  scope: AlertScope;
+  pipelineId?: string;
+  stageId?: string;
+  outputId?: string;
+  title: string;
+  cause: string;
+  evidence: string[];
+  recommendedAction: string;
+  generatedAt: string;
+  firstSeen?: string;
+  lastSeen?: string;
+}
+
+export interface AlertsSnapshot {
+  generatedAt: string;
+  alerts: OperatorAlert[];
+}
+
+export interface LifecycleEvent {
+  seq: number;
+  timestamp: string;
+  kind: string;
+  pipelineId: string;
+  protocol?: string;
+  encoding?: string;
+  backend?: string;
+  outputId?: string;
+  phase?: string;
+  error?: string;
+}
+
+export interface LifecycleEventsSnapshot {
+  generatedAt: string;
+  count: number;
+  events: LifecycleEvent[];
+}
+
+export type TelemetryMetrics = Record<string, number | string | boolean | null>;
+
+export interface TelemetryIngest {
+  pipelineId?: string;
+  protocol: string;
+  streamKey?: string;
+  uptimeSecs: number;
+  bytesReceived: number;
+  video?: unknown;
+  audio?: unknown;
+  metrics: TelemetryMetrics;
+}
+
+export interface TelemetryStage {
+  stageKey?: string;
+  pipelineId?: string;
+  kind: string;
+  active?: boolean;
+  metrics: TelemetryMetrics;
+  pipeMetrics?: TelemetryMetrics;
+  lifecycle?: Record<string, unknown>;
+  payloadStats?: TelemetryMetrics;
+}
+
+export interface TelemetryEgress {
+  outputId: string;
+  pipelineId?: string;
+  protocol?: string;
+  targetUrl?: string;
+  targetAddr?: string | null;
+  status?: string;
+  phase?: string;
+  uptimeSecs?: number;
+  bytesOut?: number;
+  lastProgressAt?: string | null;
+  lastProgressAgeMs?: number | null;
+  lastError?: string | null;
+  failurePhase?: string | null;
+  quality?: TelemetryMetrics;
+  metrics?: TelemetryMetrics;
+}
+
+export interface SourceRingReader {
+  name: string;
+  lagSlots: number;
+  overflowCount: number;
+  packetAgeMs: number | null;
+}
+
+export interface SourceRingTelemetry {
+  fill: number;
+  capacity: number;
+  fillPercent: number;
+  estimatedPktRatePerSec: number;
+  bufferDepthSecs: number;
+  payloadStats: TelemetryMetrics;
+  readers: SourceRingReader[];
+}
+
+export interface EngineTelemetrySnapshot {
+  generatedAt: string;
+  ingests: TelemetryIngest[];
+  stages: TelemetryStage[];
+  egresses: TelemetryEgress[];
+  activeTranscoderBuffers: number;
+  memoryAccounting?: Record<string, unknown>;
+}
+
+export interface PipelineTelemetrySnapshot {
+  generatedAt: string;
+  pipelineId: string;
+  ingest: TelemetryIngest | null;
+  sourceRing: SourceRingTelemetry | null;
+  stages: TelemetryStage[];
+  egresses: TelemetryEgress[];
+}
+
+export interface StageTelemetrySnapshot extends TelemetryStage {
+  generatedAt: string;
+  stageKey: string;
+  pipelineId: string;
+}
+
+async function getOverview(): Promise<OverviewSnapshot | null> {
+  return apiRequest<OverviewSnapshot>("/api/v1/overview");
+}
+
+async function getAggregateAlerts(): Promise<AlertsSnapshot | null> {
+  return apiRequest<AlertsSnapshot>("/api/v1/alerts");
+}
+
+async function getLifecycleEvents(
+  options: {
+    pipelineId?: string | null;
+    limit?: number;
+  } = {},
+): Promise<LifecycleEventsSnapshot | null> {
+  const query = new URLSearchParams();
+  if (options.pipelineId) query.set("pipeline_id", options.pipelineId);
+  if (options.limit !== undefined) query.set("limit", String(options.limit));
+  const suffix = query.toString();
+  return apiRequest<LifecycleEventsSnapshot>(
+    suffix ? `/api/v1/events?${suffix}` : "/api/v1/events",
+  );
+}
+
+async function getEngineTelemetry(): Promise<EngineTelemetrySnapshot | null> {
+  return apiRequest<EngineTelemetrySnapshot>("/api/v1/engine/telemetry");
+}
+
+async function getPipelineTelemetry(
+  pipelineId: string,
+): Promise<PipelineTelemetrySnapshot | null> {
+  return apiRequest<PipelineTelemetrySnapshot>(
+    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/telemetry`,
+  );
+}
+
+async function getStageTelemetry(
+  stageKey: string,
+): Promise<StageTelemetrySnapshot | null> {
+  return apiRequest<StageTelemetrySnapshot>(
+    `/api/v1/stages/${encodeURIComponent(stageKey)}/telemetry`,
+    { silentStatuses: [404] },
+  );
 }
 
 async function getStreamKeys(): Promise<StreamKey[] | null> {
@@ -805,6 +991,12 @@ export {
   getHealth,
   getSystemMetrics,
   getDashboardRuntimeSnapshot,
+  getOverview,
+  getAggregateAlerts,
+  getLifecycleEvents,
+  getEngineTelemetry,
+  getPipelineTelemetry,
+  getStageTelemetry,
   getStreamKeys,
   getEngineStatus,
   getEngineSbomEndpoint,

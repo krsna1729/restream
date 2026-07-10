@@ -26,6 +26,9 @@ TEST_FILES=(
   test/frontend-dashboard-contract.test.mjs
   test/frontend-core-helpers.test.mjs
   test/frontend-diagnostics.test.mjs
+  test/frontend-incidents.test.mjs
+  test/frontend-engineer-telemetry.test.mjs
+  test/frontend-ops-navigation.test.mjs
   test/frontend-history-stream.test.mjs
   test/frontend-log-stream.test.mjs
   test/frontend-history-helpers.test.mjs

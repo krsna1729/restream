@@ -140,7 +140,7 @@
       class="border-base-content/10 bg-base-100 shrink-0 border-y px-4 py-2"
     >
       <div class="flex flex-wrap items-center gap-2">
-        <div class="join" role="tablist" aria-label="Workspace mode">
+        <nav class="join" aria-label="Workspace mode">
           <button
             type="button"
             class="btn btn-sm join-item btn-accent"
@@ -148,6 +148,22 @@
             aria-pressed="true"
           >
             Overview
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm join-item btn-outline"
+            data-dashboard-mode="incidents"
+            aria-pressed="false"
+          >
+            Incidents
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm join-item btn-outline"
+            data-dashboard-mode="telemetry"
+            aria-pressed="false"
+          >
+            Telemetry
           </button>
           <button
             type="button"
@@ -197,7 +213,7 @@
           >
             Status
           </button>
-        </div>
+        </nav>
         <div
           class="text-base-content/60 min-w-0 truncate text-sm"
           id="workspace-mode-summary"
@@ -946,6 +962,20 @@
       class="min-h-0 flex-1 overflow-auto px-4 py-3"
     >
       <div id="overview-mode-content" class="mx-auto max-w-7xl"></div>
+    </section>
+
+    <section
+      id="incidents-mode-panel"
+      class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
+    >
+      <div id="incidents-mode-content" class="mx-auto max-w-7xl"></div>
+    </section>
+
+    <section
+      id="telemetry-mode-panel"
+      class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
+    >
+      <div id="telemetry-mode-content" class="mx-auto max-w-7xl"></div>
     </section>
 
     <section

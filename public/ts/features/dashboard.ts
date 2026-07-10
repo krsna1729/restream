@@ -68,6 +68,8 @@ const DASHBOARD_RUNTIME_LIFECYCLE_STREAM_MODES = new Set([
 ]);
 const DASHBOARD_CONFIG_MODES = new Set([
   "overview",
+  "incidents",
+  "telemetry",
   "pipeline",
   "inspect",
   "control",

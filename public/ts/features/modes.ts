@@ -42,8 +42,12 @@ import {
   syncDashboardRuntimeStream,
 } from "./dashboard.js";
 import type { AppLogRow, OutputView, PipelineView } from "../types.js";
+import { renderIncidentsMode } from "./incidents.js";
+import { renderEngineerTelemetryMode } from "./engineer-telemetry.js";
 type DashboardMode =
   | "overview"
+  | "incidents"
+  | "telemetry"
   | "pipeline"
   | "inspect"
   | "control"
@@ -53,6 +57,8 @@ type DashboardMode =
 
 const validModes = new Set([
   "overview",
+  "incidents",
+  "telemetry",
   "pipeline",
   "inspect",
   "control",
@@ -1094,6 +1100,8 @@ function applyMode(mode: DashboardMode): void {
   syncDashboardRuntimeStream();
   const panels: Record<DashboardMode, HTMLElement | null> = {
     overview: document.getElementById("overview-mode-panel"),
+    incidents: document.getElementById("incidents-mode-panel"),
+    telemetry: document.getElementById("telemetry-mode-panel"),
     pipeline: document.getElementById("dashboard-grid"),
     inspect: document.getElementById("inspect-mode-panel"),
     control: document.getElementById("control-mode-panel"),
@@ -1122,15 +1130,19 @@ function applyMode(mode: DashboardMode): void {
         ? `${counts.liveInputs} live inputs / ${counts.runningOutputs} running outputs${counts.retryingOutputs ? ` / ${counts.retryingOutputs} retrying` : ""}${counts.flappingOutputs ? ` / ${counts.flappingOutputs} flapping` : ""}`
         : mode === "pipeline"
           ? "Pipeline workflow"
-          : mode === "inspect"
-            ? "Graph and diagnostics"
-            : mode === "control"
-              ? "Monitoring wall"
-              : mode === "media"
-                ? "Recordings and source files"
-                : mode === "settings"
-                  ? "Server configuration"
-                  : "Runtime status";
+          : mode === "incidents"
+            ? "Alerts, evidence, and lifecycle events"
+            : mode === "telemetry"
+              ? "Engine and pipeline counters"
+              : mode === "inspect"
+                ? "Graph and diagnostics"
+                : mode === "control"
+                  ? "Monitoring wall"
+                  : mode === "media"
+                    ? "Recordings and source files"
+                    : mode === "settings"
+                      ? "Server configuration"
+                      : "Runtime status";
   }
   if (
     previousMode !== null &&
@@ -1141,6 +1153,22 @@ function applyMode(mode: DashboardMode): void {
     void refreshDashboard();
   }
   if (mode === "control") renderControlRoom();
+  const pipelineOptions = state.pipelines.map((pipeline) => ({
+    id: pipeline.id,
+    name: pipeline.name || pipeline.id,
+  }));
+  renderIncidentsMode({
+    active: mode === "incidents",
+    pipelines: pipelineOptions,
+    navigateToPipeline: (pipelineId) => {
+      selectPipeline(pipelineId);
+      setDashboardMode("pipeline");
+    },
+  });
+  renderEngineerTelemetryMode({
+    active: mode === "telemetry",
+    pipelines: pipelineOptions,
+  });
   if (mode === "media") {
     if (previousMode !== "media") {
       requestDetailedMetricsRefresh();
