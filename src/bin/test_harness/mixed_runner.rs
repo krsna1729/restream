@@ -10,6 +10,8 @@ mod mixed_artifacts;
 mod mixed_checks;
 #[path = "mixed_control.rs"]
 mod mixed_control;
+#[path = "mixed_executor.rs"]
+mod mixed_executor;
 #[path = "mixed_lifecycle.rs"]
 mod mixed_lifecycle;
 #[path = "mixed_matrix_runner.rs"]
@@ -44,6 +46,7 @@ pub(super) use mixed_control::{
     MixedResume, mixed_output_checks_need_live_progress_gate, mixed_output_progress_timeout,
     mixed_progress_output_ids,
 };
+pub(super) use mixed_executor::{ScenarioExecutionContext, scenario_executor_for_plan};
 pub(super) use mixed_lifecycle::{stop_mixed_outputs, wait_for_outputs_stopped};
 #[cfg(test)]
 pub(super) use mixed_matrix_runner::{
@@ -377,30 +380,17 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
     let mut resume = MixedResume::new(env.resume_from.clone());
 
     let config_started = Instant::now();
-    let config = match (plan.source.adapter, case.codec(), case.is_multi_track()) {
-        (MixedSourceAdapter::FileIngest, _, _) => {
-            run_mixed_file_config(&env, api, restream_pid, case, &mut resume).await
-        }
-        (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H264, false) => {
-            run_mixed_anchor_config(&env, api, restream_pid, case, &mut resume).await
-        }
-        (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H265, false) => {
-            run_mixed_live_config(&env, api, restream_pid, case, &mut resume).await
-        }
-        (MixedSourceAdapter::RtmpPublisher, MixedVideoCodec::H264, false) => {
-            run_mixed_live_config(&env, api, restream_pid, case, &mut resume).await
-        }
-        (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H264, true) => {
-            run_mixed_live_config(&env, api, restream_pid, case, &mut resume).await
-        }
-        (MixedSourceAdapter::SrtPublisher, MixedVideoCodec::H265, true) => {
-            run_mixed_live_config(&env, api, restream_pid, case, &mut resume).await
-        }
-        _ => Err(format!(
-            "unsupported mixed input case {}",
-            case.scenario_id()
-        )),
-    };
+    let mut executor = scenario_executor_for_plan(plan)?;
+    let executor_name = executor.name();
+    let config = executor
+        .execute(ScenarioExecutionContext {
+            env: &env,
+            api,
+            restream_pid,
+            case,
+            resume: &mut resume,
+        })
+        .await;
     emit_mixed_timing(
         &env,
         cfg,
@@ -453,6 +443,7 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
         "sinkPortOffset": env.sink_port_offset,
         "plan": {
             "sourceAdapter": plan.source.adapter.as_str(),
+            "executor": executor_name,
             "outputCells": plan.output_cells(),
             "checks": plan.check_names(),
             "hlsPreviewTiming": plan.hls_preview_timing.as_str(),

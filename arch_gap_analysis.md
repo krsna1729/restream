@@ -317,14 +317,14 @@ is not confused with the still-open addendum.
 | Phase C — Harness typed API client | ✅ Mostly complete | `ApiOutputStatus`, `ApiOutputMetrics`, and `ApiBlockedByStage` now parse output status rows with required `status`/`rawStatus`/`phase`; high-value progress, live-output, and stalled-output checks consume the DTO; unit tests cover required fields and progress DTO usage. Some lower-value fault/DSL polling paths still inspect raw JSON `status` fields that do exist in the API schema, so this is not yet a total typed-client conversion. |
 | Phase D — Harness root-cause reporting | ✅ Mostly complete | `FailureCause` now carries the full `impl.md` taxonomy, root-cause summaries include `cells`, and tests cover blocked stage, capacity, first output, keyframe, parameter sets, timestamp discontinuity, protocol connect, HLS segments, recording identity, runtime log, lifecycle stop, infrastructure, and no-progress classification. Remaining improvement: classify more failures from structured DTO fields before falling back to message substrings. |
 | Phase E — Harness artifact index | ✅ Mostly complete | Mixed scenario `artifact-index.json` is atomically written and now includes run id, command, selected env, started timestamp, source revision, scenario/assertions/outputs/log/media/SQLite paths, plus existing file existence/size/SHA-256 entries. Remaining improvement: add a matrix/root aggregate index and DB/table export for failed matrix runs. |
-| Phase F — Harness execution symmetry | ⚠️ Mostly complete | Manifest-backed modes and shared batch helpers expose much of the live/file execution shape. `HlsPreviewTiming` and `ProbeSamplingPolicy` are now typed, scenario/matrix artifacts report the selected and supported policies, duplicate ffprobe sampling is policy-driven, and file-ingest HLS preview attaches before output fanout by default. Remaining gap: introduce the explicit `ScenarioExecutor` trait so live/file ordering is fully named outside the runner branches. |
+| Phase F — Harness execution symmetry | ✅ Mostly complete | Manifest-backed modes and shared batch helpers expose much of the live/file execution shape. `ScenarioExecutor` is now explicit, scenario selection reports a named executor, `HlsPreviewTiming` and `ProbeSamplingPolicy` are typed, scenario/matrix artifacts report selected and supported policies, duplicate ffprobe sampling is policy-driven, and file-ingest HLS preview attaches before output fanout by default. Remaining improvement: move more of the legacy live/file body internals behind the executor step methods instead of delegating to the existing mature runner functions. |
 | Phase G — Harness/report module split | ✅ Mostly complete | `src/bin/test_harness.rs` is below 2,000 lines and command dispatch is split into focused harness modules for core, catalog, suites, probes, reports, artifacts, mixed runners, fault runners, resource sweeps, sinks, and live modes. The exact `api_client.rs`, `ports.rs`, `stacks.rs`, and `probes/mod.rs` names from `impl.md` are not used, but the ownership split is present. |
 | Phase H — Whole-codebase service and adapter split | ⚠️ Partial | Route modules, application services, runtime read-model service, graph planning, repository ports, and media FFmpeg/backend modules are split enough for Phases 1-16. The larger idealized namespace split in `impl.md` (`RuntimeGraph`, registry modules, `media/protocols/*`, `media/hls/*`, `media/recording/*`) is not fully realized. |
 | Phase I — Harness as architectural governor | ✅ Mostly complete | Named governor tests now cover progress cell identity, dependency-chain failure text, timestamp discontinuity root-cause grouping, recording metadata identity, HLS no-segments preview-state evidence, planner-backed HLS preview, shared FFmpeg stage operation planning, per-stage backend policy, mixed fast-breadth defaults, and source-audit guardrails. Fast-breadth now writes mode-specific `scenario.json` and `root-cause-summary.json` before returning failure. Remaining piece: CI execution of `target/bench/test_harness mixed.fast-breadth` once runtime cost is acceptable. |
 
 **Verdict**: **Phases 1-16 are A-grade for their phase-scope acceptance
 criteria; addendum Phases A-G/I are close, while H and the remaining F
-executor split are the main non-A addendum gaps.**
+executor-step decomposition are the main non-A addendum gaps.**
 
 ---
 
@@ -333,10 +333,10 @@ executor split are the main non-A addendum gaps.**
 ### P0 — Addendum Phase F/I Governor Gaps
 
 1. **Make harness execution symmetry explicit**
-   - Add the `ScenarioExecutor` trait so live/file ordering moves out of
-     implicit runner branches and into manifest-visible execution semantics.
-     `HlsPreviewTiming` and `ProbeSamplingPolicy` are now typed and reported,
-     but the executor boundary is still implicit.
+   - `ScenarioExecutor`, `HlsPreviewTiming`, and `ProbeSamplingPolicy` are now
+     typed and manifest-visible. Remaining polish is to migrate the legacy
+     live/file runner bodies into the executor step methods rather than
+     delegating whole scenarios through them.
 
 2. **Promote `mixed.fast-breadth` to a CI governor lane**
    - Add the bench-profile CI command once runtime cost is acceptable.
@@ -425,7 +425,7 @@ executor split are the main non-A addendum gaps.**
 | Phase C Typed harness API | A- | High-value output progress/stall paths use `ApiOutputStatus` with required schema tests; some lower-value fault/DSL status polling remains raw JSON against existing schema fields. |
 | Phase D Root causes | A- | Full `FailureCause` taxonomy, cell extraction, summary JSON, and classification tests exist; more structured classification from DTO fields would make this fully ideal. |
 | Phase E Artifact index | A- | Scenario artifact index has run identity, command/env/timestamp/revision, scenario/assertion/output/log/media/DB paths, and checksums; root aggregate index and failed-run DB export are still open. |
-| Phase F Execution symmetry | B+ | Manifest-backed execution is strong, HLS preview timing and duplicate-probe sampling are typed/reporting policies, and file-ingest preview now follows the same before-fanout default as live scenarios. The explicit `ScenarioExecutor` boundary is still pending. |
+| Phase F Execution symmetry | A- | Manifest-backed execution is strong, `ScenarioExecutor` selection is explicit, HLS preview timing and duplicate-probe sampling are typed/reporting policies, and file-ingest preview now follows the same before-fanout default as live scenarios. Full A requires migrating more live/file internals into the executor step methods. |
 | Phase G Harness split | A- | Harness root is small and modules are responsibility split; exact module names from `impl.md` are not fully mirrored. |
 | Phase H Whole-codebase split | B | Services/routes/planner/runtime read models are split for Phase 1-16, but the broader ideal namespace split in `impl.md` remains partial. |
 | Phase I Harness governor | A- | Exact named governor tests, stronger source-audit checks, and fast-breadth root-cause artifacts now exist; CI `mixed.fast-breadth` is still pending runtime-cost approval. |
