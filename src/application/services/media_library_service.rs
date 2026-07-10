@@ -15,7 +15,7 @@ use crate::application::recording::{
 };
 use crate::media::engine::MediaEngine;
 use crate::media::recording::RecordingMetadataReporter;
-use crate::types::Pipeline;
+use crate::types::{Ingest, Pipeline};
 
 use super::error::{ApiError, ApiResult};
 use super::ingest_service::IngestService;
@@ -478,11 +478,14 @@ impl MediaLibraryService {
             completed.push((from.clone(), to.clone()));
         }
 
-        let ingests = self
-            .ingest_service
-            .list_for_filename(filename)
-            .await
-            .unwrap_or_default();
+        let ingests = match self.ingest_service.list_for_filename(filename).await {
+            Ok(ingests) => ingests,
+            Err(error) => {
+                rollback_renames(completed).await;
+                return Err(MediaRenameError::IngestUpdate(error.to_string()));
+            }
+        };
+        let mut updated_ingests = Vec::new();
         for ingest in &ingests {
             if let Err(error) = self
                 .ingest_service
@@ -497,12 +500,30 @@ impl MediaLibraryService {
                 )
                 .await
             {
+                rollback_ingest_updates(&self.ingest_service, updated_ingests).await;
                 rollback_renames(completed).await;
                 return Err(MediaRenameError::IngestUpdate(error.to_string()));
             }
+            updated_ingests.push(ingest.clone());
         }
 
         Ok(ingests.len())
+    }
+}
+
+async fn rollback_ingest_updates(ingest_service: &IngestService, updated_ingests: Vec<Ingest>) {
+    for ingest in updated_ingests.into_iter().rev() {
+        let _ = ingest_service
+            .update_ingest(
+                &ingest.id,
+                &ingest.filename,
+                &ingest.stream_key,
+                ingest.loop_flag,
+                &ingest.start_time,
+                ingest.live_optimized,
+                ingest.target_gop_seconds,
+            )
+            .await;
     }
 }
 
@@ -539,7 +560,12 @@ fn entry_modified(metadata: &std::fs::Metadata) -> (String, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::ports::{
+        IngestCatalogFuture, IngestDeleteFuture, IngestLookup, IngestLookupFuture,
+        IngestUpdateFuture, IngestWriteError, IngestWriteFuture, IngestWriter,
+    };
     use crate::domain::ids::RecordingId;
+    use std::sync::Mutex;
 
     async fn service_with_pipeline() -> MediaLibraryService {
         let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
@@ -571,6 +597,132 @@ mod tests {
             PipelineService::new(pool.clone()),
             IngestService::new(pool),
         )
+    }
+
+    struct RenameRollbackIngestStore {
+        ingests: Mutex<Vec<Ingest>>,
+        fail_id: String,
+        fail_filename: String,
+    }
+
+    impl RenameRollbackIngestStore {
+        fn new(ingests: Vec<Ingest>, fail_id: &str, fail_filename: &str) -> Self {
+            Self {
+                ingests: Mutex::new(ingests),
+                fail_id: fail_id.to_string(),
+                fail_filename: fail_filename.to_string(),
+            }
+        }
+
+        fn snapshot(&self) -> Vec<Ingest> {
+            self.ingests
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone()
+        }
+    }
+
+    impl IngestLookup for RenameRollbackIngestStore {
+        fn get_ingest<'a>(&'a self, id: &'a str) -> IngestLookupFuture<'a> {
+            Box::pin(async move {
+                Ok(self
+                    .ingests
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .iter()
+                    .find(|ingest| ingest.id == id)
+                    .cloned())
+            })
+        }
+
+        fn get_ingest_by_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestLookupFuture<'a> {
+            Box::pin(async move {
+                Ok(self
+                    .ingests
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .iter()
+                    .find(|ingest| ingest.stream_key == stream_key)
+                    .cloned())
+            })
+        }
+
+        fn list_ingests<'a>(&'a self) -> IngestCatalogFuture<'a> {
+            Box::pin(async move { Ok(self.snapshot()) })
+        }
+
+        fn list_ingests_for_filename<'a>(&'a self, filename: &'a str) -> IngestCatalogFuture<'a> {
+            Box::pin(async move {
+                Ok(self
+                    .snapshot()
+                    .into_iter()
+                    .filter(|ingest| ingest.filename == filename)
+                    .collect())
+            })
+        }
+
+        fn list_ingests_for_stream_key<'a>(
+            &'a self,
+            stream_key: &'a str,
+        ) -> IngestCatalogFuture<'a> {
+            Box::pin(async move {
+                Ok(self
+                    .snapshot()
+                    .into_iter()
+                    .filter(|ingest| ingest.stream_key == stream_key)
+                    .collect())
+            })
+        }
+    }
+
+    impl IngestWriter for RenameRollbackIngestStore {
+        fn create_ingest<'a>(
+            &'a self,
+            _id: &'a str,
+            _filename: &'a str,
+            _stream_key: &'a str,
+            _loop_flag: bool,
+            _start_time: &'a str,
+            _live_optimized: bool,
+            _target_gop_seconds: u32,
+        ) -> IngestWriteFuture<'a> {
+            Box::pin(async move { Err(IngestWriteError::new("not implemented")) })
+        }
+
+        fn update_ingest<'a>(
+            &'a self,
+            id: &'a str,
+            filename: &'a str,
+            stream_key: &'a str,
+            loop_flag: bool,
+            start_time: &'a str,
+            live_optimized: bool,
+            target_gop_seconds: u32,
+        ) -> IngestUpdateFuture<'a> {
+            Box::pin(async move {
+                if id == self.fail_id && filename == self.fail_filename {
+                    return Err(IngestWriteError::new("injected update failure"));
+                }
+                let mut ingests = self
+                    .ingests
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let Some(ingest) = ingests.iter_mut().find(|ingest| ingest.id == id) else {
+                    return Ok(None);
+                };
+                ingest.filename = filename.to_string();
+                ingest.stream_key = stream_key.to_string();
+                ingest.loop_flag = loop_flag;
+                ingest.start_time = start_time.to_string();
+                ingest.live_optimized = live_optimized;
+                ingest.target_gop_seconds = target_gop_seconds;
+                Ok(Some(ingest.clone()))
+            })
+        }
+
+        fn delete_ingest<'a>(&'a self, _id: &'a str) -> IngestDeleteFuture<'a> {
+            Box::pin(async move { Ok(false) })
+        }
     }
 
     #[tokio::test]
@@ -784,6 +936,78 @@ mod tests {
         assert_eq!(renamed_ingests[0].id, "ing-rename");
         assert!(renamed_ingests[0].loop_flag);
         assert!(renamed_ingests[0].live_optimized);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn rename_media_file_rolls_back_prior_ingest_updates_on_later_failure() {
+        let old_name = "source.ts";
+        let new_name = "renamed.ts";
+        let first = Ingest {
+            id: "ing-1".to_string(),
+            filename: old_name.to_string(),
+            stream_key: "stream-key-1".to_string(),
+            loop_flag: true,
+            start_time: "00:00:01".to_string(),
+            live_optimized: true,
+            target_gop_seconds: 2,
+        };
+        let second = Ingest {
+            id: "ing-2".to_string(),
+            filename: old_name.to_string(),
+            stream_key: "stream-key-2".to_string(),
+            loop_flag: false,
+            start_time: String::new(),
+            live_optimized: false,
+            target_gop_seconds: 4,
+        };
+        let ingest_store = Arc::new(RenameRollbackIngestStore::new(
+            vec![first.clone(), second.clone()],
+            "ing-2",
+            new_name,
+        ));
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        let service = MediaLibraryService::with_stores(
+            Arc::new(SqliteMetaStore::new(pool.clone())),
+            Arc::new(SqliteMetaStore::new(pool.clone())),
+            Arc::new(SqliteRecordingStore::new(pool.clone())),
+            PipelineService::new(pool.clone()),
+            IngestService::with_ports(ingest_store.clone(), ingest_store.clone()),
+        );
+        let temp_dir = tempfile_dir("media-rename-ingest-rollback");
+        let source = temp_dir.join(old_name);
+        let destination = temp_dir.join(new_name);
+        std::fs::write(&source, b"source").unwrap();
+
+        let err = service
+            .rename_media_file(
+                old_name,
+                new_name,
+                &std::fs::canonicalize(&source).unwrap(),
+                &destination,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, MediaRenameError::IngestUpdate(_)));
+        assert!(source.exists());
+        assert!(!destination.exists());
+        let restored = ingest_store.snapshot();
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored[0].id, first.id);
+        assert_eq!(restored[0].filename, first.filename);
+        assert_eq!(restored[0].stream_key, first.stream_key);
+        assert_eq!(restored[0].loop_flag, first.loop_flag);
+        assert_eq!(restored[0].start_time, first.start_time);
+        assert_eq!(restored[0].live_optimized, first.live_optimized);
+        assert_eq!(restored[0].target_gop_seconds, first.target_gop_seconds);
+        assert_eq!(restored[1].id, second.id);
+        assert_eq!(restored[1].filename, second.filename);
+        assert_eq!(restored[1].stream_key, second.stream_key);
+        assert_eq!(restored[1].loop_flag, second.loop_flag);
+        assert_eq!(restored[1].start_time, second.start_time);
+        assert_eq!(restored[1].live_optimized, second.live_optimized);
+        assert_eq!(restored[1].target_gop_seconds, second.target_gop_seconds);
         let _ = std::fs::remove_dir_all(temp_dir);
     }
 
