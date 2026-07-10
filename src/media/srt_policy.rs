@@ -4,6 +4,7 @@ use std::sync::RwLock;
 use tracing::warn;
 
 use crate::domain::srt_ingest::{ResolvedSrtIngestConfig, SrtGlobalIngestConfig};
+use crate::secret_display::redact_secret;
 use crate::types::Pipeline;
 
 use super::parse_pipeline_srt_ingest_policy;
@@ -64,7 +65,7 @@ fn build_policy_snapshot(
             Err(error) => {
                 warn!(
                     pipeline_id = %pipeline.id,
-                    stream_key = %pipeline.stream_key,
+                    stream_key = %redact_secret(&pipeline.stream_key),
                     err = %error,
                     "ignoring invalid persisted SRT ingest policy"
                 );

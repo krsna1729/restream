@@ -64,6 +64,7 @@ use crate::media::security::RateLimitScope;
 use crate::media::startup_policy;
 use crate::media::ts_chunk_ring::{TsChunkReader, TsChunkRing};
 use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
+use crate::secret_display::redact_secret;
 
 // 256 slots covers the mux wakeup → SRT socket-write latency (sub-millisecond
 // to single-digit milliseconds in practice). The SRT protocol's own send buffer
@@ -1267,7 +1268,7 @@ impl SrtServer {
                 "Connection"
             },
             client_sock,
-            streamid
+            redact_secret(&streamid)
         );
 
         let parsed = parse_srt_stream_id(&streamid);
@@ -1291,7 +1292,10 @@ impl SrtServer {
         {
             Ok(pipeline) => pipeline,
             Err(_) => {
-                warn!("unauthorized connection for stream key: {}", stream_key);
+                warn!(
+                    stream_key = %redact_secret(stream_key),
+                    "unauthorized connection for stream key"
+                );
                 // SAFETY: client_sock is a valid accepted socket not yet closed.
                 unsafe {
                     srt_close(client_sock);
@@ -1302,7 +1306,7 @@ impl SrtServer {
 
         info!(
             "[srt] Authenticated stream key: {} for pipeline: {} (mode={})",
-            stream_key,
+            redact_secret(stream_key),
             pipeline.id,
             if is_reader { "read" } else { "publish" }
         );

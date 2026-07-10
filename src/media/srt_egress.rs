@@ -1,4 +1,5 @@
 use super::*;
+use crate::secret_display::redact_url;
 
 impl Drop for SrtServer {
     fn drop(&mut self) {
@@ -526,7 +527,7 @@ pub async fn start_srt_egress(
     let addr = match resolve_host(host_port).await {
         Some(a) => a,
         None => {
-            error!("Failed to resolve target: {}", target_url);
+            error!("Failed to resolve target: {}", redact_url(&target_url));
             egress_error!("resolve", "failed to resolve target");
             return;
         }
@@ -722,7 +723,7 @@ pub async fn start_srt_egress(
             info!(
                 "[srt-egress] Bonded connection ({} links) to {}",
                 all_addrs.len(),
-                target_url
+                redact_url(&target_url)
             );
             srt_set_highbitrate_opts(client_sock);
             srt_log_effective_opts(client_sock, "egress-bonded");
@@ -783,7 +784,7 @@ pub async fn start_srt_egress(
                 )
             };
             if conn_res < 0 {
-                error!("Connection failed to {}", target_url);
+                error!("Connection failed to {}", redact_url(&target_url));
                 // SAFETY: Valid socket, clean up on connection failure.
                 unsafe {
                     srt_close(client_sock);
@@ -791,7 +792,7 @@ pub async fn start_srt_egress(
                 return Err("connection failed".to_string());
             }
 
-            info!("Connected to {}", target_url);
+            info!("Connected to {}", redact_url(&target_url));
             srt_log_effective_opts(client_sock, "egress");
         }
         Ok(client_sock)

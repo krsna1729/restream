@@ -37,6 +37,7 @@ use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, R
 use crate::media::security::IngestSecurityService;
 use crate::media::startup_policy;
 use crate::media::tcp_stats::collect_rtmp_receiver_stats;
+use crate::secret_display::{redact_secret, redact_url};
 use bytes::Bytes;
 
 mod egress_transport;
@@ -520,7 +521,10 @@ async fn handle_session_results(
                         {
                             Ok(pipeline) => pipeline,
                             Err(IngestAuthError::InvalidStreamKey) => {
-                                warn!("publish stream key not found: {:?}", stream_key);
+                                warn!(
+                                    stream_key = %redact_secret(&stream_key),
+                                    "publish stream key not found"
+                                );
                                 let _ = session.reject_request(
                                     request_id,
                                     "NetStream.Publish.BadName",
@@ -955,7 +959,7 @@ pub async fn start_rtmp_egress(
     let parts = match parse_rtmp_url(&target_url) {
         Some(p) => p,
         None => {
-            error!("Invalid RTMP URL: {}", target_url);
+            error!("Invalid RTMP URL: {}", redact_url(&target_url));
             egress_error!("parse_url", "invalid RTMP URL");
             return;
         }

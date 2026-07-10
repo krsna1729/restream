@@ -56,6 +56,7 @@ pub mod planner;
 pub mod runtime;
 pub use config::AppConfig;
 pub mod runtime_info;
+pub mod secret_display;
 pub mod test_fixtures;
 pub mod types;
 
@@ -67,6 +68,7 @@ use crate::application::reconcile::{
 use crate::domain::stage::StageKey;
 use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
+use crate::secret_display::redact_url;
 use futures_util::FutureExt as _;
 use std::collections::HashMap;
 use std::path::Path;
@@ -817,7 +819,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
                                 event_class = "lifecycle",
                                 event_type = "egress.failed",
                                 failure_reason = "unsupported_url_scheme",
-                                url = %url_c,
+                                url = %redact_url(&url_c),
                                 "output rejected unsupported URL scheme",
                             );
                             return;
