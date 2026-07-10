@@ -1031,7 +1031,8 @@ mod tests {
 
         service
             .delete_ingest_with_runtime_cleanup(&engine, "ing-delete")
-            .await;
+            .await
+            .unwrap();
 
         assert!(!engine.is_file_ingest_running("ing-delete").await);
         assert!(
