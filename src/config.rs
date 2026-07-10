@@ -463,6 +463,26 @@ mod tests {
     }
 
     #[test]
+    fn backend_policy_does_not_use_global_internal_switch_for_all_stages() {
+        with_env_overlay(
+            &[("RESTREAM_USE_INTERNAL_TRANSCODER", "1")],
+            &[
+                "RESTREAM_INTERNAL_VIDEO_PRESETS",
+                "RESTREAM_INTERNAL_HEVC_TO_H264",
+                "RESTREAM_INTERNAL_HLS_PREVIEW",
+                "RESTREAM_INTERNAL_AUDIO_COMPLEX",
+            ],
+            || {
+                let policy = BackendPolicy::from_env();
+                assert!(!policy.internal_video_presets);
+                assert!(!policy.internal_hevc_to_h264);
+                assert!(!policy.internal_hls_preview);
+                assert!(!policy.internal_complex_audio);
+            },
+        );
+    }
+
+    #[test]
     fn effective_summary_covers_runtime_knobs_without_secret_values() {
         let config = AppConfig {
             srt_passphrase: Some("super-secret".to_string()),

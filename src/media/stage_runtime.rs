@@ -782,6 +782,49 @@ mod tests {
         assert!(matches!(plan.audio, AudioStageOp::Passthrough));
     }
 
+    #[test]
+    fn external_and_internal_stage_plan_share_operation() {
+        let key = StageKey::new("pipe-shared-plan", StageKind::video_preset("720p"));
+        let video = VideoMeta {
+            codec: "h264".to_string(),
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            bw: None,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+            level: None,
+            pixel_format: None,
+        };
+        let audio = AudioMeta {
+            codec: "aac".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            channel_layout: None,
+            track_index: 0,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+        };
+
+        let plan = build_ffmpeg_stage_plan(&key, Some(video), vec![audio], None, true)
+            .expect("video preset plan");
+
+        assert!(matches!(
+            plan.video,
+            VideoStageOp::ScalePreset { ref preset } if preset == "720p"
+        ));
+        assert!(matches!(plan.audio, AudioStageOp::Passthrough));
+        assert_eq!(plan.output_codec, VideoCodecKind::H264);
+        assert!(
+            plan.startup.wait_for_first_keyframe,
+            "shared FFmpeg plan should carry startup policy for both backends"
+        );
+    }
+
     #[tokio::test]
     async fn snapshot_reflects_lifecycle_and_metrics() {
         let engine = Arc::new(MediaEngine::new());

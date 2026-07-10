@@ -85,6 +85,15 @@ pub(crate) fn classify_mixed_failure(message: &str) -> FailureCause {
     if lower.contains("firstoutput") || lower.contains("first output") {
         return FailureCause::StageNoFirstOutput;
     }
+    if lower.contains("hls")
+        && (lower.contains("no segment")
+            || lower.contains("404")
+            || lower.contains("no playlist")
+            || lower.contains("empty playlist")
+            || lower.contains("playlist did not"))
+    {
+        return FailureCause::HlsNoSegments;
+    }
     if lower.contains("keyframe") {
         return FailureCause::StageNoKeyframe;
     }
@@ -98,15 +107,6 @@ pub(crate) fn classify_mixed_failure(message: &str) -> FailureCause {
         || lower.contains("non-monotonic")
     {
         return FailureCause::TimestampDiscontinuity;
-    }
-    if lower.contains("hls")
-        && (lower.contains("no segment")
-            || lower.contains("404")
-            || lower.contains("no playlist")
-            || lower.contains("empty playlist")
-            || lower.contains("playlist did not"))
-    {
-        return FailureCause::HlsNoSegments;
     }
     if lower.contains("connection refused")
         || lower.contains("failed to connect")
@@ -332,6 +332,36 @@ mod tests {
 
         assert_eq!(summary["causes"][0]["cause"], "output_blocked_by_stage");
         assert_eq!(summary["causes"][0]["cells"][0], "rtmp-h264-pass");
+    }
+
+    #[test]
+    fn timestamp_discontinuity_grouped_by_root_cause() {
+        let failures = vec![
+            "mixed.live.srt.h264.a1.bf0 failed: stream 0 has timestamp discontinuity".to_string(),
+            "mixed.live.rtmp.h264.a1.bf0 failed: stream 0 has duplicate DTS".to_string(),
+        ];
+
+        let summary = mixed_root_cause_summary_json(&failures);
+
+        assert_eq!(summary["causes"][0]["cause"], "timestamp_discontinuity");
+        assert_eq!(summary["causes"][0]["count"], 2);
+    }
+
+    #[test]
+    fn hls_no_segments_reports_preview_stage_state() {
+        let failures = vec![
+            "mixed.live.srt.h265.a1.bf0 / hls-preview / out0 failed: HLS 404 no segments yet; phase=waitingForKeyframe terminalStage=hls:preview".to_string(),
+        ];
+
+        let summary = mixed_root_cause_summary_json(&failures);
+
+        assert_eq!(summary["causes"][0]["cause"], "hls_no_segments");
+        assert_eq!(summary["causes"][0]["cells"][0], "hls-preview");
+        assert!(
+            summary["causes"][0]["examples"][0]
+                .as_str()
+                .is_some_and(|example| example.contains("waitingForKeyframe"))
+        );
     }
 
     #[test]

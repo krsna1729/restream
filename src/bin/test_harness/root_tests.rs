@@ -201,6 +201,63 @@ fn harness_progress_status_consumes_existing_fields() {
 }
 
 #[test]
+fn progress_failure_includes_cell_identity() {
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/bin/test_harness/output_progress.rs"
+    ));
+
+    assert!(source.contains("output_cell_label(output_id)"));
+    assert!(source.contains("unregistered-cell"));
+}
+
+#[test]
+fn progress_failure_includes_dependency_chain_when_available() {
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/bin/test_harness/output_progress.rs"
+    ));
+
+    for field in [
+        "terminalStage",
+        "blockedBy",
+        "blockedByPhase",
+        "backend",
+        "waitMs",
+    ] {
+        assert!(
+            source.contains(field),
+            "progress failure should include {field}"
+        );
+    }
+}
+
+#[test]
+fn recording_uses_metadata_identity_not_tmp_filename() {
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/bin/test_harness/mixed_playback.rs"
+    ));
+
+    assert!(source.contains("recordingId"));
+    assert!(source.contains("media_recording_identity_rejects_metadata_less_filename_fallback"));
+    assert!(source.contains("media_recording_play_name_rejects_temporary_outputs"));
+}
+
+#[test]
+fn hls_preview_plan_uses_graph_planner() {
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/planner/hls_preview.rs"
+    ));
+
+    assert!(source.contains("plan_hls_preview_graph("));
+    assert!(source.contains("preview_plan"));
+    assert!(source.contains(".stages"));
+    assert!(source.contains("spawn_preview_stage"));
+}
+
+#[test]
 fn generalized_sink_rejects_equal_video_dts() {
     let metrics = GeneralizedSinkMetrics::default();
     metrics.packets.lock().unwrap().extend([
