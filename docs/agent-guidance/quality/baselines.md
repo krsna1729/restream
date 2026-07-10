@@ -78,6 +78,25 @@ Jitter headroom by design (defaults; env-overridable):
 | TS mux ring | 256 | ~400 chunks/s | 0.64 s (SRT 12 MB send buffer absorbs the rest) |
 | AVIO queue | 512 KB | 1 MB/s @ 8 Mbps | 0.5 s |
 
+### External capacity rollout proof — 2026-07-10
+
+Command:
+
+```sh
+scripts/check-external-capacity-rollout.sh
+```
+
+The guard runs `mixed.live.srt.h264.a2.bf0` twice: first with enough external
+FFmpeg permits for a passing capacity smoke, then with one permit and default
+checks enabled. The constrained leg must fail causally with
+`blockedByPhase=waitingForCapacity`, `backend=externalFfmpeg`, nonzero `waitMs`,
+and at least one persisted `ready` recording row with both `temp_path` and
+`final_path`.
+
+| Scenario | Capacity-ok permits | Constrained permits | Required constrained evidence | Commit |
+|---|---:|---:|---|---|
+| `mixed.live.srt.h264.a2.bf0` | 2 | 1 | `waitingForCapacity`, `externalFfmpeg`, `waitMs>0`, ready recording metadata row | this commit |
+
 ## Standing optimization targets (2026-06-27 CPU profile, task-clock 999 Hz)
 
 | Self % | Symbol | Meaning | Backlog |
