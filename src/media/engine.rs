@@ -1577,6 +1577,33 @@ impl MediaEngine {
         );
     }
 
+    pub async fn update_egress_retry_state_if_current(
+        &self,
+        output_id: &str,
+        registration: &EgressRegistration,
+        attempts: u32,
+        backoff_ms: u64,
+        remaining_ms: u64,
+    ) -> bool {
+        if self
+            .with_current_egress(output_id, registration, |_| {})
+            .await
+            .is_none()
+        {
+            return false;
+        }
+        let next_retry_at_ms = Self::now_epoch_ms().saturating_add(remaining_ms);
+        self.egresses.retry.write().await.insert(
+            output_id.to_string(),
+            EgressRetryState {
+                attempts,
+                backoff_ms,
+                next_retry_at_ms,
+            },
+        );
+        true
+    }
+
     pub async fn clear_egress_retry_state(&self, output_id: &str) {
         self.egresses.retry.write().await.remove(output_id);
     }

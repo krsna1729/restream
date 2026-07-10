@@ -94,6 +94,7 @@ pub async fn start_hls_put_upload(
     }
     let client = Client::new();
     let mut uploaded_segments = HashSet::new();
+    let mut retry_attempts = 0u32;
 
     loop {
         tokio::select! {
@@ -142,6 +143,9 @@ pub async fn start_hls_put_upload(
                             err,
                         )
                         .await;
+                    retry_attempts = retry_attempts.saturating_add(1);
+                    publish_upload_retry_state(&engine, &output_id, &registration, retry_attempts)
+                        .await;
                     upload_failed = true;
                     break;
                 }
@@ -171,10 +175,14 @@ pub async fn start_hls_put_upload(
             engine
                 .record_egress_error_if_current(&output_id, &registration, "upload_playlist", err)
                 .await;
+            retry_attempts = retry_attempts.saturating_add(1);
+            publish_upload_retry_state(&engine, &output_id, &registration, retry_attempts).await;
             if wait_for_upload_retry_backoff(&registration).await {
                 return;
             }
         } else {
+            retry_attempts = 0;
+            engine.clear_egress_retry_state(&output_id).await;
             engine
                 .record_egress_progress_if_current(&output_id, &registration, playlist_len)
                 .await;
@@ -196,6 +204,27 @@ async fn wait_for_upload_retry_backoff(registration: &EgressRegistration) -> boo
         _ = registration.cancel_token.cancelled() => true,
         _ = tokio::time::sleep(HLS_UPLOAD_RETRY_BACKOFF) => false,
     }
+}
+
+async fn publish_upload_retry_state(
+    engine: &MediaEngine,
+    output_id: &str,
+    registration: &EgressRegistration,
+    attempts: u32,
+) {
+    let backoff_ms = HLS_UPLOAD_RETRY_BACKOFF
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    engine
+        .update_egress_retry_state_if_current(
+            output_id,
+            registration,
+            attempts,
+            backoff_ms,
+            backoff_ms,
+        )
+        .await;
 }
 
 async fn put_bytes<B>(
@@ -528,6 +557,7 @@ mod tests {
             )
             .await;
 
+        let engine_for_uploader = engine.clone();
         let uploader = tokio::spawn(start_hls_put_upload(
             HlsUploadStart {
                 output_id: "out1".to_string(),
@@ -536,12 +566,14 @@ mod tests {
                 terminal_stage_key,
             },
             store,
-            engine,
+            engine_for_uploader,
             registration.clone(),
         ));
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+        let mut saw_retry_state = false;
         loop {
+            saw_retry_state |= engine.egress_retry_state("out1").await.is_some();
             let (segment_attempts, playlist_attempts) = {
                 let seen = seen.lock().unwrap();
                 (
@@ -562,6 +594,14 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        assert!(
+            saw_retry_state,
+            "transient upload failure should publish retry state"
+        );
+        assert!(
+            engine.egress_retry_state("out1").await.is_none(),
+            "retry state should clear after upload recovery"
+        );
         registration.cancel_token.cancel();
         let _ = uploader.await;
     }
