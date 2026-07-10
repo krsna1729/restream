@@ -102,6 +102,8 @@ export function syncRestreamProcessIndicatorFromApiReachability(): void {
     currentIndicatorState === "faulted"
   ) {
     setIndicatorState("running");
+  } else {
+    renderRestreamProcessIndicator();
   }
 }
 

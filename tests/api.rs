@@ -2223,17 +2223,41 @@ async fn diagnostics_requires_active_ingest() {
     let (app, _) = test_app().await;
     let cookie = login(&app).await;
 
+    let unauthenticated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/pipelines/inactive/diagnostics/run")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
     let resp = app
         .clone()
         .oneshot(auth_req(
-            "GET",
-            "/api/v1/pipelines/inactive/diagnostics?probe=srt",
+            "POST",
+            "/api/v1/pipelines/inactive/diagnostics/run",
             &cookie,
             None,
         ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let wrong_method = app
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/pipelines/inactive/diagnostics/run",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(wrong_method.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
 
 #[tokio::test]
@@ -2278,22 +2302,51 @@ async fn diagnostics_supports_active_file_ingest() {
     let resp = app
         .clone()
         .oneshot(auth_req(
-            "GET",
-            "/api/v1/pipelines/pipe-file-diag/diagnostics?probe=file",
+            "POST",
+            "/api/v1/pipelines/pipe-file-diag/diagnostics/run",
             &cookie,
             None,
         ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "application/json"
+    );
 
-    let body = String::from_utf8(body_bytes(resp).await.to_vec()).unwrap();
-    assert!(body.contains("\"name\":\"File Source\""));
-    assert!(body.contains("\"name\":\"File Ingest Runtime\""));
-    assert!(body.contains("\"name\":\"Preview & Recording\""));
-    assert!(!body.contains("\"name\":\"Publisher Transport\""));
-    assert!(!body.contains("\"name\":\"Network Bandwidth\""));
-    assert!(!body.contains("\"name\":\"SRT Listener Socket\""));
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert_eq!(body["protocol"], "file");
+    assert!(body["totalDurationMs"].is_number());
+    let checks = body["checks"].as_array().unwrap();
+    assert_eq!(checks.len(), 9);
+    assert_eq!(checks[0]["index"], 0);
+    assert_eq!(checks[8]["index"], 8);
+    let names: Vec<_> = checks.iter().map(|check| &check["name"]).collect();
+    assert!(names.contains(&&serde_json::json!("File Source")));
+    assert!(names.contains(&&serde_json::json!("File Ingest Runtime")));
+    assert!(names.contains(&&serde_json::json!("Preview & Recording")));
+    assert!(!names.contains(&&serde_json::json!("Publisher Transport")));
+    assert!(!names.contains(&&serde_json::json!("Network Bandwidth")));
+    assert!(!names.contains(&&serde_json::json!("SRT Listener Socket")));
+
+    let semaphore = engine.get_or_create_diag_semaphore("pipe-file-diag").await;
+    let _held_permit = semaphore.try_acquire_owned().unwrap();
+    let busy = app
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/pipelines/pipe-file-diag/diagnostics/run",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(busy.status(), StatusCode::TOO_MANY_REQUESTS);
+    let busy_body: serde_json::Value = serde_json::from_slice(&body_bytes(busy).await).unwrap();
+    assert_eq!(
+        busy_body["error"],
+        "A diagnostic is already running for this pipeline"
+    );
 }
 
 // --- Password change ---
@@ -4239,8 +4292,8 @@ async fn v1_pipeline_detail_and_diagnostics_return_404_for_unknown_pipeline() {
 
     let resp = app
         .oneshot(auth_req(
-            "GET",
-            "/api/v1/pipelines/missing/diagnostics",
+            "POST",
+            "/api/v1/pipelines/missing/diagnostics/run",
             &cookie,
             None,
         ))
@@ -4707,6 +4760,19 @@ async fn agent_context_returns_redacted_state_bundle() {
         output_id
     );
     assert!(body["diagnostics"]["pipelines"].as_array().unwrap().len() == 1);
+    assert_eq!(
+        body["diagnostics"]["activeProbeEndpointTemplate"],
+        "/api/v1/pipelines/:pipeline_id/diagnostics/run"
+    );
+    assert_eq!(body["diagnostics"]["activeProbeMethod"], "POST");
+    assert_eq!(
+        body["diagnostics"]["pipelines"][0]["activeProbeEndpoint"],
+        format!("/api/v1/pipelines/{pid}/diagnostics/run")
+    );
+    assert_eq!(
+        body["diagnostics"]["pipelines"][0]["activeProbeMethod"],
+        "POST"
+    );
     assert!(body["dependencies"]["hls"]["config"].is_object());
     assert!(body["dependencies"]["recording"]["pipelines"].is_array());
     assert_eq!(

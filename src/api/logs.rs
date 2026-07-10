@@ -111,6 +111,11 @@ pub fn log_broadcast_matches_stream_filters(
     log_stream_prefix_matches(prefix, &entry.message)
 }
 
+fn log_row_sse_frame(row: &crate::logging::AppLogRow) -> String {
+    let data = serde_json::to_string(row).unwrap_or_default();
+    format!("id: {}\nevent: log\ndata: {}\n\n", row.id, data)
+}
+
 pub async fn logs_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -198,37 +203,43 @@ pub async fn logs_stream_handler(
                 _ => matches!(level, "ERROR" | "WARN" | "INFO"),
             }
         };
-        if let Some(since_id) = resume_from {
-            let backfill = log_service
-                .list_stream_backfill(
-                    &AppLogFilters {
-                        after_id: Some(since_id),
-                        level: Some(min_level.clone()),
-                        since: None,
-                        until: None,
-                        target: filter_target.clone(),
-                        scope: filter_scope.clone(),
-                        pipeline_id: filter_pipeline.clone(),
-                        output_id: filter_output.clone(),
-                        event_class: filter_event_class.clone(),
-                        prefix: filter_prefix.clone(),
-                        limit: Some(200),
-                        order: Some("asc".to_string()),
-                    },
-                    include_restream,
-                )
-                .await;
-
-            for row in backfill {
-                let data = serde_json::json!({
-                    "id": row.id, "ts": row.ts, "level": row.level,
-                    "target": row.target, "message": row.message,
-                    "fields": row.fields, "pipelineId": row.pipeline_id,
-                    "outputId": row.output_id,
-                });
-                let frame = format!("id: {}\nevent: log\ndata: {}\n\n", row.id, data);
-                if tx.send(frame).await.is_err() {
+        let mut delivered_through = resume_from.unwrap_or(0);
+        if resume_from.is_some() {
+            loop {
+                let Ok(backfill) = log_service
+                    .list_stream_backfill(
+                        &AppLogFilters {
+                            after_id: Some(delivered_through),
+                            level: Some(min_level.clone()),
+                            since: None,
+                            until: None,
+                            target: filter_target.clone(),
+                            scope: filter_scope.clone(),
+                            pipeline_id: filter_pipeline.clone(),
+                            output_id: filter_output.clone(),
+                            event_class: filter_event_class.clone(),
+                            prefix: filter_prefix.clone(),
+                            limit: Some(200),
+                            order: Some("asc".to_string()),
+                        },
+                        include_restream,
+                    )
+                    .await
+                else {
+                    // End the response so EventSource reconnects with its prior
+                    // cursor instead of silently treating a failed page as empty.
                     return;
+                };
+
+                let page_len = backfill.len();
+                for row in backfill {
+                    delivered_through = delivered_through.max(row.id);
+                    if tx.send(log_row_sse_frame(&row)).await.is_err() {
+                        return;
+                    }
+                }
+                if page_len < 200 {
+                    break;
                 }
             }
         }
@@ -240,6 +251,7 @@ pub async fn logs_stream_handler(
                 entry = broadcast_rx.recv() => {
                     match entry {
                         Ok(e) => {
+                            if e.id <= delivered_through { continue; }
                             if !level_passes(&e.level) { continue; }
                             if !log_broadcast_matches_stream_filters(
                                 &e,
@@ -253,9 +265,8 @@ pub async fn logs_stream_handler(
                             ) {
                                 continue;
                             }
-                            let data = serde_json::to_string(&e).unwrap_or_default();
-                            let frame = format!("id: {}\nevent: log\ndata: {}\n\n", e.id, data);
-                            if tx.send(frame).await.is_err() { return; }
+                            delivered_through = e.id;
+                            if tx.send(log_row_sse_frame(&e)).await.is_err() { return; }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                             return;
@@ -285,4 +296,29 @@ pub async fn logs_stream_handler(
         body,
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_row_sse_frame;
+
+    #[test]
+    fn sse_frame_preserves_persisted_id_and_lifecycle_metadata() {
+        let frame = log_row_sse_frame(&crate::logging::AppLogRow {
+            id: 42,
+            ts: "2026-07-10T00:00:00Z".to_string(),
+            level: "INFO".to_string(),
+            target: "restream::test".to_string(),
+            message: "connected".to_string(),
+            fields: None,
+            pipeline_id: Some("pipe-1".to_string()),
+            output_id: None,
+            event_type: Some("ingest.connected".to_string()),
+            event_class: Some("lifecycle".to_string()),
+        });
+
+        assert!(frame.starts_with("id: 42\nevent: log\ndata: "));
+        assert!(frame.contains("\"eventType\":\"ingest.connected\""));
+        assert!(frame.contains("\"eventClass\":\"lifecycle\""));
+    }
 }

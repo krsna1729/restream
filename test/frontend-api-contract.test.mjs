@@ -146,6 +146,12 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
   await api.getOutputHistory("pipe-1", "out-1", { filter: "lifecycle" });
   await api.getRestreamHistory({ limit: 50, order: "desc" });
   await api.listMediaFiles();
+  await api.getOverview();
+  await api.getAggregateAlerts();
+  await api.getLifecycleEvents({ pipelineId: "pipe /1", limit: 40 });
+  await api.getEngineTelemetry();
+  await api.getPipelineTelemetry("pipe /1");
+  await api.getStageTelemetry("pipe /1:video:720p");
   await api.logout();
 
   assert.deepEqual(
@@ -173,6 +179,12 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
       ],
       ["GET", "/api/v1/logs?scope=restream&limit=50&order=desc"],
       ["GET", "/api/v1/media"],
+      ["GET", "/api/v1/overview"],
+      ["GET", "/api/v1/alerts"],
+      ["GET", "/api/v1/events?pipeline_id=pipe+%2F1&limit=40"],
+      ["GET", "/api/v1/engine/telemetry"],
+      ["GET", "/api/v1/pipelines/pipe%20%2F1/telemetry"],
+      ["GET", "/api/v1/stages/pipe%20%2F1%3Avideo%3A720p/telemetry"],
       ["POST", "/api/v1/auth/logout"],
     ],
   );
@@ -188,14 +200,50 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
   });
 });
 
-test("frontend API helpers preserve response fields and build diagnostics URLs centrally", async () => {
-  globalThis.fetch = async (url) => {
+test("stage telemetry treats an inactive-stage 404 as an expected null snapshot", async () => {
+  const api = await loadApiModule();
+  let errorAlerts = 0;
+  const originalGetElementById = document.getElementById;
+  document.getElementById = (id) =>
+    id === "error-alert"
+      ? {
+          classList: {
+            remove(className) {
+              assert.equal(className, "hidden");
+              errorAlerts += 1;
+            },
+          },
+          querySelector() {
+            return null;
+          },
+        }
+      : originalGetElementById.call(document, id);
+  globalThis.fetch = async () =>
+    new Response("Stage not found", { status: 404 });
+  const result = await api.getStageTelemetry("gone:stage");
+  assert.equal(result, null);
+  assert.equal(errorAlerts, 0);
+});
+
+test("frontend API helpers preserve response fields and run diagnostics centrally", async () => {
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
     if (String(url).startsWith("/api/v1/audio-caps")) {
       return new Response(
         JSON.stringify({
-          caps: { "youtube:rtmp": { maxTracks: 2, maxChannels: 2, codecs: ["aac"] } },
+          caps: {
+            "youtube:rtmp": { maxTracks: 2, maxChannels: 2, codecs: ["aac"] },
+          },
           platformLabels: { youtube: "YouTube" },
         }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (String(url).endsWith("/diagnostics/run")) {
+      return new Response(
+        JSON.stringify({ protocol: "srt", totalDurationMs: 4, checks: [] }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     }
@@ -207,7 +255,7 @@ test("frontend API helpers preserve response fields and build diagnostics URLs c
             id: 1,
             ts: "2026-06-29T00:00:00Z",
             message: "started",
-            fields: "{\"state\":\"running\"}",
+            fields: '{"state":"running"}',
             eventType: "lifecycle.started",
           },
         ],
@@ -219,14 +267,22 @@ test("frontend API helpers preserve response fields and build diagnostics URLs c
   const api = await loadApiModule();
   const caps = await api.getAudioCapsPayload();
   const logs = await api.getOutputHistory("pipe-1", "out-1", { limit: 1 });
-  const params = new URLSearchParams({ probe: "srt", since: "now" });
+  const controller = new AbortController();
+  const report = await api.runPipelineDiagnostics("pipe 1", controller.signal);
 
   assert.equal(caps.caps["youtube:rtmp"].maxTracks, 2);
-  assert.equal(logs.logs[0].fields, "{\"state\":\"running\"}");
-  assert.equal(
-    api.buildPipelineDiagnosticsUrl("pipe 1", params),
-    "/api/v1/pipelines/pipe%201/diagnostics?probe=srt&since=now",
+  assert.equal(logs.logs[0].fields, '{"state":"running"}');
+  assert.equal(report.protocol, "srt");
+  const diagnosticsRequest = requests.find(({ url }) =>
+    url.endsWith("/diagnostics/run"),
   );
+  assert.equal(
+    diagnosticsRequest.url,
+    "/api/v1/pipelines/pipe%201/diagnostics/run",
+  );
+  assert.equal(diagnosticsRequest.options.method, "POST");
+  assert.equal(diagnosticsRequest.options.body, undefined);
+  assert.equal(diagnosticsRequest.options.signal, controller.signal);
   assert.equal(
     api.buildLogsStreamUrl({
       scope: "restream",
@@ -354,8 +410,7 @@ test("retrying and flapping outputs are not treated as unexpectedly down", async
     isOutputRetrying,
     isOutputRunning,
     isOutputUnexpectedlyDown,
-  } =
-    await loadCompiledModule("core/output-status.js");
+  } = await loadCompiledModule("core/output-status.js");
 
   const retryingOutput = {
     desiredState: "started",

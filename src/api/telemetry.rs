@@ -47,15 +47,6 @@ pub struct MetricsSystemQuery {
     pub view: Option<String>,
 }
 
-#[derive(Deserialize)]
-pub struct DiagnosticsQuery {
-    pub probe: Option<String>,
-    #[allow(dead_code)]
-    pub publisher: Option<String>,
-    #[allow(dead_code)]
-    pub since: Option<String>,
-}
-
 pub fn expected_media_path(media_dir: &str, filename: &str) -> PathBuf {
     let configured = PathBuf::from(media_dir);
     let root = if configured.is_absolute() {
@@ -119,18 +110,25 @@ pub async fn build_file_diagnostics_context(
     })
 }
 
-pub async fn pipeline_diagnostics_sse_handler(
+pub async fn pipeline_diagnostics_run_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
-    axum::extract::Query(query): axum::extract::Query<DiagnosticsQuery>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     if let Some(token) = get_session_token_from_headers(&headers) {
         if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "Unauthorized" })),
+            )
+                .into_response();
         }
     } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Unauthorized" })),
+        )
+            .into_response();
     }
 
     let probe_protocol = match state
@@ -140,70 +138,69 @@ pub async fn pipeline_diagnostics_sse_handler(
     {
         Some(protocol) => protocol,
         None => {
-            return (StatusCode::NOT_FOUND, "No active ingest for this pipeline").into_response();
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": "No active ingest for this pipeline"
+                })),
+            )
+                .into_response();
         }
     };
 
-    if let Some(requested_protocol) = query.probe
-        && requested_protocol != probe_protocol
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            format!(
-                "Probe protocol must match active ingest protocol ({})",
-                probe_protocol
-            ),
-        )
-            .into_response();
-    }
     let engine = state.engine.clone();
-    let file_context = if probe_protocol == "file" {
-        build_file_diagnostics_context(&state, &pipeline_id).await
-    } else {
-        None
-    };
-
     let sem = engine.get_or_create_diag_semaphore(&pipeline_id).await;
     let permit = match sem.clone().try_acquire_owned() {
         Ok(p) => p,
         Err(_) => {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
-                "A diagnostic is already running for this pipeline",
+                Json(serde_json::json!({
+                    "error": "A diagnostic is already running for this pipeline"
+                })),
             )
                 .into_response();
         }
     };
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<String>(32);
-    tokio::spawn(async move {
+    // The owned task keeps the permit through blocking file analysis even when
+    // the HTTP client disconnects. Browser abort suppresses stale UI, while the
+    // server batch intentionally runs to completion before another run may start.
+    let run_state = state.clone();
+    let report = match tokio::spawn(async move {
         let _permit = permit;
+        let file_context = if probe_protocol == "file" {
+            build_file_diagnostics_context(&run_state, &pipeline_id).await
+        } else {
+            None
+        };
+
+        // These checks form one short batch. Restore streaming only if genuinely
+        // progressive, multi-second probes return.
         diag::run_diagnostics(
             engine,
             pipeline_id,
             probe_protocol,
-            state.media_dir.clone(),
+            run_state.media_dir.clone(),
             file_context,
-            tx,
         )
-        .await;
-    });
+        .await
+    })
+    .await
+    {
+        Ok(report) => report,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Diagnostics task failed: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
 
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    let body = axum::body::Body::from_stream(futures_util::StreamExt::map(stream, |s| {
-        Ok::<_, std::convert::Infallible>(s)
-    }));
-
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "text/event-stream"),
-            (header::CACHE_CONTROL, "no-cache"),
-            (header::HeaderName::from_static("x-accel-buffering"), "no"),
-        ],
-        body,
-    )
-        .into_response()
+    (StatusCode::OK, Json(report)).into_response()
 }
 
 pub async fn status_get_handler(

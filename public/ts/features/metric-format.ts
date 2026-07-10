@@ -29,11 +29,14 @@ function setMetricValueWithSubtleUnit(
     return;
   }
 
-  let valueSpan = target.children[0] as HTMLElement | undefined;
-  let unitSpan = target.children[1] as HTMLElement | undefined;
+  const existingValueSpan = target.children[0] as HTMLElement | undefined;
+  const existingUnitSpan = target.children[1] as HTMLElement | undefined;
   const hasReusableSpans =
-    valueSpan?.dataset.metricRole === "value" &&
-    unitSpan?.dataset.metricRole === "unit";
+    existingValueSpan?.dataset.metricRole === "value" &&
+    existingUnitSpan?.dataset.metricRole === "unit";
+
+  let valueSpan: HTMLElement;
+  let unitSpan: HTMLElement;
 
   if (!hasReusableSpans) {
     valueSpan = document.createElement("span");
@@ -45,6 +48,9 @@ function setMetricValueWithSubtleUnit(
 
     // Keep the subtle-unit DOM stable so polling only patches text.
     target.replaceChildren(valueSpan, unitSpan);
+  } else {
+    valueSpan = existingValueSpan;
+    unitSpan = existingUnitSpan;
   }
 
   if (valueSpan.textContent !== parts.valueText) {

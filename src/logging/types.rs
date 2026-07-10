@@ -16,6 +16,7 @@ pub struct AppLogRow {
     pub pipeline_id: Option<String>,
     pub output_id: Option<String>,
     pub event_type: Option<String>,
+    pub event_class: Option<String>,
 }
 
 /// Entry written by the DbLayer drain task.

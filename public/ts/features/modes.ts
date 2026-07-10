@@ -1,15 +1,8 @@
-import { buildLogsStreamUrl, getRestreamHistory } from "../core/api.js";
-import { outputViewEncodingLabel } from "../core/output-config.js";
-import {
-  escapeHtml,
-  escapeRedactedHtml,
-  getUrlParam,
-  setUrlParam,
-} from "../core/utils.js";
+import { getRestreamHistory } from "../core/api.js";
+import { createManagedLogStream } from "../core/log-stream.js";
+import { escapeHtml } from "../core/utils.js";
 import { state } from "../core/state.js";
-import { openDiagnosticsModal } from "./diagnostics.js";
 import { renderControlRoom } from "./control-room.js";
-import { fetchProcessingGraph, renderGraphInto } from "./graph.js";
 import {
   refreshMediaLibraryMetricsOnly,
   renderMediaLibraryMode,
@@ -41,37 +34,27 @@ import {
   syncDashboardRuntimeStream,
 } from "./dashboard.js";
 import type { AppLogRow, OutputView, PipelineView } from "../types.js";
-type DashboardMode =
-  | "overview"
-  | "pipeline"
-  | "inspect"
-  | "control"
-  | "media"
-  | "settings"
-  | "status";
+import { renderIncidentsMode } from "./incidents.js";
+import { renderEngineerTelemetryMode } from "./engineer-telemetry.js";
+import {
+  renderPipelineInspector,
+  resetPipelineInspectorSelection,
+  syncPipelineInspectorVisibility,
+} from "./pipeline-inspector.js";
+import {
+  canonicalizeDashboardLocation,
+  dashboardModeUrl,
+  pipelineWorkspaceUrl,
+  resolveDashboardLocation,
+  syncPipelineWorkspaceShell,
+} from "../app/pipeline-workspace.js";
+import type {
+  DashboardMode,
+  PipelineWorkspaceView,
+} from "../app/pipeline-workspace.js";
 
-const validModes = new Set([
-  "overview",
-  "pipeline",
-  "inspect",
-  "control",
-  "media",
-  "settings",
-  "status",
-]);
-const runtimeDashboardModes = new Set([
-  "overview",
-  "pipeline",
-  "inspect",
-  "control",
-]);
+const runtimeDashboardModes = new Set<DashboardMode>(["overview", "pipeline"]);
 let currentMode: DashboardMode | null = null;
-let inspectPipelineId: string | null = null;
-let inspectGraphPipelineId: string | null = null;
-let inspectGraphInFlight: Promise<void> | null = null;
-let inspectGraphRequestSeq = 0;
-let inspectGraphRenderedStateKey: string | null = null;
-let inspectGraphAutoRefresh = true;
 let settingsMounted = false;
 let statusMounted = false;
 type StatusTone = "success" | "warning" | "error" | "neutral" | "info";
@@ -88,7 +71,6 @@ const OVERVIEW_HISTORY_LIMIT = 28;
 const OVERVIEW_ACTIVITY_LIMIT = 6;
 const OVERVIEW_ACTIVITY_FETCH_LIMIT = 24;
 const OVERVIEW_ACTIVITY_STALE_MS = 15_000;
-const OVERVIEW_ACTIVITY_RECONNECT_MS = 1000;
 const overviewMetricHistory: Record<OverviewMetricKey, number[]> = {
   inputs: [],
   outputs: [],
@@ -101,8 +83,8 @@ let lastOverviewMetricsSampleKey: string | null = null;
 let overviewActivityLogs: AppLogRow[] = [];
 let overviewActivityFetchedAt = 0;
 let overviewActivityInFlight: Promise<void> | null = null;
-let overviewActivityStream: EventSource | null = null;
-let overviewActivityReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+const overviewActivityStream = createManagedLogStream();
+let overviewActivityStreamActive = false;
 
 function overviewActivityLogKey(log: AppLogRow): string {
   const id = Number(log?.id);
@@ -134,14 +116,8 @@ function latestOverviewActivityId(): number | null {
 }
 
 function closeOverviewActivityStream(): void {
-  if (overviewActivityReconnectTimer) {
-    clearTimeout(overviewActivityReconnectTimer);
-    overviewActivityReconnectTimer = null;
-  }
-  if (overviewActivityStream) {
-    overviewActivityStream.close();
-    overviewActivityStream = null;
-  }
+  overviewActivityStream.close();
+  overviewActivityStreamActive = false;
 }
 
 function overviewActivityStreamingEnabled(): boolean {
@@ -151,38 +127,34 @@ function overviewActivityStreamingEnabled(): boolean {
 }
 
 function ensureOverviewActivityStream(): void {
-  if (typeof EventSource !== "function") return;
   if (!overviewActivityStreamingEnabled()) {
     closeOverviewActivityStream();
     return;
   }
-  if (overviewActivityStream) return;
-
-  overviewActivityStream = new EventSource(
-    buildLogsStreamUrl({
+  overviewActivityStreamActive = typeof EventSource === "function";
+  overviewActivityStream.sync({
+    filters: {
       scope: "restream",
-      lastEventId: latestOverviewActivityId(),
-    }),
-  );
-  overviewActivityStream.addEventListener("log", (event: Event) => {
-    try {
-      const data = JSON.parse((event as MessageEvent).data) as AppLogRow;
+    },
+    resumeAfterId: latestOverviewActivityId(),
+    onLog: (data) => {
       mergeOverviewActivityLogs([data]);
-      handleDashboardRuntimeLifecycleLog(data);
+      if (
+        data.eventClass === "lifecycle" ||
+        (!data.eventClass && Boolean(data.eventType))
+      ) {
+        handleDashboardRuntimeLifecycleLog(data);
+      }
       if (currentMode === "overview" || currentMode === null) renderOverview();
-    } catch {
-      // Ignore malformed frames and wait for the next reconnect/snapshot.
-    }
+    },
+    onUnavailable: () => {
+      overviewActivityStreamActive = false;
+      // The current snapshot remains authoritative while SSE is unavailable.
+      // Start a fresh staleness window so renderOverview() cannot spin through
+      // immediate fetch -> reconnect-failure cycles.
+      overviewActivityFetchedAt = Date.now();
+    },
   });
-  overviewActivityStream.onerror = () => {
-    closeOverviewActivityStream();
-    overviewActivityFetchedAt = 0;
-    if (!overviewActivityStreamingEnabled()) return;
-    overviewActivityReconnectTimer = setTimeout(() => {
-      overviewActivityReconnectTimer = null;
-      refreshOverviewActivityIfStale();
-    }, OVERVIEW_ACTIVITY_RECONNECT_MS);
-  };
 }
 
 function refreshOverviewActivityIfStale(): void {
@@ -191,7 +163,7 @@ function refreshOverviewActivityIfStale(): void {
     return;
   }
   const shouldFetchSnapshot =
-    overviewActivityStream === null &&
+    !overviewActivityStreamActive &&
     (overviewActivityLogs.length === 0 ||
       Date.now() - overviewActivityFetchedAt >= OVERVIEW_ACTIVITY_STALE_MS);
   if (!shouldFetchSnapshot) {
@@ -249,12 +221,6 @@ function overviewActivitySection(): string {
         </div>
         <div class="p-4">${body}</div>
     </section>`;
-}
-
-function normalizeMode(mode: string | null): DashboardMode {
-  if (mode === "admin") return "settings";
-  if (mode && validModes.has(mode)) return mode as DashboardMode;
-  return getUrlParam("p") ? "pipeline" : "overview";
 }
 
 function formatBitrate(kbps: number | null | undefined): string {
@@ -779,281 +745,6 @@ function overviewMetricHero(value: string): string {
         <span class="text-base-content/55 shrink-0 text-sm font-semibold">${escapeHtml(match[2])}</span>
     </span>`;
 }
-
-function getInspectPipeline(): PipelineView | null {
-  const selectedFromUrl = getUrlParam("p");
-  if (
-    inspectPipelineId &&
-    state.pipelines.some((pipe) => pipe.id === inspectPipelineId)
-  ) {
-    return (
-      state.pipelines.find((pipe) => pipe.id === inspectPipelineId) || null
-    );
-  }
-  if (
-    selectedFromUrl &&
-    state.pipelines.some((pipe) => pipe.id === selectedFromUrl)
-  ) {
-    inspectPipelineId = selectedFromUrl;
-    return state.pipelines.find((pipe) => pipe.id === selectedFromUrl) || null;
-  }
-  inspectPipelineId = state.pipelines[0]?.id || null;
-  return state.pipelines[0] || null;
-}
-
-function renderInspect(): void {
-  const pipe = getInspectPipeline();
-  const stateKey = inspectGraphStateKey(pipe);
-  const select = document.getElementById(
-    "inspect-pipeline-select",
-  ) as HTMLSelectElement | null;
-  if (select) {
-    select.innerHTML = state.pipelines
-      .map(
-        (p) =>
-          `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`,
-      )
-      .join("");
-    select.value = pipe?.id || "";
-    select.onchange = () => {
-      inspectPipelineId = select.value || null;
-      resetInspectGraphForSelection(inspectPipelineId);
-      renderInspect();
-      void refreshInspectGraph();
-    };
-  }
-  if (!pipe && inspectGraphPipelineId !== null) {
-    resetInspectGraphForSelection(null);
-  }
-
-  const openBtn = document.getElementById(
-    "inspect-open-pipeline-btn",
-  ) as HTMLButtonElement | null;
-  if (openBtn) {
-    openBtn.disabled = !pipe;
-    openBtn.onclick = () => {
-      if (pipe) {
-        selectPipeline(pipe.id);
-        setDashboardMode("pipeline");
-      }
-    };
-  }
-
-  renderInspectSummary(pipe);
-  renderInspectDiagnostics(pipe);
-
-  const refreshBtn = document.getElementById(
-    "inspect-refresh-graph-btn",
-  ) as HTMLButtonElement | null;
-  if (refreshBtn) {
-    refreshBtn.textContent = inspectGraphAutoRefresh
-      ? "Stop Refresh"
-      : "Auto Refresh";
-    refreshBtn.classList.toggle("btn-accent", inspectGraphAutoRefresh);
-    refreshBtn.classList.toggle("btn-outline", !inspectGraphAutoRefresh);
-    refreshBtn.setAttribute(
-      "aria-pressed",
-      inspectGraphAutoRefresh ? "true" : "false",
-    );
-    refreshBtn.onclick = () => {
-      inspectGraphAutoRefresh = !inspectGraphAutoRefresh;
-      renderInspect();
-      if (inspectGraphAutoRefresh) void refreshInspectGraph();
-    };
-  }
-  const diagBtn = document.getElementById(
-    "inspect-open-diagnostics-btn",
-  ) as HTMLButtonElement | null;
-  if (diagBtn) {
-    diagBtn.disabled = !pipe || pipe.input.status !== "on";
-    diagBtn.onclick = () => {
-      if (pipe) openDiagnosticsModal(pipe.id);
-    };
-  }
-
-  if (
-    pipe &&
-    !inspectGraphInFlight &&
-    (inspectGraphPipelineId !== pipe.id ||
-      inspectGraphRenderedStateKey !== stateKey)
-  ) {
-    void refreshInspectGraph();
-  } else if (pipe && inspectGraphAutoRefresh && !document.hidden) {
-    void refreshInspectGraph();
-  }
-}
-
-function resetInspectGraphForSelection(pipeId: string | null): void {
-  inspectGraphRequestSeq++;
-  inspectGraphPipelineId = pipeId;
-  inspectGraphRenderedStateKey = null;
-  const status = document.getElementById("inspect-graph-status");
-  const container = document.getElementById("inspect-graph-container");
-  if (status)
-    status.textContent = pipeId ? "Loading graph..." : "Select a pipeline.";
-  if (container) {
-    container.innerHTML = `<div class="text-base-content/60 flex h-full min-h-72 items-center justify-center text-sm">
-            ${pipeId ? "Loading graph..." : "Select a pipeline to inspect its graph."}
-        </div>`;
-  }
-}
-
-function renderInspectSummary(pipe: PipelineView | null): void {
-  const container = document.getElementById("inspect-pipeline-summary");
-  if (!container) return;
-  if (!pipe) {
-    container.innerHTML =
-      '<div class="text-base-content/60 text-sm">No pipeline selected.</div>';
-    return;
-  }
-
-  const health = pipelineHealthLabel(pipe);
-  const outputs = pipe.outs
-    .map((out) => {
-      const stateLabel = outputStateLabel(out);
-      const encodingLabel = outputViewEncodingLabel(out);
-      return `<div class="flex items-center justify-between gap-2 border-base-content/10 border-t py-2">
-                <div class="min-w-0">
-                    <div class="truncate text-sm font-medium">${escapeHtml(out.name)}</div>
-                    <div class="text-base-content/60 truncate text-xs">${escapeHtml(encodingLabel)} / ${escapeRedactedHtml(out.url, true)}</div>
-                </div>
-                <span class="badge ${stateLabel.cls} shrink-0">${stateLabel.label}</span>
-            </div>`;
-    })
-    .join("");
-
-  container.innerHTML = `<section class="border-base-content/10 bg-base-200 rounded-lg border p-3">
-        <div class="mb-2 flex min-w-0 items-start justify-between gap-2">
-            <h2 class="min-w-0 truncate font-semibold">${escapeHtml(pipe.name)}</h2>
-            <span class="badge ${health.cls} shrink-0 whitespace-nowrap">${health.label}</span>
-        </div>
-        <dl class="grid grid-cols-2 gap-2 text-sm">
-            <div><dt class="text-base-content/60">Input</dt><dd>${escapeHtml(pipe.input.status)}</dd></div>
-            <div><dt class="text-base-content/60">Publisher</dt><dd>${escapeHtml(pipe.input.publisher?.protocol || "--")}</dd></div>
-            <div><dt class="text-base-content/60">Input Rate</dt><dd>${formatBitrate(pipe.stats.inputBitrateKbps)}</dd></div>
-            <div><dt class="text-base-content/60">Output Rate</dt><dd>${formatBitrate(pipe.stats.outputBitrateKbps)}</dd></div>
-            <div><dt class="text-base-content/60">Received</dt><dd>${formatBytes(pipe.input.bytesReceived)}</dd></div>
-            <div><dt class="text-base-content/60">Sent</dt><dd>${formatBytes(pipe.input.bytesSent)}</dd></div>
-        </dl>
-        <div class="mt-3">${outputs || '<div class="text-base-content/60 text-sm">No outputs configured.</div>'}</div>
-    </section>`;
-}
-
-function renderInspectDiagnostics(pipe: PipelineView | null): void {
-  const container = document.getElementById("inspect-diagnostics-summary");
-  if (!container) return;
-  if (!pipe) {
-    container.innerHTML =
-      '<div class="text-base-content/60 text-sm">Select a pipeline to inspect diagnostics.</div>';
-    return;
-  }
-
-  const blockers: string[] = [];
-  if (pipe.input.status !== "on")
-    blockers.push("Input must be online for active probes.");
-  if (!pipe.input.publisher?.protocol)
-    blockers.push("Publisher protocol is not known yet.");
-  const downOutputs = pipe.outs.filter(isOutputUnexpectedlyDown);
-  const retryingOutputs = pipe.outs.filter(isOutputRetrying);
-  const flappingOutputs = pipe.outs.filter(isOutputFlapping);
-  const faultCandidates = [
-    ...downOutputs,
-    ...retryingOutputs,
-    ...flappingOutputs,
-  ];
-
-  container.innerHTML = `<div class="grid gap-3 md:grid-cols-3">
-        <div class="bg-base-100 rounded-lg p-3">
-            <div class="text-base-content/60 text-xs font-semibold uppercase">Probe Readiness</div>
-            <div class="mt-2 text-sm">${blockers.length ? blockers.map(escapeHtml).join("<br>") : "Ready for active diagnostics."}</div>
-        </div>
-        <div class="bg-base-100 rounded-lg p-3">
-            <div class="text-base-content/60 text-xs font-semibold uppercase">Fault Candidates</div>
-            <div class="mt-2 text-sm">${faultCandidates.length ? faultCandidates.map((out) => escapeHtml(out.name)).join("<br>") : "No unexpected output failures."}</div>
-        </div>
-        <div class="bg-base-100 rounded-lg p-3">
-            <div class="text-base-content/60 text-xs font-semibold uppercase">Suggested Next Step</div>
-            <div class="mt-2 text-sm">${pipe.input.status === "on" ? (retryingOutputs.length ? "Inspect recent errors and retry backoff before forcing a restart." : flappingOutputs.length ? "Inspect recent sink failures before forcing a restart." : "Run diagnostics, then inspect graph edges with zero packet output.") : "Start or reconnect the publisher before probing."}</div>
-        </div>
-    </div>`;
-}
-
-async function refreshInspectGraph(): Promise<void> {
-  const pipe = getInspectPipeline();
-  const requestStateKey = inspectGraphStateKey(pipe);
-  const status = document.getElementById("inspect-graph-status");
-  const container = document.getElementById("inspect-graph-container");
-  if (!pipe || !container) return;
-  const requestPipeId = pipe.id;
-  const requestSeq = ++inspectGraphRequestSeq;
-  inspectGraphPipelineId = requestPipeId;
-  if (status) status.textContent = "Loading graph...";
-  container.innerHTML = `<div class="text-base-content/60 flex h-full min-h-72 items-center justify-center text-sm">
-        Loading graph...
-    </div>`;
-  inspectGraphInFlight = (async () => {
-    const graph = await fetchProcessingGraph(requestPipeId);
-    if (
-      requestSeq !== inspectGraphRequestSeq ||
-      getInspectPipeline()?.id !== requestPipeId
-    ) {
-      return;
-    }
-    inspectGraphPipelineId = requestPipeId;
-    if (!graph || !container || graph.pipelineId !== requestPipeId) {
-      if (status) status.textContent = "Graph unavailable.";
-      container.innerHTML =
-        '<div class="text-base-content/60 flex h-full min-h-72 items-center justify-center text-sm">Graph unavailable.</div>';
-      return;
-    }
-    renderGraphInto(container, graph as Parameters<typeof renderGraphInto>[1]);
-    inspectGraphRenderedStateKey = requestStateKey;
-    if (status) {
-      const nodeCount = (graph as { nodes?: unknown[] }).nodes?.length || 0;
-      const inputState =
-        pipe.input.status === "on" ? "live" : pipe.input.status;
-      status.textContent = `${pipe.name} / ${nodeCount} nodes / input ${inputState}`;
-    }
-  })();
-  try {
-    await inspectGraphInFlight;
-  } finally {
-    if (requestSeq === inspectGraphRequestSeq) {
-      inspectGraphInFlight = null;
-    }
-  }
-}
-
-function inspectGraphStateKey(pipe: PipelineView | null): string | null {
-  if (!pipe) return null;
-  const outputs = pipe.outs
-    .map((out) =>
-      [
-        out.id,
-        out.status,
-        out.desiredState,
-        outputViewEncodingLabel(out),
-        out.phase || "",
-        out.retrying ? "1" : "0",
-        out.flapping ? "1" : "0",
-        out.lastError || "",
-      ].join(":"),
-    )
-    .join("|");
-  return [
-    pipe.id,
-    pipe.name,
-    pipe.input.status,
-    pipe.input.probeStatus,
-    pipe.input.readers,
-    pipe.input.audioTracks.length,
-    pipe.input.video?.codec || "",
-    pipe.hlsPreview?.active ? "1" : "0",
-    pipe.hlsPreview?.segments || 0,
-    outputs,
-  ].join("::");
-}
-
 function renderSettingsMode(): void {
   const container = document.getElementById("settings-mode-content");
   if (!container) return;
@@ -1096,17 +787,22 @@ function refreshActiveMode(): void {
   renderDashboardModes();
 }
 
-function applyMode(mode: DashboardMode): void {
+function applyMode(
+  mode: DashboardMode,
+  pipelineView: PipelineWorkspaceView,
+): void {
   const previousMode = currentMode;
   currentMode = mode;
   syncOverviewActivityStream();
   setStatusStreamActive(mode === "status");
   syncDashboardRuntimeStream();
-  const panels: Record<DashboardMode, HTMLElement | null> = {
+  const panels: Record<
+    Exclude<DashboardMode, "pipeline">,
+    HTMLElement | null
+  > = {
     overview: document.getElementById("overview-mode-panel"),
-    pipeline: document.getElementById("dashboard-grid"),
-    inspect: document.getElementById("inspect-mode-panel"),
-    control: document.getElementById("control-mode-panel"),
+    incidents: document.getElementById("incidents-mode-panel"),
+    telemetry: document.getElementById("telemetry-mode-panel"),
     media: document.getElementById("media-mode-panel"),
     settings: document.getElementById("settings-mode-panel"),
     status: document.getElementById("status-mode-panel"),
@@ -1114,6 +810,7 @@ function applyMode(mode: DashboardMode): void {
   for (const [name, panel] of Object.entries(panels)) {
     panel?.classList.toggle("hidden", name !== mode);
   }
+  syncPipelineWorkspaceShell(mode, pipelineView);
 
   document
     .querySelectorAll<HTMLButtonElement>("[data-dashboard-mode]")
@@ -1131,11 +828,15 @@ function applyMode(mode: DashboardMode): void {
       mode === "overview"
         ? `${counts.liveInputs} live inputs / ${counts.runningOutputs} running outputs${counts.retryingOutputs ? ` / ${counts.retryingOutputs} retrying` : ""}${counts.flappingOutputs ? ` / ${counts.flappingOutputs} flapping` : ""}`
         : mode === "pipeline"
-          ? "Pipeline workflow"
-          : mode === "inspect"
-            ? "Graph and diagnostics"
-            : mode === "control"
-              ? "Monitoring wall"
+          ? pipelineView === "inspect"
+            ? "Pipeline graph and diagnostics"
+            : pipelineView === "monitor"
+              ? "Pipeline monitoring wall"
+              : "Pipeline workflow"
+          : mode === "incidents"
+            ? "Alerts, evidence, and lifecycle events"
+            : mode === "telemetry"
+              ? "Engine and pipeline counters"
               : mode === "media"
                 ? "Recordings and source files"
                 : mode === "settings"
@@ -1150,7 +851,23 @@ function applyMode(mode: DashboardMode): void {
   ) {
     void refreshDashboard();
   }
-  if (mode === "control") renderControlRoom();
+  if (mode === "pipeline" && pipelineView === "monitor") renderControlRoom();
+  const pipelineOptions = state.pipelines.map((pipeline) => ({
+    id: pipeline.id,
+    name: pipeline.name || pipeline.id,
+  }));
+  renderIncidentsMode({
+    active: mode === "incidents",
+    pipelines: pipelineOptions,
+    navigateToPipeline: (pipelineId) => {
+      selectPipeline(pipelineId);
+      setDashboardMode("pipeline");
+    },
+  });
+  renderEngineerTelemetryMode({
+    active: mode === "telemetry",
+    pipelines: pipelineOptions,
+  });
   if (mode === "media") {
     if (previousMode !== "media") {
       requestDetailedMetricsRefresh();
@@ -1165,40 +882,50 @@ function applyMode(mode: DashboardMode): void {
   syncDashboardPolling();
 }
 
-function modeUsesPipelineSelection(mode: DashboardMode): boolean {
-  return mode === "pipeline" || mode === "inspect";
-}
-
 function setModeUrl(mode: DashboardMode): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set("mode", mode);
-  if (!modeUsesPipelineSelection(mode)) url.searchParams.delete("p");
+  const url = dashboardModeUrl(window.location.href, mode);
   window.history.pushState({}, "", url);
 }
 
 export function setDashboardMode(mode: string): void {
-  const nextMode = normalizeMode(mode);
+  if (mode === "inspect" || mode === "control") {
+    setPipelineWorkspaceView(mode === "inspect" ? "inspect" : "monitor");
+    return;
+  }
+  const candidate = new URL(window.location.href);
+  candidate.searchParams.set("mode", mode);
+  candidate.searchParams.delete("view");
+  const nextMode = resolveDashboardLocation(candidate.href).mode;
   setModeUrl(nextMode);
   if (currentMode === nextMode) {
-    applyMode(nextMode);
+    applyMode(nextMode, "operate");
     return;
   }
   refreshActiveMode();
 }
 
+export function setPipelineWorkspaceView(
+  view: PipelineWorkspaceView,
+  pipelineId?: string | null,
+): void {
+  const url = pipelineWorkspaceUrl(window.location.href, view, pipelineId);
+  window.history.pushState({}, "", url);
+  refreshActiveMode();
+}
+
 export function openInspectGraph(pipeId: string): void {
-  inspectPipelineId = pipeId;
-  resetInspectGraphForSelection(pipeId);
-  setUrlParam("p", pipeId);
-  setDashboardMode("inspect");
-  void refreshInspectGraph();
+  selectPipeline(pipeId);
+  resetPipelineInspectorSelection(pipeId);
+  setPipelineWorkspaceView("inspect", pipeId);
 }
 
 export function renderDashboardModes(): void {
-  const activeMode = normalizeMode(getUrlParam("mode"));
-  if (activeMode === "overview") renderOverview();
-  if (activeMode === "inspect") renderInspect();
-  applyMode(activeMode);
+  const location = canonicalizeDashboardLocation();
+  if (location.mode === "overview") renderOverview();
+  if (location.mode === "pipeline" && location.pipelineView === "inspect") {
+    renderPipelineInspector();
+  }
+  applyMode(location.mode, location.pipelineView);
 }
 
 export function initDashboardModes(): void {
@@ -1208,16 +935,25 @@ export function initDashboardModes(): void {
       button.onclick = () =>
         setDashboardMode(button.dataset.dashboardMode || "overview");
     });
+  document
+    .querySelectorAll<HTMLButtonElement>("[data-pipeline-workspace-view]")
+    .forEach((button) => {
+      button.onclick = () =>
+        setPipelineWorkspaceView(
+          (button.dataset.pipelineWorkspaceView ||
+            "operate") as PipelineWorkspaceView,
+        );
+    });
   window.addEventListener("popstate", refreshActiveMode);
   document.addEventListener("visibilitychange", () => {
     syncOverviewActivityStream();
     syncStatusStreamVisibility();
     if (
       !document.hidden &&
-      normalizeMode(getUrlParam("mode")) === "inspect" &&
-      inspectGraphAutoRefresh
+      resolveDashboardLocation(window.location.href).mode === "pipeline" &&
+      resolveDashboardLocation(window.location.href).pipelineView === "inspect"
     ) {
-      void refreshInspectGraph();
+      syncPipelineInspectorVisibility();
     }
   });
   window.setDashboardMode = setDashboardMode;

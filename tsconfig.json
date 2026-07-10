@@ -6,7 +6,7 @@
     "moduleResolution": "bundler",
     "outDir": "public/js",
     "rootDir": "public/ts",
-    "strict": false,
+    "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "declaration": false,

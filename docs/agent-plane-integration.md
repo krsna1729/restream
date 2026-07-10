@@ -23,6 +23,19 @@ Keep business logic in the product:
 Do not put plan/apply safety policy in the MCP wrapper. That would duplicate
 logic that already exists in the application.
 
+## Browser boundary
+
+The dashboard is not currently an agent client. Its normal operator workflows
+use the authenticated `/api/v1` control-plane routes directly. The existing
+diagnostics "Ask AI" action is a manual handoff that copies a prompt and opens
+an external chat; it does not host an agent in the browser.
+
+Do not couple ordinary dashboard reads or mutations to `/api/v1/agent/*`.
+A future browser approval inbox or embedded agent requires a separately designed
+authenticated workflow, durable/listable operations, and an explicit human
+approval experience. Until then, the agent routes remain the task-oriented
+boundary for MCP and other external agent clients.
+
 ## Why use the agent plane instead of raw APIs
 
 The control plane is object-oriented:

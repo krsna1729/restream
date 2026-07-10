@@ -1,6 +1,7 @@
 # Observability and Diagnostics
 
-The Rust runtime exposes JSON and SSE diagnostics directly from process state.
+The Rust runtime exposes JSON diagnostics directly from process state and SSE
+for live log/event feeds.
 It does not expose a Prometheus text endpoint, proxy Grafana, or poll a sidecar.
 
 ## Endpoints
@@ -14,7 +15,7 @@ It does not expose a Prometheus text endpoint, proxy Grafana, or poll a sidecar.
 | `GET /api/v1/engine/sbom` | Session | CycloneDX 1.5 runtime SBOM for resolved Rust crates and linked native libraries |
 | `GET /api/v1/pipelines/:id/probe` | Session | Active input codec, dimensions, audio tracks, bitrate, and GOP summary |
 | `GET /api/v1/pipelines/:id/graph` | Session | Processing stages, buffers, and output connections |
-| `GET /api/v1/pipelines/:id/diagnostics` | Session | Protocol-aware diagnostic run streamed over SSE |
+| `POST /api/v1/pipelines/:id/diagnostics/run` | Session | Protocol-aware batch diagnostic report |
 | `GET /api/v1/overview` | Session | Engine-wide operator summary: pipeline counts, alert rollup, SRT listener |
 | `GET /api/v1/alerts` | Session | Aggregate alerts across all pipelines with `firstSeen`/`lastSeen` tracking |
 | `GET /api/v1/events` | Session | Lifecycle event log (ingest, stage, egress transitions) |
@@ -256,8 +257,12 @@ prepared with bonding support or the wrong binary was linked.
 
 ## Diagnostic Checks
 
-The SSE diagnostic run (`GET /api/v1/pipelines/:id/diagnostics`) is
-protocol-aware.
+The JSON diagnostic run (`POST /api/v1/pipelines/:id/diagnostics/run`) is
+protocol-aware and infers the protocol from the active ingest; the request has
+no body. Checks are a short, ordered batch; SSE should return only if genuinely progressive multi-second
+probes are added again. A client disconnect suppresses stale browser results,
+but the owned server batch runs to completion while retaining its per-pipeline
+permit so blocking file analysis cannot overlap a retry.
 
 RTMP and SRT ingests run these checks:
 
@@ -290,8 +295,8 @@ File ingests run a file-specific set instead:
 The diagnostic runner warns above 50% SRT queue occupancy, alerts above 75%,
 and reports any kernel drop count.
 
-An optional `probe=rtmp|srt|file` query must match the active ingest protocol.
-Returns `404` without an active ingest and `400` for a protocol mismatch.
+The active ingest selects the RTMP, SRT, or file check set. Returns `404`
+without an active ingest.
 
 ## Known Instrumentation Gaps
 

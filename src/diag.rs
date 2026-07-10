@@ -1,19 +1,13 @@
 //! Native diagnostic runner — replaces the old Node.js shell-command approach.
 //!
-//! Each `DiagCheck` is an async function that:
-//!   1. Emits a `running` SSE event.
-//!   2. Performs its work (inspecting `MediaEngine`, `sysinfo`, network sockets, etc.).
-//!   3. Emits a `result` SSE event with full output and any detected issues.
-//!
-//! The endpoint streams these via Server-Sent Events so the browser can show
-//! live progress just like the old diagnostics UI.
+//! Each check inspects `MediaEngine`, `sysinfo`, network sockets, or cached file
+//! analysis and contributes one result to an ordered report.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
 use serde::Serialize;
-use serde_json::json;
 use sysinfo::{Disks, Networks, System};
 
 use crate::media::engine::MediaEngine;
@@ -77,13 +71,6 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-// ─── SSE event helpers ────────────────────────────────────────────────────────
-
-/// Format a named SSE event with JSON data.
-pub fn sse_event(event: &str, data: &serde_json::Value) -> String {
-    format!("event: {}\ndata: {}\n\n", event, data)
-}
-
 // ─── Result types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -126,21 +113,12 @@ impl DiagResult {
     }
 }
 
-// ─── Running event ────────────────────────────────────────────────────────────
-
-fn running_event(index: u32, name: &str, description: &str) -> String {
-    sse_event(
-        "running",
-        &json!({
-            "index": index,
-            "name": name,
-            "description": description,
-        }),
-    )
-}
-
-fn result_event(result: &DiagResult) -> String {
-    sse_event("result", &serde_json::to_value(result).unwrap_or_default())
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsReport {
+    pub protocol: String,
+    pub total_duration_ms: u64,
+    pub checks: Vec<DiagResult>,
 }
 
 // ─── Individual checks ────────────────────────────────────────────────────────
@@ -1160,156 +1138,76 @@ async fn check_network_bandwidth(idx: u32) -> DiagResult {
 
 // ─── Top-level runner ─────────────────────────────────────────────────────────
 
-/// Run all diagnostic checks for a pipeline, streaming SSE events as they complete.
+/// Run all batch-oriented diagnostic checks for a pipeline.
 pub async fn run_diagnostics(
     engine: Arc<MediaEngine>,
     pipeline_id: String,
     probe_protocol: String,
     media_dir: String,
     file_context: Option<FileDiagnosticsContext>,
-    tx: tokio::sync::mpsc::Sender<String>,
-) {
+) -> DiagnosticsReport {
     let overall_start = Instant::now();
+    let mut checks = Vec::new();
 
     macro_rules! run_check {
-        ($idx:expr, $name:expr, $desc:expr, $check:expr) => {{
-            if tx.send(running_event($idx, $name, $desc)).await.is_err() {
-                return;
-            }
-            let result = $check.await;
-            if tx.send(result_event(&result)).await.is_err() {
-                return;
-            }
+        ($check:expr) => {{
+            checks.push($check.await);
         }};
     }
 
-    run_check!(
-        0,
-        "Engine Status",
-        "MediaEngine active state for this pipeline",
-        check_engine_status(0, &engine, &pipeline_id)
-    );
+    run_check!(check_engine_status(0, &engine, &pipeline_id));
 
     if probe_protocol == "file" {
-        run_check!(
-            1,
-            "File Source",
-            "Configured file-ingest source and live-stream suitability",
-            check_file_source(1, file_context.as_ref())
-        );
+        run_check!(check_file_source(1, file_context.as_ref()));
 
-        run_check!(
-            2,
-            "Stream Info",
-            "Video and audio codec parameters from demuxer",
-            check_ingest_stream_info(2, &engine, &pipeline_id)
-        );
+        run_check!(check_ingest_stream_info(2, &engine, &pipeline_id));
 
-        run_check!(
-            3,
-            "GOP Analysis",
-            "Keyframe interval consistency and stability",
-            check_gop_analysis(3, &engine, &pipeline_id)
-        );
+        run_check!(check_gop_analysis(3, &engine, &pipeline_id));
 
-        run_check!(
+        run_check!(check_file_ingest_runtime(
             4,
-            "File Ingest Runtime",
-            "Internal file-ingest registration and byte flow",
-            check_file_ingest_runtime(4, &engine, &pipeline_id, file_context.as_ref())
-        );
+            &engine,
+            &pipeline_id,
+            file_context.as_ref()
+        ));
 
-        run_check!(
-            5,
-            "Ring Buffer Health",
-            "In-process media ring buffer fill level and alignment",
-            check_ring_buffer_health(5, &engine, &pipeline_id)
-        );
+        run_check!(check_ring_buffer_health(5, &engine, &pipeline_id));
 
-        run_check!(
-            6,
-            "Preview & Recording",
-            "Browser preview and recording readiness for file ingest",
-            check_preview_recording_state(6, &engine, &pipeline_id)
-        );
+        run_check!(check_preview_recording_state(6, &engine, &pipeline_id));
 
-        run_check!(
-            7,
-            "Active Outputs",
-            "Egress target status and throughput",
-            check_active_outputs(7, &engine, &pipeline_id)
-        );
+        run_check!(check_active_outputs(7, &engine, &pipeline_id));
 
-        run_check!(
-            8,
-            "System Resources",
-            "CPU, RAM, and disk utilization",
-            check_system_resources(8, &media_dir)
-        );
+        run_check!(check_system_resources(8, &media_dir));
     } else {
-        run_check!(
-            1,
-            "Stream Info",
-            "Video and audio codec parameters from demuxer",
-            check_ingest_stream_info(1, &engine, &pipeline_id)
-        );
+        run_check!(check_ingest_stream_info(1, &engine, &pipeline_id));
 
-        run_check!(
-            2,
-            "GOP Analysis",
-            "Keyframe interval consistency and stability",
-            check_gop_analysis(2, &engine, &pipeline_id)
-        );
+        run_check!(check_gop_analysis(2, &engine, &pipeline_id));
 
-        run_check!(
+        run_check!(check_publisher_transport(
             3,
-            "Publisher Transport",
-            "Network connection quality metrics",
-            check_publisher_transport(3, &engine, &pipeline_id, &probe_protocol)
-        );
+            &engine,
+            &pipeline_id,
+            &probe_protocol
+        ));
 
-        run_check!(
-            4,
-            "Ring Buffer Health",
-            "In-process media ring buffer fill level and alignment",
-            check_ring_buffer_health(4, &engine, &pipeline_id)
-        );
+        run_check!(check_ring_buffer_health(4, &engine, &pipeline_id));
 
-        run_check!(
-            5,
-            "Active Outputs",
-            "Egress target status and throughput",
-            check_active_outputs(5, &engine, &pipeline_id)
-        );
+        run_check!(check_active_outputs(5, &engine, &pipeline_id));
 
-        run_check!(
-            6,
-            "System Resources",
-            "CPU, RAM, and disk utilization",
-            check_system_resources(6, &media_dir)
-        );
+        run_check!(check_system_resources(6, &media_dir));
 
-        run_check!(
-            7,
-            "Network Bandwidth",
-            "Per-interface RX/TX throughput measurement",
-            check_network_bandwidth(7)
-        );
+        run_check!(check_network_bandwidth(7));
 
         if probe_protocol == "srt" {
-            run_check!(
-                8,
-                "SRT Listener Socket",
-                "Shared UDP socket buffer occupancy",
-                check_srt_listener_socket(8, &engine)
-            );
+            run_check!(check_srt_listener_socket(8, &engine));
         }
     }
 
-    let total_ms = overall_start.elapsed().as_millis() as u64;
-    let _ = tx
-        .send(sse_event("done", &json!({ "totalDurationMs": total_ms })))
-        .await;
+    DiagnosticsReport {
+        protocol: probe_protocol,
+        total_duration_ms: overall_start.elapsed().as_millis() as u64,
+        checks,
+    }
 }
 
 #[cfg(test)]
@@ -1318,21 +1216,28 @@ mod tests {
     use crate::media::engine::MediaEngine;
 
     #[tokio::test]
-    async fn test_run_diagnostics_early_exit_on_disconnect() {
+    async fn file_diagnostics_return_one_ordered_batch_report() {
         let engine = Arc::new(MediaEngine::new());
-        let (tx, rx) = tokio::sync::mpsc::channel::<String>(32);
-        drop(rx);
-
-        let start = Instant::now();
-        run_diagnostics(
+        let report = run_diagnostics(
             engine,
             "pipe-test".to_string(),
-            "rtmp".to_string(),
+            "file".to_string(),
             "media".to_string(),
             None,
-            tx,
         )
         .await;
-        assert!(start.elapsed().as_millis() < 100);
+
+        assert_eq!(report.protocol, "file");
+        assert_eq!(report.checks.len(), 9);
+        assert_eq!(report.checks[0].name, "Engine Status");
+        assert_eq!(report.checks[8].name, "System Resources");
+        assert_eq!(
+            report
+                .checks
+                .iter()
+                .map(|check| check.index)
+                .collect::<Vec<_>>(),
+            (0..9).collect::<Vec<_>>()
+        );
     }
 }

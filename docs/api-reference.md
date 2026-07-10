@@ -239,15 +239,15 @@ new `seg<N>.ts`, then PUTs the playlist URL.
 
 | Method | Route | Response |
 |---|---|---|
-| `GET` | `/api/logs` | `{ logs, total, hasMore }` |
-| `GET` | `/api/logs/stream` | SSE stream (`event: log` frames) |
+| `GET` | `/api/v1/logs` | `{ logs, total, hasMore }` |
+| `GET` | `/api/v1/logs/stream` | SSE stream (`event: log` frames) |
 
 All process log entries are stored in the `app_logs` SQLite table and served
-through these two endpoints. The frontend history UI calls `/api/logs` with
+through these two endpoints. The frontend history UI calls `/api/v1/logs` with
 `pipeline_id`/`output_id` filters instead of relying on the pipeline-scoped
 history endpoints.
 
-### `GET /api/logs`
+### `GET /api/v1/logs`
 
 Query parameters:
 
@@ -262,22 +262,27 @@ Query parameters:
 | `event_class` | — | `lifecycle` to return only lifecycle transition events |
 | `prefix` | — | Comma-separated message prefix filter (`stderr,exit`) |
 | `limit` | `200` | 1–1000 |
-| `order` | `desc` | `asc` or `desc` on `ts` |
+| `order` | `desc` | `asc` or `desc` on `ts` for ordinary list snapshots |
 
 Each log entry in the response includes `id`, `ts`, `level`, `target`,
 `message`, `fields` (JSON), `pipelineId`, `outputId`, `eventType`.
+Lifecycle-aware clients also receive `eventClass` (for example, `lifecycle`).
 
-### `GET /api/logs/stream`
+### `GET /api/v1/logs/stream`
 
-SSE live tail. Accepts the same core filter parameters as `GET /api/logs`,
+SSE live tail. Accepts the same core filter parameters as `GET /api/v1/logs`,
 plus `include_restream=true` when a `pipeline_id` subscription should also
 receive restream-wide process lifecycle events on the same stream.
 On connect, the handler backfills entries newer than the `Last-Event-ID`
 header (or `?last_event_id=`) from the database, then streams new entries
-from the broadcast channel. A `": ping"` comment is sent every 20 seconds.
+from the broadcast channel. Live entries are broadcast only after persistence,
+so their positive SSE IDs are stable and reconnect backfill preserves
+`eventType` and `eventClass`. Reconnect backfill pages are ordered by ascending
+persisted ID to match the resume cursor and continue until the gap is closed
+rather than truncating after one page. A `": ping"` comment is sent every 20 seconds.
 Lagging receivers are closed; the browser reconnects automatically using
 `Last-Event-ID`.
-The dashboard overview activity rail uses an initial `GET /api/logs` snapshot
+The dashboard overview activity rail uses an initial `GET /api/v1/logs` snapshot
 plus this SSE endpoint filtered with `scope=restream` for live restream-wide
 activity updates. Overview also reuses that same restream-scoped stream to
 wake `/api/v1/dashboard/runtime` summary refreshes on lifecycle events, avoiding a second
@@ -347,11 +352,12 @@ Returns `404` without an active ingest.
 Returns the current processing DAG: ingest, source ring, transcoder stages,
 egresses, HLS, and recording nodes where present.
 
-### `GET /api/v1/pipelines/:pipelineId/diagnostics`
+### `POST /api/v1/pipelines/:pipelineId/diagnostics/run`
 
-Streams Server-Sent Events. An optional `probe=rtmp|srt|file` query must match the
-active ingest protocol. Returns `404` without an active ingest and `400` for a
-protocol mismatch.
+Returns one JSON report with `protocol`, `totalDurationMs`, and ordered `checks`.
+The server infers the protocol from the active ingest; the POST has no request
+body. Returns `404` without an active ingest and `429` when another run is
+active for the pipeline.
 
 RTMP and SRT inputs run the transport-oriented checks documented in
 [Observability](observability.md). File inputs switch to file-aware checks:
@@ -413,7 +419,7 @@ Context responses include:
 Raw stream keys and output URLs are never returned by this endpoint. They are
 replaced with stable SHA-256 fingerprints plus URL scheme/host summaries.
 The context endpoint does not open active diagnostics probes; agents can use the
-advertised diagnostics SSE route when an explicit live probe is needed.
+advertised diagnostics run route when an explicit active report is needed.
 
 Plan request:
 
@@ -1006,9 +1012,9 @@ Alerts for a single pipeline. Same alert shape as the aggregate endpoint.
 
 Authenticated pipeline graph endpoint. Returns 404 for unknown pipeline IDs.
 
-### `GET /api/v1/pipelines/:pipelineId/diagnostics`
+### `POST /api/v1/pipelines/:pipelineId/diagnostics/run`
 
-Authenticated SSE diagnostics endpoint for the pipeline diagnostics stream.
+Authenticated JSON endpoint returning a complete, ordered diagnostics report.
 
 ### `GET /api/v1/settings`
 

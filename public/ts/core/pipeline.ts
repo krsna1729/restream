@@ -61,6 +61,7 @@ function parsePipelinesInfo(
   });
 
   (config?.pipelines || []).forEach((p) => {
+    const inputHealth = healthByPipeline[p.id]?.input;
     const inputBytesReceived =
       healthByPipeline[p.id]?.input?.bytesReceived || 0;
     const inputPublisher = healthByPipeline[p.id]?.input?.publisher || null;
@@ -185,18 +186,16 @@ function parsePipelinesInfo(
           healthByPipeline[p.id]?.input?.recentDisconnectError,
         ),
         recentDisconnectCount:
-          typeof healthByPipeline[p.id]?.input?.recentDisconnectCount ===
-          "number"
-            ? Number(healthByPipeline[p.id].input.recentDisconnectCount)
+          typeof inputHealth?.recentDisconnectCount === "number"
+            ? Number(inputHealth.recentDisconnectCount)
             : 0,
         flapping: Boolean(healthByPipeline[p.id]?.input?.flapping),
         disconnectGraceActive,
         disconnectGraceRemainingMs,
         lastRemoteAddr: healthByPipeline[p.id]?.input?.lastRemoteAddr || null,
         lastSessionBytesReceived:
-          typeof healthByPipeline[p.id]?.input?.lastSessionBytesReceived ===
-          "number"
-            ? healthByPipeline[p.id].input.lastSessionBytesReceived
+          typeof inputHealth?.lastSessionBytesReceived === "number"
+            ? inputHealth.lastSessionBytesReceived
             : null,
       },
       outs: [],

@@ -1076,7 +1076,7 @@ runCheck("inspect summary escapes redacted output URLs", async () => {
     makePipeline({
       outs: [
         makeOutput({
-          url: 'rtmp://example.com/live/secret"><img src=x onerror=alert(1)>',
+          url: 'rtmp://example.com/live/abcdefghijklmnopqrstuvwxyz"><img src=x onerror=alert(1)>',
         }),
       ],
     }),
@@ -1090,6 +1090,8 @@ runCheck("inspect summary escapes redacted output URLs", async () => {
   ).innerHTML;
   assert.doesNotMatch(summaryHtml, /<img/i);
   assert.match(summaryHtml, /&lt;img/);
+  assert.match(summaryHtml, /\*\*\*/);
+  assert.doesNotMatch(summaryHtml, /abcdefghijklmnopqrstuvwxyz/);
 });
 
 runCheck("inspect graph refreshes when pipeline state changes", async () => {

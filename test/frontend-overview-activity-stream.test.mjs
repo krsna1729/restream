@@ -94,7 +94,9 @@ test("overview activity uses a restream-scoped log stream after the initial snap
   modes.renderDashboardModes();
   await flushAsyncWork();
 
-  assert.deepEqual(requests, ["/api/v1/logs?scope=restream&limit=24&order=desc"]);
+  assert.deepEqual(requests, [
+    "/api/v1/logs?scope=restream&limit=24&order=desc",
+  ]);
   assert.equal(streams.length, 1);
 
   const overviewActivityStream = streams.find(
@@ -140,4 +142,30 @@ test("overview activity uses a restream-scoped log stream after the initial snap
     resumedOverviewActivityStream?.url,
     "/api/v1/logs/stream?scope=restream&last_event_id=42",
   );
+
+  document.hidden = true;
+  modes.syncOverviewActivityStream();
+  Object.defineProperty(globalThis, "EventSource", {
+    value: class ThrowingEventSource {
+      constructor() {
+        throw new Error("stream construction failed");
+      }
+    },
+    configurable: true,
+  });
+  const originalDateNow = Date.now;
+  let fakeNow = 1_000;
+  Date.now = () => fakeNow;
+  document.hidden = false;
+
+  modes.syncOverviewActivityStream();
+  fakeNow += 15_001;
+  modes.syncOverviewActivityStream();
+  await flushAsyncWork();
+
+  assert.deepEqual(requests, [
+    "/api/v1/logs?scope=restream&limit=24&order=desc",
+    "/api/v1/logs?scope=restream&limit=24&order=desc",
+  ]);
+  Date.now = originalDateNow;
 });

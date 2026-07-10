@@ -5,12 +5,23 @@ pub async fn append_app_log_batch(
     pool: &SqlitePool,
     entries: &[crate::logging::types::AppLogEntry],
 ) -> Result<(), sqlx::Error> {
+    append_app_log_batch_returning(pool, entries).await?;
+    Ok(())
+}
+
+/// Batch-insert log entries and return their persisted rows with stable IDs.
+/// The logging drain uses this to publish SSE only after the transaction commits.
+pub async fn append_app_log_batch_returning(
+    pool: &SqlitePool,
+    entries: &[crate::logging::types::AppLogEntry],
+) -> Result<Vec<crate::logging::types::AppLogRow>, sqlx::Error> {
     if entries.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let mut tx = pool.begin().await?;
+    let mut rows = Vec::with_capacity(entries.len());
     for e in entries {
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO app_logs (ts, level, target, message, fields, pipeline_id, output_id, event_type, event_class)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
@@ -25,9 +36,21 @@ pub async fn append_app_log_batch(
         .bind(&e.event_class)
         .execute(&mut *tx)
         .await?;
+        rows.push(crate::logging::types::AppLogRow {
+            id: result.last_insert_rowid(),
+            ts: e.ts.clone(),
+            level: e.level.clone(),
+            target: e.target.clone(),
+            message: e.message.clone(),
+            fields: e.fields.clone(),
+            pipeline_id: e.pipeline_id.clone(),
+            output_id: e.output_id.clone(),
+            event_type: e.event_type.clone(),
+            event_class: e.event_class.clone(),
+        });
     }
     tx.commit().await?;
-    Ok(())
+    Ok(rows)
 }
 
 /// General query for `/api/v1/logs` — supports level, target, scope, pipeline_id,
@@ -106,10 +129,17 @@ pub async fn list_app_logs(
     } else {
         format!("WHERE {}", clauses.join(" AND "))
     };
+    // `after_id` is an ID cursor, so cursor-backed reads must use the same
+    // monotonic key regardless of event timestamps supplied by callers.
+    let order_clause = if filters.after_id.is_some() {
+        "id ASC".to_string()
+    } else {
+        format!("ts {order}, id {order}")
+    };
     let sql = format!(
-        "SELECT id, ts, level, target, message, fields, pipeline_id, output_id, event_type \
-         FROM app_logs {} ORDER BY ts {}, id {} LIMIT {}",
-        where_clause, order, order, limit
+        "SELECT id, ts, level, target, message, fields, pipeline_id, output_id, event_type, event_class \
+         FROM app_logs {} ORDER BY {} LIMIT {}",
+        where_clause, order_clause, limit
     );
 
     let mut q = sqlx::query_as::<_, crate::logging::types::AppLogRow>(AssertSqlSafe(sql));
