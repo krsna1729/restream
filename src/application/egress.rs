@@ -290,4 +290,161 @@ mod tests {
             "protocol segmenter stages must not be spawned through the FFmpeg runtime"
         );
     }
+
+    #[tokio::test]
+    async fn hevc_rtmp_selected_audio_terminal_ring_makes_progress() {
+        use crate::media::mpegts::TsDemuxer;
+        use crate::media::ring_buffer::{MediaType, Reader};
+        use crate::planner::backend_policy::BackendPolicy;
+        use crate::test_fixtures::bench_transport_fixture;
+
+        let path = bench_transport_fixture("h265", "1_5m", true)
+            .expect("multi-audio HEVC benchmark fixture");
+        let file_bytes = std::fs::read(path).expect("read multi-audio HEVC fixture");
+        let mut demuxer = TsDemuxer::new();
+        let mut packets = Vec::new();
+        for chunk in file_bytes.chunks(1316) {
+            demuxer.feed(chunk);
+            demuxer.drain_into(&mut packets);
+        }
+        demuxer.flush();
+        demuxer.drain_into(&mut packets);
+        let probe = demuxer.take_probe().expect("probe multi-audio fixture");
+        let video = probe.video.expect("fixture video metadata");
+        let audio_tracks = probe.audio_tracks;
+        assert!(
+            audio_tracks.len() >= 2,
+            "fixture must expose multiple audio tracks"
+        );
+
+        let pipeline_id = "pipe-hevc-selected-audio-progress";
+        let engine = Arc::new(MediaEngine::new_with_config(Arc::new(crate::AppConfig {
+            backend_policy: BackendPolicy {
+                internal_video_presets: true,
+                internal_hevc_to_h264: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })));
+        ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Quiet);
+        engine
+            .try_register_ingest(pipeline_id, "stream-key", "file")
+            .await
+            .unwrap();
+        engine
+            .update_ingest_meta(
+                pipeline_id,
+                Some(video),
+                audio_tracks.first().cloned(),
+                None,
+            )
+            .await;
+        engine
+            .update_ingest_audio_tracks(pipeline_id, audio_tracks.clone())
+            .await;
+
+        let source = engine.get_or_create_pipeline(pipeline_id).await;
+        source.set_codec_hint("hevc");
+        source.set_audio_tracks(audio_tracks);
+        if let Some(parameter_sets) = packets.iter().find_map(|packet| {
+            (packet.media_type == MediaType::Video)
+                .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+                .flatten()
+        }) {
+            source.set_video_parameter_sets(parameter_sets);
+        }
+
+        let output = test_output(pipeline_id, "720p+atrack:0", "rtmp://example/live/selected");
+        let prepared = prepare_output_ring(&engine, &output).await;
+        let terminal_ring = prepared.ring.clone();
+        let mut reader =
+            Reader::new_live("selected-audio-terminal".to_string(), terminal_ring.clone());
+
+        let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let source_ready = source
+                .reader_snapshots()
+                .iter()
+                .any(|snapshot| snapshot.name.contains("video:720p"));
+            let terminal_ready = terminal_ring
+                .reader_snapshots()
+                .iter()
+                .any(|snapshot| snapshot.name == "selected-audio-terminal");
+            if source_ready && terminal_ready {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < ready_deadline,
+                "stage readers did not attach in time"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        source.push_batch(packets.into_iter());
+
+        let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut saw_video = false;
+        let mut saw_audio = false;
+        loop {
+            while let Ok(Some(packet)) = reader.pull() {
+                saw_video |= packet.media_type == MediaType::Video;
+                saw_audio |= packet.media_type == MediaType::Audio && packet.track_index == 0;
+            }
+            if saw_video && saw_audio {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < output_deadline,
+                "{}",
+                selected_audio_progress_failure(
+                    &engine,
+                    pipeline_id,
+                    &source,
+                    &terminal_ring,
+                    saw_video,
+                    saw_audio,
+                )
+                .await
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    async fn selected_audio_progress_failure(
+        engine: &Arc<MediaEngine>,
+        pipeline_id: &str,
+        source: &Arc<RingBuffer>,
+        terminal_ring: &Arc<RingBuffer>,
+        saw_video: bool,
+        saw_audio: bool,
+    ) -> String {
+        let mut snapshots = engine.pipeline_stage_runtime_snapshots(pipeline_id).await;
+        snapshots.sort_by_key(|snapshot| snapshot.key.to_string());
+        let stages = snapshots
+            .into_iter()
+            .map(|snapshot| {
+                format!(
+                    "{} phase={:?} packets_in={} packets_out={} bytes_in={} bytes_out={} last_error={:?}",
+                    snapshot.key,
+                    snapshot.phase,
+                    snapshot.packets_in,
+                    snapshot.packets_out,
+                    snapshot.bytes_in,
+                    snapshot.bytes_out,
+                    snapshot.last_error,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!(
+            "selected-audio terminal ring did not emit video and selected audio: \
+             saw_video={saw_video} saw_audio={saw_audio} \
+             source_write={} terminal_write={} source_readers={:?} terminal_readers={:?} stages=[{}]",
+            source.get_write_idx(),
+            terminal_ring.get_write_idx(),
+            source.reader_snapshots(),
+            terminal_ring.reader_snapshots(),
+            stages,
+        )
+    }
 }
