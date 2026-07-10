@@ -43,6 +43,7 @@ pub enum FileIngestStartError {
     IngestLookup,
     PipelineStore(String),
     AlreadyRunning,
+    InvalidMediaPath,
     MediaFileNotFound,
     PipelineAlreadyActive,
     Spawn(String),
@@ -174,6 +175,38 @@ impl FileIngestService {
         })
     }
 
+    pub fn resolve_media_file_path(
+        media_dir: &Path,
+        filename: &str,
+    ) -> Result<PathBuf, FileIngestStartError> {
+        if filename.trim().is_empty() {
+            return Err(FileIngestStartError::InvalidMediaPath);
+        }
+
+        let relative = Path::new(filename);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(FileIngestStartError::InvalidMediaPath);
+        }
+
+        let media_root = media_dir
+            .canonicalize()
+            .map_err(|_| FileIngestStartError::MediaFileNotFound)?;
+        let file_path = media_root.join(relative);
+        let canonical_file = file_path
+            .canonicalize()
+            .map_err(|_| FileIngestStartError::MediaFileNotFound)?;
+
+        if !canonical_file.starts_with(&media_root) || !canonical_file.is_file() {
+            return Err(FileIngestStartError::InvalidMediaPath);
+        }
+
+        Ok(canonical_file)
+    }
+
     pub async fn get_pipeline(&self, id: &str) -> ApiResult<Pipeline> {
         self.pipeline_service.get_by_id(id).await
     }
@@ -262,10 +295,7 @@ impl FileIngestService {
             return Err(FileIngestStartError::AlreadyRunning);
         }
 
-        let file_path = media_dir.join(&ingest.filename);
-        if !file_path.exists() {
-            return Err(FileIngestStartError::MediaFileNotFound);
-        }
+        let file_path = Self::resolve_media_file_path(media_dir, &ingest.filename)?;
 
         let ring_buffer = engine.get_or_create_pipeline(&pipeline.id).await;
         let Some(registration) = engine
@@ -657,6 +687,16 @@ mod tests {
         FileIngestService::new(pool.clone(), PipelineService::new(pool))
     }
 
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "restream-file-ingest-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     async fn setup_ingest(pool: &SqlitePool, ingest_id: &str) {
         crate::db::setup_database_schema(pool).await.unwrap();
         crate::db::create_pipeline(pool, "pipe-1", "Pipeline", "stream-key", None, None)
@@ -719,6 +759,52 @@ mod tests {
             "-force_key_frames",
             "expr:gte(t,n_forced*1)"
         ));
+    }
+
+    #[test]
+    fn resolve_media_file_path_accepts_existing_relative_file() {
+        let media_dir = temp_dir("resolve-ok");
+        let file = media_dir.join("clip.mp4");
+        std::fs::write(&file, b"clip").unwrap();
+
+        let resolved = FileIngestService::resolve_media_file_path(&media_dir, "clip.mp4").unwrap();
+
+        assert_eq!(resolved, file.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(media_dir);
+    }
+
+    #[test]
+    fn resolve_media_file_path_rejects_parent_traversal() {
+        let media_dir = temp_dir("resolve-parent");
+        let outside_dir = temp_dir("resolve-parent-outside");
+        let outside = outside_dir.join("clip.mp4");
+        std::fs::write(&outside, b"clip").unwrap();
+
+        let err = FileIngestService::resolve_media_file_path(
+            &media_dir,
+            "../resolve-parent-outside/clip.mp4",
+        )
+        .unwrap_err();
+
+        assert_eq!(err, FileIngestStartError::InvalidMediaPath);
+        let _ = std::fs::remove_dir_all(media_dir);
+        let _ = std::fs::remove_dir_all(outside_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_media_file_path_rejects_symlink_escape() {
+        let media_dir = temp_dir("resolve-symlink");
+        let outside_dir = temp_dir("resolve-symlink-outside");
+        let outside = outside_dir.join("clip.mp4");
+        std::fs::write(&outside, b"clip").unwrap();
+        std::os::unix::fs::symlink(&outside, media_dir.join("linked.mp4")).unwrap();
+
+        let err = FileIngestService::resolve_media_file_path(&media_dir, "linked.mp4").unwrap_err();
+
+        assert_eq!(err, FileIngestStartError::InvalidMediaPath);
+        let _ = std::fs::remove_dir_all(media_dir);
+        let _ = std::fs::remove_dir_all(outside_dir);
     }
 
     #[tokio::test]

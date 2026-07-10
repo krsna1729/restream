@@ -6,6 +6,7 @@ use axum::{
 };
 use serde::Deserialize;
 
+use std::path::{Component, Path as FsPath};
 use std::sync::Arc;
 
 use crate::api_view_models;
@@ -38,11 +39,32 @@ pub fn validate_pipeline_file_ingest_payload(
     {
         return Some(r);
     }
-    if payload.filename.trim().is_empty() {
+    validate_file_ingest_filename(&payload.filename)
+}
+
+pub fn validate_file_ingest_filename(filename: &str) -> Option<Response> {
+    if filename.trim().is_empty() {
         return Some(
             (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": "Filename cannot be empty"})),
+            )
+                .into_response(),
+        );
+    }
+
+    let path = FsPath::new(filename);
+    let mut components = path.components().peekable();
+    if path.is_absolute()
+        || components.peek().is_none()
+        || components.any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Some(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Filename must be a relative path under the media directory"
+                })),
             )
                 .into_response(),
         );
@@ -107,20 +129,8 @@ pub async fn pipeline_file_ingest_put_handler(
         return Ok(response);
     }
 
-    if let Some(r) = check_field_len("filename", &payload.filename, MAX_NAME_LEN) {
+    if let Some(r) = validate_pipeline_file_ingest_payload(&payload) {
         return Ok(r);
-    }
-    if let Some(ref start_time) = payload.start_time
-        && let Some(r) = check_field_len("start_time", start_time, 64)
-    {
-        return Ok(r);
-    }
-    if payload.filename.trim().is_empty() {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Filename cannot be empty"})),
-        )
-            .into_response());
     }
 
     let pipeline = state.file_ingest_service.get_pipeline(&pipeline_id).await?;
@@ -199,4 +209,26 @@ pub async fn custom_encoding_put(
         .set_meta("custom_encoding", &payload.ffmpeg_args)
         .await;
     Ok(Json(serde_json::json!({ "ffmpegArgs": payload.ffmpeg_args })).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_filename(filename: &str) -> bool {
+        validate_file_ingest_filename(filename).is_none()
+    }
+
+    #[test]
+    fn file_ingest_filename_must_stay_relative_under_media_dir() {
+        assert!(valid_filename("clip.mp4"));
+        assert!(valid_filename("shows/clip.mp4"));
+
+        assert!(!valid_filename(""));
+        assert!(!valid_filename("   "));
+        assert!(!valid_filename("../clip.mp4"));
+        assert!(!valid_filename("shows/../clip.mp4"));
+        assert!(!valid_filename("./clip.mp4"));
+        assert!(!valid_filename("/tmp/clip.mp4"));
+    }
 }

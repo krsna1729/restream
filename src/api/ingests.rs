@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::application::services::{ApiError, file_ingest_service::FileIngestStartError};
 
+use super::file_ingest::validate_file_ingest_filename;
 use super::state::{
     AppState, MAX_NAME_LEN, MAX_STREAM_KEY_LEN, check_field_len, get_session_token_from_headers,
     require_authenticated, to_hex,
@@ -71,6 +72,9 @@ pub async fn ingests_post_handler(
     if let Some(r) = check_field_len("filename", &payload.filename, MAX_NAME_LEN) {
         return Ok(r);
     }
+    if let Some(r) = validate_file_ingest_filename(&payload.filename) {
+        return Ok(r);
+    }
     if let Some(r) = check_field_len("stream_key", &payload.stream_key, MAX_STREAM_KEY_LEN) {
         return Ok(r);
     }
@@ -124,6 +128,15 @@ pub async fn ingests_update_handler(
     if let Some(ref s) = payload.start_time
         && let Some(r) = check_field_len("start_time", s, 64)
     {
+        return Ok(r);
+    }
+    if let Some(r) = check_field_len("filename", &payload.filename, MAX_NAME_LEN) {
+        return Ok(r);
+    }
+    if let Some(r) = validate_file_ingest_filename(&payload.filename) {
+        return Ok(r);
+    }
+    if let Some(r) = check_field_len("stream_key", &payload.stream_key, MAX_STREAM_KEY_LEN) {
         return Ok(r);
     }
     let loop_val = payload.loop_flag.unwrap_or(false);
@@ -221,6 +234,15 @@ pub async fn ingests_start_handler(
             return (
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({"error": "Ingest already running"})),
+            )
+                .into_response();
+        }
+        Err(FileIngestStartError::InvalidMediaPath) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Filename must be a relative path under the media directory"
+                })),
             )
                 .into_response();
         }
