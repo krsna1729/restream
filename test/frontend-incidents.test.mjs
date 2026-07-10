@@ -98,7 +98,13 @@ test("incident pipeline selection starts a fresh scoped request while the fleet 
   document.body.appendChild(root);
   const pending = [];
   globalThis.fetch = (url) =>
-    new Promise((resolve) => pending.push({ url: String(url), resolve }));
+    new Promise((resolve) =>
+      pending.push({
+        url: String(url),
+        wave: Math.floor(pending.length / 3),
+        resolve,
+      }),
+    );
   const incidents = await loadCompiledFrontendModule("features/incidents.js");
   incidents.renderIncidentsMode({
     active: true,
@@ -121,25 +127,64 @@ test("incident pipeline selection starts a fresh scoped request while the fleet 
     2,
     "A→B→A must not reuse the now-stale first A request",
   );
-  for (const request of pending)
-    request.resolve(
-      new Response(
-        JSON.stringify(
-          request.url.includes("/events")
-            ? { generatedAt: "", count: 0, events: [] }
-            : request.url.includes("/alerts")
-              ? { generatedAt: "", alerts: [] }
-              : {
+  const labels = ["Stale A", "Scope B", "Final A"];
+  const resolveWave = (wave) => {
+    for (const request of pending.filter((item) => item.wave === wave)) {
+      const label = labels[wave];
+      const data = request.url.includes("/events")
+        ? {
+            generatedAt: "",
+            count: 1,
+            events: [
+              {
+                seq: wave + 1,
+                timestamp: "2026-01-01T00:00:00Z",
+                kind: `event.${label}`,
+                pipelineId: wave === 1 ? "p1" : "fleet",
+              },
+            ],
+          }
+        : request.url.includes("/alerts")
+          ? {
+              generatedAt: "",
+              alerts: [
+                {
+                  id: `alert-${wave}`,
+                  severity: "warning",
+                  scope: "pipeline",
+                  pipelineId: wave === 1 ? "p1" : "fleet",
+                  title: label,
+                  cause: label,
+                  evidence: [],
+                  recommendedAction: label,
                   generatedAt: "",
-                  totalPipelines: 1,
-                  activePipelines: 0,
-                  degradedPipelines: 0,
-                  failedOutputs: 0,
-                  alertCount: { critical: 0, warning: 0 },
-                  srtListener: null,
                 },
-        ),
-        { status: 200 },
-      ),
-    );
+              ],
+            }
+          : {
+              generatedAt: "",
+              totalPipelines: wave + 1,
+              activePipelines: wave + 1,
+              degradedPipelines: wave + 1,
+              failedOutputs: wave + 1,
+              alertCount: { critical: 0, warning: 1 },
+              srtListener: null,
+            };
+      request.resolve(
+        new Response(JSON.stringify(data), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    }
+  };
+
+  resolveWave(2);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(root.innerHTML, /Final A/);
+  resolveWave(1);
+  resolveWave(0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(root.innerHTML, /Final A/);
+  assert.doesNotMatch(root.innerHTML, /Stale A|Scope B/);
 });

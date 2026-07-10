@@ -104,7 +104,13 @@ test("telemetry starts a new pipeline request and ignores the stale selection", 
   document.body.appendChild(root);
   const pending = [];
   globalThis.fetch = (url) =>
-    new Promise((resolve) => pending.push({ url: String(url), resolve }));
+    new Promise((resolve) =>
+      pending.push({
+        url: String(url),
+        wave: Math.floor(pending.length / 2),
+        resolve,
+      }),
+    );
   const telemetry = await loadCompiledFrontendModule(
     "features/engineer-telemetry.js",
   );
@@ -133,26 +139,62 @@ test("telemetry starts a new pipeline request and ignores the stale selection", 
     2,
     "A→B→A must issue a current A request",
   );
-  for (const request of [...pending].reverse()) {
-    const pipelineId = request.url.includes("/p2/") ? "p2" : "p1";
-    const data = request.url.includes("/engine/")
-      ? {
-          generatedAt: "",
-          ingests: [],
-          stages: [],
-          egresses: [],
-          activeTranscoderBuffers: 0,
-        }
-      : {
-          generatedAt: "",
-          pipelineId,
-          ingest: null,
-          sourceRing: null,
-          stages: [],
-          egresses: [],
-        };
-    request.resolve(new Response(JSON.stringify(data), { status: 200 }));
-  }
+  const labels = ["stale-a-reader", "scope-b-reader", "final-a-reader"];
+  const resolveWave = (wave) => {
+    for (const request of pending.filter((item) => item.wave === wave)) {
+      const pipelineId = wave === 1 ? "p2" : "p1";
+      const data = request.url.includes("/engine/")
+        ? {
+            generatedAt: "",
+            ingests: Array.from({ length: wave + 1 }, () => ({
+              protocol: "rtmp",
+              uptimeSecs: 1,
+              bytesReceived: 1,
+              metrics: {},
+            })),
+            stages: [],
+            egresses: [],
+            activeTranscoderBuffers: wave,
+          }
+        : {
+            generatedAt: "",
+            pipelineId,
+            ingest: null,
+            sourceRing: {
+              fill: wave,
+              capacity: 10,
+              fillPercent: wave * 10,
+              estimatedPktRatePerSec: 1,
+              bufferDepthSecs: 1,
+              payloadStats: {},
+              readers: [
+                {
+                  name: labels[wave],
+                  lagSlots: wave,
+                  overflowCount: 0,
+                  packetAgeMs: 1,
+                },
+              ],
+            },
+            stages: [],
+            egresses: [],
+          };
+      request.resolve(
+        new Response(JSON.stringify(data), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    }
+  };
+
+  resolveWave(2);
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(root.innerHTML, /value="p1" selected/);
+  assert.match(root.innerHTML, /final-a-reader/);
+  resolveWave(1);
+  resolveWave(0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(root.innerHTML, /final-a-reader/);
+  assert.doesNotMatch(root.innerHTML, /stale-a-reader|scope-b-reader/);
 });

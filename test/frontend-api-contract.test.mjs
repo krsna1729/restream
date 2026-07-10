@@ -201,12 +201,18 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
 });
 
 test("stage telemetry treats an inactive-stage 404 as an expected null snapshot", async () => {
+  const api = await loadApiModule();
   let errorAlerts = 0;
   const originalGetElementById = document.getElementById;
   document.getElementById = (id) =>
     id === "error-alert"
       ? {
-          classList: { remove() {} },
+          classList: {
+            remove(className) {
+              assert.equal(className, "hidden");
+              errorAlerts += 1;
+            },
+          },
           querySelector() {
             return null;
           },
@@ -214,7 +220,6 @@ test("stage telemetry treats an inactive-stage 404 as an expected null snapshot"
       : originalGetElementById.call(document, id);
   globalThis.fetch = async () =>
     new Response("Stage not found", { status: 404 });
-  const api = await loadApiModule();
   const result = await api.getStageTelemetry("gone:stage");
   assert.equal(result, null);
   assert.equal(errorAlerts, 0);
