@@ -442,7 +442,10 @@ pub async fn v1_dashboard_runtime_handler(
 
     let summary_health = query.health_view.as_deref() == Some("summary");
     let summary_metrics = query.metrics_view.as_deref() == Some("summary");
-    let all_pipeline_ids = list_dashboard_runtime_pipeline_ids(&state).await;
+    let all_pipeline_ids = match list_dashboard_runtime_pipeline_ids(&state).await {
+        Ok(pipeline_ids) => pipeline_ids,
+        Err(error) => return error.into_response(),
+    };
     let requested_pipeline_id = query.pipeline_id.as_deref().filter(|pipeline_id| {
         all_pipeline_ids
             .iter()

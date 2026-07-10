@@ -3,20 +3,23 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use super::state::{AppState, recording_enabled_map, require_authenticated};
+use crate::application::services::ApiError;
 
 #[derive(Deserialize)]
 pub struct EngineHealthQuery {
     pub view: Option<String>,
 }
 
-pub async fn build_health_snapshot(state: &AppState) -> serde_json::Value {
-    let pipeline_ids = list_dashboard_runtime_pipeline_ids(state).await;
-    build_health_snapshot_for_pipeline_ids(state, &pipeline_ids).await
+pub async fn build_health_snapshot(state: &AppState) -> Result<serde_json::Value, ApiError> {
+    let pipeline_ids = list_dashboard_runtime_pipeline_ids(state).await?;
+    Ok(build_health_snapshot_for_pipeline_ids(state, &pipeline_ids).await)
 }
 
-pub async fn build_health_summary_snapshot(state: &AppState) -> serde_json::Value {
-    let pipeline_ids = list_dashboard_runtime_pipeline_ids(state).await;
-    build_health_summary_snapshot_for_pipeline_ids(state, &pipeline_ids).await
+pub async fn build_health_summary_snapshot(
+    state: &AppState,
+) -> Result<serde_json::Value, ApiError> {
+    let pipeline_ids = list_dashboard_runtime_pipeline_ids(state).await?;
+    Ok(build_health_summary_snapshot_for_pipeline_ids(state, &pipeline_ids).await)
 }
 
 pub async fn build_health_snapshot_for_pipeline_ids(
@@ -91,12 +94,14 @@ pub fn merge_dashboard_runtime_focus_pipeline(
     pipelines_object.insert(pipeline_id.to_string(), focused_pipeline);
 }
 
-pub async fn list_dashboard_runtime_pipeline_ids(state: &AppState) -> Vec<String> {
+pub async fn list_dashboard_runtime_pipeline_ids(
+    state: &AppState,
+) -> Result<Vec<String>, ApiError> {
     state
         .pipeline_service
         .list_pipeline_ids()
         .await
-        .unwrap_or_default()
+        .map_err(|err| ApiError::internal(format!("list dashboard pipeline ids: {err}")))
 }
 
 pub async fn v1_engine_health_handler(
@@ -108,9 +113,15 @@ pub async fn v1_engine_health_handler(
         return response;
     }
     let response = if query.view.as_deref() == Some("summary") {
-        build_health_summary_snapshot(&state).await
+        match build_health_summary_snapshot(&state).await {
+            Ok(response) => response,
+            Err(error) => return error.into_response(),
+        }
     } else {
-        build_health_snapshot(&state).await
+        match build_health_snapshot(&state).await {
+            Ok(response) => response,
+            Err(error) => return error.into_response(),
+        }
     };
     Json(response).into_response()
 }
