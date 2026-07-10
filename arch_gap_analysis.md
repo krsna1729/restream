@@ -71,6 +71,84 @@ all internal-backend rollout smoke cases are blocking.
 
 ---
 
+## Bug-Fix and Proof Ledger
+
+The final A-grade pass found and rectified these implementation bugs while
+closing the phase and addendum criteria:
+
+- **Phase 12 alert derivation gaps**: `derive_alerts` did not report failed
+  dependency stages or external transcoder capacity exhaustion from the causal
+  runtime fields already exposed in health/status. The fix derives stage
+  failure and capacity alerts from `blockedBy`, stage phase, backend, permit
+  counts, wait time, and last error, with focused unit coverage.
+- **HEVC-qualified stage identity drift**: planner/runtime tests still expected
+  older unqualified stage names after HEVC codec-edge planning became
+  explicit. The fix aligned graph, reconcile, engine, and 2v16a HEVC tests with
+  codec-qualified stage keys instead of masking the new topology.
+- **Expected HEVC decoder chatter surfaced as failure evidence**: harness log
+  classification treated known decoder-side HEVC messages as runtime errors.
+  The fix suppresses expected decoder chatter while keeping true runtime error
+  matching covered by tests.
+- **External FFmpeg probe budgets were too small for SRT, high bitrate, and
+  multi-audio startup**: SRT/H.264 and high-bitrate AAC paths could fail with
+  missing codec parameters before enough bytes/time had been probed. The fix
+  increased the startup/probe budgets where the evidence showed starvation,
+  then proved the change through the bitrate and resource sweeps.
+- **Bitrate sweep fixture coverage was incomplete**: the sweep referenced
+  multi-audio H.264/H.265 bitrate cells that were not backed by checked-in
+  fixtures. The fix added the missing fixture set, generator entries, and
+  fixture-contract coverage.
+- **RTMP multi-audio output modeling was product-inaccurate**: the harness
+  modeled RTMP source outputs as carrying two selected audio tracks even though
+  RTMP output supports one audio track. The fix makes RTMP `source+atrack:0`
+  and SRT `source+atrack:0,1`, with a unit assertion on the output kind.
+- **Finite fixture-fed source stages could stay open under larger probe
+  windows**: tests that fed finite source data did not always mark end-of-stream,
+  so larger startup budgets exposed hangs instead of deterministic completion.
+  The fix marks EOS in the finite source-stage tests and adjusts deadlines to
+  prove completion.
+- **AVIO high-track probes emitted warnings in passing tests**: high-track
+  probe windows were too narrow, leaving noisy but passing logs. The fix raises
+  AVIO probe time/byte limits and the quiet test-hygiene gate now passes.
+- **Harness progress artifacts assumed a lifecycle phase was always present**:
+  missing optional phase data could break progress-status artifact generation.
+  The fix records `unknown` when the phase is absent so the artifact remains
+  analyzable.
+
+Correctness proof added or verified for this pass now includes **11
+proptest/property tests** and **18 loom model checks**:
+
+- Proptest/property coverage: ADTS frame counting, AVIO chunk round-trip,
+  ingest and egress lifecycle health invariants, external-output DTS routing,
+  HLS segment-name/window/sample invariants, source-stage chunking order, and
+  ring migration no-loss/order invariants.
+- Loom coverage: HLS publish visibility, TS chunk-ring wake/cancel races, AVIO
+  close/read wakeups, transcoder codec-edge replacement races, ring migration
+  seal wakeups/no-loss behavior, and TS muxer stage replacement/registration
+  races.
+
+Harness artifacts are now self-contained for analysis:
+
+- Every mixed scenario writes `scenario.json`, `outputs.json`,
+  `assertions.jsonl`, logs, media/probe directories, and an
+  `artifact-index.json` with schema version, run id, command, selected env,
+  start time, source revision, file existence/type/size, and SHA-256 checksums.
+- SQLite evidence is copied into a per-scenario `sqlite-snapshot/` directory
+  with DB, WAL, and SHM sidecars when present, so failed-run investigation does
+  not depend on a live harness process or mutable database path.
+- Matrix runs write root `scenario.json`, `root-cause-summary.json`, and root
+  `artifact-index.json` files that point to every child case's scenario,
+  outputs, logs, media directory, SQLite snapshot, and per-scenario index.
+- `HarnessOutputCell` and `HarnessOutputRegistry` bind output IDs to semantic
+  cells, protocols, encodings, selected audio tracks, URLs, expected media
+  shape, and terminal stages, so failures can be read from artifacts without
+  reverse-engineering output names or log order.
+- Root-cause summaries group repeated failures by taxonomy and cell, while
+  probe failure snapshots carry output status plus engine health for causal
+  stage/capacity analysis.
+
+---
+
 ## Phase-by-Phase Status
 
 ### Phase 0 — Baseline & Guardrails
