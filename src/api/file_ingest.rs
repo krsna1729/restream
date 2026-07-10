@@ -13,9 +13,7 @@ use crate::api_view_models;
 use crate::application::services::{ApiError, file_ingest_service::FileIngestConfigInput};
 
 use super::ingests::sanitize_target_gop_seconds;
-use super::state::{
-    AppState, MAX_FFMPEG_ARGS_LEN, MAX_NAME_LEN, check_field_len, require_authenticated,
-};
+use super::state::{AppState, MAX_NAME_LEN, check_field_len, require_authenticated};
 
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -177,13 +175,13 @@ pub async fn custom_encoding_get(
         return Ok(response);
     }
 
-    let args = state
-        .settings_service
-        .get_meta("custom_encoding")
-        .await
-        .unwrap_or(None)
-        .unwrap_or_default();
-    Ok(Json(serde_json::json!({ "ffmpegArgs": args })).into_response())
+    Ok((
+        StatusCode::GONE,
+        Json(serde_json::json!({
+            "error": "Custom encoding is not available yet; choose source or a preset encoding"
+        })),
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]
@@ -200,15 +198,15 @@ pub async fn custom_encoding_put(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return Ok(response);
     }
+    drop(payload.ffmpeg_args);
 
-    if let Some(r) = check_field_len("ffmpeg_args", &payload.ffmpeg_args, MAX_FFMPEG_ARGS_LEN) {
-        return Ok(r);
-    }
-    let _ = state
-        .settings_service
-        .set_meta("custom_encoding", &payload.ffmpeg_args)
-        .await;
-    Ok(Json(serde_json::json!({ "ffmpegArgs": payload.ffmpeg_args })).into_response())
+    Ok((
+        StatusCode::GONE,
+        Json(serde_json::json!({
+            "error": "Custom encoding is not available yet; choose source or a preset encoding"
+        })),
+    )
+        .into_response())
 }
 
 #[cfg(test)]

@@ -1521,8 +1521,8 @@ async fn restream_scope_logs_exclude_pipeline_and_output_entries() {
 // --- Custom encoding ---
 
 #[tokio::test]
-async fn custom_encoding_roundtrip() {
-    let (app, _) = test_app().await;
+async fn custom_encoding_endpoint_is_unavailable() {
+    let (app, pool) = test_app().await;
     let cookie = login(&app).await;
 
     let resp = app
@@ -1535,16 +1535,17 @@ async fn custom_encoding_roundtrip() {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::GONE);
+    assert_eq!(db::get_meta(&pool, "custom_encoding").await.unwrap(), None);
 
     let resp = app
         .clone()
         .oneshot(auth_req("GET", "/api/v1/encodings/custom", &cookie, None))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::GONE);
     let json = body_json(resp).await;
-    assert_eq!(json["ffmpegArgs"], "-c:v libx264 -preset fast");
+    assert!(json["error"].as_str().unwrap().contains("not available"));
 }
 
 // --- HLS pull ---
