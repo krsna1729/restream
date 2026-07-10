@@ -135,6 +135,7 @@ pub(super) struct MixedEnv {
     pub(super) n_per_group: usize,
     pub(super) snapshot_sleep: Duration,
     pub(super) collect_failures: bool,
+    pub(super) probe_sampling_policy: ProbeSamplingPolicy,
     pub(super) output_registry: Arc<Mutex<HarnessOutputRegistry>>,
 }
 impl MixedEnv {
@@ -219,6 +220,7 @@ impl MixedEnv {
             collect_failures: std::env::var("COLLECT_FAILURES")
                 .ok()
                 .is_some_and(|value| value == "1"),
+            probe_sampling_policy: ProbeSamplingPolicy::LastDuplicate,
             output_registry: Arc::new(Mutex::new(HarnessOutputRegistry::new())),
             work_dir,
         }
@@ -247,6 +249,13 @@ impl MixedEnv {
 
     pub(super) fn needs_live_output_progress_gate(&self) -> bool {
         mixed_output_checks_need_live_progress_gate(self.only_checks.as_deref())
+    }
+
+    pub(super) fn probe_duplicate_index(&self) -> usize {
+        let max_duplicate = self.n_per_group.max(1);
+        self.probe_sampling_policy
+            .duplicate_index(max_duplicate)
+            .clamp(1, max_duplicate)
     }
 
     pub(super) fn outputs_json_path(&self) -> PathBuf {
@@ -352,12 +361,13 @@ pub(super) async fn run_mixed_input_case_with_env(
 
 pub(super) async fn run_mixed_input_case_on_active_stack(
     case: MixedInputCase,
-    env: MixedEnv,
+    mut env: MixedEnv,
     api: &RampApi,
     restream_pid: u32,
 ) -> Result<Value, String> {
     let cfg = case.scenario_id();
     let plan = MixedScenarioPlan::for_input(case);
+    env.probe_sampling_policy = plan.probe_sampling_policy;
     let scenario_started = Instant::now();
     if env.n_per_group == 0 {
         return Err("N_PER_GROUP must be greater than zero".to_string());
@@ -445,6 +455,14 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
             "sourceAdapter": plan.source.adapter.as_str(),
             "outputCells": plan.output_cells(),
             "checks": plan.check_names(),
+            "hlsPreviewTiming": plan.hls_preview_timing.as_str(),
+            "supportedHlsPreviewTimings": HlsPreviewTiming::supported_names(),
+            "probeSampling": {
+                "policy": plan.probe_sampling_policy.as_str(),
+                "duplicateIndex": env.probe_duplicate_index(),
+                "nPerGroup": env.n_per_group,
+            },
+            "supportedProbeSamplingPolicies": ProbeSamplingPolicy::supported_names(),
             "expectedStages": {
                 "video": plan.expected_stages.video,
                 "audio": plan.expected_stages.audio,
@@ -1113,6 +1131,8 @@ pub(super) async fn run_mixed_file_config(
     api.post_empty(&format!("/api/v1/ingests/{ingest_id}/start"))
         .await?;
     wait_for_api_input_live(api, &pipeline_id, Duration::from_secs(45)).await?;
+    let hls_preview =
+        verify_optional_mixed_hls_preview(env, api, cfg, &pipeline_id, case, resume).await?;
     let recording = verify_mixed_recording(env, api, cfg, &pipeline_id, case, resume).await?;
     let rss_baseline = process_rss_kb(restream_pid).await.unwrap_or(0);
     if !env.skip_load {
@@ -1179,7 +1199,6 @@ pub(super) async fn run_mixed_file_config(
     }
 
     let duration_secs: u64 = 10;
-    verify_optional_mixed_hls_preview(env, api, cfg, &pipeline_id, case, resume).await?;
     if !ffmpeg_srt_sinks.is_empty() {
         finish_ffmpeg_srt_sinks(&mut ffmpeg_srt_sinks).await?;
     }
@@ -1232,7 +1251,7 @@ pub(super) async fn run_mixed_file_config(
     );
 
     write_mixed_artifact_index(env)?;
-    Ok(json!({
+    let mut result = json!({
         "scenario": cfg,
         "inputCase": case.scenario_id(),
         "codec": case.codec_name(),
@@ -1248,7 +1267,11 @@ pub(super) async fn run_mixed_file_config(
         "rssBaselineKb": rss_baseline,
         "rssPeakKb": rss_peak,
         "rssGrowthKb": growth_kb,
-    }))
+    });
+    if let Some(summary) = hls_preview {
+        result["hlsPreview"] = summary;
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -1342,6 +1365,27 @@ mod tests {
         assert_eq!(
             scenario["rootCauseSummary"]["causes"][0]["cause"],
             "timestamp_discontinuity"
+        );
+        assert_eq!(
+            scenario["caseProgress"][0]["hlsPreviewTiming"],
+            "before-fanout"
+        );
+        assert_eq!(
+            scenario["caseProgress"][0]["probeSampling"]["policy"],
+            "last-duplicate"
+        );
+        assert_eq!(
+            scenario["caseProgress"][0]["supportedHlsPreviewTimings"],
+            json!(["before-fanout", "after-progress", "disabled"])
+        );
+        assert_eq!(
+            scenario["caseProgress"][0]["supportedProbeSamplingPolicies"],
+            json!([
+                "all-duplicates",
+                "first-duplicate",
+                "last-duplicate",
+                "representative"
+            ])
         );
         assert_eq!(
             scenario["artifacts"]["rootCauseSummaryJson"],

@@ -216,6 +216,12 @@ fn matrix_case_progress_json(rows: &[MatrixCaseProgress]) -> Vec<Value> {
                 "id": row.case.scenario_id(),
                 "status": row.state.as_str(),
                 "batchGroup": row.batch_group.as_str(),
+                "hlsPreviewTiming": HlsPreviewTiming::for_input(row.case).as_str(),
+                "supportedHlsPreviewTimings": HlsPreviewTiming::supported_names(),
+                "probeSampling": {
+                    "policy": ProbeSamplingPolicy::for_input(row.case).as_str(),
+                },
+                "supportedProbeSamplingPolicies": ProbeSamplingPolicy::supported_names(),
                 "wave": row.wave,
                 "outputCells": row.output_cells,
                 "error": row.error,

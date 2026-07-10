@@ -305,6 +305,77 @@ pub(crate) const MIXED_SIGNAL_MODE: &str = "mixed.signal";
 pub(crate) const MIXED_FAST_BREADTH_MODE: &str = "mixed.fast-breadth";
 const MIXED_ARTIFACT_ROOT: &str = "test/artifacts/mixed";
 
+/// When the mixed harness attaches and verifies the product HLS preview.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HlsPreviewTiming {
+    BeforeFanout,
+    AfterProgress,
+    Disabled,
+}
+
+impl HlsPreviewTiming {
+    const ALL: [Self; 3] = [Self::BeforeFanout, Self::AfterProgress, Self::Disabled];
+
+    pub(crate) const fn for_input(_case: MixedInputCase) -> Self {
+        Self::BeforeFanout
+    }
+
+    pub(crate) fn supported_names() -> Vec<&'static str> {
+        Self::ALL.iter().map(|timing| timing.as_str()).collect()
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::BeforeFanout => "before-fanout",
+            Self::AfterProgress => "after-progress",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+/// Which duplicate output in a repeated cell is probed by default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProbeSamplingPolicy {
+    AllDuplicates,
+    FirstDuplicate,
+    LastDuplicate,
+    Representative { index: usize },
+}
+
+impl ProbeSamplingPolicy {
+    const ALL: [Self; 4] = [
+        Self::AllDuplicates,
+        Self::FirstDuplicate,
+        Self::LastDuplicate,
+        Self::Representative { index: 1 },
+    ];
+
+    pub(crate) const fn for_input(_case: MixedInputCase) -> Self {
+        Self::LastDuplicate
+    }
+
+    pub(crate) fn supported_names() -> Vec<&'static str> {
+        Self::ALL.iter().map(|policy| policy.as_str()).collect()
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::AllDuplicates => "all-duplicates",
+            Self::FirstDuplicate => "first-duplicate",
+            Self::LastDuplicate => "last-duplicate",
+            Self::Representative { .. } => "representative",
+        }
+    }
+
+    pub(crate) const fn duplicate_index(self, n_per_group: usize) -> usize {
+        match self {
+            Self::AllDuplicates | Self::FirstDuplicate => 1,
+            Self::LastDuplicate => n_per_group,
+            Self::Representative { index } => index,
+        }
+    }
+}
+
 /// One selected input row in the fast breadth sweep, with its minimal checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MixedFastBreadthCase {
@@ -929,6 +1000,8 @@ pub(crate) struct MixedScenarioPlan {
     pub(crate) source: MixedSourcePlan,
     pub(crate) outputs: &'static [MixedOutputCase],
     pub(crate) checks: &'static [MixedCheck],
+    pub(crate) hls_preview_timing: HlsPreviewTiming,
+    pub(crate) probe_sampling_policy: ProbeSamplingPolicy,
     pub(crate) expected_stages: MixedStageCount,
 }
 
@@ -942,6 +1015,8 @@ impl MixedScenarioPlan {
             },
             outputs: mixed_output_cases_for_input(input),
             checks: mixed_default_checks(),
+            hls_preview_timing: HlsPreviewTiming::for_input(input),
+            probe_sampling_policy: ProbeSamplingPolicy::for_input(input),
             expected_stages: expected_mixed_stage_count(input),
         }
     }
@@ -1041,6 +1116,25 @@ mod tests {
                 duplicated,
                 expected,
                 "{} duplicate output rows should not add unique planned stages",
+                case.scenario_id()
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_scenario_plan_names_phase_f_execution_policies() {
+        for case in mixed_input_cases() {
+            let plan = MixedScenarioPlan::for_input(*case);
+            assert_eq!(
+                plan.hls_preview_timing,
+                HlsPreviewTiming::BeforeFanout,
+                "{} should attach HLS preview before output fanout by default",
+                case.scenario_id()
+            );
+            assert_eq!(
+                plan.probe_sampling_policy,
+                ProbeSamplingPolicy::LastDuplicate,
+                "{} should report the duplicated output sampled by probes",
                 case.scenario_id()
             );
         }

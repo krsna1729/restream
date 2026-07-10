@@ -47,7 +47,7 @@ pub(crate) async fn verify_mixed_output_dimensions(
     if !env.check_selected("ffprobe") {
         return Ok(());
     }
-    let index = env.n_per_group;
+    let index = env.probe_duplicate_index();
     for case in cases {
         let url = mixed_output_read_url(env, cfg, case, index);
         verify_mixed_stream(
@@ -82,7 +82,7 @@ pub(crate) async fn verify_mixed_output_cases_inner(
         return Ok(());
     }
     let started = Instant::now();
-    let index = env.n_per_group;
+    let index = env.probe_duplicate_index();
     let mut failures = Vec::new();
     for case in cases {
         let cell_started_at = Utc::now();
@@ -266,6 +266,10 @@ pub(crate) async fn verify_mixed_output_cases_inner(
         Some(json!({
             "cases": cases.len(),
             "nPerGroup": env.n_per_group,
+            "probeSampling": {
+                "policy": env.probe_sampling_policy.as_str(),
+                "duplicateIndex": env.probe_duplicate_index(),
+            },
             "failureCount": failures.len(),
         })),
     )?;
