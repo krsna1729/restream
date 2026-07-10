@@ -295,7 +295,7 @@ live integration tests (`src/bin/test_harness.rs`). As of June 27, 2026 all
 | `GET` | `/api/v1/pipelines/:id/probe` | — | ✓ | mixed-input, correctness-* |
 | `GET` | `/api/v1/pipelines/:id/graph` | ✓ | ✓ | |
 | `GET` | `/api/v1/pipelines/:id/alerts` | ✓ | — | auth + response shape |
-| `GET` | `/api/v1/pipelines/:id/diagnostics` | ~ | — | SSE; precondition only |
+| `POST` | `/api/v1/pipelines/:id/diagnostics/run` | ✓ | — | Auth, method, JSON response shape, and busy `429` |
 | `POST` | `/api/v1/pipelines/:id/recording/start` | — | ✓ | mixed.live.srt.h264.a1.bf2 |
 | `POST` | `/api/v1/pipelines/:id/recording/stop` | — | ✓ | mixed.live.srt.h264.a1.bf2 |
 

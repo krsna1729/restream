@@ -1368,17 +1368,18 @@ fn agent_diagnostics_summary(
         pipeline_reports.push(serde_json::json!({
             "pipelineId": pipeline.id,
             "passive": true,
-            "activeProbeEndpoint": format!("/api/v1/pipelines/{}/diagnostics", pipeline.id),
-            "supportedProbeQueryValues": ["rtmp", "srt"],
+            "activeProbeEndpoint": format!("/api/v1/pipelines/{}/diagnostics/run", pipeline.id),
+            "activeProbeMethod": "POST",
             "includedActiveProbeResults": false,
-            "reason": "The context endpoint is read-only and does not open active SSE diagnostics probes.",
+            "reason": "The context endpoint is read-only and does not run active diagnostics checks.",
             "inactiveGraphNodes": inactive_nodes,
             "findings": findings,
         }));
     }
 
     serde_json::json!({
-        "streamingEndpointTemplate": "/api/v1/pipelines/:pipeline_id/diagnostics?probe=:probe",
+        "activeProbeEndpointTemplate": "/api/v1/pipelines/:pipeline_id/diagnostics/run",
+        "activeProbeMethod": "POST",
         "includedActiveProbeResults": false,
         "pipelines": pipeline_reports,
     })

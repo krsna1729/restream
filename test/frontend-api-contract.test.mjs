@@ -188,14 +188,25 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
   });
 });
 
-test("frontend API helpers preserve response fields and build diagnostics URLs centrally", async () => {
-  globalThis.fetch = async (url) => {
+test("frontend API helpers preserve response fields and run diagnostics centrally", async () => {
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
     if (String(url).startsWith("/api/v1/audio-caps")) {
       return new Response(
         JSON.stringify({
-          caps: { "youtube:rtmp": { maxTracks: 2, maxChannels: 2, codecs: ["aac"] } },
+          caps: {
+            "youtube:rtmp": { maxTracks: 2, maxChannels: 2, codecs: ["aac"] },
+          },
           platformLabels: { youtube: "YouTube" },
         }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (String(url).endsWith("/diagnostics/run")) {
+      return new Response(
+        JSON.stringify({ protocol: "srt", totalDurationMs: 4, checks: [] }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     }
@@ -207,7 +218,7 @@ test("frontend API helpers preserve response fields and build diagnostics URLs c
             id: 1,
             ts: "2026-06-29T00:00:00Z",
             message: "started",
-            fields: "{\"state\":\"running\"}",
+            fields: '{"state":"running"}',
             eventType: "lifecycle.started",
           },
         ],
@@ -219,14 +230,22 @@ test("frontend API helpers preserve response fields and build diagnostics URLs c
   const api = await loadApiModule();
   const caps = await api.getAudioCapsPayload();
   const logs = await api.getOutputHistory("pipe-1", "out-1", { limit: 1 });
-  const params = new URLSearchParams({ probe: "srt", since: "now" });
+  const controller = new AbortController();
+  const report = await api.runPipelineDiagnostics("pipe 1", controller.signal);
 
   assert.equal(caps.caps["youtube:rtmp"].maxTracks, 2);
-  assert.equal(logs.logs[0].fields, "{\"state\":\"running\"}");
-  assert.equal(
-    api.buildPipelineDiagnosticsUrl("pipe 1", params),
-    "/api/v1/pipelines/pipe%201/diagnostics?probe=srt&since=now",
+  assert.equal(logs.logs[0].fields, '{"state":"running"}');
+  assert.equal(report.protocol, "srt");
+  const diagnosticsRequest = requests.find(({ url }) =>
+    url.endsWith("/diagnostics/run"),
   );
+  assert.equal(
+    diagnosticsRequest.url,
+    "/api/v1/pipelines/pipe%201/diagnostics/run",
+  );
+  assert.equal(diagnosticsRequest.options.method, "POST");
+  assert.equal(diagnosticsRequest.options.body, undefined);
+  assert.equal(diagnosticsRequest.options.signal, controller.signal);
   assert.equal(
     api.buildLogsStreamUrl({
       scope: "restream",
@@ -354,8 +373,7 @@ test("retrying and flapping outputs are not treated as unexpectedly down", async
     isOutputRetrying,
     isOutputRunning,
     isOutputUnexpectedlyDown,
-  } =
-    await loadCompiledModule("core/output-status.js");
+  } = await loadCompiledModule("core/output-status.js");
 
   const retryingOutput = {
     desiredState: "started",

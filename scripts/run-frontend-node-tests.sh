@@ -25,6 +25,7 @@ TEST_FILES=(
   test/frontend-api-contract.test.mjs
   test/frontend-dashboard-contract.test.mjs
   test/frontend-core-helpers.test.mjs
+  test/frontend-diagnostics.test.mjs
   test/frontend-history-stream.test.mjs
   test/frontend-log-stream.test.mjs
   test/frontend-history-helpers.test.mjs

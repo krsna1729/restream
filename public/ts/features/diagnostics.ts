@@ -1,39 +1,17 @@
-import { buildPipelineDiagnosticsUrl } from "../core/api.js";
+import { runPipelineDiagnostics } from "../core/api.js";
 import { copyText, showCopiedNotification } from "../core/utils.js";
 import { state } from "../core/state.js";
-import type { PipelineView } from "../types.js";
-
-interface DiagnosticResult {
-  index: number;
-  name: string;
-  description: string;
-  command: string;
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  durationMs: number;
-  help?: string;
-  issues?: string[];
-}
-
-interface RunningEvent {
-  index: number;
-  name: string;
-  description: string;
-}
+import type { DiagnosticResult, PipelineView } from "../types.js";
 
 let diagnosticsPipeId: string | null = null;
-let eventSource: EventSource | null = null;
+let diagnosticsAbortController: AbortController | null = null;
+let requestGeneration = 0;
 let results: DiagnosticResult[] = [];
-let commandMeta: { name: string; description: string }[] = [];
 let expandedSet: Set<number> = new Set();
-let runningSet: Set<number> = new Set();
 let totalCommands = 0;
-let done = false;
+let loading = false;
+let loadFailed = false;
 let activeProbeProtocol: string = "rtmp";
-let publisherProtocol: string | null = null;
-let probeRawStdout: string = "";
-let probeRawStderr: string = "";
 
 function normalizeProbeProtocol(
   protocol: string | null,
@@ -58,10 +36,13 @@ export function openDiagnosticsModal(pipeId: string): void {
   const modal = getModal();
   if (!modal) return;
 
+  cleanup();
   diagnosticsPipeId = pipeId;
   const pipe = getPipeline();
-  publisherProtocol = pipe?.input.publisher?.protocol || null;
-  activeProbeProtocol = normalizeProbeProtocol(publisherProtocol, pipe);
+  activeProbeProtocol = normalizeProbeProtocol(
+    pipe?.input.publisher?.protocol || null,
+    pipe,
+  );
 
   resetState();
 
@@ -78,13 +59,10 @@ export function openDiagnosticsModal(pipeId: string): void {
 
 function resetState(): void {
   results = [];
-  commandMeta = [];
   expandedSet = new Set();
-  runningSet = new Set();
   totalCommands = 0;
-  done = false;
-  probeRawStdout = "";
-  probeRawStderr = "";
+  loading = false;
+  loadFailed = false;
 
   const totalTime = document.getElementById("diagnostics-total-time");
   if (totalTime) totalTime.textContent = "";
@@ -105,103 +83,54 @@ function resetState(): void {
 function renderControls(): void {
   const container = document.getElementById("diagnostics-probe-toggle");
   if (!container) return;
-
-  if (activeProbeProtocol === "file") {
-    container.innerHTML = `<span class="badge badge-outline badge-info">FILE</span>`;
-    return;
-  }
-
-  const isRtmp = activeProbeProtocol === "rtmp";
-  container.innerHTML =
-    `<div class="join">` +
-    `<button class="join-item btn btn-xs ${isRtmp ? "btn-accent" : "btn-ghost"}" data-probe="rtmp">RTMP</button>` +
-    `<button class="join-item btn btn-xs ${!isRtmp ? "btn-accent" : "btn-ghost"}" data-probe="srt">SRT</button>` +
-    `</div>`;
-
-  container
-    .querySelectorAll<HTMLButtonElement>("[data-probe]")
-    .forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const proto = btn.dataset.probe!;
-        if (proto === activeProbeProtocol) return;
-        activeProbeProtocol = proto;
-        cleanup();
-        resetState();
-        renderControls();
-        renderList();
-        runDiagnostics();
-      });
-    });
+  container.innerHTML = `<span class="badge badge-outline badge-info">${escapeHtml(activeProbeProtocol.toUpperCase())}</span>`;
 }
 
 function cleanup(): void {
-  if (eventSource) {
-    eventSource.close();
-    eventSource = null;
-  }
+  requestGeneration += 1;
+  diagnosticsAbortController?.abort();
+  diagnosticsAbortController = null;
   document.getElementById("ai-toast")?.remove();
 }
 
-function getPublishStartedAt(): string | null {
-  const pipe = getPipeline();
-  if (!pipe) return null;
-  const health = state.health as Record<string, unknown>;
-  const pipelines = health?.pipelines as
-    Record<string, { input?: { publishStartedAt?: string } }> | undefined;
-  if (!pipelines) return null;
-  return pipelines[pipe.id]?.input?.publishStartedAt || null;
-}
-
-function runDiagnostics(): void {
+async function runDiagnostics(): Promise<void> {
   if (!diagnosticsPipeId) return;
+  cleanup();
+  const generation = requestGeneration;
+  const pipeId = diagnosticsPipeId;
+  const controller = new AbortController();
+  diagnosticsAbortController = controller;
+  loading = true;
+  loadFailed = false;
+  renderList();
 
-  const params = new URLSearchParams();
-  params.set("probe", activeProbeProtocol);
-  if (publisherProtocol) params.set("publisher", publisherProtocol);
-  const since = getPublishStartedAt();
-  if (since) params.set("since", since);
-  const url = buildPipelineDiagnosticsUrl(diagnosticsPipeId, params);
+  // Diagnostics are intentionally one JSON batch. Abort and generation checks
+  // prevent a closed modal or superseded run from accepting a late response.
+  const report = await runPipelineDiagnostics(pipeId, controller.signal);
+  if (
+    controller.signal.aborted ||
+    generation !== requestGeneration ||
+    pipeId !== diagnosticsPipeId
+  ) {
+    return;
+  }
 
-  eventSource = new EventSource(url);
+  diagnosticsAbortController = null;
+  loading = false;
+  loadFailed = report === null;
+  results = report?.checks || [];
+  totalCommands = results.length;
+  if (report) {
+    activeProbeProtocol = report.protocol;
+    renderControls();
+  }
 
-  eventSource.addEventListener("running", (e: Event) => {
-    const data = JSON.parse((e as MessageEvent).data) as RunningEvent;
-    runningSet.add(data.index);
-    commandMeta[data.index] = {
-      name: data.name,
-      description: data.description,
-    };
-    if (data.index + 1 > totalCommands) totalCommands = data.index + 1;
-    renderList();
-  });
+  const totalTime = document.getElementById("diagnostics-total-time");
+  if (totalTime && report) {
+    totalTime.textContent = formatDuration(report.totalDurationMs);
+  }
 
-  eventSource.addEventListener("result", (e: Event) => {
-    const data = JSON.parse((e as MessageEvent).data) as DiagnosticResult;
-    results[data.index] = data;
-    runningSet.delete(data.index);
-    if (data.index + 1 > totalCommands) totalCommands = data.index + 1;
-    renderList();
-  });
-
-  eventSource.addEventListener("probe-raw", (e: Event) => {
-    const data = JSON.parse((e as MessageEvent).data) as {
-      stdout: string;
-      stderr: string;
-    };
-    probeRawStdout = data.stdout;
-    probeRawStderr = data.stderr;
-  });
-
-  eventSource.addEventListener("done", (e: Event) => {
-    const data = JSON.parse((e as MessageEvent).data);
-    done = true;
-    runningSet.clear();
-    eventSource?.close();
-    eventSource = null;
-
-    const totalTime = document.getElementById("diagnostics-total-time");
-    if (totalTime) totalTime.textContent = formatDuration(data.totalDurationMs);
-
+  if (report) {
     const actions: [string, (() => void) | (() => Promise<void>)][] = [
       ["diagnostics-copy-all-btn", copyAll],
       ["diagnostics-download-btn", downloadLog],
@@ -215,19 +144,8 @@ function runDiagnostics(): void {
         btn.onclick = handler;
       }
     }
-
-    renderList();
-  });
-
-  eventSource.onerror = () => {
-    if (!done) {
-      done = true;
-      runningSet.clear();
-      eventSource?.close();
-      eventSource = null;
-      renderList();
-    }
-  };
+  }
+  renderList();
 }
 
 function formatDuration(ms: number): string {
@@ -480,12 +398,20 @@ function renderList(): void {
   const container = document.getElementById("diagnostics-list");
   if (!container) return;
 
+  if (loading) {
+    container.innerHTML = `<div class="flex items-center gap-3 rounded-lg border border-base-300 bg-base-100 p-4"><span class="loading loading-spinner loading-sm text-accent"></span><span>Running diagnostics…</span></div>`;
+    return;
+  }
+  if (loadFailed) {
+    container.innerHTML = `<div class="alert alert-error">Diagnostics could not be completed.</div>`;
+    return;
+  }
+
   let html = "";
-  const count = Math.max(totalCommands, results.length);
+  const count = results.length;
 
   for (let i = 0; i < count; i++) {
     const result = results[i];
-    const isRunning = runningSet.has(i) && !result;
     const expanded = expandedSet.has(i);
 
     let statusIcon: string;
@@ -501,17 +427,13 @@ function renderList(): void {
     } else if (result && result.exitCode !== 0) {
       statusIcon = "&#10007;";
       statusClass = "text-error";
-    } else if (isRunning) {
-      statusIcon = '<span class="loading loading-spinner loading-xs"></span>';
-      statusClass = "text-accent";
     } else {
       statusIcon = "&middot;";
       statusClass = "opacity-40";
     }
 
-    const meta = commandMeta[i];
-    const name = result?.name || meta?.name || `Command ${i + 1}`;
-    const description = result?.description || meta?.description || "";
+    const name = result?.name || `Command ${i + 1}`;
+    const description = result?.description || "";
     const timing = result
       ? `<span class="badge badge-sm badge-ghost">${formatDuration(result.durationMs)}</span>`
       : "";
@@ -554,10 +476,6 @@ function renderList(): void {
     }
 
     html += `</div>`;
-
-    if (isRunning) {
-      html += `<div class="mt-2 ml-7 text-sm opacity-60">Running...</div>`;
-    }
 
     if (result && expanded) {
       html += `<div class="mt-2 ml-7">`;
@@ -684,10 +602,6 @@ function buildFullReport(): string {
       probe: activeProbeProtocol,
       totalCommands,
       results: results.filter(Boolean),
-      rawProbe: {
-        stdout: probeRawStdout || null,
-        stderr: probeRawStderr || null,
-      },
     },
     null,
     2,

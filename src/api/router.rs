@@ -56,7 +56,7 @@ use super::static_assets::{
     settings_html_redirect_handler, spa_fallback_handler, status_html_redirect_handler,
 };
 use super::telemetry::{
-    metrics_system_handler, pipeline_diagnostics_sse_handler, status_get_handler,
+    metrics_system_handler, pipeline_diagnostics_run_handler, status_get_handler,
     status_sbom_get_handler, v1_dashboard_runtime_handler, v1_engine_telemetry_handler,
     v1_events_handler, v1_overview_handler, v1_pipeline_telemetry_handler,
     v1_stage_telemetry_handler,
@@ -204,8 +204,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(pipeline_diagnostics_context_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/diagnostics",
-            get(pipeline_diagnostics_sse_handler),
+            "/api/v1/pipelines/:pipeline_id/diagnostics/run",
+            post(pipeline_diagnostics_run_handler),
         )
         .route(
             "/api/v1/pipelines/:pipeline_id/recording/start",

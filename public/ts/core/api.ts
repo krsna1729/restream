@@ -11,6 +11,7 @@ import type {
   SrtGlobalIngestConfig,
   SrtPipelineIngestConfig,
   DashboardRuntimeSnapshot,
+  DiagnosticsReport,
   SystemMetrics,
   StreamKey,
 } from "../types.js";
@@ -63,28 +64,42 @@ async function parseJsonResponse<T>(response: Response): Promise<T | null> {
   }
 }
 
+interface ApiRequestOptions {
+  method?: string;
+  body?: unknown;
+  signal?: AbortSignal;
+  showMutationLoading?: boolean;
+}
+
 async function apiRequest<T = unknown>(
   url: string,
-  { method = "GET", body = null }: { method?: string; body?: unknown } = {},
+  {
+    method = "GET",
+    body = null,
+    signal,
+    showMutationLoading = true,
+  }: ApiRequestOptions = {},
 ): Promise<T | null> {
   const normalizedMethod = String(method || "GET").toUpperCase();
-  const options: RequestInit = { method: normalizedMethod };
+  const options: RequestInit = { method: normalizedMethod, signal };
 
   if (body !== null) {
     options.headers = { "Content-Type": "application/json" };
     options.body = JSON.stringify(body);
   }
 
-  const showMutationLoading = isMutationMethod(normalizedMethod);
+  const trackMutationLoading =
+    showMutationLoading && isMutationMethod(normalizedMethod);
   let response: Response | null = null;
-  if (showMutationLoading) beginMutationRequest();
+  if (trackMutationLoading) beginMutationRequest();
   try {
     response = await fetch(withBasePath(url), options);
   } catch (e) {
+    if (signal?.aborted) return null;
     showErrorAlert("Network request failed: " + e);
     return null;
   } finally {
-    if (showMutationLoading) endMutationRequest();
+    if (trackMutationLoading) endMutationRequest();
   }
 
   if (response.status === 204) {
@@ -197,11 +212,18 @@ async function getAudioCapsPayload(): Promise<Record<string, unknown> | null> {
   return apiRequest<Record<string, unknown>>("/api/v1/audio-caps");
 }
 
-function buildPipelineDiagnosticsUrl(
+async function runPipelineDiagnostics(
   pipelineId: string,
-  params: URLSearchParams,
-): string {
-  return `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/diagnostics?${params.toString()}`;
+  signal?: AbortSignal,
+): Promise<DiagnosticsReport | null> {
+  return apiRequest<DiagnosticsReport>(
+    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/diagnostics/run`,
+    {
+      method: "POST",
+      signal,
+      showMutationLoading: false,
+    },
+  );
 }
 
 export interface BuildLogsStreamUrlOptions {
@@ -787,7 +809,7 @@ export {
   getEngineStatus,
   getEngineSbomEndpoint,
   getAudioCapsPayload,
-  buildPipelineDiagnosticsUrl,
+  runPipelineDiagnostics,
   buildLogsStreamUrl,
   createPipeline,
   updatePipeline,

@@ -352,11 +352,12 @@ Returns `404` without an active ingest.
 Returns the current processing DAG: ingest, source ring, transcoder stages,
 egresses, HLS, and recording nodes where present.
 
-### `GET /api/v1/pipelines/:pipelineId/diagnostics`
+### `POST /api/v1/pipelines/:pipelineId/diagnostics/run`
 
-Streams Server-Sent Events. An optional `probe=rtmp|srt|file` query must match the
-active ingest protocol. Returns `404` without an active ingest and `400` for a
-protocol mismatch.
+Returns one JSON report with `protocol`, `totalDurationMs`, and ordered `checks`.
+The server infers the protocol from the active ingest; the POST has no request
+body. Returns `404` without an active ingest and `429` when another run is
+active for the pipeline.
 
 RTMP and SRT inputs run the transport-oriented checks documented in
 [Observability](observability.md). File inputs switch to file-aware checks:
@@ -418,7 +419,7 @@ Context responses include:
 Raw stream keys and output URLs are never returned by this endpoint. They are
 replaced with stable SHA-256 fingerprints plus URL scheme/host summaries.
 The context endpoint does not open active diagnostics probes; agents can use the
-advertised diagnostics SSE route when an explicit live probe is needed.
+advertised diagnostics run route when an explicit active report is needed.
 
 Plan request:
 
@@ -1011,9 +1012,9 @@ Alerts for a single pipeline. Same alert shape as the aggregate endpoint.
 
 Authenticated pipeline graph endpoint. Returns 404 for unknown pipeline IDs.
 
-### `GET /api/v1/pipelines/:pipelineId/diagnostics`
+### `POST /api/v1/pipelines/:pipelineId/diagnostics/run`
 
-Authenticated SSE diagnostics endpoint for the pipeline diagnostics stream.
+Authenticated JSON endpoint returning a complete, ordered diagnostics report.
 
 ### `GET /api/v1/settings`
 

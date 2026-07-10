@@ -426,3 +426,22 @@ export interface AppLogRow {
   eventType?: string | null;
   eventClass?: string | null;
 }
+
+export interface DiagnosticResult {
+  index: number;
+  name: string;
+  description: string;
+  command: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  durationMs: number;
+  help?: string;
+  issues: string[];
+}
+
+export interface DiagnosticsReport {
+  protocol: "rtmp" | "srt" | "file" | string;
+  totalDurationMs: number;
+  checks: DiagnosticResult[];
+}
