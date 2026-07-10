@@ -91,6 +91,7 @@ pub enum MediaRenameError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaDeleteError {
     HasConfiguredIngests,
+    Dependency(String),
     NotFound,
     Io(String),
 }
@@ -402,7 +403,7 @@ impl MediaLibraryService {
             .ingest_service
             .list_for_filename(filename)
             .await
-            .unwrap_or_default();
+            .map_err(|error| MediaDeleteError::Dependency(error.to_string()))?;
         if !ingests.is_empty() {
             return Err(MediaDeleteError::HasConfiguredIngests);
         }
@@ -842,6 +843,31 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err, MediaDeleteError::HasConfiguredIngests);
+        assert!(file.exists());
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn delete_media_file_preserves_file_when_ingest_lookup_fails() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        let service = MediaLibraryService::new(
+            pool.clone(),
+            PipelineService::new(pool.clone()),
+            IngestService::new(pool.clone()),
+        );
+        let temp_dir = tempfile_dir("media-delete-lookup-failure");
+        let file = temp_dir.join("clip.mp4");
+        std::fs::write(&file, b"source").unwrap();
+        let canonical = std::fs::canonicalize(&file).unwrap();
+        pool.close().await;
+
+        let err = service
+            .delete_media_file("clip.mp4", &canonical)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, MediaDeleteError::Dependency(_)));
         assert!(file.exists());
         let _ = std::fs::remove_dir_all(temp_dir);
     }

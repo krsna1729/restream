@@ -270,6 +270,13 @@ pub async fn media_delete_handler(
             Json(serde_json::json!({"error": "Cannot delete: file has configured ingests"})),
         )
             .into_response(),
+        Err(MediaDeleteError::Dependency(error)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(
+                serde_json::json!({"error": format!("Failed to check media references: {error}")}),
+            ),
+        )
+            .into_response(),
         Err(MediaDeleteError::NotFound) => {
             (StatusCode::NOT_FOUND, "File not found").into_response()
         }
