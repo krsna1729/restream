@@ -3,6 +3,23 @@ use crate::media::engine::{AudioMeta, VideoMeta};
 use crate::media::ring_buffer::PayloadFormat;
 
 #[test]
+fn streamid_getsockopt_length_must_stay_within_buffer() {
+    let mut buf = [0u8; 8];
+    buf[..5].copy_from_slice(b"key\0x");
+
+    assert_eq!(
+        streamid_from_getsockopt_buffer(&buf, 5),
+        Some("key\0x".trim_matches('\0').to_string())
+    );
+    assert_eq!(
+        streamid_from_getsockopt_buffer(&buf, 0),
+        Some(String::new())
+    );
+    assert_eq!(streamid_from_getsockopt_buffer(&buf, -1), None);
+    assert_eq!(streamid_from_getsockopt_buffer(&buf, 9), None);
+}
+
+#[test]
 fn parses_srt_stream_ids_from_common_tools() {
     let cases = [
         (

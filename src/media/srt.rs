@@ -668,6 +668,21 @@ fn is_srt_group(socket: SRTSOCKET) -> bool {
     socket & SRTGROUP_MASK != 0
 }
 
+fn streamid_from_getsockopt_buffer(buf: &[u8], optlen: c_int) -> Option<String> {
+    if optlen < 0 {
+        return None;
+    }
+    let len = usize::try_from(optlen).ok()?;
+    if len > buf.len() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&buf[..len])
+            .trim_matches('\0')
+            .to_string(),
+    )
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct SrtGroupSummary {
     member_count: u32,
@@ -1253,9 +1268,18 @@ impl SrtServer {
         };
 
         let streamid = if res >= 0 {
-            String::from_utf8_lossy(&streamid_buf[..optlen as usize])
-                .trim_matches('\0')
-                .to_string()
+            match streamid_from_getsockopt_buffer(&streamid_buf, optlen) {
+                Some(streamid) => streamid,
+                None => {
+                    warn!(
+                        "[srt] Rejecting connection with invalid StreamID length {}",
+                        optlen
+                    );
+                    // SAFETY: client_sock is a valid accepted socket not yet closed.
+                    unsafe { srt_close(client_sock) };
+                    return;
+                }
+            }
         } else {
             "".to_string()
         };
