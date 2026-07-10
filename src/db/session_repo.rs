@@ -18,6 +18,25 @@ pub async fn delete_session(pool: &SqlitePool, token: &str) -> Result<(), sqlx::
     Ok(())
 }
 
+pub async fn delete_sessions_except(pool: &SqlitePool, token: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM sessions WHERE token != ?")
+        .bind(token)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_session_created_at(
+    pool: &SqlitePool,
+    token: &str,
+) -> Result<Option<i64>, sqlx::Error> {
+    let row = sqlx::query("SELECT created_at FROM sessions WHERE token = ?")
+        .bind(token)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.get::<i64, _>(0)))
+}
+
 pub async fn list_sessions(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
     let rows = sqlx::query("SELECT token FROM sessions")
         .fetch_all(pool)

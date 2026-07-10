@@ -135,6 +135,10 @@ async fn authenticated_app_with_temp_media_and_engine() -> (
 }
 
 async fn login(app: &axum::Router) -> String {
+    login_with_password(app, "admin").await
+}
+
+async fn login_with_password(app: &axum::Router, password: &str) -> String {
     let resp = app
         .clone()
         .oneshot(
@@ -142,7 +146,9 @@ async fn login(app: &axum::Router) -> String {
                 .method("POST")
                 .uri("/api/v1/auth/login")
                 .header("Content-Type", "application/json")
-                .body(axum::body::Body::from(r#"{"password":"admin"}"#))
+                .body(axum::body::Body::from(
+                    serde_json::json!({ "password": password }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -264,6 +270,56 @@ async fn login_success_and_logout() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn password_change_revokes_other_sessions_and_keeps_current_session() {
+    let (app, _) = test_app().await;
+    let current_cookie = login(&app).await;
+    let other_cookie = login(&app).await;
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/auth/change-password",
+            &current_cookie,
+            Some(r#"{"current_password":"admin","new_password":"newpass123"}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req("GET", "/api/v1/settings", &current_cookie, None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req("GET", "/api/v1/settings", &other_cookie, None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from(r#"{"password":"admin"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let new_cookie = login_with_password(&app, "newpass123").await;
+    assert!(new_cookie.starts_with("session="));
 }
 
 #[tokio::test]

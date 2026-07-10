@@ -76,8 +76,37 @@ pub struct AppState {
 impl AppState {
     pub async fn is_authenticated(&self, token: &str) -> bool {
         let token_hash = hash_session_token(token);
-        let sessions = self.sessions.read().await;
-        sessions.contains(&token_hash)
+        {
+            let sessions = self.sessions.read().await;
+            if !sessions.contains(&token_hash) {
+                return false;
+            }
+        }
+
+        let created_at = match self.auth_service.get_session_created_at(&token_hash).await {
+            Ok(Some(created_at)) => created_at,
+            Ok(None) => {
+                self.sessions.write().await.remove(&token_hash);
+                return false;
+            }
+            Err(error) => {
+                warn!(err = %error, "failed to validate session against SQLite");
+                self.sessions.write().await.remove(&token_hash);
+                return false;
+            }
+        };
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let max_age_ms = SESSION_MAX_AGE_SECONDS * 1000;
+        if now.saturating_sub(created_at) > max_age_ms {
+            self.sessions.write().await.remove(&token_hash);
+            if let Err(error) = self.auth_service.delete_session(&token_hash).await {
+                warn!(err = %error, "failed to delete expired session from SQLite");
+            }
+            return false;
+        }
+
+        true
     }
 
     /// Construct an AppState with all default services wired, for testing.

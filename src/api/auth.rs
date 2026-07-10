@@ -299,13 +299,11 @@ pub async fn change_password_handler(
     headers: HeaderMap,
     Json(payload): Json<ChangePasswordPayload>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-    }
+    let token = match get_session_token_from_headers(&headers) {
+        Some(token) if state.is_authenticated(&token).await => token,
+        _ => return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
+    };
+    let token_hash = hash_session_token(&token);
 
     let current_password = payload.current_password.unwrap_or_default();
     let new_password = payload.new_password.unwrap_or_default();
@@ -370,6 +368,20 @@ pub async fn change_password_handler(
         )
             .into_response();
     }
+    if state
+        .auth_service
+        .delete_sessions_except(&token_hash)
+        .await
+        .is_err()
+    {
+        state.sessions.write().await.clear();
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    state
+        .sessions
+        .write()
+        .await
+        .retain(|token| token == &token_hash);
     let _ = state
         .auth_service
         .set_meta(

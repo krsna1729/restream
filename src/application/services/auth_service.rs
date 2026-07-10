@@ -78,6 +78,20 @@ impl AuthService {
             .map_err(|e| ApiError::internal(format!("delete session: {e}")))
     }
 
+    pub async fn delete_sessions_except(&self, token: &str) -> ApiResult<()> {
+        self.session_store
+            .delete_sessions_except(token)
+            .await
+            .map_err(|e| ApiError::internal(format!("delete other sessions: {e}")))
+    }
+
+    pub async fn get_session_created_at(&self, token: &str) -> ApiResult<Option<i64>> {
+        self.session_store
+            .get_session_created_at(token)
+            .await
+            .map_err(|e| ApiError::internal(format!("get session created_at: {e}")))
+    }
+
     pub async fn prune_expired_sessions(&self, max_age_ms: i64) -> ApiResult<()> {
         self.session_store
             .prune_expired_sessions(max_age_ms)
@@ -100,14 +114,14 @@ mod tests {
     use std::sync::Mutex;
 
     use crate::application::ports::{
-        MetaLookupError, MetaLookupFuture, MetaWriteFuture, SessionListFuture, SessionStoreError,
-        SessionWriteFuture,
+        MetaLookupError, MetaLookupFuture, MetaWriteFuture, SessionListFuture, SessionLookupFuture,
+        SessionStoreError, SessionWriteFuture,
     };
 
     #[derive(Default)]
     struct FakeAuthStore {
         password_hash: Mutex<Option<String>>,
-        sessions: Mutex<BTreeSet<String>>,
+        sessions: Mutex<BTreeSet<(String, i64)>>,
     }
 
     impl MetaStore for FakeAuthStore {
@@ -136,17 +150,44 @@ mod tests {
     }
 
     impl SessionStore for FakeAuthStore {
-        fn create_session<'a>(&'a self, token: &'a str, _ts: i64) -> SessionWriteFuture<'a> {
+        fn create_session<'a>(&'a self, token: &'a str, ts: i64) -> SessionWriteFuture<'a> {
             Box::pin(async move {
-                self.sessions.lock().unwrap().insert(token.to_string());
+                self.sessions
+                    .lock()
+                    .unwrap()
+                    .insert((token.to_string(), ts));
                 Ok(())
             })
         }
 
         fn delete_session<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a> {
             Box::pin(async move {
-                self.sessions.lock().unwrap().remove(token);
+                self.sessions
+                    .lock()
+                    .unwrap()
+                    .retain(|(stored, _)| stored != token);
                 Ok(())
+            })
+        }
+
+        fn delete_sessions_except<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a> {
+            Box::pin(async move {
+                self.sessions
+                    .lock()
+                    .unwrap()
+                    .retain(|(stored, _)| stored == token);
+                Ok(())
+            })
+        }
+
+        fn get_session_created_at<'a>(&'a self, token: &'a str) -> SessionLookupFuture<'a> {
+            Box::pin(async move {
+                Ok(self
+                    .sessions
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find_map(|(stored, ts)| (stored == token).then_some(*ts)))
             })
         }
 
@@ -166,7 +207,7 @@ mod tests {
                     .lock()
                     .unwrap()
                     .iter()
-                    .cloned()
+                    .map(|(token, _)| token.clone())
                     .collect::<Vec<_>>())
             })
         }

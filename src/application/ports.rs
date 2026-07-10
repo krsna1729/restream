@@ -39,6 +39,8 @@ pub type SessionWriteFuture<'a> =
     Pin<Box<dyn Future<Output = Result<(), SessionStoreError>> + Send + 'a>>;
 pub type SessionListFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<String>, SessionStoreError>> + Send + 'a>>;
+pub type SessionLookupFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<i64>, SessionStoreError>> + Send + 'a>>;
 pub type JobListFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<Job>, JobStoreError>> + Send + 'a>>;
 pub type PipelineUpdateFuture<'a> =
@@ -359,6 +361,8 @@ pub trait IngestHostStore: Send + Sync {
 pub trait SessionStore: Send + Sync {
     fn create_session<'a>(&'a self, token: &'a str, ts: i64) -> SessionWriteFuture<'a>;
     fn delete_session<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a>;
+    fn delete_sessions_except<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a>;
+    fn get_session_created_at<'a>(&'a self, token: &'a str) -> SessionLookupFuture<'a>;
     fn prune_expired_sessions<'a>(&'a self, max_age_ms: i64) -> SessionWriteFuture<'a>;
     fn list_sessions<'a>(&'a self) -> SessionListFuture<'a>;
 }
@@ -819,6 +823,22 @@ impl SessionStore for SqliteSessionStore {
     fn delete_session<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a> {
         Box::pin(async move {
             crate::db::delete_session(&self.pool, token)
+                .await
+                .map_err(|err| SessionStoreError::new(err.to_string()))
+        })
+    }
+
+    fn delete_sessions_except<'a>(&'a self, token: &'a str) -> SessionWriteFuture<'a> {
+        Box::pin(async move {
+            crate::db::delete_sessions_except(&self.pool, token)
+                .await
+                .map_err(|err| SessionStoreError::new(err.to_string()))
+        })
+    }
+
+    fn get_session_created_at<'a>(&'a self, token: &'a str) -> SessionLookupFuture<'a> {
+        Box::pin(async move {
+            crate::db::get_session_created_at(&self.pool, token)
                 .await
                 .map_err(|err| SessionStoreError::new(err.to_string()))
         })
