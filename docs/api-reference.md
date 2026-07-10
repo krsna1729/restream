@@ -239,15 +239,15 @@ new `seg<N>.ts`, then PUTs the playlist URL.
 
 | Method | Route | Response |
 |---|---|---|
-| `GET` | `/api/logs` | `{ logs, total, hasMore }` |
-| `GET` | `/api/logs/stream` | SSE stream (`event: log` frames) |
+| `GET` | `/api/v1/logs` | `{ logs, total, hasMore }` |
+| `GET` | `/api/v1/logs/stream` | SSE stream (`event: log` frames) |
 
 All process log entries are stored in the `app_logs` SQLite table and served
-through these two endpoints. The frontend history UI calls `/api/logs` with
+through these two endpoints. The frontend history UI calls `/api/v1/logs` with
 `pipeline_id`/`output_id` filters instead of relying on the pipeline-scoped
 history endpoints.
 
-### `GET /api/logs`
+### `GET /api/v1/logs`
 
 Query parameters:
 
@@ -262,22 +262,27 @@ Query parameters:
 | `event_class` | — | `lifecycle` to return only lifecycle transition events |
 | `prefix` | — | Comma-separated message prefix filter (`stderr,exit`) |
 | `limit` | `200` | 1–1000 |
-| `order` | `desc` | `asc` or `desc` on `ts` |
+| `order` | `desc` | `asc` or `desc` on `ts` for ordinary list snapshots |
 
 Each log entry in the response includes `id`, `ts`, `level`, `target`,
 `message`, `fields` (JSON), `pipelineId`, `outputId`, `eventType`.
+Lifecycle-aware clients also receive `eventClass` (for example, `lifecycle`).
 
-### `GET /api/logs/stream`
+### `GET /api/v1/logs/stream`
 
-SSE live tail. Accepts the same core filter parameters as `GET /api/logs`,
+SSE live tail. Accepts the same core filter parameters as `GET /api/v1/logs`,
 plus `include_restream=true` when a `pipeline_id` subscription should also
 receive restream-wide process lifecycle events on the same stream.
 On connect, the handler backfills entries newer than the `Last-Event-ID`
 header (or `?last_event_id=`) from the database, then streams new entries
-from the broadcast channel. A `": ping"` comment is sent every 20 seconds.
+from the broadcast channel. Live entries are broadcast only after persistence,
+so their positive SSE IDs are stable and reconnect backfill preserves
+`eventType` and `eventClass`. Reconnect backfill pages are ordered by ascending
+persisted ID to match the resume cursor and continue until the gap is closed
+rather than truncating after one page. A `": ping"` comment is sent every 20 seconds.
 Lagging receivers are closed; the browser reconnects automatically using
 `Last-Event-ID`.
-The dashboard overview activity rail uses an initial `GET /api/logs` snapshot
+The dashboard overview activity rail uses an initial `GET /api/v1/logs` snapshot
 plus this SSE endpoint filtered with `scope=restream` for live restream-wide
 activity updates. Overview also reuses that same restream-scoped stream to
 wake `/api/v1/dashboard/runtime` summary refreshes on lifecycle events, avoiding a second

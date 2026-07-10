@@ -32,10 +32,10 @@ impl LogService {
         &self,
         filters: &AppLogFilters,
         include_restream: bool,
-    ) -> Vec<AppLogRow> {
+    ) -> ApiResult<Vec<AppLogRow>> {
         let limit = filters.limit.unwrap_or(200).clamp(1, 1000);
         if !include_restream || filters.pipeline_id.is_none() || filters.output_id.is_some() {
-            return self.list_logs(filters).await.unwrap_or_default();
+            return self.list_logs(filters).await;
         }
 
         let mut restream_filters = filters.clone();
@@ -47,15 +47,11 @@ impl LogService {
             tokio::join!(self.list_logs(filters), self.list_logs(&restream_filters),);
 
         let mut merged = std::collections::BTreeMap::new();
-        for row in pipeline_logs
-            .unwrap_or_default()
-            .into_iter()
-            .chain(restream_logs.unwrap_or_default())
-        {
+        for row in pipeline_logs?.into_iter().chain(restream_logs?) {
             merged.insert(row.id, row);
         }
 
-        merged.into_values().take(limit as usize).collect()
+        Ok(merged.into_values().take(limit as usize).collect())
     }
 }
 
@@ -113,6 +109,7 @@ mod tests {
                 pipeline_id: pipeline_id.map(str::to_string),
                 output_id: None,
                 event_type: Some("test.event".to_string()),
+                event_class: Some("lifecycle".to_string()),
             }
         }
     }
@@ -158,7 +155,8 @@ mod tests {
 
         let backfill = service
             .list_stream_backfill(&filters_for_pipeline("pipe-1", 10), true)
-            .await;
+            .await
+            .unwrap();
 
         let messages = backfill
             .iter()
@@ -185,7 +183,8 @@ mod tests {
         let service = LogService::new(pool);
         let backfill = service
             .list_stream_backfill(&filters_for_pipeline("pipe-1", 10), true)
-            .await;
+            .await
+            .unwrap();
 
         let messages = backfill
             .iter()
@@ -211,12 +210,78 @@ mod tests {
         let service = LogService::new(pool);
         let backfill = service
             .list_stream_backfill(&filters_for_pipeline("pipe-1", 10), false)
-            .await;
+            .await
+            .unwrap();
 
         let messages = backfill
             .iter()
             .map(|row| row.message.as_str())
             .collect::<Vec<_>>();
         assert_eq!(messages, vec!["pipeline event"]);
+    }
+
+    #[tokio::test]
+    async fn paged_stream_backfill_does_not_skip_ids_when_timestamps_run_backwards() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        let entries = (1..=250)
+            .map(|sequence| {
+                let reverse_seconds = 250 - sequence;
+                AppLogEntry {
+                    ts: format!(
+                        "2026-07-09T00:{:02}:{:02}Z",
+                        reverse_seconds / 60,
+                        reverse_seconds % 60
+                    ),
+                    level: "INFO".to_string(),
+                    target: "restream::tests".to_string(),
+                    message: format!("event {sequence}"),
+                    fields: None,
+                    pipeline_id: Some("pipe-1".to_string()),
+                    output_id: None,
+                    event_type: Some("test.event".to_string()),
+                    event_class: Some("lifecycle".to_string()),
+                }
+            })
+            .collect::<Vec<_>>();
+        crate::db::append_app_log_batch(&pool, &entries)
+            .await
+            .unwrap();
+
+        let service = LogService::new(pool);
+        let mut filters = filters_for_pipeline("pipe-1", 200);
+        let mut cursor = 0;
+        let mut received_ids = Vec::new();
+        loop {
+            filters.after_id = Some(cursor);
+            let page = service.list_stream_backfill(&filters, false).await.unwrap();
+            if page.is_empty() {
+                break;
+            }
+            cursor = page.iter().map(|row| row.id).max().unwrap();
+            received_ids.extend(page.into_iter().map(|row| row.id));
+        }
+
+        assert_eq!(received_ids, (1..=250).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn stream_backfill_distinguishes_store_failure_from_empty_page() {
+        let service = LogService::with_store(Arc::new(FakeLogStore {
+            rows: Arc::new(Vec::new()),
+        }));
+        let empty = service
+            .list_stream_backfill(&filters_for_pipeline("pipe-1", 10), false)
+            .await
+            .unwrap();
+        assert!(empty.is_empty());
+
+        let mut failing_filters = filters_for_pipeline("pipe-1", 10);
+        failing_filters.target = Some("fail".to_string());
+        let error = service
+            .list_stream_backfill(&failing_filters, false)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("log store failed"));
     }
 }

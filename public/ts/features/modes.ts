@@ -1,4 +1,5 @@
-import { buildLogsStreamUrl, getRestreamHistory } from "../core/api.js";
+import { getRestreamHistory } from "../core/api.js";
+import { createManagedLogStream } from "../core/log-stream.js";
 import { outputViewEncodingLabel } from "../core/output-config.js";
 import {
   escapeHtml,
@@ -88,7 +89,6 @@ const OVERVIEW_HISTORY_LIMIT = 28;
 const OVERVIEW_ACTIVITY_LIMIT = 6;
 const OVERVIEW_ACTIVITY_FETCH_LIMIT = 24;
 const OVERVIEW_ACTIVITY_STALE_MS = 15_000;
-const OVERVIEW_ACTIVITY_RECONNECT_MS = 1000;
 const overviewMetricHistory: Record<OverviewMetricKey, number[]> = {
   inputs: [],
   outputs: [],
@@ -101,8 +101,8 @@ let lastOverviewMetricsSampleKey: string | null = null;
 let overviewActivityLogs: AppLogRow[] = [];
 let overviewActivityFetchedAt = 0;
 let overviewActivityInFlight: Promise<void> | null = null;
-let overviewActivityStream: EventSource | null = null;
-let overviewActivityReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+const overviewActivityStream = createManagedLogStream();
+let overviewActivityStreamActive = false;
 
 function overviewActivityLogKey(log: AppLogRow): string {
   const id = Number(log?.id);
@@ -134,14 +134,8 @@ function latestOverviewActivityId(): number | null {
 }
 
 function closeOverviewActivityStream(): void {
-  if (overviewActivityReconnectTimer) {
-    clearTimeout(overviewActivityReconnectTimer);
-    overviewActivityReconnectTimer = null;
-  }
-  if (overviewActivityStream) {
-    overviewActivityStream.close();
-    overviewActivityStream = null;
-  }
+  overviewActivityStream.close();
+  overviewActivityStreamActive = false;
 }
 
 function overviewActivityStreamingEnabled(): boolean {
@@ -151,38 +145,34 @@ function overviewActivityStreamingEnabled(): boolean {
 }
 
 function ensureOverviewActivityStream(): void {
-  if (typeof EventSource !== "function") return;
   if (!overviewActivityStreamingEnabled()) {
     closeOverviewActivityStream();
     return;
   }
-  if (overviewActivityStream) return;
-
-  overviewActivityStream = new EventSource(
-    buildLogsStreamUrl({
+  overviewActivityStreamActive = typeof EventSource === "function";
+  overviewActivityStream.sync({
+    filters: {
       scope: "restream",
-      lastEventId: latestOverviewActivityId(),
-    }),
-  );
-  overviewActivityStream.addEventListener("log", (event: Event) => {
-    try {
-      const data = JSON.parse((event as MessageEvent).data) as AppLogRow;
+    },
+    resumeAfterId: latestOverviewActivityId(),
+    onLog: (data) => {
       mergeOverviewActivityLogs([data]);
-      handleDashboardRuntimeLifecycleLog(data);
+      if (
+        data.eventClass === "lifecycle" ||
+        (!data.eventClass && Boolean(data.eventType))
+      ) {
+        handleDashboardRuntimeLifecycleLog(data);
+      }
       if (currentMode === "overview" || currentMode === null) renderOverview();
-    } catch {
-      // Ignore malformed frames and wait for the next reconnect/snapshot.
-    }
+    },
+    onUnavailable: () => {
+      overviewActivityStreamActive = false;
+      // The current snapshot remains authoritative while SSE is unavailable.
+      // Start a fresh staleness window so renderOverview() cannot spin through
+      // immediate fetch -> reconnect-failure cycles.
+      overviewActivityFetchedAt = Date.now();
+    },
   });
-  overviewActivityStream.onerror = () => {
-    closeOverviewActivityStream();
-    overviewActivityFetchedAt = 0;
-    if (!overviewActivityStreamingEnabled()) return;
-    overviewActivityReconnectTimer = setTimeout(() => {
-      overviewActivityReconnectTimer = null;
-      refreshOverviewActivityIfStale();
-    }, OVERVIEW_ACTIVITY_RECONNECT_MS);
-  };
 }
 
 function refreshOverviewActivityIfStale(): void {
@@ -191,7 +181,7 @@ function refreshOverviewActivityIfStale(): void {
     return;
   }
   const shouldFetchSnapshot =
-    overviewActivityStream === null &&
+    !overviewActivityStreamActive &&
     (overviewActivityLogs.length === 0 ||
       Date.now() - overviewActivityFetchedAt >= OVERVIEW_ACTIVITY_STALE_MS);
   if (!shouldFetchSnapshot) {

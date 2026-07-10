@@ -1,8 +1,8 @@
+import { getOutputHistory, getPipelineHistory } from "../core/api.js";
 import {
-  buildLogsStreamUrl,
-  getOutputHistory,
-  getPipelineHistory,
-} from "../core/api.js";
+  createManagedLogStream,
+  type LogStreamFilters,
+} from "../core/log-stream.js";
 import {
   historyConstants,
   outputHistoryState,
@@ -28,8 +28,10 @@ const {
 const OUTPUT_HISTORY_TIMELINE_LIMIT = 200;
 const PIPELINE_HISTORY_LIMIT = 200;
 
-let outputHistoryStream: EventSource | null = null;
-let pipelineHistoryStream: EventSource | null = null;
+const outputHistoryStream = createManagedLogStream();
+const pipelineHistoryStream = createManagedLogStream();
+let outputHistoryStreamActive = false;
+let pipelineHistoryStreamActive = false;
 
 function historyLogKey(log: AppLogRow | null | undefined): string {
   const id = Number(log?.id);
@@ -249,17 +251,13 @@ async function pollHistoryOnce(scrollToTop = false): Promise<void> {
 }
 
 function closeOutputHistoryStream(): void {
-  if (outputHistoryStream) {
-    outputHistoryStream.close();
-    outputHistoryStream = null;
-  }
+  outputHistoryStream.close();
+  outputHistoryStreamActive = false;
 }
 
 function closePipelineHistoryStream(): void {
-  if (pipelineHistoryStream) {
-    pipelineHistoryStream.close();
-    pipelineHistoryStream = null;
-  }
+  pipelineHistoryStream.close();
+  pipelineHistoryStreamActive = false;
 }
 
 function currentHistoryPollIntervalMs(): number {
@@ -288,140 +286,91 @@ function startPipelineHistoryPollFallback(refreshNow = false): void {
   );
 }
 
-function outputHistoryStreamUrl(): string | null {
+function outputHistoryStreamSpec(): {
+  filters: LogStreamFilters;
+  resumeAfterId: number | null;
+} | null {
   const { pipelineId, outputId, mode, lifecycleLogs, rawLogs } =
     outputHistoryState;
   if (!pipelineId || !outputId) return null;
-  return mode === "timeline"
-    ? buildLogsStreamUrl({
-        pipelineId,
-        outputId,
-        eventClass: "lifecycle",
-        lastEventId: latestHistoryLogId(lifecycleLogs),
-      })
-    : buildLogsStreamUrl({
-        pipelineId,
-        outputId,
-        lastEventId: latestHistoryLogId(rawLogs),
-      });
+  return {
+    filters: {
+      pipelineId,
+      outputId,
+      ...(mode === "timeline" ? { eventClass: "lifecycle" } : {}),
+    },
+    resumeAfterId: latestHistoryLogId(
+      mode === "timeline" ? lifecycleLogs : rawLogs,
+    ),
+  };
 }
 
-function pipelineHistoryStreamUrl(): string | null {
+function pipelineHistoryStreamSpec(): {
+  filters: LogStreamFilters;
+  resumeAfterId: number | null;
+} | null {
   const { pipelineId, logs } = pipelineHistoryState;
   if (!pipelineId) return null;
-  return buildLogsStreamUrl({
-    scope: "pipeline",
-    pipelineId,
-    lastEventId: latestHistoryLogId(logs),
-  });
-}
-
-function fallbackOutputHistoryStreamIfClosed(source: EventSource): void {
-  const closedState =
-    typeof EventSource === "function" &&
-    typeof (EventSource as typeof EventSource & { CLOSED?: number }).CLOSED ===
-      "number"
-      ? (EventSource as typeof EventSource & { CLOSED: number }).CLOSED
-      : 2;
-  const readyState = (
-    source as EventSource & {
-      readyState?: number;
-    }
-  ).readyState;
-  if (readyState !== undefined && readyState !== closedState) return;
-  if (outputHistoryStream !== source || !outputHistoryState.playing) return;
-  closeOutputHistoryStream();
-  startOutputHistoryPollFallback(true);
-}
-
-function fallbackPipelineHistoryStreamIfClosed(source: EventSource): void {
-  const closedState =
-    typeof EventSource === "function" &&
-    typeof (EventSource as typeof EventSource & { CLOSED?: number }).CLOSED ===
-      "number"
-      ? (EventSource as typeof EventSource & { CLOSED: number }).CLOSED
-      : 2;
-  const readyState = (
-    source as EventSource & {
-      readyState?: number;
-    }
-  ).readyState;
-  if (readyState !== undefined && readyState !== closedState) return;
-  if (pipelineHistoryStream !== source || !pipelineHistoryState.playing) return;
-  closePipelineHistoryStream();
-  startPipelineHistoryPollFallback(true);
+  return {
+    filters: { scope: "pipeline", pipelineId },
+    resumeAfterId: latestHistoryLogId(logs),
+  };
 }
 
 function openOutputHistoryStream(): boolean {
   if (typeof EventSource !== "function") return false;
-  const url = outputHistoryStreamUrl();
-  if (!url) return false;
+  const spec = outputHistoryStreamSpec();
+  if (!spec) return false;
 
-  try {
-    const stream = new EventSource(url);
-    outputHistoryStream = stream;
-    stream.addEventListener("log", (event: Event) => {
-      if (outputHistoryStream !== stream) return;
-      try {
-        const data = JSON.parse((event as MessageEvent).data) as AppLogRow;
-        if (outputHistoryState.mode === "timeline") {
-          outputHistoryState.lifecycleLogs = mergeHistoryLogs(
-            outputHistoryState.lifecycleLogs,
-            [data],
-            OUTPUT_HISTORY_TIMELINE_LIMIT,
-          );
-        } else {
-          outputHistoryState.rawLogs = mergeHistoryLogs(
-            outputHistoryState.rawLogs,
-            [data],
-            OUTPUT_HISTORY_RAW_LIMIT,
-          );
-        }
-        renderOutputHistory(false);
-      } catch {
-        // Ignore malformed frames and wait for browser reconnect/backfill.
+  outputHistoryStreamActive = true;
+  outputHistoryStream.sync({
+    ...spec,
+    onLog: (data) => {
+      if (outputHistoryState.mode === "timeline") {
+        outputHistoryState.lifecycleLogs = mergeHistoryLogs(
+          outputHistoryState.lifecycleLogs,
+          [data],
+          OUTPUT_HISTORY_TIMELINE_LIMIT,
+        );
+      } else {
+        outputHistoryState.rawLogs = mergeHistoryLogs(
+          outputHistoryState.rawLogs,
+          [data],
+          OUTPUT_HISTORY_RAW_LIMIT,
+        );
       }
-    });
-    stream.onerror = () => {
-      fallbackOutputHistoryStreamIfClosed(stream);
-    };
-    return true;
-  } catch {
-    closeOutputHistoryStream();
-    return false;
-  }
+      renderOutputHistory(false);
+    },
+    onUnavailable: () => {
+      outputHistoryStreamActive = false;
+      if (outputHistoryState.playing) startOutputHistoryPollFallback(true);
+    },
+  });
+  return outputHistoryStreamActive;
 }
 
 function openPipelineHistoryStream(): boolean {
   if (typeof EventSource !== "function") return false;
-  const url = pipelineHistoryStreamUrl();
-  if (!url) return false;
+  const spec = pipelineHistoryStreamSpec();
+  if (!spec) return false;
 
-  try {
-    const stream = new EventSource(url);
-    pipelineHistoryStream = stream;
-    stream.addEventListener("log", (event: Event) => {
-      if (pipelineHistoryStream !== stream) return;
-      try {
-        const data = JSON.parse((event as MessageEvent).data) as AppLogRow;
-        pipelineHistoryState.logs = mergeHistoryLogs(
-          pipelineHistoryState.logs,
-          [data],
-          PIPELINE_HISTORY_LIMIT,
-        );
-        renderPipelineHistory(false);
-      } catch {
-        // Ignore malformed frames and wait for browser reconnect/backfill.
-      }
-    });
-    stream.onerror = () => {
-      fallbackPipelineHistoryStreamIfClosed(stream);
-    };
-    return true;
-  } catch {
-    closePipelineHistoryStream();
-    return false;
-  }
+  pipelineHistoryStreamActive = true;
+  pipelineHistoryStream.sync({
+    ...spec,
+    onLog: (data) => {
+      pipelineHistoryState.logs = mergeHistoryLogs(
+        pipelineHistoryState.logs,
+        [data],
+        PIPELINE_HISTORY_LIMIT,
+      );
+      renderPipelineHistory(false);
+    },
+    onUnavailable: () => {
+      pipelineHistoryStreamActive = false;
+      if (pipelineHistoryState.playing) startPipelineHistoryPollFallback(true);
+    },
+  });
+  return pipelineHistoryStreamActive;
 }
 
 function syncOutputHistoryLiveTransport(refreshFallback = false): void {
@@ -603,7 +552,7 @@ export async function syncHistoryPollingWithVisibility(): Promise<void> {
       startOutputHistoryPollFallback(false);
     } else {
       syncOutputHistoryLiveTransport(false);
-      if (outputHistoryStream) {
+      if (outputHistoryStreamActive) {
         renderOutputHistory(false);
       } else {
         await pollHistoryOnce();
@@ -616,7 +565,7 @@ export async function syncHistoryPollingWithVisibility(): Promise<void> {
       startPipelineHistoryPollFallback(false);
     } else {
       syncPipelineHistoryLiveTransport(false);
-      if (pipelineHistoryStream) {
+      if (pipelineHistoryStreamActive) {
         renderPipelineHistory(false);
       } else {
         await pollPipelineHistoryOnce();

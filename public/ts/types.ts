@@ -424,4 +424,5 @@ export interface AppLogRow {
   pipelineId?: string | null;
   outputId?: string | null;
   eventType?: string | null;
+  eventClass?: string | null;
 }

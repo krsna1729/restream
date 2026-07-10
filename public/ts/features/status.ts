@@ -1,9 +1,9 @@
 import {
-  buildLogsStreamUrl,
   getEngineSbomEndpoint,
   getEngineStatus,
   getRestreamHistory,
 } from "../core/api.js";
+import { createManagedLogStream } from "../core/log-stream.js";
 import { withBasePath } from "../core/base-path.js";
 import {
   copyText,
@@ -91,12 +91,10 @@ interface StatusData {
 
 const STATUS_PROCESS_LOG_LIMIT = 80;
 const STATUS_ACTIVITY_LIMIT = 12;
-const STATUS_STREAM_RECONNECT_MS = 1000;
 let statusDataSnapshot: StatusData | null = null;
 let statusProcessLogs: AppLogRow[] = [];
-let statusStream: EventSource | null = null;
+const statusStream = createManagedLogStream();
 let statusStreamActive = false;
-let statusStreamReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let statusStreamLastEventId: number | null = null;
 
 function syncProcessIndicatorFromLogs(logs: AppLogRow[]): void {
@@ -405,7 +403,7 @@ function latestStatusProcessLogId(): number | null {
 function rememberStatusProcessLogId(log: AppLogRow | null | undefined): void {
   const id = Number(log?.id);
   if (Number.isFinite(id) && id > 0) {
-    statusStreamLastEventId = id;
+    statusStreamLastEventId = Math.max(statusStreamLastEventId || 0, id);
   }
 }
 
@@ -477,14 +475,9 @@ function bindActions(status: StatusData, sbomEndpoint: string): void {
 }
 
 function closeStatusStream(): void {
-  if (statusStreamReconnectTimer) {
-    clearTimeout(statusStreamReconnectTimer);
-    statusStreamReconnectTimer = null;
-  }
-  if (statusStream) {
-    statusStream.close();
-    statusStream = null;
-  }
+  statusStreamLastEventId =
+    statusStream.getLastEventId() ?? statusStreamLastEventId;
+  statusStream.close();
 }
 
 function statusStreamingEnabled(): boolean {
@@ -582,41 +575,23 @@ function renderStatusSnapshot(): void {
 
 function openStatusStream(): void {
   if (!statusStreamingEnabled() || !statusDataSnapshot) return;
-  if (typeof EventSource !== "function") return;
-  if (statusStream) return;
-
-  try {
-    const stream = new EventSource(
-      buildLogsStreamUrl({
-        scope: "restream",
-        lastEventId: statusStreamLastEventId ?? latestStatusProcessLogId(),
-      }),
-    );
-    statusStream = stream;
-    stream.addEventListener("log", (event: Event) => {
-      if (statusStream !== stream) return;
-      try {
-        const data = JSON.parse((event as MessageEvent).data) as AppLogRow;
-        rememberStatusProcessLogId(data);
-        mergeStatusProcessLogs([data]);
+  statusStream.sync({
+    filters: {
+      scope: "restream",
+    },
+    resumeAfterId: statusStreamLastEventId ?? latestStatusProcessLogId(),
+    onLog: (data) => {
+      rememberStatusProcessLogId(data);
+      mergeStatusProcessLogs([data]);
+      if (
+        data.eventClass === "lifecycle" ||
+        (!data.eventClass && Boolean(data.eventType))
+      ) {
         handleDashboardRuntimeLifecycleLog(data);
-        renderStatusSnapshot();
-      } catch {
-        // Ignore malformed frames and wait for reconnect/backfill.
       }
-    });
-    stream.onerror = () => {
-      if (statusStream !== stream) return;
-      closeStatusStream();
-      if (!statusStreamingEnabled()) return;
-      statusStreamReconnectTimer = setTimeout(() => {
-        statusStreamReconnectTimer = null;
-        openStatusStream();
-      }, STATUS_STREAM_RECONNECT_MS);
-    };
-  } catch {
-    closeStatusStream();
-  }
+      renderStatusSnapshot();
+    },
+  });
 }
 
 export function setStatusStreamActive(active: boolean): void {
@@ -655,7 +630,10 @@ export async function loadStatus(): Promise<void> {
     : [];
   syncProcessIndicatorFromLogs([...statusProcessLogs].reverse());
   const latestLog = latestStatusProcessLog(statusProcessLogs);
-  if (latestLog) {
+  if (
+    latestLog?.eventClass === "lifecycle" ||
+    (!latestLog?.eventClass && Boolean(latestLog?.eventType))
+  ) {
     handleDashboardRuntimeLifecycleLog(latestLog);
   }
   statusStreamLastEventId = latestStatusProcessLogId();

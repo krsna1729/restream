@@ -1,9 +1,8 @@
-//! Unified logging subsystem — tracing subscriber with four simultaneous sinks:
+//! Unified logging subsystem — tracing subscriber with three simultaneous sinks:
 //!
 //! 1. **fmt::Layer**       → stdout (info/debug) + stderr (error/warn)
 //! 2. **FileLayer**        → rolling daily file via `tracing-appender` (NonBlocking)
-//! 3. **DbLayer**          → `app_logs` SQLite table, batched every 100 ms
-//! 4. **BroadcastLayer**   → `tokio::sync::broadcast` channel for SSE live tail
+//! 3. **DbLayer**          → `app_logs` SQLite table, then SSE broadcast with persisted IDs
 //!
 //! Call `init()` once at the top of `run_app()`, before any tasks are spawned.
 //! Hold the returned `LoggingHandles` for the process lifetime.
@@ -38,21 +37,8 @@ pub fn next_correlation_id(prefix: &str) -> String {
 
 // ── Public broadcast entry (also used by the SSE handler) ────────────────────
 
-/// A single log entry broadcast to SSE subscribers and written to SQLite.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LogBroadcast {
-    pub id: i64, // set to 0 until confirmed by DB; SSE uses this for Last-Event-ID
-    pub ts: String,
-    pub level: String,
-    pub target: String,
-    pub message: String,
-    pub fields: Option<String>,
-    pub pipeline_id: Option<String>,
-    pub output_id: Option<String>,
-    pub event_type: Option<String>,
-    pub event_class: Option<String>,
-}
+/// Persisted log row broadcast to SSE subscribers after its DB transaction commits.
+pub type LogBroadcast = AppLogRow;
 
 // ── LoggingHandles ────────────────────────────────────────────────────────────
 
@@ -266,75 +252,6 @@ impl<S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>> Layer
     }
 }
 
-// ── BroadcastLayer ────────────────────────────────────────────────────────────
-
-struct BroadcastLayer {
-    tx: broadcast::Sender<LogBroadcast>,
-    spans: SpanStore,
-}
-
-impl<S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>> Layer<S>
-    for BroadcastLayer
-{
-    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, _ctx: Context<'_, S>) {
-        let mut v = SpanVisitor(SpanFields::default());
-        attrs.record(&mut v);
-        if v.0.pipeline_id.is_some() || v.0.output_id.is_some() {
-            self.spans.record(id, v.0);
-        }
-    }
-
-    fn on_record(&self, id: &Id, values: &Record<'_>, _ctx: Context<'_, S>) {
-        if let Ok(mut m) = self.spans.0.lock()
-            && let Some(sf) = m.get_mut(id)
-        {
-            let mut v = SpanVisitor(sf.clone());
-            values.record(&mut v);
-            *sf = v.0;
-        }
-    }
-
-    fn on_close(&self, id: Id, _ctx: Context<'_, S>) {
-        self.spans.remove(&id);
-    }
-
-    fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
-        let meta = event.metadata();
-        if !history_level_enabled(meta.level()) {
-            return;
-        }
-
-        let mut fc = FieldCollector::new();
-        event.record(&mut fc);
-
-        let span_ctx = self.spans.lookup(&ctx);
-        let fields = fc.fields_json();
-        let message = fc.message.take().unwrap_or_default();
-        let pipeline_id = fc.pipeline_id.take().or(span_ctx.pipeline_id);
-        let output_id = fc.output_id.take().or(span_ctx.output_id);
-        let event_type = fc.event_type.take();
-        let event_class = fc.event_class.take();
-        let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        let level = meta.level().to_string().to_uppercase();
-
-        let entry = LogBroadcast {
-            id: 0, // DB assigns the real id asynchronously
-            ts,
-            level,
-            target: meta.target().to_string(),
-            message,
-            fields,
-            pipeline_id,
-            output_id,
-            event_type,
-            event_class,
-        };
-
-        // send() fails only when all receivers have dropped — ignore the error.
-        let _ = self.tx.send(entry);
-    }
-}
-
 // ── Stderr writer (error/warn → stderr, rest → stdout) ───────────────────────
 
 struct SplitWriter;
@@ -367,9 +284,8 @@ pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> LoggingHandle
     let (db_tx, mut db_rx) = tokio::sync::mpsc::channel::<AppLogEntry>(4096);
     let (broadcast_tx, _) = broadcast::channel::<LogBroadcast>(256);
 
-    // ── span stores — shared between DbLayer and BroadcastLayer ──
+    // ── span context for the persistence layer ──
     let db_spans = SpanStore::default();
-    let bc_spans = SpanStore::default();
 
     // ── file sink ──
     let (file_writer, file_guard) = if log_dir.is_empty() {
@@ -387,10 +303,6 @@ pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> LoggingHandle
     let db_layer = DbLayer {
         tx: db_tx.clone(),
         spans: db_spans,
-    };
-    let bc_layer = BroadcastLayer {
-        tx: broadcast_tx.clone(),
-        spans: bc_spans,
     };
 
     let fmt_layer_stdout = tracing_subscriber::fmt::layer()
@@ -410,16 +322,14 @@ pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> LoggingHandle
     let subscriber = tracing_subscriber::registry()
         .with(fmt_layer_stdout.with_filter(filter.clone()))
         .with(fmt_layer_file.with_filter(filter))
-        .with(db_layer.with_filter(history_filter))
-        .with(bc_layer.with_filter(filter_fn(|meta: &Metadata<'_>| {
-            history_level_enabled(meta.level())
-        })));
+        .with(db_layer.with_filter(history_filter));
 
     // set_global_default panics if called twice — acceptable for a process-lifetime init.
     tracing::subscriber::set_global_default(subscriber)
         .expect("tracing subscriber already installed");
 
     // ── DB drain task — spawned here, runs until db_tx is dropped ──
+    let drain_broadcast_tx = broadcast_tx.clone();
     tokio::spawn(async move {
         let mut batch: Vec<AppLogEntry> = Vec::with_capacity(64);
         loop {
@@ -438,7 +348,12 @@ pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> LoggingHandle
                             None => {
                                 // Channel closed — flush remaining and exit.
                                 if !batch.is_empty() {
-                                    let _ = crate::db::append_app_log_batch(&db_pool, &batch).await;
+                                    persist_and_broadcast_log_batch(
+                                        &db_pool,
+                                        &drain_broadcast_tx,
+                                        &mut batch,
+                                    )
+                                    .await;
                                 }
                                 return;
                             }
@@ -448,8 +363,7 @@ pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> LoggingHandle
                 }
             }
             if !batch.is_empty() {
-                let _ = crate::db::append_app_log_batch(&db_pool, &batch).await;
-                batch.clear();
+                persist_and_broadcast_log_batch(&db_pool, &drain_broadcast_tx, &mut batch).await;
             }
         }
     });
@@ -461,9 +375,24 @@ pub fn init(db_pool: SqlitePool, log_dir: &str, no_color: bool) -> LoggingHandle
     }
 }
 
+async fn persist_and_broadcast_log_batch(
+    db_pool: &SqlitePool,
+    broadcast_tx: &broadcast::Sender<LogBroadcast>,
+    batch: &mut Vec<AppLogEntry>,
+) {
+    if let Ok(rows) = crate::db::append_app_log_batch_returning(db_pool, batch).await {
+        for row in rows {
+            // send() fails only when all receivers have dropped.
+            let _ = broadcast_tx.send(row);
+        }
+    }
+    batch.clear();
+}
+
 #[cfg(test)]
 mod tests {
-    use super::history_level_enabled;
+    use super::{history_level_enabled, persist_and_broadcast_log_batch};
+    use crate::logging::AppLogEntry;
 
     #[test]
     fn history_level_filter_keeps_operator_levels() {
@@ -476,5 +405,53 @@ mod tests {
     fn history_level_filter_drops_debug_and_trace() {
         assert!(!history_level_enabled(&tracing::Level::DEBUG));
         assert!(!history_level_enabled(&tracing::Level::TRACE));
+    }
+
+    #[tokio::test]
+    async fn persistence_handoff_broadcasts_committed_positive_ids_and_metadata() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        let (tx, mut rx) = tokio::sync::broadcast::channel(4);
+        let mut batch = vec![AppLogEntry {
+            ts: "2026-07-10T00:00:00Z".to_string(),
+            level: "INFO".to_string(),
+            target: "restream::test".to_string(),
+            message: "persisted lifecycle event".to_string(),
+            fields: None,
+            pipeline_id: Some("pipe-1".to_string()),
+            output_id: None,
+            event_type: Some("ingest.connected".to_string()),
+            event_class: Some("lifecycle".to_string()),
+        }];
+
+        persist_and_broadcast_log_batch(&pool, &tx, &mut batch).await;
+
+        assert!(batch.is_empty());
+        let row = rx.recv().await.unwrap();
+        assert!(row.id > 0);
+        assert_eq!(row.event_type.as_deref(), Some("ingest.connected"));
+        assert_eq!(row.event_class.as_deref(), Some("lifecycle"));
+
+        let persisted = crate::db::list_app_logs(
+            &pool,
+            &crate::logging::AppLogFilters {
+                after_id: None,
+                level: Some("info".to_string()),
+                since: None,
+                until: None,
+                target: None,
+                scope: None,
+                pipeline_id: Some("pipe-1".to_string()),
+                output_id: None,
+                event_class: Some("lifecycle".to_string()),
+                prefix: None,
+                limit: Some(10),
+                order: Some("asc".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].id, row.id);
     }
 }

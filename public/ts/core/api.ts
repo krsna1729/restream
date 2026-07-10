@@ -204,7 +204,7 @@ function buildPipelineDiagnosticsUrl(
   return `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/diagnostics?${params.toString()}`;
 }
 
-interface BuildLogsStreamUrlOptions {
+export interface BuildLogsStreamUrlOptions {
   level?: string | null;
   target?: string | null;
   scope?: string | null;

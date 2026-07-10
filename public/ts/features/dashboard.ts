@@ -1,5 +1,4 @@
 import {
-  buildLogsStreamUrl,
   getConfig,
   getDashboardRuntimeSnapshot,
   getSystemMetrics,
@@ -19,6 +18,7 @@ import {
 import { renderPipelines, renderMetrics } from "./render.js";
 import { syncHistoryPollingWithVisibility } from "../history/controller.js";
 import { state } from "../core/state.js";
+import { createManagedLogStream } from "../core/log-stream.js";
 import type {
   AppLogRow,
   ConfigOutput,
@@ -39,9 +39,8 @@ const dashboardHooks: DashboardHooks = {
 let dashboardRefreshInFlight: Promise<void> | null = null;
 let dashboardRefreshQueued = false;
 let fetchDetailedMetricsNextTick = true;
-let dashboardRuntimeStream: EventSource | null = null;
-let dashboardRuntimeStreamReconnectTimer: ReturnType<typeof setTimeout> | null =
-  null;
+const dashboardRuntimeStream = createManagedLogStream();
+let dashboardRuntimeStreamActive = false;
 let dashboardRuntimeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let dashboardRuntimeMutationFallbackTimer: ReturnType<
   typeof setTimeout
@@ -74,7 +73,6 @@ const DASHBOARD_CONFIG_MODES = new Set([
   "control",
 ]);
 const DASHBOARD_RUNTIME_STREAM_DEBOUNCE_MS = 200;
-const DASHBOARD_RUNTIME_STREAM_RECONNECT_MS = 1000;
 const DASHBOARD_RUNTIME_MUTATION_FALLBACK_MS = 1500;
 
 export function setDashboardHooks(hooks: Partial<DashboardHooks>): void {
@@ -248,20 +246,19 @@ function mergeDashboardHealthSnapshot(
 }
 
 function closeDashboardRuntimeStream(): void {
-  if (dashboardRuntimeStreamReconnectTimer) {
-    clearTimeout(dashboardRuntimeStreamReconnectTimer);
-    dashboardRuntimeStreamReconnectTimer = null;
-  }
-  if (dashboardRuntimeStream) {
-    dashboardRuntimeStream.close();
-    dashboardRuntimeStream = null;
-  }
+  dashboardRuntimeLastEventId =
+    dashboardRuntimeStream.getLastEventId() ?? dashboardRuntimeLastEventId;
+  dashboardRuntimeStream.close();
+  dashboardRuntimeStreamActive = false;
 }
 
 function rememberDashboardRuntimeEventId(log: AppLogRow): void {
   const id = Number(log?.id);
   if (Number.isFinite(id) && id > 0) {
-    dashboardRuntimeLastEventId = id;
+    dashboardRuntimeLastEventId = Math.max(
+      dashboardRuntimeLastEventId || 0,
+      id,
+    );
   }
 }
 
@@ -360,7 +357,7 @@ export function awaitDashboardRuntimeMutationConvergence(
 
   clearDashboardRuntimeMutationFallbackTimer();
 
-  if (!dashboardRuntimeStreamingEnabled() || !dashboardRuntimeStream) {
+  if (!dashboardRuntimeStreamingEnabled() || !dashboardRuntimeStreamActive) {
     return requestDashboardRefresh(false);
   }
 
@@ -381,46 +378,25 @@ export function handleDashboardRuntimeLifecycleLog(log: AppLogRow): void {
 
 function openDashboardRuntimeStream(): void {
   if (!dashboardRuntimeStreamingEnabled()) return;
-  if (typeof EventSource !== "function") return;
-  if (dashboardRuntimeStream) return;
-
-  try {
-    const focusedPipelineId = selectedDashboardRuntimePipelineId();
-    const stream = new EventSource(
-      buildLogsStreamUrl({
-        scope: focusedPipelineId
+  const focusedPipelineId = selectedDashboardRuntimePipelineId();
+  dashboardRuntimeStreamActive = typeof EventSource === "function";
+  dashboardRuntimeStream.sync({
+    filters: {
+      scope: focusedPipelineId
+        ? null
+        : shouldFetchRuntimeHealth()
           ? null
-          : shouldFetchRuntimeHealth()
-            ? null
-            : "restream",
-        pipelineId: focusedPipelineId,
-        eventClass: "lifecycle",
-        includeRestream: Boolean(focusedPipelineId),
-        lastEventId: dashboardRuntimeLastEventId,
-      }),
-    );
-    dashboardRuntimeStream = stream;
-    stream.addEventListener("log", (event: Event) => {
-      if (dashboardRuntimeStream !== stream) return;
-      try {
-        const data = JSON.parse((event as MessageEvent).data) as AppLogRow;
-        handleDashboardRuntimeLifecycleLog(data);
-      } catch {
-        // Ignore malformed frames and wait for the next lifecycle event.
-      }
-    });
-    stream.onerror = () => {
-      if (dashboardRuntimeStream !== stream) return;
-      closeDashboardRuntimeStream();
-      if (!dashboardRuntimeStreamingEnabled()) return;
-      dashboardRuntimeStreamReconnectTimer = setTimeout(() => {
-        dashboardRuntimeStreamReconnectTimer = null;
-        openDashboardRuntimeStream();
-      }, DASHBOARD_RUNTIME_STREAM_RECONNECT_MS);
-    };
-  } catch {
-    closeDashboardRuntimeStream();
-  }
+          : "restream",
+      pipelineId: focusedPipelineId,
+      eventClass: "lifecycle",
+      includeRestream: Boolean(focusedPipelineId),
+    },
+    resumeAfterId: dashboardRuntimeLastEventId,
+    onLog: handleDashboardRuntimeLifecycleLog,
+    onUnavailable: () => {
+      dashboardRuntimeStreamActive = false;
+    },
+  });
 }
 
 export function syncDashboardRuntimeStream(): void {
