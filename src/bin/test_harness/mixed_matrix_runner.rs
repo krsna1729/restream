@@ -241,6 +241,24 @@ pub(crate) fn write_matrix_scenario_progress(
     rows: &[MatrixCaseProgress],
     failures: &[String],
 ) -> Result<(), String> {
+    write_matrix_scenario_progress_for_mode(
+        path,
+        MIXED_MATRIX_MODE,
+        execution,
+        fail_fast,
+        rows,
+        failures,
+    )
+}
+
+fn write_matrix_scenario_progress_for_mode(
+    path: &Path,
+    mode: &str,
+    execution: &str,
+    fail_fast: bool,
+    rows: &[MatrixCaseProgress],
+    failures: &[String],
+) -> Result<(), String> {
     let root_cause_summary_path = write_mixed_root_cause_summary(path, failures)?;
     let progress = matrix_progress_totals(rows);
     let total_cases = progress["totalCases"].as_u64().unwrap_or(0);
@@ -255,7 +273,7 @@ pub(crate) fn write_matrix_scenario_progress(
     write_json_pretty_atomic(
         path,
         &json!({
-            "mode": MIXED_MATRIX_MODE,
+            "mode": mode,
             "execution": execution,
             "executionState": execution_state,
             "passed": passed,
@@ -809,10 +827,23 @@ pub(crate) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
         .iter()
         .flat_map(|batch| batch.cases.iter().copied())
         .collect();
+    let scenario_path = root.join("scenario.json");
+    let mut case_progress = matrix_case_progress_rows()
+        .into_iter()
+        .filter(|row| selected_cases.contains(&row.case))
+        .collect::<Vec<_>>();
 
     for case in &selected_cases {
         total_output_cells += mixed_output_cases_for_input(*case).len();
     }
+    write_matrix_scenario_progress_for_mode(
+        &scenario_path,
+        MIXED_FAST_BREADTH_MODE,
+        "fast-breadth",
+        false,
+        &case_progress,
+        &failures,
+    )?;
 
     for batch in &selected_batches {
         let stack_mode = format!("{MIXED_FAST_BREADTH_MODE}.{}", batch.group.as_str());
@@ -900,6 +931,29 @@ pub(crate) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
                 }
                 covered_output_cells += mixed_output_cases_for_input(case_b).len();
 
+                matrix_mark_case_state(
+                    &mut case_progress,
+                    case_a,
+                    MatrixCaseState::InProgress,
+                    Some(wave_index),
+                    None,
+                );
+                matrix_mark_case_state(
+                    &mut case_progress,
+                    case_b,
+                    MatrixCaseState::InProgress,
+                    Some(wave_index),
+                    None,
+                );
+                write_matrix_scenario_progress_for_mode(
+                    &scenario_path,
+                    MIXED_FAST_BREADTH_MODE,
+                    "fast-breadth",
+                    false,
+                    &case_progress,
+                    &failures,
+                )?;
+
                 let (result_a, result_b) = tokio::join!(
                     run_mixed_input_case_on_active_stack(
                         case_a,
@@ -923,12 +977,52 @@ pub(crate) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
                             value["fastBreadthRationale"] = json!(selected.rationale);
                             value["batchGroup"] = json!(batch.group.as_str());
                             value["wave"] = json!(wave_index);
+                            matrix_mark_case_state(
+                                &mut case_progress,
+                                case,
+                                MatrixCaseState::Passed,
+                                Some(wave_index),
+                                None,
+                            );
                             results.push(value);
                         }
-                        Err(error) => failures.push(format!("{}: {error}", case.scenario_id())),
+                        Err(error) => {
+                            let failure = format!("{}: {error}", case.scenario_id());
+                            matrix_mark_case_state(
+                                &mut case_progress,
+                                case,
+                                MatrixCaseState::Failed,
+                                Some(wave_index),
+                                Some(failure.clone()),
+                            );
+                            failures.push(failure);
+                        }
                     }
                 }
+                write_matrix_scenario_progress_for_mode(
+                    &scenario_path,
+                    MIXED_FAST_BREADTH_MODE,
+                    "fast-breadth",
+                    false,
+                    &case_progress,
+                    &failures,
+                )?;
             } else {
+                matrix_mark_case_state(
+                    &mut case_progress,
+                    case_a,
+                    MatrixCaseState::InProgress,
+                    Some(wave_index),
+                    None,
+                );
+                write_matrix_scenario_progress_for_mode(
+                    &scenario_path,
+                    MIXED_FAST_BREADTH_MODE,
+                    "fast-breadth",
+                    false,
+                    &case_progress,
+                    &failures,
+                )?;
                 match run_mixed_input_case_on_active_stack(
                     case_a,
                     env_a,
@@ -941,10 +1035,35 @@ pub(crate) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
                         value["fastBreadthRationale"] = json!(selected_a.rationale);
                         value["batchGroup"] = json!(batch.group.as_str());
                         value["wave"] = json!(wave_index);
+                        matrix_mark_case_state(
+                            &mut case_progress,
+                            case_a,
+                            MatrixCaseState::Passed,
+                            Some(wave_index),
+                            None,
+                        );
                         results.push(value);
                     }
-                    Err(error) => failures.push(format!("{}: {error}", case_a.scenario_id())),
+                    Err(error) => {
+                        let failure = format!("{}: {error}", case_a.scenario_id());
+                        matrix_mark_case_state(
+                            &mut case_progress,
+                            case_a,
+                            MatrixCaseState::Failed,
+                            Some(wave_index),
+                            Some(failure.clone()),
+                        );
+                        failures.push(failure);
+                    }
                 }
+                write_matrix_scenario_progress_for_mode(
+                    &scenario_path,
+                    MIXED_FAST_BREADTH_MODE,
+                    "fast-breadth",
+                    false,
+                    &case_progress,
+                    &failures,
+                )?;
             }
         }
         emit_mixed_timing(
@@ -962,6 +1081,14 @@ pub(crate) async fn mixed_fast_breadth_correctness() -> Result<Value, String> {
     }
 
     if !failures.is_empty() {
+        write_matrix_scenario_progress_for_mode(
+            &scenario_path,
+            MIXED_FAST_BREADTH_MODE,
+            "fast-breadth",
+            false,
+            &case_progress,
+            &failures,
+        )?;
         return Err(format!(
             "mixed fast breadth failed {} selected case(s): {}",
             failures.len(),

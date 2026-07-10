@@ -803,6 +803,14 @@ fn mixed_fast_breadth_defaults_collect_failures_for_failure_mapping() {
         source.contains("root.join(\"assertions.jsonl\")"),
         "mixed.fast-breadth should emit machine-readable assertion rows by default"
     );
+    assert!(
+        source.contains("write_matrix_scenario_progress_for_mode"),
+        "mixed.fast-breadth should persist scenario/root-cause progress artifacts"
+    );
+    assert!(
+        source.contains("MIXED_FAST_BREADTH_MODE"),
+        "mixed.fast-breadth progress artifacts should identify their mode"
+    );
 }
 
 #[test]
