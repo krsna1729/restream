@@ -25,31 +25,38 @@ pub(crate) async fn wait_for_outputs_progress_with_env(
         let mut stalled = Vec::new();
         for output_id in output_ids {
             let entry = &health["pipelines"][pipeline_id]["outputs"][output_id];
-            let bytes_out = entry["bytesOut"].as_u64().unwrap_or(0);
-            let metrics_bytes = entry["metrics"]["bytesOut"].as_u64().unwrap_or(0);
-            let packets_out = entry["metrics"]["packetsOut"].as_u64().unwrap_or(0);
-            if bytes_out > 0 || metrics_bytes > 0 || packets_out > 0 {
+            let status = ApiOutputStatus::from_value(output_id, entry)?;
+            if status.has_progress() {
                 progressed += 1;
             } else {
-                let name = entry["outputName"].as_str().unwrap_or("unknown");
-                let encoding = entry["encoding"].as_str().unwrap_or("unknown");
-                let url = entry["targetUrl"].as_str().unwrap_or("unknown");
-                let phase = entry["phase"].as_str().unwrap_or("unknown");
-                let terminal_stage = entry["terminalStage"].as_str().unwrap_or("none");
-                let blocked_by_stage = entry["blockedBy"]["stage"].as_str().unwrap_or("none");
-                let blocked_by_phase = entry["blockedBy"]["phase"].as_str().unwrap_or("none");
-                let backend = entry["blockedBy"]["backend"].as_str().unwrap_or("none");
-                let wait_ms = entry["blockedBy"]["capacityWaitMs"]
-                    .as_u64()
+                let blocked_by = status.blocked_by.as_ref();
+                let wait_ms = blocked_by
+                    .and_then(|blocked| blocked.capacity_wait_ms)
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "none".to_string());
-                let last_error = entry["lastError"].as_str().unwrap_or("");
                 let cell = mixed_env
                     .and_then(|env| env.output_cell_label(output_id))
                     .unwrap_or_else(|| "unregistered-cell".to_string());
                 stalled.push(format!(
                     "{}\n  outputName={} outputId={} encoding={} url={}\n  phase={}\n  terminalStage={}\n  blockedBy={}\n  blockedByPhase={}\n  backend={} waitMs={}\n  lastError={}",
-                    cell, name, output_id, encoding, url, phase, terminal_stage, blocked_by_stage, blocked_by_phase, backend, wait_ms, last_error
+                    cell,
+                    status.output_name.as_deref().unwrap_or("unknown"),
+                    status.output_id,
+                    status.encoding.as_deref().unwrap_or("unknown"),
+                    status.target_url.as_deref().unwrap_or("unknown"),
+                    status.phase,
+                    status.terminal_stage.as_deref().unwrap_or("none"),
+                    blocked_by
+                        .and_then(|blocked| blocked.stage.as_deref())
+                        .unwrap_or("none"),
+                    blocked_by
+                        .and_then(|blocked| blocked.phase.as_deref())
+                        .unwrap_or("none"),
+                    blocked_by
+                        .and_then(|blocked| blocked.backend.as_deref())
+                        .unwrap_or("none"),
+                    wait_ms,
+                    status.last_error.as_deref().unwrap_or("")
                 ));
             }
         }

@@ -309,38 +309,30 @@ async fn wait_for_outputs_live_and_progressing(
 
         for output_id in output_ids {
             let output = health["pipelines"][pipeline_id]["outputs"][output_id].clone();
-            let status = output["status"].as_str().unwrap_or("unknown");
-            let phase = output["phase"].as_str().unwrap_or("unknown");
-            let raw_status = output["rawStatus"].as_str().unwrap_or("unknown");
-            let bytes_out = output["bytesOut"].as_u64().unwrap_or(0);
-            let total_size = output["totalSize"].as_u64().unwrap_or(0);
-            let retrying = output["retrying"].as_bool().unwrap_or(false);
-            let failure_phase = output["failurePhase"].as_str().unwrap_or("");
-            let last_error = output["lastError"].as_str().unwrap_or("");
-            let last_progress_age_ms = output["lastProgressAgeMs"].as_u64();
-            let healthy = status == "running"
-                && matches!(phase, "sending" | "uploading")
-                && raw_status == "running"
-                && bytes_out > 0
-                && total_size > 0
-                && !retrying
-                && failure_phase.is_empty()
-                && last_error.is_empty()
-                && last_progress_age_ms.is_some_and(|age| age <= 5_000);
+            let status = ApiOutputStatus::from_value(output_id, &output)?;
+            let healthy = status.status == "running"
+                && matches!(status.phase.as_str(), "sending" | "uploading")
+                && status.raw_status == "running"
+                && status.bytes_out > 0
+                && status.total_size > 0
+                && !status.retrying
+                && status.failure_phase_is_empty()
+                && status.last_error_is_empty()
+                && status.last_progress_age_ms.is_some_and(|age| age <= 5_000);
             if !healthy {
                 all_live = false;
             }
             snapshots.push(json!({
-                "outputId": output_id,
-                "status": status,
-                "phase": phase,
-                "rawStatus": raw_status,
-                "bytesOut": bytes_out,
-                "totalSize": total_size,
-                "lastProgressAgeMs": last_progress_age_ms,
-                "retrying": retrying,
-                "failurePhase": output["failurePhase"],
-                "lastError": output["lastError"],
+                "outputId": status.output_id,
+                "status": status.status,
+                "phase": status.phase,
+                "rawStatus": status.raw_status,
+                "bytesOut": status.bytes_out,
+                "totalSize": status.total_size,
+                "lastProgressAgeMs": status.last_progress_age_ms,
+                "retrying": status.retrying,
+                "failurePhase": status.failure_phase,
+                "lastError": status.last_error,
                 "healthy": healthy,
             }));
         }

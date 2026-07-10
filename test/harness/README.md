@@ -1,8 +1,9 @@
-# Test harness DSL migration
+# Test harness DSL
 
 This directory is the new manifest surface for the integration harness.
 
-The current Rust harness can ignore these files until the loader/planner is wired. They are intentionally additive so the migration can proceed in small commits.
+The Rust harness loads this surface for canonical suites, scenario-backed
+matrix runs, and special workflow inventory.
 
 ## Ownership split
 
@@ -27,4 +28,6 @@ Manifests own:
 
 ## Compatibility
 
-During migration, modes can stay `kind: legacy`. The new engine only takes over modes converted to `kind: suite` or `kind: scenario`.
+`test/harness/modes.json` is the canonical command surface. New entries should
+be `kind: suite`, `kind: scenario`, or an explicit special-workflow runner; do
+not add legacy manifest kinds.

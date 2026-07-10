@@ -600,21 +600,23 @@ pub(crate) async fn wait_for_output_stalled_status(
                     .and_then(|outputs| outputs.get(output_id).cloned())
             {
                 last_health = output.clone();
-                let stalled_visible = status["status"].as_str() == Some("stalled")
-                    && output["status"].as_str() == Some("stalled")
-                    && status["rawStatus"].as_str() == Some("running")
-                    && output["rawStatus"].as_str() == Some("running")
-                    && !status["retrying"].as_bool().unwrap_or(false)
-                    && !output["retrying"].as_bool().unwrap_or(false)
-                    && status["lastError"].is_null()
-                    && output["lastError"].is_null()
-                    && status["failurePhase"].is_null()
-                    && output["failurePhase"].is_null()
-                    && status["startedAt"].is_string()
-                    && output["startedAt"] == status["startedAt"]
-                    && output["targetAddr"] == status["targetAddr"]
-                    && output["totalSize"] == status["totalSize"];
-                let stale_age_visible = match status["lastProgressAgeMs"].as_u64() {
+                let status_row = ApiOutputStatus::from_value(output_id, &status)?;
+                let health_row = ApiOutputStatus::from_value(output_id, &output)?;
+                let stalled_visible = status_row.status == "stalled"
+                    && health_row.status == "stalled"
+                    && status_row.raw_status == "running"
+                    && health_row.raw_status == "running"
+                    && !status_row.retrying
+                    && !health_row.retrying
+                    && status_row.last_error.is_none()
+                    && health_row.last_error.is_none()
+                    && status_row.failure_phase.is_none()
+                    && health_row.failure_phase.is_none()
+                    && status_row.started_at.is_some()
+                    && health_row.started_at == status_row.started_at
+                    && health_row.target_addr == status_row.target_addr
+                    && health_row.total_size == status_row.total_size;
+                let stale_age_visible = match status_row.last_progress_age_ms {
                     Some(age_ms) => age_ms >= 10_000,
                     None => status["lastProgressAt"].is_null(),
                 };

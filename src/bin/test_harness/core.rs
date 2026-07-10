@@ -680,6 +680,106 @@ pub(crate) async fn process_rss_kb(pid: u32) -> Option<u64> {
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }
 
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApiOutputMetrics {
+    #[serde(default)]
+    pub(crate) bytes_out: u64,
+    #[serde(default)]
+    pub(crate) packets_out: u64,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApiBlockedByStage {
+    #[serde(default)]
+    pub(crate) stage: Option<String>,
+    #[serde(default)]
+    pub(crate) phase: Option<String>,
+    #[serde(default)]
+    pub(crate) backend: Option<String>,
+    #[serde(default)]
+    pub(crate) capacity_wait_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApiOutputStatus {
+    #[serde(default)]
+    pub(crate) output_id: String,
+    #[serde(default)]
+    pub(crate) output_name: Option<String>,
+    pub(crate) status: String,
+    pub(crate) raw_status: String,
+    pub(crate) phase: String,
+    #[serde(default)]
+    pub(crate) encoding: Option<String>,
+    #[serde(default)]
+    pub(crate) target_url: Option<String>,
+    #[serde(default)]
+    pub(crate) bytes_out: u64,
+    #[serde(default)]
+    pub(crate) total_size: u64,
+    #[serde(default)]
+    pub(crate) metrics: ApiOutputMetrics,
+    #[serde(default)]
+    pub(crate) last_error: Option<String>,
+    #[serde(default)]
+    pub(crate) terminal_stage: Option<String>,
+    #[serde(default)]
+    pub(crate) blocked_by: Option<ApiBlockedByStage>,
+    #[serde(default)]
+    pub(crate) retrying: bool,
+    #[serde(default)]
+    pub(crate) failure_phase: Option<String>,
+    #[serde(default)]
+    pub(crate) last_progress_age_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) started_at: Option<String>,
+    #[serde(default)]
+    pub(crate) target_addr: Option<String>,
+}
+
+impl ApiOutputStatus {
+    pub(crate) fn from_value(output_id: &str, value: &Value) -> Result<Self, String> {
+        let mut status: Self = serde_json::from_value(value.clone()).map_err(|e| {
+            format!("output status for {output_id} does not match harness API schema: {e}")
+        })?;
+        if status.output_id.is_empty() {
+            status.output_id = output_id.to_string();
+        }
+        if status.status.trim().is_empty()
+            || status.raw_status.trim().is_empty()
+            || status.phase.trim().is_empty()
+        {
+            return Err(format!(
+                "output status for {output_id} is missing required status/rawStatus/phase"
+            ));
+        }
+        Ok(status)
+    }
+
+    pub(crate) fn has_progress(&self) -> bool {
+        self.bytes_out > 0 || self.metrics.bytes_out > 0 || self.metrics.packets_out > 0
+    }
+
+    pub(crate) fn failure_phase_is_empty(&self) -> bool {
+        self.failure_phase
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+    }
+
+    pub(crate) fn last_error_is_empty(&self) -> bool {
+        self.last_error
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+    }
+}
+
 /// Small authenticated HTTP client wrapper for the local restream API.
 pub(crate) struct RampApi {
     pub(crate) client: reqwest::Client,

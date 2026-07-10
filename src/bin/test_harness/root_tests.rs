@@ -124,6 +124,83 @@ fn parse_log_fields_handles_json_string_payloads() {
 }
 
 #[test]
+fn api_output_status_has_status_raw_status_phase() {
+    let value = json!({
+        "outputId": "out-1",
+        "outputName": "primary",
+        "status": "running",
+        "rawStatus": "running",
+        "phase": "sending",
+        "bytesOut": 7,
+        "metrics": {
+            "bytesOut": 11,
+            "packetsOut": 2
+        },
+        "blockedBy": {
+            "stage": "transcode:out-1",
+            "phase": "waitingForCapacity",
+            "backend": "externalFfmpeg",
+            "capacityWaitMs": 123
+        }
+    });
+
+    let status = ApiOutputStatus::from_value("out-1", &value).expect("typed output status");
+    assert_eq!(status.status, "running");
+    assert_eq!(status.raw_status, "running");
+    assert_eq!(status.phase, "sending");
+    assert!(status.has_progress());
+    assert_eq!(
+        status
+            .blocked_by
+            .as_ref()
+            .and_then(|blocked| blocked.stage.as_deref()),
+        Some("transcode:out-1")
+    );
+}
+
+#[test]
+fn harness_fails_if_status_schema_drops_required_fields() {
+    for missing_field in ["status", "rawStatus", "phase"] {
+        let mut value = json!({
+            "status": "running",
+            "rawStatus": "running",
+            "phase": "sending",
+            "metrics": {
+                "bytesOut": 0,
+                "packetsOut": 0
+            }
+        });
+        value.as_object_mut().expect("object").remove(missing_field);
+
+        let error =
+            ApiOutputStatus::from_value("out-1", &value).expect_err("required field missing");
+        assert!(
+            error.contains("output status for out-1"),
+            "unexpected error for {missing_field}: {error}"
+        );
+    }
+}
+
+#[test]
+fn harness_progress_status_consumes_existing_fields() {
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/bin/test_harness/output_progress.rs"
+    ));
+
+    assert!(
+        source.contains("ApiOutputStatus::from_value"),
+        "progress checks must consume the typed API output status DTO"
+    );
+    assert!(
+        !source.contains("[\"status\"]")
+            && !source.contains("[\"rawStatus\"]")
+            && !source.contains("[\"phase\"]"),
+        "progress checks must not index status/rawStatus/phase directly"
+    );
+}
+
+#[test]
 fn generalized_sink_rejects_equal_video_dts() {
     let metrics = GeneralizedSinkMetrics::default();
     metrics.packets.lock().unwrap().extend([

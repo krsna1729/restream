@@ -2,30 +2,48 @@
 
 use super::*;
 
-pub(crate) const MIXED_ROOT_CAUSE_SCHEMA_VERSION: u32 = 1;
+pub(crate) const MIXED_ROOT_CAUSE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum MixedFailureCause {
-    WaitingForCapacity,
-    NoKeyframe,
+pub(crate) enum FailureCause {
+    OutputNoProgress,
+    OutputBlockedByStage,
+    StageWaitingForCapacity,
+    StageNoFirstOutput,
+    StageNoKeyframe,
+    StageNoParameterSets,
     TimestampDiscontinuity,
-    NoHlsSegments,
-    ProtocolConnectFailure,
-    NoProgress,
+    ProbeProtocolConnectFailed,
+    HlsNoSegments,
+    RecordingNotFound,
+    RecordingWrongScenario,
+    RecordingTmpFileExposed,
+    RuntimeLogError,
+    LifecycleDidNotStop,
+    HarnessInfrastructure,
     ProbeMismatch,
     DecodeFailure,
     Unknown,
 }
 
-impl MixedFailureCause {
+impl FailureCause {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::WaitingForCapacity => "waiting_for_capacity",
-            Self::NoKeyframe => "no_keyframe",
+            Self::OutputNoProgress => "output_no_progress",
+            Self::OutputBlockedByStage => "output_blocked_by_stage",
+            Self::StageWaitingForCapacity => "stage_waiting_for_capacity",
+            Self::StageNoFirstOutput => "stage_no_first_output",
+            Self::StageNoKeyframe => "stage_no_keyframe",
+            Self::StageNoParameterSets => "stage_no_parameter_sets",
             Self::TimestampDiscontinuity => "timestamp_discontinuity",
-            Self::NoHlsSegments => "no_hls_segments",
-            Self::ProtocolConnectFailure => "protocol_connect_failure",
-            Self::NoProgress => "no_progress",
+            Self::ProbeProtocolConnectFailed => "probe_protocol_connect_failed",
+            Self::HlsNoSegments => "hls_no_segments",
+            Self::RecordingNotFound => "recording_not_found",
+            Self::RecordingWrongScenario => "recording_wrong_scenario",
+            Self::RecordingTmpFileExposed => "recording_tmp_file_exposed",
+            Self::RuntimeLogError => "runtime_log_error",
+            Self::LifecycleDidNotStop => "lifecycle_did_not_stop",
+            Self::HarnessInfrastructure => "harness_infrastructure",
             Self::ProbeMismatch => "probe_mismatch",
             Self::DecodeFailure => "decode_failure",
             Self::Unknown => "unknown",
@@ -34,12 +52,21 @@ impl MixedFailureCause {
 
     fn label(self) -> &'static str {
         match self {
-            Self::WaitingForCapacity => "Waiting for capacity",
-            Self::NoKeyframe => "No keyframe",
+            Self::OutputNoProgress => "Output no progress",
+            Self::OutputBlockedByStage => "Output blocked by stage",
+            Self::StageWaitingForCapacity => "Stage waiting for capacity",
+            Self::StageNoFirstOutput => "Stage produced no first output",
+            Self::StageNoKeyframe => "Stage produced no keyframe",
+            Self::StageNoParameterSets => "Stage produced no parameter sets",
             Self::TimestampDiscontinuity => "Timestamp discontinuity",
-            Self::NoHlsSegments => "No HLS segments",
-            Self::ProtocolConnectFailure => "Protocol connect failure",
-            Self::NoProgress => "No output progress",
+            Self::ProbeProtocolConnectFailed => "Probe protocol connect failed",
+            Self::HlsNoSegments => "HLS no segments",
+            Self::RecordingNotFound => "Recording not found",
+            Self::RecordingWrongScenario => "Recording wrong scenario",
+            Self::RecordingTmpFileExposed => "Recording tmp file exposed",
+            Self::RuntimeLogError => "Runtime log error",
+            Self::LifecycleDidNotStop => "Lifecycle did not stop",
+            Self::HarnessInfrastructure => "Harness infrastructure",
             Self::ProbeMismatch => "Probe mismatch",
             Self::DecodeFailure => "Decode failure",
             Self::Unknown => "Unknown",
@@ -47,13 +74,22 @@ impl MixedFailureCause {
     }
 }
 
-pub(crate) fn classify_mixed_failure(message: &str) -> MixedFailureCause {
+pub(crate) fn classify_mixed_failure(message: &str) -> FailureCause {
     let lower = message.to_ascii_lowercase();
+    if lower.contains("blockedby=") || lower.contains("blocked by stage") {
+        return FailureCause::OutputBlockedByStage;
+    }
     if lower.contains("capacity") || lower.contains("permit") || lower.contains("permits") {
-        return MixedFailureCause::WaitingForCapacity;
+        return FailureCause::StageWaitingForCapacity;
+    }
+    if lower.contains("firstoutput") || lower.contains("first output") {
+        return FailureCause::StageNoFirstOutput;
     }
     if lower.contains("keyframe") {
-        return MixedFailureCause::NoKeyframe;
+        return FailureCause::StageNoKeyframe;
+    }
+    if lower.contains("parameter set") || lower.contains("sps") || lower.contains("pps") {
+        return FailureCause::StageNoParameterSets;
     }
     if lower.contains("timestamp discontinuity")
         || lower.contains("dts gap")
@@ -61,15 +97,16 @@ pub(crate) fn classify_mixed_failure(message: &str) -> MixedFailureCause {
         || lower.contains("non-monotone")
         || lower.contains("non-monotonic")
     {
-        return MixedFailureCause::TimestampDiscontinuity;
+        return FailureCause::TimestampDiscontinuity;
     }
     if lower.contains("hls")
         && (lower.contains("no segment")
+            || lower.contains("404")
             || lower.contains("no playlist")
             || lower.contains("empty playlist")
             || lower.contains("playlist did not"))
     {
-        return MixedFailureCause::NoHlsSegments;
+        return FailureCause::HlsNoSegments;
     }
     if lower.contains("connection refused")
         || lower.contains("failed to connect")
@@ -77,29 +114,46 @@ pub(crate) fn classify_mixed_failure(message: &str) -> MixedFailureCause {
         || lower.contains("connection reset")
         || lower.contains("connection timed out")
     {
-        return MixedFailureCause::ProtocolConnectFailure;
+        return FailureCause::ProbeProtocolConnectFailed;
+    }
+    if lower.contains("recording") && lower.contains("not found") {
+        return FailureCause::RecordingNotFound;
+    }
+    if lower.contains("recording") && lower.contains("wrong scenario") {
+        return FailureCause::RecordingWrongScenario;
+    }
+    if lower.contains("recording") && lower.contains(".tmp") {
+        return FailureCause::RecordingTmpFileExposed;
+    }
+    if lower.contains("runtime log") || lower.contains("bad log") {
+        return FailureCause::RuntimeLogError;
+    }
+    if lower.contains("lifecycle") && lower.contains("stop") {
+        return FailureCause::LifecycleDidNotStop;
+    }
+    if lower.contains("harness infrastructure") || lower.contains("preflight") {
+        return FailureCause::HarnessInfrastructure;
     }
     if lower.contains("no progress")
         || lower.contains("stalled")
         || lower.contains("did not observe output progress")
-        || lower.contains("firstoutput")
     {
-        return MixedFailureCause::NoProgress;
+        return FailureCause::OutputNoProgress;
     }
     if lower.contains("ffprobe")
         || (lower.contains("expected") && lower.contains("got"))
         || lower.contains("probe failed")
     {
-        return MixedFailureCause::ProbeMismatch;
+        return FailureCause::ProbeMismatch;
     }
     if lower.contains("decode") || lower.contains("decoder") {
-        return MixedFailureCause::DecodeFailure;
+        return FailureCause::DecodeFailure;
     }
-    MixedFailureCause::Unknown
+    FailureCause::Unknown
 }
 
 pub(crate) fn mixed_root_cause_summary_json(failures: &[String]) -> Value {
-    let mut groups = std::collections::BTreeMap::<MixedFailureCause, Vec<&String>>::new();
+    let mut groups = std::collections::BTreeMap::<FailureCause, Vec<&String>>::new();
     for failure in failures {
         groups
             .entry(classify_mixed_failure(failure))
@@ -113,11 +167,16 @@ pub(crate) fn mixed_root_cause_summary_json(failures: &[String]) -> Value {
                 .iter()
                 .filter_map(|failure| mixed_failure_scenario(failure))
                 .collect::<std::collections::BTreeSet<_>>();
+            let cells = entries
+                .iter()
+                .filter_map(|failure| mixed_failure_cell(failure))
+                .collect::<std::collections::BTreeSet<_>>();
             json!({
                 "cause": cause.as_str(),
                 "label": cause.label(),
                 "count": entries.len(),
                 "scenarios": scenarios.into_iter().collect::<Vec<_>>(),
+                "cells": cells.into_iter().collect::<Vec<_>>(),
                 "examples": entries.iter().take(3).map(|entry| (*entry).clone()).collect::<Vec<_>>(),
             })
         })
@@ -164,6 +223,26 @@ fn mixed_failure_scenario(failure: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+fn mixed_failure_cell(failure: &str) -> Option<String> {
+    if let Some((_, rest)) = failure.split_once(" / ")
+        && let Some((cell, duplicate_and_more)) = rest.split_once(" / ")
+        && duplicate_and_more.starts_with("out")
+    {
+        return Some(cell.trim().to_string());
+    }
+    ["cell=", "cellId=", "cell_id="]
+        .into_iter()
+        .find_map(|needle| {
+            failure.split_once(needle).and_then(|(_, rest)| {
+                rest.split([' ', ',', ';', '\n'])
+                    .next()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,7 +263,75 @@ mod tests {
         assert_eq!(summary["totalFailures"], 3);
         assert_eq!(summary["causes"][0]["cause"], "timestamp_discontinuity");
         assert_eq!(summary["causes"][0]["count"], 2);
-        assert_eq!(summary["causes"][1]["cause"], "protocol_connect_failure");
+        assert_eq!(
+            summary["causes"][1]["cause"],
+            "probe_protocol_connect_failed"
+        );
+    }
+
+    #[test]
+    fn root_cause_classifier_covers_governor_taxonomy() {
+        let cases = [
+            (
+                "mixed.foo / rtmp-h264 / out0\n blockedBy=transcode phase=waitingForCapacity",
+                FailureCause::OutputBlockedByStage,
+            ),
+            (
+                "stage waiting for capacity permits",
+                FailureCause::StageWaitingForCapacity,
+            ),
+            ("stage no first output", FailureCause::StageNoFirstOutput),
+            ("missing keyframe", FailureCause::StageNoKeyframe),
+            (
+                "missing SPS/PPS parameter sets",
+                FailureCause::StageNoParameterSets,
+            ),
+            (
+                "stream 0 timestamp discontinuity",
+                FailureCause::TimestampDiscontinuity,
+            ),
+            (
+                "ffprobe failed to connect to sink",
+                FailureCause::ProbeProtocolConnectFailed,
+            ),
+            ("HLS 404 no segments yet", FailureCause::HlsNoSegments),
+            ("recording not found", FailureCause::RecordingNotFound),
+            (
+                "recording wrong scenario identity",
+                FailureCause::RecordingWrongScenario,
+            ),
+            (
+                "recording exposed segment.tmp",
+                FailureCause::RecordingTmpFileExposed,
+            ),
+            ("runtime log error found", FailureCause::RuntimeLogError),
+            ("lifecycle did not stop", FailureCause::LifecycleDidNotStop),
+            (
+                "harness infrastructure preflight",
+                FailureCause::HarnessInfrastructure,
+            ),
+            (
+                "did not observe output progress",
+                FailureCause::OutputNoProgress,
+            ),
+        ];
+
+        for (message, expected) in cases {
+            assert_eq!(classify_mixed_failure(message), expected, "{message}");
+        }
+    }
+
+    #[test]
+    fn root_cause_summary_includes_cell_identity_when_present() {
+        let failures = vec![
+            "mixed.live.rtmp.h264.a1.bf0 / rtmp-h264-pass / out0\n  blockedBy=transcode"
+                .to_string(),
+        ];
+
+        let summary = mixed_root_cause_summary_json(&failures);
+
+        assert_eq!(summary["causes"][0]["cause"], "output_blocked_by_stage");
+        assert_eq!(summary["causes"][0]["cells"][0], "rtmp-h264-pass");
     }
 
     #[test]
