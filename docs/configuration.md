@@ -8,7 +8,7 @@ in SQLite.
 
 | Value | Default setting | Environment Variable Override |
 |---|---|---|
-| Dashboard/API listener | `0.0.0.0:3030` | `RESTREAM_HTTP_PORT` (port only) |
+| Dashboard/API listener | `127.0.0.1:3030` | `RESTREAM_HTTP_BIND_ADDR`, `RESTREAM_HTTP_PORT` |
 | RTMP listener | `0.0.0.0:1935` | `RESTREAM_RTMP_PORT` |
 | SRT listener | `0.0.0.0:10080` | `RESTREAM_SRT_PORT` |
 | Transcoder backend | External FFmpeg subprocess | `RESTREAM_INTERNAL_VIDEO_PRESETS`, `RESTREAM_INTERNAL_HEVC_TO_H264`, `RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX` (`1`/`true`/`yes`/`on` enable each in-process stage family independently) |
@@ -26,6 +26,11 @@ in SQLite.
 | Failed-output restart base backoff | 5 seconds | `RESTREAM_OUTPUT_RETRY_BASE_MS` |
 | Failed-output restart max backoff | 300 seconds | `RESTREAM_OUTPUT_RETRY_MAX_MS` |
 | Idle HLS segmenter timeout | 60 seconds | `RESTREAM_HLS_IDLE_TIMEOUT_MS` |
+| RTMP accept backlog | `1024` | `RESTREAM_RTMP_LISTENER_BACKLOG` |
+| RTMP concurrent connection cap | `512` | `RESTREAM_RTMP_MAX_CONNECTIONS` |
+| RTMP handshake timeout | `10000` ms | `RESTREAM_RTMP_HANDSHAKE_TIMEOUT_MS` |
+| RTMP pre-auth socket buffers | `131072` bytes | `RESTREAM_RTMP_PREAUTH_BUFFER_BYTES` |
+| RTMP streaming socket buffers | `8388608` bytes | `RESTREAM_RTMP_STREAM_BUFFER_BYTES` |
 | HLS minimum segment length | 1 second | `RESTREAM_HLS_MIN_SEGMENT_MS` |
 | HLS live window length | 20 segments | `RESTREAM_HLS_MAX_SEGMENTS` |
 | HLS segment accumulator capacity | 8 MiB | `RESTREAM_HLS_SEGMENT_CAPACITY_BYTES` |

@@ -14,6 +14,10 @@ pub struct AppConfig {
     pub log_retention_days: u64,
     pub backend_policy: BackendPolicy,
     pub rtmp_backlog: u32,
+    pub rtmp_max_connections: usize,
+    pub rtmp_handshake_timeout_ms: u64,
+    pub rtmp_preauth_buffer_bytes: usize,
+    pub rtmp_stream_buffer_bytes: usize,
     pub ffmpeg_threads: Option<u32>,
     pub avio_capacity: usize,
     pub hls_min_segment_ms: f64,
@@ -154,6 +158,10 @@ impl Default for AppConfig {
                 internal_complex_audio: false,
             },
             rtmp_backlog: 1024,
+            rtmp_max_connections: 512,
+            rtmp_handshake_timeout_ms: 10_000,
+            rtmp_preauth_buffer_bytes: 128 * 1024,
+            rtmp_stream_buffer_bytes: 8 * 1024 * 1024,
             ffmpeg_threads: None,
             avio_capacity: 512 * 1024,
             hls_min_segment_ms: 1.0,
@@ -186,6 +194,14 @@ impl AppConfig {
         let log_retention_days = env_u64("RESTREAM_LOG_RETENTION_DAYS", 7);
         let backend_policy = BackendPolicy::from_env();
         let rtmp_backlog = env_u32("RESTREAM_RTMP_LISTENER_BACKLOG", 1024);
+        let rtmp_max_connections = env_usize("RESTREAM_RTMP_MAX_CONNECTIONS", 512).clamp(1, 16384);
+        let rtmp_handshake_timeout_ms =
+            env_u64("RESTREAM_RTMP_HANDSHAKE_TIMEOUT_MS", 10_000).clamp(100, 300_000);
+        let rtmp_preauth_buffer_bytes = env_usize("RESTREAM_RTMP_PREAUTH_BUFFER_BYTES", 128 * 1024)
+            .clamp(16 * 1024, 1024 * 1024);
+        let rtmp_stream_buffer_bytes =
+            env_usize("RESTREAM_RTMP_STREAM_BUFFER_BYTES", 8 * 1024 * 1024)
+                .clamp(128 * 1024, 64 * 1024 * 1024);
         let ffmpeg_threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
             .ok()
             .and_then(|v| v.parse::<u32>().ok());
@@ -256,6 +272,10 @@ impl AppConfig {
             log_retention_days,
             backend_policy,
             rtmp_backlog,
+            rtmp_max_connections,
+            rtmp_handshake_timeout_ms,
+            rtmp_preauth_buffer_bytes,
+            rtmp_stream_buffer_bytes,
             ffmpeg_threads,
             avio_capacity,
             hls_min_segment_ms,
@@ -331,6 +351,10 @@ impl AppConfig {
             },
             "rtmp": {
                 "backlog": self.rtmp_backlog,
+                "maxConnections": self.rtmp_max_connections,
+                "handshakeTimeoutMs": self.rtmp_handshake_timeout_ms,
+                "preauthBufferBytes": self.rtmp_preauth_buffer_bytes,
+                "streamBufferBytes": self.rtmp_stream_buffer_bytes,
             },
         })
     }
@@ -421,6 +445,25 @@ mod tests {
         with_env_vars(&[("RESTREAM_HTTP_BIND_ADDR", "0.0.0.0")], || {
             assert_eq!(AppConfig::from_env().http_bind_addr, "0.0.0.0");
         });
+    }
+
+    #[test]
+    fn rtmp_preauth_limits_are_loaded_and_clamped() {
+        with_env_vars(
+            &[
+                ("RESTREAM_RTMP_MAX_CONNECTIONS", "0"),
+                ("RESTREAM_RTMP_HANDSHAKE_TIMEOUT_MS", "10"),
+                ("RESTREAM_RTMP_PREAUTH_BUFFER_BYTES", "1024"),
+                ("RESTREAM_RTMP_STREAM_BUFFER_BYTES", "65536"),
+            ],
+            || {
+                let config = AppConfig::from_env();
+                assert_eq!(config.rtmp_max_connections, 1);
+                assert_eq!(config.rtmp_handshake_timeout_ms, 100);
+                assert_eq!(config.rtmp_preauth_buffer_bytes, 16 * 1024);
+                assert_eq!(config.rtmp_stream_buffer_bytes, 128 * 1024);
+            },
+        );
     }
 
     #[test]

@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
 
 use crate::media::MEDIA_PULL_BURST_PACKETS;
@@ -127,14 +128,24 @@ pub async fn start_rtmp_server_on(
         }
     };
     info!("Server listening on {}", addr);
+    let connection_permits = Arc::new(Semaphore::new(engine.config.rtmp_max_connections));
 
     loop {
         match listener.accept().await {
             Ok((socket, addr)) => {
+                let permit = match connection_permits.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        warn!("RTMP connection rejected: max connection limit reached");
+                        drop(socket);
+                        continue;
+                    }
+                };
                 let pipeline_lookup_clone = pipeline_lookup.clone();
                 let security_clone = security.clone();
                 let engine_clone = engine.clone();
                 tokio::spawn(async move {
+                    let _permit = permit;
                     if let Err(e) = handle_rtmp_client(
                         socket,
                         addr,
@@ -165,57 +176,54 @@ fn bind_rtmp_listener_with_backlog(port: u16, backlog: i32) -> Result<TcpListene
     TcpListener::from_std(std::net::TcpListener::from(socket))
 }
 
-async fn handle_rtmp_client(
-    mut socket: TcpStream,
-    client_addr: SocketAddr,
-    pipeline_lookup: Arc<dyn PipelineStore>,
-    security: Arc<IngestSecurityService>,
-    engine: Arc<MediaEngine>,
-) -> Result<(), &'static str> {
-    let client_ip = client_addr.ip().to_string();
-    let client_addr_text = client_addr.to_string();
-    // Configure socket for low jitter and fast response
-    let _ = socket.set_nodelay(true);
+#[cfg(target_os = "linux")]
+fn set_tcp_socket_buffers(socket: &TcpStream, size: usize) {
+    use std::os::unix::io::AsRawFd;
 
-    // 8 MB kernel buffers: at 4K60 (~50 Mbps) a 1.3s burst fills 8 MB.
-    // Default ~128 KB would overflow within a single GOP.
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::io::AsRawFd;
-        let fd = socket.as_raw_fd();
-        let size: libc::c_int = 8 * 1024 * 1024;
-        // SAFETY: setsockopt is a POSIX socket API. The file descriptor
-        // `fd` is a valid socket from tokio's TcpStream. `size` is a
-        // stack-allocated c_int with a known-safe value (8 MiB). The
-        // pointer cast is valid because c_void is the canonical opaque
-        // pointer for setsockopt's option-value argument.
-        unsafe {
-            libc::setsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_RCVBUF,
-                &size as *const _ as *const libc::c_void,
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            );
-            libc::setsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_SNDBUF,
-                &size as *const _ as *const libc::c_void,
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            );
+    let Ok(size) = libc::c_int::try_from(size) else {
+        warn!("RTMP socket buffer size does not fit c_int");
+        return;
+    };
+    let fd = socket.as_raw_fd();
+    // SAFETY: setsockopt is a POSIX socket API. The file descriptor `fd` is a
+    // valid socket from tokio's TcpStream. `size` is a stack-allocated c_int,
+    // and c_void is the canonical opaque pointer for setsockopt option values.
+    unsafe {
+        if libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVBUF,
+            &size as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        ) != 0
+        {
+            warn!("failed to set RTMP receive socket buffer");
+        }
+        if libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            &size as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        ) != 0
+        {
+            warn!("failed to set RTMP send socket buffer");
         }
     }
+}
 
+#[cfg(not(target_os = "linux"))]
+fn set_tcp_socket_buffers(_socket: &TcpStream, _size: usize) {}
+
+async fn perform_server_handshake(
+    socket: &mut TcpStream,
+    buffer: &mut [u8],
+) -> Result<Vec<u8>, &'static str> {
     let mut handshake = Handshake::new(PeerType::Server);
-    let mut buffer = vec![0u8; 4096];
-    let mut remaining: Vec<u8> = Vec::new();
-    let mut handshake_completed = false;
 
-    // 1. Handshake Loop
-    while !handshake_completed {
+    loop {
         let n = socket
-            .read(&mut buffer)
+            .read(buffer)
             .await
             .map_err(|_| "Socket read error during handshake")?;
         if n == 0 {
@@ -244,11 +252,33 @@ async fn handle_rtmp_client(
                         .await
                         .map_err(|_| "Socket write error during handshake")?;
                 }
-                remaining = remaining_bytes;
-                handshake_completed = true;
+                return Ok(remaining_bytes);
             }
         }
     }
+}
+
+async fn handle_rtmp_client(
+    mut socket: TcpStream,
+    client_addr: SocketAddr,
+    pipeline_lookup: Arc<dyn PipelineStore>,
+    security: Arc<IngestSecurityService>,
+    engine: Arc<MediaEngine>,
+) -> Result<(), &'static str> {
+    let client_ip = client_addr.ip().to_string();
+    let client_addr_text = client_addr.to_string();
+    // Configure socket for low jitter and fast response
+    let _ = socket.set_nodelay(true);
+    set_tcp_socket_buffers(&socket, engine.config.rtmp_preauth_buffer_bytes);
+    let mut buffer = vec![0u8; 4096];
+
+    // 1. Handshake Loop
+    let remaining = tokio::time::timeout(
+        Duration::from_millis(engine.config.rtmp_handshake_timeout_ms),
+        perform_server_handshake(&mut socket, &mut buffer),
+    )
+    .await
+    .map_err(|_| "RTMP handshake timed out")??;
 
     // 2. Initialize ServerSession
     let config = ServerSessionConfig::new();
@@ -543,6 +573,7 @@ async fn handle_session_results(
                             bytes_received,
                             ingest_metrics,
                         });
+                        set_tcp_socket_buffers(socket, engine.config.rtmp_stream_buffer_bytes);
 
                         // Success! Accept publish request
                         let resp = session
