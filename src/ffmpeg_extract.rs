@@ -67,8 +67,8 @@ fn embedded_cache_root() -> PathBuf {
 
 fn embedded_cache_key(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
-    let mut key = String::with_capacity(16);
-    for byte in digest.iter().take(8) {
+    let mut key = String::with_capacity(64);
+    for byte in digest {
         use std::fmt::Write as _;
         let _ = write!(&mut key, "{byte:02x}");
     }
@@ -89,12 +89,63 @@ fn set_executable(path: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
+fn cached_ffmpeg_is_valid(path: &Path, expected_bytes: &[u8]) -> Result<bool, std::io::Error> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    let file_type = metadata.file_type();
+    if !file_type.is_file() || file_type.is_symlink() {
+        return Ok(false);
+    }
+
+    let actual = std::fs::read(path)?;
+    Ok(Sha256::digest(&actual) == Sha256::digest(expected_bytes))
+}
+
+fn remove_invalid_cache_entry(path: &Path) -> Result<(), std::io::Error> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
+            std::fs::remove_dir_all(path)
+        }
+        Ok(_) => std::fs::remove_file(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn write_embedded_ffmpeg_cache(
+    temp_dir: &Path,
+    ffmpeg_path: &Path,
+    ffmpeg_bytes: &[u8],
+) -> Result<(), String> {
+    let temp_path = temp_dir.join(format!(
+        "ffmpeg.tmp.{}.{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    std::fs::write(&temp_path, ffmpeg_bytes)
+        .map_err(|error| format!("Failed to write extracted FFmpeg binary: {error}"))?;
+    if let Err(error) = set_executable(&temp_path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(format!("Failed to make FFmpeg executable: {error}"));
+    }
+
+    match std::fs::rename(&temp_path, ffmpeg_path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&temp_path);
+            Err(format!(
+                "Failed to install extracted FFmpeg binary: {error}"
+            ))
+        }
+    }
+}
+
 /// Extract the embedded FFmpeg binary into a versioned cache directory.
 ///
 /// This is intentionally multi-process safe:
 /// - a content-hash directory avoids cross-version clobbering
 /// - we never remove the shared cache root at startup
 /// - installation uses a unique temp file + atomic rename
+/// - existing cache entries are reused only after type and digest validation
 fn extract_embedded() -> PathBuf {
     let ffmpeg_data = EmbeddedAssets::get("bin/ffmpeg")
         .expect("Embedded FFmpeg binary not found in public/bin/ffmpeg");
@@ -103,26 +154,29 @@ fn extract_embedded() -> PathBuf {
     std::fs::create_dir_all(&temp_dir).expect("Failed to create temp ffmpeg directory");
 
     let ffmpeg_path = temp_dir.join("ffmpeg");
-    if ffmpeg_path.exists() {
-        let _ = set_executable(&ffmpeg_path);
-        return ffmpeg_path;
+    match cached_ffmpeg_is_valid(&ffmpeg_path, ffmpeg_bytes) {
+        Ok(true) => {
+            set_executable(&ffmpeg_path).expect("Failed to make cached FFmpeg executable");
+            return ffmpeg_path;
+        }
+        Ok(false) => {
+            remove_invalid_cache_entry(&ffmpeg_path)
+                .expect("Failed to remove invalid cached FFmpeg binary");
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            panic!("Failed to validate cached FFmpeg binary: {error}");
+        }
     }
 
-    let temp_path = temp_dir.join(format!(
-        "ffmpeg.tmp.{}.{}",
-        std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    ));
-    std::fs::write(&temp_path, ffmpeg_bytes).expect("Failed to write extracted FFmpeg binary");
-    if let Err(error) = set_executable(&temp_path) {
-        let _ = std::fs::remove_file(&temp_path);
-        panic!("Failed to make FFmpeg executable: {error}");
-    }
-
-    match std::fs::rename(&temp_path, &ffmpeg_path) {
+    match write_embedded_ffmpeg_cache(&temp_dir, &ffmpeg_path, ffmpeg_bytes) {
         Ok(()) => {}
         Err(error) if ffmpeg_path.exists() => {
-            let _ = std::fs::remove_file(&temp_path);
+            if cached_ffmpeg_is_valid(&ffmpeg_path, ffmpeg_bytes).unwrap_or(false) {
+                set_executable(&ffmpeg_path).expect("Failed to make cached FFmpeg executable");
+            } else {
+                panic!("{error}");
+            }
             warn!(
                 path = %ffmpeg_path.display(),
                 err = %error,
@@ -130,8 +184,7 @@ fn extract_embedded() -> PathBuf {
             );
         }
         Err(error) => {
-            let _ = std::fs::remove_file(&temp_path);
-            panic!("Failed to install extracted FFmpeg binary: {error}");
+            panic!("{error}");
         }
     }
 
@@ -160,6 +213,16 @@ pub fn cleanup_ffmpeg() {}
 mod tests {
     use super::*;
 
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "restream-ffmpeg-cache-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[test]
     fn embedded_cache_dir_is_stable_for_same_bytes() {
         let bytes = b"same-binary";
@@ -172,5 +235,43 @@ mod tests {
             embedded_cache_dir(b"binary-a"),
             embedded_cache_dir(b"binary-b")
         );
+    }
+
+    #[test]
+    fn embedded_cache_key_uses_full_sha256_digest() {
+        let key = embedded_cache_key(b"same-binary");
+
+        assert_eq!(key.len(), 64);
+        assert_eq!(
+            key,
+            "a1f82722bc8e33aa9100d16001377c07366a779a2c42bc58fdeba9cf8fa9f1fd"
+        );
+    }
+
+    #[test]
+    fn cached_ffmpeg_validation_requires_matching_digest() {
+        let dir = temp_dir("digest");
+        let path = dir.join("ffmpeg");
+        std::fs::write(&path, b"wrong").unwrap();
+
+        assert!(!cached_ffmpeg_is_valid(&path, b"expected").unwrap());
+        std::fs::write(&path, b"expected").unwrap();
+        assert!(cached_ffmpeg_is_valid(&path, b"expected").unwrap());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cached_ffmpeg_validation_rejects_symlink() {
+        let dir = temp_dir("symlink");
+        let target = dir.join("target");
+        let link = dir.join("ffmpeg");
+        std::fs::write(&target, b"expected").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        assert!(!cached_ffmpeg_is_valid(&link, b"expected").unwrap());
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
