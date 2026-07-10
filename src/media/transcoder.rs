@@ -180,43 +180,7 @@ pub async fn start_audio_router(
                         let output_tracks = apply_audio_routing(&routing, &input_tracks);
                         output_buffer.set_audio_tracks(output_tracks);
                     }
-                    let out = match &routing {
-                        AudioRouting::Passthrough => Some((*pkt).clone()),
-
-                        AudioRouting::SelectTracks { tracks } => {
-                            match pkt.media_type {
-                                MediaType::Video => Some((*pkt).clone()),
-                                MediaType::Audio => {
-                                    if let Some(pos) = tracks.iter().position(|&t| t == pkt.track_index as usize) {
-                                        let mut new_pkt = (*pkt).clone();
-                                        new_pkt.track_index = pos as u32;
-                                        Some(new_pkt)
-                                    } else {
-                                        None // drop this track
-                                    }
-                                }
-                            }
-                        }
-
-                        AudioRouting::Remap { left, right, track } => {
-                            match pkt.media_type {
-                                MediaType::Video => Some((*pkt).clone()),
-                                MediaType::Audio if pkt.track_index as usize == *track => {
-                                    let _ = (left, right); // channel remap needs DSP
-                                    let mut new_pkt = (*pkt).clone();
-                                    new_pkt.track_index = 0;
-                                    Some(new_pkt)
-                                }
-                                MediaType::Audio => None,
-                            }
-                        }
-
-                        AudioRouting::Downmix { .. } => {
-                            // Downmix requires decode→mix→encode; not handled here.
-                            // get_or_create_transcoder routes Downmix to the FFmpeg path.
-                            Some((*pkt).clone())
-                        }
-                    };
+                    let out = route_audio_packet(&routing, &pkt);
                     if let Some(p) = out {
                         stage_metrics.record_out(p.payload.len() as u64);
                         if !first_push_logged {
@@ -291,6 +255,38 @@ pub fn apply_audio_routing(routing: &AudioRouting, input_tracks: &[AudioMeta]) -
             } else {
                 Vec::new()
             }
+        }
+    }
+}
+
+fn route_audio_packet(routing: &AudioRouting, pkt: &MediaPacket) -> Option<MediaPacket> {
+    match routing {
+        AudioRouting::Passthrough => Some(pkt.clone()),
+        AudioRouting::SelectTracks { tracks } => match pkt.media_type {
+            MediaType::Video => Some(pkt.clone()),
+            MediaType::Audio => tracks
+                .iter()
+                .position(|&track| track == pkt.track_index as usize)
+                .map(|pos| {
+                    let mut new_pkt = pkt.clone();
+                    new_pkt.track_index = pos as u32;
+                    new_pkt
+                }),
+        },
+        AudioRouting::Remap { left, right, track } => match pkt.media_type {
+            MediaType::Video => Some(pkt.clone()),
+            MediaType::Audio if pkt.track_index as usize == *track => {
+                let _ = (left, right); // channel remap needs DSP
+                let mut new_pkt = pkt.clone();
+                new_pkt.track_index = 0;
+                Some(new_pkt)
+            }
+            MediaType::Audio => None,
+        },
+        AudioRouting::Downmix { .. } => {
+            // Downmix requires decode→mix→encode; get_or_create_transcoder
+            // routes Downmix to the FFmpeg path rather than this router.
+            Some(pkt.clone())
         }
     }
 }
@@ -445,6 +441,7 @@ mod tests {
     use crate::media::MEDIA_TS_BATCH_TARGET_BYTES;
     use crate::media::engine::AudioMeta;
     use crate::media::ring_buffer::PayloadFormat;
+    use proptest::prelude::*;
     use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
@@ -604,6 +601,97 @@ mod tests {
         let output_tracks = apply_audio_routing(&routing, &input_tracks);
         assert_eq!(output_tracks.len(), 1);
         assert_eq!(output_tracks[0].track_index, 0); // re-indexed from 2 to 0
+    }
+
+    fn generated_audio_track(index: usize) -> AudioMeta {
+        AudioMeta {
+            codec: "aac".to_string(),
+            channels: 2,
+            sample_rate: 48_000,
+            track_index: index as u32,
+            channel_layout: None,
+            pid: Some(0x100 + index as u16),
+            language: None,
+            title: None,
+            profile: None,
+        }
+    }
+
+    fn generated_router_packet(is_video: bool, track_index: u32, pts: i64) -> MediaPacket {
+        MediaPacket {
+            media_type: if is_video {
+                MediaType::Video
+            } else {
+                MediaType::Audio
+            },
+            track_index,
+            pts,
+            dts: pts,
+            is_keyframe: is_video,
+            format: PayloadFormat::Raw,
+            payload: bytes::Bytes::from_static(&[0x01, 0x02, 0x03]),
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn audio_router_select_tracks_preserves_video_and_reindexes_selected_audio(
+            selected_mask in prop::array::uniform4(any::<bool>()),
+            packets in prop::collection::vec((any::<bool>(), 0_u32..4, 0_i64..10_000), 1..64),
+        ) {
+            let selected_tracks = selected_mask
+                .iter()
+                .enumerate()
+                .filter_map(|(index, selected)| selected.then_some(index))
+                .collect::<Vec<_>>();
+            let routing = AudioRouting::SelectTracks {
+                tracks: selected_tracks.clone(),
+            };
+            let input_tracks = (0..4).map(generated_audio_track).collect::<Vec<_>>();
+            let output_tracks = apply_audio_routing(&routing, &input_tracks);
+
+            prop_assert_eq!(output_tracks.len(), selected_tracks.len());
+            for (output_index, source_index) in selected_tracks.iter().enumerate() {
+                prop_assert_eq!(output_tracks[output_index].track_index, output_index as u32);
+                prop_assert_eq!(output_tracks[output_index].pid, Some(0x100 + *source_index as u16));
+            }
+
+            let mut routed_packets = Vec::new();
+            for (is_video, track_index, pts) in packets {
+                let input = generated_router_packet(is_video, track_index, pts);
+                if let Some(output) = route_audio_packet(&routing, &input) {
+                    if is_video {
+                        prop_assert_eq!(output.media_type, MediaType::Video);
+                        prop_assert_eq!(output.track_index, track_index);
+                    } else {
+                        let expected_index = selected_tracks
+                            .iter()
+                            .position(|track| *track == track_index as usize)
+                            .expect("only selected audio packets should be routed");
+                        prop_assert_eq!(output.media_type, MediaType::Audio);
+                        prop_assert_eq!(output.track_index, expected_index as u32);
+                    }
+                    prop_assert_eq!(output.pts, input.pts);
+                    prop_assert_eq!(output.dts, input.dts);
+                    prop_assert_eq!(&output.payload, &input.payload);
+                    routed_packets.push(output);
+                } else {
+                    prop_assert!(!is_video, "video packets must always pass through");
+                    prop_assert!(
+                        !selected_tracks.contains(&(track_index as usize)),
+                        "selected audio track {track_index} was dropped"
+                    );
+                }
+            }
+
+            prop_assert!(
+                routed_packets.iter().all(|packet| {
+                    packet.media_type == MediaType::Video
+                        || (packet.track_index as usize) < selected_tracks.len()
+                }),
+                "routed audio packets must be re-indexed into the selected output track range"
+            );
+        }
     }
 
     #[tokio::test]
