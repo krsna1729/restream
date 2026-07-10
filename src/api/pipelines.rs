@@ -438,7 +438,8 @@ pub async fn pipelines_delete_handler(
             refresh_srt_ingest_policy_store(&state).await;
             Json(serde_json::json!({"message": format!("Pipeline {} deleted", id)})).into_response()
         }
-        _ => (StatusCode::NOT_FOUND, "Pipeline not found").into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "Pipeline not found").into_response(),
+        Err(error) => error.into_response(),
     }
 }
 

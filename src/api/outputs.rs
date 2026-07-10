@@ -468,11 +468,14 @@ pub async fn outputs_delete_handler(
         return Ok(response);
     }
 
-    state.engine.unregister_egress(&output_id).await;
-    state
+    let deleted = state
         .output_service
         .delete_output(&pipeline_id, &output_id)
         .await?;
+    if !deleted {
+        return Ok((StatusCode::NOT_FOUND, "Output not found").into_response());
+    }
+    state.engine.unregister_egress(&output_id).await;
     Ok(Json(serde_json::json!({"message": "Output deleted"})).into_response())
 }
 

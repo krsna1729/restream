@@ -2797,6 +2797,100 @@ async fn delete_output_cancels_egress() {
 }
 
 #[tokio::test]
+async fn delete_output_returns_not_found_for_missing_row() {
+    let (app, pool) = test_app().await;
+    let cookie = login(&app).await;
+
+    db::create_pipeline(&pool, "p_delete_missing", "P", "delete-missing", None, None)
+        .await
+        .unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "DELETE",
+            "/api/v1/pipelines/p_delete_missing/outputs/missing-output",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn delete_ingest_returns_not_found_for_missing_row() {
+    let (app, _) = test_app().await;
+    let cookie = login(&app).await;
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "DELETE",
+            "/api/v1/ingests/missing-ingest",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn delete_pipeline_storage_failure_is_internal_error() {
+    let auth_pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    db::setup_database_schema(&auth_pool).await.unwrap();
+    let pipeline_pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    db::setup_database_schema(&pipeline_pool).await.unwrap();
+    db::create_pipeline(
+        &pipeline_pool,
+        "p_delete_db_down",
+        "P",
+        "delete-db-down",
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let sessions = Arc::new(TokioRwLock::new(HashSet::new()));
+    api::initialize_auth_for_test(&auth_pool, &sessions, "admin").await;
+    let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
+    let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+        SrtGlobalIngestConfig::default(),
+        &[],
+    ));
+    let (log_broadcast, _) = broadcast::channel(32);
+    let engine = Arc::new(MediaEngine::new());
+    let mut state = api::AppState::test_new(
+        auth_pool,
+        security,
+        ingest_policy_store,
+        sessions,
+        engine,
+        log_broadcast,
+        "media".to_string(),
+    );
+    state.pipeline_service =
+        restream::application::services::PipelineService::new(pipeline_pool.clone());
+    pipeline_pool.close().await;
+    let app = api::create_router(Arc::new(state));
+    let cookie = login(&app).await;
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "DELETE",
+            "/api/v1/pipelines/p_delete_db_down",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
 async fn health_endpoint_exposes_probe_and_egress_fault_fields() {
     let (app, _, engine) = test_app_with_engine().await;
     let cookie = login(&app).await;

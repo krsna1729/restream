@@ -175,20 +175,16 @@ pub async fn ingests_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+) -> Result<impl IntoResponse, ApiError> {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return Ok(response);
     }
 
     state
         .file_ingest_service
         .delete_ingest_with_runtime_cleanup(&state.engine, &id)
-        .await;
-    Json(serde_json::json!({"deleted": true})).into_response()
+        .await?;
+    Ok(Json(serde_json::json!({"deleted": true})).into_response())
 }
 
 pub async fn ingests_start_handler(

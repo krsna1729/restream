@@ -221,19 +221,39 @@ impl FileIngestService {
             .map_err(|_| ApiError::internal("load pipeline file ingest state"))
     }
 
-    pub async fn delete_ingest_with_runtime_cleanup(&self, engine: &Arc<MediaEngine>, id: &str) {
-        if let Ok(Some(ingest)) = self.ingest_lookup.get_ingest(id).await {
-            let _ = clear_stream_key_file_ingests(
-                self.pipeline_store.as_ref(),
-                self.ingest_lookup.as_ref(),
-                engine,
-                &ingest.stream_key,
-            )
-            .await;
-        }
+    pub async fn delete_ingest_with_runtime_cleanup(
+        &self,
+        engine: &Arc<MediaEngine>,
+        id: &str,
+    ) -> ApiResult<()> {
+        let ingest = self
+            .ingest_lookup
+            .get_ingest(id)
+            .await
+            .map_err(|err| ApiError::internal(format!("get ingest: {err}")))?
+            .ok_or_else(|| ApiError::not_found("Ingest not found"))?;
+
+        clear_stream_key_file_ingests(
+            self.pipeline_store.as_ref(),
+            self.ingest_lookup.as_ref(),
+            engine,
+            &ingest.stream_key,
+        )
+        .await
+        .map_err(|err| ApiError::internal(format!("clear file ingest state: {err:?}")))?;
+
         let _ = engine.stop_file_ingest_child(id).await;
         engine.clear_file_ingest_running(id).await;
-        let _ = self.ingest_writer.delete_ingest(id).await;
+        let deleted = self
+            .ingest_writer
+            .delete_ingest(id)
+            .await
+            .map_err(|err| ApiError::internal(format!("delete ingest: {err}")))?;
+        if deleted {
+            Ok(())
+        } else {
+            Err(ApiError::not_found("Ingest not found"))
+        }
     }
 
     pub async fn stop_ingest_with_runtime_cleanup(
