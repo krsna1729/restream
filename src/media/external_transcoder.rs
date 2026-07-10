@@ -45,7 +45,7 @@ use tracing::{error, info};
 use crate::media::ffmpeg::backend::{BackendError, StageRunContext};
 use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ffmpeg::stage_output::StageOutputNormalizer;
-use crate::media::ffmpeg::stage_plan::FfmpegStagePlan;
+use crate::media::ffmpeg::stage_plan::{FfmpegStagePlan, VideoStageOp};
 use crate::media::mpegts::TsDemuxer;
 use crate::media::pipe_metrics::PipeMetrics;
 
@@ -151,10 +151,11 @@ pub(crate) async fn run_external_ffmpeg_backend(
         backend: StageBackendKind::ExternalFfmpeg,
     });
 
+    let ffmpeg_preset = external_stage_arg_preset(&plan, &encoding);
     let args = if include_audio {
-        build_stage_ffmpeg_args_for_input(&encoding, output_codec, probe_codec)
+        build_stage_ffmpeg_args_for_input(&ffmpeg_preset, output_codec, probe_codec)
     } else {
-        build_stage_ffmpeg_video_only_args_for_input(&encoding, output_codec, probe_codec)
+        build_stage_ffmpeg_video_only_args_for_input(&ffmpeg_preset, output_codec, probe_codec)
     };
     info!(?args, "FFMPEG ARGS");
     let correlation_id = crate::logging::next_correlation_id("stage");
@@ -345,6 +346,14 @@ pub(crate) async fn run_external_ffmpeg_backend(
         encoding
     );
     Ok(())
+}
+
+fn external_stage_arg_preset(plan: &FfmpegStagePlan, fallback: &str) -> String {
+    match &plan.video {
+        VideoStageOp::ScalePreset { preset } | VideoStageOp::Preview { preset } => preset.clone(),
+        VideoStageOp::CodecEdge { .. } => "h264".to_string(),
+        VideoStageOp::Passthrough => fallback.to_string(),
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

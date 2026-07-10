@@ -4,7 +4,7 @@ use crate::media::engine::{AudioMeta, MediaEngine};
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use crate::media::mpegts::TsDemuxer;
 use crate::media::ring_buffer::{DtsEnforcer, MediaType, Reader, RingBuffer};
-use crate::media::stage_runtime::wait_for_stage_metadata;
+use crate::media::stage_runtime::{build_ffmpeg_stage_plan, wait_for_stage_metadata};
 use proptest::prelude::*;
 use proptest::test_runner::Config as ProptestConfig;
 use tokio_util::sync::CancellationToken;
@@ -100,6 +100,21 @@ fn test_audio_track(track_index: u32) -> AudioMeta {
         title: None,
         profile: None,
     }
+}
+
+#[test]
+fn external_stage_arg_preset_uses_preview_preset_not_stage_key_display() {
+    let key = StageKey::new(
+        "pipe-preview",
+        StageKind::preview("720p", StageKind::source()),
+    );
+    let plan = build_ffmpeg_stage_plan(&key, None, Vec::new(), None, false)
+        .expect("preview stage should produce an FFmpeg plan");
+
+    assert_eq!(
+        external_stage_arg_preset(&plan, &key.kind.to_string()),
+        "720p"
+    );
 }
 
 #[test]
