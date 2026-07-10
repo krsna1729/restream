@@ -11,9 +11,9 @@ use tokio::sync::RwLock as TokioRwLock;
 use tracing::{info, warn};
 
 use super::state::{
-    AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, MAX_PASSWORD_LEN, SESSION_MAX_AGE_SECONDS,
-    check_field_len, clear_session_cookie, get_session_token_from_headers, hash_session_token,
-    make_session_cookie, to_hex,
+    AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, MAX_PASSWORD_LEN, MIN_DASHBOARD_PASSWORD_LEN,
+    SESSION_MAX_AGE_SECONDS, check_field_len, clear_session_cookie, get_session_token_from_headers,
+    hash_session_token, make_session_cookie, to_hex,
 };
 use crate::application::services::AuthService;
 use crate::media::security::RateLimitScope;
@@ -118,7 +118,30 @@ pub fn verify_password(password: &str, stored: &str) -> bool {
         return false;
     }
     let hex_hash = to_hex(&new_hash);
-    hex_hash == stored_hash
+    constant_time_eq(hex_hash.as_bytes(), stored_hash.as_bytes())
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut diff = left.len() ^ right.len();
+    let max_len = left.len().max(right.len());
+    for index in 0..max_len {
+        let left_byte = left.get(index).copied().unwrap_or(0);
+        let right_byte = right.get(index).copied().unwrap_or(0);
+        diff |= usize::from(left_byte ^ right_byte);
+    }
+    diff == 0
+}
+
+fn validate_new_dashboard_password(password: &str) -> Result<(), String> {
+    if password.is_empty() {
+        return Err("New password cannot be empty".to_string());
+    }
+    if password.len() < MIN_DASHBOARD_PASSWORD_LEN {
+        return Err(format!(
+            "New password must be at least {MIN_DASHBOARD_PASSWORD_LEN} characters"
+        ));
+    }
+    Ok(())
 }
 
 pub async fn initialize_auth(
@@ -325,10 +348,10 @@ pub async fn change_password_handler(
         return r;
     }
 
-    if new_password.is_empty() {
+    if let Err(error) = validate_new_dashboard_password(&new_password) {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "New password cannot be empty"})),
+            Json(serde_json::json!({"error": error})),
         )
             .into_response();
     }
@@ -556,7 +579,10 @@ pub async fn stream_keys_handler(
 
 #[cfg(test)]
 mod tests {
-    use super::{select_initial_admin_password, write_bootstrap_password_file};
+    use super::{
+        constant_time_eq, select_initial_admin_password, validate_new_dashboard_password,
+        write_bootstrap_password_file,
+    };
 
     #[test]
     fn initial_admin_password_prefers_non_empty_env_value() {
@@ -594,5 +620,21 @@ mod tests {
 
         assert_eq!(contents, "secret\n");
         assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn password_hash_compare_is_length_aware() {
+        assert!(constant_time_eq(b"same", b"same"));
+        assert!(!constant_time_eq(b"same", b"same-but-longer"));
+        assert!(!constant_time_eq(b"same", b"diff"));
+    }
+
+    #[test]
+    fn dashboard_password_policy_rejects_short_replacements() {
+        assert_eq!(
+            validate_new_dashboard_password("short").unwrap_err(),
+            "New password must be at least 12 characters"
+        );
+        assert!(validate_new_dashboard_password("long-enough1").is_ok());
     }
 }

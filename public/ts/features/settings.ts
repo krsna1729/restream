@@ -207,11 +207,11 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         </fieldset>
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend">New Password</legend>
-                            <input type="password" id="new-password-input" class="input input-sm w-44" autocomplete="new-password" />
+                            <input type="password" id="new-password-input" class="input input-sm w-44" autocomplete="new-password" minlength="12" />
                         </fieldset>
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend">Confirm Password</legend>
-                            <input type="password" id="confirm-password-input" class="input input-sm w-44" autocomplete="new-password" />
+                            <input type="password" id="confirm-password-input" class="input input-sm w-44" autocomplete="new-password" minlength="12" />
                         </fieldset>
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend invisible">_</legend>
@@ -413,6 +413,10 @@ export async function saveDashboardPassword(): Promise<void> {
 
   if (!currentPassword || !newPassword || newPassword !== confirmPassword) {
     showErrorAlert("Enter the current password and matching new password");
+    return;
+  }
+  if (newPassword.length < 12) {
+    showErrorAlert("New password must be at least 12 characters");
     return;
   }
 

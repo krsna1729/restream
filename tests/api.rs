@@ -351,7 +351,7 @@ async fn password_change_revokes_other_sessions_and_keeps_current_session() {
             "POST",
             "/api/v1/auth/change-password",
             &current_cookie,
-            Some(r#"{"current_password":"admin","new_password":"newpass123"}"#),
+            Some(r#"{"current_password":"admin","new_password":"newpass12345"}"#),
         ))
         .await
         .unwrap();
@@ -385,7 +385,7 @@ async fn password_change_revokes_other_sessions_and_keeps_current_session() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
-    let new_cookie = login_with_password(&app, "newpass123").await;
+    let new_cookie = login_with_password(&app, "newpass12345").await;
     assert!(new_cookie.starts_with("session="));
 }
 
@@ -2127,7 +2127,7 @@ async fn change_password() {
             "POST",
             "/api/v1/auth/change-password",
             &cookie,
-            Some(r#"{"current_password":"admin","new_password":"newpass123"}"#),
+            Some(r#"{"current_password":"admin","new_password":"newpass12345"}"#),
         ))
         .await
         .unwrap();
@@ -2156,12 +2156,32 @@ async fn change_password() {
                 .method("POST")
                 .uri("/api/v1/auth/login")
                 .header("Content-Type", "application/json")
-                .body(axum::body::Body::from(r#"{"password":"newpass123"}"#))
+                .body(axum::body::Body::from(r#"{"password":"newpass12345"}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn change_password_rejects_short_new_password() {
+    let (app, _) = test_app().await;
+    let cookie = login(&app).await;
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/auth/change-password",
+            &cookie,
+            Some(r#"{"current_password":"admin","new_password":"short"}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"], "New password must be at least 12 characters");
 }
 
 #[tokio::test]
