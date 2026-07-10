@@ -25,7 +25,19 @@ pub(crate) async fn wait_for_outputs_progress_with_env(
         let mut stalled = Vec::new();
         for output_id in output_ids {
             let entry = &health["pipelines"][pipeline_id]["outputs"][output_id];
-            let status = ApiOutputStatus::from_value(output_id, entry)?;
+            let status = match ApiOutputStatus::from_value(output_id, entry) {
+                Ok(status) => status,
+                Err(error) if entry.is_null() => {
+                    let cell = mixed_env
+                        .and_then(|env| env.output_cell_label(output_id))
+                        .unwrap_or_else(|| "unregistered-cell".to_string());
+                    stalled.push(format!(
+                        "{cell}\n  outputId={output_id}\n  healthRow=missing\n  lastError={error}"
+                    ));
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             if status.has_progress() {
                 progressed += 1;
             } else {

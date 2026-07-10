@@ -198,6 +198,10 @@ fn harness_progress_status_consumes_existing_fields() {
             && !source.contains("[\"phase\"]"),
         "progress checks must not index status/rawStatus/phase directly"
     );
+    assert!(
+        source.contains("healthRow=missing"),
+        "temporarily missing health rows should be reported as progress stalls"
+    );
 }
 
 #[test]
