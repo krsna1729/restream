@@ -326,7 +326,6 @@ mod tests {
             },
             ..Default::default()
         })));
-        ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Quiet);
         engine
             .try_register_ingest(pipeline_id, "stream-key", "file")
             .await
@@ -345,8 +344,15 @@ mod tests {
 
         let source = engine.get_or_create_pipeline(pipeline_id).await;
         source.set_codec_hint("hevc");
-        source.set_audio_tracks(audio_tracks);
-        if let Some(parameter_sets) = packets.iter().find_map(|packet| {
+        source.set_audio_tracks(vec![audio_tracks[0].clone()]);
+        let selected_packets = packets
+            .into_iter()
+            .filter(|packet| {
+                packet.media_type == MediaType::Video
+                    || (packet.media_type == MediaType::Audio && packet.track_index == 0)
+            })
+            .collect::<Vec<_>>();
+        if let Some(parameter_sets) = selected_packets.iter().find_map(|packet| {
             (packet.media_type == MediaType::Video)
                 .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
                 .flatten()
@@ -380,7 +386,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
 
-        source.push_batch(packets.into_iter());
+        source.push_batch(selected_packets.into_iter());
 
         let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut saw_video = false;
