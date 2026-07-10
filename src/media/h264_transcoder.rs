@@ -138,7 +138,7 @@ pub(crate) async fn run_h264_codec_edge_stage(
                 iq_clone,
                 cancel_clone,
                 &pid,
-                StageOutputSink::Existing(output_normalizer),
+                StageOutputSink::Existing(Box::new(output_normalizer)),
             )
         }));
         match result {

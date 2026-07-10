@@ -1410,6 +1410,29 @@ fn resource_output_progress_timeout_scales_and_caps() {
 }
 
 #[test]
+fn mixed_hevc_output_progress_timeout_gets_codec_edge_budget() {
+    let h264_case = mixed_input_cases()
+        .iter()
+        .copied()
+        .find(|case| matches!(case.codec(), MixedVideoCodec::H264))
+        .expect("h264 mixed case");
+    let h265_case = mixed_input_cases()
+        .iter()
+        .copied()
+        .find(|case| matches!(case.codec(), MixedVideoCodec::H265))
+        .expect("h265 mixed case");
+
+    assert_eq!(
+        mixed_output_progress_timeout_for_case(h264_case, 15),
+        Duration::from_secs(102)
+    );
+    assert_eq!(
+        mixed_output_progress_timeout_for_case(h265_case, 15),
+        Duration::from_secs(192)
+    );
+}
+
+#[test]
 fn mixed_input_planning_shares_stages_across_duplicate_outputs() {
     for case in mixed_input_cases() {
         let single = planned_mixed_stage_count(*case, 1);

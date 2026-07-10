@@ -22,6 +22,14 @@ pub(crate) struct ApiBlockedByStage {
     pub(crate) backend: Option<String>,
     #[serde(default)]
     pub(crate) capacity_wait_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) packets_in: u64,
+    #[serde(default)]
+    pub(crate) packets_out: u64,
+    #[serde(default)]
+    pub(crate) bytes_in: u64,
+    #[serde(default)]
+    pub(crate) bytes_out: u64,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]

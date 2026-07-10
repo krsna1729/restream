@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::media::codec::AnnexbParameterSetAccumulator;
 use crate::media::ring_buffer::{MediaPacket, MediaType, RingBuffer};
 use crate::media::stage_lifecycle::StageLifecycle;
 use crate::media::stage_metrics::StageMetrics;
@@ -22,6 +23,7 @@ pub struct StageOutputNormalizer {
     lifecycle: Option<Arc<StageLifecycle>>,
     has_emitted: bool,
     video_track_count: usize,
+    parameter_sets: AnnexbParameterSetAccumulator,
 }
 
 impl StageOutputNormalizer {
@@ -33,6 +35,7 @@ impl StageOutputNormalizer {
             lifecycle: None,
             has_emitted: false,
             video_track_count: 1,
+            parameter_sets: AnnexbParameterSetAccumulator::default(),
         }
     }
 
@@ -56,10 +59,18 @@ impl StageOutputNormalizer {
     pub fn push(&mut self, mut packet: MediaPacket) {
         let stream_idx = self.stream_index(packet.media_type, packet.track_index);
 
-        // Extract and set parameter sets from encoded video.
         if packet.media_type == MediaType::Video
-            && packet.is_keyframe
-            && let Some(ps) = crate::media::codec::annexb_parameter_sets(&packet.payload)
+            && !packet.is_keyframe
+            && crate::media::codec::raw_annexb_is_keyframe(&packet.payload)
+        {
+            packet.is_keyframe = true;
+        }
+
+        // Extract and set parameter sets from encoded video. FFmpeg encoders
+        // may emit VPS/SPS/PPS as separate packets before the IDR packet, so
+        // the accumulator must run for every video packet, not only keyframes.
+        if packet.media_type == MediaType::Video
+            && let Some(ps) = self.parameter_sets.push_payload(&packet.payload)
         {
             self.out_ring.set_video_parameter_sets(ps);
         }
@@ -104,7 +115,7 @@ impl StageOutputNormalizer {
 }
 
 pub(crate) enum StageOutputSink {
-    Existing(StageOutputNormalizer),
+    Existing(Box<StageOutputNormalizer>),
     Ring {
         out_ring: Arc<RingBuffer>,
         metrics: Option<Arc<StageMetrics>>,
@@ -118,7 +129,7 @@ impl StageOutputSink {
 
     pub(crate) fn into_normalizer(self, stream_count: usize) -> StageOutputNormalizer {
         match self {
-            Self::Existing(normalizer) => normalizer,
+            Self::Existing(normalizer) => *normalizer,
             Self::Ring { out_ring, metrics } => {
                 let normalizer_metrics = metrics.unwrap_or_else(|| Arc::new(StageMetrics::new()));
                 StageOutputNormalizer::new(out_ring, stream_count, normalizer_metrics)
@@ -170,5 +181,72 @@ mod tests {
         let second_snapshot = lifecycle.snapshot();
         assert_eq!(second_snapshot.phase, StagePhase::FirstOutput);
         assert_eq!(second_snapshot.first_output_at, Some(first_output_at));
+    }
+
+    #[test]
+    fn normalizer_marks_annexb_idr_payload_as_keyframe() {
+        let ring = Arc::new(RingBuffer::new(8));
+        let mut normalizer =
+            StageOutputNormalizer::new(ring.clone(), 1, Arc::new(StageMetrics::new()));
+
+        normalizer.push(MediaPacket {
+            media_type: MediaType::Video,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            is_keyframe: false,
+            format: PayloadFormat::Raw,
+            payload: Bytes::from_static(&[0, 0, 0, 1, 0x65]),
+        });
+
+        let mut reader =
+            crate::media::ring_buffer::Reader::new("normalizer-keyframe-reader".to_string(), ring);
+        let packet = reader
+            .pull()
+            .expect("reader should not overflow")
+            .expect("reader should start at inferred keyframe");
+        assert!(packet.is_keyframe);
+    }
+
+    #[test]
+    fn normalizer_caches_split_hevc_parameter_sets_before_idr() {
+        let ring = Arc::new(RingBuffer::new(8));
+        let mut normalizer =
+            StageOutputNormalizer::new(ring.clone(), 1, Arc::new(StageMetrics::new()));
+
+        for (pts, payload) in [
+            (0, Bytes::from_static(&[0, 0, 0, 1, 0x40, 0x01])),
+            (1, Bytes::from_static(&[0, 0, 0, 1, 0x42, 0x01])),
+            (2, Bytes::from_static(&[0, 0, 0, 1, 0x44, 0x01])),
+            (3, Bytes::from_static(&[0, 0, 0, 1, 0x26, 0x01])),
+        ] {
+            normalizer.push(MediaPacket {
+                media_type: MediaType::Video,
+                track_index: 0,
+                pts,
+                dts: pts,
+                is_keyframe: false,
+                format: PayloadFormat::Raw,
+                payload,
+            });
+        }
+
+        assert_eq!(
+            ring.video_parameter_sets().as_deref(),
+            Some(
+                &[
+                    0, 0, 0, 1, 0x40, 0x01, 0, 0, 0, 1, 0x42, 0x01, 0, 0, 0, 1, 0x44, 0x01
+                ][..]
+            )
+        );
+
+        let mut reader =
+            crate::media::ring_buffer::Reader::new("split-hevc-param-reader".to_string(), ring);
+        let packet = reader
+            .pull()
+            .expect("reader should not overflow")
+            .expect("reader should start at inferred HEVC IDR");
+        assert_eq!(packet.payload.as_ref(), &[0, 0, 0, 1, 0x26, 0x01]);
+        assert!(packet.is_keyframe);
     }
 }

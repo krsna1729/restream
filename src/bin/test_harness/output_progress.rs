@@ -50,7 +50,7 @@ pub(crate) async fn wait_for_outputs_progress_with_env(
                     .and_then(|env| env.output_cell_label(output_id))
                     .unwrap_or_else(|| "unregistered-cell".to_string());
                 stalled.push(format!(
-                    "{}\n  outputName={} outputId={} encoding={} url={}\n  phase={}\n  terminalStage={}\n  blockedBy={}\n  blockedByPhase={}\n  backend={} waitMs={}\n  lastError={}",
+                    "{}\n  outputName={} outputId={} encoding={} url={}\n  phase={}\n  terminalStage={}\n  blockedBy={}\n  blockedByPhase={}\n  backend={} waitMs={}\n  blockedMetrics=packetsIn:{} packetsOut:{} bytesIn:{} bytesOut:{}\n  lastError={}",
                     cell,
                     status.output_name.as_deref().unwrap_or("unknown"),
                     status.output_id,
@@ -68,6 +68,10 @@ pub(crate) async fn wait_for_outputs_progress_with_env(
                         .and_then(|blocked| blocked.backend.as_deref())
                         .unwrap_or("none"),
                     wait_ms,
+                    blocked_by.map(|blocked| blocked.packets_in).unwrap_or(0),
+                    blocked_by.map(|blocked| blocked.packets_out).unwrap_or(0),
+                    blocked_by.map(|blocked| blocked.bytes_in).unwrap_or(0),
+                    blocked_by.map(|blocked| blocked.bytes_out).unwrap_or(0),
                     status.last_error.as_deref().unwrap_or("")
                 ));
             }
@@ -76,13 +80,69 @@ pub(crate) async fn wait_for_outputs_progress_with_env(
             return Ok(());
         }
         if Instant::now() >= deadline {
+            let stage_diagnostics = pipeline_stage_diagnostics(api, pipeline_id)
+                .await
+                .unwrap_or_default();
             return Err(format!(
-                "outputs did not make progress for pipeline {pipeline_id} within {:?}: {progressed}/{}; stalled={}",
+                "outputs did not make progress for pipeline {pipeline_id} within {:?}: {progressed}/{}; stalled={}{}",
                 timeout,
                 output_ids.len(),
-                stalled.join(", ")
+                stalled.join(", "),
+                stage_diagnostics
             ));
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+async fn pipeline_stage_diagnostics(api: &RampApi, pipeline_id: &str) -> Result<String, String> {
+    let telemetry = api
+        .get_json(&format!("/api/v1/pipelines/{pipeline_id}/telemetry"))
+        .await?;
+    let Some(stages) = telemetry["stages"].as_array() else {
+        return Ok(String::new());
+    };
+
+    let mut rows = Vec::new();
+    for stage in stages {
+        let stage_key = stage["stageKey"].as_str().unwrap_or("unknown");
+        let kind = stage["kind"].as_str().unwrap_or("unknown");
+        let lifecycle = &stage["lifecycle"];
+        let phase = lifecycle["phase"].as_str().unwrap_or("unknown");
+        let backend = lifecycle["backend"].as_str().unwrap_or("unknown");
+        let metrics = &stage["metrics"];
+        let pipe_metrics = &stage["pipeMetrics"];
+        let packets_in = metrics["packetsIn"].as_u64().unwrap_or(0);
+        let packets_out = metrics["packetsOut"].as_u64().unwrap_or(0);
+        let bytes_in = metrics["bytesIn"].as_u64().unwrap_or(0);
+        let bytes_out = metrics["bytesOut"].as_u64().unwrap_or(0);
+        let pipe_packets_in = pipe_metrics["packetsIn"].as_u64().unwrap_or(0);
+        let pipe_packets_out = pipe_metrics["packetsOut"].as_u64().unwrap_or(0);
+        let relevant = stage_key.contains("hevc")
+            || stage_key.contains("h264")
+            || stage_key.contains("atrack")
+            || kind == "codec_edge"
+            || kind == "audio_filter";
+        if relevant || packets_out == 0 || bytes_out == 0 {
+            rows.push(format!(
+                "{} kind={} phase={} backend={} metrics=in:{}/{} out:{}/{} pipe=in:{} out:{}",
+                stage_key,
+                kind,
+                phase,
+                backend,
+                packets_in,
+                bytes_in,
+                packets_out,
+                bytes_out,
+                pipe_packets_in,
+                pipe_packets_out
+            ));
+        }
+    }
+
+    if rows.is_empty() {
+        Ok(String::new())
+    } else {
+        Ok(format!("; stageDiagnostics=[{}]", rows.join(" | ")))
     }
 }

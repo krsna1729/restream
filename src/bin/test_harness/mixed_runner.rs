@@ -46,8 +46,8 @@ pub(super) use mixed_artifact_index::{
 pub(super) use mixed_artifacts::{HarnessOutputCell, HarnessOutputRegistry, infer_output_protocol};
 pub(super) use mixed_checks::{verify_mixed_output_cases_inner, verify_mixed_output_dimensions};
 pub(super) use mixed_control::{
-    MixedResume, mixed_output_checks_need_live_progress_gate, mixed_output_progress_timeout,
-    mixed_progress_output_ids,
+    MixedResume, mixed_output_checks_need_live_progress_gate,
+    mixed_output_progress_timeout_for_case, mixed_progress_output_ids,
 };
 pub(super) use mixed_executor::{ScenarioExecutionContext, scenario_executor_for_plan};
 pub(super) use mixed_lifecycle::{stop_mixed_outputs, wait_for_outputs_stopped};
@@ -661,7 +661,7 @@ pub(super) async fn run_mixed_anchor_config(
             api,
             &pipeline_id,
             &progress_output_ids,
-            mixed_output_progress_timeout(progress_output_ids.len()),
+            mixed_output_progress_timeout_for_case(case, progress_output_ids.len()),
             Some(env),
         )
         .await?;
@@ -989,7 +989,7 @@ pub(super) async fn run_mixed_live_config(
             api,
             &pipeline_id,
             &output_ids,
-            mixed_output_progress_timeout(output_ids.len()),
+            mixed_output_progress_timeout_for_case(case, output_ids.len()),
             Some(env),
         )
         .await?;
@@ -1188,7 +1188,7 @@ pub(super) async fn run_mixed_file_config(
             api,
             &pipeline_id,
             &output_ids,
-            mixed_output_progress_timeout(output_ids.len()),
+            mixed_output_progress_timeout_for_case(case, output_ids.len()),
             Some(env),
         )
         .await?;

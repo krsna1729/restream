@@ -199,23 +199,38 @@ fn refresh_annexb_parameter_set_cache(payload: &[u8], sps_pps_cache: &mut Vec<u8
 }
 
 pub(crate) fn annexb_parameter_sets(payload: &[u8]) -> Option<Vec<u8>> {
-    let nalus = split_annexb_nalus(payload);
-    if nalus.is_empty() {
-        return None;
-    }
+    let mut accumulator = AnnexbParameterSetAccumulator::default();
+    accumulator.push_payload(payload)
+}
 
-    let mut parameter_sets = Vec::new();
-    let mut kind = AnnexbCodecKind::Unknown;
-    let mut has_h264_sps = false;
-    let mut has_h264_pps = false;
-    let mut has_h265_vps = false;
-    let mut has_h265_sps = false;
-    let mut has_h265_pps = false;
-    for nalu in nalus {
-        if nalu.is_empty() {
-            continue;
+#[derive(Default)]
+pub(crate) struct AnnexbParameterSetAccumulator {
+    kind: AnnexbCodecKind,
+    h264_sps: Option<Vec<u8>>,
+    h264_pps: Option<Vec<u8>>,
+    h265_vps: Option<Vec<u8>>,
+    h265_sps: Option<Vec<u8>>,
+    h265_pps: Option<Vec<u8>>,
+}
+
+impl AnnexbParameterSetAccumulator {
+    pub(crate) fn push_payload(&mut self, payload: &[u8]) -> Option<Vec<u8>> {
+        let nalus = split_annexb_nalus(payload);
+        if nalus.is_empty() {
+            return self.complete();
         }
 
+        for nalu in nalus {
+            self.push_nalu(nalu);
+        }
+
+        self.complete()
+    }
+
+    fn push_nalu(&mut self, nalu: &[u8]) {
+        if nalu.is_empty() {
+            return;
+        }
         let h264_nal_type = nalu[0] & 0x1F;
         let h265_nal_type = if nalu.len() >= 2 {
             (nalu[0] >> 1) & 0x3F
@@ -225,36 +240,70 @@ pub(crate) fn annexb_parameter_sets(payload: &[u8]) -> Option<Vec<u8>> {
 
         match h264_nal_type {
             7 | 8 => {
-                if matches!(kind, AnnexbCodecKind::Unknown | AnnexbCodecKind::H264) {
-                    kind = AnnexbCodecKind::H264;
-                    has_h264_sps |= h264_nal_type == 7;
-                    has_h264_pps |= h264_nal_type == 8;
-                    parameter_sets.extend_from_slice(&[0, 0, 0, 1]);
-                    parameter_sets.extend_from_slice(nalu);
+                if self.switch_kind(AnnexbCodecKind::H264) {
+                    if h264_nal_type == 7 {
+                        self.h264_sps = Some(annexb_nalu(nalu));
+                    } else {
+                        self.h264_pps = Some(annexb_nalu(nalu));
+                    }
                 }
             }
             _ => {
-                if (32..=34).contains(&h265_nal_type)
-                    && matches!(kind, AnnexbCodecKind::Unknown | AnnexbCodecKind::H265)
-                {
-                    kind = AnnexbCodecKind::H265;
-                    has_h265_vps |= h265_nal_type == 32;
-                    has_h265_sps |= h265_nal_type == 33;
-                    has_h265_pps |= h265_nal_type == 34;
-                    parameter_sets.extend_from_slice(&[0, 0, 0, 1]);
-                    parameter_sets.extend_from_slice(nalu);
+                if (32..=34).contains(&h265_nal_type) && self.switch_kind(AnnexbCodecKind::H265) {
+                    match h265_nal_type {
+                        32 => self.h265_vps = Some(annexb_nalu(nalu)),
+                        33 => self.h265_sps = Some(annexb_nalu(nalu)),
+                        34 => self.h265_pps = Some(annexb_nalu(nalu)),
+                        _ => {}
+                    }
                 }
             }
         }
     }
 
-    match kind {
-        AnnexbCodecKind::Unknown => None,
-        AnnexbCodecKind::H264 => (has_h264_sps && has_h264_pps).then_some(parameter_sets),
-        AnnexbCodecKind::H265 => {
-            (has_h265_vps && has_h265_sps && has_h265_pps).then_some(parameter_sets)
+    fn switch_kind(&mut self, kind: AnnexbCodecKind) -> bool {
+        match self.kind {
+            AnnexbCodecKind::Unknown => {
+                self.kind = kind;
+                true
+            }
+            existing if existing == kind => true,
+            _ => {
+                *self = Self {
+                    kind,
+                    ..Self::default()
+                };
+                true
+            }
         }
     }
+
+    fn complete(&self) -> Option<Vec<u8>> {
+        match self.kind {
+            AnnexbCodecKind::Unknown => None,
+            AnnexbCodecKind::H264 => {
+                let (Some(sps), Some(pps)) = (&self.h264_sps, &self.h264_pps) else {
+                    return None;
+                };
+                Some([sps.as_slice(), pps.as_slice()].concat())
+            }
+            AnnexbCodecKind::H265 => {
+                let (Some(vps), Some(sps), Some(pps)) =
+                    (&self.h265_vps, &self.h265_sps, &self.h265_pps)
+                else {
+                    return None;
+                };
+                Some([vps.as_slice(), sps.as_slice(), pps.as_slice()].concat())
+            }
+        }
+    }
+}
+
+fn annexb_nalu(nalu: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(nalu.len() + 4);
+    out.extend_from_slice(&[0, 0, 0, 1]);
+    out.extend_from_slice(nalu);
+    out
 }
 
 pub(crate) fn raw_annexb_is_keyframe(payload: &[u8]) -> bool {
@@ -275,8 +324,9 @@ pub(crate) fn raw_annexb_is_keyframe(payload: &[u8]) -> bool {
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum AnnexbCodecKind {
+    #[default]
     Unknown,
     H264,
     H265,

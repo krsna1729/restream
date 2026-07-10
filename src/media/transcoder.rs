@@ -339,14 +339,14 @@ async fn run_internal_video_stage(
                     input_queue_clone,
                     video_preset,
                     cancel_token_clone,
-                    StageOutputSink::Existing(output_normalizer),
+                    StageOutputSink::Existing(Box::new(output_normalizer)),
                 )
             } else {
                 run_ffmpeg_transcoder_stage_with_normalizer(
                     input_queue_clone,
                     &preset_clone,
                     cancel_token_clone,
-                    StageOutputSink::Existing(output_normalizer),
+                    StageOutputSink::Existing(Box::new(output_normalizer)),
                 )
             }
         }));
