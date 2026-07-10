@@ -9,9 +9,34 @@ pub(crate) fn mixed_artifact_index_path(env: &MixedEnv) -> PathBuf {
     env.work_dir.join("artifact-index.json")
 }
 
+pub(crate) fn mixed_root_artifact_index_path(root: &Path) -> PathBuf {
+    root.join("artifact-index.json")
+}
+
 pub(crate) fn write_mixed_artifact_index(env: &MixedEnv) -> Result<PathBuf, String> {
     let path = mixed_artifact_index_path(env);
     let value = mixed_artifact_index_json(env);
+    write_json_pretty_atomic(&path, &value)?;
+    Ok(path)
+}
+
+pub(crate) fn write_mixed_root_artifact_index(
+    root: &Path,
+    mode: &str,
+    scenario_path: &Path,
+    root_cause_summary_path: &Path,
+    assertion_log: Option<&Path>,
+    cases: Vec<Value>,
+) -> Result<PathBuf, String> {
+    let path = mixed_root_artifact_index_path(root);
+    let value = mixed_root_artifact_index_json(
+        root,
+        mode,
+        scenario_path,
+        root_cause_summary_path,
+        assertion_log,
+        cases,
+    );
     write_json_pretty_atomic(&path, &value)?;
     Ok(path)
 }
@@ -41,19 +66,58 @@ pub(crate) fn mixed_artifact_index_json(env: &MixedEnv) -> Value {
     })
 }
 
+fn mixed_root_artifact_index_json(
+    root: &Path,
+    mode: &str,
+    scenario_path: &Path,
+    root_cause_summary_path: &Path,
+    assertion_log: Option<&Path>,
+    cases: Vec<Value>,
+) -> Value {
+    let mut root_artifacts = vec![
+        mixed_artifact_entry("scenarioJson", scenario_path.to_path_buf()),
+        mixed_artifact_entry(
+            "rootCauseSummaryJson",
+            root_cause_summary_path.to_path_buf(),
+        ),
+    ];
+    if let Some(assertion_log) = assertion_log {
+        root_artifacts.push(mixed_artifact_entry(
+            "assertionsJsonl",
+            assertion_log.to_path_buf(),
+        ));
+    }
+    json!({
+        "schemaVersion": MIXED_ARTIFACT_INDEX_SCHEMA_VERSION,
+        "runId": mixed_artifact_run_id_from_work_dir(root),
+        "mode": mode,
+        "command": std::env::args().collect::<Vec<_>>(),
+        "env": mixed_artifact_env(),
+        "startedAt": Utc::now().to_rfc3339(),
+        "sourceRevision": mixed_artifact_source_revision(),
+        "workDir": root,
+        "scenarioJson": scenario_path,
+        "assertionsJsonl": assertion_log,
+        "rootCauseSummaryJson": root_cause_summary_path,
+        "artifacts": root_artifacts,
+        "cases": cases,
+    })
+}
+
 fn mixed_artifact_run_id(env: &MixedEnv) -> String {
     std::env::var("RESTREAM_HARNESS_RUN_ID")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| {
-            let work_name = env
-                .work_dir
-                .file_name()
-                .and_then(|value| value.to_str())
-                .filter(|value| !value.is_empty())
-                .unwrap_or("mixed");
-            format!("{work_name}-{}", std::process::id())
-        })
+        .unwrap_or_else(|| mixed_artifact_run_id_from_work_dir(&env.work_dir))
+}
+
+fn mixed_artifact_run_id_from_work_dir(work_dir: &Path) -> String {
+    let work_name = work_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("mixed");
+    format!("{work_name}-{}", std::process::id())
 }
 
 fn mixed_artifact_env() -> std::collections::BTreeMap<String, String> {

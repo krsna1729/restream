@@ -230,6 +230,28 @@ fn matrix_case_progress_json(rows: &[MatrixCaseProgress]) -> Vec<Value> {
         .collect()
 }
 
+fn matrix_case_artifact_index_json(root: &Path, rows: &[MatrixCaseProgress]) -> Vec<Value> {
+    rows.iter()
+        .map(|row| {
+            let work_dir = root.join(row.case.artifact_rel_dir());
+            json!({
+                "id": row.case.scenario_id(),
+                "status": row.state.as_str(),
+                "batchGroup": row.batch_group.as_str(),
+                "workDir": work_dir,
+                "scenarioJson": work_dir.join("scenario.json"),
+                "artifactIndexJson": work_dir.join("artifact-index.json"),
+                "outputsJson": work_dir.join("outputs.json"),
+                "logs": [
+                    work_dir.join(format!("{}-restream.log", row.case.scenario_id())),
+                    work_dir.join(format!("{}-mediamtx.log", row.case.scenario_id())),
+                ],
+                "media": work_dir.join("media"),
+            })
+        })
+        .collect()
+}
+
 pub(crate) fn write_json_pretty_atomic(path: &Path, value: &Value) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -266,6 +288,18 @@ fn write_matrix_scenario_progress_for_mode(
     failures: &[String],
 ) -> Result<(), String> {
     let root_cause_summary_path = write_mixed_root_cause_summary(path, failures)?;
+    let root = path
+        .parent()
+        .ok_or_else(|| format!("scenario path has no parent: {}", path.display()))?;
+    let assertion_log_path = root.join("assertions.jsonl");
+    let artifact_index_path = write_mixed_root_artifact_index(
+        root,
+        mode,
+        path,
+        &root_cause_summary_path,
+        Some(&assertion_log_path),
+        matrix_case_artifact_index_json(root, rows),
+    )?;
     let progress = matrix_progress_totals(rows);
     let total_cases = progress["totalCases"].as_u64().unwrap_or(0);
     let completed_cases = progress["completedCases"].as_u64().unwrap_or(0);
@@ -290,6 +324,7 @@ fn write_matrix_scenario_progress_for_mode(
             "failFastOptOutEnv": "MIXED_MATRIX_FAIL_FAST",
             "artifacts": {
                 "rootCauseSummaryJson": root_cause_summary_path,
+                "artifactIndexJson": artifact_index_path,
             },
             "caseProgress": matrix_case_progress_json(rows),
             "updatedAt": Utc::now().to_rfc3339(),
@@ -407,6 +442,7 @@ pub(super) async fn mixed_input_matrix_correctness_serial() -> Result<Value, Str
         "rootCauseSummary": mixed_root_cause_summary_json(&failures),
         "artifacts": {
             "rootCauseSummaryJson": root_cause_summary_path,
+            "artifactIndexJson": mixed_root_artifact_index_path(&root),
         },
         "coverage": {
             "selectedInputCases": mixed_input_cases().len(),
@@ -740,6 +776,7 @@ pub(super) async fn mixed_input_matrix_correctness_shared() -> Result<Value, Str
         "rootCauseSummary": mixed_root_cause_summary_json(&failures),
         "artifacts": {
             "rootCauseSummaryJson": root_cause_summary_path,
+            "artifactIndexJson": mixed_root_artifact_index_path(&root),
         },
         "coverage": {
             "selectedInputCases": mixed_input_cases().len(),

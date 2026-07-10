@@ -39,7 +39,10 @@ mod mixed_telemetry;
 #[path = "output_helpers.rs"]
 mod output_helpers;
 
-pub(super) use mixed_artifact_index::{mixed_artifact_index_path, write_mixed_artifact_index};
+pub(super) use mixed_artifact_index::{
+    mixed_artifact_index_path, mixed_root_artifact_index_path, write_mixed_artifact_index,
+    write_mixed_root_artifact_index,
+};
 pub(super) use mixed_artifacts::{HarnessOutputCell, HarnessOutputRegistry, infer_output_protocol};
 pub(super) use mixed_checks::{verify_mixed_output_cases_inner, verify_mixed_output_dimensions};
 pub(super) use mixed_control::{
@@ -1384,6 +1387,10 @@ mod tests {
                 .to_string_lossy()
                 .as_ref()
         );
+        assert_eq!(
+            scenario["artifacts"]["artifactIndexJson"],
+            temp.join("artifact-index.json").to_string_lossy().as_ref()
+        );
 
         let summary_body = std::fs::read_to_string(temp.join("root-cause-summary.json"))
             .expect("root cause summary");
@@ -1392,6 +1399,27 @@ mod tests {
         assert_eq!(
             summary["causes"][0]["scenarios"][0],
             "mixed.live.rtmp.h265.a2.bf2"
+        );
+        let index_body =
+            std::fs::read_to_string(temp.join("artifact-index.json")).expect("artifact index");
+        let index: Value = serde_json::from_str(&index_body).expect("valid artifact index");
+        assert_eq!(index["mode"], MIXED_MATRIX_MODE);
+        assert_eq!(index["scenarioJson"], json!(scenario_path));
+        assert_eq!(
+            index["rootCauseSummaryJson"],
+            json!(temp.join("root-cause-summary.json"))
+        );
+        assert_eq!(
+            index["cases"][0]["artifactIndexJson"],
+            json!(temp.join("asset/file/h264/a1/bf0/artifact-index.json"))
+        );
+        assert_eq!(
+            index["cases"][0]["outputsJson"],
+            json!(temp.join("asset/file/h264/a1/bf0/outputs.json"))
+        );
+        assert_eq!(
+            index["cases"][0]["media"],
+            json!(temp.join("asset/file/h264/a1/bf0/media"))
         );
 
         std::fs::remove_dir_all(temp).ok();
