@@ -8,7 +8,7 @@ cancellation, and diagnostics cross each boundary without losing causality.
 
 | Boundary | Contract to prove | Current proof | Next confidence target |
 |---|---|---|---|
-| Planner -> stage runtime | Planned `StageKey` and backend policy select the runtime that is registered, rendered in graph/status, and used by outputs. | Graph planner unit tests, backend-policy unit tests, engine terminal-stage tests, HLS/recording planned-key tests. | Property-test output encodings into stage plans for unique terminal keys and no stale unqualified HEVC keys. |
+| Planner -> stage runtime | Planned `StageKey` and backend policy select the runtime that is registered, rendered in graph/status, and used by outputs. | Graph planner unit tests, backend-policy unit tests, engine terminal-stage tests, HLS/recording planned-key tests, and a property test over generated output mixes proving terminal-stage presence, edge input presence, unique stage keys, and no stale unqualified HEVC video stages. | Add new generated cases when new output protocols or stage kinds are introduced. |
 | Runtime admission -> registry | `ensure_stage` creates exactly one live runtime, reuses live runtimes, replaces cancelled runtimes, and snapshots lifecycle/metrics. | Stage runtime unit tests plus transcoder/TS muxer loom models for replacement races. | Add a direct loom model for generic registry admission once the model can share the production locking shape. |
 | Source ring -> stage input pump | Stage input starts at the correct keyframe/preroll point, emits TS bytes only for selected media, records first input once, refreshes parameter sets, and exits on EOS/cancel. | Stage input codec-hint unit test, finite source-stage tests, source-stage chunking proptest, ring migration proptests/loom, filtered-packet first-input suppression, and filtered-packet plus video EOS completion tests. | Add reconnect parameter-set refresh scenarios if a future reconnect bug appears. |
 | Input pump -> backend | External and internal FFmpeg receive the same compiled operation and startup policy; capacity waits are lifecycle-visible and cancellation-aware. | Shared operation/compiler tests, startup-policy tests, external capacity unit/harness evidence. | Table-test each `StageKind` into `FfmpegStagePlan` plus backend operation equivalence for internal/external paths. |
@@ -21,10 +21,8 @@ cancellation, and diagnostics cross each boundary without losing causality.
 
 ## Priority Order
 
-1. **Planner terminal-key property proof**: generated encodings prove stage
-   identity remains qualified and stable for shared-stage topologies.
-2. **Audio-router selected-track property proof**: generated track layouts
+1. **Audio-router selected-track property proof**: generated track layouts
    prove packet selection and prebuffer replay do not regress.
-3. **Only then add loom** for any uncovered create/reuse/cancel interleaving
+2. **Only then add loom** for any uncovered create/reuse/cancel interleaving
    that is not already modeled by the ring, AVIO, TS chunk-ring, transcoder
    stage, or TS muxer stage loom suites.

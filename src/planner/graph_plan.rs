@@ -175,7 +175,56 @@ fn is_hevc_preview_codec(codec: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::output_spec::OutputConfig;
     use crate::domain::state::DesiredOutputState;
+    use proptest::prelude::*;
+    use std::collections::HashSet;
+
+    fn output_for_case(index: usize, video_case: u8, audio_case: u8, protocol_case: u8) -> Output {
+        let video = match video_case % 3 {
+            0 => "source",
+            1 => "720p",
+            _ => "1080p",
+        };
+        let audio = match audio_case % 3 {
+            0 => None,
+            1 => Some("atrack:0"),
+            _ => Some("atrack:0,1"),
+        };
+        let encoding = match (video, audio) {
+            ("source", Some(audio)) => audio.to_string(),
+            (video, Some(audio)) => format!("{video}+{audio}"),
+            (video, None) => video.to_string(),
+        };
+        let url = match protocol_case % 3 {
+            0 => format!("rtmp://example/live/out-{index}"),
+            1 => format!("srt://example:9000?streamid=publish:live/out-{index}"),
+            _ => format!("https://example/live/out-{index}.m3u8"),
+        };
+
+        Output {
+            id: format!("out_{index}"),
+            pipeline_id: "pipe_prop".to_string(),
+            name: format!("Output {index}"),
+            url,
+            monitoring_url: None,
+            desired_state: DesiredOutputState::Running,
+            config: OutputConfig::parse(&encoding),
+        }
+    }
+
+    fn contains_unqualified_video_preset(kind: &StageKind) -> bool {
+        match kind {
+            StageKind::VideoPreset {
+                output_codec: None, ..
+            } => true,
+            StageKind::AudioRoute { upstream, .. }
+            | StageKind::CodecEdge { upstream, .. }
+            | StageKind::Preview { upstream, .. }
+            | StageKind::HlsSegmenter { upstream } => contains_unqualified_video_preset(upstream),
+            _ => false,
+        }
+    }
 
     #[test]
     fn plan_hls_preview_graph_returns_plan_for_hevc() {
@@ -341,5 +390,77 @@ mod tests {
             }),
             "HLS output graph should show media stage feeding protocol segmenter"
         );
+    }
+
+    proptest! {
+        #[test]
+        fn plan_pipeline_graph_preserves_stage_identity_invariants(
+            ingest_is_hevc in any::<bool>(),
+            cases in prop::collection::vec((0_u8..3, 0_u8..3, 0_u8..3), 1..8),
+        ) {
+            let outputs = cases
+                .iter()
+                .enumerate()
+                .map(|(index, (video_case, audio_case, protocol_case))| {
+                    output_for_case(index, *video_case, *audio_case, *protocol_case)
+                })
+                .collect::<Vec<_>>();
+            let policy = BackendPolicy::default();
+            let ingest_codec = if ingest_is_hevc { Some("hevc") } else { Some("h264") };
+            let plan = plan_pipeline_graph(
+                "pipe_prop",
+                ingest_codec,
+                &outputs,
+                false,
+                &policy,
+            );
+            let stage_keys = plan
+                .stages
+                .iter()
+                .map(|stage| stage.key.clone())
+                .collect::<HashSet<_>>();
+
+            prop_assert!(
+                stage_keys.contains(&plan.terminal_stage),
+                "terminal stage {} must be present in the planned stages {:?}",
+                plan.terminal_stage,
+                stage_keys
+            );
+            prop_assert_eq!(stage_keys.len(), plan.stages.len(), "stage keys must be unique");
+
+            for stage in &plan.stages {
+                prop_assert_eq!(stage.key.pipeline.as_str(), "pipe_prop");
+                prop_assert_eq!(&stage.kind, &stage.key.kind);
+            }
+
+            for edge in &plan.edges {
+                prop_assert!(
+                    stage_keys.contains(&edge.from),
+                    "edge input {} must be planned for edge to {}",
+                    edge.from,
+                    edge.to
+                );
+                prop_assert!(
+                    stage_keys.contains(&edge.to),
+                    "edge output {} must be planned",
+                    edge.to
+                );
+            }
+
+            if ingest_is_hevc {
+                for stage in &plan.stages {
+                    prop_assert!(
+                        !contains_unqualified_video_preset(&stage.kind),
+                        "HEVC ingest plan leaked unqualified video stage {:?}",
+                        stage.kind
+                    );
+                }
+                prop_assert!(
+                    !contains_unqualified_video_preset(&plan.terminal_stage.kind),
+                    "HEVC ingest terminal stage leaked unqualified video stage {:?}",
+                    plan.terminal_stage.kind
+                );
+            }
+        }
     }
 }
