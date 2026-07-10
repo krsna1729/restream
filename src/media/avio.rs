@@ -360,12 +360,10 @@ impl CustomInput {
 
             (*raw_ctx).pb = avio_ctx;
             (*raw_ctx).flags |= ffmpeg::ffi::AVFMT_FLAG_CUSTOM_IO;
-            // Keep the internal live probe bounded. A 1 MiB stream-info probe
-            // can consume live TS indefinitely before the transcoder reaches
-            // its packet loop; 256 KiB is still enough to keep fixture logs
-            // quiet while allowing H.264 live stages to start promptly.
-            (*raw_ctx).probesize = 256 * 1024;
-            (*raw_ctx).max_analyze_duration = 500_000;
+            // Keep the internal live probe bounded while still allowing AAC
+            // stream parameters to settle on high-track MPEG-TS inputs.
+            (*raw_ctx).probesize = 512 * 1024;
+            (*raw_ctx).max_analyze_duration = 1_000_000;
 
             let mut raw_ctx_mut = raw_ctx;
             let format_name = CString::new("mpegts").expect("static format name");
