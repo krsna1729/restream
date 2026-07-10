@@ -915,7 +915,7 @@ function renderInspectSummary(pipe: PipelineView | null): void {
       return `<div class="flex items-center justify-between gap-2 border-base-content/10 border-t py-2">
                 <div class="min-w-0">
                     <div class="truncate text-sm font-medium">${escapeHtml(out.name)}</div>
-                    <div class="text-base-content/60 truncate text-xs">${escapeHtml(encodingLabel)} / ${sanitizeLogMessage(out.url, true)}</div>
+                    <div class="text-base-content/60 truncate text-xs">${escapeHtml(encodingLabel)} / ${escapeHtml(sanitizeLogMessage(out.url, true))}</div>
                 </div>
                 <span class="badge ${stateLabel.cls} shrink-0">${stateLabel.label}</span>
             </div>`;

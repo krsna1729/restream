@@ -1,4 +1,4 @@
-import { sanitizeLogMessage } from "../core/utils.js";
+import { escapeHtml, sanitizeLogMessage } from "../core/utils.js";
 import type { AppLogRow } from "../types.js";
 import type {
   OutputHistoryState,
@@ -74,10 +74,9 @@ function renderCorrelationBadge(
   correlationId: string,
   sizeClass: "badge-xs" | "badge-sm" = "badge-sm",
 ): string {
-  const full = sanitizeLogMessage(correlationId, true);
-  const compact = sanitizeLogMessage(
-    formatCorrelationIdLabel(correlationId),
-    true,
+  const full = escapeHtml(sanitizeLogMessage(correlationId, true));
+  const compact = escapeHtml(
+    sanitizeLogMessage(formatCorrelationIdLabel(correlationId), true),
   );
   return `<span class="badge ${sizeClass} badge-ghost" title="${full}">Corr ${compact}</span>`;
 }
@@ -1207,7 +1206,7 @@ function renderEventDataSummary(log: AppLogRow): string {
           : typeof value === "object"
             ? JSON.stringify(value)
             : String(value);
-      return `<span class="border-base-content/10 bg-base-200/70 rounded-md border px-2 py-1 text-[11px]"><span class="text-base-content/50">${key}</span> <span class="font-mono">${sanitizeLogMessage(rendered, true)}</span></span>`;
+      return `<span class="border-base-content/10 bg-base-200/70 rounded-md border px-2 py-1 text-[11px]"><span class="text-base-content/50">${escapeHtml(key)}</span> <span class="font-mono">${escapeHtml(sanitizeLogMessage(rendered, true))}</span></span>`;
     })
     .join("")}</div>`;
 }
@@ -1594,7 +1593,7 @@ export function renderPipelineHistory(
           ? `<div class="mt-2 flex flex-wrap gap-1">${incident.detailBadges
               .map(
                 (detail) =>
-                  `<span class="border-base-content/10 bg-base-200/70 rounded-md border px-2 py-1 text-[11px]">${sanitizeLogMessage(detail, true)}</span>`,
+                  `<span class="border-base-content/10 bg-base-200/70 rounded-md border px-2 py-1 text-[11px]">${escapeHtml(sanitizeLogMessage(detail, true))}</span>`,
               )
               .join("")}</div>`
           : "";
