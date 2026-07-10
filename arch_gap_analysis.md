@@ -348,61 +348,28 @@ decomposition are the main non-A addendum gaps.**
 2. **Promote `mixed.fast-breadth` to a CI governor lane**
    - Add the bench-profile CI command once runtime cost is acceptable.
 
-### Completed Phase-Scope Correctness Evidence
+### P1 — Addendum Evidence and Classification Gaps
 
-1. **Single graph planner convergence is complete for Phase 6 scope**
-   - Output preparation, graph rendering, diagnostics, HLS preview, agent
-     graph/impact preview, HLS output terminal-stage preparation, recording
-     lifecycle registration, and harness stage-count tests now use or prove
-     `StageGraphPlan`, and persistent HLS segmenter lifecycle now uses the
-     planned protocol stage key, and recording writer start now receives the
-     planned recording stage key, and HLS upload start validates the planned
-     HLS terminal stage key.
+3. **Finish typed harness API conversion**
+   - Remaining fault/probe paths should observe output status through
+     `ApiOutputStatus` or a typed helper before falling back to raw JSON for
+     error envelopes and intentionally schemaless artifacts.
 
-2. **Typed state adoption is complete for the phase scope**
-   - Active egress status/phase, recent egress status/raw status/phase, output
-     desired state, job status, and egress phase transitions are now typed.
+4. **Classify root causes from structured fields first**
+   - The taxonomy is complete, but more paths should derive causes from typed
+     cells, blocked stage fields, phases, and metrics before message-substring
+     fallback.
 
-### P1 — Layering and Ownership
+5. **Preserve failed-run database evidence**
+   - Scenario and matrix artifact indexes should snapshot or export the SQLite
+     database/table evidence needed to debug failed matrix runs after cleanup.
 
-3. **API/service/repository boundary is complete for Phase 4 scope**
-   - Route modules exist, agent context catalog reads now use port-backed `AgentService`,
-     and file-ingest start/stop/delete plus pipeline-file-ingest persistence/read
-     models now live in `FileIngestService`, and media-library recording
-     list read models, companion artifact planning, and delete/rename execution
-     now live in
-     `MediaLibraryService`, and agent catalog/plan reads now go through
-     port-backed `AgentService`; file-ingest orchestration now reuses injected
-     ingest/pipeline ports instead of constructing repositories inside methods;
-     media-library recording metadata and recording settings now flow through
-     recording/meta ports; settings-backed helper paths for SRT policy refresh
-     and recording-enabled maps now go through `SettingsService`.
-     Runtime health/status/graph/telemetry read models now go through
-     `RuntimeViewService`; pipeline graph/diagnostics desired-plan selection
-     lives in `application::graph`. Agent output mutations use
-     `OutputService`, and `PipelineService`, `OutputService`, `IngestService`,
-     `HealthService`, `LogService`, `AuthService`, `SettingsService`, and the
-     runtime read-model facade are now service-backed.
+### P2 — Namespace and Ownership Polish
 
-### P2 — Guardrails and Large-File Debt
-
-6. **Large-file debt cleared for Phase 15**
-   - Rust and TypeScript source files are all under the 2,000-line ideal, and
-     `scripts/source-audit.sh` now fails if any checked `src` or `public/ts`
-     source file exceeds that cap. The split files now map to concrete
-     responsibilities instead of arbitrary chunks: runtime/HLS/test ownership,
-     protocol helpers, RTMP egress transport, external FFmpeg process helpers,
-     mixed matrix orchestration, harness core/sinks/probes/modes/suite, and
-     engine lifecycle versus stage tests.
-
-7. **Harness reporting is now complete for Phase 13 scope**
-   - The harness now persists output-cell identity through `outputs.json` and
-     uses semantic cell labels in progress stalls; matrix progress and final
-     summaries now include `root-cause-summary.json` grouped by repeated
-     failure class, assertion rows now carry a stable schema version, and
-     scenario artifacts now include `artifact-index.json` with path, existence,
-     size, and SHA-256 metadata. Probe failures now enrich assertion rows with
-     the semantic cell, output status snapshot, and engine health snapshot.
+6. **Continue the broader service/adapter namespace split**
+   - The current baseline is split enough for Phases 0-16, but the full
+     addendum ideal still calls for deeper `RuntimeGraph`, registry,
+     `media/protocols/*`, HLS TS, and recording runtime/writer namespaces.
 
 ---
 
