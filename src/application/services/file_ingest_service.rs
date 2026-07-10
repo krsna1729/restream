@@ -619,7 +619,7 @@ impl FileIngestService {
 
             match payload {
                 Some(input) => {
-                    let _ = persist_pipeline_file_ingest(
+                    persist_pipeline_file_ingest(
                         self.ingest_lookup.as_ref(),
                         self.ingest_writer.as_ref(),
                         self.pipeline_store.as_ref(),
@@ -642,7 +642,8 @@ impl FileIngestService {
                             )
                         },
                     )
-                    .await;
+                    .await
+                    .map_err(|_| ApiError::internal("persist pipeline file ingest"))?;
                 }
                 None => {
                     remove_pipeline_file_ingest(
@@ -664,6 +665,12 @@ impl FileIngestService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::ports::{
+        IngestCatalogFuture, IngestDeleteFuture, IngestLookupError, IngestLookupFuture,
+        IngestUpdateFuture, IngestWriteError, IngestWriteFuture, PipelineCreateFuture,
+        PipelineDeleteFuture, PipelineIngestHostFuture, PipelineListFuture, PipelineLookupFuture,
+        PipelineStoreError, PipelineUpdateFuture,
+    };
     use crate::application::services::PipelineService;
 
     fn ingest_with(live_optimized: bool) -> Ingest {
@@ -716,6 +723,134 @@ mod tests {
         .unwrap();
     }
 
+    struct PersistFailingLookup {
+        ingest: Ingest,
+    }
+
+    impl IngestLookup for PersistFailingLookup {
+        fn get_ingest<'a>(&'a self, _id: &'a str) -> IngestLookupFuture<'a> {
+            Box::pin(async move { Ok(Some(self.ingest.clone())) })
+        }
+
+        fn get_ingest_by_stream_key<'a>(&'a self, _stream_key: &'a str) -> IngestLookupFuture<'a> {
+            Box::pin(async move { Err(IngestLookupError::new("lookup failed during persist")) })
+        }
+
+        fn list_ingests<'a>(&'a self) -> IngestCatalogFuture<'a> {
+            Box::pin(async move { Ok(vec![self.ingest.clone()]) })
+        }
+
+        fn list_ingests_for_filename<'a>(&'a self, _filename: &'a str) -> IngestCatalogFuture<'a> {
+            Box::pin(async move { Ok(vec![self.ingest.clone()]) })
+        }
+
+        fn list_ingests_for_stream_key<'a>(
+            &'a self,
+            _stream_key: &'a str,
+        ) -> IngestCatalogFuture<'a> {
+            Box::pin(async move { Ok(vec![self.ingest.clone()]) })
+        }
+    }
+
+    struct NoopIngestWriter;
+
+    impl IngestWriter for NoopIngestWriter {
+        fn create_ingest<'a>(
+            &'a self,
+            _id: &'a str,
+            _filename: &'a str,
+            _stream_key: &'a str,
+            _loop_flag: bool,
+            _start_time: &'a str,
+            _live_optimized: bool,
+            _target_gop_seconds: u32,
+        ) -> IngestWriteFuture<'a> {
+            Box::pin(async move { Err(IngestWriteError::new("unexpected create")) })
+        }
+
+        fn update_ingest<'a>(
+            &'a self,
+            _id: &'a str,
+            _filename: &'a str,
+            _stream_key: &'a str,
+            _loop_flag: bool,
+            _start_time: &'a str,
+            _live_optimized: bool,
+            _target_gop_seconds: u32,
+        ) -> IngestUpdateFuture<'a> {
+            Box::pin(async move { Err(IngestWriteError::new("unexpected update")) })
+        }
+
+        fn delete_ingest<'a>(&'a self, _id: &'a str) -> IngestDeleteFuture<'a> {
+            Box::pin(async move { Ok(false) })
+        }
+    }
+
+    struct StaticPipelineStore {
+        pipeline: Pipeline,
+    }
+
+    impl PipelineStore for StaticPipelineStore {
+        fn get_pipeline<'a>(&'a self, id: &'a str) -> PipelineLookupFuture<'a> {
+            Box::pin(async move { Ok((self.pipeline.id == id).then(|| self.pipeline.clone())) })
+        }
+
+        fn get_pipeline_by_stream_key<'a>(
+            &'a self,
+            stream_key: &'a str,
+        ) -> PipelineLookupFuture<'a> {
+            Box::pin(async move {
+                Ok((self.pipeline.stream_key == stream_key).then(|| self.pipeline.clone()))
+            })
+        }
+
+        fn list_pipelines<'a>(&'a self) -> PipelineListFuture<'a> {
+            Box::pin(async move { Ok(vec![self.pipeline.clone()]) })
+        }
+
+        fn create_pipeline<'a>(
+            &'a self,
+            _id: &'a str,
+            _name: &'a str,
+            _stream_key: &'a str,
+            _input_source: Option<&'a str>,
+            _srt_ingest_policy: Option<&'a str>,
+        ) -> PipelineCreateFuture<'a> {
+            Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
+        }
+
+        fn update_pipeline<'a>(
+            &'a self,
+            _id: &'a str,
+            _name: &'a str,
+            _stream_key: &'a str,
+            _input_source: Option<&'a str>,
+            _srt_ingest_policy: Option<&'a str>,
+        ) -> PipelineUpdateFuture<'a> {
+            Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
+        }
+
+        fn delete_pipeline<'a>(&'a self, _id: &'a str) -> PipelineDeleteFuture<'a> {
+            Box::pin(async move { Err(PipelineStoreError::new("not implemented")) })
+        }
+
+        fn get_ingest_host<'a>(&'a self) -> PipelineIngestHostFuture<'a> {
+            Box::pin(async move { Ok(None) })
+        }
+
+        fn update_pipeline_input_source<'a>(
+            &'a self,
+            pipeline: &'a Pipeline,
+            input_source: Option<&'a str>,
+        ) -> PipelineUpdateFuture<'a> {
+            Box::pin(async move {
+                let mut updated = pipeline.clone();
+                updated.input_source = input_source.map(ToOwned::to_owned);
+                Ok(Some(updated))
+            })
+        }
+    }
+
     #[test]
     fn build_file_ingest_args_uses_copy_path_by_default() {
         let args = FileIngestService::build_file_ingest_args(
@@ -758,6 +893,49 @@ mod tests {
             &args,
             "-force_key_frames",
             "expr:gte(t,n_forced*1)"
+        ));
+    }
+
+    #[tokio::test]
+    async fn apply_file_ingest_payload_surfaces_persist_failure() {
+        let pipeline = Pipeline {
+            id: "pipe-1".to_string(),
+            name: "Pipeline".to_string(),
+            stream_key: "stream-key".to_string(),
+            input_source: None,
+            srt_ingest_policy: None,
+        };
+        let ingest = ingest_with(false);
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        let service = FileIngestService::with_ports(
+            Arc::new(PersistFailingLookup { ingest }),
+            Arc::new(NoopIngestWriter),
+            Arc::new(StaticPipelineStore {
+                pipeline: pipeline.clone(),
+            }),
+            PipelineService::new(pool),
+        );
+        let engine = Arc::new(MediaEngine::new());
+
+        let err = service
+            .apply_file_ingest_payload(
+                &engine,
+                &pipeline,
+                None,
+                Some(Some(FileIngestConfigInput {
+                    filename: "replacement.mp4".to_string(),
+                    loop_flag: false,
+                    start_time: String::new(),
+                    live_optimized: false,
+                    target_gop_seconds: 2,
+                })),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ApiError::Internal(message) if message == "persist pipeline file ingest"
         ));
     }
 
