@@ -9,15 +9,6 @@ pub async fn create_pipeline(
     input_source: Option<&str>,
     srt_ingest_policy: Option<&str>,
 ) -> Result<Pipeline, sqlx::Error> {
-    let exists =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pipelines WHERE stream_key = ?")
-            .bind(stream_key)
-            .fetch_one(pool)
-            .await?;
-    if exists > 0 {
-        return Err(sqlx::Error::Protocol("duplicate stream key".into()));
-    }
-
     sqlx::query(
         "INSERT INTO pipelines (id, name, stream_key, input_source, srt_ingest_policy) VALUES (?, ?, ?, ?, ?)",
     )
@@ -71,17 +62,6 @@ pub async fn update_pipeline(
     input_source: Option<&str>,
     srt_ingest_policy: Option<&str>,
 ) -> Result<Option<Pipeline>, sqlx::Error> {
-    let duplicate = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM pipelines WHERE stream_key = ? AND id != ?",
-    )
-    .bind(stream_key)
-    .bind(id)
-    .fetch_one(pool)
-    .await?;
-    if duplicate > 0 {
-        return Err(sqlx::Error::Protocol("duplicate stream key".into()));
-    }
-
     let result = sqlx::query(
         "UPDATE pipelines SET name = ?, stream_key = ?, input_source = ?, srt_ingest_policy = ? WHERE id = ?",
     )

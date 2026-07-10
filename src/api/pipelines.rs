@@ -44,24 +44,11 @@ fn generate_stream_key() -> String {
     format!("sk_{}", to_hex(&bytes))
 }
 
-async fn generate_unique_stream_key(state: &AppState) -> Result<String, StatusCode> {
-    let active_pipelines = state
-        .pipeline_service
-        .list_pipelines()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    for _ in 0..16 {
-        let candidate = generate_stream_key();
-        if active_pipelines
-            .iter()
-            .all(|pipeline| pipeline.stream_key != candidate)
-        {
-            return Ok(candidate);
-        }
-    }
-
-    Err(StatusCode::INTERNAL_SERVER_ERROR)
+fn is_duplicate_stream_key_error(err: &ApiError) -> bool {
+    let message = err.to_string();
+    message.contains("duplicate stream key")
+        || message.contains("idx_pipelines_stream_key_unique")
+        || message.contains("UNIQUE constraint failed: pipelines.stream_key")
 }
 
 pub async fn pipelines_get_handler(
@@ -171,31 +158,12 @@ pub async fn pipelines_post_handler(
             .into_response();
     }
 
-    let stream_key = if let Some(key) = payload
+    let requested_stream_key = payload
         .stream_key
         .as_ref()
         .map(|key| key.trim())
         .filter(|key| !key.is_empty())
-    {
-        key.to_string()
-    } else {
-        match generate_unique_stream_key(&state).await {
-            Ok(key) => key,
-            Err(status) => return status.into_response(),
-        }
-    };
-
-    if let Ok(active_pipelines) = state.pipeline_service.list_pipelines().await
-        && active_pipelines.iter().any(|p| p.stream_key == stream_key)
-    {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "A pipeline with this stream key already exists"})),
-        )
-            .into_response();
-    }
-
-    let id = format!("pipeline_{}", to_hex(&rand::random::<[u8; 8]>()));
+        .map(str::to_string);
 
     let input_source = payload
         .input_source
@@ -209,59 +177,77 @@ pub async fn pipelines_post_handler(
         None => None,
     };
 
-    match state
-        .pipeline_service
-        .create_pipeline(
-            &id,
-            &payload.name,
-            &stream_key,
-            input_source,
-            srt_ingest_policy.as_deref(),
-        )
-        .await
-    {
-        Ok(pipeline) => {
-            refresh_srt_ingest_policy_store(&state).await;
-            let file_ingest = match apply_pipeline_file_ingest_payload(
-                &state,
-                &pipeline,
-                None,
-                payload.file_ingest,
+    let max_attempts = if requested_stream_key.is_some() {
+        1
+    } else {
+        16
+    };
+    for attempt in 0..max_attempts {
+        let stream_key = requested_stream_key
+            .clone()
+            .unwrap_or_else(generate_stream_key);
+        let id = format!("pipeline_{}", to_hex(&rand::random::<[u8; 8]>()));
+        match state
+            .pipeline_service
+            .create_pipeline(
+                &id,
+                &payload.name,
+                &stream_key,
+                input_source,
+                srt_ingest_policy.as_deref(),
             )
             .await
-            {
-                Ok(file_ingest) => file_ingest,
-                Err(response) => return response,
-            };
-            let ingest_host = state.pipeline_service.get_ingest_host().await;
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({
-                    "message": "Pipeline created",
-                    "pipeline": api_view_models::pipeline_response_json_with_file_ingest(
-                        &pipeline,
-                        &ingest_host,
-                        state.ports.rtmp,
-                        state.ports.srt,
-                        file_ingest.ingest,
-                        file_ingest.running,
-                    )
-                })),
-            )
-                .into_response()
-        }
-        Err(err) => {
-            if err.to_string().contains("duplicate stream key") {
-                (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error": "A pipeline with this stream key already exists"})),
+        {
+            Ok(pipeline) => {
+                refresh_srt_ingest_policy_store(&state).await;
+                let file_ingest = match apply_pipeline_file_ingest_payload(
+                    &state,
+                    &pipeline,
+                    None,
+                    payload.file_ingest,
                 )
-                    .into_response()
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                .await
+                {
+                    Ok(file_ingest) => file_ingest,
+                    Err(response) => return response,
+                };
+                let ingest_host = state.pipeline_service.get_ingest_host().await;
+                return (
+                    StatusCode::CREATED,
+                    Json(serde_json::json!({
+                        "message": "Pipeline created",
+                        "pipeline": api_view_models::pipeline_response_json_with_file_ingest(
+                            &pipeline,
+                            &ingest_host,
+                            state.ports.rtmp,
+                            state.ports.srt,
+                            file_ingest.ingest,
+                            file_ingest.running,
+                        )
+                    })),
+                )
+                    .into_response();
+            }
+            Err(err) => {
+                if is_duplicate_stream_key_error(&err) && requested_stream_key.is_none() {
+                    if attempt + 1 < max_attempts {
+                        continue;
+                    }
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+                if is_duplicate_stream_key_error(&err) {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(serde_json::json!({"error": "A pipeline with this stream key already exists"})),
+                    )
+                    .into_response();
+                } else {
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
             }
         }
     }
+    StatusCode::INTERNAL_SERVER_ERROR.into_response()
 }
 
 pub async fn pipelines_update_handler(
@@ -384,7 +370,7 @@ pub async fn pipelines_update_handler(
             .into_response()
         }
         Err(err) => {
-            if err.to_string().contains("duplicate stream key") {
+            if is_duplicate_stream_key_error(&err) {
                 (
                     StatusCode::CONFLICT,
                     Json(serde_json::json!({"error": "A pipeline with this stream key already exists"})),
