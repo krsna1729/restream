@@ -14,8 +14,9 @@ old/
 .DS_Store
 .idea/
 .vscode/
-.claude
-.codex
+.claude/
+.codex/
+.agents/
 
 # Downloaded binaries
 /bin/
