@@ -146,7 +146,9 @@ function formatThreadsPerCore(value: unknown): string {
   return Number.isInteger(n) ? n.toFixed(0) : n.toFixed(1);
 }
 
-function formatCpuCapacity(cpu: StatusData["os"]["cpu"] | undefined): string {
+type StatusCpu = NonNullable<StatusData["os"]>["cpu"];
+
+function formatCpuCapacity(cpu: StatusCpu): string {
   if (!cpu) return "--";
   const logical = Number(cpu.logicalCpus);
   const parts = [];
@@ -173,9 +175,7 @@ function formatList(value: unknown): string {
   return value.map((item) => String(item)).join(", ");
 }
 
-function formatVirtualization(
-  cpu: StatusData["os"]["cpu"] | undefined,
-): string {
+function formatVirtualization(cpu: StatusCpu): string {
   if (!cpu) return "--";
   const parts = [];
   if (cpu.virtualization) parts.push(cpu.virtualization);
@@ -631,8 +631,9 @@ export async function loadStatus(): Promise<void> {
   syncProcessIndicatorFromLogs([...statusProcessLogs].reverse());
   const latestLog = latestStatusProcessLog(statusProcessLogs);
   if (
-    latestLog?.eventClass === "lifecycle" ||
-    (!latestLog?.eventClass && Boolean(latestLog?.eventType))
+    latestLog &&
+    (latestLog.eventClass === "lifecycle" ||
+      (!latestLog.eventClass && Boolean(latestLog.eventType)))
   ) {
     handleDashboardRuntimeLifecycleLog(latestLog);
   }

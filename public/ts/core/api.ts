@@ -294,7 +294,7 @@ async function createPipeline(
 ): Promise<PipelineMutationResponse | null> {
   if (!args.name) {
     showErrorAlert("Invalid pipeline name");
-    return;
+    return null;
   }
 
   return apiRequest<PipelineMutationResponse>("/api/v1/pipelines", {

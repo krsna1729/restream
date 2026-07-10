@@ -513,7 +513,12 @@ export function renderInputPreview(
   };
 
   function setupHlsJsPlayback(): void {
-    const hls = new window.Hls({
+    const HlsConstructor = window.Hls;
+    if (!HlsConstructor) {
+      resetPreviewLoadState();
+      return;
+    }
+    const hls = new HlsConstructor({
       startLevel: -1,
     });
     hlsInstances.set(video, hls);
@@ -521,61 +526,54 @@ export function renderInputPreview(
     hls.loadSource(previewSrc);
     hls.attachMedia(video);
 
-    hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+    hls.on(HlsConstructor.Events.MANIFEST_PARSED, () => {
       if (video.dataset.previewDisposed === "true") return;
       attemptPlayback();
     });
 
-    hls.on(
-      window.Hls.Events.AUDIO_TRACKS_UPDATED,
-      (
-        _event: unknown,
-        data: {
-          audioTracks: Array<{ id: number; name: string; lang?: string }>;
-        },
-      ) => {
-        if (video.dataset.previewDisposed === "true") return;
-        if (!data?.audioTracks?.length) return;
+    hls.on(HlsConstructor.Events.AUDIO_TRACKS_UPDATED, (...args: unknown[]) => {
+      const data = args[1] as {
+        audioTracks: Array<{ id: number; name: string; lang?: string }>;
+      };
+      if (video.dataset.previewDisposed === "true") return;
+      if (!data?.audioTracks?.length) return;
 
-        const fakeTrackList: PreviewAudioTrackList = {
-          length: data.audioTracks.length,
-          onaddtrack: null,
-          onchange: null,
-          onremovetrack: null,
+      const fakeTrackList: PreviewAudioTrackList = {
+        length: data.audioTracks.length,
+        onaddtrack: null,
+        onchange: null,
+        onremovetrack: null,
+      };
+      for (let i = 0; i < data.audioTracks.length; i++) {
+        const t = data.audioTracks[i];
+        fakeTrackList[i] = {
+          id: String(t.id),
+          kind: "main",
+          label: t.name || `Track ${i + 1}`,
+          language: t.lang || "",
+          enabled: hls.audioTrack === t.id,
+          switchable: true,
         };
-        for (let i = 0; i < data.audioTracks.length; i++) {
-          const t = data.audioTracks[i];
-          fakeTrackList[i] = {
-            id: String(t.id),
-            kind: "main",
-            label: t.name || `Track ${i + 1}`,
-            language: t.lang || "",
-            enabled: hls.audioTrack === t.id,
-            switchable: true,
-          };
-        }
-        buildAudioTrackPicker(fakeTrackList, (_index, track) => {
-          hls.audioTrack = Number(track.id);
-        });
-      },
-    );
+      }
+      buildAudioTrackPicker(fakeTrackList, (_index, track) => {
+        hls.audioTrack = Number(track.id);
+      });
+    });
 
-    hls.on(
-      window.Hls.Events.ERROR,
-      (
-        _event: unknown,
-        data: { fatal: boolean; response?: { code?: number } },
-      ) => {
-        if (video.dataset.previewDisposed === "true") return;
-        if (data.fatal) {
-          if (!previewStarted) {
-            retryPreviewLoad();
-            return;
-          }
-          resetPreviewLoadState();
+    hls.on(HlsConstructor.Events.ERROR, (...args: unknown[]) => {
+      const data = args[1] as {
+        fatal: boolean;
+        response?: { code?: number };
+      };
+      if (video.dataset.previewDisposed === "true") return;
+      if (data.fatal) {
+        if (!previewStarted) {
+          retryPreviewLoad();
+          return;
         }
-      },
-    );
+        resetPreviewLoadState();
+      }
+    });
   }
 
   function setupNativeHlsPlayback(): void {
@@ -584,12 +582,13 @@ export function renderInputPreview(
 
     video.addEventListener("loadedmetadata", () => {
       if (video.dataset.previewDisposed === "true") return;
-      if (video.audioTracks) {
-        buildAudioTrackPicker(video.audioTracks);
-        video.audioTracks.onaddtrack = () =>
-          buildAudioTrackPicker(video.audioTracks);
-        video.audioTracks.onchange = () =>
-          buildAudioTrackPicker(video.audioTracks);
+      const nativeAudioTracks = video.audioTracks;
+      if (nativeAudioTracks) {
+        buildAudioTrackPicker(nativeAudioTracks);
+        nativeAudioTracks.onaddtrack = () =>
+          buildAudioTrackPicker(nativeAudioTracks);
+        nativeAudioTracks.onchange = () =>
+          buildAudioTrackPicker(nativeAudioTracks);
       }
       attemptPlayback();
     });

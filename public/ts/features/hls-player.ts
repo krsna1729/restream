@@ -327,7 +327,12 @@ export function renderManagedHlsPlayer(
   };
 
   function setupHlsJsPlayback(): void {
-    const hls = new window.Hls({
+    const HlsConstructor = window.Hls;
+    if (!HlsConstructor) {
+      setErrorOverlay("HLS playback library is unavailable.");
+      return;
+    }
+    const hls = new HlsConstructor({
       startLevel: -1,
     });
     hlsInstances.set(video, hls);
@@ -335,28 +340,27 @@ export function renderManagedHlsPlayer(
     hls.loadSource(previewSrc);
     hls.attachMedia(video);
 
-    hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+    hls.on(HlsConstructor.Events.MANIFEST_PARSED, () => {
       if (video.dataset.previewDisposed === "true") return;
       armStallTimer("Stream stalled.");
       attemptPlayback();
     });
 
-    hls.on(
-      window.Hls.Events.ERROR,
-      (
-        _event: unknown,
-        data: { fatal: boolean; details?: string; error?: Error },
-      ) => {
-        if (video.dataset.previewDisposed === "true") return;
-        if (!data.fatal) return;
-        const reason = /manifest/i.test(data.details || "")
-          ? "Playlist could not be loaded."
-          : /level|frag|buffer/i.test(data.details || "")
-            ? "Stream stalled."
-            : data.error?.message || "Playback failed.";
-        setErrorOverlay(reason);
-      },
-    );
+    hls.on(HlsConstructor.Events.ERROR, (...args: unknown[]) => {
+      const data = args[1] as {
+        fatal: boolean;
+        details?: string;
+        error?: Error;
+      };
+      if (video.dataset.previewDisposed === "true") return;
+      if (!data.fatal) return;
+      const reason = /manifest/i.test(data.details || "")
+        ? "Playlist could not be loaded."
+        : /level|frag|buffer/i.test(data.details || "")
+          ? "Stream stalled."
+          : data.error?.message || "Playback failed.";
+      setErrorOverlay(reason);
+    });
   }
 
   function setupNativeHlsPlayback(): void {
