@@ -13,6 +13,9 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
+const RTMP_EGRESS_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const RTMP_EGRESS_TLS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 pub(super) struct RtmpUrlParts {
     pub(super) host: String,
     pub(super) port: u16,
@@ -89,7 +92,12 @@ fn rustls_client_config() -> Arc<ClientConfig> {
 pub(super) async fn connect_rtmp_egress_stream(
     parts: &RtmpUrlParts,
 ) -> io::Result<RtmpEgressStream> {
-    let tcp = TcpStream::connect(format!("{}:{}", parts.host, parts.port)).await?;
+    let tcp = tokio::time::timeout(
+        RTMP_EGRESS_CONNECT_TIMEOUT,
+        TcpStream::connect(format!("{}:{}", parts.host, parts.port)),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "RTMP TCP connect timed out"))??;
     let _ = tcp.set_nodelay(true);
 
     if !parts.tls {
@@ -99,7 +107,9 @@ pub(super) async fn connect_rtmp_egress_stream(
     let server_name = ServerName::try_from(parts.host.clone())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid RTMPS host name"))?;
     let connector = TlsConnector::from(rustls_client_config());
-    let tls = connector.connect(server_name, tcp).await?;
+    let tls = tokio::time::timeout(RTMP_EGRESS_TLS_TIMEOUT, connector.connect(server_name, tcp))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "RTMPS TLS handshake timed out"))??;
     Ok(RtmpEgressStream::Tls(Box::new(tls)))
 }
 

@@ -3,6 +3,27 @@ use super::*;
 use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
 use crate::media::ring_buffer::{MediaType, RingBuffer};
 
+#[tokio::test]
+async fn client_handshake_can_be_bounded_when_peer_is_silent() {
+    let (mut client, mut server) = tokio::io::duplex(4096);
+    let cancel = CancellationToken::new();
+    let peer = tokio::spawn(async move {
+        let mut buf = [0u8; 1537];
+        server.read_exact(&mut buf).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    });
+
+    let result = tokio::time::timeout(
+        Duration::from_millis(25),
+        perform_client_handshake(&mut client, &cancel),
+    )
+    .await;
+
+    assert!(result.is_err(), "silent peer should not complete handshake");
+    cancel.cancel();
+    peer.abort();
+}
+
 #[test]
 fn h264_sequence_header_for_keyframe_uses_cached_parameter_sets() {
     let mut cache = Vec::new();

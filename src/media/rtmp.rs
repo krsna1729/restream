@@ -22,9 +22,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::media::MEDIA_PULL_BURST_PACKETS;
@@ -52,6 +53,8 @@ use flv::{
     FlvVideoPacketKind, classify_flv_video_packet, flv_avcc_config_annexb_parameter_sets,
     flv_video_composition_time_ms, parse_flv_audio_meta, parse_flv_video_meta,
 };
+
+const RTMP_EGRESS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct RtmpIngestHandle {
     pipeline_id: String,
@@ -254,6 +257,60 @@ async fn perform_server_handshake(
                         .map_err(|_| "Socket write error during handshake")?;
                 }
                 return Ok(remaining_bytes);
+            }
+        }
+    }
+}
+
+async fn perform_client_handshake<S>(
+    socket: &mut S,
+    cancel_token: &CancellationToken,
+) -> Result<Vec<u8>, String>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut handshake = Handshake::new(PeerType::Client);
+    let c0_c1 = handshake
+        .generate_outbound_p0_and_p1()
+        .map_err(|e| format!("{e:?}"))?;
+
+    socket
+        .write_all(&c0_c1)
+        .await
+        .map_err(|_| "failed to write handshake".to_string())?;
+
+    let mut buffer = vec![0u8; 4096];
+    loop {
+        tokio::select! {
+            _ = cancel_token.cancelled() => return Err("cancelled during handshake".to_string()),
+            res = socket.read(&mut buffer) => {
+                let n = match res {
+                    Ok(n) if n > 0 => n,
+                    _ => return Err("remote closed during handshake".to_string()),
+                };
+                match handshake.process_bytes(&buffer[..n]) {
+                    Ok(HandshakeProcessResult::InProgress { response_bytes }) => {
+                        if !response_bytes.is_empty() {
+                            socket
+                                .write_all(&response_bytes)
+                                .await
+                                .map_err(|_| "failed to write handshake response".to_string())?;
+                        }
+                    }
+                    Ok(HandshakeProcessResult::Completed {
+                        response_bytes,
+                        remaining_bytes,
+                    }) => {
+                        if !response_bytes.is_empty() {
+                            socket
+                                .write_all(&response_bytes)
+                                .await
+                                .map_err(|_| "failed to write handshake completion".to_string())?;
+                        }
+                        return Ok(remaining_bytes);
+                    }
+                    Err(e) => return Err(format!("{e:?}")),
+                }
             }
         }
     }
@@ -1049,67 +1106,22 @@ pub async fn start_rtmp_egress(
 
     // Perform handshake
     egress_phase!(EgressPhase::Handshaking);
-    let mut handshake = Handshake::new(PeerType::Client);
-    let c0_c1 = match handshake.generate_outbound_p0_and_p1() {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            error!(
-                "[rtmp-egress] Handshake outbound generation failed: {:?}",
-                e
-            );
-            egress_error!("handshake", format!("{:?}", e));
+    let remaining = match tokio::time::timeout(
+        RTMP_EGRESS_HANDSHAKE_TIMEOUT,
+        perform_client_handshake(&mut socket, &cancel_token),
+    )
+    .await
+    {
+        Ok(Ok(remaining)) => remaining,
+        Ok(Err(error)) => {
+            egress_error!("handshake", error);
+            return;
+        }
+        Err(_) => {
+            egress_error!("handshake", "RTMP egress handshake timed out");
             return;
         }
     };
-
-    if socket.write_all(&c0_c1).await.is_err() {
-        egress_error!("handshake", "failed to write handshake");
-        return;
-    }
-
-    let mut buffer = vec![0u8; 4096];
-    let mut handshake_completed = false;
-    let mut remaining: Vec<u8> = Vec::new();
-
-    while !handshake_completed {
-        tokio::select! {
-            _ = cancel_token.cancelled() => return,
-            res = socket.read(&mut buffer) => {
-                let n = match res {
-                    Ok(n) if n > 0 => n,
-                    _ => {
-                        egress_error!("handshake", "remote closed during handshake");
-                        return;
-                    }
-                };
-                match handshake.process_bytes(&buffer[..n]) {
-                    Ok(HandshakeProcessResult::InProgress { response_bytes }) => {
-                        if !response_bytes.is_empty()
-                            && socket.write_all(&response_bytes).await.is_err()
-                        {
-                            egress_error!("handshake", "failed to write handshake response");
-                            return;
-                        }
-                    }
-                    Ok(HandshakeProcessResult::Completed { response_bytes, remaining_bytes }) => {
-                        if !response_bytes.is_empty()
-                            && socket.write_all(&response_bytes).await.is_err()
-                        {
-                            egress_error!("handshake", "failed to write handshake completion");
-                            return;
-                        }
-                        remaining = remaining_bytes;
-                        handshake_completed = true;
-                    }
-                    Err(e) => {
-                        error!("Handshake process bytes failed: {:?}", e);
-                        egress_error!("handshake", format!("{:?}", e));
-                        return;
-                    }
-                }
-            }
-        }
-    }
 
     // Initialize ClientSession with tcUrl for MediaMTX compatibility
     let mut config = ClientSessionConfig::new();
@@ -1149,6 +1161,7 @@ pub async fn start_rtmp_egress(
         return;
     }
 
+    let mut buffer = vec![0u8; 4096];
     if !remaining.is_empty() {
         let results = match session.handle_input(&remaining) {
             Ok(r) => r,
