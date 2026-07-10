@@ -6,6 +6,7 @@ use restream::domain::srt_ingest::SrtGlobalIngestConfig;
 use restream::domain::state::EgressPhase;
 use restream::media::security::IngestSecurityService;
 use sqlx::SqlitePool;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -47,6 +48,55 @@ async fn test_phase_3_routing_resolves_all_major_routes() {
     ));
     let app = restream::api::create_router(state);
     let _ = app.into_make_service();
+}
+
+#[test]
+fn router_routes_have_explicit_auth_classification() {
+    let source = include_str!("../src/api/router.rs");
+    let declared = extract_router_route_paths(source);
+    let public: BTreeSet<&str> = restream::api::router::PUBLIC_ROUTE_PATHS
+        .iter()
+        .copied()
+        .collect();
+    let authenticated: BTreeSet<&str> = restream::api::router::AUTHENTICATED_ROUTE_PATHS
+        .iter()
+        .copied()
+        .collect();
+    let classified: BTreeSet<&str> = public.union(&authenticated).copied().collect();
+
+    let missing: Vec<_> = declared.difference(&classified).copied().collect();
+    assert!(
+        missing.is_empty(),
+        "router paths missing auth classification: {missing:?}"
+    );
+
+    let stale: Vec<_> = classified.difference(&declared).copied().collect();
+    assert!(
+        stale.is_empty(),
+        "auth classification paths not present in router: {stale:?}"
+    );
+
+    let overlap: Vec<_> = public.intersection(&authenticated).copied().collect();
+    assert!(
+        overlap.is_empty(),
+        "routes cannot be both public and authenticated: {overlap:?}"
+    );
+}
+
+fn extract_router_route_paths(source: &'static str) -> BTreeSet<&'static str> {
+    let mut paths = BTreeSet::new();
+    for (offset, _) in source.match_indices(".route(") {
+        let rest = &source[offset..];
+        let Some(first_quote) = rest.find('"') else {
+            continue;
+        };
+        let path_start = offset + first_quote + 1;
+        let Some(path_len) = source[path_start..].find('"') else {
+            continue;
+        };
+        paths.insert(&source[path_start..path_start + path_len]);
+    }
+    paths
 }
 
 #[tokio::test]

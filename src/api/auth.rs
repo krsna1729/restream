@@ -513,7 +513,18 @@ pub async fn rate_limits_reset_handler(
     Json(serde_json::json!({ "ok": true, "removed": removed })).into_response()
 }
 
-pub async fn audio_caps_handler() -> impl IntoResponse {
+pub async fn audio_caps_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Some(token) = get_session_token_from_headers(&headers) {
+        if !state.is_authenticated(&token).await {
+            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+        }
+    } else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+
     Json(serde_json::json!({
         "caps": {
             "facebook:hls": {"codecs": ["aac"], "maxChannels": 2, "maxTracks": 1},
@@ -540,6 +551,7 @@ pub async fn audio_caps_handler() -> impl IntoResponse {
             "youtube": "YouTube"
         }
     }))
+    .into_response()
 }
 
 pub async fn stream_keys_handler(

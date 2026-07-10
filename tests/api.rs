@@ -405,6 +405,43 @@ async fn unauthenticated_returns_401() {
 }
 
 #[tokio::test]
+async fn representative_authenticated_routes_reject_missing_session() {
+    let (app, _, engine) = test_app_with_engine().await;
+    engine.get_or_create_hls_store("auth_pipe").await;
+
+    for (method, uri, body) in [
+        ("GET", "/api/v1/settings", None),
+        ("GET", "/api/v1/security/rate-limits", None),
+        ("POST", "/api/v1/security/rate-limits/reset", Some("{}")),
+        ("GET", "/api/v1/audio-caps", None),
+        ("GET", "/api/v1/stream-keys", None),
+        ("GET", "/api/v1/dashboard/runtime", None),
+        ("GET", "/api/v1/pipelines", None),
+        ("GET", "/api/v1/logs", None),
+        ("GET", "/api/v1/agent/context", None),
+        ("GET", "/api/v1/engine", None),
+        ("GET", "/api/v1/media", None),
+        ("GET", "/media/missing.ts", None),
+        ("GET", "/hls/auth_pipe/index.m3u8", None),
+    ] {
+        let mut builder = Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("Content-Type", "application/json");
+        }
+        let resp = app
+            .clone()
+            .oneshot(
+                builder
+                    .body(axum::body::Body::from(body.unwrap_or_default()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{method} {uri}");
+    }
+}
+
+#[tokio::test]
 async fn unauthenticated_app_pages_redirect_to_login() {
     let (app, _) = test_app().await;
     for uri in ["/"] {
