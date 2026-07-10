@@ -1155,7 +1155,7 @@ async fn config_patch_rejects_invalid_ingest_security() {
 // --- Audio caps ---
 
 #[tokio::test]
-async fn audio_caps_no_auth() {
+async fn audio_caps_requires_auth() {
     let (app, _) = test_app().await;
     let resp = app
         .oneshot(
@@ -1164,6 +1164,16 @@ async fn audio_caps_no_auth() {
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn audio_caps_returns_caps_when_authenticated() {
+    let (app, cookie) = authenticated_app().await;
+    let resp = app
+        .oneshot(auth_req("GET", "/api/v1/audio-caps", &cookie, None))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);

@@ -170,11 +170,14 @@ impl RampApi {
     }
 
     pub(crate) async fn login(&mut self) -> Result<(), String> {
+        let password =
+            std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").unwrap_or_else(|_| "admin".into());
+        let body = serde_json::json!({ "password": password }).to_string();
         let response = self
             .client
             .post(format!("{}/api/v1/auth/login", self.base_url))
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(r#"{"password":"admin"}"#)
+            .body(body)
             .send()
             .await
             .map_err(|e| e.to_string())?;

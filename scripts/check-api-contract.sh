@@ -15,5 +15,6 @@ bash scripts/check-history-grouping.sh
 scripts/resource-limit cargo test --test api -- --nocapture
 scripts/resource-limit cargo build --bin restream --bin test_harness
 RESTREAM_BIN=target/debug/restream \
+  RESTREAM_INITIAL_ADMIN_PASSWORD=admin \
   WORK_DIR=test/artifacts/api-contract-smoke \
   target/debug/test_harness api-smoke
