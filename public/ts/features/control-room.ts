@@ -25,6 +25,12 @@ interface ControlRoomState {
   searchQuery: string;
 }
 
+interface ControlRoomWorkspaceDependencies {
+  selectedPipelineId: () => string | null;
+  selectPipeline: (pipelineId: string | null) => void;
+  openMonitorView: (pipelineId: string | null) => void;
+}
+
 interface ControlRoomOutputOption {
   outputId: string;
   pipelineId: string;
@@ -103,6 +109,12 @@ const CONTROL_ROOM_CARD_BASE_CLASS =
   "group flex min-h-[17rem] min-w-0 w-full max-w-full flex-col overflow-hidden rounded-2xl border p-3 shadow-[0_18px_45px_rgba(15,23,42,0.12)]";
 
 let controlRoomStateLoaded = false;
+let workspaceSelectionOwned = false;
+const workspaceDependencies: ControlRoomWorkspaceDependencies = {
+  selectedPipelineId: () => null,
+  selectPipeline: () => {},
+  openMonitorView: () => window.setDashboardMode?.("control"),
+};
 let controlRoomState: ControlRoomState = {
   pipelineId: null,
   page: 0,
@@ -187,7 +199,9 @@ function normalizeState(): void {
     !controlRoomState.pipelineId ||
     !pipelines.some((pipe) => pipe.id === controlRoomState.pipelineId)
   ) {
-    controlRoomState.pipelineId = getDefaultPipelineId();
+    controlRoomState.pipelineId = workspaceSelectionOwned
+      ? null
+      : getDefaultPipelineId();
   }
 
   const selectedPipelineId = controlRoomState.pipelineId;
@@ -210,6 +224,29 @@ function normalizeState(): void {
     Math.max(0, controlRoomState.page),
     pageCount - 1,
   );
+}
+
+export function setControlRoomWorkspaceDependencies(
+  dependencies: Partial<ControlRoomWorkspaceDependencies>,
+): void {
+  Object.assign(workspaceDependencies, dependencies || {});
+  workspaceSelectionOwned = true;
+}
+
+export function syncControlRoomWorkspaceSelection(): string | null {
+  if (workspaceSelectionOwned) {
+    controlRoomState.pipelineId = workspaceDependencies.selectedPipelineId();
+  }
+  normalizeState();
+  return controlRoomState.pipelineId;
+}
+
+export function selectControlRoomPipeline(pipelineId: string | null): void {
+  controlRoomState.pipelineId = pipelineId;
+  controlRoomState.page = 0;
+  normalizeState();
+  persistState();
+  workspaceDependencies.selectPipeline(controlRoomState.pipelineId);
 }
 
 function persistState(): void {
@@ -526,10 +563,7 @@ function ensureShell(container: HTMLElement): void {
       "#control-room-pipeline-select",
     ) as HTMLSelectElement | null;
     if (!select) return;
-    controlRoomState.pipelineId = select.value || null;
-    controlRoomState.page = 0;
-    normalizeState();
-    persistState();
+    selectControlRoomPipeline(select.value || null);
     renderControlRoom();
   });
 
@@ -1785,7 +1819,7 @@ function renderControlRoom(): void {
   if (!container) return;
 
   ensureStateLoaded();
-  normalizeState();
+  syncControlRoomWorkspaceSelection();
   persistState();
   ensureShell(container);
 
@@ -1885,7 +1919,7 @@ export function openControlRoomForOutput(outputId: string): void {
     pipe.outs.some((candidate) => candidate.id === outputId),
   );
   if (!pipeline) {
-    window.setDashboardMode?.("control");
+    workspaceDependencies.openMonitorView(null);
     renderControlRoom();
     return;
   }
@@ -1901,7 +1935,7 @@ export function openControlRoomForOutput(outputId: string): void {
   };
   if (output && !output.monitoringUrl) controlRoomState.page = 0;
   persistState();
-  window.setDashboardMode?.("control");
+  workspaceDependencies.openMonitorView(pipeline.id);
   renderControlRoom();
 }
 

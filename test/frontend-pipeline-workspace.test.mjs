@@ -266,3 +266,52 @@ test("inspector preserves absent and invalid workspace selections", async () => 
     );
   }
 });
+
+test("monitor consumes and propagates the shared workspace selection", async () => {
+  installFakeDom();
+  const controlRoom = await loadCompiledFrontendModule(
+    "features/control-room.js",
+  );
+  const { state } = await loadCompiledFrontendModule("core/state.js");
+  const makePipeline = (id, outputId) => ({
+    id,
+    name: id,
+    outs: [
+      {
+        id: outputId,
+        name: outputId,
+        monitoringUrl: `https://example.com/${outputId}`,
+        status: "running",
+      },
+    ],
+  });
+  state.pipelines = [
+    makePipeline("pipe-a", "out-a"),
+    makePipeline("pipe-b", "out-b"),
+  ];
+
+  let sharedSelection = "pipe-b";
+  const propagatedSelections = [];
+  const openedMonitorSelections = [];
+  controlRoom.setControlRoomWorkspaceDependencies({
+    selectedPipelineId: () => sharedSelection,
+    selectPipeline: (pipelineId) => propagatedSelections.push(pipelineId),
+    openMonitorView: (pipelineId) => openedMonitorSelections.push(pipelineId),
+  });
+
+  assert.equal(controlRoom.syncControlRoomWorkspaceSelection(), "pipe-b");
+  sharedSelection = "missing";
+  assert.equal(
+    controlRoom.syncControlRoomWorkspaceSelection(),
+    null,
+    "invalid URL selection must not revive a persisted/default pipeline",
+  );
+  sharedSelection = null;
+  assert.equal(controlRoom.syncControlRoomWorkspaceSelection(), null);
+
+  controlRoom.selectControlRoomPipeline("pipe-a");
+  assert.deepEqual(propagatedSelections, ["pipe-a"]);
+
+  controlRoom.openControlRoomForOutput("out-b");
+  assert.deepEqual(openedMonitorSelections, ["pipe-b"]);
+});

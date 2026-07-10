@@ -28,6 +28,8 @@ import {
 } from "../features/modes.js";
 import { setPipelineInspectorDependencies } from "../features/pipeline-inspector.js";
 import { selectPipeline } from "../features/render.js";
+import { getUrlParam } from "../core/utils.js";
+import { setControlRoomWorkspaceDependencies } from "../features/control-room.js";
 
 let dashboardAppInitialized = false;
 
@@ -62,6 +64,15 @@ export function initDashboardApp(): void {
     openOperateView: (pipelineId) => {
       selectPipeline(pipelineId);
       setPipelineWorkspaceView("operate", pipelineId);
+    },
+  });
+
+  setControlRoomWorkspaceDependencies({
+    selectedPipelineId: () => getUrlParam("p"),
+    selectPipeline,
+    openMonitorView: (pipelineId) => {
+      if (pipelineId !== null) selectPipeline(pipelineId);
+      setPipelineWorkspaceView("monitor", pipelineId);
     },
   });
 
