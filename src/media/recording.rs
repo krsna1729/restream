@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::process::Command;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -29,12 +30,48 @@ const MIN_DURATION_SECS: u64 = 5;
 const MP4_MUXER_NAME: &str = "mov";
 
 pub struct RecordingStart {
+    pub recording_id: String,
     pub pipeline_name: String,
     pub pipeline_id: String,
     pub input_source: Option<String>,
     pub media_dir: String,
     pub settings: RecordingSettings,
     pub stage_key: StageKey,
+    pub metadata: Option<RecordingMetadataReporter>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecordingMetadataEvent {
+    Started {
+        recording_id: String,
+        pipeline_id: String,
+        started_at: String,
+        temp_path: String,
+    },
+    Finalized {
+        recording_id: String,
+        ended_at: String,
+        final_path: String,
+    },
+    Failed {
+        recording_id: String,
+        error: String,
+    },
+}
+
+#[derive(Clone)]
+pub struct RecordingMetadataReporter {
+    sender: mpsc::UnboundedSender<RecordingMetadataEvent>,
+}
+
+impl RecordingMetadataReporter {
+    pub fn new(sender: mpsc::UnboundedSender<RecordingMetadataEvent>) -> Self {
+        Self { sender }
+    }
+
+    pub(crate) fn report(&self, event: RecordingMetadataEvent) {
+        let _ = self.sender.send(event);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -231,17 +268,26 @@ fn ffmpeg_supports_mp4_muxer() -> bool {
 }
 
 async fn remux_recording_to_mp4(
+    recording_id: String,
     ts_path: PathBuf,
     settings: RecordingSettings,
     ffmpeg_threads: u32,
+    metadata: Option<RecordingMetadataReporter>,
 ) {
     if !ffmpeg_supports_mp4_muxer() {
+        let error = "Configured FFmpeg binary does not expose the mov/mp4 muxer".to_string();
         write_conversion_state(
             &ts_path,
             RecordingConversionStatus::Failed,
-            Some("Configured FFmpeg binary does not expose the mov/mp4 muxer".to_string()),
+            Some(error.clone()),
         )
         .await;
+        if let Some(metadata) = &metadata {
+            metadata.report(RecordingMetadataEvent::Failed {
+                recording_id,
+                error,
+            });
+        }
         info!(
             source = %ts_path.display(),
             muxer = MP4_MUXER_NAME,
@@ -267,12 +313,19 @@ async fn remux_recording_to_mp4(
         Ok(output) if output.status.success() => {
             if let Err(error) = tokio::fs::rename(&temp_path, &mp4_path).await {
                 let _ = tokio::fs::remove_file(&temp_path).await;
+                let error_message = format!("Finalized MP4 rename failed: {error}");
                 write_conversion_state(
                     &ts_path,
                     RecordingConversionStatus::Failed,
-                    Some(format!("Finalized MP4 rename failed: {error}")),
+                    Some(error_message.clone()),
                 )
                 .await;
+                if let Some(metadata) = &metadata {
+                    metadata.report(RecordingMetadataEvent::Failed {
+                        recording_id,
+                        error: error_message,
+                    });
+                }
                 error!(
                     source = %ts_path.display(),
                     output = %mp4_path.display(),
@@ -309,16 +362,30 @@ async fn remux_recording_to_mp4(
                 output = %mp4_path.display(),
                 "recording remux completed"
             );
+            if let Some(metadata) = &metadata {
+                metadata.report(RecordingMetadataEvent::Finalized {
+                    recording_id,
+                    ended_at: now_rfc3339(),
+                    final_path: mp4_path.display().to_string(),
+                });
+            }
         }
         Ok(output) => {
             let _ = tokio::fs::remove_file(&temp_path).await;
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let error = stderr.trim().to_string();
             write_conversion_state(
                 &ts_path,
                 RecordingConversionStatus::Failed,
-                Some(stderr.trim().to_string()),
+                Some(error.clone()),
             )
             .await;
+            if let Some(metadata) = &metadata {
+                metadata.report(RecordingMetadataEvent::Failed {
+                    recording_id,
+                    error,
+                });
+            }
             warn!(
                 source = %ts_path.display(),
                 output = %mp4_path.display(),
@@ -329,12 +396,19 @@ async fn remux_recording_to_mp4(
         }
         Err(error) => {
             let _ = tokio::fs::remove_file(&temp_path).await;
+            let error_message = format!("Failed to spawn ffmpeg: {error}");
             write_conversion_state(
                 &ts_path,
                 RecordingConversionStatus::Failed,
-                Some(format!("Failed to spawn ffmpeg: {error}")),
+                Some(error_message.clone()),
             )
             .await;
+            if let Some(metadata) = &metadata {
+                metadata.report(RecordingMetadataEvent::Failed {
+                    recording_id,
+                    error: error_message,
+                });
+            }
             warn!(
                 source = %ts_path.display(),
                 output = %mp4_path.display(),
@@ -371,18 +445,28 @@ pub async fn start_recording(
     cancel_token: CancellationToken,
 ) {
     let RecordingStart {
+        recording_id,
         pipeline_name,
         pipeline_id,
         input_source,
         media_dir,
         settings,
         stage_key: rec_stage_key,
+        metadata,
     } = start;
 
     let _ = fs::create_dir_all(&media_dir);
     let filename = build_filename(&pipeline_name);
     let file_path = format!("{}/{}", media_dir, filename);
     let recorded_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    if let Some(metadata) = &metadata {
+        metadata.report(RecordingMetadataEvent::Started {
+            recording_id: recording_id.clone(),
+            pipeline_id: pipeline_id.clone(),
+            started_at: recorded_at.clone(),
+            temp_path: file_path.clone(),
+        });
+    }
     let service_metadata = build_recording_service_metadata(
         &pipeline_name,
         &pipeline_id,
@@ -552,6 +636,12 @@ pub async fn start_recording(
 
     if duration.as_secs() < MIN_DURATION_SECS {
         let _ = fs::remove_file(&file_path);
+        if let Some(metadata) = &metadata {
+            metadata.report(RecordingMetadataEvent::Failed {
+                recording_id: recording_id.clone(),
+                error: format!("Recording shorter than {MIN_DURATION_SECS}s was discarded"),
+            });
+        }
         info!(filename = %filename, "deleted short recording");
     } else {
         write_conversion_state(
@@ -562,9 +652,11 @@ pub async fn start_recording(
         .await;
         let ffmpeg_threads = normalize_recording_threads(engine.config.recording_threads);
         tokio::spawn(remux_recording_to_mp4(
+            recording_id,
             PathBuf::from(&file_path),
             settings,
             ffmpeg_threads,
+            metadata,
         ));
     }
 
@@ -784,7 +876,14 @@ mod tests {
         std::fs::copy(&fixture, &source).expect("fixture should copy");
 
         write_conversion_state(&source, RecordingConversionStatus::Converting, None).await;
-        remux_recording_to_mp4(source.clone(), settings, 2).await;
+        remux_recording_to_mp4(
+            "recording-fixture".to_string(),
+            source.clone(),
+            settings,
+            2,
+            None,
+        )
+        .await;
 
         let mp4_path = build_mp4_path(&source);
         let state_path = build_conversion_state_path(&source);

@@ -10,9 +10,11 @@ use crate::application::ports::{
     MetaStore, MetaStoreWriter, RecordingStore, SqliteMetaStore, SqliteRecordingStore,
 };
 use crate::application::recording::{
-    load_recording_settings, recording_enabled_meta_key, spawn_recording_task,
+    load_recording_settings, recording_enabled_meta_key, spawn_recording_metadata_reporter,
+    spawn_recording_task,
 };
 use crate::media::engine::MediaEngine;
+use crate::media::recording::RecordingMetadataReporter;
 use crate::types::Pipeline;
 
 use super::error::{ApiError, ApiResult};
@@ -36,6 +38,7 @@ pub struct MediaLibraryService {
     recording_store: Arc<dyn RecordingStore>,
     pipeline_service: PipelineService,
     ingest_service: IngestService,
+    recording_metadata: Option<RecordingMetadataReporter>,
 }
 
 #[derive(Clone)]
@@ -99,12 +102,14 @@ impl MediaLibraryService {
         ingest_service: IngestService,
     ) -> Self {
         let meta_store = Arc::new(SqliteMetaStore::new(db.clone()));
+        let recording_metadata = spawn_recording_metadata_reporter(db.clone());
         Self {
             meta_store: meta_store.clone(),
             meta_writer: meta_store,
             recording_store: Arc::new(SqliteRecordingStore::new(db)),
             pipeline_service,
             ingest_service,
+            recording_metadata: Some(recording_metadata),
         }
     }
 
@@ -121,6 +126,7 @@ impl MediaLibraryService {
             recording_store,
             pipeline_service,
             ingest_service,
+            recording_metadata: None,
         }
     }
 
@@ -308,6 +314,7 @@ impl MediaLibraryService {
                 input_source,
                 media_dir.to_string(),
                 recording_settings,
+                self.recording_metadata.clone(),
             )
             .await;
         }

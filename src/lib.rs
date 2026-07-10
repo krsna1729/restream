@@ -445,6 +445,8 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let media_dir = config.media_dir.clone();
     let reconciler_media_dir = media_dir.clone();
     let reconciler_config = config.clone();
+    let recording_metadata_reporter =
+        crate::application::recording::spawn_recording_metadata_reporter(pool.clone());
     let pipeline_service = crate::application::services::PipelineService::new(pool.clone());
     let output_service = crate::application::services::OutputService::new(pool.clone());
     let ingest_service = crate::application::services::IngestService::new(pool.clone());
@@ -1094,6 +1096,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
             &meta_store,
             &reconciler_media_dir,
             recording_commands,
+            Some(recording_metadata_reporter.clone()),
         )
         .await;
 
