@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::media::engine::MediaEngine;
-use crate::media::hls_fmp4::Fmp4HlsStore;
+use crate::media::hls::fmp4::Fmp4HlsStore;
 
 impl MediaEngine {
     /// Ensure a browser-preview HLS runtime exists and spawn its segmenter if
@@ -35,7 +35,7 @@ impl MediaEngine {
             };
             let store_for_task = store.clone();
             tokio::spawn(async move {
-                crate::media::hls_fmp4::start_hls_fmp4_segmenter(
+                crate::media::hls::fmp4::start_hls_fmp4_segmenter(
                     pid.clone(),
                     store_for_task,
                     graph.video_ring,

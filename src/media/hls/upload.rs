@@ -11,10 +11,10 @@ use tracing::error;
 
 use reqwest::{Client, Url};
 
+use super::HlsStore;
 use crate::domain::stage::StageKey;
 use crate::domain::state::EgressPhase;
 use crate::media::engine::{EgressRegistration, MediaEngine};
-use crate::media::hls::HlsStore;
 
 const HLS_PLAYLIST_CONTENT_TYPE: &str = "application/vnd.apple.mpegurl";
 const HLS_SEGMENT_CONTENT_TYPE: &str = "video/mp2t";

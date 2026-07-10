@@ -9,6 +9,10 @@
 //! RingBuffer → TsMuxer (inline) → segment accumulator → HlsStore
 //! ```
 
+pub mod fmp4;
+pub mod preview;
+pub mod upload;
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

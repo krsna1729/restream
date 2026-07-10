@@ -30,13 +30,13 @@ use shiguredo_mp4::{
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use super::{HlsConfig, HlsSegmenterStart};
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::codec::{
     adts_frame_count, annexb_to_avcc_into, build_aac_sequence_header, build_avcc_sequence_header,
     strip_adts,
 };
 use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
-use crate::media::hls::{HlsConfig, HlsSegmenterStart};
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
 
 const VIDEO_TIMESCALE: u32 = 90_000;
