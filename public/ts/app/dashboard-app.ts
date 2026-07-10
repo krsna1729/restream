@@ -24,7 +24,10 @@ import {
   initDashboardModes,
   openInspectGraph,
   renderDashboardModes,
+  setPipelineWorkspaceView,
 } from "../features/modes.js";
+import { setPipelineInspectorDependencies } from "../features/pipeline-inspector.js";
+import { selectPipeline } from "../features/render.js";
 
 let dashboardAppInitialized = false;
 
@@ -52,6 +55,14 @@ export function initDashboardApp(): void {
     refreshDashboardRuntime,
     openDiagnosticsModal,
     openGraphExplorer: openInspectGraph,
+  });
+
+  setPipelineInspectorDependencies({
+    selectPipeline,
+    openOperateView: (pipelineId) => {
+      selectPipeline(pipelineId);
+      setPipelineWorkspaceView("operate", pipelineId);
+    },
   });
 
   initDashboardModes();

@@ -117,3 +117,152 @@ test("pipeline workspace shell exposes one active subordinate view", async () =>
   assert.equal(bar.classList.contains("hidden"), true);
   assert.equal(inspectPanel.classList.contains("hidden"), true);
 });
+
+test("inspector treats URL pipeline selection as authoritative across views", async () => {
+  const { document, window } = installFakeDom();
+  window.location.href =
+    "http://localhost/?mode=pipeline&view=operate&p=pipe-b";
+  window.history.pushState = (_state, _title, url) => {
+    window.location.href = String(url);
+  };
+  for (const [tag, id] of [
+    ["select", "inspect-pipeline-select"],
+    ["button", "inspect-open-pipeline-btn"],
+    ["div", "inspect-pipeline-summary"],
+    ["div", "inspect-diagnostics-summary"],
+    ["button", "inspect-refresh-graph-btn"],
+    ["button", "inspect-open-diagnostics-btn"],
+    ["div", "inspect-graph-status"],
+    ["div", "inspect-graph-container"],
+  ]) {
+    appendRoot(document, tag, id);
+  }
+  const makePipeline = (id, name) => ({
+    id,
+    name,
+    key: `${id}-key`,
+    input: {
+      status: "on",
+      probeReady: true,
+      probeStatus: "ready",
+      readers: 0,
+      audioTracks: [],
+      video: null,
+      publisher: { protocol: "rtmp" },
+      bytesReceived: 1,
+      bytesSent: 1,
+    },
+    outs: [],
+    stats: { inputBitrateKbps: 1, outputBitrateKbps: 0 },
+    hlsPreview: { active: false, segments: 0 },
+  });
+  globalThis.fetch = async (url) => {
+    const pipelineId = decodeURIComponent(String(url).split("/").at(-2));
+    return new Response(JSON.stringify({ pipelineId, nodes: [], edges: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const workspace = await loadCompiledFrontendModule(
+    "app/pipeline-workspace.js",
+  );
+  const inspector = await loadCompiledFrontendModule(
+    "features/pipeline-inspector.js",
+  );
+  const { state } = await loadCompiledFrontendModule("core/state.js");
+  state.pipelines = [
+    makePipeline("pipe-a", "Previously inspected A"),
+    makePipeline("pipe-b", "Operate selection B"),
+  ];
+  inspector.setPipelineInspectorDependencies({
+    selectPipeline: (pipelineId) => {
+      window.history.pushState(
+        {},
+        "",
+        workspace.pipelineWorkspaceUrl(
+          window.location.href,
+          "inspect",
+          pipelineId,
+        ),
+      );
+    },
+  });
+
+  window.history.pushState(
+    {},
+    "",
+    workspace.pipelineWorkspaceUrl(window.location.href, "inspect", "pipe-b"),
+  );
+  inspector.renderPipelineInspector();
+  assert.match(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /Operate selection B/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /Previously inspected A/,
+  );
+
+  const select = document.getElementById("inspect-pipeline-select");
+  select.value = "pipe-a";
+  select.onchange();
+  assert.equal(new URL(window.location.href).searchParams.get("p"), "pipe-a");
+
+  window.history.pushState(
+    {},
+    "",
+    workspace.pipelineWorkspaceUrl(window.location.href, "operate"),
+  );
+  assert.equal(
+    new URL(window.location.href).searchParams.get("p"),
+    "pipe-a",
+    "the inspector selection remains the shared workspace selection",
+  );
+});
+
+test("inspector preserves absent and invalid workspace selections", async () => {
+  const { document, window } = installFakeDom();
+  for (const [tag, id] of [
+    ["select", "inspect-pipeline-select"],
+    ["button", "inspect-open-pipeline-btn"],
+    ["div", "inspect-pipeline-summary"],
+    ["div", "inspect-diagnostics-summary"],
+    ["button", "inspect-refresh-graph-btn"],
+    ["button", "inspect-open-diagnostics-btn"],
+    ["div", "inspect-graph-status"],
+    ["div", "inspect-graph-container"],
+  ]) {
+    appendRoot(document, tag, id);
+  }
+  const inspector = await loadCompiledFrontendModule(
+    "features/pipeline-inspector.js",
+  );
+  const { state } = await loadCompiledFrontendModule("core/state.js");
+  state.pipelines = [
+    {
+      id: "pipe-a",
+      name: "Pipeline A",
+      input: { status: "off", audioTracks: [], readers: 0 },
+      outs: [],
+      stats: {},
+      hlsPreview: { active: false, segments: 0 },
+    },
+  ];
+
+  for (const href of [
+    "http://localhost/?mode=pipeline&view=inspect",
+    "http://localhost/?mode=pipeline&view=inspect&p=missing",
+  ]) {
+    window.location.href = href;
+    inspector.renderPipelineInspector();
+    assert.match(
+      document.getElementById("inspect-pipeline-summary").innerHTML,
+      /No pipeline selected/,
+    );
+    assert.equal(
+      document.getElementById("inspect-open-pipeline-btn").disabled,
+      true,
+    );
+  }
+});
