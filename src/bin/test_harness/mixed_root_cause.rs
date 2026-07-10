@@ -75,6 +75,47 @@ impl FailureCause {
 }
 
 pub(crate) fn classify_mixed_failure(message: &str) -> FailureCause {
+    if let Ok(value) = serde_json::from_str::<Value>(message) {
+        let cause = classify_mixed_failure_value(&value);
+        if cause != FailureCause::Unknown {
+            return cause;
+        }
+    }
+    classify_mixed_failure_text(message)
+}
+
+fn classify_mixed_failure_value(value: &Value) -> FailureCause {
+    if value_has_string_value(value, "waitingForCapacity")
+        || value_has_key_containing(value, "capacityPermits")
+    {
+        return FailureCause::StageWaitingForCapacity;
+    }
+    if value_has_present_key(value, "blockedBy") {
+        return FailureCause::OutputBlockedByStage;
+    }
+    if value_has_string_value(value, "waitingForKeyframe") {
+        return FailureCause::StageNoKeyframe;
+    }
+    for key in [
+        "message",
+        "error",
+        "lastError",
+        "failurePhase",
+        "phase",
+        "terminalStage",
+        "ffprobe_stderr",
+    ] {
+        for text in value_strings_for_key(value, key) {
+            let cause = classify_mixed_failure_text(&text);
+            if cause != FailureCause::Unknown {
+                return cause;
+            }
+        }
+    }
+    FailureCause::Unknown
+}
+
+fn classify_mixed_failure_text(message: &str) -> FailureCause {
     let lower = message.to_ascii_lowercase();
     if lower.contains("blockedby=") || lower.contains("blocked by stage") {
         return FailureCause::OutputBlockedByStage;
@@ -150,6 +191,68 @@ pub(crate) fn classify_mixed_failure(message: &str) -> FailureCause {
         return FailureCause::DecodeFailure;
     }
     FailureCause::Unknown
+}
+
+fn value_has_present_key(value: &Value, key: &str) -> bool {
+    match value {
+        Value::Object(map) => map.iter().any(|(name, value)| {
+            (name == key && !value.is_null()) || value_has_present_key(value, key)
+        }),
+        Value::Array(values) => values.iter().any(|value| value_has_present_key(value, key)),
+        _ => false,
+    }
+}
+
+fn value_has_key_containing(value: &Value, needle: &str) -> bool {
+    match value {
+        Value::Object(map) => map
+            .iter()
+            .any(|(name, value)| name.contains(needle) || value_has_key_containing(value, needle)),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value_has_key_containing(value, needle)),
+        _ => false,
+    }
+}
+
+fn value_has_string_value(value: &Value, needle: &str) -> bool {
+    match value {
+        Value::String(text) => text == needle,
+        Value::Object(map) => map
+            .values()
+            .any(|value| value_has_string_value(value, needle)),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value_has_string_value(value, needle)),
+        _ => false,
+    }
+}
+
+fn value_strings_for_key(value: &Value, key: &str) -> Vec<String> {
+    let mut strings = Vec::new();
+    collect_value_strings_for_key(value, key, &mut strings);
+    strings
+}
+
+fn collect_value_strings_for_key(value: &Value, key: &str, strings: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (name, value) in map {
+                if name == key
+                    && let Some(text) = value.as_str()
+                {
+                    strings.push(text.to_string());
+                }
+                collect_value_strings_for_key(value, key, strings);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_value_strings_for_key(value, key, strings);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(crate) fn mixed_root_cause_summary_json(failures: &[String]) -> Value {
@@ -318,6 +421,56 @@ mod tests {
 
         for (message, expected) in cases {
             assert_eq!(classify_mixed_failure(message), expected, "{message}");
+        }
+    }
+
+    #[test]
+    fn root_cause_classifier_uses_structured_fields_before_text_fallback() {
+        let structured_cases = [
+            (
+                json!({
+                    "outputStatus": {
+                        "status": "retrying",
+                        "phase": "waitingForCapacity",
+                        "blockedBy": {
+                            "stage": "egress:rtmp:out0",
+                            "phase": "waitingForCapacity"
+                        }
+                    }
+                }),
+                FailureCause::StageWaitingForCapacity,
+            ),
+            (
+                json!({
+                    "outputStatus": {
+                        "status": "retrying",
+                        "blockedBy": {"stage": "hls:preview"}
+                    }
+                }),
+                FailureCause::OutputBlockedByStage,
+            ),
+            (
+                json!({
+                    "outputStatus": {
+                        "status": "stalled",
+                        "phase": "waitingForKeyframe"
+                    }
+                }),
+                FailureCause::StageNoKeyframe,
+            ),
+            (
+                json!({
+                    "probe": {
+                        "message": "stream 0 has duplicate DTS"
+                    }
+                }),
+                FailureCause::TimestampDiscontinuity,
+            ),
+        ];
+
+        for (failure, expected) in structured_cases {
+            let payload = failure.to_string();
+            assert_eq!(classify_mixed_failure(&payload), expected, "{payload}");
         }
     }
 
