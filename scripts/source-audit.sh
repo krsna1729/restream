@@ -27,6 +27,18 @@ echo "Checking file size limits..."
 SOURCE_LINE_LIMIT=2000
 LARGE_FILE_REPORT=target/source-audit-large-files.jsonl
 : > "$LARGE_FILE_REPORT"
+SOURCE_FILE_FIND_ARGS=(
+    src
+    public/ts
+    test
+    -path test/artifacts -prune
+    -o
+    -path test/fixtures -prune
+    -o
+    -type f
+    \( -name '*.rs' -o -name '*.ts' -o -name '*.mjs' -o -name '*.js' \)
+    -print0
+)
 while IFS= read -r -d '' file; do
     lines=$(wc -l < "$file" | tr -d ' ')
     printf '{"file":"%s","lines":%s,"limit":%s}\n' \
@@ -35,19 +47,19 @@ while IFS= read -r -d '' file; do
         echo "FAIL: $file has $lines lines (limit: $SOURCE_LINE_LIMIT)" >&2
         FAILED=1
     fi
-done < <(find src public/ts -type f \( -name '*.rs' -o -name '*.ts' \) -print0)
+done < <(find "${SOURCE_FILE_FIND_ARGS[@]}")
 
 LARGEST_FILES=$(
     sort -t: -k2,2nr <(
         while IFS= read -r -d '' file; do
             lines=$(wc -l < "$file" | tr -d ' ')
             printf '%s:%s\n' "$file" "$lines"
-        done < <(find src public/ts -type f \( -name '*.rs' -o -name '*.ts' \) -print0)
+        done < <(find "${SOURCE_FILE_FIND_ARGS[@]}")
     ) | head -20
 )
 
 if [ "$FAILED" -eq 0 ]; then
-    echo "OK: All Rust/TypeScript source files are at or below ${SOURCE_LINE_LIMIT} lines."
+    echo "OK: All audited source/test files are at or below ${SOURCE_LINE_LIMIT} lines."
 fi
 
 # 3. Check for raw std::env::var usage outside src/config.rs and tests
