@@ -23,9 +23,10 @@ pub(crate) fn mixed_matrix_cases_can_share_wave(
         && !matches!(second.codec(), MixedVideoCodec::H265)
 }
 
-const MIXED_RUNTIME_LOG_NOISE_PATTERNS: [&str; 4] = [
+const MIXED_RUNTIME_LOG_NOISE_PATTERNS: [&str; 5] = [
     "PPS id out of range",
     "Could not find ref with POC",
+    "Error constructing the frame RPS.",
     "Skipping invalid undecodable NALU",
     "Error parsing NAL",
 ];

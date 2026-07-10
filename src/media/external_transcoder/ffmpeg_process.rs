@@ -333,6 +333,10 @@ pub(super) fn spawn_external_stderr_logger(
         }
         if !all.is_empty() {
             let text = String::from_utf8_lossy(&all).trim().to_string();
+            let text = actionable_external_ffmpeg_stderr(&text);
+            if text.is_empty() {
+                return;
+            }
 
             error!(
                 correlation_id = %correlation_id,
@@ -345,6 +349,25 @@ pub(super) fn spawn_external_stderr_logger(
             );
         }
     });
+}
+
+fn expected_external_ffmpeg_decoder_chatter(line: &str) -> bool {
+    const PATTERNS: [&str; 5] = [
+        "PPS id out of range",
+        "Could not find ref with POC",
+        "Error constructing the frame RPS.",
+        "Skipping invalid undecodable NALU",
+        "Error parsing NAL",
+    ];
+
+    PATTERNS.iter().any(|pattern| line.contains(pattern))
+}
+
+fn actionable_external_ffmpeg_stderr(text: &str) -> String {
+    text.lines()
+        .filter(|line| !expected_external_ffmpeg_decoder_chatter(line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -393,6 +416,30 @@ mod tests {
                 .any(|w| { w[0] == "-probesize" && w[1] == probe_size_bytes.to_string() })
         );
         assert!(args.last() == Some(&"pipe:1".to_string()));
+    }
+
+    #[test]
+    fn external_stderr_filter_drops_expected_hevc_decoder_chatter() {
+        let text = concat!(
+            "[hevc @ 0x1] Could not find ref with POC 512\n",
+            "[hevc @ 0x1] Error constructing the frame RPS.\n",
+            "[hevc @ 0x1] Skipping invalid undecodable NALU: 1\n"
+        );
+
+        assert!(actionable_external_ffmpeg_stderr(text).is_empty());
+    }
+
+    #[test]
+    fn external_stderr_filter_keeps_actionable_lines() {
+        let text = concat!(
+            "[hevc @ 0x1] Could not find ref with POC 512\n",
+            "Conversion failed!\n"
+        );
+
+        assert_eq!(
+            actionable_external_ffmpeg_stderr(text),
+            "Conversion failed!"
+        );
     }
 
     #[test]

@@ -1282,6 +1282,9 @@ mod tests {
         assert!(mixed_runtime_log_noise_matches(
             "[hevc @ 0x1] Could not find ref with POC 0"
         ));
+        assert!(mixed_runtime_log_noise_matches(
+            "[hevc @ 0x1] Error constructing the frame RPS."
+        ));
         assert!(!mixed_runtime_log_noise_matches(
             "stage exit pipeline=pipe encoding=720p"
         ));
