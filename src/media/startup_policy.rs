@@ -4,8 +4,8 @@ use crate::domain::output_spec::{OutputEncodingSpec, VideoCodecKind, VideoSelect
 use crate::media::profiles;
 
 const DEFAULT_KEYFRAME_PREROLL_PACKETS: usize = 32;
-const EXT_STAGE_ANALYZE_DURATION_US_DEFAULT: u64 = 0;
-const EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT: usize = 32 * 1024;
+const EXT_STAGE_ANALYZE_DURATION_US_DEFAULT: u64 = 1_000_000;
+const EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT: usize = 512 * 1024;
 const EXT_STAGE_ANALYZE_DURATION_US_HEVC: u64 = 1_000_000;
 const EXT_STAGE_PROBE_SIZE_BYTES_HEVC: usize = 512 * 1024;
 
