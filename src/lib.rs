@@ -1158,6 +1158,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     );
     engine.cancel_all_active_tasks().await;
     engine.shutdown_all_hls_segmenters().await;
+    engine.shutdown_listeners();
 
     // Give all tasks a moment to run their cleanup paths before we close the DB.
     tokio::time::sleep(Duration::from_millis(500)).await;

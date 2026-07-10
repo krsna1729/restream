@@ -402,6 +402,27 @@ impl MediaEngine {
         guards.push(handle);
     }
 
+    pub fn register_listener_shutdown(&self, shutdown: impl Fn() + Send + Sync + 'static) {
+        self.runtime
+            .listener_shutdowns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Box::new(shutdown));
+    }
+
+    pub fn shutdown_listeners(&self) {
+        let shutdowns: Vec<_> = self
+            .runtime
+            .listener_shutdowns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain(..)
+            .collect();
+        for shutdown in shutdowns {
+            shutdown();
+        }
+    }
+
     /// Drain all registered OS thread handles for joining at shutdown.
     pub fn drain_os_thread_handles(&self) -> Vec<std::thread::JoinHandle<()>> {
         self.runtime

@@ -1,6 +1,9 @@
 use super::*;
+use crate::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
+use crate::domain::srt_ingest::SrtGlobalIngestConfig;
 use crate::media::engine::{AudioMeta, VideoMeta};
 use crate::media::ring_buffer::PayloadFormat;
+use crate::media::security::IngestSecurityService;
 
 #[test]
 fn streamid_getsockopt_length_must_stay_within_buffer() {
@@ -17,6 +20,48 @@ fn streamid_getsockopt_length_must_stay_within_buffer() {
     );
     assert_eq!(streamid_from_getsockopt_buffer(&buf, -1), None);
     assert_eq!(streamid_from_getsockopt_buffer(&buf, 9), None);
+}
+
+#[tokio::test]
+async fn srt_server_shutdown_exits_with_no_connections() {
+    let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+    crate::db::setup_database_schema(&pool).await.unwrap();
+    let engine = Arc::new(MediaEngine::new());
+    let server = Arc::new(SrtServer::new(
+        Arc::new(crate::application::ports::SqlitePipelineStore::new(pool)),
+        engine.clone(),
+        Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
+        Arc::new(SrtIngestPolicyStore::new(
+            SrtGlobalIngestConfig::default(),
+            &[],
+        )),
+    ));
+
+    let handle = tokio::spawn(server.run(0));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if !engine
+            .runtime
+            .listener_shutdowns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "SRT listener never registered a shutdown hook"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    engine.shutdown_listeners();
+    tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("SRT server did not exit after listener shutdown")
+        .expect("SRT server task panicked");
+    teardown_srt();
 }
 
 #[test]

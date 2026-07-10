@@ -230,6 +230,7 @@ unsafe extern "C" {
     pub fn srt_getversion() -> u32;
     pub fn srt_startup() -> c_int;
     pub fn srt_cleanup() -> c_int;
+    pub fn srt_setloglevel(level: c_int);
     pub fn srt_create_socket() -> SRTSOCKET;
     pub fn srt_create_group(gtype: c_int) -> SRTSOCKET;
     pub fn srt_close(u: SRTSOCKET) -> c_int;
@@ -394,6 +395,7 @@ pub const SRTT_LIVE: c_int = 0;
 pub const DESIRED_UDP_BUF: i32 = 8 * 1024 * 1024;
 const DESIRED_SRT_BUF: i32 = 12 * 1024 * 1024;
 const DESIRED_FC: i32 = 32768;
+const SRT_LOG_CRIT: c_int = 2;
 // 4×RTT + 2×jitter for 50ms RTT, ~10ms jitter = 220ms. Round to 250ms for margin.
 const DESIRED_LATENCY_MS: i32 = 250;
 // Max reorder tolerance: at 50 Mbps / 1316 B per packet ≈ 4750 pkt/s.
@@ -681,6 +683,36 @@ fn streamid_from_getsockopt_buffer(buf: &[u8], optlen: c_int) -> Option<String> 
             .trim_matches('\0')
             .to_string(),
     )
+}
+
+struct SrtListenerCloser {
+    socket: SRTSOCKET,
+    closed: AtomicBool,
+}
+
+impl SrtListenerCloser {
+    fn new(socket: SRTSOCKET) -> Self {
+        Self {
+            socket,
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    fn close_once(&self) {
+        if !self.closed.swap(true, Ordering::AcqRel) {
+            // SAFETY: close_once owns the listener-close responsibility and
+            // prevents double-close races between explicit shutdown and Drop.
+            unsafe {
+                srt_close(self.socket);
+            }
+        }
+    }
+}
+
+impl Drop for SrtListenerCloser {
+    fn drop(&mut self) {
+        self.close_once();
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1010,6 +1042,7 @@ impl SrtServer {
         // enforced by the singleton SrtServer pattern.
         unsafe {
             srt_startup();
+            srt_setloglevel(SRT_LOG_CRIT);
         }
         check_sysctl_limits();
         Self {
@@ -1150,32 +1183,26 @@ impl SrtServer {
         // normal load (tokio processes items as fast as it can).
         let (tx, mut rx) = tokio::sync::mpsc::channel::<(SRTSOCKET, sockaddr_in)>(1024);
 
-        // RAII guard: close server_sock when run() returns (normal exit, task
-        // cancellation, or panic).  Closing the socket interrupts srt_accept()
-        // in the accept thread, which then exits via the tx.send() failure path.
-        // SAFETY: SrtSockGuard is an RAII guard that closes the server
-        // socket on drop. The socket was created by srt_create_socket()
-        // above and has not been closed elsewhere. srt_close is idempotent
-        // for invalid handles but the guard is only constructed for valid
-        // sockets.
-        struct SrtSockGuard(SRTSOCKET);
-        impl Drop for SrtSockGuard {
-            fn drop(&mut self) {
-                // SAFETY: The guard owns a socket created by
-                // srt_create_socket(). srt_close is called exactly once
-                // per socket via this RAII drop.
-                unsafe {
-                    srt_close(self.0);
-                }
-            }
-        }
-        let _server_sock_guard = SrtSockGuard(server_sock);
+        // Shared closer: explicit shutdown can close the listener before
+        // OS-thread joins, while Drop still covers normal task exit.
+        let listener_closer = Arc::new(SrtListenerCloser::new(server_sock));
+        let accept_shutdown = Arc::new(AtomicBool::new(false));
+        let accept_shutdown_hook = accept_shutdown.clone();
+        self.engine.register_listener_shutdown(move || {
+            accept_shutdown_hook.store(true, Ordering::Release)
+        });
+        let listener_shutdown = listener_closer.clone();
+        self.engine
+            .register_listener_shutdown(move || listener_shutdown.close_once());
 
         // Blocking accept thread — srt_accept in sync mode blocks until a connection arrives.
         // Wrapped in catch_unwind so a panic cannot crash the process (AGENTS.md).
         let accept_handle = std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 loop {
+                    if accept_shutdown.load(Ordering::Acquire) {
+                        break;
+                    }
                     let mut client_sin = sockaddr_in {
                         sin_family: 0,
                         sin_port: 0,
@@ -1189,6 +1216,9 @@ impl SrtServer {
                     // and len are correctly sized.
                     let client_sock = unsafe { srt_accept(server_sock, &mut client_sin, &mut len) };
                     if client_sock < 0 {
+                        if accept_shutdown.load(Ordering::Acquire) {
+                            break;
+                        }
                         // SAFETY: srt_getlasterror_str returns a thread-local
                         // static string valid until the next SRT call.
                         let err = unsafe { std::ffi::CStr::from_ptr(srt_getlasterror_str()) };

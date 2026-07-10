@@ -173,6 +173,7 @@ impl StageRegistry {
 pub struct RuntimeInfra {
     pub listener_stats: Arc<ListenerSocketStats>,
     pub os_threads: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
+    pub listener_shutdowns: std::sync::Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
     pub sender_semaphore: Arc<tokio::sync::Semaphore>,
     pub external_ffmpeg_semaphore: Arc<tokio::sync::Semaphore>,
     pub diag_semaphores: TokioRwLock<HashMap<String, Arc<tokio::sync::Semaphore>>>,
@@ -191,6 +192,7 @@ impl RuntimeInfra {
         Self {
             listener_stats: Arc::new(ListenerSocketStats::default()),
             os_threads: std::sync::Mutex::new(Vec::new()),
+            listener_shutdowns: std::sync::Mutex::new(Vec::new()),
             sender_semaphore: Arc::new(tokio::sync::Semaphore::new(512)),
             external_ffmpeg_semaphore: Arc::new(tokio::sync::Semaphore::new(
                 external_ffmpeg_permits,
