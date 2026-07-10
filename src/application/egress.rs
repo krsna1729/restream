@@ -21,7 +21,13 @@ pub struct PreparedOutput {
 /// Prepare the output ring and graph terminal stage for dependency tracking.
 pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> PreparedOutput {
     let source_buf = engine.get_or_create_pipeline(&output.pipeline_id).await;
-    let ingest_video_codec = engine.ingest_video_codec(&output.pipeline_id).await;
+    let ingest_video_codec = engine
+        .ingest_video_codec(&output.pipeline_id)
+        .await
+        .or_else(|| {
+            let hint = source_buf.codec_hint_str();
+            (!hint.is_empty()).then_some(hint.to_string())
+        });
     let ingest_is_hevc = ingest_video_codec
         .as_deref()
         .map(VideoCodecKind::from_codec_name)
@@ -310,6 +316,34 @@ mod tests {
                         StageKind::video_preset_with_codec("720p", "hevc"),
                     )
         }));
+    }
+
+    #[tokio::test]
+    async fn prepare_output_ring_uses_source_codec_hint_before_ingest_meta() {
+        let engine = Arc::new(MediaEngine::new());
+        let source = engine.get_or_create_pipeline("pipe-hevc-hint").await;
+        source.set_codec_hint("hevc");
+        let output = test_output(
+            "pipe-hevc-hint",
+            "720p+atrack:0",
+            "rtmp://example/live/hint",
+        );
+
+        let prepared = prepare_output_ring(&engine, &output).await;
+
+        assert_eq!(
+            prepared.terminal_stage_key,
+            StageKey::new(
+                "pipe-hevc-hint",
+                StageKind::audio_route(
+                    "atrack:0",
+                    StageKind::codec_edge(
+                        "hevc_to_h264",
+                        StageKind::video_preset_with_codec("720p", "hevc"),
+                    ),
+                )
+            )
+        );
     }
 
     #[tokio::test]
