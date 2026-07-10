@@ -523,7 +523,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         "dashboard API server listening",
     );
 
-    tokio::spawn(async move {
+    let mut http_handle = tokio::spawn(async move {
         if let Err(e) = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -539,7 +539,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let engine_clone = engine.clone();
     let pipeline_lookup_clone = pipeline_lookup.clone();
     let rtmp_port = ports.rtmp;
-    let rtmp_handle = tokio::spawn(async move {
+    let mut rtmp_handle = tokio::spawn(async move {
         crate::media::rtmp::start_rtmp_server_on(
             pipeline_lookup_clone,
             security_clone,
@@ -558,7 +558,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         srt_ingest_policy_store,
     ));
     let srt_port = ports.srt;
-    let srt_handle = tokio::spawn(async move {
+    let mut srt_handle = tokio::spawn(async move {
         srt_server.run(srt_port).await;
         error!("SRT server task exited unexpectedly");
     });
@@ -607,6 +607,21 @@ pub async fn run_app(config: Arc<AppConfig>) {
         // Wait one reconciler interval OR until a shutdown signal fires.
         tokio::select! {
             _ = shutdown.cancelled() => break,
+            result = &mut http_handle => {
+                error!(result = ?result, "critical HTTP listener task exited");
+                shutdown.cancel();
+                break;
+            }
+            result = &mut rtmp_handle => {
+                error!(result = ?result, "critical RTMP listener task exited");
+                shutdown.cancel();
+                break;
+            }
+            result = &mut srt_handle => {
+                error!(result = ?result, "critical SRT listener task exited");
+                shutdown.cancel();
+                break;
+            }
             _ = tokio::time::sleep(Duration::from_millis(tuning.reconciler_interval_ms)) => {}
         }
         reconciler_tick += 1;
@@ -1182,13 +1197,18 @@ pub async fn run_app(config: Arc<AppConfig>) {
     // Must be called after all DB-writing tasks have been cancelled above.
     pool.close().await;
 
-    // Abort RTMP task (it has no graceful-shutdown path; aborting is safe here).
-    rtmp_handle.abort();
+    if !http_handle.is_finished() {
+        http_handle.abort();
+    }
+    if !rtmp_handle.is_finished() {
+        rtmp_handle.abort();
+    }
 
-    // Await the SRT server task: dropping tx (via drain_os_thread_handles above)
-    // unblocks run()'s accept loop; waiting here ensures _server_sock_guard Drop
-    // fires and srt_close(server_sock) completes before srt_cleanup() below.
-    let _ = srt_handle.await;
+    // Await the SRT server task after explicit listener shutdown so the
+    // listener closer drops before srt_cleanup() below.
+    if !srt_handle.is_finished() {
+        let _ = srt_handle.await;
+    }
 
     // Tear down libsrt global state AFTER all SRT sockets are closed.
     // This must come after join_os_threads() above, which guarantees all
