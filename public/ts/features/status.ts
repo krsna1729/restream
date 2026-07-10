@@ -8,7 +8,7 @@ import { withBasePath } from "../core/base-path.js";
 import {
   copyText,
   escapeHtml,
-  sanitizeLogMessage,
+  escapeRedactedHtml,
   showCopiedNotification,
   showErrorAlert,
 } from "../core/utils.js";
@@ -322,7 +322,7 @@ function renderRestreamActivity(logs: AppLogRow[]): string {
                     <span class="badge badge-sm ${event.badgeClass}">${escapeHtml(event.label)}</span>
                     <span class="text-xs opacity-70">${escapeHtml(formatLogTime(log.ts))}</span>
                 </div>
-                <pre class="mt-2 whitespace-pre-wrap break-words text-xs">${escapeHtml(sanitizeLogMessage(log.message || "", true))}</pre>
+                <pre class="mt-2 whitespace-pre-wrap break-words text-xs">${escapeRedactedHtml(log.message || "", true)}</pre>
                 <div class="text-base-content/55 mt-2 truncate font-mono text-[11px]">${escapeHtml(log.target || "--")}</div>
             </div>`;
     })
@@ -362,7 +362,7 @@ function renderProcessLog(logs: AppLogRow[]): string {
                     <span class="opacity-70">${escapeHtml(formatLogTime(log.ts))}</span>
                     <span class="text-base-content/55 truncate font-mono">${escapeHtml(log.target || "--")}</span>
                 </div>
-                <pre class="whitespace-pre-wrap break-words text-xs">${escapeHtml(sanitizeLogMessage(log.message || "", true))}</pre>
+                <pre class="whitespace-pre-wrap break-words text-xs">${escapeRedactedHtml(log.message || "", true)}</pre>
             </div>`,
     )
     .join("");

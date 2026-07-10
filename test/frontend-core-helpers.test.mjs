@@ -153,9 +153,17 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
     /\*\*\*/,
   );
   assert.match(
-    utils.sanitizeLogMessage("rtmp://example.com/live/abcdefghijklmnopqrstuvwxyz"),
+    utils.sanitizeLogMessage(
+      "rtmp://example.com/live/abcdefghijklmnopqrstuvwxyz",
+    ),
     /\*\*\*/,
   );
+  const hostileRedacted = utils.escapeRedactedHtml(
+    'rtmp://example.com/live/abcdefghijklmnopqrstuvwxyz"><img src=x onerror=alert(1)>',
+  );
+  assert.match(hostileRedacted, /\*\*\*/);
+  assert.doesNotMatch(hostileRedacted, /<img/i);
+  assert.match(hostileRedacted, /&lt;img/);
   assert.equal(utils.formatCodecName("avc1"), "H.264");
   assert.equal(utils.formatCodecName("opus"), "Opus");
   assert.equal(utils.isValidOutput("rtmps://example.com/live/key"), true);
@@ -184,10 +192,7 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
   assert.equal(copied.classList.contains("hidden"), false);
 
   assert.equal(utils.getStatusColor("warning"), "yellow");
-  assert.equal(
-    utils.protocolUsesOutputServerPresets("hls"),
-    true,
-  );
+  assert.equal(utils.protocolUsesOutputServerPresets("hls"), true);
   assert.equal(
     utils.resolvePresetOutputUrl(
       "https://a.upload.youtube.com/http_upload_hls?cid=${stream_key}",
@@ -234,13 +239,18 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
     utils.buildDefaultCustomOutputUrl("rtmp", "rtmp://seed/live/key", "demo"),
     "rtmp://demo:1935/live/key",
   );
-  assert.equal(utils.formatMaskedStreamKey("channel_secretvalue"), "channel_se***ue");
+  assert.equal(
+    utils.formatMaskedStreamKey("channel_secretvalue"),
+    "channel_se***ue",
+  );
   assert.equal(utils.formatChannelCount(6), "5.1 (6 ch)");
 });
 
 test("audio track labels persist friendly names with title and language fallbacks", async () => {
   installFakeDom();
-  const labels = await loadCompiledFrontendModule("features/audio-track-labels.js");
+  const labels = await loadCompiledFrontendModule(
+    "features/audio-track-labels.js",
+  );
 
   const track = { pid: 256, index: 1, language: "eng", title: "Main Mix" };
   assert.equal(labels.audioTrackKey(track, 0), "pid:256");
@@ -251,10 +261,7 @@ test("audio track labels persist friendly names with title and language fallback
   assert.equal(labels.getAudioTrackLabel("pipe-1", track, 0), "Main Mix");
 
   labels.setAudioTrackStoredLabel("pipe-1", track, 0, "Program");
-  assert.equal(
-    labels.getAudioTrackStoredLabel("pipe-1", track, 0),
-    "Program",
-  );
+  assert.equal(labels.getAudioTrackStoredLabel("pipe-1", track, 0), "Program");
   assert.equal(labels.getAudioTrackLabel("pipe-1", track, 0), "Program");
 
   labels.setAudioTrackStoredLabel("pipe-1", track, 0, " ");
@@ -267,9 +274,8 @@ test("audio track labels persist friendly names with title and language fallback
 
 test("pipeline parsing maps input, output, retry, and throughput fields", async () => {
   installFakeDom();
-  const { parsePipelinesInfo } = await loadCompiledFrontendModule(
-    "core/pipeline.js",
-  );
+  const { parsePipelinesInfo } =
+    await loadCompiledFrontendModule("core/pipeline.js");
 
   const config = {
     pipelines: [
@@ -469,15 +475,15 @@ test("ingest detail rendering and publisher quality helpers surface operator-fac
     },
   });
 
-  assert.equal(
-    publisherQuality.normalizePublisherProtocolLabel("srt"),
-    "SRT",
-  );
+  assert.equal(publisherQuality.normalizePublisherProtocolLabel("srt"), "SRT");
   assert.ok(srtAlerts.some((alert) => alert.code === "srt_bond_members"));
   assert.ok(rtmpMetrics.some((metric) => metric.code === "tcp_rtt"));
 
   deps.setPipelineViewDependencies({
     openGraphExplorer: (pipeId) => pipeId,
   });
-  assert.equal(typeof deps.pipelineViewDependencies.openGraphExplorer, "function");
+  assert.equal(
+    typeof deps.pipelineViewDependencies.openGraphExplorer,
+    "function",
+  );
 });

@@ -50,6 +50,10 @@ function sanitizeLogMessage(msg: unknown, redacted = true): string {
   );
 }
 
+function escapeRedactedHtml(value: unknown, redacted = true): string {
+  return escapeHtml(sanitizeLogMessage(value, redacted));
+}
+
 function formatCodecName(codec: string | undefined | null): string | null {
   if (!codec) return null;
   const c = String(codec)
@@ -594,6 +598,7 @@ export {
   msToHHMMSS,
   setInnerText,
   escapeHtml,
+  escapeRedactedHtml,
   maskSecret,
   sanitizeLogMessage,
   formatCodecName,

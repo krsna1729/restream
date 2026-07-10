@@ -1,4 +1,4 @@
-import { escapeHtml, sanitizeLogMessage } from "../core/utils.js";
+import { escapeHtml, escapeRedactedHtml } from "../core/utils.js";
 import type { AppLogRow } from "../types.js";
 
 const RESTREAM_ACTIVITY_WINDOW_MS = 20_000;
@@ -435,7 +435,7 @@ export function renderRestreamActivityCards(
                                     <span class="badge badge-xs ${event.badgeClass}">${escapeHtml(event.label)}</span>
                                     <span class="text-[11px] opacity-70">${escapeHtml(formatActivityTime(log.ts))}</span>
                                 </div>
-                                <pre class="mt-1 whitespace-pre-wrap break-words text-xs">${escapeHtml(sanitizeLogMessage(log.message || "", true))}</pre>
+                                <pre class="mt-1 whitespace-pre-wrap break-words text-xs">${escapeRedactedHtml(log.message || "", true)}</pre>
                             </div>`;
                   })
                   .join("")}</div>
