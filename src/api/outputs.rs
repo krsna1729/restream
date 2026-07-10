@@ -4,9 +4,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use futures_util::StreamExt;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use crate::api_view_models;
 use crate::application::services::ApiError;
@@ -47,6 +48,9 @@ pub const MONITORING_URL_PARSE_ERROR: &str =
     "Monitoring URL must be a valid absolute URL with a host";
 pub const CUSTOM_OUTPUT_ENCODING_ERROR: &str =
     "Custom output encoding is not available yet; choose source or a preset encoding";
+const YOUTUBE_MONITORING_TIMEOUT: Duration = Duration::from_secs(5);
+const YOUTUBE_MONITORING_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const YOUTUBE_MONITORING_MAX_BYTES: usize = 512 * 1024;
 
 fn normalize_supported_url(
     url: &str,
@@ -165,6 +169,70 @@ pub fn parse_youtube_monitoring_status(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum YoutubeMonitoringFetchError {
+    BuildClient,
+    Request,
+    Status,
+    Body,
+    TooLarge,
+}
+
+fn youtube_monitoring_client() -> Result<reqwest::Client, YoutubeMonitoringFetchError> {
+    reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+        .connect_timeout(YOUTUBE_MONITORING_CONNECT_TIMEOUT)
+        .timeout(YOUTUBE_MONITORING_TIMEOUT)
+        .read_timeout(YOUTUBE_MONITORING_TIMEOUT)
+        .build()
+        .map_err(|_| YoutubeMonitoringFetchError::BuildClient)
+}
+
+async fn fetch_limited_text(
+    client: &reqwest::Client,
+    url: &str,
+    max_bytes: usize,
+) -> Result<String, YoutubeMonitoringFetchError> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|_| YoutubeMonitoringFetchError::Request)?
+        .error_for_status()
+        .map_err(|_| YoutubeMonitoringFetchError::Status)?;
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| YoutubeMonitoringFetchError::Body)?;
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(YoutubeMonitoringFetchError::TooLarge);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).map_err(|_| YoutubeMonitoringFetchError::Body)
+}
+
+fn youtube_fetch_error_response(error: YoutubeMonitoringFetchError) -> axum::response::Response {
+    match error {
+        YoutubeMonitoringFetchError::BuildClient => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        YoutubeMonitoringFetchError::Status => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": "YouTube metadata request returned an unsuccessful status"})),
+        )
+            .into_response(),
+        YoutubeMonitoringFetchError::TooLarge => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": "YouTube metadata response was too large"})),
+        )
+            .into_response(),
+        YoutubeMonitoringFetchError::Request | YoutubeMonitoringFetchError::Body => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": "Failed to fetch YouTube metadata"})),
+        )
+            .into_response(),
+    }
+}
+
 pub async fn youtube_monitoring_status_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -187,31 +255,15 @@ pub async fn youtube_monitoring_status_handler(
         }
     };
 
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
-        .build();
-    let Ok(client) = client else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    let client = match youtube_monitoring_client() {
+        Ok(client) => client,
+        Err(error) => return youtube_fetch_error_response(error),
     };
-    let response = match client.get(&canonical_watch_url).send().await {
-        Ok(response) => response,
-        Err(_) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": "Failed to fetch YouTube metadata"})),
-            )
-                .into_response();
-        }
-    };
-    let html = match response.text().await {
+    let html = match fetch_limited_text(&client, &canonical_watch_url, YOUTUBE_MONITORING_MAX_BYTES)
+        .await
+    {
         Ok(html) => html,
-        Err(_) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": "Failed to read YouTube metadata"})),
-            )
-                .into_response();
-        }
+        Err(error) => return youtube_fetch_error_response(error),
     };
     Json(parse_youtube_monitoring_status(canonical_watch_url, &html)).into_response()
 }
@@ -490,5 +542,54 @@ pub async fn output_status_handler(
             Json(serde_json::json!({"error": "output not active"})),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn serve_once(status: &str, body: Vec<u8>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let status = status.to_string();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            socket.write_all(&body).await.unwrap();
+        });
+        format!("http://{addr}/watch")
+    }
+
+    #[tokio::test]
+    async fn youtube_fetch_rejects_unsuccessful_status() {
+        let url = serve_once("503 Service Unavailable", b"retry later".to_vec()).await;
+        let client = youtube_monitoring_client().unwrap();
+
+        let error = fetch_limited_text(&client, &url, YOUTUBE_MONITORING_MAX_BYTES)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, YoutubeMonitoringFetchError::Status);
+    }
+
+    #[tokio::test]
+    async fn youtube_fetch_rejects_oversized_body() {
+        let url = serve_once("200 OK", vec![b'a'; YOUTUBE_MONITORING_MAX_BYTES + 1]).await;
+        let client = youtube_monitoring_client().unwrap();
+
+        let error = fetch_limited_text(&client, &url, YOUTUBE_MONITORING_MAX_BYTES)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, YoutubeMonitoringFetchError::TooLarge);
     }
 }
