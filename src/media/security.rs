@@ -9,9 +9,51 @@ use std::time::{Duration, Instant};
 
 use crate::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 
+#[derive(Clone, Copy)]
+pub enum RateLimitScope {
+    DashboardLogin,
+    RtmpPublish,
+    SrtPublish,
+    SrtRead,
+}
+
+impl RateLimitScope {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::DashboardLogin => "dashboard-login",
+            Self::RtmpPublish => "rtmp-publish",
+            Self::SrtPublish => "srt-publish",
+            Self::SrtRead => "srt-read",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "dashboard-login" => Some(Self::DashboardLogin),
+            "rtmp-publish" => Some(Self::RtmpPublish),
+            "srt-publish" => Some(Self::SrtPublish),
+            "srt-read" => Some(Self::SrtRead),
+            _ => None,
+        }
+    }
+
+    fn exempts_loopback(self) -> bool {
+        !matches!(self, Self::DashboardLogin)
+    }
+}
+
 struct FailureRecord {
     failures: Vec<Instant>,
     banned_until: Option<Instant>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RateLimitSnapshot {
+    pub scope: String,
+    pub ip: String,
+    pub failure_count: usize,
+    pub banned: bool,
+    pub ban_remaining_ms: Option<u64>,
 }
 
 pub struct IngestSecurityService {
@@ -58,7 +100,11 @@ impl IngestSecurityService {
     }
 
     pub fn is_ip_banned(&self, ip: &str) -> Option<Duration> {
-        if Self::is_loopback_ip(ip) {
+        self.is_ip_banned_for(RateLimitScope::RtmpPublish, ip)
+    }
+
+    pub fn is_ip_banned_for(&self, scope: RateLimitScope, ip: &str) -> Option<Duration> {
+        if scope.exempts_loopback() && Self::is_loopback_ip(ip) {
             return None;
         }
 
@@ -66,7 +112,8 @@ impl IngestSecurityService {
         // lazily in record_failure, keeping this hot check lock-free under
         // concurrent ban lookups (e.g., flood from many IPs).
         let state = self.state.read().ok()?;
-        let record = state.get(ip)?;
+        let key = Self::scoped_key(scope, ip);
+        let record = state.get(&key)?;
         let now = Instant::now();
 
         if let Some(banned_until) = record.banned_until
@@ -79,10 +126,13 @@ impl IngestSecurityService {
     }
 
     pub fn record_failure(&self, ip: &str) -> bool {
-        if Self::is_loopback_ip(ip) {
+        self.record_failure_for(RateLimitScope::RtmpPublish, ip)
+    }
+
+    pub fn record_failure_for(&self, scope: RateLimitScope, ip: &str) -> bool {
+        if scope.exempts_loopback() && Self::is_loopback_ip(ip) {
             return false;
         }
-
         let mut state = match self.state.write() {
             Ok(s) => s,
             Err(_) => return false,
@@ -95,12 +145,11 @@ impl IngestSecurityService {
         let limit = config.tracked_ip_limit.max(1) as usize;
         Self::evict_oldest_if_needed(&mut state, limit.saturating_sub(1));
 
-        let record = state
-            .entry(ip.to_string())
-            .or_insert_with(|| FailureRecord {
-                failures: Vec::new(),
-                banned_until: None,
-            });
+        let key = Self::scoped_key(scope, ip);
+        let record = state.entry(key).or_insert_with(|| FailureRecord {
+            failures: Vec::new(),
+            banned_until: None,
+        });
 
         record.failures.push(now);
 
@@ -151,13 +200,78 @@ impl IngestSecurityService {
     }
 
     pub fn record_success(&self, ip: &str) {
-        if Self::is_loopback_ip(ip) {
+        self.record_success_for(RateLimitScope::RtmpPublish, ip);
+    }
+
+    pub fn record_success_for(&self, scope: RateLimitScope, ip: &str) {
+        if scope.exempts_loopback() && Self::is_loopback_ip(ip) {
             return;
         }
-
         if let Ok(mut state) = self.state.write() {
-            state.remove(ip);
+            state.remove(&Self::scoped_key(scope, ip));
         }
+    }
+
+    fn scoped_key(scope: RateLimitScope, ip: &str) -> String {
+        format!("{}\0{}", scope.key(), ip)
+    }
+
+    fn parse_scoped_key(key: &str) -> Option<(&str, &str)> {
+        key.split_once('\0')
+            .filter(|(scope, ip)| RateLimitScope::from_key(scope).is_some() && !ip.is_empty())
+    }
+
+    pub fn snapshots(&self) -> Vec<RateLimitSnapshot> {
+        let Ok(state) = self.state.read() else {
+            return Vec::new();
+        };
+        let now = Instant::now();
+        let mut snapshots = state
+            .iter()
+            .filter_map(|(key, record)| {
+                let (scope, ip) = Self::parse_scoped_key(key)?;
+                let banned_until = record.banned_until.filter(|until| *until > now);
+                Some(RateLimitSnapshot {
+                    scope: scope.to_string(),
+                    ip: ip.to_string(),
+                    failure_count: record.failures.len(),
+                    banned: banned_until.is_some(),
+                    ban_remaining_ms: banned_until
+                        .map(|until| until.duration_since(now).as_millis() as u64),
+                })
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|a, b| {
+            b.banned
+                .cmp(&a.banned)
+                .then_with(|| a.scope.cmp(&b.scope))
+                .then_with(|| a.ip.cmp(&b.ip))
+        });
+        snapshots
+    }
+
+    pub fn reset(&self, scope: Option<RateLimitScope>, ip: Option<&str>) -> usize {
+        let Ok(mut state) = self.state.write() else {
+            return 0;
+        };
+        let before = state.len();
+        state.retain(|key, _| {
+            let Some((stored_scope, stored_ip)) = Self::parse_scoped_key(key) else {
+                return true;
+            };
+            if let Some(scope) = scope
+                && stored_scope != scope.key()
+            {
+                return true;
+            }
+            if let Some(ip) = ip
+                && stored_ip != ip
+            {
+                return true;
+            }
+            false
+        });
+        before.saturating_sub(state.len())
     }
 }
 
@@ -205,6 +319,97 @@ mod tests {
         // 192.168.x.x is not loopback
         assert!(!svc.record_failure("192.168.1.1"));
         assert!(svc.is_ip_banned("192.168.1.1").is_none()); // only 1 failure, not banned
+    }
+
+    #[test]
+    fn dashboard_login_does_not_exempt_loopback() {
+        let cfg = IngestSecurityConfig {
+            failure_limit: 2,
+            failure_window_ms: 60_000,
+            ban_ms: 10_000,
+            tracked_ip_limit: 1000,
+        };
+        let svc = IngestSecurityService::new(cfg);
+
+        assert!(!svc.record_failure_for(RateLimitScope::DashboardLogin, "127.0.0.1"));
+        assert!(svc.record_failure_for(RateLimitScope::DashboardLogin, "127.0.0.1"));
+        assert!(
+            svc.is_ip_banned_for(RateLimitScope::DashboardLogin, "127.0.0.1")
+                .is_some()
+        );
+        assert!(svc.is_ip_banned("127.0.0.1").is_none());
+    }
+
+    #[test]
+    fn success_only_clears_matching_rate_limit_scope() {
+        let cfg = IngestSecurityConfig {
+            failure_limit: 2,
+            failure_window_ms: 60_000,
+            ban_ms: 10_000,
+            tracked_ip_limit: 1000,
+        };
+        let svc = IngestSecurityService::new(cfg);
+        let ip = "203.0.113.55";
+
+        assert!(!svc.record_failure_for(RateLimitScope::DashboardLogin, ip));
+        assert!(svc.record_failure_for(RateLimitScope::DashboardLogin, ip));
+        assert!(
+            svc.is_ip_banned_for(RateLimitScope::DashboardLogin, ip)
+                .is_some()
+        );
+
+        svc.record_success_for(RateLimitScope::SrtPublish, ip);
+        assert!(
+            svc.is_ip_banned_for(RateLimitScope::DashboardLogin, ip)
+                .is_some(),
+            "SRT publish success must not clear dashboard login failures"
+        );
+
+        svc.record_success_for(RateLimitScope::DashboardLogin, ip);
+        assert!(
+            svc.is_ip_banned_for(RateLimitScope::DashboardLogin, ip)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn snapshots_and_reset_expose_scoped_failures() {
+        let cfg = IngestSecurityConfig {
+            failure_limit: 2,
+            failure_window_ms: 60_000,
+            ban_ms: 10_000,
+            tracked_ip_limit: 1000,
+        };
+        let svc = IngestSecurityService::new(cfg);
+        let ip = "203.0.113.60";
+
+        assert!(!svc.record_failure_for(RateLimitScope::SrtPublish, ip));
+        assert!(svc.record_failure_for(RateLimitScope::SrtPublish, ip));
+        assert!(!svc.record_failure_for(RateLimitScope::DashboardLogin, ip));
+
+        let snapshots = svc.snapshots();
+        assert_eq!(snapshots.len(), 2);
+        assert!(snapshots.iter().any(|snapshot| {
+            snapshot.scope == "srt-publish"
+                && snapshot.ip == ip
+                && snapshot.failure_count == 2
+                && snapshot.banned
+                && snapshot.ban_remaining_ms.is_some()
+        }));
+        assert!(snapshots.iter().any(|snapshot| {
+            snapshot.scope == "dashboard-login"
+                && snapshot.ip == ip
+                && snapshot.failure_count == 1
+                && !snapshot.banned
+        }));
+
+        assert_eq!(svc.reset(Some(RateLimitScope::SrtPublish), Some(ip)), 1);
+        let snapshots = svc.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].scope, "dashboard-login");
+
+        assert_eq!(svc.reset(None, None), 1);
+        assert!(svc.snapshots().is_empty());
     }
 
     #[test]

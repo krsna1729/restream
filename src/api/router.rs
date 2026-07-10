@@ -18,7 +18,8 @@ use super::agent::{
 use super::alerts::aggregate_alerts_handler;
 use super::auth::{
     audio_caps_handler, change_password_handler, dismiss_password_change_prompt_handler,
-    login_post_handler, logout_handler, stream_keys_handler,
+    login_post_handler, logout_handler, rate_limits_handler, rate_limits_reset_handler,
+    stream_keys_handler,
 };
 use super::file_ingest::{
     custom_encoding_get, custom_encoding_put, pipeline_file_ingest_delete_handler,
@@ -79,6 +80,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/auth/dismiss-password-change",
             post(dismiss_password_change_prompt_handler),
+        )
+        .route("/api/v1/security/rate-limits", get(rate_limits_handler))
+        .route(
+            "/api/v1/security/rate-limits/reset",
+            post(rate_limits_reset_handler),
         )
         .route("/api/v1/audio-caps", get(audio_caps_handler))
         .route(

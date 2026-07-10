@@ -16,6 +16,7 @@ use super::state::{
     make_session_cookie, to_hex,
 };
 use crate::application::services::AuthService;
+use crate::media::security::RateLimitScope;
 
 #[derive(Deserialize)]
 pub struct LoginPayload {
@@ -26,6 +27,13 @@ pub struct LoginPayload {
 pub struct ChangePasswordPayload {
     pub current_password: Option<String>,
     pub new_password: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimitResetPayload {
+    pub scope: Option<String>,
+    pub ip: Option<String>,
 }
 
 const BOOTSTRAP_PROMPT_PENDING: &str = "pending";
@@ -202,9 +210,12 @@ pub async fn login_post_handler(
 ) -> impl IntoResponse {
     let client_ip = connect_info
         .map(|ci| ci.0.ip().to_string())
-        .unwrap_or_else(|| "127.0.0.1".to_string());
+        .unwrap_or_else(|| "unknown".to_string());
 
-    if let Some(ban_remaining) = state.security.is_ip_banned(&client_ip) {
+    if let Some(ban_remaining) = state
+        .security
+        .is_ip_banned_for(RateLimitScope::DashboardLogin, &client_ip)
+    {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({
@@ -235,15 +246,15 @@ pub async fn login_post_handler(
         .unwrap_or(false);
 
     if !verified {
-        state.security.record_failure(&client_ip);
+        state
+            .security
+            .record_failure_for(RateLimitScope::DashboardLogin, &client_ip);
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error": "Incorrect password"})),
         )
             .into_response();
     }
-    state.security.record_success(&client_ip);
-
     use rand::RngCore;
     let mut token_bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut token_bytes);
@@ -418,6 +429,65 @@ pub async fn dismiss_password_change_prompt_handler(
     }
 
     Json(serde_json::json!({"ok": true})).into_response()
+}
+
+pub async fn rate_limits_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Some(token) = get_session_token_from_headers(&headers) {
+        if !state.is_authenticated(&token).await {
+            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+        }
+    } else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+
+    let attempts = state
+        .security
+        .snapshots()
+        .into_iter()
+        .map(|snapshot| {
+            serde_json::json!({
+                "scope": snapshot.scope,
+                "ip": snapshot.ip,
+                "failureCount": snapshot.failure_count,
+                "banned": snapshot.banned,
+                "banRemainingMs": snapshot.ban_remaining_ms,
+            })
+        })
+        .collect::<Vec<_>>();
+    Json(serde_json::json!({ "attempts": attempts })).into_response()
+}
+
+pub async fn rate_limits_reset_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<RateLimitResetPayload>,
+) -> impl IntoResponse {
+    if let Some(token) = get_session_token_from_headers(&headers) {
+        if !state.is_authenticated(&token).await {
+            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+        }
+    } else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+
+    let scope = match payload.scope.as_deref() {
+        Some(scope) => match RateLimitScope::from_key(scope) {
+            Some(scope) => Some(scope),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "Invalid rate limit scope"})),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+    let removed = state.security.reset(scope, payload.ip.as_deref());
+    Json(serde_json::json!({ "ok": true, "removed": removed })).into_response()
 }
 
 pub async fn audio_caps_handler() -> impl IntoResponse {

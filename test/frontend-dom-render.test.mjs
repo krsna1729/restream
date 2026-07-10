@@ -1338,6 +1338,22 @@ runCheck(
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
+      if (href === "/api/v1/security/rate-limits") {
+        return new Response(
+          JSON.stringify({
+            attempts: [
+              {
+                scope: "dashboard-login",
+                ip: "203.0.113.10",
+                failureCount: 2,
+                banned: false,
+                banRemainingMs: null,
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
 
       throw new Error(`Unexpected fetch: ${href}`);
     };
@@ -1357,7 +1373,10 @@ runCheck(
     await flushAsyncWork();
     await flushAsyncWork();
 
-    assert.deepEqual(requests, ["/api/v1/settings"]);
+    assert.deepEqual(requests, [
+      "/api/v1/settings",
+      "/api/v1/security/rate-limits",
+    ]);
     assert.equal(state.config.ingestSecurity?.failureLimit, 10);
     assert.equal(state.config.recordingSettings?.retainSourceTs, true);
     assert.equal(state.config.srtIngest?.pbkeylen, 24);

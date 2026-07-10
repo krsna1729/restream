@@ -249,6 +249,18 @@ interface CreatePipelineArgs {
   } | null;
 }
 
+interface RateLimitAttempt {
+  scope: string;
+  ip: string;
+  failureCount: number;
+  banned: boolean;
+  banRemainingMs?: number | null;
+}
+
+interface RateLimitState {
+  attempts: RateLimitAttempt[];
+}
+
 export interface PipelineMutationResponse {
   message?: string;
   pipeline: ConfigPipeline;
@@ -763,6 +775,23 @@ async function dismissPasswordChangePrompt(): Promise<{ ok: boolean } | null> {
   });
 }
 
+async function getRateLimitState(): Promise<RateLimitState | null> {
+  return apiRequest<RateLimitState>("/api/v1/security/rate-limits");
+}
+
+async function resetRateLimitState(body: {
+  scope?: string;
+  ip?: string;
+}): Promise<{ ok: boolean; removed: number } | null> {
+  return apiRequest<{ ok: boolean; removed: number }>(
+    "/api/v1/security/rate-limits/reset",
+    {
+      method: "POST",
+      body,
+    },
+  );
+}
+
 async function getProcessingGraph(pipelineId: string): Promise<unknown | null> {
   return apiRequest(
     `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/graph`,
@@ -819,9 +848,11 @@ export {
   logout,
   changePassword,
   dismissPasswordChangePrompt,
+  getRateLimitState,
+  resetRateLimitState,
   getProcessingGraph,
   getYoutubeMonitoringStatus,
   DEFAULT_ENGINE_SBOM_ENDPOINT,
 };
 
-export type { YoutubeMonitoringStatus };
+export type { RateLimitAttempt, RateLimitState, YoutubeMonitoringStatus };

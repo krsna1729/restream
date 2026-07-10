@@ -4,6 +4,9 @@ import {
   logout,
   changePassword,
   dismissPasswordChangePrompt,
+  getRateLimitState,
+  resetRateLimitState,
+  type RateLimitAttempt,
   type TranscodeProfile,
   type TranscodeProfiles,
 } from "../core/api.js";
@@ -49,6 +52,7 @@ export async function loadSettings({
   populateRecordingSettings();
   populateSrtIngestSettings();
   syncDashboardPasswordPrompt();
+  void refreshRateLimitState();
   loadTranscodeProfiles();
 }
 
@@ -133,6 +137,8 @@ export function registerSettingsGlobals(): void {
   window.addTranscodeProfile = addTranscodeProfile;
   window.saveDashboardPassword = saveDashboardPassword;
   window.dismissDashboardPasswordPrompt = dismissDashboardPasswordPrompt;
+  window.refreshRateLimitState = refreshRateLimitState;
+  window.resetRateLimitState = resetRateLimitStateFromUi;
   window.logoutUser = logoutUser;
 }
 
@@ -248,7 +254,34 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     </div>
                 </div>
 
+                <div class="space-y-2">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div class="text-sm font-medium">Authentication Attempts</div>
+                        <div class="flex items-center gap-2">
+                            <button class="btn btn-ghost btn-sm" onclick="refreshRateLimitState()">Refresh</button>
+                            <button class="btn btn-outline btn-sm" onclick="resetRateLimitState()">Reset All</button>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto rounded-lg border border-base-content/10">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Scope</th>
+                                    <th>IP</th>
+                                    <th>Failures</th>
+                                    <th>Status</th>
+                                    <th class="text-right">Reset</th>
+                                </tr>
+                            </thead>
+                            <tbody id="rate-limit-attempts-body">
+                                <tr><td colspan="5" class="text-base-content/60">No attempts</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <div class="divider my-0"></div>
+
 
                 <div id="recording-settings-section" class="space-y-2">
                     <div class="text-sm font-medium">Recording</div>
@@ -459,6 +492,70 @@ export async function saveIngestSecurity(): Promise<void> {
     populateIngestSecuritySettings();
     showSavedFeedback("ingest-security-saved");
   }
+}
+
+function formatRateLimitScope(scope: string): string {
+  switch (scope) {
+    case "dashboard-login":
+      return "Dashboard";
+    case "rtmp-publish":
+      return "RTMP publish";
+    case "srt-publish":
+      return "SRT publish";
+    case "srt-read":
+      return "SRT read";
+    default:
+      return scope;
+  }
+}
+
+function formatBanStatus(attempt: RateLimitAttempt): string {
+  if (!attempt.banned) return "Tracking";
+  const remainingMs = attempt.banRemainingMs ?? 0;
+  const seconds = Math.ceil(remainingMs / 1000);
+  return seconds > 0 ? `Banned ${seconds}s` : "Banned";
+}
+
+function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
+  const body = document.getElementById("rate-limit-attempts-body");
+  if (!body) return;
+  if (attempts.length === 0) {
+    body.innerHTML = `<tr><td colspan="5" class="text-base-content/60">No attempts</td></tr>`;
+    return;
+  }
+  body.innerHTML = attempts
+    .map((attempt) => {
+      const resetArgs = `${JSON.stringify(attempt.scope)}, ${JSON.stringify(attempt.ip)}`;
+      return `
+        <tr>
+          <td>${escapeHtml(formatRateLimitScope(attempt.scope))}</td>
+          <td><code>${escapeHtml(attempt.ip)}</code></td>
+          <td>${attempt.failureCount}</td>
+          <td>${escapeHtml(formatBanStatus(attempt))}</td>
+          <td class="text-right">
+            <button class="btn btn-ghost btn-xs" onclick="resetRateLimitState(${escapeHtml(resetArgs)})">Reset</button>
+          </td>
+        </tr>`;
+    })
+    .join("");
+}
+
+export async function refreshRateLimitState(): Promise<void> {
+  const result = await getRateLimitState();
+  if (!result) return;
+  renderRateLimitAttempts(result.attempts);
+}
+
+export async function resetRateLimitStateFromUi(
+  scope?: string,
+  ip?: string,
+): Promise<void> {
+  const result = await resetRateLimitState({
+    ...(scope ? { scope } : {}),
+    ...(ip ? { ip } : {}),
+  });
+  if (!result) return;
+  await refreshRateLimitState();
 }
 
 function effectiveRecordingSettings(): RecordingSettings {

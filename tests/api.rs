@@ -259,6 +259,73 @@ async fn login_wrong_password() {
 }
 
 #[tokio::test]
+async fn rate_limit_state_lists_and_resets_failed_auth_attempts() {
+    let (app, _) = test_app().await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from(r#"{"password":"wrong"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let cookie = login(&app).await;
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/security/rate-limits",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let attempts = json["attempts"].as_array().unwrap();
+    assert!(attempts.iter().any(|attempt| {
+        attempt["scope"] == "dashboard-login"
+            && attempt["ip"] == "unknown"
+            && attempt["failureCount"].as_u64() == Some(1)
+            && attempt["banned"] == false
+    }));
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/security/rate-limits/reset",
+            &cookie,
+            Some(r#"{"scope":"dashboard-login","ip":"unknown"}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["removed"], 1);
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/security/rate-limits",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    let json = body_json(resp).await;
+    assert!(json["attempts"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn login_success_and_logout() {
     let (app, _) = test_app().await;
     let cookie = login(&app).await;

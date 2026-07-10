@@ -109,6 +109,8 @@ declare global {
     addTranscodeProfile: () => void;
     saveDashboardPassword: () => Promise<void>;
     dismissDashboardPasswordPrompt: () => Promise<void>;
+    refreshRateLimitState: () => Promise<void>;
+    resetRateLimitState: (scope?: string, ip?: string) => Promise<void>;
     logoutUser: () => Promise<void>;
   }
 }

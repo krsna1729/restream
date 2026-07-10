@@ -60,6 +60,7 @@ use crate::domain::srt_ingest::{ResolvedSrtIngestConfig, SrtPipelineIngestConfig
 use crate::domain::state::EgressPhase;
 use crate::media::engine::{EgressRegistration, MediaEngine, PublisherQuality};
 use crate::media::ring_buffer::{MediaPacket, MediaType, Reader, RingBuffer};
+use crate::media::security::RateLimitScope;
 use crate::media::startup_policy;
 use crate::media::ts_chunk_ring::{TsChunkReader, TsChunkRing};
 use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
@@ -1214,8 +1215,16 @@ impl SrtServer {
         let is_group = is_srt_group(client_sock);
         let client_ip = client_addr.ip().to_string();
 
-        // Rate-limit check — same gate as RTMP (H1 fix)
-        if let Some(remaining) = self.security.is_ip_banned(&client_ip) {
+        // Rate-limit check before StreamID parsing; reject if either SRT scope
+        // has already banned the peer.
+        if let Some(remaining) = self
+            .security
+            .is_ip_banned_for(RateLimitScope::SrtPublish, &client_ip)
+            .or_else(|| {
+                self.security
+                    .is_ip_banned_for(RateLimitScope::SrtRead, &client_ip)
+            })
+        {
             error!(
                 "[srt] Rejecting banned IP {} (ban expires in {:.1}s)",
                 client_ip,
@@ -1264,6 +1273,11 @@ impl SrtServer {
         let parsed = parse_srt_stream_id(&streamid);
         let is_reader = parsed.mode == SrtConnectionMode::Read;
         let stream_key = parsed.stream_key.as_str();
+        let rate_limit_scope = if is_reader {
+            RateLimitScope::SrtRead
+        } else {
+            RateLimitScope::SrtPublish
+        };
 
         // Query pipeline for stream key validation
         let pipeline = match authenticate_srt_stream_key(
@@ -1271,6 +1285,7 @@ impl SrtServer {
             &self.security,
             stream_key,
             &client_ip,
+            rate_limit_scope,
         )
         .await
         {

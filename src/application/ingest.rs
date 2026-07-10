@@ -6,7 +6,7 @@ use crate::application::ports::{
     PipelineStoreError,
 };
 use crate::media::engine::MediaEngine;
-use crate::media::security::IngestSecurityService;
+use crate::media::security::{IngestSecurityService, RateLimitScope};
 use crate::types::{Ingest, Pipeline};
 
 #[derive(Debug)]
@@ -210,17 +210,15 @@ pub async fn authenticate_publish_stream_key(
     stream_key: &str,
     client_ip: &str,
 ) -> Result<Pipeline, IngestAuthError> {
-    match pipeline_lookup.get_pipeline_by_stream_key(stream_key).await {
-        Ok(Some(pipeline)) => Ok(pipeline),
-        Ok(None) => {
-            security.record_failure(client_ip);
-            Err(IngestAuthError::InvalidStreamKey)
-        }
-        Err(err) => {
-            security.record_failure(client_ip);
-            Err(IngestAuthError::LookupFailed(err))
-        }
-    }
+    authenticate_stream_key_for_scope(
+        pipeline_lookup,
+        security,
+        stream_key,
+        client_ip,
+        RateLimitScope::RtmpPublish,
+        false,
+    )
+    .await
 }
 
 pub async fn authenticate_srt_stream_key(
@@ -228,11 +226,43 @@ pub async fn authenticate_srt_stream_key(
     security: &IngestSecurityService,
     stream_key: &str,
     client_ip: &str,
+    scope: RateLimitScope,
 ) -> Result<Pipeline, IngestAuthError> {
-    let pipeline =
-        authenticate_publish_stream_key(pipeline_lookup, security, stream_key, client_ip).await?;
-    security.record_success(client_ip);
-    Ok(pipeline)
+    authenticate_stream_key_for_scope(
+        pipeline_lookup,
+        security,
+        stream_key,
+        client_ip,
+        scope,
+        true,
+    )
+    .await
+}
+
+async fn authenticate_stream_key_for_scope(
+    pipeline_lookup: &dyn PipelineStore,
+    security: &IngestSecurityService,
+    stream_key: &str,
+    client_ip: &str,
+    scope: RateLimitScope,
+    clear_on_success: bool,
+) -> Result<Pipeline, IngestAuthError> {
+    match pipeline_lookup.get_pipeline_by_stream_key(stream_key).await {
+        Ok(Some(pipeline)) => {
+            if clear_on_success {
+                security.record_success_for(scope, client_ip);
+            }
+            Ok(pipeline)
+        }
+        Ok(None) => {
+            security.record_failure_for(scope, client_ip);
+            Err(IngestAuthError::InvalidStreamKey)
+        }
+        Err(err) => {
+            security.record_failure_for(scope, client_ip);
+            Err(IngestAuthError::LookupFailed(err))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -562,16 +592,25 @@ mod tests {
         let security = Arc::new(IngestSecurityService::new(test_security_config()));
         let ip = "10.0.0.2";
 
-        assert!(!security.record_failure(ip));
-        assert!(security.record_failure(ip));
-        assert!(security.is_ip_banned(ip).is_some());
+        assert!(!security.record_failure_for(RateLimitScope::SrtPublish, ip));
+        assert!(security.record_failure_for(RateLimitScope::SrtPublish, ip));
+        assert!(
+            security
+                .is_ip_banned_for(RateLimitScope::SrtPublish, ip)
+                .is_some()
+        );
 
-        let pipeline = authenticate_srt_stream_key(&lookup, &security, "live", ip)
-            .await
-            .unwrap();
+        let pipeline =
+            authenticate_srt_stream_key(&lookup, &security, "live", ip, RateLimitScope::SrtPublish)
+                .await
+                .unwrap();
 
         assert_eq!(pipeline.id, "pipeline-1");
-        assert!(security.is_ip_banned(ip).is_none());
+        assert!(
+            security
+                .is_ip_banned_for(RateLimitScope::SrtPublish, ip)
+                .is_none()
+        );
     }
 
     #[tokio::test]
