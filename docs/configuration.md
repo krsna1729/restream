@@ -100,9 +100,9 @@ rtmp://<ingestHost>:1935/live/<streamKey>
 srt://<ingestHost>:10080?streamid=publish:live/<streamKey>
 ```
 
-The application exposes 20 built-in stream keys through `GET /api/v1/stream-keys`.
-Pipelines select one of those keys; the API does not currently create or delete
-stream-key records independently.
+Pipelines may supply an explicit stream key, or omit it and let the API generate
+a high-entropy key. `GET /api/v1/stream-keys` returns only keys already assigned
+to configured pipelines; it does not enumerate unused credentials.
 
 ## Output Configuration
 

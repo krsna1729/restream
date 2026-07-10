@@ -370,6 +370,29 @@ async fn pipeline_crud_via_api() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+#[tokio::test]
+async fn pipeline_create_generates_stream_key_when_omitted() {
+    let (app, _) = test_app().await;
+    let cookie = login(&app).await;
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/pipelines",
+            &cookie,
+            Some(r#"{"name":"Generated Key Pipeline"}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let json = body_json(resp).await;
+    let stream_key = json["pipeline"]["streamKey"].as_str().unwrap();
+    assert!(stream_key.starts_with("sk_"));
+    assert_eq!(stream_key.len(), 67);
+    assert!(stream_key[3..].bytes().all(|byte| byte.is_ascii_hexdigit()));
+}
+
 // --- Output CRUD via API ---
 
 #[tokio::test]
@@ -946,6 +969,9 @@ async fn stream_keys_returns_array() {
     db::set_ingest_host(&pool, "ingest.example.com")
         .await
         .unwrap();
+    db::create_pipeline(&pool, "p1", "Publisher", "configured-key", None, None)
+        .await
+        .unwrap();
 
     let resp = app
         .clone()
@@ -955,15 +981,16 @@ async fn stream_keys_returns_array() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     let keys = json.as_array().unwrap();
-    assert_eq!(keys.len(), 20);
-    assert!(keys[0]["key"].is_string());
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0]["key"], "configured-key");
+    assert_eq!(keys[0]["label"], "Publisher");
     assert_eq!(
         keys[0]["ingestUrls"]["rtmp"],
-        "rtmp://ingest.example.com:1935/live/key01_6c71124cde80358ca7c13081"
+        "rtmp://ingest.example.com:1935/live/configured-key"
     );
     assert_eq!(
         keys[0]["ingestUrls"]["srt"],
-        "srt://ingest.example.com:10080?streamid=publish:live/key01_6c71124cde80358ca7c13081"
+        "srt://ingest.example.com:10080?streamid=publish:live/configured-key"
     );
 }
 

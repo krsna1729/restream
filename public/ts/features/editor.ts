@@ -864,24 +864,24 @@ async function populatePipelineKeySelect(selectedKey = ""): Promise<string> {
   ) as HTMLSelectElement | null;
   if (!keySelect) return selectedKey;
   const keys = await loadStreamKeysOnce();
-  const usedKeys = new Set(
-    state.pipelines.map((pipeline) => pipeline.key).filter(Boolean),
-  );
-  const fallbackKey =
-    selectedKey ||
-    keys.find((key) => !usedKeys.has(key.key))?.key ||
-    keys[0]?.key ||
-    "";
+  const options = selectedKey
+    ? keys.filter((key) => key.key === selectedKey)
+    : [];
+  if (selectedKey && !options.some((key) => key.key === selectedKey)) {
+    options.push({ key: selectedKey });
+  }
 
-  keySelect.innerHTML = keys
-    .map((key) => {
-      const isSelected = key.key === fallbackKey;
-      const isUsedElsewhere = usedKeys.has(key.key) && key.key !== selectedKey;
-      return `<option value="${escapeHtml(key.key)}"${isSelected ? " selected" : ""}${isUsedElsewhere ? " disabled" : ""}>${escapeHtml(formatMaskedStreamKey(key.key))}</option>`;
-    })
-    .join("");
-  keySelect.value = fallbackKey;
-  return fallbackKey;
+  keySelect.innerHTML = [
+    `<option value=""${selectedKey ? "" : " selected"}>Generate new key</option>`,
+    ...options.map((key) => {
+      const label = key.label
+        ? `${key.label} - ${formatMaskedStreamKey(key.key)}`
+        : formatMaskedStreamKey(key.key);
+      return `<option value="${escapeHtml(key.key)}"${key.key === selectedKey ? " selected" : ""}>${escapeHtml(label)}</option>`;
+    }),
+  ].join("");
+  keySelect.value = selectedKey;
+  return selectedKey;
 }
 
 let streamKeysCache: StreamKey[] | null = null;
@@ -1406,7 +1406,7 @@ export async function pipeFormBtn(event: Event): Promise<void> {
   if (currentPipeModalMode === "create") {
     const response = await createPipeline({
       name,
-      streamKey,
+      ...(streamKey ? { streamKey } : {}),
       inputSource,
       srtIngestPolicy,
       fileIngest,

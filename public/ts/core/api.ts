@@ -237,7 +237,7 @@ function buildLogsStreamUrl(options: BuildLogsStreamUrlOptions = {}): string {
 
 interface CreatePipelineArgs {
   name: string;
-  streamKey: string;
+  streamKey?: string;
   inputSource?: string | null;
   srtIngestPolicy?: SrtPipelineIngestConfig | null;
   fileIngest?: {

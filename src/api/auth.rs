@@ -12,8 +12,8 @@ use tracing::{info, warn};
 
 use super::state::{
     AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, MAX_PASSWORD_LEN, SESSION_MAX_AGE_SECONDS,
-    STREAM_KEYS, check_field_len, clear_session_cookie, get_session_token_from_headers,
-    hash_session_token, make_session_cookie, to_hex,
+    check_field_len, clear_session_cookie, get_session_token_from_headers, hash_session_token,
+    make_session_cookie, to_hex,
 };
 use crate::application::services::AuthService;
 
@@ -450,18 +450,26 @@ pub async fn stream_keys_handler(
     }
 
     let host = state.pipeline_service.get_ingest_host().await;
-    let mut keys = Vec::new();
-    for &(key, label) in STREAM_KEYS {
-        keys.push(serde_json::json!({
-            "key": key,
-            "label": label,
-            "ingestUrls": {
-                "rtmp": format!("rtmp://{}:{}/live/{}", host, state.ports.rtmp, key),
-                "srt": format!("srt://{}:{}?streamid=publish:live/{}", host, state.ports.srt, key)
-            }
-        }));
+    match state.pipeline_service.list_pipelines().await {
+        Ok(pipelines) => {
+            let keys = pipelines
+                .into_iter()
+                .map(|pipeline| {
+                    let key = pipeline.stream_key;
+                    serde_json::json!({
+                        "key": key.clone(),
+                        "label": pipeline.name,
+                        "ingestUrls": {
+                            "rtmp": format!("rtmp://{}:{}/live/{}", host, state.ports.rtmp, key),
+                            "srt": format!("srt://{}:{}?streamid=publish:live/{}", host, state.ports.srt, key)
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+            Json(keys).into_response()
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
-    Json(keys).into_response()
 }
 
 #[cfg(test)]

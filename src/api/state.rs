@@ -40,29 +40,6 @@ pub const PASSWORD_META_KEY: &str = "dashboardPasswordHash";
 pub const BOOTSTRAP_PASSWORD_PROMPT_META_KEY: &str = "dashboardPasswordPrompt";
 pub const DEFAULT_INGEST_HOST: &str = "localhost";
 
-pub const STREAM_KEYS: &[(&str, &str)] = &[
-    ("key01_6c71124cde80358ca7c13081", "key01"),
-    ("key02_fff2adcf55a26d31ae93464b", "key02"),
-    ("key03_c8087d1adb6b3bdf8e806d8f", "key03"),
-    ("key04_4a1fe99ef35b0d0768076be7", "key04"),
-    ("key05_ea839930dce5e021c629751d", "key05"),
-    ("key06_48355e726bdc24afb9d08214", "key06"),
-    ("key07_19eb3db7cb3d3f0831335701", "key07"),
-    ("key08_3d4c645db62dac4449bbcea5", "key08"),
-    ("key09_dc3f631793cadc287a509bf8", "key09"),
-    ("key10_5d0f9109044f0cfb15d73ff8", "key10"),
-    ("key11_c714ec6d94055e4e0175c9fd", "key11"),
-    ("key12_0920bf2ce11eb518726ba3f7", "key12"),
-    ("key13_88408b620477bc316f692c31", "key13"),
-    ("key14_22893f11de0be7f49813dd8c", "key14"),
-    ("key15_c1499536bc52e16281345ee8", "key15"),
-    ("key16_794d51b9d1af088c00c2b5c1", "key16"),
-    ("key17_b36de7b3fcaec34947a29d27", "key17"),
-    ("key18_b301a17694098473a6bd2513", "key18"),
-    ("key19_522561d0ec2e70bc79dda155", "key19"),
-    ("key20_f6b326ffccc2f5a22477f1f9", "key20"),
-];
-
 pub struct PortConfig {
     pub rtmp: u16,
     pub srt: u16,

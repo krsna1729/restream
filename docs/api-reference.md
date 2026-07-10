@@ -105,7 +105,8 @@ Invalid values return `400 Bad Request` with a descriptive error.
 
 ### `GET /api/v1/stream-keys`
 
-Returns 20 built-in keys and native ingest URLs:
+Returns configured pipeline stream keys and native ingest URLs. The endpoint
+does not enumerate unused or future credentials:
 
 ```json
 [

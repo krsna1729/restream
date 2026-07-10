@@ -5,7 +5,6 @@ use axum::{
     response::IntoResponse,
 };
 use serde::Deserialize;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::alerts;
@@ -22,7 +21,7 @@ use super::file_ingest::{
     validate_pipeline_file_ingest_payload,
 };
 use super::state::{
-    AppState, MAX_NAME_LEN, MAX_STREAM_KEY_LEN, MAX_URL_LEN, STREAM_KEYS, check_field_len,
+    AppState, MAX_NAME_LEN, MAX_STREAM_KEY_LEN, MAX_URL_LEN, check_field_len,
     get_session_token_from_headers, recording_enabled_map, refresh_srt_ingest_policy_store,
     require_authenticated, to_hex,
 };
@@ -35,6 +34,34 @@ pub struct PipelinePayload {
     pub input_source: Option<Option<String>>,
     pub srt_ingest_policy: Option<SrtPipelineIngestConfig>,
     pub file_ingest: Option<Option<PipelineFileIngestPayload>>,
+}
+
+fn generate_stream_key() -> String {
+    use rand::RngCore;
+
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    format!("sk_{}", to_hex(&bytes))
+}
+
+async fn generate_unique_stream_key(state: &AppState) -> Result<String, StatusCode> {
+    let active_pipelines = state
+        .pipeline_service
+        .list_pipelines()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    for _ in 0..16 {
+        let candidate = generate_stream_key();
+        if active_pipelines
+            .iter()
+            .all(|pipeline| pipeline.stream_key != candidate)
+        {
+            return Ok(candidate);
+        }
+    }
+
+    Err(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 pub async fn pipelines_get_handler(
@@ -144,25 +171,17 @@ pub async fn pipelines_post_handler(
             .into_response();
     }
 
-    let stream_key = if let Some(ref key) = payload.stream_key {
-        key.clone()
+    let stream_key = if let Some(key) = payload
+        .stream_key
+        .as_ref()
+        .map(|key| key.trim())
+        .filter(|key| !key.is_empty())
+    {
+        key.to_string()
     } else {
-        let active_pipelines = state
-            .pipeline_service
-            .list_pipelines()
-            .await
-            .unwrap_or_default();
-        let used: HashSet<String> = active_pipelines.into_iter().map(|p| p.stream_key).collect();
-        let found = STREAM_KEYS.iter().find(|&&(key, _)| !used.contains(key));
-        match found {
-            Some(&(key, _)) => key.to_string(),
-            None => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "No available stream keys"})),
-                )
-                    .into_response();
-            }
+        match generate_unique_stream_key(&state).await {
+            Ok(key) => key,
+            Err(status) => return status.into_response(),
         }
     };
 
