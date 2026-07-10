@@ -303,7 +303,10 @@ impl MediaLibraryService {
         media_dir: &str,
     ) -> ApiResult<bool> {
         let meta_key = recording_enabled_meta_key(pipeline_id);
-        let _ = self.meta_writer.set_meta(&meta_key, "1").await;
+        self.meta_writer
+            .set_meta(&meta_key, "1")
+            .await
+            .map_err(|e| ApiError::internal(format!("set recording enabled: {e}")))?;
 
         let has_ingest = engine.ingests.active.read().await.contains_key(pipeline_id);
         if has_ingest && !engine.is_recording_active(pipeline_id).await {
@@ -329,7 +332,10 @@ impl MediaLibraryService {
         pipeline_id: &str,
     ) -> ApiResult<()> {
         let meta_key = recording_enabled_meta_key(pipeline_id);
-        let _ = self.meta_writer.set_meta(&meta_key, "0").await;
+        self.meta_writer
+            .set_meta(&meta_key, "0")
+            .await
+            .map_err(|e| ApiError::internal(format!("set recording disabled: {e}")))?;
         engine.unregister_recording(pipeline_id).await;
         Ok(())
     }
@@ -562,7 +568,8 @@ mod tests {
     use super::*;
     use crate::application::ports::{
         IngestCatalogFuture, IngestDeleteFuture, IngestLookup, IngestLookupFuture,
-        IngestUpdateFuture, IngestWriteError, IngestWriteFuture, IngestWriter,
+        IngestUpdateFuture, IngestWriteError, IngestWriteFuture, IngestWriter, MetaLookupError,
+        MetaStoreWriter, MetaWriteFuture,
     };
     use crate::domain::ids::RecordingId;
     use std::sync::Mutex;
@@ -603,6 +610,14 @@ mod tests {
         ingests: Mutex<Vec<Ingest>>,
         fail_id: String,
         fail_filename: String,
+    }
+
+    struct FailingMetaWriter;
+
+    impl MetaStoreWriter for FailingMetaWriter {
+        fn set_meta<'a>(&'a self, _key: &'a str, _value: &'a str) -> MetaWriteFuture<'a> {
+            Box::pin(async move { Err(MetaLookupError::new("injected meta write failure")) })
+        }
     }
 
     impl RenameRollbackIngestStore {
@@ -1009,6 +1024,64 @@ mod tests {
         assert_eq!(restored[1].live_optimized, second.live_optimized);
         assert_eq!(restored[1].target_gop_seconds, second.target_gop_seconds);
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn recording_start_does_not_touch_runtime_when_persistence_fails() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        let service = MediaLibraryService::with_stores(
+            Arc::new(SqliteMetaStore::new(pool.clone())),
+            Arc::new(FailingMetaWriter),
+            Arc::new(SqliteRecordingStore::new(pool.clone())),
+            PipelineService::new(pool.clone()),
+            IngestService::new(pool),
+        );
+        let engine = Arc::new(MediaEngine::new());
+        let _registration = engine
+            .try_register_ingest("pipe-recording", "stream-key", "rtmp")
+            .await
+            .unwrap();
+        let temp_dir = tempfile_dir("recording-start-persist-fail");
+
+        let err = service
+            .recording_start(
+                &engine,
+                "pipe-recording",
+                "Pipeline".to_string(),
+                None,
+                temp_dir.to_str().unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ApiError::Internal(_)));
+        assert!(!engine.is_recording_active("pipe-recording").await);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn recording_stop_does_not_touch_runtime_when_persistence_fails() {
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        crate::db::setup_database_schema(&pool).await.unwrap();
+        let service = MediaLibraryService::with_stores(
+            Arc::new(SqliteMetaStore::new(pool.clone())),
+            Arc::new(FailingMetaWriter),
+            Arc::new(SqliteRecordingStore::new(pool.clone())),
+            PipelineService::new(pool.clone()),
+            IngestService::new(pool),
+        );
+        let engine = Arc::new(MediaEngine::new());
+        let _token = engine.register_recording("pipe-recording").await;
+
+        let err = service
+            .recording_stop(&engine, "pipe-recording")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ApiError::Internal(_)));
+        assert!(engine.is_recording_active("pipe-recording").await);
+        engine.unregister_recording("pipe-recording").await;
     }
 
     #[tokio::test]
