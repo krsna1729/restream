@@ -304,7 +304,48 @@ convergence and later harness/reporting phases.
 
 ---
 
+## Addendum Phases A-I Snapshot
+
+`impl.md` continues beyond Phase 16 with a harness/codebase governance
+addendum. Those phases are now tracked separately below so Phase 1-16 progress
+is not confused with the still-open addendum.
+
+| Phase | Status | Notes |
+|---|---|---|
+| Phase A — Source-wide audit automation | ✅ Mostly complete | `scripts/source-audit.sh` now enforces the 2,000-line cap across `src`, `public/ts`, and hand-written JS/MJS tests; fails media→API imports, API FFmpeg/transcoder stage starts, removed harness `state` status-field reads, and unapproved raw env access; writes `target/source-audit.json` with line counts, public function inventory, API route counts, harness mode/suite inventory, env-var usage, feature-cfg sites, and forbidden-import counts. CI uploads the report in `.github/workflows/ci.yml`. Remaining improvement: make the harness/API schema guard derive the full output-status field set from an API schema artifact rather than the current removed-field and typed-DTO guards. |
+| Phase B — Harness v2 semantic model | ✅ Complete for current mixed matrix | `HarnessOutputCell`, `HarnessOutputRegistry`, per-scenario `outputs.json`, progress-stall semantic cell labels, and scenario/matrix embedding are implemented in `mixed_artifacts.rs`, `mixed_runner.rs`, and mixed output builders. |
+| Phase C — Harness typed API client | ✅ Mostly complete | `ApiOutputStatus`, `ApiOutputMetrics`, and `ApiBlockedByStage` now parse output status rows with required `status`/`rawStatus`/`phase`; high-value progress, live-output, and stalled-output checks consume the DTO; unit tests cover required fields and progress DTO usage. Some lower-value fault/DSL polling paths still inspect raw JSON `status` fields that do exist in the API schema, so this is not yet a total typed-client conversion. |
+| Phase D — Harness root-cause reporting | ✅ Mostly complete | `FailureCause` now carries the full `impl.md` taxonomy, root-cause summaries include `cells`, and tests cover blocked stage, capacity, first output, keyframe, parameter sets, timestamp discontinuity, protocol connect, HLS segments, recording identity, runtime log, lifecycle stop, infrastructure, and no-progress classification. Remaining improvement: classify more failures from structured DTO fields before falling back to message substrings. |
+| Phase E — Harness artifact index | ✅ Mostly complete | Mixed scenario `artifact-index.json` is atomically written and now includes run id, command, selected env, started timestamp, source revision, scenario/assertions/outputs/log/media/SQLite paths, plus existing file existence/size/SHA-256 entries. Remaining improvement: add a matrix/root aggregate index and DB/table export for failed matrix runs. |
+| Phase F — Harness execution symmetry | ⚠️ Partial | Manifest-backed modes and shared batch helpers expose much of the live/file execution shape, but the explicit `ScenarioExecutor` trait, `HlsPreviewTiming`, and `ProbeSamplingPolicy` abstractions from `impl.md` are not present yet. Live/file ordering is therefore still partly encoded in runner functions. |
+| Phase G — Harness/report module split | ✅ Mostly complete | `src/bin/test_harness.rs` is below 2,000 lines and command dispatch is split into focused harness modules for core, catalog, suites, probes, reports, artifacts, mixed runners, fault runners, resource sweeps, sinks, and live modes. The exact `api_client.rs`, `ports.rs`, `stacks.rs`, and `probes/mod.rs` names from `impl.md` are not used, but the ownership split is present. |
+| Phase H — Whole-codebase service and adapter split | ⚠️ Partial | Route modules, application services, runtime read-model service, graph planning, repository ports, and media FFmpeg/backend modules are split enough for Phases 1-16. The larger idealized namespace split in `impl.md` (`RuntimeGraph`, registry modules, `media/protocols/*`, `media/hls/*`, `media/recording/*`) is not fully realized. |
+| Phase I — Harness as architectural governor | ⚠️ Partial | Supporting governor tests exist for typed output status, root-cause grouping, recording metadata identity, graph-planned stage counts, mixed fast-breadth defaults, and source-audit guardrails. Missing pieces: the exact named governor tests from `impl.md`, CI execution of `target/bench/test_harness mixed.fast-breadth`, and a hard guarantee that fast-breadth failure paths always emit a root-cause summary artifact. |
+
+**Verdict**: **Phases 1-16 are A-grade for their phase-scope acceptance
+criteria; addendum Phases A-E/G are close, while F/H/I remain the main
+non-A addendum gaps.**
+
+---
+
 ## Critical Remaining Gaps
+
+### P0 — Addendum Phase F/I Governor Gaps
+
+1. **Make harness execution symmetry explicit**
+   - Add the `ScenarioExecutor` trait and named `HlsPreviewTiming` /
+     `ProbeSamplingPolicy` policies so live/file ordering and duplicate probe
+     sampling move out of implicit runner branches and into manifest-visible
+     execution semantics.
+
+2. **Promote `mixed.fast-breadth` to a CI governor lane**
+   - Add the bench-profile CI command once runtime cost is acceptable, and
+     require root-cause summary artifacts on failure paths.
+
+3. **Finish exact Phase I governor tests**
+   - Add the remaining named tests for progress dependency chains, HLS no
+     segments with preview-stage state, shared internal/external stage
+     operation planning, and planner-backed HLS preview.
 
 ### P0 — Phase 1-12 Correctness Blockers Cleared
 
@@ -385,6 +426,15 @@ convergence and later harness/reporting phases.
 | Ph 14 Agent/MCP cleanup | A | Shared DTOs live in `agent_core::types`; MCP and HTTP/execution share command/query payloads where feature boundaries permit; agent graph/impact preview uses the shared planner; agent reads use service/runtime read models; agent API read/plan paths have no direct media-internal imports. |
 | Ph 15 Large-file split | A | No audited Rust, TypeScript, or hand-written frontend JS/MJS test file exceeds 2,000 lines; `scripts/source-audit.sh` now enforces that cap, and the extracted modules are below the ideal cap through responsibility-based splits. |
 | Ph 16 Rollout policy | A | Per-stage policy, runtime graph lifecycle rollout, blocking internal backend smoke CI, HEVC-to-H264 RTMP selected-audio decode-scan, internal video-preset SRT decode-scan/RSS promotion proof, and the external constrained-capacity rollout proof are implemented and tested. Live evidence proves the external constrained-capacity path surfaces causal `waitingForCapacity` with backend/wait details after recording metadata is persisted. |
+| Phase A Source audit | A- | CI-visible `source-audit.json` now includes line counts, public functions, route counts, harness mode/suite inventory, env-var usage, feature cfg sites, and hard failures for file caps, media→API imports, API stage starts, removed harness `state` reads, and unapproved raw env access. Full schema-derived harness/API drift detection is still the remaining polish. |
+| Phase B Harness semantic model | A | Mixed harness output cells, registry, `outputs.json`, scenario embedding, and failure cell labels are implemented and tested. |
+| Phase C Typed harness API | A- | High-value output progress/stall paths use `ApiOutputStatus` with required schema tests; some lower-value fault/DSL status polling remains raw JSON against existing schema fields. |
+| Phase D Root causes | A- | Full `FailureCause` taxonomy, cell extraction, summary JSON, and classification tests exist; more structured classification from DTO fields would make this fully ideal. |
+| Phase E Artifact index | A- | Scenario artifact index has run identity, command/env/timestamp/revision, scenario/assertion/output/log/media/DB paths, and checksums; root aggregate index and failed-run DB export are still open. |
+| Phase F Execution symmetry | B | Manifest-backed execution is strong, but the explicit `ScenarioExecutor`, `HlsPreviewTiming`, and `ProbeSamplingPolicy` abstractions are not yet implemented. |
+| Phase G Harness split | A- | Harness root is small and modules are responsibility split; exact module names from `impl.md` are not fully mirrored. |
+| Phase H Whole-codebase split | B | Services/routes/planner/runtime read models are split for Phase 1-16, but the broader ideal namespace split in `impl.md` remains partial. |
+| Phase I Harness governor | B | Several governor checks exist and source-audit is stronger, but exact named tests, CI `mixed.fast-breadth`, and mandatory fast-breadth root-cause artifacts are still missing. |
 
 ---
 
@@ -400,6 +450,6 @@ families, output status is dependency-aware, FFmpeg execution goes through the
 shared waist, HLS preview and recording identity are graph/metadata-driven, and
 health/alerts/diagnostics expose causal runtime state.
 
-The phase-scope work in this document is now A-grade through Phase 16. Larger
-roadmap work can continue, but it is no longer a blocker for the Phases 1-16
-acceptance criteria audited here.
+The phase-scope work in this document is now A-grade through Phase 16. The
+addendum phases in `impl.md` are not all Grade A yet: A-E/G are close after the
+latest harness governance pass, while F/H/I remain the honest next targets.
