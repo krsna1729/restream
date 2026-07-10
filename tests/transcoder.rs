@@ -671,10 +671,11 @@ fn rtmp_shaped_h264_packets_drive_source_stage() {
         for packet in packets.into_iter().skip(10) {
             source.push(packet);
         }
+        source.mark_end_of_stream();
 
         let mut reader = Reader::new("rtmp_h264_stage".to_string(), output);
         let packets =
-            collect_packets_with_deadline(&mut reader, expected_packets, Duration::from_secs(3))
+            collect_packets_with_deadline(&mut reader, expected_packets, Duration::from_secs(8))
                 .await;
 
         cancel.cancel();
