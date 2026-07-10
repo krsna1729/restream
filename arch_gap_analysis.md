@@ -320,7 +320,7 @@ is not confused with the still-open addendum.
 | Phase F — Harness execution symmetry | ⚠️ Partial | Manifest-backed modes and shared batch helpers expose much of the live/file execution shape, but the explicit `ScenarioExecutor` trait, `HlsPreviewTiming`, and `ProbeSamplingPolicy` abstractions from `impl.md` are not present yet. Live/file ordering is therefore still partly encoded in runner functions. |
 | Phase G — Harness/report module split | ✅ Mostly complete | `src/bin/test_harness.rs` is below 2,000 lines and command dispatch is split into focused harness modules for core, catalog, suites, probes, reports, artifacts, mixed runners, fault runners, resource sweeps, sinks, and live modes. The exact `api_client.rs`, `ports.rs`, `stacks.rs`, and `probes/mod.rs` names from `impl.md` are not used, but the ownership split is present. |
 | Phase H — Whole-codebase service and adapter split | ⚠️ Partial | Route modules, application services, runtime read-model service, graph planning, repository ports, and media FFmpeg/backend modules are split enough for Phases 1-16. The larger idealized namespace split in `impl.md` (`RuntimeGraph`, registry modules, `media/protocols/*`, `media/hls/*`, `media/recording/*`) is not fully realized. |
-| Phase I — Harness as architectural governor | ⚠️ Partial | Supporting governor tests exist for typed output status, root-cause grouping, recording metadata identity, graph-planned stage counts, mixed fast-breadth defaults, and source-audit guardrails. Missing pieces: the exact named governor tests from `impl.md`, CI execution of `target/bench/test_harness mixed.fast-breadth`, and a hard guarantee that fast-breadth failure paths always emit a root-cause summary artifact. |
+| Phase I — Harness as architectural governor | ⚠️ Partial | Named governor tests now cover progress cell identity, dependency-chain failure text, timestamp discontinuity root-cause grouping, recording metadata identity, HLS no-segments preview-state evidence, planner-backed HLS preview, shared FFmpeg stage operation planning, per-stage backend policy, mixed fast-breadth defaults, and source-audit guardrails. Missing pieces: CI execution of `target/bench/test_harness mixed.fast-breadth` and a hard guarantee that fast-breadth failure paths always emit a root-cause summary artifact. |
 
 **Verdict**: **Phases 1-16 are A-grade for their phase-scope acceptance
 criteria; addendum Phases A-E/G are close, while F/H/I remain the main
@@ -342,10 +342,10 @@ non-A addendum gaps.**
    - Add the bench-profile CI command once runtime cost is acceptable, and
      require root-cause summary artifacts on failure paths.
 
-3. **Finish exact Phase I governor tests**
-   - Add the remaining named tests for progress dependency chains, HLS no
-     segments with preview-stage state, shared internal/external stage
-     operation planning, and planner-backed HLS preview.
+3. **Finish fast-breadth failure artifact guarantees**
+   - The exact named governor tests now exist; the remaining Phase I gap is
+     ensuring fast-breadth failure paths always persist root-cause artifacts
+     before the mode returns failure.
 
 ### P0 — Phase 1-12 Correctness Blockers Cleared
 
@@ -434,7 +434,7 @@ non-A addendum gaps.**
 | Phase F Execution symmetry | B | Manifest-backed execution is strong, but the explicit `ScenarioExecutor`, `HlsPreviewTiming`, and `ProbeSamplingPolicy` abstractions are not yet implemented. |
 | Phase G Harness split | A- | Harness root is small and modules are responsibility split; exact module names from `impl.md` are not fully mirrored. |
 | Phase H Whole-codebase split | B | Services/routes/planner/runtime read models are split for Phase 1-16, but the broader ideal namespace split in `impl.md` remains partial. |
-| Phase I Harness governor | B | Several governor checks exist and source-audit is stronger, but exact named tests, CI `mixed.fast-breadth`, and mandatory fast-breadth root-cause artifacts are still missing. |
+| Phase I Harness governor | B+ | Exact named governor tests and stronger source-audit checks now exist; CI `mixed.fast-breadth` and mandatory fast-breadth root-cause artifacts are still missing. |
 
 ---
 
