@@ -60,17 +60,17 @@ run_case() {
 }
 
 run_case "internal video preset timestamp/file loop" \
-  true \
-  "Phase 16 promotion waits for file-loop timestamp proof" \
+  false \
+  "Phase 16 file-loop timestamp proof is green" \
   env RESTREAM_INTERNAL_VIDEO_PRESETS=1 \
     ONLY_CHECKS=ffprobe,decode-scan \
     scripts/run-bench-harness.sh mixed.asset.file.h264.a1.bf0
 
 run_case "internal video preset live startup" \
-  true \
-  "Phase 16 promotion waits for preroll/parameter-set live startup proof" \
+  false \
+  "Phase 16 SRT decode-scan matrix and RSS proofs are green" \
   env RESTREAM_INTERNAL_VIDEO_PRESETS=1 \
-    ONLY_CHECKS=load,ffprobe \
+    ONLY_CHECKS=load,ffprobe,decode-scan \
     scripts/run-bench-harness.sh mixed.live.srt.h264.a1.bf0
 
 run_case "internal HEVC-to-H264 codec edge" \

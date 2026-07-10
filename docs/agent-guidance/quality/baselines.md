@@ -47,6 +47,27 @@ After ring/AVIO/TS sizing cuts (−205 MB RSS total across 15 scale cases,
 | h264-srt-multi 8M | 137 MB | 71 MB |
 | h264-rtmp 8M | 116 MB | 35 MB |
 
+### Internal video-preset rollout RSS baseline — 2026-07-10
+
+Command:
+
+```sh
+RESTREAM_INTERNAL_VIDEO_PRESETS=1 \
+ONLY_CHECKS=load,ffprobe,decode-scan \
+scripts/check-internal-video-preset-rollout.sh
+```
+
+RSS guard baseline: `test/harness/baselines/internal-video-presets-rss.csv`.
+Regression threshold: `20%` per-output RSS for this rollout guard, allowing
+host/process jitter while catching large memory regressions.
+
+| Scenario | Outputs | Restream RSS delta | Per-output RSS | External FFmpeg RSS | Commit |
+|---|---:|---:|---:|---:|---|
+| `mixed.live.srt.h264.a1.bf0` | 12 | 113,388 KB | 9,449 KB | 0 KB | this commit |
+| `mixed.live.srt.h264.a1.bf2` | 12 | 134,004 KB | 11,167 KB | 0 KB | this commit |
+| `mixed.live.srt.h264.a2.bf0` | 30 | 128,576 KB | 4,285 KB | 0 KB | this commit |
+| `mixed.live.srt.h264.a2.bf2` | 30 | 150,024 KB | 5,000 KB | 0 KB | this commit |
+
 Jitter headroom by design (defaults; env-overridable):
 
 | Ring | Default slots | Typical rate | Headroom |

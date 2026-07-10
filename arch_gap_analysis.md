@@ -50,15 +50,17 @@ acceptance criteria. Phase 16 rollout work is now partially implemented:
 per-stage internal-backend policy is the active configuration model, the legacy
 global transcoder switch no longer selects backends, runtime graph stage nodes
 carry lifecycle/capacity details for the UI and harness, and CI now runs a
-partially blocking internal-backend rollout smoke lane with per-case
-allowed-failure accounting. The remaining non-A roadmap work is Phase 16
-default-matrix proof, full internal video-preset promotion policy, and resource
-regression evidence for internal backend parity. Current live evidence shows
+blocking internal-backend rollout smoke lane, with the full internal
+video-preset SRT decode-scan/RSS promotion proof captured in
+`scripts/check-internal-video-preset-rollout.sh`. The remaining non-A roadmap
+work is Phase 16 default/recording-inclusive constrained external matrix proof.
+Current live evidence shows
 the external constrained-capacity path now fails causally as
 `waitingForCapacity` with backend and wait time attached, while the internal
-video-preset live H.264/SRT smoke now passes on the current tree. The internal
-HEVC-to-H264 RTMP selected-audio lane also now passes with `decode-scan`, so
-that smoke case has been promoted from allowed failure to blocking.
+video-preset H.264/SRT decode-scan matrix now passes with RSS baselines and no
+external FFmpeg children. The internal HEVC-to-H264 RTMP selected-audio lane
+also now passes with `decode-scan`, so all internal-backend rollout smoke cases
+are blocking.
 
 ---
 
@@ -298,7 +300,7 @@ convergence and later harness/reporting phases.
 | Phase 13 — Harness v2 reporting | ✅ Complete | Harness now has `HarnessOutputCell`, `HarnessOutputRegistry`, per-scenario `outputs.json`, scenario result embedding, semantic cell labels in progress stalls, matrix `root-cause-summary.json` grouping, schema-versioned assertion rows, per-scenario `artifact-index.json` with file metadata/checksums, and probe failure API snapshots carrying output status plus engine health. |
 | Phase 14 — Agent/MCP cleanup | ✅ Complete | Shared agent command/query DTOs live in `agent_core::types`, HTTP/execution modules re-export those DTOs instead of duplicating structs, MCP backends consume the same shared types, agent context/catalog reads use port-backed `AgentService`, agent output mutations use `OutputService`, agent graph/impact preview use `StageGraphPlan`, and agent API read/plan paths no longer import media internals. |
 | Phase 15 — Large-file split | ✅ Complete | No Rust or TypeScript source file now exceeds the 2,000-line ideal, and `scripts/source-audit.sh` enforces that cap while reporting the largest current files in `target/source-audit.json`. The final split set covers runtime snapshots, HLS lifecycle/consumer ownership, engine test modules, MPEG-TS codec probing/tests, external FFmpeg process/argument helpers, SRT egress/policy/stream-id/monitor/tests, RTMP FLV/tests/egress transport, mixed matrix orchestration, harness core/sinks/HLS PUT/media probes/fault recovery/live modes/resource sweep/suite helpers, and the test-harness root. |
-| Phase 16 — Rollout policy | 🟡 Partial | Per-stage backend policy is implemented and tested, the legacy global internal-transcoder switch is ignored, runtime graph stage nodes expose lifecycle/capacity details, the UI renders those details, and CI has an internal-backend rollout smoke lane with per-case allowed-failure accounting plus a blocking HEVC-to-H264 codec-edge case. Live external-capacity evidence now includes `RESTREAM_EXTERNAL_FFMPEG_PERMITS=2 ONLY_CHECKS=load,ffprobe scripts/run-bench-harness.sh mixed.live.srt.h264.a2.bf0` passing and `RESTREAM_EXTERNAL_FFMPEG_PERMITS=1 ONLY_CHECKS=load,ffprobe scripts/run-bench-harness.sh mixed.live.srt.h264.a2.bf0` failing causally with terminal outputs blocked by `waitingForCapacity`, `backend=externalFfmpeg`, and nonzero `waitMs` instead of an unknown stall. Current internal smoke evidence includes the file-loop/timestamp case passing, `RESTREAM_INTERNAL_VIDEO_PRESETS=1 ONLY_CHECKS=load,ffprobe scripts/run-bench-harness.sh mixed.live.srt.h264.a1.bf0` passing with `passed: true` on the current tree, and `RESTREAM_INTERNAL_VIDEO_PRESETS=0 RESTREAM_INTERNAL_HEVC_TO_H264=1 ONLY_CHECKS=load,ffprobe,decode-scan,stage-sharing scripts/run-bench-harness.sh mixed.live.srt.h265.a2.bf2` passing with all 48 assertions green. Still missing: full default/recording-inclusive constrained external matrix proof, internal video-preset SRT decode-scan/RSS promotion evidence, and removal of the remaining allowed-failure classification for unpromoted video-preset smoke cases. |
+| Phase 16 — Rollout policy | 🟡 Partial | Per-stage backend policy is implemented and tested, the legacy global internal-transcoder switch is ignored, runtime graph stage nodes expose lifecycle/capacity details, the UI renders those details, and CI has a blocking internal-backend rollout smoke lane. Live external-capacity evidence now includes `RESTREAM_EXTERNAL_FFMPEG_PERMITS=2 ONLY_CHECKS=load,ffprobe scripts/run-bench-harness.sh mixed.live.srt.h264.a2.bf0` passing and `RESTREAM_EXTERNAL_FFMPEG_PERMITS=1 ONLY_CHECKS=load,ffprobe scripts/run-bench-harness.sh mixed.live.srt.h264.a2.bf0` failing causally with terminal outputs blocked by `waitingForCapacity`, `backend=externalFfmpeg`, and nonzero `waitMs` instead of an unknown stall. Current internal smoke evidence includes the file-loop/timestamp case passing, `RESTREAM_INTERNAL_VIDEO_PRESETS=1 ONLY_CHECKS=load,ffprobe,decode-scan scripts/run-bench-harness.sh mixed.live.srt.h264.a1.bf0` passing with `passed: true` on the current tree, `RESTREAM_INTERNAL_VIDEO_PRESETS=0 RESTREAM_INTERNAL_HEVC_TO_H264=1 ONLY_CHECKS=load,ffprobe,decode-scan,stage-sharing scripts/run-bench-harness.sh mixed.live.srt.h265.a2.bf2` passing with all 48 assertions green, and `scripts/check-internal-video-preset-rollout.sh` passing the four-case H.264 SRT decode-scan matrix against `test/harness/baselines/internal-video-presets-rss.csv` with zero external FFmpeg children. Still missing: full default/recording-inclusive constrained external matrix proof. |
 
 ---
 
@@ -382,7 +384,7 @@ convergence and later harness/reporting phases.
 | Ph 13 Harness v2 | A | Output-cell registry, `outputs.json`, semantic progress-stall labels, matrix root-cause grouping, assertion schema versioning, artifact indexing, and probe failure API snapshots are implemented. |
 | Ph 14 Agent/MCP cleanup | A | Shared DTOs live in `agent_core::types`; MCP and HTTP/execution share command/query payloads where feature boundaries permit; agent graph/impact preview uses the shared planner; agent reads use service/runtime read models; agent API read/plan paths have no direct media-internal imports. |
 | Ph 15 Large-file split | A | No Rust or TypeScript source file exceeds 2,000 lines; `scripts/source-audit.sh` now enforces that cap, and the extracted modules are below the ideal cap through responsibility-based splits. |
-| Ph 16 Rollout policy | B+ | Per-stage policy, runtime graph lifecycle rollout, internal backend smoke CI, and allowed-failure accounting are implemented and tested, with the HEVC-to-H264 RTMP selected-audio decode-scan lane now promoted to blocking. Live evidence proves the external constrained-capacity path surfaces causal `waitingForCapacity` with backend/wait details, and current internal evidence includes file-loop/timestamp, live SRT H.264 video-preset, and HEVC codec-edge smokes passing. It is not A because the full default/recording-inclusive constrained external matrix is not green, internal video-preset SRT decode-scan/RSS promotion evidence is still incomplete, and two video-preset smoke cases remain classified as allowed failures. |
+| Ph 16 Rollout policy | A- | Per-stage policy, runtime graph lifecycle rollout, blocking internal backend smoke CI, HEVC-to-H264 RTMP selected-audio decode-scan, and internal video-preset SRT decode-scan/RSS promotion proof are implemented and tested. Live evidence proves the external constrained-capacity path surfaces causal `waitingForCapacity` with backend/wait details. It is not full A because the full default/recording-inclusive constrained external matrix proof is still missing. |
 
 ---
 
@@ -398,8 +400,5 @@ families, output status is dependency-aware, FFmpeg execution goes through the
 shared waist, HLS preview and recording identity are graph/metadata-driven, and
 health/alerts/diagnostics expose causal runtime state.
 
-The remaining non-A work in this document is Phase 16 rollout policy: finish
-promoting the internal video-preset smoke lane only after the SRT decode-scan
-and RSS criteria pass, prove the default/recording-inclusive constrained
-external matrix behavior, and retire the remaining video-preset allowed-failure
-classifications once those promotion criteria are green.
+The remaining non-A work in this document is Phase 16 rollout policy: prove the
+full default/recording-inclusive constrained external matrix behavior.
