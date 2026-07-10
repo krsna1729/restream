@@ -52,6 +52,12 @@ pub const REQUIRED_CHECKED_IN_FIXTURES: &[&str] = &[
     // H.264 1.5 Mbps two-audio transport fixture for multi-audio resource
     // sweeps and selected-track routing without synthetic generation.
     "test/fixtures/bench-h264-1_5m-2a.ts",
+    // H.264 4 Mbps two-audio transport fixture for multi-audio bitrate-sweep
+    // coverage at the medium-bitrate point.
+    "test/fixtures/bench-h264-4m-2a.ts",
+    // H.264 8 Mbps two-audio transport fixture for multi-audio bitrate-sweep
+    // coverage at the high-bitrate point.
+    "test/fixtures/bench-h264-8m-2a.ts",
     // HEVC 1.5 Mbps single-audio transport fixture for low-bitrate HEVC
     // scaling and RTMP compatibility-edge measurements.
     "test/fixtures/bench-h265-1_5m.ts",
@@ -64,6 +70,12 @@ pub const REQUIRED_CHECKED_IN_FIXTURES: &[&str] = &[
     // HEVC 1.5 Mbps two-audio transport fixture for multi-audio HEVC
     // resource sweeps and selected-track routing.
     "test/fixtures/bench-h265-1_5m-2a.ts",
+    // HEVC 4 Mbps two-audio transport fixture for multi-audio bitrate-sweep
+    // coverage at the medium-bitrate point.
+    "test/fixtures/bench-h265-4m-2a.ts",
+    // HEVC 8 Mbps two-audio transport fixture for multi-audio bitrate-sweep
+    // coverage at the high-bitrate point.
+    "test/fixtures/bench-h265-8m-2a.ts",
     // H.264 marker oracle: black video with periodic white flashes and
     // matching 1 kHz beeps for A/V sync, drift, and PCM-quality assertions.
     "test/fixtures/av-marker-h264.ts",

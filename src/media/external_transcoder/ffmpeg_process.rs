@@ -110,8 +110,8 @@ fn build_stage_ffmpeg_args_inner(
     if matches!(stage_spec.video_encoding(), "source" | "") {
         // Source/passthrough stages copy streams without re-encoding, so they need
         // a larger probe budget to fully resolve all stream parameters (especially audio).
-        analyze_duration_us = 1_000_000;
-        probe_size_bytes = 512 * 1024;
+        (analyze_duration_us, probe_size_bytes) =
+            startup_policy::ext_stage_probe_budget(VideoCodecKind::H264);
     }
     let ffmpeg_threads = threads.unwrap_or(2).max(1);
 

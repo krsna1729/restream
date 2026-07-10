@@ -4,10 +4,10 @@ use crate::domain::output_spec::{OutputEncodingSpec, VideoCodecKind, VideoSelect
 use crate::media::profiles;
 
 const DEFAULT_KEYFRAME_PREROLL_PACKETS: usize = 32;
-const EXT_STAGE_ANALYZE_DURATION_US_DEFAULT: u64 = 1_000_000;
-const EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT: usize = 512 * 1024;
-const EXT_STAGE_ANALYZE_DURATION_US_HEVC: u64 = 1_000_000;
-const EXT_STAGE_PROBE_SIZE_BYTES_HEVC: usize = 512 * 1024;
+const EXT_STAGE_ANALYZE_DURATION_US_DEFAULT: u64 = 2_000_000;
+const EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT: usize = 1024 * 1024;
+const EXT_STAGE_ANALYZE_DURATION_US_HEVC: u64 = 2_000_000;
+const EXT_STAGE_PROBE_SIZE_BYTES_HEVC: usize = 1024 * 1024;
 
 pub fn rtmp_egress_keyframe_preroll_packets() -> usize {
     DEFAULT_KEYFRAME_PREROLL_PACKETS

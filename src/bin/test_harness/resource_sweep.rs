@@ -228,7 +228,9 @@ impl SweepOutputKind {
 
     pub(crate) const fn encoding(self, multi_audio: bool) -> &'static str {
         match (self, multi_audio) {
-            (Self::RtmpSource | Self::SrtSource, _) => "source",
+            (Self::RtmpSource, true) => "source+atrack:0",
+            (Self::SrtSource, true) => "source+atrack:0,1",
+            (Self::RtmpSource | Self::SrtSource, false) => "source",
             (Self::Rtmp720p, true) => "720p+atrack:0",
             (Self::Srt720p, true) => "720p+atrack:0,1",
             (Self::Rtmp720p | Self::Srt720p, false) => "720p",

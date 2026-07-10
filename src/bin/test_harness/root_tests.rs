@@ -1386,7 +1386,14 @@ fn sweep_output_kind_centralizes_urls_and_multi_audio_encoding() {
     );
     assert_eq!(SweepOutputKind::Rtmp720p.encoding(true), "720p+atrack:0");
     assert_eq!(SweepOutputKind::Srt720p.encoding(true), "720p+atrack:0,1");
-    assert_eq!(SweepOutputKind::SrtSource.encoding(true), "source");
+    assert_eq!(
+        SweepOutputKind::RtmpSource.encoding(true),
+        "source+atrack:0"
+    );
+    assert_eq!(
+        SweepOutputKind::SrtSource.encoding(true),
+        "source+atrack:0,1"
+    );
 }
 
 #[test]
