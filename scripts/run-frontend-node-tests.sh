@@ -29,6 +29,7 @@ TEST_FILES=(
   test/frontend-incidents.test.mjs
   test/frontend-engineer-telemetry.test.mjs
   test/frontend-ops-navigation.test.mjs
+  test/frontend-pipeline-workspace.test.mjs
   test/frontend-history-stream.test.mjs
   test/frontend-log-stream.test.mjs
   test/frontend-history-helpers.test.mjs

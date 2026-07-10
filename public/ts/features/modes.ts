@@ -1,12 +1,7 @@
 import { getRestreamHistory } from "../core/api.js";
 import { createManagedLogStream } from "../core/log-stream.js";
 import { outputViewEncodingLabel } from "../core/output-config.js";
-import {
-  escapeHtml,
-  getUrlParam,
-  sanitizeLogMessage,
-  setUrlParam,
-} from "../core/utils.js";
+import { escapeHtml, getUrlParam, sanitizeLogMessage } from "../core/utils.js";
 import { state } from "../core/state.js";
 import { openDiagnosticsModal } from "./diagnostics.js";
 import { renderControlRoom } from "./control-room.js";
@@ -44,34 +39,19 @@ import {
 import type { AppLogRow, OutputView, PipelineView } from "../types.js";
 import { renderIncidentsMode } from "./incidents.js";
 import { renderEngineerTelemetryMode } from "./engineer-telemetry.js";
-type DashboardMode =
-  | "overview"
-  | "incidents"
-  | "telemetry"
-  | "pipeline"
-  | "inspect"
-  | "control"
-  | "media"
-  | "settings"
-  | "status";
+import {
+  canonicalizeDashboardLocation,
+  dashboardModeUrl,
+  pipelineWorkspaceUrl,
+  resolveDashboardLocation,
+  syncPipelineWorkspaceShell,
+} from "../app/pipeline-workspace.js";
+import type {
+  DashboardMode,
+  PipelineWorkspaceView,
+} from "../app/pipeline-workspace.js";
 
-const validModes = new Set([
-  "overview",
-  "incidents",
-  "telemetry",
-  "pipeline",
-  "inspect",
-  "control",
-  "media",
-  "settings",
-  "status",
-]);
-const runtimeDashboardModes = new Set([
-  "overview",
-  "pipeline",
-  "inspect",
-  "control",
-]);
+const runtimeDashboardModes = new Set<DashboardMode>(["overview", "pipeline"]);
 let currentMode: DashboardMode | null = null;
 let inspectPipelineId: string | null = null;
 let inspectGraphPipelineId: string | null = null;
@@ -245,12 +225,6 @@ function overviewActivitySection(): string {
         </div>
         <div class="p-4">${body}</div>
     </section>`;
-}
-
-function normalizeMode(mode: string | null): DashboardMode {
-  if (mode === "admin") return "settings";
-  if (mode && validModes.has(mode)) return mode as DashboardMode;
-  return getUrlParam("p") ? "pipeline" : "overview";
 }
 
 function formatBitrate(kbps: number | null | undefined): string {
@@ -1092,19 +1066,22 @@ function refreshActiveMode(): void {
   renderDashboardModes();
 }
 
-function applyMode(mode: DashboardMode): void {
+function applyMode(
+  mode: DashboardMode,
+  pipelineView: PipelineWorkspaceView,
+): void {
   const previousMode = currentMode;
   currentMode = mode;
   syncOverviewActivityStream();
   setStatusStreamActive(mode === "status");
   syncDashboardRuntimeStream();
-  const panels: Record<DashboardMode, HTMLElement | null> = {
+  const panels: Record<
+    Exclude<DashboardMode, "pipeline">,
+    HTMLElement | null
+  > = {
     overview: document.getElementById("overview-mode-panel"),
     incidents: document.getElementById("incidents-mode-panel"),
     telemetry: document.getElementById("telemetry-mode-panel"),
-    pipeline: document.getElementById("dashboard-grid"),
-    inspect: document.getElementById("inspect-mode-panel"),
-    control: document.getElementById("control-mode-panel"),
     media: document.getElementById("media-mode-panel"),
     settings: document.getElementById("settings-mode-panel"),
     status: document.getElementById("status-mode-panel"),
@@ -1112,6 +1089,7 @@ function applyMode(mode: DashboardMode): void {
   for (const [name, panel] of Object.entries(panels)) {
     panel?.classList.toggle("hidden", name !== mode);
   }
+  syncPipelineWorkspaceShell(mode, pipelineView);
 
   document
     .querySelectorAll<HTMLButtonElement>("[data-dashboard-mode]")
@@ -1129,20 +1107,20 @@ function applyMode(mode: DashboardMode): void {
       mode === "overview"
         ? `${counts.liveInputs} live inputs / ${counts.runningOutputs} running outputs${counts.retryingOutputs ? ` / ${counts.retryingOutputs} retrying` : ""}${counts.flappingOutputs ? ` / ${counts.flappingOutputs} flapping` : ""}`
         : mode === "pipeline"
-          ? "Pipeline workflow"
+          ? pipelineView === "inspect"
+            ? "Pipeline graph and diagnostics"
+            : pipelineView === "monitor"
+              ? "Pipeline monitoring wall"
+              : "Pipeline workflow"
           : mode === "incidents"
             ? "Alerts, evidence, and lifecycle events"
             : mode === "telemetry"
               ? "Engine and pipeline counters"
-              : mode === "inspect"
-                ? "Graph and diagnostics"
-                : mode === "control"
-                  ? "Monitoring wall"
-                  : mode === "media"
-                    ? "Recordings and source files"
-                    : mode === "settings"
-                      ? "Server configuration"
-                      : "Runtime status";
+              : mode === "media"
+                ? "Recordings and source files"
+                : mode === "settings"
+                  ? "Server configuration"
+                  : "Runtime status";
   }
   if (
     previousMode !== null &&
@@ -1152,7 +1130,7 @@ function applyMode(mode: DashboardMode): void {
   ) {
     void refreshDashboard();
   }
-  if (mode === "control") renderControlRoom();
+  if (mode === "pipeline" && pipelineView === "monitor") renderControlRoom();
   const pipelineOptions = state.pipelines.map((pipeline) => ({
     id: pipeline.id,
     name: pipeline.name || pipeline.id,
@@ -1183,40 +1161,51 @@ function applyMode(mode: DashboardMode): void {
   syncDashboardPolling();
 }
 
-function modeUsesPipelineSelection(mode: DashboardMode): boolean {
-  return mode === "pipeline" || mode === "inspect";
-}
-
 function setModeUrl(mode: DashboardMode): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set("mode", mode);
-  if (!modeUsesPipelineSelection(mode)) url.searchParams.delete("p");
+  const url = dashboardModeUrl(window.location.href, mode);
   window.history.pushState({}, "", url);
 }
 
 export function setDashboardMode(mode: string): void {
-  const nextMode = normalizeMode(mode);
-  setModeUrl(nextMode);
-  if (currentMode === nextMode) {
-    applyMode(nextMode);
+  if (mode === "inspect" || mode === "control") {
+    setPipelineWorkspaceView(mode === "inspect" ? "inspect" : "monitor");
     return;
   }
+  const candidate = new URL(window.location.href);
+  candidate.searchParams.set("mode", mode);
+  candidate.searchParams.delete("view");
+  const nextMode = resolveDashboardLocation(candidate.href).mode;
+  setModeUrl(nextMode);
+  if (currentMode === nextMode) {
+    applyMode(nextMode, "operate");
+    return;
+  }
+  refreshActiveMode();
+}
+
+export function setPipelineWorkspaceView(
+  view: PipelineWorkspaceView,
+  pipelineId?: string | null,
+): void {
+  const url = pipelineWorkspaceUrl(window.location.href, view, pipelineId);
+  window.history.pushState({}, "", url);
   refreshActiveMode();
 }
 
 export function openInspectGraph(pipeId: string): void {
   inspectPipelineId = pipeId;
   resetInspectGraphForSelection(pipeId);
-  setUrlParam("p", pipeId);
-  setDashboardMode("inspect");
+  setPipelineWorkspaceView("inspect", pipeId);
   void refreshInspectGraph();
 }
 
 export function renderDashboardModes(): void {
-  const activeMode = normalizeMode(getUrlParam("mode"));
-  if (activeMode === "overview") renderOverview();
-  if (activeMode === "inspect") renderInspect();
-  applyMode(activeMode);
+  const location = canonicalizeDashboardLocation();
+  if (location.mode === "overview") renderOverview();
+  if (location.mode === "pipeline" && location.pipelineView === "inspect") {
+    renderInspect();
+  }
+  applyMode(location.mode, location.pipelineView);
 }
 
 export function initDashboardModes(): void {
@@ -1226,13 +1215,24 @@ export function initDashboardModes(): void {
       button.onclick = () =>
         setDashboardMode(button.dataset.dashboardMode || "overview");
     });
+  document
+    .querySelectorAll<HTMLButtonElement>("[data-pipeline-workspace-view]")
+    .forEach((button) => {
+      button.onclick = () =>
+        setPipelineWorkspaceView(
+          (button.dataset.pipelineWorkspaceView ||
+            "operate") as PipelineWorkspaceView,
+        );
+    });
   window.addEventListener("popstate", refreshActiveMode);
   document.addEventListener("visibilitychange", () => {
     syncOverviewActivityStream();
     syncStatusStreamVisibility();
     if (
       !document.hidden &&
-      normalizeMode(getUrlParam("mode")) === "inspect" &&
+      resolveDashboardLocation(window.location.href).mode === "pipeline" &&
+      resolveDashboardLocation(window.location.href).pipelineView ===
+        "inspect" &&
       inspectGraphAutoRefresh
     ) {
       void refreshInspectGraph();

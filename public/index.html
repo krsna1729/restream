@@ -176,22 +176,6 @@
           <button
             type="button"
             class="btn btn-sm join-item btn-outline"
-            data-dashboard-mode="inspect"
-            aria-pressed="false"
-          >
-            Inspect
-          </button>
-          <button
-            type="button"
-            class="btn btn-sm join-item btn-outline"
-            data-dashboard-mode="control"
-            aria-pressed="false"
-          >
-            Control Room
-          </button>
-          <button
-            type="button"
-            class="btn btn-sm join-item btn-outline"
             data-dashboard-mode="media"
             aria-pressed="false"
           >
@@ -219,6 +203,38 @@
           id="workspace-mode-summary"
         ></div>
       </div>
+    </div>
+
+    <div
+      id="pipeline-workspace-view-bar"
+      class="border-base-content/10 bg-base-100 hidden shrink-0 border-b px-4 py-2"
+    >
+      <nav class="join" aria-label="Pipeline workspace view">
+        <button
+          type="button"
+          class="btn btn-xs join-item btn-accent"
+          data-pipeline-workspace-view="operate"
+          aria-pressed="true"
+        >
+          Operate
+        </button>
+        <button
+          type="button"
+          class="btn btn-xs join-item btn-outline"
+          data-pipeline-workspace-view="inspect"
+          aria-pressed="false"
+        >
+          Inspect
+        </button>
+        <button
+          type="button"
+          class="btn btn-xs join-item btn-outline"
+          data-pipeline-workspace-view="monitor"
+          aria-pressed="false"
+        >
+          Monitor
+        </button>
+      </nav>
     </div>
 
     <div

@@ -19,6 +19,7 @@ import { renderPipelines, renderMetrics } from "./render.js";
 import { syncHistoryPollingWithVisibility } from "../history/controller.js";
 import { state } from "../core/state.js";
 import { createManagedLogStream } from "../core/log-stream.js";
+import { resolveDashboardLocation } from "../app/pipeline-workspace.js";
 import type {
   AppLogRow,
   ConfigOutput,
@@ -54,15 +55,18 @@ let dashboardRuntimeMutationConvergenceWaiters: DashboardRuntimeMutationConverge
   [];
 const DASHBOARD_RUNTIME_MODES = new Set([
   "overview",
-  "pipeline",
-  "inspect",
-  "control",
+  "pipeline:operate",
+  "pipeline:inspect",
+  "pipeline:monitor",
 ]);
-const DASHBOARD_SCOPED_RUNTIME_MODES = new Set(["pipeline", "inspect"]);
+const DASHBOARD_SCOPED_RUNTIME_MODES = new Set([
+  "pipeline:operate",
+  "pipeline:inspect",
+]);
 const DASHBOARD_RUNTIME_LIFECYCLE_STREAM_MODES = new Set([
-  "pipeline",
-  "inspect",
-  "control",
+  "pipeline:operate",
+  "pipeline:inspect",
+  "pipeline:monitor",
   "media",
   "settings",
 ]);
@@ -70,9 +74,9 @@ const DASHBOARD_CONFIG_MODES = new Set([
   "overview",
   "incidents",
   "telemetry",
-  "pipeline",
-  "inspect",
-  "control",
+  "pipeline:operate",
+  "pipeline:inspect",
+  "pipeline:monitor",
 ]);
 const DASHBOARD_RUNTIME_STREAM_DEBOUNCE_MS = 200;
 const DASHBOARD_RUNTIME_MUTATION_FALLBACK_MS = 1500;
@@ -191,10 +195,10 @@ function mergeSystemMetricsSnapshot(
 }
 
 function currentDashboardMode(): string {
-  const mode = getUrlParam("mode");
-  if (mode === "admin") return "settings";
-  if (mode) return mode;
-  return getUrlParam("p") ? "pipeline" : "overview";
+  const location = resolveDashboardLocation(window.location.href);
+  return location.mode === "pipeline"
+    ? `pipeline:${location.pipelineView}`
+    : location.mode;
 }
 
 function publisherHealthModalOpen(): boolean {
