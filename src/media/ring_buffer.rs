@@ -47,7 +47,7 @@
 use arc_swap::ArcSwapOption;
 use bytes::Bytes;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
@@ -275,6 +275,7 @@ pub struct RingBuffer {
     /// Estimated packet rate (pkt/s) set once after stream probe.
     /// Used by telemetry to compute buffer depth in seconds.
     pub estimated_pkt_rate: std::sync::atomic::AtomicU32,
+    end_of_stream: AtomicBool,
     /// Forwarding pointer set when this ring is superseded by a larger one.
     ///
     /// When `adapt_pipeline_ring` grows the source ring, it stores the new ring
@@ -314,6 +315,7 @@ impl RingBuffer {
             video_parameter_sets: ArcSwapOption::empty(),
             audio_tracks: ArcSwapOption::empty(),
             estimated_pkt_rate: std::sync::atomic::AtomicU32::new(0),
+            end_of_stream: AtomicBool::new(false),
             next: ArcSwapOption::empty(),
         }
     }
@@ -383,6 +385,15 @@ impl RingBuffer {
         self.next.store(Some(new_ring));
         // Wake all readers blocked on this ring so they can discover `next`.
         self.notify.notify_waiters();
+    }
+
+    pub fn mark_end_of_stream(&self) {
+        self.end_of_stream.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
+    pub fn is_end_of_stream(&self) -> bool {
+        self.end_of_stream.load(Ordering::Acquire)
     }
 
     pub fn capacity(&self) -> usize {
@@ -743,6 +754,10 @@ impl Reader {
         &self.buffer
     }
 
+    pub fn is_caught_up_to_end_of_stream(&self) -> bool {
+        self.buffer.is_end_of_stream() && self.buffer.get_write_idx() == self.read_idx
+    }
+
     pub fn new(name: String, buffer: Arc<RingBuffer>) -> Self {
         let current_write = buffer.get_write_idx();
         let start_idx = buffer.fast_forward(current_write);
@@ -931,6 +946,9 @@ impl Reader {
             if self.buffer.next.load().is_some() {
                 // sealed between our last check and notified subscription; retry
                 continue;
+            }
+            if self.buffer.is_end_of_stream() {
+                return;
             }
             notified.await;
         }

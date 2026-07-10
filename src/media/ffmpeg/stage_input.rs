@@ -129,6 +129,10 @@ impl StageInputPump {
                     return Ok(());
                 }
                 _ = self.reader.wait_for_data() => {
+                    if self.reader.is_caught_up_to_end_of_stream() {
+                        return Ok(());
+                    }
+
                     packets.clear();
                     if self
                         .reader

@@ -295,6 +295,12 @@ pub(crate) async fn run_external_ffmpeg_backend(
                 }
             }
         }
+        demuxer.flush();
+        demuxer.drain_into(&mut pkts);
+        for pkt in pkts.drain(..) {
+            output_normalizer.push(pkt);
+        }
+        output_normalizer.mark_end_of_stream();
         cancel_out.cancel();
     });
 

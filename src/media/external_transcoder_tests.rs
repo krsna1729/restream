@@ -732,6 +732,7 @@ async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
     // Feed all input.  With 18 streams (2v + 16a) FFmpeg holds output
     // until stdin closes, so we cancel to send EOF and trigger a flush.
     source_ring.push_batch(packets.drain(..));
+    source_ring.mark_end_of_stream();
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     cancel.cancel();
 
@@ -904,6 +905,188 @@ async fn chained_hevc_preview_stages_emit_live_h264_packets() {
             .any(|packet| packet.media_type == MediaType::Video && packet.is_keyframe),
         "chained HEVC preview stages should emit a live keyframe"
     );
+}
+
+#[tokio::test]
+async fn hevc_scaled_rtmp_audio_routes_emit_both_selected_tracks() {
+    let fixture = crate::test_fixtures::av_marker_transport_fixture("h265", true)
+        .expect("multi-audio HEVC marker fixture");
+    let fixture_bytes = std::fs::read(fixture).expect("read multi-audio HEVC marker fixture");
+    let mut demuxer = TsDemuxer::new();
+    let mut packets = Vec::new();
+    for chunk in fixture_bytes.chunks(1316) {
+        demuxer.feed(chunk);
+        demuxer.drain_into(&mut packets);
+    }
+    demuxer.flush();
+    demuxer.drain_into(&mut packets);
+
+    let probe = demuxer.take_probe().expect("probe 2v16a HEVC sample");
+    let video = probe.video.expect("sample should contain video");
+    let audio_tracks = probe.audio_tracks;
+    assert!(
+        audio_tracks.len() >= 2,
+        "fixture must expose at least two audio tracks"
+    );
+
+    let pipeline_id = "pipe-ext-scaled-audio-routes";
+    let engine = Arc::new(MediaEngine::new());
+    let _ = tracing_subscriber::fmt::try_init();
+    engine
+        .try_register_ingest(pipeline_id, "stream-key", "file")
+        .await
+        .unwrap();
+    engine
+        .update_ingest_meta(
+            pipeline_id,
+            Some(video),
+            audio_tracks.first().cloned(),
+            None,
+        )
+        .await;
+    engine
+        .update_ingest_audio_tracks(pipeline_id, audio_tracks.clone())
+        .await;
+
+    let source_ring = engine.get_or_create_pipeline(pipeline_id).await;
+    source_ring.set_codec_hint("hevc");
+    source_ring.set_audio_tracks(audio_tracks);
+    if let Some(parameter_sets) = packets.iter().find_map(|packet| {
+        (packet.media_type == MediaType::Video)
+            .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            .flatten()
+    }) {
+        source_ring.set_video_parameter_sets(parameter_sets);
+    }
+
+    let scaled_hevc = engine
+        .get_or_create_transcoder(
+            pipeline_id,
+            StageKind::video_preset("720p"),
+            source_ring.clone(),
+            Some("hevc"),
+        )
+        .await;
+    let scaled_h264 = engine
+        .get_or_create_h264_transcoder(
+            pipeline_id,
+            StageKind::video_preset("720p"),
+            scaled_hevc.clone(),
+        )
+        .await;
+    let track0_ring = engine
+        .get_or_create_transcoder(
+            pipeline_id,
+            StageKind::audio_route(
+                "atrack:0",
+                StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("720p")),
+            ),
+            scaled_h264.clone(),
+            None,
+        )
+        .await;
+    let track1_ring = engine
+        .get_or_create_transcoder(
+            pipeline_id,
+            StageKind::audio_route(
+                "atrack:1",
+                StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("720p")),
+            ),
+            scaled_h264.clone(),
+            None,
+        )
+        .await;
+
+    let mut scaled_hevc_reader =
+        Reader::new_live("test_ext_scaled_hevc_mid".to_string(), scaled_hevc.clone());
+    let mut scaled_h264_reader =
+        Reader::new_live("test_ext_scaled_h264_mid".to_string(), scaled_h264.clone());
+    let mut track0_reader =
+        Reader::new_live("test_ext_scaled_audio_track0".to_string(), track0_ring);
+    let mut track1_reader =
+        Reader::new_live("test_ext_scaled_audio_track1".to_string(), track1_ring);
+
+    let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let source_attached = source_ring
+            .reader_snapshots()
+            .iter()
+            .any(|snapshot| snapshot.name.contains("video:720p"));
+        let h264_attached = scaled_h264.reader_snapshots().len() >= 2;
+        if source_attached && h264_attached {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < ready_deadline,
+            "scaled RTMP selected-audio chain readers did not attach in time: \
+             source={:?} scaled_hevc={:?} scaled_h264={:?}",
+            source_ring.reader_snapshots(),
+            scaled_hevc.reader_snapshots(),
+            scaled_h264.reader_snapshots()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    source_ring.push_batch(packets.drain(..));
+    source_ring.mark_end_of_stream();
+    let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut scaled_hevc_packets = Vec::new();
+    let mut scaled_h264_packets = Vec::new();
+    let mut track0_packets = Vec::new();
+    let mut track1_packets = Vec::new();
+    loop {
+        while let Ok(Some(packet)) = scaled_hevc_reader.pull() {
+            scaled_hevc_packets.push(packet);
+        }
+        while let Ok(Some(packet)) = scaled_h264_reader.pull() {
+            scaled_h264_packets.push(packet);
+        }
+        while let Ok(Some(packet)) = track0_reader.pull() {
+            track0_packets.push(packet);
+        }
+        while let Ok(Some(packet)) = track1_reader.pull() {
+            track1_packets.push(packet);
+        }
+        let track0_ready = selected_track_output_ready(&track0_packets);
+        let track1_ready = selected_track_output_ready(&track1_packets);
+        if track0_ready && track1_ready {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < output_deadline,
+            "scaled RTMP selected-audio routes did not both emit video and selected audio: \
+             source_write={} source_eos={} scaled_hevc_write={} scaled_hevc_eos={} \
+             scaled_h264_write={} scaled_h264_eos={} scaled_hevc_packets={} \
+             scaled_h264_packets={} track0_packets={} track1_packets={} stages={:?}",
+            source_ring.get_write_idx(),
+            source_ring.is_end_of_stream(),
+            scaled_hevc.get_write_idx(),
+            scaled_hevc.is_end_of_stream(),
+            scaled_h264.get_write_idx(),
+            scaled_h264.is_end_of_stream(),
+            scaled_hevc_packets.len(),
+            scaled_h264_packets.len(),
+            track0_packets.len(),
+            track1_packets.len(),
+            engine.pipeline_stage_runtime_snapshots(pipeline_id).await
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+fn selected_track_output_ready(
+    packets: &[std::sync::Arc<crate::media::ring_buffer::MediaPacket>],
+) -> bool {
+    packets
+        .iter()
+        .any(|packet| packet.media_type == MediaType::Video)
+        && packets
+            .iter()
+            .any(|packet| packet.media_type == MediaType::Audio && packet.track_index == 0)
+        && packets
+            .iter()
+            .filter(|packet| packet.media_type == MediaType::Audio)
+            .all(|packet| packet.track_index == 0)
 }
 
 #[tokio::test]

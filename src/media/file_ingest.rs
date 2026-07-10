@@ -327,6 +327,10 @@ fn run_internal_file_ingest_loop(
         )?;
         timestamps.finish_pass();
 
+        if !cancel.is_cancelled() && !loop_enabled {
+            ring_buffer.mark_end_of_stream();
+        }
+
         if cancel.is_cancelled() || !loop_enabled {
             break;
         }

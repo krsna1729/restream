@@ -88,6 +88,10 @@ impl StageOutputNormalizer {
         }
     }
 
+    pub fn mark_end_of_stream(&self) {
+        self.out_ring.mark_end_of_stream();
+    }
+
     fn stream_index(&self, media_type: MediaType, track_index: u32) -> usize {
         // TODO: replace with a real StageStreamMap once multi-video/multi-audio
         // outputs are supported. For now assume video tracks occupy indices

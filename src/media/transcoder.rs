@@ -148,6 +148,9 @@ pub async fn start_audio_router(
         tokio::select! {
             _ = cancel.cancelled() => break,
             _ = reader.wait_for_data() => {
+                if reader.is_caught_up_to_end_of_stream() {
+                    break;
+                }
                 if reader.pull_burst(&mut packets, MEDIA_PULL_BURST_PACKETS).is_err() {
                     continue;
                 }
@@ -239,6 +242,7 @@ pub async fn start_audio_router(
         }
     }
 
+    output_buffer.mark_end_of_stream();
     engine.remove_stage_metrics(&stage_key).await;
     engine.remove_stage_lifecycle(&stage_key).await;
     engine.remove_stage_runtime(&stage_key).await;

@@ -886,6 +886,19 @@ fn active_reader_count_tracks_live_readers() {
     assert_eq!(rb.active_reader_count(), 0);
 }
 
+#[tokio::test]
+async fn end_of_stream_wakes_caught_up_reader() {
+    let rb = Arc::new(RingBuffer::new(16));
+    let mut reader = Reader::new_live("eos-reader".to_string(), rb.clone());
+
+    rb.mark_end_of_stream();
+    tokio::time::timeout(std::time::Duration::from_secs(1), reader.wait_for_data())
+        .await
+        .expect("end-of-stream should wake a caught-up reader");
+
+    assert!(reader.is_caught_up_to_end_of_stream());
+}
+
 #[test]
 fn buffer_depth_secs_requires_estimated_pkt_rate() {
     let rb = RingBuffer::new(1024);
