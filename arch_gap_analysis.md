@@ -338,10 +338,10 @@ future refactor opportunities, not critical phase gaps.
 ## Critical Remaining Gaps
 
 No critical architecture gaps remain for Phases 0-16 or Addendum Phases A-I in
-the current governor scope. The next workstream is harness hardening: run the
-minimal failing fast-breadth cells, group failures by common root cause, add
-focused unit/source tests for each pattern, and then broaden to full matrix and
-the remaining harness modes.
+the current governor scope. The current proof set includes the focused unit and
+source governors, full cargo gates, quiet passing test hygiene, fast-breadth,
+the full mixed matrix, resource and bitrate sweeps, and the remaining live
+harness modes.
 
 ---
 
@@ -380,17 +380,19 @@ the remaining harness modes.
 
 ## Answer to the Expanded Goal
 
-Yes for the phase-scope criteria through Phase 16; not yet for the full
-expanded `impl.md` ideal. Typed contracts and state boundaries are in place,
-config and repository ownership are centralized, routes delegate through
-services, graph planning is the active planning model for
-outputs/HLS/recording/diagnostics/harness/agent preview, stage lifecycle is
+Yes. The codebase now satisfies the phase-scope criteria through Phase 16 and
+the expanded Addendum Phases A-I in `impl.md` for the current architecture
+governor scope. Typed contracts and state boundaries are in place, config and
+repository ownership are centralized, routes delegate through services, graph
+planning is the active planning model for outputs, HLS, recording,
+diagnostics, harness expectations, and agent preview, stage lifecycle is
 first-class for both ring-backed and non-ring stage families, output status is
 dependency-aware, FFmpeg execution goes through the shared waist, HLS preview
-and recording identity are graph/metadata-driven, and health/alerts/diagnostics
-expose causal runtime state.
+and recording identity are graph/metadata-driven, and
+health/alerts/diagnostics expose causal runtime state.
 
-The current remaining work is now concentrated in the addendum: move more
-live/file execution internals behind executor steps, continue the broader
-runtime/media namespace split, and keep the blocking `mixed.fast-breadth` CI
-governor lane green as execution costs evolve.
+The addendum work is also complete for the current governor set: semantic
+output cells, typed harness API status DTOs, root-cause summaries, artifact
+indexes, manifest-visible execution policy, responsibility-based harness
+modules, service/adapter namespaces, and blocking harness/source governor tests
+are implemented and covered by the current proof gates.
