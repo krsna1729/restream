@@ -324,25 +324,20 @@ mod tests {
                 output_id: OutputId::new("out_1")
             }
         );
+        let hevc_720p = StageKind::video_preset_with_codec("720p", "hevc");
         assert_eq!(
             plan.terminal_stage,
-            StageKey::new(
-                "pipe_1",
-                StageKind::hls_segmenter(StageKind::video_preset("720p"))
-            )
+            StageKey::new("pipe_1", StageKind::hls_segmenter(hevc_720p.clone()))
         );
         assert!(plan.stages.iter().any(|stage| {
-            stage.kind == StageKind::hls_segmenter(StageKind::video_preset("720p"))
+            stage.kind == StageKind::hls_segmenter(hevc_720p.clone())
                 && stage.backend == StageBackend::HlsSegmenter
         }));
         assert!(
             plan.edges.iter().any(|edge| {
-                edge.from == StageKey::new("pipe_1", StageKind::video_preset("720p"))
+                edge.from == StageKey::new("pipe_1", hevc_720p.clone())
                     && edge.to
-                        == StageKey::new(
-                            "pipe_1",
-                            StageKind::hls_segmenter(StageKind::video_preset("720p")),
-                        )
+                        == StageKey::new("pipe_1", StageKind::hls_segmenter(hevc_720p.clone()))
             }),
             "HLS output graph should show media stage feeding protocol segmenter"
         );

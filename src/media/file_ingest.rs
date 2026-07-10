@@ -1245,25 +1245,10 @@ mod tests {
             .expect("register ingest");
         let ring_buffer = runtime.block_on(engine.get_or_create_pipeline(pipeline_id));
 
-        let fixture = crate::test_fixtures::av_marker_transport_fixture_for_bframes(
-            "h265",
-            false,
-            crate::test_fixtures::AvMarkerBframeMode::Bf0,
-        )
-        .expect("checked-in hevc bf0 transport fixture");
-        let fixture_bytes = std::fs::read(fixture).expect("read checked-in transport fixture");
-
-        let mut demuxer = TsDemuxer::new();
-        let mut packets = Vec::new();
-        demuxer.feed(&fixture_bytes);
-        demuxer.flush();
-        demuxer.drain_into(&mut packets);
-
-        let video_payload = packets
-            .iter()
-            .find(|pkt| pkt.media_type == MediaType::Video)
-            .map(|pkt| pkt.payload.clone())
-            .expect("fixture should contain at least one video packet");
+        let video_payload = [
+            0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0xAA, 0x00, 0x00, 0x00, 0x01, 0x42, 0x01, 0xBB,
+            0x00, 0x00, 0x00, 0x01, 0x44, 0x01, 0xCC, 0x00, 0x00, 0x00, 0x01, 0x26, 0x01, 0xDD,
+        ];
 
         assert!(
             crate::media::codec::build_avcc_sequence_header(

@@ -1786,10 +1786,15 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
     let _ = crate::application::egress::prepare_output_ring(&engine, &output).await;
 
     let stages = engine.active_transcoder_stages(pipeline_id).await;
+    let stale_plain = StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("h264"));
+    let stale_qualified = StageKind::codec_edge(
+        "hevc_to_h264",
+        StageKind::video_preset_with_codec("h264", "hevc"),
+    );
     assert!(
-        stages.iter().any(|(stage, live)| *stage
-            == StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("h264"))
-            && *live),
+        stages
+            .iter()
+            .any(|(stage, live)| *live && (*stage == stale_plain || *stage == stale_qualified)),
         "test precondition: stale codec-edge stage should still exist in the engine registry"
     );
 

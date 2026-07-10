@@ -108,7 +108,10 @@ async fn pipeline_stage_diagnostics(api: &RampApi, pipeline_id: &str) -> Result<
         let stage_key = stage["stageKey"].as_str().unwrap_or("unknown");
         let kind = stage["kind"].as_str().unwrap_or("unknown");
         let lifecycle = &stage["lifecycle"];
-        let phase = lifecycle["phase"].as_str().unwrap_or("unknown");
+        let phase = lifecycle
+            .get("phase")
+            .and_then(|phase| phase.as_str())
+            .unwrap_or("unknown");
         let backend = lifecycle["backend"].as_str().unwrap_or("unknown");
         let metrics = &stage["metrics"];
         let pipe_metrics = &stage["pipeMetrics"];

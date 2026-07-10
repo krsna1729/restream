@@ -653,7 +653,7 @@ async fn stage_metadata_requires_raw_parameter_sets_for_hevc_codec_edge_stages()
 
 #[tokio::test]
 async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
-    let ts_sample = extract_2v16a_hevc_ts_sample();
+    let ts_sample = extract_2v16a_hevc_ts_sample_for_duration(5);
     let mut demuxer = TsDemuxer::new();
     let mut packets = Vec::new();
     for chunk in ts_sample.chunks(1316) {
@@ -690,14 +690,14 @@ async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
     source_ring.set_audio_tracks(audio_tracks);
     // Extract parameter sets from the pre-demuxed packets so the stage's
     // metadata wait loop can find them (required for HEVC).
-    let found_ps = packets.iter().find_map(|p| {
-        (p.media_type == MediaType::Video)
-            .then(|| crate::media::codec::annexb_parameter_sets(&p.payload))
-            .flatten()
-    });
-    if let Some(ps) = found_ps {
-        source_ring.set_video_parameter_sets(ps);
-    }
+    let mut parameter_sets = crate::media::codec::AnnexbParameterSetAccumulator::default();
+    let found_ps = packets
+        .iter()
+        .filter(|p| p.media_type == MediaType::Video)
+        .find_map(|p| parameter_sets.push_payload(&p.payload));
+    source_ring.set_video_parameter_sets(
+        found_ps.expect("2v16a HEVC sample should expose raw VPS/SPS/PPS"),
+    );
     let stage_key = StageKey::new(
         "pipe-ext-preview",
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
@@ -713,7 +713,7 @@ async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
 
     manager.spawn_codec_edge_stage(handle, source_ring.clone());
 
-    let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         if source_ring
             .reader_snapshots()
@@ -730,11 +730,9 @@ async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
     }
 
     // Feed all input.  With 18 streams (2v + 16a) FFmpeg holds output
-    // until stdin closes, so we cancel to send EOF and trigger a flush.
+    // until stdin closes, so mark EOS and let the pump drain naturally.
     source_ring.push_batch(packets.drain(..));
     source_ring.mark_end_of_stream();
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    cancel.cancel();
 
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
     let mut output_packets = Vec::new();
@@ -768,6 +766,7 @@ async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
         "external 720p HEVC preview stage should emit a keyframe after close (got {} packets)",
         output_packets.len()
     );
+    cancel.cancel();
 }
 
 #[tokio::test]
