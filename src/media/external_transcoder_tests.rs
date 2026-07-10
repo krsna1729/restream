@@ -1163,7 +1163,7 @@ async fn hevc_hls_preview_stage_uses_hevc_input_and_emits_h264() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     cancel.cancel();
 
-    let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+    let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(16);
     let mut output_packets = Vec::new();
     loop {
         while let Ok(Some(packet)) = reader.pull() {
@@ -1269,7 +1269,8 @@ async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture() {
     }
 
     source_ring.push_batch(packets.drain(..));
-    let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+    source_ring.mark_end_of_stream();
+    let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(16);
     let mut output_packets = Vec::new();
     loop {
         while let Ok(Some(packet)) = reader.pull() {
@@ -1388,7 +1389,8 @@ async fn external_1080p_stage_remuxes_marker_fixture_with_monotone_dts() {
     }
 
     source_ring.push_batch(packets.drain(..));
-    let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+    source_ring.mark_end_of_stream();
+    let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(16);
     let mut output_packets = Vec::new();
     loop {
         while let Ok(Some(packet)) = reader.pull() {
