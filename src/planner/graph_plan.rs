@@ -265,7 +265,10 @@ mod tests {
                 "pipe_1",
                 StageKind::audio_route(
                     "atrack:0",
-                    StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("720p")),
+                    StageKind::codec_edge(
+                        "hevc_to_h264",
+                        StageKind::video_preset_with_codec("720p", "hevc")
+                    ),
                 )
             )
         );

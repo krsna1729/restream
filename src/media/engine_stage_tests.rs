@@ -186,7 +186,7 @@ async fn transcoder_stage_registry_uses_typed_stage_keys() {
     assert_eq!(key.to_string(), "pipe-typed:video:720p");
     assert!(matches!(
         &key.kind,
-        StageKind::VideoPreset { preset } if preset == "720p"
+        StageKind::VideoPreset { preset, .. } if preset == "720p"
     ));
 }
 

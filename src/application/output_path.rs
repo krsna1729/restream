@@ -23,8 +23,29 @@ impl OutputPath {
         self.protocol.is_rtmp()
     }
 
-    pub fn video_stage(&self) -> Option<StageKey> {
+    pub fn video_stage(&self, ingest_video_codec: Option<&str>) -> Option<StageKey> {
+        if ingest_video_codec
+            .map(VideoCodecKind::from_codec_name)
+            .is_some_and(VideoCodecKind::is_hevc)
+            && let StageKind::VideoPreset { preset, .. } = self.stage_plan.video_terminal_kind()
+        {
+            return Some(StageKey::new(
+                self.stage_plan.pipeline().clone(),
+                StageKind::video_preset_with_codec(preset.clone(), "hevc"),
+            ));
+        }
         self.stage_plan.video_stage()
+    }
+
+    fn codec_edge_upstream_stage_kind(&self, ingest_video_codec: Option<&str>) -> StageKind {
+        if ingest_video_codec
+            .map(VideoCodecKind::from_codec_name)
+            .is_some_and(VideoCodecKind::is_hevc)
+            && let StageKind::VideoPreset { preset, .. } = self.stage_plan.video_terminal_kind()
+        {
+            return StageKind::video_preset_with_codec(preset.clone(), "hevc");
+        }
+        self.stage_plan.video_terminal_kind().clone()
     }
 
     pub fn audio_stage(&self) -> Option<StageKey> {
@@ -39,10 +60,7 @@ impl OutputPath {
         self.protocol.is_rtmp().then(|| {
             StageKey::new(
                 self.stage_plan.pipeline().clone(),
-                StageKind::codec_edge(
-                    "hevc_to_h264",
-                    self.stage_plan.video_terminal_kind().clone(),
-                ),
+                StageKind::codec_edge("hevc_to_h264", self.codec_edge_upstream_stage_kind(None)),
             )
         })
     }
@@ -62,16 +80,22 @@ impl OutputPath {
     }
 
     pub fn codec_edge_stage(&self, ingest_video_codec: Option<&str>) -> Option<StageKey> {
-        self.needs_rtmp_h264_conv(ingest_video_codec)
-            .then(|| self.codec_edge_candidate_stage())
-            .flatten()
+        self.needs_rtmp_h264_conv(ingest_video_codec).then(|| {
+            StageKey::new(
+                self.stage_plan.pipeline().clone(),
+                StageKind::codec_edge(
+                    "hevc_to_h264",
+                    self.codec_edge_upstream_stage_kind(ingest_video_codec),
+                ),
+            )
+        })
     }
 
-    pub fn codec_edge_upstream_kind(&self, ingest_video_codec: Option<&str>) -> &StageKind {
+    pub fn codec_edge_upstream_kind(&self, ingest_video_codec: Option<&str>) -> StageKind {
         if self.needs_rtmp_h264_conv(ingest_video_codec) {
-            self.stage_plan.video_terminal_kind()
+            self.codec_edge_upstream_stage_kind(ingest_video_codec)
         } else {
-            self.stage_plan.terminal_kind()
+            self.stage_plan.terminal_kind().clone()
         }
     }
 
@@ -79,12 +103,16 @@ impl OutputPath {
         if let Some(codec_edge) = self.codec_edge_stage(ingest_video_codec) {
             return self.stage_plan.audio_stage_from_upstream(codec_edge.kind);
         }
+        if let Some(video_stage) = self.video_stage(ingest_video_codec) {
+            return self.stage_plan.audio_stage_from_upstream(video_stage.kind);
+        }
         self.stage_plan.audio_stage()
     }
 
     pub fn terminal_stage_kind(&self, ingest_video_codec: Option<&str>) -> StageKind {
         self.routed_audio_stage(ingest_video_codec)
             .or_else(|| self.codec_edge_stage(ingest_video_codec))
+            .or_else(|| self.video_stage(ingest_video_codec))
             .map(|stage| stage.kind)
             .unwrap_or_else(|| self.stage_plan.terminal_kind().clone())
     }
@@ -98,7 +126,7 @@ impl OutputPath {
 
     pub fn needed_stage_keys(&self, ingest_video_codec: Option<&str>) -> Vec<StageKey> {
         let mut stages = Vec::new();
-        if let Some(stage) = self.video_stage() {
+        if let Some(stage) = self.video_stage(ingest_video_codec) {
             stages.push(stage);
         }
         if let Some(stage) = self.codec_edge_stage(ingest_video_codec) {
@@ -125,7 +153,10 @@ mod tests {
             path.terminal_stage_kind(Some("hevc")),
             StageKind::audio_route(
                 "atrack:0",
-                StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("720p")),
+                StageKind::codec_edge(
+                    "hevc_to_h264",
+                    StageKind::video_preset_with_codec("720p", "hevc")
+                ),
             )
         );
     }
@@ -138,7 +169,10 @@ mod tests {
         assert!(path.codec_edge_stage(Some("hevc")).is_none());
         assert_eq!(
             path.terminal_stage_kind(Some("hevc")),
-            StageKind::audio_route("atrack:0", StageKind::video_preset("720p")),
+            StageKind::audio_route(
+                "atrack:0",
+                StageKind::video_preset_with_codec("720p", "hevc")
+            ),
         );
     }
 
@@ -157,7 +191,7 @@ mod tests {
     fn source_atrack_creates_audio_stage_without_video_stage() {
         let path = OutputPath::resolve("pipe", "source+atrack:0", "rtmp://example/live");
 
-        assert!(path.video_stage().is_none());
+        assert!(path.video_stage(None).is_none());
         assert_eq!(
             path.audio_stage().unwrap().kind,
             StageKind::audio_route("atrack:0", StageKind::source())
@@ -174,16 +208,25 @@ mod tests {
         let stages = path.needed_stage_keys(Some("hevc"));
 
         assert_eq!(stages.len(), 3);
-        assert_eq!(stages[0].kind, StageKind::video_preset("720p"));
+        assert_eq!(
+            stages[0].kind,
+            StageKind::video_preset_with_codec("720p", "hevc")
+        );
         assert_eq!(
             stages[1].kind,
-            StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("720p"))
+            StageKind::codec_edge(
+                "hevc_to_h264",
+                StageKind::video_preset_with_codec("720p", "hevc")
+            )
         );
         assert_eq!(
             stages[2].kind,
             StageKind::audio_route(
                 "remap:0:1",
-                StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("720p")),
+                StageKind::codec_edge(
+                    "hevc_to_h264",
+                    StageKind::video_preset_with_codec("720p", "hevc")
+                ),
             )
         );
     }
@@ -209,16 +252,25 @@ mod tests {
             "pipe",
             StageKind::codec_edge("hevc_to_h264", StageKind::source())
         )));
-        assert!(unique.contains(&StageKey::new("pipe", StageKind::video_preset("720p"))));
         assert!(unique.contains(&StageKey::new(
             "pipe",
-            StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("720p"))
+            StageKind::video_preset_with_codec("720p", "hevc")
+        )));
+        assert!(unique.contains(&StageKey::new(
+            "pipe",
+            StageKind::codec_edge(
+                "hevc_to_h264",
+                StageKind::video_preset_with_codec("720p", "hevc")
+            )
         )));
         assert!(unique.contains(&StageKey::new(
             "pipe",
             StageKind::audio_route(
                 "atrack:0",
-                StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("720p"))
+                StageKind::codec_edge(
+                    "hevc_to_h264",
+                    StageKind::video_preset_with_codec("720p", "hevc")
+                )
             )
         )));
         assert_eq!(

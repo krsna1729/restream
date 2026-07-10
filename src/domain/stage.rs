@@ -37,6 +37,8 @@ pub enum StageKind {
     Source,
     VideoPreset {
         preset: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_codec: Option<String>,
     },
     AudioRoute {
         operation: String,
@@ -65,6 +67,17 @@ impl StageKind {
     pub fn video_preset(preset: impl Into<String>) -> Self {
         Self::VideoPreset {
             preset: preset.into(),
+            output_codec: None,
+        }
+    }
+
+    pub fn video_preset_with_codec(
+        preset: impl Into<String>,
+        output_codec: impl Into<String>,
+    ) -> Self {
+        Self::VideoPreset {
+            preset: preset.into(),
+            output_codec: Some(output_codec.into()),
         }
     }
 
@@ -114,7 +127,13 @@ impl StageKind {
             Self::Hls => "HLS Preview".to_string(),
             Self::HlsSegmenter { .. } => "fMP4 Segmenter".to_string(),
             Self::Recording => "MKV Recording".to_string(),
-            Self::VideoPreset { preset } => format!("Video: {preset}"),
+            Self::VideoPreset {
+                preset,
+                output_codec,
+            } => match output_codec {
+                Some(codec) => format!("Video: {preset} ({codec})"),
+                None => format!("Video: {preset}"),
+            },
             Self::AudioRoute { operation, .. } => format!("Audio: {operation}"),
             Self::CodecEdge { operation, .. } => match operation.as_str() {
                 "hevc_to_h264" => "HEVC -> H.264".to_string(),
@@ -169,7 +188,14 @@ impl StageKind {
     /// codec-edge stages to refer to their upstream in Display output.
     pub fn preset_name(&self) -> Option<&str> {
         match self {
-            Self::VideoPreset { preset } => Some(preset.as_str()),
+            Self::VideoPreset { preset, .. } => Some(preset.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn video_output_codec(&self) -> Option<&str> {
+        match self {
+            Self::VideoPreset { output_codec, .. } => output_codec.as_deref(),
             _ => None,
         }
     }
@@ -185,7 +211,13 @@ impl fmt::Display for StageKind {
             }
             Self::HlsSegmenter { upstream } => write!(f, "hls:from:{upstream}"),
             Self::Recording => f.write_str("recording"),
-            Self::VideoPreset { preset } => write!(f, "video:{preset}"),
+            Self::VideoPreset {
+                preset,
+                output_codec,
+            } => match output_codec {
+                Some(codec) => write!(f, "video:{preset}:codec:{codec}"),
+                None => write!(f, "video:{preset}"),
+            },
             Self::AudioRoute {
                 operation,
                 upstream,

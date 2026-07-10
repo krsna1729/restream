@@ -346,7 +346,12 @@ impl StageRuntimeManager {
         // the source is HEVC and we are preserving it. Codec-edge stages always
         // emit H.264. Preview stages always emit H.264.
         if key.kind.is_video_preset() {
-            output_ring.set_codec_hint(input_codec_override.unwrap_or("h264"));
+            output_ring.set_codec_hint(
+                key.kind
+                    .video_output_codec()
+                    .or(input_codec_override)
+                    .unwrap_or("h264"),
+            );
         } else if key.kind.is_preview() || matches!(key.kind, StageKind::CodecEdge { .. }) {
             output_ring.set_codec_hint("h264");
         } else if let Some(oc) = input_codec_override {
@@ -558,7 +563,7 @@ pub fn build_ffmpeg_stage_plan(
             },
             timeline: TimelinePolicy::default(),
         }),
-        StageKind::VideoPreset { preset } => Some(FfmpegStagePlan {
+        StageKind::VideoPreset { preset, .. } => Some(FfmpegStagePlan {
             stage_key: key.clone(),
             pipeline_id: key.pipeline.to_string(),
             input,

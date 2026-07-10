@@ -69,12 +69,14 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
 
         let stage_buf = match &stage.kind {
             StageKind::VideoPreset { .. } => {
+                let stage_codec_override =
+                    stage.kind.video_output_codec().or(ingest_codec_override);
                 engine
                     .get_or_create_transcoder(
                         &output.pipeline_id,
                         stage.kind.clone(),
                         input_buf,
-                        ingest_codec_override,
+                        stage_codec_override,
                     )
                     .await
             }
@@ -246,7 +248,11 @@ mod tests {
         );
         assert!(stages.iter().any(|(kind, active)| {
             *active
-                && *kind == StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("720p"))
+                && *kind
+                    == StageKind::codec_edge(
+                        "hevc_to_h264",
+                        StageKind::video_preset_with_codec("720p", "hevc"),
+                    )
         }));
         assert_eq!(
             stages
@@ -258,6 +264,52 @@ mod tests {
             2,
             "audio selection should happen after the shared codec edge"
         );
+    }
+
+    #[tokio::test]
+    async fn hevc_scaled_stage_is_shared_before_rtmp_codec_edge() {
+        let engine = Arc::new(MediaEngine::new());
+        engine
+            .try_register_ingest("pipe-hevc-mixed", "stream-key", "file")
+            .await
+            .unwrap();
+        engine
+            .update_ingest_meta(
+                "pipe-hevc-mixed",
+                Some(VideoMeta {
+                    codec: "hevc".to_string(),
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+            .await;
+
+        let srt = test_output("pipe-hevc-mixed", "720p", "srt://example:9000");
+        let rtmp = test_output("pipe-hevc-mixed", "720p+atrack:0", "rtmp://example/live/a");
+
+        let srt_ring = prepare_output_ring(&engine, &srt).await.ring;
+        let rtmp_ring = prepare_output_ring(&engine, &rtmp).await.ring;
+        let stages = engine.active_transcoder_stages("pipe-hevc-mixed").await;
+
+        assert!(!Arc::ptr_eq(&srt_ring, &rtmp_ring));
+        assert!(
+            !stages
+                .iter()
+                .any(|(kind, active)| { *active && *kind == StageKind::video_preset("720p") }),
+            "HEVC input must not create a second plain scaled-video stage"
+        );
+        assert!(stages.iter().any(|(kind, active)| {
+            *active && *kind == StageKind::video_preset_with_codec("720p", "hevc")
+        }));
+        assert!(stages.iter().any(|(kind, active)| {
+            *active
+                && *kind
+                    == StageKind::codec_edge(
+                        "hevc_to_h264",
+                        StageKind::video_preset_with_codec("720p", "hevc"),
+                    )
+        }));
     }
 
     #[tokio::test]

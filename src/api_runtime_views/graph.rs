@@ -183,7 +183,7 @@ pub(crate) async fn processing_graph(
                 edges.push(api_view_models::processing_graph_edge(
                     from, stage_id, label,
                 ));
-            } else if let StageKind::VideoPreset { preset } = &kind {
+            } else if let StageKind::VideoPreset { preset, .. } = &kind {
                 edges.push(api_view_models::processing_graph_edge(
                     rb_node_id.clone(),
                     stage_id,
