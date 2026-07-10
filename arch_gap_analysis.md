@@ -324,7 +324,7 @@ is not confused with the still-open addendum.
 | Phase D — Harness root-cause reporting | ✅ Complete for current taxonomy | `FailureCause` carries the full `impl.md` taxonomy, root-cause summaries include `cells`, and tests cover blocked stage, capacity, first output, keyframe, parameter sets, timestamp discontinuity, protocol connect, HLS segments, recording identity, runtime log, lifecycle stop, infrastructure, no-progress classification, and structured JSON failure rows. The classifier now inspects structured fields such as `blockedBy`, capacity phases, keyframe phases, and typed message/error fields before falling back to message substrings. |
 | Phase E — Harness artifact index | ✅ Complete for failed-run evidence | Mixed scenario `artifact-index.json` is atomically written and now includes run id, command, selected env, started timestamp, source revision, scenario/assertions/outputs/log/media/SQLite paths, file existence/size/SHA-256 entries, and a copied SQLite snapshot directory containing the DB plus WAL/SHM sidecars when present. Matrix progress also writes a root `artifact-index.json` that points to the root scenario/root-cause/assertion artifacts and every child case's scenario, outputs, logs, media directory, SQLite snapshot directory, and per-scenario index. |
 | Phase F — Harness execution symmetry | ✅ Mostly complete | Manifest-backed modes and shared batch helpers expose much of the live/file execution shape. `ScenarioExecutor` is now explicit, scenario selection reports a named executor, `HlsPreviewTiming` and `ProbeSamplingPolicy` are typed, scenario/matrix artifacts report selected and supported policies, duplicate ffprobe sampling is policy-driven, and file-ingest HLS preview attaches before output fanout by default. Remaining improvement: move more of the legacy live/file body internals behind the executor step methods instead of delegating to the existing mature runner functions. |
-| Phase G — Harness/report module split | ✅ Mostly complete | `src/bin/test_harness.rs` is below 2,000 lines and command dispatch is split into focused harness modules for core, catalog, suites, probes, reports, artifacts, mixed runners, fault runners, resource sweeps, sinks, and live modes. The exact `api_client.rs`, `ports.rs`, `stacks.rs`, and `probes/mod.rs` names from `impl.md` are not used, but the ownership split is present. |
+| Phase G — Harness/report module split | ✅ Complete for responsibility-based organization | `src/bin/test_harness.rs` is below 2,000 lines and command dispatch is split into focused harness modules for API client/DTOs, core env/process helpers, catalog, suites, probes, reports, artifacts, mixed runners, fault runners, resource sweeps, sinks, and live modes. The organization intentionally favors responsibility-based modules over forcing every exact illustrative filename from `impl.md`; `api_client.rs` now owns `RampApi` and typed DTOs, while the source audit verifies the DTO schema at that boundary. |
 | Phase H — Whole-codebase service and adapter split | ⚠️ Partial+ | Route modules, application services, runtime read-model service, graph planning, repository ports, and media FFmpeg/backend modules are split enough for the current phase-scope baseline. Recording catalog concerns now live under `media/recording/catalog.rs`, and HLS packaging is namespaced under `media/hls/{fmp4,preview,upload}.rs` with legacy module paths preserved for callers. The larger idealized namespace split in `impl.md` (`RuntimeGraph`, registry modules, `media/protocols/*`, HLS TS submodule, and recording runtime/writer modules) is still not fully realized. |
 | Phase I — Harness as architectural governor | ✅ Mostly complete | Named governor tests now cover progress cell identity, dependency-chain failure text, timestamp discontinuity root-cause grouping, recording metadata identity, HLS no-segments preview-state evidence, planner-backed HLS preview, shared FFmpeg stage operation planning, per-stage backend policy, mixed fast-breadth defaults, and source-audit guardrails. Fast-breadth now writes mode-specific `scenario.json` and `root-cause-summary.json` before returning failure. Remaining piece: CI execution of `target/bench/test_harness mixed.fast-breadth` once runtime cost is acceptable. |
 
@@ -348,17 +348,9 @@ decomposition are the main non-A addendum gaps.**
 2. **Promote `mixed.fast-breadth` to a CI governor lane**
    - Add the bench-profile CI command once runtime cost is acceptable.
 
-### P1 — Addendum Evidence and Classification Gaps
-
-3. **Keep typed harness API coverage expanding beyond output status**
-   - Output-status DTO coverage is complete for normal harness observations.
-     Future polish should apply the same typed-client pattern to additional API
-     surfaces where the harness still treats structured responses as generic
-     JSON.
-
 ### P2 — Namespace and Ownership Polish
 
-4. **Continue the broader service/adapter namespace split**
+3. **Continue the broader service/adapter namespace split**
    - The current baseline is split enough for Phases 0-16, but the full
      addendum ideal still calls for deeper `RuntimeGraph`, registry,
      `media/protocols/*`, HLS TS, and recording runtime/writer namespaces.
@@ -392,7 +384,7 @@ decomposition are the main non-A addendum gaps.**
 | Phase D Root causes | A | Full `FailureCause` taxonomy, cell extraction, summary JSON, and classification tests exist; structured JSON fields now classify before message-substring fallback. |
 | Phase E Artifact index | A | Scenario and root aggregate artifact indexes have run identity, command/env/timestamp/revision, root/case scenario paths, assertion/root-cause/output/log/media/DB pointers, file checksums, and copied SQLite DB/WAL/SHM snapshots for failed-run evidence. |
 | Phase F Execution symmetry | A- | Manifest-backed execution is strong, `ScenarioExecutor` selection is explicit, HLS preview timing and duplicate-probe sampling are typed/reporting policies, and file-ingest preview now follows the same before-fanout default as live scenarios. Full A requires migrating more live/file internals into the executor step methods. |
-| Phase G Harness split | A- | Harness root is small and modules are responsibility split; exact module names from `impl.md` are not fully mirrored. |
+| Phase G Harness split | A | Harness root is small, API client/DTOs live in `api_client.rs`, and the remaining harness modules are responsibility split rather than exact-name mirrors where the current organization is clearer. |
 | Phase H Whole-codebase split | A- | Services/routes/planner/runtime read models are split for the current phase-scope baseline; recording catalog helpers now live in `media/recording/catalog.rs`; HLS fMP4, preview, and upload modules now live under `media/hls/`. Broader `RuntimeGraph`, registry, protocol, HLS TS, and recording runtime/writer namespace splits remain partial. |
 | Phase I Harness governor | A- | Exact named governor tests, stronger source-audit checks, and fast-breadth root-cause artifacts now exist; CI `mixed.fast-breadth` is still pending runtime-cost approval. |
 

@@ -232,10 +232,10 @@ if egress_match:
     api_output_status_fields.update(re.findall(r'"([A-Za-z][A-Za-z0-9]*)"\s*:', body))
     api_output_status_fields.update(re.findall(r'value\["([A-Za-z][A-Za-z0-9]*)"\]', body))
 
-harness_core = read(root / "src" / "bin" / "test_harness" / "core.rs")
+harness_api_client = read(root / "src" / "bin" / "test_harness" / "api_client.rs")
 harness_status_match = re.search(
     r"struct ApiOutputStatus \{(?P<body>[\s\S]*?)\n\}",
-    harness_core,
+    harness_api_client,
 )
 harness_output_status_fields = set()
 if harness_status_match:
@@ -282,7 +282,7 @@ report = {
     },
     "outputStatusSchema": {
         "source": "src/api_view_models.rs::egress_runtime_json",
-        "harnessDto": "src/bin/test_harness/core.rs::ApiOutputStatus",
+        "harnessDto": "src/bin/test_harness/api_client.rs::ApiOutputStatus",
         "apiFields": sorted(api_output_status_fields),
         "harnessFields": sorted(harness_output_status_fields),
         "missingInHarness": output_status_missing_in_harness,

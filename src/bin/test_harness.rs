@@ -29,6 +29,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
 use tokio_util::sync::CancellationToken;
 
+#[path = "test_harness/api_client.rs"]
+mod api_client;
 #[path = "test_harness/catalog.rs"]
 #[allow(dead_code)]
 mod catalog;
@@ -65,6 +67,7 @@ mod suite;
 #[path = "test_harness/workflow_exec.rs"]
 mod workflow_exec;
 
+use api_client::*;
 use core::*;
 use fault_manifest::*;
 use fault_recovery::*;

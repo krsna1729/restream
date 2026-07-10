@@ -1623,19 +1623,3 @@ fn csv_escape(value: &str) -> String {
         value.to_string()
     }
 }
-
-pub(crate) async fn json_response(request: reqwest::RequestBuilder) -> Result<Value, String> {
-    let response = request.send().await.map_err(|e| e.to_string())?;
-    let status = response.status();
-    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(format!(
-            "HTTP {status}: {}",
-            String::from_utf8_lossy(&bytes)
-        ));
-    }
-    if bytes.is_empty() {
-        return Ok(Value::Null);
-    }
-    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
-}
