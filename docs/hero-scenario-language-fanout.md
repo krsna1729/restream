@@ -1,0 +1,368 @@
+# Hero Scenario: SRT Multi-Language Fan-Out
+
+## Status
+
+- **Scenario status:** canonical capacity and correctness target
+- **Architecture status:** model and test the current implementation; no media-path
+  redesign is implied by this document
+- **Harness status:** proposed; not yet implemented or measured
+- **Baseline status:** no passing 30-track / 1,200-output baseline exists yet
+
+This document tracks the highest-value production scenario for the current
+backend: one high-resolution SRT contribution carrying one video stream and 30
+language audio tracks, fanned out to mostly RTMP push outputs. Each RTMP output
+selects exactly one audio track. SRT outputs may select one track, a subset, or
+all tracks.
+
+The purpose is to keep the scenario, assumptions, expected runtime graph,
+proof plan, and eventual measurements in one durable place. It is not an
+architecture proposal.
+
+## Canonical Workload
+
+### Ingest
+
+| Dimension | Canonical value |
+|---|---|
+| Protocol | SRT / MPEG-TS |
+| Video streams | 1 |
+| Video resolution | Run separately at 1080p and 4K |
+| Video frame rate | 30 fps initially; 60 fps as an explicit extension |
+| Video codecs | H.264 primary; HEVC compatibility variant |
+| Audio tracks | 30 AAC tracks at 48 kHz |
+| Audio layouts | 29 stereo, 1 5.1 |
+| Track identity | Stable track index plus language metadata |
+| Output video encoding | `source` unless a test explicitly selects a preset |
+
+The primary run uses source-resolution passthrough so it measures the actual
+fan-out and routing path rather than conflating it with a resolution transcode.
+The HEVC variant includes the current shared HEVC-to-H.264 compatibility stage
+for RTMP outputs.
+
+### Output population
+
+The canonical Zipf distribution uses exponent `s = 1`, rank-one population
+300, and rounded counts `N(rank) = round(300 / rank)`. This deliberately sums
+to exactly 1,200 outputs:
+
+```text
+300, 150, 100, 75, 60, 50, 43, 38, 33, 30,
+27, 25, 23, 21, 20, 19, 18, 17, 16, 15,
+14, 14, 13, 13, 12, 12, 11, 11, 10, 10
+```
+
+| Protocol | Share | Output count |
+|---|---:|---:|
+| RTMP | 95% | 1,140 |
+| SRT | 5% | 60 |
+| **Total** | **100%** | **1,200** |
+
+Protocol assignment must preserve the rank distribution as closely as
+possible while producing exactly 1,140 RTMP and 60 SRT outputs. A deterministic
+assignment is required so repeated runs are comparable.
+
+Every RTMP output uses `source+atrack:N`. The primary SRT run also uses one
+selected track per output so protocol costs can be compared against the same
+media shape. Two SRT correctness variants are required:
+
+1. selected subsets, including at least 2-, 3-, and 6-track subsets;
+2. `source` with all 30 audio tracks.
+
+The subset/all variants need not carry the full 60-output population during
+the first proof. Their purpose is to validate correctness and measure the
+incremental package cost of those current supported shapes.
+
+## Expected Current Runtime Graph
+
+### H.264 source variant
+
+With all 30 languages represented:
+
+- one SRT ingest task and inline MPEG-TS demuxer;
+- one adaptive source ring;
+- 30 shared `audio:atrack:N:from:source` router stages;
+- 1,140 independent RTMP egress tasks and TCP connections;
+- shared SRT MPEG-TS mux stages keyed by distinct final encoding;
+- 60 independent SRT feeder tasks, sender threads, sockets, and AVIO queues.
+
+The Zipf distribution changes the number of last-hop senders per language. It
+does not create additional audio routers for a hot language: the 300 rank-one
+outputs share the same selected-audio ring.
+
+### HEVC source variant
+
+The current RTMP compatibility edge adds:
+
+- one shared `hevc_to_h264:from:source` stage for all RTMP source outputs;
+- RTMP audio routers downstream of the H.264 compatibility ring;
+- separate native-HEVC audio routers for SRT selected-track outputs.
+
+If all 30 languages are used by both protocols, up to 60 selected-audio router
+stages are therefore expected. This is current stage-key behavior, not a target
+for consolidation.
+
+### High-track-count packet rate
+
+The source-ring sizing model assumes approximately 50 AAC packets per second
+per audio track:
+
+```text
+30 tracks * 50 audio packets/s + 30 to 60 video packets/s
+= approximately 1,530 to 1,560 source packets/s
+```
+
+Six seconds of adaptive source-ring headroom requires approximately 9,180 to
+9,360 slots, below the current 16,384-slot maximum.
+
+With 30 distinct selected-track routes, the audio routers collectively inspect
+approximately 46,000 source packets per second. Payload bytes are shared, but
+packet objects, ring writes, metrics, and notifications remain per route.
+
+## Capacity Model
+
+The following figures are planning estimates, not measured baselines. They
+assume approximately 192 kbps per selected stereo AAC track. The one 5.1 track
+does not materially change the aggregate unless it is assigned a much higher
+bitrate.
+
+| Source video bitrate | Approximate media payload egress at 1,200 outputs |
+|---:|---:|
+| 8 Mbps | 9.8 Gbps |
+| 12 Mbps | 14.6 Gbps |
+| 25 Mbps | 30.2 Gbps |
+| 40 Mbps | 48.2 Gbps |
+
+Wire overhead, retransmission, and operational headroom are additional. A
+localhost harness can measure backend CPU, memory, task, queue, and socket
+behavior, but cannot certify physical NIC capacity from these figures.
+
+At 30 fps, one selected AAC track produces roughly 80 media messages per
+output per second. At 60 fps it produces roughly 110. The canonical population
+therefore drives approximately 96,000 to 132,000 per-output media-message sends
+per second.
+
+## Risks To Track
+
+| ID | Risk | Evidence required |
+|---|---|---|
+| HERO-01 | Aggregate network bandwidth exceeds the host link | Measured bytes/s plus external-link certification |
+| HERO-02 | Per-output RTMP packetization/socket work saturates Tokio workers | CPU, scheduler, progress, and latency samples across the ramp |
+| HERO-03 | Thirty audio routers cause allocation/cache pressure | Stage CPU, RSS, retained payload, allocation profile |
+| HERO-04 | Adaptive ring replacement disrupts mass startup | Startup timeline, cancellations, retries, time-to-progress |
+| HERO-05 | Correlated sink failure creates a retry/log/DB storm | Fault slice with bounded recovery and reconciler timing |
+| HERO-06 | Slow outputs overflow and repeatedly restart | One and many slow-sink fault slices; overflow and retry counters |
+| HERO-07 | SRT per-output threads and buffers consume excessive resources | Thread count, AVIO HWM, RSS/PSS, kernel socket memory |
+| HERO-08 | 5.1 AAC is not accepted by an RTMP destination | Interop probe of passthrough 5.1 and optional downmix route |
+| HERO-09 | The shared 4K HEVC compatibility stage misses real time | Stage CPU, output progress, decode probe, dropped/overflow counters |
+| HERO-10 | Teardown leaks tasks, stages, sockets, jobs, or memory | Post-stop convergence and resource return-to-baseline assertions |
+
+## Representative Harness Plan
+
+Yes, this scenario can be represented by the existing live harness philosophy:
+run the production binary, configure it through the API, publish real media
+over SRT, and receive real RTMP/SRT egress over localhost. It should be added
+as a dedicated bench-profile measurement mode rather than multiplied into
+every `mixed.matrix` row.
+
+Proposed mode name:
+
+```text
+hero.language-fanout
+```
+
+The implementation must follow the repository's two-tier testing strategy:
+pure topology/distribution rules in unit tests, and media/runtime behavior in
+the live binary-plus-API harness. It must also follow fixture discipline and
+write artifacts under a run-specific `test/artifacts/` directory.
+
+### Phase 0: deterministic topology unit tests
+
+Test without sockets or media:
+
+- Zipf rank vector has 30 entries and totals 1,200;
+- protocol allocation totals exactly 1,140 RTMP and 60 SRT;
+- every RTMP output resolves to exactly one `atrack:N` selection;
+- requested SRT single/subset/all encodings are valid;
+- expected distinct stage keys are calculated for H.264 and HEVC;
+- output IDs, sink paths, and ports are deterministic and collision-free.
+
+### Phase 1: 30-track correctness fixture
+
+Add a checked-in, compact MPEG-TS fixture registered in
+`src/test_fixtures.rs` with:
+
+- one H.264 video stream;
+- 30 AAC audio streams at 48 kHz;
+- 29 stereo tracks and one 5.1 track;
+- stable language descriptors;
+- distinguishable audio markers so track selection proves identity, not only
+  stream count.
+
+The existing two-audio transport fixtures prove the routing mechanism, and the
+`2v16a` media-library fixture proves higher track-count probing, but neither is
+an exact transport-level oracle for this scenario.
+
+The first live correctness run should create one RTMP and one SRT output for
+each language, plus representative SRT subset and all-track outputs. Assert:
+
+- ingest reports 30 audio tracks with the expected language/channel metadata;
+- every RTMP sink receives H.264 plus exactly one correct AAC language;
+- every selected SRT sink receives the requested tracks only;
+- the all-track SRT sink receives all 30 tracks;
+- selected tracks are reindexed correctly at the output edge;
+- shared stage counts match the expected graph;
+- no output reports retry, overflow, or failure.
+
+### Phase 2: bounded Zipf fan-out ramp
+
+Use the real production binary and real localhost sinks. Ramp through
+deterministic prefixes of the same canonical population, for example:
+
+```text
+30, 120, 300, 600, 900, 1,200 outputs
+```
+
+Keep the source bitrate moderate for this phase so it isolates connection and
+per-output backend cost from physical-link saturation. At each step record:
+
+- active/healthy/progressing output counts by protocol and language rank;
+- startup p50/p95/p99 and total convergence time;
+- restream RSS/PSS, CPU, file descriptors, task count, and OS-thread count;
+- child FFmpeg count/RSS/CPU;
+- source, selected-audio, and TS-mux ring fill/HWM/overflow counters;
+- AVIO queue length, HWM, and blocked writes;
+- egress bytes/s and messages/s by protocol;
+- retry, failure, and log-event rates;
+- SQLite/reconciler tick duration if exposed by current telemetry.
+
+Correctness probing should occur once per distinct language/subset shape plus a
+deterministic sample of duplicate hot-language outputs. Spawning an `ffprobe`
+process for all 1,200 outputs would measure probe-process fan-out more than the
+backend. The harness sink should count progress on every connection and reserve
+full decode/probe checks for representative routes.
+
+### Phase 3: bitrate and codec envelope
+
+Repeat selected stable population points with:
+
+- H.264 1080p source;
+- H.264 4K source;
+- HEVC 4K source with the shared RTMP compatibility stage;
+- 30 fps and, separately, 60 fps;
+- passthrough 5.1 AAC and a shared stereo downmix variant.
+
+Do not require the local host to run every bitrate/population cross-product.
+Use a small matrix chosen from Phase 2's knee points. The full 1,200-output 4K
+run is a certification case, not a routine developer gate.
+
+### Phase 4: degradation slices
+
+Run separately from clean capacity measurements:
+
+1. one stalled RTMP sink in the hottest language;
+2. one stalled SRT sink;
+3. a bounded percentage of sinks disconnecting together;
+4. restart of the shared sink service;
+5. stop and recreate the full output population;
+6. publisher disconnect and reconnect while all outputs are desired-running.
+
+Assert sibling progress, bounded retry behavior, causal failure phases, and
+complete teardown. Fault runs must not be mixed into performance baselines.
+
+### Phase 5: external-link certification
+
+Loopback runs cannot validate 10–50 Gbps wire behavior. A full certification
+run requires remote or distributed sinks and records:
+
+- NIC throughput, drops, errors, queue depth, and retransmits;
+- host softirq/system CPU;
+- RTMP and SRT delivery progress at the receivers;
+- end-to-end packet loss, continuity, and decode success;
+- backend telemetry and harness artifacts from the same time window.
+
+This phase may be unavailable on a development workstation. Its absence must
+be reported as an unproven network envelope rather than inferred from localhost
+success.
+
+## Harness Implementation Shape
+
+The lowest-risk implementation is an extension of the current declarative
+resource/ramp infrastructure:
+
+- a typed `HeroLanguageFanoutConfig` owning rank counts, protocol assignment,
+  codec, resolution, frame rate, and SRT subset/all variants;
+- a declarative scenario file rather than 1,200 hand-authored output rows;
+- harness-owned high-concurrency RTMP and SRT sinks where available, avoiding
+  one helper process per output;
+- production output creation through the existing HTTP API;
+- incremental `scenario.json`, JSONL assertions, raw 1 Hz samples, CSV summary,
+  and final JSON result;
+- bench-profile execution through `scripts/run-bench-harness.sh`;
+- serial measurement discipline and explicit detection of pre-existing media
+  processes.
+
+Do not use one FFmpeg or ffprobe child per output during the scale phase. That
+would make helper-process cost dominate the system under test. Use full media
+probes only for distinct output shapes and sampled duplicates.
+
+## Proposed Controls
+
+Names are provisional until the mode is implemented:
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `HERO_OUTPUT_COUNTS` | `30,120,300,600,900,1200` | Ramp checkpoints |
+| `HERO_ZIPF_EXPONENT` | `1.0` | Distribution shape |
+| `HERO_HOT_COUNT` | `300` | Rank-one population |
+| `HERO_RTMP_PERCENT` | `95` | Protocol mix |
+| `HERO_SAMPLE_SECS` | `30` | Stable sampling window per checkpoint |
+| `HERO_VIDEO_CODEC` | `h264` | `h264` or `h265`/`hevc` |
+| `HERO_VIDEO_SHAPE` | `1080p30` | Fixture/profile selection |
+| `HERO_SRT_SHAPE` | `single` | `single`, `subsets`, or `all` |
+| `HERO_STOP_AFTER` | unset | Stop after a checkpoint for a bounded run |
+| `HERO_NO_CLEANUP` | unset | Leave the final stack for inspection |
+
+## Acceptance Contract
+
+The first implementation is complete when it can produce repeatable artifacts
+for Phases 0–2. It must not invent pass thresholds before a clean baseline has
+been captured. Initial runs establish the curve and identify the first
+capacity knee.
+
+Eventually, a passing canonical run should require:
+
+- exact requested output count and 95/5 protocol mix;
+- every connection making sustained forward progress;
+- correct audio identity for every distinct route and sampled duplicate;
+- no unexpected stage multiplication;
+- zero source/audio-router overflows during the clean run;
+- no unexplained retries or failed outputs;
+- bounded RSS/CPU/FD/thread growth relative to the recorded baseline;
+- complete shutdown and return near the pre-run resource baseline;
+- an explicit statement of whether network capacity was measured externally or
+  remains unproven.
+
+## Tracking Checklist
+
+- [x] Canonical workload and Zipf population documented
+- [x] Expected H.264 and HEVC runtime graphs documented
+- [x] Representative harness approach defined
+- [ ] Exact 30-track checked-in MPEG-TS fixture added
+- [ ] Deterministic topology unit tests added
+- [ ] `hero.language-fanout` mode registered
+- [ ] Harness-owned sinks proven at the required connection counts
+- [ ] Phase 1 correctness run passing
+- [ ] Phase 2 bounded Zipf ramp baseline recorded
+- [ ] Phase 3 1080p/4K and H.264/HEVC envelope recorded
+- [ ] Phase 4 degradation behavior recorded
+- [ ] Phase 5 external-link certification recorded or explicitly waived
+
+## Related Documentation
+
+- [Media pipeline](media-pipeline.md)
+- [Testing](testing.md)
+- [Testing strategy](testing-strategy.md)
+- [Resource sweep](resource-sweep.md)
+- [Matrix resource constraints](matrix-resource-constraints.md)
+- [Performance and resource baselines](agent-guidance/quality/baselines.md)
+

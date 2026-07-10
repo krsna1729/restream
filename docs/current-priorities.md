@@ -77,6 +77,7 @@ Primary references:
 
 - [testing.md](testing.md)
 - [testing-strategy.md](testing-strategy.md)
+- [hero-scenario-language-fanout.md](hero-scenario-language-fanout.md)
 - [observability.md](observability.md)
 - [agent-plane-integration.md](agent-plane-integration.md)
 
