@@ -3060,6 +3060,22 @@ async fn media_delete_path_traversal_blocked() {
     assert!(resp.status() == StatusCode::BAD_REQUEST || resp.status() == StatusCode::NOT_FOUND);
 }
 
+#[test]
+fn media_destination_path_allows_plain_name_under_relative_media_root() {
+    let media_dir = format!("target/restream-media-{}", rand::random::<u64>());
+    std::fs::create_dir_all(&media_dir).unwrap();
+
+    let destination =
+        restream::api::media_library::media_destination_path_under_root(&media_dir, "renamed.mp4")
+            .unwrap();
+    let expected = std::fs::canonicalize(&media_dir)
+        .unwrap()
+        .join("renamed.mp4");
+
+    assert_eq!(destination, expected);
+    let _ = std::fs::remove_dir_all(media_dir);
+}
+
 #[tokio::test]
 async fn media_library_classifies_serves_and_deletes_files() {
     let (app, cookie, temp_dir, pool) = authenticated_app_with_temp_media().await;

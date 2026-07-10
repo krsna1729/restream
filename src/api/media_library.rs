@@ -198,7 +198,7 @@ pub fn media_destination_path_under_root(
     let _ = std::fs::create_dir_all(media_dir);
     let media_root =
         std::fs::canonicalize(media_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let path = std::path::Path::new(media_dir).join(filename);
+    let path = media_root.join(filename);
     if let Some(parent) = path.parent()
         && !parent.starts_with(&media_root)
     {
