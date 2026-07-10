@@ -18,6 +18,9 @@ dependencies, a pinned `mediamtx` binary for the live harness, and the
 repo-managed native dependency prefix used by the build.
 
 After `cargo run`, the service is available at `http://localhost:3030`.
+The dashboard/API binds to `127.0.0.1` by default; set
+`RESTREAM_HTTP_BIND_ADDR=0.0.0.0` or another address when you deliberately want
+to expose it beyond loopback.
 
 Default runtime ports:
 
@@ -25,7 +28,10 @@ Default runtime ports:
 - `1935`: RTMP ingest/play
 - `10080`: SRT ingest/read
 
-First-run dashboard password: `admin`
+For the first dashboard login, set `RESTREAM_INITIAL_ADMIN_PASSWORD` in CI or a
+local dev environment. If it is unset, Restream generates a high-entropy
+initial password and writes it next to the SQLite database as
+`restream-initial-admin-password.txt` with owner-only permissions.
 
 ## Running The Binary Directly
 

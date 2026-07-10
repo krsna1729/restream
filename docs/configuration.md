@@ -66,13 +66,17 @@ updates any supplied field.
 | `ingestHost` | Hostname used when generating RTMP/SRT publisher URLs; blank falls back to `localhost` |
 | `ingestSecurity` | In-memory failed-publish tracking and temporary IP bans; changes are persisted |
 | `recordingSettings.retainSourceTs` | Deployment-wide recording retention policy. Default `false`: after a successful `.mp4` remux, the source recording `.ts` is deleted. Failed remuxes always keep the source `.ts`. |
-| Dashboard password | Scrypt hash stored in SQLite; first-run password is `admin` |
+| Dashboard password | Scrypt hash stored in SQLite. On first startup, `RESTREAM_INITIAL_ADMIN_PASSWORD` is used when set; otherwise a high-entropy password is generated and written next to the SQLite database as `restream-initial-admin-password.txt` with owner-only permissions. |
 | Custom encoding | Stored through `/api/v1/encodings/custom` for future use; not offered as an output encoding and rejected by output create/update |
 | Recording enabled | Stored per pipeline as `recording_enabled:<pipelineId>` |
 
 Sessions are persisted in SQLite and reloaded at startup. Expired sessions are
 pruned during initialization and then once per hour while the server is running
 (reconciler tick 3600).
+
+The dashboard/API HTTP listener binds to `127.0.0.1` by default. Override that
+with `RESTREAM_HTTP_BIND_ADDR` only when another component, such as a reverse
+proxy or tunnel, is expected to reach the service on a different interface.
 
 ## SQLite Performance Settings
 

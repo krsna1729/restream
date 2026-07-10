@@ -3,6 +3,7 @@ import {
   patchConfig,
   logout,
   changePassword,
+  dismissPasswordChangePrompt,
   type TranscodeProfile,
   type TranscodeProfiles,
 } from "../core/api.js";
@@ -47,6 +48,7 @@ export async function loadSettings({
   populateIngestSecuritySettings();
   populateRecordingSettings();
   populateSrtIngestSettings();
+  syncDashboardPasswordPrompt();
   loadTranscodeProfiles();
 }
 
@@ -130,6 +132,7 @@ export function registerSettingsGlobals(): void {
   window.saveTranscodeProfiles = saveTranscodeProfiles;
   window.addTranscodeProfile = addTranscodeProfile;
   window.saveDashboardPassword = saveDashboardPassword;
+  window.dismissDashboardPasswordPrompt = dismissDashboardPasswordPrompt;
   window.logoutUser = logoutUser;
 }
 
@@ -180,6 +183,14 @@ export function renderSettingsPanel(container: HTMLElement): void {
                 </div>
 
                 <div class="divider my-0"></div>
+
+                <div id="dashboard-password-prompt" class="alert alert-warning hidden items-start gap-3">
+                    <div class="min-w-0">
+                        <div class="font-semibold">Initial dashboard password is still active</div>
+                        <div class="text-sm">Set a different password below, or dismiss this reminder.</div>
+                    </div>
+                    <button class="btn btn-sm" onclick="dismissDashboardPasswordPrompt()">Skip</button>
+                </div>
 
                 <div class="space-y-2">
                     <div class="text-sm font-medium">Dashboard Password</div>
@@ -375,10 +386,25 @@ export async function saveDashboardPassword(): Promise<void> {
   const result = await changePassword(currentPassword, newPassword);
   if (!result) return;
 
+  state.config = {
+    ...state.config,
+    dashboardPasswordChangeRecommended: false,
+  };
+  syncDashboardPasswordPrompt();
   if (currentInput) currentInput.value = "";
   if (newInput) newInput.value = "";
   if (confirmInput) confirmInput.value = "";
   showSavedFeedback("dashboard-password-saved");
+}
+
+export async function dismissDashboardPasswordPrompt(): Promise<void> {
+  const result = await dismissPasswordChangePrompt();
+  if (!result) return;
+  state.config = {
+    ...state.config,
+    dashboardPasswordChangeRecommended: false,
+  };
+  syncDashboardPasswordPrompt();
 }
 
 export async function logoutUser(): Promise<void> {
@@ -472,6 +498,14 @@ function showSavedFeedback(id: string): void {
   if (!el) return;
   el.classList.remove("hidden");
   setTimeout(() => el.classList.add("hidden"), 2000);
+}
+
+function syncDashboardPasswordPrompt(): void {
+  const prompt = document.getElementById("dashboard-password-prompt");
+  if (!prompt) return;
+  const show = state.config?.dashboardPasswordChangeRecommended === true;
+  prompt.classList.toggle("hidden", !show);
+  prompt.classList.toggle("flex", show);
 }
 
 function getSrtPbkeylenInputValue(id: string): 16 | 24 | 32 {

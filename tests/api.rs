@@ -30,7 +30,7 @@ async fn test_app_with_engine() -> (axum::Router, SqlitePool, Arc<MediaEngine>) 
     db::setup_database_schema(&pool).await.unwrap();
 
     let sessions = Arc::new(TokioRwLock::new(HashSet::new()));
-    api::initialize_auth(&pool, &sessions).await;
+    api::initialize_auth_for_test(&pool, &sessions, "admin").await;
 
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
     let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
@@ -65,7 +65,7 @@ async fn authenticated_app_with_temp_media()
     db::setup_database_schema(&pool).await.unwrap();
 
     let sessions = Arc::new(TokioRwLock::new(HashSet::new()));
-    api::initialize_auth(&pool, &sessions).await;
+    api::initialize_auth_for_test(&pool, &sessions, "admin").await;
 
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
     let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
@@ -105,7 +105,7 @@ async fn authenticated_app_with_temp_media_and_engine() -> (
     db::setup_database_schema(&pool).await.unwrap();
 
     let sessions = Arc::new(TokioRwLock::new(HashSet::new()));
-    api::initialize_auth(&pool, &sessions).await;
+    api::initialize_auth_for_test(&pool, &sessions, "admin").await;
 
     let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
     let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
@@ -2050,7 +2050,7 @@ async fn health_shows_registered_egress() {
     let (_, pool, engine) = test_app_with_engine().await;
     let app = {
         let sessions = Arc::new(TokioRwLock::new(HashSet::new()));
-        api::initialize_auth(&pool, &sessions).await;
+        api::initialize_auth_for_test(&pool, &sessions, "admin").await;
         let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
         let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
             SrtGlobalIngestConfig::default(),

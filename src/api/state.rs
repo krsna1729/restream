@@ -37,6 +37,7 @@ pub static ENGINE_CPU_SAMPLE: OnceLock<Mutex<Option<EngineCpuSample>>> = OnceLoc
 pub const SESSION_COOKIE_NAME: &str = "session";
 pub const SESSION_MAX_AGE_SECONDS: i64 = 30 * 24 * 60 * 60;
 pub const PASSWORD_META_KEY: &str = "dashboardPasswordHash";
+pub const BOOTSTRAP_PASSWORD_PROMPT_META_KEY: &str = "dashboardPasswordPrompt";
 pub const DEFAULT_INGEST_HOST: &str = "localhost";
 
 pub const STREAM_KEYS: &[(&str, &str)] = &[

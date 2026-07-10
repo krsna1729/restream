@@ -5,14 +5,15 @@ use axum::{
     response::IntoResponse,
 };
 use serde::Deserialize;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock as TokioRwLock;
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::state::{
-    AppState, MAX_PASSWORD_LEN, SESSION_MAX_AGE_SECONDS, STREAM_KEYS, check_field_len,
-    clear_session_cookie, get_session_token_from_headers, hash_session_token, make_session_cookie,
-    to_hex,
+    AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, MAX_PASSWORD_LEN, SESSION_MAX_AGE_SECONDS,
+    STREAM_KEYS, check_field_len, clear_session_cookie, get_session_token_from_headers,
+    hash_session_token, make_session_cookie, to_hex,
 };
 use crate::application::services::AuthService;
 
@@ -25,6 +26,51 @@ pub struct LoginPayload {
 pub struct ChangePasswordPayload {
     pub current_password: Option<String>,
     pub new_password: Option<String>,
+}
+
+const BOOTSTRAP_PROMPT_PENDING: &str = "pending";
+const BOOTSTRAP_PROMPT_DISMISSED: &str = "dismissed";
+
+fn select_initial_admin_password(env_password: Option<String>) -> (String, bool) {
+    match env_password {
+        Some(value) if !value.is_empty() => (value, false),
+        _ => (generate_bootstrap_password(), true),
+    }
+}
+
+fn generate_bootstrap_password() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    to_hex(&bytes)
+}
+
+fn write_bootstrap_password_file(path: &Path, password: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        writeln!(file, "{password}")?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, format!("{password}\n"))?;
+    }
+
+    Ok(())
 }
 
 pub fn hash_password(password: &str) -> String {
@@ -71,9 +117,67 @@ pub async fn initialize_auth(
     db_pool: &sqlx::SqlitePool,
     sessions_set: &TokioRwLock<std::collections::HashSet<String>>,
 ) {
+    initialize_auth_with_bootstrap_file(db_pool, sessions_set, None).await;
+}
+
+pub async fn initialize_auth_for_test(
+    db_pool: &sqlx::SqlitePool,
+    sessions_set: &TokioRwLock<std::collections::HashSet<String>>,
+    password: &str,
+) {
     let auth_service = AuthService::new(db_pool.clone());
-    let admin_hash = hash_password("admin");
-    let _ = auth_service.ensure_password_hash(&admin_hash).await;
+    auth_service
+        .set_password_hash(&hash_password(password))
+        .await
+        .expect("test auth password should persist");
+    let _ = auth_service
+        .set_meta(
+            BOOTSTRAP_PASSWORD_PROMPT_META_KEY,
+            BOOTSTRAP_PROMPT_DISMISSED,
+        )
+        .await;
+    initialize_auth(db_pool, sessions_set).await;
+}
+
+pub async fn initialize_auth_with_bootstrap_file(
+    db_pool: &sqlx::SqlitePool,
+    sessions_set: &TokioRwLock<std::collections::HashSet<String>>,
+    bootstrap_password_file: Option<&Path>,
+) {
+    let auth_service = AuthService::new(db_pool.clone());
+    if matches!(auth_service.get_password_hash().await, Ok(None)) {
+        let (password, generated) =
+            select_initial_admin_password(std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok());
+        let admin_hash = hash_password(&password);
+        if let Err(error) = auth_service.ensure_password_hash(&admin_hash).await {
+            panic!("failed to initialize dashboard password: {error}");
+        }
+        if generated {
+            if let Some(path) = bootstrap_password_file {
+                write_bootstrap_password_file(path, &password)
+                    .unwrap_or_else(|error| panic!("failed to write bootstrap password: {error}"));
+                info!(
+                    path = %path.display(),
+                    "generated initial dashboard password; read it from this local file"
+                );
+            } else {
+                info!(
+                    password = %password,
+                    "generated initial dashboard password"
+                );
+            }
+            let _ = auth_service
+                .set_meta(BOOTSTRAP_PASSWORD_PROMPT_META_KEY, BOOTSTRAP_PROMPT_PENDING)
+                .await;
+        } else {
+            let _ = auth_service
+                .set_meta(
+                    BOOTSTRAP_PASSWORD_PROMPT_META_KEY,
+                    BOOTSTRAP_PROMPT_DISMISSED,
+                )
+                .await;
+        }
+    }
 
     let _ = auth_service
         .prune_expired_sessions(30 * 24 * 60 * 60 * 1000)
@@ -266,6 +370,40 @@ pub async fn change_password_handler(
         )
             .into_response();
     }
+    let _ = state
+        .auth_service
+        .set_meta(
+            BOOTSTRAP_PASSWORD_PROMPT_META_KEY,
+            BOOTSTRAP_PROMPT_DISMISSED,
+        )
+        .await;
+
+    Json(serde_json::json!({"ok": true})).into_response()
+}
+
+pub async fn dismiss_password_change_prompt_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Some(token) = get_session_token_from_headers(&headers) {
+        if !state.is_authenticated(&token).await {
+            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+        }
+    } else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+
+    if state
+        .auth_service
+        .set_meta(
+            BOOTSTRAP_PASSWORD_PROMPT_META_KEY,
+            BOOTSTRAP_PROMPT_DISMISSED,
+        )
+        .await
+        .is_err()
+    {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
 
     Json(serde_json::json!({"ok": true})).into_response()
 }
@@ -324,4 +462,47 @@ pub async fn stream_keys_handler(
         }));
     }
     Json(keys).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{select_initial_admin_password, write_bootstrap_password_file};
+
+    #[test]
+    fn initial_admin_password_prefers_non_empty_env_value() {
+        let (password, generated) = select_initial_admin_password(Some("dev-secret".to_string()));
+
+        assert_eq!(password, "dev-secret");
+        assert!(!generated);
+    }
+
+    #[test]
+    fn initial_admin_password_generates_high_entropy_hex_without_env_value() {
+        let (password, generated) = select_initial_admin_password(None);
+
+        assert!(generated);
+        assert_eq!(password.len(), 64);
+        assert!(password.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn generated_bootstrap_password_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "restream-bootstrap-password-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        write_bootstrap_password_file(&path, "secret").unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(contents, "secret\n");
+        assert_eq!(mode, 0o600);
+    }
 }

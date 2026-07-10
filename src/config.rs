@@ -7,6 +7,7 @@ use crate::{RuntimeTuning, ServerPorts};
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub ports: ServerPorts,
+    pub http_bind_addr: String,
     pub tuning: RuntimeTuning,
     pub db_path: String,
     pub media_dir: String,
@@ -141,6 +142,7 @@ impl Default for AppConfig {
 
         Self {
             ports,
+            http_bind_addr: "127.0.0.1".to_string(),
             tuning,
             db_path: "data.db".to_string(),
             media_dir: "media".to_string(),
@@ -176,6 +178,8 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn from_env() -> Self {
         let ports = ServerPorts::from_env();
+        let http_bind_addr =
+            std::env::var("RESTREAM_HTTP_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
         let tuning = RuntimeTuning::from_env();
         let db_path = std::env::var("RESTREAM_DB_PATH").unwrap_or_else(|_| "data.db".to_string());
         let media_dir = std::env::var("RESTREAM_MEDIA_DIR").unwrap_or_else(|_| "media".to_string());
@@ -245,6 +249,7 @@ impl AppConfig {
 
         Self {
             ports,
+            http_bind_addr,
             tuning,
             db_path,
             media_dir,
@@ -277,6 +282,7 @@ impl AppConfig {
                 "http": self.ports.http,
                 "rtmp": self.ports.rtmp,
                 "srt": self.ports.srt,
+                "httpBindAddr": self.http_bind_addr,
             },
             "tuning": {
                 "nofileLimit": self.tuning.nofile_limit,
@@ -405,6 +411,16 @@ mod tests {
                 assert_eq!(ports.srt, 11080);
             },
         );
+    }
+
+    #[test]
+    fn http_bind_addr_defaults_to_loopback_and_can_be_overridden() {
+        with_env_overlay(&[], &["RESTREAM_HTTP_BIND_ADDR"], || {
+            assert_eq!(AppConfig::from_env().http_bind_addr, "127.0.0.1");
+        });
+        with_env_vars(&[("RESTREAM_HTTP_BIND_ADDR", "0.0.0.0")], || {
+            assert_eq!(AppConfig::from_env().http_bind_addr, "0.0.0.0");
+        });
     }
 
     #[test]

@@ -16,7 +16,8 @@ use crate::domain::srt_ingest::SrtGlobalIngestConfig;
 use crate::domain::transcode_profile::TranscodeProfiles;
 
 use super::state::{
-    AppState, DEFAULT_INGEST_HOST, get_session_token_from_headers, refresh_srt_ingest_policy_store,
+    AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, DEFAULT_INGEST_HOST,
+    get_session_token_from_headers, refresh_srt_ingest_policy_store,
 };
 
 #[derive(Deserialize)]
@@ -94,6 +95,13 @@ pub async fn config_get_handler(
         Ok(s) => s,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
+    let dashboard_password_change_recommended = state
+        .settings_service
+        .get_meta(BOOTSTRAP_PASSWORD_PROMPT_META_KEY)
+        .await
+        .unwrap_or(None)
+        .as_deref()
+        == Some("pending");
     let is_dashboard_view = query.view.as_deref() == Some("dashboard");
     let jobs_json = if is_dashboard_view {
         Vec::new()
@@ -110,6 +118,7 @@ pub async fn config_get_handler(
         serde_json::json!({
             "serverName": settings.server_name,
             "ingestHost": settings.ingest_host,
+            "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
             "transcodeProfiles": settings.transcode_profiles,
             "pipelines": pipelines,
             "outputs": api_view_models::output_response_json_list(&outputs),
@@ -119,6 +128,7 @@ pub async fn config_get_handler(
         serde_json::json!({
             "serverName": settings.server_name,
             "ingestHost": settings.ingest_host,
+            "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
             "ingestSecurity": settings.ingest_security,
             "recordingSettings": settings.recording_settings,
             "srtIngest": settings.srt_ingest,

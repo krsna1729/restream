@@ -108,6 +108,7 @@ declare global {
     saveTranscodeProfiles: () => Promise<void>;
     addTranscodeProfile: () => void;
     saveDashboardPassword: () => Promise<void>;
+    dismissDashboardPasswordPrompt: () => Promise<void>;
     logoutUser: () => Promise<void>;
   }
 }

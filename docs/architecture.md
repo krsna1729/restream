@@ -792,8 +792,11 @@ recording.
 ## State and Authentication
 
 SQLite stores pipelines, outputs, jobs, logs, file-ingest definitions, metadata,
-and sessions. The default password is created on first startup and stored as a
-scrypt hash. Session cookies are `HttpOnly` and `SameSite=Strict`.
+and sessions. On first startup, the dashboard password is taken from
+`RESTREAM_INITIAL_ADMIN_PASSWORD` when set; otherwise a high-entropy initial
+password is generated, written to a local owner-only file next to the SQLite
+database, and stored as a scrypt hash. Session cookies are `HttpOnly` and
+`SameSite=Strict`.
 
 Deletion handlers cancel active output/ingest tasks before removing their
 database rows, and file-ingest deletion kills its tracked child. Naturally

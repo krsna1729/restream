@@ -516,6 +516,7 @@ async function patchConfig(body: {
 }): Promise<{
   serverName: string;
   ingestHost: string;
+  dashboardPasswordChangeRecommended?: boolean;
   ingestSecurity: IngestSecurityConfig;
   recordingSettings: RecordingSettings;
   srtIngest: SrtGlobalIngestConfig;
@@ -524,6 +525,7 @@ async function patchConfig(body: {
   return apiRequest<{
     serverName: string;
     ingestHost: string;
+    dashboardPasswordChangeRecommended?: boolean;
     ingestSecurity: IngestSecurityConfig;
     recordingSettings: RecordingSettings;
     srtIngest: SrtGlobalIngestConfig;
@@ -755,6 +757,12 @@ async function changePassword(
   });
 }
 
+async function dismissPasswordChangePrompt(): Promise<{ ok: boolean } | null> {
+  return apiRequest<{ ok: boolean }>("/api/v1/auth/dismiss-password-change", {
+    method: "POST",
+  });
+}
+
 async function getProcessingGraph(pipelineId: string): Promise<unknown | null> {
   return apiRequest(
     `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/graph`,
@@ -810,6 +818,7 @@ export {
   deletePipelineFileIngest,
   logout,
   changePassword,
+  dismissPasswordChangePrompt,
   getProcessingGraph,
   getYoutubeMonitoringStatus,
   DEFAULT_ENGINE_SBOM_ENDPOINT,

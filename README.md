@@ -25,7 +25,14 @@ Default ports:
 - `1935` for RTMP ingest/play
 - `10080` for SRT ingest/read
 
-First-run dashboard password: `admin`
+The dashboard/API binds to `127.0.0.1` by default. Override that with
+`RESTREAM_HTTP_BIND_ADDR` when you intentionally want to expose it on another
+interface.
+
+On first startup, Restream uses `RESTREAM_INITIAL_ADMIN_PASSWORD` when it is
+set. Otherwise it generates a high-entropy initial password and writes it next
+to the SQLite database as `restream-initial-admin-password.txt` with
+owner-only permissions.
 
 ## Running A Built Binary
 

@@ -160,6 +160,7 @@ export interface Encoding {
 export interface ConfigData {
   serverName?: string;
   ingestHost?: string;
+  dashboardPasswordChangeRecommended?: boolean;
   ingestSecurity?: IngestSecurityConfig;
   recordingSettings?: RecordingSettings;
   srtIngest?: SrtGlobalIngestConfig;

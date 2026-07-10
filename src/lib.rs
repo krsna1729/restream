@@ -421,7 +421,14 @@ pub async fn run_app(config: Arc<AppConfig>) {
         },
     );
     let sessions = Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new()));
-    crate::api::initialize_auth(&pool, &sessions).await;
+    let bootstrap_password_path =
+        std::path::Path::new(&config.db_path).with_file_name("restream-initial-admin-password.txt");
+    crate::api::auth::initialize_auth_with_bootstrap_file(
+        &pool,
+        &sessions,
+        Some(&bootstrap_password_path),
+    )
+    .await;
     crate::application::transcode_profiles::load_transcode_profiles(&meta_store).await;
     let engine = Arc::new(MediaEngine::new_with_config(config.clone()));
     let pipeline_lookup: Arc<dyn crate::application::ports::PipelineStore> =
@@ -497,7 +504,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     });
 
     // Start Web Server
-    let http_addr = format!("0.0.0.0:{}", ports.http);
+    let http_addr = format!("{}:{}", config.http_bind_addr, ports.http);
     let app = crate::api::create_router(state);
     let listener = tokio::net::TcpListener::bind(&http_addr)
         .await

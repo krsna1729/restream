@@ -15,7 +15,7 @@ pub mod state;
 pub mod static_assets;
 pub mod telemetry;
 
-pub use auth::initialize_auth;
+pub use auth::{initialize_auth, initialize_auth_for_test};
 pub use router::create_router;
 pub use state::{AppState, PortConfig};
 pub use static_assets::EmbeddedAssets;

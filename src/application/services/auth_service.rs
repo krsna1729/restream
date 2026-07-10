@@ -56,6 +56,14 @@ impl AuthService {
             .map_err(|e| ApiError::internal(format!("set password hash: {e}")))
     }
 
+    pub async fn set_meta(&self, key: &str, value: &str) -> ApiResult<()> {
+        self.meta_writer
+            .set_meta(key, value)
+            .await
+            .map(|_| ())
+            .map_err(|e| ApiError::internal(format!("set auth meta: {e}")))
+    }
+
     pub async fn create_session(&self, token: &str, ts: i64) -> ApiResult<()> {
         self.session_store
             .create_session(token, ts)
