@@ -10,7 +10,7 @@ cancellation, and diagnostics cross each boundary without losing causality.
 |---|---|---|---|
 | Planner -> stage runtime | Planned `StageKey` and backend policy select the runtime that is registered, rendered in graph/status, and used by outputs. | Graph planner unit tests, backend-policy unit tests, engine terminal-stage tests, HLS/recording planned-key tests. | Property-test output encodings into stage plans for unique terminal keys and no stale unqualified HEVC keys. |
 | Runtime admission -> registry | `ensure_stage` creates exactly one live runtime, reuses live runtimes, replaces cancelled runtimes, and snapshots lifecycle/metrics. | Stage runtime unit tests plus transcoder/TS muxer loom models for replacement races. | Add a direct loom model for generic registry admission once the model can share the production locking shape. |
-| Source ring -> stage input pump | Stage input starts at the correct keyframe/preroll point, emits TS bytes only for selected media, records first input once, refreshes parameter sets, and exits on EOS/cancel. | Stage input codec-hint unit test, finite source-stage tests, source-stage chunking proptest, ring migration proptests/loom. | Unit-test first-input suppression for filtered audio-only packets and EOS completion after filtered packets. |
+| Source ring -> stage input pump | Stage input starts at the correct keyframe/preroll point, emits TS bytes only for selected media, records first input once, refreshes parameter sets, and exits on EOS/cancel. | Stage input codec-hint unit test, finite source-stage tests, source-stage chunking proptest, ring migration proptests/loom, filtered-packet first-input suppression, and filtered-packet plus video EOS completion tests. | Add reconnect parameter-set refresh scenarios if a future reconnect bug appears. |
 | Input pump -> backend | External and internal FFmpeg receive the same compiled operation and startup policy; capacity waits are lifecycle-visible and cancellation-aware. | Shared operation/compiler tests, startup-policy tests, external capacity unit/harness evidence. | Table-test each `StageKind` into `FfmpegStagePlan` plus backend operation equivalence for internal/external paths. |
 | Backend -> output normalizer | Every backend emits through the normalizer; output timestamps are stage-local, non-negative, per-stream monotone, parameter sets are cached, first output is recorded once, and metrics match emitted packets. | Stage timeline unit tests, normalizer unit tests for first output, keyframe inference, split HEVC parameter sets, and a proptest over arbitrary interleaved audio/video packets asserting ring-visible timestamp/metric invariants. | Extend the property to generated split parameter-set/keyframe combinations if a future bug appears there. |
 | Audio router boundary | Selected tracks, remap/downmix operations, prebuffer replay, EOS, and lifecycle cleanup preserve packet order and selected-track intent. | Audio-router unit tests for selected tracks, prebuffer replay, multi-track routing, and stage sharing. | Property-test generated selected-track operations over interleaved audio/video packets. |
@@ -21,14 +21,12 @@ cancellation, and diagnostics cross each boundary without losing causality.
 
 ## Priority Order
 
-1. **Input pump filtered-packet/EOS proof**: cheap async unit tests for
-   first-input and EOS behavior at the source-stage boundary.
-2. **Status/graph/alert phase table**: unit tests ensuring every causal
+1. **Status/graph/alert phase table**: unit tests ensuring every causal
    non-producing phase has the same operator meaning across read models.
-3. **Planner terminal-key property proof**: generated encodings prove stage
+2. **Planner terminal-key property proof**: generated encodings prove stage
    identity remains qualified and stable for shared-stage topologies.
-4. **Audio-router selected-track property proof**: generated track layouts
+3. **Audio-router selected-track property proof**: generated track layouts
    prove packet selection and prebuffer replay do not regress.
-5. **Only then add loom** for any uncovered create/reuse/cancel interleaving
+4. **Only then add loom** for any uncovered create/reuse/cancel interleaving
    that is not already modeled by the ring, AVIO, TS chunk-ring, transcoder
    stage, or TS muxer stage loom suites.

@@ -211,6 +211,74 @@ impl StageInputPump {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::media::ring_buffer::{MediaPacket, PayloadFormat};
+    use crate::media::stage_lifecycle::{StageBackendKind, StagePhase};
+    use bytes::Bytes;
+    use std::sync::atomic::Ordering;
+
+    struct CapturingSink {
+        bytes_written: usize,
+        writes: usize,
+    }
+
+    impl StageByteSink for CapturingSink {
+        async fn write_ts(
+            &mut self,
+            bytes: &[u8],
+            _cancel: &CancellationToken,
+        ) -> Result<(), String> {
+            self.bytes_written += bytes.len();
+            self.writes += 1;
+            Ok(())
+        }
+    }
+
+    fn video_meta() -> VideoMeta {
+        VideoMeta {
+            codec: "h264".to_string(),
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            bw: None,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+            level: None,
+            pixel_format: None,
+        }
+    }
+
+    fn audio_packet(pts: i64) -> MediaPacket {
+        MediaPacket {
+            media_type: MediaType::Audio,
+            format: PayloadFormat::Raw,
+            is_keyframe: false,
+            track_index: 0,
+            pts,
+            dts: pts,
+            payload: Bytes::from_static(&[0x11; 32]),
+        }
+    }
+
+    fn video_keyframe(pts: i64) -> MediaPacket {
+        MediaPacket {
+            media_type: MediaType::Video,
+            format: PayloadFormat::Raw,
+            is_keyframe: true,
+            track_index: 0,
+            pts,
+            dts: pts,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x80]),
+        }
+    }
+
+    fn h264_parameter_sets() -> Vec<u8> {
+        vec![
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+            0xCE, 0x38, 0x80,
+        ]
+    }
 
     #[test]
     fn codec_hint_reports_ring_hint_without_exposing_ring() {
@@ -227,5 +295,90 @@ mod tests {
         );
 
         assert_eq!(pump.codec_hint(), "hevc");
+    }
+
+    #[tokio::test]
+    async fn pump_suppresses_first_input_for_filtered_audio_until_eos() {
+        let ring = Arc::new(RingBuffer::new(8));
+        let lifecycle = Arc::new(StageLifecycle::new(StagePhase::BackendSpawned {
+            backend: StageBackendKind::InternalFfmpeg,
+            pid: None,
+        }));
+        let metrics = Arc::new(StageMetrics::new());
+        let mut pump = StageInputPump::new(
+            "filtered-audio-only".to_string(),
+            ring.clone(),
+            0,
+            None,
+            &[],
+            false,
+            metrics.clone(),
+        )
+        .with_lifecycle(lifecycle.clone());
+        let cancel = CancellationToken::new();
+        let mut sink = CapturingSink {
+            bytes_written: 0,
+            writes: 0,
+        };
+
+        ring.push(audio_packet(0));
+        ring.mark_end_of_stream();
+
+        pump.pump_to(&mut sink, &cancel)
+            .await
+            .expect("pump should finish at EOS");
+
+        assert_eq!(sink.bytes_written, 0);
+        assert_eq!(sink.writes, 0);
+        assert_eq!(metrics.packets_in.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            lifecycle.current_phase(),
+            StagePhase::BackendSpawned {
+                backend: StageBackendKind::InternalFfmpeg,
+                pid: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn pump_records_first_input_once_after_filtered_audio_then_video_eos() {
+        let ring = Arc::new(RingBuffer::new(8));
+        ring.set_video_parameter_sets(h264_parameter_sets());
+        let video = video_meta();
+        let lifecycle = Arc::new(StageLifecycle::new(StagePhase::BackendSpawned {
+            backend: StageBackendKind::InternalFfmpeg,
+            pid: None,
+        }));
+        let metrics = Arc::new(StageMetrics::new());
+        let mut pump = StageInputPump::new(
+            "filtered-audio-then-video".to_string(),
+            ring.clone(),
+            0,
+            Some(&video),
+            &[],
+            false,
+            metrics.clone(),
+        )
+        .with_lifecycle(lifecycle.clone());
+        let cancel = CancellationToken::new();
+        let mut sink = CapturingSink {
+            bytes_written: 0,
+            writes: 0,
+        };
+
+        ring.push(audio_packet(0));
+        ring.push(video_keyframe(33));
+        ring.mark_end_of_stream();
+
+        pump.pump_to(&mut sink, &cancel)
+            .await
+            .expect("pump should finish at EOS");
+
+        assert!(sink.bytes_written > 0);
+        assert_eq!(sink.writes, 1);
+        assert_eq!(metrics.packets_in.load(Ordering::Relaxed), 1);
+        let snapshot = lifecycle.snapshot();
+        assert_eq!(snapshot.phase, StagePhase::FirstInput);
+        assert!(snapshot.first_input_at.is_some());
     }
 }
