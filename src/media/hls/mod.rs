@@ -11,6 +11,7 @@
 
 pub mod fmp4;
 pub mod preview;
+pub mod ts;
 pub mod upload;
 
 use std::collections::{HashMap, VecDeque};

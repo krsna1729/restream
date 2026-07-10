@@ -385,6 +385,7 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
     let config_started = Instant::now();
     let mut executor = scenario_executor_for_plan(plan)?;
     let executor_name = executor.name();
+    let executor_steps = executor.step_names();
     let config = executor
         .execute(ScenarioExecutionContext {
             env: &env,
@@ -447,6 +448,7 @@ pub(super) async fn run_mixed_input_case_on_active_stack(
         "plan": {
             "sourceAdapter": plan.source.adapter.as_str(),
             "executor": executor_name,
+            "executorSteps": executor_steps,
             "outputCells": plan.output_cells(),
             "checks": plan.check_names(),
             "hlsPreviewTiming": plan.hls_preview_timing.as_str(),

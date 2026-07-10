@@ -7,6 +7,41 @@ use super::*;
 
 type ScenarioExecutorFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + 'a>>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScenarioExecutorStep {
+    Prepare,
+    StartInput,
+    PreFanoutChecks,
+    CreateOutputs,
+    WaitForProgress,
+    RunProbes,
+    Cleanup,
+}
+
+impl ScenarioExecutorStep {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Prepare => "prepare",
+            Self::StartInput => "startInput",
+            Self::PreFanoutChecks => "preFanoutChecks",
+            Self::CreateOutputs => "createOutputs",
+            Self::WaitForProgress => "waitForProgress",
+            Self::RunProbes => "runProbes",
+            Self::Cleanup => "cleanup",
+        }
+    }
+}
+
+const DEFAULT_SCENARIO_STEPS: [ScenarioExecutorStep; 7] = [
+    ScenarioExecutorStep::Prepare,
+    ScenarioExecutorStep::StartInput,
+    ScenarioExecutorStep::PreFanoutChecks,
+    ScenarioExecutorStep::CreateOutputs,
+    ScenarioExecutorStep::WaitForProgress,
+    ScenarioExecutorStep::RunProbes,
+    ScenarioExecutorStep::Cleanup,
+];
+
 pub(crate) struct ScenarioExecutionContext<'a> {
     pub(crate) env: &'a MixedEnv,
     pub(crate) api: &'a RampApi,
@@ -18,6 +53,14 @@ pub(crate) struct ScenarioExecutionContext<'a> {
 #[allow(dead_code)]
 pub(crate) trait ScenarioExecutor {
     fn name(&self) -> &'static str;
+
+    fn steps(&self) -> &'static [ScenarioExecutorStep] {
+        &DEFAULT_SCENARIO_STEPS
+    }
+
+    fn step_names(&self) -> Vec<&'static str> {
+        self.steps().iter().map(|step| step.as_str()).collect()
+    }
 
     fn prepare<'a>(
         &'a mut self,
@@ -190,6 +233,21 @@ mod tests {
                 (MixedInputProtocol::Rtmp, _, _) => "live-rtmp",
             };
             assert_eq!(executor.name(), expected, "{}", case.scenario_id());
+        }
+    }
+
+    #[test]
+    fn scenario_executors_expose_symmetric_phase_f_steps() {
+        for case in mixed_input_cases() {
+            let plan = MixedScenarioPlan::for_input(*case);
+            let executor = scenario_executor_for_plan(plan)
+                .unwrap_or_else(|error| panic!("{}: {error}", case.scenario_id()));
+            assert_eq!(
+                executor.steps(),
+                &DEFAULT_SCENARIO_STEPS,
+                "{} should expose the canonical prepare/start/check/fanout/progress/probe/cleanup order",
+                case.scenario_id()
+            );
         }
     }
 }

@@ -22,6 +22,7 @@ pub use hls::upload as hls_upload;
 pub mod mpegts;
 pub mod pipe_metrics;
 pub mod profiles;
+pub mod protocols;
 pub mod recording;
 pub mod ring_buffer;
 pub mod rtmp;
@@ -56,3 +57,18 @@ pub const SRT_TS_PAYLOAD_BYTES: usize = MPEG_TS_PACKET_BYTES * MPEG_TS_PACKETS_P
 
 /// Reusable MPEG-TS batch capacity aligned to full 1316-byte SRT payloads.
 pub const MEDIA_TS_BATCH_TARGET_BYTES: usize = SRT_TS_PAYLOAD_BYTES * MEDIA_PULL_BURST_PACKETS;
+
+#[cfg(test)]
+mod namespace_tests {
+    #[test]
+    fn phase_h_adapter_namespaces_are_exported() {
+        let _rtmp_ingest = crate::media::protocols::rtmp::ingest::start_rtmp_server_on;
+        let _rtmp_egress = crate::media::protocols::rtmp::egress::start_rtmp_egress;
+        let _srt_version =
+            crate::media::protocols::srt::ingest::linked_srt_version as fn() -> String;
+        let _srt_egress = crate::media::protocols::srt::egress::start_srt_egress;
+        let _ = std::mem::size_of::<crate::media::protocols::srt::quality::SrtTraceBStats>();
+        let _ = std::mem::size_of::<crate::media::recording::runtime::RecordingStart>();
+        let _ = std::mem::size_of::<crate::media::recording::writer::RecordingStart>();
+    }
+}

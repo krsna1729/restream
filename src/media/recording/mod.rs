@@ -26,6 +26,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 mod catalog;
+pub mod runtime;
+pub mod writer;
 
 pub use catalog::{RecordingConversionState, RecordingConversionStatus};
 pub(crate) use catalog::{
