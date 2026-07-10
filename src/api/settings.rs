@@ -17,7 +17,7 @@ use crate::domain::transcode_profile::TranscodeProfiles;
 
 use super::state::{
     AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, DEFAULT_INGEST_HOST,
-    get_session_token_from_headers, refresh_srt_ingest_policy_store,
+    get_session_token_from_headers,
 };
 
 #[derive(Deserialize)]
@@ -155,15 +155,56 @@ pub async fn config_patch_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    if let Some(ref name) = payload.server_name {
-        if name.trim().is_empty() {
-            return (
-                StatusCode::BAD_REQUEST,
-                "serverName must be a non-empty string",
-            )
-                .into_response();
+    if let Some(ref name) = payload.server_name
+        && name.trim().is_empty()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "serverName must be a non-empty string",
+        )
+            .into_response();
+    }
+
+    let normalized_ingest_security = match payload.ingest_security.clone() {
+        Some(mut sec) => {
+            if let Err(error) = sec.validate() {
+                return (StatusCode::BAD_REQUEST, error).into_response();
+            }
+            sec.normalize();
+            Some(sec)
         }
-        let _ = state.settings_service.set_server_name(name).await;
+        None => None,
+    };
+
+    let srt_ingest_json = match payload.srt_ingest.clone() {
+        Some(mut srt_ingest) => {
+            if let Err(error) = srt_ingest.validate() {
+                return (StatusCode::BAD_REQUEST, error).into_response();
+            }
+            match serde_json::to_string(&srt_ingest) {
+                Ok(value) => Some(value),
+                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
+        }
+        None => None,
+    };
+
+    if let Some(ref profiles) = payload.transcode_profiles {
+        for (name, profile) in profiles {
+            if let Err(err) = profile.validate() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid profile '{}': {}", name, err),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    if let Some(ref name) = payload.server_name
+        && state.settings_service.set_server_name(name).await.is_err()
+    {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
     if let Some(ref host) = payload.ingest_host
@@ -172,12 +213,7 @@ pub async fn config_patch_handler(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    if let Some(mut sec) = payload.ingest_security.clone() {
-        if let Err(error) = sec.validate() {
-            return (StatusCode::BAD_REQUEST, error).into_response();
-        }
-        sec.normalize();
-        state.security.update_config(sec.clone());
+    if let Some(sec) = normalized_ingest_security {
         if state
             .settings_service
             .save_ingest_security_config(&sec)
@@ -186,6 +222,7 @@ pub async fn config_patch_handler(
         {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
+        state.security.update_config(sec);
     }
 
     if let Some(ref recording_settings) = payload.recording_settings
@@ -198,14 +235,7 @@ pub async fn config_patch_handler(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    if let Some(mut srt_ingest) = payload.srt_ingest.clone() {
-        if let Err(error) = srt_ingest.validate() {
-            return (StatusCode::BAD_REQUEST, error).into_response();
-        }
-        let raw_json = match serde_json::to_string(&srt_ingest) {
-            Ok(value) => value,
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        };
+    if let Some(raw_json) = srt_ingest_json {
         if state
             .settings_service
             .set_meta(SRT_INGEST_GLOBAL_CONFIG_META_KEY, &raw_json)
@@ -214,19 +244,21 @@ pub async fn config_patch_handler(
         {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
-        refresh_srt_ingest_policy_store(&state).await;
+        if state
+            .settings_service
+            .refresh_srt_ingest_policy_store(
+                &state.ingest_policy_store,
+                state.srt_passphrase.clone(),
+                state.srt_pbkeylen,
+            )
+            .await
+            .is_err()
+        {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
 
     if let Some(ref profiles) = payload.transcode_profiles {
-        for (name, profile) in profiles {
-            if let Err(err) = profile.validate() {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    format!("Invalid profile '{}': {}", name, err),
-                )
-                    .into_response();
-            }
-        }
         if let Err(e) = state
             .settings_service
             .save_transcode_profiles(profiles)

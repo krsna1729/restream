@@ -1069,6 +1069,57 @@ async fn config_patch_ingest_security_persists() {
 }
 
 #[tokio::test]
+async fn config_patch_ingest_security_does_not_mutate_runtime_when_persist_fails() {
+    let auth_pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    db::setup_database_schema(&auth_pool).await.unwrap();
+    let settings_pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    db::setup_database_schema(&settings_pool).await.unwrap();
+
+    let sessions = Arc::new(TokioRwLock::new(HashSet::new()));
+    api::initialize_auth_for_test(&auth_pool, &sessions, "admin").await;
+    let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
+    let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+        SrtGlobalIngestConfig::default(),
+        &[],
+    ));
+    let (log_broadcast, _) = broadcast::channel(32);
+    let engine = Arc::new(MediaEngine::new());
+    let mut state = api::AppState::test_new(
+        auth_pool.clone(),
+        security.clone(),
+        ingest_policy_store,
+        sessions,
+        engine,
+        log_broadcast,
+        "media".to_string(),
+    );
+    state.settings_service =
+        restream::application::services::SettingsService::new(settings_pool.clone());
+    settings_pool.close().await;
+    let app = api::create_router(Arc::new(state));
+    let cookie = login(&app).await;
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "PATCH",
+            "/api/v1/settings",
+            &cookie,
+            Some(
+                r#"{"ingestSecurity":{"failureLimit":3,"failureWindowMs":15000,"banMs":45000,"trackedIpLimit":64}}"#,
+            ),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        security.get_config().failure_limit,
+        DEFAULT_INGEST_SECURITY_CONFIG.failure_limit
+    );
+}
+
+#[tokio::test]
 async fn config_patch_rejects_invalid_ingest_security() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;
