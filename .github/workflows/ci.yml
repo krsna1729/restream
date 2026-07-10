@@ -354,6 +354,10 @@ jobs:
           scripts/resource-limit ./target/release/test_harness suite \
             --only-modes ramp-family,mixed-h264-rtmp,mixed-anchor,mixed-h265-srt,mixed-h264-srt-multi,mixed-h265-srt-multi \
             --continue-on-fail
+      - name: Run mixed fast-breadth governor
+        env:
+          N_PER_GROUP: "1"
+        run: BENCH_BUILD=if-needed scripts/run-bench-harness.sh mixed.fast-breadth -- --no-netns
       - name: Run internal backend rollout smoke
         env:
           INTERNAL_BACKEND_SMOKE_CONTINUE_ON_FAIL: "1"

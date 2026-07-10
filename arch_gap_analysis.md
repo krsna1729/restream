@@ -326,7 +326,7 @@ is not confused with the still-open addendum.
 | Phase F — Harness execution symmetry | ✅ Mostly complete | Manifest-backed modes and shared batch helpers expose much of the live/file execution shape. `ScenarioExecutor` is now explicit, scenario selection reports a named executor, `HlsPreviewTiming` and `ProbeSamplingPolicy` are typed, scenario/matrix artifacts report selected and supported policies, duplicate ffprobe sampling is policy-driven, and file-ingest HLS preview attaches before output fanout by default. Remaining improvement: move more of the legacy live/file body internals behind the executor step methods instead of delegating to the existing mature runner functions. |
 | Phase G — Harness/report module split | ✅ Complete for responsibility-based organization | `src/bin/test_harness.rs` is below 2,000 lines and command dispatch is split into focused harness modules for API client/DTOs, core env/process helpers, catalog, suites, probes, reports, artifacts, mixed runners, fault runners, resource sweeps, sinks, and live modes. The organization intentionally favors responsibility-based modules over forcing every exact illustrative filename from `impl.md`; `api_client.rs` now owns `RampApi` and typed DTOs, while the source audit verifies the DTO schema at that boundary. |
 | Phase H — Whole-codebase service and adapter split | ⚠️ Partial+ | Route modules, application services, runtime read-model service, graph planning, repository ports, and media FFmpeg/backend modules are split enough for the current phase-scope baseline. Recording catalog concerns now live under `media/recording/catalog.rs`, and HLS packaging is namespaced under `media/hls/{fmp4,preview,upload}.rs` with legacy module paths preserved for callers. The larger idealized namespace split in `impl.md` (`RuntimeGraph`, registry modules, `media/protocols/*`, HLS TS submodule, and recording runtime/writer modules) is still not fully realized. |
-| Phase I — Harness as architectural governor | ✅ Mostly complete | Named governor tests now cover progress cell identity, dependency-chain failure text, timestamp discontinuity root-cause grouping, recording metadata identity, HLS no-segments preview-state evidence, planner-backed HLS preview, shared FFmpeg stage operation planning, per-stage backend policy, mixed fast-breadth defaults, and source-audit guardrails. Fast-breadth now writes mode-specific `scenario.json` and `root-cause-summary.json` before returning failure. Remaining piece: CI execution of `target/bench/test_harness mixed.fast-breadth` once runtime cost is acceptable. |
+| Phase I — Harness as architectural governor | ✅ Complete for current governor set | Named governor tests now cover progress cell identity, dependency-chain failure text, timestamp discontinuity root-cause grouping, recording metadata identity, HLS no-segments preview-state evidence, planner-backed HLS preview, shared FFmpeg stage operation planning, per-stage backend policy, mixed fast-breadth defaults, and source-audit guardrails. Fast-breadth writes mode-specific `scenario.json` and `root-cause-summary.json` before returning failure, and CI now runs `scripts/run-bench-harness.sh mixed.fast-breadth` as a blocking integration governor with bench-profile binaries. |
 
 **Verdict**: **Phases 0-16 are A-grade for their phase-scope acceptance
 criteria. The expanded `impl.md` ideal is not fully complete yet: addendum
@@ -345,12 +345,9 @@ decomposition are the main non-A addendum gaps.**
      live/file runner bodies into the executor step methods rather than
      delegating whole scenarios through them.
 
-2. **Promote `mixed.fast-breadth` to a CI governor lane**
-   - Add the bench-profile CI command once runtime cost is acceptable.
-
 ### P2 — Namespace and Ownership Polish
 
-3. **Continue the broader service/adapter namespace split**
+2. **Continue the broader service/adapter namespace split**
    - The current baseline is split enough for Phases 0-16, but the full
      addendum ideal still calls for deeper `RuntimeGraph`, registry,
      `media/protocols/*`, HLS TS, and recording runtime/writer namespaces.
@@ -386,7 +383,7 @@ decomposition are the main non-A addendum gaps.**
 | Phase F Execution symmetry | A- | Manifest-backed execution is strong, `ScenarioExecutor` selection is explicit, HLS preview timing and duplicate-probe sampling are typed/reporting policies, and file-ingest preview now follows the same before-fanout default as live scenarios. Full A requires migrating more live/file internals into the executor step methods. |
 | Phase G Harness split | A | Harness root is small, API client/DTOs live in `api_client.rs`, and the remaining harness modules are responsibility split rather than exact-name mirrors where the current organization is clearer. |
 | Phase H Whole-codebase split | A- | Services/routes/planner/runtime read models are split for the current phase-scope baseline; recording catalog helpers now live in `media/recording/catalog.rs`; HLS fMP4, preview, and upload modules now live under `media/hls/`. Broader `RuntimeGraph`, registry, protocol, HLS TS, and recording runtime/writer namespace splits remain partial. |
-| Phase I Harness governor | A- | Exact named governor tests, stronger source-audit checks, and fast-breadth root-cause artifacts now exist; CI `mixed.fast-breadth` is still pending runtime-cost approval. |
+| Phase I Harness governor | A | Exact named governor tests, stronger source-audit checks, fast-breadth root-cause artifacts, and a blocking CI `mixed.fast-breadth` bench-profile lane now exist. |
 
 ---
 
@@ -402,9 +399,7 @@ dependency-aware, FFmpeg execution goes through the shared waist, HLS preview
 and recording identity are graph/metadata-driven, and health/alerts/diagnostics
 expose causal runtime state.
 
-The current remaining work is the addendum: finish the typed harness API
-conversion, improve structured root-cause classification, preserve failed-run
-database evidence in artifact indexes, move more live/file execution internals
-behind executor steps, keep tightening harness/module ownership, continue the
-broader namespace split, and decide when `mixed.fast-breadth` is cheap enough
-to become a blocking CI governor lane.
+The current remaining work is now concentrated in the addendum: move more
+live/file execution internals behind executor steps, continue the broader
+runtime/media namespace split, and keep the blocking `mixed.fast-breadth` CI
+governor lane green as execution costs evolve.
