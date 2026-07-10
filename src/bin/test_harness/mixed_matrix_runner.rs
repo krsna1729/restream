@@ -242,6 +242,7 @@ fn matrix_case_artifact_index_json(root: &Path, rows: &[MatrixCaseProgress]) -> 
                 "scenarioJson": work_dir.join("scenario.json"),
                 "artifactIndexJson": work_dir.join("artifact-index.json"),
                 "outputsJson": work_dir.join("outputs.json"),
+                "sqliteSnapshotDir": work_dir.join("sqlite-snapshot"),
                 "logs": [
                     work_dir.join(format!("{}-restream.log", row.case.scenario_id())),
                     work_dir.join(format!("{}-mediamtx.log", row.case.scenario_id())),

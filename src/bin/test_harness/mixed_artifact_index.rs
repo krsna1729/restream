@@ -15,6 +15,7 @@ pub(crate) fn mixed_root_artifact_index_path(root: &Path) -> PathBuf {
 
 pub(crate) fn write_mixed_artifact_index(env: &MixedEnv) -> Result<PathBuf, String> {
     let path = mixed_artifact_index_path(env);
+    snapshot_mixed_sqlite_artifacts(env)?;
     let value = mixed_artifact_index_json(env);
     write_json_pretty_atomic(&path, &value)?;
     Ok(path)
@@ -42,6 +43,7 @@ pub(crate) fn write_mixed_root_artifact_index(
 }
 
 pub(crate) fn mixed_artifact_index_json(env: &MixedEnv) -> Value {
+    let sqlite_snapshot_dir = mixed_sqlite_snapshot_dir(env);
     let artifacts = mixed_artifact_entries(env)
         .into_iter()
         .map(|(role, path)| mixed_artifact_entry(role, path))
@@ -62,6 +64,7 @@ pub(crate) fn mixed_artifact_index_json(env: &MixedEnv) -> Value {
         "logs": [env.restream_log.clone(), env.mediamtx_log.clone()],
         "media": [env.media_dir.clone()],
         "sqliteDb": env.restream_db_path,
+        "sqliteSnapshotDir": sqlite_snapshot_dir,
         "artifacts": artifacts,
     })
 }
@@ -159,6 +162,7 @@ fn mixed_artifact_source_revision() -> Option<String> {
 }
 
 fn mixed_artifact_entries(env: &MixedEnv) -> Vec<(&'static str, PathBuf)> {
+    let sqlite_snapshot_dir = mixed_sqlite_snapshot_dir(env);
     let mut entries = vec![
         ("outputsJson", env.outputs_json_path()),
         ("scaleCsv", env.scale_log.clone()),
@@ -169,12 +173,47 @@ fn mixed_artifact_entries(env: &MixedEnv) -> Vec<(&'static str, PathBuf)> {
         ("mediamtxLog", env.mediamtx_log.clone()),
         ("mediamtxConfig", env.mediamtx_config.clone()),
         ("restreamDb", env.restream_db_path.clone()),
+        ("sqliteSnapshotDir", sqlite_snapshot_dir.clone()),
+        ("sqliteSnapshotDb", sqlite_snapshot_dir.join("restream.db")),
+        (
+            "sqliteSnapshotWal",
+            sqlite_snapshot_dir.join("restream.db-wal"),
+        ),
+        (
+            "sqliteSnapshotShm",
+            sqlite_snapshot_dir.join("restream.db-shm"),
+        ),
         ("mediaDir", env.media_dir.clone()),
     ];
     if let Some(assertion_log) = &env.assertion_log {
         entries.push(("assertionsJsonl", assertion_log.clone()));
     }
     entries
+}
+
+fn mixed_sqlite_snapshot_dir(env: &MixedEnv) -> PathBuf {
+    env.work_dir.join("sqlite-snapshot")
+}
+
+fn snapshot_mixed_sqlite_artifacts(env: &MixedEnv) -> Result<(), String> {
+    let snapshot_dir = mixed_sqlite_snapshot_dir(env);
+    std::fs::create_dir_all(&snapshot_dir).map_err(|error| error.to_string())?;
+    for (source, name) in [
+        (env.restream_db_path.clone(), "restream.db"),
+        (
+            PathBuf::from(format!("{}-wal", env.restream_db_path.display())),
+            "restream.db-wal",
+        ),
+        (
+            PathBuf::from(format!("{}-shm", env.restream_db_path.display())),
+            "restream.db-shm",
+        ),
+    ] {
+        if source.exists() {
+            std::fs::copy(source, snapshot_dir.join(name)).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 fn mixed_artifact_entry(role: &'static str, path: PathBuf) -> Value {
@@ -251,6 +290,10 @@ mod tests {
         assert_eq!(index["logs"][0], json!(env.restream_log));
         assert_eq!(index["media"][0], json!(env.media_dir));
         assert_eq!(index["sqliteDb"], json!(env.restream_db_path));
+        assert_eq!(
+            index["sqliteSnapshotDir"],
+            json!(temp.join("sqlite-snapshot"))
+        );
         let artifacts = index["artifacts"].as_array().expect("artifact list");
         let outputs = artifacts
             .iter()
@@ -267,6 +310,62 @@ mod tests {
                 .iter()
                 .any(|entry| entry["role"] == "assertionsJsonl")
         );
+        assert!(
+            artifacts
+                .iter()
+                .any(|entry| entry["role"] == "sqliteSnapshotDir")
+        );
+
+        std::fs::remove_dir_all(temp).ok();
+    }
+
+    #[test]
+    fn artifact_index_snapshots_sqlite_db_and_sidecars() {
+        let temp = std::env::temp_dir().join(format!(
+            "restream-mixed-sqlite-snapshot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        let env = MixedEnv::from_env_with_default_work_dir("mixed.sqlite", temp.clone());
+        std::fs::write(&env.restream_db_path, b"db").expect("db");
+        std::fs::write(format!("{}-wal", env.restream_db_path.display()), b"wal").expect("wal");
+        std::fs::write(format!("{}-shm", env.restream_db_path.display()), b"shm").expect("shm");
+
+        let index_path = write_mixed_artifact_index(&env).expect("artifact index");
+        let snapshot_dir = temp.join("sqlite-snapshot");
+
+        assert_eq!(
+            std::fs::read(snapshot_dir.join("restream.db")).expect("snapshot db"),
+            b"db"
+        );
+        assert_eq!(
+            std::fs::read(snapshot_dir.join("restream.db-wal")).expect("snapshot wal"),
+            b"wal"
+        );
+        assert_eq!(
+            std::fs::read(snapshot_dir.join("restream.db-shm")).expect("snapshot shm"),
+            b"shm"
+        );
+
+        let index_body = std::fs::read_to_string(index_path).expect("artifact index body");
+        let index: Value = serde_json::from_str(&index_body).expect("valid artifact index");
+        let artifacts = index["artifacts"].as_array().expect("artifact list");
+        for role in ["sqliteSnapshotDb", "sqliteSnapshotWal", "sqliteSnapshotShm"] {
+            let entry = artifacts
+                .iter()
+                .find(|entry| entry["role"] == role)
+                .unwrap_or_else(|| panic!("missing {role} entry"));
+            assert_eq!(entry["exists"], true);
+            assert!(
+                entry["sha256"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty())
+            );
+        }
 
         std::fs::remove_dir_all(temp).ok();
     }

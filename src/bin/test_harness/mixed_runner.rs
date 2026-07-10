@@ -1418,6 +1418,10 @@ mod tests {
             json!(temp.join("asset/file/h264/a1/bf0/outputs.json"))
         );
         assert_eq!(
+            index["cases"][0]["sqliteSnapshotDir"],
+            json!(temp.join("asset/file/h264/a1/bf0/sqlite-snapshot"))
+        );
+        assert_eq!(
             index["cases"][0]["media"],
             json!(temp.join("asset/file/h264/a1/bf0/media"))
         );
