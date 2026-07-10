@@ -217,6 +217,43 @@ for path in [root / "Cargo.toml", *sorted((root / "src").rglob("*.rs"))]:
             if "#[cfg(feature" in line or "required-features" in line:
                 feature_cfg_sites.append({"file": rel(path), "line": line_no, "text": line.strip()})
 
+def snake_to_camel(value: str) -> str:
+    head, *tail = value.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in tail)
+
+api_view_models = read(root / "src" / "api_view_models.rs")
+egress_match = re.search(
+    r"pub\(crate\) fn egress_runtime_json\([\s\S]*?pub\(crate\) fn output_runtime_explanation_json",
+    api_view_models,
+)
+api_output_status_fields = set()
+if egress_match:
+    body = egress_match.group(0)
+    api_output_status_fields.update(re.findall(r'"([A-Za-z][A-Za-z0-9]*)"\s*:', body))
+    api_output_status_fields.update(re.findall(r'value\["([A-Za-z][A-Za-z0-9]*)"\]', body))
+
+harness_core = read(root / "src" / "bin" / "test_harness" / "core.rs")
+harness_status_match = re.search(
+    r"struct ApiOutputStatus \{(?P<body>[\s\S]*?)\n\}",
+    harness_core,
+)
+harness_output_status_fields = set()
+if harness_status_match:
+    harness_output_status_fields.update(
+        snake_to_camel(name)
+        for name in re.findall(
+            r"pub\(crate\)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:",
+            harness_status_match.group("body"),
+        )
+    )
+
+output_status_missing_in_harness = sorted(
+    api_output_status_fields - harness_output_status_fields
+)
+output_status_extra_in_harness = sorted(
+    harness_output_status_fields - api_output_status_fields
+)
+
 report = {
     "sourceLineLimit": line_limit,
     "largestFiles": line_counts[:20],
@@ -243,6 +280,14 @@ report = {
         "apiManualStageStarts": len([line for line in api_stage_starts.stdout.splitlines() if line]),
         "harnessStateFieldReads": len([line for line in harness_state_reads.stdout.splitlines() if line]),
     },
+    "outputStatusSchema": {
+        "source": "src/api_view_models.rs::egress_runtime_json",
+        "harnessDto": "src/bin/test_harness/core.rs::ApiOutputStatus",
+        "apiFields": sorted(api_output_status_fields),
+        "harnessFields": sorted(harness_output_status_fields),
+        "missingInHarness": output_status_missing_in_harness,
+        "extraInHarness": output_status_extra_in_harness,
+    },
     "featureCfgSites": feature_cfg_sites,
 }
 
@@ -250,6 +295,14 @@ pathlib.Path("target/source-audit.json").write_text(
     json.dumps(report, indent=2, sort_keys=True) + "\n",
     encoding="utf-8",
 )
+
+if output_status_missing_in_harness:
+    print(
+        "FAIL: Harness ApiOutputStatus is missing API output status fields: "
+        + ", ".join(output_status_missing_in_harness),
+        file=sys.stderr,
+    )
+    sys.exit(1)
 PY
 echo "Wrote target/source-audit.json"
 

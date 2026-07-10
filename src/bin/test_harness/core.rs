@@ -709,6 +709,10 @@ pub(crate) struct ApiOutputStatus {
     pub(crate) output_id: String,
     #[serde(default)]
     pub(crate) output_name: Option<String>,
+    #[serde(default)]
+    pub(crate) pipeline_id: Option<String>,
+    #[serde(default)]
+    pub(crate) protocol: Option<String>,
     pub(crate) status: String,
     pub(crate) raw_status: String,
     pub(crate) phase: String,
@@ -716,6 +720,10 @@ pub(crate) struct ApiOutputStatus {
     pub(crate) encoding: Option<String>,
     #[serde(default)]
     pub(crate) target_url: Option<String>,
+    #[serde(default)]
+    pub(crate) target_addr: Option<String>,
+    #[serde(default)]
+    pub(crate) uptime_secs: Option<f64>,
     #[serde(default)]
     pub(crate) bytes_out: u64,
     #[serde(default)]
@@ -725,19 +733,35 @@ pub(crate) struct ApiOutputStatus {
     #[serde(default)]
     pub(crate) last_error: Option<String>,
     #[serde(default)]
+    pub(crate) last_error_at: Option<String>,
+    #[serde(default)]
+    pub(crate) last_progress_at: Option<String>,
+    #[serde(default)]
+    pub(crate) last_progress_age_ms: Option<u64>,
+    #[serde(default)]
     pub(crate) terminal_stage: Option<String>,
     #[serde(default)]
     pub(crate) blocked_by: Option<ApiBlockedByStage>,
     #[serde(default)]
+    pub(crate) recent_failure_count: u64,
+    #[serde(default)]
+    pub(crate) flapping: bool,
+    #[serde(default)]
     pub(crate) retrying: bool,
+    #[serde(default)]
+    pub(crate) retry_attempts: Option<u64>,
+    #[serde(default)]
+    pub(crate) retry_backoff_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) next_retry_at: Option<String>,
+    #[serde(default)]
+    pub(crate) retry_remaining_ms: Option<u64>,
     #[serde(default)]
     pub(crate) failure_phase: Option<String>,
     #[serde(default)]
-    pub(crate) last_progress_age_ms: Option<u64>,
+    pub(crate) quality: Value,
     #[serde(default)]
     pub(crate) started_at: Option<String>,
-    #[serde(default)]
-    pub(crate) target_addr: Option<String>,
 }
 
 impl ApiOutputStatus {
@@ -756,7 +780,26 @@ impl ApiOutputStatus {
                 "output status for {output_id} is missing required status/rawStatus/phase"
             ));
         }
+        status.touch_schema_fields_for_audit();
         Ok(status)
+    }
+
+    fn touch_schema_fields_for_audit(&self) {
+        let _ = (
+            &self.pipeline_id,
+            &self.protocol,
+            &self.target_addr,
+            &self.uptime_secs,
+            &self.last_error_at,
+            &self.last_progress_at,
+            &self.recent_failure_count,
+            &self.flapping,
+            &self.retry_attempts,
+            &self.retry_backoff_ms,
+            &self.next_retry_at,
+            &self.retry_remaining_ms,
+            &self.quality,
+        );
     }
 
     pub(crate) fn has_progress(&self) -> bool {
