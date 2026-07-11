@@ -12,11 +12,11 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
         "CREATE TABLE IF NOT EXISTS pipelines (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
-            stream_key TEXT NOT NULL,
+            stream_key TEXT NOT NULL CHECK(length(stream_key) > 0),
             encoding TEXT,
-            input_ever_seen_live INTEGER NOT NULL DEFAULT 0,
+            input_ever_seen_live INTEGER NOT NULL DEFAULT 0 CHECK(input_ever_seen_live IN (0, 1)),
             input_source TEXT,
-            srt_ingest_policy TEXT
+            srt_ingest_policy TEXT CHECK(srt_ingest_policy IS NULL OR json_valid(srt_ingest_policy))
         );",
     )
     .execute(pool)
@@ -30,8 +30,8 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
             name TEXT NOT NULL,
             url TEXT NOT NULL,
             monitoring_url TEXT,
-            desired_state TEXT NOT NULL DEFAULT 'running',
-            config TEXT NOT NULL DEFAULT '{\"video\":{\"mode\":\"source\"},\"audio\":{\"mode\":\"all\"}}',
+            desired_state TEXT NOT NULL DEFAULT 'running' CHECK(desired_state IN ('running', 'stopped', 'failed')),
+            config TEXT NOT NULL DEFAULT '{\"video\":{\"mode\":\"source\"},\"audio\":{\"mode\":\"all\"}}' CHECK(json_valid(config)),
             encoding TEXT,
             FOREIGN KEY(pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
         );",
@@ -65,7 +65,7 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
             pipeline_id TEXT NOT NULL,
             output_id TEXT NOT NULL,
             pid INTEGER,
-            status TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('running', 'stopped', 'failed')),
             started_at TEXT,
             ended_at TEXT,
             exit_code INTEGER,
@@ -87,11 +87,11 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
         "CREATE TABLE IF NOT EXISTS ingests (
             id TEXT PRIMARY KEY,
             filename TEXT NOT NULL,
-            stream_key TEXT NOT NULL,
-            loop INTEGER NOT NULL DEFAULT 0,
+            stream_key TEXT NOT NULL CHECK(length(stream_key) > 0),
+            loop INTEGER NOT NULL DEFAULT 0 CHECK(loop IN (0, 1)),
             start_time TEXT NOT NULL DEFAULT '',
-            live_optimized INTEGER NOT NULL DEFAULT 0,
-            target_gop_seconds INTEGER NOT NULL DEFAULT 2
+            live_optimized INTEGER NOT NULL DEFAULT 0 CHECK(live_optimized IN (0, 1)),
+            target_gop_seconds INTEGER NOT NULL DEFAULT 2 CHECK(target_gop_seconds >= 1)
         );",
     )
     .execute(pool)
@@ -181,7 +181,7 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
             pipeline_id    TEXT NOT NULL,
             started_at     TEXT NOT NULL,
             ended_at       TEXT,
-            status         TEXT NOT NULL DEFAULT 'recording',
+            status         TEXT NOT NULL DEFAULT 'recording' CHECK(status IN ('recording', 'finalizing', 'ready', 'failed')),
             temp_path      TEXT,
             final_path     TEXT,
             codec_summary  TEXT,

@@ -173,6 +173,71 @@ async fn output_crud() {
 }
 
 #[tokio::test]
+async fn schema_constraints_reject_invalid_runtime_invariants() {
+    let pool = test_pool().await;
+    db::create_pipeline(&pool, "p1", "P", "key01", None, None)
+        .await
+        .unwrap();
+
+    let invalid_pipeline_bool = sqlx::query(
+        "INSERT INTO pipelines (id, name, stream_key, input_ever_seen_live)
+         VALUES ('p-bool', 'Bad', 'key-bool', 2);",
+    )
+    .execute(&pool)
+    .await;
+    assert!(invalid_pipeline_bool.is_err());
+
+    let invalid_output_state = sqlx::query(
+        "INSERT INTO outputs (id, pipeline_id, name, url, desired_state, config)
+         VALUES ('o-bad-state', 'p1', 'Bad', 'rtmp://example/live/key', 'paused',
+                 '{\"video\":{\"mode\":\"source\"},\"audio\":{\"mode\":\"all\"}}');",
+    )
+    .execute(&pool)
+    .await;
+    assert!(invalid_output_state.is_err());
+
+    let invalid_output_config = sqlx::query(
+        "INSERT INTO outputs (id, pipeline_id, name, url, desired_state, config)
+         VALUES ('o-bad-config', 'p1', 'Bad', 'rtmp://example/live/key', 'running', 'not-json');",
+    )
+    .execute(&pool)
+    .await;
+    assert!(invalid_output_config.is_err());
+
+    let invalid_job_status = sqlx::query(
+        "INSERT INTO jobs (id, pipeline_id, output_id, status)
+         VALUES ('j-bad', 'p1', 'o1', 'retrying');",
+    )
+    .execute(&pool)
+    .await;
+    assert!(invalid_job_status.is_err());
+
+    let invalid_ingest_bool = sqlx::query(
+        "INSERT INTO ingests (id, filename, stream_key, loop, live_optimized, target_gop_seconds)
+         VALUES ('i-bad-bool', 'clip.mp4', 'key-file', 2, 0, 2);",
+    )
+    .execute(&pool)
+    .await;
+    assert!(invalid_ingest_bool.is_err());
+
+    let invalid_ingest_gop = sqlx::query(
+        "INSERT INTO ingests (id, filename, stream_key, loop, live_optimized, target_gop_seconds)
+         VALUES ('i-bad-gop', 'clip.mp4', 'key-file-2', 0, 0, 0);",
+    )
+    .execute(&pool)
+    .await;
+    assert!(invalid_ingest_gop.is_err());
+
+    let invalid_recording_status = sqlx::query(
+        "INSERT INTO recordings (recording_id, pipeline_id, started_at, status)
+         VALUES ('r-bad', 'p1', '2026-01-01T00:00:00Z', 'done');",
+    )
+    .execute(&pool)
+    .await;
+    assert!(invalid_recording_status.is_err());
+}
+
+#[tokio::test]
 async fn cascade_delete_removes_outputs() {
     let pool = test_pool().await;
     db::create_pipeline(&pool, "p1", "P", "key01", None, None)
