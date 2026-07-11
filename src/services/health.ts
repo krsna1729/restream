@@ -15,6 +15,8 @@ import {
 import type { PullProtocol } from '../utils/mediamtx';
 import type { Db, Pipeline, Output, Job } from '../types';
 import { normalizeSocketAddressKey, parseSsTcpSocketEntries } from '../utils/tcp-socket-stats';
+import { isLoopbackAddress } from './security';
+import type { SrtRelayService, SrtRelayStats, SrtRelayStreamStatus } from './srt-relay';
 
 const ffprobeCmd = process.env.FFPROBE_PATH || 'ffprobe';
 const FFPROBE_DELAYS_MS = [3000, 10000, 20000, 40000];
@@ -111,16 +113,23 @@ interface InputHealth {
     };
 }
 
+interface SrtBondingHealth extends SrtRelayStreamStatus {
+    acceptedByMediamtx: boolean;
+    publishConflict: boolean;
+}
+
 interface PipelineHealth {
     input: InputHealth;
     outputs: Record<string, OutputHealth>;
     recording: { enabled: boolean; active: boolean };
+    srtBonding: SrtBondingHealth;
 }
 
 interface HealthSnapshot {
     generatedAt: string;
     status: string;
     mediamtx: MediamtxStats;
+    srtRelay: SrtRelayStats;
     pipelines: Record<string, PipelineHealth>;
 }
 
@@ -162,6 +171,45 @@ function computeInputStatus({
     if (pathAvailable) return 'on';
     if (pathOnline) return 'warning';
     return 'off';
+}
+
+function socketAddressHost(value: string | null | undefined): string | null {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+
+    const bracketed = /^\[([^\]]+)\]:(\d{1,5})$/.exec(raw);
+    if (bracketed) return bracketed[1];
+
+    const separator = raw.lastIndexOf(':');
+    if (separator <= 0 || !/^\d{1,5}$/.test(raw.slice(separator + 1))) return null;
+    return raw.slice(0, separator);
+}
+
+export function deriveSrtBondingPublicationState({
+    inputStatus,
+    publisherProtocol,
+    publisherRemoteAddr,
+    relayStatus,
+}: {
+    inputStatus: string;
+    publisherProtocol: string | null | undefined;
+    publisherRemoteAddr: string | null | undefined;
+    relayStatus: Pick<SrtRelayStreamStatus, 'inputActive' | 'outputConnected'> | null | undefined;
+}): { acceptedByMediamtx: boolean; publishConflict: boolean } {
+    const hasSrtPublisher = inputStatus === 'on' && publisherProtocol === 'srt';
+    const publisherIsRelay =
+        hasSrtPublisher && isLoopbackAddress(socketAddressHost(publisherRemoteAddr));
+    const relayInputActive = !!relayStatus?.inputActive;
+    const acceptedByMediamtx =
+        relayInputActive && !!relayStatus?.outputConnected && publisherIsRelay;
+
+    return {
+        acceptedByMediamtx,
+        publishConflict:
+            relayInputActive &&
+            hasSrtPublisher &&
+            (!relayStatus?.outputConnected || !publisherIsRelay),
+    };
 }
 
 export function parseFfmpegNumber(raw: unknown): number | null {
@@ -385,14 +433,50 @@ function groupOutputsByPipeline(outputs: Output[]): Map<string, Output[]> {
     return map;
 }
 
+const EMPTY_SRT_RELAY_STATS: SrtRelayStats = {
+    status: 'stopped',
+    pid: null,
+    startedAtMs: null,
+    lastError: null,
+    port: 10081,
+};
+
+const EMPTY_SRT_BONDING: SrtBondingHealth = {
+    inputActive: false,
+    outputConnected: false,
+    retryFailures: 0,
+    forwardedPackets: 0,
+    forwardedBytes: 0,
+    lastPacketAt: null,
+    lastInputPacketAt: null,
+    recvPacketsTotal: 0,
+    recvUniquePacketsTotal: 0,
+    recvLossTotal: 0,
+    recvDropTotal: 0,
+    retransTotal: 0,
+    inputRttMs: null,
+    outputRttMs: null,
+    outputSentPacketsTotal: 0,
+    outputSendLossTotal: 0,
+    outputSendDropTotal: 0,
+    outputRetransTotal: 0,
+    legs: [],
+    lastErrorAt: null,
+    lastError: null,
+    acceptedByMediamtx: false,
+    publishConflict: false,
+};
+
 function buildDefaultHealthSnapshot(
     status = 'initializing',
     mediamtxReady = false,
+    relayStats?: SrtRelayStats,
 ): HealthSnapshot {
     return {
         generatedAt: new Date().toISOString(),
         status,
         mediamtx: { pathCount: 0, rtmpConnCount: 0, srtConnCount: 0, ready: mediamtxReady },
+        srtRelay: relayStats ?? { ...EMPTY_SRT_RELAY_STATS },
         pipelines: {},
     };
 }
@@ -401,10 +485,12 @@ export function createHealthMonitorService({
     db,
     fetch: fetchImpl = globalThis.fetch,
     ffmpegProgressByJobId,
+    srtRelayService,
 }: {
     db: Db;
     fetch?: typeof globalThis.fetch;
     ffmpegProgressByJobId: Map<string, Record<string, string>>;
+    srtRelayService?: SrtRelayService;
 }): HealthMonitor {
     let inputRecoveryHandler: ((pipelineId: string) => void) | null = null;
     let inputLostHandler: ((pipelineId: string) => void) | null = null;
@@ -878,16 +964,41 @@ export function createHealthMonitorService({
             );
         }
 
+        const bondingStreamId = `publish:${effectivePath}`;
+        const rawBondingStatus = srtRelayService?.getStreamStatus(bondingStreamId);
+        const publicationState = deriveSrtBondingPublicationState({
+            inputStatus,
+            publisherProtocol: publisher?.protocol,
+            publisherRemoteAddr: publisher?.remoteAddr,
+            relayStatus: rawBondingStatus,
+        });
+
+        const srtBonding: SrtBondingHealth = rawBondingStatus
+            ? {
+                  ...rawBondingStatus,
+                  ...publicationState,
+              }
+            : { ...EMPTY_SRT_BONDING };
+
         return {
             input: inputHealth,
             outputs: outputsHealth,
             recording: recordingStateProvider?.(pipeline.id) ?? { enabled: false, active: false },
+            srtBonding,
         };
+    }
+
+    function getRelayStats(): SrtRelayStats {
+        return srtRelayService?.getStats() ?? { ...EMPTY_SRT_RELAY_STATS };
     }
 
     async function buildHealthSnapshot(): Promise<HealthSnapshot> {
         if (!mediamtxReadiness.ready) {
-            return buildDefaultHealthSnapshot('initializing', mediamtxReadiness.ready);
+            return buildDefaultHealthSnapshot(
+                'initializing',
+                mediamtxReadiness.ready,
+                getRelayStats(),
+            );
         }
 
         try {
@@ -945,6 +1056,7 @@ export function createHealthMonitorService({
                     srtConnCount: s.itemCount || 0,
                     ready: mediamtxReadiness.ready,
                 },
+                srtRelay: getRelayStats(),
                 ...health,
             };
         } catch (err) {
@@ -958,6 +1070,7 @@ export function createHealthMonitorService({
                     srtConnCount: latestHealthSnapshot?.mediamtx.srtConnCount ?? 0,
                     ready: mediamtxReadiness.ready,
                 },
+                srtRelay: getRelayStats(),
                 pipelines: latestHealthSnapshot?.pipelines ?? {},
             };
         }
@@ -976,7 +1089,7 @@ export function createHealthMonitorService({
 
     function startHealthCollector() {
         setLatestHealthSnapshot(
-            buildDefaultHealthSnapshot('initializing', mediamtxReadiness.ready),
+            buildDefaultHealthSnapshot('initializing', mediamtxReadiness.ready, getRelayStats()),
         );
         void collectHealthSnapshot().catch((err) => {
             log('error', 'Initial health snapshot collection failed', { error: errMsg(err) });
