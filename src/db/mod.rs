@@ -14,14 +14,35 @@ pub mod recording_repo;
 mod schema;
 pub(crate) mod session_repo;
 
-pub use ingest_repo::*;
-pub use job_repo::*;
-pub use log_repo::*;
-pub use output_repo::*;
-pub use pipeline_repo::*;
-pub use recording_repo::*;
-pub use schema::*;
-pub use session_repo::*;
+pub use ingest_repo::{
+    create_ingest, delete_ingest, get_ingest, get_ingest_by_stream_key, list_ingests,
+    list_ingests_for_filename, list_ingests_for_stream_key, update_ingest,
+};
+pub use job_repo::{
+    cleanup_old_jobs, create_job, get_job, get_running_job_for, list_jobs, list_jobs_for_output,
+    reset_running_jobs, update_job,
+};
+pub use log_repo::{
+    append_app_log_batch, append_app_log_batch_returning, delete_app_logs_older_than, list_app_logs,
+};
+pub use output_repo::{
+    create_output, delete_output, get_output, list_outputs, list_outputs_for_pipeline,
+    set_output_desired_state, update_output,
+};
+pub use pipeline_repo::{
+    create_pipeline, delete_pipeline, get_pipeline, get_pipeline_by_stream_key, list_pipelines,
+    update_pipeline,
+};
+pub use recording_repo::{
+    RecordingRow, create_recording, delete_recording, finalize_recording, get_recording,
+    list_recordings, list_recordings_by_status, list_recordings_for_pipeline,
+    update_recording_status,
+};
+pub use schema::setup_database_schema;
+pub use session_repo::{
+    create_session, delete_session, delete_sessions_except, get_session_created_at, list_sessions,
+    prune_expired_sessions,
+};
 
 pub use meta_repo::get_ingest_host;
 pub use meta_repo::get_meta;
