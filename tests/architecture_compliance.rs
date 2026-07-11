@@ -90,6 +90,7 @@ fn release_policy_metadata_is_declared_and_enforced() {
     assert!(cargo_toml.contains("publish = false"));
     assert!(cargo_toml.contains("license-file = \"LICENSE.md\""));
     assert!(cargo_toml.contains("repository = "));
+    assert!(!cargo_toml.contains("release_max_level_"));
 
     let build_rs = include_str!("../build.rs");
     assert!(build_rs.contains("PKG_CONFIG_LIBDIR"));
@@ -127,6 +128,7 @@ fn release_policy_metadata_is_declared_and_enforced() {
     let deny_toml = include_str!("../deny.toml");
     assert!(deny_toml.contains("unknown-registry = \"deny\""));
     assert!(deny_toml.contains("unknown-git = \"deny\""));
+    assert!(deny_toml.contains("duplicate families currently come through"));
 
     let sbom_workflow = include_str!("../.github/workflows/sbom-security.yml");
     assert!(sbom_workflow.contains("cargo deny check advisories licenses bans sources"));
@@ -142,6 +144,8 @@ fn release_policy_metadata_is_declared_and_enforced() {
         "cargo deny check advisories licenses bans sources",
         "GPL-2.0-or-later",
         "LicenseRef-restream-internal",
+        "tracing/release_max_level_*",
+        "Dependency Policy",
     ] {
         assert!(
             compliance.contains(required),

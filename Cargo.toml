@@ -52,7 +52,7 @@ webpki-roots = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 url = "2"
 shiguredo_mp4 = "2026.3.0"
-tracing = { version = "0.1", features = ["max_level_debug", "release_max_level_info"] }
+tracing = { version = "0.1", features = ["max_level_debug"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"
 
