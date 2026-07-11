@@ -170,4 +170,4 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
       - name: Run cargo deny
-        run: cargo deny check advisories licenses bans
+        run: cargo deny check advisories licenses bans sources

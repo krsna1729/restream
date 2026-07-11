@@ -2078,6 +2078,12 @@ async fn status_returns_version_info() {
     let engine = &json;
     assert!(engine["restream"]["version"].is_string());
     assert!(engine["restream"]["commit"].is_string());
+    assert!(engine["restream"]["buildTimestamp"].is_string());
+    assert!(engine["restream"]["nativeBuildId"].is_string());
+    assert_ne!(
+        engine["restream"]["nativeBuildId"], engine["restream"]["commit"],
+        "native build id must identify native inputs, not reuse the source commit"
+    );
     assert!(engine.get("ffmpeg").is_none());
     assert!(engine["toolchain"]["rustc"].is_string());
     assert!(engine["nativeLibraries"]["ffmpeg"]["version"].is_string());
@@ -2128,6 +2134,24 @@ async fn status_sbom_is_authenticated_cyclonedx_with_licenses() {
     assert_eq!(json["bomFormat"], "CycloneDX");
     assert_eq!(json["specVersion"], "1.5");
     assert_eq!(json["metadata"]["component"]["name"], "restream");
+    assert_eq!(
+        json["metadata"]["component"]["licenses"][0]["license"]["name"],
+        "LicenseRef-restream-internal"
+    );
+    assert_eq!(
+        json["metadata"]["component"]["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|property| property["name"] == "restream:nativeBuildId")
+            .unwrap()["value"],
+        json["metadata"]["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|property| property["name"] == "restream:nativeBuildId")
+            .unwrap()["value"]
+    );
 
     let components = json["components"].as_array().unwrap();
     assert!(components.len() > 20);
@@ -2189,6 +2213,17 @@ async fn status_sbom_is_authenticated_cyclonedx_with_licenses() {
                 .is_some_and(|v| !v.is_empty())
         );
     }
+
+    let cargo_component = components
+        .iter()
+        .find(|component| component["name"] == "tokio")
+        .expect("tokio should be present in runtime SBOM");
+    assert!(
+        cargo_component["hashes"]
+            .as_array()
+            .is_some_and(|hashes| hashes.iter().any(|hash| hash["alg"] == "SHA-256")),
+        "Cargo runtime components should include lockfile checksums"
+    );
 }
 
 // --- Processing graph ---
