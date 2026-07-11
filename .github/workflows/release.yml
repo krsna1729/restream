@@ -35,9 +35,10 @@ jobs:
           echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
           sudo apt-get update -qq && sudo apt-get install -y -qq trivy
       - name: Full live harness suite
-        run: |
-          scripts/harness/run.sh --prepare
-          target/bench/test_harness suite --run-id release-${{ github.sha }} --continue-on-fail
+        # Keep the resource-limit shared lock and harness runtime setup in the
+        # canonical runner. Calling target/bench/test_harness directly skips
+        # that contract and makes every suite mode fail before it can start.
+        run: scripts/harness/run.sh suite -- --run-id release-${{ github.sha }} --continue-on-fail
       - name: Release evidence and OCI asset
         run: |
           scripts/check/release-evidence.sh \
