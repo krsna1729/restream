@@ -1,0 +1,14 @@
+name: Native prefix
+description: Restore or build the repository-managed static media dependency prefix.
+
+runs:
+  using: composite
+  steps:
+    - id: cache
+      uses: actions/cache@v4
+      with:
+        path: .local/build/static/prefix
+        key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh', 'scripts/build/native/native-inputs.lock', 'scripts/native/mbedtls-config-srt.h') }}
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh

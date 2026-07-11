@@ -41,15 +41,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libssl-dev pkg-config clang
-      - name: Restore static prefix
-        id: cache-static-prefix
-        uses: actions/cache@v4
-        with:
-          path: .local/build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
-      - name: Build static prefix
-        if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
+      - name: Restore or build native prefix
+        uses: ./.github/actions/native-prefix
       - name: Restore cargo cache
         uses: actions/cache@v4
         with:
@@ -88,15 +81,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libssl-dev pkg-config clang iproute2 util-linux
-      - name: Restore static prefix
-        id: cache-static-prefix
-        uses: actions/cache@v4
-        with:
-          path: .local/build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
-      - name: Build static prefix
-        if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
+      - name: Restore or build native prefix
+        uses: ./.github/actions/native-prefix
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -132,6 +118,29 @@ jobs:
       - name: Run browser-DOM tests
         run: npm run test:frontend:browser-dom
 
+  frontend-e2e:
+    name: Frontend full-app integration
+    runs-on: ubuntu-latest
+    needs: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libssl-dev pkg-config clang ffmpeg
+      - name: Restore or build native prefix
+        uses: ./.github/actions/native-prefix
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium for full-app tests
+        run: npx playwright install --with-deps chromium
+      - name: Run isolated app/browser integration
+        run: npm run test:e2e
+
   concurrency-contract:
     name: Concurrency contract gate
     runs-on: ubuntu-latest
@@ -145,15 +154,8 @@ jobs:
           sudo apt-get install -y -qq \
             libssl-dev pkg-config clang \
             ffmpeg jq curl iproute2 util-linux
-      - name: Restore static prefix
-        id: cache-static-prefix
-        uses: actions/cache@v4
-        with:
-          path: .local/build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
-      - name: Build static prefix
-        if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
+      - name: Restore or build native prefix
+        uses: ./.github/actions/native-prefix
       - name: Restore cargo cache
         uses: actions/cache@v4
         with:
@@ -178,15 +180,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libssl-dev pkg-config clang
-      - name: Restore static prefix
-        id: cache-static-prefix
-        uses: actions/cache@v4
-        with:
-          path: .local/build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
-      - name: Build static prefix
-        if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
+      - name: Restore or build native prefix
+        uses: ./.github/actions/native-prefix
       - name: Restore cargo cache
         uses: actions/cache@v4
         with:
@@ -212,15 +207,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libssl-dev pkg-config clang
-      - name: Restore static prefix
-        id: cache-static-prefix
-        uses: actions/cache@v4
-        with:
-          path: .local/build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
-      - name: Build static prefix
-        if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
+      - name: Restore or build native prefix
+        uses: ./.github/actions/native-prefix
       - name: Restore cargo cache
         uses: actions/cache@v4
         with:
@@ -249,15 +237,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libssl-dev pkg-config clang
-      - name: Restore static prefix
-        id: cache-static-prefix
-        uses: actions/cache@v4
-        with:
-          path: .local/build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
-      - name: Build static prefix
-        if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
+      - name: Restore or build native prefix
+        uses: ./.github/actions/native-prefix
       - name: Restore cargo cache
         uses: actions/cache@v4
         with:
@@ -296,15 +277,8 @@ jobs:
           sudo apt-get install -y -qq \
             libssl-dev pkg-config clang \
             jq curl iproute2 util-linux
-      - name: Restore static prefix
-        id: cache-static-prefix
-        uses: actions/cache@v4
-        with:
-          path: .local/build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
-      - name: Build static prefix
-        if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
+      - name: Restore or build native prefix
+        uses: ./.github/actions/native-prefix
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -407,15 +381,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libssl-dev pkg-config clang
-      - name: Restore static prefix
-        id: cache-static-prefix
-        uses: actions/cache@v4
-        with:
-          path: .local/build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
-      - name: Build static prefix
-        if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
+      - name: Restore or build native prefix
+        uses: ./.github/actions/native-prefix
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
