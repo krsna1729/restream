@@ -121,6 +121,20 @@ async fn schema_setup_reports_legacy_duplicate_pipeline_stream_keys() {
 }
 
 #[tokio::test]
+async fn schema_setup_records_current_migration_version_once() {
+    let pool = test_pool().await;
+    db::setup_database_schema(&pool).await.unwrap();
+
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT version, name FROM schema_migrations ORDER BY version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!(rows, vec![(1, "bootstrap_schema_v1".to_string())]);
+}
+
+#[tokio::test]
 async fn output_crud() {
     let pool = test_pool().await;
     db::create_pipeline(&pool, "p1", "P", "key01", None, None)

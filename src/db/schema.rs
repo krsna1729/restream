@@ -7,6 +7,7 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
     sqlx::query("PRAGMA journal_size_limit = 67108864;")
         .execute(pool)
         .await?;
+    super::migrations::ensure_schema_migrations_table(pool).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS pipelines (
@@ -196,6 +197,13 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
         "CREATE INDEX IF NOT EXISTS idx_recordings_pipeline ON recordings(pipeline_id, started_at DESC);",
     )
     .execute(pool)
+    .await?;
+
+    super::migrations::record_schema_migration(
+        pool,
+        super::migrations::CURRENT_SCHEMA_VERSION,
+        super::migrations::CURRENT_SCHEMA_MIGRATION_NAME,
+    )
     .await?;
 
     Ok(())

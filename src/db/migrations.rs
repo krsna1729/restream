@@ -1,5 +1,38 @@
 use sqlx::{AssertSqlSafe, Row, SqlitePool};
 
+pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 1;
+pub(crate) const CURRENT_SCHEMA_MIGRATION_NAME: &str = "bootstrap_schema_v1";
+
+pub(crate) async fn ensure_schema_migrations_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn record_schema_migration(
+    pool: &SqlitePool,
+    version: i64,
+    name: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO schema_migrations (version, name)
+         VALUES (?, ?)
+         ON CONFLICT(version) DO UPDATE SET name = excluded.name;",
+    )
+    .bind(version)
+    .bind(name)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub(crate) async fn ensure_column_exists(
     pool: &SqlitePool,
     table: &str,
