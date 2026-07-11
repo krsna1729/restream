@@ -180,6 +180,11 @@ COPY test/harness/ test/harness/
 ENV PATH="/workspace/target/bench:${PATH}" \
     RESTREAM_REPO_ROOT=/workspace
 
+# Keep the production scratch runtime as Docker's implicit final target. The
+# harness remains an explicit `--target harness` validation image; otherwise a
+# plain `docker build .` would silently ship the Ubuntu test environment.
+FROM runtime-scratch AS runtime
+
 ENTRYPOINT ["/workspace/target/bench/test_harness"]
 
 # The ordinary `docker build` result is the production scratch image.
