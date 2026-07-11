@@ -423,8 +423,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
 
     let ports = &config.ports;
 
-    let media_dir = config.media_dir.clone();
-    let reconciler_media_dir = media_dir.clone();
+    let reconciler_media_dir = config.media_dir.clone();
     let reconciler_config = config.clone();
     let recording_metadata_reporter =
         crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter(pool.clone());
@@ -435,18 +434,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         sessions,
         engine.clone(),
         logging_handles.broadcast_tx.clone(),
-        crate::api::state::AppStateRuntimeConfig {
-            ingest_disconnect_grace_ms: tuning.ingest_disconnect_grace_ms,
-            ports: crate::api::PortConfig {
-                rtmp: ports.rtmp,
-                srt: ports.srt,
-            },
-            media_dir,
-            db_path: config.db_path.clone(),
-            srt_passphrase: config.srt_passphrase.clone(),
-            srt_pbkeylen: config.srt_pbkeylen,
-            secure_session_cookies: config.secure_session_cookies,
-        },
+        crate::api::state::AppStateRuntimeConfig::from(config.as_ref()),
     ));
 
     // Start Web Server

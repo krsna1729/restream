@@ -2,7 +2,6 @@
 
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
-use restream::config::DEFAULT_MEDIA_DIR;
 use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 use restream::domain::srt_ingest::SrtGlobalIngestConfig;
 use restream::domain::state::EgressPhase;
@@ -40,7 +39,6 @@ async fn test_app_with_engine() -> (axum::Router, SqlitePool, Arc<MediaEngine>) 
         sessions,
         engine.clone(),
         log_broadcast,
-        DEFAULT_MEDIA_DIR.to_string(),
     ));
 
     (api::create_router(state), pool, engine)

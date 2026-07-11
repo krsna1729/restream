@@ -14,6 +14,7 @@ use crate::application::services::{
     AgentService, AuthService, FileIngestService, HealthService, IngestService, LogService,
     MediaLibraryService, OutputService, PipelineService, SettingsService,
 };
+use crate::config::AppConfig;
 use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::media::engine::MediaEngine;
 use crate::media::security::{IngestSecurityService, RateLimitScope, RateLimitSnapshot};
@@ -55,6 +56,49 @@ pub struct AppStateRuntimeConfig {
     pub srt_passphrase: Option<String>,
     pub srt_pbkeylen: i32,
     pub secure_session_cookies: bool,
+}
+
+impl Default for AppStateRuntimeConfig {
+    fn default() -> Self {
+        Self::from(&AppConfig::default())
+    }
+}
+
+impl From<&AppConfig> for AppStateRuntimeConfig {
+    fn from(config: &AppConfig) -> Self {
+        Self {
+            ingest_disconnect_grace_ms: config.tuning.ingest_disconnect_grace_ms,
+            ports: PortConfig {
+                rtmp: config.ports.rtmp,
+                srt: config.ports.srt,
+            },
+            media_dir: config.media_dir.clone(),
+            db_path: config.db_path.clone(),
+            srt_passphrase: config.srt_passphrase.clone(),
+            srt_pbkeylen: config.srt_pbkeylen,
+            secure_session_cookies: config.secure_session_cookies,
+        }
+    }
+}
+
+#[cfg(test)]
+mod runtime_config_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_are_derived_from_app_config() {
+        let app_config = AppConfig::default();
+        let runtime = AppStateRuntimeConfig::default();
+
+        assert_eq!(runtime.media_dir, app_config.media_dir);
+        assert_eq!(runtime.db_path, app_config.db_path);
+        assert_eq!(runtime.ports.rtmp, app_config.ports.rtmp);
+        assert_eq!(runtime.ports.srt, app_config.ports.srt);
+        assert_eq!(
+            runtime.ingest_disconnect_grace_ms,
+            app_config.tuning.ingest_disconnect_grace_ms
+        );
+    }
 }
 
 pub struct AppState {
@@ -269,7 +313,6 @@ impl AppState {
         sessions: Arc<TokioRwLock<HashSet<String>>>,
         engine: Arc<MediaEngine>,
         log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
-        media_dir: String,
     ) -> Self {
         Self::new(
             db,
@@ -278,18 +321,30 @@ impl AppState {
             sessions,
             engine,
             log_broadcast,
-            AppStateRuntimeConfig {
-                ingest_disconnect_grace_ms: 5000,
-                ports: PortConfig {
-                    rtmp: 1935,
-                    srt: 10080,
-                },
-                media_dir,
-                db_path: "data.db".to_string(),
-                srt_passphrase: None,
-                srt_pbkeylen: 16,
-                secure_session_cookies: false,
-            },
+            AppStateRuntimeConfig::default(),
+        )
+    }
+
+    /// Construct an AppState with default services and an isolated media directory.
+    pub fn test_new_with_media_dir(
+        db: SqlitePool,
+        security: Arc<IngestSecurityService>,
+        ingest_policy_store: Arc<SrtIngestPolicyStore>,
+        sessions: Arc<TokioRwLock<HashSet<String>>>,
+        engine: Arc<MediaEngine>,
+        log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
+        media_dir: String,
+    ) -> Self {
+        let mut runtime = AppStateRuntimeConfig::default();
+        runtime.media_dir = media_dir;
+        Self::new(
+            db,
+            security,
+            ingest_policy_store,
+            sessions,
+            engine,
+            log_broadcast,
+            runtime,
         )
     }
 }
