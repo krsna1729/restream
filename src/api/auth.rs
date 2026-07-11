@@ -301,7 +301,11 @@ pub async fn login_post_handler(
 
     state.sessions.write().await.insert(token_hash);
 
-    let cookie = make_session_cookie(&token, SESSION_MAX_AGE_SECONDS);
+    let cookie = make_session_cookie(
+        &token,
+        SESSION_MAX_AGE_SECONDS,
+        state.secure_session_cookies,
+    );
     (
         StatusCode::OK,
         [(header::SET_COOKIE, cookie)],
@@ -321,7 +325,7 @@ pub async fn logout_handler(
             warn!(err = %e, "failed to delete session from DB");
         }
     }
-    let cookie = clear_session_cookie();
+    let cookie = clear_session_cookie(state.secure_session_cookies);
     (
         StatusCode::OK,
         [(header::SET_COOKIE, cookie)],

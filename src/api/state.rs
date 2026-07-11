@@ -71,6 +71,7 @@ pub struct AppState {
     pub agent_service: AgentService,
     pub alert_tracker: alerts::AlertTracker,
     pub log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
+    pub secure_session_cookies: bool,
     #[cfg(feature = "agent-execution")]
     pub agent_execution: Arc<crate::agent_execution::AgentExecutionStore>,
 }
@@ -162,6 +163,7 @@ impl AppState {
             agent_service,
             alert_tracker: alerts::AlertTracker::new(),
             log_broadcast,
+            secure_session_cookies: false,
             #[cfg(feature = "agent-execution")]
             agent_execution: Arc::new(crate::agent_execution::AgentExecutionStore::default()),
         }
@@ -220,18 +222,20 @@ pub async fn require_hls_access(
     require_authenticated(state, headers).await
 }
 
-pub fn make_session_cookie(token: &str, max_age: i64) -> String {
+pub fn make_session_cookie(token: &str, max_age: i64, secure: bool) -> String {
+    let secure_attr = if secure { "; Secure" } else { "" };
     format!(
         "{}={}; HttpOnly; Path=/; SameSite=Strict; Max-Age={}",
         SESSION_COOKIE_NAME, token, max_age
-    )
+    ) + secure_attr
 }
 
-pub fn clear_session_cookie() -> String {
+pub fn clear_session_cookie(secure: bool) -> String {
+    let secure_attr = if secure { "; Secure" } else { "" };
     format!(
         "{}={}; HttpOnly; Path=/; SameSite=Strict; Max-Age=0",
         SESSION_COOKIE_NAME, ""
-    )
+    ) + secure_attr
 }
 
 pub async fn refresh_srt_ingest_policy_store(state: &AppState) {

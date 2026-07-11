@@ -2,11 +2,10 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     http::{HeaderValue, header},
-    routing::{get, patch, post, put},
+    routing::{any, get, patch, post, put},
 };
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
-use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::agent::{
@@ -53,8 +52,9 @@ use super::pipelines::{
 use super::settings::{config_get_handler, config_patch_handler};
 use super::state::AppState;
 use super::static_assets::{
-    css_handler, login_get_handler, login_html_redirect_handler, logo_handler,
-    settings_html_redirect_handler, spa_fallback_handler, status_html_redirect_handler,
+    api_not_found_handler, css_handler, login_get_handler, login_html_redirect_handler,
+    logo_handler, settings_html_redirect_handler, spa_fallback_handler,
+    status_html_redirect_handler,
 };
 use super::telemetry::{
     metrics_system_handler, pipeline_diagnostics_run_handler, status_get_handler,
@@ -71,6 +71,7 @@ pub const PUBLIC_ROUTE_PATHS: &[&str] = &[
     "/logo.png",
     "/output.css",
     "/api/v1/auth/login",
+    "/api/*path",
     "/healthz",
     "/metrics/system",
 ];
@@ -148,6 +149,36 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
 ];
 
 pub fn create_router(state: Arc<AppState>) -> Router {
+    let hls_router = Router::new()
+        .route("/hls/:pipeline_id", get(hls_playlist_handler))
+        .route("/hls/:pipeline_id/master.m3u8", get(hls_master_handler))
+        .route("/hls/:pipeline_id/index.m3u8", get(hls_playlist_handler))
+        .route(
+            "/hls/:pipeline_id/video/index.m3u8",
+            get(hls_video_playlist_handler),
+        )
+        .route(
+            "/hls/:pipeline_id/video/init.mp4",
+            get(hls_video_init_handler),
+        )
+        .route(
+            "/hls/:pipeline_id/video/:segment",
+            get(hls_video_segment_handler),
+        )
+        .route(
+            "/hls/:pipeline_id/audio/:track_index/index.m3u8",
+            get(hls_audio_playlist_handler),
+        )
+        .route(
+            "/hls/:pipeline_id/audio/:track_index/init.mp4",
+            get(hls_audio_init_handler),
+        )
+        .route(
+            "/hls/:pipeline_id/audio/:track_index/:segment",
+            get(hls_audio_segment_handler),
+        )
+        .route("/hls/:pipeline_id/:segment", get(hls_segment_handler));
+
     Router::new()
         .route("/login", get(login_get_handler))
         .route("/login.html", get(login_html_redirect_handler))
@@ -341,6 +372,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route("/healthz", get(healthz_get_handler))
         .route("/metrics/system", get(metrics_system_handler))
+        .merge(hls_router)
+        .route("/api/*path", any(api_not_found_handler))
         .fallback(get(spa_fallback_handler))
         .layer(CompressionLayer::new())
         .layer(DefaultBodyLimit::max(4 * 1024 * 1024))
@@ -352,43 +385,5 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             header::HeaderName::from_static("x-frame-options"),
             HeaderValue::from_static("SAMEORIGIN"),
         ))
-        .merge(
-            Router::new()
-                .route("/hls/:pipeline_id", get(hls_playlist_handler))
-                .route("/hls/:pipeline_id/master.m3u8", get(hls_master_handler))
-                .route("/hls/:pipeline_id/index.m3u8", get(hls_playlist_handler))
-                .route(
-                    "/hls/:pipeline_id/video/index.m3u8",
-                    get(hls_video_playlist_handler),
-                )
-                .route(
-                    "/hls/:pipeline_id/video/init.mp4",
-                    get(hls_video_init_handler),
-                )
-                .route(
-                    "/hls/:pipeline_id/video/:segment",
-                    get(hls_video_segment_handler),
-                )
-                .route(
-                    "/hls/:pipeline_id/audio/:track_index/index.m3u8",
-                    get(hls_audio_playlist_handler),
-                )
-                .route(
-                    "/hls/:pipeline_id/audio/:track_index/init.mp4",
-                    get(hls_audio_init_handler),
-                )
-                .route(
-                    "/hls/:pipeline_id/audio/:track_index/:segment",
-                    get(hls_audio_segment_handler),
-                )
-                .route("/hls/:pipeline_id/:segment", get(hls_segment_handler))
-                .layer(
-                    CorsLayer::new()
-                        .allow_origin(AllowOrigin::any())
-                        .allow_methods([axum::http::Method::GET, axum::http::Method::OPTIONS])
-                        .allow_headers([header::CONTENT_TYPE, header::RANGE]),
-                )
-                .with_state(state.clone()),
-        )
         .with_state(state)
 }
