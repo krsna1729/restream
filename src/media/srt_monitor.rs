@@ -50,10 +50,14 @@ pub(super) fn read_udp_socket_stats(port: u16) -> Option<(u64, u64)> {
 pub(super) async fn monitor_listener_socket(
     port: u16,
     stats: Arc<crate::media::engine::ListenerSocketStats>,
+    effective_udp_recv_capacity: u64,
 ) {
     use std::sync::atomic::Ordering;
 
-    let configured_buf = DESIRED_UDP_BUF as u64;
+    // The requested 8 MiB may be clamped by the host's rmem_max. Monitor the
+    // actual getsockopt value so a constrained host degrades visibly instead
+    // of accepting traffic until it drops packets at an understated percentage.
+    let configured_buf = effective_udp_recv_capacity.max(1);
     let warn_threshold = configured_buf / 2; // 50%
     let crit_threshold = (configured_buf * 3) / 4; // 75%
     let mut prev_drops = 0u64;

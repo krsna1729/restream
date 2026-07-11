@@ -562,7 +562,13 @@ fn srt_set_highbitrate_opts(sock: SRTSOCKET) {
 // SAFETY: srt_getsockopt reads integer option values from a valid SRT
 // socket into correctly-sized stack variables. All options are benign
 // diagnostic reads with no side effects on the socket.
-fn srt_log_effective_opts(sock: SRTSOCKET, label: &str) {
+/// Logs the read-back socket policy and returns the actual receive capacity.
+///
+/// Linux may clamp the requested UDP buffer to the host `rmem_max`. Callers
+/// must use this value for pressure thresholds; using `DESIRED_UDP_BUF` after a
+/// clamp would make the monitor report a safe percentage while the real socket
+/// is already near overflow.
+fn srt_log_effective_opts(sock: SRTSOCKET, label: &str) -> u64 {
     unsafe {
         let mut udp_snd = 0i32;
         let mut udp_rcv = 0i32;
@@ -651,6 +657,7 @@ fn srt_log_effective_opts(sock: SRTSOCKET, label: &str) {
                 DESIRED_UDP_BUF / 1024,
             );
         }
+        udp_rcv.max(0) as u64
     }
 }
 
@@ -1134,7 +1141,7 @@ impl SrtServer {
             }
         }
         srt_set_highbitrate_opts(server_sock);
-        srt_log_effective_opts(server_sock, "listener");
+        let listener_udp_recv_capacity = srt_log_effective_opts(server_sock, "listener");
 
         let addr_str = format!("0.0.0.0:{}", port);
         let addr = match addr_str.parse::<SocketAddr>() {
@@ -1183,7 +1190,7 @@ impl SrtServer {
         // Monitor the shared listener socket's kernel UDP buffer occupancy
         let listener_stats = self.engine.listener_stats_handle();
         tokio::spawn(async move {
-            monitor_listener_socket(port, listener_stats).await;
+            monitor_listener_socket(port, listener_stats, listener_udp_recv_capacity).await;
         });
 
         // Bounded channel between the blocking accept thread and the tokio task.
