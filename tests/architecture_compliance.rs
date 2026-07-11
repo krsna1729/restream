@@ -242,6 +242,77 @@ fn app_state_hides_security_session_and_srt_internals() {
     }
 }
 
+#[test]
+fn source_distribution_manifest_matches_declared_build_inputs() {
+    let manifest = include_str!("../docs/source-distribution.md");
+    for required in [
+        ".build/static/prefix/",
+        "package-lock.json",
+        "tsconfig.json",
+        "scripts/resource-limit ./scripts/setup-static-build.sh",
+        "npm run build:frontend",
+        "hls.min.js.map",
+    ] {
+        assert!(
+            manifest.contains(required),
+            "source distribution manifest must mention {required}"
+        );
+    }
+
+    let cargo_toml = include_str!("../Cargo.toml");
+    let mut missing_benches = Vec::new();
+    for bench in declared_benches(cargo_toml) {
+        let expected = format!("benches/{bench}.rs");
+        if !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(&expected)
+            .exists()
+        {
+            missing_benches.push(expected);
+        }
+    }
+    assert!(
+        missing_benches.is_empty(),
+        "Cargo.toml declares missing bench files: {missing_benches:?}"
+    );
+
+    for script in [
+        "scripts/run-bench-harness.sh",
+        "scripts/build-bench-harness.sh",
+        "scripts/setup-static-build.sh",
+        "scripts/ensure-frontend-assets.mjs",
+    ] {
+        assert!(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(script)
+                .is_file(),
+            "declared build script is missing: {script}"
+        );
+    }
+}
+
+fn declared_benches(cargo_toml: &str) -> Vec<&str> {
+    let mut benches = Vec::new();
+    let mut in_bench = false;
+    for line in cargo_toml.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[[bench]]" {
+            in_bench = true;
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            in_bench = false;
+        }
+        if in_bench
+            && let Some(name) = trimmed
+                .strip_prefix("name = \"")
+                .and_then(|rest| rest.strip_suffix('"'))
+        {
+            benches.push(name);
+        }
+    }
+    benches
+}
+
 fn extract_router_route_paths(source: &'static str) -> BTreeSet<&'static str> {
     let mut paths = BTreeSet::new();
     for (offset, _) in source.match_indices(".route(") {
