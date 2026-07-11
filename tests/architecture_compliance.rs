@@ -135,6 +135,30 @@ fn release_policy_metadata_is_declared_and_enforced() {
     let sbom_workflow = include_str!("../.github/workflows/sbom-security.yml");
     assert!(sbom_workflow.contains("cargo deny check advisories licenses bans sources"));
 
+    let native_build = include_str!("../scripts/setup-static-build.sh");
+    assert!(native_build.contains("scripts/native-inputs.lock"));
+    assert!(native_build.contains("require_locked_value MBEDTLS_SHA256"));
+    assert!(native_build.contains("require_source_commit \"SRT\""));
+    assert!(native_build.contains("require_source_commit \"FFmpeg\""));
+    assert!(native_build.contains("Mbed TLS config SHA-256"));
+    assert!(native_build.contains("reset_cmake_build_if_moved"));
+    assert!(native_build.contains("RESTREAM_VERIFY_NATIVE_INPUT_LOCK_ONLY"));
+
+    let native_lock = include_str!("../scripts/native-inputs.lock");
+    for required in [
+        "RESTREAM_LOCK_MBEDTLS_TARBALL_SHA256",
+        "RESTREAM_LOCK_MBEDTLS_CONFIG_SHA256",
+        "RESTREAM_LOCK_SRT_COMMIT",
+        "RESTREAM_LOCK_FFMPEG_COMMIT",
+        "RESTREAM_LOCK_X264_COMMIT",
+        "RESTREAM_LOCK_X265_COMMIT",
+    ] {
+        assert!(
+            native_lock.contains(required),
+            "native input lock must declare {required}"
+        );
+    }
+
     let license = include_str!("../LICENSE.md");
     assert!(license.contains("All rights"));
     assert!(license.contains("reserved"));

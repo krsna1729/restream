@@ -7,6 +7,7 @@ TOOLS="$BUILD_ROOT/tools"
 SOURCES="$BUILD_ROOT/src"
 PREFIX="$BUILD_ROOT/prefix"
 STAMPS="$BUILD_ROOT/stamps"
+NATIVE_INPUT_LOCK="$ROOT/scripts/native-inputs.lock"
 
 if [[ -z "${RESTREAM_BUILD_LOCK_HELD:-}" ]]; then
     echo "setup-static-build: run via scripts/resource-limit ./scripts/setup-static-build.sh" >&2
@@ -24,6 +25,31 @@ X265_COMMIT="${X265_COMMIT:-e444744c03978c1fb4e037168967020cf2648427}"
 # (supported through at least March 2027); overridable.
 MBEDTLS_VERSION="${MBEDTLS_VERSION:-mbedtls-3.6.6}"
 MBEDTLS_SHA256="${MBEDTLS_SHA256:-8fb65fae8dcae5840f793c0a334860a411f884cc537ea290ce1c52bb64ca007a}"
+
+if [[ ! -f "$NATIVE_INPUT_LOCK" ]]; then
+    echo "missing native input lock: $NATIVE_INPUT_LOCK" >&2
+    exit 1
+fi
+# shellcheck source=scripts/native-inputs.lock
+source "$NATIVE_INPUT_LOCK"
+
+require_locked_value() {
+    local label="$1"
+    local actual="$2"
+    local expected="$3"
+    if [[ "$actual" != "$expected" ]]; then
+        echo "native input lock mismatch for $label: got '$actual', expected '$expected'" >&2
+        echo "update scripts/native-inputs.lock with reviewed provenance before changing native inputs" >&2
+        exit 1
+    fi
+}
+
+require_locked_value MBEDTLS_VERSION "$MBEDTLS_VERSION" "$RESTREAM_LOCK_MBEDTLS_VERSION"
+require_locked_value MBEDTLS_SHA256 "$MBEDTLS_SHA256" "$RESTREAM_LOCK_MBEDTLS_TARBALL_SHA256"
+require_locked_value SRT_VERSION "$SRT_VERSION" "$RESTREAM_LOCK_SRT_VERSION"
+require_locked_value FFMPEG_VERSION "$FFMPEG_VERSION" "$RESTREAM_LOCK_FFMPEG_VERSION"
+require_locked_value X264_COMMIT "$X264_COMMIT" "$RESTREAM_LOCK_X264_COMMIT"
+require_locked_value X265_COMMIT "$X265_COMMIT" "$RESTREAM_LOCK_X265_COMMIT"
 
 mkdir -p "$TOOLS" "$SOURCES" "$PREFIX" "$STAMPS"
 
@@ -121,6 +147,30 @@ clone_tag https://github.com/FFmpeg/FFmpeg.git "$FFMPEG_VERSION" "$SOURCES/ffmpe
 clone_commit https://code.videolan.org/videolan/x264.git "$X264_COMMIT" "$SOURCES/x264"
 clone_commit https://bitbucket.org/multicoreware/x265_git.git "$X265_COMMIT" "$SOURCES/x265"
 
+require_source_commit() {
+    local label="$1"
+    local source_dir="$2"
+    local expected="$3"
+    local actual
+    actual="$(git -C "$source_dir" rev-parse HEAD)"
+    require_locked_value "$label resolved commit" "$actual" "$expected"
+}
+
+require_source_commit "SRT" "$SOURCES/srt" "$RESTREAM_LOCK_SRT_COMMIT"
+require_source_commit "FFmpeg" "$SOURCES/ffmpeg" "$RESTREAM_LOCK_FFMPEG_COMMIT"
+require_source_commit "x264" "$SOURCES/x264" "$RESTREAM_LOCK_X264_COMMIT"
+require_source_commit "x265" "$SOURCES/x265" "$RESTREAM_LOCK_X265_COMMIT"
+
+require_locked_value \
+    "Mbed TLS config SHA-256" \
+    "$(sha256sum "$ROOT/scripts/mbedtls-config-srt.h" | cut -d' ' -f1)" \
+    "$RESTREAM_LOCK_MBEDTLS_CONFIG_SHA256"
+
+if [[ "${RESTREAM_VERIFY_NATIVE_INPUT_LOCK_ONLY:-0}" == "1" ]]; then
+    echo "Native input lock verified."
+    exit 0
+fi
+
 fingerprint() {
     sha256sum | cut -d' ' -f1
 }
@@ -137,6 +187,22 @@ write_stamp() {
     local stamp="$1"
     local value="$2"
     printf '%s\n' "$value" >"$stamp"
+}
+
+reset_cmake_build_if_moved() {
+    local build_dir="$1"
+    local source_dir="$2"
+    local cache="$build_dir/CMakeCache.txt"
+    if [[ ! -f "$cache" ]]; then
+        return
+    fi
+
+    local cached_source
+    cached_source="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$cache")"
+    if [[ "$cached_source" != "$source_dir" ]]; then
+        echo "Discarding moved CMake build cache: $build_dir"
+        rm -rf "$build_dir"
+    fi
 }
 
 # ─ Microarchitecture/Optimization Level ──────────────────────────────────────
@@ -187,6 +253,7 @@ MBEDTLS_STAMP="$STAMPS/mbedtls"
 if ! stamp_matches "$MBEDTLS_STAMP" "$MBEDTLS_FINGERPRINT" ||
     [[ ! -f "$PREFIX/lib/libmbedcrypto.a" ||
         ! -f "$PREFIX/lib/pkgconfig/mbedcrypto.pc" ]]; then
+    reset_cmake_build_if_moved "$BUILD_ROOT/mbedtls-build" "$SOURCES/mbedtls"
     cmake -S "$SOURCES/mbedtls" -B "$BUILD_ROOT/mbedtls-build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_FLAGS="$BUILD_CFLAGS" \
@@ -324,6 +391,7 @@ X265_STAMP="$STAMPS/x265"
 if ! stamp_matches "$X265_STAMP" "$X265_FINGERPRINT" ||
     [[ ! -f "$PREFIX/lib/libx265.a" || ! -f "$PREFIX/lib/pkgconfig/x265.pc" ]] ||
     grep -q -- '-lgcc_s' "$PREFIX/lib/pkgconfig/x265.pc"; then
+    reset_cmake_build_if_moved "$BUILD_ROOT/x265-build" "$SOURCES/x265/source"
     cmake -S "$SOURCES/x265/source" -B "$BUILD_ROOT/x265-build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_FLAGS="$BUILD_CFLAGS" \

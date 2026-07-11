@@ -1,0 +1,18 @@
+# Native static-build source lock.
+#
+# setup-static-build.sh refuses to build if its source pins or local native
+# configuration drift from these committed values. Git-tag inputs are locked
+# both by tag name and resolved commit to catch upstream tag movement.
+
+RESTREAM_LOCK_MBEDTLS_VERSION=mbedtls-3.6.6
+RESTREAM_LOCK_MBEDTLS_TARBALL_SHA256=8fb65fae8dcae5840f793c0a334860a411f884cc537ea290ce1c52bb64ca007a
+RESTREAM_LOCK_MBEDTLS_CONFIG_SHA256=9f56cd1156cd12893b471ca95d81a0aea9eb7b898ae6bd91ec2339f8b70a863c
+
+RESTREAM_LOCK_SRT_VERSION=v1.5.5
+RESTREAM_LOCK_SRT_COMMIT=b6b4ae990daa8193625a4ddeaeaed03023b23125
+
+RESTREAM_LOCK_FFMPEG_VERSION=n8.1.2
+RESTREAM_LOCK_FFMPEG_COMMIT=38b88335f99e76ed89ff3c93f877fdefce736c13
+
+RESTREAM_LOCK_X264_COMMIT=b35605ace3ddf7c1a5d67a2eb553f034aef41d55
+RESTREAM_LOCK_X265_COMMIT=e444744c03978c1fb4e037168967020cf2648427
