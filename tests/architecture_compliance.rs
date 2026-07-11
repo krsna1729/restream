@@ -243,6 +243,39 @@ fn app_state_hides_security_session_and_srt_internals() {
 }
 
 #[test]
+fn frontend_tooling_and_vendored_assets_are_reproducible() {
+    let package_json = include_str!("../package.json");
+    assert!(package_json.contains("\"build:frontend\""));
+    assert!(package_json.contains("\"format:check\""));
+    assert!(package_json.contains("\"test:frontend\""));
+
+    let package_lock = include_str!("../package-lock.json");
+    assert!(package_lock.contains("\"lockfileVersion\""));
+    assert!(package_lock.contains("\"hls.js\""));
+
+    let tsconfig = include_str!("../tsconfig.json");
+    for required in [
+        "\"strict\": true",
+        "\"rootDir\": \"public/ts\"",
+        "\"outDir\": \"public/js\"",
+        "\"sourceMap\": false",
+    ] {
+        assert!(
+            tsconfig.contains(required),
+            "tsconfig must contain {required}"
+        );
+    }
+
+    let hls_sync = include_str!("../scripts/ensure-frontend-assets.mjs");
+    assert!(hls_sync.contains("sourceMappingURL=hls\\.min\\.js\\.map"));
+    let hls_bundle = include_str!("../public/js/lib/hls.min.js");
+    assert!(
+        !hls_bundle.contains("sourceMappingURL=hls.min.js.map"),
+        "checked-in HLS bundle should not point at an absent source map"
+    );
+}
+
+#[test]
 fn source_distribution_manifest_matches_declared_build_inputs() {
     let manifest = include_str!("../docs/source-distribution.md");
     for required in [
