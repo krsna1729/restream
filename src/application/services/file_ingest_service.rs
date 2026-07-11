@@ -1038,6 +1038,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(outside_dir);
     }
 
+    #[test]
+    fn resolve_media_file_path_rejects_absolute_paths() {
+        let media_dir = temp_dir("resolve-absolute");
+        let outside_dir = temp_dir("resolve-absolute-outside");
+        let outside = outside_dir.join("clip.mp4");
+        std::fs::write(&outside, b"clip").unwrap();
+
+        let err = FileIngestService::resolve_media_file_path(
+            &media_dir,
+            outside.to_str().expect("utf-8 temp path"),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, FileIngestStartError::InvalidMediaPath);
+        let _ = std::fs::remove_dir_all(media_dir);
+        let _ = std::fs::remove_dir_all(outside_dir);
+    }
+
     #[cfg(unix)]
     #[test]
     fn resolve_media_file_path_rejects_symlink_escape() {
