@@ -21,8 +21,10 @@ fn main() {
     embed_toolchain_versions();
     embed_rust_dependency_inventory();
 
-    // All native libraries (SRT, FFmpeg, Mbed TLS, libstdc++) are always linked
-    // statically from the repo-managed static prefix built by setup-static-build.sh.
+    // SRT, FFmpeg, Mbed TLS, x264, and x265 are always linked statically from
+    // the repo-managed static prefix built by setup-static-build.sh. The C++
+    // runtime is resolved from the active compiler toolchain and linked
+    // explicitly below.
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
     let prefix = manifest_dir.join(".build/static/prefix");
@@ -45,28 +47,9 @@ fn main() {
         std::env::remove_var("PKG_CONFIG_SYSROOT_DIR");
     }
 
-    let archive = lib_dir.join("libsrt.a");
+    check_required_static_inputs(&prefix);
+
     let pc_path = pkgconfig_dir.join("srt.pc");
-
-    println!("cargo:rerun-if-changed={}", archive.display());
-    println!("cargo:rerun-if-changed={}", pc_path.display());
-
-    if !archive.exists() || !pc_path.exists() {
-        panic!(
-            "repo static libsrt is missing at {}. Run `scripts/resource-limit ./scripts/setup-static-build.sh` first.",
-            prefix.display()
-        );
-    }
-    for package in REQUIRED_PKG_CONFIG_PACKAGES {
-        let pc_path = pkgconfig_dir.join(format!("{package}.pc"));
-        println!("cargo:rerun-if-changed={}", pc_path.display());
-        if !pc_path.exists() {
-            panic!(
-                "repo static pkg-config file is missing: {}. Run `scripts/resource-limit ./scripts/setup-static-build.sh` first.",
-                pc_path.display()
-            );
-        }
-    }
 
     println!(
         "cargo:rustc-env=RESTREAM_NATIVE_BUILD_ID={}",
@@ -119,6 +102,7 @@ fn main() {
     println!("cargo:rustc-link-arg=-lgcc_eh");
     println!("cargo:rustc-link-arg=-lgcc");
     println!("cargo:rustc-link-arg=-Wl,--end-group");
+    println!("cargo:rustc-link-arg=-Wl,-Bdynamic");
 
     let avcodec = probe_pinned_package("libavcodec", &prefix, true);
     if avcodec
@@ -156,6 +140,8 @@ fn embed_pkg_version(env_name: &str, package: &str) {
 
 const REQUIRED_PKG_CONFIG_PACKAGES: &[&str] = &[
     "srt",
+    "mbedtls",
+    "mbedx509",
     "mbedcrypto",
     "libavcodec",
     "libavformat",
@@ -165,6 +151,23 @@ const REQUIRED_PKG_CONFIG_PACKAGES: &[&str] = &[
     "libavutil",
     "x264",
     "x265",
+];
+
+const REQUIRED_STATIC_ARCHIVES: &[&str] = &[
+    "libsrt.a",
+    "libmbedtls.a",
+    "libmbedx509.a",
+    "libmbedcrypto.a",
+    "libp256m.a",
+    "libeverest.a",
+    "libavcodec.a",
+    "libavformat.a",
+    "libavfilter.a",
+    "libswscale.a",
+    "libswresample.a",
+    "libavutil.a",
+    "libx264.a",
+    "libx265.a",
 ];
 
 struct BuildIdentity {
@@ -233,6 +236,42 @@ fn probe_pinned_package(package: &str, prefix: &Path, cargo_metadata: bool) -> p
     assert_pinned_paths(package, prefix, &library.link_paths);
     assert_pinned_paths(package, prefix, &library.include_paths);
     library
+}
+
+fn check_required_static_inputs(prefix: &Path) {
+    let lib_dir = prefix.join("lib");
+    let pkgconfig_dir = lib_dir.join("pkgconfig");
+
+    for archive in REQUIRED_STATIC_ARCHIVES {
+        let path = lib_dir.join(archive);
+        println!("cargo:rerun-if-changed={}", path.display());
+        assert_required_file(
+            &path,
+            &format!(
+                "repo static archive is missing: {}. Run `scripts/resource-limit ./scripts/setup-static-build.sh` first.",
+                path.display()
+            ),
+        );
+    }
+
+    for package in REQUIRED_PKG_CONFIG_PACKAGES {
+        let path = pkgconfig_dir.join(format!("{package}.pc"));
+        println!("cargo:rerun-if-changed={}", path.display());
+        assert_required_file(
+            &path,
+            &format!(
+                "repo static pkg-config file is missing: {}. Run `scripts/resource-limit ./scripts/setup-static-build.sh` first.",
+                path.display()
+            ),
+        );
+    }
+}
+
+fn assert_required_file(path: &Path, message: &str) {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => {}
+        _ => panic!("{message}"),
+    }
 }
 
 fn assert_pinned_paths(package: &str, prefix: &Path, paths: &[PathBuf]) {

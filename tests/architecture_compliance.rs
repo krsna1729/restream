@@ -96,6 +96,33 @@ fn release_policy_metadata_is_declared_and_enforced() {
     assert!(build_rs.contains("remove_var(\"PKG_CONFIG_PATH\")"));
     assert!(build_rs.contains("RESTREAM_NATIVE_BUILD_ID"));
     assert!(build_rs.contains("native_build_id(&prefix)"));
+    assert!(build_rs.contains("REQUIRED_STATIC_ARCHIVES"));
+    assert!(build_rs.contains("check_required_static_inputs(&prefix)"));
+    assert!(build_rs.contains("assert_pinned_paths(package, prefix, &library.link_paths)"));
+    assert!(build_rs.contains("assert_pinned_paths(package, prefix, &library.include_paths)"));
+    assert!(build_rs.contains("cargo:rustc-link-arg=-Wl,-Bdynamic"));
+    for native_input in [
+        "libsrt.a",
+        "libmbedtls.a",
+        "libmbedx509.a",
+        "libmbedcrypto.a",
+        "libavcodec.a",
+        "libavformat.a",
+        "libavfilter.a",
+        "libswscale.a",
+        "libswresample.a",
+        "libavutil.a",
+        "libx264.a",
+        "libx265.a",
+        "mbedtls",
+        "mbedx509",
+        "mbedcrypto",
+    ] {
+        assert!(
+            build_rs.contains(native_input),
+            "build.rs missing native input policy for {native_input}"
+        );
+    }
 
     let deny_toml = include_str!("../deny.toml");
     assert!(deny_toml.contains("unknown-registry = \"deny\""));
