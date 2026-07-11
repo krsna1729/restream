@@ -27,15 +27,13 @@ pub async fn build_health_snapshot_for_pipeline_ids(
     pipeline_ids: &[String],
 ) -> serde_json::Value {
     let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
-    state
-        .runtime_view_service
-        .health_snapshot(
-            &state.engine,
-            pipeline_ids,
-            &recording_enabled,
-            state.ingest_disconnect_grace_ms,
-        )
-        .await
+    crate::api_runtime_views::health_snapshot(
+        &state.engine,
+        pipeline_ids,
+        &recording_enabled,
+        state.ingest_disconnect_grace_ms,
+    )
+    .await
 }
 
 pub async fn build_health_summary_snapshot_for_pipeline_ids(
@@ -43,15 +41,13 @@ pub async fn build_health_summary_snapshot_for_pipeline_ids(
     pipeline_ids: &[String],
 ) -> serde_json::Value {
     let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
-    state
-        .runtime_view_service
-        .health_summary_snapshot(
-            &state.engine,
-            pipeline_ids,
-            &recording_enabled,
-            state.ingest_disconnect_grace_ms,
-        )
-        .await
+    crate::api_runtime_views::health_summary_snapshot(
+        &state.engine,
+        pipeline_ids,
+        &recording_enabled,
+        state.ingest_disconnect_grace_ms,
+    )
+    .await
 }
 
 pub fn select_dashboard_runtime_pipeline_ids(

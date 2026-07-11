@@ -13,7 +13,6 @@ pub mod log_service;
 pub mod media_library_service;
 pub mod output_service;
 pub mod pipeline_service;
-pub mod runtime_view_service;
 pub mod settings_service;
 
 pub use agent_service::AgentService;
@@ -26,5 +25,4 @@ pub use log_service::LogService;
 pub use media_library_service::MediaLibraryService;
 pub use output_service::OutputService;
 pub use pipeline_service::PipelineService;
-pub use runtime_view_service::RuntimeViewService;
 pub use settings_service::SettingsService;

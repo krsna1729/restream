@@ -534,11 +534,7 @@ pub async fn output_status_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    match state
-        .runtime_view_service
-        .output_status(&state.engine, &output_id)
-        .await
-    {
+    match crate::api_runtime_views::output_status(&state.engine, &output_id).await {
         Some(status) => Json(status).into_response(),
         None => (
             StatusCode::NOT_FOUND,

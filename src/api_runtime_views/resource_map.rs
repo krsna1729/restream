@@ -54,6 +54,7 @@ impl ResourceMapOptions {
         }
     }
 
+    #[allow(dead_code)]
     pub fn summary() -> Self {
         Self {
             view: ResourceMapView::Summary,

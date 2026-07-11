@@ -294,6 +294,21 @@ fn god_file_extractions_keep_owned_helpers_out_of_protocol_roots() {
 }
 
 #[test]
+fn runtime_json_views_stay_out_of_application_services() {
+    let services_mod = include_str!("../src/application/services/mod.rs");
+    assert!(
+        !services_mod.contains("runtime_view_service"),
+        "API/runtime JSON adapters should stay at the presentation-runtime boundary"
+    );
+
+    let app_state = include_str!("../src/api/state.rs");
+    assert!(
+        !app_state.contains("RuntimeViewService"),
+        "AppState should not carry a pass-through application service for API JSON views"
+    );
+}
+
+#[test]
 fn frontend_tooling_and_vendored_assets_are_reproducible() {
     let package_json = include_str!("../package.json");
     assert!(package_json.contains("\"build:frontend\""));
