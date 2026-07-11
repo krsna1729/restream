@@ -1,10 +1,10 @@
 //! SQLite-backed implementations of application storage ports.
 
+use crate::application::models::Pipeline;
 use crate::application::ports::*;
 use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;
 use crate::logging::types::AppLogFilters;
-use crate::types::Pipeline;
 use sqlx::SqlitePool;
 
 #[derive(Clone)]

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::application::models::{Job, Output, Pipeline};
 use crate::application::ports::{IngestHostStore, JobStore, MetaStore, MetaStoreWriter};
 use crate::application::recording::load_recording_enabled_map;
 use crate::application::recording::{RecordingSettings, save_recording_settings};
@@ -13,7 +14,6 @@ use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::media::security::IngestSecurityService;
 use crate::media::srt::SrtIngestPolicyStore;
 use crate::planner::backend_policy::BackendPolicy;
-use crate::types::{Job, Output, Pipeline};
 
 use super::error::{ApiError, ApiResult};
 use super::output_service::OutputService;
@@ -171,6 +171,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
+    use crate::application::models::JobStatus;
     use crate::application::ports::{
         JobListFuture, MetaLookupError, MetaLookupFuture, MetaWriteFuture,
     };
@@ -179,7 +180,6 @@ mod tests {
     use crate::domain::srt_ingest::{SrtGlobalIngestConfig, SrtGlobalIngestMode};
     use crate::media::security::IngestSecurityService;
     use crate::media::srt::SrtIngestPolicyStore;
-    use crate::types::JobStatus;
 
     #[derive(Default)]
     struct FakeSettingsStore {

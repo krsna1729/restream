@@ -4,11 +4,11 @@
 //! preview requests, providing a single source of truth for transcoders,
 //! HLS previews, and recordings.
 
+use crate::application::models::Output;
 use crate::domain::ids::{OutputId, PipelineId};
 use crate::domain::stage::{StageKey, StageKind};
 use crate::planner::backend_policy::{BackendPolicy, StageBackend};
 use crate::runtime::graph::{GraphRole, StageGraphPlan};
-use crate::types::Output;
 
 pub fn plan_pipeline_graph(
     pipeline_id: &str,

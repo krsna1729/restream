@@ -1,6 +1,6 @@
+use crate::application::models::Output;
 use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;
-use crate::types::Output;
 use sqlx::{AssertSqlSafe, FromRow, SqlitePool};
 
 pub(crate) fn default_config() -> OutputConfig {

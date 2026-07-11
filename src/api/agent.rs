@@ -49,12 +49,12 @@ use crate::alerts;
 use crate::api_runtime_views::{ResourceMapOptions, ResourceMapView};
 #[cfg(feature = "agent-plane")]
 use crate::api_view_models;
+#[cfg(feature = "agent-plane")]
+use crate::application::models::{Ingest, Pipeline};
 #[cfg(any(feature = "agent-plane", feature = "agent-execution"))]
 use crate::domain::output_spec::OutputUrlScheme;
 #[cfg(feature = "agent-plane")]
 use crate::events;
-#[cfg(feature = "agent-plane")]
-use crate::types::{Ingest, Pipeline};
 #[cfg(feature = "agent-plane")]
 use std::path::Path as FsPath;
 #[cfg(feature = "agent-plane")]
@@ -1211,9 +1211,9 @@ async fn agent_media_inventory(state: &AppState) -> serde_json::Value {
 #[cfg(feature = "agent-plane")]
 fn agent_desired_vs_actual(
     pipelines: &[Pipeline],
-    outputs: &[crate::types::Output],
+    outputs: &[crate::application::models::Output],
     ingests: &[Ingest],
-    jobs: &[crate::types::Job],
+    jobs: &[crate::application::models::Job],
     recording_enabled: &std::collections::HashMap<String, bool>,
     health: &serde_json::Value,
 ) -> serde_json::Value {
@@ -1333,7 +1333,7 @@ fn agent_desired_vs_actual(
 #[cfg(feature = "agent-plane")]
 fn agent_diagnostics_summary(
     pipelines: &[Pipeline],
-    outputs: &[crate::types::Output],
+    outputs: &[crate::application::models::Output],
     health: &serde_json::Value,
     graphs: &[serde_json::Value],
 ) -> serde_json::Value {
@@ -1416,7 +1416,7 @@ fn agent_diagnostics_summary(
 async fn agent_dependency_summary(
     state: &AppState,
     pipelines: &[Pipeline],
-    outputs: &[crate::types::Output],
+    outputs: &[crate::application::models::Output],
     ingests: &[Ingest],
     recording_enabled: &std::collections::HashMap<String, bool>,
     health: &serde_json::Value,

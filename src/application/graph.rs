@@ -1,9 +1,9 @@
 //! Application-owned desired graph planning for API and diagnostics read models.
 
+use crate::application::models::Output;
 use crate::domain::output_spec::OutputUrlScheme;
 use crate::planner::backend_policy::BackendPolicy;
 use crate::runtime::graph::StageGraphPlan;
-use crate::types::Output;
 
 pub struct DesiredPipelineGraphs {
     pub aggregate: StageGraphPlan,

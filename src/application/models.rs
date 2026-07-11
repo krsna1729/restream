@@ -1,8 +1,8 @@
-//! Shared pipeline/media DTOs that are still used across orchestration and API
-//! layers.
-//! Domain policy configs and logging payloads live in their own modules; this
-//! file is for the remaining cross-layer records and JSON payloads for
-//! pipelines, outputs, jobs, and file ingests.
+//! Application-owned records for pipelines, outputs, jobs, and file ingests.
+//!
+//! Database repositories map private row structs into these records. API
+//! handlers may serialize them directly while their JSON contract still matches
+//! the application shape.
 
 use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;

@@ -1,11 +1,11 @@
 //! Application-layer reconciliation logic that compares desired output and
 //! recording state with engine reality and computes convergence actions.
 
+use crate::application::models::Output;
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
 use crate::domain::stage::StageKey;
 use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
-use crate::types::Output;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -257,11 +257,11 @@ pub async fn build_recording_reconcile_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::models::Pipeline;
     use crate::application::ports::{MetaLookupFuture, PipelineListFuture};
     use crate::domain::output_spec::OutputConfig;
     use crate::domain::stage::StageKind;
     use crate::media::engine::VideoMeta;
-    use crate::types::Pipeline;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -417,7 +417,7 @@ mod tests {
                 None,
             )
             .await;
-        let output = crate::types::Output {
+        let output = crate::application::models::Output {
             id: "out-1".to_string(),
             pipeline_id: "pipe".to_string(),
             name: "Output".to_string(),
@@ -442,7 +442,7 @@ mod tests {
             .await
             .unwrap();
         engine.unregister_ingest("pipe").await;
-        let output = crate::types::Output {
+        let output = crate::application::models::Output {
             id: "out-1".to_string(),
             pipeline_id: "pipe".to_string(),
             name: "Output".to_string(),
@@ -461,7 +461,7 @@ mod tests {
 
     #[test]
     fn output_stage_sweep_input_uses_snapshot_fields() {
-        let output = crate::types::Output {
+        let output = crate::application::models::Output {
             id: "out-1".to_string(),
             pipeline_id: "pipe".to_string(),
             name: "Output".to_string(),

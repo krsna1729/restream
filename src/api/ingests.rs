@@ -30,7 +30,7 @@ pub struct IngestPayload {
 
 pub fn sanitize_target_gop_seconds(value: Option<u32>) -> u32 {
     value
-        .unwrap_or(crate::types::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS)
+        .unwrap_or(crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS)
         .max(1)
 }
 

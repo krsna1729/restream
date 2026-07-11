@@ -1040,12 +1040,12 @@ pub(crate) fn mixed_output_protocol_name(protocol: MixedOutputProtocol) -> &'sta
 #[cfg(test)]
 mod tests {
     use super::*;
+    use restream::application::models::Output;
     use restream::domain::output_spec::OutputConfig;
     use restream::domain::stage::StageKind;
     use restream::domain::state::DesiredOutputState;
     use restream::planner::backend_policy::BackendPolicy;
     use restream::planner::graph_plan::plan_pipeline_graph;
-    use restream::types::Output;
 
     fn planned_stage_count_from_graph(
         case: MixedInputCase,

@@ -26,11 +26,11 @@ impl HealthService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::models::Pipeline;
     use crate::application::ports::{
         PipelineCreateFuture, PipelineDeleteFuture, PipelineIngestHostFuture, PipelineListFuture,
         PipelineLookupFuture, PipelineStoreError, PipelineUpdateFuture,
     };
-    use crate::types::Pipeline;
 
     struct FakePipelineStore {
         fail: bool,

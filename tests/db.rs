@@ -3,11 +3,11 @@
 //! verified independently from HTTP and runtime concerns.
 
 use restream::{
+    application::models::JobStatus,
     db,
     domain::output_spec::OutputConfig,
     domain::state::DesiredOutputState,
     logging::types::{AppLogEntry, AppLogFilters},
-    types::JobStatus,
 };
 
 async fn test_pool() -> sqlx::SqlitePool {

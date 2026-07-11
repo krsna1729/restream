@@ -1,4 +1,4 @@
-use crate::types::{Job, JobStatus};
+use crate::application::models::{Job, JobStatus};
 use sqlx::{AssertSqlSafe, FromRow, SqlitePool};
 
 #[derive(FromRow)]

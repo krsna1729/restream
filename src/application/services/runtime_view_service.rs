@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
+use crate::application::models::Output;
 use crate::media::engine::MediaEngine;
-use crate::types::Output;
 
 #[derive(Clone, Default)]
 pub struct RuntimeViewService;

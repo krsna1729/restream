@@ -1063,7 +1063,7 @@ async fn config_get_returns_structured_data() {
         "p1",
         "o1",
         Some(1234),
-        restream::types::JobStatus::Running,
+        restream::application::models::JobStatus::Running,
         "2024-01-01T00:00:00Z",
     )
     .await
@@ -5013,7 +5013,7 @@ async fn agent_context_returns_redacted_state_bundle() {
         &pid,
         &output_id,
         Some(4321),
-        restream::types::JobStatus::Running,
+        restream::application::models::JobStatus::Running,
         "2024-01-01T00:00:00Z",
     )
     .await
