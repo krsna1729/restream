@@ -4,8 +4,8 @@ use crate::domain::output_spec::{OutputEncodingSpec, VideoCodecKind, VideoSelect
 use crate::media::profiles;
 
 const DEFAULT_KEYFRAME_PREROLL_PACKETS: usize = 32;
-const EXT_STAGE_ANALYZE_DURATION_US_DEFAULT: u64 = 4_000_000;
-const EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT: usize = 2 * 1024 * 1024;
+const EXT_STAGE_ANALYZE_DURATION_US_DEFAULT: u64 = 500_000;
+const EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT: usize = 64 * 1024;
 const EXT_STAGE_ANALYZE_DURATION_US_HEVC: u64 = 4_000_000;
 const EXT_STAGE_PROBE_SIZE_BYTES_HEVC: usize = 2 * 1024 * 1024;
 
@@ -50,6 +50,13 @@ pub fn ext_stage_probe_budget(codec: VideoCodecKind) -> (u64, usize) {
     }
 }
 
+pub fn ext_stage_passthrough_probe_budget() -> (u64, usize) {
+    (
+        EXT_STAGE_ANALYZE_DURATION_US_HEVC,
+        EXT_STAGE_PROBE_SIZE_BYTES_HEVC,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,6 +82,17 @@ mod tests {
         );
         assert_eq!(
             ext_stage_probe_budget(VideoCodecKind::Hevc),
+            (
+                EXT_STAGE_ANALYZE_DURATION_US_HEVC,
+                EXT_STAGE_PROBE_SIZE_BYTES_HEVC,
+            )
+        );
+    }
+
+    #[test]
+    fn external_passthrough_stage_keeps_full_probe_budget() {
+        assert_eq!(
+            ext_stage_passthrough_probe_budget(),
             (
                 EXT_STAGE_ANALYZE_DURATION_US_HEVC,
                 EXT_STAGE_PROBE_SIZE_BYTES_HEVC,

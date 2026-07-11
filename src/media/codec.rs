@@ -34,11 +34,10 @@ pub fn video_for_ts<'a>(
             if payload.is_empty() {
                 None
             } else {
-                let has_inline_parameter_sets =
-                    refresh_annexb_parameter_set_cache(payload, sps_pps_cache);
-                if !has_inline_parameter_sets
-                    && !sps_pps_cache.is_empty()
+                refresh_annexb_parameter_set_cache(payload, sps_pps_cache);
+                if !sps_pps_cache.is_empty()
                     && raw_annexb_is_keyframe(payload)
+                    && !payload.starts_with(sps_pps_cache.as_slice())
                 {
                     let mut out = sps_pps_cache.clone();
                     out.extend_from_slice(payload);
@@ -147,11 +146,10 @@ pub fn video_for_ts_into<'a>(
             if payload.is_empty() {
                 None
             } else {
-                let has_inline_parameter_sets =
-                    refresh_annexb_parameter_set_cache(payload, sps_pps_cache);
-                if !has_inline_parameter_sets
-                    && !sps_pps_cache.is_empty()
+                refresh_annexb_parameter_set_cache(payload, sps_pps_cache);
+                if !sps_pps_cache.is_empty()
                     && raw_annexb_is_keyframe(payload)
+                    && !payload.starts_with(sps_pps_cache.as_slice())
                 {
                     buf.clear();
                     buf.extend_from_slice(sps_pps_cache);

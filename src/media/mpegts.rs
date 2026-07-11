@@ -34,6 +34,13 @@ const STREAM_TYPE_H265: u8 = 0x24;
 const STREAM_TYPE_AAC_ADTS: u8 = 0x0F;
 const STREAM_TYPE_AAC_LATM: u8 = 0x11;
 
+fn pes_payload_len(pes_packet_len: usize, pes_header_len: usize) -> Option<usize> {
+    if pes_packet_len == 0 {
+        return None;
+    }
+    pes_packet_len.checked_sub(3 + pes_header_len)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StreamKind {
     H264,
@@ -72,6 +79,7 @@ impl StreamKind {
 #[derive(Debug)]
 struct PesAccumulator {
     buf: Vec<u8>,
+    expected_payload_len: Option<usize>,
     pts: i64,
     dts: i64,
     has_timestamp: bool,
@@ -82,6 +90,7 @@ impl PesAccumulator {
     fn new() -> Self {
         Self {
             buf: Vec::with_capacity(16384),
+            expected_payload_len: None,
             pts: 0,
             dts: 0,
             has_timestamp: false,
@@ -91,6 +100,7 @@ impl PesAccumulator {
 
     fn reset(&mut self) {
         self.buf.clear();
+        self.expected_payload_len = None;
         self.pts = 0;
         self.dts = 0;
         self.has_timestamp = false;
@@ -334,6 +344,7 @@ impl TsDemuxer {
 
             // Parse PES header
             if payload.len() >= 9 && payload[0..3] == PES_START_CODE {
+                let pes_packet_len = u16::from_be_bytes([payload[4], payload[5]]) as usize;
                 let pes_header_len = payload[8] as usize;
                 let flags = payload[7];
                 let has_pts = flags & 0x80 != 0;
@@ -341,6 +352,7 @@ impl TsDemuxer {
 
                 let stream = &mut self.streams[stream_idx];
                 stream.pes.random_access = random_access;
+                stream.pes.expected_payload_len = pes_payload_len(pes_packet_len, pes_header_len);
 
                 if has_pts && payload.len() >= 14 {
                     stream.pes.pts = parse_timestamp(&payload[9..14]);
@@ -359,6 +371,7 @@ impl TsDemuxer {
                         stream.pes.buf.extend_from_slice(pes_data);
                     }
                 }
+                self.flush_completed_pes(stream_idx);
             }
         } else {
             // Continuation of PES
@@ -366,6 +379,17 @@ impl TsDemuxer {
             if stream.pes.buf.len() + payload.len() <= MAX_PES_BUFFER {
                 stream.pes.buf.extend_from_slice(payload);
             }
+            self.flush_completed_pes(stream_idx);
+        }
+    }
+
+    fn flush_completed_pes(&mut self, stream_idx: usize) {
+        let Some(expected) = self.streams[stream_idx].pes.expected_payload_len else {
+            return;
+        };
+        if self.streams[stream_idx].pes.buf.len() >= expected {
+            self.streams[stream_idx].pes.buf.truncate(expected);
+            self.flush_pes(stream_idx);
         }
     }
 

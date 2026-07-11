@@ -111,7 +111,7 @@ fn build_stage_ffmpeg_args_inner(
         // Source/passthrough stages copy streams without re-encoding, so they need
         // a larger probe budget to fully resolve all stream parameters (especially audio).
         (analyze_duration_us, probe_size_bytes) =
-            startup_policy::ext_stage_probe_budget(VideoCodecKind::H264);
+            startup_policy::ext_stage_passthrough_probe_budget();
     }
     let ffmpeg_threads = threads.unwrap_or(2).max(1);
 
@@ -225,6 +225,8 @@ fn build_stage_ffmpeg_args_inner(
         "-pes_payload_size".to_string(),
         "0".to_string(),
         "-omit_video_pes_length".to_string(),
+        "0".to_string(),
+        "-max_interleave_delta".to_string(),
         "0".to_string(),
         "-flush_packets".to_string(),
         "1".to_string(),
@@ -376,6 +378,15 @@ mod tests {
     use crate::domain::transcode_profile::TranscodeProfile;
     use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
     use crate::media::mpegts::TsDemuxer;
+    use std::sync::{Mutex, MutexGuard};
+
+    static PROFILE_CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn profile_cache_test_lock() -> MutexGuard<'static, ()> {
+        PROFILE_CACHE_TEST_LOCK
+            .lock()
+            .expect("profile cache test lock")
+    }
 
     fn write_temp_ts_artifact(name: &str, bytes: &[u8]) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -488,6 +499,7 @@ mod tests {
 
     #[test]
     fn stage_args_custom_profile_uses_profile_settings() {
+        let _guard = profile_cache_test_lock();
         {
             let mut cache = crate::media::profiles::cache().blocking_write();
             cache.insert(
@@ -659,6 +671,7 @@ mod tests {
 
     #[test]
     fn stage_args_profile_with_crf_when_bitrate_zero() {
+        let _guard = profile_cache_test_lock();
         {
             let mut cache = crate::media::profiles::cache().blocking_write();
             cache.insert(
@@ -863,5 +876,102 @@ mod tests {
             "transcoded marker output should contain a decodable video stream: {}",
             String::from_utf8_lossy(&decode_video.stderr)
         );
+    }
+
+    #[test]
+    fn feeder_remuxed_h264_marker_fixture_transcodes_as_live_pipe_input() {
+        let path = crate::test_fixtures::av_marker_transport_fixture_for_bframes(
+            "h264",
+            false,
+            crate::test_fixtures::AvMarkerBframeMode::Bf0,
+        )
+        .expect("marker path");
+        let file_bytes = std::fs::read(&path).expect("read H.264 marker fixture");
+        let mut demuxer = TsDemuxer::new();
+        let mut packets = Vec::new();
+        for chunk in file_bytes.chunks(1316) {
+            demuxer.feed(chunk);
+            demuxer.drain_into(&mut packets);
+        }
+        demuxer.flush();
+        demuxer.drain_into(&mut packets);
+
+        let probe = demuxer.take_probe().expect("probe H.264 marker fixture");
+        let video = probe.video.expect("marker fixture should contain video");
+        let audio_tracks = probe.audio_tracks;
+
+        let mut feeder = TsPacketFeeder::new(
+            Some(&video),
+            std::sync::Arc::new(audio_tracks),
+            PacketFeedConfig::default(),
+        );
+        let mut ts_bytes = Vec::new();
+        let mut packet_buf = Vec::new();
+
+        for _ in 0..4 {
+            for packet in &packets {
+                packet_buf.clear();
+                if feeder.extend_ts_for_packet(packet, &mut packet_buf) {
+                    ts_bytes.extend_from_slice(&packet_buf);
+                }
+            }
+        }
+
+        assert!(
+            !ts_bytes.is_empty(),
+            "remuxed H.264 marker fixture should produce TS bytes"
+        );
+
+        let ffmpeg = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
+        let mut child = std::process::Command::new(ffmpeg)
+            .args(build_stage_ffmpeg_args("720p", "h264"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn bundled ffmpeg transcode");
+
+        let mut stdout = child.stdout.take().expect("stdout pipe");
+        let mut stdin = child.stdin.take().expect("stdin pipe");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut buf = [0u8; 188 * 16];
+            if let Ok(n) = std::io::Read::read(&mut stdout, &mut buf) {
+                let _ = tx.send(n);
+            }
+        });
+
+        let writer = std::thread::spawn(move || {
+            for chunk in ts_bytes.chunks(1316) {
+                if std::io::Write::write_all(&mut stdin, chunk).is_err() {
+                    break;
+                }
+            }
+            stdin
+        });
+
+        let live_bytes = match rx.recv_timeout(std::time::Duration::from_secs(12)) {
+            Ok(n) => n,
+            Err(err) => {
+                let mut stdin = writer.join().expect("join writer");
+                let _ = std::io::Write::flush(&mut stdin);
+                drop(stdin);
+                let _ = child.kill();
+                let output = child.wait_with_output().expect("wait for ffmpeg");
+                let _ = reader.join();
+                panic!(
+                    "ffmpeg should emit stdout before stdin closes: {err}; stderr={}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        };
+        assert!(live_bytes > 0, "ffmpeg stdout should not be empty");
+
+        let mut stdin = writer.join().expect("join writer");
+        let _ = std::io::Write::flush(&mut stdin);
+        drop(stdin);
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = reader.join();
     }
 }
