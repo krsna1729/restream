@@ -509,6 +509,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         agent_service,
         alert_tracker: crate::alerts::AlertTracker::new(),
         log_broadcast: logging_handles.broadcast_tx.clone(),
+        secure_session_cookies: config.secure_session_cookies,
         #[cfg(feature = "agent-execution")]
         agent_execution: Arc::new(crate::agent_execution::AgentExecutionStore::default()),
     });

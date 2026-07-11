@@ -36,6 +36,7 @@ pub struct AppConfig {
     pub srt_pbkeylen: i32,
     pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
+    pub secure_session_cookies: bool,
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -181,6 +182,7 @@ impl Default for AppConfig {
             srt_pbkeylen: 16,
             use_internal_file_ingest: false,
             initial_admin_password: None,
+            secure_session_cookies: false,
         }
     }
 }
@@ -234,6 +236,7 @@ impl AppConfig {
         let use_internal_file_ingest =
             std::env::var_os("RESTREAM_USE_INTERNAL_FILE_INGEST").is_some();
         let initial_admin_password = std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok();
+        let secure_session_cookies = env_bool("RESTREAM_SECURE_SESSION_COOKIES").unwrap_or(false);
 
         // Calculate external_ffmpeg_permits:
         let permits = if let Ok(value) = std::env::var("RESTREAM_EXTERNAL_FFMPEG_PERMITS")
@@ -297,6 +300,7 @@ impl AppConfig {
             srt_pbkeylen,
             use_internal_file_ingest,
             initial_admin_password,
+            secure_session_cookies,
         }
     }
 
@@ -352,6 +356,9 @@ impl AppConfig {
                 "requireBonding": self.require_srt_bonding,
                 "passphraseConfigured": self.srt_passphrase.is_some(),
                 "pbkeylen": self.srt_pbkeylen,
+            },
+            "security": {
+                "secureSessionCookies": self.secure_session_cookies,
             },
             "rtmp": {
                 "backlog": self.rtmp_backlog,
@@ -448,6 +455,16 @@ mod tests {
         });
         with_env_vars(&[("RESTREAM_HTTP_BIND_ADDR", "0.0.0.0")], || {
             assert_eq!(AppConfig::from_env().http_bind_addr, "0.0.0.0");
+        });
+    }
+
+    #[test]
+    fn secure_session_cookie_flag_is_opt_in() {
+        with_env_overlay(&[], &["RESTREAM_SECURE_SESSION_COOKIES"], || {
+            assert!(!AppConfig::from_env().secure_session_cookies);
+        });
+        with_env_vars(&[("RESTREAM_SECURE_SESSION_COOKIES", "true")], || {
+            assert!(AppConfig::from_env().secure_session_cookies);
         });
     }
 

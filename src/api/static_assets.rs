@@ -1,6 +1,6 @@
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode, Uri, header},
     response::{IntoResponse, Redirect, Response},
 };
 use rust_embed::RustEmbed;
@@ -53,21 +53,21 @@ pub async fn login_get_handler(State(state): State<Arc<AppState>>, headers: Head
     if let Some(token) = get_session_token_from_headers(&headers)
         && state.is_authenticated(&token).await
     {
-        return Redirect::to("/").into_response();
+        return Redirect::to("./").into_response();
     }
     serve_embedded("login.html").into_response()
 }
 
 pub async fn login_html_redirect_handler() -> impl IntoResponse {
-    Redirect::to("/login")
+    Redirect::to("login")
 }
 
 pub async fn settings_html_redirect_handler() -> impl IntoResponse {
-    Redirect::to("/?mode=settings")
+    Redirect::to("./?mode=settings")
 }
 
 pub async fn status_html_redirect_handler() -> impl IntoResponse {
-    Redirect::to("/?mode=status")
+    Redirect::to("./?mode=status")
 }
 
 pub async fn logo_handler() -> impl IntoResponse {
@@ -81,17 +81,29 @@ pub async fn css_handler() -> impl IntoResponse {
 pub async fn spa_fallback_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    uri: axum::http::Uri,
+    uri: Uri,
 ) -> Response {
     let path = uri.path().trim_start_matches('/');
     if !path.is_empty() && path.contains('.') {
         if path.ends_with(".html") && !request_is_authenticated(&state, &headers).await {
-            return Redirect::to("/login").into_response();
+            return Redirect::to("login").into_response();
         }
         return serve_embedded(path).into_response();
     }
     if !request_is_authenticated(&state, &headers).await {
-        return Redirect::to("/login").into_response();
+        return Redirect::to("login").into_response();
     }
     serve_embedded("index.html").into_response()
+}
+
+pub async fn api_not_found_handler(uri: Uri) -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        [(header::CONTENT_TYPE, "application/json")],
+        axum::Json(serde_json::json!({
+            "error": "API route not found",
+            "path": uri.path(),
+            "status": 404,
+        })),
+    )
 }

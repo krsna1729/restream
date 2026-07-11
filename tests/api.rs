@@ -53,6 +53,35 @@ async fn test_app_with_engine() -> (axum::Router, SqlitePool, Arc<MediaEngine>) 
     (api::create_router(state), pool, engine)
 }
 
+async fn test_app_with_secure_cookies() -> axum::Router {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    db::setup_database_schema(&pool).await.unwrap();
+
+    let sessions = Arc::new(TokioRwLock::new(HashSet::new()));
+    api::initialize_auth_for_test(&pool, &sessions, "admin").await;
+
+    let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
+    let ingest_policy_store = Arc::new(restream::media::srt::SrtIngestPolicyStore::new(
+        SrtGlobalIngestConfig::default(),
+        &[],
+    ));
+    let (log_broadcast, _) = broadcast::channel(32);
+    let engine = Arc::new(MediaEngine::new());
+
+    let mut state = api::AppState::test_new(
+        pool,
+        security,
+        ingest_policy_store,
+        sessions,
+        engine,
+        log_broadcast,
+        "media".to_string(),
+    );
+    state.secure_session_cookies = true;
+
+    api::create_router(Arc::new(state))
+}
+
 async fn authenticated_app() -> (axum::Router, String) {
     let (app, _) = test_app().await;
     let cookie = login(&app).await;
@@ -189,6 +218,104 @@ async fn base_path_script_is_served_as_static_asset() {
     );
     let body = String::from_utf8(body_bytes(resp).await.to_vec()).unwrap();
     assert!(body.contains("__RESTREAM_BASE_PATH__"));
+}
+
+#[tokio::test]
+async fn login_page_uses_base_path_aware_api_and_redirects() {
+    let (app, _) = test_app().await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/login")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = String::from_utf8(body_bytes(resp).await.to_vec()).unwrap();
+    assert!(body.contains(r#"<script src="base-path.js"></script>"#));
+    assert!(body.contains(r#"fetch(withBasePath("/api/v1/auth/login")"#));
+    assert!(body.contains(r#"window.location.href = withBasePath("/")"#));
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/login.html")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.headers()
+            .get(header::LOCATION)
+            .and_then(|v| v.to_str().ok()),
+        Some("login")
+    );
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/settings.html")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.headers()
+            .get(header::LOCATION)
+            .and_then(|v| v.to_str().ok()),
+        Some("./?mode=settings")
+    );
+}
+
+#[tokio::test]
+async fn secure_session_cookies_are_opt_in() {
+    let (default_app, _) = test_app().await;
+    let default_resp = default_app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from(r#"{"password":"admin"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let default_cookie = default_resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap();
+    assert!(!default_cookie.contains("; Secure"));
+
+    let secure_app = test_app_with_secure_cookies().await;
+    let secure_resp = secure_app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from(r#"{"password":"admin"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let secure_cookie = secure_resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap();
+    assert!(secure_cookie.contains("; Secure"));
 }
 
 fn auth_req(
@@ -472,7 +599,7 @@ async fn unauthenticated_app_pages_redirect_to_login() {
             .await
             .unwrap();
         assert!(resp.status().is_redirection(), "{uri} should redirect");
-        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/login");
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "login");
     }
 }
 
@@ -3361,6 +3488,65 @@ async fn security_headers_present_on_api_response() {
         Some(b"SAMEORIGIN" as &[u8]),
         "X-Frame-Options: SAMEORIGIN must be present"
     );
+}
+
+#[tokio::test]
+async fn security_headers_present_on_hls_response_without_wildcard_cors() {
+    let (app, _, engine) = test_app_with_engine().await;
+    engine.get_or_create_hls_store("test_pipe").await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/hls/test_pipe")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        resp.headers()
+            .get("x-content-type-options")
+            .map(|v| v.as_bytes()),
+        Some(b"nosniff" as &[u8])
+    );
+    assert_eq!(
+        resp.headers().get("x-frame-options").map(|v| v.as_bytes()),
+        Some(b"SAMEORIGIN" as &[u8])
+    );
+    assert!(
+        resp.headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none(),
+        "cookie-authenticated HLS should not advertise wildcard CORS"
+    );
+}
+
+#[tokio::test]
+async fn unknown_api_paths_return_json_not_spa_html() {
+    let (app, _) = test_app().await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/not-a-real-route")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert!(
+        resp.headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("application/json"))
+    );
+    let body = body_json(resp).await;
+    assert_eq!(body["error"], "API route not found");
+    assert_eq!(body["path"], "/api/v1/not-a-real-route");
+    assert_eq!(body["status"], 404);
 }
 
 // --- Regression: Round 6 #7 — HLS consumer refcount ---
