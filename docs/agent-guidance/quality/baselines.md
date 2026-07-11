@@ -197,6 +197,43 @@ Two structural costs found:
    libsrt worker threads; RcvQ workers alone total ~1 core (mostly system
    time + scheduler churn). ≈ 1.7% CPU + 2 threads per SRT egress.
 
+### libsrt 1.5.5 lock/thread topology (source audit, 2026-07-11)
+
+Audited `.local/build/static/src/srt` against the profile above.
+
+- **Threads are not tunable.** libsrt spawns one RcvQ + SndQ worker pair per
+  UDP multiplexer, one TsbPd thread per *receiving* socket, one global GC.
+  No socket option changes this; topology is controlled only by muxer
+  sharing.
+- **Muxer sharing rule** (`CUDTUnited::updateMux`, api.cpp:3155): a caller
+  socket reuses an existing muxer only if it is *bound to the same local
+  port first* and `CSrtMuxerConfig` matches exactly — IPTTL, IPTOS,
+  REUSEADDR, UDP_SNDBUF, UDP_RCVBUF (+BINDTODEVICE). Unbound `srt_connect`
+  auto-selects an ephemeral port (api.cpp:2025) ⇒ fresh muxer per egress.
+  Our egress never pre-binds (`srt_bind` is used only by the ingest
+  listener, src/media/srt.rs:1153); all sockets already use uniform
+  8 MB UDP buffers, so a single fixed local bind port would collapse
+  60 egress muxers → 1 (−118 threads, −~1 core RcvQ churn, and one shared
+  kernel UDP socket instead of 61 × 8 MB buffer requests). A settings
+  mismatch on a shared port is a hard bind error, so option uniformity must
+  be enforced at the call site. Accepted ingest sockets already share the
+  listener muxer — sharing is libsrt's normal server topology.
+- **Cross-socket locks — ingest can stall egress and vice versa.** Three
+  process-globals couple all SRT sockets: (1) `CEPoll::m_EPollLock` — held
+  by `CEPoll::wait` for every readiness scan (epoll.cpp:565–723) and taken
+  *unconditionally* by `update_events` (epoll.cpp:874) from per-packet paths
+  (TsbPd delivery core.cpp:5729, egress ACK processing core.cpp:8642,
+  send-buffer-full core.cpp:7148) even for sockets subscribed to no epoll.
+  The spinning ingest waiter hammers this lock (9.3% mutex_lock + 5.4%
+  unlock of its core); the epoll-spin fix removes most of the pressure.
+  (2) `m_GlobControlLock` — shared-read on every `srt_send`/`srt_recv`
+  (`locateSocket`, api.cpp:2681), exclusive during connect/close/updateMux:
+  a 60-output SRT reconnect storm briefly serializes all SRT I/O including
+  ingest. (3) `CGlobEvent` — one global condvar; any socket's event wakes
+  every `CEPoll::wait` sleeper. At current scale measured contention is
+  modest (egress SndQ threads ~0% CPU, no visible stall); it grows with SRT
+  egress count, ACK rate, and additional ingests.
+
 ## Profiling notes (WSL2)
 
 Hardware PMU counters are unavailable under Hyper-V. Use
