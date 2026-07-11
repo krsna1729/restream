@@ -75,12 +75,12 @@ fn srt_global_config_from_appconfig(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::models::Pipeline;
     use crate::application::ports::{
         MetaLookupError, MetaLookupFuture, MetaStore, PipelineListFuture, PipelineStore,
     };
     use crate::domain::srt_ingest::ResolvedSrtIngestConfig;
     use crate::media::srt::serialize_pipeline_srt_ingest_policy;
-    use crate::types::Pipeline;
 
     struct FakeMetaStore {
         value: Option<String>,

@@ -12,9 +12,9 @@ use crate::application::ingest::{
     clear_stream_key_file_ingests, load_pipeline_file_ingest_state, persist_pipeline_file_ingest,
     remove_pipeline_file_ingest, resolve_file_ingest_context,
 };
+use crate::application::models::{Ingest, Pipeline};
 use crate::application::ports::{IngestLookup, IngestWriter, PipelineStore};
 use crate::media::engine::MediaEngine;
-use crate::types::{Ingest, Pipeline};
 
 use super::error::{ApiError, ApiResult};
 use super::pipeline_service::PipelineService;
@@ -725,7 +725,7 @@ mod tests {
             false,
             "",
             false,
-            crate::types::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+            crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
         )
         .await
         .unwrap();
@@ -1057,7 +1057,7 @@ mod tests {
             false,
             "",
             false,
-            crate::types::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+            crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
         )
         .await
         .unwrap();

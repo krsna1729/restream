@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
+use crate::application::models::{Ingest, Job, Output, Pipeline};
 use crate::application::ports::{
     IngestHostStore, IngestLookup, JobStore, MetaStore, OutputStore, PipelineStore,
 };
 use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
 use crate::media::security::IngestSecurityService;
 use crate::planner::backend_policy::BackendPolicy;
-use crate::types::{Ingest, Job, Output, Pipeline};
 
 #[derive(Debug)]
 pub struct AgentContextCatalog {
@@ -127,9 +127,9 @@ impl AgentService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::models::JobStatus;
     use crate::domain::output_spec::OutputConfig;
     use crate::domain::state::DesiredOutputState;
-    use crate::types::JobStatus;
 
     #[tokio::test]
     async fn agent_service_loads_context_catalog_from_storage() {
@@ -169,7 +169,7 @@ mod tests {
             false,
             "",
             false,
-            crate::types::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+            crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
         )
         .await
         .unwrap();

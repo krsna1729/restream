@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::application::models::{Ingest, Pipeline};
 use crate::application::ports::{MetaStore, MetaStoreWriter, RecordingStore};
 use crate::application::recording::{
     load_recording_settings, recording_enabled_meta_key, spawn_recording_task,
 };
 use crate::media::engine::MediaEngine;
 use crate::media::recording::RecordingMetadataReporter;
-use crate::types::{Ingest, Pipeline};
 
 use super::error::{ApiError, ApiResult};
 use super::ingest_service::IngestService;
@@ -757,7 +757,7 @@ mod tests {
             false,
             "",
             false,
-            crate::types::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+            crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
         )
         .await
         .unwrap();
@@ -888,7 +888,7 @@ mod tests {
             true,
             "00:00:01",
             true,
-            crate::types::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+            crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
         )
         .await
         .unwrap();
@@ -1109,7 +1109,7 @@ mod tests {
             false,
             "",
             false,
-            crate::types::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
+            crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS,
         )
         .await
         .unwrap();

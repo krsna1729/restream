@@ -9,11 +9,11 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
+use crate::application::models::{Ingest, Output, Pipeline};
 use crate::domain::output_spec::{OutputConfig, OutputUrlScheme};
 use crate::domain::state::DesiredOutputState;
 use crate::planner::backend_policy::BackendPolicy;
 use crate::planner::graph_plan::plan_pipeline_graph;
-use crate::types::{Ingest, Output, Pipeline};
 
 const OUTPUT_URL_SCHEME_ERROR: &str =
     "Supported schemes are rtmp://, rtmps://, srt://, hls://, http://, and https://";

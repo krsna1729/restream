@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use crate::application::models::Pipeline;
 use crate::application::ports::PipelineStore;
-use crate::types::Pipeline;
 
 use super::error::{ApiError, ApiResult};
 

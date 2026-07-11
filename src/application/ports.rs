@@ -1,10 +1,10 @@
 //! Application-layer port traits defining the storage and catalog capabilities
 //! that orchestration code depends on.
 
+use crate::application::models::{Ingest, Job, Output, Pipeline};
 use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;
 use crate::logging::types::{AppLogFilters, AppLogRow};
-use crate::types::{Ingest, Job, Output, Pipeline};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;

@@ -1,11 +1,11 @@
 //! Application-layer output preparation that turns persisted output settings
 //! into the runtime ring and transcoder wiring owned by the media engine.
 
+use crate::application::models::Output;
 use crate::domain::output_spec::{EgressProtocol, OutputUrlScheme, VideoCodecKind};
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::ring_buffer::RingBuffer;
-use crate::types::Output;
 use std::sync::Arc;
 
 /// Prepared runtime attachment point for an output.

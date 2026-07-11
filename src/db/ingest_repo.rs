@@ -1,4 +1,4 @@
-use crate::types::Ingest;
+use crate::application::models::Ingest;
 use sqlx::SqlitePool;
 
 #[derive(sqlx::FromRow)]

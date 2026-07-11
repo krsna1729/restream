@@ -3,9 +3,9 @@ use std::sync::RwLock;
 
 use tracing::warn;
 
+use crate::application::models::Pipeline;
 use crate::domain::srt_ingest::{ResolvedSrtIngestConfig, SrtGlobalIngestConfig};
 use crate::secret_display::redact_secret;
-use crate::types::Pipeline;
 
 use super::parse_pipeline_srt_ingest_policy;
 

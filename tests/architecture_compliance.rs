@@ -188,6 +188,24 @@ fn db_module_uses_explicit_repository_exports() {
     assert!(db_mod.contains("pub use schema::setup_database_schema"));
 }
 
+#[test]
+fn application_records_do_not_live_in_root_types_module() {
+    let lib_rs = include_str!("../src/lib.rs");
+    assert!(
+        !lib_rs.contains("pub mod types;"),
+        "application records should live under application::models, not a root types module"
+    );
+
+    let application_mod = include_str!("../src/application/mod.rs");
+    assert!(application_mod.contains("pub mod models;"));
+
+    let models = include_str!("../src/application/models.rs");
+    assert!(models.contains("pub struct Pipeline"));
+    assert!(models.contains("pub struct Output"));
+    assert!(models.contains("pub struct Ingest"));
+    assert!(models.contains("pub struct Job"));
+}
+
 fn extract_router_route_paths(source: &'static str) -> BTreeSet<&'static str> {
     let mut paths = BTreeSet::new();
     for (offset, _) in source.match_indices(".route(") {

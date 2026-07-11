@@ -102,12 +102,12 @@ fn planned_mixed_stage_count(
     case: MixedInputCase,
     duplicates_per_output: usize,
 ) -> MixedStageCount {
+    use restream::application::models::Output;
     use restream::domain::output_spec::OutputConfig;
     use restream::domain::stage::StageKind;
     use restream::domain::state::DesiredOutputState;
     use restream::planner::backend_policy::BackendPolicy;
     use restream::planner::graph_plan::plan_pipeline_graph;
-    use restream::types::Output;
 
     let outputs = mixed_output_cases_for_input(case)
         .iter()

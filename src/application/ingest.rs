@@ -1,13 +1,13 @@
 //! Application-layer ingest coordination that resolves pipelines, loads
 //! file-ingest context, and validates stream access before media processing begins.
 
+use crate::application::models::{Ingest, Pipeline};
 use crate::application::ports::{
     IngestLookup, IngestLookupError, IngestWriteError, IngestWriter, PipelineStore,
     PipelineStoreError,
 };
 use crate::media::engine::MediaEngine;
 use crate::media::security::{IngestSecurityService, RateLimitScope};
-use crate::types::{Ingest, Pipeline};
 
 #[derive(Debug)]
 pub enum IngestAuthError {

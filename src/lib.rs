@@ -59,7 +59,6 @@ pub use config::AppConfig;
 pub mod runtime_info;
 pub mod secret_display;
 pub mod test_fixtures;
-pub mod types;
 
 use crate::application::reconcile::{
     OutputFailureWindow, OutputStartAction, OutputStopAction, build_recording_reconcile_plan,
@@ -769,7 +768,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
                         &output.pipeline_id,
                         &output.id,
                         None,
-                        crate::types::JobStatus::Running,
+                        crate::application::models::JobStatus::Running,
                         &now_str,
                     )
                     .await;
@@ -803,7 +802,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
                                 &pool_c,
                                 &job_id,
                                 None,
-                                Some(crate::types::JobStatus::Failed),
+                                Some(crate::application::models::JobStatus::Failed),
                                 Some(&end_now),
                                 Some(0),
                                 None,
@@ -991,9 +990,9 @@ pub async fn run_app(config: Arc<AppConfig>) {
 
                         let end_now = chrono::Utc::now().to_rfc3339();
                         let job_status = if is_cancelled {
-                            crate::types::JobStatus::Stopped
+                            crate::application::models::JobStatus::Stopped
                         } else {
-                            crate::types::JobStatus::Failed
+                            crate::application::models::JobStatus::Failed
                         };
                         let _ = db::update_job(
                             &pool_c,

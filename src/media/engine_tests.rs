@@ -1665,7 +1665,7 @@ async fn processing_graph_routes_srt_egress_through_ts_mux() {
     let engine = MediaEngine::new();
     let pipeline_id = "pipeline-srt-graph";
     let _source = engine.get_or_create_pipeline(pipeline_id).await;
-    let output = crate::types::Output {
+    let output = crate::application::models::Output {
         id: "out-srt".to_string(),
         pipeline_id: pipeline_id.to_string(),
         name: "SRT Target".to_string(),
@@ -1716,7 +1716,7 @@ async fn processing_graph_marks_failed_egress_inactive() {
         .record_egress_error("out-failed", "send", "connection refused")
         .await;
 
-    let output = crate::types::Output {
+    let output = crate::application::models::Output {
         id: "out-failed".to_string(),
         pipeline_id: pipeline_id.to_string(),
         name: "Failed Target".to_string(),
@@ -1759,7 +1759,7 @@ async fn processing_graph_omits_stale_codec_edge_when_output_no_longer_needs_it(
         )
         .await;
 
-    let output = crate::types::Output {
+    let output = crate::application::models::Output {
         id: "out-graph-stale-codec".to_string(),
         pipeline_id: pipeline_id.to_string(),
         name: "Graph RTMP".to_string(),

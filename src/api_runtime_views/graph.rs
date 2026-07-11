@@ -4,12 +4,12 @@
 //! output state, including packetizer, recording, and preview branches.
 
 use crate::api_view_models;
+use crate::application::models::Output;
 use crate::domain::output_spec::VideoCodecKind;
 use crate::domain::stage::{StageKey, StageKind};
 use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
 use crate::planner::graph_plan::{plan_pipeline_graph, plan_recording_graph};
-use crate::types::Output;
 use std::collections::{HashMap, HashSet};
 
 pub(crate) async fn processing_graph(

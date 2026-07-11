@@ -1,4 +1,4 @@
-use crate::types::Pipeline;
+use crate::application::models::Pipeline;
 use sqlx::SqlitePool;
 
 #[derive(sqlx::FromRow)]
