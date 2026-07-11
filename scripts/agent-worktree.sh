@@ -18,6 +18,7 @@ SEED_TARGET=1
 SEED_CARGO=1
 SEED_NODE=1
 SHARE_STATIC=1
+COPY_STATIC=0
 TARGET_CACHE_MODE="subset"
 WITH_INCREMENTAL=0
 
@@ -75,13 +76,16 @@ Options:
   --no-cargo-config        skip .cargo/ seeding
   --no-node-modules        skip node_modules/ seeding
   --no-share-static        do not share .build/static or public/bin
+  --copy-static            copy .build/static and public/bin instead of sharing
   --dry-run                print actions without mutating the repo
   -h, --help               show this help
 
 Notes:
   - Cleanup removes the worktree checkout. It does not delete the git branch.
   - Static sharing is meant for tasks that do not modify the native/static
-    build layer. Disable it with --no-share-static when working on that layer.
+    build layer. Use --copy-static when working on that layer so native inputs
+    are isolated but immediately buildable. Use --no-share-static only when the
+    worktree should start without generated static artifacts.
   - The default target warmup copies only high-value debug artifacts:
     debug/deps, debug/build, debug/.fingerprint, root debug binaries, and no
     incremental state unless --with-incremental is set.
@@ -436,6 +440,32 @@ share_path() {
     run_cmd ln -s "$source_path" "$target_path"
 }
 
+rewrite_copied_static_pkgconfig() {
+    local source_static_root="$1"
+    local target_static_root="$2"
+    local source_prefix="$source_static_root/prefix"
+    local target_prefix="$target_static_root/prefix"
+    local pkgconfig_dir="$target_prefix/lib/pkgconfig"
+    local escaped_source
+    local escaped_target
+
+    if [[ ! -d "$pkgconfig_dir" ]]; then
+        info "skip copied static pkg-config rewrite: missing $pkgconfig_dir"
+        return 0
+    fi
+
+    info "rewrite copied static pkg-config paths: $source_prefix -> $target_prefix"
+    if ((DRY_RUN)); then
+        printf 'dry-run: rewrite *.pc under %q\n' "$pkgconfig_dir"
+        return 0
+    fi
+
+    escaped_source="$(printf '%s\n' "$source_prefix" | sed 's/[\/&]/\\&/g')"
+    escaped_target="$(printf '%s\n' "$target_prefix" | sed 's/[\/&]/\\&/g')"
+    find "$pkgconfig_dir" -maxdepth 1 -type f -name '*.pc' -print0 |
+        xargs -0 --no-run-if-empty sed -i "s/${escaped_source}/${escaped_target}/g"
+}
+
 write_agent_state() {
     local agent_state_dir="$1"
     local worktree_id="$2"
@@ -537,6 +567,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-share-static)
             SHARE_STATIC=0
+            COPY_STATIC=0
+            shift
+            ;;
+        --copy-static)
+            SHARE_STATIC=0
+            COPY_STATIC=1
             shift
             ;;
         --dry-run)
@@ -643,6 +679,10 @@ fi
 if ((SHARE_STATIC)); then
     share_path "$STATIC_SOURCE_ROOT" "$WORKTREE_PATH/.build/static" ".build/static"
     share_path "$PUBLIC_BIN_SOURCE" "$WORKTREE_PATH/public/bin" "public/bin"
+elif ((COPY_STATIC)); then
+    sync_tree "$STATIC_SOURCE_ROOT" "$WORKTREE_PATH/.build/static" ".build/static"
+    rewrite_copied_static_pkgconfig "$STATIC_SOURCE_ROOT" "$WORKTREE_PATH/.build/static"
+    sync_tree "$PUBLIC_BIN_SOURCE" "$WORKTREE_PATH/public/bin" "public/bin"
 else
     info "skip shared static outputs by request"
 fi
@@ -652,6 +692,8 @@ WORK_ROOT_DEFAULT="$WORKTREE_PATH/test/artifacts/agents/$WORKTREE_ID"
 SHARED_STATIC_ROOT=""
 if ((SHARE_STATIC)); then
     SHARED_STATIC_ROOT="$STATIC_SOURCE_ROOT"
+elif ((COPY_STATIC)); then
+    SHARED_STATIC_ROOT="$WORKTREE_PATH/.build/static"
 fi
 write_agent_state \
     "$AGENT_STATE_DIR" \
