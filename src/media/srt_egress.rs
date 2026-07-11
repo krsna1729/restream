@@ -1,3 +1,5 @@
+use super::srt_crypto::{apply_srt_crypto_config, apply_srt_crypto_socket, srt_crypto_from_url};
+use super::srt_url::parse_srt_egress_url;
 use super::*;
 use crate::secret_display::redact_url;
 
@@ -74,167 +76,6 @@ fn to_libc_sockaddr(addr: SocketAddr) -> (libc::sockaddr_storage, c_int) {
             (storage, std::mem::size_of::<libc::sockaddr_in6>() as c_int)
         }
     }
-}
-
-pub(super) struct SrtEgressUrl {
-    pub(super) host_port: String,
-    pub(super) streamid: String,
-    pub(super) bond_addrs: Vec<String>,
-    passphrase: String,
-    pbkeylen: Option<c_int>,
-}
-
-pub(super) fn parse_srt_egress_url(url: &str) -> SrtEgressUrl {
-    let url_cleaned = url.replace("srt://", "");
-    let parts: Vec<&str> = url_cleaned.split('?').collect();
-    let host_port = parts[0].to_string();
-
-    let mut streamid = String::new();
-    let mut bond_addrs: Vec<String> = Vec::new();
-    let mut passphrase = String::new();
-    let mut pbkeylen = None;
-    if parts.len() > 1 {
-        for param in parts[1].split('&') {
-            let key_val: Vec<&str> = param.splitn(2, '=').collect();
-            if key_val.len() == 2 {
-                match key_val[0] {
-                    "streamid" => streamid = percent_decode(key_val[1]),
-                    "passphrase" => passphrase = percent_decode(key_val[1]),
-                    "pbkeylen" => pbkeylen = key_val[1].parse::<c_int>().ok(),
-                    "bond" => {
-                        bond_addrs = key_val[1].split(',').map(|s| s.to_string()).collect();
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    SrtEgressUrl {
-        host_port,
-        streamid,
-        bond_addrs,
-        passphrase,
-        pbkeylen,
-    }
-}
-
-#[derive(Clone)]
-pub(super) struct SrtCryptoConfig {
-    passphrase: String,
-    pub(super) pbkeylen: c_int,
-}
-
-pub(super) fn srt_crypto_from_resolved(config: ResolvedSrtIngestConfig) -> Option<SrtCryptoConfig> {
-    match config {
-        ResolvedSrtIngestConfig::Plaintext => None,
-        ResolvedSrtIngestConfig::Encrypted {
-            passphrase,
-            pbkeylen,
-        } => Some(SrtCryptoConfig {
-            passphrase,
-            pbkeylen,
-        }),
-    }
-}
-
-pub fn parse_pipeline_srt_ingest_policy(raw: Option<&str>) -> Option<SrtPipelineIngestConfig> {
-    raw.and_then(|value| serde_json::from_str::<SrtPipelineIngestConfig>(value).ok())
-}
-
-pub fn serialize_pipeline_srt_ingest_policy(
-    config: &SrtPipelineIngestConfig,
-) -> Result<String, serde_json::Error> {
-    serde_json::to_string(config)
-}
-
-pub(super) fn apply_srt_crypto_socket(
-    sock: SRTSOCKET,
-    crypto: &SrtCryptoConfig,
-) -> Result<(), String> {
-    let passphrase =
-        std::ffi::CString::new(crypto.passphrase.as_str()).map_err(|_| "invalid SRT passphrase")?;
-    let enforced: c_int = 1;
-    let pbkeylen = crypto.pbkeylen;
-    unsafe {
-        check_srt_option_result(
-            "SRTO_PASSPHRASE",
-            srt_setsockopt(
-                sock,
-                0,
-                SRTO_PASSPHRASE,
-                passphrase.as_ptr() as *const c_void,
-                crypto.passphrase.len() as c_int,
-            ),
-        )?;
-        check_srt_option_result(
-            "SRTO_PBKEYLEN",
-            srt_setsockopt(
-                sock,
-                0,
-                SRTO_PBKEYLEN,
-                &pbkeylen as *const _ as *const c_void,
-                std::mem::size_of::<c_int>() as c_int,
-            ),
-        )?;
-        check_srt_option_result(
-            "SRTO_ENFORCEDENCRYPTION",
-            srt_setsockopt(
-                sock,
-                0,
-                SRTO_ENFORCEDENCRYPTION,
-                &enforced as *const _ as *const c_void,
-                std::mem::size_of::<c_int>() as c_int,
-            ),
-        )?;
-    }
-    Ok(())
-}
-
-fn check_srt_option_result(option: &str, result: c_int) -> Result<(), String> {
-    if result >= 0 {
-        return Ok(());
-    }
-    let (code, message) = last_srt_error();
-    Err(format!("failed to set {option}: {message} ({code})"))
-}
-
-unsafe fn apply_srt_crypto_config(
-    config: *mut SrtSockOptConfig,
-    crypto: &SrtCryptoConfig,
-) -> Result<(), String> {
-    let passphrase =
-        std::ffi::CString::new(crypto.passphrase.as_str()).map_err(|_| "invalid SRT passphrase")?;
-    let enforced: c_int = 1;
-    unsafe {
-        check_srt_option_result(
-            "SRTO_PASSPHRASE",
-            srt_config_add(
-                config,
-                SRTO_PASSPHRASE,
-                passphrase.as_ptr() as *const c_void,
-                crypto.passphrase.len() as c_int,
-            ),
-        )?;
-        check_srt_option_result(
-            "SRTO_PBKEYLEN",
-            srt_config_add(
-                config,
-                SRTO_PBKEYLEN,
-                &crypto.pbkeylen as *const _ as *const c_void,
-                std::mem::size_of::<c_int>() as c_int,
-            ),
-        )?;
-        check_srt_option_result(
-            "SRTO_ENFORCEDENCRYPTION",
-            srt_config_add(
-                config,
-                SRTO_ENFORCEDENCRYPTION,
-                &enforced as *const _ as *const c_void,
-                std::mem::size_of::<c_int>() as c_int,
-            ),
-        )?;
-    }
-    Ok(())
 }
 
 pub fn start_shared_ts_muxer(
@@ -518,10 +359,7 @@ pub async fn start_srt_egress(
     let host_port = &parsed.host_port;
     let streamid = parsed.streamid;
     let bond_addrs = parsed.bond_addrs;
-    let url_crypto = (!parsed.passphrase.is_empty()).then_some(SrtCryptoConfig {
-        passphrase: parsed.passphrase,
-        pbkeylen: parsed.pbkeylen.unwrap_or(16),
-    });
+    let url_crypto = srt_crypto_from_url(parsed.passphrase, parsed.pbkeylen);
 
     egress_phase!(EgressPhase::Resolving);
     let addr = match resolve_host(host_port).await {

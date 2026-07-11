@@ -51,6 +51,9 @@ test("static HTML keeps core DOM accessibility and layout invariants", async () 
   assert.doesNotMatch(indexHtml, /Cy Ganderton|Quality Control Specialist/);
   assert.doesNotMatch(indexHtml, /grid-template-columns:/);
   assert.match(indexHtml, /id="stats-table"><\/tbody>/);
+  assert.match(indexHtml, /<details[\s\S]*id="pipe-srt-ingest-fields"/);
+  assert.match(indexHtml, /id="out-srt-passphrase-input"/);
+  assert.match(indexHtml, /id="out-srt-pbkeylen-input"/);
   assert.match(
     indexHtml,
     /min-w-0 overflow-y-auto rounded-lg border p-4 xl:min-w-\[24rem\]/,

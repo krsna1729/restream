@@ -455,17 +455,18 @@
             ></div>
           </div>
 
-          <div
+          <details
             id="pipe-srt-ingest-fields"
             class="border-base-content/10 bg-base-200 rounded-lg border p-3"
           >
-            <div class="mb-2">
-              <div class="text-sm font-medium">SRT Ingest Policy</div>
-              <p class="text-base-content/60 text-xs">
-                Controls whether this pipeline inherits the global listener
-                policy, stays plaintext, or requires its own passphrase.
-              </p>
-            </div>
+            <summary
+              class="text-base-content/90 cursor-pointer text-sm font-medium"
+            >
+              SRT Ingest Policy
+            </summary>
+            <p class="text-base-content/60 mt-2 text-xs">
+              Optional per-pipeline SRT listener policy.
+            </p>
             <div class="grid gap-3 sm:grid-cols-[12rem_1fr_8rem]">
               <fieldset class="fieldset">
                 <legend class="fieldset-legend">Mode</legend>
@@ -496,7 +497,7 @@
                 </select>
               </fieldset>
             </div>
-          </div>
+          </details>
         </div>
 
         <div class="modal-action">
@@ -633,6 +634,23 @@
                 class="input w-full"
                 placeholder="publish:live/my-key"
               />
+            </fieldset>
+            <fieldset class="fieldset ml-2 inline-block w-56">
+              <legend class="fieldset-legend">Passphrase</legend>
+              <input
+                type="password"
+                id="out-srt-passphrase-input"
+                class="input w-full"
+                placeholder="10-79 bytes"
+              />
+            </fieldset>
+            <fieldset class="fieldset ml-2 inline-block w-28">
+              <legend class="fieldset-legend">Key Length</legend>
+              <select class="select w-full" id="out-srt-pbkeylen-input">
+                <option value="16">AES-128</option>
+                <option value="24">AES-192</option>
+                <option value="32">AES-256</option>
+              </select>
             </fieldset>
             <fieldset class="fieldset ml-2 inline-block w-64">
               <legend class="fieldset-legend">Extra Query</legend>

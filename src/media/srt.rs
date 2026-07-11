@@ -56,7 +56,7 @@ use tracing::{error, info, warn};
 
 use crate::application::ingest::authenticate_srt_stream_key;
 use crate::application::ports::PipelineStore;
-use crate::domain::srt_ingest::{ResolvedSrtIngestConfig, SrtPipelineIngestConfig};
+use crate::domain::srt_ingest::ResolvedSrtIngestConfig;
 use crate::domain::state::EgressPhase;
 use crate::media::engine::{EgressRegistration, MediaEngine, PublisherQuality};
 use crate::media::ring_buffer::{MediaPacket, MediaType, Reader, RingBuffer};
@@ -365,6 +365,14 @@ fn last_srt_error() -> (c_int, String) {
         .to_string_lossy()
         .into_owned();
     (code, message)
+}
+
+fn check_srt_option_result(option: &str, result: c_int) -> Result<(), String> {
+    if result >= 0 {
+        return Ok(());
+    }
+    let (code, message) = last_srt_error();
+    Err(format!("failed to set {option}: {message} ({code})"))
 }
 
 // SRT socket options — values from srt.h SRT_SOCKOPT enum
@@ -931,7 +939,9 @@ fn srt_sender_quality_from_stats(
 
 #[path = "srt_stream_id.rs"]
 mod srt_stream_id;
-use srt_stream_id::{SrtConnectionMode, parse_srt_stream_id, percent_decode};
+#[cfg(test)]
+use srt_stream_id::percent_decode;
+use srt_stream_id::{SrtConnectionMode, parse_srt_stream_id};
 fn try_acquire_srt_sender_permit(
     semaphore: Arc<tokio::sync::Semaphore>,
 ) -> Result<tokio::sync::OwnedSemaphorePermit, tokio::sync::TryAcquireError> {
@@ -1923,15 +1933,21 @@ impl SrtServer {
     }
 }
 
+#[path = "srt/config.rs"]
+mod srt_config;
+#[path = "srt/crypto.rs"]
+mod srt_crypto;
 #[path = "srt_egress.rs"]
 mod srt_egress;
+#[path = "srt/url.rs"]
+mod srt_url;
 #[cfg(test)]
 #[path = "srt_tests.rs"]
 mod tests;
-use srt_egress::{apply_srt_crypto_socket, srt_crypto_from_resolved};
+pub use srt_config::{parse_pipeline_srt_ingest_policy, serialize_pipeline_srt_ingest_policy};
+use srt_crypto::{apply_srt_crypto_socket, srt_crypto_from_resolved};
 #[cfg(test)]
-use srt_egress::{estimate_ts_accum_capacity, parse_srt_egress_url};
-pub use srt_egress::{
-    parse_pipeline_srt_ingest_policy, serialize_pipeline_srt_ingest_policy, start_shared_ts_muxer,
-    start_srt_egress, teardown_srt,
-};
+use srt_egress::estimate_ts_accum_capacity;
+pub use srt_egress::{start_shared_ts_muxer, start_srt_egress, teardown_srt};
+#[cfg(test)]
+use srt_url::parse_srt_egress_url;

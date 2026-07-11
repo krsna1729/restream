@@ -46,6 +46,7 @@ test("pipeline edits reuse returned pipeline payloads instead of refetching dash
   appendField("input", "pipe-file-loop-input").checked = true;
   appendField("input", "pipe-file-live-optimized-input").checked = true;
   appendRoot(document, "div", "pipe-file-fields");
+  appendRoot(document, "details", "pipe-srt-ingest-fields");
   appendRoot(document, "div", "pipe-file-analysis-summary");
   appendRoot(document, "div", "pipe-file-warning").classList.add("hidden");
   appendRoot(document, "div", "pipe-stream-key-locked-hint").classList.add(
@@ -265,6 +266,7 @@ test("pipeline edit modal defers media file lookups until file mode is selected"
   appendField("input", "pipe-file-loop-input").checked = false;
   appendField("input", "pipe-file-live-optimized-input").checked = false;
   appendRoot(document, "div", "pipe-file-fields");
+  appendRoot(document, "details", "pipe-srt-ingest-fields");
   appendRoot(document, "div", "pipe-file-analysis-summary");
   appendRoot(document, "div", "pipe-file-warning").classList.add("hidden");
   appendRoot(document, "div", "pipe-stream-key-locked-hint").classList.add(
@@ -654,4 +656,3 @@ test("recording patches local state immediately, while file-ingest falls back to
     "pipeline runtime controls should not refetch dashboard settings after steady-state boot",
   );
 });
-

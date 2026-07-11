@@ -530,6 +530,8 @@ export interface SrtFields {
   host: string;
   port: string;
   streamId: string;
+  passphrase: string;
+  pbkeylen: string;
   extraQuery: string;
 }
 
@@ -541,11 +543,13 @@ function parseSrtFields(rawUrl: string, defaultHost = "localhost"): SrtFields {
       host: defaultHost,
       port: "6000",
       streamId: `publish:live/${token}`,
+      passphrase: "",
+      pbkeylen: "16",
       extraQuery: "",
     };
   }
   const isSrt = parsed.protocol === "srt:";
-  const knownKeys = new Set(["streamid"]);
+  const knownKeys = new Set(["streamid", "passphrase", "pbkeylen"]);
   const extraEntries: string[] = [];
   parsed.searchParams.forEach((value, key) => {
     if (!knownKeys.has(key)) extraEntries.push(`${key}=${value}`);
@@ -557,6 +561,8 @@ function parseSrtFields(rawUrl: string, defaultHost = "localhost"): SrtFields {
     host: parsed.hostname || defaultHost,
     port: isSrt ? parsed.port || "6000" : "6000",
     streamId,
+    passphrase: isSrt ? parsed.searchParams.get("passphrase") || "" : "",
+    pbkeylen: isSrt ? parsed.searchParams.get("pbkeylen") || "16" : "16",
     extraQuery: isSrt ? extraEntries.join("&") : "",
   };
 }

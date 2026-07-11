@@ -140,12 +140,30 @@ function buildSrtUrlFromFields(): string {
         "out-srt-extra-query-input",
       ) as HTMLInputElement | null
     )?.value.trim() || "";
+  const passphrase =
+    (
+      document.getElementById(
+        "out-srt-passphrase-input",
+      ) as HTMLInputElement | null
+    )?.value.trim() || "";
+  const pbkeylen =
+    (
+      document.getElementById(
+        "out-srt-pbkeylen-input",
+      ) as HTMLSelectElement | null
+    )?.value || "16";
 
   if (!host) return "";
 
   const queryParts: string[] = [];
   if (streamId) {
     queryParts.push(`streamid=${streamId}`);
+  }
+  if (passphrase) {
+    queryParts.push(`passphrase=${encodeURIComponent(passphrase)}`);
+    queryParts.push(
+      `pbkeylen=${pbkeylen === "24" || pbkeylen === "32" ? pbkeylen : "16"}`,
+    );
   }
   if (extraQueryRaw) {
     for (const segment of extraQueryRaw.split("&")) {
@@ -290,6 +308,15 @@ function setupOutputModalProtocolHandlers(): void {
       (
         document.getElementById("out-srt-streamid-input") as HTMLInputElement
       ).value = values.streamId;
+      (
+        document.getElementById("out-srt-passphrase-input") as HTMLInputElement
+      ).value = values.passphrase;
+      (
+        document.getElementById("out-srt-pbkeylen-input") as HTMLSelectElement
+      ).value =
+        values.pbkeylen === "24" || values.pbkeylen === "32"
+          ? values.pbkeylen
+          : "16";
       (
         document.getElementById("out-srt-extra-query-input") as HTMLInputElement
       ).value = values.extraQuery;
@@ -915,8 +942,15 @@ function setPipeSourceUi(sourceType: "publisher" | "file"): void {
     "pipe-source-type-input",
   ) as HTMLSelectElement | null;
   const fileFields = document.getElementById("pipe-file-fields");
+  const srtIngestFields = document.getElementById(
+    "pipe-srt-ingest-fields",
+  ) as HTMLDetailsElement | null;
   if (sourceSelect) sourceSelect.value = sourceType;
   fileFields?.classList.toggle("hidden", sourceType !== "file");
+  srtIngestFields?.classList.toggle("hidden", sourceType !== "publisher");
+  if (sourceType !== "publisher" && srtIngestFields) {
+    srtIngestFields.open = false;
+  }
   if (sourceType !== "file") {
     const summary = document.getElementById("pipe-file-analysis-summary");
     const warning = document.getElementById("pipe-file-warning");
@@ -1254,6 +1288,10 @@ function populatePipeSrtIngestFields(
   }
   if (passphraseInput) passphraseInput.value = policy?.passphrase || "";
   if (pbkeylenInput) pbkeylenInput.value = String(policy?.pbkeylen || 16);
+  const details = document.getElementById(
+    "pipe-srt-ingest-fields",
+  ) as HTMLDetailsElement | null;
+  if (details) details.open = mode !== "inherit";
   setPipeSrtIngestModeUi(
     mode === "encrypted"
       ? "encrypted"
@@ -1563,6 +1601,15 @@ async function openOutModal(
       document.getElementById("out-srt-streamid-input") as HTMLInputElement
     ).value = values.streamId;
     (
+      document.getElementById("out-srt-passphrase-input") as HTMLInputElement
+    ).value = values.passphrase;
+    (
+      document.getElementById("out-srt-pbkeylen-input") as HTMLSelectElement
+    ).value =
+      values.pbkeylen === "24" || values.pbkeylen === "32"
+        ? values.pbkeylen
+        : "16";
+    (
       document.getElementById("out-srt-extra-query-input") as HTMLInputElement
     ).value = values.extraQuery;
   }
@@ -1699,9 +1746,11 @@ export async function editOutFormBtn(event: Event): Promise<void> {
   }
 
   const isOutputUrlValid = isValidOutput(data.url);
-  const outputErrorField =
+  const outputProtocol =
     (document.getElementById("out-protocol-input") as HTMLSelectElement | null)
-      ?.value === "srt"
+      ?.value || "rtmp";
+  const outputErrorField =
+    outputProtocol === "srt"
       ? document.getElementById("out-srt-host-input")
       : document.getElementById("out-rtmp-key-input");
   if (isOutputUrlValid) {
@@ -1734,6 +1783,20 @@ export async function editOutFormBtn(event: Event): Promise<void> {
   }
 
   if (!isOutputUrlValid || !isMonitoringUrlValid || !isOutNameValid) {
+    return;
+  }
+
+  const srtPassphraseInput = document.getElementById(
+    "out-srt-passphrase-input",
+  ) as HTMLInputElement | null;
+  const srtPassphrase = srtPassphraseInput?.value.trim() || "";
+  const isSrtPassphraseValid =
+    outputProtocol !== "srt" ||
+    !srtPassphrase ||
+    (srtPassphrase.length >= 10 && srtPassphrase.length <= 79);
+  srtPassphraseInput?.classList.toggle("input-error", !isSrtPassphraseValid);
+  if (!isSrtPassphraseValid) {
+    showErrorAlert("SRT egress passphrase must be 10-79 bytes");
     return;
   }
 

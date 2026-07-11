@@ -2,7 +2,57 @@
 //! Reads environment variables once at startup and stores them in a typed struct.
 
 use crate::planner::backend_policy::BackendPolicy;
-use crate::{RuntimeTuning, ServerPorts};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServerPorts {
+    pub http: u16,
+    pub rtmp: u16,
+    pub srt: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeTuning {
+    pub nofile_limit: u64,
+    pub reconciler_interval_ms: u64,
+    pub ingest_disconnect_grace_ms: u64,
+    pub output_max_retries: u32,
+    pub output_retry_base_ms: u64,
+    pub output_retry_max_ms: u64,
+    pub hls_idle_timeout_ms: u64,
+}
+
+impl Default for RuntimeTuning {
+    fn default() -> Self {
+        Self {
+            nofile_limit: 65_536,
+            reconciler_interval_ms: 1_000,
+            ingest_disconnect_grace_ms: 5_000,
+            output_max_retries: 10,
+            output_retry_base_ms: 5_000,
+            output_retry_max_ms: 300_000,
+            hls_idle_timeout_ms: 60_000,
+        }
+    }
+}
+
+impl RuntimeTuning {
+    pub(crate) fn session_prune_every_ticks(&self) -> u64 {
+        let ticks = 3_600_000u64.div_ceil(self.reconciler_interval_ms);
+        ticks.max(1)
+    }
+
+    pub(crate) fn output_backoff_ms(&self, retries: u32) -> u64 {
+        self.output_retry_policy().backoff_ms(retries)
+    }
+
+    pub(crate) fn output_retry_policy(&self) -> crate::application::reconcile::OutputRetryPolicy {
+        crate::application::reconcile::OutputRetryPolicy {
+            max_retries: self.output_max_retries,
+            base_ms: self.output_retry_base_ms,
+            max_ms: self.output_retry_max_ms,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {

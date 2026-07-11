@@ -31,10 +31,25 @@ pub fn init(configured: Option<String>) {
     let _ = FFMPEG_BIN_PATH.get_or_init(resolve_ffmpeg_bin_path);
 }
 
+fn select_configured_ffmpeg_path(
+    configured: Option<&Option<String>>,
+    env_value: Option<String>,
+) -> Option<String> {
+    configured
+        .and_then(|opt| opt.as_ref().cloned())
+        .or(env_value)
+}
+
+fn configured_ffmpeg_path() -> Option<String> {
+    select_configured_ffmpeg_path(
+        CONFIGURED_FFMPEG_PATH.get(),
+        std::env::var("FFMPEG_BIN_PATH").ok(),
+    )
+}
+
 fn resolve_ffmpeg_bin_path() -> PathBuf {
-    let configured = CONFIGURED_FFMPEG_PATH.get().and_then(|opt| opt.as_ref());
-    if let Some(user_path) = configured {
-        let path = PathBuf::from(user_path);
+    if let Some(user_path) = configured_ffmpeg_path() {
+        let path = PathBuf::from(&user_path);
         if path.exists() && path.is_file() {
             info!("[startup] configured FFmpeg binary: {}", path.display());
             path
@@ -245,6 +260,21 @@ mod tests {
         assert_eq!(
             key,
             "a1f82722bc8e33aa9100d16001377c07366a779a2c42bc58fdeba9cf8fa9f1fd"
+        );
+    }
+
+    #[test]
+    fn configured_ffmpeg_path_falls_back_to_env_for_direct_unit_consumers() {
+        let configured = None;
+        assert_eq!(
+            select_configured_ffmpeg_path(Some(&configured), Some("/usr/bin/ffmpeg".to_string())),
+            Some("/usr/bin/ffmpeg".to_string())
+        );
+
+        let configured = Some("/custom/ffmpeg".to_string());
+        assert_eq!(
+            select_configured_ffmpeg_path(Some(&configured), Some("/usr/bin/ffmpeg".to_string())),
+            Some("/custom/ffmpeg".to_string())
         );
     }
 

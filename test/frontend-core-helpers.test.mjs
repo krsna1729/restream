@@ -226,12 +226,14 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
   );
   assert.deepEqual(
     utils.parseSrtFields(
-      "srt://example.com:10080?streamid=publish:live/feed&latency=200",
+      "srt://example.com:10080?streamid=publish:live/feed&passphrase=supersecret1&pbkeylen=24&latency=200",
     ),
     {
       host: "example.com",
       port: "10080",
       streamId: "publish:live/feed",
+      passphrase: "supersecret1",
+      pbkeylen: "24",
       extraQuery: "latency=200",
     },
   );
@@ -366,24 +368,34 @@ test("pipeline parsing maps input, output, retry, and throughput fields", async 
     },
   };
 
-  const first = parsePipelinesInfo(config, baseHealth);
-  const second = parsePipelinesInfo(config, {
-    pipelines: {
-      "pipe-1": {
-        ...baseHealth.pipelines["pipe-1"],
-        outputs: {
-          "out-1": {
-            ...baseHealth.pipelines["pipe-1"].outputs["out-1"],
-            status: "running",
-            uptimeSecs: 9.25,
-            totalSize: 30_000,
-            bytesSent: 30_000,
-            bytesDelivered: 30_000,
+  const originalDateNow = Date.now;
+  let fakeNow = 1_000;
+  let first;
+  let second;
+  try {
+    Date.now = () => fakeNow;
+    first = parsePipelinesInfo(config, baseHealth);
+    fakeNow += 1_000;
+    second = parsePipelinesInfo(config, {
+      pipelines: {
+        "pipe-1": {
+          ...baseHealth.pipelines["pipe-1"],
+          outputs: {
+            "out-1": {
+              ...baseHealth.pipelines["pipe-1"].outputs["out-1"],
+              status: "running",
+              uptimeSecs: 9.25,
+              totalSize: 30_000,
+              bytesSent: 30_000,
+              bytesDelivered: 30_000,
+            },
           },
         },
       },
-    },
-  });
+    });
+  } finally {
+    Date.now = originalDateNow;
+  }
 
   assert.equal(first[0].input.status, "warning");
   assert.equal(first[0].input.audioTracks[0].pid, 256);
