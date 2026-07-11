@@ -165,6 +165,18 @@ runCheck("renderStatsColumn skips identical empty-state rewrites", async () => {
   assert.equal(statsCol.stats.innerHTMLWrites, firstWriteCount);
 });
 
+runCheck("renderSettingsPanel emits delegated actions without inline handlers", async () => {
+  const { document } = installFakeDom();
+  const container = appendRoot(document, "div", "settings-mode-content");
+
+  const settings = await loadCompiledFrontendModule("features/settings.js");
+  settings.renderSettingsPanel(container);
+
+  assert.doesNotMatch(container.innerHTML, /\son[a-z]+\s*=/i);
+  assert.match(container.innerHTML, /data-settings-action="save-server-name"/);
+  assert.match(container.innerHTML, /data-settings-action="reset-rate-limits"/);
+});
+
 runCheck(
   "renderOutsColumn reuses cards and patches live telemetry fields",
   async () => {

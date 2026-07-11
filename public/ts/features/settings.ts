@@ -178,7 +178,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         <label for="settings-server-name" class="text-sm font-medium">Server Name</label>
                         <div class="flex flex-wrap items-center gap-2">
                             <input type="text" id="settings-server-name" class="input input-sm min-w-0 flex-1" placeholder="Name" />
-                            <button class="btn btn-accent btn-sm" onclick="saveServerName()">Save</button>
+                            <button class="btn btn-accent btn-sm" data-settings-action="save-server-name">Save</button>
                             <span id="server-name-saved" class="text-success hidden text-sm">Saved</span>
                         </div>
                     </div>
@@ -191,7 +191,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                                 id="settings-ingest-host"
                                 class="input input-sm min-w-0 flex-1"
                                 placeholder="e.g. 192.168.1.10 (blank = localhost)" />
-                            <button class="btn btn-accent btn-sm" onclick="saveIngestHost()">Save</button>
+                            <button class="btn btn-accent btn-sm" data-settings-action="save-ingest-host">Save</button>
                             <span id="ingest-host-saved" class="text-success hidden text-sm">Saved</span>
                         </div>
                     </div>
@@ -204,7 +204,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         <div class="font-semibold">Initial dashboard password is still active</div>
                         <div class="text-sm">Set a different password below, or dismiss this reminder.</div>
                     </div>
-                    <button class="btn btn-sm" onclick="dismissDashboardPasswordPrompt()">Skip</button>
+                    <button class="btn btn-sm" data-settings-action="dismiss-dashboard-password-prompt">Skip</button>
                 </div>
 
                 <div class="space-y-2">
@@ -225,7 +225,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend invisible">_</legend>
                             <div class="flex items-center gap-3">
-                                <button class="btn btn-accent btn-sm" onclick="saveDashboardPassword()">Save</button>
+                                <button class="btn btn-accent btn-sm" data-settings-action="save-dashboard-password">Save</button>
                                 <span id="dashboard-password-saved" class="text-success hidden text-sm">Saved</span>
                             </div>
                         </fieldset>
@@ -256,7 +256,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend invisible">_</legend>
                             <div class="flex items-center gap-3">
-                                <button class="btn btn-accent btn-sm" onclick="saveIngestSecurity()">Save</button>
+                                <button class="btn btn-accent btn-sm" data-settings-action="save-ingest-security">Save</button>
                                 <span id="ingest-security-saved" class="text-success hidden text-sm">Saved</span>
                             </div>
                         </fieldset>
@@ -267,8 +267,8 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <div class="text-sm font-medium">Authentication Attempts</div>
                         <div class="flex items-center gap-2">
-                            <button class="btn btn-ghost btn-sm" onclick="refreshRateLimitState()">Refresh</button>
-                            <button class="btn btn-outline btn-sm" onclick="resetRateLimitState()">Reset All</button>
+                            <button class="btn btn-ghost btn-sm" data-settings-action="refresh-rate-limits">Refresh</button>
+                            <button class="btn btn-outline btn-sm" data-settings-action="reset-rate-limits">Reset All</button>
                         </div>
                     </div>
                     <div class="overflow-x-auto rounded-lg border border-base-content/10">
@@ -306,7 +306,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend invisible">_</legend>
                             <div class="flex items-center gap-3">
-                                <button class="btn btn-accent btn-sm" onclick="saveRecordingSettings()">Save</button>
+                                <button class="btn btn-accent btn-sm" data-settings-action="save-recording-settings">Save</button>
                                 <span id="recording-settings-saved" class="text-success hidden text-sm">Saved</span>
                             </div>
                         </fieldset>
@@ -341,7 +341,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend invisible">_</legend>
                             <div class="flex items-center gap-3">
-                                <button class="btn btn-accent btn-sm" onclick="saveSrtIngest()">Save</button>
+                                <button class="btn btn-accent btn-sm" data-settings-action="save-srt-ingest">Save</button>
                                 <span id="srt-ingest-saved" class="text-success hidden text-sm">Saved</span>
                             </div>
                         </fieldset>
@@ -372,7 +372,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         </label>
                     </div>
                     <div class="flex items-center gap-3">
-                        <button class="btn btn-accent btn-sm" onclick="saveBackendPolicy()">Save</button>
+                        <button class="btn btn-accent btn-sm" data-settings-action="save-backend-policy">Save</button>
                         <span id="backend-policy-saved" class="text-success hidden text-sm">Saved</span>
                     </div>
                 </div>
@@ -386,17 +386,69 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     </div>
                     <div id="transcode-profiles-list" class="space-y-3"></div>
                     <div class="flex items-center gap-3">
-                        <button class="btn btn-accent btn-sm" onclick="saveTranscodeProfiles()">Save Profiles</button>
-                        <button class="btn btn-ghost btn-sm" onclick="addTranscodeProfile()">+ Add Profile</button>
+                        <button class="btn btn-accent btn-sm" data-settings-action="save-transcode-profiles">Save Profiles</button>
+                        <button class="btn btn-ghost btn-sm" data-settings-action="add-transcode-profile">+ Add Profile</button>
                         <span id="transcode-profiles-saved" class="text-success hidden text-sm">Saved</span>
                     </div>
                 </div>
 
                 <div class="flex justify-end">
-                    <button class="btn btn-error btn-outline btn-sm" onclick="logoutUser()">Logout</button>
+                    <button class="btn btn-error btn-outline btn-sm" data-settings-action="logout">Logout</button>
                 </div>
             </section>
         </div>`;
+  bindSettingsPanelActions(container);
+}
+
+function bindSettingsPanelActions(container: HTMLElement): void {
+  container.onclick = (event) => {
+    const button = (event.target as Element | null)?.closest(
+      "[data-settings-action]",
+    ) as HTMLElement | null;
+    if (!button || !container.contains(button)) return;
+    const action = button.dataset.settingsAction;
+    switch (action) {
+      case "save-server-name":
+        void saveServerName();
+        break;
+      case "save-ingest-host":
+        void saveIngestHost();
+        break;
+      case "dismiss-dashboard-password-prompt":
+        void dismissDashboardPasswordPrompt();
+        break;
+      case "save-dashboard-password":
+        void saveDashboardPassword();
+        break;
+      case "save-ingest-security":
+        void saveIngestSecurity();
+        break;
+      case "refresh-rate-limits":
+        void refreshRateLimitState();
+        break;
+      case "reset-rate-limits":
+        void resetRateLimitStateFromUi(button.dataset.scope, button.dataset.ip);
+        break;
+      case "save-recording-settings":
+        void saveRecordingSettings();
+        break;
+      case "save-srt-ingest":
+        void saveSrtIngest();
+        break;
+      case "save-backend-policy":
+        void saveBackendPolicy();
+        break;
+      case "save-transcode-profiles":
+        void saveTranscodeProfiles();
+        break;
+      case "add-transcode-profile":
+        addTranscodeProfile();
+        break;
+      case "logout":
+        void logoutUser();
+        break;
+    }
+  };
 }
 
 // ── Server Name ───────────────────────────────────────
@@ -567,7 +619,6 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
   }
   body.innerHTML = attempts
     .map((attempt) => {
-      const resetArgs = `${JSON.stringify(attempt.scope)}, ${JSON.stringify(attempt.ip)}`;
       return `
         <tr>
           <td>${escapeHtml(formatRateLimitScope(attempt.scope))}</td>
@@ -575,7 +626,11 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
           <td>${attempt.failureCount}</td>
           <td>${escapeHtml(formatBanStatus(attempt))}</td>
           <td class="text-right">
-            <button class="btn btn-ghost btn-xs" onclick="resetRateLimitState(${escapeHtml(resetArgs)})">Reset</button>
+            <button
+              class="btn btn-ghost btn-xs"
+              data-settings-action="reset-rate-limits"
+              data-scope="${escapeHtml(attempt.scope)}"
+              data-ip="${escapeHtml(attempt.ip)}">Reset</button>
           </td>
         </tr>`;
     })

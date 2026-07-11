@@ -793,7 +793,7 @@ test.describe.serial('HLS Player — live playback', () => {
 
         const newName = `TestRestream_${Date.now()}`;
         await serverNameInput.fill(newName);
-        await page.locator('button[onclick="saveServerName()"]').click();
+        await page.locator('button[data-settings-action="save-server-name"]').click();
 
         await expect(page.locator('#server-name-saved')).toBeVisible();
 
@@ -803,7 +803,7 @@ test.describe.serial('HLS Player — live playback', () => {
         await expect(serverNameInput).toHaveValue(newName);
 
         await serverNameInput.fill(originalName);
-        await page.locator('button[onclick="saveServerName()"]').click();
+        await page.locator('button[data-settings-action="save-server-name"]').click();
         await expect(page.locator('#server-name-saved')).toBeVisible();
     });
 
