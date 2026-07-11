@@ -332,7 +332,7 @@
         },
         {
           "name": "restream:enabledFeatures",
-          "value": "default,form,http1,json,macros,matched-path,original-uri,query,tokio,tower-log,tracing"
+          "value": "default,form,http1,json,macros,matched-path,multipart,original-uri,query,tokio,tower-log,tracing"
         },
         {
           "name": "restream:source",
@@ -1674,6 +1674,42 @@
       "purl": "pkg:cargo/either@1.16.0",
       "type": "library",
       "version": "1.16.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/encoding_rs@0.8.35",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "(Apache-2.0 OR MIT) AND BSD-3-Clause"
+        }
+      ],
+      "name": "encoding_rs",
+      "properties": [
+        {
+          "name": "restream:ecosystem",
+          "value": "cargo"
+        },
+        {
+          "name": "restream:versionSource",
+          "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default"
+        },
+        {
+          "name": "restream:source",
+          "value": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ],
+      "purl": "pkg:cargo/encoding_rs@0.8.35",
+      "type": "library",
+      "version": "0.8.35"
     },
     {
       "bom-ref": "pkg:cargo/equivalent@1.0.2",
@@ -4735,6 +4771,42 @@
       "purl": "pkg:cargo/mio@1.2.1",
       "type": "library",
       "version": "1.2.1"
+    },
+    {
+      "bom-ref": "pkg:cargo/multer@3.1.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "multer",
+      "properties": [
+        {
+          "name": "restream:ecosystem",
+          "value": "cargo"
+        },
+        {
+          "name": "restream:versionSource",
+          "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default"
+        },
+        {
+          "name": "restream:source",
+          "value": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ],
+      "purl": "pkg:cargo/multer@3.1.0",
+      "type": "library",
+      "version": "3.1.0"
     },
     {
       "bom-ref": "pkg:cargo/nu-ansi-term@0.50.3",
@@ -9101,6 +9173,7 @@
         "pkg:cargo/digest@0.9.0",
         "pkg:cargo/dotenvy@0.15.7",
         "pkg:cargo/either@1.16.0",
+        "pkg:cargo/encoding_rs@0.8.35",
         "pkg:cargo/equivalent@1.0.2",
         "pkg:cargo/errno@0.3.14",
         "pkg:cargo/event-listener@5.4.1",
@@ -9182,6 +9255,7 @@
         "pkg:cargo/mime_guess@2.0.5",
         "pkg:cargo/miniz_oxide@0.8.9",
         "pkg:cargo/mio@1.2.1",
+        "pkg:cargo/multer@3.1.0",
         "pkg:cargo/nu-ansi-term@0.50.3",
         "pkg:cargo/num-conv@0.2.2",
         "pkg:cargo/num-traits@0.2.19",
@@ -9411,6 +9485,7 @@
         "pkg:cargo/matchit@0.7.3",
         "pkg:cargo/memchr@2.8.2",
         "pkg:cargo/mime@0.3.17",
+        "pkg:cargo/multer@3.1.0",
         "pkg:cargo/percent-encoding@2.3.2",
         "pkg:cargo/pin-project-lite@0.2.17",
         "pkg:cargo/serde@1.0.228",
@@ -9645,6 +9720,12 @@
         "pkg:cargo/serde@1.0.228"
       ],
       "ref": "pkg:cargo/either@1.16.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4"
+      ],
+      "ref": "pkg:cargo/encoding_rs@0.8.35"
     },
     {
       "dependsOn": [],
@@ -10096,6 +10177,19 @@
         "pkg:cargo/libc@0.2.186"
       ],
       "ref": "pkg:cargo/mio@1.2.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/encoding_rs@0.8.35",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/http@1.4.2",
+        "pkg:cargo/httparse@1.10.1",
+        "pkg:cargo/memchr@2.8.2",
+        "pkg:cargo/mime@0.3.17",
+        "pkg:cargo/spin@0.9.8"
+      ],
+      "ref": "pkg:cargo/multer@3.1.0"
     },
     {
       "dependsOn": [],
@@ -10991,16 +11085,14 @@
       "bom-ref": "pkg:cargo/restream@0.1.0",
       "licenses": [
         {
-          "license": {
-            "name": "LicenseRef-restream-internal"
-          }
+          "expression": "MIT"
         }
       ],
       "name": "restream",
       "properties": [
         {
           "name": "restream:gitCommit",
-          "value": "6ed7da40739ac2223b7b5bbe7fe0582a093933c5"
+          "value": "6f0afdf1bc605d0c9bbec4603d847a2df0117a1d"
         },
         {
           "name": "restream:nativeBuildId",
@@ -11008,7 +11100,7 @@
         },
         {
           "name": "restream:licenseFile",
-          "value": "LICENSE.md"
+          "value": ""
         }
       ],
       "purl": "pkg:cargo/restream@0.1.0",
@@ -11026,14 +11118,14 @@
       },
       {
         "name": "restream:gitCommit",
-        "value": "6ed7da40739ac2223b7b5bbe7fe0582a093933c5"
+        "value": "6f0afdf1bc605d0c9bbec4603d847a2df0117a1d"
       },
       {
         "name": "restream:nativeBuildId",
         "value": "73765ce8948ebff28e85fdd11b491d54b4e96c6468a016360fd1110af2ef12f0"
       }
     ],
-    "timestamp": "2026-07-11T18:20:32+05:30",
+    "timestamp": "2026-07-12T01:12:42+05:30",
     "tools": {
       "components": [
         {

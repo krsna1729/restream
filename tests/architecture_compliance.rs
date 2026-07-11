@@ -87,7 +87,7 @@ fn release_policy_metadata_is_declared_and_enforced() {
     let cargo_toml = include_str!("../Cargo.toml");
     assert!(cargo_toml.contains("rust-version = \"1.96\""));
     assert!(cargo_toml.contains("publish = false"));
-    assert!(cargo_toml.contains("license-file = \"LICENSE.md\""));
+    assert!(cargo_toml.contains("license = \"MIT\""));
     assert!(cargo_toml.contains("repository = "));
     assert!(!cargo_toml.contains("release_max_level_"));
 
@@ -161,8 +161,8 @@ fn release_policy_metadata_is_declared_and_enforced() {
     }
 
     let license = include_str!("../LICENSE.md");
-    assert!(license.contains("All rights"));
-    assert!(license.contains("reserved"));
+    assert!(license.contains("MIT License"));
+    assert!(license.contains("Permission is hereby granted"));
 
     let compliance = include_str!("../docs/release-compliance.md");
     for required in [
@@ -170,7 +170,7 @@ fn release_policy_metadata_is_declared_and_enforced() {
         "cargo audit",
         "cargo deny check advisories licenses bans sources",
         "GPL-2.0-or-later",
-        "LicenseRef-restream-internal",
+        "MIT",
         "tracing/release_max_level_*",
         "Dependency Policy",
     ] {

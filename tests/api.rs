@@ -2245,8 +2245,8 @@ async fn status_sbom_is_authenticated_cyclonedx_with_licenses() {
     assert_eq!(json["specVersion"], "1.5");
     assert_eq!(json["metadata"]["component"]["name"], "restream");
     assert_eq!(
-        json["metadata"]["component"]["licenses"][0]["license"]["name"],
-        "LicenseRef-restream-internal"
+        json["metadata"]["component"]["licenses"][0]["expression"],
+        "MIT"
     );
     assert_eq!(
         json["metadata"]["component"]["properties"]
