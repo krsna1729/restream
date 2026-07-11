@@ -2,6 +2,7 @@
 //! diagnostics surfaces.
 
 use std::ffi::{CStr, c_char};
+use std::path::Path;
 
 use serde_json::{Value, json};
 
@@ -612,4 +613,67 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
     });
 
     (status, sbom)
+}
+
+fn normalize_sbom_for_repo_compare(sbom: &mut serde_json::Value) {
+    if let Some(metadata) = sbom
+        .get_mut("metadata")
+        .and_then(|value| value.as_object_mut())
+    {
+        metadata.remove("timestamp");
+    }
+}
+
+pub async fn emit_repo_sbom(path: &Path) -> Result<bool, String> {
+    let (_, sbom) = status_and_sbom(false);
+
+    let mut normalized_new = sbom.clone();
+    normalize_sbom_for_repo_compare(&mut normalized_new);
+    if let Ok(existing) = std::fs::read_to_string(path)
+        && let Ok(mut existing_json) = serde_json::from_str::<serde_json::Value>(&existing)
+    {
+        normalize_sbom_for_repo_compare(&mut existing_json);
+        if existing_json == normalized_new {
+            return Ok(false);
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create SBOM directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let bytes = serde_json::to_vec_pretty(&sbom)
+        .map_err(|error| format!("failed to serialize SBOM JSON: {error}"))?;
+    std::fs::write(
+        path,
+        format!("{}\n", String::from_utf8_lossy(&bytes)).as_bytes(),
+    )
+    .map_err(|error| format!("failed to write SBOM file {}: {error}", path.display()))?;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repo_sbom_compare_ignores_timestamp() {
+        let mut left = serde_json::json!({
+            "metadata": { "timestamp": "2026-06-28T01:00:00Z" },
+            "components": [{ "name": "restream" }]
+        });
+        let mut right = serde_json::json!({
+            "metadata": { "timestamp": "2026-06-29T01:00:00Z" },
+            "components": [{ "name": "restream" }]
+        });
+
+        normalize_sbom_for_repo_compare(&mut left);
+        normalize_sbom_for_repo_compare(&mut right);
+
+        assert_eq!(left, right);
+    }
 }
