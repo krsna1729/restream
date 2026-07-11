@@ -83,6 +83,46 @@ fn router_routes_have_explicit_auth_classification() {
     );
 }
 
+#[test]
+fn release_policy_metadata_is_declared_and_enforced() {
+    let cargo_toml = include_str!("../Cargo.toml");
+    assert!(cargo_toml.contains("rust-version = \"1.96\""));
+    assert!(cargo_toml.contains("publish = false"));
+    assert!(cargo_toml.contains("license-file = \"LICENSE.md\""));
+    assert!(cargo_toml.contains("repository = "));
+
+    let build_rs = include_str!("../build.rs");
+    assert!(build_rs.contains("PKG_CONFIG_LIBDIR"));
+    assert!(build_rs.contains("remove_var(\"PKG_CONFIG_PATH\")"));
+    assert!(build_rs.contains("RESTREAM_NATIVE_BUILD_ID"));
+    assert!(build_rs.contains("native_build_id(&prefix)"));
+
+    let deny_toml = include_str!("../deny.toml");
+    assert!(deny_toml.contains("unknown-registry = \"deny\""));
+    assert!(deny_toml.contains("unknown-git = \"deny\""));
+
+    let sbom_workflow = include_str!("../.github/workflows/sbom-security.yml");
+    assert!(sbom_workflow.contains("cargo deny check advisories licenses bans sources"));
+
+    let license = include_str!("../LICENSE.md");
+    assert!(license.contains("All rights"));
+    assert!(license.contains("reserved"));
+
+    let compliance = include_str!("../docs/release-compliance.md");
+    for required in [
+        "restream.nativeBuildId",
+        "cargo audit",
+        "cargo deny check advisories licenses bans sources",
+        "GPL-2.0-or-later",
+        "LicenseRef-restream-internal",
+    ] {
+        assert!(
+            compliance.contains(required),
+            "release compliance docs must mention {required}"
+        );
+    }
+}
+
 fn extract_router_route_paths(source: &'static str) -> BTreeSet<&'static str> {
     let mut paths = BTreeSet::new();
     for (offset, _) in source.match_indices(".route(") {

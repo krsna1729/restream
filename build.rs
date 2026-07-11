@@ -1,42 +1,49 @@
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
+
 fn main() {
     println!("cargo:rerun-if-changed=Cargo.lock");
     println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+    println!("cargo:rerun-if-env-changed=RESTREAM_BUILD_GIT_COMMIT");
+    println!("cargo:rerun-if-env-changed=RESTREAM_BUILD_TIMESTAMP");
+    println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
     println!("cargo:rustc-check-cfg=cfg(restream_ffmpeg_needs_avcodec_close_shim)");
 
-    // Embed git commit hash at build time
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output();
-    let commit = output
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .unwrap_or_default();
-    println!("cargo:rustc-env=GIT_COMMIT_HASH={}", commit.trim());
+    let build_identity = build_identity();
+    println!("cargo:rustc-env=GIT_COMMIT_HASH={}", build_identity.commit);
+    println!(
+        "cargo:rustc-env=RESTREAM_BUILD_TIMESTAMP={}",
+        build_identity.timestamp
+    );
     embed_toolchain_versions();
     embed_rust_dependency_inventory();
 
     // All native libraries (SRT, FFmpeg, Mbed TLS, libstdc++) are always linked
     // statically from the repo-managed static prefix built by setup-static-build.sh.
-    let manifest_dir = std::path::PathBuf::from(
-        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"),
-    );
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
     let prefix = manifest_dir.join(".build/static/prefix");
     let lib_dir = prefix.join("lib");
     let pkgconfig_dir = lib_dir.join("pkgconfig");
 
-    // Prepend the static prefix to pkg-config's search path so FFmpeg, SRT,
-    // codec, and Mbed TLS .pc files from the prefix take priority over any
-    // system-installed counterparts. setup-static-build.sh builds a pinned
-    // Mbed TLS into the prefix; this prepend is what makes it win over the host.
-    let existing_pkg_config_path = std::env::var("PKG_CONFIG_PATH").unwrap_or_default();
-    let new_pkg_config_path = if existing_pkg_config_path.is_empty() {
-        pkgconfig_dir.display().to_string()
-    } else {
-        format!("{}:{existing_pkg_config_path}", pkgconfig_dir.display())
-    };
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux")
+        || std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("gnu")
+    {
+        panic!("restream static native build is currently supported only for linux-gnu targets");
+    }
+
+    // Keep pkg-config inside the generated static prefix. A host fallback would
+    // make release binaries depend on whichever native packages happen to be
+    // installed on the build machine.
     // SAFETY: build scripts are single-threaded at the point this runs.
-    unsafe { std::env::set_var("PKG_CONFIG_PATH", new_pkg_config_path) };
+    unsafe {
+        std::env::set_var("PKG_CONFIG_LIBDIR", pkgconfig_dir.display().to_string());
+        std::env::remove_var("PKG_CONFIG_PATH");
+        std::env::remove_var("PKG_CONFIG_SYSROOT_DIR");
+    }
 
     let archive = lib_dir.join("libsrt.a");
     let pc_path = pkgconfig_dir.join("srt.pc");
@@ -50,6 +57,21 @@ fn main() {
             prefix.display()
         );
     }
+    for package in REQUIRED_PKG_CONFIG_PACKAGES {
+        let pc_path = pkgconfig_dir.join(format!("{package}.pc"));
+        println!("cargo:rerun-if-changed={}", pc_path.display());
+        if !pc_path.exists() {
+            panic!(
+                "repo static pkg-config file is missing: {}. Run `scripts/resource-limit ./scripts/setup-static-build.sh` first.",
+                pc_path.display()
+            );
+        }
+    }
+
+    println!(
+        "cargo:rustc-env=RESTREAM_NATIVE_BUILD_ID={}",
+        native_build_id(&prefix)
+    );
 
     let srt_version = std::fs::read_to_string(&pc_path)
         .ok()
@@ -69,25 +91,16 @@ fn main() {
         .expect("failed to ask C++ compiler for libstdc++.a");
     let archive_path = String::from_utf8(output.stdout)
         .expect("C++ compiler returned a non-UTF-8 libstdc++.a path");
-    let archive_path = std::path::Path::new(archive_path.trim());
+    let archive_path = Path::new(archive_path.trim());
     let stdcxx_dir = archive_path
         .parent()
         .filter(|p| archive_path.is_absolute() && p.exists())
         .expect("C++ compiler did not return an absolute libstdc++.a path");
     println!("cargo:rustc-link-search=native={}", stdcxx_dir.display());
 
-    // Resolve Mbed TLS's static library directory via pkg-config. With the
-    // static prefix prepended to PKG_CONFIG_PATH above, this picks the pinned
-    // Mbed TLS built by setup-static-build.sh; it falls back to the system copy
-    // if the prefix has not been built.
-    if let Ok(mbedtls) = pkg_config::Config::new()
-        .statik(true)
-        .cargo_metadata(false)
-        .probe("mbedcrypto")
-    {
-        for path in &mbedtls.link_paths {
-            println!("cargo:rustc-link-search=native={}", path.display());
-        }
+    let mbedtls = probe_pinned_package("mbedcrypto", &prefix, false);
+    for path in &mbedtls.link_paths {
+        println!("cargo:rustc-link-search=native={}", path.display());
     }
 
     println!("cargo:rustc-link-lib=static=srt");
@@ -107,11 +120,7 @@ fn main() {
     println!("cargo:rustc-link-arg=-lgcc");
     println!("cargo:rustc-link-arg=-Wl,--end-group");
 
-    let mut ffmpeg = pkg_config::Config::new();
-    ffmpeg.statik(true);
-    let avcodec = ffmpeg
-        .probe("libavcodec")
-        .expect("libavcodec not found; run setup-static-build.sh first");
+    let avcodec = probe_pinned_package("libavcodec", &prefix, true);
     if avcodec
         .version
         .split('.')
@@ -121,21 +130,15 @@ fn main() {
     {
         println!("cargo:rustc-cfg=restream_ffmpeg_needs_avcodec_close_shim");
     }
-    ffmpeg
-        .probe("libavformat")
-        .expect("libavformat not found; run setup-static-build.sh first");
-    ffmpeg
-        .probe("libavfilter")
-        .expect("libavfilter not found; run setup-static-build.sh first");
-    ffmpeg
-        .probe("libswscale")
-        .expect("libswscale not found; run setup-static-build.sh first");
-    ffmpeg
-        .probe("libswresample")
-        .expect("libswresample not found; run setup-static-build.sh first");
-    ffmpeg
-        .probe("libavutil")
-        .expect("libavutil not found; run setup-static-build.sh first");
+    for package in [
+        "libavformat",
+        "libavfilter",
+        "libswscale",
+        "libswresample",
+        "libavutil",
+    ] {
+        probe_pinned_package(package, &prefix, true);
+    }
 
     embed_pkg_version("RESTREAM_BUILD_X264_VERSION", "x264");
     embed_pkg_version("RESTREAM_BUILD_X265_VERSION", "x265");
@@ -143,13 +146,178 @@ fn main() {
 }
 
 fn embed_pkg_version(env_name: &str, package: &str) {
-    let version = pkg_config::Config::new()
-        .statik(true)
-        .cargo_metadata(false)
-        .probe(package)
-        .map(|library| library.version)
-        .unwrap_or_else(|_| "unknown".to_string());
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
+    let prefix = manifest_dir.join(".build/static/prefix");
+    let cargo_metadata = matches!(package, "x264" | "x265");
+    let version = probe_pinned_package(package, &prefix, cargo_metadata).version;
     println!("cargo:rustc-env={env_name}={version}");
+}
+
+const REQUIRED_PKG_CONFIG_PACKAGES: &[&str] = &[
+    "srt",
+    "mbedcrypto",
+    "libavcodec",
+    "libavformat",
+    "libavfilter",
+    "libswscale",
+    "libswresample",
+    "libavutil",
+    "x264",
+    "x265",
+];
+
+struct BuildIdentity {
+    commit: String,
+    timestamp: String,
+}
+
+fn build_identity() -> BuildIdentity {
+    let commit = std::env::var("RESTREAM_BUILD_GIT_COMMIT")
+        .or_else(|_| std::env::var("GITHUB_SHA"))
+        .unwrap_or_else(|_| git_output(["rev-parse", "--verify", "HEAD"]));
+    let commit = commit.trim().to_string();
+    if commit.is_empty() {
+        panic!("build provenance missing: set RESTREAM_BUILD_GIT_COMMIT when building without git");
+    }
+
+    if let Ok(path) = git_output_checked(["rev-parse", "--git-path", "HEAD"]) {
+        println!("cargo:rerun-if-changed={}", path.trim());
+    }
+    if let Ok(path) = git_output_checked(["rev-parse", "--git-path", "index"]) {
+        println!("cargo:rerun-if-changed={}", path.trim());
+    }
+
+    let timestamp = std::env::var("RESTREAM_BUILD_TIMESTAMP")
+        .or_else(|_| std::env::var("SOURCE_DATE_EPOCH"))
+        .unwrap_or_else(|_| git_output(["show", "-s", "--format=%cI", "HEAD"]));
+    let timestamp = timestamp.trim().to_string();
+    if timestamp.is_empty() {
+        panic!(
+            "build provenance missing: set RESTREAM_BUILD_TIMESTAMP or SOURCE_DATE_EPOCH when building without git"
+        );
+    }
+
+    BuildIdentity { commit, timestamp }
+}
+
+fn git_output<const N: usize>(args: [&str; N]) -> String {
+    git_output_checked(args).unwrap_or_else(|error| panic!("{error}"))
+}
+
+fn git_output_checked<const N: usize>(args: [&str; N]) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .output()
+        .map_err(|error| format!("failed to run git for build provenance: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git provenance command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    String::from_utf8(output.stdout).map_err(|error| format!("git output was not UTF-8: {error}"))
+}
+
+fn probe_pinned_package(package: &str, prefix: &Path, cargo_metadata: bool) -> pkg_config::Library {
+    let library = pkg_config::Config::new()
+        .statik(true)
+        .cargo_metadata(cargo_metadata)
+        .probe(package)
+        .unwrap_or_else(|error| {
+            panic!(
+                "{package} not found in repo static prefix {}: {error}. Run `scripts/resource-limit ./scripts/setup-static-build.sh` first.",
+                prefix.display()
+            )
+        });
+    assert_pinned_paths(package, prefix, &library.link_paths);
+    assert_pinned_paths(package, prefix, &library.include_paths);
+    library
+}
+
+fn assert_pinned_paths(package: &str, prefix: &Path, paths: &[PathBuf]) {
+    let prefix = prefix
+        .canonicalize()
+        .unwrap_or_else(|error| panic!("failed to canonicalize {}: {error}", prefix.display()));
+    for path in paths {
+        let canonical = path.canonicalize().unwrap_or_else(|error| {
+            panic!(
+                "pkg-config package {package} resolved missing path {}: {error}",
+                path.display()
+            )
+        });
+        if !canonical.starts_with(&prefix) {
+            panic!(
+                "pkg-config package {package} resolved host path {}; expected all native inputs under {}",
+                canonical.display(),
+                prefix.display()
+            );
+        }
+    }
+}
+
+fn native_build_id(prefix: &Path) -> String {
+    let mut files = Vec::new();
+    collect_native_inputs(&prefix.join("lib"), &mut files);
+    collect_native_inputs(&prefix.join("include"), &mut files);
+    files.sort();
+    if files.is_empty() {
+        panic!("native build provenance missing: no static prefix inputs found");
+    }
+
+    let mut hasher = Sha256::new();
+    for path in files {
+        println!("cargo:rerun-if-changed={}", path.display());
+        let relative = path.strip_prefix(prefix).unwrap_or(&path);
+        hasher.update(relative.to_string_lossy().as_bytes());
+        hasher.update([0]);
+        let mut file = std::fs::File::open(&path).unwrap_or_else(|error| {
+            panic!("failed to open native input {}: {error}", path.display())
+        });
+        let mut buffer = [0u8; 8192];
+        loop {
+            let read = file.read(&mut buffer).unwrap_or_else(|error| {
+                panic!("failed to hash native input {}: {error}", path.display())
+            });
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+    }
+    to_hex(&hasher.finalize())
+}
+
+fn collect_native_inputs(dir: &Path, files: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries {
+        let entry =
+            entry.unwrap_or_else(|error| panic!("failed to read {}: {error}", dir.display()));
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .unwrap_or_else(|error| panic!("failed to inspect {}: {error}", path.display()));
+        if file_type.is_dir() {
+            collect_native_inputs(&path, files);
+        } else if matches!(
+            path.extension().and_then(|ext| ext.to_str()),
+            Some("a" | "pc" | "h" | "hpp")
+        ) {
+            files.push(path);
+        }
+    }
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
 }
 
 fn embed_toolchain_versions() {
@@ -230,6 +398,7 @@ fn embed_rust_dependency_inventory() {
             node_by_id.insert(id, node);
         }
     }
+    let package_checksums = package_checksums_from_lock();
 
     let mut pending = vec![root_id.to_string()];
     let mut visited = std::collections::HashSet::new();
@@ -267,6 +436,10 @@ fn embed_rust_dependency_inventory() {
                 "name": package["name"],
                 "version": package["version"],
                 "source": package["source"],
+                "checksum": package["name"].as_str()
+                    .zip(package["version"].as_str())
+                    .and_then(|(name, version)| package_checksums.get(&(name.to_string(), version.to_string())))
+                    .map(String::as_str),
                 "license": package["license"],
             }));
         }
@@ -307,4 +480,43 @@ fn embed_rust_dependency_inventory() {
         serde_json::to_vec(&dependencies).expect("failed to serialize dependency inventory"),
     )
     .expect("failed to write dependency inventory");
+}
+
+fn package_checksums_from_lock() -> std::collections::HashMap<(String, String), String> {
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
+    let lock_path = manifest_dir.join("Cargo.lock");
+    let lock = std::fs::read_to_string(&lock_path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", lock_path.display()));
+    let mut checksums = std::collections::HashMap::new();
+    let mut name: Option<String> = None;
+    let mut version: Option<String> = None;
+    let mut checksum: Option<String> = None;
+
+    let mut flush =
+        |name: &mut Option<String>, version: &mut Option<String>, checksum: &mut Option<String>| {
+            if let (Some(name), Some(version), Some(checksum)) =
+                (name.take(), version.take(), checksum.take())
+            {
+                checksums.insert((name, version), checksum);
+            } else {
+                *name = None;
+                *version = None;
+                *checksum = None;
+            }
+        };
+
+    for line in lock.lines() {
+        if line == "[[package]]" {
+            flush(&mut name, &mut version, &mut checksum);
+        } else if let Some(value) = line.strip_prefix("name = ") {
+            name = Some(value.trim_matches('"').to_string());
+        } else if let Some(value) = line.strip_prefix("version = ") {
+            version = Some(value.trim_matches('"').to_string());
+        } else if let Some(value) = line.strip_prefix("checksum = ") {
+            checksum = Some(value.trim_matches('"').to_string());
+        }
+    }
+    flush(&mut name, &mut version, &mut checksum);
+    checksums
 }

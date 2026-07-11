@@ -2,6 +2,10 @@
 name = "restream"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.96"
+publish = false
+license-file = "LICENSE.md"
+repository = "https://github.com/live-miracles/restream"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
@@ -55,6 +59,7 @@ tracing-appender = "0.2"
 [build-dependencies]
 pkg-config = "0.3"
 serde_json = "1.0"
+sha2 = "0.10"
 
 [dev-dependencies]
 criterion = "0.5"
@@ -130,7 +135,7 @@ debug = 1
 # the linker (mold) doesn't need to open it during linking.
 split-debuginfo = "unpacked"
 
-# Compile every dependency at opt-level 2 so they are fast to execute (and stay
+# Compile every dependency at opt-level 1 so they are fast to execute (and stay
 # cached across rebuilds). Our own crate stays at opt-level 0 for maximum
 # incremental compile speed — only changed translation units are recompiled.
 [profile.dev.package."*"]

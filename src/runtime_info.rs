@@ -43,6 +43,16 @@ fn license(expression: &str) -> Value {
     json!([{ "expression": expression }])
 }
 
+fn application_license() -> Value {
+    if !env!("CARGO_PKG_LICENSE").is_empty() {
+        license(env!("CARGO_PKG_LICENSE"))
+    } else if !env!("CARGO_PKG_LICENSE_FILE").is_empty() {
+        json!([{ "license": { "name": "LicenseRef-restream-internal" } }])
+    } else {
+        json!([{ "license": { "name": "NOASSERTION" } }])
+    }
+}
+
 fn native_component(
     name: &str,
     version: String,
@@ -99,6 +109,9 @@ fn rust_components() -> Vec<Value> {
                 "version": version,
                 "purl": purl,
                 "licenses": licenses,
+                "hashes": dependency["checksum"].as_str().map(|checksum| {
+                    json!([{ "alg": "SHA-256", "content": checksum }])
+                }).unwrap_or_else(|| json!([])),
                 "properties": [
                     { "name": "restream:ecosystem", "value": "cargo" },
                     { "name": "restream:versionSource", "value": "Cargo.lock" },
@@ -336,12 +349,16 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
         "name": "restream",
         "version": env!("CARGO_PKG_VERSION"),
         "purl": format!("pkg:cargo/restream@{}", env!("CARGO_PKG_VERSION")),
-        "licenses": [{ "license": { "name": "NOASSERTION" } }],
+        "licenses": application_license(),
         "properties": [
             { "name": "restream:gitCommit", "value": env!("GIT_COMMIT_HASH") },
             {
                 "name": "restream:nativeBuildId",
-                "value": env!("GIT_COMMIT_HASH")
+                "value": env!("RESTREAM_NATIVE_BUILD_ID")
+            },
+            {
+                "name": "restream:licenseFile",
+                "value": env!("CARGO_PKG_LICENSE_FILE")
             }
         ]
     });
@@ -351,7 +368,7 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
         "specVersion": "1.5",
         "version": 1,
         "metadata": {
-            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "timestamp": env!("RESTREAM_BUILD_TIMESTAMP"),
             "component": application,
             "tools": {
                 "components": [{
@@ -362,7 +379,9 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
             },
             "properties": [
                 { "name": "restream:generatedBy", "value": "running process" },
-                { "name": "restream:rustDependencySource", "value": "resolved normal Cargo dependency closure" }
+                { "name": "restream:rustDependencySource", "value": "resolved normal Cargo dependency closure" },
+                { "name": "restream:gitCommit", "value": env!("GIT_COMMIT_HASH") },
+                { "name": "restream:nativeBuildId", "value": env!("RESTREAM_NATIVE_BUILD_ID") }
             ]
         },
         "components": components
@@ -375,7 +394,8 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
         "restream": {
             "version": env!("CARGO_PKG_VERSION"),
             "commit": env!("GIT_COMMIT_HASH"),
-            "nativeBuildId": env!("GIT_COMMIT_HASH"),
+            "nativeBuildId": env!("RESTREAM_NATIVE_BUILD_ID"),
+            "buildTimestamp": env!("RESTREAM_BUILD_TIMESTAMP"),
         },
         "toolchain": {
             "rustc": env!("RESTREAM_RUSTC_VERSION"),
