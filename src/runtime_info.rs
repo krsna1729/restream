@@ -156,7 +156,11 @@ fn component_ref(components: &[Value], name: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn sbom_dependencies(application_ref: &str, components: &[Value]) -> Value {
+fn sbom_dependencies(
+    application_ref: &str,
+    components: &[Value],
+    rust_dependencies: &[Value],
+) -> Value {
     let component_refs: Vec<String> = components
         .iter()
         .filter_map(|component| component["bom-ref"].as_str().map(str::to_owned))
@@ -194,22 +198,54 @@ fn sbom_dependencies(application_ref: &str, components: &[Value]) -> Value {
         }
     }
 
+    for dependency in rust_dependencies {
+        let Some(reference) = dependency["bomRef"].as_str() else {
+            continue;
+        };
+        let depends_on: Vec<String> = dependency["dependencyRefs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str().map(str::to_owned))
+            .filter(|reference| component_refs.contains(reference))
+            .collect();
+        dependencies.push(json!({
+            "ref": reference,
+            "dependsOn": depends_on
+        }));
+    }
+
     json!(dependencies)
 }
 
-fn rust_components() -> Vec<Value> {
-    let dependencies: Vec<Value> =
-        serde_json::from_str(RUST_DEPENDENCIES_JSON).expect("embedded dependency inventory");
+fn rust_dependency_inventory() -> Vec<Value> {
+    serde_json::from_str(RUST_DEPENDENCIES_JSON).expect("embedded dependency inventory")
+}
+
+fn rust_components(dependencies: &[Value]) -> Vec<Value> {
     dependencies
-        .into_iter()
+        .iter()
         .map(|dependency| {
             let name = dependency["name"].as_str().unwrap_or("unknown");
             let version = dependency["version"].as_str().unwrap_or("unknown");
-            let purl = format!("pkg:cargo/{name}@{version}");
+            let purl = dependency["bomRef"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("pkg:cargo/{name}@{version}"));
             let licenses = dependency["license"]
                 .as_str()
                 .map(license)
                 .unwrap_or_else(|| json!([{ "license": { "name": "NOASSERTION" } }]));
+            let enabled_features = dependency["features"]
+                .as_array()
+                .map(|features| {
+                    features
+                        .iter()
+                        .filter_map(|feature| feature.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .unwrap_or_default();
             json!({
                 "type": "library",
                 "bom-ref": purl,
@@ -223,6 +259,7 @@ fn rust_components() -> Vec<Value> {
                 "properties": [
                     { "name": "restream:ecosystem", "value": "cargo" },
                     { "name": "restream:versionSource", "value": "Cargo.lock" },
+                    { "name": "restream:enabledFeatures", "value": enabled_features },
                     {
                         "name": "restream:source",
                         "value": dependency["source"].as_str().unwrap_or("path")
@@ -490,7 +527,8 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
         .filter_map(|component| component["name"].as_str().map(str::to_string))
         .collect();
 
-    let mut components = rust_components();
+    let rust_dependencies = rust_dependency_inventory();
+    let mut components = rust_components(&rust_dependencies);
     let rust_component_count = components.len();
     let native_component_count = native_components.len();
     components.extend(native_components);
@@ -523,7 +561,7 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
     let application_ref = application["bom-ref"]
         .as_str()
         .expect("application component has bom-ref");
-    let dependencies = sbom_dependencies(application_ref, &components);
+    let dependencies = sbom_dependencies(application_ref, &components, &rust_dependencies);
 
     let sbom = json!({
         "bomFormat": "CycloneDX",

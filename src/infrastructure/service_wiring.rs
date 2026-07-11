@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
-use crate::application::recording::spawn_recording_metadata_reporter;
 use crate::application::services::{
     AgentService, AuthService, FileIngestService, HealthService, IngestService, LogService,
     MediaLibraryService, OutputService, PipelineService, SettingsService,
 };
+use crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter;
 use crate::infrastructure::sqlite_ports::{
     SqliteIngestLookup, SqliteJobStore, SqliteLogStore, SqliteMetaStore, SqliteOutputStore,
     SqlitePipelineStore, SqliteRecordingStore, SqliteSessionStore,

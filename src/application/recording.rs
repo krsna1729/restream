@@ -3,15 +3,11 @@
 
 use crate::application::ports::{MetaLookupError, MetaStore, MetaStoreWriter};
 use crate::application::reconcile::RecordingCommand;
-use crate::domain::ids::RecordingId;
-use crate::domain::state::RecordingPhase;
 use crate::media::engine::MediaEngine;
-use crate::media::recording::{RecordingMetadataEvent, RecordingMetadataReporter, RecordingStart};
+use crate::media::recording::{RecordingMetadataReporter, RecordingStart};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 pub const RECORDING_SETTINGS_META_KEY: &str = "recording_settings";
@@ -116,71 +112,6 @@ pub async fn spawn_recording_task(
     cancel_token
 }
 
-pub fn spawn_recording_metadata_reporter(pool: SqlitePool) -> RecordingMetadataReporter {
-    let (sender, mut receiver) = mpsc::unbounded_channel();
-    tokio::spawn(async move {
-        while let Some(event) = receiver.recv().await {
-            if let Err(error) = persist_recording_metadata_event(&pool, event).await {
-                tracing::warn!(
-                    err = %error,
-                    "failed to persist recording metadata event"
-                );
-            }
-        }
-    });
-    RecordingMetadataReporter::new(sender)
-}
-
-async fn persist_recording_metadata_event(
-    pool: &SqlitePool,
-    event: RecordingMetadataEvent,
-) -> Result<(), sqlx::Error> {
-    match event {
-        RecordingMetadataEvent::Started {
-            recording_id,
-            pipeline_id,
-            started_at,
-            temp_path,
-        } => {
-            crate::db::create_recording(
-                pool,
-                &RecordingId::new(recording_id),
-                &pipeline_id,
-                &started_at,
-                Some(&temp_path),
-                None,
-            )
-            .await?;
-        }
-        RecordingMetadataEvent::Finalized {
-            recording_id,
-            ended_at,
-            final_path,
-        } => {
-            crate::db::finalize_recording(
-                pool,
-                &RecordingId::new(recording_id),
-                &ended_at,
-                &final_path,
-            )
-            .await?;
-        }
-        RecordingMetadataEvent::Failed {
-            recording_id,
-            error,
-        } => {
-            crate::db::update_recording_status(
-                pool,
-                &RecordingId::new(recording_id),
-                RecordingPhase::Failed,
-                Some(&error),
-            )
-            .await?;
-        }
-    }
-    Ok(())
-}
-
 pub async fn apply_recording_commands(
     engine: Arc<MediaEngine>,
     meta_store: &dyn MetaStore,
@@ -226,8 +157,10 @@ pub async fn apply_recording_commands(
 mod tests {
     use super::*;
     use crate::application::ports::{MetaLookupFuture, MetaWriteFuture};
+    use crate::domain::ids::RecordingId;
     use crate::domain::stage::StageKey;
-    use crate::media::recording::RecordingMetadataEvent;
+    use crate::domain::state::RecordingPhase;
+    use sqlx::SqlitePool;
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -460,7 +393,10 @@ mod tests {
             .await
             .unwrap();
 
-        let reporter = spawn_recording_metadata_reporter(pool.clone());
+        let reporter = crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter(
+            pool.clone(),
+        );
+        use crate::media::recording::RecordingMetadataEvent;
         reporter.report(RecordingMetadataEvent::Started {
             recording_id: "recording-meta".to_string(),
             pipeline_id: "pipeline-meta".to_string(),

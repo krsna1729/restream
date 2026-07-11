@@ -409,7 +409,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let reconciler_media_dir = media_dir.clone();
     let reconciler_config = config.clone();
     let recording_metadata_reporter =
-        crate::application::recording::spawn_recording_metadata_reporter(pool.clone());
+        crate::infrastructure::recording_metadata::spawn_recording_metadata_reporter(pool.clone());
     let state = Arc::new(crate::api::AppState::new(
         pool.clone(),
         security.clone(),

@@ -99,6 +99,8 @@ fn release_policy_metadata_is_declared_and_enforced() {
     assert!(build_rs.contains("native_build_id(&prefix)"));
     assert!(build_rs.contains("embed_native_input_inventory(&prefix)"));
     assert!(build_rs.contains("native-build-inputs.json"));
+    assert!(build_rs.contains("\"features\": features"));
+    assert!(build_rs.contains("\"dependencyRefs\": dependency_refs"));
     assert!(build_rs.contains("REQUIRED_STATIC_ARCHIVES"));
     assert!(build_rs.contains("check_required_static_inputs(&prefix)"));
     assert!(build_rs.contains("assert_pinned_paths(package, prefix, &library.link_paths)"));
@@ -178,6 +180,21 @@ fn release_policy_metadata_is_declared_and_enforced() {
             "release compliance docs must mention {required}"
         );
     }
+
+    let runtime_info = include_str!("../src/runtime_info.rs");
+    for required in [
+        "env!(\"RESTREAM_BUILD_TIMESTAMP\")",
+        "restream:enabledFeatures",
+        "dependencyRefs",
+        "restream:nativeInputSha256",
+        "restream:nativeBuildId",
+        "\"dependencies\": dependencies",
+    ] {
+        assert!(
+            runtime_info.contains(required),
+            "runtime SBOM should include {required}"
+        );
+    }
 }
 
 #[test]
@@ -212,6 +229,45 @@ fn db_module_uses_explicit_repository_exports() {
     assert!(!db_mod.contains("pub use recording_repo::*"));
     assert!(!db_mod.contains("pub use session_repo::*"));
     assert!(db_mod.contains("pub use schema::setup_database_schema"));
+}
+
+#[test]
+fn application_ports_are_abstract_and_sqlite_adapters_live_in_infrastructure() {
+    let ports = include_str!("../src/application/ports.rs");
+    for forbidden in ["sqlx", "Sqlite", "crate::db"] {
+        assert!(
+            !ports.contains(forbidden),
+            "application ports should not expose concrete persistence detail {forbidden}"
+        );
+    }
+
+    let infrastructure_mod = include_str!("../src/infrastructure/mod.rs");
+    assert!(infrastructure_mod.contains("pub mod sqlite_ports;"));
+    assert!(infrastructure_mod.contains("pub mod recording_metadata;"));
+
+    let sqlite_ports = include_str!("../src/infrastructure/sqlite_ports.rs");
+    assert!(sqlite_ports.contains("SqlitePool"));
+    assert!(sqlite_ports.contains("impl PipelineStore for SqlitePipelineStore"));
+    assert!(sqlite_ports.contains("impl OutputStore for SqliteOutputStore"));
+}
+
+#[test]
+fn recording_metadata_persistence_is_infrastructure_owned() {
+    let recording = include_str!("../src/application/recording.rs");
+    let production_recording = recording
+        .split("#[cfg(test)]")
+        .next()
+        .expect("application recording module should have production section");
+    for forbidden in ["SqlitePool", "crate::db", "sqlx::"] {
+        assert!(
+            !production_recording.contains(forbidden),
+            "application recording runtime should not own concrete DB detail {forbidden}"
+        );
+    }
+
+    let infrastructure = include_str!("../src/infrastructure/recording_metadata.rs");
+    assert!(infrastructure.contains("SqlitePool"));
+    assert!(infrastructure.contains("persist_recording_metadata_event"));
 }
 
 #[test]

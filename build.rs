@@ -506,6 +506,9 @@ fn embed_rust_dependency_inventory() {
         if !visited.insert(id.clone()) {
             continue;
         }
+        let Some(node) = node_by_id.get(id.as_str()) else {
+            continue;
+        };
         if id != root_id {
             let package = package_by_id
                 .get(id.as_str())
@@ -530,21 +533,56 @@ fn embed_rust_dependency_inventory() {
                 // but are not linked into the shipped runtime artifact.
                 continue;
             }
+            let name = package["name"].as_str().unwrap_or("unknown");
+            let version = package["version"].as_str().unwrap_or("unknown");
+            let bom_ref = format!("pkg:cargo/{name}@{version}");
+            let features: Vec<&str> = node["features"]
+                .as_array()
+                .map(|features| {
+                    features
+                        .iter()
+                        .filter_map(|feature| feature.as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let dependency_refs: Vec<String> = node["deps"]
+                .as_array()
+                .map(|deps| {
+                    deps.iter()
+                        .filter(|dep| {
+                            dep["dep_kinds"]
+                                .as_array()
+                                .map(|kinds| {
+                                    kinds.iter().any(|kind| {
+                                        kind["kind"].is_null() || kind["kind"] == "normal"
+                                    })
+                                })
+                                .unwrap_or(true)
+                        })
+                        .filter_map(|dep| dep["pkg"].as_str())
+                        .filter_map(|pkg_id| package_by_id.get(pkg_id).copied())
+                        .filter_map(|package| {
+                            package["name"]
+                                .as_str()
+                                .zip(package["version"].as_str())
+                                .map(|(name, version)| format!("pkg:cargo/{name}@{version}"))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             dependencies.push(serde_json::json!({
-                "name": package["name"],
-                "version": package["version"],
+                "bomRef": bom_ref,
+                "name": name,
+                "version": version,
                 "source": package["source"],
-                "checksum": package["name"].as_str()
-                    .zip(package["version"].as_str())
-                    .and_then(|(name, version)| package_checksums.get(&(name.to_string(), version.to_string())))
+                "checksum": package_checksums.get(&(name.to_string(), version.to_string()))
                     .map(String::as_str),
                 "license": package["license"],
+                "features": features,
+                "dependencyRefs": dependency_refs,
             }));
         }
 
-        let Some(node) = node_by_id.get(id.as_str()) else {
-            continue;
-        };
         let Some(deps) = node["deps"].as_array() else {
             continue;
         };
