@@ -208,7 +208,11 @@ function getPipelineStageEncoding(log: AppLogRow): string | null {
 
 function getPipelineStageBackend(log: AppLogRow): string | null {
   const backend = getEventFieldString(log, "stage_backend", "stageBackend");
-  if (backend) return backend;
+  if (backend) {
+    const normalized = backend.toLowerCase().replaceAll("-", "_");
+    if (normalized === "external_ffmpeg") return "external_transcoder";
+    return normalized;
+  }
   return String(log?.target || "").includes("external_transcoder")
     ? "external_transcoder"
     : null;

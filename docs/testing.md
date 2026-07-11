@@ -57,7 +57,13 @@ Treat frontend confidence as four layers, each owning a different kind of risk:
 | TypeScript/source logic | Keep parsing, helpers, API choke points, and pure UI state logic deterministic and cheap. | `npm run test:frontend` |
 | Fake-DOM scenario matrices | Replace repetitive manual "check every state" work for state-heavy renderers. | `npm run test:frontend` |
 | Browser-native DOM checks | Prove real DOM events, focus/ARIA behavior, overlay positioning hooks, and browser-only widget behavior without starting the full Rust app. | `npm run test:frontend:browser-dom` |
-| Full app/browser integration | Prove login, navigation, media playback, real network wiring, and end-to-end runtime behavior against the running dashboard. | `npm run test:e2e` |
+| Full app/browser integration | Prove login, navigation, media playback, real network wiring, and end-to-end runtime behavior against an isolated app with committed fixtures. | `npm run test:e2e` |
+
+`npm run test:e2e` is self-contained: it builds the native-linked debug app and
+frontend, seeds the required checked-in multi-audio fixture into an isolated
+`.local/e2e/` media directory, waits for `/healthz`, runs Playwright, and
+stops only the app process it started. Do not manually start a dashboard before
+using it.
 
 Use the lowest layer that can actually catch the bug. Move upward only when the
 lower layer cannot prove the behavior.

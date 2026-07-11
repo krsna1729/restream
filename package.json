@@ -12,7 +12,7 @@
     "test:frontend:js-smoke": "npm run build:frontend && FRONTEND_MODULES_DIR=public/js node --experimental-default-type=module --test test/frontend/frontend-api-contract.test.mjs test/frontend/frontend-dashboard-contract.test.mjs test/frontend/frontend-diagnostics.test.mjs test/frontend/frontend-incidents.test.mjs test/frontend/frontend-engineer-telemetry.test.mjs test/frontend/frontend-ops-navigation.test.mjs test/frontend/frontend-pipeline-workspace.test.mjs test/frontend/frontend-history-stream.test.mjs test/frontend/frontend-log-stream.test.mjs test/frontend/frontend-overview-activity-stream.test.mjs test/frontend/frontend-publisher-health-contract.test.mjs test/frontend/frontend-status-stream.test.mjs test/frontend/frontend-build-smoke.test.mjs test/frontend/frontend-dom-invariants.test.mjs",
     "test:frontend:browser-dom": "npm run build:frontend && node ./scripts/dev/frontend/browser-dom-tests.mjs",
     "bench:frontend-dom": "npm run build:frontend && FRONTEND_JS_DIR=public/js node test/frontend/frontend-dom-render-bench.mjs",
-    "test:e2e": "npx playwright test"
+    "test:e2e": "./scripts/harness/frontend-e2e.sh"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",

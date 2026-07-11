@@ -13,6 +13,22 @@ async function login(page: Page): Promise<void> {
     await page.waitForURL('**/');
 }
 
+async function openPipelineWorkspace(page: Page): Promise<void> {
+    const tab = page.locator('#workspace-tab-pipeline');
+    await expect(tab).toBeVisible();
+    await tab.click();
+}
+
+async function selectPipelineForWorkspace(
+    page: Page,
+    pipelineName: string,
+): Promise<void> {
+    await openPipelineWorkspace(page);
+    const pipeline = page.locator('#pipelines li', { hasText: pipelineName });
+    await expect(pipeline).toBeVisible({ timeout: 10000 });
+    await pipeline.click();
+}
+
 async function waitFor<T>(
     fn: () => Promise<T>,
     predicate: (value: T) => boolean,
@@ -538,11 +554,11 @@ test.describe.serial('HLS Player — live playback', () => {
         expect(livePipelineId).toBeTruthy();
 
         // start ffmpeg publisher (RTMP)
-        const target = `rtmp://localhost:1935/live/${pipeKey}`;
+        const target = `rtmp://127.0.0.1:1935/live/${pipeKey}`;
         ffmproc = spawn('ffmpeg', [
             '-nostdin', '-re', '-stream_loop', '-1',
             '-i', INPUT_FILE,
-            '-map', '0:v:1', '-map', '0:a:0',
+            '-map', '0:v:0', '-map', '0:a:0',
             '-c', 'copy', '-f', 'flv', target,
         ], { stdio: ['ignore', 'pipe', 'pipe'] });
         ffmproc.on('error', (err) => {
@@ -652,7 +668,7 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test('select pipeline and click Play preview triggers HLS load', async ({ page }) => {
-        await page.getByRole('button', { name: 'Pipeline', exact: true }).click();
+        await openPipelineWorkspace(page);
         const pipelineItem = page.locator('#pipelines li', {
             hasText: livePipelineName,
         });
@@ -685,7 +701,7 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test('video starts playback after clicking Play preview', async ({ page }) => {
-        await page.getByRole('button', { name: 'Pipeline', exact: true }).click();
+        await openPipelineWorkspace(page);
         const pipelineItem = page.locator('#pipelines li', {
             hasText: livePipelineName,
         });
@@ -758,7 +774,10 @@ test.describe.serial('HLS Player — live playback', () => {
             data: {
                 name: 'E2E-Egress-Test',
                 url: 'rtmp://127.0.0.1:11935/live/e2e_egress_out',
-                encoding: 'source'
+                config: {
+                    video: { mode: 'source' },
+                    audio: { mode: 'all' },
+                },
             }
         });
         expect(outputResp.ok()).toBe(true);
@@ -767,7 +786,7 @@ test.describe.serial('HLS Player — live playback', () => {
         await ctx.dispose();
 
         await page.goto('/');
-        await page.getByRole('button', { name: 'Pipeline', exact: true }).click();
+        await openPipelineWorkspace(page);
         const pipelineItem = page.locator('#pipelines li', { hasText: livePipelineName });
         await pipelineItem.click();
 
@@ -786,11 +805,11 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test('settings persistence validation', async ({ page }) => {
-        await page.getByRole('button', { name: 'Pipeline', exact: true }).click();
+        await openPipelineWorkspace(page);
         const pipelineItem = page.locator('#pipelines li', { hasText: livePipelineName });
         await expect(pipelineItem).toBeVisible({ timeout: 10000 });
 
-        await page.getByRole('button', { name: 'Settings', exact: true }).click();
+        await page.locator('#workspace-tab-settings').click();
         const serverNameInput = page.locator('#settings-server-name');
         await expect(serverNameInput).toBeVisible();
 
@@ -805,7 +824,7 @@ test.describe.serial('HLS Player — live playback', () => {
 
         await page.goto('/');
         await expect(page.locator('button', { hasText: `Restream: ${newName}` })).toBeVisible({ timeout: 10000 });
-        await page.getByRole('button', { name: 'Settings', exact: true }).click();
+        await page.locator('#workspace-tab-settings').click();
         await expect(serverNameInput).toHaveValue(newName);
 
         await serverNameInput.fill(originalName);
@@ -814,7 +833,8 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test('diagnostics modal auditing', async ({ page }) => {
-        await page.getByRole('button', { name: 'Inspect', exact: true }).click();
+        await selectPipelineForWorkspace(page, livePipelineName);
+        await page.locator('#pipeline-workspace-tab-inspect').click();
         
         const select = page.locator('#inspect-pipeline-select');
         await expect(select).toBeVisible();
@@ -840,7 +860,8 @@ test.describe.serial('HLS Player — live playback', () => {
     });
 
     test('Control Room HLS preview player verification', async ({ page }) => {
-        await page.getByRole('button', { name: 'Control Room', exact: true }).click();
+        await selectPipelineForWorkspace(page, livePipelineName);
+        await page.locator('#pipeline-workspace-tab-monitor').click();
 
         const select = page.locator('#control-room-pipeline-select');
         await expect(select).toBeVisible();
@@ -955,7 +976,7 @@ test.describe.serial('HLS Player — alternate audio preview', () => {
         };
         page.on('response', responseListener);
 
-        await page.getByRole('button', { name: 'Pipeline', exact: true }).click();
+        await openPipelineWorkspace(page);
         const pipelineItem = page.locator('#pipelines li', { hasText: pipelineName });
         await expect(pipelineItem).toBeVisible({ timeout: 10000 });
         await pipelineItem.click();

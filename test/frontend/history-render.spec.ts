@@ -100,6 +100,20 @@ test.describe("History Render — correlation contract", () => {
           id: 1,
           ts: "2026-06-29T00:00:00Z",
           level: "INFO",
+          target: "restream::media::external_transcoder",
+          message: "[ext-transcoder] stage start  pipeline=pipe-1 encoding=video:720p",
+          fields: JSON.stringify({
+            correlation_id: "stage-0000000000000002",
+            stage_backend: "external_transcoder",
+          }),
+          pipelineId: "pipe-1",
+          outputId: null,
+          eventType: "stage.started",
+        },
+        {
+          id: 2,
+          ts: "2026-06-29T00:00:05Z",
+          level: "INFO",
           target: "restream::lib",
           message: "output job started",
           fields: JSON.stringify({
@@ -109,20 +123,6 @@ test.describe("History Render — correlation contract", () => {
           pipelineId: "pipe-1",
           outputId: "out-1",
           eventType: "lifecycle.start",
-        },
-        {
-          id: 2,
-          ts: "2026-06-29T00:00:05Z",
-          level: "INFO",
-          target: "restream::media::external_transcoder",
-          message: "[ext-transcoder] stage start  pipeline=pipe-1 encoding=video:720p",
-          fields: JSON.stringify({
-            correlation_id: "stage-0000000000000002",
-            stage_backend: "external_ffmpeg",
-          }),
-          pipelineId: "pipe-1",
-          outputId: null,
-          eventType: "stage.started",
         },
         {
           id: 3,
