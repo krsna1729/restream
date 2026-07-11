@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use sysinfo::{Disks, Networks, System};
 
 use crate::alerts;
+use crate::api_runtime_views::{ResourceMapOptions, ResourceMapView};
 use crate::diag;
 use crate::events;
 
@@ -45,6 +46,25 @@ pub struct DashboardRuntimeQuery {
 #[derive(Deserialize)]
 pub struct MetricsSystemQuery {
     pub view: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ResourceMapQuery {
+    pub pipeline_id: Option<String>,
+    pub view: Option<String>,
+    pub top_n: Option<usize>,
+}
+
+impl ResourceMapQuery {
+    fn options(&self) -> ResourceMapOptions {
+        let view = match self.view.as_deref() {
+            Some("summary") => ResourceMapView::Summary,
+            Some("detail") => ResourceMapView::Detail,
+            Some("grouped") | None => ResourceMapView::Grouped,
+            Some(_) => ResourceMapView::Grouped,
+        };
+        ResourceMapOptions::new(view, self.top_n)
+    }
 }
 
 pub fn expected_media_path(media_dir: &str, filename: &str) -> PathBuf {
@@ -752,6 +772,84 @@ pub fn engine_metrics(sys: &System, core_count: usize) -> serde_json::Value {
         "externalFfmpegCount": external_ffmpeg_count,
         "externalFfmpegMemoryBytes": external_ffmpeg_memory,
     })
+}
+
+fn proc_self_thread_count() -> u64 {
+    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+        return 0;
+    };
+    status
+        .lines()
+        .find_map(|line| {
+            let value = line.strip_prefix("Threads:")?.trim();
+            value.parse::<u64>().ok()
+        })
+        .unwrap_or(0)
+}
+
+fn proc_self_fd_count() -> Option<u64> {
+    std::fs::read_dir("/proc/self/fd")
+        .ok()
+        .map(|entries| entries.filter_map(Result::ok).count() as u64)
+}
+
+pub(crate) fn process_resource_snapshot(
+    sys: &System,
+) -> crate::api_runtime_views::ProcessResourceSnapshot {
+    let core_count = sys.cpus().len();
+    let metrics = engine_metrics(sys, core_count);
+    crate::api_runtime_views::ProcessResourceSnapshot {
+        cpu_percent: float_metric(&metrics, "cpuPercent"),
+        restream_cpu_percent: float_metric(&metrics, "restreamCpuPercent"),
+        external_ffmpeg_cpu_percent: float_metric(&metrics, "externalFfmpegCpuPercent"),
+        cpu_sample_ready: metrics
+            .get("cpuSampleReady")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        restream_memory_bytes: u64_metric(&metrics, "restreamMemoryBytes"),
+        external_ffmpeg_memory_bytes: u64_metric(&metrics, "externalFfmpegMemoryBytes"),
+        total_memory_bytes: u64_metric(&metrics, "totalMemoryBytes"),
+        external_ffmpeg_count: u64_metric(&metrics, "externalFfmpegCount"),
+        process_thread_count: proc_self_thread_count(),
+        fd_count: proc_self_fd_count(),
+    }
+}
+
+fn u64_metric(value: &serde_json::Value, key: &str) -> u64 {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+}
+
+fn float_metric(value: &serde_json::Value, key: &str) -> f64 {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0)
+}
+
+pub async fn v1_engine_resource_map_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<ResourceMapQuery>,
+) -> impl IntoResponse {
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
+    }
+
+    let sys = System::new_all();
+    let process = process_resource_snapshot(&sys);
+    let snapshot = state
+        .runtime_view_service
+        .resource_map(
+            &state.engine,
+            process,
+            query.pipeline_id.as_deref(),
+            query.options(),
+        )
+        .await;
+    Json(snapshot).into_response()
 }
 
 pub async fn metrics_system_handler(

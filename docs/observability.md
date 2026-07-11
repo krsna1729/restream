@@ -10,6 +10,7 @@ It does not expose a Prometheus text endpoint, proxy Grafana, or poll a sidecar.
 |---|---|---|
 | `GET /healthz` | None | Process liveness: `{ "status": "ok" }` |
 | `GET /api/v1/engine/health` | Session | Pipeline input/output state, transport quality, recording state, SRT listener pressure |
+| `GET /api/v1/engine/resource-map` | Session | Runtime or pipeline-scoped resource attribution: CPU/RSS/thread summary plus measured/derived resource nodes; defaults to grouped top-N for large fleets |
 | `GET /metrics/system` | Session | Host CPU/memory/disk/network plus restream engine self metrics, including child FFmpeg CPU/RSS (JSON, not Prometheus) |
 | `GET /api/v1/engine` | Session | Restream build/toolchain, linked native-library versions, SBOM summary, and System information: OS, kernel, memory, CPU topology/features, and virtualization context |
 | `GET /api/v1/engine/sbom` | Session | CycloneDX 1.5 runtime SBOM for resolved Rust crates and linked native libraries |

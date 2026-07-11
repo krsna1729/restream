@@ -5285,6 +5285,71 @@ async fn metrics_system_requires_auth_and_returns_structured_data() {
     assert!(body["generatedAt"].is_string());
 }
 
+#[tokio::test]
+async fn engine_resource_map_requires_auth_and_returns_structured_data() {
+    let (app, cookie) = authenticated_app().await;
+
+    let unauth = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/engine/resource-map")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/engine/resource-map",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["scope"]["kind"].as_str(), Some("runtime"));
+    assert_eq!(body["view"].as_str(), Some("grouped"));
+    assert_eq!(body["limits"]["topN"].as_u64(), Some(25));
+    assert!(body["limits"]["totalNodeCount"].is_number());
+    assert!(body["limits"]["truncatedNodeCount"].is_number());
+    assert!(body["memoryAccounting"].is_null());
+    assert!(body["summary"]["processThreadCount"].is_number());
+    assert!(body["summary"]["srtSenderThreads"].is_number());
+    assert!(body["nodes"].as_array().is_some_and(|nodes| {
+        nodes
+            .iter()
+            .any(|node| node["memory"]["confidence"].as_str() == Some("measured"))
+    }));
+    assert!(body["attribution"]["derived"].is_array());
+
+    let detail = app
+        .clone()
+        .oneshot(auth_req(
+            "GET",
+            "/api/v1/engine/resource-map?view=detail&top_n=1",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail_body = body_json(detail).await;
+    assert_eq!(detail_body["view"].as_str(), Some("detail"));
+    assert_eq!(detail_body["limits"]["topN"].as_u64(), Some(1));
+    assert!(
+        detail_body["nodes"]
+            .as_array()
+            .is_some_and(|nodes| nodes.len() <= 1)
+    );
+    assert!(detail_body["memoryAccounting"].is_object());
+}
+
 // ── coverage gap: agent graph-diff-preview ──────────────────────────────
 
 #[tokio::test]

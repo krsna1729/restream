@@ -256,15 +256,190 @@ test("inspector preserves absent and invalid workspace selections", async () => 
   ]) {
     window.location.href = href;
     inspector.renderPipelineInspector();
+    const expectedSummary = href.includes("p=missing")
+      ? /No pipeline selected/
+      : /Whole Runtime/;
     assert.match(
       document.getElementById("inspect-pipeline-summary").innerHTML,
-      /No pipeline selected/,
+      expectedSummary,
     );
     assert.equal(
       document.getElementById("inspect-open-pipeline-btn").disabled,
       true,
     );
   }
+});
+
+test("inspector renders runtime resource graph with accuracy labels", async () => {
+  const { document, window } = installFakeDom();
+  window.location.href = "http://localhost/?mode=pipeline&view=inspect";
+  for (const [tag, id] of [
+    ["select", "inspect-pipeline-select"],
+    ["button", "inspect-open-pipeline-btn"],
+    ["div", "inspect-pipeline-summary"],
+    ["div", "inspect-diagnostics-summary"],
+    ["button", "inspect-refresh-graph-btn"],
+    ["button", "inspect-open-diagnostics-btn"],
+    ["div", "inspect-graph-status"],
+    ["div", "inspect-graph-container"],
+  ]) {
+    appendRoot(document, tag, id);
+  }
+  const inspector = await loadCompiledFrontendModule(
+    "features/pipeline-inspector.js",
+  );
+  const { state } = await loadCompiledFrontendModule("core/state.js");
+  state.pipelines = [];
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        scope: { kind: "runtime" },
+        summary: {
+          cpuPercent: 7.5,
+          totalMemoryBytes: 104857600,
+          processThreadCount: 12,
+          srtSenderThreads: 1,
+          srtSenderThreadLimit: 512,
+          externalFfmpegCount: 1,
+          retainedPayloadBytes: 4096,
+        },
+        nodes: [
+          {
+            id: "runtime:restream",
+            kind: "runtime_process",
+            label: "restream",
+            execution: "process",
+            cpuPercent: 2.5,
+            memory: {
+              attributedBytes: 52428800,
+              confidence: "measured",
+            },
+            threads: { process: 12 },
+            hotspots: ["control"],
+          },
+          {
+            id: "runtime:external-ffmpeg",
+            kind: "child_process_group",
+            label: "External FFmpeg",
+            execution: "child_process",
+            cpuPercent: 5,
+            memory: {
+              attributedBytes: 52428800,
+              confidence: "measured",
+            },
+            threads: { childProcess: 1 },
+            hotspots: ["transcoding"],
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+  inspector.renderPipelineInspector();
+  await inspector.refreshPipelineInspectorGraph();
+
+  const graphHtml = document.getElementById(
+    "inspect-graph-container",
+  ).innerHTML;
+  assert.match(graphHtml, /Runtime Resource Graph/);
+  assert.match(graphHtml, /Measured/);
+  assert.match(graphHtml, /Derived/);
+  assert.match(graphHtml, /runtime-resource-graph/);
+});
+
+test("inspector uses grouped resource view for large-output pipelines", async () => {
+  const { document, window } = installFakeDom();
+  window.location.href =
+    "http://localhost/?mode=pipeline&view=inspect&p=pipe-large";
+  for (const [tag, id] of [
+    ["select", "inspect-pipeline-select"],
+    ["button", "inspect-open-pipeline-btn"],
+    ["div", "inspect-pipeline-summary"],
+    ["div", "inspect-diagnostics-summary"],
+    ["button", "inspect-refresh-graph-btn"],
+    ["button", "inspect-open-diagnostics-btn"],
+    ["div", "inspect-graph-status"],
+    ["div", "inspect-graph-container"],
+  ]) {
+    appendRoot(document, tag, id);
+  }
+  const requests = [];
+  globalThis.fetch = async (url) => {
+    requests.push(String(url));
+    return new Response(
+      JSON.stringify({
+        scope: { kind: "pipeline", pipelineId: "pipe-large" },
+        view: "grouped",
+        limits: {
+          topN: 25,
+          totalNodeCount: 125,
+          returnedNodeCount: 4,
+          truncatedNodeCount: 121,
+        },
+        summary: {
+          cpuPercent: 12,
+          totalMemoryBytes: 104857600,
+          processThreadCount: 30,
+          srtSenderThreads: 10,
+          srtSenderThreadLimit: 512,
+          externalFfmpegCount: 2,
+          retainedPayloadBytes: 4096,
+        },
+        nodes: [],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const inspector = await loadCompiledFrontendModule(
+    "features/pipeline-inspector.js",
+  );
+  const { state } = await loadCompiledFrontendModule("core/state.js");
+  state.pipelines = [
+    {
+      id: "pipe-large",
+      name: "Large Pipeline",
+      input: {
+        status: "on",
+        probeReady: true,
+        probeStatus: "ready",
+        readers: 0,
+        audioTracks: [],
+        publisher: { protocol: "rtmp" },
+      },
+      outs: Array.from({ length: 51 }, (_, index) => ({
+        id: `out-${index}`,
+        name: `Output ${index}`,
+        desiredState: "started",
+        status: "running",
+        url: `rtmp://example/${index}`,
+        config: { video: { mode: "source" }, audio: { mode: "all" } },
+      })),
+      stats: { inputBitrateKbps: 1, outputBitrateKbps: 1 },
+      hlsPreview: { active: false, segments: 0 },
+    },
+  ];
+
+  inspector.renderPipelineInspector();
+  await inspector.refreshPipelineInspectorGraph();
+
+  assert.equal(
+    requests.some((url) => url.includes("/graph")),
+    false,
+    "large pipelines should not fetch the raw processing graph by default",
+  );
+  assert.equal(
+    requests.some((url) =>
+      url.includes(
+        "/api/v1/engine/resource-map?pipeline_id=pipe-large&view=grouped&top_n=25",
+      ),
+    ),
+    true,
+  );
+  assert.match(
+    document.getElementById("inspect-graph-status").textContent,
+    /grouped resources/,
+  );
 });
 
 test("monitor consumes and propagates the shared workspace selection", async () => {

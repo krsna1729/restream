@@ -100,6 +100,7 @@ pub fn redacted_context(
     health: Value,
     engine_telemetry: Value,
     pipeline_telemetry: Vec<Value>,
+    resource_map: Value,
     graphs: Vec<Value>,
     alerts: Vec<crate::alerts::Alert>,
     events: Vec<crate::events::Event>,
@@ -137,6 +138,7 @@ pub fn redacted_context(
                 "engine": redact_secrets(engine_telemetry),
                 "pipelines": pipeline_telemetry.into_iter().map(redact_secrets).collect::<Vec<_>>()
             },
+            "resources": redact_secrets(resource_map),
             "graphs": graphs.into_iter().map(redact_secrets).collect::<Vec<_>>(),
             "alerts": alerts.iter().map(redact_serializable).collect::<Vec<_>>(),
             "events": events.iter().map(redact_serializable).collect::<Vec<_>>()
@@ -164,6 +166,7 @@ pub fn capabilities() -> AgentCapabilities {
             "find_first_unhealthy_node",
             "explain_degradation",
             "estimate_change_impact",
+            "inspect_resource_map",
             "inspect_desired_vs_actual",
             "inspect_diagnostics_summary",
         ],
@@ -223,6 +226,7 @@ pub fn route_catalog() -> Value {
         {"tool": "get_agent_capabilities", "method": "GET", "path": "/api/v1/agent/capabilities", "auth": "session", "feature": "agent-plane", "mutates": false, "responseSchema": "AgentCapabilities"},
         {"tool": "get_agent_context", "method": "GET", "path": "/api/v1/agent/context", "auth": "session", "feature": "agent-plane", "mutates": false, "responseSchema": "AgentContextV1"},
         {"tool": "investigate_pipeline_issue", "method": "POST", "path": "/api/v1/agent/investigations", "auth": "session", "feature": "agent-plane", "mutates": false, "requestSchema": "InvestigationRequest", "responseSchema": "InvestigationResponse"},
+        {"tool": "inspect_resource_map", "method": "GET", "path": "/api/v1/engine/resource-map", "auth": "session", "feature": "core", "mutates": false, "responseSchema": "ResourceMapSnapshot"},
         {"tool": "plan_pipeline_change", "method": "POST", "path": "/api/v1/agent/plans", "auth": "session", "feature": "agent-plane", "mutates": false, "requestSchema": "PlanRequest", "responseSchema": "PlanResponse"},
         {"tool": "validate_change", "method": "POST", "path": "/api/v1/agent/plans/validate", "auth": "session", "feature": "agent-plane", "mutates": false, "requestSchema": "PlanRequest", "responseSchema": "ValidationResult"},
         {"tool": "preview_graph_diff", "method": "POST", "path": "/api/v1/agent/graph-diff-preview", "auth": "session", "feature": "agent-plane", "mutates": false, "requestSchema": "PlanRequest", "responseSchema": "GraphDiffPreview"},
@@ -427,6 +431,7 @@ pub fn investigation_response(
     health: Value,
     graph: Option<Value>,
     telemetry: Value,
+    resource_map: Value,
     alerts: Vec<crate::alerts::Alert>,
     events: Vec<crate::events::Event>,
 ) -> Value {
@@ -489,6 +494,7 @@ pub fn investigation_response(
             "health": redact_secrets(health),
             "graph": graph.map(redact_secrets),
             "telemetry": redact_secrets(telemetry),
+            "resources": redact_secrets(resource_map),
             "alerts": alerts.iter().map(redact_serializable).collect::<Vec<_>>(),
             "events": events.iter().map(redact_serializable).collect::<Vec<_>>(),
         }

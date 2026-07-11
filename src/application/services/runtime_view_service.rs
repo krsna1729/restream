@@ -64,6 +64,16 @@ impl RuntimeViewService {
         crate::api_runtime_views::engine_telemetry(engine).await
     }
 
+    pub async fn resource_map(
+        &self,
+        engine: &MediaEngine,
+        process: crate::api_runtime_views::ProcessResourceSnapshot,
+        pipeline_id: Option<&str>,
+        options: crate::api_runtime_views::ResourceMapOptions,
+    ) -> serde_json::Value {
+        crate::api_runtime_views::resource_map(engine, process, pipeline_id, options).await
+    }
+
     pub async fn pipeline_telemetry(
         &self,
         engine: &MediaEngine,

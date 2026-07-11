@@ -6,9 +6,13 @@
 //! stay split by responsibility here rather than inside `media`.
 
 mod graph;
+mod resource_map;
 mod status;
 mod telemetry;
 
 pub(crate) use graph::processing_graph;
+pub(crate) use resource_map::{
+    ProcessResourceSnapshot, ResourceMapOptions, ResourceMapView, resource_map,
+};
 pub(crate) use status::{health_snapshot, health_summary_snapshot, output_status};
 pub(crate) use telemetry::{engine_telemetry, pipeline_telemetry, stage_telemetry_by_display};

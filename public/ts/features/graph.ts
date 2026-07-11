@@ -229,7 +229,11 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
     svg += `<circle cx="${pos.x + NODE_W - 14}" cy="${pos.y + 40}" r="5" fill="${dotColor}"/>`;
 
     const detailLines: string[] = [];
-    if (node.type === "ring_buffer" && node.details) {
+    if (node.details?.resource === true) {
+      detailLines.push(`cpu: ${String(node.details.cpu || "--")}`);
+      detailLines.push(`memory: ${String(node.details.memory || "--")}`);
+      detailLines.push(`threads: ${String(node.details.threads || "--")}`);
+    } else if (node.type === "ring_buffer" && node.details) {
       const fill = finiteNumber(node.details.fill);
       const capacity = finiteNumber(node.details.capacity);
       const readers = Array.isArray(node.details.readers)

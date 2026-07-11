@@ -410,8 +410,8 @@ Context responses include:
 - build/runtime status, OS basics, native-library versions, and feature flags
 - redacted pipelines, outputs, ingests, jobs, transcode profiles, and settings
 - current desired-vs-actual summaries for inputs, outputs, recording, and HLS
-- health, engine telemetry, per-pipeline telemetry, processing graphs, alerts,
-  and recent lifecycle events
+- health, resource maps, engine telemetry, per-pipeline telemetry, processing
+  graphs, alerts, and recent lifecycle events
 - media inventory, storage summary, dependency summaries, and passive
   diagnostics findings plus active diagnostics route metadata
 - redaction metadata describing which fields were removed
@@ -1007,6 +1007,36 @@ configured outputs. Returns 404 for unknown pipeline IDs.
 ### `GET /api/v1/pipelines/:pipelineId/alerts`
 
 Alerts for a single pipeline. Same alert shape as the aggregate endpoint.
+
+### `GET /api/v1/engine/resource-map`
+
+Authenticated resource attribution snapshot for Inspect and agent workflows.
+Without query params it returns `scope.kind = "runtime"` for the whole restream
+runtime. With `pipeline_id=<id>` it returns `scope.kind = "pipeline"` and filters
+stage/output nodes to that pipeline.
+
+Query parameters:
+
+- `view=grouped|summary|detail`: defaults to `grouped`. `summary` returns only
+  summary counters and no nodes. `grouped` collapses high-cardinality resources
+  such as outputs by kind/protocol/execution. `detail` returns top individual
+  nodes and includes detailed memory-accounting payloads.
+- `top_n=<n>`: caps returned nodes, default `25`, maximum `200`.
+
+The summary contains measured process and child-process fields such as CPU,
+RSS, thread count, file descriptor count, child FFmpeg count, and active SRT
+sender thread permits. Nodes include execution ownership (`tokio_task`,
+`os_thread`, `child_process`, `shared`, or `process`) plus memory attribution
+with a confidence marker:
+
+- `measured`: process RSS, child FFmpeg RSS, process thread/fd counts
+- `derived`: ring payload stats, AVIO queue lengths, stage/egress counters
+- `estimated`: overheads that are intentionally not assigned to exact nodes
+
+Responses include `limits.totalNodeCount`, `limits.returnedNodeCount`, and
+`limits.truncatedNodeCount` so large fleets can show that the view is grouped or
+capped. Agent context uses summary mode by default; investigation responses use
+grouped mode unless a future explicit drill-down tool asks for detail.
 
 ### `GET /api/v1/pipelines/:pipelineId/graph`
 

@@ -336,6 +336,49 @@ export interface StageTelemetrySnapshot extends TelemetryStage {
   pipelineId: string;
 }
 
+export interface ResourceMapMemory {
+  attributedBytes?: number | null;
+  confidence?: "measured" | "derived" | "estimated" | string;
+  source?: string;
+}
+
+export interface ResourceMapNode {
+  id: string;
+  kind: string;
+  label: string;
+  pipelineId?: string | null;
+  execution?: string;
+  cpuPercent?: number | null;
+  memory?: ResourceMapMemory | null;
+  threads?: Record<string, number | string | null>;
+  status?: string | null;
+  phase?: string | null;
+  metrics?: TelemetryMetrics;
+  queue?: TelemetryMetrics | null;
+  hotspots?: string[];
+}
+
+export interface ResourceMapSnapshot {
+  generatedAt: string;
+  scope: {
+    kind: "runtime" | "pipeline" | string;
+    pipelineId?: string | null;
+  };
+  view?: "summary" | "grouped" | "detail" | string;
+  limits?: {
+    topN?: number;
+    totalNodeCount?: number;
+    returnedNodeCount?: number;
+    truncatedNodeCount?: number;
+    maxTopN?: number;
+  };
+  summary: Record<string, number | string | boolean | null>;
+  memoryAccounting?: Record<string, unknown>;
+  nodes: ResourceMapNode[];
+  edges?: Array<Record<string, unknown>>;
+  attribution?: Record<string, string[]>;
+}
+
 async function getOverview(): Promise<OverviewSnapshot | null> {
   return apiRequest<OverviewSnapshot>("/api/v1/overview");
 }
@@ -377,6 +420,22 @@ async function getStageTelemetry(
   return apiRequest<StageTelemetrySnapshot>(
     `/api/v1/stages/${encodeURIComponent(stageKey)}/telemetry`,
     { silentStatuses: [404] },
+  );
+}
+
+async function getResourceMap(
+  pipelineId?: string | null,
+  options: { view?: "summary" | "grouped" | "detail"; topN?: number } = {},
+): Promise<ResourceMapSnapshot | null> {
+  const query = new URLSearchParams();
+  if (pipelineId) query.set("pipeline_id", pipelineId);
+  if (options.view) query.set("view", options.view);
+  if (Number.isFinite(options.topN)) query.set("top_n", String(options.topN));
+  const suffix = query.toString();
+  return apiRequest<ResourceMapSnapshot>(
+    suffix
+      ? `/api/v1/engine/resource-map?${suffix}`
+      : "/api/v1/engine/resource-map",
   );
 }
 
@@ -1026,6 +1085,7 @@ export {
   getEngineTelemetry,
   getPipelineTelemetry,
   getStageTelemetry,
+  getResourceMap,
   getStreamKeys,
   getEngineStatus,
   getEngineSbomEndpoint,

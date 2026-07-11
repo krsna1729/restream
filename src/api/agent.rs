@@ -42,9 +42,11 @@ use super::state::recording_enabled_map;
 #[cfg(feature = "agent-execution")]
 use super::state::to_hex;
 #[cfg(feature = "agent-plane")]
-use super::telemetry::system_status;
+use super::telemetry::{process_resource_snapshot, system_status};
 #[cfg(feature = "agent-plane")]
 use crate::alerts;
+#[cfg(feature = "agent-plane")]
+use crate::api_runtime_views::{ResourceMapOptions, ResourceMapView};
 #[cfg(feature = "agent-plane")]
 use crate::api_view_models;
 #[cfg(feature = "agent-plane")]
@@ -59,6 +61,9 @@ use crate::types::{Ingest, Pipeline};
 use std::path::Path as FsPath;
 #[cfg(feature = "agent-plane")]
 use sysinfo::{Disks, System};
+
+#[cfg(feature = "agent-plane")]
+const AGENT_PROCESSING_GRAPH_OUTPUT_LIMIT: usize = 50;
 
 #[cfg(feature = "agent-plane")]
 pub async fn agent_capabilities_handler(
@@ -166,6 +171,11 @@ pub async fn agent_investigation_handler(
     let alerts = alerts::derive_alerts(&health);
     let graph = if let Some(pid) = request.pipeline_id.as_deref()
         && pipeline_exists
+        && outputs
+            .iter()
+            .filter(|output| output.pipeline_id == pid)
+            .count()
+            <= AGENT_PROCESSING_GRAPH_OUTPUT_LIMIT
     {
         Some(
             state
@@ -187,6 +197,16 @@ pub async fn agent_investigation_handler(
             .engine_telemetry(&state.engine)
             .await
     };
+    let sys = System::new_all();
+    let resource_map = state
+        .runtime_view_service
+        .resource_map(
+            &state.engine,
+            process_resource_snapshot(&sys),
+            request.pipeline_id.as_deref(),
+            ResourceMapOptions::new(ResourceMapView::Grouped, Some(25)),
+        )
+        .await;
     let events = state.engine.recent_events(
         request.event_limit.min(events::MAX_EVENTS),
         request.pipeline_id.as_deref(),
@@ -201,6 +221,7 @@ pub async fn agent_investigation_handler(
         health,
         graph,
         telemetry,
+        resource_map,
         alerts,
         events,
     ))
@@ -531,6 +552,16 @@ async fn build_agent_context(state: &AppState) -> serde_json::Value {
         .runtime_view_service
         .engine_telemetry(&state.engine)
         .await;
+    let sys = System::new_all();
+    let resource_map = state
+        .runtime_view_service
+        .resource_map(
+            &state.engine,
+            process_resource_snapshot(&sys),
+            None,
+            ResourceMapOptions::summary(),
+        )
+        .await;
     let mut pipeline_telemetry = Vec::new();
     let mut graphs = Vec::new();
     for pipeline_id in &pipeline_ids {
@@ -568,7 +599,6 @@ async fn build_agent_context(state: &AppState) -> serde_json::Value {
 
     let bonding_available = state.engine.bonding_available();
     let (mut status, _) = crate::runtime_info::status_and_sbom(bonding_available);
-    let sys = System::new_all();
     status["os"] = system_status(&sys);
 
     let settings = catalog.settings;
@@ -611,6 +641,7 @@ async fn build_agent_context(state: &AppState) -> serde_json::Value {
         health,
         engine_telemetry,
         pipeline_telemetry,
+        resource_map,
         graphs,
         alerts,
         events,
