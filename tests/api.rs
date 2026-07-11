@@ -2221,6 +2221,8 @@ async fn status_sbom_is_authenticated_cyclonedx_with_licenses() {
         "libswresample",
         "libavutil",
         "libsrt",
+        "libmbedtls",
+        "libmbedx509",
         "libmbedcrypto",
         "SQLite",
         "x264",
@@ -2243,6 +2245,89 @@ async fn status_sbom_is_authenticated_cyclonedx_with_licenses() {
                 .is_some_and(|v| !v.is_empty())
         );
     }
+
+    for (name, expected_inputs) in [
+        ("libsrt", &["lib/libsrt.a", "lib/pkgconfig/srt.pc"][..]),
+        (
+            "libavcodec",
+            &["lib/libavcodec.a", "lib/pkgconfig/libavcodec.pc"][..],
+        ),
+        (
+            "libmbedcrypto",
+            &["lib/libmbedcrypto.a", "lib/pkgconfig/mbedcrypto.pc"][..],
+        ),
+        ("x264", &["lib/libx264.a", "lib/pkgconfig/x264.pc"][..]),
+    ] {
+        let component = components
+            .iter()
+            .find(|component| component["name"] == name)
+            .unwrap_or_else(|| panic!("missing native SBOM component {name}"));
+        assert!(
+            component["hashes"]
+                .as_array()
+                .is_some_and(|hashes| hashes.iter().any(|hash| {
+                    hash["alg"] == "SHA-256"
+                        && hash["content"]
+                            .as_str()
+                            .is_some_and(|content| content.len() == 64)
+                })),
+            "native component {name} should include a static archive SHA-256 hash"
+        );
+        let properties = component["properties"].as_array().unwrap();
+        for input in expected_inputs {
+            assert!(
+                properties
+                    .iter()
+                    .any(|property| property["name"] == "restream:nativeInput"
+                        && property["value"] == *input),
+                "native component {name} should list input {input}"
+            );
+            assert!(
+                properties.iter().any(|property| {
+                    property["name"] == "restream:nativeInputSha256"
+                        && property["value"]
+                            .as_str()
+                            .is_some_and(|value| value.starts_with(&format!("{input}=")))
+                }),
+                "native component {name} should list input hash for {input}"
+            );
+        }
+    }
+
+    let dependencies = json["dependencies"].as_array().unwrap();
+    let app_ref = json["metadata"]["component"]["bom-ref"].as_str().unwrap();
+    assert!(
+        dependencies.iter().any(|dependency| {
+            dependency["ref"] == app_ref
+                && dependency["dependsOn"].as_array().is_some_and(|refs| {
+                    refs.iter().any(|reference| {
+                        reference
+                            .as_str()
+                            .is_some_and(|reference| reference.starts_with("native:libsrt@"))
+                    })
+                })
+        }),
+        "SBOM dependencies should link the application to native components"
+    );
+    let libsrt_ref = components
+        .iter()
+        .find(|component| component["name"] == "libsrt")
+        .unwrap()["bom-ref"]
+        .as_str()
+        .unwrap();
+    assert!(
+        dependencies.iter().any(|dependency| {
+            dependency["ref"] == libsrt_ref
+                && dependency["dependsOn"].as_array().is_some_and(|refs| {
+                    refs.iter().any(|reference| {
+                        reference
+                            .as_str()
+                            .is_some_and(|reference| reference.starts_with("native:libmbedcrypto@"))
+                    })
+                })
+        }),
+        "SBOM dependencies should link libsrt to Mbed TLS crypto"
+    );
 
     let cargo_component = components
         .iter()

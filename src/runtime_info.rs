@@ -17,6 +17,8 @@ unsafe extern "C" {
 
 const RUST_DEPENDENCIES_JSON: &str =
     include_str!(concat!(env!("OUT_DIR"), "/rust-runtime-dependencies.json"));
+const NATIVE_BUILD_INPUTS_JSON: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/native-build-inputs.json"));
 
 fn c_string(pointer: *const c_char) -> String {
     if pointer.is_null() {
@@ -89,6 +91,111 @@ fn native_component(
     component
 }
 
+fn native_component_with_inputs(
+    name: &str,
+    version: String,
+    license_expression: &str,
+    version_source: &str,
+    properties: Vec<Value>,
+    input_paths: &[&str],
+    native_inputs: &[Value],
+) -> Value {
+    let mut component = native_component(
+        name,
+        version,
+        license_expression,
+        version_source,
+        properties,
+    );
+    let entries = native_input_entries(input_paths, native_inputs);
+
+    let archive_hashes: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry["kind"] == "static-archive")
+        .filter_map(|entry| {
+            entry["sha256"]
+                .as_str()
+                .map(|hash| json!({ "alg": "SHA-256", "content": hash }))
+        })
+        .collect();
+    if !archive_hashes.is_empty() {
+        component["hashes"] = json!(archive_hashes);
+    }
+
+    if let Some(list) = component["properties"].as_array_mut() {
+        for entry in entries {
+            if let (Some(path), Some(hash)) = (entry["path"].as_str(), entry["sha256"].as_str()) {
+                list.push(json!({ "name": "restream:nativeInput", "value": path }));
+                list.push(json!({
+                    "name": "restream:nativeInputSha256",
+                    "value": format!("{path}={hash}")
+                }));
+            }
+        }
+    }
+    component
+}
+
+fn native_input_entries<'a>(input_paths: &[&str], native_inputs: &'a [Value]) -> Vec<&'a Value> {
+    input_paths
+        .iter()
+        .filter_map(|path| {
+            native_inputs
+                .iter()
+                .find(|entry| entry["path"].as_str() == Some(*path))
+        })
+        .collect()
+}
+
+fn component_ref(components: &[Value], name: &str) -> Option<String> {
+    components
+        .iter()
+        .find(|component| component["name"] == name)
+        .and_then(|component| component["bom-ref"].as_str())
+        .map(str::to_owned)
+}
+
+fn sbom_dependencies(application_ref: &str, components: &[Value]) -> Value {
+    let component_refs: Vec<String> = components
+        .iter()
+        .filter_map(|component| component["bom-ref"].as_str().map(str::to_owned))
+        .collect();
+    let mut dependencies = vec![json!({
+        "ref": application_ref,
+        "dependsOn": component_refs
+    })];
+
+    for (name, depends_on) in [
+        (
+            "libsrt",
+            &["libmbedtls", "libmbedx509", "libmbedcrypto"][..],
+        ),
+        ("libmbedtls", &["libmbedx509", "libmbedcrypto"][..]),
+        ("libmbedx509", &["libmbedcrypto"][..]),
+        ("libavformat", &["libavcodec", "libavutil"][..]),
+        (
+            "libavfilter",
+            &["libavcodec", "libavformat", "libavutil"][..],
+        ),
+        ("libavcodec", &["libavutil", "x264", "x265"][..]),
+        ("libswscale", &["libavutil"][..]),
+        ("libswresample", &["libavutil"][..]),
+    ] {
+        if let Some(reference) = component_ref(components, name) {
+            let refs: Vec<String> = depends_on
+                .iter()
+                .filter_map(|dependency| component_ref(components, dependency))
+                .collect();
+            dependencies.push(json!({
+                "ref": reference,
+                "dependsOn": refs
+            }));
+        }
+    }
+
+    json!(dependencies)
+}
+
 fn rust_components() -> Vec<Value> {
     let dependencies: Vec<Value> =
         serde_json::from_str(RUST_DEPENDENCIES_JSON).expect("embedded dependency inventory");
@@ -136,7 +243,11 @@ fn sqlite_runtime_info() -> (String, String) {
     )
 }
 
-fn ffmpeg_components() -> (Vec<Value>, String, String) {
+fn native_build_inputs() -> Vec<Value> {
+    serde_json::from_str(NATIVE_BUILD_INPUTS_JSON).expect("embedded native input inventory")
+}
+
+fn ffmpeg_components(native_inputs: &[Value]) -> (Vec<Value>, String, String) {
     // SAFETY: avcodec_configuration and avcodec_license are FFmpeg C API
     // functions that return NUL-terminated static strings valid for the
     // process lifetime. No ownership transfer; caller must not free.
@@ -159,47 +270,59 @@ fn ffmpeg_components() -> (Vec<Value>, String, String) {
     // memory allocation; they are pure functions callable from any context.
     let components = unsafe {
         vec![
-            native_component(
+            native_component_with_inputs(
                 "libavcodec",
                 av_version(ffmpeg_next::ffi::avcodec_version()),
                 license_expression,
                 "runtime API",
                 common_properties(),
+                &["lib/libavcodec.a", "lib/pkgconfig/libavcodec.pc"],
+                native_inputs,
             ),
-            native_component(
+            native_component_with_inputs(
                 "libavformat",
                 av_version(ffmpeg_next::ffi::avformat_version()),
                 license_expression,
                 "runtime API",
                 common_properties(),
+                &["lib/libavformat.a", "lib/pkgconfig/libavformat.pc"],
+                native_inputs,
             ),
-            native_component(
+            native_component_with_inputs(
                 "libavfilter",
                 av_version(ffmpeg_next::ffi::avfilter_version()),
                 license_expression,
                 "runtime API",
                 common_properties(),
+                &["lib/libavfilter.a", "lib/pkgconfig/libavfilter.pc"],
+                native_inputs,
             ),
-            native_component(
+            native_component_with_inputs(
                 "libswscale",
                 av_version(ffmpeg_next::ffi::swscale_version()),
                 license_expression,
                 "runtime API",
                 common_properties(),
+                &["lib/libswscale.a", "lib/pkgconfig/libswscale.pc"],
+                native_inputs,
             ),
-            native_component(
+            native_component_with_inputs(
                 "libswresample",
                 av_version(ffmpeg_next::ffi::swresample_version()),
                 license_expression,
                 "runtime API",
                 common_properties(),
+                &["lib/libswresample.a", "lib/pkgconfig/libswresample.pc"],
+                native_inputs,
             ),
-            native_component(
+            native_component_with_inputs(
                 "libavutil",
                 av_version(ffmpeg_next::ffi::avutil_version()),
                 license_expression,
                 "runtime API",
                 common_properties(),
+                &["lib/libavutil.a", "lib/pkgconfig/libavutil.pc"],
+                native_inputs,
             ),
         ]
     };
@@ -231,6 +354,7 @@ fn libc_component() -> Option<Value> {
 }
 
 pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
+    let native_inputs = native_build_inputs();
     let (sqlite_version, sqlite_source_id) = sqlite_runtime_info();
     // SAFETY: mbedtls_version_get_string_full writes at most 18 bytes
     // (including the NUL) into the 32-byte buffer, then c_string reads it back
@@ -243,10 +367,11 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
     let srt_version = crate::media::srt::linked_srt_version();
     let x264_version = env!("RESTREAM_BUILD_X264_VERSION").to_string();
     let x265_version = env!("RESTREAM_BUILD_X265_VERSION").to_string();
-    let (mut native_components, ffmpeg_configuration, ffmpeg_license) = ffmpeg_components();
+    let (mut native_components, ffmpeg_configuration, ffmpeg_license) =
+        ffmpeg_components(&native_inputs);
 
     native_components.extend([
-        native_component(
+        native_component_with_inputs(
             "libsrt",
             srt_version.clone(),
             "MPL-2.0",
@@ -261,8 +386,34 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
                     "value": env!("RESTREAM_BUILD_SRT_VERSION")
                 }),
             ],
+            &["lib/libsrt.a", "lib/pkgconfig/srt.pc"],
+            &native_inputs,
         ),
-        native_component(
+        native_component_with_inputs(
+            "libmbedtls",
+            mbedtls_version.clone(),
+            "Apache-2.0",
+            "runtime API",
+            vec![json!({
+                "name": "restream:buildResolvedVersion",
+                "value": env!("RESTREAM_BUILD_MBEDTLS_VERSION")
+            })],
+            &["lib/libmbedtls.a", "lib/pkgconfig/mbedtls.pc"],
+            &native_inputs,
+        ),
+        native_component_with_inputs(
+            "libmbedx509",
+            mbedtls_version.clone(),
+            "Apache-2.0",
+            "runtime API",
+            vec![json!({
+                "name": "restream:buildResolvedVersion",
+                "value": env!("RESTREAM_BUILD_MBEDTLS_VERSION")
+            })],
+            &["lib/libmbedx509.a", "lib/pkgconfig/mbedx509.pc"],
+            &native_inputs,
+        ),
+        native_component_with_inputs(
             "libmbedcrypto",
             mbedtls_version.clone(),
             "Apache-2.0",
@@ -271,6 +422,8 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
                 "name": "restream:buildResolvedVersion",
                 "value": env!("RESTREAM_BUILD_MBEDTLS_VERSION")
             })],
+            &["lib/libmbedcrypto.a", "lib/pkgconfig/mbedcrypto.pc"],
+            &native_inputs,
         ),
         native_component(
             "SQLite",
@@ -282,7 +435,7 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
                 "value": sqlite_source_id
             })],
         ),
-        native_component(
+        native_component_with_inputs(
             "x264",
             x264_version.clone(),
             "GPL-2.0-or-later",
@@ -291,8 +444,10 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
                 "name": "restream:runtimeDispatch",
                 "value": "x86 assembly enabled"
             })],
+            &["lib/libx264.a", "lib/pkgconfig/x264.pc"],
+            &native_inputs,
         ),
-        native_component(
+        native_component_with_inputs(
             "x265",
             x265_version.clone(),
             "GPL-2.0-or-later",
@@ -301,6 +456,8 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
                 "name": "restream:runtimeDispatch",
                 "value": "x86 assembly enabled"
             })],
+            &["lib/libx265.a", "lib/pkgconfig/x265.pc"],
+            &native_inputs,
         ),
         native_component(
             "libstdc++",
@@ -362,6 +519,10 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
             }
         ]
     });
+    let application_ref = application["bom-ref"]
+        .as_str()
+        .expect("application component has bom-ref");
+    let dependencies = sbom_dependencies(application_ref, &components);
 
     let sbom = json!({
         "bomFormat": "CycloneDX",
@@ -384,7 +545,8 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
                 { "name": "restream:nativeBuildId", "value": env!("RESTREAM_NATIVE_BUILD_ID") }
             ]
         },
-        "components": components
+        "components": components,
+        "dependencies": dependencies
     });
 
     // SAFETY: av_version_info returns a NUL-terminated static string

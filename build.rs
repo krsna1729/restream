@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 fn main() {
@@ -48,6 +49,7 @@ fn main() {
     }
 
     check_required_static_inputs(&prefix);
+    embed_native_input_inventory(&prefix);
 
     let pc_path = pkgconfig_dir.join("srt.pc");
 
@@ -272,6 +274,63 @@ fn assert_required_file(path: &Path, message: &str) {
         Ok(metadata) if metadata.is_file() => {}
         _ => panic!("{message}"),
     }
+}
+
+fn embed_native_input_inventory(prefix: &Path) {
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR missing"));
+    let path = out_dir.join("native-build-inputs.json");
+    let mut inputs = Vec::new();
+
+    for archive in REQUIRED_STATIC_ARCHIVES {
+        inputs.push(native_input(
+            prefix,
+            &format!("lib/{archive}"),
+            "static-archive",
+        ));
+    }
+    for package in REQUIRED_PKG_CONFIG_PACKAGES {
+        inputs.push(native_input(
+            prefix,
+            &format!("lib/pkgconfig/{package}.pc"),
+            "pkg-config",
+        ));
+    }
+    inputs.sort_by(|left, right| left["path"].as_str().cmp(&right["path"].as_str()));
+
+    let bytes =
+        serde_json::to_vec_pretty(&inputs).expect("native build input inventory should serialize");
+    std::fs::write(&path, bytes).unwrap_or_else(|error| {
+        panic!(
+            "failed to write native build input inventory {}: {error}",
+            path.display()
+        )
+    });
+}
+
+fn native_input(prefix: &Path, relative_path: &str, kind: &str) -> serde_json::Value {
+    let path = prefix.join(relative_path);
+    json!({
+        "kind": kind,
+        "path": relative_path,
+        "sha256": file_sha256(&path),
+    })
+}
+
+fn file_sha256(path: &Path) -> String {
+    let mut file = std::fs::File::open(path)
+        .unwrap_or_else(|error| panic!("failed to open native input {}: {error}", path.display()));
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = file.read(&mut buffer).unwrap_or_else(|error| {
+            panic!("failed to hash native input {}: {error}", path.display())
+        });
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    to_hex(&hasher.finalize())
 }
 
 fn assert_pinned_paths(package: &str, prefix: &Path, paths: &[PathBuf]) {

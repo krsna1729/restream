@@ -97,6 +97,8 @@ fn release_policy_metadata_is_declared_and_enforced() {
     assert!(build_rs.contains("remove_var(\"PKG_CONFIG_PATH\")"));
     assert!(build_rs.contains("RESTREAM_NATIVE_BUILD_ID"));
     assert!(build_rs.contains("native_build_id(&prefix)"));
+    assert!(build_rs.contains("embed_native_input_inventory(&prefix)"));
+    assert!(build_rs.contains("native-build-inputs.json"));
     assert!(build_rs.contains("REQUIRED_STATIC_ARCHIVES"));
     assert!(build_rs.contains("check_required_static_inputs(&prefix)"));
     assert!(build_rs.contains("assert_pinned_paths(package, prefix, &library.link_paths)"));
