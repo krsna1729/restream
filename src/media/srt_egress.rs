@@ -580,9 +580,11 @@ pub async fn start_srt_egress(
                 return Err("failed to create bonding group".to_string());
             }
 
-            if !streamid.is_empty() {
-                let streamid_c = match std::ffi::CString::new(streamid.as_str()) {
-                    Ok(c) => c,
+            let streamid_c = if streamid.is_empty() {
+                None
+            } else {
+                match std::ffi::CString::new(streamid.as_str()) {
+                    Ok(c) => Some(c),
                     Err(_) => {
                         error!("Stream ID contains null bytes");
                         // SAFETY: Valid group socket, clean up on invalid streamid.
@@ -591,134 +593,105 @@ pub async fn start_srt_egress(
                         }
                         return Err("stream ID contains null bytes".to_string());
                     }
-                };
-                let connect_error = {
-                    // SAFETY: srt_create_config allocates a per-member config.
-                    // srt_config_add writes the streamid into that config.
-                    // Ownership transfers to SRT on successful srt_connect_group;
-                    // on failure config is freed via srt_delete_config below.
-                    let config = unsafe { srt_create_config() };
-                    if !config.is_null() {
-                        unsafe {
+                }
+            };
+            let config_needed = streamid_c.is_some() || url_crypto.is_some();
+            let config = if config_needed {
+                // SAFETY: srt_create_config allocates a per-member config.
+                // Ownership transfers to SRT on successful srt_connect_group;
+                // on failure config is freed via srt_delete_config below.
+                let config = unsafe { srt_create_config() };
+                if config.is_null() {
+                    unsafe {
+                        srt_close(client_sock);
+                    }
+                    return Err("failed to create bonded SRT member config".to_string());
+                }
+                if let Some(streamid_c) = &streamid_c {
+                    unsafe {
+                        check_srt_option_result(
+                            "SRTO_STREAMID",
                             srt_config_add(
                                 config,
                                 SRTO_STREAMID,
                                 streamid_c.as_ptr() as *const c_void,
                                 streamid.len() as c_int,
-                            );
-                        }
-                        if let Some(crypto) = &url_crypto
-                            && let Err(error) = unsafe { apply_srt_crypto_config(config, crypto) }
-                        {
-                            unsafe {
-                                srt_delete_config(config);
-                            }
-                            unsafe {
-                                srt_close(client_sock);
-                            }
-                            return Err(error);
-                        }
+                            ),
+                        )
                     }
-
-                    let mut members: Vec<SrtGroupMemberConfig> = Vec::new();
-                    for (i, &peer_addr) in all_addrs.iter().enumerate() {
-                        let (peer_storage, addrlen) = to_libc_sockaddr(peer_addr);
-                        // SAFETY: srt_prepare_endpoint creates a group member
-                        // descriptor from a sockaddr. The peer_storage is
-                        // stack-allocated and valid for this call.
-                        let mut member = unsafe {
-                            srt_prepare_endpoint(
-                                std::ptr::null(),
-                                &peer_storage as *const _ as *const libc::sockaddr,
-                                addrlen,
-                            )
-                        };
-                        member.weight = if i == 0 { 1 } else { 0 };
-                        if !config.is_null() {
-                            member.config = config;
-                        }
-                        members.push(member);
-                    }
-
-                    // SAFETY: srt_connect_group opens all member connections.
-                    // members is a correctly sized Vec of SrtGroupMemberConfig.
-                    // On failure, client_sock and config are cleaned up.
-                    let conn_res = unsafe {
-                        srt_connect_group(client_sock, members.as_mut_ptr(), members.len() as c_int)
-                    };
-                    if conn_res < 0 {
-                        // SAFETY: srt_getlasterror_str returns a thread-local
-                        // static string valid until the next SRT call.
-                        let err = unsafe { std::ffi::CStr::from_ptr(srt_getlasterror_str()) };
-                        let message =
-                            format!("bonded connection failed: {}", err.to_string_lossy());
-                        error!(
-                            "[srt-egress] Bonded connection failed: {}",
-                            err.to_string_lossy()
-                        );
-                        // SAFETY: Clean up group socket and per-member config
-                        // on connection failure. Order: close socket, then
-                        // free config (config must not outlive the socket).
-                        unsafe {
-                            srt_close(client_sock);
-                            if !config.is_null() {
-                                srt_delete_config(config);
-                            }
-                        }
-                        Some(message)
-                    } else {
-                        None
-                    }
-                };
-                if let Some(message) = connect_error {
-                    return Err(message);
+                    .inspect_err(|_| unsafe {
+                        srt_delete_config(config);
+                        srt_close(client_sock);
+                    })?;
                 }
-                // config ownership transfers to SRT on successful connect
+                if let Some(crypto) = &url_crypto
+                    && let Err(error) = unsafe { apply_srt_crypto_config(config, crypto) }
+                {
+                    unsafe {
+                        srt_delete_config(config);
+                        srt_close(client_sock);
+                    }
+                    return Err(error);
+                }
+                config
             } else {
-                let connect_error = {
-                    let mut members: Vec<SrtGroupMemberConfig> = Vec::new();
-                    for (i, &peer_addr) in all_addrs.iter().enumerate() {
-                        let (peer_storage, addrlen) = to_libc_sockaddr(peer_addr);
-                        // SAFETY: srt_prepare_endpoint with NULL source and
-                        // stack-allocated sockaddr.
-                        let mut member = unsafe {
-                            srt_prepare_endpoint(
-                                std::ptr::null(),
-                                &peer_storage as *const _ as *const libc::sockaddr,
-                                addrlen,
-                            )
-                        };
-                        member.weight = if i == 0 { 1 } else { 0 };
-                        members.push(member);
-                    }
+                std::ptr::null_mut()
+            };
 
-                    // SAFETY: Connect group without streamid config.
-                    // Members array is valid; members.len() is correct.
-                    let conn_res = unsafe {
-                        srt_connect_group(client_sock, members.as_mut_ptr(), members.len() as c_int)
+            let connect_error = {
+                let mut members: Vec<SrtGroupMemberConfig> = Vec::new();
+                for (i, &peer_addr) in all_addrs.iter().enumerate() {
+                    let (peer_storage, addrlen) = to_libc_sockaddr(peer_addr);
+                    // SAFETY: srt_prepare_endpoint creates a group member
+                    // descriptor from a sockaddr. The peer_storage is
+                    // stack-allocated and valid for this call.
+                    let mut member = unsafe {
+                        srt_prepare_endpoint(
+                            std::ptr::null(),
+                            &peer_storage as *const _ as *const libc::sockaddr,
+                            addrlen,
+                        )
                     };
-                    if conn_res < 0 {
-                        // SAFETY: srt_getlasterror_str is valid until next SRT call.
-                        let err = unsafe { std::ffi::CStr::from_ptr(srt_getlasterror_str()) };
-                        let message =
-                            format!("bonded connection failed: {}", err.to_string_lossy());
-                        error!(
-                            "[srt-egress] Bonded connection failed: {}",
-                            err.to_string_lossy()
-                        );
-                        // SAFETY: Clean up socket on connection failure.
-                        unsafe {
-                            srt_close(client_sock);
-                        }
-                        Some(message)
-                    } else {
-                        None
+                    member.weight = if i == 0 { 1 } else { 0 };
+                    if !config.is_null() {
+                        member.config = config;
                     }
-                };
-                if let Some(message) = connect_error {
-                    return Err(message);
+                    members.push(member);
                 }
+
+                // SAFETY: srt_connect_group opens all member connections.
+                // members is a correctly sized Vec of SrtGroupMemberConfig.
+                // On failure, client_sock and config are cleaned up.
+                let conn_res = unsafe {
+                    srt_connect_group(client_sock, members.as_mut_ptr(), members.len() as c_int)
+                };
+                if conn_res < 0 {
+                    // SAFETY: srt_getlasterror_str returns a thread-local
+                    // static string valid until the next SRT call.
+                    let err = unsafe { std::ffi::CStr::from_ptr(srt_getlasterror_str()) };
+                    let message = format!("bonded connection failed: {}", err.to_string_lossy());
+                    error!(
+                        "[srt-egress] Bonded connection failed: {}",
+                        err.to_string_lossy()
+                    );
+                    // SAFETY: Clean up group socket and per-member config
+                    // on connection failure. Order: close socket, then
+                    // free config (config must not outlive the socket).
+                    unsafe {
+                        srt_close(client_sock);
+                        if !config.is_null() {
+                            srt_delete_config(config);
+                        }
+                    }
+                    Some(message)
+                } else {
+                    None
+                }
+            };
+            if let Some(message) = connect_error {
+                return Err(message);
             }
+            // config ownership transfers to SRT on successful connect
 
             info!(
                 "[srt-egress] Bonded connection ({} links) to {}",

@@ -378,6 +378,35 @@ fn egress_url_bond_only_no_streamid() {
 }
 
 #[test]
+fn bonded_egress_member_config_is_created_for_crypto_without_streamid() {
+    let source = include_str!("srt_egress.rs");
+    let bonded_branch = source
+        .split("if use_bonding {")
+        .nth(1)
+        .expect("bonded branch should exist")
+        .split("} else {\n            // SAFETY: srt_create_socket")
+        .next()
+        .expect("single-socket branch should follow bonded branch");
+    assert!(
+        bonded_branch.contains("let config_needed = streamid_c.is_some() || url_crypto.is_some();"),
+        "bonded SRT egress must allocate member config when either StreamID or crypto is present"
+    );
+    assert!(
+        bonded_branch.contains("failed to create bonded SRT member config"),
+        "bonded SRT egress must fail closed when member config allocation fails"
+    );
+    assert!(
+        bonded_branch
+            .contains("check_srt_option_result(\n                            \"SRTO_STREAMID\""),
+        "bonded SRT egress must check StreamID option errors"
+    );
+    assert!(
+        !bonded_branch.contains("if !streamid.is_empty() {\n                let streamid_c"),
+        "bonded SRT egress must not keep crypto application behind a non-empty StreamID branch"
+    );
+}
+
+#[test]
 fn sysctl_check_does_not_panic() {
     // Smoke test: runs on any Linux, should not panic even if paths don't exist
     check_sysctl_limits();
