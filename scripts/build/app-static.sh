@@ -45,6 +45,16 @@ else
     exit 1
 fi
 
+# Linkage alone is not a release contract.  Static glibc/native-library builds
+# have regressed by producing an ELF that passed ldd yet crashed before CLI
+# parsing.  Keep this cheap, dependency-free process smoke beside the linker
+# check so CI/release automation cannot publish that false-positive artifact.
+if ! "$BINARY" --help >/dev/null 2>&1; then
+    echo "Static runtime smoke failed: $BINARY cannot start (--help)." >&2
+    exit 1
+fi
+echo "Verified: $BINARY starts successfully."
+
 if [[ "${RESTREAM_SKIP_SBOM:-0}" == "1" ]]; then
     echo "Skipping SBOM emission (RESTREAM_SKIP_SBOM=1)."
 else

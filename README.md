@@ -38,19 +38,17 @@ set. Otherwise it generates a high-entropy initial password and writes it next
 to the SQLite database as `restream-initial-admin-password.txt` with
 owner-only permissions.
 
-## Running A Built Binary
+## Running Restream
 
-If you already have a release binary produced by
-`scripts/build/resource-limit.sh ./scripts/build/app-static.sh`, you can run it directly:
+The supported portable launch path is the scratch container below. It contains
+the native runtime closure verified by the container and needs no host FFmpeg,
+SRT, or C/C++ runtime packages. A directly downloadable single-file release is
+not published yet: `scripts/build/app-static.sh` is retained as an engineering
+build path and refuses to succeed unless its binary can start, but it is not a
+release contract until that static-runtime proof is restored.
 
-```sh
-./restream
-```
-
-That static release artifact does not require FFmpeg, SRT, or other shared
-runtime dependencies to be installed on the host. The source-build and `cargo`
-paths are different: they do require the build dependencies described in
-[docs/development.md](docs/development.md).
+For a host source build, install the dependencies described in
+[docs/development.md](docs/development.md), then use the daily loop below.
 
 ## Daily Loop
 
