@@ -6,8 +6,17 @@ use crate::media::profiles;
 const DEFAULT_KEYFRAME_PREROLL_PACKETS: usize = 32;
 const EXT_STAGE_ANALYZE_DURATION_US_DEFAULT: u64 = 500_000;
 const EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT: usize = 64 * 1024;
-const EXT_STAGE_ANALYZE_DURATION_US_HEVC: u64 = 4_000_000;
-const EXT_STAGE_PROBE_SIZE_BYTES_HEVC: usize = 2 * 1024 * 1024;
+// External stages consume a persistent MPEG-TS pipe, not a finite file. A
+// previous high-bitrate probe pass raised HEVC to 4 s / 2 MiB, which left a
+// low-bitrate SRT HEVC publisher in `firstInput` until it had supplied 2 MiB;
+// no downstream output could start meanwhile. `TsPacketFeeder` supplies
+// VPS/SPS/PPS before frames, but AAC still needs a bounded window to establish
+// its sample rate. 512 KiB / 1 s is sufficient for that header while staying
+// below the live-progress budget; it must never drift back to a multi-megabyte
+// file-style probe. Keep the pipe-open HEVC regression test in
+// `external_transcoder/ffmpeg_process.rs` paired with this policy.
+const EXT_STAGE_ANALYZE_DURATION_US_HEVC: u64 = 1_000_000;
+const EXT_STAGE_PROBE_SIZE_BYTES_HEVC: usize = 512 * 1024;
 
 pub fn rtmp_egress_keyframe_preroll_packets() -> usize {
     DEFAULT_KEYFRAME_PREROLL_PACKETS

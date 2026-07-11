@@ -974,4 +974,148 @@ mod tests {
         let _ = child.wait();
         let _ = reader.join();
     }
+
+    #[test]
+    fn feeder_remuxed_hevc_fixture_transcodes_before_live_pipe_closes() {
+        // Regression: a July 2026 H.264 startup tuning pass proved only AVC.
+        // HEVC SRT sources can keep stdin open indefinitely, so waiting for EOF
+        // before stdout appears leaves every downstream output in
+        // `waitingUpstream`. Keep this pipe-open proof beside the AVC one: the
+        // probe and mux settings must produce H.264 bytes while HEVC is live.
+        let path = crate::test_fixtures::canonical_ts_fixture("h265")
+            .expect("single-audio HEVC fixture path");
+        let file_bytes = std::fs::read(&path).expect("read HEVC fixture");
+        let mut demuxer = TsDemuxer::new();
+        let mut all_packets = Vec::new();
+        for chunk in file_bytes.chunks(1316) {
+            demuxer.feed(chunk);
+            demuxer.drain_into(&mut all_packets);
+        }
+        demuxer.flush();
+        demuxer.drain_into(&mut all_packets);
+        let mut probe = demuxer.take_probe().expect("probe HEVC fixture");
+        let video = probe.video.take().expect("HEVC video metadata");
+        let mut audio_tracks: Vec<_> = probe.audio_tracks.drain(..).take(1).collect();
+        let source_audio_track = audio_tracks
+            .first()
+            .map(|track| track.track_index)
+            .expect("HEVC fixture audio metadata");
+        audio_tracks[0].track_index = 0;
+        // Retain transport order. A live SRT ring interleaves video and audio;
+        // grouping every video packet first makes FFmpeg wait for AAC
+        // parameters that production already supplied and hides the real
+        // persistent-pipe startup behavior.
+        let packets: Vec<_> = all_packets
+            .into_iter()
+            .filter_map(|mut packet| match packet.media_type {
+                crate::media::ring_buffer::MediaType::Video => Some(packet),
+                crate::media::ring_buffer::MediaType::Audio
+                    if packet.track_index == source_audio_track =>
+                {
+                    packet.track_index = 0;
+                    Some(packet)
+                }
+                _ => None,
+            })
+            .collect();
+        let mut feeder = TsPacketFeeder::new(
+            Some(&video),
+            std::sync::Arc::new(audio_tracks),
+            PacketFeedConfig::default(),
+        );
+        let parameter_sets = packets
+            .iter()
+            .find_map(|packet| {
+                (packet.media_type == crate::media::ring_buffer::MediaType::Video)
+                    .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+                    .flatten()
+            })
+            .expect("HEVC fixture parameter sets");
+        feeder.set_raw_video_parameter_sets_if_empty(&parameter_sets);
+
+        let mut ts_bytes = Vec::new();
+        let mut packet_buf = Vec::new();
+        // One fixture pass represents the sparse live start seen from SRT. Do
+        // not repeat it until FFmpeg crosses the probe ceiling: that hides the
+        // exact regression where every stage remained at `firstInput` while a
+        // low-bitrate HEVC publisher kept its pipe open.
+        // A complete HEVC + AAC live-start window fits in 640 KiB. This is
+        // above the headers required for both streams, but far below the old
+        // 2 MiB probe ceiling that caused the SRT harness stall.
+        const LIVE_STARTUP_TS_BUDGET: usize = 640 * 1024;
+        for packet in &packets {
+            packet_buf.clear();
+            if feeder.extend_ts_for_packet(packet, &mut packet_buf) {
+                if ts_bytes.len() + packet_buf.len() > LIVE_STARTUP_TS_BUDGET {
+                    break;
+                }
+                ts_bytes.extend_from_slice(&packet_buf);
+            }
+        }
+        assert!(
+            !ts_bytes.is_empty(),
+            "HEVC fixture should remux to TS bytes"
+        );
+        assert!(
+            ts_bytes.len() <= LIVE_STARTUP_TS_BUDGET,
+            "the live-start regression fixture must stay below the old 2 MiB probe ceiling"
+        );
+        const LIVE_STARTUP_BATCHES: usize = 3;
+        assert!(
+            ts_bytes.len() * LIVE_STARTUP_BATCHES < 2 * 1024 * 1024,
+            "the persistent-pipe proof must emit before the old 2 MiB probe ceiling"
+        );
+
+        let ffmpeg = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
+        let mut child = std::process::Command::new(ffmpeg)
+            .args(build_stage_ffmpeg_args_for_input("h264", "h264", "hevc"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn bundled HEVC-to-H.264 transcode");
+        let mut stdout = child.stdout.take().expect("stdout pipe");
+        let mut stdin = child.stdin.take().expect("stdin pipe");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut buf = [0u8; 188 * 16];
+            if let Ok(n) = std::io::Read::read(&mut stdout, &mut buf) {
+                let _ = tx.send(n);
+            }
+        });
+        let writer = std::thread::spawn(move || {
+            for _ in 0..LIVE_STARTUP_BATCHES {
+                for chunk in ts_bytes.chunks(1316) {
+                    if std::io::Write::write_all(&mut stdin, chunk).is_err() {
+                        return stdin;
+                    }
+                }
+            }
+            stdin
+        });
+
+        let live_bytes = match rx.recv_timeout(std::time::Duration::from_secs(12)) {
+            Ok(n) => n,
+            Err(err) => {
+                let mut stdin = writer.join().expect("join writer");
+                let _ = std::io::Write::flush(&mut stdin);
+                drop(stdin);
+                let _ = child.kill();
+                let output = child.wait_with_output().expect("wait for ffmpeg");
+                let _ = reader.join();
+                panic!(
+                    "HEVC live pipe should emit stdout before stdin closes: {err}; stderr={}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        };
+        assert!(live_bytes > 0, "HEVC live pipe stdout should not be empty");
+
+        let mut stdin = writer.join().expect("join writer");
+        let _ = std::io::Write::flush(&mut stdin);
+        drop(stdin);
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = reader.join();
+    }
 }
