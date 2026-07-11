@@ -21,6 +21,7 @@ WITH_FRONTEND=1
 RUN_NATIVE_SETUP=1
 INSTALL_MEDIAMTX=1
 CONFIGURE_HARNESS_HOST=0
+CHECK_HARNESS_HOST=1
 
 usage() {
     cat <<'EOF'
@@ -40,6 +41,8 @@ Options:
   --configure-harness-host
                       explicitly persist Linux user-namespace and SRT UDP-buffer
                       prerequisites for the private-network live harness
+  --skip-harness-host-check
+                      skip host namespace/SRT-buffer readiness checks (Docker only)
   -h, --help           show this help
 EOF
 }
@@ -60,6 +63,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --configure-harness-host)
             CONFIGURE_HARNESS_HOST=1
+            shift
+            ;;
+        --skip-harness-host-check)
+            CHECK_HARNESS_HOST=0
             shift
             ;;
         -h|--help)
@@ -142,63 +149,6 @@ ensure_frontend_node_toolchain() {
     run_as_root apt-get install -y nodejs
 }
 
-unprivileged_netns_available() {
-    command -v unshare >/dev/null 2>&1 \
-        && unshare --user --map-root-user --net true >/dev/null 2>&1
-}
-
-sysctl_value() {
-    local key=$1
-    local path="/proc/sys/${key//./\/}"
-    [[ -r "$path" ]] && <"$path"
-}
-
-configure_harness_host() {
-    local conf
-    conf="$(mktemp)"
-    cat >"$conf" <<'EOF'
-# Required for Restream's private-loopback live harness and 8 MiB SRT UDP buffers.
-kernel.unprivileged_userns_clone=1
-user.max_user_namespaces=28633
-net.core.rmem_max=26214400
-net.core.wmem_max=8388608
-EOF
-    run_as_root install -m 0644 "$conf" /etc/sysctl.d/99-restream-harness.conf
-    rm -f "$conf"
-    run_as_root sysctl --system >/dev/null
-}
-
-report_harness_host_prerequisites() {
-    local rmem_max wmem_max
-    rmem_max="$(sysctl_value net.core.rmem_max || true)"
-    wmem_max="$(sysctl_value net.core.wmem_max || true)"
-
-    if unprivileged_netns_available; then
-        echo "bootstrap-dev: private live-harness network namespaces are available"
-    else
-        cat >&2 <<'EOF'
-bootstrap-dev: private live-harness network namespaces are unavailable.
-Use --no-netns only as a temporary fallback, or explicitly configure this host:
-  scripts/dev/bootstrap.sh --configure-harness-host
-
-If an AppArmor policy still blocks unshare after configuration, ask the host
-administrator to approve that policy change; bootstrap never disables AppArmor.
-EOF
-    fi
-
-    if [[ "$rmem_max" =~ ^[0-9]+$ && "$rmem_max" -ge 26214400 \
-        && "$wmem_max" =~ ^[0-9]+$ && "$wmem_max" -ge 8388608 ]]; then
-        echo "bootstrap-dev: SRT UDP buffer ceilings satisfy the 8 MiB harness policy"
-    else
-        cat >&2 <<EOF
-bootstrap-dev: SRT UDP buffer ceilings are below the live-harness policy
-(rmem_max=${rmem_max:-unavailable}, wmem_max=${wmem_max:-unavailable}; need at least 26214400 and 8388608).
-Configure them explicitly with:
-  scripts/dev/bootstrap.sh --configure-harness-host
-EOF
-    fi
-}
-
 missing_packages=()
 for package in "${APT_PACKAGES[@]}"; do
     if ! dpkg-query -W "$package" >/dev/null 2>&1; then
@@ -255,10 +205,10 @@ fi
 
 if (( CONFIGURE_HARNESS_HOST )); then
     echo "bootstrap-dev: persisting live-harness host prerequisites"
-    configure_harness_host
+    "$ROOT/scripts/dev/harness-host-prereqs.sh" --configure
+elif (( CHECK_HARNESS_HOST )); then
+    "$ROOT/scripts/dev/harness-host-prereqs.sh"
 fi
-
-report_harness_host_prerequisites
 
 if (( RUN_NATIVE_SETUP )); then
     echo "bootstrap-dev: building pinned native dependency prefix"

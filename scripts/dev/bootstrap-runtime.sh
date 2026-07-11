@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Install only the host tools required to run Restream's live harness. This is
 # separate from bootstrap.sh: it neither installs a compiler nor mutates host
-# namespace/sysctl policy, so Docker and runtime-only users do not inherit
-# development-machine setup.
+# namespace/sysctl policy unless its explicit --configure-harness-host option
+# is requested, so Docker and runtime-only users do not inherit development
+# machine setup by accident.
 set -euo pipefail
 
 if [[ -n "${RESTREAM_REPO_ROOT:-}" ]]; then
@@ -16,6 +17,8 @@ fi
 MEDIAMTX_VERSION="${RESTREAM_MEDIAMTX_VERSION:-v1.19.1}"
 INSTALL_PACKAGES=1
 INSTALL_MEDIAMTX=1
+CHECK_HARNESS_HOST=1
+CONFIGURE_HARNESS_HOST=0
 
 usage() {
     cat <<'EOF'
@@ -27,6 +30,10 @@ FFmpeg/ffprobe, MediaMTX, networking utilities, SQLite, and certificates.
 Options:
   --mediamtx-only     install or update only the pinned MediaMTX binary
   --skip-mediamtx     install runtime packages without MediaMTX
+  --configure-harness-host
+                      explicitly persist live-harness SRT buffer sysctls
+  --skip-harness-host-check
+                      skip host sysctl checks (used by the Docker harness image)
   -h, --help          show this help
 EOF
 }
@@ -39,6 +46,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-mediamtx)
             INSTALL_MEDIAMTX=0
+            shift
+            ;;
+        --configure-harness-host)
+            CONFIGURE_HARNESS_HOST=1
+            shift
+            ;;
+        --skip-harness-host-check)
+            CHECK_HARNESS_HOST=0
             shift
             ;;
         -h|--help)
@@ -124,6 +139,12 @@ fi
 
 if (( INSTALL_MEDIAMTX )); then
     install_mediamtx
+fi
+
+if (( CONFIGURE_HARNESS_HOST )); then
+    "$ROOT/scripts/dev/harness-host-prereqs.sh" --configure
+elif (( CHECK_HARNESS_HOST )); then
+    "$ROOT/scripts/dev/harness-host-prereqs.sh"
 fi
 
 echo "bootstrap-runtime: ready"

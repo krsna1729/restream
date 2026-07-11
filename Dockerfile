@@ -35,6 +35,7 @@ ENV RESTREAM_REPO_ROOT=/workspace
 COPY package.json package-lock.json ./
 COPY rust-toolchain.toml rust-toolchain.toml
 COPY scripts/dev/bootstrap.sh scripts/dev/bootstrap.sh
+COPY scripts/dev/harness-host-prereqs.sh scripts/dev/harness-host-prereqs.sh
 COPY scripts/dev/install-git-hooks.sh scripts/dev/install-git-hooks.sh
 COPY scripts/build/resource-limit.sh scripts/build/resource-limit.sh
 COPY scripts/build/native-deps.sh scripts/build/native-deps.sh
@@ -47,7 +48,7 @@ COPY test/native/ffmpeg-capabilities.c test/native/ffmpeg-capabilities.c
 
 # bootstrap owns the fresh-Ubuntu dependency contract, including Node/npm
 # plus npm ci for the committed frontend toolchain dependencies.
-RUN scripts/dev/bootstrap.sh --skip-mediamtx
+RUN scripts/dev/bootstrap.sh --skip-mediamtx --skip-harness-host-check
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 
@@ -168,7 +169,8 @@ FROM ubuntu:24.04 AS harness
 
 WORKDIR /workspace
 COPY scripts/dev/bootstrap-runtime.sh scripts/dev/bootstrap-runtime.sh
-RUN scripts/dev/bootstrap-runtime.sh
+COPY scripts/dev/harness-host-prereqs.sh scripts/dev/harness-host-prereqs.sh
+RUN scripts/dev/bootstrap-runtime.sh --skip-harness-host-check
 COPY --from=harness-build /workspace/target/bench/restream /workspace/target/bench/restream
 COPY --from=harness-build /workspace/target/bench/test_harness /workspace/target/bench/test_harness
 COPY --from=harness-build /workspace/public/bin/ffmpeg /workspace/public/bin/ffmpeg

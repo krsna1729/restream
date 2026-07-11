@@ -22,8 +22,10 @@ expected by live tests. To deliberately persist those host settings, use
 
 `scripts/dev/bootstrap-runtime.sh` is intentionally separate: it installs only
 the FFmpeg/MediaMTX and networking tools needed to run the live harness. It
-does not install compilers, npm dependencies, or change host sysctls. Docker's
-`harness` target uses this runtime bootstrap directly.
+does not install compilers or npm dependencies, but it shares the same explicit
+`--configure-harness-host` SRT/sysctl option as the developer bootstrap.
+Docker's `harness` target uses this runtime bootstrap with host checks skipped,
+because a container must not modify its host kernel.
 
 After `cargo run`, the service is available at `http://localhost:3030`.
 The dashboard/API binds to `127.0.0.1` by default; set

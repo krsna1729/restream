@@ -234,20 +234,24 @@ Linux startup checks warn when `net.core.rmem_max` or `net.core.wmem_max` cannot
 support the requested UDP buffers. The listener's `/proc/net/udp` receive queue
 and drop count are exported in `/api/v1/engine/health`.
 
-For a fresh Linux development host, `scripts/dev/bootstrap.sh` reports whether
-private user/network namespaces and the required SRT UDP buffer ceilings are
-available. To persist the known-good live-harness values deliberately, run:
+For a fresh Linux host, both `scripts/dev/bootstrap.sh` and
+`scripts/dev/bootstrap-runtime.sh` report whether private user/network
+namespaces and the required SRT UDP buffer ceilings are available. To persist
+the known-good live-harness values deliberately from either bootstrap path, run:
 
 ```sh
 scripts/dev/bootstrap.sh --configure-harness-host
+# or, for a runtime-only host:
+scripts/dev/bootstrap-runtime.sh --configure-harness-host
 ```
 
 This writes `kernel.unprivileged_userns_clone=1`,
 `user.max_user_namespaces=28633`, `net.core.rmem_max=26214400`, and
 `net.core.wmem_max=8388608` to `/etc/sysctl.d/99-restream-harness.conf`.
-The bootstrapper does not disable AppArmor or other host security policy; use
-`--no-netns` as a temporary fallback when the host administrator has not
-approved unprivileged namespaces.
+Both bootstrappers delegate to `scripts/dev/harness-host-prereqs.sh`, so the
+sysctl policy cannot drift. They do not disable AppArmor or other host security
+policy; use `--no-netns` as a temporary fallback when the host administrator
+has not approved unprivileged namespaces.
 
 SRT egress backup links can be supplied with:
 
