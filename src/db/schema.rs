@@ -17,7 +17,7 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
             encoding TEXT,
             input_ever_seen_live INTEGER NOT NULL DEFAULT 0 CHECK(input_ever_seen_live IN (0, 1)),
             input_source TEXT,
-            srt_ingest_policy TEXT CHECK(srt_ingest_policy IS NULL OR json_valid(srt_ingest_policy))
+            srt_ingest_policy TEXT CHECK(srt_ingest_policy IS NULL OR srt_ingest_policy IN ('', 'source', 'encrypted') OR json_valid(srt_ingest_policy))
         );",
     )
     .execute(pool)

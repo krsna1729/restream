@@ -201,6 +201,30 @@ async fn schema_constraints_reject_invalid_runtime_invariants() {
     .await;
     assert!(invalid_pipeline_bool.is_err());
 
+    let empty_srt_policy = sqlx::query(
+        "INSERT INTO pipelines (id, name, stream_key, srt_ingest_policy)
+         VALUES ('p-empty-policy', 'Empty policy', 'key-empty-policy', '');",
+    )
+    .execute(&pool)
+    .await;
+    assert!(empty_srt_policy.is_ok());
+
+    let legacy_srt_policy = sqlx::query(
+        "INSERT INTO pipelines (id, name, stream_key, srt_ingest_policy)
+         VALUES ('p-legacy-policy', 'Legacy policy', 'key-legacy-policy', 'source');",
+    )
+    .execute(&pool)
+    .await;
+    assert!(legacy_srt_policy.is_ok());
+
+    let invalid_srt_policy = sqlx::query(
+        "INSERT INTO pipelines (id, name, stream_key, srt_ingest_policy)
+         VALUES ('p-bad-policy', 'Bad policy', 'key-bad-policy', 'not-json');",
+    )
+    .execute(&pool)
+    .await;
+    assert!(invalid_srt_policy.is_err());
+
     let invalid_output_state = sqlx::query(
         "INSERT INTO outputs (id, pipeline_id, name, url, desired_state, config)
          VALUES ('o-bad-state', 'p1', 'Bad', 'rtmp://example/live/key', 'paused',
