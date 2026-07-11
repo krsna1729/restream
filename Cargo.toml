@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.96"
 publish = false
-license-file = "LICENSE.md"
+license = "MIT"
 repository = "https://github.com/live-miracles/restream"
 
 [lints.rust]

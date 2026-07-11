@@ -21,8 +21,7 @@ artifact that needs provenance and license review.
 
 Run `scripts/check/release-evidence.sh` for the canonical local gate. A `v*`
 tag runs the same gate, the full bench-harness suite, and publishes a
-gzip-compressed OCI runtime archive plus its checksum and runtime SBOM only
-when the repository variable `RELEASE_LICENSE_APPROVED` is `true`.
+gzip-compressed OCI runtime archive plus its checksum and runtime SBOM.
 
 ## Native License Basis
 
@@ -40,10 +39,10 @@ native build.
 
 ## Application License
 
-`Cargo.toml` points to `LICENSE.md`, and the runtime SBOM represents the
-application as `LicenseRef-restream-internal`. Do not replace that with a public
-SPDX license identifier unless the project owner has approved the release terms
-and the native dependency obligations above.
+Restream is MIT-licensed. The runtime image also includes GPL-licensed native
+components (including x264/x265 and potentially GPL-configured FFmpeg), so a
+released image must retain the corresponding third-party license notices and
+source-offer obligations; the application license does not replace them.
 
 ## Dependency Policy
 

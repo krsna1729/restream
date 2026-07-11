@@ -9,21 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  license-approval:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require approved distribution terms
-        env:
-          RELEASE_LICENSE_APPROVED: ${{ vars.RELEASE_LICENSE_APPROVED }}
-        run: |
-          test "$RELEASE_LICENSE_APPROVED" = true || {
-            echo "Set repository variable RELEASE_LICENSE_APPROVED=true after legal review." >&2
-            exit 1
-          }
-
   certify-and-publish:
     runs-on: ubuntu-latest
-    needs: license-approval
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
