@@ -172,6 +172,22 @@ fn hls_preview_runtime_execution_stays_out_of_planner() {
     assert!(preview_graph.contains("resolve_hls_preview_graph"));
 }
 
+#[test]
+fn db_module_uses_explicit_repository_exports() {
+    let db_mod = include_str!("../src/db/mod.rs");
+    assert!(
+        !db_mod.contains("pub use ingest_repo::*"),
+        "db repositories should export explicit APIs, not wildcard repository surfaces"
+    );
+    assert!(!db_mod.contains("pub use job_repo::*"));
+    assert!(!db_mod.contains("pub use log_repo::*"));
+    assert!(!db_mod.contains("pub use output_repo::*"));
+    assert!(!db_mod.contains("pub use pipeline_repo::*"));
+    assert!(!db_mod.contains("pub use recording_repo::*"));
+    assert!(!db_mod.contains("pub use session_repo::*"));
+    assert!(db_mod.contains("pub use schema::setup_database_schema"));
+}
+
 fn extract_router_route_paths(source: &'static str) -> BTreeSet<&'static str> {
     let mut paths = BTreeSet::new();
     for (offset, _) in source.match_indices(".route(") {
