@@ -1,14 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
-RUST_TOOLCHAIN="$(sed -n 's/^channel = "\(.*\)"/\1/p' "$ROOT/rust-toolchain.toml")"
+if [[ -n "${RESTREAM_REPO_ROOT:-}" ]]; then
+    ROOT="$RESTREAM_REPO_ROOT"
+elif command -v git >/dev/null 2>&1 && git rev-parse --show-toplevel >/dev/null 2>&1; then
+    ROOT="$(git rev-parse --show-toplevel)"
+else
+    # Container/tarball onboarding can run before Git is installed. Resolve
+    # the repository from this script's canonical location instead of making
+    # the bootstrapper depend on the tool it is about to provision.
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fi
+RUST_TOOLCHAIN=""
+if [[ -f "$ROOT/rust-toolchain.toml" ]]; then
+    RUST_TOOLCHAIN="$(sed -n 's/^channel = "\(.*\)"/\1/p' "$ROOT/rust-toolchain.toml")"
+fi
 FRONTEND_NODE_MAJOR="${RESTREAM_FRONTEND_NODE_MAJOR:-22}"
 FRONTEND_NODE_MIN_MAJOR=20
 MEDIAMTX_VERSION="${RESTREAM_MEDIAMTX_VERSION:-v1.19.1}"
 WITH_FRONTEND=1
 RUN_NATIVE_SETUP=1
 INSTALL_MEDIAMTX=1
+HARNESS_RUNTIME_ONLY=0
 
 usage() {
     cat <<'EOF'
@@ -25,6 +38,7 @@ Options:
   --skip-frontend      skip nodejs/npm install and npm ci
   --skip-native-setup  skip scripts/build/native-deps.sh
   --skip-mediamtx      skip the live-harness Mediamtx binary
+  --harness-runtime    install only live-harness runtime tools and MediaMTX
   -h, --help           show this help
 EOF
 }
@@ -41,6 +55,13 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-mediamtx)
             INSTALL_MEDIAMTX=0
+            shift
+            ;;
+        --harness-runtime)
+            HARNESS_RUNTIME_ONLY=1
+            WITH_FRONTEND=0
+            RUN_NATIVE_SETUP=0
+            INSTALL_MEDIAMTX=1
             shift
             ;;
         -h|--help)
@@ -90,6 +111,18 @@ APT_PACKAGES=(
     pkg-config
     tzdata
 )
+
+if (( HARNESS_RUNTIME_ONLY )); then
+    APT_PACKAGES=(
+        ca-certificates
+        curl
+        ffmpeg
+        iproute2
+        jq
+        sqlite3
+        util-linux
+    )
+fi
 
 run_as_root() {
     if [[ "$(id -u)" -eq 0 ]]; then
@@ -185,23 +218,25 @@ else
     echo "bootstrap-dev: apt packages already present"
 fi
 
-export PATH="$HOME/.cargo/bin:$PATH"
+if (( ! HARNESS_RUNTIME_ONLY )); then
+    export PATH="$HOME/.cargo/bin:$PATH"
 
-if ! command -v rustup >/dev/null; then
-    echo "bootstrap-dev: installing rustup"
-    curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain none
+    if ! command -v rustup >/dev/null; then
+        echo "bootstrap-dev: installing rustup"
+        curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain none
+    fi
+
+    export PATH="$HOME/.cargo/bin:$PATH"
+
+    if [[ -z "$RUST_TOOLCHAIN" ]]; then
+        echo "bootstrap-dev: failed to read rust-toolchain.toml" >&2
+        exit 1
+    fi
+
+    echo "bootstrap-dev: installing Rust toolchain $RUST_TOOLCHAIN"
+    rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
+    (cd "$ROOT" && rustup override set "$RUST_TOOLCHAIN" >/dev/null)
 fi
-
-export PATH="$HOME/.cargo/bin:$PATH"
-
-if [[ -z "$RUST_TOOLCHAIN" ]]; then
-    echo "bootstrap-dev: failed to read rust-toolchain.toml" >&2
-    exit 1
-fi
-
-echo "bootstrap-dev: installing Rust toolchain $RUST_TOOLCHAIN"
-rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
-(cd "$ROOT" && rustup override set "$RUST_TOOLCHAIN" >/dev/null)
 
 if (( WITH_FRONTEND )); then
     ensure_frontend_node_toolchain
@@ -213,7 +248,7 @@ if (( WITH_FRONTEND )); then
     fi
 fi
 
-if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if (( ! HARNESS_RUNTIME_ONLY )) && git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     echo "bootstrap-dev: installing repo-managed Git hooks"
     "$ROOT/scripts/dev/install-git-hooks.sh"
 else
@@ -227,6 +262,11 @@ fi
 if (( RUN_NATIVE_SETUP )); then
     echo "bootstrap-dev: building pinned native dependency prefix"
     "$ROOT/scripts/build/resource-limit.sh" "$ROOT/scripts/build/native-deps.sh"
+fi
+
+if (( HARNESS_RUNTIME_ONLY )); then
+    echo "bootstrap-dev: harness runtime tools are ready"
+    exit 0
 fi
 
 cat <<EOF

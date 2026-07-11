@@ -5,7 +5,9 @@
 #
 #   1. native-deps  → OS packages, pinned Rust toolchain, static C/C++ prefix
 #   2. rust-build   → Cargo dependency warm-up, then the real application build
-#   3. runtime      → the shipped binary plus the runtime files it expects
+#   3. runtime tree  → the shipped binaries plus their exact glibc closure
+#   4. runtime       → a pure-scratch production image
+#   5. harness       → a minimal Ubuntu image for live protocol validation
 #
 # The native/static artifacts come from scripts/build/native-deps.sh, the Rust
 # toolchain bootstrap comes from scripts/dev/bootstrap.sh, and the final static
@@ -80,6 +82,8 @@ ENV RESTREAM_BUILD_GIT_COMMIT=source-distribution \
     RESTREAM_SKIP_SBOM=1
 
 COPY scripts/build/app-native.sh scripts/build/app-native.sh
+COPY scripts/build/bench-harness.sh scripts/build/bench-harness.sh
+COPY scripts/build/runtime-rootfs.sh scripts/build/runtime-rootfs.sh
 
 # Warm the release dependency graph without copying the real application code.
 # The dummy main compiles the full dependency set into .local/build/static/cargo-target
@@ -91,6 +95,9 @@ RUN mkdir -p benches src \
     && printf 'fn main() {}\n' > src/main.rs
 RUN RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 
+# Return to the application build stage for its runtime filesystem assembly.
+FROM rust-build AS runtime-tree
+
 # Inner-loop layer: copy the actual application sources, then bring in the
 # built frontend assets from the frontend stage. Rust-only edits therefore skip
 # frontend rebuilds, while frontend edits reuse the warmed Cargo dependency
@@ -100,28 +107,19 @@ COPY --from=frontend-build /workspace/public public
 COPY --from=native-deps /workspace/public/bin/ffmpeg public/bin/ffmpeg
 RUN RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 
-# Build the minimal filesystem tree that the shipped binary expects at runtime.
-# /tmp must remain writable and executable because the embedded FFmpeg binary is
-# extracted there on startup; operators should still prefer --tmpfs /tmp:exec.
-RUN mkdir -p \
-        /runtime/data \
-        /runtime/etc/ssl/certs \
-        /runtime/media \
-        /runtime/tmp/logs \
-        /runtime/usr/share/zoneinfo \
-    && cp -a /usr/share/zoneinfo/. /runtime/usr/share/zoneinfo/ \
-    && cp -a /etc/localtime /runtime/etc/localtime \
-    && cp /etc/ssl/certs/ca-certificates.crt /runtime/etc/ssl/certs/ca-certificates.crt \
-    && cp /etc/nsswitch.conf /runtime/etc/nsswitch.conf \
-    && cp /etc/protocols /runtime/etc/protocols \
-    && cp /etc/services /runtime/etc/services \
-    && cp -L /etc/resolv.conf /runtime/etc/resolv.conf \
-    && printf 'restream:x:1000:1000:restream:/nonexistent:/sbin/nologin\n' > /runtime/etc/passwd \
-    && printf 'restream:x:1000:\n' > /runtime/etc/group \
-    && chmod 1777 /runtime/tmp \
-    && chown -R 1000:1000 /runtime/data /runtime/media /runtime/tmp
+# The rootfs closure is built by the same canonical script that developers can
+# invoke when packaging a scratch image outside Docker.
+RUN bash scripts/build/runtime-rootfs.sh /workspace/target/release/restream /runtime
 
-# ── Stage 4: minimal runtime ─────────────────────────────────────────────────
+# The harness image is an explicit target, so this extra bench build is paid
+# only by `--target harness`, never by the production scratch image. It must
+# derive from `runtime-tree`, which has the real source and generated frontend
+# assets rather than the dummy dependency-warmup crate.
+FROM runtime-tree AS harness-build
+
+RUN scripts/build/bench-harness.sh
+
+# ── Stage 4: pure-scratch runtime ────────────────────────────────────────────
 #
 # Runtime requirements:
 #   /tmp    exec-enabled writable tmpfs for embedded FFmpeg extraction
@@ -135,10 +133,10 @@ RUN mkdir -p \
 #     -v restream-media:/media \
 #     -p 3030:3030 -p 1935:1935 -p 10080:10080/udp \
 #     restream:scratch
-FROM ubuntu:24.04
+FROM scratch AS runtime-scratch
 
-COPY --from=rust-build /runtime/ /
-COPY --from=rust-build /workspace/target/release/restream /restream
+COPY --from=runtime-tree /runtime/ /
+COPY --from=runtime-tree /workspace/target/release/restream /restream
 
 EXPOSE 3030 1935 10080/udp
 
@@ -150,3 +148,45 @@ ENV RESTREAM_DB_PATH=/data/restream.db \
     RESTREAM_HTTP_BIND_ADDR=0.0.0.0
 
 ENTRYPOINT ["/restream"]
+
+# Keep the old distro runtime available only as an escape hatch for operators
+# with an unusual NSS/DNS integration. The default production target below is
+# the verified scratch runtime above.
+FROM ubuntu:24.04 AS runtime-ubuntu
+
+COPY --from=runtime-tree /runtime/ /
+COPY --from=runtime-tree /workspace/target/release/restream /restream
+
+EXPOSE 3030 1935 10080/udp
+USER 1000:1000
+ENV RESTREAM_DB_PATH=/data/restream.db \
+    RESTREAM_MEDIA_DIR=/media \
+    RESTREAM_LOG_DIR=/tmp/logs \
+    RESTREAM_HTTP_BIND_ADDR=0.0.0.0
+ENTRYPOINT ["/restream"]
+
+# ── Stage 5: live-harness image ──────────────────────────────────────────────
+#
+# Build explicitly with `docker build --target harness -t restream:harness .`.
+# It contains every generated executable used in live validation (`restream`,
+# bench-profile `test_harness`, and the embedded static FFmpeg), the pinned
+# MediaMTX peer, committed fixtures, and only the OS tools the harness invokes.
+FROM ubuntu:24.04 AS harness
+
+WORKDIR /workspace
+COPY scripts/dev/bootstrap.sh scripts/dev/bootstrap.sh
+COPY scripts/dev/install-git-hooks.sh scripts/dev/install-git-hooks.sh
+RUN scripts/dev/bootstrap.sh --harness-runtime
+COPY --from=harness-build /workspace/target/bench/restream /workspace/target/bench/restream
+COPY --from=harness-build /workspace/target/bench/test_harness /workspace/target/bench/test_harness
+COPY --from=harness-build /workspace/public/bin/ffmpeg /workspace/public/bin/ffmpeg
+COPY test/fixtures/ test/fixtures/
+COPY test/harness/ test/harness/
+
+ENV PATH="/workspace/target/bench:${PATH}" \
+    RESTREAM_REPO_ROOT=/workspace
+
+ENTRYPOINT ["/workspace/target/bench/test_harness"]
+
+# The ordinary `docker build` result is the production scratch image.
+FROM runtime-scratch AS runtime

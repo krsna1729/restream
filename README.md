@@ -85,12 +85,13 @@ diagnostic all-files report.
 - `tests/`: Rust integration tests
 - `scripts/build/`, `scripts/check/`, `scripts/dev/`, `scripts/harness/`: builds, gates, setup, and live validation
 
-## Scratch Container Proof
+## Scratch Runtime and Live-Harness Containers
 
 The Dockerfile rebuilds native dependencies and frontend output from the same
 committed scripts used locally in a clean build container, then produces a
-minimal Ubuntu runtime image. The fully static binary is kept in that runtime
-layer because the current static SRT build exits in a pure `scratch` filesystem.
+pure `scratch` runtime. It copies the generated binary's small glibc/C++ loader
+closure, certificates, timezone/NSS files, and the writable runtime paths; the
+media stack and embedded FFmpeg remain static.
 
 ```sh
 docker build -t restream:container .
@@ -100,6 +101,21 @@ docker run --rm --tmpfs /tmp:exec,mode=1777 \
 ```
 
 Mount persistent volumes at `/data` and `/media` for a non-ephemeral service.
+
+For the complete live protocol harness, build the explicit `harness` target.
+It contains the bench-profile `restream` and `test_harness` binaries, pinned
+MediaMTX, FFmpeg/ffprobe, and committed fixtures without carrying a compiler or
+source checkout:
+
+```sh
+docker build --target harness -t restream:harness .
+docker run --rm --network host restream:harness mixed.live.srt.h264.a1.bf0 -- --no-netns
+```
+
+Use `--network host` for harness modes that open loopback publishers and sinks;
+the normal production image needs only its documented TCP/UDP ports. The
+`runtime-ubuntu` target remains available as a compatibility fallback, but the
+default image is `runtime`/scratch.
 
 ## Read Next
 
