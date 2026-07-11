@@ -4,6 +4,7 @@
 
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
+use restream::config::DEFAULT_MEDIA_DIR;
 use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 use restream::domain::output_spec::OutputConfig;
 use restream::domain::srt_ingest::SrtGlobalIngestConfig;
@@ -47,7 +48,7 @@ async fn test_app_with_engine() -> (axum::Router, SqlitePool, Arc<MediaEngine>) 
         sessions,
         engine.clone(),
         log_broadcast,
-        ".restream/media".to_string(),
+        DEFAULT_MEDIA_DIR.to_string(),
     ));
 
     (api::create_router(state), pool, engine)
@@ -75,7 +76,7 @@ async fn test_app_with_secure_cookies() -> axum::Router {
         sessions,
         engine,
         log_broadcast,
-        ".restream/media".to_string(),
+        DEFAULT_MEDIA_DIR.to_string(),
     );
     state.set_secure_session_cookies_for_test(true);
 
@@ -1428,7 +1429,7 @@ async fn config_patch_ingest_security_does_not_mutate_runtime_when_persist_fails
         sessions,
         engine,
         log_broadcast,
-        ".restream/media".to_string(),
+        DEFAULT_MEDIA_DIR.to_string(),
     );
     state.settings_service =
         restream::application::services::SettingsService::new(settings_pool.clone());
@@ -2891,7 +2892,7 @@ async fn health_shows_registered_egress() {
             sessions,
             engine.clone(),
             log_broadcast,
-            ".restream/media".to_string(),
+            DEFAULT_MEDIA_DIR.to_string(),
         ));
         api::create_router(state)
     };
@@ -3343,7 +3344,7 @@ async fn delete_pipeline_storage_failure_is_internal_error() {
         sessions,
         engine,
         log_broadcast,
-        ".restream/media".to_string(),
+        DEFAULT_MEDIA_DIR.to_string(),
     );
     state.pipeline_service =
         restream::application::services::PipelineService::new(pipeline_pool.clone());
@@ -3387,7 +3388,7 @@ async fn health_and_dashboard_runtime_fail_when_pipeline_list_fails() {
         sessions,
         engine,
         log_broadcast,
-        ".restream/media".to_string(),
+        DEFAULT_MEDIA_DIR.to_string(),
     );
     state.pipeline_service =
         restream::application::services::PipelineService::new(pipeline_pool.clone());

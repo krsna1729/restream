@@ -3,6 +3,12 @@
 
 use crate::planner::backend_policy::BackendPolicy;
 
+/// Default location for media-library files relative to the process working directory.
+///
+/// Keep this as the single source of truth: tests and harness fallbacks use the same
+/// value so they cannot silently recreate the legacy repository-root `media/` directory.
+pub const DEFAULT_MEDIA_DIR: &str = ".restream/media";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServerPorts {
     pub http: u16,
@@ -201,7 +207,7 @@ impl Default for AppConfig {
             http_bind_addr: "127.0.0.1".to_string(),
             tuning,
             db_path: ".restream/data/restream.db".to_string(),
-            media_dir: ".restream/media".to_string(),
+            media_dir: DEFAULT_MEDIA_DIR.to_string(),
             log_retention_days: 7,
             backend_policy: BackendPolicy {
                 internal_video_presets: false,
@@ -246,7 +252,7 @@ impl AppConfig {
         let db_path = std::env::var("RESTREAM_DB_PATH")
             .unwrap_or_else(|_| ".restream/data/restream.db".to_string());
         let media_dir =
-            std::env::var("RESTREAM_MEDIA_DIR").unwrap_or_else(|_| ".restream/media".to_string());
+            std::env::var("RESTREAM_MEDIA_DIR").unwrap_or_else(|_| DEFAULT_MEDIA_DIR.to_string());
         let log_retention_days = env_u64("RESTREAM_LOG_RETENTION_DAYS", 7);
         let backend_policy = BackendPolicy::from_env();
         let rtmp_backlog = env_u32("RESTREAM_RTMP_LISTENER_BACKLOG", 1024);
@@ -519,7 +525,7 @@ mod tests {
             || {
                 let config = AppConfig::from_env();
                 assert_eq!(config.db_path, ".restream/data/restream.db");
-                assert_eq!(config.media_dir, ".restream/media");
+                assert_eq!(config.media_dir, DEFAULT_MEDIA_DIR);
                 assert_eq!(config.log_dir, ".restream/logs");
             },
         );

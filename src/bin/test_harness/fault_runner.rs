@@ -809,7 +809,8 @@ async fn configure_file_ingest_case(
 ) -> Result<String, String> {
     let fixture_name = fixture.file_name().unwrap().to_string_lossy().to_string();
     let media_root = PathBuf::from(
-        std::env::var("RESTREAM_MEDIA_DIR").unwrap_or_else(|_| ".restream/media".into()),
+        std::env::var("RESTREAM_MEDIA_DIR")
+            .unwrap_or_else(|_| restream::config::DEFAULT_MEDIA_DIR.into()),
     );
     std::fs::create_dir_all(&media_root).map_err(|e| e.to_string())?;
     let media_dest = media_root.join(&fixture_name);

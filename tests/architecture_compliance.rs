@@ -1,4 +1,4 @@
-use restream::config::AppConfig;
+use restream::config::{AppConfig, DEFAULT_MEDIA_DIR};
 use restream::domain::ids::OutputId;
 use restream::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
 use restream::domain::output_spec::OutputConfig;
@@ -44,7 +44,7 @@ async fn test_phase_3_routing_resolves_all_major_routes() {
         sessions,
         mock_engine,
         log_broadcast,
-        ".restream/media".to_string(),
+        DEFAULT_MEDIA_DIR.to_string(),
     ));
     let app = restream::api::create_router(state);
     let _ = app.into_make_service();
