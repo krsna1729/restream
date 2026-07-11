@@ -21,7 +21,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if [[ "${RESTREAM_E2E_SKIP_BUILD:-0}" != "1" ]]; then
-    "$ROOT/scripts/build/resource-limit.sh" "$ROOT/scripts/build/app-native.sh"
+    # The SBOM belongs to a distributable build. Regenerating it for an
+    # isolated browser test dirties the worktree without testing a different
+    # artifact, so keep this development build side-effect free.
+    RESTREAM_SKIP_SBOM=1 "$ROOT/scripts/build/resource-limit.sh" "$ROOT/scripts/build/app-native.sh"
     (cd "$ROOT" && npm run build:frontend)
 fi
 
@@ -46,7 +49,9 @@ RESTREAM_INITIAL_ADMIN_PASSWORD=admin \
 APP_PID=$!
 
 for _ in $(seq 1 30); do
-    if curl -fsS http://127.0.0.1:3030/healthz >/dev/null; then
+    # Connection refusal is expected while the owned app starts; only the
+    # eventual timeout should be user-visible, together with the app log.
+    if curl -fsS http://127.0.0.1:3030/healthz >/dev/null 2>&1; then
         cd "$ROOT"
         npx playwright test "$@"
         exit $?
