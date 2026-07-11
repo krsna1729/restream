@@ -1093,12 +1093,6 @@
     <div
       id="dashboard-grid"
       class="mx-auto grid hidden min-h-0 w-full max-w-7xl flex-1 gap-4 p-4"
-      style="
-        grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr) minmax(
-            24rem,
-            1fr
-          );
-      "
     >
       <!-- Left Column -->
       <div
@@ -1477,7 +1471,7 @@
 
       <!-- Right Column -->
       <div
-        class="border-base-content/10 bg-base-200 hidden w-full min-w-[24rem] overflow-y-auto rounded-lg border p-4"
+        class="border-base-content/10 bg-base-200 hidden w-full min-w-0 overflow-y-auto rounded-lg border p-4 xl:min-w-[24rem]"
         id="outs-col"
       >
         <h2 class="text-base-content/70 mb-3 text-sm font-semibold uppercase">
@@ -1517,14 +1511,7 @@
                 <th>Freq</th>
               </tr>
             </thead>
-            <tbody id="stats-table">
-              <tr>
-                <th>1</th>
-                <td>Cy Ganderton</td>
-                <td>Quality Control Specialist</td>
-                <td>Blue</td>
-              </tr>
-            </tbody>
+            <tbody id="stats-table"></tbody>
           </table>
         </div>
       </div>

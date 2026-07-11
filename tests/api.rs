@@ -238,6 +238,22 @@ async fn login_page_uses_base_path_aware_api_and_redirects() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = String::from_utf8(body_bytes(resp).await.to_vec()).unwrap();
     assert!(body.contains(r#"<script src="base-path.js"></script>"#));
+    assert!(body.contains(r#"<script src="login.js"></script>"#));
+    assert!(!body.contains(r#"onclick="loginBtn()"#));
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/login.js")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = String::from_utf8(body_bytes(resp).await.to_vec()).unwrap();
     assert!(body.contains(r#"fetch(withBasePath("/api/v1/auth/login")"#));
     assert!(body.contains(r#"window.location.href = withBasePath("/")"#));
 

@@ -32,6 +32,9 @@ function resolveAssetPath(urlPath) {
   if (urlPath.startsWith("/js/")) {
     return path.join(repoRoot, "public", urlPath);
   }
+  if (urlPath === "/base-path.js" || urlPath === "/login.js") {
+    return path.join(repoRoot, "public", urlPath.slice(1));
+  }
   if (urlPath.startsWith("/login.html") || urlPath.startsWith("/index.html")) {
     return path.join(repoRoot, "public", urlPath.slice(1));
   }

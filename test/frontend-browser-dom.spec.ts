@@ -122,6 +122,98 @@ async function mountPreviewPipe(
 }
 
 test.describe("Frontend Browser DOM", () => {
+  test("dashboard selected-pipeline grid does not overflow mobile viewports", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto(HARNESS_PATH);
+    await page.evaluate(() => {
+      document.body.innerHTML = `
+        <main>
+          <div id="dashboard-grid" class="mx-auto grid min-h-0 w-full max-w-7xl flex-1 gap-4 p-4 has-selected-pipeline">
+            <div class="border-base-content/10 bg-base-200 w-full max-w-[18rem] overflow-y-auto rounded-lg border"></div>
+            <div id="pipe-info-col" class="border-base-content/10 bg-base-200 overflow-y-auto rounded-lg border p-4"></div>
+            <div id="outs-col" class="border-base-content/10 bg-base-200 w-full min-w-0 overflow-y-auto rounded-lg border p-4 xl:min-w-[24rem]"></div>
+          </div>
+        </main>`;
+    });
+
+    const overflow = await page.evaluate(() => ({
+      gridScrollWidth: document.getElementById("dashboard-grid")?.scrollWidth,
+      gridClientWidth: document.getElementById("dashboard-grid")?.clientWidth,
+      gridTemplate: getComputedStyle(
+        document.getElementById("dashboard-grid") as HTMLElement,
+      ).gridTemplateColumns,
+    }));
+
+    expect(overflow.gridScrollWidth).toBeLessThanOrEqual(
+      overflow.gridClientWidth,
+    );
+    expect(overflow.gridTemplate).not.toContain("384px");
+  });
+
+  test("login form submits through base-path-aware fetch and keeps password toggle keyboard reachable", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      (
+        window as typeof window & { __RESTREAM_BASE_PATH__?: string }
+      ).__RESTREAM_BASE_PATH__ = "/restream";
+    });
+    await page.goto("/login.html");
+    const requests: unknown[] = [];
+    await page.exposeFunction("recordLoginRequest", (request: unknown) => {
+      requests.push(request);
+    });
+    await page.evaluate(() => {
+      window.fetch = async (url, init) => {
+        await (
+          window as typeof window & {
+            recordLoginRequest: (request: unknown) => Promise<void>;
+          }
+        ).recordLoginRequest({
+          url: String(url),
+          method: init?.method,
+          body: init?.body,
+        });
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      };
+    });
+
+    await expect(page.locator("form#login-form")).toBeVisible();
+    await expect
+      .poll(() => page.locator("#toggle-password-btn").evaluate((el) => el.tabIndex))
+      .toBeGreaterThanOrEqual(0);
+    await page.locator("#toggle-password-btn").click();
+    await expect(page.locator("#password-input")).toHaveAttribute(
+      "type",
+      "text",
+    );
+    await expect(page.locator("#toggle-password-btn")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await page.locator("#password-input").fill("secret-password");
+    await page.locator("form#login-form").evaluate((form) => {
+      form.addEventListener("submit", (event) => event.preventDefault(), {
+        once: true,
+      });
+    });
+    await page.locator("form#login-form").dispatchEvent("submit");
+
+    expect(requests).toEqual([
+      {
+        url: "/restream/api/v1/auth/login",
+        method: "POST",
+        body: JSON.stringify({ password: "secret-password" }),
+      },
+    ]);
+  });
+
   test("preview audio picker opens and switches tracks without the full app server", async ({
     page,
   }) => {
