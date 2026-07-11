@@ -30,7 +30,7 @@ same location, one directory per skill.
 All skill bodies are agent-neutral: the canonical instructions are the
 `docs/agent-guidance/skills/<name>/SKILL.md` files. Claude Code registers
 them through thin shims in `.claude/skills/<name>/SKILL.md`, generated
-locally by `scripts/setup-agent-skills.sh` (`.claude/` is gitignored;
+locally by `scripts/agent/setup-skills.sh` (`.claude/` is gitignored;
 `agent-worktree.sh` runs the generator automatically). Agents without a
 skill system read the canonical files directly (wired via `AGENTS.md`
 § Autonomous Quality Loops).
@@ -69,7 +69,7 @@ This is an 8 GB WSL2 host with no swap; static FFmpeg links make concurrent
 heavy builds a kernel-panic risk. Therefore, and non-negotiably:
 
 - **One quality loop per host.** For parallel agents, use
-  `scripts/agent-worktree.sh` and export
+  `scripts/agent/worktree.sh` and export
   `RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock` so the build lock is
   host-global, not per-worktree.
 - Loops never kill media processes they didn't start; they skip the iteration
@@ -92,5 +92,5 @@ Add work by writing well-formed items into `backlog.md` (format in
 backlog-groom). Add a new dimension by writing a sweep skill with the same
 shape — discovery recipe + execution recipe + binding rules — into
 `docs/agent-guidance/skills/<name>/SKILL.md`, mapping its tag in the
-quality-loop dispatch table, and re-running `scripts/setup-agent-skills.sh`
+quality-loop dispatch table, and re-running `scripts/agent/setup-skills.sh`
 to refresh the local registration shims.

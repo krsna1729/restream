@@ -5,7 +5,7 @@
     "lib": ["ES2021", "DOM"],
     "moduleResolution": "bundler",
     "outDir": "public/js",
-    "rootDir": "public/ts",
+    "rootDir": "web/ts",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -13,5 +13,5 @@
     "sourceMap": false,
     "removeComments": true
   },
-  "include": ["public/ts/**/*.ts", "public/ts/**/*.d.ts"]
+  "include": ["web/ts/**/*.ts", "web/ts/**/*.d.ts"]
 }

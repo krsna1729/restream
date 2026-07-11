@@ -38,8 +38,8 @@ runtime modules.
 4. Hot-path modules keep their runtime focus — a boundary move must not add
    indirection (dyn dispatch, extra channel hops, per-packet trait calls) to
    packet-level loops.
-5. Gates: `scripts/resource-limit cargo test <scoped>` for the touched area;
-   `./scripts/check-api-contract.sh` if any frontend/backend contract surface
+5. Gates: `scripts/build/resource-limit.sh cargo test <scoped>` for the touched area;
+   `./scripts/check/api-contract.sh` if any frontend/backend contract surface
    moved; `npm run test:frontend` for frontend moves; full standard gates via
    quality-loop.
 
@@ -52,7 +52,7 @@ Run ONE probe, file items, move nothing:
   `api`/view-model modules.
 - Check `docs/layering-roadmap.md` for the topmost not-yet-done step; file it
   with the target files listed.
-- Largest-file check: list the 5 largest files in `src/` and `public/ts/`;
+- Largest-file check: list the 5 largest files in `src/` and `web/ts/`;
   a file is an item only if it mixes ownerships, not merely because it is big.
 
 ## Stop rules (from the layering audit — binding)

@@ -245,7 +245,7 @@ borrowed payload slice is returned directly (zero copy).
 
 ## Scale Test Pipeline Paths
 
-`scripts/resource-limit target/bench/test_harness mixed.matrix` exercises
+`scripts/build/resource-limit.sh target/bench/test_harness mixed.matrix` exercises
 the closed-GOP input matrix. Individual rows use the scenario grammar
 `mixed.<source>.<ingest>.<video>.<audio>.<reorder>`, where `reorder` is `bf0`
 or `bf2` based on the source-side B-frame signal. The current table uses
@@ -537,7 +537,7 @@ StreamIDs are rejected as duplicate publishers.
 
 Requires libsrt compiled with `ENABLE_BONDING=ON`; startup warns and retains
 single-link ingest otherwise. All builds link against the repo-managed static
-SRT build from `.build/static/prefix`, so bonded-ingest support no longer
+SRT build from `.local/build/static/prefix`, so bonded-ingest support no longer
 depends on the distro `libsrt` package.
 
 ### Egress

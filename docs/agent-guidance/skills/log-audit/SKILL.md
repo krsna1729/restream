@@ -58,7 +58,7 @@ due to a fault that is *not* the remote client's fault:
 3. Fix misclassified callsites in-place. Keep the message text and structured
    fields unchanged; only change the macro name.
 
-4. Compile-check: `scripts/resource-limit cargo check`
+4. Compile-check: `scripts/build/resource-limit.sh cargo check`
 
 5. Update `docs/logging.md` § "Callsite Audit":
    - Add or update the row for each changed callsite.

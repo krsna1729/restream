@@ -28,7 +28,7 @@ fn main() {
     // explicitly below.
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
-    let prefix = manifest_dir.join(".build/static/prefix");
+    let prefix = manifest_dir.join(".local/build/static/prefix");
     let lib_dir = prefix.join("lib");
     let pkgconfig_dir = lib_dir.join("pkgconfig");
 
@@ -134,7 +134,7 @@ fn main() {
 fn embed_pkg_version(env_name: &str, package: &str) {
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
-    let prefix = manifest_dir.join(".build/static/prefix");
+    let prefix = manifest_dir.join(".local/build/static/prefix");
     let cargo_metadata = matches!(package, "x264" | "x265");
     let version = probe_pinned_package(package, &prefix, cargo_metadata).version;
     println!("cargo:rustc-env={env_name}={version}");
@@ -231,7 +231,7 @@ fn probe_pinned_package(package: &str, prefix: &Path, cargo_metadata: bool) -> p
         .probe(package)
         .unwrap_or_else(|error| {
             panic!(
-                "{package} not found in repo static prefix {}: {error}. Run `scripts/resource-limit ./scripts/setup-static-build.sh` first.",
+                "{package} not found in repo static prefix {}: {error}. Run `scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` first.",
                 prefix.display()
             )
         });
@@ -250,7 +250,7 @@ fn check_required_static_inputs(prefix: &Path) {
         assert_required_file(
             &path,
             &format!(
-                "repo static archive is missing: {}. Run `scripts/resource-limit ./scripts/setup-static-build.sh` first.",
+                "repo static archive is missing: {}. Run `scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` first.",
                 path.display()
             ),
         );
@@ -262,7 +262,7 @@ fn check_required_static_inputs(prefix: &Path) {
         assert_required_file(
             &path,
             &format!(
-                "repo static pkg-config file is missing: {}. Run `scripts/resource-limit ./scripts/setup-static-build.sh` first.",
+                "repo static pkg-config file is missing: {}. Run `scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` first.",
                 path.display()
             ),
         );

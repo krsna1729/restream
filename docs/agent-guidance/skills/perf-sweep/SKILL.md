@@ -14,10 +14,10 @@ chased, or one optimization with before/after proof.
 
 - **Serial only:** nothing else may build or run on the host during any
   measurement. Kill-check first: `pgrep -x restream; pgrep -x mediamtx; pgrep -x ffmpeg`.
-- Bench profile only: `scripts/resource-limit cargo build --profile bench`,
-  `scripts/resource-limit cargo bench --bench <name>`. Never `--release`,
+- Bench profile only: `scripts/build/resource-limit.sh cargo build --profile bench`,
+  `scripts/build/resource-limit.sh cargo bench --bench <name>`. Never `--release`,
   never `target/debug` for measurement harness modes
-  (`scripts/build-bench-harness.sh` → `target/bench/test_harness`).
+  (`scripts/build/bench-harness.sh` → `target/bench/test_harness`).
 - Every claim needs numbers from this machine, this session. No "should be
   faster".
 - Durable results go to `docs/agent-guidance/quality/baselines.md`; Criterion's
@@ -40,7 +40,7 @@ chased, or one optimization with before/after proof.
 
 ## Mode B — resource check (efficiency guard)
 
-1. Run `scripts/resource-limit target/bench/test_harness resource-sweep`
+1. Run `scripts/build/resource-limit.sh target/bench/test_harness resource-sweep`
    (serial, bench harness).
 2. Compare RSS, ring payload, and AVIO high-water marks against the resource
    table in `baselines.md`.

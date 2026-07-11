@@ -83,13 +83,13 @@ Add API/frontend contract coverage when:
 Fast proof gate for local loops:
 
 ```sh
-bash ./scripts/check-concurrency-proof-fast.sh
+bash ./scripts/check/concurrency/fast.sh
 ```
 
 Full contract gate:
 
 ```sh
-bash ./scripts/check-concurrency-contract.sh
+bash ./scripts/check/concurrency/contract.sh
 ```
 
 The fast gate runs the loom targets, focused API tests, and harness unit tests.
@@ -136,8 +136,8 @@ surface already covers it.
 
 ## Current Mandatory Surfaces
 
-- `scripts/check-concurrency-proof-fast.sh`
-- `scripts/check-concurrency-contract.sh`
+- `scripts/check/concurrency/fast.sh`
+- `scripts/check/concurrency/contract.sh`
 - `tests/api.rs`
   - `health_endpoint_exposes_probe_and_egress_fault_fields`
   - `health_endpoint_surfaces_repeated_transient_disconnects_as_flapping`

@@ -1,11 +1,6 @@
-# WIP
-worktrees/
-
-# Rust build artifacts
-/target
-/.build
-/.build-lock
-/test/artifacts/
+# Local generated state
+/.local/
+/target/
 
 # Old Node.js/TypeScript codebase (archived)
 old/
@@ -18,13 +13,13 @@ old/
 .codex/
 .agents/
 
-# Downloaded binaries
-/bin/
-/public/bin/
+# Generated frontend bundle and downloaded runtime binary
+/public/
+/media/
+/test-results/
 
 # Log files
 log/
-logs/
 *.log
 *.pid
 scale.csv
@@ -51,14 +46,6 @@ scale.csv
 *.pfx
 *tls*.tgz
 *cert*.tgz
-
-# Generated frontend output
-public/js/
-public/output.css
-
-# Runtime data
-data.db
-/media/
 
 # Coverage output
 coverage.lcov

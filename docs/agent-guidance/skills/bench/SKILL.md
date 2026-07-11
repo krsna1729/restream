@@ -29,8 +29,8 @@ Available bench names (from `benches/`):
 
 1. If no argument given, list available bench names and ask which to run.
 2. Kill any live pipeline first (WSL2 memory safety): confirm `pgrep -x restream`, `pgrep -x mediamtx`, `pgrep -x ffmpeg` are all empty before building.
-3. Build with bench profile: `scripts/resource-limit cargo build --profile bench`
-4. Run: `scripts/resource-limit cargo bench --bench <name>`
+3. Build with bench profile: `scripts/build/resource-limit.sh cargo build --profile bench`
+4. Run: `scripts/build/resource-limit.sh cargo bench --bench <name>`
 5. Report the Criterion summary (throughput, latency, change % if a baseline exists).
 
 ## Workflow for before/after comparison

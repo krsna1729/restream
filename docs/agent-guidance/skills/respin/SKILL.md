@@ -62,7 +62,7 @@ fi
 
 if [[ $NEED_BUILD -eq 1 ]]; then
   echo "Building bench binary..."
-  scripts/resource-limit cargo build --profile bench 2>&1 | tail -3
+  scripts/build/resource-limit.sh cargo build --profile bench 2>&1 | tail -3
 fi
 ```
 
@@ -151,7 +151,7 @@ Start the 2v16a SRT publisher (H.264 1080p30 at stream index 1, all 16 audio tra
 
 ```bash
 ffmpeg -nostdin -hide_banner -loglevel error \
-  -re -stream_loop -1 -i media/colorbar-timer-2v16a.mp4 \
+  -re -stream_loop -1 -i test/fixtures/media-library/colorbar-timer-2v16a.mp4 \
   -map 0:1 -map 0:a? -c copy \
   -f mpegts 'srt://127.0.0.1:31280?streamid=publish:live/live&pkt_size=1316' \
   >> "$WORK/ffmpeg-pub.log" 2>&1 &

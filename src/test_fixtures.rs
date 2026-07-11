@@ -1,7 +1,8 @@
 //! Canonical fixture contract for tests and benchmarks.
 //!
-//! Non-integration fixtures live in git under `test/fixtures/`. Integration
-//! media that exercises the public media-library path stays under `media/`.
+//! Non-integration fixtures live in git under `test/fixtures/transport/`. Integration
+//! media that exercises the public media-library path stays under
+//! `test/fixtures/media-library/`.
 //! Tests and benches should resolve them through this module so fixture drift
 //! fails loudly instead of silently depending on whatever happens to be local.
 
@@ -36,83 +37,83 @@ impl AvMarkerBframeMode {
 pub const REQUIRED_CHECKED_IN_FIXTURES: &[&str] = &[
     // Canonical H.264 MPEG-TS correctness source: single-video/single-audio
     // packet fixture used by unit tests and non-measurement protocol gates.
-    "test/fixtures/correctness-h264.ts",
+    "test/fixtures/transport/correctness-h264.ts",
     // Canonical HEVC MPEG-TS correctness source: exercises HEVC demux,
     // passthrough, and H.265->H.264 compatibility conversion paths.
-    "test/fixtures/correctness-h265.ts",
+    "test/fixtures/transport/correctness-h265.ts",
     // H.264 1.5 Mbps single-audio transport fixture for resource/throughput
     // sweeps where bitrate shape matters more than signal markers.
-    "test/fixtures/bench-h264-1_5m.ts",
+    "test/fixtures/transport/bench-h264-1_5m.ts",
     // H.264 4 Mbps single-audio transport fixture for medium-bitrate scaling
     // and ramp measurements.
-    "test/fixtures/bench-h264-4m.ts",
+    "test/fixtures/transport/bench-h264-4m.ts",
     // H.264 8 Mbps single-audio transport fixture for high-bitrate scaling
     // and buffer-pressure measurements.
-    "test/fixtures/bench-h264-8m.ts",
+    "test/fixtures/transport/bench-h264-8m.ts",
     // H.264 1.5 Mbps two-audio transport fixture for multi-audio resource
     // sweeps and selected-track routing without synthetic generation.
-    "test/fixtures/bench-h264-1_5m-2a.ts",
+    "test/fixtures/transport/bench-h264-1_5m-2a.ts",
     // H.264 4 Mbps two-audio transport fixture for multi-audio bitrate-sweep
     // coverage at the medium-bitrate point.
-    "test/fixtures/bench-h264-4m-2a.ts",
+    "test/fixtures/transport/bench-h264-4m-2a.ts",
     // H.264 8 Mbps two-audio transport fixture for multi-audio bitrate-sweep
     // coverage at the high-bitrate point.
-    "test/fixtures/bench-h264-8m-2a.ts",
+    "test/fixtures/transport/bench-h264-8m-2a.ts",
     // HEVC 1.5 Mbps single-audio transport fixture for low-bitrate HEVC
     // scaling and RTMP compatibility-edge measurements.
-    "test/fixtures/bench-h265-1_5m.ts",
+    "test/fixtures/transport/bench-h265-1_5m.ts",
     // HEVC 4 Mbps single-audio transport fixture for medium-bitrate HEVC
     // scaling and codec-edge resource measurements.
-    "test/fixtures/bench-h265-4m.ts",
+    "test/fixtures/transport/bench-h265-4m.ts",
     // HEVC 8 Mbps single-audio transport fixture for high-bitrate HEVC
     // scaling and stress of the in-process H.265->H.264 path.
-    "test/fixtures/bench-h265-8m.ts",
+    "test/fixtures/transport/bench-h265-8m.ts",
     // HEVC 1.5 Mbps two-audio transport fixture for multi-audio HEVC
     // resource sweeps and selected-track routing.
-    "test/fixtures/bench-h265-1_5m-2a.ts",
+    "test/fixtures/transport/bench-h265-1_5m-2a.ts",
     // HEVC 4 Mbps two-audio transport fixture for multi-audio bitrate-sweep
     // coverage at the medium-bitrate point.
-    "test/fixtures/bench-h265-4m-2a.ts",
+    "test/fixtures/transport/bench-h265-4m-2a.ts",
     // HEVC 8 Mbps two-audio transport fixture for multi-audio bitrate-sweep
     // coverage at the high-bitrate point.
-    "test/fixtures/bench-h265-8m-2a.ts",
+    "test/fixtures/transport/bench-h265-8m-2a.ts",
     // H.264 marker oracle: black video with periodic white flashes and
     // matching 1 kHz beeps for A/V sync, drift, and PCM-quality assertions.
-    "test/fixtures/av-marker-h264.ts",
+    "test/fixtures/transport/av-marker-h264.ts",
     // HEVC marker oracle with the same flash/beep timing as the H.264 marker
     // fixture, used to verify signal quality through HEVC paths.
-    "test/fixtures/av-marker-h265.ts",
+    "test/fixtures/transport/av-marker-h265.ts",
     // H.264 marker oracle with two AAC tracks: track 0 has 1 kHz beeps and
     // track 1 has 2 kHz beeps for multi-audio routing and future frequency
     // identity checks.
-    "test/fixtures/av-marker-h264-2a.ts",
+    "test/fixtures/transport/av-marker-h264-2a.ts",
     // H.264 marker oracle with B-frames disabled so harnesses can verify
     // source-side no-reorder ingest against the same flash/beep timing.
-    "test/fixtures/av-marker-h264-bf0.ts",
+    "test/fixtures/transport/av-marker-h264-bf0.ts",
     // H.264 two-audio marker oracle with B-frames disabled for multi-audio
     // source-reorder matrix coverage.
-    "test/fixtures/av-marker-h264-bf0-2a.ts",
+    "test/fixtures/transport/av-marker-h264-bf0-2a.ts",
     // HEVC marker oracle with two AAC tracks, covering HEVC multi-audio
     // routing plus RTMP compatibility conversion under signal validation.
-    "test/fixtures/av-marker-h265-2a.ts",
+    "test/fixtures/transport/av-marker-h265-2a.ts",
     // HEVC marker oracle with B-frames disabled so mixed input can cover
     // HEVC no-reorder ingest without dropping A/V marker signal.
-    "test/fixtures/av-marker-h265-bf0.ts",
+    "test/fixtures/transport/av-marker-h265-bf0.ts",
     // HEVC two-audio marker oracle with B-frames disabled for multi-audio
     // no-reorder ingest coverage.
-    "test/fixtures/av-marker-h265-bf0-2a.ts",
+    "test/fixtures/transport/av-marker-h265-bf0-2a.ts",
     // HLS edge-case fixture whose first segment starts audio-only, guarding
     // preview and playlist startup behavior when video arrives later.
-    "test/fixtures/hls-first-audio-only-6s.ts",
+    "test/fixtures/transport/hls-first-audio-only-6s.ts",
     // Sparse-GOP MP4 fixture for file-live-edge optimization tests that verify
     // GOP normalization and recording duration behavior.
-    "test/fixtures/sparse-gop-5s.mp4",
+    "test/fixtures/media-library/sparse-gop-5s.mp4",
     // Public media-library fixture with two video tracks and sixteen audio
     // tracks; validates high-track-count probing and UI/audio-routing behavior.
-    "media/colorbar-timer-2v16a.mp4",
+    "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
     // MediaMTX sink configuration fixture used by integration harnesses for
     // deterministic local RTMP/SRT/HLS sink behavior.
-    "test/mediamtx-sink.yml",
+    "test/harness/mediamtx-sink.yml",
 ];
 
 fn repo_root() -> PathBuf {
@@ -132,15 +133,15 @@ pub fn checked_in_fixture(relative_path: &str) -> Result<PathBuf, String> {
 }
 
 pub fn canonical_h264_ts_fixture() -> Result<PathBuf, String> {
-    checked_in_fixture("test/fixtures/correctness-h264.ts")
+    checked_in_fixture("test/fixtures/transport/correctness-h264.ts")
 }
 
 pub fn canonical_h265_ts_fixture() -> Result<PathBuf, String> {
-    checked_in_fixture("test/fixtures/correctness-h265.ts")
+    checked_in_fixture("test/fixtures/transport/correctness-h265.ts")
 }
 
 pub fn sparse_gop_mp4_fixture() -> Result<PathBuf, String> {
-    checked_in_fixture("test/fixtures/sparse-gop-5s.mp4")
+    checked_in_fixture("test/fixtures/media-library/sparse-gop-5s.mp4")
 }
 
 pub fn canonical_ts_fixture(codec: &str) -> Result<PathBuf, String> {
@@ -163,7 +164,9 @@ pub fn bench_transport_fixture(
     };
     let bitrate = bitrate_label.to_ascii_lowercase().replace('.', "_");
     let suffix = if multi_audio { "-2a" } else { "" };
-    checked_in_fixture(&format!("test/fixtures/bench-{codec}-{bitrate}{suffix}.ts"))
+    checked_in_fixture(&format!(
+        "test/fixtures/transport/bench-{codec}-{bitrate}{suffix}.ts"
+    ))
 }
 
 pub fn av_marker_transport_fixture(codec: &str, multi_audio: bool) -> Result<PathBuf, String> {
@@ -182,7 +185,7 @@ pub fn av_marker_transport_fixture_for_bframes(
     };
     let suffix = if multi_audio { "-2a" } else { "" };
     checked_in_fixture(&format!(
-        "test/fixtures/av-marker-{codec}{}{suffix}.ts",
+        "test/fixtures/transport/av-marker-{codec}{}{suffix}.ts",
         bframes.file_suffix()
     ))
 }

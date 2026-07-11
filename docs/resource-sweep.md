@@ -3,7 +3,7 @@
 The preferred integration entry point is the native Rust harness mode:
 
 ```sh
-./scripts/run-bench-harness.sh resource-sweep
+./scripts/harness/run.sh resource-sweep
 ```
 
 The sweep measures `restream` CPU and memory across a fixed set of live
@@ -22,7 +22,7 @@ integration scenarios:
 - egress growth with mixed RTMP+SRT source plus 720p plus 1080p outputs
 - HEVC ingest to RTMP source-output growth (captures the internal HEVC bridge)
 
-Artifacts are written to `test/artifacts/resource-sweep/`:
+Artifacts are written to `.local/artifacts/resource-sweep/`:
 
 - `resource-sweep-results.json`: stage aggregates
 - `resource-sweep-results.csv`: spreadsheet-friendly summary
@@ -45,13 +45,13 @@ For transcode scenarios the CSV/JSON now split CPU into:
 Run it with the canonical bench harness wrapper:
 
 ```sh
-./scripts/run-bench-harness.sh resource-sweep
+./scripts/harness/run.sh resource-sweep
 ```
 
 Useful env vars:
 
 - `RESTREAM_BIN=/path/to/restream`
-- `WORK_DIR=test/artifacts/resource-sweep-custom`
+- `WORK_DIR=.local/artifacts/resource-sweep-custom`
 - `RESOURCE_SWEEP_SAMPLE_SECS=10`
 - `RESOURCE_SWEEP_SETTLE_SECS=6`
 - `RESOURCE_SWEEP_EGRESS_COUNTS=1,3,6`
@@ -67,7 +67,7 @@ If you specifically want the current-code passthrough-vs-transcode-family
 baseline, use the dedicated harness mode instead:
 
 ```sh
-./scripts/run-bench-harness.sh branch-matrix
+./scripts/harness/run.sh branch-matrix
 ```
 
 Examples:
@@ -75,39 +75,39 @@ Examples:
 ```sh
 RESOURCE_SWEEP_SCENARIOS=egress-growth-transcode-mixed \
 RESOURCE_SWEEP_EGRESS_COUNTS=10 \
-./scripts/run-bench-harness.sh resource-sweep
+./scripts/harness/run.sh resource-sweep
 
 RESOURCE_SWEEP_SCENARIOS=egress-growth-hevc-bridge \
 RESOURCE_SWEEP_EGRESS_COUNTS=10 \
-./scripts/run-bench-harness.sh resource-sweep
+./scripts/harness/run.sh resource-sweep
 
 RESOURCE_SWEEP_SCENARIOS=egress-growth-transcode-dual-mixed,egress-growth-source-plus-transcode-dual-mixed \
 RESOURCE_SWEEP_EGRESS_COUNTS=10 \
-./scripts/run-bench-harness.sh resource-sweep
+./scripts/harness/run.sh resource-sweep
 
 HARNESS_SRT_PASSPHRASE=0123456789abcd \
 HARNESS_SRT_PBKEYLEN=16 \
 RESOURCE_SWEEP_SCENARIOS=ingest-only,egress-growth-source-mixed \
-./scripts/run-bench-harness.sh resource-sweep
+./scripts/harness/run.sh resource-sweep
 
 RESTREAM_BIN=target/bench/restream \
 SRT_CRYPTO_MATRIX_VARIANTS=plaintext,enc16,enc24,enc32 \
 BRANCH_MATRIX_SCENARIOS=egress-growth-source-mixed \
-./scripts/run-bench-harness.sh srt-crypto-matrix
+./scripts/harness/run.sh srt-crypto-matrix
 ```
 
 To leave the last scenario up for interactive inspection:
 
 ```sh
-RESOURCE_SWEEP_NO_CLEANUP=1 ./scripts/run-bench-harness.sh resource-sweep
+RESOURCE_SWEEP_NO_CLEANUP=1 ./scripts/harness/run.sh resource-sweep
 ```
 
 Lifecycle modes:
 
 ```sh
-RESOURCE_SWEEP_LIFECYCLE=isolated ./scripts/run-bench-harness.sh resource-sweep
-RESOURCE_SWEEP_LIFECYCLE=continuous ./scripts/run-bench-harness.sh resource-sweep
-RESOURCE_SWEEP_LIFECYCLE=cumulative ./scripts/run-bench-harness.sh resource-sweep
+RESOURCE_SWEEP_LIFECYCLE=isolated ./scripts/harness/run.sh resource-sweep
+RESOURCE_SWEEP_LIFECYCLE=continuous ./scripts/harness/run.sh resource-sweep
+RESOURCE_SWEEP_LIFECYCLE=cumulative ./scripts/harness/run.sh resource-sweep
 ```
 
 - `isolated`: restart `restream` and `mediamtx` between scenarios for cleaner attribution
@@ -118,8 +118,8 @@ RESOURCE_SWEEP_LIFECYCLE=cumulative ./scripts/run-bench-harness.sh resource-swee
 
 Source artifacts:
 
-- `test/artifacts/resource-sweep-authoritative/resource-sweep-results.csv`
-- `test/artifacts/bitrate-sweep-authoritative/bitrate-sweep-results.csv`
+- `.local/artifacts/resource-sweep-authoritative/resource-sweep-results.csv`
+- `.local/artifacts/bitrate-sweep-authoritative/bitrate-sweep-results.csv`
 
 Peak memory and average CPU for the default isolated sweep:
 
@@ -165,11 +165,11 @@ For targeted profiling, avoid a full sweep. Run one scenario with a long sample
 window and attach a profiler during the live run:
 
 ```sh
-WORK_DIR=test/artifacts/profile-external \
+WORK_DIR=.local/artifacts/profile-external \
 RESOURCE_SWEEP_SCENARIOS=egress-growth-transcode-mixed \
 RESOURCE_SWEEP_EGRESS_COUNTS=10 \
 RESOURCE_SWEEP_SAMPLE_SECS=30 \
-./scripts/run-bench-harness.sh resource-sweep
+./scripts/harness/run.sh resource-sweep
 ```
 
 On Linux, attach `perf` to the live pid:

@@ -137,8 +137,8 @@ fn release_policy_metadata_is_declared_and_enforced() {
     let sbom_workflow = include_str!("../.github/workflows/sbom-security.yml");
     assert!(sbom_workflow.contains("cargo deny check advisories licenses bans sources"));
 
-    let native_build = include_str!("../scripts/setup-static-build.sh");
-    assert!(native_build.contains("scripts/native-inputs.lock"));
+    let native_build = include_str!("../scripts/build/native-deps.sh");
+    assert!(native_build.contains("scripts/build/native/native-inputs.lock"));
     assert!(native_build.contains("require_locked_value MBEDTLS_SHA256"));
     assert!(native_build.contains("require_source_commit \"SRT\""));
     assert!(native_build.contains("require_source_commit \"FFmpeg\""));
@@ -146,7 +146,7 @@ fn release_policy_metadata_is_declared_and_enforced() {
     assert!(native_build.contains("reset_cmake_build_if_moved"));
     assert!(native_build.contains("RESTREAM_VERIFY_NATIVE_INPUT_LOCK_ONLY"));
 
-    let native_lock = include_str!("../scripts/native-inputs.lock");
+    let native_lock = include_str!("../scripts/build/native/native-inputs.lock");
     for required in [
         "RESTREAM_LOCK_MBEDTLS_TARBALL_SHA256",
         "RESTREAM_LOCK_MBEDTLS_CONFIG_SHA256",
@@ -378,7 +378,7 @@ fn frontend_tooling_and_vendored_assets_are_reproducible() {
     let tsconfig = include_str!("../tsconfig.json");
     for required in [
         "\"strict\": true",
-        "\"rootDir\": \"public/ts\"",
+        "\"rootDir\": \"web/ts\"",
         "\"outDir\": \"public/js\"",
         "\"sourceMap\": false",
     ] {
@@ -388,7 +388,7 @@ fn frontend_tooling_and_vendored_assets_are_reproducible() {
         );
     }
 
-    let hls_sync = include_str!("../scripts/ensure-frontend-assets.mjs");
+    let hls_sync = include_str!("../scripts/dev/frontend/prepare-assets.mjs");
     assert!(hls_sync.contains("sourceMappingURL=hls\\.min\\.js\\.map"));
     let generated_hls_bundle =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("public/js/lib/hls.min.js");
@@ -406,10 +406,10 @@ fn frontend_tooling_and_vendored_assets_are_reproducible() {
 fn source_distribution_manifest_matches_declared_build_inputs() {
     let manifest = include_str!("../docs/source-distribution.md");
     for required in [
-        ".build/static/prefix/",
+        ".local/build/static/prefix/",
         "package-lock.json",
         "tsconfig.json",
-        "scripts/resource-limit ./scripts/setup-static-build.sh",
+        "scripts/build/resource-limit.sh ./scripts/build/native-deps.sh",
         "npm run build:frontend",
         "hls.min.js.map",
     ] {
@@ -436,10 +436,10 @@ fn source_distribution_manifest_matches_declared_build_inputs() {
     );
 
     for script in [
-        "scripts/run-bench-harness.sh",
-        "scripts/build-bench-harness.sh",
-        "scripts/setup-static-build.sh",
-        "scripts/ensure-frontend-assets.mjs",
+        "scripts/harness/run.sh",
+        "scripts/build/bench-harness.sh",
+        "scripts/build/native-deps.sh",
+        "scripts/dev/frontend/prepare-assets.mjs",
     ] {
         assert!(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

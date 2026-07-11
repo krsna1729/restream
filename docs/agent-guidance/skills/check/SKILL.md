@@ -20,8 +20,8 @@ If any are running, stop and ask (or, in an autonomous loop, skip the iteration)
 ## Steps
 
 1. Run `cargo fmt --all --check` — report misformatted files, do NOT auto-fix.
-2. Run `scripts/resource-limit cargo clippy -- -D warnings` — fail on any warning.
-3. Run `scripts/resource-limit cargo test` — run the full unit/integration test suite.
+2. Run `scripts/build/resource-limit.sh cargo clippy -- -D warnings` — fail on any warning.
+3. Run `scripts/build/resource-limit.sh cargo test` — run the full unit/integration test suite.
 
 Stop at the first failure and report clearly what failed and how to fix it. Do not proceed to the next step if a prior step fails.
 
@@ -31,5 +31,5 @@ If all three pass, report a short summary: "fmt ✓  clippy ✓  tests ✓" and 
 - Never use `--release`; use `--profile bench` only if explicitly building for benchmarks.
 - `cargo fmt` (without `--check`) auto-fixes; only use `--check` here unless the user explicitly asks to format.
 - Use `cargo fmt --all` / `cargo fmt --all --check`; do not run `rustfmt` directly.
-- The resource limiter acquires `.build-lock`; it is safe to run alongside other agents.
-- Passing test logs must stay quiet: no warnings, panic text, or FFmpeg probe chatter (see `scripts/check-test-hygiene.sh`).
+- The resource limiter acquires `.local/build/lock`; it is safe to run alongside other agents.
+- Passing test logs must stay quiet: no warnings, panic text, or FFmpeg probe chatter (see `scripts/check/test-hygiene.sh`).

@@ -9,19 +9,19 @@ Run the live protocol correctness matrix and media validation suites. Use after 
 
 ## Steps
 
-1. Preflight: confirm no live pipeline is running (`pgrep -x restream`, `pgrep -x mediamtx`, `pgrep -x ffmpeg` all empty). Build the harness: `scripts/resource-limit cargo build --bin test_harness`.
+1. Preflight: confirm no live pipeline is running (`pgrep -x restream`, `pgrep -x mediamtx`, `pgrep -x ffmpeg` all empty). Build the harness: `scripts/build/resource-limit.sh cargo build --bin test_harness`.
 
 2. Run the protocol correctness scenarios relevant to the change (each is one harness invocation). RTMP/SRT ingest correctness, cross-protocol egress, and HEVC coverage all run through the `mixed.*` scenario matrix now — a single scenario's output plan exercises RTMP, SRT, and HLS egress together:
    ```sh
-   scripts/resource-limit target/debug/test_harness mixed.live.rtmp.h264.a1.bf0
-   scripts/resource-limit target/debug/test_harness mixed.live.srt.h264.a1.bf0
+   scripts/build/resource-limit.sh target/debug/test_harness mixed.live.rtmp.h264.a1.bf0
+   scripts/build/resource-limit.sh target/debug/test_harness mixed.live.srt.h264.a1.bf0
    ```
    For HEVC-affecting changes add `mixed.live.srt.h265.a1.bf2` (and `.a2.bf2` for multi-audio).
    For B-frame/timestamp changes add `timestamp.bframe`.
    For SRT encryption/policy changes add `srt.policy` and `srt-crypto-matrix`.
    - If a mode fails: report failures and ask whether to continue to media validation.
 
-3. Run the bounded media validation suite: `scripts/resource-limit ./test/run-media-validation.sh`
+3. Run the bounded media validation suite: `scripts/build/resource-limit.sh ./scripts/harness/media-validation.sh`
 
 4. Report a summary of all runs: pass/fail counts, any failures with their output.
 
@@ -30,4 +30,4 @@ Run the live protocol correctness matrix and media validation suites. Use after 
 - For SRT-specific changes, also run `/media-test srt` (scoped unit tests) before this suite.
 - For RTMP-specific changes, also run `/media-test rtmp` first.
 - These tests can take several minutes. Report progress as each mode completes.
-- Correctness modes may overlap when isolated; measurement modes (bench, bitrate-sweep, resource-sweep) must stay serial and use the bench-profile harness (`scripts/build-bench-harness.sh` → `target/bench/test_harness`).
+- Correctness modes may overlap when isolated; measurement modes (bench, bitrate-sweep, resource-sweep) must stay serial and use the bench-profile harness (`scripts/build/bench-harness.sh` → `target/bench/test_harness`).

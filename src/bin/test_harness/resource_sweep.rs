@@ -71,7 +71,7 @@ struct ResourceSweepEnv {
 
 impl ResourceSweepEnv {
     fn from_env() -> Result<Self, String> {
-        Self::from_env_with_default_dir("test/artifacts/resource-sweep")
+        Self::from_env_with_default_dir(".local/artifacts/resource-sweep")
     }
 
     fn from_env_with_default_dir(default_dir: &str) -> Result<Self, String> {
@@ -305,7 +305,7 @@ struct BranchMatrixEnv {
 
 impl BranchMatrixEnv {
     fn from_env() -> Result<Self, String> {
-        Self::from_env_with_default_dir("test/artifacts/branch-matrix")
+        Self::from_env_with_default_dir(".local/artifacts/branch-matrix")
     }
 
     fn from_env_with_default_dir(default_dir: &str) -> Result<Self, String> {
@@ -685,7 +685,8 @@ pub(crate) async fn branch_matrix() -> Result<Value, String> {
 }
 
 pub(crate) async fn backend_policy_matrix() -> Result<Value, String> {
-    let base = BranchMatrixEnv::from_env_with_default_dir("test/artifacts/backend-policy-matrix")?;
+    let base =
+        BranchMatrixEnv::from_env_with_default_dir(".local/artifacts/backend-policy-matrix")?;
     let parent_work_dir = base.resource.work_dir.clone();
     let variants = selected_backend_policy_variants()?;
     let mut runs = Vec::new();

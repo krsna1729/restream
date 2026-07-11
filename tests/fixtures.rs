@@ -24,9 +24,9 @@ fn canonical_transport_fixtures_resolve() {
     let sparse =
         restream::test_fixtures::sparse_gop_mp4_fixture().unwrap_or_else(|e| panic!("{e}"));
 
-    assert!(h264.ends_with("test/fixtures/correctness-h264.ts"));
-    assert!(h265.ends_with("test/fixtures/correctness-h265.ts"));
-    assert!(sparse.ends_with("test/fixtures/sparse-gop-5s.mp4"));
+    assert!(h264.ends_with("test/fixtures/transport/correctness-h264.ts"));
+    assert!(h265.ends_with("test/fixtures/transport/correctness-h265.ts"));
+    assert!(sparse.ends_with("test/fixtures/media-library/sparse-gop-5s.mp4"));
 }
 
 #[test]

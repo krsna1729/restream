@@ -9,7 +9,7 @@ whole design is ideal, but they catch the highest-risk regressions early.
 Run:
 
 ```sh
-./scripts/source-audit.sh
+./scripts/check/source-audit.sh
 ```
 
 The audit enforces:
@@ -33,11 +33,11 @@ documented generated-artifact location.
 
 ## Related Gates
 
-- API boundary changes: `./scripts/check-api-contract.sh`
-- Concurrency and lifecycle changes: `./scripts/check-concurrency-proof-fast.sh`
-  and `./scripts/check-concurrency-contract.sh`
-- Fixture discipline: `./scripts/check-fixture-discipline.sh`
-- Test hygiene: `./scripts/check-test-hygiene.sh`
+- API boundary changes: `./scripts/check/api-contract.sh`
+- Concurrency and lifecycle changes: `./scripts/check/concurrency/fast.sh`
+  and `./scripts/check/concurrency/contract.sh`
+- Fixture discipline: `./scripts/check/fixture-discipline.sh`
+- Test hygiene: `./scripts/check/test-hygiene.sh`
 
 When a phase intentionally changes ownership boundaries, update this file and
 the relevant script in the same commit.

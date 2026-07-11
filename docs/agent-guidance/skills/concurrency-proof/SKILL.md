@@ -28,13 +28,13 @@ Use this skill when the task touches:
 Run the focused proof gate first:
 
 ```sh
-bash ./scripts/check-concurrency-proof-fast.sh
+bash ./scripts/check/concurrency/fast.sh
 ```
 
 Run the full live contract gate before sign-off:
 
 ```sh
-bash ./scripts/check-concurrency-contract.sh
+bash ./scripts/check/concurrency/contract.sh
 ```
 
 ## Rules

@@ -1,0 +1,439 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { loadFrontendModule } from "../support/helpers/frontend-module-loader.mjs";
+
+function makeStorage() {
+  const data = new Map();
+  return {
+    getItem(key) {
+      return data.has(key) ? data.get(key) : null;
+    },
+    setItem(key, value) {
+      data.set(key, String(value));
+    },
+    removeItem(key) {
+      data.delete(key);
+    },
+  };
+}
+
+function makeElement(tagName = "div") {
+  return {
+    tagName,
+    value: "",
+    innerText: "",
+    textContent: "",
+    dataset: {},
+    style: {},
+    classList: {
+      add() {},
+      remove() {},
+      toggle() {},
+    },
+    appendChild() {},
+    removeChild() {},
+    setAttribute() {},
+    removeAttribute() {},
+    focus() {},
+    select() {},
+    click() {},
+    getAttribute() {
+      return null;
+    },
+  };
+}
+
+function installBrowserStubs() {
+  const documentStub = {
+    title: "",
+    body: makeElement("body"),
+    getElementById() {
+      return null;
+    },
+    querySelector() {
+      return null;
+    },
+    createElement(tagName) {
+      return makeElement(tagName);
+    },
+    execCommand() {
+      return true;
+    },
+  };
+
+  const windowStub = {
+    __RESTREAM_BASE_PATH__: "",
+    location: {
+      href: "http://localhost/",
+    },
+    history: {
+      pushState() {},
+    },
+    localStorage: makeStorage(),
+    sessionStorage: makeStorage(),
+  };
+
+  Object.defineProperty(globalThis, "document", {
+    value: documentStub,
+    configurable: true,
+  });
+  Object.defineProperty(globalThis, "window", {
+    value: windowStub,
+    configurable: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    value: {
+      clipboard: {
+        async writeText() {},
+      },
+    },
+    configurable: true,
+  });
+}
+
+async function loadCompiledModule(relativePath) {
+  installBrowserStubs();
+  return loadFrontendModule(relativePath);
+}
+
+async function loadApiModule() {
+  return loadCompiledModule("core/api.js");
+}
+
+test("frontend API helpers call the canonical v1 routes and methods", async () => {
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({
+      url: String(url),
+      method: options.method || "GET",
+      body: options.body ? JSON.parse(options.body) : null,
+    });
+    return new Response(JSON.stringify({ ok: true, logs: [], files: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const api = await loadApiModule();
+
+  await api.getConfig();
+  await api.getConfig({ view: "dashboard" });
+  await api.getConfig({ jobs: "latest" });
+  await api.getDashboardRuntimeSnapshot({
+    healthView: "summary",
+    metricsView: "full",
+  });
+  await api.getDashboardRuntimeSnapshot({
+    healthView: "summary",
+    metricsView: "summary",
+    pipelineId: "pipe-1",
+  });
+  await api.getHealth({ view: "summary" });
+  await api.getSystemMetrics({ view: "summary" });
+  await api.updatePipeline("pipe-1", {
+    name: "Updated",
+    fileIngest: {
+      filename: "clip.ts",
+      loopFlag: true,
+      startTime: "00:00:01",
+      liveOptimized: true,
+      targetGopSeconds: 2,
+    },
+  });
+  await api.updateOutput("pipe-1", "out-1", { name: "Output" });
+  await api.getPipelineHistory("pipe-1", 25);
+  await api.getOutputHistory("pipe-1", "out-1", { filter: "lifecycle" });
+  await api.getRestreamHistory({ limit: 50, order: "desc" });
+  await api.listMediaFiles();
+  await api.getOverview();
+  await api.getAggregateAlerts();
+  await api.getLifecycleEvents({ pipelineId: "pipe /1", limit: 40 });
+  await api.getEngineTelemetry();
+  await api.getPipelineTelemetry("pipe /1");
+  await api.getStageTelemetry("pipe /1:video:720p");
+  await api.getResourceMap("pipe /1", { view: "detail", topN: 40 });
+  await api.logout();
+
+  assert.deepEqual(
+    requests.map((request) => [request.method, request.url]),
+    [
+      ["GET", "/api/v1/settings"],
+      ["GET", "/api/v1/settings?view=dashboard"],
+      ["GET", "/api/v1/settings?jobs=latest"],
+      [
+        "GET",
+        "/api/v1/dashboard/runtime?health_view=summary&metrics_view=full",
+      ],
+      [
+        "GET",
+        "/api/v1/dashboard/runtime?health_view=summary&metrics_view=summary&pipeline_id=pipe-1",
+      ],
+      ["GET", "/api/v1/engine/health?view=summary"],
+      ["GET", "/metrics/system?view=summary"],
+      ["PATCH", "/api/v1/pipelines/pipe-1"],
+      ["PATCH", "/api/v1/pipelines/pipe-1/outputs/out-1"],
+      ["GET", "/api/v1/logs?pipeline_id=pipe-1&limit=25"],
+      [
+        "GET",
+        "/api/v1/logs?pipeline_id=pipe-1&output_id=out-1&event_class=lifecycle",
+      ],
+      ["GET", "/api/v1/logs?scope=restream&limit=50&order=desc"],
+      ["GET", "/api/v1/media"],
+      ["GET", "/api/v1/overview"],
+      ["GET", "/api/v1/alerts"],
+      ["GET", "/api/v1/events?pipeline_id=pipe+%2F1&limit=40"],
+      ["GET", "/api/v1/engine/telemetry"],
+      ["GET", "/api/v1/pipelines/pipe%20%2F1/telemetry"],
+      ["GET", "/api/v1/stages/pipe%20%2F1%3Avideo%3A720p/telemetry"],
+      [
+        "GET",
+        "/api/v1/engine/resource-map?pipeline_id=pipe+%2F1&view=detail&top_n=40",
+      ],
+      ["POST", "/api/v1/auth/logout"],
+    ],
+  );
+  assert.deepEqual(requests[7].body, {
+    name: "Updated",
+    fileIngest: {
+      filename: "clip.ts",
+      loopFlag: true,
+      startTime: "00:00:01",
+      liveOptimized: true,
+      targetGopSeconds: 2,
+    },
+  });
+});
+
+test("stage telemetry treats an inactive-stage 404 as an expected null snapshot", async () => {
+  const api = await loadApiModule();
+  let errorAlerts = 0;
+  const originalGetElementById = document.getElementById;
+  document.getElementById = (id) =>
+    id === "error-alert"
+      ? {
+          classList: {
+            remove(className) {
+              assert.equal(className, "hidden");
+              errorAlerts += 1;
+            },
+          },
+          querySelector() {
+            return null;
+          },
+        }
+      : originalGetElementById.call(document, id);
+  globalThis.fetch = async () =>
+    new Response("Stage not found", { status: 404 });
+  const result = await api.getStageTelemetry("gone:stage");
+  assert.equal(result, null);
+  assert.equal(errorAlerts, 0);
+});
+
+test("frontend API helpers preserve response fields and run diagnostics centrally", async () => {
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    if (String(url).startsWith("/api/v1/audio-caps")) {
+      return new Response(
+        JSON.stringify({
+          caps: {
+            "youtube:rtmp": { maxTracks: 2, maxChannels: 2, codecs: ["aac"] },
+          },
+          platformLabels: { youtube: "YouTube" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (String(url).endsWith("/diagnostics/run")) {
+      return new Response(
+        JSON.stringify({ protocol: "srt", totalDurationMs: 4, checks: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        logs: [
+          {
+            id: 1,
+            ts: "2026-06-29T00:00:00Z",
+            message: "started",
+            fields: '{"state":"running"}',
+            eventType: "lifecycle.started",
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const api = await loadApiModule();
+  const caps = await api.getAudioCapsPayload();
+  const logs = await api.getOutputHistory("pipe-1", "out-1", { limit: 1 });
+  const controller = new AbortController();
+  const report = await api.runPipelineDiagnostics("pipe 1", controller.signal);
+
+  assert.equal(caps.caps["youtube:rtmp"].maxTracks, 2);
+  assert.equal(logs.logs[0].fields, '{"state":"running"}');
+  assert.equal(report.protocol, "srt");
+  const diagnosticsRequest = requests.find(({ url }) =>
+    url.endsWith("/diagnostics/run"),
+  );
+  assert.equal(
+    diagnosticsRequest.url,
+    "/api/v1/pipelines/pipe%201/diagnostics/run",
+  );
+  assert.equal(diagnosticsRequest.options.method, "POST");
+  assert.equal(diagnosticsRequest.options.body, undefined);
+  assert.equal(diagnosticsRequest.options.signal, controller.signal);
+  assert.equal(
+    api.buildLogsStreamUrl({
+      scope: "restream",
+      level: "warn",
+      eventClass: "lifecycle",
+      lastEventId: 12,
+      prefixes: ["stderr", "exit"],
+    }),
+    "/api/v1/logs/stream?level=warn&scope=restream&event_class=lifecycle&last_event_id=12&prefix=stderr%2Cexit",
+  );
+  assert.equal(
+    api.buildLogsStreamUrl({
+      pipelineId: "pipe-1",
+      eventClass: "lifecycle",
+      includeRestream: true,
+    }),
+    "/api/v1/logs/stream?pipeline_id=pipe-1&include_restream=true&event_class=lifecycle",
+  );
+});
+
+test("pipeline parsing preserves probe and runtime fault status fields", async () => {
+  const { parsePipelinesInfo } = await loadCompiledModule("core/pipeline.js");
+
+  const pipelines = parsePipelinesInfo(
+    {
+      pipelines: [
+        {
+          id: "pipe-1",
+          name: "Pipeline 1",
+          streamKey: "stream-key",
+          inputSource: null,
+          srtIngestPolicy: null,
+          ingestUrls: { rtmp: null, srt: null },
+        },
+      ],
+      outputs: [
+        {
+          id: "out-1",
+          pipelineId: "pipe-1",
+          name: "Output 1",
+          desiredState: "started",
+          encoding: "source",
+          url: "rtmp://dest/live/key",
+          monitoringUrl: "http://localhost:11888/live/out-1/index.m3u8",
+        },
+      ],
+      jobs: [],
+    },
+    {
+      pipelines: {
+        "pipe-1": {
+          input: {
+            status: "on",
+            probeReady: false,
+            probeStatus: "pending",
+            probePendingMs: 2400,
+            bytesReceived: 1024,
+            bytesSent: 0,
+            readers: 1,
+            bitrateKbps: 3200.4,
+            publisher: { protocol: "srt" },
+            unexpectedReaders: { count: 0 },
+            audioTracks: [],
+            video: null,
+            lastSessionProtocol: null,
+            lastDisconnectAt: null,
+            lastDisconnectAgeMs: null,
+            lastDisconnectReason: null,
+            lastFailurePhase: null,
+            recentDisconnectError: false,
+            lastRemoteAddr: null,
+            lastSessionBytesReceived: null,
+          },
+          outputs: {
+            "out-1": {
+              status: "retrying",
+              rawStatus: "running",
+              phase: "failed",
+              failurePhase: "send",
+              lastError: "connection reset by peer",
+              lastErrorAt: "2026-06-29T00:00:05Z",
+              lastProgressAt: "2026-06-29T00:00:04Z",
+              lastProgressAgeMs: 1200,
+              totalSize: 4096,
+              bitrateKbps: 512.8,
+              recentFailureCount: 2,
+              flapping: true,
+              retrying: true,
+              retryAttempts: 2,
+              retryBackoffMs: 20000,
+              nextRetryAt: "2026-06-29T00:00:25Z",
+              retryRemainingMs: 15000,
+            },
+          },
+        },
+      },
+    },
+  );
+
+  assert.equal(pipelines.length, 1);
+  assert.equal(pipelines[0].input.probeReady, false);
+  assert.equal(pipelines[0].input.probeStatus, "pending");
+  assert.equal(pipelines[0].input.probePendingMs, 2400);
+  assert.equal(pipelines[0].input.lastDisconnectReason, null);
+  assert.equal(pipelines[0].outs[0].status, "retrying");
+  assert.equal(pipelines[0].outs[0].rawStatus, "running");
+  assert.equal(pipelines[0].outs[0].phase, "failed");
+  assert.equal(pipelines[0].outs[0].failurePhase, "send");
+  assert.equal(pipelines[0].outs[0].lastError, "connection reset by peer");
+  assert.equal(pipelines[0].outs[0].lastErrorAt, "2026-06-29T00:00:05Z");
+  assert.equal(pipelines[0].outs[0].lastProgressAt, "2026-06-29T00:00:04Z");
+  assert.equal(pipelines[0].outs[0].lastProgressAgeMs, 1200);
+  assert.equal(pipelines[0].outs[0].recentFailureCount, 2);
+  assert.equal(pipelines[0].outs[0].flapping, true);
+  assert.equal(pipelines[0].outs[0].retrying, true);
+  assert.equal(pipelines[0].outs[0].retryAttempts, 2);
+  assert.equal(pipelines[0].outs[0].retryBackoffMs, 20000);
+  assert.equal(pipelines[0].outs[0].nextRetryAt, "2026-06-29T00:00:25Z");
+  assert.equal(pipelines[0].outs[0].retryRemainingMs, 15000);
+});
+
+test("retrying and flapping outputs are not treated as unexpectedly down", async () => {
+  const {
+    isOutputFlapping,
+    isOutputRetrying,
+    isOutputRunning,
+    isOutputUnexpectedlyDown,
+  } = await loadCompiledModule("core/output-status.js");
+
+  const retryingOutput = {
+    desiredState: "started",
+    status: "retrying",
+    retrying: true,
+  };
+
+  assert.equal(isOutputRetrying(retryingOutput), true);
+  assert.equal(isOutputRunning(retryingOutput), false);
+  assert.equal(isOutputUnexpectedlyDown(retryingOutput), false);
+
+  const flappingOutput = {
+    desiredState: "started",
+    status: "running",
+    flapping: true,
+  };
+
+  assert.equal(isOutputFlapping(flappingOutput), true);
+  assert.equal(isOutputRunning(flappingOutput), true);
+  assert.equal(isOutputUnexpectedlyDown(flappingOutput), false);
+});

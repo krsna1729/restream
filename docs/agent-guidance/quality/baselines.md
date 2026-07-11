@@ -54,7 +54,7 @@ Command:
 ```sh
 RESTREAM_INTERNAL_VIDEO_PRESETS=1 \
 ONLY_CHECKS=load,ffprobe,decode-scan \
-scripts/check-internal-video-preset-rollout.sh
+scripts/harness/rollouts/internal-video-presets.sh
 ```
 
 RSS guard baseline: `test/harness/baselines/internal-video-presets-rss.csv`.
@@ -83,7 +83,7 @@ Jitter headroom by design (defaults; env-overridable):
 Command:
 
 ```sh
-scripts/check-external-capacity-rollout.sh
+scripts/harness/rollouts/external-capacity.sh
 ```
 
 The guard runs `mixed.live.srt.h264.a2.bf0` twice: first with enough external

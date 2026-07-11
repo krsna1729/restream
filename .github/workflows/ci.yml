@@ -45,11 +45,11 @@ jobs:
         id: cache-static-prefix
         uses: actions/cache@v4
         with:
-          path: .build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup-static-build.sh', 'scripts/build-static.sh', 'scripts/build-native.sh') }}
+          path: .local/build/static/prefix
+          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
       - name: Build static prefix
         if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/resource-limit ./scripts/setup-static-build.sh
+        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
       - name: Restore cargo cache
         uses: actions/cache@v4
         with:
@@ -61,9 +61,9 @@ jobs:
           key: clippy-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: clippy-${{ runner.os }}-
       - name: Rust clippy (strict for lib)
-        run: scripts/resource-limit cargo clippy --lib -- -D warnings
+        run: scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings
       - name: Rust clippy (warn only for all targets)
-        run: scripts/resource-limit cargo clippy --workspace --all-targets
+        run: scripts/build/resource-limit.sh cargo clippy --workspace --all-targets
 
   architecture-guardrails:
     name: Architecture guardrails
@@ -71,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run source audit
-        run: ./scripts/source-audit.sh
+        run: ./scripts/check/source-audit.sh
       - name: Upload source audit inventory
         uses: actions/upload-artifact@v4
         with:
@@ -92,11 +92,11 @@ jobs:
         id: cache-static-prefix
         uses: actions/cache@v4
         with:
-          path: .build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup-static-build.sh', 'scripts/build-static.sh', 'scripts/build-native.sh') }}
+          path: .local/build/static/prefix
+          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
       - name: Build static prefix
         if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/resource-limit ./scripts/setup-static-build.sh
+        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -113,7 +113,24 @@ jobs:
           key: api-contract-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: api-contract-${{ runner.os }}-
       - name: Run API contract gate
-        run: ./scripts/check-api-contract.sh
+        run: ./scripts/check/api-contract.sh
+
+  frontend:
+    name: Frontend source and browser-DOM gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Run frontend source tests
+        run: npm run test:frontend
+      - name: Install Chromium for browser-DOM tests
+        run: npx playwright install --with-deps chromium
+      - name: Run browser-DOM tests
+        run: npm run test:frontend:browser-dom
 
   concurrency-contract:
     name: Concurrency contract gate
@@ -132,11 +149,11 @@ jobs:
         id: cache-static-prefix
         uses: actions/cache@v4
         with:
-          path: .build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup-static-build.sh', 'scripts/build-static.sh', 'scripts/build-native.sh') }}
+          path: .local/build/static/prefix
+          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
       - name: Build static prefix
         if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/resource-limit ./scripts/setup-static-build.sh
+        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
       - name: Restore cargo cache
         uses: actions/cache@v4
         with:
@@ -148,7 +165,7 @@ jobs:
           key: concurrency-contract-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: concurrency-contract-${{ runner.os }}-
       - name: Run concurrency contract gate
-        run: bash ./scripts/check-concurrency-contract.sh
+        run: bash ./scripts/check/concurrency/contract.sh
 
   test:
     name: Unit & integration tests
@@ -165,11 +182,11 @@ jobs:
         id: cache-static-prefix
         uses: actions/cache@v4
         with:
-          path: .build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup-static-build.sh', 'scripts/build-static.sh', 'scripts/build-native.sh') }}
+          path: .local/build/static/prefix
+          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
       - name: Build static prefix
         if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/resource-limit ./scripts/setup-static-build.sh
+        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
       - name: Restore cargo cache
         uses: actions/cache@v4
         with:
@@ -181,7 +198,9 @@ jobs:
           key: test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: test-${{ runner.os }}-
       - name: Rust test hygiene gate
-        run: ./scripts/check-test-hygiene.sh
+        run: ./scripts/check/test-hygiene.sh
+      - name: Fixture discipline gate
+        run: ./scripts/check/fixture-discipline.sh
 
   sbom-sync:
     name: SBOM sync check
@@ -197,11 +216,11 @@ jobs:
         id: cache-static-prefix
         uses: actions/cache@v4
         with:
-          path: .build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup-static-build.sh', 'scripts/build-static.sh', 'scripts/build-native.sh') }}
+          path: .local/build/static/prefix
+          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
       - name: Build static prefix
         if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/resource-limit ./scripts/setup-static-build.sh
+        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
       - name: Restore cargo cache
         uses: actions/cache@v4
         with:
@@ -213,7 +232,7 @@ jobs:
           key: sbom-sync-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: sbom-sync-${{ runner.os }}-
       - name: Rebuild committed SBOM
-        run: scripts/resource-limit ./scripts/build-native.sh
+        run: scripts/build/resource-limit.sh ./scripts/build/app-native.sh
       - name: Verify committed SBOM is up to date
         run: git diff --exit-code -- sbom/restream-runtime.cdx.json
 
@@ -234,11 +253,11 @@ jobs:
         id: cache-static-prefix
         uses: actions/cache@v4
         with:
-          path: .build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup-static-build.sh', 'scripts/build-static.sh', 'scripts/build-native.sh') }}
+          path: .local/build/static/prefix
+          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
       - name: Build static prefix
         if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/resource-limit ./scripts/setup-static-build.sh
+        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
       - name: Restore cargo cache
         uses: actions/cache@v4
         with:
@@ -281,11 +300,11 @@ jobs:
         id: cache-static-prefix
         uses: actions/cache@v4
         with:
-          path: .build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup-static-build.sh', 'scripts/build-static.sh', 'scripts/build-native.sh') }}
+          path: .local/build/static/prefix
+          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
       - name: Build static prefix
         if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/resource-limit ./scripts/setup-static-build.sh
+        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -348,33 +367,33 @@ jobs:
       - name: Ensure MediaMTX is executable
         run: chmod +x bin/mediamtx/mediamtx
       - name: Build release binary
-        run: scripts/resource-limit cargo build --release
+        run: scripts/build/resource-limit.sh cargo build --release
       - name: Run integration suite
         run: |
-          scripts/resource-limit ./target/release/test_harness suite \
+          scripts/build/resource-limit.sh ./target/release/test_harness suite \
             --only-modes ramp-family,mixed-h264-rtmp,mixed-anchor,mixed-h265-srt,mixed-h264-srt-multi,mixed-h265-srt-multi \
             --continue-on-fail
       - name: Run mixed fast-breadth governor
         env:
           N_PER_GROUP: "1"
-        run: BENCH_BUILD=if-needed scripts/run-bench-harness.sh mixed.fast-breadth -- --no-netns
+        run: BENCH_BUILD=if-needed scripts/harness/run.sh mixed.fast-breadth -- --no-netns
       - name: Run internal backend rollout smoke
         env:
           INTERNAL_BACKEND_SMOKE_CONTINUE_ON_FAIL: "1"
-        run: ./scripts/check-internal-backend-rollout-smoke.sh
+        run: ./scripts/harness/rollouts/internal-backend-smoke.sh
       - name: Upload internal backend smoke artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: internal-backend-smoke
-          path: test/artifacts/internal-backend-smoke/
+          path: .local/artifacts/internal-backend-smoke/
           if-no-files-found: ignore
       - name: Upload test artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: integration-test-artifacts
-          path: test/artifacts/
+          path: .local/artifacts/
           if-no-files-found: ignore
 
   playwright:
@@ -392,11 +411,11 @@ jobs:
         id: cache-static-prefix
         uses: actions/cache@v4
         with:
-          path: .build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup-static-build.sh', 'scripts/build-static.sh', 'scripts/build-native.sh') }}
+          path: .local/build/static/prefix
+          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
       - name: Build static prefix
         if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/resource-limit ./scripts/setup-static-build.sh
+        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -415,7 +434,7 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium
       - name: Build release binary
-        run: scripts/resource-limit cargo build --release
+        run: scripts/build/resource-limit.sh cargo build --release
       - name: Start app
         run: ./target/release/restream &
       - name: Wait for app

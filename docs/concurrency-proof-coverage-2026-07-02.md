@@ -89,9 +89,9 @@ This report summarizes the model, property, unit, and live-harness proof surface
   - Extended `fault.output-stall` with a sibling-isolation subtest (`rtmp-stalled-sink-isolation-under-many-outputs`) that keeps one RTMP sink intentionally non-draining while sibling RTMP outputs drain through generalized sink servers.
   - The subtest now proves isolation: the stalled output surfaces `status=stalled` while sibling outputs remain `running`/progressing with positive bytes and fresh progress timestamps.
   - `FAULT_OUTPUT_STALL_SIBLINGS` controls sibling fanout (default `12`), capped by `N_PER_GROUP` so `N_PER_GROUP=1` keeps the mode cheap for fast loops.
-- `scripts/resource-limit`
+- `scripts/build/resource-limit.sh`
   - Honors `RESTREAM_BUILD_LOCK_FILE` and rejects relative paths.
-- `scripts/check-concurrency-contract.sh`
+- `scripts/check/concurrency/contract.sh`
   - Defaults a host-global build lock when unset.
   - Adds static lifecycle guards for child process handling.
   - Captures a runtime-process baseline and checks that harness-mode cleanup
@@ -102,7 +102,7 @@ This report summarizes the model, property, unit, and live-harness proof surface
 
 ### Fast Proof Gate
 
-`bash ./scripts/check-concurrency-proof-fast.sh` runs:
+`bash ./scripts/check/concurrency/fast.sh` runs:
 
 - Loom targets:
   - `avio_loom`
@@ -123,9 +123,9 @@ This report summarizes the model, property, unit, and live-harness proof surface
 
 ### Full Contract Gate
 
-`bash ./scripts/check-concurrency-contract.sh` runs everything in the fast proof gate plus:
+`bash ./scripts/check/concurrency/contract.sh` runs everything in the fast proof gate plus:
 
-- `scripts/check-history-grouping.sh`
+- `scripts/check/history-grouping.sh`
 - static process lifecycle guards
 - debug binary build for `restream` and `test_harness`
 - live harness modes:
@@ -142,27 +142,27 @@ The following focused checks passed serially after merging the isolated proof br
 
 ```sh
 cargo fmt --all --check
-bash -n scripts/resource-limit scripts/check-concurrency-contract.sh
-RESTREAM_BUILD_LOCK_FILE=relative scripts/resource-limit true # expected exit 2
-./scripts/run-loom-target.sh ring_migration_loom
-./scripts/run-loom-target.sh avio_loom
-./scripts/run-loom-target.sh transcoder_stage_loom
-./scripts/run-loom-target.sh ts_muxer_stage_loom
-scripts/resource-limit cargo test internal_scale_stage_chunked_remux_input_preserves_video_timestamp_order --test transcoder -- --nocapture
-scripts/resource-limit cargo test prop_source_stage_chunked_input_preserves_per_stream_dts_order --test transcoder -- --nocapture
-scripts/resource-limit cargo test replacement_video_stage_preserves_codec_hint_and_audio_tracks --test transcoder -- --nocapture
-scripts/resource-limit cargo test prop_multi_reader_migration_preserves_each_reader_order --test ring_migration -- --nocapture
-scripts/resource-limit cargo test media::avio::tests --lib -- --nocapture
-scripts/resource-limit cargo test srt_stream_ids_normalize_equivalent --lib -- --nocapture
-scripts/resource-limit cargo test srt_sender_semaphore --lib -- --nocapture
-scripts/resource-limit cargo test --bin test_harness tests::kill_and_wait_child_terminates_spawned_process -- --exact --nocapture
-N_PER_GROUP=1 scripts/resource-limit cargo run --bin test_harness -- fault.output-stall --no-netns
-env N_PER_GROUP=1 ONLY_CHECKS=ffprobe SKIP_LOAD=1 scripts/resource-limit cargo run --bin test_harness -- mixed.asset.file.h264.a1
+bash -n scripts/build/resource-limit.sh scripts/check/concurrency/contract.sh
+RESTREAM_BUILD_LOCK_FILE=relative scripts/build/resource-limit.sh true # expected exit 2
+./scripts/harness/loom-target.sh ring_migration_loom
+./scripts/harness/loom-target.sh avio_loom
+./scripts/harness/loom-target.sh transcoder_stage_loom
+./scripts/harness/loom-target.sh ts_muxer_stage_loom
+scripts/build/resource-limit.sh cargo test internal_scale_stage_chunked_remux_input_preserves_video_timestamp_order --test transcoder -- --nocapture
+scripts/build/resource-limit.sh cargo test prop_source_stage_chunked_input_preserves_per_stream_dts_order --test transcoder -- --nocapture
+scripts/build/resource-limit.sh cargo test replacement_video_stage_preserves_codec_hint_and_audio_tracks --test transcoder -- --nocapture
+scripts/build/resource-limit.sh cargo test prop_multi_reader_migration_preserves_each_reader_order --test ring_migration -- --nocapture
+scripts/build/resource-limit.sh cargo test media::avio::tests --lib -- --nocapture
+scripts/build/resource-limit.sh cargo test srt_stream_ids_normalize_equivalent --lib -- --nocapture
+scripts/build/resource-limit.sh cargo test srt_sender_semaphore --lib -- --nocapture
+scripts/build/resource-limit.sh cargo test --bin test_harness tests::kill_and_wait_child_terminates_spawned_process -- --exact --nocapture
+N_PER_GROUP=1 scripts/build/resource-limit.sh cargo run --bin test_harness -- fault.output-stall --no-netns
+env N_PER_GROUP=1 ONLY_CHECKS=ffprobe SKIP_LOAD=1 scripts/build/resource-limit.sh cargo run --bin test_harness -- mixed.asset.file.h264.a1
 ```
 
-The full live `scripts/check-concurrency-contract.sh` gate remains the sign-off gate for broad lifecycle changes, but it should be run serially on a stable host because it starts several live harness modes.
+The full live `scripts/check/concurrency/contract.sh` gate remains the sign-off gate for broad lifecycle changes, but it should be run serially on a stable host because it starts several live harness modes.
 
-After wiring the expanded proof labels into `scripts/concurrency-proof-common.sh`, both `bash ./scripts/check-concurrency-proof-fast.sh` and `bash ./scripts/check-concurrency-contract.sh` passed. The full contract run produced logs for all mandatory proof steps and live modes under `test/artifacts/concurrency-contract-logs/`, and the post-run process cleanup check found no new `restream`, `mediamtx`, `ffmpeg`, `ffprobe`, or `test_harness` survivors beyond the gate's startup baseline.
+After wiring the expanded proof labels into `scripts/check/concurrency/common.sh`, both `bash ./scripts/check/concurrency/fast.sh` and `bash ./scripts/check/concurrency/contract.sh` passed. The full contract run produced logs for all mandatory proof steps and live modes under `.local/artifacts/concurrency-contract-logs/`, and the post-run process cleanup check found no new `restream`, `mediamtx`, `ffmpeg`, `ffprobe`, or `test_harness` survivors beyond the gate's startup baseline.
 
 ## Remaining Gaps
 

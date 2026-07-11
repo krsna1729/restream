@@ -2,7 +2,7 @@
   "version": 1,
   "profiles": {
     "default": {
-      "artifactRoot": "test/artifacts/latest",
+      "artifactRoot": ".local/artifacts/latest",
       "workDir": "${artifactRoot}/${mode}",
       "mediaDir": "${workDir}/media",
       "logDir": "${workDir}/logs",
@@ -13,7 +13,7 @@
       "collectFailures": false
     },
     "mixed": {
-      "artifactRoot": "test/artifacts/mixed",
+      "artifactRoot": ".local/artifacts/mixed",
       "workDir": "${artifactRoot}/${scenario.artifact.relDir}",
       "mediaDir": "${workDir}/media",
       "logDir": "${workDir}/logs",
@@ -32,7 +32,7 @@
     },
     "mixedFastBreadth": {
       "extends": "mixed",
-      "artifactRoot": "test/artifacts/mixed/fast-breadth",
+      "artifactRoot": ".local/artifacts/mixed/fast-breadth",
       "nPerGroup": 1,
       "skipLoad": true,
       "collectFailures": true,
@@ -40,7 +40,7 @@
     },
     "mixedSignal": {
       "extends": "mixed",
-      "artifactRoot": "test/artifacts/mixed/signal",
+      "artifactRoot": ".local/artifacts/mixed/signal",
       "nPerGroup": 1,
       "skipLoad": true,
       "collectFailures": true,
@@ -48,7 +48,7 @@
     },
     "bitrateSweep": {
       "extends": "mixed",
-      "artifactRoot": "test/artifacts/bitrate-sweep",
+      "artifactRoot": ".local/artifacts/bitrate-sweep",
       "workDir": "${artifactRoot}",
       "summaryJson": "${workDir}/bitrate-sweep-results.json",
       "summaryCsv": "${workDir}/bitrate-sweep-results.csv",
@@ -60,7 +60,7 @@
     },
     "branchMatrix": {
       "extends": "mixed",
-      "artifactRoot": "test/artifacts/branch-matrix",
+      "artifactRoot": ".local/artifacts/branch-matrix",
       "workDir": "${artifactRoot}",
       "summaryJson": "${workDir}/branch-matrix-results.json",
       "summaryCsv": "${workDir}/branch-matrix-results.csv",
@@ -71,7 +71,7 @@
     },
     "srtCryptoMatrix": {
       "extends": "mixed",
-      "artifactRoot": "test/artifacts/srt-crypto-matrix",
+      "artifactRoot": ".local/artifacts/srt-crypto-matrix",
       "workDir": "${artifactRoot}",
       "summaryJson": "${workDir}/srt-crypto-matrix-results.json",
       "samplesJsonl": "${workDir}/srt-crypto-matrix-samples.jsonl"

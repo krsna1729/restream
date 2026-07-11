@@ -79,6 +79,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -109,6 +113,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "std"
         },
         {
           "name": "restream:source",
@@ -143,6 +151,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -173,6 +185,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -207,6 +223,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "gzip,tokio"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -237,6 +257,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
         },
         {
           "name": "restream:source",
@@ -271,6 +295,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -301,6 +329,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,form,http1,json,macros,matched-path,original-uri,query,tokio,tower-log,tracing"
         },
         {
           "name": "restream:source",
@@ -335,6 +367,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "tracing"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -365,6 +401,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,std"
         },
         {
           "name": "restream:source",
@@ -399,6 +439,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -429,6 +473,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "serde,serde_core,std"
         },
         {
           "name": "restream:source",
@@ -463,6 +511,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -493,6 +545,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -527,6 +583,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -557,6 +617,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
         },
         {
           "name": "restream:source",
@@ -591,6 +655,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -621,6 +689,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -655,6 +727,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "rng"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -685,6 +761,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,clock,default,iana-time-zone,js-sys,now,oldtime,serde,std,wasm-bindgen,wasmbind,winapi,windows-link"
         },
         {
           "name": "restream:source",
@@ -719,6 +799,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -749,6 +833,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -783,6 +871,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "flate2,gzip,memchr"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -813,6 +905,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -847,6 +943,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -877,6 +977,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -911,6 +1015,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -941,6 +1049,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -975,6 +1087,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1005,6 +1121,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
         },
         {
           "name": "restream:source",
@@ -1039,6 +1159,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1069,6 +1193,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
         },
         {
           "name": "restream:source",
@@ -1103,6 +1231,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1133,6 +1265,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,std"
         },
         {
           "name": "restream:source",
@@ -1167,6 +1303,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1197,6 +1337,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "std"
         },
         {
           "name": "restream:source",
@@ -1231,6 +1375,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1261,6 +1409,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -1295,6 +1447,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1325,6 +1481,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default"
         },
         {
           "name": "restream:source",
@@ -1359,6 +1519,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,block-buffer,core-api,default,mac,std,subtle"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1389,6 +1553,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,block-api,default,mac"
         },
         {
           "name": "restream:source",
@@ -1423,6 +1591,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1453,6 +1625,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -1487,6 +1663,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,serde,std,use_std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1517,6 +1697,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -1551,6 +1735,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1581,6 +1769,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,parking,std"
         },
         {
           "name": "restream:source",
@@ -1615,6 +1807,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "codec,filter,format,software-resampling,software-scaling"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1645,6 +1841,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "avcodec,avfilter,avformat,swresample,swscale"
         },
         {
           "name": "restream:source",
@@ -1679,6 +1879,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "any_impl,default,miniz_oxide,rust_backend"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1709,6 +1913,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "async,futures-core,futures-sink"
         },
         {
           "name": "restream:source",
@@ -1743,6 +1951,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1773,6 +1985,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,std"
         },
         {
           "name": "restream:source",
@@ -1807,6 +2023,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,futures-sink,sink,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1837,6 +2057,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,std"
         },
         {
           "name": "restream:source",
@@ -1871,6 +2095,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1901,6 +2129,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,parking_lot,std"
         },
         {
           "name": "restream:source",
@@ -1935,6 +2167,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -1965,6 +2201,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,std"
         },
         {
           "name": "restream:source",
@@ -1999,6 +2239,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2029,6 +2273,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,async-await,async-await-macro,default,futures-io,futures-macro,futures-sink,io,memchr,sink,slab,std"
         },
         {
           "name": "restream:source",
@@ -2063,6 +2311,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "more_lengths"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2093,6 +2345,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "js,js-sys,std,wasm-bindgen"
         },
         {
           "name": "restream:source",
@@ -2127,6 +2383,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "std,wasm_js"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2157,6 +2417,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "std,sys_rng"
         },
         {
           "name": "restream:source",
@@ -2216,6 +2480,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "allocator-api2,default,default-hasher,equivalent,inline-more,raw-entry"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2246,6 +2514,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -2280,6 +2552,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2310,6 +2586,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,std"
         },
         {
           "name": "restream:source",
@@ -2344,6 +2624,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2374,6 +2658,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -2408,6 +2696,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2438,6 +2730,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -2472,6 +2768,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2502,6 +2802,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -2536,6 +2840,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2566,6 +2874,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -2600,6 +2912,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2630,6 +2946,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -2664,6 +2984,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2694,6 +3018,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "client,default,http1,server"
         },
         {
           "name": "restream:source",
@@ -2728,6 +3056,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "http1,ring,tls12,webpki-roots,webpki-tokio"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2758,6 +3090,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "client,client-legacy,client-proxy,default,http1,server,service,tokio"
         },
         {
           "name": "restream:source",
@@ -2792,6 +3128,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "fallback"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2822,6 +3162,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -2856,6 +3200,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "zerovec"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2886,6 +3234,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "compiled_data"
         },
         {
           "name": "restream:source",
@@ -2920,6 +3272,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -2950,6 +3306,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "compiled_data"
         },
         {
           "name": "restream:source",
@@ -2984,6 +3344,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -3014,6 +3378,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "baked"
         },
         {
           "name": "restream:source",
@@ -3048,6 +3416,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,compiled_data,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -3078,6 +3450,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "compiled_data"
         },
         {
           "name": "restream:source",
@@ -3112,6 +3488,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -3142,6 +3522,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -3176,6 +3560,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -3206,6 +3594,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -3240,6 +3632,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -3250,6 +3646,12 @@
     },
     {
       "bom-ref": "native:libavcodec@62.28.102",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "8bf107196c8bad9b115bc3e1e4cd197313834f2ce5ab7b613ac7faa89f89ecf4"
+        }
+      ],
       "licenses": [
         {
           "expression": "GPL-2.0-or-later"
@@ -3271,11 +3673,27 @@
         },
         {
           "name": "restream:ffmpegConfiguration",
-          "value": "--prefix=/home/krsna1729/code/github/live-miracles/restream/.build/static/prefix --pkg-config-flags=--static --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-debug --disable-autodetect --disable-network --enable-x86asm --extra-cflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --extra-cxxflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --disable-everything --enable-gpl --enable-libx264 --enable-libx265 --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-swresample --enable-protocol='file,pipe' --enable-demuxer='mpegts,matroska,mov' --enable-muxer='mpegts,matroska,mov' --enable-decoder='h264,hevc,aac,mp3,ac3,eac3' --enable-encoder='aac,ac3,libx264,libx265' --enable-parser='h264,hevc,aac,ac3' --enable-bsf='h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc' --enable-filter='scale,crop,transpose,format,aformat,aresample,pan'"
+          "value": "--prefix=/home/krsna1729/code/github/live-miracles/restream/.local/build/static/prefix --pkg-config-flags=--static --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-debug --disable-autodetect --disable-network --enable-x86asm --extra-cflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --extra-cxxflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --disable-everything --enable-gpl --enable-libx264 --enable-libx265 --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-swresample --enable-protocol='file,pipe' --enable-demuxer='mpegts,matroska,mov' --enable-muxer='mpegts,matroska,mov' --enable-decoder='h264,hevc,aac,mp3,ac3,eac3' --enable-encoder='aac,ac3,libx264,libx265' --enable-parser='h264,hevc,aac,ac3' --enable-bsf='h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc' --enable-filter='scale,crop,transpose,format,aformat,aresample,pan'"
         },
         {
           "name": "restream:runtimeLicenseText",
           "value": "GPL version 2 or later"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/libavcodec.a"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/libavcodec.a=8bf107196c8bad9b115bc3e1e4cd197313834f2ce5ab7b613ac7faa89f89ecf4"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/pkgconfig/libavcodec.pc"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/pkgconfig/libavcodec.pc=25be066b6c001b0ab3afd004f102869f0d706d1156036787b6e9f14d7babfbea"
         }
       ],
       "type": "library",
@@ -3283,6 +3701,12 @@
     },
     {
       "bom-ref": "native:libavfilter@11.14.102",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9e7c4e0faae4764e2d828e92cb1234e9cf2dcbcc6acc8775bfd520f7f994bac5"
+        }
+      ],
       "licenses": [
         {
           "expression": "GPL-2.0-or-later"
@@ -3304,11 +3728,27 @@
         },
         {
           "name": "restream:ffmpegConfiguration",
-          "value": "--prefix=/home/krsna1729/code/github/live-miracles/restream/.build/static/prefix --pkg-config-flags=--static --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-debug --disable-autodetect --disable-network --enable-x86asm --extra-cflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --extra-cxxflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --disable-everything --enable-gpl --enable-libx264 --enable-libx265 --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-swresample --enable-protocol='file,pipe' --enable-demuxer='mpegts,matroska,mov' --enable-muxer='mpegts,matroska,mov' --enable-decoder='h264,hevc,aac,mp3,ac3,eac3' --enable-encoder='aac,ac3,libx264,libx265' --enable-parser='h264,hevc,aac,ac3' --enable-bsf='h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc' --enable-filter='scale,crop,transpose,format,aformat,aresample,pan'"
+          "value": "--prefix=/home/krsna1729/code/github/live-miracles/restream/.local/build/static/prefix --pkg-config-flags=--static --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-debug --disable-autodetect --disable-network --enable-x86asm --extra-cflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --extra-cxxflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --disable-everything --enable-gpl --enable-libx264 --enable-libx265 --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-swresample --enable-protocol='file,pipe' --enable-demuxer='mpegts,matroska,mov' --enable-muxer='mpegts,matroska,mov' --enable-decoder='h264,hevc,aac,mp3,ac3,eac3' --enable-encoder='aac,ac3,libx264,libx265' --enable-parser='h264,hevc,aac,ac3' --enable-bsf='h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc' --enable-filter='scale,crop,transpose,format,aformat,aresample,pan'"
         },
         {
           "name": "restream:runtimeLicenseText",
           "value": "GPL version 2 or later"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/libavfilter.a"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/libavfilter.a=9e7c4e0faae4764e2d828e92cb1234e9cf2dcbcc6acc8775bfd520f7f994bac5"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/pkgconfig/libavfilter.pc"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/pkgconfig/libavfilter.pc=e8a3c1ac376a906045c95603780681c5c745b033938a2f4671548460ae0a6651"
         }
       ],
       "type": "library",
@@ -3316,6 +3756,12 @@
     },
     {
       "bom-ref": "native:libavformat@62.12.102",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e98b920f2649f4ee44e42de4521b99aa64f09e204024b6689c8407c206b7e13d"
+        }
+      ],
       "licenses": [
         {
           "expression": "GPL-2.0-or-later"
@@ -3337,11 +3783,27 @@
         },
         {
           "name": "restream:ffmpegConfiguration",
-          "value": "--prefix=/home/krsna1729/code/github/live-miracles/restream/.build/static/prefix --pkg-config-flags=--static --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-debug --disable-autodetect --disable-network --enable-x86asm --extra-cflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --extra-cxxflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --disable-everything --enable-gpl --enable-libx264 --enable-libx265 --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-swresample --enable-protocol='file,pipe' --enable-demuxer='mpegts,matroska,mov' --enable-muxer='mpegts,matroska,mov' --enable-decoder='h264,hevc,aac,mp3,ac3,eac3' --enable-encoder='aac,ac3,libx264,libx265' --enable-parser='h264,hevc,aac,ac3' --enable-bsf='h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc' --enable-filter='scale,crop,transpose,format,aformat,aresample,pan'"
+          "value": "--prefix=/home/krsna1729/code/github/live-miracles/restream/.local/build/static/prefix --pkg-config-flags=--static --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-debug --disable-autodetect --disable-network --enable-x86asm --extra-cflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --extra-cxxflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --disable-everything --enable-gpl --enable-libx264 --enable-libx265 --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-swresample --enable-protocol='file,pipe' --enable-demuxer='mpegts,matroska,mov' --enable-muxer='mpegts,matroska,mov' --enable-decoder='h264,hevc,aac,mp3,ac3,eac3' --enable-encoder='aac,ac3,libx264,libx265' --enable-parser='h264,hevc,aac,ac3' --enable-bsf='h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc' --enable-filter='scale,crop,transpose,format,aformat,aresample,pan'"
         },
         {
           "name": "restream:runtimeLicenseText",
           "value": "GPL version 2 or later"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/libavformat.a"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/libavformat.a=e98b920f2649f4ee44e42de4521b99aa64f09e204024b6689c8407c206b7e13d"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/pkgconfig/libavformat.pc"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/pkgconfig/libavformat.pc=65875d7ad51affe3e823e794541b101524a365519c816bc6612c067b0277d8aa"
         }
       ],
       "type": "library",
@@ -3349,6 +3811,12 @@
     },
     {
       "bom-ref": "native:libavutil@60.26.102",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "bfb31a1878920655aeb2f890625c6ac6d4265c4e1b6d38425d911472d182bf07"
+        }
+      ],
       "licenses": [
         {
           "expression": "GPL-2.0-or-later"
@@ -3370,11 +3838,27 @@
         },
         {
           "name": "restream:ffmpegConfiguration",
-          "value": "--prefix=/home/krsna1729/code/github/live-miracles/restream/.build/static/prefix --pkg-config-flags=--static --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-debug --disable-autodetect --disable-network --enable-x86asm --extra-cflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --extra-cxxflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --disable-everything --enable-gpl --enable-libx264 --enable-libx265 --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-swresample --enable-protocol='file,pipe' --enable-demuxer='mpegts,matroska,mov' --enable-muxer='mpegts,matroska,mov' --enable-decoder='h264,hevc,aac,mp3,ac3,eac3' --enable-encoder='aac,ac3,libx264,libx265' --enable-parser='h264,hevc,aac,ac3' --enable-bsf='h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc' --enable-filter='scale,crop,transpose,format,aformat,aresample,pan'"
+          "value": "--prefix=/home/krsna1729/code/github/live-miracles/restream/.local/build/static/prefix --pkg-config-flags=--static --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-debug --disable-autodetect --disable-network --enable-x86asm --extra-cflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --extra-cxxflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --disable-everything --enable-gpl --enable-libx264 --enable-libx265 --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-swresample --enable-protocol='file,pipe' --enable-demuxer='mpegts,matroska,mov' --enable-muxer='mpegts,matroska,mov' --enable-decoder='h264,hevc,aac,mp3,ac3,eac3' --enable-encoder='aac,ac3,libx264,libx265' --enable-parser='h264,hevc,aac,ac3' --enable-bsf='h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc' --enable-filter='scale,crop,transpose,format,aformat,aresample,pan'"
         },
         {
           "name": "restream:runtimeLicenseText",
           "value": "GPL version 2 or later"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/libavutil.a"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/libavutil.a=bfb31a1878920655aeb2f890625c6ac6d4265c4e1b6d38425d911472d182bf07"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/pkgconfig/libavutil.pc"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/pkgconfig/libavutil.pc=da09d99ad7e0fc78786376eadae89aa2bc7376a585b3524f0bca49381cca9332"
         }
       ],
       "type": "library",
@@ -3402,6 +3886,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
         },
         {
           "name": "restream:source",
@@ -3439,6 +3927,12 @@
     },
     {
       "bom-ref": "native:libmbedcrypto@Mbed_TLS_3.6.6",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "bc30dab3b82df2dd7851b8a7b0bb275ae85a078d9ca0ce009155068a1f16ac25"
+        }
+      ],
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -3461,6 +3955,124 @@
         {
           "name": "restream:buildResolvedVersion",
           "value": "3.6.6"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/libmbedcrypto.a"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/libmbedcrypto.a=bc30dab3b82df2dd7851b8a7b0bb275ae85a078d9ca0ce009155068a1f16ac25"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/pkgconfig/mbedcrypto.pc"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/pkgconfig/mbedcrypto.pc=1bcec77d263ba1710dbc33875b3d8ee7366e80e46fc84a0a8b5bfa4a81a2c80c"
+        }
+      ],
+      "type": "library",
+      "version": "Mbed TLS 3.6.6"
+    },
+    {
+      "bom-ref": "native:libmbedtls@Mbed_TLS_3.6.6",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6a12ae90df339b840852ba150ddefa8e3a4c8741b520d11fd1c92b1d5f2c6bda"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "name": "libmbedtls",
+      "properties": [
+        {
+          "name": "restream:ecosystem",
+          "value": "native"
+        },
+        {
+          "name": "restream:versionSource",
+          "value": "runtime API"
+        },
+        {
+          "name": "restream:linkage",
+          "value": "statically linked component"
+        },
+        {
+          "name": "restream:buildResolvedVersion",
+          "value": "3.6.6"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/libmbedtls.a"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/libmbedtls.a=6a12ae90df339b840852ba150ddefa8e3a4c8741b520d11fd1c92b1d5f2c6bda"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/pkgconfig/mbedtls.pc"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/pkgconfig/mbedtls.pc=52503f0d9154d0a0e4e6cdcd804ca5eb8a3620cfcd8ec9d141ce0e9e21f29c2d"
+        }
+      ],
+      "type": "library",
+      "version": "Mbed TLS 3.6.6"
+    },
+    {
+      "bom-ref": "native:libmbedx509@Mbed_TLS_3.6.6",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a20478010ed9365358541d1c983718d1e711f96de2eee271d3a8a66247bf58c9"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "name": "libmbedx509",
+      "properties": [
+        {
+          "name": "restream:ecosystem",
+          "value": "native"
+        },
+        {
+          "name": "restream:versionSource",
+          "value": "runtime API"
+        },
+        {
+          "name": "restream:linkage",
+          "value": "statically linked component"
+        },
+        {
+          "name": "restream:buildResolvedVersion",
+          "value": "3.6.6"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/libmbedx509.a"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/libmbedx509.a=a20478010ed9365358541d1c983718d1e711f96de2eee271d3a8a66247bf58c9"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/pkgconfig/mbedx509.pc"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/pkgconfig/mbedx509.pc=6f0b74a6d446989289a462910c13a11edf9dfe29a1aff8e3d5fe48bafe636cf4"
         }
       ],
       "type": "library",
@@ -3490,6 +4102,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "bundled,bundled_bindings,cc,default,min_sqlite_version_3_34_1,pkg-config,unlock_notify,vcpkg"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -3500,6 +4116,12 @@
     },
     {
       "bom-ref": "native:libsrt@1.5.5",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "44480a2023abaae4158fa6cb594fc979c18c491ce9e57f8ba8faafa02fd0d12a"
+        }
+      ],
       "licenses": [
         {
           "expression": "MPL-2.0"
@@ -3526,6 +4148,22 @@
         {
           "name": "restream:buildResolvedVersion",
           "value": "1.5.5"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/libsrt.a"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/libsrt.a=44480a2023abaae4158fa6cb594fc979c18c491ce9e57f8ba8faafa02fd0d12a"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/pkgconfig/srt.pc"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/pkgconfig/srt.pc=62f532b5d6360ea21c18a1ebb7d6193346f62d84819ad943e45fa374b6989897"
         }
       ],
       "type": "library",
@@ -3558,6 +4196,12 @@
     },
     {
       "bom-ref": "native:libswresample@6.3.102",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "fd9f715bb7ce446428e37a5cd71975c5316f168ebb425c6a03aea42d72ac11ff"
+        }
+      ],
       "licenses": [
         {
           "expression": "GPL-2.0-or-later"
@@ -3579,11 +4223,27 @@
         },
         {
           "name": "restream:ffmpegConfiguration",
-          "value": "--prefix=/home/krsna1729/code/github/live-miracles/restream/.build/static/prefix --pkg-config-flags=--static --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-debug --disable-autodetect --disable-network --enable-x86asm --extra-cflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --extra-cxxflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --disable-everything --enable-gpl --enable-libx264 --enable-libx265 --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-swresample --enable-protocol='file,pipe' --enable-demuxer='mpegts,matroska,mov' --enable-muxer='mpegts,matroska,mov' --enable-decoder='h264,hevc,aac,mp3,ac3,eac3' --enable-encoder='aac,ac3,libx264,libx265' --enable-parser='h264,hevc,aac,ac3' --enable-bsf='h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc' --enable-filter='scale,crop,transpose,format,aformat,aresample,pan'"
+          "value": "--prefix=/home/krsna1729/code/github/live-miracles/restream/.local/build/static/prefix --pkg-config-flags=--static --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-debug --disable-autodetect --disable-network --enable-x86asm --extra-cflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --extra-cxxflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --disable-everything --enable-gpl --enable-libx264 --enable-libx265 --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-swresample --enable-protocol='file,pipe' --enable-demuxer='mpegts,matroska,mov' --enable-muxer='mpegts,matroska,mov' --enable-decoder='h264,hevc,aac,mp3,ac3,eac3' --enable-encoder='aac,ac3,libx264,libx265' --enable-parser='h264,hevc,aac,ac3' --enable-bsf='h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc' --enable-filter='scale,crop,transpose,format,aformat,aresample,pan'"
         },
         {
           "name": "restream:runtimeLicenseText",
           "value": "GPL version 2 or later"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/libswresample.a"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/libswresample.a=fd9f715bb7ce446428e37a5cd71975c5316f168ebb425c6a03aea42d72ac11ff"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/pkgconfig/libswresample.pc"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/pkgconfig/libswresample.pc=af2d5d5045fee0b3a0e510b6a235919701833cc239bc5249f83f14c4b524f56c"
         }
       ],
       "type": "library",
@@ -3591,6 +4251,12 @@
     },
     {
       "bom-ref": "native:libswscale@9.5.102",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "790a47d060c56fd112dab500e5aad567d1fa3688e752865f7cc305019d48cbc0"
+        }
+      ],
       "licenses": [
         {
           "expression": "GPL-2.0-or-later"
@@ -3612,11 +4278,27 @@
         },
         {
           "name": "restream:ffmpegConfiguration",
-          "value": "--prefix=/home/krsna1729/code/github/live-miracles/restream/.build/static/prefix --pkg-config-flags=--static --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-debug --disable-autodetect --disable-network --enable-x86asm --extra-cflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --extra-cxxflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --disable-everything --enable-gpl --enable-libx264 --enable-libx265 --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-swresample --enable-protocol='file,pipe' --enable-demuxer='mpegts,matroska,mov' --enable-muxer='mpegts,matroska,mov' --enable-decoder='h264,hevc,aac,mp3,ac3,eac3' --enable-encoder='aac,ac3,libx264,libx265' --enable-parser='h264,hevc,aac,ac3' --enable-bsf='h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc' --enable-filter='scale,crop,transpose,format,aformat,aresample,pan'"
+          "value": "--prefix=/home/krsna1729/code/github/live-miracles/restream/.local/build/static/prefix --pkg-config-flags=--static --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-debug --disable-autodetect --disable-network --enable-x86asm --extra-cflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --extra-cxxflags='-O3 -march=x86-64-v3 -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fPIC' --disable-everything --enable-gpl --enable-libx264 --enable-libx265 --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-swresample --enable-protocol='file,pipe' --enable-demuxer='mpegts,matroska,mov' --enable-muxer='mpegts,matroska,mov' --enable-decoder='h264,hevc,aac,mp3,ac3,eac3' --enable-encoder='aac,ac3,libx264,libx265' --enable-parser='h264,hevc,aac,ac3' --enable-bsf='h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc' --enable-filter='scale,crop,transpose,format,aformat,aresample,pan'"
         },
         {
           "name": "restream:runtimeLicenseText",
           "value": "GPL version 2 or later"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/libswscale.a"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/libswscale.a=790a47d060c56fd112dab500e5aad567d1fa3688e752865f7cc305019d48cbc0"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/pkgconfig/libswscale.pc"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/pkgconfig/libswscale.pc=72c09da7709eb2083b96626fe1d549c556a833c1767a1177fcefdc01dced2a03"
         }
       ],
       "type": "library",
@@ -3644,6 +4326,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -3678,6 +4364,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "atomic_usize,default"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -3708,6 +4398,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "std"
         },
         {
           "name": "restream:source",
@@ -3742,6 +4436,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -3772,6 +4470,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -3806,6 +4508,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -3836,6 +4542,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -3870,6 +4580,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -3900,6 +4614,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -3934,6 +4652,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -3964,6 +4686,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "simd,simd-adler32,with-alloc"
         },
         {
           "name": "restream:source",
@@ -3998,6 +4724,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "net,os-ext,os-poll"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4028,6 +4758,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
         },
         {
           "name": "restream:source",
@@ -4062,6 +4796,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4092,6 +4830,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,i128,std"
         },
         {
           "name": "restream:source",
@@ -4126,6 +4868,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,race,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4156,6 +4902,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -4190,6 +4940,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4220,6 +4974,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default"
         },
         {
           "name": "restream:source",
@@ -4254,6 +5012,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4284,6 +5046,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,rand_core,std"
         },
         {
           "name": "restream:source",
@@ -4318,6 +5084,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,hmac"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4348,6 +5118,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,std"
         },
         {
           "name": "restream:source",
@@ -4382,6 +5156,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4412,6 +5190,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "zerovec"
         },
         {
           "name": "restream:source",
@@ -4446,6 +5228,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4476,6 +5262,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "simd,std"
         },
         {
           "name": "restream:source",
@@ -4510,6 +5300,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "ring,runtime-tokio,rustls,rustls-ring"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4540,6 +5334,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "ring,rustls-ring"
         },
         {
           "name": "restream:source",
@@ -4574,6 +5372,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "tracing"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4604,6 +5406,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,std,std_rng,sys_rng,thread_rng"
         },
         {
           "name": "restream:source",
@@ -4638,6 +5444,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,getrandom,libc,rand_chacha,std,std_rng"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4668,6 +5478,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,os_rng,small_rng,std,std_rng,thread_rng"
         },
         {
           "name": "restream:source",
@@ -4702,6 +5516,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4732,6 +5550,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "std"
         },
         {
           "name": "restream:source",
@@ -4766,6 +5588,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4796,6 +5622,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,getrandom,std"
         },
         {
           "name": "restream:source",
@@ -4830,6 +5660,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "os_rng,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4860,6 +5694,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -4894,6 +5732,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4924,6 +5766,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,dfa-build,dfa-search,meta,nfa-pikevm,nfa-thompson,std,syntax,unicode-perl,unicode-word-boundary"
         },
         {
           "name": "restream:source",
@@ -4958,6 +5804,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std,unicode,unicode-age,unicode-bool,unicode-case,unicode-gencat,unicode-perl,unicode-script,unicode-segment"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -4988,6 +5838,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "__rustls,__rustls-ring,__tls,rustls-tls,rustls-tls-webpki-roots,rustls-tls-webpki-roots-no-provider,stream"
         },
         {
           "name": "restream:source",
@@ -5022,6 +5876,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,dev_urandom_fallback,wasm32_unknown_unknown_js"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5052,6 +5910,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -5086,6 +5948,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5116,6 +5982,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -5150,6 +6020,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5180,6 +6054,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
         },
         {
           "name": "restream:source",
@@ -5214,6 +6092,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "log,logging,ring,std,tls12"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5244,6 +6126,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,std,web,web-time"
         },
         {
           "name": "restream:source",
@@ -5278,6 +6164,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,ring,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5308,6 +6198,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -5342,6 +6236,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5372,6 +6270,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -5406,6 +6308,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5436,6 +6342,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,password-hash,simple,std"
         },
         {
           "name": "restream:source",
@@ -5470,6 +6380,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,derive,rc,serde_derive,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5500,6 +6414,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,rc,result,std"
         },
         {
           "name": "restream:source",
@@ -5534,6 +6452,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,raw_value,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5564,6 +6486,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -5598,6 +6524,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5628,6 +6558,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -5662,6 +6596,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5692,6 +6630,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -5726,6 +6668,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5756,6 +6702,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -5790,6 +6740,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5820,6 +6774,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -5854,6 +6812,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5884,6 +6846,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
         },
         {
           "name": "restream:source",
@@ -5918,6 +6884,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "const_generics,const_new,serde"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -5948,6 +6918,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "all"
         },
         {
           "name": "restream:source",
@@ -5982,6 +6956,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "barrier,default,lazy,lock_api,lock_api_crate,mutex,once,rwlock,spin_mutex"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6012,6 +6990,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "_rt-tokio,_sqlite,derive,macros,runtime-tokio,sqlite,sqlite-bundled,sqlite-deserialize,sqlite-load-extension,sqlite-unlock-notify,sqlx-macros,sqlx-sqlite"
         },
         {
           "name": "restream:source",
@@ -6046,6 +7028,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "_rt-tokio,any,crc,default,json,migrate,offline,serde,serde_json,sha2,tokio,tokio-stream"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6076,6 +7062,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "offline,serde"
         },
         {
           "name": "restream:source",
@@ -6110,6 +7100,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "json,offline"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6140,6 +7134,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "bundled,deserialize,load-extension,migrate,offline,serde,unlock-notify"
         },
         {
           "name": "restream:source",
@@ -6174,6 +7172,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6204,6 +7206,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -6238,6 +7244,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6268,6 +7278,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -6302,6 +7316,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "futures,futures-core"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6332,6 +7350,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,multithread,rayon"
         },
         {
           "name": "restream:source",
@@ -6366,6 +7388,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6396,6 +7422,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
         },
         {
           "name": "restream:source",
@@ -6430,6 +7460,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6460,6 +7494,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,formatting,parsing,std"
         },
         {
           "name": "restream:source",
@@ -6494,6 +7532,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6524,6 +7566,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "zerovec"
         },
         {
           "name": "restream:source",
@@ -6558,6 +7604,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default,tinyvec_macros"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6588,6 +7638,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -6622,6 +7676,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "bytes,default,fs,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,test-util,time,tokio-macros,windows-sys"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6652,6 +7710,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "logging,ring,tls12"
         },
         {
           "name": "restream:source",
@@ -6686,6 +7748,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,fs,time"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6716,6 +7782,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "codec,default,io"
         },
         {
           "name": "restream:source",
@@ -6750,6 +7820,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "futures-core,futures-util,log,make,pin-project-lite,retry,sync_wrapper,timeout,tokio,tracing,util"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6780,6 +7854,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "async-compression,compression-gzip,cors,default,fs,futures-core,futures-util,httpdate,mime,mime_guess,percent-encoding,set-header,set-status,tokio,tokio-util,tracing"
         },
         {
           "name": "restream:source",
@@ -6814,6 +7892,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "follow-redirect,futures-util,tower"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6844,6 +7926,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -6878,6 +7964,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6908,6 +7998,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "attributes,default,log,max_level_debug,std,tracing-attributes"
         },
         {
           "name": "restream:source",
@@ -6942,6 +8036,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -6972,6 +8070,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,once_cell,std"
         },
         {
           "name": "restream:source",
@@ -7006,6 +8108,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "log-tracer,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -7036,6 +8142,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -7070,6 +8180,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,ansi,default,env-filter,fmt,json,matchers,nu-ansi-term,once_cell,registry,serde,serde_json,sharded-slab,smallvec,std,thread_local,tracing,tracing-log,tracing-serde"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -7100,6 +8214,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -7134,6 +8252,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "const-generics"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -7164,6 +8286,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -7198,6 +8324,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,hardcoded-data,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -7228,6 +8358,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
         },
         {
           "name": "restream:source",
@@ -7262,6 +8396,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,emoji,general-category"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -7292,6 +8430,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -7326,6 +8468,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "default,std"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -7356,6 +8502,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -7390,6 +8540,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -7420,6 +8574,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -7454,6 +8612,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -7484,6 +8646,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": ""
         },
         {
           "name": "restream:source",
@@ -7518,6 +8684,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -7528,6 +8698,12 @@
     },
     {
       "bom-ref": "native:x264@0.165.3222",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7d142d19066e52e0f70e4a2f11dc7175ecd015f7502b4e357ae0f53e64fc805a"
+        }
+      ],
       "licenses": [
         {
           "expression": "GPL-2.0-or-later"
@@ -7550,6 +8726,22 @@
         {
           "name": "restream:runtimeDispatch",
           "value": "x86 assembly enabled"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/libx264.a"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/libx264.a=7d142d19066e52e0f70e4a2f11dc7175ecd015f7502b4e357ae0f53e64fc805a"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/pkgconfig/x264.pc"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/pkgconfig/x264.pc=dc1b15bf2a20b61baf9eccfe27e7c46cef5bcd26be83425e3c8da28f35d82190"
         }
       ],
       "type": "library",
@@ -7557,6 +8749,12 @@
     },
     {
       "bom-ref": "native:x265@4.2",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a60dda03055bf3d36fb178ae3d59b77fbd765d72b683ae2591243960c54962da"
+        }
+      ],
       "licenses": [
         {
           "expression": "GPL-2.0-or-later"
@@ -7579,6 +8777,22 @@
         {
           "name": "restream:runtimeDispatch",
           "value": "x86 assembly enabled"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/libx265.a"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/libx265.a=a60dda03055bf3d36fb178ae3d59b77fbd765d72b683ae2591243960c54962da"
+        },
+        {
+          "name": "restream:nativeInput",
+          "value": "lib/pkgconfig/x265.pc"
+        },
+        {
+          "name": "restream:nativeInputSha256",
+          "value": "lib/pkgconfig/x265.pc=3fbb4368a79a0d4a0f4efcae9bbfa47a03cb3a85767fed7cd4c7f0d81bf11988"
         }
       ],
       "type": "library",
@@ -7606,6 +8820,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "derive,zerofrom"
         },
         {
           "name": "restream:source",
@@ -7640,6 +8858,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "derive,simd,zerocopy-derive"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -7670,6 +8892,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "derive"
         },
         {
           "name": "restream:source",
@@ -7704,6 +8930,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "alloc,default"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -7734,6 +8964,10 @@
         {
           "name": "restream:versionSource",
           "value": "Cargo.lock"
+        },
+        {
+          "name": "restream:enabledFeatures",
+          "value": "yoke,zerofrom"
         },
         {
           "name": "restream:source",
@@ -7768,6 +9002,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": "derive,yoke"
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -7800,6 +9038,10 @@
           "value": "Cargo.lock"
         },
         {
+          "name": "restream:enabledFeatures",
+          "value": ""
+        },
+        {
           "name": "restream:source",
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
@@ -7807,6 +9049,1941 @@
       "purl": "pkg:cargo/zmij@1.0.21",
       "type": "library",
       "version": "1.0.21"
+    }
+  ],
+  "dependencies": [
+    {
+      "dependsOn": [
+        "native:Rust standard library@1.96.0",
+        "native:SQLite@3.51.3",
+        "pkg:cargo/adler2@2.0.1",
+        "pkg:cargo/aho-corasick@1.1.4",
+        "pkg:cargo/allocator-api2@0.2.21",
+        "pkg:cargo/arc-swap@1.9.1",
+        "pkg:cargo/async-compression@0.4.42",
+        "pkg:cargo/atoi@2.0.0",
+        "pkg:cargo/atomic-waker@1.1.2",
+        "pkg:cargo/axum@0.7.9",
+        "pkg:cargo/axum-core@0.4.5",
+        "pkg:cargo/base64@0.22.1",
+        "pkg:cargo/base64ct@1.8.3",
+        "pkg:cargo/bitflags@2.13.0",
+        "pkg:cargo/block-buffer@0.10.4",
+        "pkg:cargo/block-buffer@0.12.1",
+        "pkg:cargo/block-buffer@0.9.0",
+        "pkg:cargo/byteorder@1.5.0",
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/chacha20@0.10.1",
+        "pkg:cargo/chrono@0.4.45",
+        "pkg:cargo/cipher@0.4.4",
+        "pkg:cargo/cmov@0.5.4",
+        "pkg:cargo/compression-codecs@0.4.38",
+        "pkg:cargo/compression-core@0.4.32",
+        "pkg:cargo/concurrent-queue@2.5.0",
+        "pkg:cargo/cpufeatures@0.2.17",
+        "pkg:cargo/cpufeatures@0.3.0",
+        "pkg:cargo/crc@3.4.0",
+        "pkg:cargo/crc-catalog@2.5.0",
+        "pkg:cargo/crc32fast@1.5.0",
+        "pkg:cargo/crossbeam-channel@0.5.15",
+        "pkg:cargo/crossbeam-deque@0.8.6",
+        "pkg:cargo/crossbeam-epoch@0.9.18",
+        "pkg:cargo/crossbeam-queue@0.3.12",
+        "pkg:cargo/crossbeam-utils@0.8.21",
+        "pkg:cargo/crypto-common@0.1.7",
+        "pkg:cargo/crypto-common@0.2.2",
+        "pkg:cargo/crypto-mac@0.10.0",
+        "pkg:cargo/ctutils@0.4.2",
+        "pkg:cargo/deranged@0.5.8",
+        "pkg:cargo/digest@0.10.7",
+        "pkg:cargo/digest@0.11.3",
+        "pkg:cargo/digest@0.9.0",
+        "pkg:cargo/dotenvy@0.15.7",
+        "pkg:cargo/either@1.16.0",
+        "pkg:cargo/equivalent@1.0.2",
+        "pkg:cargo/errno@0.3.14",
+        "pkg:cargo/event-listener@5.4.1",
+        "pkg:cargo/ffmpeg-next@8.1.0",
+        "pkg:cargo/ffmpeg-sys-next@8.1.0",
+        "pkg:cargo/flate2@1.1.9",
+        "pkg:cargo/flume@0.12.0",
+        "pkg:cargo/foldhash@0.2.0",
+        "pkg:cargo/form_urlencoded@1.2.2",
+        "pkg:cargo/futures-channel@0.3.32",
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/futures-executor@0.3.32",
+        "pkg:cargo/futures-intrusive@0.5.0",
+        "pkg:cargo/futures-io@0.3.32",
+        "pkg:cargo/futures-sink@0.3.32",
+        "pkg:cargo/futures-task@0.3.32",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/generic-array@0.14.7",
+        "pkg:cargo/getrandom@0.2.17",
+        "pkg:cargo/getrandom@0.3.4",
+        "pkg:cargo/getrandom@0.4.3",
+        "native:glibc@2.39",
+        "pkg:cargo/hashbrown@0.16.1",
+        "pkg:cargo/hashbrown@0.17.1",
+        "pkg:cargo/hashlink@0.11.1",
+        "pkg:cargo/hex@0.4.3",
+        "pkg:cargo/hkdf@0.13.0",
+        "pkg:cargo/hmac@0.10.1",
+        "pkg:cargo/hmac@0.12.1",
+        "pkg:cargo/hmac@0.13.0",
+        "pkg:cargo/http@1.4.2",
+        "pkg:cargo/http-body@1.0.1",
+        "pkg:cargo/http-body-util@0.1.3",
+        "pkg:cargo/http-range-header@0.4.2",
+        "pkg:cargo/httparse@1.10.1",
+        "pkg:cargo/httpdate@1.0.3",
+        "pkg:cargo/hybrid-array@0.4.13",
+        "pkg:cargo/hyper@1.10.1",
+        "pkg:cargo/hyper-rustls@0.27.9",
+        "pkg:cargo/hyper-util@0.1.20",
+        "pkg:cargo/iana-time-zone@0.1.65",
+        "pkg:cargo/icu_collections@2.2.0",
+        "pkg:cargo/icu_locale_core@2.2.0",
+        "pkg:cargo/icu_normalizer@2.2.0",
+        "pkg:cargo/icu_normalizer_data@2.2.0",
+        "pkg:cargo/icu_properties@2.2.0",
+        "pkg:cargo/icu_properties_data@2.2.0",
+        "pkg:cargo/icu_provider@2.2.0",
+        "pkg:cargo/idna@1.1.0",
+        "pkg:cargo/idna_adapter@1.2.2",
+        "pkg:cargo/indexmap@2.14.0",
+        "pkg:cargo/inout@0.1.4",
+        "pkg:cargo/ipnet@2.12.0",
+        "pkg:cargo/itoa@1.0.18",
+        "pkg:cargo/lazy_static@1.5.0",
+        "native:libavcodec@62.28.102",
+        "native:libavfilter@11.14.102",
+        "native:libavformat@62.12.102",
+        "native:libavutil@60.26.102",
+        "pkg:cargo/libc@0.2.186",
+        "native:libgcc@13.3.0",
+        "native:libmbedcrypto@Mbed_TLS_3.6.6",
+        "native:libmbedtls@Mbed_TLS_3.6.6",
+        "native:libmbedx509@Mbed_TLS_3.6.6",
+        "pkg:cargo/libsqlite3-sys@0.37.0",
+        "native:libsrt@1.5.5",
+        "native:libstdc++@13.3.0",
+        "native:libswresample@6.3.102",
+        "native:libswscale@9.5.102",
+        "pkg:cargo/litemap@0.8.2",
+        "pkg:cargo/lock_api@0.4.14",
+        "pkg:cargo/log@0.4.33",
+        "pkg:cargo/lru-slab@0.1.2",
+        "pkg:cargo/matchers@0.2.0",
+        "pkg:cargo/matchit@0.7.3",
+        "pkg:cargo/md-5@0.11.0",
+        "pkg:cargo/memchr@2.8.2",
+        "pkg:cargo/mime@0.3.17",
+        "pkg:cargo/mime_guess@2.0.5",
+        "pkg:cargo/miniz_oxide@0.8.9",
+        "pkg:cargo/mio@1.2.1",
+        "pkg:cargo/nu-ansi-term@0.50.3",
+        "pkg:cargo/num-conv@0.2.2",
+        "pkg:cargo/num-traits@0.2.19",
+        "pkg:cargo/once_cell@1.21.4",
+        "pkg:cargo/opaque-debug@0.3.1",
+        "pkg:cargo/parking@2.2.1",
+        "pkg:cargo/parking_lot@0.12.5",
+        "pkg:cargo/parking_lot_core@0.9.12",
+        "pkg:cargo/password-hash@0.5.0",
+        "pkg:cargo/pbkdf2@0.12.2",
+        "pkg:cargo/percent-encoding@2.3.2",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/potential_utf@0.1.5",
+        "pkg:cargo/powerfmt@0.2.0",
+        "pkg:cargo/ppv-lite86@0.2.21",
+        "pkg:cargo/quinn@0.11.11",
+        "pkg:cargo/quinn-proto@0.11.15",
+        "pkg:cargo/quinn-udp@0.5.14",
+        "pkg:cargo/rand@0.10.1",
+        "pkg:cargo/rand@0.8.6",
+        "pkg:cargo/rand@0.9.4",
+        "pkg:cargo/rand_chacha@0.3.1",
+        "pkg:cargo/rand_chacha@0.9.0",
+        "pkg:cargo/rand_core@0.10.1",
+        "pkg:cargo/rand_core@0.6.4",
+        "pkg:cargo/rand_core@0.9.5",
+        "pkg:cargo/rayon@1.12.0",
+        "pkg:cargo/rayon-core@1.13.0",
+        "pkg:cargo/regex-automata@0.4.14",
+        "pkg:cargo/regex-syntax@0.8.11",
+        "pkg:cargo/reqwest@0.12.28",
+        "pkg:cargo/ring@0.17.14",
+        "pkg:cargo/rml_amf0@0.3.0",
+        "pkg:cargo/rml_rtmp@0.8.0",
+        "pkg:cargo/rust-embed@8.11.0",
+        "pkg:cargo/rust-embed-utils@8.11.0",
+        "pkg:cargo/rustc-hash@2.1.2",
+        "pkg:cargo/rustls@0.23.41",
+        "pkg:cargo/rustls-pki-types@1.14.1",
+        "pkg:cargo/rustls-webpki@0.103.13",
+        "pkg:cargo/ryu@1.0.23",
+        "pkg:cargo/salsa20@0.10.2",
+        "pkg:cargo/same-file@1.0.6",
+        "pkg:cargo/scopeguard@1.2.0",
+        "pkg:cargo/scrypt@0.11.0",
+        "pkg:cargo/serde@1.0.228",
+        "pkg:cargo/serde_core@1.0.228",
+        "pkg:cargo/serde_json@1.0.150",
+        "pkg:cargo/serde_path_to_error@0.1.20",
+        "pkg:cargo/serde_urlencoded@0.7.1",
+        "pkg:cargo/sha1@0.11.0",
+        "pkg:cargo/sha2@0.10.9",
+        "pkg:cargo/sha2@0.11.0",
+        "pkg:cargo/sha2@0.9.9",
+        "pkg:cargo/sharded-slab@0.1.7",
+        "pkg:cargo/shiguredo_mp4@2026.3.0",
+        "pkg:cargo/signal-hook-registry@1.4.8",
+        "pkg:cargo/simd-adler32@0.3.9",
+        "pkg:cargo/slab@0.4.12",
+        "pkg:cargo/smallvec@1.15.2",
+        "pkg:cargo/socket2@0.6.4",
+        "pkg:cargo/spin@0.9.8",
+        "pkg:cargo/sqlx@0.9.0",
+        "pkg:cargo/sqlx-core@0.9.0",
+        "pkg:cargo/sqlx-mysql@0.9.0",
+        "pkg:cargo/sqlx-postgres@0.9.0",
+        "pkg:cargo/sqlx-sqlite@0.9.0",
+        "pkg:cargo/stable_deref_trait@1.2.1",
+        "pkg:cargo/stringprep@0.1.5",
+        "pkg:cargo/subtle@2.6.1",
+        "pkg:cargo/symlink@0.1.0",
+        "pkg:cargo/sync_wrapper@1.0.2",
+        "pkg:cargo/sysinfo@0.30.13",
+        "pkg:cargo/thiserror@1.0.69",
+        "pkg:cargo/thiserror@2.0.18",
+        "pkg:cargo/thread_local@1.1.9",
+        "pkg:cargo/time@0.3.51",
+        "pkg:cargo/time-core@0.1.9",
+        "pkg:cargo/tinystr@0.8.3",
+        "pkg:cargo/tinyvec@1.11.0",
+        "pkg:cargo/tinyvec_macros@0.1.1",
+        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio-rustls@0.26.4",
+        "pkg:cargo/tokio-stream@0.1.18",
+        "pkg:cargo/tokio-util@0.7.18",
+        "pkg:cargo/tower@0.5.3",
+        "pkg:cargo/tower-http@0.5.2",
+        "pkg:cargo/tower-http@0.6.11",
+        "pkg:cargo/tower-layer@0.3.3",
+        "pkg:cargo/tower-service@0.3.3",
+        "pkg:cargo/tracing@0.1.44",
+        "pkg:cargo/tracing-appender@0.2.5",
+        "pkg:cargo/tracing-core@0.1.36",
+        "pkg:cargo/tracing-log@0.2.0",
+        "pkg:cargo/tracing-serde@0.2.0",
+        "pkg:cargo/tracing-subscriber@0.3.23",
+        "pkg:cargo/try-lock@0.2.5",
+        "pkg:cargo/typenum@1.20.1",
+        "pkg:cargo/unicase@2.9.0",
+        "pkg:cargo/unicode-bidi@0.3.18",
+        "pkg:cargo/unicode-normalization@0.1.25",
+        "pkg:cargo/unicode-properties@0.1.4",
+        "pkg:cargo/untrusted@0.9.0",
+        "pkg:cargo/url@2.5.8",
+        "pkg:cargo/utf8_iter@1.0.4",
+        "pkg:cargo/walkdir@2.5.0",
+        "pkg:cargo/want@0.3.1",
+        "pkg:cargo/webpki-roots@1.0.8",
+        "pkg:cargo/whoami@2.1.2",
+        "pkg:cargo/writeable@0.6.3",
+        "native:x264@0.165.3222",
+        "native:x265@4.2",
+        "pkg:cargo/yoke@0.8.3",
+        "pkg:cargo/zerocopy@0.8.52",
+        "pkg:cargo/zerofrom@0.1.8",
+        "pkg:cargo/zeroize@1.9.0",
+        "pkg:cargo/zerotrie@0.2.4",
+        "pkg:cargo/zerovec@0.11.6",
+        "pkg:cargo/zmij@1.0.21"
+      ],
+      "ref": "pkg:cargo/restream@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "native:libmbedtls@Mbed_TLS_3.6.6",
+        "native:libmbedx509@Mbed_TLS_3.6.6",
+        "native:libmbedcrypto@Mbed_TLS_3.6.6"
+      ],
+      "ref": "native:libsrt@1.5.5"
+    },
+    {
+      "dependsOn": [
+        "native:libmbedx509@Mbed_TLS_3.6.6",
+        "native:libmbedcrypto@Mbed_TLS_3.6.6"
+      ],
+      "ref": "native:libmbedtls@Mbed_TLS_3.6.6"
+    },
+    {
+      "dependsOn": [
+        "native:libmbedcrypto@Mbed_TLS_3.6.6"
+      ],
+      "ref": "native:libmbedx509@Mbed_TLS_3.6.6"
+    },
+    {
+      "dependsOn": [
+        "native:libavcodec@62.28.102",
+        "native:libavutil@60.26.102"
+      ],
+      "ref": "native:libavformat@62.12.102"
+    },
+    {
+      "dependsOn": [
+        "native:libavcodec@62.28.102",
+        "native:libavformat@62.12.102",
+        "native:libavutil@60.26.102"
+      ],
+      "ref": "native:libavfilter@11.14.102"
+    },
+    {
+      "dependsOn": [
+        "native:libavutil@60.26.102",
+        "native:x264@0.165.3222",
+        "native:x265@4.2"
+      ],
+      "ref": "native:libavcodec@62.28.102"
+    },
+    {
+      "dependsOn": [
+        "native:libavutil@60.26.102"
+      ],
+      "ref": "native:libswscale@9.5.102"
+    },
+    {
+      "dependsOn": [
+        "native:libavutil@60.26.102"
+      ],
+      "ref": "native:libswresample@6.3.102"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/adler2@2.0.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/memchr@2.8.2"
+      ],
+      "ref": "pkg:cargo/aho-corasick@1.1.4"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/allocator-api2@0.2.21"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/arc-swap@1.9.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/compression-codecs@0.4.38",
+        "pkg:cargo/compression-core@0.4.32",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/tokio@1.52.3"
+      ],
+      "ref": "pkg:cargo/async-compression@0.4.42"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/num-traits@0.2.19"
+      ],
+      "ref": "pkg:cargo/atoi@2.0.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/atomic-waker@1.1.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/axum-core@0.4.5",
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/http@1.4.2",
+        "pkg:cargo/http-body@1.0.1",
+        "pkg:cargo/http-body-util@0.1.3",
+        "pkg:cargo/hyper@1.10.1",
+        "pkg:cargo/hyper-util@0.1.20",
+        "pkg:cargo/itoa@1.0.18",
+        "pkg:cargo/matchit@0.7.3",
+        "pkg:cargo/memchr@2.8.2",
+        "pkg:cargo/mime@0.3.17",
+        "pkg:cargo/percent-encoding@2.3.2",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/serde@1.0.228",
+        "pkg:cargo/serde_json@1.0.150",
+        "pkg:cargo/serde_path_to_error@0.1.20",
+        "pkg:cargo/serde_urlencoded@0.7.1",
+        "pkg:cargo/sync_wrapper@1.0.2",
+        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tower@0.5.3",
+        "pkg:cargo/tower-layer@0.3.3",
+        "pkg:cargo/tower-service@0.3.3",
+        "pkg:cargo/tracing@0.1.44"
+      ],
+      "ref": "pkg:cargo/axum@0.7.9"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/http@1.4.2",
+        "pkg:cargo/http-body@1.0.1",
+        "pkg:cargo/http-body-util@0.1.3",
+        "pkg:cargo/mime@0.3.17",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/sync_wrapper@1.0.2",
+        "pkg:cargo/tower-layer@0.3.3",
+        "pkg:cargo/tower-service@0.3.3",
+        "pkg:cargo/tracing@0.1.44"
+      ],
+      "ref": "pkg:cargo/axum-core@0.4.5"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/base64@0.22.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/base64ct@1.8.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/serde_core@1.0.228"
+      ],
+      "ref": "pkg:cargo/bitflags@2.13.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/generic-array@0.14.7"
+      ],
+      "ref": "pkg:cargo/block-buffer@0.10.4"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/hybrid-array@0.4.13"
+      ],
+      "ref": "pkg:cargo/block-buffer@0.12.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/generic-array@0.14.7"
+      ],
+      "ref": "pkg:cargo/block-buffer@0.9.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/byteorder@1.5.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/bytes@1.12.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/cfg-if@1.0.4"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/cpufeatures@0.3.0",
+        "pkg:cargo/rand_core@0.10.1"
+      ],
+      "ref": "pkg:cargo/chacha20@0.10.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/iana-time-zone@0.1.65",
+        "pkg:cargo/num-traits@0.2.19",
+        "pkg:cargo/serde@1.0.228"
+      ],
+      "ref": "pkg:cargo/chrono@0.4.45"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/crypto-common@0.1.7",
+        "pkg:cargo/inout@0.1.4"
+      ],
+      "ref": "pkg:cargo/cipher@0.4.4"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/cmov@0.5.4"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/compression-core@0.4.32",
+        "pkg:cargo/flate2@1.1.9",
+        "pkg:cargo/memchr@2.8.2"
+      ],
+      "ref": "pkg:cargo/compression-codecs@0.4.38"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/compression-core@0.4.32"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/crossbeam-utils@0.8.21"
+      ],
+      "ref": "pkg:cargo/concurrent-queue@2.5.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/cpufeatures@0.2.17"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/cpufeatures@0.3.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/crc-catalog@2.5.0"
+      ],
+      "ref": "pkg:cargo/crc@3.4.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/crc-catalog@2.5.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4"
+      ],
+      "ref": "pkg:cargo/crc32fast@1.5.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/crossbeam-utils@0.8.21"
+      ],
+      "ref": "pkg:cargo/crossbeam-channel@0.5.15"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/crossbeam-epoch@0.9.18",
+        "pkg:cargo/crossbeam-utils@0.8.21"
+      ],
+      "ref": "pkg:cargo/crossbeam-deque@0.8.6"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/crossbeam-utils@0.8.21"
+      ],
+      "ref": "pkg:cargo/crossbeam-epoch@0.9.18"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/crossbeam-utils@0.8.21"
+      ],
+      "ref": "pkg:cargo/crossbeam-queue@0.3.12"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/crossbeam-utils@0.8.21"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/generic-array@0.14.7",
+        "pkg:cargo/typenum@1.20.1"
+      ],
+      "ref": "pkg:cargo/crypto-common@0.1.7"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/hybrid-array@0.4.13"
+      ],
+      "ref": "pkg:cargo/crypto-common@0.2.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/generic-array@0.14.7",
+        "pkg:cargo/subtle@2.6.1"
+      ],
+      "ref": "pkg:cargo/crypto-mac@0.10.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cmov@0.5.4"
+      ],
+      "ref": "pkg:cargo/ctutils@0.4.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/deranged@0.5.8"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/block-buffer@0.10.4",
+        "pkg:cargo/crypto-common@0.1.7",
+        "pkg:cargo/subtle@2.6.1"
+      ],
+      "ref": "pkg:cargo/digest@0.10.7"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/block-buffer@0.12.1",
+        "pkg:cargo/crypto-common@0.2.2",
+        "pkg:cargo/ctutils@0.4.2"
+      ],
+      "ref": "pkg:cargo/digest@0.11.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/generic-array@0.14.7"
+      ],
+      "ref": "pkg:cargo/digest@0.9.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/dotenvy@0.15.7"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/serde@1.0.228"
+      ],
+      "ref": "pkg:cargo/either@1.16.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/equivalent@1.0.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/libc@0.2.186"
+      ],
+      "ref": "pkg:cargo/errno@0.3.14"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/concurrent-queue@2.5.0",
+        "pkg:cargo/parking@2.2.1",
+        "pkg:cargo/pin-project-lite@0.2.17"
+      ],
+      "ref": "pkg:cargo/event-listener@5.4.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bitflags@2.13.0",
+        "pkg:cargo/ffmpeg-sys-next@8.1.0",
+        "pkg:cargo/libc@0.2.186"
+      ],
+      "ref": "pkg:cargo/ffmpeg-next@8.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/libc@0.2.186"
+      ],
+      "ref": "pkg:cargo/ffmpeg-sys-next@8.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/crc32fast@1.5.0",
+        "pkg:cargo/miniz_oxide@0.8.9"
+      ],
+      "ref": "pkg:cargo/flate2@1.1.9"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/futures-sink@0.3.32",
+        "pkg:cargo/spin@0.9.8"
+      ],
+      "ref": "pkg:cargo/flume@0.12.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/foldhash@0.2.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/percent-encoding@2.3.2"
+      ],
+      "ref": "pkg:cargo/form_urlencoded@1.2.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/futures-sink@0.3.32"
+      ],
+      "ref": "pkg:cargo/futures-channel@0.3.32"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/futures-core@0.3.32"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/futures-task@0.3.32",
+        "pkg:cargo/futures-util@0.3.32"
+      ],
+      "ref": "pkg:cargo/futures-executor@0.3.32"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/lock_api@0.4.14",
+        "pkg:cargo/parking_lot@0.12.5"
+      ],
+      "ref": "pkg:cargo/futures-intrusive@0.5.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/futures-io@0.3.32"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/futures-sink@0.3.32"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/futures-task@0.3.32"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/futures-io@0.3.32",
+        "pkg:cargo/futures-sink@0.3.32",
+        "pkg:cargo/futures-task@0.3.32",
+        "pkg:cargo/memchr@2.8.2",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/slab@0.4.12"
+      ],
+      "ref": "pkg:cargo/futures-util@0.3.32"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/typenum@1.20.1"
+      ],
+      "ref": "pkg:cargo/generic-array@0.14.7"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/libc@0.2.186"
+      ],
+      "ref": "pkg:cargo/getrandom@0.2.17"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/libc@0.2.186"
+      ],
+      "ref": "pkg:cargo/getrandom@0.3.4"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/libc@0.2.186",
+        "pkg:cargo/rand_core@0.10.1"
+      ],
+      "ref": "pkg:cargo/getrandom@0.4.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/allocator-api2@0.2.21",
+        "pkg:cargo/equivalent@1.0.2",
+        "pkg:cargo/foldhash@0.2.0"
+      ],
+      "ref": "pkg:cargo/hashbrown@0.16.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/hashbrown@0.17.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/hashbrown@0.16.1"
+      ],
+      "ref": "pkg:cargo/hashlink@0.11.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/hex@0.4.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/hmac@0.13.0"
+      ],
+      "ref": "pkg:cargo/hkdf@0.13.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/crypto-mac@0.10.0",
+        "pkg:cargo/digest@0.9.0"
+      ],
+      "ref": "pkg:cargo/hmac@0.10.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/digest@0.10.7"
+      ],
+      "ref": "pkg:cargo/hmac@0.12.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/digest@0.11.3"
+      ],
+      "ref": "pkg:cargo/hmac@0.13.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/itoa@1.0.18"
+      ],
+      "ref": "pkg:cargo/http@1.4.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/http@1.4.2"
+      ],
+      "ref": "pkg:cargo/http-body@1.0.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/http@1.4.2",
+        "pkg:cargo/http-body@1.0.1",
+        "pkg:cargo/pin-project-lite@0.2.17"
+      ],
+      "ref": "pkg:cargo/http-body-util@0.1.3"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/http-range-header@0.4.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/httparse@1.10.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/httpdate@1.0.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/typenum@1.20.1"
+      ],
+      "ref": "pkg:cargo/hybrid-array@0.4.13"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/atomic-waker@1.1.2",
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/futures-channel@0.3.32",
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/http@1.4.2",
+        "pkg:cargo/http-body@1.0.1",
+        "pkg:cargo/httparse@1.10.1",
+        "pkg:cargo/httpdate@1.0.3",
+        "pkg:cargo/itoa@1.0.18",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/smallvec@1.15.2",
+        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/want@0.3.1"
+      ],
+      "ref": "pkg:cargo/hyper@1.10.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/http@1.4.2",
+        "pkg:cargo/hyper@1.10.1",
+        "pkg:cargo/hyper-util@0.1.20",
+        "pkg:cargo/rustls@0.23.41",
+        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio-rustls@0.26.4",
+        "pkg:cargo/tower-service@0.3.3",
+        "pkg:cargo/webpki-roots@1.0.8"
+      ],
+      "ref": "pkg:cargo/hyper-rustls@0.27.9"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/base64@0.22.1",
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/futures-channel@0.3.32",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/http@1.4.2",
+        "pkg:cargo/http-body@1.0.1",
+        "pkg:cargo/hyper@1.10.1",
+        "pkg:cargo/ipnet@2.12.0",
+        "pkg:cargo/libc@0.2.186",
+        "pkg:cargo/percent-encoding@2.3.2",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/socket2@0.6.4",
+        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tower-service@0.3.3",
+        "pkg:cargo/tracing@0.1.44"
+      ],
+      "ref": "pkg:cargo/hyper-util@0.1.20"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/iana-time-zone@0.1.65"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/potential_utf@0.1.5",
+        "pkg:cargo/utf8_iter@1.0.4",
+        "pkg:cargo/yoke@0.8.3",
+        "pkg:cargo/zerofrom@0.1.8",
+        "pkg:cargo/zerovec@0.11.6"
+      ],
+      "ref": "pkg:cargo/icu_collections@2.2.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/litemap@0.8.2",
+        "pkg:cargo/tinystr@0.8.3",
+        "pkg:cargo/writeable@0.6.3",
+        "pkg:cargo/zerovec@0.11.6"
+      ],
+      "ref": "pkg:cargo/icu_locale_core@2.2.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/icu_collections@2.2.0",
+        "pkg:cargo/icu_normalizer_data@2.2.0",
+        "pkg:cargo/icu_properties@2.2.0",
+        "pkg:cargo/icu_provider@2.2.0",
+        "pkg:cargo/smallvec@1.15.2",
+        "pkg:cargo/zerovec@0.11.6"
+      ],
+      "ref": "pkg:cargo/icu_normalizer@2.2.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/icu_normalizer_data@2.2.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/icu_collections@2.2.0",
+        "pkg:cargo/icu_locale_core@2.2.0",
+        "pkg:cargo/icu_properties_data@2.2.0",
+        "pkg:cargo/icu_provider@2.2.0",
+        "pkg:cargo/zerotrie@0.2.4",
+        "pkg:cargo/zerovec@0.11.6"
+      ],
+      "ref": "pkg:cargo/icu_properties@2.2.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/icu_properties_data@2.2.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/icu_locale_core@2.2.0",
+        "pkg:cargo/writeable@0.6.3",
+        "pkg:cargo/yoke@0.8.3",
+        "pkg:cargo/zerofrom@0.1.8",
+        "pkg:cargo/zerotrie@0.2.4",
+        "pkg:cargo/zerovec@0.11.6"
+      ],
+      "ref": "pkg:cargo/icu_provider@2.2.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/idna_adapter@1.2.2",
+        "pkg:cargo/smallvec@1.15.2",
+        "pkg:cargo/utf8_iter@1.0.4"
+      ],
+      "ref": "pkg:cargo/idna@1.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/icu_normalizer@2.2.0",
+        "pkg:cargo/icu_properties@2.2.0"
+      ],
+      "ref": "pkg:cargo/idna_adapter@1.2.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/equivalent@1.0.2",
+        "pkg:cargo/hashbrown@0.17.1"
+      ],
+      "ref": "pkg:cargo/indexmap@2.14.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/generic-array@0.14.7"
+      ],
+      "ref": "pkg:cargo/inout@0.1.4"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/ipnet@2.12.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/itoa@1.0.18"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/lazy_static@1.5.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/libc@0.2.186"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/libsqlite3-sys@0.37.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/litemap@0.8.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/scopeguard@1.2.0"
+      ],
+      "ref": "pkg:cargo/lock_api@0.4.14"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/log@0.4.33"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/lru-slab@0.1.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/regex-automata@0.4.14"
+      ],
+      "ref": "pkg:cargo/matchers@0.2.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/matchit@0.7.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/digest@0.11.3"
+      ],
+      "ref": "pkg:cargo/md-5@0.11.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/memchr@2.8.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/mime@0.3.17"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/mime@0.3.17",
+        "pkg:cargo/unicase@2.9.0"
+      ],
+      "ref": "pkg:cargo/mime_guess@2.0.5"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/adler2@2.0.1",
+        "pkg:cargo/simd-adler32@0.3.9"
+      ],
+      "ref": "pkg:cargo/miniz_oxide@0.8.9"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/libc@0.2.186"
+      ],
+      "ref": "pkg:cargo/mio@1.2.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/nu-ansi-term@0.50.3"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/num-conv@0.2.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/num-traits@0.2.19"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/once_cell@1.21.4"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/opaque-debug@0.3.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/parking@2.2.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/lock_api@0.4.14",
+        "pkg:cargo/parking_lot_core@0.9.12"
+      ],
+      "ref": "pkg:cargo/parking_lot@0.12.5"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/libc@0.2.186",
+        "pkg:cargo/smallvec@1.15.2"
+      ],
+      "ref": "pkg:cargo/parking_lot_core@0.9.12"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/base64ct@1.8.3",
+        "pkg:cargo/rand_core@0.6.4",
+        "pkg:cargo/subtle@2.6.1"
+      ],
+      "ref": "pkg:cargo/password-hash@0.5.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/digest@0.10.7",
+        "pkg:cargo/hmac@0.12.1"
+      ],
+      "ref": "pkg:cargo/pbkdf2@0.12.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/percent-encoding@2.3.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/pin-project-lite@0.2.17"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/zerovec@0.11.6"
+      ],
+      "ref": "pkg:cargo/potential_utf@0.1.5"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/powerfmt@0.2.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/zerocopy@0.8.52"
+      ],
+      "ref": "pkg:cargo/ppv-lite86@0.2.21"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/quinn-proto@0.11.15",
+        "pkg:cargo/quinn-udp@0.5.14",
+        "pkg:cargo/rustc-hash@2.1.2",
+        "pkg:cargo/rustls@0.23.41",
+        "pkg:cargo/socket2@0.6.4",
+        "pkg:cargo/thiserror@2.0.18",
+        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tracing@0.1.44"
+      ],
+      "ref": "pkg:cargo/quinn@0.11.11"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/lru-slab@0.1.2",
+        "pkg:cargo/rand@0.9.4",
+        "pkg:cargo/ring@0.17.14",
+        "pkg:cargo/rustc-hash@2.1.2",
+        "pkg:cargo/rustls@0.23.41",
+        "pkg:cargo/slab@0.4.12",
+        "pkg:cargo/thiserror@2.0.18",
+        "pkg:cargo/tinyvec@1.11.0",
+        "pkg:cargo/tracing@0.1.44"
+      ],
+      "ref": "pkg:cargo/quinn-proto@0.11.15"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/libc@0.2.186",
+        "pkg:cargo/socket2@0.6.4",
+        "pkg:cargo/tracing@0.1.44"
+      ],
+      "ref": "pkg:cargo/quinn-udp@0.5.14"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/chacha20@0.10.1",
+        "pkg:cargo/getrandom@0.4.3",
+        "pkg:cargo/rand_core@0.10.1"
+      ],
+      "ref": "pkg:cargo/rand@0.10.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/libc@0.2.186",
+        "pkg:cargo/rand_chacha@0.3.1",
+        "pkg:cargo/rand_core@0.6.4"
+      ],
+      "ref": "pkg:cargo/rand@0.8.6"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/rand_chacha@0.9.0",
+        "pkg:cargo/rand_core@0.9.5"
+      ],
+      "ref": "pkg:cargo/rand@0.9.4"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/ppv-lite86@0.2.21",
+        "pkg:cargo/rand_core@0.6.4"
+      ],
+      "ref": "pkg:cargo/rand_chacha@0.3.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/ppv-lite86@0.2.21",
+        "pkg:cargo/rand_core@0.9.5"
+      ],
+      "ref": "pkg:cargo/rand_chacha@0.9.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/rand_core@0.10.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/getrandom@0.2.17"
+      ],
+      "ref": "pkg:cargo/rand_core@0.6.4"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/getrandom@0.3.4"
+      ],
+      "ref": "pkg:cargo/rand_core@0.9.5"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/either@1.16.0",
+        "pkg:cargo/rayon-core@1.13.0"
+      ],
+      "ref": "pkg:cargo/rayon@1.12.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/crossbeam-deque@0.8.6",
+        "pkg:cargo/crossbeam-utils@0.8.21"
+      ],
+      "ref": "pkg:cargo/rayon-core@1.13.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/aho-corasick@1.1.4",
+        "pkg:cargo/memchr@2.8.2",
+        "pkg:cargo/regex-syntax@0.8.11"
+      ],
+      "ref": "pkg:cargo/regex-automata@0.4.14"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/regex-syntax@0.8.11"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/base64@0.22.1",
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/http@1.4.2",
+        "pkg:cargo/http-body@1.0.1",
+        "pkg:cargo/http-body-util@0.1.3",
+        "pkg:cargo/hyper@1.10.1",
+        "pkg:cargo/hyper-rustls@0.27.9",
+        "pkg:cargo/hyper-util@0.1.20",
+        "pkg:cargo/log@0.4.33",
+        "pkg:cargo/percent-encoding@2.3.2",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/quinn@0.11.11",
+        "pkg:cargo/rustls@0.23.41",
+        "pkg:cargo/rustls-pki-types@1.14.1",
+        "pkg:cargo/serde@1.0.228",
+        "pkg:cargo/serde_urlencoded@0.7.1",
+        "pkg:cargo/sync_wrapper@1.0.2",
+        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio-rustls@0.26.4",
+        "pkg:cargo/tokio-util@0.7.18",
+        "pkg:cargo/tower@0.5.3",
+        "pkg:cargo/tower-http@0.6.11",
+        "pkg:cargo/tower-service@0.3.3",
+        "pkg:cargo/url@2.5.8",
+        "pkg:cargo/webpki-roots@1.0.8"
+      ],
+      "ref": "pkg:cargo/reqwest@0.12.28"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/getrandom@0.2.17",
+        "pkg:cargo/untrusted@0.9.0"
+      ],
+      "ref": "pkg:cargo/ring@0.17.14"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/byteorder@1.5.0",
+        "pkg:cargo/thiserror@1.0.69"
+      ],
+      "ref": "pkg:cargo/rml_amf0@0.3.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/byteorder@1.5.0",
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/hmac@0.10.1",
+        "pkg:cargo/rand@0.8.6",
+        "pkg:cargo/rml_amf0@0.3.0",
+        "pkg:cargo/sha2@0.9.9",
+        "pkg:cargo/thiserror@1.0.69"
+      ],
+      "ref": "pkg:cargo/rml_rtmp@0.8.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/rust-embed-utils@8.11.0",
+        "pkg:cargo/walkdir@2.5.0"
+      ],
+      "ref": "pkg:cargo/rust-embed@8.11.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/sha2@0.10.9",
+        "pkg:cargo/walkdir@2.5.0"
+      ],
+      "ref": "pkg:cargo/rust-embed-utils@8.11.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/rustc-hash@2.1.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/log@0.4.33",
+        "pkg:cargo/once_cell@1.21.4",
+        "pkg:cargo/ring@0.17.14",
+        "pkg:cargo/rustls-pki-types@1.14.1",
+        "pkg:cargo/rustls-webpki@0.103.13",
+        "pkg:cargo/subtle@2.6.1",
+        "pkg:cargo/zeroize@1.9.0"
+      ],
+      "ref": "pkg:cargo/rustls@0.23.41"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/zeroize@1.9.0"
+      ],
+      "ref": "pkg:cargo/rustls-pki-types@1.14.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/ring@0.17.14",
+        "pkg:cargo/rustls-pki-types@1.14.1",
+        "pkg:cargo/untrusted@0.9.0"
+      ],
+      "ref": "pkg:cargo/rustls-webpki@0.103.13"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/ryu@1.0.23"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cipher@0.4.4"
+      ],
+      "ref": "pkg:cargo/salsa20@0.10.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/same-file@1.0.6"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/scopeguard@1.2.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/password-hash@0.5.0",
+        "pkg:cargo/pbkdf2@0.12.2",
+        "pkg:cargo/salsa20@0.10.2",
+        "pkg:cargo/sha2@0.10.9"
+      ],
+      "ref": "pkg:cargo/scrypt@0.11.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/serde_core@1.0.228"
+      ],
+      "ref": "pkg:cargo/serde@1.0.228"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/serde_core@1.0.228"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/itoa@1.0.18",
+        "pkg:cargo/memchr@2.8.2",
+        "pkg:cargo/serde_core@1.0.228",
+        "pkg:cargo/zmij@1.0.21"
+      ],
+      "ref": "pkg:cargo/serde_json@1.0.150"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/itoa@1.0.18",
+        "pkg:cargo/serde_core@1.0.228"
+      ],
+      "ref": "pkg:cargo/serde_path_to_error@0.1.20"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/form_urlencoded@1.2.2",
+        "pkg:cargo/itoa@1.0.18",
+        "pkg:cargo/ryu@1.0.23",
+        "pkg:cargo/serde@1.0.228"
+      ],
+      "ref": "pkg:cargo/serde_urlencoded@0.7.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/cpufeatures@0.3.0",
+        "pkg:cargo/digest@0.11.3"
+      ],
+      "ref": "pkg:cargo/sha1@0.11.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/cpufeatures@0.2.17",
+        "pkg:cargo/digest@0.10.7"
+      ],
+      "ref": "pkg:cargo/sha2@0.10.9"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/cpufeatures@0.3.0",
+        "pkg:cargo/digest@0.11.3"
+      ],
+      "ref": "pkg:cargo/sha2@0.11.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/block-buffer@0.9.0",
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/cpufeatures@0.2.17",
+        "pkg:cargo/digest@0.9.0",
+        "pkg:cargo/opaque-debug@0.3.1"
+      ],
+      "ref": "pkg:cargo/sha2@0.9.9"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/lazy_static@1.5.0"
+      ],
+      "ref": "pkg:cargo/sharded-slab@0.1.7"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/shiguredo_mp4@2026.3.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/errno@0.3.14",
+        "pkg:cargo/libc@0.2.186"
+      ],
+      "ref": "pkg:cargo/signal-hook-registry@1.4.8"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/simd-adler32@0.3.9"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/slab@0.4.12"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/serde@1.0.228"
+      ],
+      "ref": "pkg:cargo/smallvec@1.15.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/libc@0.2.186"
+      ],
+      "ref": "pkg:cargo/socket2@0.6.4"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/lock_api@0.4.14"
+      ],
+      "ref": "pkg:cargo/spin@0.9.8"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/sqlx-core@0.9.0",
+        "pkg:cargo/sqlx-mysql@0.9.0",
+        "pkg:cargo/sqlx-postgres@0.9.0",
+        "pkg:cargo/sqlx-sqlite@0.9.0"
+      ],
+      "ref": "pkg:cargo/sqlx@0.9.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/base64@0.22.1",
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/crc@3.4.0",
+        "pkg:cargo/crossbeam-queue@0.3.12",
+        "pkg:cargo/either@1.16.0",
+        "pkg:cargo/event-listener@5.4.1",
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/futures-intrusive@0.5.0",
+        "pkg:cargo/futures-io@0.3.32",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/hashbrown@0.16.1",
+        "pkg:cargo/hashlink@0.11.1",
+        "pkg:cargo/indexmap@2.14.0",
+        "pkg:cargo/log@0.4.33",
+        "pkg:cargo/memchr@2.8.2",
+        "pkg:cargo/percent-encoding@2.3.2",
+        "pkg:cargo/serde@1.0.228",
+        "pkg:cargo/serde_json@1.0.150",
+        "pkg:cargo/sha2@0.10.9",
+        "pkg:cargo/smallvec@1.15.2",
+        "pkg:cargo/thiserror@2.0.18",
+        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio-stream@0.1.18",
+        "pkg:cargo/tracing@0.1.44",
+        "pkg:cargo/url@2.5.8"
+      ],
+      "ref": "pkg:cargo/sqlx-core@0.9.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bitflags@2.13.0",
+        "pkg:cargo/byteorder@1.5.0",
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/digest@0.11.3",
+        "pkg:cargo/dotenvy@0.15.7",
+        "pkg:cargo/either@1.16.0",
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/generic-array@0.14.7",
+        "pkg:cargo/log@0.4.33",
+        "pkg:cargo/percent-encoding@2.3.2",
+        "pkg:cargo/serde@1.0.228",
+        "pkg:cargo/sha1@0.11.0",
+        "pkg:cargo/sha2@0.11.0",
+        "pkg:cargo/sqlx-core@0.9.0",
+        "pkg:cargo/thiserror@2.0.18",
+        "pkg:cargo/tracing@0.1.44"
+      ],
+      "ref": "pkg:cargo/sqlx-mysql@0.9.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/atoi@2.0.0",
+        "pkg:cargo/base64@0.22.1",
+        "pkg:cargo/bitflags@2.13.0",
+        "pkg:cargo/byteorder@1.5.0",
+        "pkg:cargo/dotenvy@0.15.7",
+        "pkg:cargo/futures-channel@0.3.32",
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/hex@0.4.3",
+        "pkg:cargo/hkdf@0.13.0",
+        "pkg:cargo/hmac@0.13.0",
+        "pkg:cargo/itoa@1.0.18",
+        "pkg:cargo/log@0.4.33",
+        "pkg:cargo/md-5@0.11.0",
+        "pkg:cargo/memchr@2.8.2",
+        "pkg:cargo/rand@0.10.1",
+        "pkg:cargo/serde@1.0.228",
+        "pkg:cargo/serde_json@1.0.150",
+        "pkg:cargo/sha2@0.11.0",
+        "pkg:cargo/smallvec@1.15.2",
+        "pkg:cargo/sqlx-core@0.9.0",
+        "pkg:cargo/stringprep@0.1.5",
+        "pkg:cargo/thiserror@2.0.18",
+        "pkg:cargo/tracing@0.1.44",
+        "pkg:cargo/whoami@2.1.2"
+      ],
+      "ref": "pkg:cargo/sqlx-postgres@0.9.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/atoi@2.0.0",
+        "pkg:cargo/flume@0.12.0",
+        "pkg:cargo/form_urlencoded@1.2.2",
+        "pkg:cargo/futures-channel@0.3.32",
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/futures-executor@0.3.32",
+        "pkg:cargo/futures-intrusive@0.5.0",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/libsqlite3-sys@0.37.0",
+        "pkg:cargo/log@0.4.33",
+        "pkg:cargo/percent-encoding@2.3.2",
+        "pkg:cargo/serde@1.0.228",
+        "pkg:cargo/sqlx-core@0.9.0",
+        "pkg:cargo/thiserror@2.0.18",
+        "pkg:cargo/tracing@0.1.44",
+        "pkg:cargo/url@2.5.8"
+      ],
+      "ref": "pkg:cargo/sqlx-sqlite@0.9.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/stable_deref_trait@1.2.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/unicode-bidi@0.3.18",
+        "pkg:cargo/unicode-normalization@0.1.25",
+        "pkg:cargo/unicode-properties@0.1.4"
+      ],
+      "ref": "pkg:cargo/stringprep@0.1.5"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/subtle@2.6.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/symlink@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/futures-core@0.3.32"
+      ],
+      "ref": "pkg:cargo/sync_wrapper@1.0.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/libc@0.2.186",
+        "pkg:cargo/once_cell@1.21.4",
+        "pkg:cargo/rayon@1.12.0"
+      ],
+      "ref": "pkg:cargo/sysinfo@0.30.13"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/thiserror@1.0.69"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/thiserror@2.0.18"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4"
+      ],
+      "ref": "pkg:cargo/thread_local@1.1.9"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/deranged@0.5.8",
+        "pkg:cargo/num-conv@0.2.2",
+        "pkg:cargo/powerfmt@0.2.0",
+        "pkg:cargo/serde_core@1.0.228",
+        "pkg:cargo/time-core@0.1.9"
+      ],
+      "ref": "pkg:cargo/time@0.3.51"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/time-core@0.1.9"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/zerovec@0.11.6"
+      ],
+      "ref": "pkg:cargo/tinystr@0.8.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/tinyvec_macros@0.1.1"
+      ],
+      "ref": "pkg:cargo/tinyvec@1.11.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/tinyvec_macros@0.1.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/libc@0.2.186",
+        "pkg:cargo/mio@1.2.1",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/signal-hook-registry@1.4.8",
+        "pkg:cargo/socket2@0.6.4"
+      ],
+      "ref": "pkg:cargo/tokio@1.52.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/rustls@0.23.41",
+        "pkg:cargo/tokio@1.52.3"
+      ],
+      "ref": "pkg:cargo/tokio-rustls@0.26.4"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/tokio@1.52.3"
+      ],
+      "ref": "pkg:cargo/tokio-stream@0.1.18"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/futures-sink@0.3.32",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/tokio@1.52.3"
+      ],
+      "ref": "pkg:cargo/tokio-util@0.7.18"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/sync_wrapper@1.0.2",
+        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tower-layer@0.3.3",
+        "pkg:cargo/tower-service@0.3.3",
+        "pkg:cargo/tracing@0.1.44"
+      ],
+      "ref": "pkg:cargo/tower@0.5.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/async-compression@0.4.42",
+        "pkg:cargo/bitflags@2.13.0",
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/futures-core@0.3.32",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/http@1.4.2",
+        "pkg:cargo/http-body@1.0.1",
+        "pkg:cargo/http-body-util@0.1.3",
+        "pkg:cargo/http-range-header@0.4.2",
+        "pkg:cargo/httpdate@1.0.3",
+        "pkg:cargo/mime@0.3.17",
+        "pkg:cargo/mime_guess@2.0.5",
+        "pkg:cargo/percent-encoding@2.3.2",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio-util@0.7.18",
+        "pkg:cargo/tower-layer@0.3.3",
+        "pkg:cargo/tower-service@0.3.3",
+        "pkg:cargo/tracing@0.1.44"
+      ],
+      "ref": "pkg:cargo/tower-http@0.5.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bitflags@2.13.0",
+        "pkg:cargo/bytes@1.12.0",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/http@1.4.2",
+        "pkg:cargo/http-body@1.0.1",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/tower@0.5.3",
+        "pkg:cargo/tower-layer@0.3.3",
+        "pkg:cargo/tower-service@0.3.3",
+        "pkg:cargo/url@2.5.8"
+      ],
+      "ref": "pkg:cargo/tower-http@0.6.11"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/tower-layer@0.3.3"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/tower-service@0.3.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/log@0.4.33",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/tracing-core@0.1.36"
+      ],
+      "ref": "pkg:cargo/tracing@0.1.44"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/crossbeam-channel@0.5.15",
+        "pkg:cargo/symlink@0.1.0",
+        "pkg:cargo/thiserror@2.0.18",
+        "pkg:cargo/time@0.3.51",
+        "pkg:cargo/tracing-subscriber@0.3.23"
+      ],
+      "ref": "pkg:cargo/tracing-appender@0.2.5"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/once_cell@1.21.4"
+      ],
+      "ref": "pkg:cargo/tracing-core@0.1.36"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/log@0.4.33",
+        "pkg:cargo/once_cell@1.21.4",
+        "pkg:cargo/tracing-core@0.1.36"
+      ],
+      "ref": "pkg:cargo/tracing-log@0.2.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/serde@1.0.228",
+        "pkg:cargo/tracing-core@0.1.36"
+      ],
+      "ref": "pkg:cargo/tracing-serde@0.2.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/matchers@0.2.0",
+        "pkg:cargo/nu-ansi-term@0.50.3",
+        "pkg:cargo/once_cell@1.21.4",
+        "pkg:cargo/regex-automata@0.4.14",
+        "pkg:cargo/serde@1.0.228",
+        "pkg:cargo/serde_json@1.0.150",
+        "pkg:cargo/sharded-slab@0.1.7",
+        "pkg:cargo/smallvec@1.15.2",
+        "pkg:cargo/thread_local@1.1.9",
+        "pkg:cargo/tracing@0.1.44",
+        "pkg:cargo/tracing-core@0.1.36",
+        "pkg:cargo/tracing-log@0.2.0",
+        "pkg:cargo/tracing-serde@0.2.0"
+      ],
+      "ref": "pkg:cargo/tracing-subscriber@0.3.23"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/try-lock@0.2.5"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/typenum@1.20.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/unicase@2.9.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/unicode-bidi@0.3.18"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/tinyvec@1.11.0"
+      ],
+      "ref": "pkg:cargo/unicode-normalization@0.1.25"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/unicode-properties@0.1.4"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/untrusted@0.9.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/form_urlencoded@1.2.2",
+        "pkg:cargo/idna@1.1.0",
+        "pkg:cargo/percent-encoding@2.3.2",
+        "pkg:cargo/serde@1.0.228"
+      ],
+      "ref": "pkg:cargo/url@2.5.8"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/utf8_iter@1.0.4"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/same-file@1.0.6"
+      ],
+      "ref": "pkg:cargo/walkdir@2.5.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/try-lock@0.2.5"
+      ],
+      "ref": "pkg:cargo/want@0.3.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/rustls-pki-types@1.14.1"
+      ],
+      "ref": "pkg:cargo/webpki-roots@1.0.8"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/whoami@2.1.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/writeable@0.6.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/stable_deref_trait@1.2.1",
+        "pkg:cargo/zerofrom@0.1.8"
+      ],
+      "ref": "pkg:cargo/yoke@0.8.3"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/zerocopy@0.8.52"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/zerofrom@0.1.8"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/zeroize@1.9.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/yoke@0.8.3",
+        "pkg:cargo/zerofrom@0.1.8"
+      ],
+      "ref": "pkg:cargo/zerotrie@0.2.4"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/yoke@0.8.3",
+        "pkg:cargo/zerofrom@0.1.8"
+      ],
+      "ref": "pkg:cargo/zerovec@0.11.6"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/zmij@1.0.21"
     }
   ],
   "metadata": {
@@ -7823,11 +11000,11 @@
       "properties": [
         {
           "name": "restream:gitCommit",
-          "value": "2c9d4964adcb570c2abd58b6791a624beaead3c3"
+          "value": "e7fc55c288a689907ce6a2279f3cbf5efab16543"
         },
         {
           "name": "restream:nativeBuildId",
-          "value": "5c0ed6c7b94f3e194229b3e538b125ef932ffe6760f7c0938b1cb96bf61f0076"
+          "value": "73765ce8948ebff28e85fdd11b491d54b4e96c6468a016360fd1110af2ef12f0"
         },
         {
           "name": "restream:licenseFile",
@@ -7849,14 +11026,14 @@
       },
       {
         "name": "restream:gitCommit",
-        "value": "2c9d4964adcb570c2abd58b6791a624beaead3c3"
+        "value": "e7fc55c288a689907ce6a2279f3cbf5efab16543"
       },
       {
         "name": "restream:nativeBuildId",
-        "value": "5c0ed6c7b94f3e194229b3e538b125ef932ffe6760f7c0938b1cb96bf61f0076"
+        "value": "73765ce8948ebff28e85fdd11b491d54b4e96c6468a016360fd1110af2ef12f0"
       }
     ],
-    "timestamp": "2026-07-11T12:04:02+05:30",
+    "timestamp": "2026-07-11T16:14:40+05:30",
     "tools": {
       "components": [
         {

@@ -252,7 +252,7 @@ async fn run() -> Result<(), String> {
 async fn api_smoke() -> Result<Value, String> {
     let work_dir = std::env::var_os("WORK_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("test/artifacts/api-smoke"));
+        .unwrap_or_else(|| PathBuf::from(".local/artifacts/api-smoke"));
     std::fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
 
     let restream_bin = default_restream_bin();

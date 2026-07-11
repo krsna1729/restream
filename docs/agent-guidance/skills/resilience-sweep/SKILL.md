@@ -19,7 +19,7 @@ hundreds of times per event. One invocation proves or fixes one failure path.
 2. **Lifecycle unit tests** — teardown, cancellation, double-close, late
    reader, re-publish while draining; assert operator-visible status.
 3. **Live harness fault modes** (build harness first, run under
-   `scripts/resource-limit`, private netns by default):
+   `scripts/build/resource-limit.sh`, private netns by default):
    - `fault.resilience` — general fault isolation
    - `fault.egress-retry` — egress destination failure/retry
    - `fault.output-stall` — stalled output handling
@@ -42,7 +42,7 @@ hundreds of times per event. One invocation proves or fixes one failure path.
    assertion and the operator-visible status contract in the same change
    (`tests/api.rs`, `docs/api-reference.md`, `docs/observability.md`).
 5. Gates: the new test, scoped `cargo test`, plus
-   `bash ./scripts/check-concurrency-proof-fast.sh` if lifecycle/cancellation
+   `bash ./scripts/check/concurrency/fast.sh` if lifecycle/cancellation
    was touched, plus the relevant harness fault mode if the change is about
    live behavior.
 

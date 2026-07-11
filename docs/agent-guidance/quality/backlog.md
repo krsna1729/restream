@@ -18,7 +18,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   `src/media/` modules.
 - Files: none modified (measurement only); output lands in
   `docs/agent-guidance/quality/journal.md` + new backlog items.
-- Gates: `scripts/resource-limit cargo llvm-cov --summary-only` completes
+- Gates: `scripts/build/resource-limit.sh cargo llvm-cov --summary-only` completes
   clean (kill-check media processes first; this is a heavy build).
 - Context: cargo-llvm-cov is installed. The stale root `coverage.lcov` is from
   2026-06-24 and gitignored; a fresh map is the seed for invariant-coverage
@@ -43,7 +43,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   `high_performance_data_path` recorded in `baselines.md` with date, commit,
   and noise notes.
 - Files: `docs/agent-guidance/quality/baselines.md`.
-- Gates: three clean serial `scripts/resource-limit cargo bench --bench <name>`
+- Gates: three clean serial `scripts/build/resource-limit.sh cargo bench --bench <name>`
   runs on an otherwise idle host (`pgrep -x restream/mediamtx/ffmpeg` all
   empty).
 - Context: Criterion state in `target/criterion/` is scratch; the ledger is
@@ -66,8 +66,8 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   `fault.output-stall`, and `recovery` recorded in the journal; any failure or
   flake filed as its own item with output attached.
 - Files: none modified (measurement only).
-- Gates: `scripts/resource-limit cargo build --bin test_harness` then each
-  mode via `scripts/resource-limit target/debug/test_harness <mode>`,
+- Gates: `scripts/build/resource-limit.sh cargo build --bin test_harness` then each
+  mode via `scripts/build/resource-limit.sh target/debug/test_harness <mode>`,
   serially, idle host.
 - Context: these modes are the live resilience contract; the loop needs a
   known-green baseline before it can treat a failure as a regression signal.
@@ -78,8 +78,8 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   `resource-sweep` harness run recorded in `baselines.md` next to the
   historical 2026-06-27 numbers.
 - Files: `docs/agent-guidance/quality/baselines.md`.
-- Gates: `scripts/build-bench-harness.sh` then
-  `scripts/resource-limit target/bench/test_harness resource-sweep`, serial,
+- Gates: `scripts/build/bench-harness.sh` then
+  `scripts/build/resource-limit.sh target/bench/test_harness resource-sweep`, serial,
   idle host.
 - Context: the 2026-06-27 memory-optimization pass cut ~205 MB RSS across 15
   scale cases; without a refreshed baseline, regressions of that work are
@@ -88,8 +88,8 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 
 ### Q-007 [groom] [sonnet] Diff concurrency-proof coverage doc against the fast gate
 - Goal: every rule claimed in `docs/concurrency-proof-coverage-2026-07-02.md`
-  mapped to its enforcement in `scripts/check-concurrency-proof-fast.sh` /
-  `scripts/check-concurrency-contract.sh`; uncovered rules filed as
+  mapped to its enforcement in `scripts/check/concurrency/fast.sh` /
+  `scripts/check/concurrency/contract.sh`; uncovered rules filed as
   `[proof]` items (tier per rule complexity).
 - Files: read-only; output to backlog + journal.
 - Gates: none (grooming).
@@ -103,7 +103,7 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   to reflect reality.
 - Files: per the roadmap step; plus `docs/layering-roadmap.md`.
 - Gates: scoped `cargo test` for the touched area;
-  `./scripts/check-api-contract.sh` if contract surface moved; standard
+  `./scripts/check/api-contract.sh` if contract surface moved; standard
   quality-loop gates.
 - Context: known cross-layer flows still open: planner→media backend parsing,
   runtime core emitting API-shaped JSON, protocol handlers reading raw SQL

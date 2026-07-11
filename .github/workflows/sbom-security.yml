@@ -29,12 +29,12 @@ jobs:
         id: cache-static-prefix
         uses: actions/cache@v4
         with:
-          path: .build/static/prefix
-          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup-static-build.sh', 'scripts/build-static.sh', 'scripts/build-native.sh') }}
+          path: .local/build/static/prefix
+          key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh') }}
 
       - name: Build static prefix
         if: steps.cache-static-prefix.outputs.cache-hit != 'true'
-        run: scripts/resource-limit ./scripts/setup-static-build.sh
+        run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
 
       - name: Restore cargo cache
         uses: actions/cache@v4
@@ -48,7 +48,7 @@ jobs:
           restore-keys: sbom-${{ runner.os }}-
 
       - name: Build binary
-        run: scripts/resource-limit cargo build --profile bench
+        run: scripts/build/resource-limit.sh cargo build --profile bench
 
       - name: Generate SBOM from runtime code path
         run: |

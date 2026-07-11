@@ -5,19 +5,19 @@
 Run the repo gate:
 
 ```sh
-./scripts/check-test-hygiene.sh
+./scripts/check/test-hygiene.sh
 ```
 
 For fixture-first media discipline:
 
 ```sh
-./scripts/check-fixture-discipline.sh
+./scripts/check/fixture-discipline.sh
 ```
 
 For a plain full-suite run without the hygiene scan:
 
 ```sh
-scripts/resource-limit cargo test
+scripts/build/resource-limit.sh cargo test
 ```
 
 Keep successful logs quiet. New tests should not land with compiler warnings,
@@ -30,7 +30,7 @@ Frontend confidence is intentionally split between TypeScript ownership and
 compiled-bundle smoke coverage:
 
 - `npm run test:frontend` runs the Node-based frontend suites from a temporary
-  sourcemapped build of `public/ts/**`, then finishes with a smaller smoke pass
+  sourcemapped build of `web/ts/**`, then finishes with a smaller smoke pass
   against the shipped `public/js/**` bundle.
 - `npm run test:frontend:coverage` keeps the same split, but reports coverage
   back onto the deterministic TypeScript modules that the Node/fake-DOM suite
@@ -64,14 +64,14 @@ lower layer cannot prove the behavior.
 
 For the native fMP4 preview path specifically:
 
-- `scripts/resource-limit cargo test hls_fmp4 -- --nocapture` covers the unit,
+- `scripts/build/resource-limit.sh cargo test hls_fmp4 -- --nocapture` covers the unit,
   proptest, and loom-backed correctness checks for rendition publication and
   sample timestamp packaging.
-- `scripts/resource-limit cargo bench --profile bench --bench hls_fmp4_cost`
+- `scripts/build/resource-limit.sh cargo bench --profile bench --bench hls_fmp4_cost`
   measures fMP4 segment muxing plus the multi-rendition in-memory publication
   path used by browser preview.
 - `npm run test:frontend:browser-dom` keeps the preview audio-track picker
-  behavior deterministic, and `npx playwright test test/hls-player.spec.ts`
+  behavior deterministic, and `npx playwright test test/frontend/hls-player.spec.ts`
   proves the full browser flow against the running app, including real video
   load and alternate-audio selection.
 
@@ -81,11 +81,11 @@ When a dashboard surface starts accumulating too many manual "click every state"
 checks, add a fake-DOM scenario matrix instead of growing Playwright coverage
 for every badge and branch.
 
-- Use `test/helpers/ui-scenario-harness.mjs` to mount the minimum DOM, load the
+- Use `test/support/helpers/ui-scenario-harness.mjs` to mount the minimum DOM, load the
   compiled frontend module, and run a named state matrix under `npm run test:frontend`.
 - Current examples:
-  `test/frontend-output-scenarios.test.mjs` and
-  `test/frontend-pipeline-info-scenarios.test.mjs`.
+  `test/frontend/frontend-output-scenarios.test.mjs` and
+  `test/frontend/frontend-pipeline-info-scenarios.test.mjs`.
 - Feed renderers a bounded set of important states such as healthy, retrying,
   flapping, stalled, stopped, long text, and missing optional metadata.
 - Assert operator-visible structure and state: the right action label,
@@ -100,7 +100,7 @@ As of June 29, 2026 `cargo test -- --list` enumerates 621 tests across unit,
 integration, harness, and doctest targets.
 
 Checked-in fixture contracts now cover the committed benchmark/test media under
-`test/fixtures/`, so the transcoder and fixture-dependent suites no longer rely
+`test/fixtures/transport/`, so the transcoder and fixture-dependent suites no longer rely
 on ad-hoc local artifacts. Tests, benches, and harness publishers should resolve
 those assets through `src/test_fixtures.rs` so missing files fail loudly and new
 fixtures are added to one explicit contract.
@@ -108,7 +108,7 @@ fixtures are added to one explicit contract.
 Historical architecture-regression artifacts are indexed in
 [`regression-artifacts.md`](regression-artifacts.md). The index maps each known
 failure class to its durable fixture, harness replay command, generated-artifact
-location, or proof gate; generated `test/artifacts/` run directories remain
+location, or proof gate; generated `.local/artifacts/` run directories remain
 uncommitted.
 
 ## Parallelism Policy
@@ -116,7 +116,7 @@ uncommitted.
 Keep correctness throughput high, but treat measurement fidelity as a separate
 constraint.
 
-- Rust unit and integration tests: prefer a single `scripts/resource-limit cargo test ...`
+- Rust unit and integration tests: prefer a single `scripts/build/resource-limit.sh cargo test ...`
   invocation and let Cargo own compile and test-thread parallelism. Avoid
   launching multiple heavy `cargo test` commands against the same worktree at
   once; that just trades useful concurrency for lock contention and noisier logs.
@@ -127,7 +127,7 @@ constraint.
   CPU, RSS, and throughput numbers are only comparable when the harness runs one
   measurement slice at a time from `target/bench/`.
 - Criterion benches: parallelize compilation and fixture preparation, not timed
-  measurement. `scripts/resource-limit cargo bench --no-run` is the safe fan-out
+  measurement. `scripts/build/resource-limit.sh cargo bench --no-run` is the safe fan-out
   step; actual `cargo bench --bench ...` execution should stay serial unless the
   runs are explicitly resource-isolated.
 
@@ -140,18 +140,18 @@ developer loops fast while still making the verification signal precise.
 Good scoped Rust patterns:
 
 ```sh
-scripts/resource-limit cargo test --lib <test-name-or-module-filter>
-scripts/resource-limit cargo test --test api <test-name-filter>
-scripts/resource-limit cargo test --test transcoder <test-name-filter>
+scripts/build/resource-limit.sh cargo test --lib <test-name-or-module-filter>
+scripts/build/resource-limit.sh cargo test --test api <test-name-filter>
+scripts/build/resource-limit.sh cargo test --test transcoder <test-name-filter>
 ```
 
 Good scoped benchmark patterns:
 
 ```sh
-scripts/resource-limit cargo bench --bench <bench-name> -- <criterion-filter>
-scripts/resource-limit cargo bench --bench high_performance_data_path -- data_path/egress_progress
-scripts/resource-limit cargo bench --bench srt_ingest_latency -- 'srt_(ingest|egress)'
-scripts/resource-limit cargo bench --bench hls_fmp4_cost -- hls_fmp4_cost
+scripts/build/resource-limit.sh cargo bench --bench <bench-name> -- <criterion-filter>
+scripts/build/resource-limit.sh cargo bench --bench high_performance_data_path -- data_path/egress_progress
+scripts/build/resource-limit.sh cargo bench --bench srt_ingest_latency -- 'srt_(ingest|egress)'
+scripts/build/resource-limit.sh cargo bench --bench hls_fmp4_cost -- hls_fmp4_cost
 ```
 
 The SRT bench is a socket-pair microbenchmark, not a live pipeline test. It is
@@ -442,10 +442,10 @@ the live integration harness which is not captured by `llvm-cov`.
 All live integration tests are unified under one entry point:
 
 ```sh
-scripts/resource-limit target/debug/test_harness [--no-netns] <mode>
+scripts/build/resource-limit.sh target/debug/test_harness [--no-netns] <mode>
 ```
 
-`scripts/resource-limit` only constrains build/test command parallelism. It
+`scripts/build/resource-limit.sh` only constrains build/test command parallelism. It
 does not sandbox runtime CPU or memory for `restream`, MediaMTX, or FFmpeg
 children once the harness process starts.
 
@@ -460,7 +460,7 @@ namespace wrapper is unavailable or constrained.
 For concurrency-sensitive changes, run the focused proof gate first:
 
 ```sh
-bash ./scripts/check-concurrency-proof-fast.sh
+bash ./scripts/check/concurrency/fast.sh
 ```
 
 The current model/property/unit proof inventory is tracked in
@@ -471,11 +471,11 @@ resource-constrained environment, then run the full gate before broad sign-off.
 Then run the full live contract gate:
 
 ```sh
-bash ./scripts/check-concurrency-contract.sh
+bash ./scripts/check/concurrency/contract.sh
 ```
 
 Required tools: `ffmpeg`, `ffprobe`, `mediamtx`, `curl`, `jq`.
-On Debian/Ubuntu, `./scripts/bootstrap-dev.sh` installs everything above.
+On Debian/Ubuntu, `./scripts/dev/bootstrap.sh` installs everything above.
 
 Common runner flags:
 
@@ -513,7 +513,7 @@ Runtime thread and process limits relevant to matrix and fast-breadth runs:
 Optional per-stack cgroup limits for harness-managed processes:
 
 - Set `HARNESS_USE_CGROUP_WRAPPER=1` to route harness-spawned `restream`,
-  MediaMTX, and publisher FFmpeg processes through `scripts/cgroup-wrap`.
+  MediaMTX, and publisher FFmpeg processes through `scripts/native/cgroup-wrap.sh`.
 - Set `HARNESS_CGROUP_CPU_MAX` (for example `200%`) and/or
   `HARNESS_CGROUP_MEMORY_MAX` (for example `2G`) to apply limits.
 - Scopes are named per stack using synthesized ports (for example
@@ -531,10 +531,10 @@ failure-shape sweep.
 
 | Goal | Command |
 |---|---|
-| Full matrix | `scripts/run-bench-harness.sh mixed.matrix` |
-| Single scenario | `scripts/run-bench-harness.sh mixed.live.srt.h264.a1.bf2` |
-| Fast breadth, parallel families | `scripts/run-mixed-fast-breadth-parallel.sh` |
-| Fast breadth, one family | `N_PER_GROUP=1 scripts/run-bench-harness.sh mixed.fast-breadth -- --no-netns` |
+| Full matrix | `scripts/harness/run.sh mixed.matrix` |
+| Single scenario | `scripts/harness/run.sh mixed.live.srt.h264.a1.bf2` |
+| Fast breadth, parallel families | `scripts/harness/parallel-fast-breadth.sh` |
+| Fast breadth, one family | `N_PER_GROUP=1 scripts/harness/run.sh mixed.fast-breadth -- --no-netns` |
 
 Useful matrix knobs:
 
@@ -548,13 +548,13 @@ Useful matrix knobs:
 ### Artifact Disk Guards
 
 Live integration runs write logs, JSONL assertions, ffprobe stderr, SQLite
-fixtures, generated media, and manifests under `test/artifacts/` by default.
+fixtures, generated media, and manifests under `.local/artifacts/` by default.
 The runner applies two disk-safety guards before starting live services:
 
 - `RESTREAM_ARTIFACT_MIN_FREE_MB` (default `2048`) fails the run when the
   artifact filesystem has less free space than the configured floor. Set it to
   `0` only for an intentional no-floor diagnostic run.
-- old top-level `test/artifacts/` directories are pruned so only the latest
+- old top-level `.local/artifacts/` directories are pruned so only the latest
   three runs remain. The active run directory is protected. Set
   `KEEP_ARTIFACTS=1` only for a deliberate manual-retention/debug session.
 
@@ -569,14 +569,14 @@ harness sink, direct SRT probes, and the dummy HLS PUT sink. Override
 `FFMPEG_SIGNAL_SINK_BASE` only when a run needs a fixed external port layout.
 If a measurement live mode needs `target/bench/restream` and the repo-managed
 static SRT archive is also missing, the binary check points agents at
-`scripts/resource-limit ./scripts/setup-static-build.sh` before the bench-profile
+`scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` before the bench-profile
 build step.
 
 Typical quick agent loop:
 
 ```sh
-scripts/resource-limit target/debug/test_harness preflight
-scripts/resource-limit target/bench/test_harness mixed.live.srt.h264.a1.bf2
+scripts/build/resource-limit.sh target/debug/test_harness preflight
+scripts/build/resource-limit.sh target/bench/test_harness mixed.live.srt.h264.a1.bf2
 ```
 
 ### Manual Dashboard Live Env
@@ -621,7 +621,7 @@ Expected sink-probe behavior:
 ### `ramp` — Sequential output ramp
 
 ```sh
-N_OUTPUTS=10 scripts/resource-limit target/debug/test_harness ramp
+N_OUTPUTS=10 scripts/build/resource-limit.sh target/debug/test_harness ramp
 ```
 
 Sweeps eight ingest×egress×encoding combinations (RTMP/SRT ingest × RTMP/SRT
@@ -645,19 +645,19 @@ legacy all-bash ramp path while bisecting harness behavior, or set
 Run the full matrix:
 
 ```sh
-./scripts/run-bench-harness.sh mixed.matrix
+./scripts/harness/run.sh mixed.matrix
 ```
 
 Run one scenario for focused debugging:
 
 ```sh
-./scripts/run-bench-harness.sh mixed.live.srt.h264.a1.bf2
+./scripts/harness/run.sh mixed.live.srt.h264.a1.bf2
 ```
 
 Run only the HLS/recording slice:
 
 ```sh
-N_PER_GROUP=2 ONLY_CHECKS=hls ./scripts/run-bench-harness.sh mixed.matrix
+N_PER_GROUP=2 ONLY_CHECKS=hls ./scripts/harness/run.sh mixed.matrix
 ```
 
 Exercises the table-driven input matrix. Names follow
@@ -681,8 +681,8 @@ multi-track RTMP ingest row unless the product contract changes.
 | `mixed.live.srt.h264.a2.{bf0,bf2}` | 2 | SRT | H.264 | 2 | multi-audio track routing |
 | `mixed.live.srt.h265.a2.{bf0,bf2}` | 2 | SRT | H.265 | 2 | HEVC + multi-audio |
 
-Each row can be run through `scripts/run-bench-harness.sh <scenario-id>`, for
-example `scripts/run-bench-harness.sh mixed.live.srt.h265.a2.bf2`. By default the
+Each row can be run through `scripts/harness/run.sh <scenario-id>`, for
+example `scripts/harness/run.sh mixed.live.srt.h265.a2.bf2`. By default the
 aggregate `mixed.matrix` reuses one shared Restream+MediaMTX stack per input
 family (`live-rtmp`, `live-srt`, `file-ingest`) and executes up to two cases per
 wave inside that stack, while still writing each case to its own work directory.
@@ -700,9 +700,9 @@ selection. Matrix runs also default `COLLECT_FAILURES=1` and write
 `assertions.jsonl` in `WORK_DIR` unless `COLLECT_FAILURES` or `ASSERTION_LOG`
 is overridden.
 
-`scripts/run-bench-harness.sh` is the canonical measurement entrypoint: it
+`scripts/harness/run.sh` is the canonical measurement entrypoint: it
 builds bench-profile binaries first (unless `BENCH_BUILD=0` is set) and then
-executes `target/bench/test_harness` via `scripts/resource-limit`.
+executes `target/bench/test_harness` via `scripts/build/resource-limit.sh`.
 
 While `mixed.matrix` is running, `WORK_DIR/scenario.json` is refreshed
 incrementally with live progress counters and per-case status. The `progress`
@@ -814,15 +814,15 @@ over adding function-per-row Rust.
 ### `mixed.fast-breadth` — 5-minute breadth sweep
 
 ```sh
-./scripts/build-bench-harness.sh
-scripts/run-mixed-fast-breadth-parallel.sh
+./scripts/build/bench-harness.sh
+scripts/harness/parallel-fast-breadth.sh
 ```
 
 `mixed.fast-breadth` is the quick failure-shape sweep for the mixed matrix. It
 keeps `N_PER_GROUP=1`, `SKIP_LOAD=1`, and `COLLECT_FAILURES=1` by default, then
 reuses one shared Restream+MediaMTX stack per transport family.
 
-`scripts/run-mixed-fast-breadth-parallel.sh` is the wall-clock path when the
+`scripts/harness/parallel-fast-breadth.sh` is the wall-clock path when the
 goal is "collect the broad reports first, analyze afterward". It launches three
 independent `mixed.fast-breadth` processes concurrently:
 
@@ -858,7 +858,7 @@ diagnosis against the system binary. Normal runs use the embedded standalone
 ### `resource-sweep` — CPU and memory attribution sweep
 
 ```sh
-./scripts/build-bench-harness.sh
+./scripts/build/bench-harness.sh
 ./target/bench/test_harness resource-sweep
 ```
 
@@ -889,7 +889,7 @@ Useful narrow-loop knobs:
 ### `bitrate-sweep` — bitrate sensitivity sweep
 
 ```sh
-./scripts/build-bench-harness.sh
+./scripts/build/bench-harness.sh
 ./target/bench/test_harness bitrate-sweep
 ```
 
@@ -903,7 +903,7 @@ points and records a focused bitrate-sensitivity report:
 - source-ring overflow counts
 - correctness of RTMP source, RTMP 720p, SRT source, and SRT 720p outputs
 
-Artifacts are written to `test/artifacts/bitrate-sweep/` by default:
+Artifacts are written to `.local/artifacts/bitrate-sweep/` by default:
 
 - `bitrate-sweep-results.json`
 - `bitrate-sweep-results.csv`
@@ -921,7 +921,7 @@ Useful env vars:
 ### `branch-matrix` — passthrough vs transcode family baseline
 
 ```sh
-./scripts/build-bench-harness.sh
+./scripts/build/bench-harness.sh
 ./target/bench/test_harness branch-matrix
 ```
 
@@ -936,7 +936,7 @@ It runs five fixed H.264 SRT egress shapes:
 - two shared transcode families (`720p` + `1080p`)
 - source + two shared transcode families
 
-Artifacts are written to `test/artifacts/branch-matrix/` by default:
+Artifacts are written to `.local/artifacts/branch-matrix/` by default:
 
 - `branch-matrix-results.json`
 - `branch-matrix-results.csv`
@@ -972,10 +972,10 @@ The default variant set is the external baseline, each one-hot internal family,
 and all-internal:
 
 ```sh
-./scripts/run-bench-harness.sh backend-policy-matrix
+./scripts/harness/run.sh backend-policy-matrix
 ```
 
-Artifacts are written under `test/artifacts/backend-policy-matrix/` by default.
+Artifacts are written under `.local/artifacts/backend-policy-matrix/` by default.
 Set `BACKEND_POLICY_MATRIX_VARIANTS` to a comma-separated subset such as
 `internal-video-presets,internal-hls-preview`, or `default`/`all` for the full
 default set. The mode reuses branch/resource probes for video presets and the
@@ -985,7 +985,7 @@ uses a downmix resource probe for complex-audio routing.
 ### `srt-crypto-matrix` — plaintext vs AES-128/192/256 ingest
 
 ```sh
-./scripts/build-bench-harness.sh
+./scripts/build/bench-harness.sh
 RESTREAM_BIN=target/bench/restream \
 ./target/bench/test_harness srt-crypto-matrix
 ```
@@ -998,7 +998,7 @@ ingest scenario family:
 - encrypted AES-192 (`pbkeylen=24`)
 - encrypted AES-256 (`pbkeylen=32`)
 
-Each variant gets its own subdirectory under `test/artifacts/branch-matrix/`.
+Each variant gets its own subdirectory under `.local/artifacts/branch-matrix/`.
 The harness configures both sides of each ingest consistently: the Restream SRT
 listener gets the matching passphrase/key length, and every SRT publisher URL in
 that run gets the corresponding `passphrase`/`pbkeylen` query parameters.
@@ -1014,13 +1014,13 @@ Useful env vars:
 ### `bonding` — SRT socket bonding
 
 ```sh
-scripts/resource-limit target/debug/test_harness bonding
+scripts/build/resource-limit.sh target/debug/test_harness bonding
 ```
 
 Verifies libsrt group-socket bonding using dedicated C helper binaries compiled
-from `test/srt-bond-server.c` and `test/srt-bond-client.c` against a statically
+from `test/native/srt-bond-server.c` and `test/native/srt-bond-client.c` against a statically
 linked libsrt 1.5.5 built with `ENABLE_BONDING=ON`. The script calls
-`scripts/resource-limit ./scripts/setup-static-build.sh` automatically on first
+`scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` automatically on first
 run.
 
 Two bonding modes are tested:
@@ -1043,7 +1043,7 @@ the wrong source IP and make a healthy bonding implementation look broken.
 ### `mixed.live.srt.h264.a1.bf2` — Closed-GOP probe bundle
 
 ```sh
-scripts/resource-limit target/bench/test_harness mixed.live.srt.h264.a1.bf2
+scripts/build/resource-limit.sh target/bench/test_harness mixed.live.srt.h264.a1.bf2
 ```
 
 Streams a closed-GOP RTMP/SRT matrix across H.264/H.265, 1080p/4K, selected
@@ -1078,7 +1078,7 @@ recovery behavior.
 ### `timestamp.bframe` — RTMP B-frame timestamp round-trip
 
 ```sh
-scripts/resource-limit target/debug/test_harness timestamp.bframe
+scripts/build/resource-limit.sh target/debug/test_harness timestamp.bframe
 ```
 
 Publishes one RTMP H.264/AAC input with B-frames, starts an RTMP source output,
@@ -1153,7 +1153,7 @@ ffmpeg -y \
   -c:a aac -b:a 128k \
   -metadata:s:a:0 title=track-440hz \
   -metadata:s:a:1 title=track-880hz \
-  test/artifacts/dual-audio-h264.mkv
+  .local/artifacts/dual-audio-h264.mkv
 ```
 
 **Dual-Audio H.265:**
@@ -1166,7 +1166,7 @@ ffmpeg -y \
   -map 0:v -map 1:a -map 2:a \
   -c:v libx265 -preset slow -x265-params "keyint=60:bframes=2" \
   -c:a aac -b:a 128k \
-  test/artifacts/dual-audio-h265.mkv
+  .local/artifacts/dual-audio-h265.mkv
 ```
 
 Also retain short 10-second versions for smoke tests.
@@ -1269,15 +1269,15 @@ baseline on stop.
 Currently checked in:
 
 ```text
-scripts/resource-limit target/debug/test_harness ramp-family
-scripts/resource-limit target/bench/test_harness mixed.live.srt.h264.a1.bf2
-scripts/resource-limit target/debug/test_harness bonding
-scripts/resource-limit target/debug/test_harness timestamp.bframe
-scripts/resource-limit target/debug/test_harness mixed.live.srt.h264.a1.bf0
-scripts/resource-limit target/debug/test_harness mixed.live.srt.h265.a1.bf2
+scripts/build/resource-limit.sh target/debug/test_harness ramp-family
+scripts/build/resource-limit.sh target/bench/test_harness mixed.live.srt.h264.a1.bf2
+scripts/build/resource-limit.sh target/debug/test_harness bonding
+scripts/build/resource-limit.sh target/debug/test_harness timestamp.bframe
+scripts/build/resource-limit.sh target/debug/test_harness mixed.live.srt.h264.a1.bf0
+scripts/build/resource-limit.sh target/debug/test_harness mixed.live.srt.h265.a1.bf2
 ./target/bench/test_harness resource-sweep
 ./target/bench/test_harness bitrate-sweep
-test/run-media-validation.sh
+scripts/harness/media-validation.sh
 ```
 
 Aggregate release-evidence runner:
@@ -1287,9 +1287,9 @@ cargo run --bin test_harness -- suite --run-id <run-id>
 ```
 
 Use `test_harness suite` as the canonical aggregate orchestrator. It creates
-`test/artifacts/<run-id>/manifest.json`, runs each checked-in integration mode
+`.local/artifacts/<run-id>/manifest.json`, runs each checked-in integration mode
 in its own subdirectory, and records one JSONL result per mode in
-`test/artifacts/<run-id>/results.jsonl`. Supported suite options are:
+`.local/artifacts/<run-id>/results.jsonl`. Supported suite options are:
 
 - `--run-id <id>` to choose the artifact run id
 - `--work-root <path>` to choose the aggregate artifact directory
@@ -1335,7 +1335,7 @@ scale-inprocess
 scale-500
 ```
 
-Each completed matrix run should write artifacts to `test/artifacts/<run-id>/` with manifest,
+Each completed matrix run should write artifacts to `.local/artifacts/<run-id>/` with manifest,
 environment, per-case results (PASS/FAIL/EXPECTED_FAIL/SKIPPED/INFRA_FAILURE),
 ffprobe output, captures, metrics, logs, and summary.
 
@@ -1352,7 +1352,7 @@ These capabilities must be treated as test results, not assumptions:
 | Cross-protocol SRT→RTMP | Live H.264/AAC packetization through `target/debug/test_harness mixed.live.srt.h264.a1.bf0` |
 | Built-in video presets (`h264`, `720p`, `1080p`) | Decode/filter/encode loop is covered by transcoder integration tests |
 | Additional/custom video presets | Must be explicitly profiled and matrix-tested before advertising |
-| Embedded FFmpeg subprocess feature set | `scripts/build-static.sh` runs `restream-ffmpeg-capabilities` to prove the required codecs, `file`/`pipe` protocols, and `mov`/`matroska`/`mpegts` mux/demux surface are present |
+| Embedded FFmpeg subprocess feature set | `scripts/build/app-static.sh` runs `restream-ffmpeg-capabilities` to prove the required codecs, `file`/`pipe` protocols, and `mov`/`matroska`/`mpegts` mux/demux surface are present |
 | HLS live segments | Native TsMuxer validates in-memory |
 | HLS upload egress | YouTube-style `file=` and path-style signed-query HTTP PUT delivery plus destination restart recovery are covered by unit tests and the `mixed.live.srt.h264.a1.bf2` HLS PUT probe |
 | Recording | Readable file with correct streams/timestamps |
@@ -1365,8 +1365,8 @@ These capabilities must be treated as test results, not assumptions:
 These numbers are authoritative current-code measurements generated by the Rust
 harness:
 
-- `test/artifacts/resource-sweep-authoritative/resource-sweep-results.csv`
-- `test/artifacts/bitrate-sweep-authoritative/bitrate-sweep-results.csv`
+- `.local/artifacts/resource-sweep-authoritative/resource-sweep-results.csv`
+- `.local/artifacts/bitrate-sweep-authoritative/bitrate-sweep-results.csv`
 
 Both sweeps use live ingest/egress, sample `/proc`, and cross-check against
 `/api/v1/engine/telemetry`.
@@ -1491,7 +1491,7 @@ around the checked-in H.265 + two-audio fixture.
 ### Required Controls
 
 - Probe the checked-in fixture before blaming Restream:
-  `ffprobe -v warning -show_entries program=:stream=index,codec_type,width,height:packet=stream_index,dts_time,pts_time -of compact=p=1:nk=0 test/fixtures/bench-h265-1_5m-2a.ts`.
+  `ffprobe -v warning -show_entries program=:stream=index,codec_type,width,height:packet=stream_index,dts_time,pts_time -of compact=p=1:nk=0 test/fixtures/transport/bench-h265-1_5m-2a.ts`.
 - For sink disputes, run FFmpeg/FFprobe directly against the sink path with
   Restream bypassed. If the control reproduces the warning, keep MediaMTX in
   the matrix for interoperability but use a direct FFmpeg-family sink for muxer

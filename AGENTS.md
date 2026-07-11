@@ -18,7 +18,7 @@ Instructions for AI coding agents in this repository.
 
 - Backend: `src/`
 - Media engine: `src/media/`
-- Frontend source: `public/ts/`
+- Frontend source: `web/ts/`
 - Generated frontend output: `public/js/`
 - Tests: `test/`
 - Benchmarks: `benches/`
@@ -28,35 +28,35 @@ Instructions for AI coding agents in this repository.
 
 Use the pinned Rust toolchain from `rust-toolchain.toml`.
 
-- Prefix Cargo and other heavy commands with `scripts/resource-limit`.
+- Prefix Cargo and other heavy commands with `scripts/build/resource-limit.sh`.
 - Use `--profile bench` instead of `--release` for local or agent builds.
 - Cargo hardcodes `target/release` as the output dir for a profile named
   `bench` (long-standing `cargo bench` compatibility quirk); `cargo build
   --profile bench` alone does not populate `target/bench/`. For measurement
   harness modes that require binaries at `target/bench/`, build with
-  `scripts/build-bench-harness.sh` instead — the one canonical path to those
+  `scripts/build/bench-harness.sh` instead — the one canonical path to those
   binaries.
-- Edit `public/ts/` and `public/input.css`; do not hand-edit generated files in `public/js/`.
+- Edit `web/ts/` and `web/styles/input.css`; do not hand-edit generated files in `public/js/`.
 - Default frontend verification is `npm run test:frontend`; use Playwright when browser-only behavior is touched.
 
 ```sh
-scripts/resource-limit cargo build --profile bench
-scripts/resource-limit cargo test
-scripts/resource-limit cargo clippy
+scripts/build/resource-limit.sh cargo build --profile bench
+scripts/build/resource-limit.sh cargo test
+scripts/build/resource-limit.sh cargo clippy
 cargo fmt --all
 
-scripts/agent-worktree.sh <id>
-source worktrees/<id>/.agent-state/setup.env
-scripts/agent-worktree.sh --cleanup <id>
+scripts/agent/worktree.sh <id>
+source .local/worktrees/<id>/.agent-state/setup.env
+scripts/agent/worktree.sh --cleanup <id>
 
-scripts/setup-agent-skills.sh
+scripts/agent/setup-skills.sh
 
 npm run test:frontend
 npm run test:frontend:coverage
 npx playwright test
 
-scripts/resource-limit cargo bench --bench <name>
-scripts/resource-limit target/debug/test_harness mixed-anchor
+scripts/build/resource-limit.sh cargo bench --bench <name>
+scripts/build/resource-limit.sh target/debug/test_harness mixed-anchor
 ```
 
 Integration tests use a private loopback namespace by default; use `--no-netns` only when required.
@@ -70,22 +70,22 @@ in on demand, and verify with the narrowest gate first.
   touches when it touches it (see Key References).
 - Skill bodies load on invocation; the canonical versions live in
   `docs/agent-guidance/skills/`. Claude Code shims are generated locally by
-  `scripts/setup-agent-skills.sh` (`.claude/` is gitignored;
+  `scripts/agent/setup-skills.sh` (`.claude/` is gitignored;
   `agent-worktree.sh` runs it automatically in new worktrees).
 - Pick the first gate by files touched, then broaden to full
-  `scripts/resource-limit cargo test` only when the change crosses module
+  `scripts/build/resource-limit.sh cargo test` only when the change crosses module
   boundaries or shared contracts. Treat unrelated full-suite failures as
   separate findings.
 
 | Files touched | First gate |
 |---|---|
-| one backend module | `scripts/resource-limit cargo test <module>` |
-| timestamp/DTS/PTS logic | `scripts/resource-limit cargo test av_sync` |
-| lifecycle in `engine.rs`, `srt.rs`, `ts_chunk_ring.rs`, `avio.rs`, `recording.rs`, `file_ingest.rs`, `external_transcoder.rs` | `scripts/check-concurrency-contract.sh` |
-| concurrency primitives or thread hops | `scripts/check-concurrency-proof-fast.sh` |
-| frontend/backend contract surface | `scripts/check-api-contract.sh` |
-| test media, fixtures, bench/harness setup | `scripts/check-fixture-discipline.sh` |
-| `public/ts/`, `public/input.css` | `npm run test:frontend` (plus Playwright for browser-only behavior) |
+| one backend module | `scripts/build/resource-limit.sh cargo test <module>` |
+| timestamp/DTS/PTS logic | `scripts/build/resource-limit.sh cargo test av_sync` |
+| lifecycle in `engine.rs`, `srt.rs`, `ts_chunk_ring.rs`, `avio.rs`, `recording.rs`, `file_ingest.rs`, `external_transcoder.rs` | `scripts/check/concurrency/contract.sh` |
+| concurrency primitives or thread hops | `scripts/check/concurrency/fast.sh` |
+| frontend/backend contract surface | `scripts/check/api-contract.sh` |
+| test media, fixtures, bench/harness setup | `scripts/check/fixture-discipline.sh` |
+| `web/ts/`, `web/styles/input.css` | `npm run test:frontend` (plus Playwright for browser-only behavior) |
 | hot-path code | relevant `benches/` suite before and after |
 | RTMP/SRT/HLS protocol behavior | `test_harness` `correctness*` modes (protocol-test skill) |
 
@@ -101,7 +101,7 @@ export RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock
 pkill -x restream; pkill -x mediamtx; pkill -x ffmpeg
 ```
 
-- Prefer `scripts/agent-worktree.sh <id>` over manual setup.
+- Prefer `scripts/agent/worktree.sh <id>` over manual setup.
 - Use one worktree per agent or task.
 - Treat `target/`, `.cargo/`, and `node_modules/` as copied caches owned by the destination worktree; do not point multiple worktrees at one live `target/`.
 - Use `--no-share-static` when touching native or linkage-related inputs such as `build.rs`, Docker/static build scripts, or native `test/*.c` helpers.
@@ -151,11 +151,11 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
 - Use `cargo fmt --all` and `cargo fmt --all --check`; do not run `rustfmt` directly.
 - Resolve media through `src/test_fixtures.rs`; add new committed assets to `REQUIRED_CHECKED_IN_FIXTURES`.
 - Prefer checked-in fixtures over inline media generation for tests, benches, and harness runs.
-- For concurrency or thread-hop changes, extend `scripts/check-concurrency-proof-fast.sh` or explain why the existing proof gate already covers the change.
+- For concurrency or thread-hop changes, extend `scripts/check/concurrency/fast.sh` or explain why the existing proof gate already covers the change.
 - If teardown or recovery semantics change, update the live harness assertion and the operator-visible status contract in the same change.
 - Gate selection by files touched: see the Inner Loop table above.
 - Let Cargo keep normal test parallelism for correctness work; do not shard multiple heavy `cargo test` runs across the same tree without explicit isolation.
-- For scale or integration checks, use `scripts/resource-limit target/debug/test_harness mixed-anchor`.
+- For scale or integration checks, use `scripts/build/resource-limit.sh target/debug/test_harness mixed-anchor`.
 
 ## Autonomous Quality Loops
 
@@ -165,12 +165,12 @@ Hot paths include `src/media/`, ring buffers, mux/demux loops, AVIO queues, SRT/
   modularity-sweep, perf-sweep, backlog-groom, plus supporting task skills).
 - The `docs/agent-guidance/skills/<name>/SKILL.md` files are canonical for
   every agent. Claude Code registration shims in `.claude/skills/` are
-  generated locally by `scripts/setup-agent-skills.sh` (not checked in);
+  generated locally by `scripts/agent/setup-skills.sh` (not checked in);
   agents without a skill system follow the canonical files directly.
 - One loop iteration = one backlog item, verified by gates, journaled, and
   committed on its own. Loops never push.
 - One quality loop per host. Multi-agent work goes through
-  `scripts/agent-worktree.sh` with a host-global
+  `scripts/agent/worktree.sh` with a host-global
   `RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock`.
 - Loops skip (never kill) media processes they did not start.
 - Backlog items are tier-tagged; do not attempt items above your model tier.

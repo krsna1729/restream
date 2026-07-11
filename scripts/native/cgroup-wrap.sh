@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scope=""
+if [[ "${1:-}" == "--scope" ]]; then
+  scope="${2:-}"
+  shift 2
+fi
+
+if [[ "${1:-}" != "--" ]]; then
+  echo "usage: scripts/native/cgroup-wrap.sh [--scope <name>] -- <command> [args...]" >&2
+  exit 2
+fi
+shift
+
+if [[ $# -eq 0 ]]; then
+  echo "cgroup-wrap: missing command" >&2
+  exit 2
+fi
+
+cpu_max="${HARNESS_CGROUP_CPU_MAX:-}"
+memory_max="${HARNESS_CGROUP_MEMORY_MAX:-}"
+pids_max="${HARNESS_CGROUP_PIDS_MAX:-}"
+
+if [[ -n "${cpu_max}" || -n "${memory_max}" || -n "${pids_max}" ]]; then
+  if command -v systemd-run >/dev/null 2>&1; then
+    unit_name="restream-harness"
+    if [[ -n "${scope}" ]]; then
+      unit_name+="-${scope}"
+    fi
+    unit_name+="-$$"
+
+    args=(--user --scope --quiet --unit "${unit_name}" --same-dir)
+    if [[ -n "${cpu_max}" ]]; then
+      args+=(--property "CPUQuota=${cpu_max}")
+    fi
+    if [[ -n "${memory_max}" ]]; then
+      args+=(--property "MemoryMax=${memory_max}")
+    fi
+    if [[ -n "${pids_max}" ]]; then
+      args+=(--property "TasksMax=${pids_max}")
+    fi
+
+    exec systemd-run "${args[@]}" -- "$@"
+  fi
+fi
+
+exec "$@"

@@ -62,7 +62,7 @@ impl BitrateSweepEnv {
     fn from_env() -> Result<Self, String> {
         let work_dir = std::env::var_os("WORK_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("test/artifacts/bitrate-sweep"));
+            .unwrap_or_else(|| PathBuf::from(".local/artifacts/bitrate-sweep"));
         let ports = harness_port_defaults();
         Ok(Self {
             summary_json: work_dir.join("bitrate-sweep-results.json"),

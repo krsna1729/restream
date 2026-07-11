@@ -16,7 +16,7 @@ invariant breaks. One invocation closes one gap.
 2. **Property test (proptest is a dev-dependency)** — parser/mux/timestamp
    invariants over generated inputs: DTS monotonicity, FLV composition-offset
    PTS derivation, SRT Stream ID normalization, ring index arithmetic.
-3. **Loom model (`scripts/run-loom-target.sh`)** — wake/cancel and registry
+3. **Loom model (`scripts/harness/loom-target.sh`)** — wake/cancel and registry
    race orderings. Only for genuine multi-thread interleaving questions.
 4. **Live harness mode** — real sockets/processes, only when the property is
    about the running binary (use the concurrency-proof skill's gates).
@@ -31,7 +31,7 @@ invariant breaks. One invocation closes one gap.
 3. Keep passing output quiet (no warnings, panic text, FFmpeg chatter).
 4. Use fixtures via `src/test_fixtures.rs`; never generate media inline.
 5. If the proof covers a concurrency rule, decide whether
-   `scripts/check-concurrency-proof-fast.sh` must be extended so it stays
+   `scripts/check/concurrency/fast.sh` must be extended so it stays
    mandatory — extending the gate is part of the item.
 6. Gates: scoped `cargo test <filter>` + the standard quality-loop gates.
 
@@ -40,7 +40,7 @@ invariant breaks. One invocation closes one gap.
 Run ONE of these probes and file items for the top findings (do not fix
 anything during discovery):
 
-- **Coverage map:** `scripts/resource-limit cargo llvm-cov --summary-only`
+- **Coverage map:** `scripts/build/resource-limit.sh cargo llvm-cov --summary-only`
   (cargo-llvm-cov is installed). File one item per weakest `src/media/` module.
   Kill any live pipeline check first; this is a heavy build.
 - **Panic-path inventory:** `grep -rn "\.unwrap()\|\.expect(\|panic!\|unreachable!" src/media/ --include="*.rs"`
@@ -50,7 +50,7 @@ anything during discovery):
 - **Invariant × proof cross-check:** for each AGENTS.md § Media Rules bullet,
   name the test that enforces it. Bullets with no test become items.
 - **Gate-coverage check:** read `docs/concurrency-proof-coverage-2026-07-02.md`
-  and diff its claims against `scripts/check-concurrency-proof-fast.sh`;
+  and diff its claims against `scripts/check/concurrency/fast.sh`;
   uncovered rules become items.
 
 ## Rules

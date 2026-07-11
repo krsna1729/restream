@@ -12,10 +12,14 @@ useful context without making them read the whole system on day one.
 On Debian/Ubuntu, the fastest setup path is:
 
 ```sh
-./scripts/bootstrap-dev.sh
-scripts/resource-limit ./scripts/build-native.sh
+./scripts/dev/prepare.sh
 cargo run
 ```
+
+`prepare.sh` is the clean-checkout contract: it verifies the committed Node
+toolchain, builds the pinned native prefix, and generates `public/` from the
+authored files in `web/`. Use `bootstrap.sh` only when a Debian/Ubuntu host
+still needs its system packages, Rust toolchain, Node, or Mediamtx installed.
 
 Then open `http://localhost:3030`.
 
@@ -37,7 +41,7 @@ owner-only permissions.
 ## Running A Built Binary
 
 If you already have a release binary produced by
-`scripts/resource-limit ./scripts/build-static.sh`, you can run it directly:
+`scripts/build/resource-limit.sh ./scripts/build/app-static.sh`, you can run it directly:
 
 ```sh
 ./restream
@@ -53,9 +57,9 @@ paths are different: they do require the build dependencies described in
 Most backend work stays in this loop:
 
 ```sh
-scripts/resource-limit ./scripts/build-native.sh
-scripts/resource-limit cargo test
-scripts/resource-limit cargo clippy
+scripts/build/resource-limit.sh ./scripts/build/app-native.sh
+scripts/build/resource-limit.sh cargo test
+scripts/build/resource-limit.sh cargo clippy
 cargo fmt --all
 ```
 
@@ -64,6 +68,7 @@ If you edit frontend assets:
 ```sh
 npm run build:frontend
 npm run test:frontend
+npm run test:frontend:browser-dom
 ```
 
 Use `npm run test:frontend:coverage` for the scoped Node-side TypeScript
@@ -76,10 +81,27 @@ diagnostic all-files report.
 - `src/media/`: ingest, egress, mux/demux, ring buffers, HLS, transcoding
 - `src/domain/`: persisted models and business logic
 - `src/planner/`: pipeline planning/orchestration helpers
-- `public/`: dashboard assets
-  Frontend TypeScript is layered under `public/ts/app`, `public/ts/core`, `public/ts/features`, and `public/ts/history`.
-- `tests/` and `test/`: integration tests and live test harness
-- `scripts/`: bootstrap and native build helpers
+- `web/`: authored dashboard pages, assets, styles, and TypeScript
+- `public/`: generated browser output; never edit it directly
+- `test/fixtures/`, `test/native/`, `test/frontend/`, `test/harness/`: committed media, native probes, frontend tests, and live-harness support
+- `tests/`: Rust integration tests
+- `scripts/build/`, `scripts/check/`, `scripts/dev/`, `scripts/harness/`: builds, gates, setup, and live validation
+
+## Scratch Container Proof
+
+The Dockerfile rebuilds native dependencies and frontend output from the same
+committed scripts used locally in a clean build container, then produces a
+minimal Ubuntu runtime image. The fully static binary is kept in that runtime
+layer because the current static SRT build exits in a pure `scratch` filesystem.
+
+```sh
+docker build -t restream:container .
+docker run --rm --tmpfs /tmp:exec,mode=1777 \
+  -e RESTREAM_INITIAL_ADMIN_PASSWORD=change-me \
+  -p 3030:3030 restream:container
+```
+
+Mount persistent volumes at `/data` and `/media` for a non-ephemeral service.
 
 ## Read Next
 

@@ -20,15 +20,15 @@ Run scoped media pipeline tests, then optionally escalate to live harness tests.
 
 1. Preflight: confirm no live pipeline is running (`pgrep -x restream`, `pgrep -x mediamtx`, `pgrep -x ffmpeg` all empty) before any cargo command — WSL2 memory safety.
 
-2. Run `scripts/resource-limit cargo test <filter>` where `<filter>` is the argument provided.
+2. Run `scripts/build/resource-limit.sh cargo test <filter>` where `<filter>` is the argument provided.
    - If this fails: report the failures clearly and **stop**. Do not escalate.
    - If no argument given: ask the user which module or filter to use.
 
 3. If step 2 passes, report the scoped results, then ask: "Scoped tests pass. Escalate to the live harness? This takes several minutes." Escalation options:
-   - `scripts/resource-limit target/debug/test_harness mixed.live.srt.h264.a1.bf0` / `mixed.live.rtmp.h264.a1.bf0` — protocol-scoped correctness
-   - `scripts/resource-limit target/debug/test_harness mixed-anchor` — scale/integration anchor
+   - `scripts/build/resource-limit.sh target/debug/test_harness mixed.live.srt.h264.a1.bf0` / `mixed.live.rtmp.h264.a1.bf0` — protocol-scoped correctness
+   - `scripts/build/resource-limit.sh target/debug/test_harness mixed-anchor` — scale/integration anchor
 
-4. If the user confirms, build the harness first (`scripts/resource-limit cargo build --bin test_harness`) and run the chosen mode.
+4. If the user confirms, build the harness first (`scripts/build/resource-limit.sh cargo build --bin test_harness`) and run the chosen mode.
 
 ## Notes
 - For timestamp/AV-sync changes use filter `av_sync`.

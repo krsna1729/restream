@@ -30,7 +30,7 @@ green gates, an honest journal entry, and no collateral edits.
    pressure. Preflight check: `pgrep -x restream; pgrep -x mediamtx; pgrep -x ffmpeg`.
    If any are running and you did not start them, **skip the iteration**
    (journal `SKIPPED: host busy`) — do not kill processes you don't own.
-2. Prefix every heavy command with `scripts/resource-limit`.
+2. Prefix every heavy command with `scripts/build/resource-limit.sh`.
 3. Never use `--release`; use the default profile for tests, `--profile bench`
    for benchmarks.
 4. Never `git push`. Never rewrite history. Never touch files outside your item.
@@ -99,11 +99,11 @@ Run, in order, stopping at first failure:
 
 1. The item's own listed gates (each item names its gates).
 2. `cargo fmt --all --check`
-3. `scripts/resource-limit cargo clippy -- -D warnings`
-4. `scripts/resource-limit cargo test <scoped filter for the touched modules>`
+3. `scripts/build/resource-limit.sh cargo clippy -- -D warnings`
+4. `scripts/build/resource-limit.sh cargo test <scoped filter for the touched modules>`
 5. Frontend touched? → `npm run test:frontend`. Contract touched? →
-   `./scripts/check-api-contract.sh`. Concurrency touched? →
-   `bash ./scripts/check-concurrency-proof-fast.sh`.
+   `./scripts/check/api-contract.sh`. Concurrency touched? →
+   `bash ./scripts/check/concurrency/fast.sh`.
 
 **Two-strike rule:** if a gate fails, you get one focused fix attempt. If it
 fails again, revert your working edits (`git checkout -- <your files only>`,

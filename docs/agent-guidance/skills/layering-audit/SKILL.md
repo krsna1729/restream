@@ -39,10 +39,10 @@ Backend signals:
 
 Frontend signals:
 
-- dashboard feature wiring moving into `public/ts/app/`
+- dashboard feature wiring moving into `web/ts/app/`
 - output-list rendering and delegated actions moving out of `pipeline-view.ts`
-- shared fetch/state/URL helpers staying in `public/ts/core/`
-- history-specific render/controller state staying inside `public/ts/history/`
+- shared fetch/state/URL helpers staying in `web/ts/core/`
+- history-specific render/controller state staying inside `web/ts/history/`
 
 Ownership pattern:
 

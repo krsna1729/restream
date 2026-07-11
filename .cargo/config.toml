@@ -13,4 +13,4 @@ rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "link-arg=-Wl,-z,relro,-z,now
 # Our build.rs handles actual linking; the sys crate's duplicate link
 # directives are harmless.
 [env]
-FFMPEG_DIR = { value = ".build/static/prefix", relative = true, force = false }
+FFMPEG_DIR = { value = ".local/build/static/prefix", relative = true, force = false }

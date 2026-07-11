@@ -9,7 +9,7 @@ The current static build default is FFmpeg `n8.1.2`, matching the
 `ffmpeg-next = "8.0"` Rust binding family in `Cargo.toml`.
 
 ```bash
-scripts/resource-limit ./scripts/setup-static-build.sh
+scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
 ```
 
 To test a different FFmpeg tag, override `FFMPEG_VERSION` for the external
@@ -20,12 +20,12 @@ FFmpeg library and embedded subprocess binary, then update `ffmpeg-next` in
 
 ### 1. Select FFmpeg Version
 ```bash
-FFMPEG_VERSION=n8.1.2 scripts/resource-limit ./scripts/setup-static-build.sh
+FFMPEG_VERSION=n8.1.2 scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
 ```
 
 ### 2. Build Static FFmpeg Binary
 ```bash
-scripts/resource-limit ./scripts/setup-static-build.sh
+scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
 ```
 This downloads, patches, and compiles FFmpeg from source with optimizations:
 - `x86-64-v3` baseline (AVX2 on Haswell 2013+)
@@ -36,7 +36,7 @@ This downloads, patches, and compiles FFmpeg from source with optimizations:
 
 ### 3. Build Rust Binary
 ```bash
-scripts/resource-limit ./scripts/build-static.sh
+scripts/build/resource-limit.sh ./scripts/build/app-static.sh
 ```
 Compiles with:
 - Matching `ffmpeg-next` crate version
@@ -47,7 +47,7 @@ Compiles with:
 If using Scenario 2 (lazy embedding), copy the binary to `public/bin/ffmpeg`:
 ```bash
 mkdir -p public/bin
-cp .build/static/prefix/bin/ffmpeg public/bin/ffmpeg
+cp .local/build/static/prefix/bin/ffmpeg public/bin/ffmpeg
 ```
 
 ## Version Information
@@ -92,7 +92,7 @@ export RESTREAM_BUILD_ROOT=/custom/build/path
 export RESTREAM_REBUILD_NATIVE=1
 
 # Then build
-scripts/resource-limit ./scripts/setup-static-build.sh
+scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
 ```
 
 ## Manual Version Update
@@ -100,7 +100,7 @@ scripts/resource-limit ./scripts/setup-static-build.sh
 If you prefer to configure manually:
 
 ### Update External FFmpeg Version
-Edit `scripts/setup-static-build.sh`:
+Edit `scripts/build/native-deps.sh`:
 ```bash
 FFMPEG_VERSION="${FFMPEG_VERSION:-n8.1.2}"    # Change to desired tag
 ```
@@ -117,7 +117,7 @@ ffmpeg-next = { version = "8.0", default-features = false, features = ["codec", 
 If external transcoding fails:
 ```bash
 # Verify binary was built
-ls -lh .build/static/prefix/bin/ffmpeg
+ls -lh .local/build/static/prefix/bin/ffmpeg
 
 # Or specify explicitly
 export FFMPEG_BIN_PATH=/path/to/ffmpeg
@@ -128,7 +128,7 @@ Verify the crate version matches your FFmpeg binary:
 ```bash
 # Check what version you're trying to use
 grep "ffmpeg-next" Cargo.toml
-grep "FFMPEG_VERSION" scripts/setup-static-build.sh
+grep "FFMPEG_VERSION" scripts/build/native-deps.sh
 ```
 
 ### Transcoding failures with new FFmpeg version

@@ -136,7 +136,7 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
 
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let work_root = {
-        let r = work_root.unwrap_or_else(|| cwd.join("test/artifacts").join(&run_id));
+        let r = work_root.unwrap_or_else(|| cwd.join(".local/artifacts").join(&run_id));
         if r.is_absolute() { r } else { cwd.join(r) }
     };
     std::fs::create_dir_all(&work_root).map_err(|e| e.to_string())?;
@@ -397,7 +397,7 @@ pub(crate) async fn preflight_check() -> Result<Value, String> {
         json!({ "check": "deps", "missing": missing, "status": "fail" })
     };
 
-    let artifact_root = PathBuf::from("test/artifacts");
+    let artifact_root = PathBuf::from(".local/artifacts");
     let min_free_mb: u64 = std::env::var("RESTREAM_ARTIFACT_MIN_FREE_MB")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -408,7 +408,7 @@ pub(crate) async fn preflight_check() -> Result<Value, String> {
                 json!({ "check": "artifact-disk", "freeMb": free_mb, "minFreeMb": min_free_mb, "status": "ok" })
             } else {
                 json!({ "check": "artifact-disk", "freeMb": free_mb, "minFreeMb": min_free_mb, "status": "fail",
-                         "hint": "prune test/artifacts or lower RESTREAM_ARTIFACT_MIN_FREE_MB" })
+                         "hint": "prune .local/artifacts or lower RESTREAM_ARTIFACT_MIN_FREE_MB" })
             }
         }
         Err(_) => {
@@ -431,7 +431,7 @@ pub(crate) async fn preflight_check() -> Result<Value, String> {
             "restream": restream_bin.display().to_string(),
             "required": "bench",
             "status": "fail",
-            "hint": "measurement modes require bench-profile binaries; run `scripts/build-bench-harness.sh` and use `target/bench/test_harness`"
+            "hint": "measurement modes require bench-profile binaries; run `scripts/build/bench-harness.sh` and use `target/bench/test_harness`"
         })
     };
 

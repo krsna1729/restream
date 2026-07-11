@@ -138,7 +138,9 @@ fn msr_plan_json(plan: &[MsrOutputSpec], checkpoints: &[usize]) -> Value {
 }
 
 fn spawn_msr_publisher(env: &ResourceSweepEnv, stream_key: &str) -> Result<Child, String> {
-    let fixture = restream::test_fixtures::checked_in_fixture("media/colorbar-timer-2v16a.mp4")?;
+    let fixture = restream::test_fixtures::checked_in_fixture(
+        "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
+    )?;
     let log_path = env.work_dir.join("publisher-msr.log");
     let url = append_srt_crypto(
         format!(
@@ -186,7 +188,7 @@ pub(crate) async fn msr() -> Result<Value, String> {
         }));
     }
 
-    let mut env = ResourceSweepEnv::from_env_with_default_dir("test/artifacts/msr")?;
+    let mut env = ResourceSweepEnv::from_env_with_default_dir(".local/artifacts/msr")?;
     env.lifecycle = ResourceSweepLifecycle::Continuous;
     env.sample_secs = env_secs("MSR_SAMPLE_SECS", 6);
     env.sample_interval_ms = env_secs("MSR_SAMPLE_INTERVAL_MS", 1000);

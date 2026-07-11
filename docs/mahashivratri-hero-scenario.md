@@ -191,15 +191,15 @@ default runs the first 30 outputs; set `MSR_FULL=1` for the canonical
 Run the deterministic plan smoke, bounded default, or full Mahashivratri ramp:
 
 ```sh
-MSR_PLAN_ONLY=1 ./scripts/run-bench-harness.sh msr
-./scripts/run-bench-harness.sh msr
-MSR_FULL=1 ./scripts/run-bench-harness.sh msr
+MSR_PLAN_ONLY=1 ./scripts/harness/run.sh msr
+./scripts/harness/run.sh msr
+MSR_FULL=1 ./scripts/harness/run.sh msr
 ```
 
 The implementation must follow the repository's two-tier testing strategy:
 pure topology/distribution rules in unit tests, and media/runtime behavior in
 the live binary-plus-API harness. It must also follow fixture discipline and
-write artifacts under a run-specific `test/artifacts/` directory.
+write artifacts under a run-specific `.local/artifacts/` directory.
 
 ### Phase 0: deterministic topology unit tests
 
@@ -323,7 +323,7 @@ resource/ramp infrastructure:
 - production output creation through the existing HTTP API;
 - incremental `scenario.json`, JSONL assertions, raw 1 Hz samples, CSV summary,
   and final JSON result;
-- bench-profile execution through `scripts/run-bench-harness.sh`;
+- bench-profile execution through `scripts/harness/run.sh`;
 - serial measurement discipline and explicit detection of pre-existing media
   processes.
 

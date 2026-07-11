@@ -16,7 +16,7 @@ fn mixed_runner_matrix_source() -> String {
 
 #[test]
 fn default_work_db_path_stays_under_work_dir() {
-    let work_dir = Path::new("test/artifacts/example");
+    let work_dir = Path::new(".local/artifacts/example");
     assert_eq!(
         default_work_db_path(work_dir, "suite.db"),
         work_dir.join("suite.db")
@@ -41,14 +41,14 @@ fn strip_netns_opt_removes_only_the_opt_out_flag() {
         "bitrate-sweep".to_string(),
         "--no-netns".to_string(),
         "--work-root".to_string(),
-        "test/artifacts/example".to_string(),
+        ".local/artifacts/example".to_string(),
     ];
     assert_eq!(
         strip_netns_opt(&raw),
         vec![
             "bitrate-sweep".to_string(),
             "--work-root".to_string(),
-            "test/artifacts/example".to_string(),
+            ".local/artifacts/example".to_string(),
         ]
     );
 }

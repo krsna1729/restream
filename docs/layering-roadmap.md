@@ -15,10 +15,10 @@ The backend already has promising boundaries:
 
 The frontend now also has a clearer shape:
 
-- `public/ts/app` for dashboard composition/bootstrap
-- `public/ts/core` for shared transport, state, and pure transforms
-- `public/ts/features` for bounded UI modules
-- `public/ts/history` for history-specific controller/rendering behavior
+- `web/ts/app` for dashboard composition/bootstrap
+- `web/ts/core` for shared transport, state, and pure transforms
+- `web/ts/features` for bounded UI modules
+- `web/ts/history` for history-specific controller/rendering behavior
 
 The remaining issue is not "missing modules." It is cross-layer dependency flow.
 
@@ -213,8 +213,8 @@ Good backend examples in this repo:
 
 Good frontend examples in this repo:
 
-- `public/ts/features/pipeline-output-list`
-- `public/ts/features/pipeline-dependencies`
+- `web/ts/features/pipeline-output-list`
+- `web/ts/features/pipeline-dependencies`
 
 ### 3. Visibility boundary
 
@@ -279,7 +279,7 @@ Success condition:
 
 ### 3. Continue frontend composition cleanup
 
-Goal: keep cross-feature coordination in `public/ts/app`, not in oversized
+Goal: keep cross-feature coordination in `web/ts/app`, not in oversized
 feature modules.
 
 Still-useful next candidates:
@@ -368,7 +368,7 @@ Best next low-risk code steps:
 
 1. Extend backend application ports where ingest/runtime still reaches into DB details directly.
 2. Continue converting engine JSON emitters into typed snapshots plus edge serializers.
-3. Keep moving dashboard composition concerns into `public/ts/app` only when that removes real cross-feature coupling.
+3. Keep moving dashboard composition concerns into `web/ts/app` only when that removes real cross-feature coupling.
 4. Split additional frontend feature modules only where one concept clearly owns the moved state and tests can prove behavior/performance stayed intact.
 
 That sequence keeps progress real without forcing a risky big-bang rewrite.

@@ -103,7 +103,7 @@ pub(crate) fn ensure_measurement_profile(command: &str, raw: &[String]) -> Resul
     }
 
     Err(format!(
-        "{command} requires bench-profile binaries for valid measurements; build them with `scripts/build-bench-harness.sh` and run `target/bench/test_harness`"
+        "{command} requires bench-profile binaries for valid measurements; build them with `scripts/build/bench-harness.sh` and run `target/bench/test_harness`"
     ))
 }
 
@@ -169,7 +169,7 @@ pub(crate) fn artifact_path(name: &str) -> PathBuf {
     std::env::var_os("TEST_HARNESS_ARTIFACT_DIR")
         .or_else(|| std::env::var_os("WORK_DIR"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("test/artifacts/latest"))
+        .unwrap_or_else(|| PathBuf::from(".local/artifacts/latest"))
         .join(name)
 }
 
@@ -194,7 +194,7 @@ pub(crate) fn maybe_prune_old_artifacts() -> Result<(), String> {
     if env_flag("KEEP_ARTIFACTS") {
         return Ok(());
     }
-    let artifact_root = PathBuf::from("test/artifacts");
+    let artifact_root = PathBuf::from(".local/artifacts");
     let Ok(entries) = std::fs::read_dir(&artifact_root) else {
         return Ok(());
     };
@@ -232,7 +232,7 @@ pub(crate) fn command_with_optional_cgroup(program: impl AsRef<OsStr>, scope: &s
     if !env_flag("HARNESS_USE_CGROUP_WRAPPER") {
         return Command::new(program);
     }
-    let mut command = Command::new("scripts/cgroup-wrap");
+    let mut command = Command::new("scripts/native/cgroup-wrap.sh");
     command.arg("--scope").arg(scope).arg("--").arg(program);
     command
 }

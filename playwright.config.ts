@@ -2,6 +2,10 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
     testDir: './test',
+    testMatch: '**/*.spec.ts',
+    testIgnore: process.env.PLAYWRIGHT_BROWSER_DOM_HARNESS
+        ? []
+        : '**/frontend-browser-dom.spec.ts',
     fullyParallel: false,
     forbidOnly: !!process.env.CI,
     retries: process.env.CI ? 1 : 0,

@@ -11,8 +11,8 @@ implemented.
 
 This repository already has strong building blocks for isolation:
 
-- `git worktree` clones are already being used under `worktrees/`.
-- `scripts/resource-limit` serializes heavy commands and sizes build jobs.
+- `git worktree` clones are already being used under `.local/worktrees/`.
+- `scripts/build/resource-limit.sh` serializes heavy commands and sizes build jobs.
 - `src/bin/test_harness.rs` already isolates live correctness modes with
   `unshare --net --user --map-root-user` when available.
 - `test_harness suite` already parallelizes correctness-only modes and keeps
@@ -23,8 +23,8 @@ This repository already has strong building blocks for isolation:
 
 The repo also has one important hazard that makes ad hoc parallel work unsafe:
 
-- `scripts/resource-limit` locks per repo root, not per host. In a multi-worktree
-  setup, each worktree gets its own `.build-lock`, so two agents can still start
+- `scripts/build/resource-limit.sh` locks per repo root, not per host. In a multi-worktree
+  setup, each worktree gets its own `.local/build/lock`, so two agents can still start
   heavy `cargo` work at the same time on the same 8 GB WSL2 host.
 
 That means we should treat parallel-agent work as four separate coordination
@@ -62,15 +62,15 @@ Every agent gets its own worktree and runtime root.
 Use:
 
 ```text
-worktrees/<task-or-agent-id>
+.local/worktrees/<task-or-agent-id>
 ```
 
 Examples:
 
 ```text
-worktrees/api-contract-opt
-worktrees/frontend-layering
-worktrees/agent-hls-recovery
+.local/worktrees/api-contract-opt
+.local/worktrees/frontend-layering
+.local/worktrees/agent-hls-recovery
 ```
 
 ### Runtime roots
@@ -78,22 +78,22 @@ worktrees/agent-hls-recovery
 Inside each worktree, reserve these paths:
 
 ```text
-worktrees/<id>/
-  test/artifacts/agents/<run-id>/
+.local/worktrees/<id>/
+  .local/artifacts/agents/<run-id>/
   .agent-state/
 ```
 
 Use:
 
-- `WORK_ROOT=<worktree>/test/artifacts/agents/<run-id>` for aggregate harness runs
-- `WORK_DIR=<worktree>/test/artifacts/agents/<run-id>/<mode>` for single-mode runs
+- `WORK_ROOT=<worktree>/.local/artifacts/agents/<run-id>` for aggregate harness runs
+- `WORK_DIR=<worktree>/.local/artifacts/agents/<run-id>/<mode>` for single-mode runs
 - `.agent-state/` for local notes such as port reservations or claimed files
 
 The key rule is simple: no two agents share a `WORK_DIR` or `WORK_ROOT`.
 When the worktree is no longer needed, the owning agent should remove it with:
 
 ```sh
-scripts/agent-worktree.sh --cleanup <id>
+scripts/agent/worktree.sh --cleanup <id>
 ```
 
 ## Framework Rules
@@ -106,7 +106,7 @@ checkout directly unless it is the final integrator.
 Recommended flow:
 
 ```sh
-git worktree add worktrees/<id> -b codex/<id> HEAD
+git worktree add .local/worktrees/<id> -b codex/<id> HEAD
 ```
 
 Rules:
@@ -135,18 +135,18 @@ worktrees.
 
 ### Repo change to make this enforceable
 
-Add a shared lock override to `scripts/resource-limit`, for example:
+Add a shared lock override to `scripts/build/resource-limit.sh`, for example:
 
 ```text
 RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock
 ```
 
 Then all worktrees can opt into the same lock file instead of separate
-`<worktree>/.build-lock` files.
+`<worktree>/.local/build/lock` files.
 
 If we want "safe by default", the better version is:
 
-- teach `scripts/resource-limit` to prefer `/tmp/restream-build.lock`
+- teach `scripts/build/resource-limit.sh` to prefer `/tmp/restream-build.lock`
 - allow an override only when someone explicitly wants a different lock
 
 ### Practical scheduling policy
@@ -176,14 +176,14 @@ Safe-to-share examples:
 - FFmpeg static prefix
 - SRT static prefix
 - x264/x265 static outputs
-- other outputs produced by `scripts/setup-static-build.sh` and
-  `scripts/build-static.sh`
+- other outputs produced by `scripts/build/native-deps.sh` and
+  `scripts/build/app-static.sh`
 
 Do not assume these shared outputs are reusable if the task edits files such as:
 
-- `scripts/setup-static-build.sh`
-- `scripts/build-static.sh`
-- `scripts/bootstrap-dev.sh`
+- `scripts/build/native-deps.sh`
+- `scripts/build/app-static.sh`
+- `scripts/dev/bootstrap.sh`
 - `Dockerfile`
 - `build.rs`
 - native fixture/probe sources under `test/*.c`
@@ -198,7 +198,7 @@ Recommended policy:
 In practice, that means a worktree setup helper should prefer reusing:
 
 ```text
-.build/static/
+.local/build/static/
 public/bin/ffmpeg
 ```
 
@@ -239,12 +239,12 @@ Recommended approach:
 Example setup shape:
 
 ```sh
-git worktree add worktrees/<id> -b codex/<id> HEAD
-rsync -a --delete <source-worktree>/target/debug/deps/ worktrees/<id>/target/debug/deps/
-rsync -a --delete <source-worktree>/target/debug/build/ worktrees/<id>/target/debug/build/
-rsync -a --delete <source-worktree>/target/debug/.fingerprint/ worktrees/<id>/target/debug/.fingerprint/
-rsync -a <source-worktree>/.cargo/ worktrees/<id>/.cargo/
-rsync -a <source-worktree>/node_modules/ worktrees/<id>/node_modules/
+git worktree add .local/worktrees/<id> -b codex/<id> HEAD
+rsync -a --delete <source-worktree>/target/debug/deps/ .local/worktrees/<id>/target/debug/deps/
+rsync -a --delete <source-worktree>/target/debug/build/ .local/worktrees/<id>/target/debug/build/
+rsync -a --delete <source-worktree>/target/debug/.fingerprint/ .local/worktrees/<id>/target/debug/.fingerprint/
+rsync -a <source-worktree>/.cargo/ .local/worktrees/<id>/.cargo/
+rsync -a <source-worktree>/node_modules/ .local/worktrees/<id>/node_modules/
 ```
 
 For the static/native layer, prefer sharing or one-way syncing from the warm
@@ -271,7 +271,7 @@ Then run harness work inside a container backed by one worktree:
 
 ```sh
 RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock \
-scripts/resource-limit cargo build --bin restream --bin test_harness
+scripts/build/resource-limit.sh cargo build --bin restream --bin test_harness
 
 docker run --rm \
   --network none \
@@ -279,7 +279,7 @@ docker run --rm \
   -v "$PWD":/workspace \
   -w /workspace \
   restream/dev \
-  bash -lc 'WORK_DIR=test/artifacts/agents/run-1/mixed.live.srt.h264.a1 target/bench/test_harness mixed.live.srt.h264.a1'
+  bash -lc 'WORK_DIR=.local/artifacts/agents/run-1/mixed.live.srt.h264.a1 target/bench/test_harness mixed.live.srt.h264.a1'
 ```
 
 Why `--network none` works well here:
@@ -292,7 +292,7 @@ Important:
 
 - use Docker primarily for runtime isolation, not as a way to bypass the
   host-wide build lane
-- until `scripts/resource-limit` supports a shared host lock file, do not let
+- until `scripts/build/resource-limit.sh` supports a shared host lock file, do not let
   multiple containers compile Rust concurrently
 
 ### Native fallback
@@ -307,13 +307,13 @@ When Docker is not available, rely on the current repo behavior:
 Native fallback command shape:
 
 ```sh
-scripts/resource-limit target/bench/test_harness mixed.live.srt.h264.a1
+scripts/build/resource-limit.sh target/bench/test_harness mixed.live.srt.h264.a1
 ```
 
 or:
 
 ```sh
-WORK_DIR=test/artifacts/agents/run-1/mixed.live.srt.h264.a1 \
+WORK_DIR=.local/artifacts/agents/run-1/mixed.live.srt.h264.a1 \
 target/bench/test_harness mixed.live.srt.h264.a1
 ```
 
@@ -396,7 +396,7 @@ If Docker is unavailable, reserve a port block before starting:
 Store the reservation in:
 
 ```text
-worktrees/<id>/.agent-state/ports.json
+.local/worktrees/<id>/.agent-state/ports.json
 ```
 
 ## Agent Roles
@@ -422,7 +422,7 @@ Allowed:
 
 - filtered `cargo test`
 - `npm run test:frontend`
-- contract scripts such as `scripts/check-api-contract.sh`
+- contract scripts such as `scripts/check/api-contract.sh`
 
 Rules:
 
@@ -476,22 +476,22 @@ machine budget is more constrained than the harness API surface.
 ## Worktree setup
 
 ```sh
-git worktree add worktrees/agent-rtmp -b codex/agent-rtmp HEAD
-git worktree add worktrees/agent-hls -b codex/agent-hls HEAD
+git worktree add .local/worktrees/agent-rtmp -b codex/agent-rtmp HEAD
+git worktree add .local/worktrees/agent-hls -b codex/agent-hls HEAD
 ```
 
 ## Scoped unit verification
 
 ```sh
 RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock \
-scripts/resource-limit cargo test --test api health_endpoint_exposes_probe_and_egress_fault_fields -- --nocapture
+scripts/build/resource-limit.sh cargo test --test api health_endpoint_exposes_probe_and_egress_fault_fields -- --nocapture
 ```
 
 ## Correctness live harness in Docker
 
 ```sh
 RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock \
-scripts/resource-limit cargo build --bin restream --bin test_harness
+scripts/build/resource-limit.sh cargo build --bin restream --bin test_harness
 
 docker run --rm \
   --network none \
@@ -499,13 +499,13 @@ docker run --rm \
   -v "$PWD":/workspace \
   -w /workspace \
   restream/dev \
-  bash -lc 'WORK_DIR=test/artifacts/agents/run-mixed.live.srt.h264.a1 target/bench/test_harness mixed.live.srt.h264.a1'
+  bash -lc 'WORK_DIR=.local/artifacts/agents/run-mixed.live.srt.h264.a1 target/bench/test_harness mixed.live.srt.h264.a1'
 ```
 
 ## Correctness live harness with native netns fallback
 
 ```sh
-WORK_DIR=test/artifacts/agents/run-fault \
+WORK_DIR=.local/artifacts/agents/run-fault \
 target/debug/test_harness fault.resilience
 ```
 
@@ -513,9 +513,9 @@ target/debug/test_harness fault.resilience
 
 ```sh
 RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock \
-scripts/resource-limit ./scripts/build-bench-harness.sh
+scripts/build/resource-limit.sh ./scripts/build/bench-harness.sh
 
-WORK_DIR=test/artifacts/agents/run-sweep \
+WORK_DIR=.local/artifacts/agents/run-sweep \
 target/bench/test_harness resource-sweep
 ```
 
@@ -524,14 +524,14 @@ target/bench/test_harness resource-sweep
 The framework becomes much easier to follow if we add small helper scripts
 instead of relying on tribal knowledge.
 
-### 1. `scripts/agent-worktree.sh`
+### 1. `scripts/agent/worktree.sh`
 
 Status: implemented.
 
 Responsibilities:
 
-- create `worktrees/<id>`
-- remove `worktrees/<id>` when the task is complete
+- create `.local/worktrees/<id>`
+- remove `.local/worktrees/<id>` when the task is complete
 - create branch `codex/<id>`
 - initialize `.agent-state/`
 - seed the new worktree from a warm source tree by copying a pruned high-value
@@ -574,13 +574,13 @@ Responsibilities:
 
 ### Phase 1: Safe coordination defaults
 
-1. Add host-global build lock support to `scripts/resource-limit`.
+1. Add host-global build lock support to `scripts/build/resource-limit.sh`.
 2. Document the "one worktree per agent" rule.
-3. Standardize `WORK_DIR` and `WORK_ROOT` naming under `test/artifacts/agents/`.
+3. Standardize `WORK_DIR` and `WORK_ROOT` naming under `.local/artifacts/agents/`.
 
 ### Phase 2: Wrapper scripts
 
-1. `scripts/agent-worktree.sh` is in place; use it as the default agent
+1. `scripts/agent/worktree.sh` is in place; use it as the default agent
    worktree entrypoint.
 2. Add `scripts/agent-harness.sh`.
 3. Add `scripts/agent-debug-env.sh`.

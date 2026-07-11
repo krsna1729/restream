@@ -11,7 +11,7 @@ The full matrix and fast-breadth modes are **partially constrained**. Every
 internal buffer, queue, ring, socket, and semaphore that the engine uses has an
 explicit bound, and the harness caps concurrent pipelines per shared stack.
 However, there is **no process-level runtime CPU or memory limit** on the
-`restream` process, MediaMTX, or spawned FFmpeg children. `scripts/resource-limit`
+`restream` process, MediaMTX, or spawned FFmpeg children. `scripts/build/resource-limit.sh`
 only constrains build parallelism.
 
 On a resource-constrained host, the biggest risks are:
@@ -33,7 +33,7 @@ container memory/CPU limits) rather than relying on env knobs alone.
 
 ## Build-time constraints only
 
-[scripts/resource-limit](../scripts/resource-limit) is the only place that sizes
+[scripts/build/resource-limit.sh](../scripts/build/resource-limit.sh) is the only place that sizes
 work from available CPU and memory. It computes `BUILD_JOBS`,
 `CARGO_BUILD_JOBS`, `CMAKE_BUILD_PARALLEL_LEVEL`, and `MAKEFLAGS` from:
 
@@ -155,7 +155,7 @@ Source: [src/bin/test_harness/mixed_runner.rs](../src/bin/test_harness/mixed_run
 
 - 6 selected input cases, same 3 groups.
 - Default `N_PER_GROUP = 1`, `SKIP_LOAD = 1`, `COLLECT_FAILURES = 1`.
-- [scripts/run-mixed-fast-breadth-parallel.sh](../scripts/run-mixed-fast-breadth-parallel.sh)
+- [scripts/harness/parallel-fast-breadth.sh](../scripts/harness/parallel-fast-breadth.sh)
   launches **all three groups concurrently** on the host with isolated port
   bundles and work directories.
 - Each group still runs up to 2 concurrent pipelines internally.
@@ -223,7 +223,7 @@ The following previously documented knobs are now implemented in the harness:
 
 | Var | Documented use | Implemented? |
 |---|---|---|
-| `KEEP_ARTIFACTS` | Retain old `test/artifacts/` directories | Yes |
+| `KEEP_ARTIFACTS` | Retain old `.local/artifacts/` directories | Yes |
 | `RSS_BASELINE` | Compare mixed-input RSS against saved CSV | Yes |
 | `SAVE_RSS_BASELINE` | Save current RSS summary as baseline | Yes |
 | `ALLOW_GLOBAL_PROCESS_CLEANUP` | Legacy host-wide cleanup before run | Yes |
@@ -263,7 +263,7 @@ that.
 
 Update [testing.md](testing.md) to:
 
-1. State clearly that `scripts/resource-limit` constrains **build parallelism
+1. State clearly that `scripts/build/resource-limit.sh` constrains **build parallelism
    only**.
 2. Keep `KEEP_ARTIFACTS`, `RSS_BASELINE`, `SAVE_RSS_BASELINE`, and
   `ALLOW_GLOBAL_PROCESS_CLEANUP` documented as implemented harness controls.

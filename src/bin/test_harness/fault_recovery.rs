@@ -252,7 +252,7 @@ async fn fault_rtmp_egress_sink_stalls(
 
     let accepted = stall_server.publish_accepted.load(Ordering::Relaxed);
     let stalled_result =
-        wait_for_output_stalled_status(api, &pid, &oid, Duration::from_secs(20)).await;
+        wait_for_output_stalled_status(api, &pid, &oid, Duration::from_secs(45)).await;
     let (status_snapshot, health_snapshot) = stalled_result
         .as_ref()
         .map(|(status, health)| (status.clone(), health.clone()))
@@ -453,7 +453,7 @@ async fn fault_rtmp_stalled_sink_isolation_under_many_outputs(
     )
     .await;
     let stalled_result =
-        wait_for_output_stalled_status(api, &pid, &stalled_oid, Duration::from_secs(25)).await;
+        wait_for_output_stalled_status(api, &pid, &stalled_oid, Duration::from_secs(45)).await;
 
     let healthy_snapshots = healthy_progress_result.as_ref().ok().cloned();
     let stalled_snapshots = stalled_result

@@ -1997,8 +1997,10 @@ async fn internal_file_ingest_preview_hls_serves_playlist_and_segment() {
         tokio::runtime::Handle::current(),
         ingest_id.to_string(),
         pipeline_id.to_string(),
-        restream::test_fixtures::checked_in_fixture("media/colorbar-timer-2v16a.mp4")
-            .expect("checked-in integration media fixture"),
+        restream::test_fixtures::checked_in_fixture(
+            "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
+        )
+        .expect("checked-in integration media fixture"),
         String::new(),
         false,
         ring_buffer,

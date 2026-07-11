@@ -1,7 +1,6 @@
 # Build artifacts — excluded to keep context small; Docker stages regenerate them
 target/
-.build/
-*.build-lock
+.local/
 
 # Runtime data — never bake into the image
 data.db
@@ -28,4 +27,4 @@ deploy/
 
 # Node artefacts
 node_modules/
-public/js/
+public/

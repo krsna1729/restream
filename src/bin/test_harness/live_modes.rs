@@ -70,7 +70,7 @@ impl RampEnv {
     fn from_env() -> Self {
         let work_dir = std::env::var_os("WORK_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("test/artifacts/ramp"));
+            .unwrap_or_else(|| PathBuf::from(".local/artifacts/ramp"));
         let ports = harness_port_defaults();
         Self {
             scale_log: std::env::var_os("SCALE_LOG")

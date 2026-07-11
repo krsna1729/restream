@@ -303,7 +303,7 @@ impl MixedSharedBatchGroup {
 pub(crate) const MIXED_MATRIX_MODE: &str = "mixed.matrix";
 pub(crate) const MIXED_SIGNAL_MODE: &str = "mixed.signal";
 pub(crate) const MIXED_FAST_BREADTH_MODE: &str = "mixed.fast-breadth";
-const MIXED_ARTIFACT_ROOT: &str = "test/artifacts/mixed";
+const MIXED_ARTIFACT_ROOT: &str = ".local/artifacts/mixed";
 
 /// When the mixed harness attaches and verifies the product HLS preview.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

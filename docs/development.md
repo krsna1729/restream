@@ -8,12 +8,12 @@ need setup details, the normal edit/test loop, or release-build notes.
 For a fresh Debian/Ubuntu machine:
 
 ```sh
-./scripts/bootstrap-dev.sh
-scripts/resource-limit ./scripts/build-native.sh
+./scripts/dev/bootstrap.sh
+scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 cargo run
 ```
 
-`bootstrap-dev.sh` installs host packages, the pinned Rust toolchain, frontend
+`scripts/dev/bootstrap.sh` installs host packages, the pinned Rust toolchain, frontend
 dependencies, a pinned `mediamtx` binary for the live harness, and the
 repo-managed native dependency prefix used by the build.
 
@@ -43,7 +43,7 @@ There are two different stories here:
 If you already have a binary built with:
 
 ```sh
-scripts/resource-limit ./scripts/build-static.sh
+scripts/build/resource-limit.sh ./scripts/build/app-static.sh
 ```
 
 you can run that artifact directly with:
@@ -52,13 +52,13 @@ you can run that artifact directly with:
 ./restream
 ```
 
-`build-static.sh` verifies that the produced binary is statically linked, so
+`scripts/build/app-static.sh` verifies that the produced binary is statically linked, so
 the release artifact does not depend on the host having FFmpeg, libsrt, or
 other shared runtime libraries installed.
 
 ## Manual Prerequisites
 
-If you are not using `bootstrap-dev.sh`, you will need:
+If you are not using `scripts/dev/bootstrap.sh`, you will need:
 
 - Rust toolchain pinned in `rust-toolchain.toml`
 - FFmpeg development packages available through `pkg-config`
@@ -82,11 +82,11 @@ native tooling requires Node `>= 20`).
 Before the first Rust build, make sure the repo-managed native prefix exists:
 
 ```sh
-scripts/resource-limit ./scripts/setup-static-build.sh
+scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
 ```
 
 That native setup builds SRT against a repo-managed Mbed TLS instead of the
-host's OpenSSL. [scripts/mbedtls-config-srt.h](../scripts/mbedtls-config-srt.h)
+host's OpenSSL. [scripts/native/mbedtls-config-srt.h](../scripts/native/mbedtls-config-srt.h)
 is intentionally a whole-build replacement config, not a small override: it
 keeps only the AES-CTR, PBKDF2-HMAC-SHA1, entropy/CTR-DRBG, and version-report
 pieces that SRT's CRYSPR backend actually calls. The goal is a smaller static
@@ -97,31 +97,32 @@ artifact, a tighter SBOM, and less unused crypto surface in the shipped binary.
 The usual backend loop is:
 
 ```sh
-scripts/resource-limit ./scripts/build-native.sh
-scripts/resource-limit cargo test
-scripts/resource-limit cargo clippy
+scripts/build/resource-limit.sh ./scripts/build/app-native.sh
+scripts/build/resource-limit.sh cargo test
+scripts/build/resource-limit.sh cargo clippy
 cargo fmt --all
 ```
 
-`build-native.sh` verifies that the debug build is using the expected native
+`scripts/build/app-native.sh` verifies that the debug build is using the expected native
 linkage, including the repo-managed static `libsrt`.
 
 ### Frontend
 
-Only needed when editing `public/ts/` or `public/input.css`:
+Only needed when editing `web/ts/` or `web/styles/input.css`:
 
 ```sh
 npm run build:frontend
 npm run test:frontend
+npm run test:frontend:browser-dom
 ```
 
-Edit `public/ts/`, not generated files in `public/js/`. The build now re-syncs
+Edit `web/ts/`, not generated files in `public/js/`. The build now re-syncs
 the browser HLS runtime from the `hls.js` npm dependency automatically.
-Frontend orchestration entrypoints live in `public/ts/app/`, shared transport
-and state helpers in `public/ts/core/`, bounded UI modules in
-`public/ts/features/`, and history-specific UI in `public/ts/history/`.
+Frontend orchestration entrypoints live in `web/ts/app/`, shared transport
+and state helpers in `web/ts/core/`, bounded UI modules in
+`web/ts/features/`, and history-specific UI in `web/ts/history/`.
 The Node-based frontend suite now uses a temporary sourcemapped test build so
-coverage reports point at `public/ts/**`, while `npm run test:frontend:js-smoke`
+coverage reports point at `web/ts/**`, while `npm run test:frontend:js-smoke`
 keeps a smaller direct check against the shipped `public/js/**` bundle.
 Use `npm run test:frontend:coverage` for the Node-scope TypeScript coverage
 gate. That covered surface now includes the dashboard/history/status transport
@@ -189,8 +190,8 @@ The practical rule is: use SSE for sparse, operator-visible edges; use polling f
 For the broader testing story, use [Testing](testing.md). The short version:
 
 ```sh
-scripts/resource-limit cargo test
-scripts/resource-limit target/bench/test_harness mixed.live.srt.h264.a1
+scripts/build/resource-limit.sh cargo test
+scripts/build/resource-limit.sh target/bench/test_harness mixed.live.srt.h264.a1
 ```
 
 Prefer scoped tests first, then broaden when the change crosses module or
@@ -201,8 +202,8 @@ protocol boundaries.
 Run benchmarks before and after hot-path work:
 
 ```sh
-scripts/resource-limit cargo bench --bench <name>
-scripts/resource-limit cargo bench
+scripts/build/resource-limit.sh cargo bench --bench <name>
+scripts/build/resource-limit.sh cargo bench
 ```
 
 Available suites include:
@@ -224,7 +225,7 @@ For the SRT crypto migration specifically, compare plaintext vs encrypted local
 socket cost with:
 
 ```sh
-scripts/resource-limit cargo bench --bench srt_ingest_latency -- srt_(ingest|egress)
+scripts/build/resource-limit.sh cargo bench --bench srt_ingest_latency -- srt_(ingest|egress)
 ```
 
 That bench fixes the transport shape at `8 x 1316-byte` live-mode packets per
@@ -239,11 +240,11 @@ For the optimization roadmap behind those benches, see
 ## Static Release Build
 
 The release path builds pinned native dependencies into
-`.build/static/prefix/`, then links the Rust binary against them:
+`.local/build/static/prefix/`, then links the Rust binary against them:
 
 ```sh
-scripts/resource-limit ./scripts/setup-static-build.sh
-scripts/resource-limit ./scripts/build-static.sh
+scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
+scripts/build/resource-limit.sh ./scripts/build/app-static.sh
 ```
 
 Use this path when you need the pinned FFmpeg/x264/x265/libsrt toolchain rather
@@ -252,8 +253,8 @@ than the faster debug-iteration path.
 Helpful variants:
 
 ```sh
-RESTREAM_REBUILD_NATIVE=1 scripts/resource-limit ./scripts/setup-static-build.sh
-RESTREAM_BUILD_PROFILE=fast-release scripts/resource-limit ./scripts/build-static.sh
+RESTREAM_REBUILD_NATIVE=1 scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
+RESTREAM_BUILD_PROFILE=fast-release scripts/build/resource-limit.sh ./scripts/build/app-static.sh
 ```
 
 See [FFmpeg Version Configuration](ffmpeg-versions.md) for version-selection
