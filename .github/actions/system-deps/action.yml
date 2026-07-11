@@ -1,0 +1,14 @@
+name: System dependencies
+description: Install one canonical Ubuntu system-dependency profile for CI.
+
+inputs:
+  profile:
+    description: base, browser, or live
+    required: true
+    default: base
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: scripts/ci/install-system-deps.sh "${{ inputs.profile }}"
