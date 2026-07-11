@@ -6,13 +6,12 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
-use crate::application::ports::{
-    MetaStore, MetaStoreWriter, RecordingStore, SqliteMetaStore, SqliteRecordingStore,
-};
+use crate::application::ports::{MetaStore, MetaStoreWriter, RecordingStore};
 use crate::application::recording::{
     load_recording_settings, recording_enabled_meta_key, spawn_recording_metadata_reporter,
     spawn_recording_task,
 };
+use crate::infrastructure::sqlite_ports::{SqliteMetaStore, SqliteRecordingStore};
 use crate::media::engine::MediaEngine;
 use crate::media::recording::RecordingMetadataReporter;
 use crate::types::{Ingest, Pipeline};

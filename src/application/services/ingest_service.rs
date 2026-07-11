@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use crate::application::ports::{IngestLookup, IngestWriter, SqliteIngestLookup};
+use crate::application::ports::{IngestLookup, IngestWriter};
+use crate::infrastructure::sqlite_ports::SqliteIngestLookup;
 use crate::types::Ingest;
 
 use super::error::{ApiError, ApiResult};

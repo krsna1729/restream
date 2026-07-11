@@ -1069,7 +1069,7 @@ async fn config_patch_recording_settings_persists() {
     assert_eq!(json["recordingSettings"]["retainSourceTs"], true);
 
     let stored = restream::application::recording::load_recording_settings(
-        &restream::application::ports::SqliteMetaStore::new(pool.clone()),
+        &restream::infrastructure::sqlite_ports::SqliteMetaStore::new(pool.clone()),
     )
     .await;
     assert!(stored.retain_source_ts);
@@ -1122,7 +1122,7 @@ async fn config_patch_backend_policy_persists_and_updates_runtime() {
     assert_eq!(engine.backend_policy(), expected);
 
     let stored = restream::application::settings::load_backend_policy(
-        &restream::application::ports::SqliteMetaStore::new(pool),
+        &restream::infrastructure::sqlite_ports::SqliteMetaStore::new(pool),
         restream::planner::backend_policy::BackendPolicy::default(),
     )
     .await;
@@ -1163,7 +1163,7 @@ async fn config_patch_ingest_security_persists() {
     assert_eq!(json["ingestSecurity"]["trackedIpLimit"], 64);
 
     let stored = restream::application::ingest_security::load_ingest_security_config(
-        &restream::application::ports::SqliteMetaStore::new(pool.clone()),
+        &restream::infrastructure::sqlite_ports::SqliteMetaStore::new(pool.clone()),
     )
     .await;
     assert_eq!(stored.failure_limit, 3);
@@ -1256,7 +1256,7 @@ async fn config_patch_rejects_invalid_ingest_security() {
     );
 
     let stored = restream::application::ingest_security::load_ingest_security_config(
-        &restream::application::ports::SqliteMetaStore::new(pool.clone()),
+        &restream::infrastructure::sqlite_ports::SqliteMetaStore::new(pool.clone()),
     )
     .await;
     assert_eq!(

@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use crate::application::ports::{
-    MetaStore, MetaStoreWriter, SessionStore, SqliteMetaStore, SqliteSessionStore,
-};
+use crate::application::ports::{MetaStore, MetaStoreWriter, SessionStore};
+use crate::infrastructure::sqlite_ports::{SqliteMetaStore, SqliteSessionStore};
 
 use super::error::{ApiError, ApiResult};
 

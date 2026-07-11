@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use crate::application::ports::{LogStore, SqliteLogStore};
+use crate::application::ports::LogStore;
+use crate::infrastructure::sqlite_ports::SqliteLogStore;
 use crate::logging::types::{AppLogFilters, AppLogRow};
 
 use super::error::{ApiError, ApiResult};

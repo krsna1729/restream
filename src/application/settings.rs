@@ -71,9 +71,9 @@ pub async fn load_settings_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::ports::SqliteMetaStore;
     use crate::db;
     use crate::domain::ingest_security::DEFAULT_INGEST_SECURITY_CONFIG;
+    use crate::infrastructure::sqlite_ports::SqliteMetaStore;
     use crate::media::security::IngestSecurityService;
 
     #[tokio::test]
