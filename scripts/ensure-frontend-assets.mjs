@@ -1,4 +1,4 @@
-import { copyFile, mkdir } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +27,10 @@ function resolveHlsAsset(startDir) {
 const source = resolveHlsAsset(repoRoot);
 
 await mkdir(targetDir, { recursive: true });
-await copyFile(source, target);
+const hlsBundle = await readFile(source, 'utf8');
+await writeFile(
+    target,
+    hlsBundle.replace(/\n?\/\/# sourceMappingURL=hls\.min\.js\.map\s*$/, '\n'),
+);
 
 console.log(`Synced ${path.relative(repoRoot, target)} from hls.js dependency`);

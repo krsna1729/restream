@@ -1,18 +1,36 @@
-@import 'tailwindcss';
+@import "tailwindcss";
 @plugin 'daisyui' {
-    themes: dim;
+  themes: dim;
+}
+
+#dashboard-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 768px) {
+  #dashboard-grid {
+    grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 1280px) {
+  #dashboard-grid.has-selected-pipeline {
+    grid-template-columns:
+      minmax(15rem, 18rem) minmax(24rem, 34rem)
+      minmax(24rem, 1fr);
+  }
 }
 
 /* Spinner keyframe used by the HLS preview loading indicator. */
 @keyframes spin {
-    to {
-        transform: rotate(360deg);
-    }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Timeline history badge override for stronger contrast in dim theme. */
 .badge-stopped {
-    border-color: color-mix(in oklab, #60a5fa 70%, transparent);
-    background-color: color-mix(in oklab, #60a5fa 30%, transparent);
-    color: #dbeafe;
+  border-color: color-mix(in oklab, #60a5fa 70%, transparent);
+  background-color: color-mix(in oklab, #60a5fa 30%, transparent);
+  color: #dbeafe;
 }

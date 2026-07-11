@@ -145,12 +145,8 @@ function renderPipelines(): void {
   if (!gridElem) {
     return;
   }
-  if (selectedPipe) {
-    gridElem.style.gridTemplateColumns =
-      "minmax(15rem, 18rem) minmax(24rem, 34rem) minmax(24rem, 1fr)";
-  } else {
-    gridElem.style.gridTemplateColumns = "minmax(15rem, 18rem) minmax(0, 1fr)";
-  }
+  gridElem.classList.toggle("has-selected-pipeline", Boolean(selectedPipe));
+  gridElem.style.gridTemplateColumns = "";
 
   renderPipelinesList(selectedPipe);
   renderPipelineInfoColumn(selectedPipe);
