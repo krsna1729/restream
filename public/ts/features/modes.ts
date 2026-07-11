@@ -818,7 +818,8 @@ function applyMode(
       const active = button.dataset.dashboardMode === mode;
       button.classList.toggle("btn-accent", active);
       button.classList.toggle("btn-outline", !active);
-      button.setAttribute("aria-pressed", active ? "true" : "false");
+      button.setAttribute("aria-selected", active ? "true" : "false");
+      button.tabIndex = active ? 0 : -1;
     });
 
   const summary = document.getElementById("workspace-mode-summary");

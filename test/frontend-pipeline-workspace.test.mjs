@@ -106,9 +106,12 @@ test("pipeline workspace shell exposes one active subordinate view", async () =>
   workspace.syncPipelineWorkspaceShell("pipeline", "inspect");
 
   assert.equal(bar.classList.contains("hidden"), false);
-  assert.equal(operate.getAttribute("aria-pressed"), "false");
-  assert.equal(inspect.getAttribute("aria-pressed"), "true");
-  assert.equal(monitor.getAttribute("aria-pressed"), "false");
+  assert.equal(operate.getAttribute("aria-selected"), "false");
+  assert.equal(inspect.getAttribute("aria-selected"), "true");
+  assert.equal(monitor.getAttribute("aria-selected"), "false");
+  assert.equal(operate.tabIndex, -1);
+  assert.equal(inspect.tabIndex, 0);
+  assert.equal(monitor.tabIndex, -1);
   assert.equal(operatePanel.classList.contains("hidden"), true);
   assert.equal(inspectPanel.classList.contains("hidden"), false);
   assert.equal(monitorPanel.classList.contains("hidden"), true);

@@ -124,7 +124,8 @@ export function syncPipelineWorkspaceShell(
       const selected = active && button.dataset.pipelineWorkspaceView === view;
       button.classList.toggle("btn-accent", selected);
       button.classList.toggle("btn-outline", !selected);
-      button.setAttribute("aria-pressed", selected ? "true" : "false");
+      button.setAttribute("aria-selected", selected ? "true" : "false");
+      button.tabIndex = selected ? 0 : -1;
     });
 
   const panels: Record<PipelineWorkspaceView, HTMLElement | null> = {
