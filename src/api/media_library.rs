@@ -1,7 +1,7 @@
 use axum::{
     Json,
     body::Body,
-    extract::{Path, State},
+    extract::{Multipart, Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -9,7 +9,7 @@ use bytes::Bytes;
 use futures_util::stream;
 use serde::Deserialize;
 
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 use std::sync::Arc;
 
@@ -25,6 +25,8 @@ use super::state::{AppState, get_session_token_from_headers, require_authenticat
 pub struct MediaRenamePayload {
     pub new_name: String,
 }
+
+pub const MAX_MEDIA_UPLOAD_BYTES: usize = 8 * 1024 * 1024 * 1024;
 
 pub async fn recording_start_handler(
     State(state): State<Arc<AppState>>,
@@ -87,6 +89,179 @@ pub async fn media_list_handler(
         .list_media_files(&state.media_dir)
         .await;
     Json(serde_json::json!({ "files": files })).into_response()
+}
+
+/// Stream one media file into the configured library without buffering it in
+/// memory. The upload route has its own body limit; keeping that larger limit
+/// off the general API router prevents ordinary control-plane requests from
+/// inheriting media-sized attack surface.
+pub async fn media_upload_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
+    if let Some(token) = get_session_token_from_headers(&headers) {
+        if !state.is_authenticated(&token).await {
+            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+        }
+    } else {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+
+    let mut uploaded = None;
+    loop {
+        let mut field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(
+                        serde_json::json!({"error": format!("Invalid multipart upload: {error}")}),
+                    ),
+                )
+                    .into_response();
+            }
+        };
+        if field.name() != Some("file") || uploaded.is_some() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Upload exactly one file field"})),
+            )
+                .into_response();
+        }
+        let Some(filename) = field.file_name().map(str::to_owned) else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Uploaded file is missing a filename"})),
+            )
+                .into_response();
+        };
+        if validate_media_filename(&filename).is_err() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Unsupported or unsafe media filename"})),
+            )
+                .into_response();
+        }
+
+        let destination = match media_destination_path_under_root(&state.media_dir, &filename) {
+            Ok(path) => path,
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Media directory error"})),
+                )
+                    .into_response();
+            }
+        };
+        if destination.exists() {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": "A media file with that name already exists"})),
+            )
+                .into_response();
+        }
+
+        let temporary = destination.with_file_name(format!(
+            ".{filename}.upload-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let mut output = match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .await
+        {
+            Ok(file) => file,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("Failed to create upload: {error}")})),
+                )
+                    .into_response();
+            }
+        };
+
+        let mut size = 0usize;
+        let mut write_error = None;
+        while let Some(chunk) = match field.chunk().await {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                write_error = Some(format!("Failed to read upload: {error}"));
+                None
+            }
+        } {
+            size = size.saturating_add(chunk.len());
+            if size > MAX_MEDIA_UPLOAD_BYTES {
+                write_error = Some("Uploaded file exceeds the 8 GiB limit".to_string());
+                break;
+            }
+            if let Err(error) = output.write_all(&chunk).await {
+                write_error = Some(format!("Failed to write upload: {error}"));
+                break;
+            }
+        }
+        if let Err(error) = output.flush().await {
+            write_error.get_or_insert_with(|| format!("Failed to finalize upload: {error}"));
+        }
+        drop(output);
+
+        if let Some(error) = write_error {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            let status = if error == "Uploaded file exceeds the 8 GiB limit" {
+                StatusCode::PAYLOAD_TOO_LARGE
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            return (status, Json(serde_json::json!({"error": error}))).into_response();
+        }
+
+        // hard_link is create-only at the final name, so a concurrent upload
+        // cannot replace an existing library file between the earlier check
+        // and publication. It is atomic because both paths share media_dir.
+        match tokio::fs::hard_link(&temporary, &destination).await {
+            Ok(()) => {
+                let _ = tokio::fs::remove_file(&temporary).await;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = tokio::fs::remove_file(&temporary).await;
+                return (
+                    StatusCode::CONFLICT,
+                    Json(
+                        serde_json::json!({"error": "A media file with that name already exists"}),
+                    ),
+                )
+                    .into_response();
+            }
+            Err(error) => {
+                let _ = tokio::fs::remove_file(&temporary).await;
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(
+                        serde_json::json!({"error": format!("Failed to publish upload: {error}")}),
+                    ),
+                )
+                    .into_response();
+            }
+        }
+        uploaded = Some((filename, size));
+    }
+
+    match uploaded {
+        Some((name, size)) => Json(serde_json::json!({
+            "uploaded": true,
+            "name": name,
+            "size": size,
+        }))
+        .into_response(),
+        None => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Upload requires one file field"})),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn media_analysis_handler(

@@ -2,6 +2,7 @@ import {
   deleteMediaFile,
   listMediaFiles,
   renameMediaFile,
+  uploadMediaFile,
   type MediaFile,
 } from "../core/api.js";
 import { withBasePath } from "../core/base-path.js";
@@ -192,6 +193,10 @@ function mountMediaShell(container: HTMLElement): void {
                     <h1 class="text-lg font-semibold">Media Library</h1>
                     <p class="text-base-content/60 text-sm">Recordings and file-ingest sources from the configured media directory.</p>
                 </div>
+                <div>
+                    <input class="hidden js-upload-media-input" type="file" accept=".ts,.mkv,.mp4,.mov">
+                    <button type="button" class="btn btn-sm btn-primary js-upload-media">Upload media</button>
+                </div>
             </div>
             <div class="space-y-4 p-4">
                 ${mediaSectionShell("Recordings", "media-recordings-list", "media-recordings-summary")}
@@ -238,6 +243,19 @@ export function refreshMediaLibraryMetricsOnly(): void {
 }
 
 function attachMediaActions(container: HTMLElement): void {
+  const uploadButton = container.querySelector<HTMLButtonElement>(".js-upload-media");
+  const uploadInput = container.querySelector<HTMLInputElement>(".js-upload-media-input");
+  if (uploadButton && uploadInput && uploadButton.dataset.bound !== "1") {
+    uploadButton.dataset.bound = "1";
+    uploadButton.addEventListener("click", () => uploadInput.click());
+    uploadInput.addEventListener("change", async () => {
+      const file = uploadInput.files?.[0];
+      uploadInput.value = "";
+      if (!file) return;
+      const result = await uploadMediaFile(file);
+      if (result !== null) await renderMediaLibraryMode({ force: true });
+    });
+  }
   container
     .querySelectorAll<HTMLButtonElement>(".js-rename-media")
     .forEach((btn) => {

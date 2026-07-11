@@ -428,6 +428,27 @@ fn auth_req_with_header(
         .unwrap()
 }
 
+fn media_upload_req(cookie: &str, filename: &str, contents: &[u8]) -> Request<axum::body::Body> {
+    let boundary = "restream-upload-boundary";
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(contents);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    Request::builder()
+        .method("POST")
+        .uri("/api/v1/media/upload")
+        .header("Cookie", cookie)
+        .header(
+            "Content-Type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(axum::body::Body::from(body))
+        .unwrap()
+}
+
 async fn body_json(resp: axum::http::Response<axum::body::Body>) -> serde_json::Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap()
@@ -4075,6 +4096,41 @@ async fn media_library_classifies_serves_and_deletes_files() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+#[tokio::test]
+async fn media_library_upload_streams_one_validated_file() {
+    let (app, cookie, temp_dir, _) = authenticated_app_with_temp_media().await;
+
+    let response = app
+        .clone()
+        .oneshot(media_upload_req(&cookie, "source.mp4", b"uploaded media"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let uploaded = body_json(response).await;
+    assert_eq!(uploaded["uploaded"], true);
+    assert_eq!(uploaded["name"], "source.mp4");
+    assert_eq!(uploaded["size"], 14);
+    assert_eq!(
+        std::fs::read(temp_dir.join("source.mp4")).unwrap(),
+        b"uploaded media"
+    );
+
+    let duplicate = app
+        .clone()
+        .oneshot(media_upload_req(&cookie, "source.mp4", b"second copy"))
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+
+    let unsafe_name = app
+        .oneshot(media_upload_req(&cookie, "../../escape.txt", b"not media"))
+        .await
+        .unwrap();
+    assert_eq!(unsafe_name.status(), StatusCode::BAD_REQUEST);
+    assert!(!temp_dir.parent().unwrap().join("escape.txt").exists());
     let _ = std::fs::remove_dir_all(temp_dir);
 }
 

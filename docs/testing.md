@@ -330,6 +330,7 @@ live integration tests (`src/bin/test_harness.rs`). As of June 27, 2026 all
 | `GET` | `/api/v1/engine` | ✓ | — | |
 | `GET` | `/api/v1/engine/sbom` | ✓ | — | |
 | `GET` | `/api/v1/media` | ✓ | — | |
+| `POST` | `/api/v1/media/upload` | ✓ | ✓ | authenticated multipart upload; duplicate/path traversal proof |
 | `GET` | `/api/v1/media/:filename/analysis` | ✓ | — | |
 | `PATCH` | `/api/v1/media/:filename` | ✓ | — | Rename + ingest reference update |
 | `DELETE` | `/api/v1/media/:filename` | ✓ | — | Path traversal tested |

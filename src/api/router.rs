@@ -36,8 +36,9 @@ use super::ingests::{
 };
 use super::logs::{logs_handler, logs_stream_handler};
 use super::media_library::{
-    media_analysis_handler, media_delete_handler, media_file_handler, media_list_handler,
-    media_rename_handler, recording_start_handler, recording_stop_handler,
+    MAX_MEDIA_UPLOAD_BYTES, media_analysis_handler, media_delete_handler, media_file_handler,
+    media_list_handler, media_rename_handler, media_upload_handler, recording_start_handler,
+    recording_stop_handler,
 };
 use super::outputs::{
     output_status_handler, outputs_create_handler, outputs_delete_handler, outputs_start_handler,
@@ -133,6 +134,7 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/engine/sbom",
     "/api/v1/engine/health",
     "/api/v1/media",
+    "/api/v1/media/upload",
     "/api/v1/media/:filename/analysis",
     "/api/v1/media/:filename",
     "/media/:filename",
@@ -357,6 +359,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/engine", get(status_get_handler))
         .route("/api/v1/engine/sbom", get(status_sbom_get_handler))
         .route("/api/v1/engine/health", get(v1_engine_health_handler))
+        .route(
+            "/api/v1/media/upload",
+            post(media_upload_handler).layer(DefaultBodyLimit::max(MAX_MEDIA_UPLOAD_BYTES)),
+        )
         .route("/api/v1/media", get(media_list_handler))
         .route(
             "/api/v1/media/:filename/analysis",

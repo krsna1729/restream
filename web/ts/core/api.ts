@@ -87,8 +87,12 @@ async function apiRequest<T = unknown>(
   const options: RequestInit = { method: normalizedMethod, signal };
 
   if (body !== null) {
-    options.headers = { "Content-Type": "application/json" };
-    options.body = JSON.stringify(body);
+    if (body instanceof FormData) {
+      options.body = body;
+    } else {
+      options.headers = { "Content-Type": "application/json" };
+      options.body = JSON.stringify(body);
+    }
   }
 
   const trackMutationLoading =
@@ -900,6 +904,17 @@ async function listMediaFiles(): Promise<{ files: MediaFile[] } | null> {
   return apiRequest<{ files: MediaFile[] }>("/api/v1/media");
 }
 
+async function uploadMediaFile(
+  file: File,
+): Promise<{ uploaded: boolean; name: string; size: number } | null> {
+  const body = new FormData();
+  body.append("file", file, file.name);
+  return apiRequest<{ uploaded: boolean; name: string; size: number }>(
+    "/api/v1/media/upload",
+    { method: "POST", body },
+  );
+}
+
 async function deleteMediaFile(
   filename: string,
 ): Promise<{ deleted: boolean } | null> {
@@ -1111,6 +1126,7 @@ export {
   startRecording,
   stopRecording,
   listMediaFiles,
+  uploadMediaFile,
   deleteMediaFile,
   renameMediaFile,
   listIngests,

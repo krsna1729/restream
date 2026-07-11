@@ -205,6 +205,28 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
   });
 });
 
+test("media upload uses the canonical multipart endpoint", async () => {
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return new Response(
+      JSON.stringify({ uploaded: true, name: "source.mp4", size: 12 }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const api = await loadApiModule();
+  const result = await api.uploadMediaFile(
+    new File(["media bytes"], "source.mp4", { type: "video/mp4" }),
+  );
+
+  assert.equal(captured.url, "/api/v1/media/upload");
+  assert.equal(captured.options.method, "POST");
+  assert.ok(captured.options.body instanceof FormData);
+  assert.equal(captured.options.body.get("file").name, "source.mp4");
+  assert.deepEqual(result, { uploaded: true, name: "source.mp4", size: 12 });
+});
+
 test("stage telemetry treats an inactive-stage 404 as an expected null snapshot", async () => {
   const api = await loadApiModule();
   let errorAlerts = 0;

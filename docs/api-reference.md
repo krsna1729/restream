@@ -567,6 +567,7 @@ no zombie processes remain.
 | Method | Route | Purpose |
 |---|---|---|
 | `GET` | `/api/v1/media` | List supported media files in `.restream/media/` by default |
+| `POST` | `/api/v1/media/upload` | Upload one `.ts`, `.mkv`, `.mp4`, or `.mov` media-library file (multipart field `file`, max 8 GiB) |
 | `GET` | `/api/v1/media/:filename/analysis` | Return source-file codec / duration / GOP analysis |
 | `PATCH` | `/api/v1/media/:filename` | Rename a media file without changing its extension |
 | `DELETE` | `/api/v1/media/:filename` | Delete an unreferenced file under `media/` |
