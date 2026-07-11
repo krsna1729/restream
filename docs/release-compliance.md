@@ -15,6 +15,9 @@ artifact that needs provenance and license review.
   SHA-256 digest over the resolved native static inputs and headers.
 - Run `cargo audit`, `cargo deny check advisories licenses bans sources`, and
   the SBOM vulnerability scan before publishing an artifact.
+- Release builds must preserve diagnostic tracing callsites; do not enable
+  `tracing/release_max_level_*` features without an explicit observability
+  review.
 
 ## Native License Basis
 
@@ -36,3 +39,10 @@ native build.
 application as `LicenseRef-restream-internal`. Do not replace that with a public
 SPDX license identifier unless the project owner has approved the release terms
 and the native dependency obligations above.
+
+## Dependency Policy
+
+`deny.toml` denies unknown registries and Git sources, denies known
+vulnerabilities and unsound advisories, and warns on duplicate dependency
+families. Any temporary duplicate-family skip must stay documented in
+`deny.toml` and should be removed when the upstream dependency graph converges.

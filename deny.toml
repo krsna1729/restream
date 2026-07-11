@@ -21,6 +21,9 @@ copyleft = "warn"
 
 [bans]
 multiple-versions = "warn"
+# These duplicate families currently come through independent ecosystem stacks.
+# Keep them visible as warnings while avoiding a hard CI block until upstream
+# dependencies converge.
 skip = [
   { name = "base64" },
   { name = "hashbrown" },
