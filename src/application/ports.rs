@@ -946,7 +946,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sqlite_ingest_lookup_reads_ingest_by_id_and_latest_stream_key_entry() {
+    async fn sqlite_ingest_lookup_reads_ingest_by_id_and_stream_key() {
         let pool = test_pool().await;
         crate::db::create_ingest(
             &pool,
@@ -960,7 +960,7 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::db::create_ingest(
+        let duplicate = crate::db::create_ingest(
             &pool,
             "i2",
             "clip-latest.mp4",
@@ -970,17 +970,17 @@ mod tests {
             false,
             2,
         )
-        .await
-        .unwrap();
+        .await;
         let lookup = SqliteIngestLookup::new(pool);
 
         let by_id = lookup.get_ingest("i1").await.unwrap();
         let by_stream_key = lookup.get_ingest_by_stream_key("stream-key").await.unwrap();
 
+        assert!(duplicate.is_err());
         assert_eq!(by_id.as_ref().map(|ingest| ingest.id.as_str()), Some("i1"));
         assert_eq!(
             by_stream_key.as_ref().map(|ingest| ingest.id.as_str()),
-            Some("i2")
+            Some("i1")
         );
     }
 
@@ -993,9 +993,9 @@ mod tests {
         crate::db::create_ingest(&pool, "i2", "clip-2.mp4", "other-key", false, "", false, 2)
             .await
             .unwrap();
-        crate::db::create_ingest(&pool, "i3", "clip-3.mp4", "stream-key", false, "", false, 2)
-            .await
-            .unwrap();
+        let duplicate =
+            crate::db::create_ingest(&pool, "i3", "clip-3.mp4", "stream-key", false, "", false, 2)
+                .await;
         let lookup = SqliteIngestLookup::new(pool);
 
         let ingests = lookup
@@ -1003,9 +1003,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(ingests.len(), 2);
+        assert!(duplicate.is_err());
+        assert_eq!(ingests.len(), 1);
         assert_eq!(ingests[0].id, "i1");
-        assert_eq!(ingests[1].id, "i3");
     }
 
     #[tokio::test]

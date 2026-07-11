@@ -201,23 +201,29 @@ pub struct MediaByteRange {
     pub end: u64,
 }
 
-pub fn parse_media_range_header(range: &str, size: u64) -> Result<Option<MediaByteRange>, ()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MediaRangeParseError;
+
+pub fn parse_media_range_header(
+    range: &str,
+    size: u64,
+) -> Result<Option<MediaByteRange>, MediaRangeParseError> {
     let Some(spec) = range.strip_prefix("bytes=") else {
         return Ok(None);
     };
     if spec.contains(',') {
-        return Err(());
+        return Err(MediaRangeParseError);
     }
     let Some((start_raw, end_raw)) = spec.split_once('-') else {
-        return Err(());
+        return Err(MediaRangeParseError);
     };
     if start_raw.is_empty() {
-        let suffix_len = end_raw.parse::<u64>().map_err(|_| ())?;
+        let suffix_len = end_raw.parse::<u64>().map_err(|_| MediaRangeParseError)?;
         if suffix_len == 0 {
-            return Err(());
+            return Err(MediaRangeParseError);
         }
         if size == 0 {
-            return Err(());
+            return Err(MediaRangeParseError);
         }
         let start = size.saturating_sub(suffix_len);
         return Ok(Some(MediaByteRange {
@@ -226,14 +232,14 @@ pub fn parse_media_range_header(range: &str, size: u64) -> Result<Option<MediaBy
         }));
     }
 
-    let start = start_raw.parse::<u64>().map_err(|_| ())?;
+    let start = start_raw.parse::<u64>().map_err(|_| MediaRangeParseError)?;
     let end = if end_raw.is_empty() {
-        size.checked_sub(1).ok_or(())?
+        size.checked_sub(1).ok_or(MediaRangeParseError)?
     } else {
-        end_raw.parse::<u64>().map_err(|_| ())?
+        end_raw.parse::<u64>().map_err(|_| MediaRangeParseError)?
     };
     if start >= size || end < start {
-        return Err(());
+        return Err(MediaRangeParseError);
     }
     Ok(Some(MediaByteRange {
         start,
@@ -266,7 +272,7 @@ async fn media_file_response(
     let range = match range_header.and_then(|value| value.to_str().ok()) {
         Some(range) => match parse_media_range_header(range, size) {
             Ok(range) => range,
-            Err(()) => return Ok(media_range_not_satisfiable_response(size)),
+            Err(MediaRangeParseError) => return Ok(media_range_not_satisfiable_response(size)),
         },
         None => None,
     };

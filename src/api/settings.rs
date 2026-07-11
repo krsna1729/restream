@@ -258,15 +258,14 @@ pub async fn config_patch_handler(
         }
     }
 
-    if let Some(ref profiles) = payload.transcode_profiles {
-        if let Err(e) = state
+    if let Some(ref profiles) = payload.transcode_profiles
+        && let Err(e) = state
             .settings_service
             .save_transcode_profiles(profiles)
             .await
-        {
-            warn!(err = %e, "failed to save transcode profiles");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save profiles").into_response();
-        }
+    {
+        warn!(err = %e, "failed to save transcode profiles");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save profiles").into_response();
     }
 
     let settings = match state.settings_service.load_snapshot(&state.security).await {
