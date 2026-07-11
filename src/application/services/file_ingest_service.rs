@@ -615,15 +615,6 @@ impl FileIngestService {
         }
 
         if let Some(payload) = payload {
-            clear_stream_key_file_ingests(
-                self.pipeline_store.as_ref(),
-                self.ingest_lookup.as_ref(),
-                engine,
-                &pipeline.stream_key,
-            )
-            .await
-            .map_err(|_| ApiError::internal("clear stream key file ingests (current)"))?;
-
             match payload {
                 Some(input) => {
                     persist_pipeline_file_ingest(
@@ -651,8 +642,26 @@ impl FileIngestService {
                     )
                     .await
                     .map_err(|_| ApiError::internal("persist pipeline file ingest"))?;
+
+                    clear_stream_key_file_ingests(
+                        self.pipeline_store.as_ref(),
+                        self.ingest_lookup.as_ref(),
+                        engine,
+                        &pipeline.stream_key,
+                    )
+                    .await
+                    .map_err(|_| ApiError::internal("clear stream key file ingests (current)"))?;
                 }
                 None => {
+                    clear_stream_key_file_ingests(
+                        self.pipeline_store.as_ref(),
+                        self.ingest_lookup.as_ref(),
+                        engine,
+                        &pipeline.stream_key,
+                    )
+                    .await
+                    .map_err(|_| ApiError::internal("clear stream key file ingests (current)"))?;
+
                     remove_pipeline_file_ingest(
                         self.ingest_lookup.as_ref(),
                         self.ingest_writer.as_ref(),
@@ -945,6 +954,58 @@ mod tests {
             err,
             ApiError::Internal(message) if message == "persist pipeline file ingest"
         ));
+    }
+
+    #[tokio::test]
+    async fn apply_file_ingest_payload_preserves_runtime_when_persist_fails() {
+        let pipeline = Pipeline {
+            id: "pipe-1".to_string(),
+            name: "Pipeline".to_string(),
+            stream_key: "stream-key".to_string(),
+            input_source: None,
+            srt_ingest_policy: None,
+        };
+        let ingest = ingest_with(false);
+        let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+        let service = FileIngestService::with_ports(
+            Arc::new(PersistFailingLookup {
+                ingest: ingest.clone(),
+            }),
+            Arc::new(NoopIngestWriter),
+            Arc::new(StaticPipelineStore {
+                pipeline: pipeline.clone(),
+            }),
+            PipelineService::new(pool),
+        );
+        let engine = Arc::new(MediaEngine::new());
+        let _registration = engine
+            .try_register_ingest_attempt(&pipeline.id, &pipeline.stream_key, "file")
+            .await
+            .expect("pipeline should register");
+        engine.mark_file_ingest_running(&ingest.id).await;
+
+        let err = service
+            .apply_file_ingest_payload(
+                &engine,
+                &pipeline,
+                None,
+                Some(Some(FileIngestConfigInput {
+                    filename: "replacement.mp4".to_string(),
+                    loop_flag: false,
+                    start_time: String::new(),
+                    live_optimized: false,
+                    target_gop_seconds: 2,
+                })),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ApiError::Internal(message) if message == "persist pipeline file ingest"
+        ));
+        assert!(engine.has_active_ingest(&pipeline.id).await);
+        assert!(engine.is_file_ingest_running(&ingest.id).await);
     }
 
     #[test]
