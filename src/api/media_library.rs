@@ -519,3 +519,48 @@ pub async fn media_rename_handler(
     }))
     .into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_media_dir(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("restream-api-media-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn relative_media_dir(name: &str) -> String {
+        let path = format!(
+            "target/tmp/restream-api-media-{name}-{}",
+            std::process::id()
+        );
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn media_destination_path_uses_canonical_root_for_relative_media_dir() {
+        let media_dir = relative_media_dir("relative-rename");
+        let canonical_root = std::fs::canonicalize(&media_dir).unwrap();
+
+        let destination = media_destination_path_under_root(&media_dir, "renamed.mp4").unwrap();
+
+        assert_eq!(destination, canonical_root.join("renamed.mp4"));
+        let _ = std::fs::remove_dir_all(media_dir);
+    }
+
+    #[test]
+    fn media_destination_path_rejects_traversal() {
+        let media_dir = temp_media_dir("rename-traversal");
+
+        let err = media_destination_path_under_root(media_dir.to_str().unwrap(), "../clip.mp4")
+            .unwrap_err();
+
+        assert_eq!(err, StatusCode::BAD_REQUEST);
+        let _ = std::fs::remove_dir_all(media_dir);
+    }
+}
