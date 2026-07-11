@@ -360,10 +360,16 @@ impl CustomInput {
 
             (*raw_ctx).pb = avio_ctx;
             (*raw_ctx).flags |= ffmpeg::ffi::AVFMT_FLAG_CUSTOM_IO;
-            // Keep the internal live probe bounded while still allowing AAC
-            // stream parameters to settle on high-track MPEG-TS inputs.
-            (*raw_ctx).probesize = 512 * 1024;
-            (*raw_ctx).max_analyze_duration = 1_000_000;
+            // This is a persistent live queue, not a complete transport file.
+            // A 512 KiB / 1 s probe left low-bitrate SRT H.264 preset stages
+            // in `firstInput` after they had accepted ~453 KiB, so every
+            // dependent output waited forever. The feeder supplies PAT/PMT,
+            // video parameter sets, and AAC headers; 256 KiB / 500 ms leaves
+            // enough room to identify them without making stage startup depend
+            // on a file-sized lead-in. Keep the open-queue internal-stage
+            // regression proof beside the transcoder tests.
+            (*raw_ctx).probesize = 256 * 1024;
+            (*raw_ctx).max_analyze_duration = 500_000;
 
             let mut raw_ctx_mut = raw_ctx;
             let format_name = CString::new("mpegts").expect("static format name");

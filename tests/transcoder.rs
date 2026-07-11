@@ -454,6 +454,59 @@ fn internal_scale_stage_chunked_remux_input_preserves_video_timestamp_order() {
     assert_packets_have_monotonic_dts_per_stream(&packets);
 }
 
+#[test]
+fn internal_scale_stage_emits_before_live_queue_closes() {
+    // Regression: file-ingest feeds a complete queue and hid the fact that an
+    // in-process AVIO reader can wait indefinitely on a persistent SRT queue.
+    // This committed transport fixture needs a 768 KiB keyframe lead-in; keep
+    // the queue open after that valid startup window and require video before
+    // EOF, matching the live stage contract.
+    const LIVE_STARTUP_BYTES: usize = 768 * 1024;
+    let fixture = load_fixture();
+    assert!(
+        fixture.len() > LIVE_STARTUP_BYTES,
+        "checked-in H.264 fixture must exercise a bounded live startup window"
+    );
+
+    let input = Arc::new(MemoryQueue::new());
+    let output = Arc::new(RingBuffer::new(4096));
+    let cancel = CancellationToken::new();
+    let worker_input = input.clone();
+    let worker_output = output.clone();
+    let worker_cancel = cancel.clone();
+    let worker = std::thread::spawn(move || {
+        run_ffmpeg_transcode_with_scale(worker_input, worker_output, "720p", worker_cancel)
+    });
+
+    input.write_sync(&fixture[..LIVE_STARTUP_BYTES]);
+    let mut reader = Reader::new("internal_live_queue_startup".to_string(), output);
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let mut emitted_video = false;
+    while Instant::now() < deadline {
+        while let Ok(Some(packet)) = reader.pull() {
+            if packet.media_type == MediaType::Video {
+                emitted_video = true;
+                break;
+            }
+        }
+        if emitted_video {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    cancel.cancel();
+    input.close();
+    let result = worker
+        .join()
+        .expect("internal scale worker should not panic");
+    assert!(result.is_ok(), "internal scale worker failed: {result:?}");
+    assert!(
+        emitted_video,
+        "internal scale stage must emit before a live queue reaches EOF"
+    );
+}
+
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: 6,
