@@ -154,6 +154,24 @@ fn release_policy_metadata_is_declared_and_enforced() {
     }
 }
 
+#[test]
+fn hls_preview_runtime_execution_stays_out_of_planner() {
+    let planner_mod = include_str!("../src/planner/mod.rs");
+    assert!(
+        !planner_mod.contains("hls_preview"),
+        "planner should expose pure planning modules only"
+    );
+
+    let graph_plan = include_str!("../src/planner/graph_plan.rs");
+    assert!(graph_plan.contains("pub fn plan_hls_preview_graph"));
+    assert!(!graph_plan.contains("StageRuntimeManager"));
+    assert!(!graph_plan.contains("tokio::time"));
+
+    let preview_graph = include_str!("../src/media/hls/preview_graph.rs");
+    assert!(preview_graph.contains("StageRuntimeManager"));
+    assert!(preview_graph.contains("resolve_hls_preview_graph"));
+}
+
 fn extract_router_route_paths(source: &'static str) -> BTreeSet<&'static str> {
     let mut paths = BTreeSet::new();
     for (offset, _) in source.match_indices(".route(") {

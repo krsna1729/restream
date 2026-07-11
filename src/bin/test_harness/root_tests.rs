@@ -250,15 +250,20 @@ fn recording_uses_metadata_identity_not_tmp_filename() {
 
 #[test]
 fn hls_preview_plan_uses_graph_planner() {
-    let source = include_str!(concat!(
+    let planner = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/src/planner/hls_preview.rs"
+        "/src/planner/graph_plan.rs"
+    ));
+    let runtime = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/media/hls/preview_graph.rs"
     ));
 
-    assert!(source.contains("plan_hls_preview_graph("));
-    assert!(source.contains("preview_plan"));
-    assert!(source.contains(".stages"));
-    assert!(source.contains("spawn_preview_stage"));
+    assert!(planner.contains("pub fn plan_hls_preview_graph("));
+    assert!(runtime.contains("plan_hls_preview_graph("));
+    assert!(runtime.contains("preview_plan"));
+    assert!(runtime.contains(".stages"));
+    assert!(runtime.contains("spawn_preview_stage"));
 }
 
 #[test]

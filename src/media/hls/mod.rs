@@ -11,6 +11,7 @@
 
 pub mod fmp4;
 pub mod preview;
+pub mod preview_graph;
 pub mod ts;
 pub mod upload;
 
