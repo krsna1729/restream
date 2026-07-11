@@ -1,9 +1,11 @@
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode, Uri, header},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     response::{IntoResponse, Redirect, Response},
 };
+use bytes::Bytes;
 use rust_embed::RustEmbed;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 use super::state::{AppState, get_session_token_from_headers, request_is_authenticated};
@@ -13,6 +15,10 @@ use super::state::{AppState, get_session_token_from_headers, request_is_authenti
 pub struct EmbeddedAssets;
 
 pub fn serve_embedded(path: &str) -> Response {
+    serve_embedded_with_headers(path, &HeaderMap::new())
+}
+
+pub fn serve_embedded_with_headers(path: &str, headers: &HeaderMap) -> Response {
     let content_type = match path.rsplit('.').next() {
         Some("html") => "text/html; charset=utf-8",
         Some("css") => "text/css",
@@ -34,18 +40,73 @@ pub fn serve_embedded(path: &str) -> Response {
             && candidate.starts_with(&public_root)
             && let Ok(data) = std::fs::read(&candidate)
         {
-            return (StatusCode::OK, [(header::CONTENT_TYPE, content_type)], data).into_response();
+            return static_asset_response(path, content_type, bytes::Bytes::from(data), headers);
         }
     }
 
     match EmbeddedAssets::get(path) {
-        Some(file) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, content_type)],
-            file.data.to_vec(),
-        )
-            .into_response(),
+        Some(file) => {
+            let data = match file.data {
+                std::borrow::Cow::Borrowed(data) => Bytes::from_static(data),
+                std::borrow::Cow::Owned(data) => Bytes::from(data),
+            };
+            static_asset_response(path, content_type, data, headers)
+        }
         None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+fn static_asset_response(
+    path: &str,
+    content_type: &'static str,
+    data: Bytes,
+    headers: &HeaderMap,
+) -> Response {
+    let etag = asset_etag(path, &data);
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.split(',').any(|candidate| candidate.trim() == etag))
+    {
+        return (
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, header_value(&etag)),
+                (header::CACHE_CONTROL, cache_control(path)),
+            ],
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static(content_type)),
+            (header::ETAG, header_value(&etag)),
+            (header::CACHE_CONTROL, cache_control(path)),
+        ],
+        data,
+    )
+        .into_response()
+}
+
+fn asset_etag(path: &str, data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(path.as_bytes());
+    hasher.update([0]);
+    hasher.update(data);
+    format!("\"{:x}\"", hasher.finalize())
+}
+
+fn header_value(value: &str) -> HeaderValue {
+    HeaderValue::from_str(value).expect("generated static asset header is valid")
+}
+
+fn cache_control(path: &str) -> HeaderValue {
+    if path.ends_with(".html") {
+        HeaderValue::from_static("no-cache")
+    } else {
+        HeaderValue::from_static("public, max-age=3600")
     }
 }
 
@@ -55,7 +116,7 @@ pub async fn login_get_handler(State(state): State<Arc<AppState>>, headers: Head
     {
         return Redirect::to("./").into_response();
     }
-    serve_embedded("login.html").into_response()
+    serve_embedded_with_headers("login.html", &headers).into_response()
 }
 
 pub async fn login_html_redirect_handler() -> impl IntoResponse {
@@ -70,12 +131,12 @@ pub async fn status_html_redirect_handler() -> impl IntoResponse {
     Redirect::to("./?mode=status")
 }
 
-pub async fn logo_handler() -> impl IntoResponse {
-    serve_embedded("logo.png")
+pub async fn logo_handler(headers: HeaderMap) -> impl IntoResponse {
+    serve_embedded_with_headers("logo.png", &headers)
 }
 
-pub async fn css_handler() -> impl IntoResponse {
-    serve_embedded("output.css")
+pub async fn css_handler(headers: HeaderMap) -> impl IntoResponse {
+    serve_embedded_with_headers("output.css", &headers)
 }
 
 pub async fn spa_fallback_handler(
@@ -88,12 +149,12 @@ pub async fn spa_fallback_handler(
         if path.ends_with(".html") && !request_is_authenticated(&state, &headers).await {
             return Redirect::to("login").into_response();
         }
-        return serve_embedded(path).into_response();
+        return serve_embedded_with_headers(path, &headers).into_response();
     }
     if !request_is_authenticated(&state, &headers).await {
         return Redirect::to("login").into_response();
     }
-    serve_embedded("index.html").into_response()
+    serve_embedded_with_headers("index.html", &headers).into_response()
 }
 
 pub async fn api_not_found_handler(uri: Uri) -> impl IntoResponse {

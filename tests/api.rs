@@ -221,6 +221,66 @@ async fn base_path_script_is_served_as_static_asset() {
 }
 
 #[tokio::test]
+async fn static_assets_use_cache_validators() {
+    let (app, _) = test_app().await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/base-path.js")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("public, max-age=3600")
+    );
+    let etag = resp.headers().get(header::ETAG).cloned().unwrap();
+    assert!(!body_bytes(resp).await.is_empty());
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/base-path.js")
+                .header(header::IF_NONE_MATCH, etag)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(resp).await.is_empty());
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/login")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-cache")
+    );
+    assert!(resp.headers().contains_key(header::ETAG));
+}
+
+#[tokio::test]
 async fn login_page_uses_base_path_aware_api_and_redirects() {
     let (app, _) = test_app().await;
 
