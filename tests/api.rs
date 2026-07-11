@@ -77,7 +77,7 @@ async fn test_app_with_secure_cookies() -> axum::Router {
         log_broadcast,
         "media".to_string(),
     );
-    state.secure_session_cookies = true;
+    state.set_secure_session_cookies_for_test(true);
 
     api::create_router(Arc::new(state))
 }

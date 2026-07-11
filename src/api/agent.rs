@@ -529,8 +529,7 @@ pub async fn agent_verify_handler(
 
 #[cfg(feature = "agent-plane")]
 async fn build_agent_context(state: &AppState) -> serde_json::Value {
-    let agent_service = state.agent_service.clone();
-    let catalog = agent_service.load_context_catalog(&state.security).await;
+    let catalog = state.agent_context_catalog().await;
     let pipelines = catalog.pipelines;
     let pipeline_ids: Vec<String> = pipelines.iter().map(|p| p.id.clone()).collect();
     let outputs = catalog.outputs;
@@ -611,7 +610,7 @@ async fn build_agent_context(state: &AppState) -> serde_json::Value {
         "ingestSecurity": settings
             .as_ref()
             .map(|settings| settings.ingest_security.clone())
-            .unwrap_or_else(|| state.security.get_config()),
+            .unwrap_or_else(|| state.ingest_security_config()),
         "transcodeProfiles": settings
             .as_ref()
             .map(|settings| settings.transcode_profiles.clone())
@@ -1499,7 +1498,7 @@ async fn agent_dependency_summary(
             "ingests": file_ingest,
         },
         "ingestSecurity": {
-            "config": state.security.get_config(),
+            "config": state.ingest_security_config(),
             "loopbackExempt": true,
             "trackedIpRuntimeStateRedacted": true,
         }

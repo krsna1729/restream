@@ -461,57 +461,26 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let reconciler_config = config.clone();
     let recording_metadata_reporter =
         crate::application::recording::spawn_recording_metadata_reporter(pool.clone());
-    let pipeline_service = crate::application::services::PipelineService::new(pool.clone());
-    let output_service = crate::application::services::OutputService::new(pool.clone());
-    let ingest_service = crate::application::services::IngestService::new(pool.clone());
-    let settings_service = crate::application::services::SettingsService::new(pool.clone());
-    let health_service = crate::application::services::HealthService::new(pool.clone());
-    let runtime_view_service = crate::application::services::RuntimeViewService::new();
-    let file_ingest_service = crate::application::services::FileIngestService::new(
+    let state = Arc::new(crate::api::AppState::new(
         pool.clone(),
-        pipeline_service.clone(),
-    );
-    let media_library_service = crate::application::services::MediaLibraryService::new(
-        pool.clone(),
-        pipeline_service.clone(),
-        ingest_service.clone(),
-    );
-    let log_service = crate::application::services::LogService::new(pool.clone());
-    let auth_service = crate::application::services::AuthService::new(pool.clone());
-    let agent_service = crate::application::services::AgentService::new(pool.clone());
-
-    let state = Arc::new(crate::api::AppState {
-        db: pool.clone(),
-        security: security.clone(),
-        ingest_policy_store: srt_ingest_policy_store.clone(),
+        security.clone(),
+        srt_ingest_policy_store.clone(),
         sessions,
-        engine: engine.clone(),
-        ingest_disconnect_grace_ms: tuning.ingest_disconnect_grace_ms,
-        ports: crate::api::PortConfig {
-            rtmp: ports.rtmp,
-            srt: ports.srt,
+        engine.clone(),
+        logging_handles.broadcast_tx.clone(),
+        crate::api::state::AppStateRuntimeConfig {
+            ingest_disconnect_grace_ms: tuning.ingest_disconnect_grace_ms,
+            ports: crate::api::PortConfig {
+                rtmp: ports.rtmp,
+                srt: ports.srt,
+            },
+            media_dir,
+            db_path: config.db_path.clone(),
+            srt_passphrase: config.srt_passphrase.clone(),
+            srt_pbkeylen: config.srt_pbkeylen,
+            secure_session_cookies: config.secure_session_cookies,
         },
-        media_dir,
-        db_path: config.db_path.clone(),
-        srt_passphrase: config.srt_passphrase.clone(),
-        srt_pbkeylen: config.srt_pbkeylen,
-        pipeline_service,
-        output_service,
-        ingest_service,
-        auth_service,
-        settings_service,
-        health_service,
-        runtime_view_service,
-        file_ingest_service,
-        media_library_service,
-        log_service,
-        agent_service,
-        alert_tracker: crate::alerts::AlertTracker::new(),
-        log_broadcast: logging_handles.broadcast_tx.clone(),
-        secure_session_cookies: config.secure_session_cookies,
-        #[cfg(feature = "agent-execution")]
-        agent_execution: Arc::new(crate::agent_execution::AgentExecutionStore::default()),
-    });
+    ));
 
     // Start Web Server
     let http_addr = format!("{}:{}", config.http_bind_addr, ports.http);
