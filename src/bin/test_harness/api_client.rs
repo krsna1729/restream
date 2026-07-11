@@ -2,6 +2,13 @@
 
 use super::*;
 
+pub(crate) const DEFAULT_HARNESS_ADMIN_PASSWORD: &str = "restream-local-harness-password";
+
+pub(crate) fn harness_admin_password() -> String {
+    std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD")
+        .unwrap_or_else(|_| DEFAULT_HARNESS_ADMIN_PASSWORD.to_string())
+}
+
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ApiOutputMetrics {
@@ -170,8 +177,11 @@ impl RampApi {
     }
 
     pub(crate) async fn login(&mut self) -> Result<(), String> {
-        let password =
-            std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").unwrap_or_else(|_| "admin".into());
+        let password = harness_admin_password();
+        self.login_with_password(&password).await
+    }
+
+    pub(crate) async fn login_with_password(&mut self, password: &str) -> Result<(), String> {
         let body = serde_json::json!({ "password": password }).to_string();
         let response = self
             .client

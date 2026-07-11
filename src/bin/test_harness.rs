@@ -219,6 +219,7 @@ async fn run() -> Result<(), String> {
             "signal.control" => signal_control().await,
             "recovery" => recovery().await,
             "resource-sweep" => resource_sweep().await,
+            "msr" => msr().await,
             "bitrate-sweep" => bitrate_sweep().await,
             "branch-matrix" => branch_matrix().await,
             "srt-crypto-matrix" => srt_crypto_matrix().await,

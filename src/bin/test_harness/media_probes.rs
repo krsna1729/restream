@@ -5,7 +5,18 @@ use super::*;
 pub(crate) enum PublishTrackSelection {
     PrimaryAv,
     AllStreams,
+    /// MSR hero-scenario topology: one H.264 video, 29 stereo AAC language
+    /// tracks, and one 5.1 AAC language track. The checked-in 2v16a fixture
+    /// supplies both source layouts; FFmpeg only maps/copies them onto the
+    /// exact transport shape required by the live scenario.
+    MsrThirtyAudio,
 }
+
+pub(crate) const MSR_LANGUAGE_CODES: [&str; 30] = [
+    "eng", "hin", "spa", "fra", "deu", "ita", "por", "rus", "jpn", "kor", "zho", "ara", "ben",
+    "urd", "ind", "tur", "vie", "tha", "tam", "tel", "mar", "guj", "kan", "mal", "pan", "nld",
+    "pol", "ukr", "swe", "fil",
+];
 
 pub(crate) fn sweep_fixture(config: SweepConfig, bitrate_label: &str) -> Result<PathBuf, String> {
     restream::test_fixtures::bench_transport_fixture(
@@ -47,10 +58,33 @@ pub(crate) fn spawn_publisher_with_selection(
         PublishTrackSelection::PrimaryAv => {
             cmd.args(["-map", "0:v", "-map", "0:a:0"]);
         }
+        PublishTrackSelection::MsrThirtyAudio => {
+            // The fixture has two video streams and sixteen audio streams.
+            // Use only the primary H.264 video, duplicate a checked-in stereo
+            // AAC stream for ranks 1..29, and place the fixture's 5.1 AAC
+            // stream at rank 30. Stream copy preserves representative AAC
+            // packet cadence without adding encoder cost to the publisher.
+            cmd.args(["-map", "0:v:0"]);
+            for _ in 0..29 {
+                cmd.args(["-map", "0:a:1"]);
+            }
+            cmd.args(["-map", "0:a:2"]);
+            for (index, language) in MSR_LANGUAGE_CODES.iter().enumerate() {
+                cmd.arg(format!("-metadata:s:a:{index}"));
+                cmd.arg(format!("language={language}"));
+            }
+        }
     }
     if format == "mpegts" {
         cmd.args(["-mpegts_flags", "+resend_headers"]);
-        cmd.args(["-bsf:v", "dump_extra=freq=keyframe"]);
+        if matches!(selection, PublishTrackSelection::MsrThirtyAudio) {
+            // The MSR source fixture is MP4/AVCC; convert its H.264 payload to
+            // Annex B before the MPEG-TS muxer. Existing transport fixtures
+            // retain their established dump-extra path.
+            cmd.args(["-bsf:v", "h264_mp4toannexb"]);
+        } else {
+            cmd.args(["-bsf:v", "dump_extra=freq=keyframe"]);
+        }
     }
     cmd.args(["-c", "copy", "-f", format]).arg(url);
     if let Some(log_path) = log_path {

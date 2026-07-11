@@ -327,6 +327,7 @@ async fn start_bitrate_sweep_stack(env: &BitrateSweepEnv) -> Result<ResourceSwee
         .env("RESTREAM_HTTP_PORT", env.restream_http.to_string())
         .env("RESTREAM_RTMP_PORT", env.restream_rtmp.to_string())
         .env("RESTREAM_SRT_PORT", env.restream_srt.to_string())
+        .env("RESTREAM_INITIAL_ADMIN_PASSWORD", harness_admin_password())
         .env("RESTREAM_LOG_DIR", env.work_dir.join("logs"))
         .env(
             "RESTREAM_DB_PATH",

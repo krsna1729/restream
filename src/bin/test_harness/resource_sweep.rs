@@ -3,6 +3,9 @@ use super::*;
 #[path = "resource_sweep/bitrate.rs"]
 mod bitrate;
 pub(crate) use bitrate::bitrate_sweep;
+#[path = "resource_sweep/msr.rs"]
+mod msr;
+pub(crate) use msr::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ResourceSweepLifecycle {
@@ -705,6 +708,7 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
         .env("RESTREAM_HTTP_PORT", env.restream_http.to_string())
         .env("RESTREAM_RTMP_PORT", env.restream_rtmp.to_string())
         .env("RESTREAM_SRT_PORT", env.restream_srt.to_string())
+        .env("RESTREAM_INITIAL_ADMIN_PASSWORD", harness_admin_password())
         .env("RESTREAM_LOG_DIR", env.work_dir.join("logs"))
         .env(
             "RESTREAM_DB_PATH",

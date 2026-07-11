@@ -505,6 +505,7 @@ pub(crate) async fn start_restream_child_opts(
         .env("RESTREAM_HTTP_PORT", ports.http.to_string())
         .env("RESTREAM_RTMP_PORT", ports.rtmp.to_string())
         .env("RESTREAM_SRT_PORT", ports.srt.to_string())
+        .env("RESTREAM_INITIAL_ADMIN_PASSWORD", harness_admin_password())
         .env("RESTREAM_LOG_DIR", &log_dir)
         .env("RESTREAM_DB_PATH", db_path.to_string_lossy().to_string())
         .stdout(Stdio::from(log))

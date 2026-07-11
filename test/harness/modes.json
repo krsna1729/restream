@@ -66,6 +66,14 @@
           },
           "foldedInto": "mixed"
         },
+        "msr": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "purpose": "Mahashivratri hero scenario with multi-language SRT ingest and Zipfian RTMP/SRT output fan-out"
+        },
         "bitrate-sweep": {
           "suiteRef": "suites.json#suites.bitrate-sweep",
           "suiteDefault": true,

@@ -1,24 +1,24 @@
-# Hero Scenario: SRT Multi-Language Fan-Out
+# Mahashivratri Hero Scenario: SRT Multi-Language Fan-Out
 
 ## Status
 
-- **Scenario status:** canonical capacity and correctness target
+- **Scenario status:** canonical Mahashivratri capacity and correctness target
 - **Architecture status:** model and test the current implementation; no media-path
   redesign is implied by this document
-- **Harness status:** proposed; not yet implemented or measured
+- **Harness status:** `msr` mode implemented; not yet measured at full scale
 - **Baseline status:** no passing 30-track / 1,200-output baseline exists yet
 
-This document tracks the highest-value production scenario for the current
+This document tracks the Mahashivratri production scenario for the current
 backend: one high-resolution SRT contribution carrying one video stream and 30
-language audio tracks, fanned out to mostly RTMP push outputs. Each RTMP output
-selects exactly one audio track. SRT outputs may select one track, a subset, or
-all tracks.
+language audio tracks, fanned out to mostly RTMP push outputs for the event.
+Each RTMP output selects exactly one audio track. SRT outputs may select one
+track, a subset, or all tracks.
 
-The purpose is to keep the scenario, assumptions, expected runtime graph,
-proof plan, and eventual measurements in one durable place. It is not an
-architecture proposal.
+The purpose is to keep the Mahashivratri assumptions, expected runtime graph,
+proof plan, and eventual event-capacity measurements in one durable place. It
+is not an architecture proposal.
 
-## Canonical Workload
+## Canonical Mahashivratri Workload
 
 ### Ingest
 
@@ -145,29 +145,43 @@ per second.
 
 | ID | Risk | Evidence required |
 |---|---|---|
-| HERO-01 | Aggregate network bandwidth exceeds the host link | Measured bytes/s plus external-link certification |
-| HERO-02 | Per-output RTMP packetization/socket work saturates Tokio workers | CPU, scheduler, progress, and latency samples across the ramp |
-| HERO-03 | Thirty audio routers cause allocation/cache pressure | Stage CPU, RSS, retained payload, allocation profile |
-| HERO-04 | Adaptive ring replacement disrupts mass startup | Startup timeline, cancellations, retries, time-to-progress |
-| HERO-05 | Correlated sink failure creates a retry/log/DB storm | Fault slice with bounded recovery and reconciler timing |
-| HERO-06 | Slow outputs overflow and repeatedly restart | One and many slow-sink fault slices; overflow and retry counters |
-| HERO-07 | SRT per-output threads and buffers consume excessive resources | Thread count, AVIO HWM, RSS/PSS, kernel socket memory |
-| HERO-08 | 5.1 AAC is not accepted by an RTMP destination | Interop probe of passthrough 5.1 and optional downmix route |
-| HERO-09 | The shared 4K HEVC compatibility stage misses real time | Stage CPU, output progress, decode probe, dropped/overflow counters |
-| HERO-10 | Teardown leaks tasks, stages, sockets, jobs, or memory | Post-stop convergence and resource return-to-baseline assertions |
+| MSR-01 | Aggregate network bandwidth exceeds the host link | Measured bytes/s plus external-link certification |
+| MSR-02 | Per-output RTMP packetization/socket work saturates Tokio workers | CPU, scheduler, progress, and latency samples across the ramp |
+| MSR-03 | Thirty audio routers cause allocation/cache pressure | Stage CPU, RSS, retained payload, allocation profile |
+| MSR-04 | Adaptive ring replacement disrupts mass startup | Startup timeline, cancellations, retries, time-to-progress |
+| MSR-05 | Correlated sink failure creates a retry/log/DB storm | Fault slice with bounded recovery and reconciler timing |
+| MSR-06 | Slow outputs overflow and repeatedly restart | One and many slow-sink fault slices; overflow and retry counters |
+| MSR-07 | SRT per-output threads and buffers consume excessive resources | Thread count, AVIO HWM, RSS/PSS, kernel socket memory |
+| MSR-08 | 5.1 AAC is not accepted by an RTMP destination | Interop probe of passthrough 5.1 and optional downmix route |
+| MSR-09 | The shared 4K HEVC compatibility stage misses real time | Stage CPU, output progress, decode probe, dropped/overflow counters |
+| MSR-10 | Teardown leaks tasks, stages, sockets, jobs, or memory | Post-stop convergence and resource return-to-baseline assertions |
 
 ## Representative Harness Plan
 
-Yes, this scenario can be represented by the existing live harness philosophy:
+The Mahashivratri scenario is implemented using the existing live harness philosophy:
 run the production binary, configure it through the API, publish real media
-over SRT, and receive real RTMP/SRT egress over localhost. It should be added
-as a dedicated bench-profile measurement mode rather than multiplied into
-every `mixed.matrix` row.
+over SRT, and receive real RTMP/SRT egress over localhost. It is a dedicated
+bench-profile measurement mode rather than another row multiplied through
+`mixed.matrix`.
 
-Proposed mode name:
+Mode name:
 
 ```text
-hero.language-fanout
+msr
+```
+
+The mode command is lowercase `msr`, consistent with the other harness modes.
+MSR stands for **Mahashivratri**. It is an additive,
+bench-profile-only harness mode and is not part of the default suite. Its safe
+default runs the first 30 outputs; set `MSR_FULL=1` for the canonical
+30/120/300/600/900/1,200 ramp or override `MSR_OUTPUT_COUNTS` directly.
+
+Run the deterministic plan smoke, bounded default, or full Mahashivratri ramp:
+
+```sh
+MSR_PLAN_ONLY=1 ./scripts/run-bench-harness.sh msr
+./scripts/run-bench-harness.sh msr
+MSR_FULL=1 ./scripts/run-bench-harness.sh msr
 ```
 
 The implementation must follow the repository's two-tier testing strategy:
@@ -311,16 +325,16 @@ Names are provisional until the mode is implemented:
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `HERO_OUTPUT_COUNTS` | `30,120,300,600,900,1200` | Ramp checkpoints |
-| `HERO_ZIPF_EXPONENT` | `1.0` | Distribution shape |
-| `HERO_HOT_COUNT` | `300` | Rank-one population |
-| `HERO_RTMP_PERCENT` | `95` | Protocol mix |
-| `HERO_SAMPLE_SECS` | `30` | Stable sampling window per checkpoint |
-| `HERO_VIDEO_CODEC` | `h264` | `h264` or `h265`/`hevc` |
-| `HERO_VIDEO_SHAPE` | `1080p30` | Fixture/profile selection |
-| `HERO_SRT_SHAPE` | `single` | `single`, `subsets`, or `all` |
-| `HERO_STOP_AFTER` | unset | Stop after a checkpoint for a bounded run |
-| `HERO_NO_CLEANUP` | unset | Leave the final stack for inspection |
+| `MSR_OUTPUT_COUNTS` | `30` | Ramp checkpoints; overrides `MSR_FULL` |
+| `MSR_FULL` | unset | Use `30,120,300,600,900,1200` checkpoints when set to `1` |
+| `MSR_PLAN_ONLY` | unset | Emit the deterministic 1,200-output plan without starting media |
+| `MSR_SAMPLE_SECS` | `6` | Stable sampling window per checkpoint |
+| `MSR_SAMPLE_INTERVAL_MS` | `1000` | Raw resource sample interval |
+| `MSR_SETTLE_SECS` | `4` | Settle time before sampling |
+| `MSR_PROGRESS_TIMEOUT_BASE_SECS` | `60` | Initial output-progress allowance |
+| `MSR_PROGRESS_TIMEOUT_PER_OUTPUT_SECS` | `2` | Additional progress allowance per output |
+| `MSR_PROGRESS_TIMEOUT_CAP_SECS` | `900` | Maximum progress wait |
+| `MSR_NO_CLEANUP` | unset | Leave the final stack for inspection |
 
 ## Acceptance Contract
 
@@ -347,9 +361,9 @@ Eventually, a passing canonical run should require:
 - [x] Canonical workload and Zipf population documented
 - [x] Expected H.264 and HEVC runtime graphs documented
 - [x] Representative harness approach defined
-- [ ] Exact 30-track checked-in MPEG-TS fixture added
-- [ ] Deterministic topology unit tests added
-- [ ] `hero.language-fanout` mode registered
+- [x] Exact 30-track transport mapping built from the checked-in `2v16a` fixture
+- [x] Deterministic topology unit tests added
+- [x] `msr` mode registered
 - [ ] Harness-owned sinks proven at the required connection counts
 - [ ] Phase 1 correctness run passing
 - [ ] Phase 2 bounded Zipf ramp baseline recorded
@@ -365,4 +379,3 @@ Eventually, a passing canonical run should require:
 - [Resource sweep](resource-sweep.md)
 - [Matrix resource constraints](matrix-resource-constraints.md)
 - [Performance and resource baselines](agent-guidance/quality/baselines.md)
-
