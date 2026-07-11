@@ -38,3 +38,22 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Notes: no capacity knee on 6 cores — 1,200 outputs ≈ 2.4 cores avg,
   447 MB RSS, sublinear CPU scaling. Hero-scenario doc status flipped to
   "measured at full scale (connection-scale phase)".
+
+## 2026-07-11 21:50 VPS HW-COUNTER PROFILING DONE [fable]
+- What: profiled the live 1,200-output soak on the VPS with perf + AMD vPMU
+  (KVM exposes hardware counters; WSL2 does not). Root-caused the pegged CPU
+  core: SRT ingest epoll waiter (`src/media/srt.rs:1536` spawn_blocking loop)
+  busy-spins in libsrt `CEPoll::wait` when the socket is continuously
+  read-ready — ~1 core per SRT ingest, scale-independent. Also attributed a
+  second core to 61 libsrt RcvQ multiplexer threads (one pair per SRT egress).
+  Confirmed tokio is not bin-packed (default `worker_threads = num_cpus`,
+  no affinity; `RESTREAM_TOKIO_WORKER_THREADS` override exists but unset).
+- Gates: n/a (measurement only; no engine code touched; profiling attached
+  to the running soak without disturbing it).
+- Commit: baselines.md § "Profiling notes (VPS)" (this commit).
+- Follow-ups: fix candidate — re-arm handshake or blocking-mode recv for the
+  ingest epoll waiter; bin-packing experiment (2–3 workers) informed by the
+  hot/cool counter contrast; consider libsrt muxer sharing for SRT egress.
+- Notes: hot spinning thread IPC 2.13 / 0.03% L1d miss vs idle scheduler
+  worker IPC 0.45 / 8.3% branch miss / 807 migrations/s — strong quantitative
+  case that fewer, busier workers win on this workload.
