@@ -33,7 +33,10 @@ cd "$ROOT"
 RESTREAM_BUILD_ROOT="$BUILD_ROOT" cargo build "${cargo_args[@]}" --bin restream
 
 BINARY="${CARGO_TARGET_DIR:-$ROOT/target}/$binary_dir/restream"
-SBOM="$ROOT/sbom/restream-runtime.cdx.json"
+# The checked-in SBOM is a source-distribution snapshot. Release certification
+# writes a commit-specific SBOM to dist/ instead, because its provenance fields
+# intentionally change on every tag.
+SBOM="${RESTREAM_SBOM_PATH:-$ROOT/sbom/restream-runtime.cdx.json}"
 file "$BINARY"
 
 ldd_output="$(ldd "$BINARY" 2>&1 || true)"
@@ -48,5 +51,6 @@ echo "Verified: $BINARY does not link libsrt dynamically."
 if [[ "${RESTREAM_SKIP_SBOM:-0}" == "1" ]]; then
     echo "Skipping SBOM emission (RESTREAM_SKIP_SBOM=1)."
 else
+    mkdir -p "$(dirname "$SBOM")"
     "$BINARY" --emit-sbom "$SBOM"
 fi

@@ -19,9 +19,22 @@ artifact that needs provenance and license review.
   `tracing/release_max_level_*` features without an explicit observability
   review.
 
-Run `scripts/check/release-evidence.sh` for the canonical local gate. A `v*`
-tag runs the same gate, the full bench-harness suite, and publishes a
-gzip-compressed OCI runtime archive plus its checksum and runtime SBOM.
+Run `scripts/check/release-evidence.sh <oci-archive> <release-sbom>` for the
+canonical local gate. The checked-in SBOM is a source snapshot; certification
+writes its commit-specific SBOM to the supplied release path so its provenance
+does not dirty the checkout. A `v*` tag runs the same gate, the full
+bench-harness suite, and publishes the
+scratch OCI runtime archive, a checksummed Linux x86_64 bundle containing every
+supported executable plus its verified runtime closure, and the runtime SBOM.
+The certified scratch image is also published to GHCR as both the version tag
+and `latest` only after those gates pass.
+
+The binary bundle is the supported host-download path: unpack it and use
+`./run restream`. Its launcher uses the loader and libraries captured from the
+same smoke-tested scratch image, so it does not rely on host FFmpeg, SRT, or
+C/C++ runtime packages. The diagnostic harness binaries are shipped too, but
+live integration runs still belong in a source checkout because they need the
+checked-in fixtures, MediaMTX, and documented host prerequisites.
 
 ## Native License Basis
 

@@ -6,6 +6,7 @@ set -euo pipefail
 ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 cd "$ROOT"
 ARCHIVE="${1:-}"
+SBOM="${2:-sbom/restream-runtime.cdx.json}"
 
 for command in cargo-audit cargo-deny grype trivy; do
     command -v "$command" >/dev/null || {
@@ -17,11 +18,15 @@ done
 cargo audit
 cargo deny check advisories licenses bans sources
 
-RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
-git diff --exit-code -- sbom/restream-runtime.cdx.json
+RESTREAM_SBOM_PATH="$SBOM" RESTREAM_BUILD_PROFILE=release \
+    scripts/build/resource-limit.sh ./scripts/build/app-native.sh
+[[ -s "$SBOM" ]] || {
+    echo "release-evidence: SBOM was not written: $SBOM" >&2
+    exit 1
+}
 
-grype "sbom:sbom/restream-runtime.cdx.json" --fail-on high
-trivy sbom --exit-code 1 --severity HIGH,CRITICAL sbom/restream-runtime.cdx.json
+grype "sbom:$SBOM" --fail-on high
+trivy sbom --exit-code 1 --severity HIGH,CRITICAL "$SBOM"
 
 if [[ -n "$ARCHIVE" ]]; then
     scripts/check/container-smoke.sh --image restream:release --archive "$ARCHIVE"

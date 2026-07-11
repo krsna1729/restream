@@ -40,12 +40,16 @@ owner-only permissions.
 
 ## Running Restream
 
-The supported portable launch path is the scratch container below. It contains
-the native runtime closure verified by the container and needs no host FFmpeg,
-SRT, or C/C++ runtime packages. A directly downloadable single-file release is
-not published yet: `scripts/build/app-static.sh` is retained as an engineering
-build path and refuses to succeed unless its binary can start, but it is not a
-release contract until that static-runtime proof is restored.
+The supported portable launch paths are the scratch container below and the
+checksummed Linux x86_64 bundle attached to each GitHub release. The bundle
+contains the native runtime closure verified by the container, so after
+unpacking it, run `./run restream` without host FFmpeg, SRT, or C/C++ runtime
+packages. It also contains the feature-enabled MCP and diagnostic harness
+executables; use live harness tooling from a source checkout when it needs
+fixtures, MediaMTX, or host network setup.
+
+`scripts/build/app-static.sh` remains an engineering build path. It is not a
+single-file release contract until its static-runtime proof is restored.
 
 For a host source build, install the dependencies described in
 [docs/development.md](docs/development.md), then use the daily loop below.

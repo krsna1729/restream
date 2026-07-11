@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   certify-and-publish:
@@ -38,14 +39,26 @@ jobs:
           scripts/harness/run.sh --prepare
           target/bench/test_harness suite --run-id release-${{ github.sha }} --continue-on-fail
       - name: Release evidence and OCI asset
-        run: scripts/check/release-evidence.sh dist/restream-${{ github.ref_name || github.sha }}-oci.tar.gz
+        run: |
+          scripts/check/release-evidence.sh \
+            dist/restream-${{ github.ref_name || github.sha }}-oci.tar.gz \
+            dist/restream-${{ github.ref_name || github.sha }}.sbom.cdx.json
+      - name: Package every supported Linux binary
+        run: scripts/release/package-binaries.sh ${{ github.ref_name || github.sha }}
+      - name: Publish certified scratch image
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESTREAM_REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          scripts/release/publish-image.sh "$GITHUB_REF_NAME"
       - uses: actions/upload-artifact@v4
         with:
           name: release-evidence
           path: |
             dist/
             .local/artifacts/release-${{ github.sha }}/
-            sbom/restream-runtime.cdx.json
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -54,4 +67,6 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             dist/restream-"$GITHUB_REF_NAME"-oci.tar.gz \
             dist/restream-"$GITHUB_REF_NAME"-oci.tar.gz.sha256 \
-            sbom/restream-runtime.cdx.json --generate-notes
+            dist/restream-"$GITHUB_REF_NAME"-linux-x86_64.tar.gz \
+            dist/restream-"$GITHUB_REF_NAME"-linux-x86_64.tar.gz.sha256 \
+            dist/restream-"$GITHUB_REF_NAME".sbom.cdx.json --generate-notes
