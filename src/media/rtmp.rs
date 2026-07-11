@@ -17,13 +17,12 @@ use rml_rtmp::sessions::{
     ServerSessionResult, StreamMetadata,
 };
 use rml_rtmp::time::RtmpTimestamp;
-use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -123,7 +122,7 @@ pub async fn start_rtmp_server_on(
     port: u16,
 ) {
     let addr = format!("0.0.0.0:{port}");
-    let backlog = engine.config.rtmp_backlog as i32;
+    let backlog = engine.config.rtmp_backlog;
     let listener = match bind_rtmp_listener_with_backlog(port, backlog) {
         Ok(l) => l,
         Err(e) => {
@@ -170,14 +169,12 @@ pub async fn start_rtmp_server_on(
     }
 }
 
-fn bind_rtmp_listener_with_backlog(port: u16, backlog: i32) -> Result<TcpListener, std::io::Error> {
-    let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
-    socket.set_reuse_address(true)?;
+fn bind_rtmp_listener_with_backlog(port: u16, backlog: u32) -> Result<TcpListener, std::io::Error> {
+    let socket = TcpSocket::new_v4()?;
+    socket.set_reuseaddr(true)?;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    socket.bind(&SockAddr::from(addr))?;
-    socket.listen(backlog)?;
-    socket.set_nonblocking(true)?;
-    TcpListener::from_std(std::net::TcpListener::from(socket))
+    socket.bind(addr)?;
+    socket.listen(backlog)
 }
 
 #[cfg(target_os = "linux")]
@@ -1092,17 +1089,18 @@ pub async fn start_rtmp_egress(
         parts.stream_key
     );
 
-    let mut socket = match connect_rtmp_egress_stream(&parts).await {
-        Ok(s) => s,
-        Err(e) => {
-            error!(
-                "[rtmp-egress] Connection failed to {}:{}: {:?}",
-                parts.host, parts.port, e
-            );
-            egress_error!("connect", e.to_string());
-            return;
-        }
-    };
+    let mut socket =
+        match connect_rtmp_egress_stream(&parts, engine.config.rtmp_stream_buffer_bytes).await {
+            Ok(s) => s,
+            Err(e) => {
+                error!(
+                    "[rtmp-egress] Connection failed to {}:{}: {:?}",
+                    parts.host, parts.port, e
+                );
+                egress_error!("connect", e.to_string());
+                return;
+            }
+        };
 
     // Perform handshake
     egress_phase!(EgressPhase::Handshaking);

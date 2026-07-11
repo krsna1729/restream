@@ -402,9 +402,8 @@ pub(crate) async fn preflight_check() -> Result<Value, String> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(2048);
-    let disk_check = match nix::sys::statvfs::statvfs(&artifact_root) {
-        Ok(stat) => {
-            let free_mb = stat.block_size() * stat.blocks_available() / 1_048_576;
+    let disk_check = match artifact_disk_free_mb(&artifact_root) {
+        Ok(free_mb) => {
             if free_mb >= min_free_mb {
                 json!({ "check": "artifact-disk", "freeMb": free_mb, "minFreeMb": min_free_mb, "status": "ok" })
             } else {
@@ -454,4 +453,36 @@ pub(crate) async fn preflight_check() -> Result<Value, String> {
             serde_json::to_string_pretty(&result).unwrap_or_default()
         ))
     }
+}
+
+#[cfg(unix)]
+fn artifact_disk_free_mb(path: &Path) -> std::io::Result<u64> {
+    use std::ffi::CString;
+    use std::mem::MaybeUninit;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "artifact path contains an interior NUL byte",
+        )
+    })?;
+    let mut stat = MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: c_path is a valid NUL-terminated path and stat points to writable
+    // memory for libc to initialize.
+    let result = unsafe { libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: statvfs returned success, so the struct was initialized.
+    let stat = unsafe { stat.assume_init() };
+    Ok(stat.f_bsize * stat.f_bavail / 1_048_576)
+}
+
+#[cfg(not(unix))]
+fn artifact_disk_free_mb(_path: &Path) -> std::io::Result<u64> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "artifact disk check is only implemented on Unix",
+    ))
 }

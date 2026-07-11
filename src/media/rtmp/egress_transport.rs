@@ -3,12 +3,13 @@ use crate::media::engine::PublisherQuality;
 use crate::media::tcp_stats::collect_rtmp_sender_stats;
 use reqwest::Url;
 use std::io;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream, lookup_host};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
@@ -91,14 +92,13 @@ fn rustls_client_config() -> Arc<ClientConfig> {
 
 pub(super) async fn connect_rtmp_egress_stream(
     parts: &RtmpUrlParts,
+    buffer_size: usize,
 ) -> io::Result<RtmpEgressStream> {
-    let tcp = tokio::time::timeout(
-        RTMP_EGRESS_CONNECT_TIMEOUT,
-        TcpStream::connect(format!("{}:{}", parts.host, parts.port)),
-    )
+    let tcp = tokio::time::timeout(RTMP_EGRESS_CONNECT_TIMEOUT, async {
+        connect_tcp_with_options(parts, buffer_size).await
+    })
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "RTMP TCP connect timed out"))??;
-    let _ = tcp.set_nodelay(true);
 
     if !parts.tls {
         return Ok(RtmpEgressStream::Plain(tcp));
@@ -111,6 +111,52 @@ pub(super) async fn connect_rtmp_egress_stream(
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "RTMPS TLS handshake timed out"))??;
     Ok(RtmpEgressStream::Tls(Box::new(tls)))
+}
+
+async fn connect_tcp_with_options(
+    parts: &RtmpUrlParts,
+    buffer_size: usize,
+) -> io::Result<TcpStream> {
+    let target = format_host_port(&parts.host, parts.port);
+    let mut last_error = None;
+    for addr in lookup_host(&target).await? {
+        let socket = tcp_socket_for_addr(addr)?;
+        configure_rtmp_socket(&socket, buffer_size);
+        match socket.connect(addr).await {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no addresses resolved for RTMP target {target}"),
+        )
+    }))
+}
+
+fn tcp_socket_for_addr(addr: SocketAddr) -> io::Result<TcpSocket> {
+    if addr.is_ipv4() {
+        TcpSocket::new_v4()
+    } else {
+        TcpSocket::new_v6()
+    }
+}
+
+fn configure_rtmp_socket(socket: &TcpSocket, buffer_size: usize) {
+    let _ = socket.set_nodelay(true);
+    if let Ok(buffer_size) = u32::try_from(buffer_size) {
+        let _ = socket.set_send_buffer_size(buffer_size);
+        let _ = socket.set_recv_buffer_size(buffer_size);
+    }
+}
+
+fn format_host_port(host: &str, port: u16) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
 }
 
 pub(super) fn rtmp_sender_quality(
