@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
-use sqlx::SqlitePool;
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, ChildStderr, ChildStdout, Command};
 use tokio_util::sync::CancellationToken;
@@ -14,7 +13,6 @@ use crate::application::ingest::{
     remove_pipeline_file_ingest, resolve_file_ingest_context,
 };
 use crate::application::ports::{IngestLookup, IngestWriter, PipelineStore};
-use crate::infrastructure::sqlite_ports::{SqliteIngestLookup, SqlitePipelineStore};
 use crate::media::engine::MediaEngine;
 use crate::types::{Ingest, Pipeline};
 
@@ -56,16 +54,6 @@ pub struct FileIngestService {
 }
 
 impl FileIngestService {
-    pub fn new(db: SqlitePool, pipeline_service: PipelineService) -> Self {
-        let ingest_store = Arc::new(SqliteIngestLookup::new(db.clone()));
-        Self {
-            ingest_lookup: ingest_store.clone(),
-            ingest_writer: ingest_store,
-            pipeline_store: Arc::new(SqlitePipelineStore::new(db)),
-            pipeline_service,
-        }
-    }
-
     pub fn with_ports(
         ingest_lookup: Arc<dyn IngestLookup>,
         ingest_writer: Arc<dyn IngestWriter>,
@@ -691,6 +679,7 @@ mod tests {
         PipelineStoreError, PipelineUpdateFuture,
     };
     use crate::application::services::PipelineService;
+    use sqlx::SqlitePool;
 
     fn ingest_with(live_optimized: bool) -> Ingest {
         Ingest {

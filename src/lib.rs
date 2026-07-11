@@ -479,6 +479,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     );
     let log_service = crate::application::services::LogService::new(pool.clone());
     let auth_service = crate::application::services::AuthService::new(pool.clone());
+    let agent_service = crate::application::services::AgentService::new(pool.clone());
 
     let state = Arc::new(crate::api::AppState {
         db: pool.clone(),
@@ -505,6 +506,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         file_ingest_service,
         media_library_service,
         log_service,
+        agent_service,
         alert_tracker: crate::alerts::AlertTracker::new(),
         log_broadcast: logging_handles.broadcast_tx.clone(),
         #[cfg(feature = "agent-execution")]

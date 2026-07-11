@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::application::ports::PipelineStore;
-use crate::infrastructure::sqlite_ports::SqlitePipelineStore;
 use crate::types::Pipeline;
 
 use super::error::{ApiError, ApiResult};
@@ -9,7 +8,7 @@ use super::error::{ApiError, ApiResult};
 /// Application service for pipeline CRUD and read operations.
 ///
 /// Depends on `PipelineStore` — a port trait — rather than `SqlitePool`
-/// directly. The default constructor wires it through `SqlitePipelineStore`;
+/// directly. Infrastructure wiring provides the default SQLite constructor;
 /// tests can inject any implementation.
 #[derive(Clone)]
 pub struct PipelineService {
@@ -17,13 +16,6 @@ pub struct PipelineService {
 }
 
 impl PipelineService {
-    /// Create a service backed by SQLite via `SqlitePipelineStore`.
-    pub fn new(db: sqlx::SqlitePool) -> Self {
-        Self {
-            store: Arc::new(SqlitePipelineStore::new(db)),
-        }
-    }
-
     /// Create a service backed by any `PipelineStore` implementation.
     /// Useful for tests with an in-memory or mock store.
     pub fn with_store(store: Arc<dyn PipelineStore>) -> Self {

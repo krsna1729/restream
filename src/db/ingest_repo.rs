@@ -1,6 +1,32 @@
 use crate::types::Ingest;
 use sqlx::SqlitePool;
 
+#[derive(sqlx::FromRow)]
+struct IngestRow {
+    id: String,
+    filename: String,
+    stream_key: String,
+    #[sqlx(rename = "loop")]
+    loop_flag: bool,
+    start_time: String,
+    live_optimized: bool,
+    target_gop_seconds: u32,
+}
+
+impl From<IngestRow> for Ingest {
+    fn from(row: IngestRow) -> Self {
+        Self {
+            id: row.id,
+            filename: row.filename,
+            stream_key: row.stream_key,
+            loop_flag: row.loop_flag,
+            start_time: row.start_time,
+            live_optimized: row.live_optimized,
+            target_gop_seconds: row.target_gop_seconds,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn create_ingest(
     pool: &SqlitePool,
@@ -31,56 +57,61 @@ pub async fn create_ingest(
 }
 
 pub async fn get_ingest(pool: &SqlitePool, id: &str) -> Result<Option<Ingest>, sqlx::Error> {
-    sqlx::query_as::<_, Ingest>(
+    sqlx::query_as::<_, IngestRow>(
         "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
     .await
+    .map(|row| row.map(Into::into))
 }
 
 pub async fn get_ingest_by_stream_key(
     pool: &SqlitePool,
     stream_key: &str,
 ) -> Result<Option<Ingest>, sqlx::Error> {
-    sqlx::query_as::<_, Ingest>(
+    sqlx::query_as::<_, IngestRow>(
         "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests WHERE stream_key = ? ORDER BY rowid DESC LIMIT 1",
     )
     .bind(stream_key)
     .fetch_optional(pool)
     .await
+    .map(|row| row.map(Into::into))
 }
 
 pub async fn list_ingests_for_stream_key(
     pool: &SqlitePool,
     stream_key: &str,
 ) -> Result<Vec<Ingest>, sqlx::Error> {
-    sqlx::query_as::<_, Ingest>(
+    sqlx::query_as::<_, IngestRow>(
         "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests WHERE stream_key = ? ORDER BY rowid ASC",
     )
     .bind(stream_key)
     .fetch_all(pool)
     .await
+    .map(|rows| rows.into_iter().map(Into::into).collect())
 }
 
 pub async fn list_ingests(pool: &SqlitePool) -> Result<Vec<Ingest>, sqlx::Error> {
-    sqlx::query_as::<_, Ingest>(
+    sqlx::query_as::<_, IngestRow>(
         "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests ORDER BY rowid ASC",
     )
     .fetch_all(pool)
     .await
+    .map(|rows| rows.into_iter().map(Into::into).collect())
 }
 
 pub async fn list_ingests_for_filename(
     pool: &SqlitePool,
     filename: &str,
 ) -> Result<Vec<Ingest>, sqlx::Error> {
-    sqlx::query_as::<_, Ingest>(
+    sqlx::query_as::<_, IngestRow>(
         "SELECT id, filename, stream_key, loop, start_time, live_optimized, target_gop_seconds FROM ingests WHERE filename = ?",
     )
     .bind(filename)
     .fetch_all(pool)
     .await
+    .map(|rows| rows.into_iter().map(Into::into).collect())
 }
 
 #[allow(clippy::too_many_arguments)]

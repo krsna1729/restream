@@ -1,6 +1,27 @@
 use crate::types::Pipeline;
 use sqlx::SqlitePool;
 
+#[derive(sqlx::FromRow)]
+struct PipelineRow {
+    id: String,
+    name: String,
+    stream_key: String,
+    input_source: Option<String>,
+    srt_ingest_policy: Option<String>,
+}
+
+impl From<PipelineRow> for Pipeline {
+    fn from(row: PipelineRow) -> Self {
+        Self {
+            id: row.id,
+            name: row.name,
+            stream_key: row.stream_key,
+            input_source: row.input_source,
+            srt_ingest_policy: row.srt_ingest_policy,
+        }
+    }
+}
+
 pub async fn create_pipeline(
     pool: &SqlitePool,
     id: &str,
@@ -26,32 +47,35 @@ pub async fn create_pipeline(
 }
 
 pub async fn get_pipeline(pool: &SqlitePool, id: &str) -> Result<Option<Pipeline>, sqlx::Error> {
-    sqlx::query_as::<_, Pipeline>(
+    sqlx::query_as::<_, PipelineRow>(
         "SELECT id, name, stream_key, input_source, srt_ingest_policy FROM pipelines WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
     .await
+    .map(|row| row.map(Into::into))
 }
 
 pub async fn get_pipeline_by_stream_key(
     pool: &SqlitePool,
     stream_key: &str,
 ) -> Result<Option<Pipeline>, sqlx::Error> {
-    sqlx::query_as::<_, Pipeline>(
+    sqlx::query_as::<_, PipelineRow>(
         "SELECT id, name, stream_key, input_source, srt_ingest_policy FROM pipelines WHERE stream_key = ?",
     )
     .bind(stream_key)
     .fetch_optional(pool)
     .await
+    .map(|row| row.map(Into::into))
 }
 
 pub async fn list_pipelines(pool: &SqlitePool) -> Result<Vec<Pipeline>, sqlx::Error> {
-    sqlx::query_as::<_, Pipeline>(
+    sqlx::query_as::<_, PipelineRow>(
         "SELECT id, name, stream_key, input_source, srt_ingest_policy FROM pipelines",
     )
     .fetch_all(pool)
     .await
+    .map(|rows| rows.into_iter().map(Into::into).collect())
 }
 
 pub async fn update_pipeline(

@@ -11,8 +11,8 @@ use tracing::warn;
 
 use crate::alerts;
 use crate::application::services::{
-    AuthService, FileIngestService, HealthService, IngestService, LogService, MediaLibraryService,
-    OutputService, PipelineService, RuntimeViewService, SettingsService,
+    AgentService, AuthService, FileIngestService, HealthService, IngestService, LogService,
+    MediaLibraryService, OutputService, PipelineService, RuntimeViewService, SettingsService,
 };
 use crate::media::engine::MediaEngine;
 use crate::media::security::IngestSecurityService;
@@ -68,6 +68,7 @@ pub struct AppState {
     pub file_ingest_service: FileIngestService,
     pub media_library_service: MediaLibraryService,
     pub log_service: LogService,
+    pub agent_service: AgentService,
     pub alert_tracker: alerts::AlertTracker,
     pub log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
     #[cfg(feature = "agent-execution")]
@@ -131,6 +132,7 @@ impl AppState {
         let media_library_service =
             MediaLibraryService::new(db.clone(), pipeline_service.clone(), ingest_service.clone());
         let log_service = LogService::new(db.clone());
+        let agent_service = AgentService::new(db.clone());
 
         Self {
             db,
@@ -157,6 +159,7 @@ impl AppState {
             file_ingest_service,
             media_library_service,
             log_service,
+            agent_service,
             alert_tracker: alerts::AlertTracker::new(),
             log_broadcast,
             #[cfg(feature = "agent-execution")]

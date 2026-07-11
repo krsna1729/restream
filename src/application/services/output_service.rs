@@ -3,15 +3,14 @@ use std::sync::Arc;
 use crate::application::ports::OutputStore;
 use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;
-use crate::infrastructure::sqlite_ports::SqliteOutputStore;
 use crate::types::Output;
 
 use super::error::{ApiError, ApiResult};
 
 /// Application service for output CRUD and lifecycle requests.
 ///
-/// Depends on `OutputStore` rather than `SqlitePool` directly. The default
-/// constructor wires it through `SqliteOutputStore`; tests can inject any
+/// Depends on `OutputStore` rather than `SqlitePool` directly. Infrastructure
+/// wiring provides the default SQLite constructor; tests can inject any
 /// implementation.
 #[derive(Clone)]
 pub struct OutputService {
@@ -19,12 +18,6 @@ pub struct OutputService {
 }
 
 impl OutputService {
-    pub fn new(db: sqlx::SqlitePool) -> Self {
-        Self {
-            store: Arc::new(SqliteOutputStore::new(db)),
-        }
-    }
-
     pub fn with_store(store: Arc<dyn OutputStore>) -> Self {
         Self { store }
     }
