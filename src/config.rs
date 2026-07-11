@@ -35,6 +35,7 @@ pub struct AppConfig {
     pub srt_passphrase: Option<String>,
     pub srt_pbkeylen: i32,
     pub use_internal_file_ingest: bool,
+    pub initial_admin_password: Option<String>,
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -179,6 +180,7 @@ impl Default for AppConfig {
             srt_passphrase: None,
             srt_pbkeylen: 16,
             use_internal_file_ingest: false,
+            initial_admin_password: None,
         }
     }
 }
@@ -231,6 +233,7 @@ impl AppConfig {
             .unwrap_or(16);
         let use_internal_file_ingest =
             std::env::var_os("RESTREAM_USE_INTERNAL_FILE_INGEST").is_some();
+        let initial_admin_password = std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok();
 
         // Calculate external_ffmpeg_permits:
         let permits = if let Ok(value) = std::env::var("RESTREAM_EXTERNAL_FFMPEG_PERMITS")
@@ -293,6 +296,7 @@ impl AppConfig {
             srt_passphrase,
             srt_pbkeylen,
             use_internal_file_ingest,
+            initial_admin_password,
         }
     }
 
@@ -542,9 +546,18 @@ mod tests {
     }
 
     #[test]
+    fn initial_admin_password_is_loaded_by_config_module() {
+        with_env_vars(&[("RESTREAM_INITIAL_ADMIN_PASSWORD", "dev-secret")], || {
+            let config = AppConfig::from_env();
+            assert_eq!(config.initial_admin_password.as_deref(), Some("dev-secret"));
+        });
+    }
+
+    #[test]
     fn effective_summary_covers_runtime_knobs_without_secret_values() {
         let config = AppConfig {
             srt_passphrase: Some("super-secret".to_string()),
+            initial_admin_password: Some("admin-secret".to_string()),
             ffmpeg_bin_path: Some("/usr/bin/ffmpeg".to_string()),
             ..AppConfig::default()
         };
@@ -562,5 +575,6 @@ mod tests {
         assert_eq!(summary["srt"]["passphraseConfigured"], true);
         assert_eq!(summary["srt"]["pbkeylen"], 16);
         assert!(!summary.to_string().contains("super-secret"));
+        assert!(!summary.to_string().contains("admin-secret"));
     }
 }

@@ -429,6 +429,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         &pool,
         &sessions,
         Some(&bootstrap_password_path),
+        config.initial_admin_password.as_deref(),
     )
     .await;
     crate::application::transcode_profiles::load_transcode_profiles(&meta_store).await;

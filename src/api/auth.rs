@@ -148,7 +148,7 @@ pub async fn initialize_auth(
     db_pool: &sqlx::SqlitePool,
     sessions_set: &TokioRwLock<std::collections::HashSet<String>>,
 ) {
-    initialize_auth_with_bootstrap_file(db_pool, sessions_set, None).await;
+    initialize_auth_with_bootstrap_file(db_pool, sessions_set, None, None).await;
 }
 
 pub async fn initialize_auth_for_test(
@@ -174,11 +174,12 @@ pub async fn initialize_auth_with_bootstrap_file(
     db_pool: &sqlx::SqlitePool,
     sessions_set: &TokioRwLock<std::collections::HashSet<String>>,
     bootstrap_password_file: Option<&Path>,
+    initial_admin_password: Option<&str>,
 ) {
     let auth_service = AuthService::new(db_pool.clone());
     if matches!(auth_service.get_password_hash().await, Ok(None)) {
         let (password, generated) =
-            select_initial_admin_password(std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok());
+            select_initial_admin_password(initial_admin_password.map(str::to_string));
         let admin_hash = hash_password(&password);
         if let Err(error) = auth_service.ensure_password_hash(&admin_hash).await {
             panic!("failed to initialize dashboard password: {error}");
