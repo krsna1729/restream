@@ -13,9 +13,42 @@ pub(crate) enum PublishTrackSelection {
 }
 
 pub(crate) const MSR_LANGUAGE_CODES: [&str; 30] = [
-    "eng", "hin", "spa", "fra", "deu", "ita", "por", "rus", "jpn", "kor", "zho", "ara", "ben",
-    "urd", "ind", "tur", "vie", "tha", "tam", "tel", "mar", "guj", "kan", "mal", "pan", "nld",
-    "pol", "ukr", "swe", "fil",
+    "eng", "tam", "hin", "tel", "kan", "mar", "nep", "ben", "mal", "guj", "ori", "ita", "spa",
+    "fra", "deu", "rus", "por", "ara", "zho", "zho", "ind", "jpn", "kor", "urd", "tur", "vie",
+    "tha", "pan", "nld", "pol",
+];
+
+pub(crate) const MSR_LANGUAGE_NAMES: [&str; 30] = [
+    "English",
+    "தமிழ்",
+    "हिन्दी",
+    "తెలుగు",
+    "ಕನ್ನಡ",
+    "मराठी",
+    "नेपाली",
+    "Bengali",
+    "മലയാളം",
+    "Gujarati",
+    "Odia",
+    "Italian",
+    "Spanish",
+    "French",
+    "German",
+    "Russian",
+    "Portuguese",
+    "Arabic",
+    "Simplified Chinese",
+    "Traditional Chinese",
+    "Indonesian",
+    "Japanese",
+    "Korean",
+    "Urdu",
+    "Turkish",
+    "Vietnamese",
+    "Thai",
+    "Punjabi",
+    "Dutch",
+    "Polish",
 ];
 
 pub(crate) fn sweep_fixture(config: SweepConfig, bitrate_label: &str) -> Result<PathBuf, String> {
@@ -69,9 +102,15 @@ pub(crate) fn spawn_publisher_with_selection(
                 cmd.args(["-map", "0:a:1"]);
             }
             cmd.args(["-map", "0:a:2"]);
-            for (index, language) in MSR_LANGUAGE_CODES.iter().enumerate() {
+            for (index, (language_code, language_name)) in MSR_LANGUAGE_CODES
+                .iter()
+                .zip(MSR_LANGUAGE_NAMES.iter())
+                .enumerate()
+            {
                 cmd.arg(format!("-metadata:s:a:{index}"));
-                cmd.arg(format!("language={language}"));
+                cmd.arg(format!("language={language_code}"));
+                cmd.arg(format!("-metadata:s:a:{index}"));
+                cmd.arg(format!("title={language_name}"));
             }
         }
     }

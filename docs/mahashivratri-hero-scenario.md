@@ -34,6 +34,18 @@ is not an architecture proposal.
 | Track identity | Stable track index plus language metadata |
 | Output video encoding | `source` unless a test explicitly selects a preset |
 
+The canonical language ranks are:
+
+```text
+English, தமிழ், हिन्दी, తెలుగు, ಕನ್ನಡ, मराठी, नेपाली, Bengali,
+മലയാളം, Gujarati, Odia, Italian, Spanish, French, German, Russian,
+Portuguese, Arabic, Simplified Chinese, Traditional Chinese, Indonesian,
+Japanese, Korean, Urdu, Turkish, Vietnamese, Thai, Punjabi, Dutch, Polish
+```
+
+Simplified and Traditional Chinese both use the MPEG-TS ISO 639 language code
+`zho`; their distinct stream titles preserve the requested identity.
+
 The primary run uses source-resolution passthrough so it measures the actual
 fan-out and routing path rather than conflating it with a resolution transcode.
 The HEVC variant includes the current shared HEVC-to-H.264 compatibility stage

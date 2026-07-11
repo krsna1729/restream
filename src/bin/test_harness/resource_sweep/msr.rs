@@ -28,7 +28,8 @@ impl MsrProtocol {
 struct MsrOutputSpec {
     ordinal: usize,
     rank: usize,
-    language: &'static str,
+    language_code: &'static str,
+    language_name: &'static str,
     protocol: MsrProtocol,
     encoding: String,
     name: String,
@@ -49,7 +50,8 @@ fn msr_output_plan() -> Vec<MsrOutputSpec> {
             plan.push(MsrOutputSpec {
                 ordinal,
                 rank: rank_index + 1,
-                language: MSR_LANGUAGE_CODES[rank_index],
+                language_code: MSR_LANGUAGE_CODES[rank_index],
+                language_name: MSR_LANGUAGE_NAMES[rank_index],
                 protocol,
                 encoding: format!("source+atrack:{rank_index}"),
                 name: format!(
@@ -121,7 +123,17 @@ fn msr_plan_json(plan: &[MsrOutputSpec], checkpoints: &[usize]) -> Value {
             "srtPercent": 5,
             "checkpoints": checkpoints,
         },
-        "languages": MSR_LANGUAGE_CODES,
+        "languages": MSR_LANGUAGE_NAMES,
+        "languageTracks": MSR_LANGUAGE_CODES
+            .iter()
+            .zip(MSR_LANGUAGE_NAMES.iter())
+            .enumerate()
+            .map(|(index, (code, name))| json!({
+                "rank": index + 1,
+                "code": code,
+                "name": name,
+            }))
+            .collect::<Vec<_>>(),
     })
 }
 
@@ -316,11 +328,34 @@ mod tests {
     #[test]
     fn every_output_selects_its_rank_audio_track() {
         for output in msr_output_plan() {
-            assert_eq!(output.language, MSR_LANGUAGE_CODES[output.rank - 1]);
+            assert_eq!(output.language_code, MSR_LANGUAGE_CODES[output.rank - 1]);
+            assert_eq!(output.language_name, MSR_LANGUAGE_NAMES[output.rank - 1]);
             assert_eq!(
                 output.encoding,
                 format!("source+atrack:{}", output.rank - 1)
             );
         }
+    }
+
+    #[test]
+    fn requested_mahashivratri_language_codes_are_present() {
+        let required = [
+            "eng", "tam", "hin", "tel", "kan", "mar", "nep", "ben", "mal", "guj", "ori", "ita",
+            "spa", "fra", "deu", "rus", "por", "ara", "ind",
+        ];
+        for language_code in required {
+            assert!(
+                MSR_LANGUAGE_CODES.contains(&language_code),
+                "missing required MSR language code {language_code}"
+            );
+        }
+        assert_eq!(
+            MSR_LANGUAGE_CODES
+                .iter()
+                .filter(|code| **code == "zho")
+                .count(),
+            2,
+            "Simplified and Traditional Chinese both require zho entries"
+        );
     }
 }
