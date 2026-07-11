@@ -100,4 +100,10 @@ if [[ $prepare_only -eq 1 ]]; then
   exit 0
 fi
 
-scripts/build/resource-limit.sh "$bin" "$mode" "${harness_args[@]}"
+# The build lock is exclusive while Cargo/native inputs are being written, but
+# an already-built harness is a read-only consumer. Use a shared lock here so
+# `parallel-fast-breadth.sh` can really run its port-isolated groups together;
+# an incoming build still waits until every live run has released its shared
+# lock. Keeping this exclusive silently serialized the groups behind 10-minute
+# lock waits and made the regression breadth gate time out.
+scripts/build/resource-limit.sh --shared "$bin" "$mode" "${harness_args[@]}"
