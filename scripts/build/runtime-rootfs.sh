@@ -17,13 +17,10 @@ if [[ ! -x "$binary" ]]; then
     exit 1
 fi
 
+restream_home="$rootfs/.restream"
 mkdir -p \
-    "$rootfs/data" \
+    "$restream_home" \
     "$rootfs/etc/ssl/certs" \
-    "$rootfs/logs" \
-    "$rootfs/media" \
-    "$rootfs/runtime" \
-    "$rootfs/tmp" \
     "$rootfs/usr/share/zoneinfo"
 
 cp -a /usr/share/zoneinfo/. "$rootfs/usr/share/zoneinfo/"
@@ -35,8 +32,7 @@ cp /etc/services "$rootfs/etc/services"
 cp -L /etc/resolv.conf "$rootfs/etc/resolv.conf"
 printf 'restream:x:1000:1000:restream:/nonexistent:/sbin/nologin\n' > "$rootfs/etc/passwd"
 printf 'restream:x:1000:\n' > "$rootfs/etc/group"
-chmod 1777 "$rootfs/tmp"
-chown -R 1000:1000 "$rootfs/data" "$rootfs/logs" "$rootfs/media" "$rootfs/runtime" "$rootfs/tmp"
+chown -R 1000:1000 "$restream_home"
 
 # Keep this parser deliberately constrained to absolute ELF paths reported by
 # ldd. Any failure aborts the package step: a scratch image without its loader

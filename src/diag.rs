@@ -1222,7 +1222,7 @@ mod tests {
             engine,
             "pipe-test".to_string(),
             "file".to_string(),
-            "media".to_string(),
+            ".restream/media".to_string(),
             None,
         )
         .await;

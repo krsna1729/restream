@@ -100,13 +100,12 @@ docker run --rm \
   -p 3030:3030 restream:container
 ```
 
-Bare Restream and the container use the same owned layout: `data/restream.db`
-(including its WAL/SHM sidecars and initial-password file), `media/`, and
-`runtime/ffmpeg/`. Docker rebases those paths to `/data`, `/media`, and
-`/runtime`, with rotated JSON logs under `/logs`. Mount each volume
-independently when it must persist. `RESTREAM_LOG_DIR` overrides the default
-`logs/` directory; stdout/stderr and SQLite-backed log history remain enabled
-as well.
+Bare Restream and the container use the same owned layout under `.restream/`:
+`data/restream.db` (including WAL/SHM sidecars and the initial-password file),
+`media/`, `logs/`, and `runtime/ffmpeg/`. A container can run with no mounts
+for an ephemeral session; mount one volume at `/.restream` to persist all
+state. `RESTREAM_LOG_DIR` overrides the default `.restream/logs` directory;
+stdout/stderr and SQLite-backed log history remain enabled as well.
 
 For the complete live protocol harness, build the explicit `harness` target.
 It contains the bench-profile `restream` and `test_harness` binaries, pinned

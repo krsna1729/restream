@@ -47,7 +47,7 @@ async fn test_app_with_engine() -> (axum::Router, SqlitePool, Arc<MediaEngine>) 
         sessions,
         engine.clone(),
         log_broadcast,
-        "media".to_string(),
+        ".restream/media".to_string(),
     ));
 
     (api::create_router(state), pool, engine)
@@ -75,7 +75,7 @@ async fn test_app_with_secure_cookies() -> axum::Router {
         sessions,
         engine,
         log_broadcast,
-        "media".to_string(),
+        ".restream/media".to_string(),
     );
     state.set_secure_session_cookies_for_test(true);
 
@@ -1407,7 +1407,7 @@ async fn config_patch_ingest_security_does_not_mutate_runtime_when_persist_fails
         sessions,
         engine,
         log_broadcast,
-        "media".to_string(),
+        ".restream/media".to_string(),
     );
     state.settings_service =
         restream::application::services::SettingsService::new(settings_pool.clone());
@@ -2870,7 +2870,7 @@ async fn health_shows_registered_egress() {
             sessions,
             engine.clone(),
             log_broadcast,
-            "media".to_string(),
+            ".restream/media".to_string(),
         ));
         api::create_router(state)
     };
@@ -3322,7 +3322,7 @@ async fn delete_pipeline_storage_failure_is_internal_error() {
         sessions,
         engine,
         log_broadcast,
-        "media".to_string(),
+        ".restream/media".to_string(),
     );
     state.pipeline_service =
         restream::application::services::PipelineService::new(pipeline_pool.clone());
@@ -3366,7 +3366,7 @@ async fn health_and_dashboard_runtime_fail_when_pipeline_list_fails() {
         sessions,
         engine,
         log_broadcast,
-        "media".to_string(),
+        ".restream/media".to_string(),
     );
     state.pipeline_service =
         restream::application::services::PipelineService::new(pipeline_pool.clone());

@@ -39,7 +39,7 @@ async fn test_app_with_engine() -> (axum::Router, SqlitePool, Arc<MediaEngine>) 
         sessions,
         engine.clone(),
         log_broadcast,
-        "media".to_string(),
+        ".restream/media".to_string(),
     ));
 
     (api::create_router(state), pool, engine)

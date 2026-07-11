@@ -15,6 +15,7 @@ old/
 
 # Generated frontend bundle and downloaded runtime binary
 /public/
+/.restream/
 /data/
 /logs/
 /media/

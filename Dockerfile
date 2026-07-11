@@ -122,17 +122,14 @@ RUN scripts/build/bench-harness.sh
 # ── Stage 4: pure-scratch runtime ────────────────────────────────────────────
 #
 # Runtime requirements:
-#   /data     SQLite database persistence (including WAL/SHM sidecars)
-#   /logs     rotated JSON process logs
-#   /media    uploaded media and recordings
-#   /runtime  internal embedded-FFmpeg cache; no executable `/tmp` mount is required
+#   /.restream/data     SQLite database persistence (including WAL/SHM sidecars)
+#   /.restream/logs     rotated JSON process logs
+#   /.restream/media    uploaded media and recordings
+#   /.restream/runtime  internal embedded-FFmpeg cache; the runtime needs no `/tmp` directory
 #
 # Example:
 #   docker run -d \
-#     -v restream-db:/data \
-#     -v restream-logs:/logs \
-#     -v restream-media:/media \
-#     -v restream-runtime:/runtime \
+#     -v restream-state:/.restream \
 #     -p 3030:3030 -p 1935:1935 -p 10080:10080/udp \
 #     restream:scratch
 FROM scratch AS runtime-scratch
@@ -144,9 +141,7 @@ EXPOSE 3030 1935 10080/udp
 
 USER 1000:1000
 
-ENV RESTREAM_DB_PATH=/data/restream.db \
-    RESTREAM_MEDIA_DIR=/media \
-    RESTREAM_HTTP_BIND_ADDR=0.0.0.0
+ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
 
 ENTRYPOINT ["/restream"]
 
@@ -160,9 +155,7 @@ COPY --from=runtime-tree /workspace/target/release/restream /restream
 
 EXPOSE 3030 1935 10080/udp
 USER 1000:1000
-ENV RESTREAM_DB_PATH=/data/restream.db \
-    RESTREAM_MEDIA_DIR=/media \
-    RESTREAM_HTTP_BIND_ADDR=0.0.0.0
+ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
 ENTRYPOINT ["/restream"]
 
 # ── Stage 5: live-harness image ──────────────────────────────────────────────

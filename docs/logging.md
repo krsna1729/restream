@@ -131,9 +131,9 @@ any buffered lines before the process exits.
 File names: `RESTREAM_LOG_DIR/restream.log.2026-06-27`. No log rotation library is
 required — daily rotation is built into `tracing-appender`.
 
-The default directory is `logs/`. Set `RESTREAM_LOG_DIR` to place rotated JSON
-log files elsewhere, or to an empty string to disable the file sink while
-keeping stdout/stderr and SQLite-backed history active.
+The default directory is `.restream/logs/`. Set `RESTREAM_LOG_DIR` to place
+rotated JSON log files elsewhere, or to an empty string to disable the file
+sink while keeping stdout/stderr and SQLite-backed history active.
 
 ### 3. DbLayer — SQLite (`app_logs` table)
 

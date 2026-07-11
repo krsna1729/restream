@@ -6,7 +6,7 @@
 //! extraction entirely, keeping RSS baseline low.
 //!
 //! When the env var is absent the embedded binary (via `rust-embed`) is written
-//! to a versioned shared cache under `runtime/ffmpeg/`, made executable,
+//! to a versioned shared cache under `.restream/runtime/ffmpeg/`, made executable,
 //! and then reused across processes. Startup is intentionally atomic and
 //! multi-process safe so correctness harness modes can boot in parallel.
 //!
@@ -77,7 +77,7 @@ pub fn ensure_ffmpeg_extracted() -> &'static Path {
 }
 
 fn embedded_cache_root() -> PathBuf {
-    PathBuf::from("runtime").join("ffmpeg")
+    PathBuf::from(".restream/runtime").join("ffmpeg")
 }
 
 fn embedded_cache_key(bytes: &[u8]) -> String {
@@ -254,7 +254,10 @@ mod tests {
 
     #[test]
     fn embedded_cache_uses_the_owned_runtime_directory() {
-        assert_eq!(embedded_cache_root(), PathBuf::from("runtime/ffmpeg"));
+        assert_eq!(
+            embedded_cache_root(),
+            PathBuf::from(".restream/runtime/ffmpeg")
+        );
     }
 
     #[test]

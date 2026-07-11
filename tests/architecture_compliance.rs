@@ -44,7 +44,7 @@ async fn test_phase_3_routing_resolves_all_major_routes() {
         sessions,
         mock_engine,
         log_broadcast,
-        "media".to_string(),
+        ".restream/media".to_string(),
     ));
     let app = restream::api::create_router(state);
     let _ = app.into_make_service();

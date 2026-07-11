@@ -38,9 +38,10 @@ initial password and writes it next to the SQLite database as
 Source builds require the host toolchain and native dependencies. The supported
 portable launch path is the scratch container documented in the README; the
 single-file static build is not a release artifact until its startup proof is
-restored. A direct source-built binary owns `data/restream.db`, `media/`, and
-`runtime/` in its working directory by default; explicit database, media, and
-log-directory environment variables override their respective locations.
+restored. A direct source-built binary owns `.restream/data/restream.db`,
+`.restream/media/`, `.restream/logs/`, and `.restream/runtime/` in its working
+directory by default; explicit database, media, and log-directory environment
+variables override their respective locations.
 
 ## Manual Prerequisites
 

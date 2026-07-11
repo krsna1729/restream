@@ -200,8 +200,8 @@ impl Default for AppConfig {
             ports,
             http_bind_addr: "127.0.0.1".to_string(),
             tuning,
-            db_path: "data/restream.db".to_string(),
-            media_dir: "media".to_string(),
+            db_path: ".restream/data/restream.db".to_string(),
+            media_dir: ".restream/media".to_string(),
             log_retention_days: 7,
             backend_policy: BackendPolicy {
                 internal_video_presets: false,
@@ -226,7 +226,7 @@ impl Default for AppConfig {
             require_srt_bonding: false,
             external_ffmpeg_permits: derived_permits,
             ffmpeg_bin_path: None,
-            log_dir: "logs".to_string(),
+            log_dir: ".restream/logs".to_string(),
             no_color: false,
             srt_passphrase: None,
             srt_pbkeylen: 16,
@@ -243,9 +243,10 @@ impl AppConfig {
         let http_bind_addr =
             std::env::var("RESTREAM_HTTP_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
         let tuning = RuntimeTuning::from_env();
-        let db_path =
-            std::env::var("RESTREAM_DB_PATH").unwrap_or_else(|_| "data/restream.db".to_string());
-        let media_dir = std::env::var("RESTREAM_MEDIA_DIR").unwrap_or_else(|_| "media".to_string());
+        let db_path = std::env::var("RESTREAM_DB_PATH")
+            .unwrap_or_else(|_| ".restream/data/restream.db".to_string());
+        let media_dir =
+            std::env::var("RESTREAM_MEDIA_DIR").unwrap_or_else(|_| ".restream/media".to_string());
         let log_retention_days = env_u64("RESTREAM_LOG_RETENTION_DAYS", 7);
         let backend_policy = BackendPolicy::from_env();
         let rtmp_backlog = env_u32("RESTREAM_RTMP_LISTENER_BACKLOG", 1024);
@@ -277,7 +278,8 @@ impl AppConfig {
             env_usize("RESTREAM_TRANSCODER_RING_CAPACITY", 512).clamp(64, 16384);
         let require_srt_bonding = std::env::var_os("RESTREAM_REQUIRE_SRT_BONDING").is_some();
         let ffmpeg_bin_path = std::env::var("FFMPEG_BIN_PATH").ok();
-        let log_dir = std::env::var("RESTREAM_LOG_DIR").unwrap_or_else(|_| "logs".to_string());
+        let log_dir =
+            std::env::var("RESTREAM_LOG_DIR").unwrap_or_else(|_| ".restream/logs".to_string());
         let no_color = std::env::var_os("NO_COLOR").is_some();
         let srt_passphrase = std::env::var("RESTREAM_SRT_PASSPHRASE").ok();
         let srt_pbkeylen = std::env::var("RESTREAM_SRT_PBKEYLEN")
@@ -516,9 +518,9 @@ mod tests {
             &["RESTREAM_DB_PATH", "RESTREAM_MEDIA_DIR", "RESTREAM_LOG_DIR"],
             || {
                 let config = AppConfig::from_env();
-                assert_eq!(config.db_path, "data/restream.db");
-                assert_eq!(config.media_dir, "media");
-                assert_eq!(config.log_dir, "logs");
+                assert_eq!(config.db_path, ".restream/data/restream.db");
+                assert_eq!(config.media_dir, ".restream/media");
+                assert_eq!(config.log_dir, ".restream/logs");
             },
         );
 

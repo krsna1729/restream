@@ -13,10 +13,10 @@ in SQLite.
 | SRT listener | `0.0.0.0:10080` | `RESTREAM_SRT_PORT` |
 | Transcoder backend | External FFmpeg subprocess | `RESTREAM_INTERNAL_VIDEO_PRESETS`, `RESTREAM_INTERNAL_HEVC_TO_H264`, `RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX` (`1`/`true`/`yes`/`on` enable each in-process stage family independently) |
 | File-ingest backend | External embedded FFmpeg subprocess | `RESTREAM_USE_INTERNAL_FILE_INGEST` (`1`/`true`/`yes`/`on` to enable in-process remux + demux for passthrough file ingest) |
-| External transcoder and file-ingest executable | Embedded `public/bin/ffmpeg`, extracted to `runtime/ffmpeg/` at startup | `FFMPEG_BIN_PATH` |
-| SQLite database | `data/restream.db` (with WAL/SHM sidecars) | `RESTREAM_DB_PATH` |
-| Media directory | `media/` | `RESTREAM_MEDIA_DIR` |
-| Text file log directory | `logs/` | `RESTREAM_LOG_DIR` |
+| External transcoder and file-ingest executable | Embedded `public/bin/ffmpeg`, extracted to `.restream/runtime/ffmpeg/` at startup | `FFMPEG_BIN_PATH` |
+| SQLite database | `.restream/data/restream.db` (with WAL/SHM sidecars) | `RESTREAM_DB_PATH` |
+| Media directory | `.restream/media/` | `RESTREAM_MEDIA_DIR` |
+| Text file log directory | `.restream/logs/` | `RESTREAM_LOG_DIR` |
 | Media packet ring depth (source/ingest) | `1024` packets | `RESTREAM_RING_CAPACITY` |
 | Media packet ring depth (transcoder output) | `512` packets | `RESTREAM_TRANSCODER_RING_CAPACITY` (720p30 output ≈ 80 pkt/s → 512 slots ≈ 6.4 s jitter headroom; lower than source ring because I-frame payloads are large) |
 | Shared SRT TS ring depth | `256` chunks | `RESTREAM_TS_RING_CAPACITY` (SRT protocol's own send buffer absorbs network jitter; this ring only bridges muxer → socket write, typically sub-millisecond) |
@@ -45,11 +45,11 @@ external transcoder, the default file-ingest backend, and post-recording
 `.ts` → `.mp4` remux. The recording remux path requires that binary to expose
 the `mov/mp4` muxer.
 
-The default working-directory layout is deliberately small and explicit:
-`data/` owns only SQLite state and its sidecars, `media/` owns uploads and
-recordings, and `runtime/` is an internal disposable executable cache. Database
-and media paths can be overridden independently for container volumes or
-host-service conventions.
+The default working-directory layout is deliberately small and hidden under
+`.restream/`: `data/` owns only SQLite state and its sidecars, `media/` owns
+uploads and recordings, `logs/` owns rotated file logs, and `runtime/` is an
+internal disposable executable cache. Database and media paths can be
+overridden independently for host-service conventions.
 
 ## SQLite-Backed Settings
 

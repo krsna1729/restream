@@ -566,7 +566,7 @@ no zombie processes remain.
 
 | Method | Route | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/media` | List supported media files in `media/` |
+| `GET` | `/api/v1/media` | List supported media files in `.restream/media/` by default |
 | `GET` | `/api/v1/media/:filename/analysis` | Return source-file codec / duration / GOP analysis |
 | `PATCH` | `/api/v1/media/:filename` | Rename a media file without changing its extension |
 | `DELETE` | `/api/v1/media/:filename` | Delete an unreferenced file under `media/` |
