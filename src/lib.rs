@@ -50,6 +50,7 @@ pub mod diag;
 pub mod domain;
 pub mod events;
 pub mod ffmpeg_extract;
+pub mod infrastructure;
 pub mod logging;
 pub mod media;
 pub mod planner;
@@ -384,7 +385,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
         .expect("Failed to reset stale running jobs");
 
     // Initialize services
-    let meta_store = crate::application::ports::SqliteMetaStore::new(pool.clone());
+    let meta_store = crate::infrastructure::sqlite_ports::SqliteMetaStore::new(pool.clone());
     let sec_config =
         crate::application::ingest_security::load_ingest_security_config(&meta_store).await;
     let backend_policy =
@@ -392,7 +393,8 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let security = Arc::new(crate::media::security::IngestSecurityService::new(
         sec_config,
     ));
-    let pipeline_store = crate::application::ports::SqlitePipelineStore::new(pool.clone());
+    let pipeline_store =
+        crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(pool.clone());
     let pipeline_catalog: Arc<dyn crate::application::ports::PipelineStore> =
         Arc::new(pipeline_store.clone());
     let srt_passphrase = config.srt_passphrase.clone();

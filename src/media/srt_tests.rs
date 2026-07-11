@@ -28,7 +28,7 @@ async fn srt_server_shutdown_exits_with_no_connections() {
     crate::db::setup_database_schema(&pool).await.unwrap();
     let engine = Arc::new(MediaEngine::new());
     let server = Arc::new(SrtServer::new(
-        Arc::new(crate::application::ports::SqlitePipelineStore::new(pool)),
+        Arc::new(crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(pool)),
         engine.clone(),
         Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
         Arc::new(SrtIngestPolicyStore::new(

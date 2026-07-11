@@ -13,9 +13,8 @@ use crate::application::ingest::{
     clear_stream_key_file_ingests, load_pipeline_file_ingest_state, persist_pipeline_file_ingest,
     remove_pipeline_file_ingest, resolve_file_ingest_context,
 };
-use crate::application::ports::{
-    IngestLookup, IngestWriter, PipelineStore, SqliteIngestLookup, SqlitePipelineStore,
-};
+use crate::application::ports::{IngestLookup, IngestWriter, PipelineStore};
+use crate::infrastructure::sqlite_ports::{SqliteIngestLookup, SqlitePipelineStore};
 use crate::media::engine::MediaEngine;
 use crate::types::{Ingest, Pipeline};
 

@@ -2,9 +2,11 @@ use std::sync::Arc;
 
 use crate::application::ports::{
     IngestHostStore, IngestLookup, JobStore, MetaStore, OutputStore, PipelineStore,
-    SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqliteOutputStore, SqlitePipelineStore,
 };
 use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
+use crate::infrastructure::sqlite_ports::{
+    SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqliteOutputStore, SqlitePipelineStore,
+};
 use crate::media::security::IngestSecurityService;
 use crate::planner::backend_policy::BackendPolicy;
 use crate::types::{Ingest, Job, Output, Pipeline};

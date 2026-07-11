@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use crate::application::ports::{OutputStore, SqliteOutputStore};
+use crate::application::ports::OutputStore;
 use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;
+use crate::infrastructure::sqlite_ports::SqliteOutputStore;
 use crate::types::Output;
 
 use super::error::{ApiError, ApiResult};

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use crate::application::ports::{PipelineStore, SqlitePipelineStore};
+use crate::application::ports::PipelineStore;
+use crate::infrastructure::sqlite_ports::SqlitePipelineStore;
 
 use super::error::{ApiError, ApiResult};
 

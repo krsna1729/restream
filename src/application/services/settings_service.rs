@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use crate::application::ports::{
-    IngestHostStore, JobStore, MetaStore, MetaStoreWriter, SqliteJobStore, SqliteMetaStore,
-};
+use crate::application::ports::{IngestHostStore, JobStore, MetaStore, MetaStoreWriter};
 use crate::application::recording::load_recording_enabled_map;
 use crate::application::recording::{RecordingSettings, save_recording_settings};
 use crate::application::settings::{BACKEND_POLICY_META_KEY, load_settings_snapshot};
@@ -12,6 +10,7 @@ use crate::application::{
 };
 use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::domain::transcode_profile::TranscodeProfiles;
+use crate::infrastructure::sqlite_ports::{SqliteJobStore, SqliteMetaStore};
 use crate::media::security::IngestSecurityService;
 use crate::media::srt::SrtIngestPolicyStore;
 use crate::planner::backend_policy::BackendPolicy;
