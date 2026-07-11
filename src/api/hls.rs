@@ -1,8 +1,10 @@
 use axum::{
+    Json,
     extract::{OriginalUri, Path, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 use super::state::{AppState, require_hls_access};
@@ -159,32 +161,80 @@ fn media_response(
 
 fn hls_preview_error_response(err: HlsPreviewReadError) -> Response {
     match err {
-        HlsPreviewReadError::NoStream => (StatusCode::NOT_FOUND, "No HLS stream").into_response(),
+        HlsPreviewReadError::NoStream => {
+            json_error_response(StatusCode::NOT_FOUND, "hlsNoStream", "No HLS stream", None)
+        }
         HlsPreviewReadError::NoSegments { blocked_by } => {
             if let Some(cause) = blocked_by {
-                (
+                json_error_response(
                     StatusCode::NOT_FOUND,
+                    "hlsNoSegments",
                     format!(
                         "No segments yet: blocked by video stage: {} (phase: {})",
                         cause.stage, cause.phase
                     ),
+                    Some(json!({
+                        "blockedBy": {
+                            "stage": cause.stage.to_string(),
+                            "phase": cause.phase.to_string(),
+                        }
+                    })),
                 )
-                    .into_response()
             } else {
-                (StatusCode::NOT_FOUND, "No segments yet").into_response()
+                json_error_response(
+                    StatusCode::NOT_FOUND,
+                    "hlsNoSegments",
+                    "No segments yet",
+                    None,
+                )
             }
         }
-        HlsPreviewReadError::AudioTrackNotFound => {
-            (StatusCode::NOT_FOUND, "Audio track not found").into_response()
-        }
-        HlsPreviewReadError::InvalidSegmentName => {
-            (StatusCode::BAD_REQUEST, "Invalid segment name").into_response()
-        }
-        HlsPreviewReadError::SegmentNotFound => {
-            (StatusCode::NOT_FOUND, "Segment not found").into_response()
-        }
-        HlsPreviewReadError::InitSegmentNotFound => {
-            (StatusCode::NOT_FOUND, "No init segment").into_response()
-        }
+        HlsPreviewReadError::AudioTrackNotFound => json_error_response(
+            StatusCode::NOT_FOUND,
+            "hlsAudioTrackNotFound",
+            "Audio track not found",
+            None,
+        ),
+        HlsPreviewReadError::InvalidSegmentName => json_error_response(
+            StatusCode::BAD_REQUEST,
+            "hlsInvalidSegmentName",
+            "Invalid segment name",
+            None,
+        ),
+        HlsPreviewReadError::SegmentNotFound => json_error_response(
+            StatusCode::NOT_FOUND,
+            "hlsSegmentNotFound",
+            "Segment not found",
+            None,
+        ),
+        HlsPreviewReadError::InitSegmentNotFound => json_error_response(
+            StatusCode::NOT_FOUND,
+            "hlsInitSegmentNotFound",
+            "No init segment",
+            None,
+        ),
     }
+}
+
+fn json_error_response(
+    status: StatusCode,
+    code: &'static str,
+    message: impl Into<String>,
+    extra: Option<Value>,
+) -> Response {
+    let mut body = json!({
+        "error": message.into(),
+        "status": status.as_u16(),
+        "code": code,
+    });
+    if let (Value::Object(body), Some(Value::Object(extra))) = (&mut body, extra) {
+        body.extend(extra);
+    }
+
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/json")],
+        Json(body),
+    )
+        .into_response()
 }
