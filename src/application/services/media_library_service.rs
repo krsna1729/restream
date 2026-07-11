@@ -4,14 +4,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use sqlx::SqlitePool;
 
 use crate::application::ports::{MetaStore, MetaStoreWriter, RecordingStore};
 use crate::application::recording::{
-    load_recording_settings, recording_enabled_meta_key, spawn_recording_metadata_reporter,
-    spawn_recording_task,
+    load_recording_settings, recording_enabled_meta_key, spawn_recording_task,
 };
-use crate::infrastructure::sqlite_ports::{SqliteMetaStore, SqliteRecordingStore};
 use crate::media::engine::MediaEngine;
 use crate::media::recording::RecordingMetadataReporter;
 use crate::types::{Ingest, Pipeline};
@@ -96,23 +93,6 @@ pub enum MediaDeleteError {
 }
 
 impl MediaLibraryService {
-    pub fn new(
-        db: SqlitePool,
-        pipeline_service: PipelineService,
-        ingest_service: IngestService,
-    ) -> Self {
-        let meta_store = Arc::new(SqliteMetaStore::new(db.clone()));
-        let recording_metadata = spawn_recording_metadata_reporter(db.clone());
-        Self {
-            meta_store: meta_store.clone(),
-            meta_writer: meta_store,
-            recording_store: Arc::new(SqliteRecordingStore::new(db)),
-            pipeline_service,
-            ingest_service,
-            recording_metadata: Some(recording_metadata),
-        }
-    }
-
     pub fn with_stores(
         meta_store: Arc<dyn MetaStore>,
         meta_writer: Arc<dyn MetaStoreWriter>,
@@ -128,6 +108,14 @@ impl MediaLibraryService {
             ingest_service,
             recording_metadata: None,
         }
+    }
+
+    pub fn with_recording_metadata(
+        mut self,
+        recording_metadata: RecordingMetadataReporter,
+    ) -> Self {
+        self.recording_metadata = Some(recording_metadata);
+        self
     }
 
     pub async fn get_pipeline(&self, id: &str) -> ApiResult<Pipeline> {
@@ -571,6 +559,7 @@ mod tests {
         MetaStoreWriter, MetaWriteFuture,
     };
     use crate::domain::ids::RecordingId;
+    use crate::infrastructure::sqlite_ports::{SqliteMetaStore, SqliteRecordingStore};
     use std::sync::Mutex;
 
     async fn service_with_pipeline() -> MediaLibraryService {

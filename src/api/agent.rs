@@ -49,9 +49,7 @@ use crate::alerts;
 use crate::api_runtime_views::{ResourceMapOptions, ResourceMapView};
 #[cfg(feature = "agent-plane")]
 use crate::api_view_models;
-#[cfg(feature = "agent-plane")]
-use crate::application::services::AgentService;
-#[cfg(feature = "agent-plane")]
+#[cfg(any(feature = "agent-plane", feature = "agent-execution"))]
 use crate::domain::output_spec::OutputUrlScheme;
 #[cfg(feature = "agent-plane")]
 use crate::events;
@@ -121,9 +119,7 @@ pub async fn agent_investigation_handler(
         return response;
     }
 
-    let catalog = AgentService::new(state.db.clone())
-        .load_pipeline_output_catalog()
-        .await;
+    let catalog = state.agent_service.load_pipeline_output_catalog().await;
     let pipelines = catalog.pipelines;
     let outputs = catalog.outputs;
     let pipeline_exists = request
@@ -533,7 +529,7 @@ pub async fn agent_verify_handler(
 
 #[cfg(feature = "agent-plane")]
 async fn build_agent_context(state: &AppState) -> serde_json::Value {
-    let agent_service = AgentService::new(state.db.clone());
+    let agent_service = state.agent_service.clone();
     let catalog = agent_service.load_context_catalog(&state.security).await;
     let pipelines = catalog.pipelines;
     let pipeline_ids: Vec<String> = pipelines.iter().map(|p| p.id.clone()).collect();
@@ -667,7 +663,8 @@ async fn execute_agent_operation(
     record: &crate::agent_execution::OperationRecord,
 ) -> Result<AgentOperationApplyOutcome, String> {
     let request = record.request.plan_request();
-    let catalog = AgentService::new(state.db.clone())
+    let catalog = state
+        .agent_service
         .try_load_pipeline_output_catalog()
         .await?;
     let pipelines = catalog.pipelines;
@@ -1004,9 +1001,7 @@ async fn verify_agent_operation(
     state: &AppState,
     record: &crate::agent_execution::OperationRecord,
 ) -> serde_json::Value {
-    let catalog = AgentService::new(state.db.clone())
-        .load_pipeline_output_catalog()
-        .await;
+    let catalog = state.agent_service.load_pipeline_output_catalog().await;
     let pipelines = catalog.pipelines;
     let pipeline_ids: Vec<String> = pipelines
         .iter()
@@ -1187,9 +1182,7 @@ fn agent_change_output_id(
 
 #[cfg(feature = "agent-execution")]
 async fn current_agent_alert_count(state: &AppState) -> usize {
-    let catalog = AgentService::new(state.db.clone())
-        .load_pipeline_output_catalog()
-        .await;
+    let catalog = state.agent_service.load_pipeline_output_catalog().await;
     let pipelines = catalog.pipelines;
     let pipeline_ids: Vec<String> = pipelines
         .iter()
@@ -1560,9 +1553,7 @@ async fn build_agent_plan(
     state: &AppState,
     request: crate::agent_plane::PlanRequest,
 ) -> crate::agent_plane::PlanResponse {
-    let catalog = AgentService::new(state.db.clone())
-        .load_pipeline_output_catalog()
-        .await;
+    let catalog = state.agent_service.load_pipeline_output_catalog().await;
     let pipelines = catalog.pipelines;
     let outputs = catalog.outputs;
     let current_graph = if let Some(pid) = request.pipeline_id.as_deref()

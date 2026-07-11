@@ -10,7 +10,6 @@ use crate::application::{
 };
 use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::domain::transcode_profile::TranscodeProfiles;
-use crate::infrastructure::sqlite_ports::{SqliteJobStore, SqliteMetaStore};
 use crate::media::security::IngestSecurityService;
 use crate::media::srt::SrtIngestPolicyStore;
 use crate::planner::backend_policy::BackendPolicy;
@@ -30,18 +29,6 @@ pub struct SettingsService {
 }
 
 impl SettingsService {
-    pub fn new(db: sqlx::SqlitePool) -> Self {
-        let meta_store = Arc::new(SqliteMetaStore::new(db.clone()));
-        Self {
-            pipeline_service: PipelineService::new(db.clone()),
-            output_service: OutputService::new(db.clone()),
-            meta_writer: meta_store.clone(),
-            ingest_host_store: meta_store.clone(),
-            meta_store,
-            job_store: Arc::new(SqliteJobStore::new(db)),
-        }
-    }
-
     pub fn with_stores(
         meta_store: Arc<dyn MetaStore>,
         meta_writer: Arc<dyn MetaStoreWriter>,

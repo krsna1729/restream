@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::application::ports::PipelineStore;
-use crate::infrastructure::sqlite_ports::SqlitePipelineStore;
 
 use super::error::{ApiError, ApiResult};
 
@@ -11,12 +10,6 @@ pub struct HealthService {
 }
 
 impl HealthService {
-    pub fn new(db: sqlx::SqlitePool) -> Self {
-        Self {
-            store: Arc::new(SqlitePipelineStore::new(db)),
-        }
-    }
-
     pub fn with_store(store: Arc<dyn PipelineStore>) -> Self {
         Self { store }
     }

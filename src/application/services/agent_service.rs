@@ -4,13 +4,9 @@ use crate::application::ports::{
     IngestHostStore, IngestLookup, JobStore, MetaStore, OutputStore, PipelineStore,
 };
 use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
-use crate::infrastructure::sqlite_ports::{
-    SqliteIngestLookup, SqliteJobStore, SqliteMetaStore, SqliteOutputStore, SqlitePipelineStore,
-};
 use crate::media::security::IngestSecurityService;
 use crate::planner::backend_policy::BackendPolicy;
 use crate::types::{Ingest, Job, Output, Pipeline};
-use sqlx::SqlitePool;
 
 #[derive(Debug)]
 pub struct AgentContextCatalog {
@@ -43,15 +39,21 @@ pub struct AgentService {
 }
 
 impl AgentService {
-    pub fn new(db: SqlitePool) -> Self {
-        let meta_store = Arc::new(SqliteMetaStore::new(db.clone()));
+    pub fn with_stores(
+        pipeline_store: Arc<dyn PipelineStore>,
+        output_store: Arc<dyn OutputStore>,
+        job_store: Arc<dyn JobStore>,
+        ingest_store: Arc<dyn IngestLookup>,
+        meta_store: Arc<dyn MetaStore>,
+        ingest_host_store: Arc<dyn IngestHostStore>,
+    ) -> Self {
         Self {
-            pipeline_store: Arc::new(SqlitePipelineStore::new(db.clone())),
-            output_store: Arc::new(SqliteOutputStore::new(db.clone())),
-            job_store: Arc::new(SqliteJobStore::new(db.clone())),
-            ingest_store: Arc::new(SqliteIngestLookup::new(db)),
-            meta_store: meta_store.clone(),
-            ingest_host_store: meta_store,
+            pipeline_store,
+            output_store,
+            job_store,
+            ingest_store,
+            meta_store,
+            ingest_host_store,
         }
     }
 

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::application::ports::{IngestLookup, IngestWriter};
-use crate::infrastructure::sqlite_ports::SqliteIngestLookup;
 use crate::types::Ingest;
 
 use super::error::{ApiError, ApiResult};
@@ -13,14 +12,6 @@ pub struct IngestService {
 }
 
 impl IngestService {
-    pub fn new(db: sqlx::SqlitePool) -> Self {
-        let store = Arc::new(SqliteIngestLookup::new(db));
-        Self {
-            lookup: store.clone(),
-            writer: store,
-        }
-    }
-
     pub fn with_ports(lookup: Arc<dyn IngestLookup>, writer: Arc<dyn IngestWriter>) -> Self {
         Self { lookup, writer }
     }

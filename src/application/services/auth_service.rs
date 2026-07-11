@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::application::ports::{MetaStore, MetaStoreWriter, SessionStore};
-use crate::infrastructure::sqlite_ports::{SqliteMetaStore, SqliteSessionStore};
 
 use super::error::{ApiError, ApiResult};
 
@@ -12,15 +11,6 @@ pub struct AuthService {
 }
 
 impl AuthService {
-    pub fn new(db: sqlx::SqlitePool) -> Self {
-        let meta_store = Arc::new(SqliteMetaStore::new(db.clone()));
-        Self {
-            meta_store: meta_store.clone(),
-            meta_writer: meta_store,
-            session_store: Arc::new(SqliteSessionStore::new(db)),
-        }
-    }
-
     pub fn with_stores(
         meta_store: Arc<dyn MetaStore>,
         meta_writer: Arc<dyn MetaStoreWriter>,

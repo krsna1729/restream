@@ -1,22 +1,21 @@
-//! Shared pipeline/media DTOs and persistence row shapes that are still used
-//! across storage, orchestration, and API layers.
+//! Shared pipeline/media DTOs that are still used across orchestration and API
+//! layers.
 //! Domain policy configs and logging payloads live in their own modules; this
-//! file is for the remaining cross-layer records that still back SQLite rows
-//! and JSON payloads for pipelines, outputs, jobs, and file ingests.
+//! file is for the remaining cross-layer records and JSON payloads for
+//! pipelines, outputs, jobs, and file ingests.
 
 use crate::domain::output_spec::OutputConfig;
 use crate::domain::state::DesiredOutputState;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ingest {
     pub id: String,
     pub filename: String,
     pub stream_key: String,
     #[serde(rename = "loop")]
-    #[sqlx(rename = "loop")]
     pub loop_flag: bool,
     pub start_time: String,
     #[serde(default)]
@@ -31,7 +30,7 @@ pub fn default_file_ingest_target_gop_seconds() -> u32 {
     DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Pipeline {
     pub id: String,

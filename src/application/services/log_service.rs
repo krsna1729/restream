@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::application::ports::LogStore;
-use crate::infrastructure::sqlite_ports::SqliteLogStore;
 use crate::logging::types::{AppLogFilters, AppLogRow};
 
 use super::error::{ApiError, ApiResult};
@@ -12,12 +11,6 @@ pub struct LogService {
 }
 
 impl LogService {
-    pub fn new(db: sqlx::SqlitePool) -> Self {
-        Self {
-            store: Arc::new(SqliteLogStore::new(db)),
-        }
-    }
-
     pub fn with_store(store: Arc<dyn LogStore>) -> Self {
         Self { store }
     }
