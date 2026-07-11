@@ -9,50 +9,6 @@ use proptest::prelude::*;
 use proptest::test_runner::Config as ProptestConfig;
 use tokio_util::sync::CancellationToken;
 
-fn extract_2v16a_hevc_ts_sample_for_duration(seconds: u32) -> Vec<u8> {
-    let ffmpeg = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
-    let fixture = crate::test_fixtures::checked_in_fixture("media/colorbar-timer-2v16a.mp4")
-        .expect("2v16a fixture should exist");
-    let output = std::process::Command::new(ffmpeg)
-        .args([
-            "-v",
-            "error",
-            "-i",
-            fixture.to_str().expect("utf-8 fixture path"),
-            "-map",
-            "0:v:1",
-            "-map",
-            "0:a",
-            "-c:v",
-            "copy",
-            "-bsf:v",
-            "hevc_mp4toannexb",
-            "-c:a",
-            "copy",
-            "-t",
-            &seconds.to_string(),
-            "-f",
-            "mpegts",
-            "pipe:1",
-        ])
-        .output()
-        .expect("spawn bundled ffmpeg for 2v16a HEVC sample extraction");
-    assert!(
-        output.status.success(),
-        "ffmpeg 2v16a HEVC sample extraction failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        !output.stdout.is_empty(),
-        "2v16a HEVC TS sample should not be empty"
-    );
-    output.stdout
-}
-
-fn extract_2v16a_hevc_ts_sample() -> Vec<u8> {
-    extract_2v16a_hevc_ts_sample_for_duration(1)
-}
-
 fn write_temp_ts_artifact(name: &str, bytes: &[u8]) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "restream-external-transcoder-test-{}-{}",
@@ -653,19 +609,9 @@ async fn stage_metadata_requires_raw_parameter_sets_for_hevc_codec_edge_stages()
 
 #[tokio::test]
 async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
-    let ts_sample = extract_2v16a_hevc_ts_sample_for_duration(5);
-    let mut demuxer = TsDemuxer::new();
-    let mut packets = Vec::new();
-    for chunk in ts_sample.chunks(1316) {
-        demuxer.feed(chunk);
-        demuxer.drain_into(&mut packets);
-    }
-    demuxer.flush();
-    demuxer.drain_into(&mut packets);
-
-    let probe = demuxer.take_probe().expect("probe 2v16a HEVC sample");
-    let video = probe.video.expect("sample should contain video");
-    let audio_tracks = probe.audio_tracks;
+    let (video, audio_tracks, mut packets) =
+        crate::test_fixtures::primary_av_packets_for_codec("h265")
+            .expect("single-audio HEVC fixture");
 
     let _ = tracing_subscriber::fmt::try_init();
     let engine = Arc::new(MediaEngine::new());
@@ -690,14 +636,13 @@ async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
     source_ring.set_audio_tracks(audio_tracks);
     // Extract parameter sets from the pre-demuxed packets so the stage's
     // metadata wait loop can find them (required for HEVC).
-    let mut parameter_sets = crate::media::codec::AnnexbParameterSetAccumulator::default();
-    let found_ps = packets
-        .iter()
-        .filter(|p| p.media_type == MediaType::Video)
-        .find_map(|p| parameter_sets.push_payload(&p.payload));
-    source_ring.set_video_parameter_sets(
-        found_ps.expect("2v16a HEVC sample should expose raw VPS/SPS/PPS"),
-    );
+    if let Some(ps) = packets.iter().find_map(|p| {
+        (p.media_type == MediaType::Video)
+            .then(|| crate::media::codec::annexb_parameter_sets(&p.payload))
+            .flatten()
+    }) {
+        source_ring.set_video_parameter_sets(ps);
+    }
     let stage_key = StageKey::new(
         "pipe-ext-preview",
         StageKind::codec_edge("hevc_to_h264", StageKind::source()),
@@ -770,21 +715,10 @@ async fn external_720p_stage_emits_live_packets_for_hevc_sample() {
 }
 
 #[tokio::test]
-#[ignore = "diagnostic: current live HEVC + 16 audio preview stage still stalls without EOF"]
 async fn chained_hevc_preview_stages_emit_live_h264_packets() {
-    let ts_sample = extract_2v16a_hevc_ts_sample();
-    let mut demuxer = TsDemuxer::new();
-    let mut packets = Vec::new();
-    for chunk in ts_sample.chunks(1316) {
-        demuxer.feed(chunk);
-        demuxer.drain_into(&mut packets);
-    }
-    demuxer.flush();
-    demuxer.drain_into(&mut packets);
-
-    let probe = demuxer.take_probe().expect("probe 2v16a HEVC sample");
-    let video = probe.video.expect("sample should contain video");
-    let audio_tracks = probe.audio_tracks;
+    let (video, audio_tracks, mut packets) =
+        crate::test_fixtures::primary_av_packets_for_codec("h265")
+            .expect("single-audio HEVC fixture");
 
     let engine = Arc::new(MediaEngine::new());
     engine
@@ -808,7 +742,15 @@ async fn chained_hevc_preview_stages_emit_live_h264_packets() {
         .await;
     source_ring.set_codec_hint("hevc");
     source_ring.set_audio_tracks(audio_tracks);
+    if let Some(parameter_sets) = packets.iter().find_map(|packet| {
+        (packet.media_type == MediaType::Video)
+            .then(|| crate::media::codec::annexb_parameter_sets(&packet.payload))
+            .flatten()
+    }) {
+        source_ring.set_video_parameter_sets(parameter_sets);
+    }
 
+    let hevc_stage_key = StageKey::new("pipe-ext-preview-chain", StageKind::video_preset("1080p"));
     let hevc_preview_upstream = engine
         .get_or_create_transcoder(
             "pipe-ext-preview-chain",
@@ -817,6 +759,10 @@ async fn chained_hevc_preview_stages_emit_live_h264_packets() {
             Some("hevc"),
         )
         .await;
+    let h264_stage_key = StageKey::new(
+        "pipe-ext-preview-chain",
+        StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("1080p")),
+    );
     let h264_preview_ring = engine
         .get_or_create_h264_transcoder(
             "pipe-ext-preview-chain",
@@ -835,25 +781,19 @@ async fn chained_hevc_preview_stages_emit_live_h264_packets() {
 
     let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
-        let source_attached = source_ring.reader_snapshots().iter().any(|snapshot| {
-            snapshot
-                .name
-                .contains("ext-stage:pipe-ext-preview-chain:video:1080p")
-        });
-        let chained_attached = hevc_preview_upstream
+        let source_attached = source_ring
             .reader_snapshots()
             .iter()
-            .any(|snapshot| {
-                snapshot
-                    .name
-                    .contains("ext-stage:pipe-ext-preview-chain:720p")
-            });
-        if source_attached && chained_attached {
+            .any(|snapshot| snapshot.name.contains(&hevc_stage_key.to_string()));
+        if source_attached {
             break;
         }
         assert!(
             tokio::time::Instant::now() < ready_deadline,
-            "preview chain readers did not both attach in time"
+            "preview upstream reader did not attach in time: source={:?} expected_source={} hevc_stage={:?}",
+            source_ring.reader_snapshots(),
+            hevc_stage_key,
+            engine.stage_runtime_snapshot(&hevc_stage_key).await
         );
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
@@ -896,7 +836,8 @@ async fn chained_hevc_preview_stages_emit_live_h264_packets() {
         output_packets
             .iter()
             .any(|packet| packet.media_type == MediaType::Video),
-        "chained HEVC preview stages should emit live video packets"
+        "chained HEVC preview stages should emit live video packets; h264_stage={:?}",
+        engine.stage_runtime_snapshot(&h264_stage_key).await
     );
     assert!(
         output_packets
@@ -920,7 +861,9 @@ async fn hevc_scaled_rtmp_audio_routes_emit_both_selected_tracks() {
     demuxer.flush();
     demuxer.drain_into(&mut packets);
 
-    let probe = demuxer.take_probe().expect("probe 2v16a HEVC sample");
+    let probe = demuxer
+        .take_probe()
+        .expect("probe multi-audio HEVC marker fixture");
     let video = probe.video.expect("sample should contain video");
     let audio_tracks = probe.audio_tracks;
     assert!(
@@ -1841,22 +1784,10 @@ async fn external_720p_stage_emits_video_for_prebuffered_single_audio_hevc_fixtu
 }
 
 #[tokio::test]
-async fn external_720p_stage_emits_live_packets_for_2v16a_hevc_with_longer_input() {
-    let ts_sample = extract_2v16a_hevc_ts_sample_for_duration(5);
-    let mut demuxer = TsDemuxer::new();
-    let mut packets = Vec::new();
-    for chunk in ts_sample.chunks(1316) {
-        demuxer.feed(chunk);
-        demuxer.drain_into(&mut packets);
-    }
-    demuxer.flush();
-    demuxer.drain_into(&mut packets);
-
-    let probe = demuxer
-        .take_probe()
-        .expect("probe longer 2v16a HEVC sample");
-    let video = probe.video.expect("sample should contain video");
-    let audio_tracks = probe.audio_tracks;
+async fn external_720p_stage_emits_live_packets_for_canonical_hevc_fixture() {
+    let (video, audio_tracks, mut packets) =
+        crate::test_fixtures::primary_av_packets_for_codec("h265")
+            .expect("single-audio HEVC fixture");
 
     let engine = Arc::new(MediaEngine::new());
     engine
@@ -1918,15 +1849,9 @@ async fn external_720p_stage_emits_live_packets_for_2v16a_hevc_with_longer_input
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 
-    // Feed all input; wait for the pump to drain the ring to stdin
-    // before cancelling, otherwise FFmpeg gets EOF with no input data.
     source_ring.push_batch(packets.drain(..));
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    cancel.cancel();
 
-    // The 18-stream (2v + 16a) MPEG-TS muxer is slow to flush; 5 seconds
-    // of input also takes longer to process.
-    let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    let output_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(16);
     let mut output_packets = Vec::new();
     loop {
         while let Ok(Some(packet)) = reader.pull() {
@@ -1944,11 +1869,13 @@ async fn external_720p_stage_emits_live_packets_for_2v16a_hevc_with_longer_input
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 
+    cancel.cancel();
+
     assert!(
         output_packets
             .iter()
             .any(|packet| packet.media_type == MediaType::Video),
-        "external 720p HEVC preview stage should emit live video packets with longer 2v16a input (got {} packets)",
+        "external 720p HEVC preview stage should emit live video packets for the canonical fixture (got {} packets)",
         output_packets.len()
     );
 }

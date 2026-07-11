@@ -126,12 +126,24 @@ pub fn audio_for_ts<'a>(
 /// Returns `None` if the packet should be skipped (sequence header, empty, etc.).
 ///
 /// # Usage
-/// ```ignore
-/// let mut conv_buf = Vec::<u8>::new();
-/// // per-packet loop:
-/// let slice = video_for_ts_into(payload, format, &mut nls, &mut sps_pps, &mut conv_buf)?;
-/// mux_packet(slice);
-/// // NLL: conv_buf borrow ends after last use of slice
+/// ```
+/// use restream::media::codec::video_for_ts_into;
+/// use restream::media::ring_buffer::PayloadFormat;
+///
+/// let payload = [0, 0, 1, 9, 0x10];
+/// let mut nalu_len_size = 4;
+/// let mut sps_pps = Vec::new();
+/// let mut conv_buf = Vec::new();
+///
+/// let slice = video_for_ts_into(
+///     &payload,
+///     PayloadFormat::Raw,
+///     &mut nalu_len_size,
+///     &mut sps_pps,
+///     &mut conv_buf,
+/// )
+/// .expect("raw Annex B payload should pass through");
+/// assert_eq!(slice, payload);
 /// ```
 #[inline]
 pub fn video_for_ts_into<'a>(

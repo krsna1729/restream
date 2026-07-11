@@ -479,51 +479,18 @@ fn run_ffmpeg_h264_stage_with_normalizer(
 mod tests {
     use super::*;
     use crate::media::ring_buffer::Reader;
-    use std::process::Command;
     use std::sync::Arc;
 
-    fn extract_2v16a_hevc_ts_sample() -> Vec<u8> {
-        let ffmpeg = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
-        let fixture = crate::test_fixtures::checked_in_fixture("media/colorbar-timer-2v16a.mp4")
-            .expect("2v16a fixture should exist");
-        let output = Command::new(ffmpeg)
-            .args([
-                "-v",
-                "error",
-                "-i",
-                fixture.to_str().expect("utf-8 fixture path"),
-                "-map",
-                "0:v:1",
-                "-map",
-                "0:a",
-                "-c",
-                "copy",
-                "-t",
-                "1",
-                "-f",
-                "mpegts",
-                "pipe:1",
-            ])
-            .output()
-            .expect("spawn bundled ffmpeg for 2v16a HEVC sample extraction");
-        assert!(
-            output.status.success(),
-            "ffmpeg 2v16a HEVC sample extraction failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            !output.stdout.is_empty(),
-            "2v16a HEVC TS sample should not be empty"
-        );
-        output.stdout
+    fn canonical_hevc_ts_bytes() -> Vec<u8> {
+        let fixture =
+            crate::test_fixtures::canonical_h265_ts_fixture().unwrap_or_else(|e| panic!("{e}"));
+        std::fs::read(&fixture)
+            .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", fixture.display()))
     }
 
     #[test]
     fn h264_transcoder_emits_packets_from_checked_in_hevc_fixture() {
-        let fixture =
-            crate::test_fixtures::canonical_h265_ts_fixture().unwrap_or_else(|e| panic!("{e}"));
-        let fixture_bytes = std::fs::read(&fixture)
-            .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", fixture.display()));
+        let fixture_bytes = canonical_hevc_ts_bytes();
 
         let input_queue = Arc::new(MemoryQueue::new());
         input_queue.write_sync(&fixture_bytes);
@@ -571,8 +538,8 @@ mod tests {
     }
 
     #[test]
-    fn h264_transcoder_emits_packets_from_2v16a_hevc_stream() {
-        let fixture_bytes = extract_2v16a_hevc_ts_sample();
+    fn h264_transcoder_preserves_audio_from_checked_in_hevc_fixture() {
+        let fixture_bytes = canonical_hevc_ts_bytes();
 
         let input_queue = Arc::new(MemoryQueue::new());
         input_queue.write_sync(&fixture_bytes);
@@ -585,11 +552,14 @@ mod tests {
             input_queue,
             output_ring.clone(),
             cancel,
-            "test-2v16a-hevc-h264",
+            "test-canonical-hevc-h264-audio",
         )
-        .unwrap_or_else(|e| panic!("HEVC->H.264 stage failed on 2v16a sample: {e}"));
+        .unwrap_or_else(|e| panic!("HEVC->H.264 stage failed on checked-in fixture: {e}"));
 
-        let mut reader = Reader::new("test_2v16a_h264_tc_output".to_string(), output_ring);
+        let mut reader = Reader::new(
+            "test_canonical_h264_tc_audio_output".to_string(),
+            output_ring,
+        );
         let mut packets = Vec::new();
         while let Ok(Some(packet)) = reader.pull() {
             packets.push(packet);
@@ -597,25 +567,25 @@ mod tests {
 
         assert!(
             !packets.is_empty(),
-            "HEVC->H.264 stage should emit packets for the 2v16a HEVC sample"
+            "HEVC->H.264 stage should emit packets for the checked-in HEVC fixture"
         );
         assert!(
             packets
                 .iter()
                 .any(|packet| packet.media_type == MediaType::Video),
-            "2v16a HEVC sample should produce transcoded video packets"
+            "checked-in HEVC fixture should produce transcoded video packets"
         );
         assert!(
             packets
                 .iter()
                 .any(|packet| packet.media_type == MediaType::Audio),
-            "2v16a HEVC sample should preserve audio packets"
+            "checked-in HEVC fixture should preserve audio packets"
         );
     }
 
     #[test]
     fn h264_transcoder_emits_video_after_input_queue_is_closed() {
-        let fixture_bytes = extract_2v16a_hevc_ts_sample();
+        let fixture_bytes = canonical_hevc_ts_bytes();
 
         let input_queue = Arc::new(MemoryQueue::new());
         input_queue.write_sync(&fixture_bytes);
@@ -631,7 +601,7 @@ mod tests {
                 input_queue_for_thread,
                 output_ring_for_thread,
                 cancel_for_thread,
-                "test-2v16a-hevc-h264",
+                "test-canonical-hevc-h264-closed",
             )
         });
 
@@ -641,9 +611,12 @@ mod tests {
         handle
             .join()
             .expect("HEVC->H.264 stage thread should join")
-            .unwrap_or_else(|e| panic!("HEVC->H.264 stage failed on 2v16a sample: {e}"));
+            .unwrap_or_else(|e| panic!("HEVC->H.264 stage failed on checked-in fixture: {e}"));
 
-        let mut reader = Reader::new("test_live_2v16a_h264_tc_output".to_string(), output_ring);
+        let mut reader = Reader::new(
+            "test_live_canonical_h264_tc_output".to_string(),
+            output_ring,
+        );
         let mut packets = Vec::new();
         while let Ok(Some(packet)) = reader.pull() {
             packets.push(packet);

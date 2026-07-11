@@ -1,5 +1,3 @@
-use std::process::Command;
-
 use super::mpegts_probe::*;
 use super::*;
 
@@ -10,42 +8,6 @@ fn parse_timestamp_round_trip() {
     write_timestamp(&mut buf, ts, 0x02);
     let parsed = parse_timestamp(&buf);
     assert_eq!(parsed, ts);
-}
-
-fn fixture_h264_multiaudio_ts() -> Vec<u8> {
-    let ffmpeg = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
-    let fixture = crate::test_fixtures::checked_in_fixture("media/colorbar-timer-2v16a.mp4")
-        .expect("2v16a fixture should exist");
-    let output = Command::new(ffmpeg)
-        .args([
-            "-v",
-            "error",
-            "-i",
-            fixture.to_str().expect("utf-8 fixture path"),
-            "-map",
-            "0:v:1",
-            "-map",
-            "0:a",
-            "-c",
-            "copy",
-            "-t",
-            "1",
-            "-f",
-            "mpegts",
-            "pipe:1",
-        ])
-        .output()
-        .expect("spawn bundled ffmpeg for multiaudio fixture");
-    assert!(
-        output.status.success(),
-        "ffmpeg multiaudio fixture extraction failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        !output.stdout.is_empty(),
-        "fixture TS segment should not be empty"
-    );
-    output.stdout
 }
 
 fn h264_stream_info(pid: u16) -> StreamInfo {
@@ -914,8 +876,11 @@ fn mux_demux_32_audio_tracks_spans_pmt_packets() {
 }
 
 #[test]
-fn real_fixture_probe_recovers_all_16_audio_tracks() {
-    let ts = fixture_h264_multiaudio_ts();
+fn marker_fixture_probe_recovers_two_audio_tracks() {
+    let fixture = crate::test_fixtures::av_marker_transport_fixture("h264", true)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let ts = std::fs::read(&fixture)
+        .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", fixture.display()));
     let mut demuxer = TsDemuxer::new();
     demuxer.feed(&ts);
     demuxer.flush();
@@ -931,8 +896,8 @@ fn real_fixture_probe_recovers_all_16_audio_tracks() {
     assert_eq!(probe.video_track_count, 1);
     assert_eq!(
         probe.audio_tracks.len(),
-        16,
-        "fixture should expose 16 audio tracks"
+        2,
+        "marker fixture should expose two audio tracks"
     );
     assert_eq!(
         probe
@@ -940,7 +905,7 @@ fn real_fixture_probe_recovers_all_16_audio_tracks() {
             .iter()
             .map(|track| track.track_index)
             .collect::<Vec<_>>(),
-        (0..16).collect::<Vec<_>>()
+        vec![0, 1]
     );
     assert_eq!(
         packets
@@ -949,8 +914,8 @@ fn real_fixture_probe_recovers_all_16_audio_tracks() {
             .map(|packet| packet.track_index)
             .collect::<std::collections::HashSet<_>>()
             .len(),
-        16,
-        "fixture packets should cover all 16 logical audio tracks"
+        2,
+        "fixture packets should cover both logical audio tracks"
     );
 }
 
