@@ -166,6 +166,10 @@ in-process backend; audio streams are copied. HEVC-to-H.264 bridge stages,
 HLS preview transcode stages, and complex audio stages are controlled
 separately by `RESTREAM_INTERNAL_HEVC_TO_H264`,
 `RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX`.
+These environment variables are startup defaults. Operators can override the
+same four backend-family choices from Admin -> Backend or by patching
+`backendPolicy` through `/api/v1/settings`; persisted settings take precedence
+on restart and apply to newly started or reconciled stages.
 `custom` remains stored configuration only. It is rejected by output
 create/update so operators do not accidentally select a passthrough path that
 looks like custom FFmpeg execution.

@@ -387,6 +387,8 @@ pub async fn run_app(config: Arc<AppConfig>) {
     let meta_store = crate::application::ports::SqliteMetaStore::new(pool.clone());
     let sec_config =
         crate::application::ingest_security::load_ingest_security_config(&meta_store).await;
+    let backend_policy =
+        crate::application::settings::load_backend_policy(&meta_store, config.backend_policy).await;
     let security = Arc::new(crate::media::security::IngestSecurityService::new(
         sec_config,
     ));
@@ -434,6 +436,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
     .await;
     crate::application::transcode_profiles::load_transcode_profiles(&meta_store).await;
     let engine = Arc::new(MediaEngine::new_with_config(config.clone()));
+    engine.set_backend_policy(backend_policy);
     let pipeline_lookup: Arc<dyn crate::application::ports::PipelineStore> =
         Arc::new(pipeline_store);
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1089,8 +1092,9 @@ pub async fn run_app(config: Arc<AppConfig>) {
                 .await;
                 stage_inputs.push(output_stage_sweep_input(output, &snapshot));
             }
+            let backend_policy = engine.backend_policy();
             let needed_stages: std::collections::HashSet<StageKey> =
-                collect_needed_stage_keys(stage_inputs, &engine.config.backend_policy);
+                collect_needed_stage_keys(stage_inputs, &backend_policy);
             let mut needed_stages = needed_stages;
             needed_stages.extend(engine.active_hls_preview_stage_keys().await);
             engine.sweep_unused_transcoder_stages(&needed_stages).await;

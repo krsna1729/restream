@@ -14,6 +14,7 @@ use crate::application::srt_ingest::SRT_INGEST_GLOBAL_CONFIG_META_KEY;
 use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::domain::srt_ingest::SrtGlobalIngestConfig;
 use crate::domain::transcode_profile::TranscodeProfiles;
+use crate::planner::backend_policy::BackendPolicy;
 
 use super::state::{
     AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, DEFAULT_INGEST_HOST,
@@ -35,6 +36,7 @@ pub struct ConfigPatchPayload {
     pub recording_settings: Option<crate::application::recording::RecordingSettings>,
     pub srt_ingest: Option<SrtGlobalIngestConfig>,
     pub transcode_profiles: Option<TranscodeProfiles>,
+    pub backend_policy: Option<BackendPolicy>,
 }
 
 pub async fn config_get_handler(
@@ -91,7 +93,11 @@ pub async fn config_get_handler(
         .list_outputs()
         .await
         .unwrap_or_default();
-    let settings = match state.settings_service.load_snapshot(&state.security).await {
+    let settings = match state
+        .settings_service
+        .load_snapshot(&state.security, state.engine.backend_policy())
+        .await
+    {
         Ok(s) => s,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -119,6 +125,7 @@ pub async fn config_get_handler(
             "serverName": settings.server_name,
             "ingestHost": settings.ingest_host,
             "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
+            "backendPolicy": settings.backend_policy,
             "transcodeProfiles": settings.transcode_profiles,
             "pipelines": pipelines,
             "outputs": api_view_models::output_response_json_list(&outputs),
@@ -132,6 +139,7 @@ pub async fn config_get_handler(
             "ingestSecurity": settings.ingest_security,
             "recordingSettings": settings.recording_settings,
             "srtIngest": settings.srt_ingest,
+            "backendPolicy": settings.backend_policy,
             "transcodeProfiles": settings.transcode_profiles,
             "pipelines": pipelines,
             "outputs": api_view_models::output_response_json_list(&outputs),
@@ -268,7 +276,23 @@ pub async fn config_patch_handler(
         return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save profiles").into_response();
     }
 
-    let settings = match state.settings_service.load_snapshot(&state.security).await {
+    if let Some(policy) = payload.backend_policy {
+        if state
+            .settings_service
+            .save_backend_policy(policy)
+            .await
+            .is_err()
+        {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        state.engine.set_backend_policy(policy);
+    }
+
+    let settings = match state
+        .settings_service
+        .load_snapshot(&state.security, state.engine.backend_policy())
+        .await
+    {
         Ok(settings) => settings,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -279,6 +303,7 @@ pub async fn config_patch_handler(
         "ingestSecurity": settings.ingest_security,
         "recordingSettings": settings.recording_settings,
         "srtIngest": settings.srt_ingest,
+        "backendPolicy": settings.backend_policy,
         "transcodeProfiles": settings.transcode_profiles
     }))
     .into_response()

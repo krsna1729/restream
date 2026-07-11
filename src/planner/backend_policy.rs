@@ -1,12 +1,11 @@
 //! Backend selection for runtime stages.
 //!
-//! The engine owns stage lifecycles; this module owns the policy choice for how
-//! a typed stage should run. Per-stage backend families are controlled via
 //! Runtime configuration supplies the per-stage backend toggles; this module
 //! owns only the policy decision for a typed stage.
 
 use crate::domain::audio_routing::{AudioRouting, parse_audio_operation};
 use crate::domain::stage::StageKind;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StageBackend {
@@ -21,7 +20,8 @@ pub enum StageBackend {
 ///
 /// Targeted controls so that each stage family can graduate independently.
 /// The default is all-external (no internal FFmpeg backends enabled).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BackendPolicy {
     pub internal_video_presets: bool,
     pub internal_hevc_to_h264: bool,

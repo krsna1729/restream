@@ -52,7 +52,7 @@ pub struct StageRuntimeManager {
 impl StageRuntimeManager {
     /// Create a manager using the engine's embedded `AppConfig` as the policy source.
     pub fn new(engine: Arc<MediaEngine>) -> Self {
-        let policy = engine.config.backend_policy;
+        let policy = engine.backend_policy();
         Self { engine, policy }
     }
 

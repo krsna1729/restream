@@ -5,7 +5,7 @@ use crate::application::ports::{
 };
 use crate::application::recording::load_recording_enabled_map;
 use crate::application::recording::{RecordingSettings, save_recording_settings};
-use crate::application::settings::load_settings_snapshot;
+use crate::application::settings::{BACKEND_POLICY_META_KEY, load_settings_snapshot};
 use crate::application::srt_ingest::load_global_srt_ingest_config;
 use crate::application::{
     ingest_security::save_ingest_security_config, transcode_profiles::save_transcode_profiles,
@@ -14,6 +14,7 @@ use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::media::security::IngestSecurityService;
 use crate::media::srt::SrtIngestPolicyStore;
+use crate::planner::backend_policy::BackendPolicy;
 use crate::types::{Job, Output, Pipeline};
 
 use super::error::{ApiError, ApiResult};
@@ -63,10 +64,16 @@ impl SettingsService {
     pub async fn load_snapshot(
         &self,
         security: &IngestSecurityService,
+        default_backend_policy: BackendPolicy,
     ) -> ApiResult<crate::application::settings::SettingsSnapshot> {
-        load_settings_snapshot(&*self.meta_store, &*self.ingest_host_store, security)
-            .await
-            .map_err(|e| ApiError::internal(format!("load settings: {e}")))
+        load_settings_snapshot(
+            &*self.meta_store,
+            &*self.ingest_host_store,
+            security,
+            default_backend_policy,
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("load settings: {e}")))
     }
 
     pub async fn list_pipelines(&self) -> ApiResult<Vec<Pipeline>> {
@@ -142,6 +149,12 @@ impl SettingsService {
         save_transcode_profiles(self.meta_writer.as_ref(), profiles)
             .await
             .map_err(|e| ApiError::internal(format!("save transcode profiles: {e}")))
+    }
+
+    pub async fn save_backend_policy(&self, policy: BackendPolicy) -> ApiResult<()> {
+        let raw = serde_json::to_string(&policy)
+            .map_err(|e| ApiError::internal(format!("serialize backend policy: {e}")))?;
+        self.set_meta(BACKEND_POLICY_META_KEY, &raw).await
     }
 
     pub async fn refresh_srt_ingest_policy_store(
@@ -288,7 +301,10 @@ mod tests {
             .unwrap();
 
         let security = IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG);
-        let snapshot = service.load_snapshot(&security).await.unwrap();
+        let snapshot = service
+            .load_snapshot(&security, BackendPolicy::default())
+            .await
+            .unwrap();
 
         assert_eq!(snapshot.server_name, "Studio");
         assert_eq!(snapshot.ingest_host, "edge.local");

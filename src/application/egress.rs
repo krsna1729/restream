@@ -36,12 +36,13 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
         (EgressProtocol::from_url(&output.url).is_rtmp() && ingest_is_hevc).then_some("hevc");
 
     let url_scheme = OutputUrlScheme::from_url(&output.url);
+    let backend_policy = engine.backend_policy();
     let plan = if url_scheme.is_hls_family() {
         crate::planner::graph_plan::plan_hls_output_graph(
             &output.pipeline_id,
             ingest_video_codec.as_deref(),
             output,
-            &engine.config.backend_policy,
+            &backend_policy,
         )
     } else {
         crate::planner::graph_plan::plan_pipeline_graph(
@@ -49,7 +50,7 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
             ingest_video_codec.as_deref(),
             std::slice::from_ref(output),
             false,
-            &engine.config.backend_policy,
+            &backend_policy,
         )
     };
 

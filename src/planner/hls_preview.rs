@@ -55,8 +55,9 @@ pub async fn plan_hls_preview(
 
         match resolved_codec {
             Some(codec) => {
+                let backend_policy = engine.backend_policy();
                 let preview_plan =
-                    plan_hls_preview_graph(pipeline_id, Some(codec), &engine.config.backend_policy);
+                    plan_hls_preview_graph(pipeline_id, Some(codec), &backend_policy);
                 let Some(preview_plan) = preview_plan else {
                     return Some(HlsPreviewGraph {
                         video_ring: source_ring,

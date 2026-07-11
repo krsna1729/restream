@@ -164,10 +164,18 @@ export interface ConfigData {
   ingestSecurity?: IngestSecurityConfig;
   recordingSettings?: RecordingSettings;
   srtIngest?: SrtGlobalIngestConfig;
+  backendPolicy?: BackendPolicy;
   transcodeProfiles?: Record<string, TranscodeProfileEntry>;
   pipelines: ConfigPipeline[];
   outputs: ConfigOutput[];
   jobs: Job[];
+}
+
+export interface BackendPolicy {
+  internalVideoPresets: boolean;
+  internalHevcToH264: boolean;
+  internalHlsPreview: boolean;
+  internalComplexAudio: boolean;
 }
 
 export interface RecordingSettings {

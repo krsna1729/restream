@@ -1085,6 +1085,51 @@ async fn config_patch_recording_settings_persists() {
 }
 
 #[tokio::test]
+async fn config_patch_backend_policy_persists_and_updates_runtime() {
+    let (app, pool, engine) = test_app_with_engine().await;
+    let cookie = login(&app).await;
+
+    assert_eq!(
+        engine.backend_policy(),
+        restream::planner::backend_policy::BackendPolicy::default()
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(auth_req(
+            "PATCH",
+            "/api/v1/settings",
+            &cookie,
+            Some(
+                r#"{"backendPolicy":{"internalVideoPresets":true,"internalHevcToH264":false,"internalHlsPreview":true,"internalComplexAudio":false}}"#,
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["backendPolicy"]["internalVideoPresets"], true);
+    assert_eq!(json["backendPolicy"]["internalHevcToH264"], false);
+    assert_eq!(json["backendPolicy"]["internalHlsPreview"], true);
+    assert_eq!(json["backendPolicy"]["internalComplexAudio"], false);
+
+    let expected = restream::planner::backend_policy::BackendPolicy {
+        internal_video_presets: true,
+        internal_hevc_to_h264: false,
+        internal_hls_preview: true,
+        internal_complex_audio: false,
+    };
+    assert_eq!(engine.backend_policy(), expected);
+
+    let stored = restream::application::settings::load_backend_policy(
+        &restream::application::ports::SqliteMetaStore::new(pool),
+        restream::planner::backend_policy::BackendPolicy::default(),
+    )
+    .await;
+    assert_eq!(stored, expected);
+}
+
+#[tokio::test]
 async fn config_patch_ingest_security_persists() {
     let (app, pool) = test_app().await;
     let cookie = login(&app).await;

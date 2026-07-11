@@ -119,12 +119,13 @@ pub(crate) async fn processing_graph(
         })
         .map(|output| (*output).to_owned())
         .collect::<Vec<_>>();
+    let backend_policy = engine.backend_policy();
     let visible_stage_plan = plan_pipeline_graph(
         pipeline_id,
         ingest_video_codec,
         &visible_outputs,
         false,
-        &engine.config.backend_policy,
+        &backend_policy,
     );
     let visible_stage_keys: HashSet<StageKey> = visible_stage_plan
         .stages
@@ -225,7 +226,7 @@ pub(crate) async fn processing_graph(
             ingest_is_hevc.then_some("hevc"),
             &output_for_plan,
             false,
-            &engine.config.backend_policy,
+            &backend_policy,
         );
         let terminal_kind = output_stage_plan.terminal_stage.kind;
         let terminal_node_id = if matches!(terminal_kind, StageKind::Source) {
@@ -287,8 +288,7 @@ pub(crate) async fn processing_graph(
 
     if let Some(token) = rec_tokens.get(pipeline_id) {
         let rec_id = format!("{pipeline_id}_recording");
-        let rec_stage_key =
-            plan_recording_graph(pipeline_id, &engine.config.backend_policy).terminal_stage;
+        let rec_stage_key = plan_recording_graph(pipeline_id, &backend_policy).terminal_stage;
         nodes.push(api_view_models::processing_graph_node(
             rec_id.clone(),
             "recording",

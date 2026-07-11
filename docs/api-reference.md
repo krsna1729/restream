@@ -1051,11 +1051,24 @@ Authenticated JSON endpoint returning a complete, ordered diagnostics report.
 Authenticated settings/configuration read endpoint.
 Supports `?jobs=latest` for consumers that only need the newest job per output,
 and `?view=dashboard` for the slim dashboard config shape used by runtime
-overview/control flows.
+overview/control flows. Responses include `backendPolicy`:
+
+```json
+{
+  "backendPolicy": {
+    "internalVideoPresets": false,
+    "internalHevcToH264": false,
+    "internalHlsPreview": false,
+    "internalComplexAudio": false
+  }
+}
+```
 
 ### `PATCH /api/v1/settings`
 
-Authenticated settings/configuration update endpoint.
+Authenticated settings/configuration update endpoint. The `backendPolicy`
+object is optional; when supplied it is persisted and becomes the runtime policy
+for newly started or reconciled transcoding stages.
 
 ## Engineer v1 Endpoints
 

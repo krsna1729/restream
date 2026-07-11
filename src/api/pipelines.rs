@@ -475,11 +475,12 @@ pub async fn pipeline_graph_handler(
         .processing_graph(&state.engine, &pipeline_id, &pipeline_outputs)
         .await;
     let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
+    let backend_policy = state.engine.backend_policy();
     let desired_graphs = crate::application::graph::desired_pipeline_graphs(
         &pipeline_id,
         ingest_codec.as_deref(),
         &pipeline_outputs,
-        &state.engine.config.backend_policy,
+        &backend_policy,
     );
     if let Some(graph_obj) = graph.as_object_mut() {
         graph_obj.insert(
@@ -565,11 +566,12 @@ pub async fn pipeline_diagnostics_context_handler(
 
     let pipeline_outputs = state.output_service.list_for_pipeline(&pipeline_id).await?;
     let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
+    let backend_policy = state.engine.backend_policy();
     let desired_graphs = crate::application::graph::desired_pipeline_graphs(
         &pipeline_id,
         ingest_codec.as_deref(),
         &pipeline_outputs,
-        &state.engine.config.backend_policy,
+        &backend_policy,
     );
     let runtime_graph = state
         .runtime_view_service

@@ -4,8 +4,8 @@
 //! `crate::api_runtime_views` when they need API-facing health JSON.
 
 use ffmpeg_next as ffmpeg;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
@@ -155,6 +155,7 @@ pub struct MediaEngine {
     pub stages: StageRegistry,
     pub runtime: RuntimeInfra,
     pub config: Arc<crate::AppConfig>,
+    backend_policy: RwLock<crate::planner::backend_policy::BackendPolicy>,
 }
 
 impl Default for MediaEngine {
@@ -186,8 +187,23 @@ impl MediaEngine {
             file_ingests: FileIngestRegistry::new(),
             stages: StageRegistry::new(),
             runtime: RuntimeInfra::new(&config),
+            backend_policy: RwLock::new(config.backend_policy),
             config,
         }
+    }
+
+    pub fn backend_policy(&self) -> crate::planner::backend_policy::BackendPolicy {
+        *self
+            .backend_policy
+            .read()
+            .expect("backend policy lock poisoned")
+    }
+
+    pub fn set_backend_policy(&self, policy: crate::planner::backend_policy::BackendPolicy) {
+        *self
+            .backend_policy
+            .write()
+            .expect("backend policy lock poisoned") = policy;
     }
 
     pub(crate) fn now_epoch_ms() -> u64 {

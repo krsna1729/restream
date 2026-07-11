@@ -292,10 +292,11 @@ impl MediaEngine {
                 .and_then(|i| i.video.as_ref())
                 .map(|v| v.codec.as_str());
 
+            let backend_policy = self.backend_policy();
             let Some(plan) = crate::planner::graph_plan::plan_hls_preview_graph(
                 &pipeline_id,
                 ingest_codec,
-                &self.config.backend_policy,
+                &backend_policy,
             ) else {
                 continue;
             };

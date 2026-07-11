@@ -10,7 +10,11 @@ import {
   type TranscodeProfile,
   type TranscodeProfiles,
 } from "../core/api.js";
-import type { RecordingSettings, SrtGlobalIngestConfig } from "../types.js";
+import type {
+  BackendPolicy,
+  RecordingSettings,
+  SrtGlobalIngestConfig,
+} from "../types.js";
 import { showErrorAlert } from "../core/utils.js";
 import { state } from "../core/state.js";
 import { withBasePath } from "../core/base-path.js";
@@ -21,7 +25,8 @@ function needsFullSettingsConfig(): boolean {
   return (
     state.config?.ingestSecurity === undefined ||
     state.config?.recordingSettings === undefined ||
-    state.config?.srtIngest === undefined
+    state.config?.srtIngest === undefined ||
+    state.config?.backendPolicy === undefined
   );
 }
 
@@ -51,6 +56,7 @@ export async function loadSettings({
   populateIngestSecuritySettings();
   populateRecordingSettings();
   populateSrtIngestSettings();
+  populateBackendPolicySettings();
   syncDashboardPasswordPrompt();
   void refreshRateLimitState();
   loadTranscodeProfiles();
@@ -101,6 +107,7 @@ function ensureSettingsNav(container: Element): void {
             <a class="btn btn-sm btn-ghost" href="#server-settings-section">Server</a>
             <a class="btn btn-sm btn-ghost" href="#recording-settings-section">Recording</a>
             <a class="btn btn-sm btn-ghost" href="#srt-settings-section">SRT</a>
+            <a class="btn btn-sm btn-ghost" href="#backend-policy-section">Backend</a>
             <a class="btn btn-sm btn-ghost" href="#transcode-profiles-section">Profiles</a>
         </div>`;
   title?.insertAdjacentElement("afterend", nav);
@@ -133,6 +140,7 @@ export function registerSettingsGlobals(): void {
   window.saveIngestSecurity = saveIngestSecurity;
   window.saveRecordingSettings = saveRecordingSettings;
   window.saveSrtIngest = saveSrtIngest;
+  window.saveBackendPolicy = saveBackendPolicy;
   window.saveTranscodeProfiles = saveTranscodeProfiles;
   window.addTranscodeProfile = addTranscodeProfile;
   window.saveDashboardPassword = saveDashboardPassword;
@@ -155,6 +163,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     <a class="btn btn-sm btn-ghost" href="#server-settings-section">Server</a>
                     <a class="btn btn-sm btn-ghost" href="#recording-settings-section">Recording</a>
                     <a class="btn btn-sm btn-ghost" href="#srt-settings-section">SRT</a>
+                    <a class="btn btn-sm btn-ghost" href="#backend-policy-section">Backend</a>
                     <a class="btn btn-sm btn-ghost" href="#transcode-profiles-section">Profiles</a>
                 </nav>
             </div>
@@ -336,6 +345,35 @@ export function renderSettingsPanel(container: HTMLElement): void {
                                 <span id="srt-ingest-saved" class="text-success hidden text-sm">Saved</span>
                             </div>
                         </fieldset>
+                    </div>
+                </div>
+
+                <div class="divider my-0"></div>
+
+                <div id="backend-policy-section" class="space-y-2">
+                    <div class="text-sm font-medium">Transcoding Backend</div>
+                    <p class="text-base-content/60 text-sm">Policy for newly started or reconciled stages.</p>
+                    <div class="grid gap-2 sm:grid-cols-2">
+                        <label class="border-base-content/10 bg-base-100 flex items-start gap-3 rounded-lg border px-3 py-3">
+                            <input type="checkbox" id="backend-policy-internal-video-presets" class="checkbox checkbox-sm mt-0.5" />
+                            <span class="text-sm">Use internal backend for video presets</span>
+                        </label>
+                        <label class="border-base-content/10 bg-base-100 flex items-start gap-3 rounded-lg border px-3 py-3">
+                            <input type="checkbox" id="backend-policy-internal-hevc-to-h264" class="checkbox checkbox-sm mt-0.5" />
+                            <span class="text-sm">Use internal backend for HEVC to H.264</span>
+                        </label>
+                        <label class="border-base-content/10 bg-base-100 flex items-start gap-3 rounded-lg border px-3 py-3">
+                            <input type="checkbox" id="backend-policy-internal-hls-preview" class="checkbox checkbox-sm mt-0.5" />
+                            <span class="text-sm">Use internal backend for HLS preview</span>
+                        </label>
+                        <label class="border-base-content/10 bg-base-100 flex items-start gap-3 rounded-lg border px-3 py-3">
+                            <input type="checkbox" id="backend-policy-internal-complex-audio" class="checkbox checkbox-sm mt-0.5" />
+                            <span class="text-sm">Use internal backend for complex audio</span>
+                        </label>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button class="btn btn-accent btn-sm" onclick="saveBackendPolicy()">Save</button>
+                        <span id="backend-policy-saved" class="text-success hidden text-sm">Saved</span>
                     </div>
                 </div>
 
@@ -693,6 +731,70 @@ export async function saveSrtIngest(): Promise<void> {
     state.config = { ...state.config, srtIngest: result.srtIngest };
     populateSrtIngestSettings();
     showSavedFeedback("srt-ingest-saved");
+  }
+}
+
+// ── Transcoding Backend ───────────────────────────────
+
+const DEFAULT_BACKEND_POLICY: BackendPolicy = {
+  internalVideoPresets: false,
+  internalHevcToH264: false,
+  internalHlsPreview: false,
+  internalComplexAudio: false,
+};
+
+function effectiveBackendPolicy(): BackendPolicy {
+  return {
+    ...DEFAULT_BACKEND_POLICY,
+    ...(state.config?.backendPolicy ?? {}),
+  };
+}
+
+function backendPolicyCheckbox(id: string): HTMLInputElement | null {
+  return document.getElementById(id) as HTMLInputElement | null;
+}
+
+function populateBackendPolicySettings(): void {
+  const policy = effectiveBackendPolicy();
+  const inputs: Array<[string, boolean]> = [
+    ["backend-policy-internal-video-presets", policy.internalVideoPresets],
+    ["backend-policy-internal-hevc-to-h264", policy.internalHevcToH264],
+    ["backend-policy-internal-hls-preview", policy.internalHlsPreview],
+    ["backend-policy-internal-complex-audio", policy.internalComplexAudio],
+  ];
+  for (const [id, checked] of inputs) {
+    const input = backendPolicyCheckbox(id);
+    if (input) input.checked = checked;
+  }
+}
+
+function readBackendPolicySettings(): BackendPolicy {
+  return {
+    internalVideoPresets:
+      backendPolicyCheckbox("backend-policy-internal-video-presets")?.checked ??
+      false,
+    internalHevcToH264:
+      backendPolicyCheckbox("backend-policy-internal-hevc-to-h264")?.checked ??
+      false,
+    internalHlsPreview:
+      backendPolicyCheckbox("backend-policy-internal-hls-preview")?.checked ??
+      false,
+    internalComplexAudio:
+      backendPolicyCheckbox("backend-policy-internal-complex-audio")?.checked ??
+      false,
+  };
+}
+
+export async function saveBackendPolicy(): Promise<void> {
+  const backendPolicy = readBackendPolicySettings();
+  const result = await patchConfig({ backendPolicy });
+  if (result) {
+    state.config = {
+      ...state.config,
+      backendPolicy: result.backendPolicy ?? backendPolicy,
+    };
+    populateBackendPolicySettings();
+    showSavedFeedback("backend-policy-saved");
   }
 }
 
