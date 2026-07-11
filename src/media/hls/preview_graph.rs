@@ -1,7 +1,7 @@
-//! HLS preview graph planning.
+//! Runtime HLS preview graph resolution.
 //!
-//! Decides whether a browser-preview HLS stream needs a transcoding stage
-//! (HEVC→H.264 video-only) or can read the source ring directly.
+//! The pure planner returns a `StageGraphPlan`; this module reconciles that
+//! plan with live engine state, ring buffers, and preview stage execution.
 
 use std::sync::Arc;
 
@@ -24,7 +24,7 @@ pub struct HlsPreviewGraph {
     pub video_meta: Option<VideoMeta>,
 }
 
-/// Plan and start the HLS preview graph for a pipeline.
+/// Resolve and start the HLS preview runtime graph for a pipeline.
 ///
 /// For HEVC/H.265 ingest, this creates a video-only preview transcoder that
 /// scales to 720p H.264 via the `StageRuntimeManager`. Audio is read from
@@ -34,7 +34,7 @@ pub struct HlsPreviewGraph {
 ///
 /// Returns `None` when the ingest codec cannot be determined within the
 /// deadline (3 seconds).
-pub async fn plan_hls_preview(
+pub async fn resolve_hls_preview_graph(
     engine: Arc<MediaEngine>,
     pipeline_id: &str,
     cancel: CancellationToken,

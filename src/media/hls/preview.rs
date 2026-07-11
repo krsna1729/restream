@@ -19,7 +19,7 @@ impl MediaEngine {
                 .get_hls_preview_cancel_token(pipeline_id)
                 .await
                 .unwrap();
-            let graph = match crate::planner::hls_preview::plan_hls_preview(
+            let graph = match crate::media::hls::preview_graph::resolve_hls_preview_graph(
                 self.clone(),
                 pipeline_id,
                 cancel_token.clone(),
@@ -27,7 +27,7 @@ impl MediaEngine {
             .await
             {
                 Some(graph) => graph,
-                None => crate::planner::hls_preview::HlsPreviewGraph {
+                None => crate::media::hls::preview_graph::HlsPreviewGraph {
                     video_ring: self.get_or_create_pipeline(pipeline_id).await,
                     audio_ring: None,
                     video_meta: None,
