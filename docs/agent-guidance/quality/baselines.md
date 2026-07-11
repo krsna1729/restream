@@ -97,6 +97,40 @@ and at least one persisted `ready` recording row with both `temp_path` and
 |---|---:|---:|---|---|
 | `mixed.live.srt.h264.a2.bf0` | 2 | 1 | `waitingForCapacity`, `externalFfmpeg`, `waitMs>0`, ready recording metadata row | this commit |
 
+### Mahashivratri msr full-scale ramp — 2026-07-11 (VPS, not WSL2)
+
+Host: dedicated Contabo VPS (6 vCPU AMD EPYC gen1, 11 GiB RAM, 2 GiB swap),
+idle. **Not comparable to WSL2 rows in this file.** Commit `6fc2f254`
+(includes msr sink tuning: MediaMTX `writeQueueSize: 512`).
+
+```sh
+scripts/build/resource-limit.sh target/bench/test_harness msr        # smoke
+MSR_FULL=1 scripts/build/resource-limit.sh target/bench/test_harness msr
+```
+
+Status: **PASS at every checkpoint including 1,200 outputs** (1 SRT ingest,
+30 audio tracks, Zipf fan-out, 95% RTMP / 5% SRT, 1080p30 H.264 passthrough,
+loopback MediaMTX sink). Zero warn/error/panic lines in restream logs.
+
+| Outputs | Egress mix | CPU avg % | CPU peak % | RSS peak | AVIO HWM peak | Samples |
+|---:|---|---:|---:|---:|---:|---:|
+| 30 | rtmp:29,srt:1 | 32.1 | 42.4 | 90 MB | 92 KB | 6 |
+| 120 | rtmp:114,srt:6 | 102.9 | 128.8 | 126 MB | 362 KB | 6 |
+| 300 | rtmp:285,srt:15 | 147.0 | 171.2 | 180 MB | 808 KB | 5 |
+| 600 | rtmp:570,srt:30 | 196.0 | 232.7 | 276 MB | 1.78 MB | 5 |
+| 900 | rtmp:855,srt:45 | 209.9 | 230.1 | 365 MB | 3.02 MB | 4 |
+| 1200 | rtmp:1140,srt:60 | 244.4 | 280.6 | 447 MB | 4.10 MB | 3 |
+
+CPU % is of a single core (600% available on this host). No capacity knee on
+this box: 1,200 outputs ran at ~2.4 cores avg / 2.8 peak with ~55% CPU
+headroom. CPU scales strongly sublinearly (40× outputs → 7.6× CPU; marginal
+cost ≈ 0.18%/output above the 30-output base). RSS ≈ 90 MB + ~0.3 MB/output.
+Caveats: loopback sink (MSR-01 link certification still open), moderate
+fixture bitrate (Phase 2 connection-scale, not the bitrate envelope), no
+external transcoders active. Raw artifacts retained off-repo
+(`.local/artifacts/msr-vps/` on the dev box; `~/msr-artifacts-smoke30` +
+`.local/artifacts/msr/` on the VPS).
+
 ## Standing optimization targets (2026-06-27 CPU profile, task-clock 999 Hz)
 
 | Self % | Symbol | Meaning | Backlog |

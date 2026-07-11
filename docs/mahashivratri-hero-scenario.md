@@ -5,8 +5,13 @@
 - **Scenario status:** canonical Mahashivratri capacity and correctness target
 - **Architecture status:** model and test the current implementation; no media-path
   redesign is implied by this document
-- **Harness status:** `msr` mode implemented; not yet measured at full scale
-- **Baseline status:** no passing 30-track / 1,200-output baseline exists yet
+- **Harness status:** `msr` mode implemented; measured at full scale on a
+  dedicated 6-core VPS on 2026-07-11 (Phase 2 connection-scale ramp);
+  event-hardware and bitrate-envelope runs still pending
+- **Baseline status:** passing 30-track / 1,200-output connection-scale
+  baseline recorded 2026-07-11 — see
+  `docs/agent-guidance/quality/baselines.md`
+  § "Mahashivratri msr full-scale ramp"
 
 This document tracks the Mahashivratri production scenario for the current
 backend: one high-resolution SRT contribution carrying one video stream and 30
@@ -152,6 +157,18 @@ At 30 fps, one selected AAC track produces roughly 80 media messages per
 output per second. At 60 fps it produces roughly 110. The canonical population
 therefore drives approximately 96,000 to 132,000 per-output media-message sends
 per second.
+
+## Measured Baselines
+
+First full-scale Phase 2 ramp (2026-07-11, commit 6fc2f254, dedicated 6-vCPU
+EPYC gen1 VPS, 1080p30 H.264 passthrough, loopback sink): PASS at every
+checkpoint through 1,200 outputs with no capacity knee — ~2.4 cores average /
+2.8 peak and 447 MB RSS at 1,200 outputs, sublinear CPU scaling, zero
+warnings or errors. Full per-checkpoint table and caveats live in
+`docs/agent-guidance/quality/baselines.md` § "Mahashivratri msr full-scale
+ramp — 2026-07-11 (VPS)". This covers connection-scale evidence for MSR-02,
+MSR-03, and MSR-07; MSR-01 (link certification), Phase 3 (bitrate envelope),
+and Phase 4 (degradation slices) remain open.
 
 ## Risks To Track
 
