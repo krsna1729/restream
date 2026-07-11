@@ -13,9 +13,17 @@ scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 cargo run
 ```
 
-`scripts/dev/bootstrap.sh` installs host packages, the pinned Rust toolchain, frontend
-dependencies, a pinned `mediamtx` binary for the live harness, and the
-repo-managed native dependency prefix used by the build.
+`scripts/dev/bootstrap.sh` installs host packages, the pinned Rust toolchain,
+frontend dependencies, the pinned `mediamtx` live-harness peer, and the
+repo-managed native dependency prefix used by the build. It also reports
+whether this host can use the private network namespace and SRT buffer policy
+expected by live tests. To deliberately persist those host settings, use
+`scripts/dev/bootstrap.sh --configure-harness-host`.
+
+`scripts/dev/bootstrap-runtime.sh` is intentionally separate: it installs only
+the FFmpeg/MediaMTX and networking tools needed to run the live harness. It
+does not install compilers, npm dependencies, or change host sysctls. Docker's
+`harness` target uses this runtime bootstrap directly.
 
 After `cargo run`, the service is available at `http://localhost:3030`.
 The dashboard/API binds to `127.0.0.1` by default; set
@@ -59,7 +67,7 @@ On Debian/Ubuntu, the bootstrap script installs:
 apt-get install -y build-essential bzip2 ca-certificates clang cmake curl ffmpeg \
   git jq libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev \
   libavutil-dev libswresample-dev libswscale-dev mold nasm \
-  ninja-build perl pkg-config
+  ninja-build perl pkg-config iproute2 sqlite3 util-linux
 ```
 
 Then install a current Node.js toolchain for Tailwind/TypeScript work

@@ -167,9 +167,8 @@ ENTRYPOINT ["/restream"]
 FROM ubuntu:24.04 AS harness
 
 WORKDIR /workspace
-COPY scripts/dev/bootstrap.sh scripts/dev/bootstrap.sh
-COPY scripts/dev/install-git-hooks.sh scripts/dev/install-git-hooks.sh
-RUN scripts/dev/bootstrap.sh --harness-runtime
+COPY scripts/dev/bootstrap-runtime.sh scripts/dev/bootstrap-runtime.sh
+RUN scripts/dev/bootstrap-runtime.sh
 COPY --from=harness-build /workspace/target/bench/restream /workspace/target/bench/restream
 COPY --from=harness-build /workspace/target/bench/test_harness /workspace/target/bench/test_harness
 COPY --from=harness-build /workspace/public/bin/ffmpeg /workspace/public/bin/ffmpeg

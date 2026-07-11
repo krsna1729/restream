@@ -44,7 +44,7 @@ pub(crate) fn strip_netns_opt(raw: &[String]) -> Vec<String> {
 
 pub(crate) fn netns_available() -> bool {
     std::process::Command::new("unshare")
-        .arg("--help")
+        .args(["--net", "--user", "--map-root-user", "true"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -81,6 +81,12 @@ pub(crate) fn maybe_reexec_in_port_namespace() -> Result<(), String> {
         .env("RESTREAM_HARNESS_IN_NETNS", "1")
         .status()
         .map_err(|e| format!("failed to re-exec {command} inside a network namespace: {e}"))?;
+
+    if !status.success() {
+        return Err(format!(
+            "{command} could not enter the default private network namespace; rerun with --no-netns to use the host-network fallback"
+        ));
+    }
 
     let code = status.code().unwrap_or(1);
     unsafe { libc::_exit(code) };

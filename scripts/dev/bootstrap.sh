@@ -17,11 +17,10 @@ if [[ -f "$ROOT/rust-toolchain.toml" ]]; then
 fi
 FRONTEND_NODE_MAJOR="${RESTREAM_FRONTEND_NODE_MAJOR:-22}"
 FRONTEND_NODE_MIN_MAJOR=20
-MEDIAMTX_VERSION="${RESTREAM_MEDIAMTX_VERSION:-v1.19.1}"
 WITH_FRONTEND=1
 RUN_NATIVE_SETUP=1
 INSTALL_MEDIAMTX=1
-HARNESS_RUNTIME_ONLY=0
+CONFIGURE_HARNESS_HOST=0
 
 usage() {
     cat <<'EOF'
@@ -38,7 +37,9 @@ Options:
   --skip-frontend      skip nodejs/npm install and npm ci
   --skip-native-setup  skip scripts/build/native-deps.sh
   --skip-mediamtx      skip the live-harness Mediamtx binary
-  --harness-runtime    install only live-harness runtime tools and MediaMTX
+  --configure-harness-host
+                      explicitly persist Linux user-namespace and SRT UDP-buffer
+                      prerequisites for the private-network live harness
   -h, --help           show this help
 EOF
 }
@@ -57,11 +58,8 @@ while [[ $# -gt 0 ]]; do
             INSTALL_MEDIAMTX=0
             shift
             ;;
-        --harness-runtime)
-            HARNESS_RUNTIME_ONLY=1
-            WITH_FRONTEND=0
-            RUN_NATIVE_SETUP=0
-            INSTALL_MEDIAMTX=1
+        --configure-harness-host)
+            CONFIGURE_HARNESS_HOST=1
             shift
             ;;
         -h|--help)
@@ -109,20 +107,11 @@ APT_PACKAGES=(
     ninja-build
     perl
     pkg-config
+    iproute2
+    sqlite3
     tzdata
+    util-linux
 )
-
-if (( HARNESS_RUNTIME_ONLY )); then
-    APT_PACKAGES=(
-        ca-certificates
-        curl
-        ffmpeg
-        iproute2
-        jq
-        sqlite3
-        util-linux
-    )
-fi
 
 run_as_root() {
     if [[ "$(id -u)" -eq 0 ]]; then
@@ -153,54 +142,61 @@ ensure_frontend_node_toolchain() {
     run_as_root apt-get install -y nodejs
 }
 
-mediamtx_archive_name() {
-    local arch
-    arch="$(uname -m)"
-    case "$arch" in
-        x86_64)
-            echo "mediamtx_${MEDIAMTX_VERSION}_linux_amd64.tar.gz"
-            ;;
-        aarch64|arm64)
-            echo "mediamtx_${MEDIAMTX_VERSION}_linux_arm64v8.tar.gz"
-            ;;
-        armv7l)
-            echo "mediamtx_${MEDIAMTX_VERSION}_linux_armv7.tar.gz"
-            ;;
-        *)
-            echo "bootstrap-dev: unsupported architecture for mediamtx: $arch" >&2
-            exit 1
-            ;;
-    esac
+unprivileged_netns_available() {
+    command -v unshare >/dev/null 2>&1 \
+        && unshare --user --map-root-user --net true >/dev/null 2>&1
 }
 
-install_mediamtx() {
-    local archive_name archive_url tmpdir extracted_bin target_bin current_version
-    target_bin="/usr/local/bin/mediamtx"
+sysctl_value() {
+    local key=$1
+    local path="/proc/sys/${key//./\/}"
+    [[ -r "$path" ]] && <"$path"
+}
 
-    if command -v mediamtx >/dev/null 2>&1; then
-        current_version="$(mediamtx --version 2>/dev/null | awk 'NR==1 {print $2}')"
-        if [[ "$current_version" == "$MEDIAMTX_VERSION" ]]; then
-            echo "bootstrap-dev: mediamtx $MEDIAMTX_VERSION already present"
-            return
-        fi
+configure_harness_host() {
+    local conf
+    conf="$(mktemp)"
+    cat >"$conf" <<'EOF'
+# Required for Restream's private-loopback live harness and 8 MiB SRT UDP buffers.
+kernel.unprivileged_userns_clone=1
+user.max_user_namespaces=28633
+net.core.rmem_max=26214400
+net.core.wmem_max=8388608
+EOF
+    run_as_root install -m 0644 "$conf" /etc/sysctl.d/99-restream-harness.conf
+    rm -f "$conf"
+    run_as_root sysctl --system >/dev/null
+}
+
+report_harness_host_prerequisites() {
+    local rmem_max wmem_max
+    rmem_max="$(sysctl_value net.core.rmem_max || true)"
+    wmem_max="$(sysctl_value net.core.wmem_max || true)"
+
+    if unprivileged_netns_available; then
+        echo "bootstrap-dev: private live-harness network namespaces are available"
+    else
+        cat >&2 <<'EOF'
+bootstrap-dev: private live-harness network namespaces are unavailable.
+Use --no-netns only as a temporary fallback, or explicitly configure this host:
+  scripts/dev/bootstrap.sh --configure-harness-host
+
+If an AppArmor policy still blocks unshare after configuration, ask the host
+administrator to approve that policy change; bootstrap never disables AppArmor.
+EOF
     fi
 
-    archive_name="$(mediamtx_archive_name)"
-    archive_url="https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VERSION}/${archive_name}"
-    tmpdir="$(mktemp -d)"
-
-    echo "bootstrap-dev: installing mediamtx ${MEDIAMTX_VERSION}"
-    curl -fsSL "$archive_url" -o "$tmpdir/$archive_name"
-    tar -xzf "$tmpdir/$archive_name" -C "$tmpdir"
-
-    extracted_bin="$tmpdir/mediamtx"
-    if [[ ! -x "$extracted_bin" ]]; then
-        echo "bootstrap-dev: mediamtx archive did not contain an executable binary" >&2
-        exit 1
+    if [[ "$rmem_max" =~ ^[0-9]+$ && "$rmem_max" -ge 26214400 \
+        && "$wmem_max" =~ ^[0-9]+$ && "$wmem_max" -ge 8388608 ]]; then
+        echo "bootstrap-dev: SRT UDP buffer ceilings satisfy the 8 MiB harness policy"
+    else
+        cat >&2 <<EOF
+bootstrap-dev: SRT UDP buffer ceilings are below the live-harness policy
+(rmem_max=${rmem_max:-unavailable}, wmem_max=${wmem_max:-unavailable}; need at least 26214400 and 8388608).
+Configure them explicitly with:
+  scripts/dev/bootstrap.sh --configure-harness-host
+EOF
     fi
-
-    run_as_root install -m 0755 "$extracted_bin" "$target_bin"
-    rm -rf "$tmpdir"
 }
 
 missing_packages=()
@@ -218,25 +214,23 @@ else
     echo "bootstrap-dev: apt packages already present"
 fi
 
-if (( ! HARNESS_RUNTIME_ONLY )); then
-    export PATH="$HOME/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 
-    if ! command -v rustup >/dev/null; then
-        echo "bootstrap-dev: installing rustup"
-        curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain none
-    fi
-
-    export PATH="$HOME/.cargo/bin:$PATH"
-
-    if [[ -z "$RUST_TOOLCHAIN" ]]; then
-        echo "bootstrap-dev: failed to read rust-toolchain.toml" >&2
-        exit 1
-    fi
-
-    echo "bootstrap-dev: installing Rust toolchain $RUST_TOOLCHAIN"
-    rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
-    (cd "$ROOT" && rustup override set "$RUST_TOOLCHAIN" >/dev/null)
+if ! command -v rustup >/dev/null; then
+    echo "bootstrap-dev: installing rustup"
+    curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain none
 fi
+
+export PATH="$HOME/.cargo/bin:$PATH"
+
+if [[ -z "$RUST_TOOLCHAIN" ]]; then
+    echo "bootstrap-dev: failed to read rust-toolchain.toml" >&2
+    exit 1
+fi
+
+echo "bootstrap-dev: installing Rust toolchain $RUST_TOOLCHAIN"
+rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
+(cd "$ROOT" && rustup override set "$RUST_TOOLCHAIN" >/dev/null)
 
 if (( WITH_FRONTEND )); then
     ensure_frontend_node_toolchain
@@ -248,7 +242,7 @@ if (( WITH_FRONTEND )); then
     fi
 fi
 
-if (( ! HARNESS_RUNTIME_ONLY )) && git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     echo "bootstrap-dev: installing repo-managed Git hooks"
     "$ROOT/scripts/dev/install-git-hooks.sh"
 else
@@ -256,17 +250,19 @@ else
 fi
 
 if (( INSTALL_MEDIAMTX )); then
-    install_mediamtx
+    "$ROOT/scripts/dev/bootstrap-runtime.sh" --mediamtx-only
 fi
+
+if (( CONFIGURE_HARNESS_HOST )); then
+    echo "bootstrap-dev: persisting live-harness host prerequisites"
+    configure_harness_host
+fi
+
+report_harness_host_prerequisites
 
 if (( RUN_NATIVE_SETUP )); then
     echo "bootstrap-dev: building pinned native dependency prefix"
     "$ROOT/scripts/build/resource-limit.sh" "$ROOT/scripts/build/native-deps.sh"
-fi
-
-if (( HARNESS_RUNTIME_ONLY )); then
-    echo "bootstrap-dev: harness runtime tools are ready"
-    exit 0
 fi
 
 cat <<EOF

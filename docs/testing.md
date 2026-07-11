@@ -459,6 +459,10 @@ children once the harness process starts.
 By default every mode that manages its own server processes runs inside a
 private loopback network namespace (`unshare --net`) so ports never conflict
 with the host. Pass `--no-netns` to skip namespace re-exec.
+On a fresh Linux development host, run `scripts/dev/bootstrap.sh` first; it
+reports namespace and SRT-buffer readiness. Use
+`scripts/dev/bootstrap.sh --configure-harness-host` only when you explicitly
+want to persist the documented host sysctls.
 When no explicit `RESTREAM_*` or `MTX_*` port env vars are set, the harness
 also synthesizes a per-process high-port bundle instead of reusing the legacy
 3030/1935/10080 defaults, so correctness runs stay isolated even when the
