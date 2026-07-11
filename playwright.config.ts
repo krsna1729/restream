@@ -11,6 +11,7 @@ export default defineConfig({
     retries: process.env.CI ? 1 : 0,
     workers: 1,
     reporter: 'list',
+    outputDir: './.local/test-results',
     timeout: 30000,
     use: {
         baseURL: process.env.BASE_URL || 'http://localhost:3030',
