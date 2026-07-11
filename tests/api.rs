@@ -5073,6 +5073,22 @@ async fn agent_operation_lifecycle_is_approval_gated_redacted_and_verified() {
     let reused_body = body_json(reused).await;
     assert_eq!(reused_body["operationId"], operation_id);
 
+    let mut changed_request = request.clone();
+    changed_request["intent"] = serde_json::json!("Create a different output");
+    let idempotency_conflict = app
+        .clone()
+        .oneshot(auth_req(
+            "POST",
+            "/api/v1/agent/operations",
+            &cookie,
+            Some(&changed_request.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(idempotency_conflict.status(), StatusCode::CONFLICT);
+    let conflict_body = body_json(idempotency_conflict).await;
+    assert_eq!(conflict_body["code"], "idempotencyConflict");
+
     let apply_before_approval = app
         .clone()
         .oneshot(auth_req(

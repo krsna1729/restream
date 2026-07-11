@@ -33,6 +33,7 @@ pub struct OperationRecord {
     pub request: OperationCreateRequest,
     pub plan: PlanResponse,
     pub plan_hash: String,
+    pub idempotency_hash: Option<String>,
     pub approval: Option<ApprovalState>,
     pub approval_required: bool,
     pub created_at: String,
@@ -74,6 +75,7 @@ pub struct ApprovalState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationStoreError {
     NotFound,
+    IdempotencyConflict,
     Invalid,
     RequiresApproval,
     AlreadyApplying,
@@ -92,20 +94,27 @@ impl AgentExecutionStore {
         request: OperationCreateRequest,
         plan: PlanResponse,
         pre_alert_count: usize,
-    ) -> StoreCreateResult {
+    ) -> Result<StoreCreateResult, OperationStoreError> {
+        let plan_request = request.plan_request();
+        let plan_hash = plan_hash(&plan_request);
+        let idempotency_hash = request
+            .idempotency_key
+            .as_ref()
+            .map(|_| operation_idempotency_hash(&request, &plan_hash));
         if let Some(key) = request.idempotency_key.as_deref()
             && let Some(operation_id) = lock_or_recover(&self.idempotency).get(key).cloned()
             && let Some(record) = lock_or_recover(&self.records).get(&operation_id).cloned()
         {
-            return StoreCreateResult {
+            if record.idempotency_hash.as_ref() != idempotency_hash.as_ref() {
+                return Err(OperationStoreError::IdempotencyConflict);
+            }
+            return Ok(StoreCreateResult {
                 operation: public_record(&record),
                 reused: true,
-            };
+            });
         }
 
         let created_at = now();
-        let plan_request = request.plan_request();
-        let plan_hash = plan_hash(&plan_request);
         let operation_id = operation_id(&request, &created_at);
         let status = if plan.validation.valid {
             OperationStatus::AwaitingApproval
@@ -146,6 +155,7 @@ impl AgentExecutionStore {
             status,
             plan,
             plan_hash,
+            idempotency_hash,
             approval: None,
             approval_required: true,
             created_at: created_at.clone(),
@@ -179,10 +189,10 @@ impl AgentExecutionStore {
             self.enforce_record_limit(&mut records);
         }
 
-        StoreCreateResult {
+        Ok(StoreCreateResult {
             operation: public_record(&record),
             reused: false,
-        }
+        })
     }
 
     pub fn get(&self, operation_id: &str) -> Option<OperationRecord> {
@@ -417,6 +427,12 @@ fn plan_hash(request: &PlanRequest) -> String {
     format!("sha256:{}", hex_prefix(&digest, 32))
 }
 
+fn operation_idempotency_hash(request: &OperationCreateRequest, plan_hash: &str) -> String {
+    let raw = serde_json::to_vec(&(request, plan_hash)).unwrap_or_default();
+    let digest = Sha256::digest(raw);
+    format!("sha256:{}", hex_prefix(&digest, 32))
+}
+
 fn operation_id(request: &OperationCreateRequest, created_at: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(created_at.as_bytes());
@@ -514,11 +530,16 @@ mod tests {
         created_at: &str,
     ) -> OperationRecord {
         let request = test_request(idempotency_key.clone());
+        let plan_hash = plan_hash(&request.plan_request());
         OperationRecord {
             operation_id: operation_id.to_string(),
             idempotency_key,
             status: OperationStatus::AwaitingApproval,
-            plan_hash: plan_hash(&request.plan_request()),
+            idempotency_hash: request
+                .idempotency_key
+                .as_ref()
+                .map(|_| operation_idempotency_hash(&request, &plan_hash)),
+            plan_hash,
             request,
             plan: test_plan(),
             approval: None,
@@ -594,5 +615,28 @@ mod tests {
         });
 
         assert!(store.get("op").is_some());
+    }
+
+    #[test]
+    fn idempotency_reuse_requires_matching_request_hash() {
+        let store = AgentExecutionStore::default();
+        let request = test_request(Some("same-key".to_string()));
+        let first = store
+            .create(request.clone(), test_plan(), 0)
+            .expect("first create succeeds");
+        assert!(!first.reused);
+
+        let replay = store
+            .create(request, test_plan(), 0)
+            .expect("matching replay succeeds");
+        assert!(replay.reused);
+
+        let mut changed = test_request(Some("same-key".to_string()));
+        changed.intent = "remove output".to_string();
+        let err = store
+            .create(changed, test_plan(), 0)
+            .expect_err("different request with same key should conflict");
+
+        assert_eq!(err, OperationStoreError::IdempotencyConflict);
     }
 }

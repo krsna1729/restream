@@ -334,7 +334,10 @@ pub async fn agent_operation_create_handler(
 
     let plan = build_agent_plan(&state, request.plan_request()).await;
     let pre_alert_count = current_agent_alert_count(&state).await;
-    let result = state.agent_execution.create(request, plan, pre_alert_count);
+    let result = match state.agent_execution.create(request, plan, pre_alert_count) {
+        Ok(result) => result,
+        Err(err) => return agent_operation_store_error(err),
+    };
     let status = if result.reused {
         StatusCode::OK
     } else {
@@ -1557,6 +1560,11 @@ fn agent_operation_store_error(
             StatusCode::NOT_FOUND,
             "operationNotFound",
             "Operation not found",
+        ),
+        OperationStoreError::IdempotencyConflict => (
+            StatusCode::CONFLICT,
+            "idempotencyConflict",
+            "Idempotency key was already used for a different operation",
         ),
         OperationStoreError::Invalid => (
             StatusCode::CONFLICT,
