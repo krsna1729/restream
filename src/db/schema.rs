@@ -52,6 +52,7 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
         .execute(pool)
         .await?;
 
+    super::migrations::ensure_no_duplicate_pipeline_stream_keys(pool).await?;
     sqlx::query(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_pipelines_stream_key_unique ON pipelines(stream_key);",
     )

@@ -83,6 +83,44 @@ async fn update_nonexistent_pipeline_returns_none() {
 }
 
 #[tokio::test]
+async fn schema_setup_reports_legacy_duplicate_pipeline_stream_keys() {
+    let pool = db::create_pool("sqlite::memory:").await.unwrap();
+    sqlx::query(
+        "CREATE TABLE pipelines (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            stream_key TEXT NOT NULL,
+            encoding TEXT,
+            input_ever_seen_live INTEGER NOT NULL DEFAULT 0,
+            input_source TEXT
+        );",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO pipelines (id, name, stream_key)
+         VALUES ('p-old', 'Old', 'dup-key'),
+                ('p-new', 'New', 'dup-key');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let err = db::setup_database_schema(&pool)
+        .await
+        .expect_err("legacy duplicate stream keys should block unique-index migration");
+    let message = err.to_string();
+    assert!(
+        message.contains("duplicate pipeline stream keys must be resolved before migration"),
+        "unexpected duplicate-key migration error: {message}"
+    );
+    assert!(message.contains("dup-key"));
+    assert!(message.contains("p-old"));
+    assert!(message.contains("p-new"));
+}
+
+#[tokio::test]
 async fn output_crud() {
     let pool = test_pool().await;
     db::create_pipeline(&pool, "p1", "P", "key01", None, None)
