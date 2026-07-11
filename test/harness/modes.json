@@ -92,6 +92,15 @@
           },
           "foldedInto": "mixed+branch-axis"
         },
+        "backend-policy-matrix": {
+          "suiteRef": "suites.json#suites.backend-policy-matrix",
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "foldedInto": "mixed+backend-policy-axis"
+        },
         "srt-crypto-matrix": {
           "suiteRef": "suites.json#suites.srt-crypto-matrix",
           "suiteDefault": true,

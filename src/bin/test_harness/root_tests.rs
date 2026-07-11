@@ -1394,6 +1394,43 @@ fn sweep_output_kind_centralizes_urls_and_multi_audio_encoding() {
         SweepOutputKind::SrtSource.encoding(true),
         "source+atrack:0,1"
     );
+    assert_eq!(
+        SweepOutputKind::RtmpSourceDownmix.encoding(true),
+        "source+downmix:0"
+    );
+    assert_eq!(
+        SweepOutputKind::SrtSourceDownmix.encoding(true),
+        "source+downmix:0"
+    );
+}
+
+#[test]
+fn backend_policy_matrix_is_separate_from_symmetric_mixed_matrix() {
+    let matrix_spec = mode_spec("mixed.matrix").expect("mixed.matrix must be listed");
+    let policy_spec =
+        mode_spec("backend-policy-matrix").expect("backend-policy-matrix must be listed");
+
+    assert!(matrix_spec.suite_default);
+    assert!(!policy_spec.suite_default);
+    assert!(policy_spec.requires_bench_profile);
+}
+
+#[test]
+fn backend_policy_matrix_default_variants_cover_four_internal_stage_families() {
+    let variants = selected_backend_policy_variants().expect("default variants should parse");
+    let names: Vec<_> = variants.iter().map(|variant| variant.name()).collect();
+
+    assert_eq!(
+        names,
+        vec![
+            "external-all",
+            "internal-video-presets",
+            "internal-hevc-to-h264",
+            "internal-hls-preview",
+            "internal-complex-audio",
+            "internal-all",
+        ]
+    );
 }
 
 #[test]

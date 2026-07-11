@@ -66,6 +66,7 @@ struct ResourceSweepEnv {
     lifecycle: ResourceSweepLifecycle,
     no_cleanup: bool,
     srt_crypto: HarnessSrtCrypto,
+    backend_policy_env: Vec<(&'static str, String)>,
 }
 
 impl ResourceSweepEnv {
@@ -106,6 +107,7 @@ impl ResourceSweepEnv {
                 .ok()
                 .is_some_and(|v| v == "1"),
             srt_crypto: harness_srt_crypto_from_env(),
+            backend_policy_env: Vec::new(),
             work_dir,
         })
     }
@@ -189,6 +191,8 @@ fn sweep_configs() -> &'static [SweepConfig] {
 pub(crate) enum SweepOutputKind {
     RtmpSource,
     SrtSource,
+    RtmpSourceDownmix,
+    SrtSourceDownmix,
     Rtmp720p,
     Srt720p,
     Rtmp1080p,
@@ -200,6 +204,8 @@ impl SweepOutputKind {
         match self {
             Self::RtmpSource => "rtmp-source",
             Self::SrtSource => "srt-source",
+            Self::RtmpSourceDownmix => "rtmp-source-downmix",
+            Self::SrtSourceDownmix => "srt-source-downmix",
             Self::Rtmp720p => "rtmp.720p.a0",
             Self::Srt720p => "srt.720p.a0",
             Self::Rtmp1080p => "rtmp.1080p.a0",
@@ -209,10 +215,10 @@ impl SweepOutputKind {
 
     pub(crate) fn publish_url(self, rtmp_port: u16, srt_port: u16, name: &str) -> String {
         match self {
-            Self::RtmpSource | Self::Rtmp720p | Self::Rtmp1080p => {
+            Self::RtmpSource | Self::RtmpSourceDownmix | Self::Rtmp720p | Self::Rtmp1080p => {
                 format!("rtmp://127.0.0.1:{rtmp_port}/live/{name}")
             }
-            Self::SrtSource | Self::Srt720p | Self::Srt1080p => {
+            Self::SrtSource | Self::SrtSourceDownmix | Self::Srt720p | Self::Srt1080p => {
                 format!("srt://127.0.0.1:{srt_port}?streamid=publish:live/{name}")
             }
         }
@@ -220,10 +226,10 @@ impl SweepOutputKind {
 
     pub(crate) fn read_url(self, rtmp_port: u16, srt_port: u16, name: &str) -> String {
         match self {
-            Self::RtmpSource | Self::Rtmp720p | Self::Rtmp1080p => {
+            Self::RtmpSource | Self::RtmpSourceDownmix | Self::Rtmp720p | Self::Rtmp1080p => {
                 format!("rtmp://127.0.0.1:{rtmp_port}/live/{name}")
             }
-            Self::SrtSource | Self::Srt720p | Self::Srt1080p => {
+            Self::SrtSource | Self::SrtSourceDownmix | Self::Srt720p | Self::Srt1080p => {
                 format!("srt://127.0.0.1:{srt_port}?streamid=read:live/{name}&timeout=30000000")
             }
         }
@@ -234,6 +240,7 @@ impl SweepOutputKind {
             (Self::RtmpSource, true) => "source+atrack:0",
             (Self::SrtSource, true) => "source+atrack:0,1",
             (Self::RtmpSource | Self::SrtSource, false) => "source",
+            (Self::RtmpSourceDownmix | Self::SrtSourceDownmix, _) => "source+downmix:0",
             (Self::Rtmp720p, true) => "720p+atrack:0",
             (Self::Srt720p, true) => "720p+atrack:0,1",
             (Self::Rtmp720p | Self::Srt720p, false) => "720p",
@@ -298,8 +305,11 @@ struct BranchMatrixEnv {
 
 impl BranchMatrixEnv {
     fn from_env() -> Result<Self, String> {
-        let mut resource =
-            ResourceSweepEnv::from_env_with_default_dir("test/artifacts/branch-matrix")?;
+        Self::from_env_with_default_dir("test/artifacts/branch-matrix")
+    }
+
+    fn from_env_with_default_dir(default_dir: &str) -> Result<Self, String> {
+        let mut resource = ResourceSweepEnv::from_env_with_default_dir(default_dir)?;
         let work_dir = resource.work_dir.clone();
         let egress_count = env_usize("BRANCH_MATRIX_EGRESS_COUNT", 10).max(1);
         resource.egress_counts = vec![egress_count];
@@ -337,6 +347,142 @@ impl BranchMatrixEnv {
             .as_ref()
             .is_none_or(|filter| filter.contains(scenario))
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct BackendPolicyVariant {
+    name: &'static str,
+    internal_video_presets: bool,
+    internal_hevc_to_h264: bool,
+    internal_hls_preview: bool,
+    internal_complex_audio: bool,
+}
+
+impl BackendPolicyVariant {
+    const fn new(
+        name: &'static str,
+        internal_video_presets: bool,
+        internal_hevc_to_h264: bool,
+        internal_hls_preview: bool,
+        internal_complex_audio: bool,
+    ) -> Self {
+        Self {
+            name,
+            internal_video_presets,
+            internal_hevc_to_h264,
+            internal_hls_preview,
+            internal_complex_audio,
+        }
+    }
+
+    fn env_overrides(self) -> Vec<(&'static str, String)> {
+        vec![
+            (
+                "RESTREAM_INTERNAL_VIDEO_PRESETS",
+                bool_env(self.internal_video_presets),
+            ),
+            (
+                "RESTREAM_INTERNAL_HEVC_TO_H264",
+                bool_env(self.internal_hevc_to_h264),
+            ),
+            (
+                "RESTREAM_INTERNAL_HLS_PREVIEW",
+                bool_env(self.internal_hls_preview),
+            ),
+            (
+                "RESTREAM_INTERNAL_AUDIO_COMPLEX",
+                bool_env(self.internal_complex_audio),
+            ),
+        ]
+    }
+
+    pub(crate) const fn name(self) -> &'static str {
+        self.name
+    }
+
+    fn policy_json(self) -> Value {
+        json!({
+            "internalVideoPresets": self.internal_video_presets,
+            "internalHevcToH264": self.internal_hevc_to_h264,
+            "internalHlsPreview": self.internal_hls_preview,
+            "internalComplexAudio": self.internal_complex_audio,
+        })
+    }
+
+    fn branch_filter(self) -> Option<HashSet<String>> {
+        let mut scenarios = HashSet::new();
+        if self.internal_video_presets {
+            scenarios.insert("egress-growth-transcode-mixed".to_string());
+            scenarios.insert("egress-growth-source-plus-transcode-mixed".to_string());
+            scenarios.insert("egress-growth-transcode-dual-mixed".to_string());
+            scenarios.insert("egress-growth-source-plus-transcode-dual-mixed".to_string());
+        }
+        if self.internal_hevc_to_h264 {
+            scenarios.insert("egress-growth-hevc-bridge".to_string());
+        }
+        (!scenarios.is_empty()).then_some(scenarios)
+    }
+
+    fn needs_branch_probe(self) -> bool {
+        self.name == "external-all" || self.internal_video_presets || self.internal_hevc_to_h264
+    }
+
+    fn needs_hls_probe(self) -> bool {
+        self.internal_hls_preview
+    }
+
+    fn needs_complex_audio_probe(self) -> bool {
+        self.internal_complex_audio
+    }
+}
+
+fn bool_env(value: bool) -> String {
+    if value { "1" } else { "0" }.to_string()
+}
+
+const BACKEND_POLICY_VARIANTS: &[BackendPolicyVariant] = &[
+    BackendPolicyVariant::new("external-all", false, false, false, false),
+    BackendPolicyVariant::new("internal-video-presets", true, false, false, false),
+    BackendPolicyVariant::new("internal-hevc-to-h264", false, true, false, false),
+    BackendPolicyVariant::new("internal-hls-preview", false, false, true, false),
+    BackendPolicyVariant::new("internal-complex-audio", false, false, false, true),
+    BackendPolicyVariant::new("internal-all", true, true, true, true),
+];
+
+fn backend_policy_variant_by_name(name: &str) -> Option<BackendPolicyVariant> {
+    BACKEND_POLICY_VARIANTS
+        .iter()
+        .copied()
+        .find(|variant| variant.name() == name)
+}
+
+pub(crate) fn selected_backend_policy_variants() -> Result<Vec<BackendPolicyVariant>, String> {
+    let raw = std::env::var("BACKEND_POLICY_MATRIX_VARIANTS").unwrap_or_else(|_| {
+        BACKEND_POLICY_VARIANTS
+            .iter()
+            .map(|variant| variant.name())
+            .collect::<Vec<_>>()
+            .join(",")
+    });
+    let mut variants = Vec::new();
+    for name in raw
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        if name == "all" || name == "default" {
+            variants.extend(BACKEND_POLICY_VARIANTS.iter().copied());
+            continue;
+        }
+        variants.push(
+            backend_policy_variant_by_name(name)
+                .ok_or_else(|| format!("unknown backend policy variant {name:?}"))?,
+        );
+    }
+    if variants.is_empty() {
+        return Err("BACKEND_POLICY_MATRIX_VARIANTS selected no variants".to_string());
+    }
+    Ok(variants)
 }
 
 /// One periodic process/memory sample in resource-oriented sweeps.
@@ -538,6 +684,79 @@ pub(crate) async fn branch_matrix() -> Result<Value, String> {
     run_branch_matrix_variant(&env).await
 }
 
+pub(crate) async fn backend_policy_matrix() -> Result<Value, String> {
+    let base = BranchMatrixEnv::from_env_with_default_dir("test/artifacts/backend-policy-matrix")?;
+    let parent_work_dir = base.resource.work_dir.clone();
+    let variants = selected_backend_policy_variants()?;
+    let mut runs = Vec::new();
+
+    for variant in variants {
+        let variant_work_dir = parent_work_dir.join(variant.name());
+        let mut probes = serde_json::Map::new();
+
+        if variant.needs_branch_probe() {
+            let mut branch_env = base.clone();
+            apply_branch_matrix_work_dir(
+                &mut branch_env,
+                variant_work_dir.join("branch"),
+                "branch-matrix",
+            );
+            branch_env.backend = variant.name().to_string();
+            branch_env.resource.backend_policy_env = variant.env_overrides();
+            if let Some(filter) = variant.branch_filter() {
+                branch_env.scenario_filter = Some(filter);
+            }
+            probes.insert(
+                "branch".to_string(),
+                run_branch_matrix_variant(&branch_env).await?,
+            );
+        }
+
+        if variant.needs_hls_probe() {
+            probes.insert(
+                "hlsPreview".to_string(),
+                run_backend_hls_preview_probe(variant, variant_work_dir.join("hls-preview"))
+                    .await?,
+            );
+        }
+
+        if variant.needs_complex_audio_probe() {
+            probes.insert(
+                "complexAudio".to_string(),
+                run_backend_complex_audio_probe(
+                    &base,
+                    variant,
+                    variant_work_dir.join("complex-audio"),
+                )
+                .await?,
+            );
+        }
+
+        runs.push(json!({
+            "variant": variant.name(),
+            "policy": variant.policy_json(),
+            "probes": probes,
+        }));
+    }
+
+    let summary_json = parent_work_dir.join("backend-policy-matrix-results.json");
+    let result = json!({
+        "mode": "backend-policy-matrix",
+        "variantSelection": std::env::var("BACKEND_POLICY_MATRIX_VARIANTS").unwrap_or_else(|_| "default".to_string()),
+        "artifacts": {
+            "summaryJson": summary_json,
+            "workDir": parent_work_dir,
+        },
+        "variants": runs,
+    });
+    if let Some(parent) = summary_json.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&summary_json, serde_json::to_vec_pretty(&result).unwrap())
+        .map_err(|e| e.to_string())?;
+    Ok(result)
+}
+
 pub(crate) async fn srt_crypto_matrix() -> Result<Value, String> {
     let mut env = BranchMatrixEnv::from_env()?;
     env.srt_variants =
@@ -548,36 +767,11 @@ pub(crate) async fn srt_crypto_matrix() -> Result<Value, String> {
     for crypto in env.srt_variants.clone() {
         let mut variant_env = env.clone();
         variant_env.resource.srt_crypto = crypto.clone();
-        variant_env.resource.work_dir = parent_work_dir.join(&crypto.label);
-        variant_env.resource.summary_json = variant_env
-            .resource
-            .work_dir
-            .join("branch-matrix-results.json");
-        variant_env.resource.summary_csv = variant_env
-            .resource
-            .work_dir
-            .join("branch-matrix-results.csv");
-        variant_env.resource.samples_jsonl = variant_env
-            .resource
-            .work_dir
-            .join("branch-matrix-samples.jsonl");
-        variant_env.resource.restream_log = variant_env.resource.work_dir.join("restream.log");
-        variant_env.resource.mediamtx_log = variant_env.resource.work_dir.join("mediamtx.log");
-        variant_env.resource.mediamtx_config = variant_env.resource.work_dir.join("mediamtx.yml");
-        variant_env.resource.restream_db_path =
-            variant_env.resource.work_dir.join("branch-matrix.db");
-        variant_env.summary_json = variant_env
-            .resource
-            .work_dir
-            .join("branch-matrix-results.json");
-        variant_env.summary_csv = variant_env
-            .resource
-            .work_dir
-            .join("branch-matrix-results.csv");
-        variant_env.summary_md = variant_env
-            .resource
-            .work_dir
-            .join("branch-matrix-summary.md");
+        apply_branch_matrix_work_dir(
+            &mut variant_env,
+            parent_work_dir.join(&crypto.label),
+            "branch-matrix",
+        );
         runs.push(run_branch_matrix_variant(&variant_env).await?);
     }
 
@@ -585,6 +779,131 @@ pub(crate) async fn srt_crypto_matrix() -> Result<Value, String> {
         "mode": "srt-crypto-matrix",
         "variants": runs,
     }))
+}
+
+fn apply_branch_matrix_work_dir(env: &mut BranchMatrixEnv, work_dir: PathBuf, db_stem: &str) {
+    env.resource.work_dir = work_dir;
+    env.resource.summary_json = env.resource.work_dir.join("branch-matrix-results.json");
+    env.resource.summary_csv = env.resource.work_dir.join("branch-matrix-results.csv");
+    env.resource.samples_jsonl = env.resource.work_dir.join("branch-matrix-samples.jsonl");
+    env.resource.restream_log = env.resource.work_dir.join("restream.log");
+    env.resource.mediamtx_log = env.resource.work_dir.join("mediamtx.log");
+    env.resource.mediamtx_config = env.resource.work_dir.join("mediamtx.yml");
+    env.resource.restream_db_path = env.resource.work_dir.join(format!("{db_stem}.db"));
+    env.summary_json = env.resource.work_dir.join("branch-matrix-results.json");
+    env.summary_csv = env.resource.work_dir.join("branch-matrix-results.csv");
+    env.summary_md = env.resource.work_dir.join("branch-matrix-summary.md");
+}
+
+async fn run_backend_hls_preview_probe(
+    variant: BackendPolicyVariant,
+    work_dir: PathBuf,
+) -> Result<Value, String> {
+    let case = mixed_input_case_for_command("mixed.live.srt.h265.a1.bf2")
+        .ok_or("backend policy HLS probe scenario missing")?;
+    let mut env =
+        MixedEnv::from_env_with_default_work_dir("backend-policy-hls-preview", work_dir.clone());
+    apply_mixed_work_dir(&mut env, "backend-policy-hls-preview", work_dir);
+    env.only_checks = Some(vec!["ffprobe".to_string(), "hls".to_string()]);
+    env.n_per_group = 1;
+    env.collect_failures = true;
+    env.restream_env_overrides = variant.env_overrides();
+    let mut result = run_mixed_input_case_with_env(case, env).await?;
+    result["backendPolicyVariant"] = json!(variant.name());
+    result["backendPolicy"] = variant.policy_json();
+    Ok(result)
+}
+
+async fn run_backend_complex_audio_probe(
+    base: &BranchMatrixEnv,
+    variant: BackendPolicyVariant,
+    work_dir: PathBuf,
+) -> Result<Value, String> {
+    let mut env = base.resource.clone();
+    env.work_dir = work_dir;
+    env.summary_json = env.work_dir.join("complex-audio-results.json");
+    env.summary_csv = env.work_dir.join("complex-audio-results.csv");
+    env.samples_jsonl = env.work_dir.join("complex-audio-samples.jsonl");
+    env.restream_log = env.work_dir.join("restream.log");
+    env.mediamtx_log = env.work_dir.join("mediamtx.log");
+    env.mediamtx_config = env.work_dir.join("mediamtx.yml");
+    env.restream_db_path = env.work_dir.join("complex-audio.db");
+    env.backend_policy_env = variant.env_overrides();
+    std::fs::create_dir_all(&env.work_dir).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&env.summary_csv);
+    let _ = std::fs::remove_file(&env.summary_json);
+    let _ = std::fs::remove_file(&env.samples_jsonl);
+
+    let mut stack = if env.lifecycle == ResourceSweepLifecycle::Isolated {
+        None
+    } else {
+        Some(start_resource_sweep_stack(&env).await?)
+    };
+    let mut retained_publishers = Vec::new();
+    let aggregates = run_resource_egress_growth(
+        &env,
+        &mut stack,
+        &mut retained_publishers,
+        "backend-policy-complex-audio",
+        sweep_configs()[3],
+        &[
+            SweepOutputKind::RtmpSourceDownmix,
+            SweepOutputKind::SrtSourceDownmix,
+        ],
+    )
+    .await?;
+    write_resource_sweep_csv(&env.summary_csv, &aggregates)?;
+    let result = json!({
+        "mode": "backend-policy-complex-audio",
+        "backendPolicyVariant": variant.name(),
+        "backendPolicy": variant.policy_json(),
+        "lifecycle": env.lifecycle.as_str(),
+        "artifacts": {
+            "summaryJson": env.summary_json,
+            "summaryCsv": env.summary_csv,
+            "samplesJsonl": env.samples_jsonl,
+            "restreamLog": env.restream_log,
+            "mediamtxLog": env.mediamtx_log,
+        },
+        "aggregates": aggregates.iter().map(resource_aggregate_json).collect::<Vec<_>>(),
+    });
+    std::fs::write(
+        &env.summary_json,
+        serde_json::to_vec_pretty(&result).unwrap(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    if env.no_cleanup {
+        for child in retained_publishers.drain(..) {
+            std::mem::forget(child);
+        }
+        if let Some(stack) = stack.take() {
+            std::mem::forget(stack);
+        }
+    } else {
+        for child in &mut retained_publishers {
+            stop_child(child).await;
+        }
+        if let Some(stack) = stack.as_mut() {
+            stop_child(&mut stack.restream).await;
+            stop_child(&mut stack.mediamtx).await;
+        }
+    }
+    Ok(result)
+}
+
+fn apply_mixed_work_dir(env: &mut MixedEnv, log_stem: &str, work_dir: PathBuf) {
+    env.media_dir = work_dir.join("media");
+    env.scale_log = work_dir.join("scale.csv");
+    env.timing_log = work_dir.join("timing.jsonl");
+    env.rss_summary = work_dir.join("rss-summary.csv");
+    env.summary_log = work_dir.join("summary.txt");
+    env.restream_log = work_dir.join(format!("{log_stem}-restream.log"));
+    env.mediamtx_log = work_dir.join(format!("{log_stem}-mediamtx.log"));
+    env.mediamtx_config = work_dir.join(format!("{log_stem}-mediamtx.yml"));
+    env.restream_db_path = default_work_db_path(&work_dir, &format!("{log_stem}.db"));
+    env.assertion_log = Some(work_dir.join("assertions.jsonl"));
+    env.work_dir = work_dir;
 }
 
 async fn run_branch_matrix_variant(env: &BranchMatrixEnv) -> Result<Value, String> {
@@ -717,6 +1036,9 @@ async fn start_resource_sweep_stack(env: &ResourceSweepEnv) -> Result<ResourceSw
         .stdout(Stdio::from(restream_log))
         .stderr(Stdio::from(restream_err))
         .kill_on_drop(true);
+    for (key, value) in &env.backend_policy_env {
+        restream_cmd.env(key, value);
+    }
     apply_srt_listener_env(&mut restream_cmd, &env.srt_crypto);
     let mut restream = restream_cmd.spawn().map_err(|e| e.to_string())?;
     if let Err(err) = wait_for_http_ok(
@@ -980,6 +1302,8 @@ async fn run_resource_egress_growth(
                                     | SweepOutputKind::Srt720p
                                     | SweepOutputKind::Rtmp1080p
                                     | SweepOutputKind::Srt1080p
+                                    | SweepOutputKind::RtmpSourceDownmix
+                                    | SweepOutputKind::SrtSourceDownmix
                             )
                         }) {
                             "yes"

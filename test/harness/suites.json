@@ -33,6 +33,20 @@
       "selector": "scenarios/mixed.json#selectors.branch-matrix",
       "coverageFromSelector": true
     },
+    "backend-policy-matrix": {
+      "version": 1,
+      "id": "backend-policy-matrix",
+      "runtimeProfile": "branchMatrix",
+      "coverage": "scenarios/mixed.json#coverageSlices.branchMatrix",
+      "execution": {
+        "stackPolicy": "perPolicyProbe",
+        "continueOnFail": false
+      },
+      "artifact": {
+        "path": "${runtime.workDir}/backend-policy-matrix-results.json"
+      },
+      "coverageFromSelector": false
+    },
     "default": {
       "version": 1,
       "id": "default",

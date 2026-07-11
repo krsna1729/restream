@@ -4,7 +4,7 @@ use super::*;
 
 pub(crate) async fn start_mixed_restream(env: &MixedEnv) -> Result<Child, String> {
     std::fs::create_dir_all(&env.media_dir).map_err(|e| e.to_string())?;
-    start_restream_child_in_media_dir(
+    start_restream_child_opts(
         &env.restream_bin,
         &TestPorts {
             http: env.restream_http,
@@ -13,7 +13,9 @@ pub(crate) async fn start_mixed_restream(env: &MixedEnv) -> Result<Child, String
         },
         &env.restream_db_path,
         &env.restream_log,
-        &env.media_dir,
+        true,
+        Some(&env.media_dir),
+        &env.restream_env_overrides,
     )
     .await
 }

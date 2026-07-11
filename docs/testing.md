@@ -957,6 +957,31 @@ Useful env vars:
 - `HARNESS_SRT_PASSPHRASE=0123456789abcd` and `HARNESS_SRT_PBKEYLEN=16` to
   rerun the matrix with encrypted SRT ingest
 
+### `backend-policy-matrix` — internal/external stage-family policy
+
+`mixed.matrix` stays symmetric and media-shape focused. Use
+`backend-policy-matrix` when validating the four independent internal backend
+toggles:
+
+- `RESTREAM_INTERNAL_VIDEO_PRESETS`
+- `RESTREAM_INTERNAL_HEVC_TO_H264`
+- `RESTREAM_INTERNAL_HLS_PREVIEW`
+- `RESTREAM_INTERNAL_AUDIO_COMPLEX`
+
+The default variant set is the external baseline, each one-hot internal family,
+and all-internal:
+
+```sh
+./scripts/run-bench-harness.sh backend-policy-matrix
+```
+
+Artifacts are written under `test/artifacts/backend-policy-matrix/` by default.
+Set `BACKEND_POLICY_MATRIX_VARIANTS` to a comma-separated subset such as
+`internal-video-presets,internal-hls-preview`, or `default`/`all` for the full
+default set. The mode reuses branch/resource probes for video presets and the
+HEVC bridge, runs a mixed HLS-preview sentinel for the preview backend, and
+uses a downmix resource probe for complex-audio routing.
+
 ### `srt-crypto-matrix` — plaintext vs AES-128/192/256 ingest
 
 ```sh

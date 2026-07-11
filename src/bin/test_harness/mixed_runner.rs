@@ -142,6 +142,7 @@ pub(super) struct MixedEnv {
     pub(super) snapshot_sleep: Duration,
     pub(super) collect_failures: bool,
     pub(super) probe_sampling_policy: ProbeSamplingPolicy,
+    pub(super) restream_env_overrides: Vec<(&'static str, String)>,
     pub(super) output_registry: Arc<Mutex<HarnessOutputRegistry>>,
 }
 impl MixedEnv {
@@ -227,6 +228,7 @@ impl MixedEnv {
                 .ok()
                 .is_some_and(|value| value == "1"),
             probe_sampling_policy: ProbeSamplingPolicy::LastDuplicate,
+            restream_env_overrides: Vec::new(),
             output_registry: Arc::new(Mutex::new(HarnessOutputRegistry::new())),
             work_dir,
         }
