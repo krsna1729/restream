@@ -5046,6 +5046,9 @@ async fn agent_operation_lifecycle_is_approval_gated_redacted_and_verified() {
     let operation_id = created["operationId"].as_str().unwrap().to_string();
     assert_eq!(created["status"], "awaitingApproval");
     assert_eq!(created["approvalRequired"], true);
+    assert_eq!(created["actor"], "dashboard-admin");
+    assert_eq!(created["agentId"], "dashboard-admin");
+    assert_eq!(created["toolIdentity"], "agent-execution-api");
     assert_eq!(created["incidentId"], "incident-api-test");
     assert_eq!(created["incidentLinks"][0], "alert:test-output");
     assert_eq!(created["plan"]["executionEnabled"], true);
@@ -5122,7 +5125,7 @@ async fn agent_operation_lifecycle_is_approval_gated_redacted_and_verified() {
     assert_eq!(approved.status(), StatusCode::OK);
     let approved_body = body_json(approved).await;
     assert_eq!(approved_body["status"], "approved");
-    assert_eq!(approved_body["approval"]["approvedBy"], "human-test");
+    assert_eq!(approved_body["approval"]["approvedBy"], "dashboard-session");
 
     let applied = app
         .clone()

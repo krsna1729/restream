@@ -17,6 +17,9 @@ use crate::agent_plane::PlanResponse;
 pub use crate::agent_core::types::{ApprovalRequest, OperationCreateRequest, VerifyRequest};
 
 const MAX_AGENT_EXECUTION_RECORDS: usize = 1024;
+const AUTHENTICATED_DASHBOARD_ACTOR: &str = "dashboard-admin";
+const AUTHENTICATED_DASHBOARD_APPROVER: &str = "dashboard-session";
+const AGENT_EXECUTION_TOOL_IDENTITY: &str = "agent-execution-api";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -160,15 +163,9 @@ impl AgentExecutionStore {
             approval_required: true,
             created_at: created_at.clone(),
             updated_at: created_at,
-            actor: request.actor.clone().unwrap_or_else(|| "agent".to_string()),
-            agent_id: request
-                .agent_id
-                .clone()
-                .unwrap_or_else(|| "unspecified-agent".to_string()),
-            tool_identity: request
-                .tool_identity
-                .clone()
-                .unwrap_or_else(|| "agent-execution-api".to_string()),
+            actor: AUTHENTICATED_DASHBOARD_ACTOR.to_string(),
+            agent_id: AUTHENTICATED_DASHBOARD_ACTOR.to_string(),
+            tool_identity: AGENT_EXECUTION_TOOL_IDENTITY.to_string(),
             affected_objects,
             warnings,
             progress_snapshots: Vec::new(),
@@ -222,7 +219,7 @@ impl AgentExecutionStore {
         let approved_at = now();
         record.status = OperationStatus::Approved;
         record.approval = Some(ApprovalState {
-            approved_by: approval.approved_by,
+            approved_by: AUTHENTICATED_DASHBOARD_APPROVER.to_string(),
             reason: approval.reason,
             approved_at: approved_at.clone(),
         });
@@ -638,5 +635,39 @@ mod tests {
             .expect_err("different request with same key should conflict");
 
         assert_eq!(err, OperationStoreError::IdempotencyConflict);
+    }
+
+    #[test]
+    fn create_and_approve_use_authenticated_dashboard_identity() {
+        let store = AgentExecutionStore::default();
+        let mut request = test_request(Some("identity-key".to_string()));
+        request.actor = Some("spoofed-actor".to_string());
+        request.agent_id = Some("spoofed-agent".to_string());
+        request.tool_identity = Some("spoofed-tool".to_string());
+
+        let created = store
+            .create(request, test_plan(), 0)
+            .expect("create succeeds");
+        let operation_id = created.operation["operationId"].as_str().unwrap();
+        let record = store.get(operation_id).expect("record stored");
+
+        assert_eq!(record.actor, AUTHENTICATED_DASHBOARD_ACTOR);
+        assert_eq!(record.agent_id, AUTHENTICATED_DASHBOARD_ACTOR);
+        assert_eq!(record.tool_identity, AGENT_EXECUTION_TOOL_IDENTITY);
+
+        let approved = store
+            .approve(
+                operation_id,
+                ApprovalRequest {
+                    approved_by: "spoofed-approver".to_string(),
+                    reason: Some("approved from test".to_string()),
+                },
+            )
+            .expect("approval succeeds");
+
+        assert_eq!(
+            approved.approval.unwrap().approved_by,
+            AUTHENTICATED_DASHBOARD_APPROVER
+        );
     }
 }
