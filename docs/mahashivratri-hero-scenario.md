@@ -170,6 +170,14 @@ ramp — 2026-07-11 (VPS)". This covers connection-scale evidence for MSR-02,
 MSR-03, and MSR-07; MSR-01 (link certification), Phase 3 (bitrate envelope),
 and Phase 4 (degradation slices) remain open.
 
+Hardware-counter profiling during the 1,200-output soak (same host, same
+commit) attributed two structural CPU costs inside the ~2.4-core total:
+the SRT ingest epoll waiter busy-spins for ~1 core per ingest
+(`src/media/srt.rs:1536`; fix filed), and libsrt allocates one multiplexer
+(2 OS threads) per SRT egress — 122 threads and ~1 core of RcvQ work at 60
+SRT outputs. Details and the tokio locality dataset live in
+`docs/agent-guidance/quality/baselines.md` § "Profiling notes (VPS)".
+
 ## Risks To Track
 
 | ID | Risk | Evidence required |
