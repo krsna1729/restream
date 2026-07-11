@@ -714,6 +714,60 @@ async fn ingest_crud() {
 }
 
 #[tokio::test]
+async fn schema_setup_prunes_duplicate_file_ingests_before_unique_index() {
+    let pool = db::create_pool("sqlite::memory:").await.unwrap();
+    sqlx::query(
+        "CREATE TABLE ingests (
+            id TEXT PRIMARY KEY,
+            filename TEXT NOT NULL,
+            stream_key TEXT NOT NULL,
+            loop INTEGER NOT NULL DEFAULT 0,
+            start_time TEXT NOT NULL DEFAULT ''
+        );",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO ingests (id, filename, stream_key, loop, start_time)
+         VALUES ('old', 'old.mp4', 'same-key', 0, ''),
+                ('new', 'new.mp4', 'same-key', 1, '00:00:05');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    db::setup_database_schema(&pool).await.unwrap();
+
+    let ingests = db::list_ingests_for_stream_key(&pool, "same-key")
+        .await
+        .unwrap();
+    assert_eq!(ingests.len(), 1);
+    assert_eq!(ingests[0].id, "new");
+    let duplicate = db::create_ingest(
+        &pool,
+        "another",
+        "other.mp4",
+        "same-key",
+        false,
+        "",
+        false,
+        2,
+    )
+    .await
+    .expect_err("stream key should be unique after schema setup");
+    assert!(
+        duplicate
+            .to_string()
+            .contains("idx_ingests_stream_key_unique")
+            || duplicate
+                .to_string()
+                .contains("UNIQUE constraint failed: ingests.stream_key"),
+        "unexpected duplicate-ingest error: {duplicate}"
+    );
+}
+
+#[tokio::test]
 async fn meta_operations() {
     let pool = test_pool().await;
 

@@ -109,6 +109,12 @@ pub async fn setup_database_schema(pool: &SqlitePool) -> Result<(), sqlx::Error>
         "INTEGER NOT NULL DEFAULT 2",
     )
     .await?;
+    super::migrations::prune_duplicate_ingests_by_stream_key(pool).await?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ingests_stream_key_unique ON ingests(stream_key);",
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS meta (

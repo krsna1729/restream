@@ -63,3 +63,19 @@ pub(crate) async fn backfill_output_configs(pool: &SqlitePool) -> Result<(), sql
     }
     Ok(())
 }
+
+pub(crate) async fn prune_duplicate_ingests_by_stream_key(
+    pool: &SqlitePool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM ingests
+         WHERE rowid NOT IN (
+             SELECT MAX(rowid)
+             FROM ingests
+             GROUP BY stream_key
+         );",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
