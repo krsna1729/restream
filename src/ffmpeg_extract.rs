@@ -6,7 +6,7 @@
 //! extraction entirely, keeping RSS baseline low.
 //!
 //! When the env var is absent the embedded binary (via `rust-embed`) is written
-//! to a versioned shared cache under `/tmp/restream-ffmpeg/`, made executable,
+//! to a versioned shared cache under `runtime/ffmpeg/`, made executable,
 //! and then reused across processes. Startup is intentionally atomic and
 //! multi-process safe so correctness harness modes can boot in parallel.
 //!
@@ -77,7 +77,7 @@ pub fn ensure_ffmpeg_extracted() -> &'static Path {
 }
 
 fn embedded_cache_root() -> PathBuf {
-    std::env::temp_dir().join("restream-ffmpeg")
+    PathBuf::from("runtime").join("ffmpeg")
 }
 
 fn embedded_cache_key(bytes: &[u8]) -> String {
@@ -217,7 +217,7 @@ pub fn ffmpeg_bin_path() -> &'static Path {
     ensure_ffmpeg_extracted()
 }
 
-/// Remove the temp FFmpeg directory on shutdown.
+/// Remove the FFmpeg cache on shutdown.
 ///
 /// This is intentionally a no-op for embedded binaries since the shared cache
 /// may be in use by concurrent processes. User-supplied `FFMPEG_BIN_PATH`
@@ -250,6 +250,11 @@ mod tests {
             embedded_cache_dir(b"binary-a"),
             embedded_cache_dir(b"binary-b")
         );
+    }
+
+    #[test]
+    fn embedded_cache_uses_the_owned_runtime_directory() {
+        assert_eq!(embedded_cache_root(), PathBuf::from("runtime/ffmpeg"));
     }
 
     #[test]

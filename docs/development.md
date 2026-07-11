@@ -35,26 +35,12 @@ initial password and writes it next to the SQLite database as
 
 ## Running The Binary Directly
 
-There are two different stories here:
-
-- Building from source: requires the host toolchain and native dependencies
-- Running a static release binary: does not require those runtime dependencies
-
-If you already have a binary built with:
-
-```sh
-scripts/build/resource-limit.sh ./scripts/build/app-static.sh
-```
-
-you can run that artifact directly with:
-
-```sh
-./restream
-```
-
-`scripts/build/app-static.sh` verifies that the produced binary is statically linked, so
-the release artifact does not depend on the host having FFmpeg, libsrt, or
-other shared runtime libraries installed.
+Source builds require the host toolchain and native dependencies. The supported
+portable launch path is the scratch container documented in the README; the
+single-file static build is not a release artifact until its startup proof is
+restored. A direct source-built binary owns `data/restream.db`, `media/`, and
+`runtime/` in its working directory by default; explicit database, media, and
+log-directory environment variables override their respective locations.
 
 ## Manual Prerequisites
 

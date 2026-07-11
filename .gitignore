@@ -15,7 +15,10 @@ old/
 
 # Generated frontend bundle and downloaded runtime binary
 /public/
+/data/
+/logs/
 /media/
+/runtime/
 
 # Log files
 log/

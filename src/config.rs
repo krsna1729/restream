@@ -200,7 +200,7 @@ impl Default for AppConfig {
             ports,
             http_bind_addr: "127.0.0.1".to_string(),
             tuning,
-            db_path: "data.db".to_string(),
+            db_path: "data/restream.db".to_string(),
             media_dir: "media".to_string(),
             log_retention_days: 7,
             backend_policy: BackendPolicy {
@@ -243,7 +243,8 @@ impl AppConfig {
         let http_bind_addr =
             std::env::var("RESTREAM_HTTP_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
         let tuning = RuntimeTuning::from_env();
-        let db_path = std::env::var("RESTREAM_DB_PATH").unwrap_or_else(|_| "data.db".to_string());
+        let db_path =
+            std::env::var("RESTREAM_DB_PATH").unwrap_or_else(|_| "data/restream.db".to_string());
         let media_dir = std::env::var("RESTREAM_MEDIA_DIR").unwrap_or_else(|_| "media".to_string());
         let log_retention_days = env_u64("RESTREAM_LOG_RETENTION_DAYS", 7);
         let backend_policy = BackendPolicy::from_env();
@@ -506,6 +507,34 @@ mod tests {
         with_env_vars(&[("RESTREAM_HTTP_BIND_ADDR", "0.0.0.0")], || {
             assert_eq!(AppConfig::from_env().http_bind_addr, "0.0.0.0");
         });
+    }
+
+    #[test]
+    fn runtime_layout_is_owned_and_each_path_can_be_overridden() {
+        with_env_overlay(
+            &[],
+            &["RESTREAM_DB_PATH", "RESTREAM_MEDIA_DIR", "RESTREAM_LOG_DIR"],
+            || {
+                let config = AppConfig::from_env();
+                assert_eq!(config.db_path, "data/restream.db");
+                assert_eq!(config.media_dir, "media");
+                assert_eq!(config.log_dir, "logs");
+            },
+        );
+
+        with_env_vars(
+            &[
+                ("RESTREAM_DB_PATH", "/state/custom.db"),
+                ("RESTREAM_MEDIA_DIR", "/assets"),
+                ("RESTREAM_LOG_DIR", "/var/log/restream"),
+            ],
+            || {
+                let config = AppConfig::from_env();
+                assert_eq!(config.db_path, "/state/custom.db");
+                assert_eq!(config.media_dir, "/assets");
+                assert_eq!(config.log_dir, "/var/log/restream");
+            },
+        );
     }
 
     #[test]

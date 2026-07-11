@@ -24,7 +24,7 @@ tracing facade  (compile-time level strip via Cargo features)
 tracing_subscriber::Registry + EnvFilter
     |
     +---> fmt::Layer      --> stdout / stderr
-    +---> FileLayer       --> logs/restream.log.YYYY-MM-DD  (NonBlocking)
+    +---> FileLayer       --> optional RESTREAM_LOG_DIR/restream.log.YYYY-MM-DD
     +---> DbLayer         --> app_logs table (SQLite, batched)
     `---> BroadcastLayer  --> tokio broadcast channel --> SSE subscribers
                                                           (GET /api/logs/stream)
@@ -120,7 +120,7 @@ and similar without a parsing rule.
 
 ### 2. FileLayer — rolling file
 
-Uses `tracing-appender::rolling::daily("logs/", "restream.log")` wrapped
+Uses `tracing-appender::rolling::daily(RESTREAM_LOG_DIR, "restream.log")` wrapped
 in `non_blocking()`. The file sink runs in a background OS thread;
 callsites never block on disk I/O.
 
@@ -128,11 +128,12 @@ The `WorkerGuard` returned by `non_blocking()` is held for the process
 lifetime in `run_app()`. On shutdown the guard is dropped last, flushing
 any buffered lines before the process exits.
 
-File names: `logs/restream.log.2026-06-27`. No log rotation library is
+File names: `RESTREAM_LOG_DIR/restream.log.2026-06-27`. No log rotation library is
 required — daily rotation is built into `tracing-appender`.
 
-Configure the directory with `RESTREAM_LOG_DIR` (default: `logs/`). Set
-to an empty string to disable file logging.
+The default directory is `logs/`. Set `RESTREAM_LOG_DIR` to place rotated JSON
+log files elsewhere, or to an empty string to disable the file sink while
+keeping stdout/stderr and SQLite-backed history active.
 
 ### 3. DbLayer — SQLite (`app_logs` table)
 
