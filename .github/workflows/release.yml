@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  certify-and-publish:
+    runs-on: ubuntu-latest
+    if: vars.RELEASE_LICENSE_APPROVED == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: ./.github/actions/system-deps
+        with: { profile: live }
+      - uses: ./.github/actions/native-prefix
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: release-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - run: cargo install cargo-audit cargo-deny --locked
+      - run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq trivy
+      - name: Full live harness suite
+        run: |
+          scripts/harness/run.sh --prepare
+          target/bench/test_harness suite --run-id release-${{ github.sha }} --continue-on-fail
+      - name: Release evidence and OCI asset
+        run: scripts/check/release-evidence.sh dist/restream-${{ github.ref_name || github.sha }}-oci.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence
+          path: |
+            dist/
+            .local/artifacts/release-${{ github.sha }}/
+            sbom/restream-runtime.cdx.json
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env: { GH_TOKEN: ${{ github.token }} }
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/restream-"$GITHUB_REF_NAME"-oci.tar.gz \
+            dist/restream-"$GITHUB_REF_NAME"-oci.tar.gz.sha256 \
+            sbom/restream-runtime.cdx.json --generate-notes

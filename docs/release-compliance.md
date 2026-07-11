@@ -19,6 +19,11 @@ artifact that needs provenance and license review.
   `tracing/release_max_level_*` features without an explicit observability
   review.
 
+Run `scripts/check/release-evidence.sh` for the canonical local gate. A `v*`
+tag runs the same gate, the full bench-harness suite, and publishes a
+gzip-compressed OCI runtime archive plus its checksum and runtime SBOM only
+when the repository variable `RELEASE_LICENSE_APPROVED` is `true`.
+
 ## Native License Basis
 
 The runtime SBOM reports the native libraries that are linked into the shipped
