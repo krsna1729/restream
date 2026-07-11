@@ -93,11 +93,7 @@ pub async fn config_get_handler(
         .list_outputs()
         .await
         .unwrap_or_default();
-    let settings = match state
-        .settings_service
-        .load_snapshot(&state.security, state.engine.backend_policy())
-        .await
-    {
+    let settings = match state.settings_snapshot().await {
         Ok(s) => s,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -230,7 +226,7 @@ pub async fn config_patch_handler(
         {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
-        state.security.update_config(sec);
+        state.update_ingest_security_config(sec);
     }
 
     if let Some(ref recording_settings) = payload.recording_settings
@@ -252,16 +248,7 @@ pub async fn config_patch_handler(
         {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
-        if state
-            .settings_service
-            .refresh_srt_ingest_policy_store(
-                &state.ingest_policy_store,
-                state.srt_passphrase.clone(),
-                state.srt_pbkeylen,
-            )
-            .await
-            .is_err()
-        {
+        if state.refresh_srt_ingest_policy_store().await.is_err() {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
@@ -288,11 +275,7 @@ pub async fn config_patch_handler(
         state.engine.set_backend_policy(policy);
     }
 
-    let settings = match state
-        .settings_service
-        .load_snapshot(&state.security, state.engine.backend_policy())
-        .await
-    {
+    let settings = match state.settings_snapshot().await {
         Ok(settings) => settings,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };

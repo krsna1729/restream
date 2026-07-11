@@ -206,6 +206,42 @@ fn application_records_do_not_live_in_root_types_module() {
     assert!(models.contains("pub struct Job"));
 }
 
+#[test]
+fn app_state_hides_security_session_and_srt_internals() {
+    let state = include_str!("../src/api/state.rs");
+    let app_state = state
+        .split("pub struct AppState {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n\nimpl AppState").next())
+        .expect("AppState struct block should be present");
+    for forbidden in [
+        "pub security:",
+        "pub sessions:",
+        "pub ingest_policy_store:",
+        "pub srt_passphrase:",
+        "pub srt_pbkeylen:",
+        "pub secure_session_cookies:",
+    ] {
+        assert!(
+            !app_state.contains(forbidden),
+            "AppState should hide internal field {forbidden}"
+        );
+    }
+    for required in [
+        "pub fn record_security_failure",
+        "pub fn reset_security_failures",
+        "pub fn security_failure_snapshots",
+        "pub async fn add_session_hash",
+        "pub async fn retain_only_session_hash",
+        "pub async fn refresh_srt_ingest_policy_store",
+    ] {
+        assert!(
+            state.contains(required),
+            "AppState should expose explicit operation {required}"
+        );
+    }
+}
+
 fn extract_router_route_paths(source: &'static str) -> BTreeSet<&'static str> {
     let mut paths = BTreeSet::new();
     for (offset, _) in source.match_indices(".route(") {

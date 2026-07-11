@@ -236,9 +236,8 @@ pub async fn login_post_handler(
         .map(|ci| ci.0.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    if let Some(ban_remaining) = state
-        .security
-        .is_ip_banned_for(RateLimitScope::DashboardLogin, &client_ip)
+    if let Some(ban_remaining) =
+        state.login_ban_remaining(RateLimitScope::DashboardLogin, &client_ip)
     {
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -270,9 +269,7 @@ pub async fn login_post_handler(
         .unwrap_or(false);
 
     if !verified {
-        state
-            .security
-            .record_failure_for(RateLimitScope::DashboardLogin, &client_ip);
+        state.record_security_failure(RateLimitScope::DashboardLogin, &client_ip);
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error": "Incorrect password"})),
@@ -299,12 +296,12 @@ pub async fn login_post_handler(
             .into_response();
     }
 
-    state.sessions.write().await.insert(token_hash);
+    state.add_session_hash(token_hash).await;
 
     let cookie = make_session_cookie(
         &token,
         SESSION_MAX_AGE_SECONDS,
-        state.secure_session_cookies,
+        state.secure_session_cookies(),
     );
     (
         StatusCode::OK,
@@ -320,12 +317,12 @@ pub async fn logout_handler(
 ) -> impl IntoResponse {
     if let Some(token) = get_session_token_from_headers(&headers) {
         let token_hash = hash_session_token(&token);
-        state.sessions.write().await.remove(&token_hash);
+        state.remove_session_hash(&token_hash).await;
         if let Err(e) = state.auth_service.delete_session(&token_hash).await {
             warn!(err = %e, "failed to delete session from DB");
         }
     }
-    let cookie = clear_session_cookie(state.secure_session_cookies);
+    let cookie = clear_session_cookie(state.secure_session_cookies());
     (
         StatusCode::OK,
         [(header::SET_COOKIE, cookie)],
@@ -413,14 +410,10 @@ pub async fn change_password_handler(
         .await
         .is_err()
     {
-        state.sessions.write().await.clear();
+        state.clear_session_hashes().await;
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-    state
-        .sessions
-        .write()
-        .await
-        .retain(|token| token == &token_hash);
+    state.retain_only_session_hash(&token_hash).await;
     let _ = state
         .auth_service
         .set_meta(
@@ -472,8 +465,7 @@ pub async fn rate_limits_handler(
     }
 
     let attempts = state
-        .security
-        .snapshots()
+        .security_failure_snapshots()
         .into_iter()
         .map(|snapshot| {
             serde_json::json!({
@@ -514,7 +506,7 @@ pub async fn rate_limits_reset_handler(
         },
         None => None,
     };
-    let removed = state.security.reset(scope, payload.ip.as_deref());
+    let removed = state.reset_security_failures(scope, payload.ip.as_deref());
     Json(serde_json::json!({ "ok": true, "removed": removed })).into_response()
 }
 

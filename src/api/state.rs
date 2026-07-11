@@ -14,8 +14,9 @@ use crate::application::services::{
     AgentService, AuthService, FileIngestService, HealthService, IngestService, LogService,
     MediaLibraryService, OutputService, PipelineService, RuntimeViewService, SettingsService,
 };
+use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::media::engine::MediaEngine;
-use crate::media::security::IngestSecurityService;
+use crate::media::security::{IngestSecurityService, RateLimitScope, RateLimitSnapshot};
 use crate::media::srt::SrtIngestPolicyStore;
 
 pub const MAX_NAME_LEN: usize = 256;
@@ -46,18 +47,28 @@ pub struct PortConfig {
     pub srt: u16,
 }
 
-pub struct AppState {
-    pub db: SqlitePool,
-    pub security: Arc<IngestSecurityService>,
-    pub ingest_policy_store: Arc<SrtIngestPolicyStore>,
-    pub sessions: Arc<TokioRwLock<HashSet<String>>>,
-    pub engine: Arc<MediaEngine>,
+pub struct AppStateRuntimeConfig {
     pub ingest_disconnect_grace_ms: u64,
     pub ports: PortConfig,
     pub media_dir: String,
     pub db_path: String,
     pub srt_passphrase: Option<String>,
     pub srt_pbkeylen: i32,
+    pub secure_session_cookies: bool,
+}
+
+pub struct AppState {
+    pub db: SqlitePool,
+    security: Arc<IngestSecurityService>,
+    ingest_policy_store: Arc<SrtIngestPolicyStore>,
+    sessions: Arc<TokioRwLock<HashSet<String>>>,
+    pub engine: Arc<MediaEngine>,
+    pub ingest_disconnect_grace_ms: u64,
+    pub ports: PortConfig,
+    pub media_dir: String,
+    pub db_path: String,
+    srt_passphrase: Option<String>,
+    srt_pbkeylen: i32,
     pub pipeline_service: PipelineService,
     pub output_service: OutputService,
     pub ingest_service: IngestService,
@@ -71,12 +82,153 @@ pub struct AppState {
     pub agent_service: AgentService,
     pub alert_tracker: alerts::AlertTracker,
     pub log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
-    pub secure_session_cookies: bool,
+    secure_session_cookies: bool,
     #[cfg(feature = "agent-execution")]
     pub agent_execution: Arc<crate::agent_execution::AgentExecutionStore>,
 }
 
 impl AppState {
+    pub fn new(
+        db: SqlitePool,
+        security: Arc<IngestSecurityService>,
+        ingest_policy_store: Arc<SrtIngestPolicyStore>,
+        sessions: Arc<TokioRwLock<HashSet<String>>>,
+        engine: Arc<MediaEngine>,
+        log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
+        runtime: AppStateRuntimeConfig,
+    ) -> Self {
+        let pipeline_service = PipelineService::new(db.clone());
+        let output_service = OutputService::new(db.clone());
+        let ingest_service = IngestService::new(db.clone());
+        let auth_service = AuthService::new(db.clone());
+        let settings_service = SettingsService::new(db.clone());
+        let health_service = HealthService::new(db.clone());
+        let runtime_view_service = RuntimeViewService::new();
+        let file_ingest_service = FileIngestService::new(db.clone(), pipeline_service.clone());
+        let media_library_service =
+            MediaLibraryService::new(db.clone(), pipeline_service.clone(), ingest_service.clone());
+        let log_service = LogService::new(db.clone());
+        let agent_service = AgentService::new(db.clone());
+
+        Self {
+            db,
+            security,
+            ingest_policy_store,
+            sessions,
+            engine,
+            ingest_disconnect_grace_ms: runtime.ingest_disconnect_grace_ms,
+            ports: runtime.ports,
+            media_dir: runtime.media_dir,
+            db_path: runtime.db_path,
+            srt_passphrase: runtime.srt_passphrase,
+            srt_pbkeylen: runtime.srt_pbkeylen,
+            pipeline_service,
+            output_service,
+            ingest_service,
+            auth_service,
+            settings_service,
+            health_service,
+            runtime_view_service,
+            file_ingest_service,
+            media_library_service,
+            log_service,
+            agent_service,
+            alert_tracker: alerts::AlertTracker::new(),
+            log_broadcast,
+            secure_session_cookies: runtime.secure_session_cookies,
+            #[cfg(feature = "agent-execution")]
+            agent_execution: Arc::new(crate::agent_execution::AgentExecutionStore::default()),
+        }
+    }
+
+    pub async fn add_session_hash(&self, token_hash: String) {
+        self.sessions.write().await.insert(token_hash);
+    }
+
+    pub async fn remove_session_hash(&self, token_hash: &str) {
+        self.sessions.write().await.remove(token_hash);
+    }
+
+    pub async fn clear_session_hashes(&self) {
+        self.sessions.write().await.clear();
+    }
+
+    pub async fn retain_only_session_hash(&self, token_hash: &str) {
+        self.sessions
+            .write()
+            .await
+            .retain(|token| token == token_hash);
+    }
+
+    pub const fn secure_session_cookies(&self) -> bool {
+        self.secure_session_cookies
+    }
+
+    pub fn set_secure_session_cookies_for_test(&mut self, secure: bool) {
+        self.secure_session_cookies = secure;
+    }
+
+    pub fn ingest_security_config(&self) -> IngestSecurityConfig {
+        self.security.get_config()
+    }
+
+    pub fn update_ingest_security_config(&self, config: IngestSecurityConfig) {
+        self.security.update_config(config);
+    }
+
+    pub fn record_security_failure(&self, scope: RateLimitScope, ip: &str) {
+        self.security.record_failure_for(scope, ip);
+    }
+
+    pub fn login_ban_remaining(
+        &self,
+        scope: RateLimitScope,
+        ip: &str,
+    ) -> Option<std::time::Duration> {
+        self.security.is_ip_banned_for(scope, ip)
+    }
+
+    pub fn reset_security_failures(
+        &self,
+        scope: Option<RateLimitScope>,
+        ip: Option<&str>,
+    ) -> usize {
+        self.security.reset(scope, ip)
+    }
+
+    pub fn security_failure_snapshots(&self) -> Vec<RateLimitSnapshot> {
+        self.security.snapshots()
+    }
+
+    pub async fn settings_snapshot(
+        &self,
+    ) -> crate::application::services::ApiResult<crate::application::settings::SettingsSnapshot>
+    {
+        self.settings_service
+            .load_snapshot(&self.security, self.engine.backend_policy())
+            .await
+    }
+
+    pub async fn refresh_srt_ingest_policy_store(
+        &self,
+    ) -> crate::application::services::ApiResult<()> {
+        self.settings_service
+            .refresh_srt_ingest_policy_store(
+                &self.ingest_policy_store,
+                self.srt_passphrase.clone(),
+                self.srt_pbkeylen,
+            )
+            .await
+    }
+
+    pub async fn agent_context_catalog(
+        &self,
+    ) -> crate::application::services::agent_service::AgentContextCatalog {
+        self.agent_service
+            .load_context_catalog(&self.security)
+            .await
+    }
+
     pub async fn is_authenticated(&self, token: &str) -> bool {
         let token_hash = hash_session_token(token);
         {
@@ -122,51 +274,26 @@ impl AppState {
         log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
         media_dir: String,
     ) -> Self {
-        let pipeline_service = PipelineService::new(db.clone());
-        let output_service = OutputService::new(db.clone());
-        let ingest_service = IngestService::new(db.clone());
-        let auth_service = AuthService::new(db.clone());
-        let settings_service = SettingsService::new(db.clone());
-        let health_service = HealthService::new(db.clone());
-        let runtime_view_service = RuntimeViewService::new();
-        let file_ingest_service = FileIngestService::new(db.clone(), pipeline_service.clone());
-        let media_library_service =
-            MediaLibraryService::new(db.clone(), pipeline_service.clone(), ingest_service.clone());
-        let log_service = LogService::new(db.clone());
-        let agent_service = AgentService::new(db.clone());
-
-        Self {
+        Self::new(
             db,
             security,
             ingest_policy_store,
             sessions,
             engine,
-            ingest_disconnect_grace_ms: 5000,
-            ports: PortConfig {
-                rtmp: 1935,
-                srt: 10080,
-            },
-            media_dir,
-            db_path: "data.db".to_string(),
-            srt_passphrase: None,
-            srt_pbkeylen: 16,
-            pipeline_service,
-            output_service,
-            ingest_service,
-            auth_service,
-            settings_service,
-            health_service,
-            runtime_view_service,
-            file_ingest_service,
-            media_library_service,
-            log_service,
-            agent_service,
-            alert_tracker: alerts::AlertTracker::new(),
             log_broadcast,
-            secure_session_cookies: false,
-            #[cfg(feature = "agent-execution")]
-            agent_execution: Arc::new(crate::agent_execution::AgentExecutionStore::default()),
-        }
+            AppStateRuntimeConfig {
+                ingest_disconnect_grace_ms: 5000,
+                ports: PortConfig {
+                    rtmp: 1935,
+                    srt: 10080,
+                },
+                media_dir,
+                db_path: "data.db".to_string(),
+                srt_passphrase: None,
+                srt_pbkeylen: 16,
+                secure_session_cookies: false,
+            },
+        )
     }
 }
 
