@@ -561,3 +561,50 @@ Raw evidence:
 Log proof: the recovered egress failure was emitted as `WARN`
 (`event_type="egress.failed"`, `phase=send`, `error=remote closed connection`)
 instead of `ERROR`; Restream had no `ERROR`/`panic` lines for the run.
+
+Steady-state process-mode perf on the same fixed run, after enabling PMU
+access with `sudo sysctl kernel.perf_event_paranoid=-1`, kept MediaMTX at
+`1200/1200` ready paths while bytes advanced. Raw artifacts:
+
+- `.local/artifacts/msr-dashboard-live-3030-20260712T114859Z/perf-stat-restream-20260712T115411Z.csv`
+- `.local/artifacts/msr-dashboard-live-3030-20260712T114859Z/pidstat-threads-restream-20260712T115450Z.txt`
+- `.local/artifacts/msr-dashboard-live-3030-20260712T114859Z/perf-record-restream-20260712T115450Z.txt`
+
+Process counters over a 15 s `perf stat -p <restream-pid>` attach:
+
+| Metric | Result |
+|---|---:|
+| CPU utilized | `4.243` CPUs |
+| Instructions per cycle | `0.34` |
+| Cache misses | `20.76%` of cache refs |
+| Branch misses | `10.63%` of branches |
+| Context switches | `5.334 K/sec` |
+| CPU migrations | `136.610/sec` |
+
+Thread-family CPU from 10 s `pidstat -t` averages:
+
+| Thread family | Threads | CPU | User | System |
+|---|---:|---:|---:|---:|
+| Tokio runtime workers | 68 | `137.35%` | `45.86%` | `91.49%` |
+| SRT RcvQ workers | 61 | `125.00%` | `19.10%` | `106.36%` |
+| SRT SndQ workers | 61 | `29.07%` | `3.50%` | `25.59%` |
+| SRT TsbPd | 1 | `0.79%` | `0.10%` | `0.69%` |
+| sqlx workers | 10 | `0.40%` | `0.20%` | `0.20%` |
+
+`perf record -F 99 -g -p <restream-pid>` showed the largest single sampled
+bucket in scheduler/futex wakeups (`__pv_queued_spin_lock_slowpath` via
+`try_to_wake_up`/`futex_wake`, 2.60%), followed by APIC timer interrupts
+(2.01%), RTMP egress work (1.50%), and `__memmove_avx_unaligned_erms`
+(1.02%). The actionable ordering did not change after the alert/log fixes:
+
+1. Collapse SRT egress UDP muxers where destination parameters are compatible
+   (same local bind port + identical muxer config) to remove most of the
+   122 SRT worker threads and roughly `1.5` CPUs of RcvQ/SndQ churn at this
+   60-SRT-output shape.
+2. Reduce Tokio wakeup/migration pressure in RTMP egress fan-out. The 68
+   Tokio worker/blocking threads only use ~1.37 CPUs but drive high system
+   time and migrations; any worker heuristic should use effective CPU mask,
+   ingest/output mix, and shared-stage shape rather than MSR alone.
+3. Treat `memmove` as a secondary copy target. It is visible but far below
+   scheduler/libsrt costs in this workload, so AVIO/TsMux copy removal should
+   stay behind correctness proof and targeted bench evidence.
