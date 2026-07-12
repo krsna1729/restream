@@ -259,6 +259,54 @@ per SRT socket unless sockets share libsrt muxers. The next structural
 optimization target is therefore SRT muxer/thread sharing, before hot/cold
 member layout work.
 
+#### Full-scale confirmation of 3-worker candidate
+
+The 3-worker candidate was promoted to a full `MSR_FULL=1` ramp with
+process-mode perf:
+
+```sh
+RESTREAM_TOKIO_WORKER_THREADS=3 MSR_FULL=1 \
+  WORK_DIR=.local/artifacts/msr-worker-sweep-20260712/w3-full-confirm \
+  BENCH_BUILD=never scripts/harness/run.sh msr
+```
+
+Status: **PASS for receiver liveness but rejected as a clean/default
+candidate**. MediaMTX reported `1200/1200` ready paths with bytes growing, but
+Restream emitted many `sqlx` slow query/pool-acquire warnings during the
+full-scale lifecycle burst and MediaMTX emitted SRT TS decode warnings. The run
+is retained as negative sizing evidence, not as a log-clean baseline.
+
+| Outputs | Egress mix | MediaMTX ready | MediaMTX bytes delta | CPU avg % | CPU peak % | RSS peak | AVIO HWM peak | Samples |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 30 | rtmp:29,srt:1 | 30/30 | 4.5 MB | 40.5 | 58.1 | 90 MB | 34 KB | 6 |
+| 120 | rtmp:114,srt:6 | 120/120 | 17.9 MB | 129.1 | 194.8 | 115 MB | 280 KB | 6 |
+| 300 | rtmp:285,srt:15 | 300/300 | 39.2 MB | 218.2 | 233.7 | 160 MB | 937 KB | 6 |
+| 600 | rtmp:570,srt:30 | 600/600 | 85.2 MB | 388.4 | 395.6 | 231 MB | 2.00 MB | 3 |
+| 900 | rtmp:855,srt:45 | 900/900 | 173.6 MB | 429.1 | 434.7 | 316 MB | 3.00 MB | 3 |
+| 1200 | rtmp:1140,srt:60 | 1200/1200 | 282.4 MB | 449.5 | 450.8 | 404 MB | 14.00 MB | 2 |
+
+Process-mode perf counters:
+
+| Counter | Value | Note |
+|---|---:|---|
+| cycles | 2,084,070,807,729 | 67% multiplexed |
+| instructions | 652,302,689,467 | IPC 0.31 |
+| cache references | 97,217,081,244 | 66% multiplexed |
+| cache misses | 21,725,964,040 | 22.35% of cache refs |
+| branches | 148,525,840,849 | 65% multiplexed |
+| branch misses | 15,562,068,188 | 10.48% of branches |
+| context switches | 9,994,043 | full attached run |
+| CPU migrations | 542,817 | full attached run |
+| page faults | 112,665 | mostly minor |
+| major faults | 4 | unexpected; another reason not to promote this run |
+
+Conclusion: fewer Tokio workers improved some perf counters relative to the
+default process-mode perf run, but full-scale MSR startup/reconcile pressure
+needs more async/control-plane headroom. Keep the production default unchanged
+for now. Any future heuristic should size from the process's effective CPU
+quota/mask and workload shape (ingests, output count, SRT egress count, stage
+sharing, and external transcoders), not from MSR alone.
+
 ## Standing optimization targets (2026-06-27 CPU profile, task-clock 999 Hz)
 
 | Self % | Symbol | Meaning | Backlog |

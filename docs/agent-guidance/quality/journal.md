@@ -101,3 +101,19 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   ingest, which scales directly into the 60-SRT-output MSR shape.
 - Notes: 2 workers passed liveness but was too constrained; 6 workers passed
   but used more CPU/RSS than the 3-worker run at this checkpoint.
+
+## 2026-07-12 12:32 MSR 3-WORKER FULL CONFIRMATION REJECTED [codex]
+- What: promoted the 3-worker candidate from the 300-output sweep to a full
+  `MSR_FULL=1` ramp with MediaMTX API proof and process-mode `perf stat -p`.
+- Gates: full run PASS for receiver liveness at every checkpoint including
+  `1200/1200` MediaMTX paths ready and bytes growing.
+- Commit: (this commit)
+- Follow-ups: do not change the production Tokio worker default from this
+  evidence. The full run produced many Restream `sqlx` slow query/pool acquire
+  warnings plus MediaMTX SRT TS decode warnings, and final CPU was worse than
+  the clean default-worker baseline. Next worker-sizing work should detect the
+  effective CPU quota/mask and combine it with workload shape rather than using
+  a fixed low worker count.
+- Notes: perf counters improved in isolation (IPC 0.31, cache misses 22.35%),
+  but the warning profile shows the runtime was under-provisioned for the
+  full-scale lifecycle/control-plane burst.
