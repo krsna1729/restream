@@ -18,6 +18,7 @@
         "mixed.matrix": {
           "suiteRef": "suites.json#suites.mixed.matrix",
           "suiteDefault": true,
+          "suiteTimeoutSecs": 2400,
           "requires": {
             "portNamespace": true,
             "benchProfile": true

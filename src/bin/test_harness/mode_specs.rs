@@ -16,6 +16,7 @@ pub(crate) struct HarnessModeSpec {
     pub(crate) suite_default: bool,
     pub(crate) requires_port_namespace: bool,
     pub(crate) requires_bench_profile: bool,
+    pub(crate) suite_timeout_secs: Option<u64>,
 }
 
 pub(crate) fn harness_catalog_root() -> PathBuf {
@@ -52,6 +53,7 @@ fn builtin_mode_specs() -> &'static [HarnessModeSpec] {
                         .get("benchProfile")
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
+                    suite_timeout_secs: entry.spec.get("suiteTimeoutSecs").and_then(Value::as_u64),
                 }
             })
             .collect()
@@ -66,6 +68,7 @@ fn mixed_input_mode_spec(case: MixedInputCase) -> HarnessModeSpec {
         // Mixed scenarios always emit timing/resource evidence and should run
         // under one harness-level profile policy rather than varying by cell.
         requires_bench_profile: true,
+        suite_timeout_secs: None,
     }
 }
 

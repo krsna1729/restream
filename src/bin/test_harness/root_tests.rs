@@ -107,6 +107,13 @@ fn suite_profile_parser_accepts_mode_timeout_option() {
 }
 
 #[test]
+fn mixed_matrix_uses_heavyweight_suite_timeout_floor() {
+    assert_eq!(suite_mode_timeout_secs("api-smoke", 900), 900);
+    assert_eq!(suite_mode_timeout_secs("mixed.matrix", 900), 2400);
+    assert_eq!(suite_mode_timeout_secs("mixed.matrix", 3000), 3000);
+}
+
+#[test]
 fn fault_output_stall_sibling_count_honors_n_per_group_cap() {
     assert_eq!(effective_fault_output_stall_siblings(12, None), 12);
     assert_eq!(effective_fault_output_stall_siblings(12, Some(1)), 1);

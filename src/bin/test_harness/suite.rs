@@ -4,6 +4,19 @@ use super::*;
 
 const DEFAULT_SUITE_MODE_TIMEOUT_SECS: u64 = 15 * 60;
 
+pub(crate) fn suite_mode_timeout_secs(mode: &str, default_secs: u64) -> u64 {
+    mode_spec(mode)
+        .and_then(|spec| spec.suite_timeout_secs)
+        .map(|mode_secs| {
+            // A mode catalog timeout is a safety minimum for heavyweight
+            // release evidence modes. Keep it as a floor so a global suite
+            // default change cannot silently reintroduce artificial timeouts
+            // for modes that are still making expected progress.
+            default_secs.max(mode_secs)
+        })
+        .unwrap_or(default_secs)
+}
+
 pub(crate) fn suite_mode_is_parallelizable(mode: &str, preflight_only: bool) -> bool {
     !preflight_only && !measurement_mode_requires_bench_profile(mode)
 }
@@ -17,6 +30,7 @@ struct SuiteModeOutcome {
     finished_at: String,
     exit_ok: bool,
     timed_out: bool,
+    timeout_secs: u64,
 }
 
 struct SuiteSpawnOutcome {
@@ -60,6 +74,7 @@ async fn suite_run_mode(
         finished_at,
         exit_ok: exit_ok.exit_ok,
         timed_out: exit_ok.timed_out,
+        timeout_secs: timeout.as_secs(),
     })
 }
 
@@ -70,7 +85,7 @@ async fn suite_run_parallel_batch(
     preflight_only: bool,
     has_unshare: bool,
     use_host_net: bool,
-    timeout: Duration,
+    default_timeout_secs: u64,
 ) -> Result<Vec<SuiteModeOutcome>, String> {
     let mut join_set = tokio::task::JoinSet::new();
     for (offset, mode) in modes.iter().enumerate() {
@@ -81,6 +96,7 @@ async fn suite_run_parallel_batch(
         } else {
             mode.clone()
         };
+        let timeout = Duration::from_secs(suite_mode_timeout_secs(mode, default_timeout_secs));
         println!(
             "[suite] {} {mode}",
             if preflight_only { "preflight" } else { "run" }
@@ -175,8 +191,6 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
     if mode_timeout_secs == 0 {
         return Err("suite mode timeout must be greater than zero".to_string());
     }
-    let mode_timeout = Duration::from_secs(mode_timeout_secs);
-
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let work_root = {
         let r = work_root.unwrap_or_else(|| cwd.join(".local/artifacts").join(&run_id));
@@ -221,7 +235,7 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
                 preflight_only,
                 has_unshare,
                 use_host_net,
-                mode_timeout,
+                mode_timeout_secs,
             )
             .await?;
             for outcome in outcomes {
@@ -238,7 +252,7 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
                     &outcome.mode_dir,
                     preflight_only,
                     outcome.timed_out,
-                    mode_timeout_secs,
+                    outcome.timeout_secs,
                 )?;
                 println!("[suite] {}: {mode_status}", outcome.mode);
             }
@@ -258,6 +272,8 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
                 "[suite] {} {mode}",
                 if preflight_only { "preflight" } else { "run" }
             );
+            let mode_timeout_secs = suite_mode_timeout_secs(mode, mode_timeout_secs);
+            let mode_timeout = Duration::from_secs(mode_timeout_secs);
 
             let outcome = suite_spawn_mode(
                 &exe,

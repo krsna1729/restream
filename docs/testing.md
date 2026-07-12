@@ -1311,6 +1311,11 @@ in its own subdirectory, and records one JSONL result per mode in
   timeout (`TEST_HARNESS_SUITE_MODE_TIMEOUT_SECS` provides the same override)
 - `--continue-on-fail` to keep collecting artifacts after the first failure
 
+Heavyweight suite-default modes can declare a larger catalog timeout floor in
+`test/harness/modes.json`. `mixed.matrix` does this because it performs the
+full RTMP/SRT, H.264/H.265, audio-track, HLS, recording, and decode-scan
+matrix; the default 15-minute cap is still used for ordinary modes.
+
 The aggregate manifest and each JSONL row label their evidence as `preflight`
 or `execution`; a successful `--preflight-only` run therefore cannot be
 mistaken for proof that the live mode ran. Timed-out children are terminated as
