@@ -132,7 +132,12 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Follow-ups: 12h soak plus live egress-failure health-latency proof remains
   open. Optimization should prioritize effective-CPU/workload-shape worker
   heuristics and SRT muxer/thread sharing before hot/cold member layout work.
+  Add one allocator-arena experiment (`MALLOC_ARENA_MAX` or alternate allocator)
+  before data-structure field-layout work because RSS growth was private
+  anonymous memory while named media buffers stayed flat.
 - Notes: current live sample used 4.276 Restream CPUs with IPC 0.37,
   19.93% cache misses, 10.21% branch misses, and 130.755 migrations/sec.
   Thread census again showed six hot Tokio scheduler workers plus roughly one
-  low-CPU `SRT:RcvQ:*` thread per SRT socket.
+  low-CPU `SRT:RcvQ:*` thread per SRT socket. RSS rose from 323,884 KiB to
+  742,996 KiB over the observed 1,200-output window; `/proc` attributed most of
+  it to private anonymous mappings, including several nearly-full 64 MiB arenas.

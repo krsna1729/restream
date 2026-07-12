@@ -347,6 +347,15 @@ Tokio worker at ~2%. The 60 SRT egresses plus one SRT ingest again created one
 core of aggregate scheduler/system overhead. `SRT:SndQ:*` threads were mostly
 near-idle but still present one-per-muxer.
 
+RSS rose during the live dashboard window even though named media buffers were
+flat. Across 68 5-second samples at the 1,200-output shape, RSS grew from
+323,884 KiB to 742,996 KiB while AVIO HWM stayed at 3.2-4.5 MiB, source rings
+stayed around 16-17 MiB, transcoder rings around 20-22 MiB, and TSMux rings
+around 9.5-10.9 MiB. `/proc/<pid>/smaps_rollup` attributed 662,312 KiB to
+private anonymous memory; `pmap -x` showed multiple nearly-full 64 MiB anonymous
+regions plus a 36 MiB heap. That shape is consistent with allocator arena
+retention/thread churn rather than bounded media-ring growth.
+
 Interpretation:
 
 - The health snapshot lock fix did not introduce an obvious control-plane
@@ -358,6 +367,10 @@ Interpretation:
 - The structural SRT opportunity remains muxer/socket sharing or otherwise
   reducing the per-SRT-egress native thread footprint. Worker-count heuristics
   should use effective CPU quota/mask plus workload shape, not MSR alone.
+- The memory follow-up should test `MALLOC_ARENA_MAX`/allocator choices as a
+  single-variable MSR run before changing hot-path data structures. The evidence
+  points first at allocator arena retention from thread count, not a named ring
+  buffer leak.
 
 ## Standing optimization targets (2026-06-27 CPU profile, task-clock 999 Hz)
 
