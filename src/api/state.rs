@@ -81,26 +81,6 @@ impl From<&AppConfig> for AppStateRuntimeConfig {
     }
 }
 
-#[cfg(test)]
-mod runtime_config_tests {
-    use super::*;
-
-    #[test]
-    fn defaults_are_derived_from_app_config() {
-        let app_config = AppConfig::default();
-        let runtime = AppStateRuntimeConfig::default();
-
-        assert_eq!(runtime.media_dir, app_config.media_dir);
-        assert_eq!(runtime.db_path, app_config.db_path);
-        assert_eq!(runtime.ports.rtmp, app_config.ports.rtmp);
-        assert_eq!(runtime.ports.srt, app_config.ports.srt);
-        assert_eq!(
-            runtime.ingest_disconnect_grace_ms,
-            app_config.tuning.ingest_disconnect_grace_ms
-        );
-    }
-}
-
 pub struct AppState {
     pub db: SqlitePool,
     security: Arc<IngestSecurityService>,
@@ -335,8 +315,10 @@ impl AppState {
         log_broadcast: tokio::sync::broadcast::Sender<crate::logging::LogBroadcast>,
         media_dir: String,
     ) -> Self {
-        let mut runtime = AppStateRuntimeConfig::default();
-        runtime.media_dir = media_dir;
+        let runtime = AppStateRuntimeConfig {
+            media_dir,
+            ..AppStateRuntimeConfig::default()
+        };
         Self::new(
             db,
             security,
@@ -449,4 +431,24 @@ pub async fn recording_enabled_map(
         .settings_service
         .recording_enabled_map(pipeline_ids)
         .await
+}
+
+#[cfg(test)]
+mod runtime_config_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_are_derived_from_app_config() {
+        let app_config = AppConfig::default();
+        let runtime = AppStateRuntimeConfig::default();
+
+        assert_eq!(runtime.media_dir, app_config.media_dir);
+        assert_eq!(runtime.db_path, app_config.db_path);
+        assert_eq!(runtime.ports.rtmp, app_config.ports.rtmp);
+        assert_eq!(runtime.ports.srt, app_config.ports.srt);
+        assert_eq!(
+            runtime.ingest_disconnect_grace_ms,
+            app_config.tuning.ingest_disconnect_grace_ms
+        );
+    }
 }
