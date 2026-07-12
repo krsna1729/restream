@@ -88,8 +88,9 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   direction is promising only on a clean default-runtime run: SRT helpers on
   CPUs `0-1` and other Restream threads on `2-5` reduced CPU, cache misses,
   context switches, and migrations while preserving MediaMTX receiver health.
-  Do not add internal pinning without an ownership-aware design and concurrency
-  proof gates.
+  A first in-process scanner prototype applied the intended masks but did not
+  reproduce the CPU/cache/context-switch win, so do not add internal pinning
+  without a stronger ownership-aware design and concurrency proof gates.
 - Status: open, narrowed to an opt-in runtime affinity design (Filed:
   2026-07-12 by groom)
 

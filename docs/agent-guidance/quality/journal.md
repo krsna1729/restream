@@ -267,3 +267,25 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   were the one worse counter (`7.200/sec` to `58.733/sec`). The clean thread
   census again showed `82` threads total with two hot Tokio workers and two hot
   shared SRT queue workers, not 64 busy Tokio workers.
+
+## 2026-07-12 17:20 Q-012 RUNTIME AFFINITY PROTOTYPE REJECTED [codex]
+- What: implemented a small Linux-only `RESTREAM_THREAD_AFFINITY=partitioned`
+  prototype that scanned `/proc/self/task` and applied the same SRT-vs-other
+  CPU partition from inside the process; tested it live, then reverted the
+  runtime code before commit.
+- Gates: unit tests for CPU-list parsing/thread classification passed;
+  `scripts/check/concurrency/fast.sh` passed; `cargo clippy --all-targets
+  -- -D warnings` passed; live MSR reached `1200/1200` MediaMTX paths with
+  bytes growing before and after perf. Thread census proved masks were applied
+  as intended.
+- Commit: (this commit records the rejected result and systemd guidance; no
+  runtime affinity code remains)
+- Follow-ups: prefer systemd `CPUAffinity`/NUMA policy for coarse process
+  placement. In-process thread-family pinning remains open, but the next design
+  must explain why external `taskset` improved CPU/cache/context switches while
+  the first scanner did not.
+- Notes: the scanner sample used `2.450` and `2.419` cores across two perf
+  windows, with cache misses around `20.6-20.9%` and context switches around
+  `7.7-8.0 K/sec`; this is not the external partition result (`2.051` cores,
+  `16.25%` cache misses, `4.330 K/sec` context switches), so the code was
+  correctly rejected.

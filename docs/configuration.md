@@ -90,6 +90,24 @@ The dashboard/API HTTP listener binds to `127.0.0.1` by default. Override that
 with `RESTREAM_HTTP_BIND_ADDR` only when another component, such as a reverse
 proxy or tunnel, is expected to reach the service on a different interface.
 
+## Linux Service Placement
+
+For Linux hosts managed by systemd, prefer systemd for coarse process-level CPU
+and NUMA placement. The helper below installs a `restream.service` unit and can
+add `CPUAffinity`, `NUMAPolicy`, and `NUMAMask` when those are known-good for
+the host:
+
+```sh
+sudo RESTREAM_CPU_AFFINITY=0-5 \
+  RESTREAM_NUMA_POLICY=local \
+  scripts/deploy/install-systemd-service.sh
+```
+
+Use systemd placement only after validating the CPU/NUMA set on the deployment
+host. MSR profiling showed thread-family partitioning can help, but the runtime
+does not currently pin individual thread families; keep fine-grained placement
+experiments outside production defaults until they have host-specific proof.
+
 ## SQLite Performance Settings
 
 The following PRAGMAs are applied at startup after WAL mode is enabled:

@@ -1084,3 +1084,49 @@ Raw artifacts:
 - `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/affinity-probe/perf-stat-partitioned.csv`
 - `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/affinity-probe/pidstat-partitioned.txt`
 - `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/affinity-probe/thread-census-partitioned.txt`
+
+### Negative result: in-process runtime affinity scanner - 2026-07-12 (local)
+
+Follow-up to the clean external `taskset` result above. A Linux-only,
+environment-gated prototype scanned `/proc/self/task` once per second and
+applied the same partition internally: `SRT:*` threads on CPUs `0-1`, all other
+Restream threads on CPUs `2-5`. The prototype was tested, then reverted before
+commit because it did not reproduce the clean external A/B win.
+
+Correctness and mask proof:
+
+| Check | Result |
+|---|---:|
+| MediaMTX ready before perf | `1200/1200` |
+| MediaMTX bytes delta before perf | `202,797,567` over 3 s |
+| MediaMTX ready after perf | `1200/1200` |
+| MediaMTX bytes delta after perf | `168,496,569` over 3 s |
+| Runtime log | affinity enabled with `allowed=0,1,2,3,4,5`, `srt=0,1`, `other=2,3,4,5` |
+| Thread masks | `SRT:*` on `0-1`; Tokio/SQLite/main/tracing on `2-5` |
+
+Process counters:
+
+| Metric | Clean default scheduler | External partition probe | In-process scanner |
+|---|---:|---:|---:|
+| CPU utilized | `2.321` CPUs | `2.051` CPUs | `2.450` / `2.419` CPUs |
+| IPC | `0.336` | `0.420` | `0.352` / `0.343` |
+| Cache misses | `20.80%` | `16.25%` | `20.60%` / `20.89%` |
+| Context switches | `7.663 K/sec` | `4.330 K/sec` | `7.749` / `7.978 K/sec` |
+| CPU migrations | `920.333/sec` | `288.533/sec` | `643.333` / `669.467/sec` |
+| Page faults | `7.200/sec` | `58.733/sec` | `0.200` / `0.267/sec` |
+
+Conclusion: correct masks are not enough. The first runtime scanner preserved
+receiver health and applied the desired placement, but its process counters
+were closer to the default scheduler than to the external partition win. The
+code was reverted. Keep systemd/service-level placement guidance, but do not
+land in-process pinning until the implementation explains and reproduces the
+external A/B result.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-runtime-affinity-3030-20260712T164945Z/mediamtx-proof-before-perf.json`
+- `.local/artifacts/msr-runtime-affinity-3030-20260712T164945Z/mediamtx-proof-after-perf.json`
+- `.local/artifacts/msr-runtime-affinity-3030-20260712T164945Z/thread-census.txt`
+- `.local/artifacts/msr-runtime-affinity-3030-20260712T164945Z/perf-stat-runtime-affinity.csv`
+- `.local/artifacts/msr-runtime-affinity-3030-20260712T164945Z/perf-stat-runtime-affinity-second.csv`
+- `.local/artifacts/msr-runtime-affinity-3030-20260712T164945Z/pidstat-runtime-affinity.txt`
