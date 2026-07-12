@@ -878,3 +878,61 @@ Raw artifacts:
 - `.local/artifacts/msr-redeploy-3030-20260712T133546Z/perf-stat-restream-restored-final.csv`
 - `.local/artifacts/msr-redeploy-3030-20260712T133546Z/pidstat-threads-restream-restored-final.txt`
 - `.local/artifacts/msr-redeploy-3030-20260712T133546Z/restream-smaps-rollup-before-final-perf.txt`
+
+### Negative result: MSR `MALLOC_ARENA_MAX=2` arena cap - 2026-07-12 (local)
+
+Single-variable follow-up to the restored MSR dashboard sample above. The run
+kept the same bench-profile binaries and 1,200-output loopback MediaMTX sink,
+changing only the process environment with `MALLOC_ARENA_MAX=2`.
+
+Correctness and sink proof:
+
+| Check | Result |
+|---|---:|
+| MediaMTX ready before perf | `1200/1200` |
+| MediaMTX bytes delta before perf | `162,241,256` over 3 s |
+| MediaMTX ready after perf | `1200/1200` |
+| MediaMTX bytes delta after perf | `169,653,485` over 3 s |
+| Later MediaMTX bytes delta | `183,699,931` over 3 s |
+| Restream warn/error/panic lines | `0` |
+
+Resource/counter comparison against the immediately preceding restored runtime
+sample:
+
+| Metric | Restored runtime | `MALLOC_ARENA_MAX=2` |
+|---|---:|---:|
+| CPU utilized | `2.527` CPUs | `2.600` CPUs |
+| IPC | `0.367` | `0.374` |
+| Cache misses | `18.70%` | `18.37%` |
+| Branch misses | `8.44%` | `8.50%` |
+| Context switches | `6.118 K/sec` | `5.495 K/sec` |
+| CPU migrations | `676.333/sec` | `712.867/sec` |
+| Page faults | `0.067/sec` | `76.467/sec` |
+| RSS / PSS at first sample | `333,840 / 323,384 KiB` | `310,848 / 292,509 KiB` |
+| RSS / PSS after settle | `333,840 / 323,384 KiB` | `317,444 / 299,104 KiB` |
+| Private anonymous after settle | `288,640 KiB` | `265,324 KiB` |
+| AnonHugePages | `0 KiB` | `0 KiB` |
+
+Conclusion: the arena cap reduced local MSR RSS/PSS by roughly `16-24 MiB` at
+this point in the run, but it increased CPU, CPU migrations, and especially
+minor page faults. The memory win is too small relative to the CPU/latency-risk
+signals to recommend `MALLOC_ARENA_MAX=2` as a default operator setting for
+MSR. Keep allocator tuning as an emergency memory-pressure knob only, and do
+not wire it into runtime defaults without a longer soak and p99 latency proof.
+
+Hugepage note from the same run: the host was in THP `madvise` mode and the
+Restream process had `AnonHugePages: 0 KiB`. A 10 s dTLB sample showed
+`19,429,143` dTLB load misses (`12.95%` of dTLB load accesses), so targeted
+large-buffer hugepage work is a plausible later experiment, but global THP
+`always` or explicit hugetlb reservation is not justified by this evidence.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-arena2-3031-20260712T161905Z/mediamtx-proof-before-perf.json`
+- `.local/artifacts/msr-arena2-3031-20260712T161905Z/mediamtx-proof-after-perf.json`
+- `.local/artifacts/msr-arena2-3031-20260712T161905Z/mediamtx-proof-plus2m.json`
+- `.local/artifacts/msr-arena2-3031-20260712T161905Z/perf-stat-restream-arena2.csv`
+- `.local/artifacts/msr-arena2-3031-20260712T161905Z/perf-stat-restream-arena2-dtlb.csv`
+- `.local/artifacts/msr-arena2-3031-20260712T161905Z/pidstat-threads-restream-arena2.txt`
+- `.local/artifacts/msr-arena2-3031-20260712T161905Z/restream-smaps-rollup-before-perf.txt`
+- `.local/artifacts/msr-arena2-3031-20260712T161905Z/restream-smaps-rollup-plus2m.txt`

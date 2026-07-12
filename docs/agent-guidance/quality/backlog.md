@@ -101,7 +101,8 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: MSR memory evidence showed retained Rust payload below 50 MiB while
   RSS/PSS plateau was consistent with allocator/native arena retention. This is
   a safer first memory experiment than hot-path data-structure rewrites.
-- Status: open (Filed: 2026-07-12 by groom)
+- Status: done (Rejected as a default operator setting in this change. Filed:
+  2026-07-12 by groom)
 
 ### Q-004 [proof] [haiku] Panic-path inventory for src/media
 - Goal: classified list of every `.unwrap()`, `.expect(`, `panic!`,

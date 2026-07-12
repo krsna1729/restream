@@ -203,3 +203,24 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   `676.333/sec`, and RSS/PSS `333,840/323,384 KiB`. This artifact has one
   startup slow-SQL warning, so it is a dashboard/perf observation rather than a
   zero-warning certification baseline.
+
+## 2026-07-12 16:30 Q-013 DONE [codex]
+- What: tested `MALLOC_ARENA_MAX=2` as a single-variable allocator arena cap
+  against a short 1,200-output MSR run and rejected it as a default operator
+  setting.
+- Gates: MediaMTX `/v3/paths/list` showed `1200/1200` ready with bytes growing
+  before perf (`162,241,256` over 3 s), after perf (`169,653,485` over 3 s),
+  and after an additional settle window (`183,699,931` over 3 s). Restream logs
+  had zero warn/error/panic lines.
+- Commit: (this commit)
+- Follow-ups: keep allocator arena limits as an emergency deployment knob only;
+  do not wire them into runtime defaults without a longer soak and p99 latency
+  proof. If memory pressure remains a priority, compare allocators directly
+  under the same receiver-proofed MSR method.
+- Notes: RSS/PSS improved from `333,840/323,384 KiB` in the restored sample to
+  `317,444/299,104 KiB` after settle with `MALLOC_ARENA_MAX=2`, but CPU rose
+  from `2.527` to `2.600` cores, CPU migrations rose from `676.333/sec` to
+  `712.867/sec`, and page faults rose from `0.067/sec` to `76.467/sec`.
+  Hugepages were not active (`AnonHugePages: 0 KiB`); dTLB load misses were
+  visible (`12.95%`), but the evidence supports only a later targeted
+  large-buffer experiment, not global THP.
