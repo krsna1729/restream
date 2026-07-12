@@ -184,13 +184,18 @@ killer are the only backstops.
 
 ### Tokio runtime sizing
 
-- `restream`: `tokio::runtime::Builder::new_multi_thread()` with default
-  worker/blocking thread counts ([src/main.rs](../src/main.rs)).
+- `restream`: `tokio::runtime::Builder::new_multi_thread()` with a
+  conservative worker count derived from effective CPUs (Rust available
+  parallelism, process CPU mask, and cgroup v2 CPU quota) and
+  `RESTREAM_TOKIO_WORKER_THREADS` as an explicit override
+  ([src/main.rs](../src/main.rs)).
 - `test_harness`: `#[tokio::main(flavor = "multi_thread")]` with default counts
   ([src/bin/test_harness.rs](../src/bin/test_harness.rs)).
 
-Default Tokio behavior scales worker threads to the number of CPUs. The
-application does not explicitly cap worker or blocking threads.
+The default favors fewer, busier scheduler workers for high-fanout I/O:
+effective CPUs divided by three, rounded up, clamped to `1..8`. The blocking
+pool remains capped separately by `RESTREAM_TOKIO_MAX_BLOCKING_THREADS`
+(`512` by default).
 
 ### RTMP listener backlog
 

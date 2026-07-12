@@ -663,3 +663,35 @@ worker count is still 68, the six scheduler workers are hot, and CPU migration
 rate did not improve with SRT thread collapse. Any Tokio heuristic should be
 driven by effective CPU mask plus workload shape (ingests, outputs, SRT count,
 and stage sharing), not MSR alone.
+
+### MSR Tokio worker-count quick sweep after SRT muxer reuse — 2026-07-12 (VPS)
+
+Same 1,200-output MSR shape and same bench-profile binary as the muxer-reuse
+proof. Each point first proved MediaMTX receiver health via paginated
+`/v3/paths/list` (`1200/1200` ready and `bytesReceived > 0`), then attached
+`perf stat -p <restream-pid>` for 20 seconds.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-srt-muxer-reuse-3030-20260712T121114Z/perf-stat-restream-srt-muxer-reuse.csv`
+- `.local/artifacts/msr-tokio-workers3-3030-20260712T121730Z/perf-stat-restream-workers3.csv`
+- `.local/artifacts/msr-tokio-workers2-3030-20260712T121914Z/perf-stat-restream-workers2.csv`
+- `.local/artifacts/msr-tokio-default-3030-20260712T122557Z/perf-stat-restream-default-workers.csv`
+
+| Tokio workers | MediaMTX ready | CPU utilized | IPC | Cache misses | Branch misses | Context switches | CPU migrations |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 6 | `1200/1200` | `2.992` CPUs | `0.34` | `19.38%` | `8.53%` | `2.215 K/sec` | `201.210/sec` |
+| 3 | `1200/1200` | `2.813` CPUs | `0.35` | `19.55%` | `8.65%` | `2.386 K/sec` | `217.783/sec` |
+| 2 | `1200/1200` | `2.458` CPUs | `0.40` | `17.49%` | `8.40%` | `1.912 K/sec` | `231.536/sec` |
+
+Interpretation: after the SRT muxer/thread fix, two Tokio scheduler workers
+gave the best CPU/cache/context-switch result for this 6-vCPU high-fanout I/O
+shape. CPU migrations remained high, so a future affinity/bin-packing pass
+needs separate proof. The default runtime policy was changed to derive effective
+CPUs from Rust available parallelism, process CPU mask, and cgroup v2 quota,
+then use roughly one Tokio worker per three effective CPUs (rounded up, clamped
+to `1..8`) while preserving `RESTREAM_TOKIO_WORKER_THREADS` as an override.
+The rebuilt default-policy binary selected the same two-worker shape on this
+host (`64` `tokio-rt-worker` threads total after blocking tasks), kept MediaMTX
+at `1200/1200` ready paths with bytes advancing to `5,152,906,267`, and measured
+`2.476` CPUs over the attached 20-second perf sample.

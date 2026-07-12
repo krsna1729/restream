@@ -156,7 +156,7 @@ can restart the stage on the next tick.
 
 | Thread | Type | Spawned at | Purpose |
 |---|---|---|---|
-| Tokio runtime workers | OS threads | `#[tokio::main]` | Async task scheduling, epoll I/O polling |
+| Tokio runtime workers | OS threads | `src/main.rs` runtime builder | Async task scheduling, epoll I/O polling |
 | SRT accept loop | `std::thread` | `srt.rs` `SrtServer::run` | Blocks on `srt_accept()`, sends sockets via bounded `mpsc::channel(1024)` |
 | SRT socket monitor | tokio task | `srt.rs` `SrtServer::run` | Polls `/proc/net/udp` every 1s for buffer occupancy |
 | Reconciler | tokio task | `lib.rs` `run_app` | 1-second default tick: reconciles output desired vs active state; logs DB errors to stderr instead of silently skipping |
@@ -316,7 +316,7 @@ Zero thread hops. The entire path runs as tokio tasks on the async runtime.
                                 │ socket ready (epoll)
                                 ▼
  ╔═══════════════════════════════════════════════════════════════╗
- ║  TOKIO RUNTIME  (num_cpus worker threads, any core)           ║
+ ║  TOKIO RUNTIME  (effective CPU based worker count, any core)  ║
  ║                                                               ║
  ║  ┌─────────────────────────────────────────────────────────┐  ║
  ║  │ Task: RTMP ingest handler                               │  ║
