@@ -808,10 +808,7 @@ async fn configure_file_ingest_case(
     fixture: &Path,
 ) -> Result<String, String> {
     let fixture_name = fixture.file_name().unwrap().to_string_lossy().to_string();
-    let media_root = PathBuf::from(
-        std::env::var("RESTREAM_MEDIA_DIR")
-            .unwrap_or_else(|_| restream::config::DEFAULT_MEDIA_DIR.into()),
-    );
+    let media_root = harness_media_root();
     std::fs::create_dir_all(&media_root).map_err(|e| e.to_string())?;
     let media_dest = media_root.join(&fixture_name);
     if !media_dest.exists() {
@@ -834,6 +831,41 @@ async fn configure_file_ingest_case(
         .and_then(|ingest| ingest["id"].as_str())
         .map(str::to_string)
         .ok_or_else(|| format!("file ingest not found in list for {stream_key}"))
+}
+
+fn harness_media_root() -> PathBuf {
+    PathBuf::from(
+        std::env::var("RESTREAM_MEDIA_DIR")
+            .unwrap_or_else(|_| restream::config::DEFAULT_MEDIA_DIR.into()),
+    )
+}
+
+fn recording_file_exists(media_root: &Path, pipeline_name: &str) -> bool {
+    std::fs::read_dir(media_root)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            let path = entry.path();
+            path.extension()
+                .is_some_and(|ext| ext == "ts" || ext == "mp4")
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains(pipeline_name))
+        })
+}
+
+async fn wait_for_recording_file(media_root: &Path, pipeline_name: &str) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if recording_file_exists(media_root, pipeline_name) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    recording_file_exists(media_root, pipeline_name)
 }
 
 pub(super) async fn run_ingest_lifecycle_case(
@@ -993,20 +1025,8 @@ pub(super) async fn run_ingest_lifecycle_case(
             // A completed recording may already have been remuxed from .ts to
             // .mp4 (recording.rs deletes the source .ts on successful remux
             // unless retention is enabled), so either extension counts as found.
-            let recording_file_found = std::fs::read_dir("media")
-                .ok()
-                .into_iter()
-                .flatten()
-                .flatten()
-                .any(|entry| {
-                    let path = entry.path();
-                    path.extension()
-                        .is_some_and(|ext| ext == "ts" || ext == "mp4")
-                        && path
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .is_some_and(|name| name.contains(&case.pipeline))
-                });
+            let media_root = harness_media_root();
+            let recording_file_found = wait_for_recording_file(&media_root, &case.pipeline).await;
             let state = inactive_result
                 .as_ref()
                 .and_then(|result| result.as_ref().ok());
