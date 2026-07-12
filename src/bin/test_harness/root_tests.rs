@@ -78,6 +78,13 @@ fn strip_netns_opt_removes_only_the_opt_out_flag() {
 }
 
 #[test]
+fn file_live_edge_duration_budget_covers_one_target_gop() {
+    assert_eq!(file_live_edge_max_duration_drift_secs(0), 0.75);
+    assert_eq!(file_live_edge_max_duration_drift_secs(1), 1.0);
+    assert_eq!(file_live_edge_max_duration_drift_secs(2), 2.0);
+}
+
+#[test]
 fn only_non_measurement_modes_parallelize_in_suite() {
     assert!(suite_mode_is_parallelizable("srt.policy", false));
     assert!(suite_mode_is_parallelizable("fault.egress-retry", false));

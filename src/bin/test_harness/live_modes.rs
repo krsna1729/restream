@@ -1,6 +1,10 @@
 use super::*;
 
-const FILE_LIVE_EDGE_MAX_DURATION_DRIFT_SECS: f64 = 0.75;
+const FILE_LIVE_EDGE_MIN_DURATION_DRIFT_SECS: f64 = 0.75;
+
+pub(crate) fn file_live_edge_max_duration_drift_secs(target_gop_seconds: u32) -> f64 {
+    FILE_LIVE_EDGE_MIN_DURATION_DRIFT_SECS.max(target_gop_seconds as f64)
+}
 
 pub(crate) async fn run_burst_graph_check(
     api: &RampApi,
@@ -1538,7 +1542,12 @@ async fn run_file_live_edge_case(
         )
     })?;
     let duration_delta_secs = absolute_delta_secs(recorded_duration_secs, capture_elapsed_secs);
-    let duration_ok = duration_delta_secs <= FILE_LIVE_EDGE_MAX_DURATION_DRIFT_SECS;
+    // Recording start/stop follows live media timestamps and keyframe/GOP
+    // boundaries, not the wall-clock sleep edge in this harness. Bound the
+    // drift to one target GOP window so the test still catches runaway
+    // recording duration without failing normal live-edge alignment.
+    let max_duration_drift_secs = file_live_edge_max_duration_drift_secs(target_gop_seconds);
+    let duration_ok = duration_delta_secs <= max_duration_drift_secs;
     let hls_ok = playlist_body.contains("#EXTM3U")
         && hls_probe.is_ok()
         && hls_playlist_progress["passed"] == true;
@@ -1558,7 +1567,7 @@ async fn run_file_live_edge_case(
         "captureElapsedSecs": capture_elapsed_secs,
         "recordedDurationSecs": recorded_duration_secs,
         "durationDeltaSecs": duration_delta_secs,
-        "maxAllowedDurationDriftSecs": FILE_LIVE_EDGE_MAX_DURATION_DRIFT_SECS,
+        "maxAllowedDurationDriftSecs": max_duration_drift_secs,
         "durationOk": duration_ok,
         "sourceAnalysis": source_analysis,
         "recordedAnalysis": recorded_analysis,
@@ -1617,13 +1626,18 @@ pub(crate) async fn file_live_edge() -> Result<Value, String> {
 
     let cases = vec![passthrough, live_optimized];
     let passed = cases.iter().all(|case| case["passed"] == true);
-    Ok(json!({
+    let results = json!({
         "mode": "file.live-edge",
         "passed": passed,
         "cases": cases,
         "mediaDir": media_dir,
         "logPath": log_path,
-    }))
+    });
+    if passed {
+        Ok(results)
+    } else {
+        Err(format!("file.live-edge: not all cases passed: {results}"))
+    }
 }
 
 pub(crate) async fn signal_control() -> Result<Value, String> {
