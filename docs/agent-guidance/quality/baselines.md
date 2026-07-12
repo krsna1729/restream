@@ -695,3 +695,27 @@ The rebuilt default-policy binary selected the same two-worker shape on this
 host (`64` `tokio-rt-worker` threads total after blocking tasks), kept MediaMTX
 at `1200/1200` ready paths with bytes advancing to `5,152,906,267`, and measured
 `2.476` CPUs over the attached 20-second perf sample.
+
+### Negative result: RTMP burst write coalescing — 2026-07-12 (VPS)
+
+Hypothesis: coalescing already-pulled RTMP media packets into one reused
+`Vec<u8>` per ring burst would reduce `send`/wakeup pressure enough to offset
+the extra userspace copy. The experiment preserved correctness (`1200/1200`
+MediaMTX paths ready, bytes advancing, zero runtime alerts, zero Restream
+warn/error/panic lines), but did not improve the process counters.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-rtmp-batch-3030-20260712T123503Z/perf-stat-restream-rtmp-batch.csv`
+- `.local/artifacts/msr-rtmp-batch-3030-20260712T123503Z/pidstat-threads-restream-rtmp-batch.txt`
+
+| Variant | MediaMTX ready | CPU utilized | IPC | Cache misses | Branch misses | Context switches | CPU migrations |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Default 2-worker policy | `1200/1200` | `2.476` CPUs | `0.37` | `19.38%` | `8.39%` | `2.728 K/sec` | `322.886/sec` |
+| RTMP media burst write coalescing | `1200/1200` | `2.530` CPUs | `0.35` | `20.68%` | `7.79%` | `2.325 K/sec` | `265.887/sec` |
+
+Conclusion: the extra userspace copy and retained per-egress buffer outweigh
+the syscall/context-switch reduction in this workload. The code was reverted;
+future RTMP work should target packet construction/allocation in
+`rml_rtmp::ChunkSerializer` or payload ownership before adding another batching
+copy.
