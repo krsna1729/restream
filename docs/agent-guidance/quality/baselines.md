@@ -1130,3 +1130,66 @@ Raw artifacts:
 - `.local/artifacts/msr-runtime-affinity-3030-20260712T164945Z/perf-stat-runtime-affinity.csv`
 - `.local/artifacts/msr-runtime-affinity-3030-20260712T164945Z/perf-stat-runtime-affinity-second.csv`
 - `.local/artifacts/msr-runtime-affinity-3030-20260712T164945Z/pidstat-runtime-affinity.txt`
+
+### Final MSR full ramp after performance series - 2026-07-12 (local)
+
+Bench-profile binaries rebuilt from committed source at `7587fdb`, no allocator
+override, no runtime affinity override. Command shape:
+
+```sh
+MSR_FULL=1 MSR_SAMPLE_SECS=20 MSR_SAMPLE_INTERVAL_MS=5000 \
+  MSR_SINK_SAMPLE_SECS=3 MSR_NO_CLEANUP=1 BENCH_BUILD=never \
+  WORK_DIR=.local/artifacts/msr-final-full-20260712T165925Z \
+  scripts/harness/run.sh msr -- --no-netns
+```
+
+Status: `PASS`. Every checkpoint included paginated MediaMTX `/v3/paths/list`
+proof that all expected paths were `ready=true` and aggregate
+`bytesReceived` grew across the sink sample window. Restream and harness logs
+had zero warn/error/panic lines.
+
+| Outputs | Egress mix | MediaMTX ready | MediaMTX bytes delta | CPU avg % | CPU peak % | RSS peak | AVIO HWM peak | Samples |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 30 | `rtmp:29,srt:1` | `30/30` | `4,665,974` | 17.27 | 23.54 | 92.0 MB | 32 KB | 4 |
+| 120 | `rtmp:114,srt:6` | `120/120` | `15,540,301` | 43.28 | 53.09 | 119.4 MB | 256 KB | 4 |
+| 300 | `rtmp:285,srt:15` | `300/300` | `46,554,165` | 63.78 | 80.36 | 152.6 MB | 864 KB | 4 |
+| 600 | `rtmp:570,srt:30` | `600/600` | `76,622,802` | 90.06 | 98.45 | 207.1 MB | 1.5 MB | 4 |
+| 900 | `rtmp:855,srt:45` | `900/900` | `155,214,230` | 114.87 | 141.06 | 263.1 MB | 2.3 MB | 4 |
+| 1200 | `rtmp:1140,srt:60` | `1200/1200` | `208,072,764` | 126.87 | 131.90 | 329.5 MB | 3.3 MB | 4 |
+
+Independent 1,200-output receiver proof around a 15 s process-mode
+`perf stat -p <restream-pid>` attach:
+
+| Check | Result |
+|---|---:|
+| MediaMTX ready before perf | `1200/1200` |
+| MediaMTX bytes delta before perf | `203,110,184` over 3 s |
+| MediaMTX ready after perf | `1200/1200` |
+| MediaMTX bytes delta after perf | `171,669,716` over 3 s |
+| CPU utilized | `2.339` CPUs |
+| IPC | `0.307` |
+| Cache misses | `20.41%` |
+| Branch misses | `9.62%` |
+| Context switches | `7.507 K/sec` |
+| CPU migrations | `909.133/sec` |
+| Page faults | `0/sec` |
+| RSS / PSS | `339,136 / 320,408 KiB` |
+| Private anonymous | `285,268 KiB` |
+
+Final thread census was still the expected MSR shape: `82` Restream threads,
+including `64` Tokio runtime/blocking-pool-named threads where only two were
+hot, `2` SRT receive queue workers, `2` SRT send queue workers, `10` SQLite
+workers, and single main/SRT timestamp/SRT GC/tracing appender threads.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-final-full-20260712T165925Z/msr.json`
+- `.local/artifacts/msr-final-full-20260712T165925Z/msr-results.json`
+- `.local/artifacts/msr-final-full-20260712T165925Z/msr-samples.jsonl`
+- `.local/artifacts/msr-final-full-20260712T165925Z/msr-report.md`
+- `.local/artifacts/msr-final-full-20260712T165925Z/mediamtx-proof-final-before-perf.json`
+- `.local/artifacts/msr-final-full-20260712T165925Z/mediamtx-proof-final-after-perf.json`
+- `.local/artifacts/msr-final-full-20260712T165925Z/perf-stat-final.csv`
+- `.local/artifacts/msr-final-full-20260712T165925Z/pidstat-final.txt`
+- `.local/artifacts/msr-final-full-20260712T165925Z/thread-census-final.txt`
+- `.local/artifacts/msr-final-full-20260712T165925Z/restream-smaps-rollup-final.txt`
