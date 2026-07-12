@@ -833,3 +833,48 @@ Raw artifacts:
 
 - `.local/artifacts/msr-rtmp-ownership-3030-20260712T132924Z/perf-stat-restream-ownership-20260712T133014Z.csv`
 - `.local/artifacts/msr-rtmp-ownership-3030-20260712T132924Z/pidstat-threads-restream-ownership-20260712T133046Z.txt`
+
+### Restored MSR dashboard sample after RTMP ownership rejection - 2026-07-12 (local)
+
+After reverting the runtime RTMP ownership-transfer experiment, rebuilt the
+bench-profile harness binaries and left a restored 1,200-output MSR dashboard
+run alive on port 3030 for inspection. This is a live observation sample, not a
+zero-warning certification run: Restream emitted one startup slow-SQL warning
+while enabling outputs.
+
+MediaMTX receiver proof stayed green before and after the process-mode perf
+attach:
+
+| Sample | MediaMTX ready | MediaMTX bytes delta |
+|---|---:|---:|
+| Before perf | `1200/1200` | `164,832,352` over 3 s |
+| After perf | `1200/1200` | `166,214,003` over 3 s |
+
+Process counters over a 15 s `perf stat -p <restream-pid>` attach:
+
+| Metric | Restored runtime |
+|---|---:|
+| CPU utilized | `2.527` CPUs |
+| IPC | `0.367` |
+| Cache misses | `18.70%` |
+| Branch misses | `8.44%` |
+| Context switches | `6.118 K/sec` |
+| CPU migrations | `676.333/sec` |
+| Page faults | `0.067/sec` |
+| RSS / PSS | `333,840 KiB` / `323,384 KiB` |
+| Private anonymous | `288,640 KiB` |
+
+Thread sampling still showed work split between two hot Tokio workers and the
+shared SRT muxer threads: hottest `tokio-rt-worker` samples were `43.11%` and
+`42.32%` CPU, while the hottest SRT threads were `SRT:RcvQ:w2` at `14.57%` and
+`SRT:SndQ:w2` at `7.98%`. The SRT thread explosion remains fixed; the open
+question is CPU placement/migration policy, tracked as Q-012, and allocator
+arena sizing for RSS/PSS, tracked as Q-013.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-redeploy-3030-20260712T133546Z/mediamtx-proof-before-final-perf.json`
+- `.local/artifacts/msr-redeploy-3030-20260712T133546Z/mediamtx-proof-after-final-perf.json`
+- `.local/artifacts/msr-redeploy-3030-20260712T133546Z/perf-stat-restream-restored-final.csv`
+- `.local/artifacts/msr-redeploy-3030-20260712T133546Z/pidstat-threads-restream-restored-final.txt`
+- `.local/artifacts/msr-redeploy-3030-20260712T133546Z/restream-smaps-rollup-before-final-perf.txt`

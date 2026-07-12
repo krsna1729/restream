@@ -187,3 +187,19 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   `2.304`, cache misses were slightly worse, and page faults rose to
   `60.491/sec`; context-switch/migration reductions were not enough to make it
   a net win.
+
+## 2026-07-12 15:55 MSR RESTORED DASHBOARD SAMPLE [codex]
+- What: kept the restored post-Q-011 MSR full dashboard run alive on port 3030
+  and collected one short process-mode perf/memory sample without rebuilding or
+  disturbing the live stack.
+- Gates: paginated MediaMTX `/v3/paths/list` proof before and after the perf
+  attach showed `1200/1200` ready paths and bytes growing (`164,832,352` then
+  `166,214,003` over 3 s); `/healthz` returned 200.
+- Commit: (this commit)
+- Follow-ups: Q-012 remains the right place for CPU affinity/effective-mask
+  experiments; Q-013 remains the right place for allocator arena/RSS work.
+- Notes: restored runtime sample used `2.527` CPUs over 15 s, IPC `0.367`,
+  cache misses `18.70%`, context switches `6.118 K/sec`, CPU migrations
+  `676.333/sec`, and RSS/PSS `333,840/323,384 KiB`. This artifact has one
+  startup slow-SQL warning, so it is a dashboard/perf observation rather than a
+  zero-warning certification baseline.
