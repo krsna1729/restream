@@ -350,7 +350,7 @@ test("inspector renders runtime resource graph with accuracy labels", async () =
   assert.match(graphHtml, /runtime-resource-graph/);
 });
 
-test("inspector uses grouped resource view for large-output pipelines", async () => {
+test("inspector keeps processing graph for large-output pipelines", async () => {
   const { document, window } = installFakeDom();
   window.location.href =
     "http://localhost/?mode=pipeline&view=inspect&p=pipe-large";
@@ -369,6 +369,39 @@ test("inspector uses grouped resource view for large-output pipelines", async ()
   const requests = [];
   globalThis.fetch = async (url) => {
     requests.push(String(url));
+    if (String(url).includes("/graph")) {
+      return new Response(
+        JSON.stringify({
+          pipelineId: "pipe-large",
+          nodes: [
+            {
+              id: "source",
+              type: "ring_buffer",
+              label: "Source Buffer",
+              active: true,
+            },
+            ...Array.from({ length: 51 }, (_, index) => ({
+              id: `egress-${index}`,
+              type: "egress",
+              label: `RTMP sender: Output ${index}`,
+              active: true,
+              details: {
+                status: "running",
+                phase: "send",
+                totalSize: 1024,
+                bitrateKbps: 64,
+              },
+            })),
+          ],
+          edges: Array.from({ length: 51 }, (_, index) => ({
+            from: "source",
+            to: `egress-${index}`,
+            label: "RTMP publish",
+          })),
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
     return new Response(
       JSON.stringify({
         scope: { kind: "pipeline", pipelineId: "pipe-large" },
@@ -428,8 +461,8 @@ test("inspector uses grouped resource view for large-output pipelines", async ()
 
   assert.equal(
     requests.some((url) => url.includes("/graph")),
-    false,
-    "large pipelines should not fetch the raw processing graph by default",
+    true,
+    "large pipelines should still fetch the processing graph",
   );
   assert.equal(
     requests.some((url) =>
@@ -441,8 +474,78 @@ test("inspector uses grouped resource view for large-output pipelines", async ()
   );
   assert.match(
     document.getElementById("inspect-graph-status").textContent,
-    /grouped resources/,
+    /processing graph \/ 51 outputs/,
   );
+  assert.match(
+    document.getElementById("inspect-graph-container").innerHTML,
+    /RTMP egress x51/,
+  );
+});
+
+test("processing graph collapses repeated egress leaves by count", async () => {
+  const { document } = installFakeDom();
+  const graph = await loadCompiledFrontendModule("features/graph.js");
+  const container = appendRoot(document, "div", "graph-target");
+  graph.renderGraphInto(container, {
+    pipelineId: "pipe-1",
+    nodes: [
+      {
+        id: "source",
+        type: "ring_buffer",
+        label: "Source Buffer",
+        active: true,
+      },
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `rtmp-${index}`,
+        type: "egress",
+        label: `RTMP sender: Output ${index}`,
+        active: true,
+        details: {
+          status: "running",
+          phase: "send",
+          totalSize: 1024,
+          bitrateKbps: 64,
+        },
+        metrics: {
+          packetsIn: 10,
+          packetsOut: 10,
+          bytesIn: 2048,
+          bytesOut: 2048,
+          processingUs: 100,
+          avgUsPerPacket: 10,
+          packetsPerSec: 30,
+          uptimeSecs: 5,
+        },
+      })),
+      {
+        id: "srt-unique",
+        type: "egress",
+        label: "SRT sender: Backup",
+        active: true,
+        details: {
+          status: "running",
+          phase: "send",
+          totalSize: 2048,
+          bitrateKbps: 32,
+        },
+      },
+    ],
+    edges: [
+      ...Array.from({ length: 5 }, (_, index) => ({
+        from: "source",
+        to: `rtmp-${index}`,
+        label: "RTMP publish",
+      })),
+      { from: "source", to: "srt-unique", label: "SRT send" },
+    ],
+  });
+
+  const html = container.innerHTML;
+  assert.match(html, /RTMP egress x5/);
+  assert.match(html, /5 RTMP outputs/);
+  assert.match(html, /5\/5 running/);
+  assert.match(html, /SRT sender: Backup/);
+  assert.doesNotMatch(html, /RTMP sender: Output 0/);
 });
 
 test("monitor consumes and propagates the shared workspace selection", async () => {

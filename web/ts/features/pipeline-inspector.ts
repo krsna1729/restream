@@ -33,7 +33,6 @@ let forceRuntimeScope = false;
 
 const RUNTIME_SCOPE_VALUE = "__runtime";
 const RESOURCE_MAP_TOP_N = 25;
-const PROCESSING_GRAPH_OUTPUT_LIMIT = 50;
 
 export function setPipelineInspectorDependencies(
   next: Partial<PipelineInspectorDependencies>,
@@ -375,41 +374,6 @@ export async function refreshPipelineInspectorGraph(): Promise<void> {
   }
   const requestPipelineId = pipe.id;
   graphPipelineId = requestPipelineId;
-  if (pipe.outs.length > PROCESSING_GRAPH_OUTPUT_LIMIT) {
-    if (status) status.textContent = "Loading grouped resource map...";
-    container.innerHTML = `<div class="text-base-content/60 flex h-full min-h-72 items-center justify-center text-sm">
-        Loading grouped resource map...
-    </div>`;
-    graphInFlight = (async () => {
-      const resourceMap = await getResourceMap(requestPipelineId, {
-        view: "grouped",
-        topN: RESOURCE_MAP_TOP_N,
-      });
-      if (
-        requestSeq !== graphRequestSeq ||
-        selectedPipeline()?.id !== requestPipelineId
-      ) {
-        return;
-      }
-      if (!resourceMap) {
-        if (status) status.textContent = "Resource map unavailable.";
-        container.innerHTML =
-          '<div class="text-base-content/60 flex h-full min-h-72 items-center justify-center text-sm">Resource map unavailable.</div>';
-        return;
-      }
-      renderResourceMapInto(container, resourceMap);
-      graphRenderedStateKey = requestStateKey;
-      if (status) {
-        status.textContent = `${pipe.name} / grouped resources / ${pipe.outs.length} outputs`;
-      }
-    })();
-    try {
-      await graphInFlight;
-    } finally {
-      if (requestSeq === graphRequestSeq) graphInFlight = null;
-    }
-    return;
-  }
   if (status) status.textContent = "Loading graph...";
   container.innerHTML = `<div class="text-base-content/60 flex h-full min-h-72 items-center justify-center text-sm">
         Loading graph...
@@ -441,10 +405,9 @@ export async function refreshPipelineInspectorGraph(): Promise<void> {
     }
     graphRenderedStateKey = requestStateKey;
     if (status) {
-      const nodeCount = (graph as { nodes?: unknown[] }).nodes?.length || 0;
       const inputState =
         pipe.input.status === "on" ? "live" : pipe.input.status;
-      status.textContent = `${pipe.name} / ${nodeCount} nodes / input ${inputState}`;
+      status.textContent = `${pipe.name} / processing graph / ${pipe.outs.length} outputs / input ${inputState}`;
     }
   })();
   try {
