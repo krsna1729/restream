@@ -719,3 +719,44 @@ the syscall/context-switch reduction in this workload. The code was reverted;
 future RTMP work should target packet construction/allocation in
 `rml_rtmp::ChunkSerializer` or payload ownership before adding another batching
 copy.
+
+### Current MSR RTMP allocator/serializer profile — 2026-07-12 (VPS)
+
+Same post-fix full MSR dashboard run as the MediaMTX env-hardening redeploy
+(`abc8ee0`, bench-profile binaries, 1,200 outputs, `1200/1200` MediaMTX paths
+ready). A fresh 20-second `perf stat -p <restream-pid>` attach measured:
+
+| Metric | Current |
+|---|---:|
+| CPU utilized | `2.304` CPUs |
+| IPC | `0.36` |
+| Cache misses | `18.04%` |
+| Context switches | `3.050 K/sec` |
+| CPU migrations | `337.348/sec` |
+
+Thread sampling still showed the SRT muxer reuse win holding (`2` RcvQ and `2`
+SndQ workers), while RTMP/Tokio work dominated the remaining CPU. A 15-second
+`perf record -g -p <restream-pid>` had these top user-space symbols:
+
+| Symbol/family | Overhead |
+|---|---:|
+| `restream::media::rtmp::start_rtmp_egress` | `2.56%` |
+| `libc::_int_malloc` | `1.50%` |
+| `rml_rtmp::chunk_io::serializer::ChunkSerializer::serialize` | `1.17%` |
+| `libc::__memmove_avx_unaligned_erms` | `1.15%` |
+| `libc::_int_free` | `1.14%` |
+| `libc::malloc` | `0.97%` |
+
+Interpretation: production RTMP egress already uses reusable conversion
+buffers for Raw H.264/AAC, but it must hand owned `Bytes` to `rml_rtmp` and then
+write the serialized outbound packet. The next RTMP optimization should isolate
+packet-construction/allocation first (for example, a benchmark that compares the
+current `Bytes::copy_from_slice` + `ChunkSerializer` path with any reusable or
+ownership-transfer alternative). Repeating burst write coalescing is not
+justified by the current evidence.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-redeploy-3030-20260712T125823Z/perf-stat-restream-current-20260712T130031Z.csv`
+- `.local/artifacts/msr-redeploy-3030-20260712T125823Z/pidstat-threads-restream-current-20260712T130107Z.txt`
+- `.local/artifacts/msr-redeploy-3030-20260712T125823Z/perf-report-restream-current-20260712T130204Z.txt`
