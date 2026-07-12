@@ -55,7 +55,8 @@ use crate::media::{MEDIA_PRODUCER_BATCH_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
 mod ffmpeg_process;
 use ffmpeg_process::{ExternalStdinSink, spawn_external_stderr_logger};
 pub use ffmpeg_process::{
-    build_stage_ffmpeg_args, build_stage_ffmpeg_args_for_input, build_stage_ffmpeg_video_only_args,
+    build_stage_ffmpeg_args, build_stage_ffmpeg_args_for_input,
+    build_stage_ffmpeg_args_for_input_streams, build_stage_ffmpeg_video_only_args,
     build_stage_ffmpeg_video_only_args_for_input,
 };
 
@@ -152,11 +153,13 @@ pub(crate) async fn run_external_ffmpeg_backend(
     });
 
     let ffmpeg_preset = external_stage_arg_preset(&plan, &encoding);
-    let args = if include_audio {
-        build_stage_ffmpeg_args_for_input(&ffmpeg_preset, output_codec, probe_codec)
-    } else {
-        build_stage_ffmpeg_video_only_args_for_input(&ffmpeg_preset, output_codec, probe_codec)
-    };
+    let args = build_stage_ffmpeg_args_for_input_streams(
+        &ffmpeg_preset,
+        output_codec,
+        probe_codec,
+        include_audio,
+        plan.input.audio_tracks.len(),
+    );
     info!(?args, "FFMPEG ARGS");
     let correlation_id = crate::logging::next_correlation_id("stage");
 

@@ -92,6 +92,7 @@ fn build_stage_ffmpeg_args_inner(
     input_codec: &str,
     probe_codec: &str,
     include_audio: bool,
+    audio_track_count: usize,
     threads: Option<u32>,
 ) -> Vec<String> {
     // Strip the internal stage-key prefix ("video:720p" -> "720p").
@@ -105,14 +106,17 @@ fn build_stage_ffmpeg_args_inner(
     } else {
         Some(crate::media::profiles::try_get_cached(encoding))
     };
-    let (mut analyze_duration_us, mut probe_size_bytes) =
-        startup_policy::ext_stage_probe_budget(VideoCodecKind::from_codec_name(probe_codec));
-    if matches!(stage_spec.video_encoding(), "source" | "") {
-        // Source/passthrough stages copy streams without re-encoding, so they need
-        // a larger probe budget to fully resolve all stream parameters (especially audio).
-        (analyze_duration_us, probe_size_bytes) =
-            startup_policy::ext_stage_passthrough_probe_budget();
-    }
+    let passthrough = matches!(stage_spec.video_encoding(), "source" | "");
+    let full_stream_passthrough = passthrough && audio_routing.is_none();
+    let probed_audio_track_count =
+        probe_audio_track_count(&audio_routing, include_audio, audio_track_count);
+    let (analyze_duration_us, probe_size_bytes) =
+        startup_policy::ext_stage_probe_budget_for(startup_policy::ExtStageProbeContext {
+            codec: VideoCodecKind::from_codec_name(probe_codec),
+            include_audio,
+            audio_track_count: probed_audio_track_count,
+            passthrough: full_stream_passthrough,
+        });
     let ffmpeg_threads = threads.unwrap_or(2).max(1);
 
     let mut args = vec![
@@ -243,7 +247,7 @@ fn build_stage_ffmpeg_args_inner(
 }
 
 pub fn build_stage_ffmpeg_args(preset: &str, input_codec: &str) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, true, None)
+    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, true, 1, None)
 }
 
 /// Like [`build_stage_ffmpeg_args`], but sizes FFmpeg's input probe budget from
@@ -255,11 +259,28 @@ pub fn build_stage_ffmpeg_args_for_input(
     input_codec: &str,
     probe_codec: &str,
 ) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, true, None)
+    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, true, 1, None)
+}
+
+pub fn build_stage_ffmpeg_args_for_input_streams(
+    preset: &str,
+    input_codec: &str,
+    probe_codec: &str,
+    include_audio: bool,
+    audio_track_count: usize,
+) -> Vec<String> {
+    build_stage_ffmpeg_args_inner(
+        preset,
+        input_codec,
+        probe_codec,
+        include_audio,
+        audio_track_count,
+        None,
+    )
 }
 
 pub fn build_stage_ffmpeg_video_only_args(preset: &str, input_codec: &str) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, false, None)
+    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, false, 0, None)
 }
 
 pub fn build_stage_ffmpeg_video_only_args_for_input(
@@ -267,7 +288,7 @@ pub fn build_stage_ffmpeg_video_only_args_for_input(
     input_codec: &str,
     probe_codec: &str,
 ) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, false, None)
+    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, false, 0, None)
 }
 
 fn stage_audio_routing(preset: &str) -> Option<AudioRouting> {
@@ -296,6 +317,29 @@ fn audio_filter_complex(routing: &Option<AudioRouting>) -> Option<String> {
             Some(format!("[0:a:{track}]aresample=out_chlayout=stereo[aout]"))
         }
         _ => None,
+    }
+}
+
+fn probe_audio_track_count(
+    routing: &Option<AudioRouting>,
+    include_audio: bool,
+    observed_audio_track_count: usize,
+) -> usize {
+    if !include_audio {
+        return 0;
+    }
+
+    match routing {
+        Some(AudioRouting::Remap { track, .. }) | Some(AudioRouting::Downmix { track }) => {
+            track.saturating_add(1)
+        }
+        Some(AudioRouting::SelectTracks { tracks }) => tracks
+            .iter()
+            .copied()
+            .max()
+            .map(|track| track.saturating_add(1))
+            .unwrap_or(0),
+        Some(AudioRouting::Passthrough) | None => observed_audio_track_count,
     }
 }
 
@@ -400,6 +444,14 @@ mod tests {
         path
     }
 
+    fn arg_after<'a>(args: &'a [String], flag: &str) -> &'a str {
+        let pos = args
+            .iter()
+            .position(|arg| arg == flag)
+            .unwrap_or_else(|| panic!("missing ffmpeg arg {flag}"));
+        &args[pos + 1]
+    }
+
     #[test]
     fn stage_args_720p_reads_stdin_writes_stdout() {
         let args = build_stage_ffmpeg_args("720p", "h264");
@@ -482,6 +534,105 @@ mod tests {
         assert!(
             args.windows(2)
                 .any(|w| { w[0] == "-probesize" && w[1] == probe_size_bytes.to_string() })
+        );
+    }
+
+    #[test]
+    fn stage_args_scale_probe_budget_by_observed_audio_streams() {
+        for (codec, tracks, expected_probe_size) in [
+            ("h264", 1, 128 * 1024),
+            ("h264", 10, 272 * 1024),
+            ("h264", 30, 592 * 1024),
+            ("hevc", 1, 512 * 1024),
+            ("hevc", 10, 656 * 1024),
+            ("hevc", 30, 976 * 1024),
+        ] {
+            let args =
+                build_stage_ffmpeg_args_for_input_streams("720p", codec, codec, true, tracks);
+            assert_eq!(
+                arg_after(&args, "-probesize"),
+                expected_probe_size.to_string(),
+                "codec={codec} tracks={tracks}"
+            );
+        }
+
+        let args_video_only =
+            build_stage_ffmpeg_args_for_input_streams("720p", "h264", "h264", false, 30);
+
+        assert_eq!(
+            arg_after(&args_video_only, "-probesize"),
+            (128 * 1024).to_string()
+        );
+    }
+
+    #[test]
+    fn stage_args_probe_budget_covers_common_output_resolutions() {
+        let _guard = profile_cache_test_lock();
+        {
+            let mut cache = crate::media::profiles::cache().blocking_write();
+            for (name, width, height) in [
+                ("240p_test", 426, 240),
+                ("480p_test", 854, 480),
+                ("4k_test", 3840, 2160),
+            ] {
+                cache.insert(
+                    name.to_string(),
+                    TranscodeProfile {
+                        preset: "ultrafast".to_string(),
+                        tune: "zerolatency".to_string(),
+                        crf: 23,
+                        gop: 60,
+                        bframes: 0,
+                        bitrate: 0,
+                        max_bitrate: 0,
+                        width,
+                        height,
+                    },
+                );
+            }
+        }
+
+        for preset in ["240p_test", "480p_test", "720p", "1080p", "4k_test"] {
+            let args = build_stage_ffmpeg_args_for_input_streams(preset, "h264", "h264", true, 1);
+            assert_eq!(
+                arg_after(&args, "-probesize"),
+                (128 * 1024).to_string(),
+                "preset={preset}"
+            );
+            assert!(
+                args.iter().any(|arg| arg.starts_with("scale=")),
+                "preset={preset}"
+            );
+        }
+    }
+
+    #[test]
+    fn stage_args_hevc_multi_audio_probe_stays_bounded() {
+        let args = build_stage_ffmpeg_args_for_input_streams("h264", "h264", "hevc", true, 30);
+        assert_eq!(arg_after(&args, "-probesize"), (976 * 1024).to_string());
+        assert_eq!(arg_after(&args, "-analyzeduration"), "1000000");
+    }
+
+    #[test]
+    fn complex_audio_args_probe_only_referenced_input_tracks() {
+        let downmix_track0 =
+            build_stage_ffmpeg_args_for_input_streams("downmix:0", "h264", "h264", true, 30);
+        let remap_track9 =
+            build_stage_ffmpeg_args_for_input_streams("remap:0:1:9", "h264", "h264", true, 30);
+        let hevc_downmix_track29 =
+            build_stage_ffmpeg_args_for_input_streams("downmix:29", "h264", "hevc", true, 30);
+
+        assert_eq!(
+            arg_after(&downmix_track0, "-probesize"),
+            (128 * 1024).to_string()
+        );
+        assert_eq!(
+            arg_after(&remap_track9, "-probesize"),
+            (272 * 1024).to_string()
+        );
+        assert_eq!(
+            arg_after(&hevc_downmix_track29, "-probesize"),
+            (976 * 1024).to_string()
         );
     }
 

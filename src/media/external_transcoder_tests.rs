@@ -1361,11 +1361,16 @@ async fn external_720p_stage_emits_live_packets_for_h264_marker_fixture_without_
 
     cancel.cancel();
 
+    let snapshot = manager.snapshot(&stage_key).await;
     assert!(
         output_packets
             .iter()
             .any(|packet| packet.media_type == MediaType::Video),
-        "external H.264 marker stage should emit live video packets without requiring EOS"
+        "external H.264 marker stage should emit live video packets without requiring EOS; \
+         source_write_idx={} output_write_idx={} output_packets={} stage_snapshot={snapshot:?}",
+        source_ring.get_write_idx(),
+        reader.current_ring().get_write_idx(),
+        output_packets.len()
     );
 }
 
