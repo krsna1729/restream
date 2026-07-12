@@ -1,10 +1,11 @@
 [advisories]
 db-urls = ["https://github.com/rustsec/advisory-db"]
-vulnerability = "deny"
-unmaintained = "warn"
-unsound = "deny"
-notice = "warn"
-ignore = []
+# cargo-deny 0.20 derives advisory severity from the advisory database. Keep
+# this section minimal so release CI can use the current prebuilt cargo-deny
+# binary without schema drift blocking the real vulnerability check.
+ignore = [
+  { id = "RUSTSEC-2024-0436", reason = "paste is pulled through the dev-only pulp benchmark dependency; keep visible through cargo audit warnings while avoiding a release hard block." },
+]
 
 [licenses]
 allow = [
@@ -13,11 +14,11 @@ allow = [
   "BSD-2-Clause",
   "BSD-3-Clause",
   "ISC",
-  "Unicode-DFL-1.0",
+  "Unicode-3.0",
   "Zlib",
-  "OpenSSL",
+  "WTFPL",
+  "CDLA-Permissive-2.0",
 ]
-copyleft = "warn"
 
 [bans]
 multiple-versions = "warn"
@@ -25,7 +26,6 @@ multiple-versions = "warn"
 # Keep them visible as warnings while avoiding a hard CI block until upstream
 # dependencies converge.
 skip = [
-  { name = "base64" },
   { name = "hashbrown" },
   { name = "thiserror" },
 ]
