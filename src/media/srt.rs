@@ -1040,6 +1040,72 @@ mod srt_monitor;
 use srt_monitor::monitor_listener_socket;
 #[cfg(test)]
 use srt_monitor::{audio_codec_id, read_udp_socket_stats, video_codec_id};
+
+/// Demand-driven handshake between the async ingest receive loop and its
+/// long-lived blocking epoll waiter.
+///
+/// The waiter must arm `srt_epoll_wait` only while the receive loop is parked
+/// on EAGAIN. libsrt epoll readiness is level-triggered: for as long as the
+/// receive buffer holds playable data, `srt_epoll_wait` returns immediately,
+/// so an unconditionally looping waiter busy-spins a full core on any live
+/// stream. Gating each wait behind `request_wait()` keeps the waiter asleep on
+/// the condvar whenever the receive loop is busy draining.
+struct EpollWaiterSignal {
+    state: std::sync::Mutex<EpollWaiterState>,
+    wakeups: std::sync::Condvar,
+}
+
+#[derive(Default)]
+struct EpollWaiterState {
+    wait_requested: bool,
+    stopped: bool,
+}
+
+impl EpollWaiterSignal {
+    fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(EpollWaiterState::default()),
+            wakeups: std::sync::Condvar::new(),
+        }
+    }
+
+    /// Receive-loop side (async context; locks briefly, never blocks): ask
+    /// the waiter to arm one epoll wait. Idempotent until serviced.
+    fn request_wait(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.wait_requested = true;
+        self.wakeups.notify_one();
+    }
+
+    /// Stop-guard side: wake the waiter so it can release the epoll handle
+    /// and exit even if no wait was requested.
+    fn stop(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.stopped = true;
+        self.wakeups.notify_one();
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).stopped
+    }
+
+    /// Waiter side (blocking thread): park until a wait is requested or the
+    /// guard stops us. Returns `false` on stop.
+    fn wait_for_request(&self) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if state.stopped {
+                return false;
+            }
+            if state.wait_requested {
+                state.wait_requested = false;
+                return true;
+            }
+            state = self.wakeups.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
 pub struct SrtServer {
     pipeline_lookup: Arc<dyn PipelineStore>,
     engine: Arc<MediaEngine>,
@@ -1529,83 +1595,96 @@ impl SrtServer {
         //   1. Task allocation per idle cycle
         //   2. No cancellation propagation (infinite epoll_wait timeout)
         //   3. Silently discarded errors on EAGAIN path
+        // Demand-gated via EpollWaiterSignal: the waiter arms srt_epoll_wait
+        // only after the receive loop parks on EAGAIN, never while the loop
+        // is draining a level-triggered-ready socket (see the type docs).
         let data_ready = Arc::new(AtomicBool::new(false));
-        let epoll_stop = Arc::new(AtomicBool::new(false));
+        let epoll_signal = Arc::new(EpollWaiterSignal::new());
         let notify = Arc::new(Notify::new());
 
         let w_data_ready = data_ready.clone();
-        let w_epoll_stop = epoll_stop.clone();
+        let w_signal = epoll_signal.clone();
         let w_notify = notify.clone();
         // The task owns eid and releases it before signaling completion.
         // This ensures srt_epoll_release runs even if the outer async future
         // is dropped at an await point (the JoinHandle detaches but the
         // blocking task continues to completion).
         let mut epoll_waiter = Some(tokio::task::spawn_blocking(move || {
-            loop {
-                if w_epoll_stop.load(Ordering::Acquire) {
-                    // Release the epoll handle before waking the outer task.
-                    // SAFETY: eid is valid; we are the only caller of
-                    // srt_epoll_release for this handle. The outer code no
-                    // longer calls srt_epoll_release after this task exits.
-                    unsafe {
-                        srt_epoll_release(eid);
+            while w_signal.wait_for_request() {
+                // Receive loop is parked on EAGAIN: block until the socket is
+                // readable or errored, rechecking stop each iteration.
+                loop {
+                    if w_signal.is_stopped() {
+                        break;
                     }
-                    // Wake the main task so it can observe we're done.
-                    w_data_ready.store(true, Ordering::Release);
-                    w_notify.notify_one();
-                    return;
-                }
 
-                let mut read_ready = [SRTSOCKET::default(); 1];
-                let mut rnum = 1i32;
-                // SAFETY: srt_epoll_wait blocks the OS thread until data
-                // arrives or timeout. NULL write/lwfd/wfds sets are valid
-                // (we only wait for read-ready). Called from spawn_blocking
-                // so the tokio runtime is not blocked.
-                //
-                // 200ms timeout balances:
-                //   - Cancellation responsiveness: ≤200ms from cancel to exit
-                //   - CPU: no busy-loop (vs polling with a microsleep)
-                //   - Perceptibility: 200ms is imperceptible on stream stop
-                //   - Cleanup: ≤200ms delay before epoll handle is freed
-                let ret = unsafe {
-                    srt_epoll_wait(
-                        eid,
-                        read_ready.as_mut_ptr(),
-                        &mut rnum,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        200,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                    )
-                };
-                if ret > 0 {
-                    // Data available — wake the consumer.
-                    w_data_ready.store(true, Ordering::Release);
-                    w_notify.notify_one();
+                    let mut read_ready = [SRTSOCKET::default(); 1];
+                    let mut rnum = 1i32;
+                    // SAFETY: srt_epoll_wait blocks the OS thread until data
+                    // arrives or timeout. NULL write/lwfd/wfds sets are valid
+                    // (we only wait for read-ready). Called from
+                    // spawn_blocking so the tokio runtime is not blocked.
+                    //
+                    // 200ms timeout balances:
+                    //   - Cancellation responsiveness: ≤200ms from cancel to exit
+                    //   - CPU: no busy-loop (vs polling with a microsleep)
+                    //   - Perceptibility: 200ms is imperceptible on stream stop
+                    //   - Cleanup: ≤200ms delay before epoll handle is freed
+                    let ret = unsafe {
+                        srt_epoll_wait(
+                            eid,
+                            read_ready.as_mut_ptr(),
+                            &mut rnum,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            200,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                        )
+                    };
+                    if ret > 0 {
+                        // Data available — wake the consumer and park until
+                        // the next EAGAIN requests another wait.
+                        w_data_ready.store(true, Ordering::Release);
+                        w_notify.notify_one();
+                        break;
+                    }
+                    // ret <= 0 (timeout or error): loop back and check stop.
+                    // Errors here mean the socket left the epoll set (close
+                    // during teardown), and stop is always set before the
+                    // socket guard closes it, so this cannot spin.
                 }
-                // ret == 0 (timeout) or < 0 (error): loop back and check stop.
             }
+
+            // Stopped: release the epoll handle before waking the outer task.
+            // SAFETY: eid is valid; we are the only caller of
+            // srt_epoll_release for this handle. The outer code no longer
+            // calls srt_epoll_release after this task exits.
+            unsafe {
+                srt_epoll_release(eid);
+            }
+            // Wake the main task so it can observe we're done.
+            w_data_ready.store(true, Ordering::Release);
+            w_notify.notify_one();
         }));
 
         // RAII guard: signals the epoll_waiter task to exit when this scope
         // ends (normal return, panic, or future dropped at an await point).
         // The task then calls srt_epoll_release(eid) before exiting.
         struct EpollStopGuard {
-            stop: Arc<AtomicBool>,
+            signal: Arc<EpollWaiterSignal>,
             notify: Arc<Notify>,
         }
         impl Drop for EpollStopGuard {
             fn drop(&mut self) {
-                self.stop.store(true, Ordering::Release);
+                self.signal.stop();
                 self.notify.notify_one();
             }
         }
         let _epoll_stop_guard = EpollStopGuard {
-            stop: epoll_stop.clone(),
+            signal: epoll_signal.clone(),
             notify: notify.clone(),
         };
 
@@ -1642,6 +1721,7 @@ impl SrtServer {
                 match classify_srt_receive_error(error_code) {
                     SrtReceiveErrorAction::WaitForReadiness => {
                         if !data_ready.swap(false, Ordering::Acquire) {
+                            epoll_signal.request_wait();
                             tokio::select! {
                                 _ = notify.notified() => {}
                                 _ = registration.cancel_token.cancelled() => break,
@@ -1790,7 +1870,7 @@ impl SrtServer {
         // The _epoll_stop_guard would do this on drop, but signaling explicitly
         // here lets us await the task handle — ensuring eid is released before
         // the _client_sock_guard drops and closes the socket.
-        epoll_stop.store(true, Ordering::Release);
+        epoll_signal.stop();
         notify.notify_one();
         if let Some(handle) = epoll_waiter.take() {
             let _ = handle.await;
