@@ -57,3 +57,28 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Notes: hot spinning thread IPC 2.13 / 0.03% L1d miss vs idle scheduler
   worker IPC 0.45 / 8.3% branch miss / 807 migrations/s — strong quantitative
   case that fewer, busier workers win on this workload.
+
+## 2026-07-12 12:05 MSR RECEIVER-PROVED BASELINE + PROCESS PERF DONE [codex]
+- What: reran Mahashivratri full MSR on the 6-vCPU EPYC VPS after adding
+  harness-side MediaMTX receiver proof. The first full attempt failed at 120
+  outputs because `/v3/paths/list` is paginated at 100 items by default; fixed
+  the generic MediaMTX probe to walk all pages, then reran the full
+  30/120/300/600/900/1,200 ramp successfully. Added a second full run with
+  `perf stat -p <restream-pid>` so hardware counters cover the Restream process
+  only, not the harness/MediaMTX wrapper.
+- Gates: `cargo fmt --all --check`; `cargo clippy --all-targets --all-features
+  -- -D warnings`; `cargo test`; `cargo test mediamtx --bin test_harness`;
+  `MSR_OUTPUT_COUNTS=120` pagination repro/fix run; `MSR_FULL=1` clean run
+  PASS with `1200/1200` MediaMTX paths ready and bytes growing; process-mode
+  perf run PASS with `1200/1200` ready.
+- Commit: `0e4774e` (pagination fix; earlier same-session commits `85ebdf6`
+  SRT plain keys and `5778632` MediaMTX path-health verifier).
+- Follow-ups: process-mode perf shows IPC 0.28, cache misses 26.96% of cache
+  references, and 10,143 CPU migrations; next optimization should test
+  thread/worker bin-packing or affinity before packet-layout changes. VPS 12h
+  soak with egress-failure health-latency proof remains open from the original
+  launch-hardening checklist.
+- Notes: clean full run had zero warn/error/panic lines across Restream,
+  MediaMTX, and publisher logs. The process-mode perf run passed but MediaMTX
+  emitted one SRT TS decode warning near shutdown/load, so that run is retained
+  for counters, not as the log-noise baseline.

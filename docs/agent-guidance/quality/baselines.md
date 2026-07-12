@@ -131,6 +131,91 @@ external transcoders active. Raw artifacts retained off-repo
 (`.local/artifacts/msr-vps/` on the dev box; `~/msr-artifacts-smoke30` +
 `.local/artifacts/msr/` on the VPS).
 
+### Mahashivratri msr full-scale ramp with MediaMTX API proof — 2026-07-12 (VPS)
+
+Host: `vmi3423592`, dedicated Contabo VPS (6 vCPU AMD EPYC gen1, 11 GiB RAM,
+2 GiB swap), idle. Commit `0e4774e` (SRT plain stream IDs, generic MediaMTX
+path-health verifier, paginated `/v3/paths/list` reads).
+
+```sh
+MSR_FULL=1 WORK_DIR=.local/artifacts/msr-full-baseline-20260712-paged \
+  scripts/harness/run.sh msr
+```
+
+Status: **PASS at every checkpoint including 1,200 outputs**. Each checkpoint
+proved MediaMTX receiver health through `/v3/paths/list`: every expected path
+was `ready=true` and aggregate `bytesReceived` grew across the sample window.
+The first full attempt after adding receiver proof failed at 120 outputs because
+MediaMTX paginates path listings at 100 items by default; commit `0e4774e`
+walks all pages and the rerun passed. Zero warn/error/panic lines in restream,
+MediaMTX, and publisher logs for this clean baseline run.
+
+| Outputs | Egress mix | MediaMTX ready | MediaMTX bytes delta | CPU avg % | CPU peak % | RSS peak | AVIO HWM peak | Samples |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 30 | rtmp:29,srt:1 | 30/30 | 4.1 MB | 18.1 | 20.4 | 91 MB | 76 KB | 6 |
+| 120 | rtmp:114,srt:6 | 120/120 | 17.2 MB | 49.6 | 72.3 | 124 MB | 388 KB | 6 |
+| 300 | rtmp:285,srt:15 | 300/300 | 42.4 MB | 76.7 | 111.0 | 177 MB | 736 KB | 6 |
+| 600 | rtmp:570,srt:30 | 600/600 | 89.3 MB | 121.8 | 126.8 | 292 MB | 1.69 MB | 5 |
+| 900 | rtmp:855,srt:45 | 900/900 | 142.3 MB | 231.1 | 239.1 | 363 MB | 2.55 MB | 4 |
+| 1200 | rtmp:1140,srt:60 | 1200/1200 | 192.9 MB | 202.7 | 210.3 | 459 MB | 3.69 MB | 4 |
+
+Artifacts: `.local/artifacts/msr-full-baseline-20260712-paged/`
+(`msr-results.json`, `msr-samples.jsonl`, `msr-report.md`, logs, SQLite DB).
+This is the local/VPS connection-scale baseline for future MSR comparisons.
+
+### Mahashivratri msr process-mode perf counters — 2026-07-12 (VPS)
+
+Same host and commit as the API-proved ramp above. This run attached
+`perf stat` to the `restream` process only after the bench-profile process
+started, excluding the harness wrapper, MediaMTX, shell, and build overhead.
+
+```sh
+sudo perf stat -x, -p <restream-pid> \
+  -o .local/artifacts/msr-full-perf-process-20260712/perf-restream-process.csv \
+  -e cycles,instructions,cache-references,cache-misses,branches,branch-misses,\
+context-switches,cpu-migrations,page-faults,minor-faults,major-faults
+```
+
+The attached run also passed all MediaMTX receiver-health checkpoints
+(`1200/1200`, `bytesReceivedDelta=229,620,986` at the final checkpoint).
+It is **not** the log-noise baseline: MediaMTX emitted one SRT TS decode warning
+near shutdown/load, while Restream and publisher logs were quiet.
+
+| Counter | Value | Note |
+|---|---:|---|
+| cycles | 199,778,946,277 | 67% multiplexed |
+| instructions | 56,913,663,158 | IPC 0.28 |
+| cache references | 7,566,409,593 | 66% multiplexed |
+| cache misses | 2,039,585,276 | 26.96% of cache refs |
+| branches | 12,904,759,218 | 65% multiplexed |
+| branch misses | 1,215,289,024 | 9.42% of branches |
+| context switches | 75,912 | process lifetime during attached run |
+| CPU migrations | 10,143 | high enough to keep worker/thread affinity on the optimization list |
+| page faults | 12,187 | all minor |
+| major faults | 0 | no disk-backed fault pressure |
+
+The process-mode run's resource checkpoint was noisier/heavier than the clean
+baseline, likely because of perf overhead and host variance:
+
+| Outputs | MediaMTX ready | CPU avg % | CPU peak % | RSS peak | AVIO HWM peak |
+|---:|---:|---:|---:|---:|---:|
+| 30 | 30/30 | 24.2 | 27.8 | 91 MB | 32 KB |
+| 120 | 120/120 | 63.1 | 72.1 | 121 MB | 276 KB |
+| 300 | 300/300 | 233.5 | 308.9 | 180 MB | 960 KB |
+| 600 | 600/600 | 244.8 | 262.3 | 277 MB | 1.71 MB |
+| 900 | 900/900 | 275.4 | 296.3 | 385 MB | 2.72 MB |
+| 1200 | 1200/1200 | 356.3 | 360.3 | 487 MB | 3.82 MB |
+
+Interpretation for the next optimization pass:
+
+- IPC 0.28 and 26.96% cache-miss rate point at memory/cache locality and
+  scheduler/thread movement, not raw compute, as the next bottleneck class.
+- 10,143 migrations during the attached run support testing worker/thread
+  bin-packing or affinity before touching packet code.
+- AVIO HWM remains bounded (<4 MB at 1,200 outputs) and no major faults were
+  observed, so memory growth is currently acceptable for the connection-scale
+  baseline.
+
 ## Standing optimization targets (2026-06-27 CPU profile, task-clock 999 Hz)
 
 | Self % | Symbol | Meaning | Backlog |
