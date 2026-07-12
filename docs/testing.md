@@ -1295,7 +1295,7 @@ scripts/harness/media-validation.sh
 Aggregate release-evidence runner:
 
 ```sh
-cargo run --bin test_harness -- suite --run-id <run-id>
+scripts/harness/run.sh suite -- --run-id <run-id>
 ```
 
 Use `test_harness suite` as the canonical aggregate orchestrator. It creates
@@ -1307,7 +1307,15 @@ in its own subdirectory, and records one JSONL result per mode in
 - `--work-root <path>` to choose the aggregate artifact directory
 - `--only-modes mixed.live.srt.h264.a1.bf2,timestamp.bframe` to run a subset
 - `--preflight-only` to run readiness checks without starting live services
+- `--mode-timeout-secs <seconds>` to override the bounded 15-minute child-mode
+  timeout (`TEST_HARNESS_SUITE_MODE_TIMEOUT_SECS` provides the same override)
 - `--continue-on-fail` to keep collecting artifacts after the first failure
+
+The aggregate manifest and each JSONL row label their evidence as `preflight`
+or `execution`; a successful `--preflight-only` run therefore cannot be
+mistaken for proof that the live mode ran. Timed-out children are terminated as
+one owned process group and write `timeout.json` beside `run.log` before the
+suite continues or fails.
 
 Why the aggregate runner lives in `test_harness` instead of a separate
 `protocol_matrix` binary:

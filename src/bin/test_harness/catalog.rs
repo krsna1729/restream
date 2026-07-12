@@ -179,6 +179,22 @@ impl HarnessCatalog {
                         return Err(format!("duplicate mode {name}"));
                     }
                 }
+                if kind == "suite" {
+                    for (name, spec) in modes {
+                        let suite_ref = spec
+                            .get("suiteRef")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| format!("suite mode {name} missing suiteRef"))?;
+                        let suite = self.value_ref(suite_ref).map_err(|error| {
+                            format!("suite mode {name} has invalid suiteRef {suite_ref}: {error}")
+                        })?;
+                        if !suite.is_object() {
+                            return Err(format!(
+                                "suite mode {name} suiteRef {suite_ref} must resolve to an object"
+                            ));
+                        }
+                    }
+                }
             }
             if let Some(names) = group.get("names").and_then(Value::as_array) {
                 for item in names {
@@ -980,15 +996,36 @@ pub(crate) fn select_value<'a>(value: &'a Value, selector: &str) -> Option<&'a V
         return value.pointer(selector);
     }
 
-    let mut current = value;
-    for part in selector.split('.').filter(|part| !part.is_empty()) {
-        if let Ok(index) = part.parse::<usize>() {
-            current = current.as_array()?.get(index)?;
-        } else {
-            current = current.as_object()?.get(part)?;
+    fn select_parts<'a>(current: &'a Value, parts: &[&str]) -> Option<&'a Value> {
+        if parts.is_empty() {
+            return Some(current);
         }
+
+        if let Some(array) = current.as_array() {
+            let index = parts[0].parse::<usize>().ok()?;
+            return select_parts(array.get(index)?, &parts[1..]);
+        }
+
+        let object = current.as_object()?;
+        // Prefer the longest matching object key. This keeps ordinary dot
+        // selectors working while allowing catalog keys such as
+        // `mixed.signal` to be addressed by `suites.mixed.signal`.
+        for end in (1..=parts.len()).rev() {
+            let key = parts[..end].join(".");
+            if let Some(next) = object.get(&key)
+                && let Some(selected) = select_parts(next, &parts[end..])
+            {
+                return Some(selected);
+            }
+        }
+        None
     }
-    Some(current)
+
+    let parts: Vec<&str> = selector
+        .split('.')
+        .filter(|part| !part.is_empty())
+        .collect();
+    select_parts(value, &parts)
 }
 
 pub(crate) fn required_str<'a>(value: &'a Value, path: &[&str]) -> AppResult<&'a str> {
@@ -1029,8 +1066,15 @@ mod tests {
 
     #[test]
     fn can_select_dot_paths() {
-        let value = json!({"a": {"b": [10, 20]}});
+        let value = json!({
+            "a": {"b": [10, 20]},
+            "suites": {"mixed.signal": {"id": "mixed.signal"}}
+        });
         assert_eq!(select_value(&value, "a.b.1").unwrap(), &json!(20));
+        assert_eq!(
+            select_value(&value, "suites.mixed.signal").unwrap(),
+            &json!({"id": "mixed.signal"})
+        );
     }
 
     #[test]
@@ -1043,5 +1087,14 @@ mod tests {
             workflow_ref_from_name("workflows/mixed-slice.json"),
             "workflows/mixed-slice.json"
         );
+    }
+
+    #[test]
+    fn checked_in_catalog_self_check_resolves_every_suite_ref() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/harness");
+        HarnessCatalog::load(&root)
+            .expect("load checked-in harness catalog")
+            .self_check()
+            .expect("all mode suiteRef values should resolve");
     }
 }

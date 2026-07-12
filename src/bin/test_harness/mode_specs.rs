@@ -137,7 +137,7 @@ pub(crate) fn suite_modes_require_bench_profile(raw: &[String]) -> Result<bool, 
                     .filter(|s| !s.is_empty())
                     .collect();
             }
-            "--run-id" | "--work-root" => {
+            "--run-id" | "--work-root" | "--mode-timeout-secs" => {
                 i += 1;
                 raw.get(i)
                     .ok_or_else(|| format!("{} requires a value", raw[i - 1]))?;

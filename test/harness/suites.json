@@ -61,7 +61,10 @@
       "options": {
         "continueOnFailEnv": "CONTINUE_ON_FAIL",
         "onlyModesArg": "--only-modes",
-        "preflightOnlyArg": "--preflight-only"
+        "preflightOnlyArg": "--preflight-only",
+        "modeTimeoutArg": "--mode-timeout-secs",
+        "modeTimeoutEnv": "TEST_HARNESS_SUITE_MODE_TIMEOUT_SECS",
+        "modeTimeoutDefaultSeconds": 900
       }
     },
     "generic-sweeps": {

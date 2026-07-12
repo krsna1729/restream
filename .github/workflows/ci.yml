@@ -275,10 +275,6 @@ jobs:
           profile: live
       - name: Restore or build native prefix
         uses: ./.github/actions/native-prefix
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
       - name: Restore cargo cache
         uses: actions/cache@v4
         with:
@@ -289,67 +285,33 @@ jobs:
             target
           key: integration-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: integration-${{ runner.os }}-
-      - name: Restore FFmpeg binary
-        uses: actions/cache@v4
-        id: cache-ffmpeg
-        with:
-          path: bin/ffmpeg
-          key: ffmpeg-7.1-${{ runner.arch }}
-      - name: Download FFmpeg
-        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
-        run: |
-          FFMPEG_VERSION="7.1"
-          case "$(uname -m)" in
-            x86_64)  BTBN_ARCH=linux64 ;;
-            aarch64) BTBN_ARCH=linuxarm64 ;;
-            *) echo "Unsupported arch: $(uname -m)"; exit 1 ;;
-          esac
-          FILE="ffmpeg-n${FFMPEG_VERSION}-latest-${BTBN_ARCH}-gpl-${FFMPEG_VERSION}.tar.xz"
-          URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${FILE}"
-          TMP=$(mktemp -d)
-          curl -fsSL "$URL" | tar -xJ -C "$TMP"
-          mkdir -p bin/ffmpeg
-          cp "$TMP"/ffmpeg-*/bin/ffmpeg "$TMP"/ffmpeg-*/bin/ffprobe bin/ffmpeg/
-          rm -rf "$TMP"
-      - name: Add FFmpeg to PATH
-        run: |
-          chmod +x bin/ffmpeg/ffmpeg bin/ffmpeg/ffprobe
-          echo "$GITHUB_WORKSPACE/bin/ffmpeg" >> "$GITHUB_PATH"
-      - name: Restore MediaMTX binary
-        uses: actions/cache@v4
-        id: cache-mediamtx
-        with:
-          path: bin/mediamtx
-          key: mediamtx-1.17.1-${{ runner.arch }}
-      - name: Download MediaMTX
-        if: steps.cache-mediamtx.outputs.cache-hit != 'true'
-        run: |
-          MEDIAMTX_VERSION="1.17.1"
-          case "$(uname -m)" in
-            x86_64)  ARCH=amd64 ;;
-            aarch64) ARCH=arm64 ;;
-            *) echo "Unsupported arch: $(uname -m)"; exit 1 ;;
-          esac
-          FILE="mediamtx_v${MEDIAMTX_VERSION}_linux_${ARCH}.tar.gz"
-          URL="https://github.com/bluenviron/mediamtx/releases/download/v${MEDIAMTX_VERSION}/${FILE}"
-          mkdir -p bin/mediamtx
-          curl -fsSL "$URL" | tar -xz -C bin/mediamtx
-      - name: Ensure MediaMTX is executable
-        run: chmod +x bin/mediamtx/mediamtx
-      - name: Build release binary
-        run: scripts/build/resource-limit.sh cargo build --release
+      - name: Build canonical bench harness binaries
+        run: ./scripts/build/bench-harness.sh
       - name: Run integration suite
+        env:
+          BENCH_BUILD: never
         run: |
-          scripts/build/resource-limit.sh ./target/release/test_harness suite \
-            --only-modes ramp-family,mixed-h264-rtmp,mixed-anchor,mixed-h265-srt,mixed-h264-srt-multi,mixed-h265-srt-multi \
+          # The live dependency profile already installs FFmpeg and delegates
+          # pinned MediaMTX setup to bootstrap-runtime.sh. Keep execution on the
+          # same bench builder/runner developers use so CI cannot silently test
+          # release-profile measurements or drift into a third setup path.
+          scripts/harness/run.sh suite -- \
+            --only-modes ramp-family,mixed.live.rtmp.h264.a1.bf2,mixed.live.srt.h264.a1.bf2,mixed.live.srt.h265.a1.bf2,mixed.live.srt.h264.a2.bf2,mixed.live.srt.h265.a2.bf2 \
+            --no-netns \
             --continue-on-fail
       - name: Run mixed fast-breadth governor
         env:
           N_PER_GROUP: "1"
-        run: BENCH_BUILD=if-needed scripts/harness/run.sh mixed.fast-breadth -- --no-netns
+          BENCH_BUILD: never
+        run: scripts/harness/run.sh mixed.fast-breadth -- --no-netns
       - name: Run internal backend rollout smoke
         env:
+          BENCH_BUILD: never
           INTERNAL_BACKEND_SMOKE_CONTINUE_ON_FAIL: "1"
+          # Hosted runners cannot preserve the SRT sysctls inside the optional
+          # user namespace; keep all live slices on the same host-network
+          # fallback instead of letting this nested runner regress separately.
+          TEST_HARNESS_USE_HOST_NET: "1"
         run: ./scripts/harness/rollouts/internal-backend-smoke.sh
       - name: Upload internal backend smoke artifacts
         if: always()

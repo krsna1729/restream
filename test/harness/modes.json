@@ -16,7 +16,7 @@
           }
         },
         "mixed.matrix": {
-          "suiteRef": "suites.json#suites.mixed-matrix",
+          "suiteRef": "suites.json#suites.mixed.matrix",
           "suiteDefault": true,
           "requires": {
             "portNamespace": true,
@@ -32,7 +32,7 @@
           }
         },
         "mixed.fast-breadth": {
-          "suiteRef": "suites.json#suites.mixed-fast-breadth",
+          "suiteRef": "suites.json#suites.mixed.fast-breadth",
           "suiteDefault": false,
           "requires": {
             "portNamespace": true,
@@ -65,14 +65,6 @@
             "benchProfile": true
           },
           "foldedInto": "mixed"
-        },
-        "msr": {
-          "suiteDefault": false,
-          "requires": {
-            "portNamespace": true,
-            "benchProfile": true
-          },
-          "purpose": "Mahashivratri hero scenario with multi-language SRT ingest and Zipfian RTMP/SRT output fan-out"
         },
         "bitrate-sweep": {
           "suiteRef": "suites.json#suites.bitrate-sweep",
@@ -139,6 +131,14 @@
             "benchProfile": false
           },
           "purpose": "SRT global/pipeline policy inheritance, override, and rejection behavior"
+        },
+        "msr": {
+          "suiteDefault": false,
+          "requires": {
+            "portNamespace": true,
+            "benchProfile": true
+          },
+          "purpose": "Mahashivratri hero scenario with multi-language SRT ingest and Zipfian RTMP/SRT output fan-out"
         },
         "timestamp.bframe": {
           "suiteDefault": false,

@@ -89,6 +89,17 @@ fn only_non_measurement_modes_parallelize_in_suite() {
 }
 
 #[test]
+fn suite_profile_parser_accepts_mode_timeout_option() {
+    let raw = vec![
+        "--only-modes".to_string(),
+        "api-smoke".to_string(),
+        "--mode-timeout-secs".to_string(),
+        "120".to_string(),
+    ];
+    assert!(!suite_modes_require_bench_profile(&raw).expect("valid suite options"));
+}
+
+#[test]
 fn fault_output_stall_sibling_count_honors_n_per_group_cap() {
     assert_eq!(effective_fault_output_stall_siblings(12, None), 12);
     assert_eq!(effective_fault_output_stall_siblings(12, Some(1)), 1);
