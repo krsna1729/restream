@@ -109,8 +109,9 @@ fn suite_profile_parser_accepts_mode_timeout_option() {
 #[test]
 fn mixed_matrix_uses_heavyweight_suite_timeout_floor() {
     assert_eq!(suite_mode_timeout_secs("api-smoke", 900), 900);
-    assert_eq!(suite_mode_timeout_secs("mixed.matrix", 900), 2400);
-    assert_eq!(suite_mode_timeout_secs("mixed.matrix", 3000), 3000);
+    assert_eq!(suite_mode_timeout_secs("mixed.matrix", 900), 5400);
+    assert_eq!(suite_mode_timeout_secs("mixed.matrix", 6000), 6000);
+    assert_eq!(suite_mode_timeout_secs("resource-sweep", 900), 2400);
 }
 
 #[test]

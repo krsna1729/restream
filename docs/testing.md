@@ -1314,7 +1314,11 @@ in its own subdirectory, and records one JSONL result per mode in
 Heavyweight suite-default modes can declare a larger catalog timeout floor in
 `test/harness/modes.json`. `mixed.matrix` does this because it performs the
 full RTMP/SRT, H.264/H.265, audio-track, HLS, recording, and decode-scan
-matrix; the default 15-minute cap is still used for ordinary modes.
+matrix. `resource-sweep` also declares a floor because the release-default
+growth cases include source, transcode, and dual-transcode stacks. These floors
+are caps, not sleeps: they only prevent the suite from killing a mode that is
+still making expected progress. The default 15-minute cap is still used for
+ordinary modes.
 
 The aggregate manifest and each JSONL row label their evidence as `preflight`
 or `execution`; a successful `--preflight-only` run therefore cannot be

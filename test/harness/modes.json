@@ -18,7 +18,7 @@
         "mixed.matrix": {
           "suiteRef": "suites.json#suites.mixed.matrix",
           "suiteDefault": true,
-          "suiteTimeoutSecs": 2400,
+          "suiteTimeoutSecs": 5400,
           "requires": {
             "portNamespace": true,
             "benchProfile": true
@@ -61,6 +61,7 @@
         "resource-sweep": {
           "suiteRef": "suites.json#suites.resource-sweep",
           "suiteDefault": true,
+          "suiteTimeoutSecs": 2400,
           "requires": {
             "portNamespace": true,
             "benchProfile": true
