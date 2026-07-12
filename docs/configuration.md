@@ -32,6 +32,7 @@ in SQLite.
 | RTMP handshake timeout | `10000` ms | `RESTREAM_RTMP_HANDSHAKE_TIMEOUT_MS` |
 | RTMP pre-auth socket buffers | `131072` bytes | `RESTREAM_RTMP_PREAUTH_BUFFER_BYTES` |
 | RTMP streaming socket buffers | `8388608` bytes | `RESTREAM_RTMP_STREAM_BUFFER_BYTES` |
+| RTMP egress chunk size | `4096` bytes | `RESTREAM_RTMP_EGRESS_CHUNK_SIZE` (sent with the RTMP `SetChunkSize` message; use for controlled receiver-interop and fanout CPU sweeps) |
 | HLS minimum segment length | 1 second | `RESTREAM_HLS_MIN_SEGMENT_MS` |
 | HLS live window length | 20 segments | `RESTREAM_HLS_MAX_SEGMENTS` |
 | HLS segment accumulator capacity | 8 MiB | `RESTREAM_HLS_SEGMENT_CAPACITY_BYTES` |

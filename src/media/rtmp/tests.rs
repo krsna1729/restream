@@ -65,6 +65,22 @@ fn classify_flv_video_packet_distinguishes_config_and_media() {
 }
 
 #[test]
+fn rtmp_video_droppability_matches_rml_contract() {
+    assert!(
+        !rtmp_video_packet_can_be_dropped(&[0x17, 0x00, 0x00, 0x00, 0x00], true),
+        "AVC sequence headers must never be marked droppable"
+    );
+    assert!(
+        !rtmp_video_packet_can_be_dropped(&[0x17, 0x01, 0x00, 0x00, 0x28], true),
+        "keyframes must not be marked droppable because later frames depend on them"
+    );
+    assert!(
+        rtmp_video_packet_can_be_dropped(&[0x27, 0x01, 0x00, 0x00, 0x28], false),
+        "interframes may be marked droppable for future slow-consumer policies"
+    );
+}
+
+#[test]
 fn startup_video_sequence_header_prefers_ring_parameter_sets() {
     let ring = Arc::new(RingBuffer::new(1024));
     ring.set_codec_hint("h264");

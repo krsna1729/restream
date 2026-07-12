@@ -92,6 +92,7 @@ pub struct AppConfig {
     pub rtmp_handshake_timeout_ms: u64,
     pub rtmp_preauth_buffer_bytes: usize,
     pub rtmp_stream_buffer_bytes: usize,
+    pub rtmp_egress_chunk_size: u32,
     pub ffmpeg_threads: Option<u32>,
     pub avio_capacity: usize,
     pub hls_min_segment_ms: f64,
@@ -350,6 +351,7 @@ impl Default for AppConfig {
             rtmp_handshake_timeout_ms: 10_000,
             rtmp_preauth_buffer_bytes: 128 * 1024,
             rtmp_stream_buffer_bytes: 8 * 1024 * 1024,
+            rtmp_egress_chunk_size: 4096,
             ffmpeg_threads: None,
             avio_capacity: 512 * 1024,
             hls_min_segment_ms: 1.0,
@@ -395,6 +397,8 @@ impl AppConfig {
         let rtmp_stream_buffer_bytes =
             env_usize("RESTREAM_RTMP_STREAM_BUFFER_BYTES", 8 * 1024 * 1024)
                 .clamp(128 * 1024, 64 * 1024 * 1024);
+        let rtmp_egress_chunk_size =
+            env_u32("RESTREAM_RTMP_EGRESS_CHUNK_SIZE", 4096).clamp(128, 1024 * 1024);
         let ffmpeg_threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
             .ok()
             .and_then(|v| v.parse::<u32>().ok());
@@ -468,6 +472,7 @@ impl AppConfig {
             rtmp_handshake_timeout_ms,
             rtmp_preauth_buffer_bytes,
             rtmp_stream_buffer_bytes,
+            rtmp_egress_chunk_size,
             ffmpeg_threads,
             avio_capacity,
             hls_min_segment_ms,
@@ -556,6 +561,7 @@ impl AppConfig {
                 "handshakeTimeoutMs": self.rtmp_handshake_timeout_ms,
                 "preauthBufferBytes": self.rtmp_preauth_buffer_bytes,
                 "streamBufferBytes": self.rtmp_stream_buffer_bytes,
+                "egressChunkSize": self.rtmp_egress_chunk_size,
             },
         })
     }
@@ -735,6 +741,7 @@ mod tests {
                 ("RESTREAM_RTMP_HANDSHAKE_TIMEOUT_MS", "10"),
                 ("RESTREAM_RTMP_PREAUTH_BUFFER_BYTES", "1024"),
                 ("RESTREAM_RTMP_STREAM_BUFFER_BYTES", "65536"),
+                ("RESTREAM_RTMP_EGRESS_CHUNK_SIZE", "32"),
             ],
             || {
                 let config = AppConfig::from_env();
@@ -742,6 +749,7 @@ mod tests {
                 assert_eq!(config.rtmp_handshake_timeout_ms, 100);
                 assert_eq!(config.rtmp_preauth_buffer_bytes, 16 * 1024);
                 assert_eq!(config.rtmp_stream_buffer_bytes, 128 * 1024);
+                assert_eq!(config.rtmp_egress_chunk_size, 128);
             },
         );
     }

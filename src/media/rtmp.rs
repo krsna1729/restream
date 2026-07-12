@@ -1140,6 +1140,7 @@ pub async fn start_rtmp_egress(
         "{}://{}:{}/{}",
         scheme, parts.host, parts.port, parts.app
     ));
+    config.chunk_size = engine.config.rtmp_egress_chunk_size;
     let (mut session, initial_results) = match ClientSession::new(config) {
         Ok(s) => s,
         Err(e) => {
@@ -1338,7 +1339,7 @@ pub async fn start_rtmp_egress(
                                             session.publish_video_data(
                                                 vsh,
                                                 RtmpTimestamp::new(0),
-                                                true,
+                                                false,
                                             )
                                         && socket.write_all(&p.bytes).await.is_err()
                                     {
@@ -1518,7 +1519,7 @@ pub async fn start_rtmp_egress(
                                                 )) = session.publish_video_data(
                                                     seq_hdr,
                                                     sequence_header_ts,
-                                                    true,
+                                                    false,
                                                 ) && socket.write_all(&p.bytes).await.is_err()
                                                 {
                                                     egress_error!(
@@ -1592,7 +1593,9 @@ pub async fn start_rtmp_egress(
                                 {
                                     video_ready = true;
                                 }
-                                session.publish_video_data(payload, ts, packet.is_keyframe)
+                                let can_be_dropped =
+                                    rtmp_video_packet_can_be_dropped(&payload, packet.is_keyframe);
+                                session.publish_video_data(payload, ts, can_be_dropped)
                             }
                             MediaType::Audio => {
                                 session.publish_audio_data(payload, ts, false)
@@ -1752,6 +1755,15 @@ fn startup_video_sequence_header(
 fn rtmp_output_waits_for_video(ring_buffer: &RingBuffer) -> bool {
     !ring_buffer.codec_hint_str().is_empty() || ring_buffer.video_parameter_sets().is_some()
 }
+
+fn rtmp_video_packet_can_be_dropped(payload: &[u8], is_keyframe: bool) -> bool {
+    !is_keyframe
+        && !matches!(
+            classify_flv_video_packet(payload),
+            Some(FlvVideoPacketKind::SequenceHeader)
+        )
+}
+
 #[cfg(test)]
 fn rtmp_warmup_ready(
     ring_buffer: &RingBuffer,
