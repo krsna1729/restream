@@ -202,6 +202,7 @@ pub async fn start_audio_router(
                         lifecycle.record_first_output();
                     }
                     output_buffer.push_drained_batch_capped(&mut out_batch);
+                    lifecycle.record_producing();
                 }
             }
         }
@@ -757,6 +758,72 @@ mod tests {
         assert_eq!(out_pkts[0].media_type, MediaType::Video);
         assert_eq!(out_pkts[1].media_type, MediaType::Audio);
         assert_eq!(out_pkts[1].track_index, 0); // re-indexed to 0
+    }
+
+    #[tokio::test]
+    async fn audio_router_stage_is_not_blocking_after_output() {
+        use crate::domain::stage::{StageKey, StageKind};
+        use crate::media::engine::MediaEngine;
+
+        let source_ring = Arc::new(RingBuffer::new(16));
+        let out_ring = Arc::new(RingBuffer::new(16));
+        let engine = Arc::new(MediaEngine::new());
+        let cancel = CancellationToken::new();
+        let stage_key = StageKey::new(
+            "audio-router-producing",
+            StageKind::audio_route("atrack:0", StageKind::source()),
+        );
+
+        let handle = tokio::spawn(start_audio_router(
+            "audio-router-producing".to_string(),
+            AudioRouting::SelectTracks { tracks: vec![0] },
+            source_ring.clone(),
+            out_ring.clone(),
+            engine.clone(),
+            cancel.clone(),
+            stage_key.clone(),
+        ));
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while source_ring.active_reader_count() == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("audio router input reader should attach");
+
+        source_ring.push(MediaPacket {
+            media_type: MediaType::Audio,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            is_keyframe: false,
+            format: PayloadFormat::Raw,
+            payload: bytes::Bytes::from_static(&[4, 5, 6]),
+        });
+
+        let mut output_reader = Reader::new("audio-router-producing-output".to_string(), out_ring);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if matches!(output_reader.pull(), Ok(Some(_))) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("audio router should emit output");
+
+        assert!(
+            engine
+                .egress_blocked_by_stage_snapshot(&stage_key)
+                .await
+                .is_none(),
+            "a stage that has emitted output must not surface as blockedBy"
+        );
+
+        cancel.cancel();
+        handle.await.expect("audio router task should not panic");
     }
 
     #[tokio::test]

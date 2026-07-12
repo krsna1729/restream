@@ -242,7 +242,7 @@ fn persist_runtime_event(event: crate::events::Event) {
             output_id,
             phase,
             error: error_message,
-        } => error!(
+        } => warn!(
             pipeline_id = %pipeline_id,
             output_id = %output_id,
             event_class = "lifecycle",
@@ -1157,6 +1157,59 @@ pub async fn run_app(config: Arc<AppConfig>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use tracing::Level;
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::prelude::*;
+
+    #[derive(Clone, Default)]
+    struct CapturingLayer {
+        levels: Arc<Mutex<Vec<Level>>>,
+    }
+
+    impl<S> Layer<S> for CapturingLayer
+    where
+        S: tracing::Subscriber,
+    {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            self.levels
+                .lock()
+                .expect("captured levels lock poisoned")
+                .push(*event.metadata().level());
+        }
+    }
+
+    #[test]
+    fn egress_failed_lifecycle_event_logs_at_warn() {
+        let layer = CapturingLayer::default();
+        let levels = layer.levels.clone();
+        let subscriber = tracing_subscriber::registry().with(layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            persist_runtime_event(crate::events::Event {
+                seq: 1,
+                timestamp: chrono::Utc::now(),
+                kind: crate::events::EventKind::EgressFailed {
+                    pipeline_id: "pipe".to_string(),
+                    output_id: "out".to_string(),
+                    phase: "send".to_string(),
+                    error: "remote closed connection".to_string(),
+                },
+            });
+        });
+
+        assert_eq!(
+            levels
+                .lock()
+                .expect("captured levels lock poisoned")
+                .as_slice(),
+            &[Level::WARN]
+        );
+    }
 
     #[test]
     fn runtime_layout_creates_database_media_and_log_roots() {

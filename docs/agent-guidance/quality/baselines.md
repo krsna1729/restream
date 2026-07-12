@@ -516,3 +516,48 @@ Audited `.local/build/static/src/srt` against the profile above.
 Hardware PMU counters are unavailable under Hyper-V. Use
 `perf record -e task-clock` (software sampling), `perf_event_paranoid=-1`,
 with the distro `linux-tools-generic` perf binary.
+
+### MSR full live alert and one-sink recovery proof — 2026-07-12 (VPS)
+
+Commit under test: local tree after the audio-router lifecycle fix and
+egress-failure log-level correction. Artifacts:
+`.local/artifacts/msr-dashboard-live-3030-20260712T114859Z/`.
+
+Setup:
+
+```sh
+RESTREAM_HTTP=3030 RESTREAM_INITIAL_ADMIN_PASSWORD=restream-local-harness-password \
+  MSR_OUTPUT_COUNTS=1200 MSR_SAMPLE_SECS=3600 MSR_SAMPLE_INTERVAL_MS=5000 \
+  MSR_SINK_SAMPLE_SECS=3 MSR_NO_CLEANUP=1 BENCH_BUILD=never \
+  scripts/harness/run.sh msr -- --no-netns
+```
+
+Pre-fault receiver and UI-status proof:
+
+- MediaMTX API `/v3/paths/list` returned `1200/1200` ready paths with
+  `bytesReceived=1,114,198,451`.
+- `/api/v1/alerts` returned `0` alerts.
+- Full `/api/v1/engine/health` returned `1200` outputs, `1200` running,
+  and `0` `blockedBy` fields.
+
+Fault slice: kicked one MediaMTX RTMP publisher connection with
+`POST /v3/rtmpconns/kick/{id}` for `live/msr-rank01-rtmp-0001`, then sampled
+summary health, alerts, and paginated MediaMTX path health for 61 seconds.
+Raw evidence:
+`.local/artifacts/msr-dashboard-live-3030-20260712T114859Z/rtmp-kick-proof.jsonl`.
+
+| Metric | Result |
+|---|---|
+| Kicked connection | `6f8a4846-5961-4cfb-aa17-0cd90ba65b3f` |
+| Kick API status | `200` |
+| Health failures | `0/61` |
+| Summary health p95 | `56.8 ms` |
+| Summary health max | `201.8 ms` |
+| Alert count max | `1` |
+| MediaMTX ready min | `1199/1200` |
+| MediaMTX ready final | `1200/1200` |
+| Final MediaMTX bytes | `8,702,695,480` |
+
+Log proof: the recovered egress failure was emitted as `WARN`
+(`event_type="egress.failed"`, `phase=send`, `error=remote closed connection`)
+instead of `ERROR`; Restream had no `ERROR`/`panic` lines for the run.

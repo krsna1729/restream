@@ -385,6 +385,7 @@ codebase. Update it when changing a callsite's level.
 | RTMP/SRT server task exited | `error` | Protocol listener down — ingest impossible |
 | Ctrl+C signal error | `warn` | Signal handler glitch; shutdown proceeds anyway |
 | DB error reading outputs/pipelines | `warn` | Reconciler will retry next tick |
+| Egress failed lifecycle event | `warn` | A single egress attempt failed and is surfaced to events/alerts; live MSR sink-kick proof showed automatic retry/recovery, so this is not page-level unless retries exhaust or the task panics |
 | Output exceeded max retries | `warn` | Reconciler marks it failed; controlled outcome |
 | Panic in egress task | `error` | Unexpected process fault, not a client error |
 | HLS segmenter token missing | `warn` | Race condition, task already cleaned up; reconciler retries |
