@@ -272,8 +272,8 @@ export interface RuntimeNofileLimit {
 export interface HostSettingRow {
   key: string;
   label: string;
-  current?: number | null;
-  required?: number | null;
+  current?: number | string | null;
+  required?: number | string | null;
   unit?: string;
   status?: "ok" | "warning" | "unknown" | string;
   detail?: string | null;

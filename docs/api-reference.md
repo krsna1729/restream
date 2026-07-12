@@ -764,6 +764,33 @@ Query params:
       "unit": "bytes",
       "status": "ok",
       "detail": "needed for SRT UDP send buffers"
+    },
+    {
+      "key": "runtime.cpu.available_parallelism",
+      "label": "Available CPU parallelism",
+      "current": 6,
+      "required": null,
+      "unit": "cpus",
+      "status": "ok",
+      "detail": "basis for default Tokio worker sizing before workload-specific tuning"
+    },
+    {
+      "key": "runtime.cpu.allowed_list",
+      "label": "Allowed CPU mask",
+      "current": "0-5",
+      "required": null,
+      "unit": "cpuset",
+      "status": "ok",
+      "detail": "process scheduler affinity (6 CPUs); container cpusets can make this smaller than the host"
+    },
+    {
+      "key": "runtime.cpu.cgroup_max",
+      "label": "Cgroup CPU quota",
+      "current": "max 100000",
+      "required": null,
+      "unit": "quota",
+      "status": "ok",
+      "detail": "no cgroup CPU quota; scheduling is cpuset/host limited"
     }
   ]
 }
@@ -1009,6 +1036,15 @@ Summary response shape:
       "unit": "fds",
       "status": "ok",
       "detail": "hard limit 65536"
+    },
+    {
+      "key": "runtime.cpu.allowed_list",
+      "label": "Allowed CPU mask",
+      "current": "0-5",
+      "required": null,
+      "unit": "cpuset",
+      "status": "ok",
+      "detail": "process scheduler affinity (6 CPUs); container cpusets can make this smaller than the host"
     }
   ]
 }

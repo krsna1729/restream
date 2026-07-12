@@ -56,6 +56,24 @@ fn proc_sys_u64(key: &str) -> Option<u64> {
         .and_then(|value| value.trim().parse::<u64>().ok())
 }
 
+fn host_info_setting_json(
+    key: &str,
+    label: &str,
+    current: serde_json::Value,
+    unit: &str,
+    detail: impl Into<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "key": key,
+        "label": label,
+        "current": current,
+        "required": null,
+        "unit": unit,
+        "status": "ok",
+        "detail": detail.into(),
+    })
+}
+
 fn host_setting_json(
     key: &str,
     label: &str,
@@ -81,13 +99,142 @@ fn host_setting_json(
     })
 }
 
+#[cfg(target_os = "linux")]
+fn proc_status_value(key: &str) -> Option<String> {
+    let contents = std::fs::read_to_string("/proc/self/status").ok()?;
+    contents.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        (name == key).then(|| value.trim().to_string())
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn parse_cpu_list_count(list: &str) -> Option<u64> {
+    let mut count = 0u64;
+    for part in list
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let Some((start, end)) = part.split_once('-') else {
+            part.parse::<u64>().ok()?;
+            count = count.checked_add(1)?;
+            continue;
+        };
+        let start = start.trim().parse::<u64>().ok()?;
+        let end = end.trim().parse::<u64>().ok()?;
+        if end < start {
+            return None;
+        }
+        count = count.checked_add(end - start + 1)?;
+    }
+    Some(count)
+}
+
+#[cfg(target_os = "linux")]
+fn read_cgroup_cpu_max() -> Option<(String, Option<f64>)> {
+    let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    let unified_path = cgroup.lines().find_map(|line| {
+        let mut parts = line.splitn(3, ':');
+        let hierarchy = parts.next()?;
+        let controllers = parts.next()?;
+        let path = parts.next()?;
+        (hierarchy == "0" && controllers.is_empty()).then_some(path)
+    })?;
+    let relative = unified_path.trim_start_matches('/');
+    let cpu_max_path = std::path::Path::new("/sys/fs/cgroup")
+        .join(relative)
+        .join("cpu.max");
+    let value = std::fs::read_to_string(cpu_max_path).ok()?;
+    Some(parse_cgroup_cpu_max(value.trim()))
+}
+
+#[cfg(target_os = "linux")]
+fn parse_cgroup_cpu_max(value: &str) -> (String, Option<f64>) {
+    let mut parts = value.split_whitespace();
+    let quota = parts.next().unwrap_or("max");
+    let period = parts.next().unwrap_or("");
+    if quota == "max" {
+        return (value.to_string(), None);
+    }
+    let quota = quota.parse::<f64>().ok();
+    let period = period.parse::<f64>().ok();
+    let cpus = match (quota, period) {
+        (Some(quota), Some(period)) if period > 0.0 => Some(quota / period),
+        _ => None,
+    };
+    (value.to_string(), cpus)
+}
+
+#[cfg(target_os = "linux")]
+fn cpu_capacity_settings() -> Vec<serde_json::Value> {
+    let mut rows = Vec::new();
+    let online = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .ok()
+        .and_then(|cpus| u64::try_from(cpus).ok());
+    if let Some(cpus) = online {
+        rows.push(host_info_setting_json(
+            "runtime.cpu.available_parallelism",
+            "Available CPU parallelism",
+            serde_json::json!(cpus),
+            "cpus",
+            "basis for default Tokio worker sizing before workload-specific tuning",
+        ));
+    }
+    if let Some(mask) = proc_status_value("Cpus_allowed_list") {
+        let count = parse_cpu_list_count(&mask);
+        rows.push(host_info_setting_json(
+            "runtime.cpu.allowed_list",
+            "Allowed CPU mask",
+            serde_json::json!(mask),
+            "cpuset",
+            format!(
+                "process scheduler affinity{}; container cpusets can make this smaller than the host",
+                count.map(|value| format!(" ({value} CPUs)")).unwrap_or_default()
+            ),
+        ));
+    }
+    if let Some((raw, cpus)) = read_cgroup_cpu_max() {
+        rows.push(host_info_setting_json(
+            "runtime.cpu.cgroup_max",
+            "Cgroup CPU quota",
+            serde_json::json!(raw),
+            "quota",
+            cpus.map(|value| format!("effective quota {:.2} CPUs", value))
+                .unwrap_or_else(|| {
+                    "no cgroup CPU quota; scheduling is cpuset/host limited".to_string()
+                }),
+        ));
+    }
+    rows
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cpu_capacity_settings() -> Vec<serde_json::Value> {
+    let cpus = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .ok()
+        .and_then(|cpus| u64::try_from(cpus).ok());
+    cpus.map(|cpus| {
+        vec![host_info_setting_json(
+            "runtime.cpu.available_parallelism",
+            "Available CPU parallelism",
+            serde_json::json!(cpus),
+            "cpus",
+            "basis for default Tokio worker sizing before workload-specific tuning",
+        )]
+    })
+    .unwrap_or_default()
+}
+
 fn host_settings_json(engine: &MediaEngine) -> serde_json::Value {
     let nofile = nofile_limit_json(engine.config.tuning.nofile_limit);
     let nofile_soft = nofile.get("soft").and_then(|value| value.as_u64());
     let nofile_hard = nofile.get("hard").and_then(|value| value.as_u64());
     let nofile_detail = nofile_hard.map(|hard| format!("hard limit {hard}"));
 
-    serde_json::json!([
+    let mut rows = vec![
         host_setting_json(
             "runtime.nofile",
             "Open file descriptors",
@@ -112,7 +259,9 @@ fn host_settings_json(engine: &MediaEngine) -> serde_json::Value {
             "bytes",
             Some("needed for SRT UDP send buffers".to_string()),
         ),
-    ])
+    ];
+    rows.extend(cpu_capacity_settings());
+    serde_json::json!(rows)
 }
 
 pub(crate) async fn output_status(
@@ -503,4 +652,37 @@ pub(crate) async fn health_summary_snapshot(
         },
         "hostSettings": host_settings_json(engine),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(target_os = "linux")]
+    use super::{parse_cgroup_cpu_max, parse_cpu_list_count};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cpu_list_count_handles_ranges_and_singletons() {
+        assert_eq!(parse_cpu_list_count("0-3"), Some(4));
+        assert_eq!(parse_cpu_list_count("0-1,4,7-9"), Some(6));
+        assert_eq!(parse_cpu_list_count(" 2 , 5-6 "), Some(3));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cpu_list_count_rejects_invalid_ranges() {
+        assert_eq!(parse_cpu_list_count("4-2"), None);
+        assert_eq!(parse_cpu_list_count("0,nope"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cgroup_cpu_max_reports_unlimited_and_quota() {
+        assert_eq!(
+            parse_cgroup_cpu_max("max 100000"),
+            ("max 100000".to_string(), None)
+        );
+        let (raw, cpus) = parse_cgroup_cpu_max("250000 100000");
+        assert_eq!(raw, "250000 100000");
+        assert_eq!(cpus, Some(2.5));
+    }
 }
