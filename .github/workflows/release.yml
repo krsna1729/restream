@@ -26,7 +26,13 @@ jobs:
             ~/.cargo/git/db
             target
           key: release-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-      - run: cargo install cargo-audit cargo-deny --locked
+      # Reuse the repository's established prebuilt installer instead of
+      # compiling two audit CLIs on every hosted release runner. The release
+      # gate below still invokes the canonical release-evidence script.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
       - run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
       - run: |
           sudo apt-get update -qq
