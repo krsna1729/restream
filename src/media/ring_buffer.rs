@@ -641,37 +641,82 @@ impl RingBuffer {
     /// This is sampled only during stage startup. It deliberately uses media
     /// DTS rather than wall-clock arrival time: a publisher can deliver in
     /// bursts, while FFmpeg's probe must cover a bounded amount of media time.
-    /// Require a meaningful window so a single large keyframe cannot be
-    /// mistaken for the steady stream rate.
+    /// Use both the retained-window average and a short media-time peak. Early
+    /// live ingest can be VBR-heavy around the first keyframe, and FFmpeg needs
+    /// enough bytes to see the audio/video headers in that burst even when the
+    /// whole retained window averages lower. The startup policy applies the
+    /// final cap, so this estimator should err toward stable startup.
     pub fn observed_payload_bitrate_bps(&self) -> Option<u64> {
         const MIN_OBSERVATION_MS: i64 = 250;
+        const PEAK_WINDOW_MS: i64 = 250;
 
-        let mut payload_bytes = 0u64;
-        let mut min_dts = i64::MAX;
-        let mut max_dts = i64::MIN;
-        let mut packets = 0usize;
+        let mut samples = Vec::with_capacity(self.capacity);
 
         for slot in &self.slots {
             let Some(packet) = slot.data.load_full() else {
                 continue;
             };
-            payload_bytes = payload_bytes.saturating_add(packet.payload.len() as u64);
-            min_dts = min_dts.min(packet.dts);
-            max_dts = max_dts.max(packet.dts);
-            packets += 1;
+            samples.push((packet.dts, packet.payload.len() as u64));
         }
 
-        let span_ms = max_dts.checked_sub(min_dts)?;
-        if packets < 2 || payload_bytes == 0 || span_ms < MIN_OBSERVATION_MS {
+        if samples.len() < 2 {
             return None;
         }
 
-        Some(
-            payload_bytes
-                .saturating_mul(8)
-                .saturating_mul(1_000)
-                .div_ceil(span_ms as u64),
-        )
+        samples.sort_unstable_by_key(|(dts, _)| *dts);
+
+        let mut grouped: Vec<(i64, u64)> = Vec::with_capacity(samples.len());
+        for (dts, bytes) in samples {
+            if let Some((last_dts, last_bytes)) = grouped.last_mut()
+                && *last_dts == dts
+            {
+                *last_bytes = last_bytes.saturating_add(bytes);
+                continue;
+            }
+            grouped.push((dts, bytes));
+        }
+
+        let min_dts = grouped.first()?.0;
+        let max_dts = grouped.last()?.0;
+        let payload_bytes = grouped
+            .iter()
+            .fold(0u64, |acc, (_, bytes)| acc.saturating_add(*bytes));
+        let span_ms = max_dts.checked_sub(min_dts)?;
+        if payload_bytes == 0 || span_ms < MIN_OBSERVATION_MS {
+            return None;
+        }
+
+        let average_bps = payload_bytes
+            .saturating_mul(8)
+            .saturating_mul(1_000)
+            .div_ceil(span_ms as u64);
+
+        let mut peak_bps = 0u64;
+        let mut window_bytes = 0u64;
+        let mut end = 0usize;
+        for start in 0..grouped.len() {
+            let window_end_dts = grouped[start].0.saturating_add(PEAK_WINDOW_MS);
+            while end < grouped.len() && grouped[end].0 < window_end_dts {
+                window_bytes = window_bytes.saturating_add(grouped[end].1);
+                end += 1;
+            }
+
+            if window_bytes > 0 {
+                let effective_span_ms = grouped[end.saturating_sub(1)]
+                    .0
+                    .saturating_sub(grouped[start].0)
+                    .max(PEAK_WINDOW_MS);
+                let candidate_bps = window_bytes
+                    .saturating_mul(8)
+                    .saturating_mul(1_000)
+                    .div_ceil(effective_span_ms as u64);
+                peak_bps = peak_bps.max(candidate_bps);
+            }
+
+            window_bytes = window_bytes.saturating_sub(grouped[start].1);
+        }
+
+        Some(average_bps.max(peak_bps))
     }
 
     pub fn reader_snapshots(&self) -> Vec<ReaderSnapshot> {

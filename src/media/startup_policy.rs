@@ -4,28 +4,29 @@ use crate::domain::output_spec::{OutputEncodingSpec, VideoCodecKind, VideoSelect
 use crate::media::profiles;
 
 const DEFAULT_KEYFRAME_PREROLL_PACKETS: usize = 32;
-// These are safety floors, not the normal live policy. Restream measures the
-// encoded payload rate from the source ring and covers one bounded media-time
-// window below. The floor handles a stage created before a useful rate sample
-// exists; the cap prevents a high-rate source from turning probe data into an
-// unbounded allocation or multi-second startup wait.
+// These are fallbacks, not the normal live policy. Restream measures the
+// aggregate encoded payload rate from the source ring and covers one bounded
+// media-time window below. The fallbacks are used only when a stage is created
+// before a useful rate sample exists; the cap prevents corrupt or extreme
+// probe data from turning startup into an unbounded read.
 const EXT_STAGE_ANALYZE_DURATION_US_DEFAULT: u64 = 1_000_000;
 const EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT: usize = 128 * 1024;
 // External stages consume a persistent MPEG-TS pipe, not a finite file. A
-// previous high-bitrate probe pass raised HEVC to 4 s / 2 MiB, which left a
-// low-bitrate SRT HEVC publisher in `firstInput` until it had supplied 2 MiB;
-// no downstream output could start meanwhile. `TsPacketFeeder` supplies
-// VPS/SPS/PPS before frames, but AAC still needs a bounded window to establish
-// its sample rate. 512 KiB / 1 s is sufficient for that header while staying
-// below the live-progress budget; it must never drift back to a multi-megabyte
-// file-style probe. Keep the pipe-open HEVC regression test in
+// previous high-bitrate probe pass raised the *fallback* HEVC budget to
+// 4 s / 2 MiB, which left a low-bitrate SRT HEVC publisher in `firstInput`
+// until it had supplied 2 MiB; no downstream output could start meanwhile.
+// `TsPacketFeeder` supplies VPS/SPS/PPS before frames, but AAC still needs a
+// bounded window to establish its sample rate. Keep the no-observation fallback
+// at 512 KiB / 1 s and allow the larger global cap only for measured live-rate
+// data. That gives high-rate/VBR inputs room without regressing low-rate live
+// startup. Keep the pipe-open HEVC regression test in
 // `external_transcoder/ffmpeg_process.rs` paired with this policy.
 const EXT_STAGE_ANALYZE_DURATION_US_HEVC: u64 = 1_000_000;
 const EXT_STAGE_PROBE_SIZE_BYTES_HEVC: usize = 512 * 1024;
 const EXT_STAGE_PROBE_SIZE_BYTES_AUDIO_TRACK: usize = 16 * 1024;
-const EXT_STAGE_PROBE_SIZE_BYTES_MAX: usize = 1024 * 1024;
-const EXT_STAGE_PROBE_RATE_MARGIN_NUMERATOR: u64 = 5;
-const EXT_STAGE_PROBE_RATE_MARGIN_DENOMINATOR: u64 = 4;
+const EXT_STAGE_PROBE_SIZE_BYTES_MAX: usize = 2 * 1024 * 1024;
+const EXT_STAGE_PROBE_RATE_MARGIN_NUMERATOR: u64 = 3;
+const EXT_STAGE_PROBE_RATE_MARGIN_DENOMINATOR: u64 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExtStageProbeContext {
@@ -100,18 +101,25 @@ pub fn ext_stage_probe_budget_for(context: ExtStageProbeContext) -> (u64, usize)
             .saturating_mul(EXT_STAGE_PROBE_RATE_MARGIN_NUMERATOR)
             .div_ceil(EXT_STAGE_PROBE_RATE_MARGIN_DENOMINATOR) as usize
     });
-    let stream_probe_size = observed_window_bytes
-        .unwrap_or(base_probe_size)
-        .max(base_probe_size);
+    // The observed rate already includes every retained audio and video
+    // payload. Do not clamp it to a codec-specific byte target or add another
+    // per-audio allowance: either would turn a one-second live-data budget
+    // back into a fixed byte wait for low-rate streams. Stream-shape fallbacks
+    // remain useful only before Restream has a sufficiently long sample.
+    let stream_probe_size = observed_window_bytes.unwrap_or(base_probe_size);
 
     let audio_tracks = if context.include_audio {
         context.audio_track_count
     } else {
         0
     };
-    let audio_probe_size = audio_tracks
-        .saturating_sub(1)
-        .saturating_mul(EXT_STAGE_PROBE_SIZE_BYTES_AUDIO_TRACK);
+    let audio_probe_size = if observed_window_bytes.is_some() {
+        0
+    } else {
+        audio_tracks
+            .saturating_sub(1)
+            .saturating_mul(EXT_STAGE_PROBE_SIZE_BYTES_AUDIO_TRACK)
+    };
     let probe_size_bytes = stream_probe_size
         .saturating_add(audio_probe_size)
         .min(EXT_STAGE_PROBE_SIZE_BYTES_MAX);
@@ -275,9 +283,29 @@ mod tests {
             })
         };
 
-        assert_eq!(budget(640_000), (1_000_000, 128 * 1024));
-        assert_eq!(budget(1_500_000), (1_000_000, 234_375));
-        assert_eq!(budget(8_000_000), (1_000_000, 1024 * 1024));
+        assert_eq!(budget(640_000), (1_000_000, 120_000));
+        assert_eq!(budget(1_500_000), (1_000_000, 281_250));
+        assert_eq!(budget(8_000_000), (1_000_000, 1_500_000));
+    }
+
+    #[test]
+    fn observed_rate_replaces_codec_and_stream_shape_fallbacks() {
+        let expected_one_second_window = 187_500;
+        for codec in [VideoCodecKind::H264, VideoCodecKind::Hevc] {
+            for audio_track_count in [0, 1, 30] {
+                assert_eq!(
+                    ext_stage_probe_budget_for(ExtStageProbeContext {
+                        codec,
+                        include_audio: audio_track_count > 0,
+                        audio_track_count,
+                        passthrough: codec.is_hevc(),
+                        observed_bitrate_bps: Some(1_000_000),
+                    }),
+                    (1_000_000, expected_one_second_window),
+                    "codec={codec:?} tracks={audio_track_count}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -290,7 +318,7 @@ mod tests {
                 passthrough: false,
                 observed_bitrate_bps: Some(1_500_000),
             }),
-            (1_000_000, 267_143)
+            (1_000_000, 281_250)
         );
         assert_eq!(
             ext_stage_probe_budget_for(ExtStageProbeContext {
@@ -300,7 +328,17 @@ mod tests {
                 passthrough: false,
                 observed_bitrate_bps: Some(8_000_000),
             }),
-            (1_000_000, 1024 * 1024)
+            (1_000_000, 1_500_000)
+        );
+        assert_eq!(
+            ext_stage_probe_budget_for(ExtStageProbeContext {
+                codec: VideoCodecKind::Hevc,
+                include_audio: true,
+                audio_track_count: 30,
+                passthrough: false,
+                observed_bitrate_bps: Some(20_000_000),
+            }),
+            (1_000_000, EXT_STAGE_PROBE_SIZE_BYTES_MAX)
         );
     }
 }

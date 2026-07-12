@@ -50,6 +50,18 @@ fn audio_packet(pts: i64, dts: i64) -> MediaPacket {
     }
 }
 
+fn media_packet_with_payload(media_type: MediaType, dts: i64, payload_bytes: usize) -> MediaPacket {
+    MediaPacket {
+        media_type,
+        track_index: 0,
+        pts: dts,
+        dts,
+        is_keyframe: matches!(media_type, MediaType::Video) && dts == 0,
+        format: PayloadFormat::Raw,
+        payload: Bytes::from(vec![0; payload_bytes]),
+    }
+}
+
 // -- RingBuffer push/pull --
 
 #[test]
@@ -883,6 +895,62 @@ fn observed_payload_bitrate_uses_retained_media_time() {
     }
 
     assert_eq!(rb.observed_payload_bitrate_bps(), Some(1_500_000));
+}
+
+#[test]
+fn observed_payload_bitrate_uses_peak_media_window_for_bursty_startup() {
+    let rb = RingBuffer::new(8);
+    for (dts, bytes) in [
+        (0, 80_000),
+        (33, 5_000),
+        (66, 5_000),
+        (1000, 5_000),
+        (1033, 5_000),
+        (1066, 5_000),
+    ] {
+        rb.push(media_packet_with_payload(MediaType::Video, dts, bytes));
+    }
+
+    assert_eq!(rb.observed_payload_bitrate_bps(), Some(2_880_000));
+}
+
+#[test]
+fn observed_payload_bitrate_sorts_by_dts_not_arrival_order() {
+    let in_order = RingBuffer::new(8);
+    for dts in [0, 250, 500, 750, 1000] {
+        in_order.push(media_packet_with_payload(MediaType::Video, dts, 10_000));
+    }
+
+    let reordered = RingBuffer::new(8);
+    for dts in [500, 0, 1000, 250, 750] {
+        reordered.push(media_packet_with_payload(MediaType::Video, dts, 10_000));
+    }
+
+    assert_eq!(
+        reordered.observed_payload_bitrate_bps(),
+        in_order.observed_payload_bitrate_bps()
+    );
+}
+
+#[test]
+fn observed_payload_bitrate_includes_same_dts_audio_payloads() {
+    let rb = RingBuffer::new(8);
+    for dts in [0, 500, 1000] {
+        rb.push(media_packet_with_payload(MediaType::Video, dts, 20_000));
+        rb.push(media_packet_with_payload(MediaType::Audio, dts, 5_000));
+    }
+
+    assert_eq!(rb.observed_payload_bitrate_bps(), Some(800_000));
+}
+
+#[test]
+fn observed_payload_bitrate_ignores_long_gaps_when_peak_is_higher() {
+    let rb = RingBuffer::new(8);
+    for (dts, bytes) in [(0, 40_000), (33, 40_000), (10_000, 1_000), (10_033, 1_000)] {
+        rb.push(media_packet_with_payload(MediaType::Video, dts, bytes));
+    }
+
+    assert_eq!(rb.observed_payload_bitrate_bps(), Some(2_560_000));
 }
 
 #[test]

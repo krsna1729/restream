@@ -1169,16 +1169,16 @@ mod tests {
         let mut probe = demuxer.take_probe().expect("probe bitrate fixture");
         let video = probe.video.take().expect("H.264 video metadata");
         let audio_tracks = probe.audio_tracks;
-        let min_dts = packets.iter().map(|packet| packet.dts).min().unwrap();
-        let max_dts = packets.iter().map(|packet| packet.dts).max().unwrap();
-        let payload_bytes: u64 = packets
-            .iter()
-            .map(|packet| packet.payload.len() as u64)
-            .sum();
-        let observed_bitrate_bps = payload_bytes
-            .saturating_mul(8)
-            .saturating_mul(1_000)
-            .div_ceil((max_dts - min_dts) as u64);
+        // Exercise the production estimator rather than duplicating its math
+        // in the regression. Otherwise the stage wiring could fall back to a
+        // fixed probe size while this test continued to pass independently.
+        let observed_ring = crate::media::ring_buffer::RingBuffer::new(packets.len().max(2));
+        for packet in &packets {
+            observed_ring.push(packet.clone());
+        }
+        let observed_bitrate_bps = observed_ring
+            .observed_payload_bitrate_bps()
+            .expect("fixture provides a sufficient retained media window");
 
         let args = build_stage_ffmpeg_args_for_observed_input_streams(
             "720p",
@@ -1190,11 +1190,19 @@ mod tests {
         );
         let probe_size: usize = arg_after(&args, "-probesize").parse().unwrap();
         assert!(
+            observed_bitrate_bps >= 4_000_000,
+            "fixture must exercise the burst-tolerant estimator, not only the whole-window average"
+        );
+        assert!(
             probe_size > 128 * 1024,
             "observed bitrate must lift the failed 128 KiB probe floor"
         );
         assert!(
-            probe_size <= 1024 * 1024,
+            probe_size >= 900 * 1024,
+            "fixture burst must receive enough probe room to cover early AAC/video headers"
+        );
+        assert!(
+            probe_size <= 2 * 1024 * 1024,
             "live probe must remain under the global startup cap"
         );
 
