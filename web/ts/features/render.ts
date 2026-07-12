@@ -133,8 +133,22 @@ function getRenderableSelectedPipe(): string | null {
     : null;
 }
 
+function currentDashboardMode(): string {
+  return new URL(window.location.href).searchParams.get("mode") || "overview";
+}
+
+function selectOnlyPipelineWhenUseful(): string | null {
+  if (getUrlParam("p")) return null;
+  if (currentDashboardMode() !== "pipeline") return null;
+  if (state.pipelines.length !== 1) return null;
+  const onlyPipeline = state.pipelines[0];
+  setUrlParam("p", onlyPipeline.id);
+  return onlyPipeline.id;
+}
+
 function renderPipelines(): void {
-  const selectedPipe = getRenderableSelectedPipe();
+  const selectedPipe =
+    getRenderableSelectedPipe() || selectOnlyPipelineWhenUseful();
   writeSelectedPipelineHint(
     selectedPipe
       ? state.pipelines.find((pipe) => pipe.id === selectedPipe) || null

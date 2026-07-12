@@ -315,8 +315,7 @@ function renderAudioTracksTable(
     return;
   }
 
-  audioTracksContainer.innerHTML = tracks
-    .map((track, index) => {
+  const renderTrack = (track: AudioTrack, index: number): string => {
       const codec = formatCodecName(track.codec) || track.codec || "--";
       const label = getAudioTrackLabel(pipelineId, track, index);
       const storedLabel = getAudioTrackStoredLabel(pipelineId, track, index);
@@ -362,7 +361,7 @@ function renderAudioTracksTable(
                     <div class="stat-desc truncate">${escapeHtml(identity)}</div>
                 </div>`;
 
-      return `<div class="stats border-base-content/10 bg-base-100 grid w-full grid-cols-[minmax(0,1.15fr)_minmax(4rem,.65fr)_minmax(5rem,.8fr)_minmax(6rem,.95fr)_minmax(4rem,.65fr)] overflow-hidden border">
+      return `<div class="stats border-base-content/10 bg-base-100 grid w-full grid-cols-2 overflow-hidden border sm:grid-cols-[minmax(0,1.15fr)_minmax(4rem,.65fr)_minmax(5rem,.8fr)_minmax(6rem,.95fr)_minmax(4rem,.65fr)]">
                 ${trackStat}
                 <div class="stat min-w-0 place-items-center p-2 text-center">
                     <div class="stat-title">Codec</div>
@@ -381,8 +380,29 @@ function renderAudioTracksTable(
                     <div class="stat-value truncate text-sm">${escapeHtml(track.profile || "--")}</div>
                 </div>
             </div>`;
-    })
+    };
+
+  const visibleLimit = tracks.length > 8 ? 6 : tracks.length;
+  const visibleTracks = tracks
+    .slice(0, visibleLimit)
+    .map((track, index) => renderTrack(track, index))
     .join("");
+  const extraTracks = tracks
+    .slice(visibleLimit)
+    .map((track, offset) => renderTrack(track, visibleLimit + offset))
+    .join("");
+
+  audioTracksContainer.innerHTML = `${visibleTracks}
+    ${
+      extraTracks
+        ? `<details class="border-base-content/10 bg-base-100 rounded-lg border p-2">
+            <summary class="cursor-pointer px-2 py-1 text-sm font-semibold">
+              ${tracks.length - visibleLimit} more audio tracks
+            </summary>
+            <div class="mt-2 space-y-1">${extraTracks}</div>
+          </details>`
+        : ""
+    }`;
 
   audioTracksContainer
     .querySelectorAll<HTMLButtonElement>("button[data-audio-label-action]")

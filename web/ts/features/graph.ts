@@ -88,7 +88,7 @@ const NODE_H = 80;
 const METRICS_H = 50;
 const COL_GAP = 80;
 const ROW_GAP = 30;
-const REPEATED_EGRESS_GROUP_MIN = 4;
+const REPEATED_LEAF_GROUP_MIN = 4;
 
 function nodeColor(type: string, active: boolean): string {
   if (!active) return "#6b7280";
@@ -119,7 +119,7 @@ function nodeColor(type: string, active: boolean): string {
 }
 
 export function renderGraphInto(container: HTMLElement, data: GraphData): void {
-  data = aggregateRepeatedEgressLeaves(data);
+  data = aggregateRepeatedLeaves(data);
 
   // Build adjacency for layout
   const childrenOf = new Map<string, string[]>();
@@ -259,18 +259,26 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
       detailLines.push(
         `received: ${formatBytes(node.details.bytesReceived as number)}${bitrateLabel}`,
       );
-    } else if (
-      node.type === "egress" &&
-      node.details?.aggregate === true
-    ) {
+    } else if (node.details?.aggregate === true) {
       const count = finiteNumber(node.details.count);
       const activeCount = finiteNumber(node.details.activeCount);
-      const protocol = String(node.details.protocol || "egress");
-      detailLines.push(`${count} ${protocol} outputs`);
-      detailLines.push(`${activeCount}/${count} running`);
-      detailLines.push(
-        `${formatKbps(node.details.bitrateKbps)} | ${formatBytes(node.details.totalSize)}`,
-      );
+      const itemLabel = String(node.details.itemLabel || "nodes");
+      const activityLabel =
+        node.type === "egress" ? "running" : "active";
+      detailLines.push(`${count} ${itemLabel}`);
+      detailLines.push(`${activeCount}/${count} ${activityLabel}`);
+      if (node.type === "egress") {
+        detailLines.push(
+          `${formatKbps(node.details.bitrateKbps)} | ${formatBytes(node.details.totalSize)}`,
+        );
+      } else {
+        const phase = String(node.details.phase || "");
+        const backend = String(node.details.backend || "");
+        const status = String(node.details.status || "");
+        detailLines.push(
+          [status, phase, backend].filter(Boolean).join(" | ") || "grouped",
+        );
+      }
     } else if (node.type === "egress" && node.details) {
       const status = String(
         node.details.status || (node.active ? "running" : "inactive"),
@@ -302,12 +310,14 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
         detailLines.push(`capacity wait: ${formatDurationMs(waitMs)}`);
       }
     }
+    appendBranchDetails(detailLines, node);
 
     // Metrics
     if (
       node.metrics &&
       node.metrics.packetsIn > 0 &&
-      node.details?.aggregate !== true
+      node.details?.aggregate !== true &&
+      node.details?.branchStart !== true
     ) {
       const m = node.metrics;
       const packetsPerSec = finiteNumber(m.packetsPerSec);
@@ -341,7 +351,7 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
   container.innerHTML = svg;
 }
 
-function aggregateRepeatedEgressLeaves(data: GraphData): GraphData {
+function aggregateRepeatedLeaves(data: GraphData): GraphData {
   const incoming = new Map<string, GraphEdge[]>();
   const outgoing = new Map<string, GraphEdge[]>();
   for (const edge of data.edges) {
@@ -354,11 +364,15 @@ function aggregateRepeatedEgressLeaves(data: GraphData): GraphData {
   const groups = new Map<string, { edge: GraphEdge; nodes: GraphNode[] }>();
   const keepNodes: GraphNode[] = [];
   const groupedNodeIds = new Set<string>();
+  const branchSummaries = new Map<
+    string,
+    { totalLeaves: number; groups: string[] }
+  >();
 
   for (const node of data.nodes) {
     const inEdges = incoming.get(node.id) || [];
     const outEdges = outgoing.get(node.id) || [];
-    if (node.type !== "egress" || inEdges.length !== 1 || outEdges.length > 0) {
+    if (inEdges.length !== 1 || outEdges.length > 0) {
       keepNodes.push(node);
       continue;
     }
@@ -368,9 +382,10 @@ function aggregateRepeatedEgressLeaves(data: GraphData): GraphData {
     const groupKey = [
       edge.from,
       edge.label,
+      node.type,
       protocol,
       node.active ? "active" : "inactive",
-      egressStatusLabel(node),
+      nodeStateLabel(node),
     ].join("|");
     if (!groups.has(groupKey)) groups.set(groupKey, { edge, nodes: [] });
     groups.get(groupKey)!.nodes.push(node);
@@ -379,22 +394,35 @@ function aggregateRepeatedEgressLeaves(data: GraphData): GraphData {
   const aggregateNodes: GraphNode[] = [];
   const aggregateEdges: GraphEdge[] = [];
   for (const [key, group] of groups) {
-    if (group.nodes.length < REPEATED_EGRESS_GROUP_MIN) {
+    if (group.nodes.length < REPEATED_LEAF_GROUP_MIN) {
       keepNodes.push(...group.nodes);
       continue;
     }
     for (const node of group.nodes) groupedNodeIds.add(node.id);
-    const protocol = egressProtocolLabel(group.nodes[0], group.edge);
+    const firstNode = group.nodes[0];
     const activeCount = group.nodes.filter((node) => node.active).length;
     const aggregateId = `aggregate:${hashString(key)}`;
+    const aggregateLabel = aggregateNodeLabel(
+      firstNode,
+      group.edge,
+      group.nodes.length,
+    );
     aggregateNodes.push({
       id: aggregateId,
-      type: "egress",
-      label: `${protocol} egress x${group.nodes.length}`,
+      type: firstNode.type,
+      label: aggregateLabel,
       active: activeCount > 0,
-      details: aggregateEgressDetails(protocol, group.nodes, activeCount),
+      details: aggregateNodeDetails(firstNode, group.nodes, activeCount),
       metrics: undefined,
     });
+    const branchSummary =
+      branchSummaries.get(group.edge.from) || {
+        totalLeaves: 0,
+        groups: [],
+      };
+    branchSummary.totalLeaves += group.nodes.length;
+    branchSummary.groups.push(aggregateLabel);
+    branchSummaries.set(group.edge.from, branchSummary);
     aggregateEdges.push({
       from: group.edge.from,
       to: aggregateId,
@@ -410,12 +438,32 @@ function aggregateRepeatedEgressLeaves(data: GraphData): GraphData {
 
   return {
     pipelineId: data.pipelineId,
-    nodes: keepNodes.concat(aggregateNodes),
+    nodes: keepNodes
+      .map((node) => annotateBranchStart(node, branchSummaries))
+      .concat(aggregateNodes),
     edges,
   };
 }
 
+function annotateBranchStart(
+  node: GraphNode,
+  branchSummaries: Map<string, { totalLeaves: number; groups: string[] }>,
+): GraphNode {
+  const summary = branchSummaries.get(node.id);
+  if (!summary) return node;
+  return {
+    ...node,
+    details: {
+      ...(node.details || {}),
+      branchStart: true,
+      branchLeafCount: summary.totalLeaves,
+      branchGroups: summary.groups,
+    },
+  };
+}
+
 function egressProtocolLabel(node: GraphNode, edge: GraphEdge): string {
+  if (node.type !== "egress") return "";
   const label = node.label || edge.label || "egress";
   const lower = label.toLowerCase();
   if (lower.includes("rtmp")) return "RTMP";
@@ -424,14 +472,47 @@ function egressProtocolLabel(node: GraphNode, edge: GraphEdge): string {
   return edge.label || "Egress";
 }
 
-function egressStatusLabel(node: GraphNode): string {
+function nodeStateLabel(node: GraphNode): string {
   const status = String(node.details?.status || "");
   const phase = String(node.details?.phase || "");
-  return `${status}|${phase}`;
+  const backend = String(node.details?.backend || "");
+  return `${status}|${phase}|${backend}`;
 }
 
-function aggregateEgressDetails(
-  protocol: string,
+function humanizeNodeType(type: string): string {
+  return type
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function aggregateNodeLabel(
+  node: GraphNode,
+  edge: GraphEdge,
+  count: number,
+): string {
+  if (node.type === "egress") {
+    return `${egressProtocolLabel(node, edge)} egress x${count}`;
+  }
+  return `${humanizeNodeType(node.type)} x${count}`;
+}
+
+function aggregateItemLabel(node: GraphNode): string {
+  if (node.type === "egress") {
+    const protocol = String(node.details?.protocol || "").trim();
+    return `${
+      protocol ||
+      egressProtocolLabel(node, { from: "", to: "", label: "" }) ||
+      "egress"
+    } outputs`;
+  }
+  const type = humanizeNodeType(node.type).toLowerCase();
+  return `${type} stages`;
+}
+
+function aggregateNodeDetails(
+  template: GraphNode,
   nodes: GraphNode[],
   activeCount: number,
 ): Record<string, unknown> {
@@ -446,15 +527,38 @@ function aggregateEgressDetails(
       finiteNumber(node.details?.lastProgressAgeMs),
     );
   }
+  const status = String(template.details?.status || "");
+  const phase = String(template.details?.phase || "");
+  const backend = String(template.details?.backend || "");
   return {
     aggregate: true,
-    protocol,
+    itemLabel: aggregateItemLabel(template),
     count: nodes.length,
     activeCount,
+    status,
+    phase,
+    backend,
     totalSize,
     bitrateKbps,
     lastProgressAgeMs: maxProgressAgeMs,
   };
+}
+
+function appendBranchDetails(lines: string[], node: GraphNode): void {
+  if (node.details?.branchStart !== true) return;
+  const leafCount = finiteNumber(node.details.branchLeafCount);
+  const rawGroups = Array.isArray(node.details.branchGroups)
+    ? node.details.branchGroups
+    : [];
+  const groups = rawGroups
+    .map((item) => String(item))
+    .filter((item) => item.length > 0);
+  const branchLines = [`branch starts: ${leafCount} leaves`];
+  if (groups.length > 0) {
+    const suffix = groups.length > 2 ? ` / +${groups.length - 2} more` : "";
+    branchLines.push(`fan-out: ${groups.slice(0, 2).join(" / ")}${suffix}`);
+  }
+  lines.unshift(...branchLines);
 }
 
 function hashString(value: string): string {

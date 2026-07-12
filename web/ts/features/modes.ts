@@ -507,6 +507,85 @@ function summaryCounts() {
   };
 }
 
+function overviewAttentionSection(): string {
+  const issues = state.pipelines
+    .map((pipe) => {
+      const health = pipelineHealthLabel(pipe);
+      const down = pipe.outs.filter(isOutputUnexpectedlyDown).length;
+      const retrying = pipe.outs.filter(isOutputRetrying).length;
+      const flapping = pipe.outs.filter(isOutputFlapping).length;
+      const warnings = pipe.outs.filter(
+        (output) => output.status === "warning",
+      ).length;
+      const count = down + retrying + flapping + warnings;
+      const detailParts = [
+        down ? `${down} down` : "",
+        retrying ? `${retrying} retrying` : "",
+        flapping ? `${flapping} flapping` : "",
+        warnings ? `${warnings} warning` : "",
+        pipe.input.flapping
+          ? `${Math.max(pipe.input.recentDisconnectCount, 2)} input drops`
+          : "",
+      ].filter(Boolean);
+      const needsAttention =
+        health.tone === "error" ||
+        health.tone === "warning" ||
+        count > 0 ||
+        pipe.input.status === "error" ||
+        pipe.input.status === "warning";
+      if (!needsAttention) return null;
+      return {
+        pipe,
+        health,
+        count,
+        detail: detailParts.join(" / ") || health.detail || "check pipeline",
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+    .sort((left, right) => {
+      const severity =
+        Number(right.health.tone === "error") -
+        Number(left.health.tone === "error");
+      return (
+        severity ||
+        right.count - left.count ||
+        left.pipe.name.localeCompare(right.pipe.name)
+      );
+    })
+    .slice(0, 4);
+
+  const body = issues.length
+    ? issues
+        .map(
+          ({ pipe, health, detail }) => `<article class="border-base-content/10 bg-base-100 rounded-lg border p-3">
+            <div class="flex min-w-0 items-start justify-between gap-3">
+              <div class="min-w-0">
+                <h3 class="truncate font-semibold">${escapeHtml(pipe.name)}</h3>
+                <p class="text-base-content/60 mt-1 text-xs">${escapeHtml(detail)}</p>
+              </div>
+              <span class="badge ${health.cls} shrink-0">${escapeHtml(health.label)}</span>
+            </div>
+            <div class="mt-3 flex flex-wrap gap-2">
+              <button type="button" class="btn btn-xs btn-outline js-open-pipeline" data-pipeline-id="${escapeHtml(pipe.id)}">Operate</button>
+              <button type="button" class="btn btn-xs btn-outline js-inspect-pipeline" data-pipeline-id="${escapeHtml(pipe.id)}">Inspect</button>
+            </div>
+          </article>`,
+        )
+        .join("")
+    : `<div class="border-base-content/10 bg-base-100 rounded-lg border p-4 text-sm text-base-content/70">No active incident-level issues. Runtime detail stays available under Status and Pipeline Inspect.</div>`;
+
+  return `<section class="border-base-content/10 bg-base-200/80 mb-4 rounded-lg border">
+    <div class="border-base-content/10 flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+      <div>
+        <h2 class="text-base font-semibold">Needs attention</h2>
+        <p class="text-base-content/60 mt-1 text-sm">Fleet incidents are folded into Overview, then handled from the affected pipeline.</p>
+      </div>
+      <button type="button" class="btn btn-sm btn-outline" id="overview-open-status-detail-btn">Runtime detail</button>
+    </div>
+    <div class="grid gap-3 p-4 lg:grid-cols-2">${body}</div>
+  </section>`;
+}
+
 function inputOverviewPill(pipe: PipelineView): string {
   const protocol = pipe.input.publisher?.protocol?.toUpperCase();
   const rate = formatBitrate(pipe.stats.inputBitrateKbps);
@@ -668,6 +747,7 @@ function renderOverview(): void {
             ${overviewMetric("Outputs Running", `${counts.runningOutputs}`, `${counts.retryingOutputs} retrying / ${counts.flappingOutputs} flapping / ${counts.downOutputs} down / ${counts.stoppedOutputs} stopped`, "outputs")}
             ${overviewMetric("Throughput Out", formatBitrate(counts.outputKbps), `${counts.recording} active recording${counts.recording === 1 ? "" : "s"}`, "outputKbps")}
         </div>
+        ${overviewAttentionSection()}
         <section class="border-base-content/10 bg-base-200/80 rounded-lg border">
             <div class="border-base-content/10 flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
                 <div>
@@ -704,8 +784,22 @@ function renderOverview(): void {
         setDashboardMode("pipeline");
       };
     });
+  container
+    .querySelectorAll<HTMLElement>(".js-inspect-pipeline")
+    .forEach((button) => {
+      button.onclick = () => {
+        if (!button.dataset.pipelineId) return;
+        openInspectGraph(button.dataset.pipelineId);
+      };
+    });
   const addBtn = document.getElementById("overview-add-pipeline-btn");
   if (addBtn) addBtn.onclick = () => void window.addPipeBtn();
+  const statusDetailBtn = document.getElementById(
+    "overview-open-status-detail-btn",
+  );
+  if (statusDetailBtn) {
+    statusDetailBtn.onclick = () => setDashboardMode("status");
+  }
   const statusBtn = document.getElementById("overview-open-status-btn");
   if (statusBtn) {
     statusBtn.onclick = () => setDashboardMode("status");

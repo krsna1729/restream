@@ -11,11 +11,11 @@
     <script type="module" src="js/features/dashboard-entry.js"></script>
   </head>
   <body class="bg-base-100 text-base-content flex h-screen flex-col">
-    <header class="navbar bg-base-100 shrink-0">
+    <header class="navbar bg-base-100 min-h-16 shrink-0 flex-wrap gap-2">
       <!-- LEFT -->
       <div class="flex flex-1 items-center gap-3">
         <button
-          class="btn btn-ghost text-xl"
+          class="btn btn-ghost max-w-[13rem] justify-start truncate text-xl"
           id="server-name"
           onclick="selectPipeline(null)"
         >
@@ -42,11 +42,11 @@
       </div>
 
       <!-- CENTER - Server Metrics -->
-      <div class="hidden min-w-0 flex-none xl:block">
+      <div class="hidden min-w-0 flex-none lg:block">
         <div class="flex items-stretch gap-2" id="server-metrics-navbar">
           <div
             id="navbar-cpu-card"
-            class="border-base-content/10 bg-base-200/70 flex h-14 min-w-28 flex-col justify-center rounded-lg border px-3 py-1.5"
+            class="border-base-content/10 bg-base-200/70 flex h-11 min-w-24 flex-col justify-center rounded-lg border px-3 py-1.5"
           >
             <div class="flex items-center justify-between gap-2">
               <span
@@ -66,7 +66,7 @@
           </div>
           <div
             id="navbar-ram-card"
-            class="border-base-content/10 bg-base-200/70 flex h-14 min-w-28 flex-col justify-center rounded-lg border px-3 py-1.5"
+            class="border-base-content/10 bg-base-200/70 flex h-11 min-w-24 flex-col justify-center rounded-lg border px-3 py-1.5"
           >
             <div class="flex items-center justify-between gap-2">
               <span
@@ -86,7 +86,7 @@
           </div>
           <div
             id="navbar-disk-card"
-            class="border-base-content/10 bg-base-200/70 flex h-14 min-w-28 flex-col justify-center rounded-lg border px-3 py-1.5"
+            class="border-base-content/10 bg-base-200/70 flex h-11 min-w-24 flex-col justify-center rounded-lg border px-3 py-1.5"
           >
             <div class="flex items-center justify-between gap-2">
               <span
@@ -108,7 +108,7 @@
           </div>
           <div
             id="navbar-net-card"
-            class="border-base-content/10 bg-base-200/70 flex h-14 min-w-44 flex-col justify-center rounded-lg border px-3 py-1.5"
+            class="border-base-content/10 bg-base-200/70 flex h-11 min-w-40 flex-col justify-center rounded-lg border px-3 py-1.5"
           >
             <div
               class="text-base-content/60 text-[0.65rem] font-semibold uppercase"
@@ -126,7 +126,7 @@
       </div>
 
       <!-- RIGHT -->
-      <div class="flex flex-1 justify-end">
+      <div class="hidden flex-1 justify-end sm:flex">
         <ul class="menu menu-horizontal px-1">
           <li>
             <a href="https://github.com/live-miracles/restream">GitHub</a>
@@ -140,92 +140,70 @@
       class="border-base-content/10 bg-base-100 shrink-0 border-y px-4 py-2"
     >
       <div class="flex flex-wrap items-center gap-2">
-        <nav class="join" role="tablist" aria-label="Workspace mode">
-          <button
-            id="workspace-tab-overview"
-            type="button"
-            class="btn btn-sm join-item btn-accent"
-            data-dashboard-mode="overview"
-            role="tab"
-            aria-selected="true"
-            aria-controls="overview-mode-panel"
-            tabindex="0"
-          >
-            Overview
-          </button>
-          <button
-            id="workspace-tab-incidents"
-            type="button"
-            class="btn btn-sm join-item btn-outline"
-            data-dashboard-mode="incidents"
-            role="tab"
-            aria-selected="false"
-            aria-controls="incidents-mode-panel"
-            tabindex="-1"
-          >
-            Incidents
-          </button>
-          <button
-            id="workspace-tab-telemetry"
-            type="button"
-            class="btn btn-sm join-item btn-outline"
-            data-dashboard-mode="telemetry"
-            role="tab"
-            aria-selected="false"
-            aria-controls="telemetry-mode-panel"
-            tabindex="-1"
-          >
-            Telemetry
-          </button>
-          <button
-            id="workspace-tab-pipeline"
-            type="button"
-            class="btn btn-sm join-item btn-outline"
-            data-dashboard-mode="pipeline"
-            role="tab"
-            aria-selected="false"
-            aria-controls="dashboard-grid"
-            tabindex="-1"
-          >
-            Pipeline
-          </button>
-          <button
-            id="workspace-tab-media"
-            type="button"
-            class="btn btn-sm join-item btn-outline"
-            data-dashboard-mode="media"
-            role="tab"
-            aria-selected="false"
-            aria-controls="media-mode-panel"
-            tabindex="-1"
-          >
-            Media
-          </button>
-          <button
-            id="workspace-tab-settings"
-            type="button"
-            class="btn btn-sm join-item btn-outline"
-            data-dashboard-mode="settings"
-            role="tab"
-            aria-selected="false"
-            aria-controls="settings-mode-panel"
-            tabindex="-1"
-          >
-            Settings
-          </button>
-          <button
-            id="workspace-tab-status"
-            type="button"
-            class="btn btn-sm join-item btn-outline"
-            data-dashboard-mode="status"
-            role="tab"
-            aria-selected="false"
-            aria-controls="status-mode-panel"
-            tabindex="-1"
-          >
-            Status
-          </button>
-        </nav>
+        <div class="dashboard-scrollbar max-w-full overflow-x-auto">
+          <nav class="join" role="tablist" aria-label="Workspace mode">
+            <button
+              id="workspace-tab-overview"
+              type="button"
+              class="btn btn-sm join-item btn-accent"
+              data-dashboard-mode="overview"
+              role="tab"
+              aria-selected="true"
+              aria-controls="overview-mode-panel"
+              tabindex="0"
+            >
+              Overview
+            </button>
+            <button
+              id="workspace-tab-pipeline"
+              type="button"
+              class="btn btn-sm join-item btn-outline"
+              data-dashboard-mode="pipeline"
+              role="tab"
+              aria-selected="false"
+              aria-controls="dashboard-grid"
+              tabindex="-1"
+            >
+              Pipeline
+            </button>
+            <button
+              id="workspace-tab-media"
+              type="button"
+              class="btn btn-sm join-item btn-outline"
+              data-dashboard-mode="media"
+              role="tab"
+              aria-selected="false"
+              aria-controls="media-mode-panel"
+              tabindex="-1"
+            >
+              Media
+            </button>
+            <button
+              id="workspace-tab-settings"
+              type="button"
+              class="btn btn-sm join-item btn-outline"
+              data-dashboard-mode="settings"
+              role="tab"
+              aria-selected="false"
+              aria-controls="settings-mode-panel"
+              tabindex="-1"
+            >
+              Settings
+            </button>
+            <button
+              id="workspace-tab-status"
+              type="button"
+              class="btn btn-sm join-item btn-outline"
+              data-dashboard-mode="status"
+              role="tab"
+              aria-selected="false"
+              aria-controls="status-mode-panel"
+              tabindex="-1"
+            >
+              Status
+            </button>
+          </nav>
+        </div>
         <div
           class="text-base-content/60 min-w-0 truncate text-sm"
           id="workspace-mode-summary"
@@ -237,7 +215,11 @@
       id="pipeline-workspace-view-bar"
       class="border-base-content/10 bg-base-100 hidden shrink-0 border-b px-4 py-2"
     >
-      <nav class="join" role="tablist" aria-label="Pipeline workspace view">
+      <nav
+        class="join dashboard-scrollbar max-w-full overflow-x-auto"
+        role="tablist"
+        aria-label="Pipeline workspace view"
+      >
         <button
           id="pipeline-workspace-tab-operate"
           type="button"
@@ -1044,7 +1026,7 @@
       <section
         id="incidents-mode-panel"
         role="tabpanel"
-        aria-labelledby="workspace-tab-incidents"
+        aria-label="Incidents"
         class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
       >
         <div id="incidents-mode-content" class="mx-auto max-w-7xl"></div>
@@ -1053,7 +1035,7 @@
       <section
         id="telemetry-mode-panel"
         role="tabpanel"
-        aria-labelledby="workspace-tab-telemetry"
+        aria-label="Telemetry"
         class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
       >
         <div id="telemetry-mode-content" class="mx-auto max-w-7xl"></div>
@@ -1202,14 +1184,14 @@
           id="pipe-info-col"
         >
           <div>
-            <div class="mb-3 flex items-start justify-between gap-3">
-              <div class="min-w-0">
+            <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0 flex-1 max-sm:w-full max-sm:flex-none">
                 <h2
-                  class="truncate text-lg font-semibold leading-tight"
+                  class="whitespace-normal text-lg font-semibold leading-tight"
                   id="pipe-name"
                 ></h2>
               </div>
-              <div class="flex shrink-0 items-center gap-2">
+              <div class="flex shrink-0 items-center gap-2 max-sm:w-full max-sm:flex-wrap">
                 <button
                   class="btn btn-xs btn-accent btn-outline hidden"
                   id="file-ingest-pipe-btn"
@@ -1245,7 +1227,7 @@
                   </button>
                   <ul
                     tabindex="0"
-                    class="dropdown-content menu bg-base-100 border-base-content/10 z-20 mt-2 w-40 rounded-lg border p-1 shadow"
+                    class="dropdown-content menu dashboard-action-menu bg-base-100 border-base-content/10 z-20 mt-2 w-40 rounded-lg border p-1 shadow"
                   >
                     <li>
                       <button type="button" id="pipe-history-btn">
@@ -1564,6 +1546,24 @@
           <h2 class="text-base-content/70 mb-3 text-sm font-semibold uppercase">
             Outputs
           </h2>
+          <div id="outputs-summary" class="mb-3"></div>
+          <div id="outputs-focus-list" class="mb-3 space-y-2"></div>
+          <div
+            id="outputs-list-toolbar"
+            class="mb-3 hidden items-center justify-between gap-2"
+          >
+            <div
+              id="outputs-list-caption"
+              class="text-base-content/60 text-xs"
+            ></div>
+            <button
+              type="button"
+              id="outputs-toggle-full-list"
+              class="btn btn-xs btn-outline"
+            >
+              Show all
+            </button>
+          </div>
           <div class="space-y-3" id="outputs-list"></div>
           <div class="mt-5 w-full text-center">
             <button
