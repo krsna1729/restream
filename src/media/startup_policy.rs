@@ -4,8 +4,11 @@ use crate::domain::output_spec::{OutputEncodingSpec, VideoCodecKind, VideoSelect
 use crate::media::profiles;
 
 const DEFAULT_KEYFRAME_PREROLL_PACKETS: usize = 32;
-const EXT_STAGE_ANALYZE_DURATION_US_DEFAULT: u64 = 500_000;
-const EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT: usize = 64 * 1024;
+// H.264 with AAC MPEG-TS needs more than FFmpeg's 64 KiB/0.5 s startup
+// window to observe the AAC sample rate after a live join. Keep this bounded
+// 256 KiB/1 s budget distinct from the rejected multi-megabyte file probe.
+const EXT_STAGE_ANALYZE_DURATION_US_DEFAULT: u64 = 1_000_000;
+const EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT: usize = 256 * 1024;
 // External stages consume a persistent MPEG-TS pipe, not a finite file. A
 // previous high-bitrate probe pass raised HEVC to 4 s / 2 MiB, which left a
 // low-bitrate SRT HEVC publisher in `firstInput` until it had supplied 2 MiB;
@@ -95,6 +98,14 @@ mod tests {
                 EXT_STAGE_ANALYZE_DURATION_US_HEVC,
                 EXT_STAGE_PROBE_SIZE_BYTES_HEVC,
             )
+        );
+    }
+
+    #[test]
+    fn h264_probe_budget_covers_live_aac_header_without_file_style_delay() {
+        assert_eq!(
+            ext_stage_probe_budget(VideoCodecKind::H264),
+            (1_000_000, 256 * 1024)
         );
     }
 

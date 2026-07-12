@@ -64,6 +64,7 @@ jobs:
           echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           scripts/release/publish-image.sh "$GITHUB_REF_NAME"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: release-evidence
           path: |
