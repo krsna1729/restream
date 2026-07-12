@@ -51,6 +51,57 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   future comparison is blind.
 - Status: open (Filed: 2026-07-03 by bootstrap)
 
+### Q-011 [performance] [sonnet] Prove or reject RTMP video payload ownership transfer
+- Goal: a measured runtime decision on replacing RTMP Raw video
+  reuse-Vec-plus-`Bytes::copy_from_slice` with a handoff shape that moves
+  converted payload ownership into `Bytes`, implemented or explicitly rejected
+  with MSR/process-counter evidence.
+- Files: `src/media/rtmp.rs`, `benches/codec_conversions.rs`,
+  `docs/agent-guidance/quality/baselines.md`.
+- Gates: baseline and after `scripts/build/resource-limit.sh cargo bench --bench
+  codec_conversions -- 'codec/rtmp_payload_ownership'`; scoped
+  `scripts/build/resource-limit.sh cargo test rtmp --lib`; bench-profile
+  `MSR_OUTPUT_COUNTS=1200` receiver proof via MediaMTX `/v3/paths/list` plus
+  `perf stat -p <restream-pid>` before/after; `cargo fmt --all --check`.
+- Context: MSR perf at `da84fbe` showed RTMP egress, allocator calls, memmove,
+  and `rml_rtmp::ChunkSerializer::serialize` in the remaining hot path. The
+  micro-benchmark added in `6efa461` showed video handoff wins of 10-29% by
+  avoiding the final copy into `Bytes`, while audio was noise. Do not repeat
+  burst write coalescing (`b19cb17` rejected it).
+- Status: open (Filed: 2026-07-12 by groom)
+
+### Q-012 [performance] [opus] Evaluate CPU affinity for Tokio/SRT/RTMP thread families
+- Goal: a measured decision on whether internal thread affinity/bin-packing
+  reduces MSR CPU migrations and cache misses without hurting receiver health,
+  implemented or rejected with evidence.
+- Files: `src/main.rs`, `src/media/srt.rs`, `src/media/srt_egress.rs`,
+  `docs/agent-guidance/quality/baselines.md`.
+- Gates: process CPU mask/cgroup detection unit tests; before/after full
+  `MSR_OUTPUT_COUNTS=1200` MediaMTX receiver proof; `perf stat -p` with
+  migrations/cache/context-switch counters; `pidstat -t`; concurrency fast gate
+  if thread creation or blocking handoff changes.
+- Context: SRT muxer reuse and 2-worker Tokio policy cut CPU, but migrations
+  remained high (`~230-337/sec` in 2026-07-12 MSR samples). Any pinning must be
+  container-orchestration aware and derived from the effective CPU mask, not
+  hard-coded host CPUs.
+- Status: open (Filed: 2026-07-12 by groom)
+
+### Q-013 [efficiency] [sonnet] Test allocator arena limits for MSR memory plateau
+- Goal: a single-variable MSR run proves whether `MALLOC_ARENA_MAX` or an
+  allocator setting lowers RSS/PSS plateau without increasing CPU or receiver
+  failures; record the decision in `baselines.md`.
+- Files: `docs/agent-guidance/quality/baselines.md`,
+  `docs/matrix-resource-constraints.md` if an operator-facing setting is
+  recommended.
+- Gates: before/after `MSR_OUTPUT_COUNTS=1200` run with MediaMTX
+  `/v3/paths/list` receiver proof; `/proc/<pid>/smaps_rollup` RSS/PSS/private
+  dirty samples; `perf stat -p` CPU/cache/context counters; no Restream
+  warn/error/panic lines.
+- Context: MSR memory evidence showed retained Rust payload below 50 MiB while
+  RSS/PSS plateau was consistent with allocator/native arena retention. This is
+  a safer first memory experiment than hot-path data-structure rewrites.
+- Status: open (Filed: 2026-07-12 by groom)
+
 ### Q-004 [proof] [haiku] Panic-path inventory for src/media
 - Goal: classified list of every `.unwrap()`, `.expect(`, `panic!`,
   `unreachable!` in non-test `src/media/` code: invariant-safe (with the

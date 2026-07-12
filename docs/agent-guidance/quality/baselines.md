@@ -760,3 +760,36 @@ Raw artifacts:
 - `.local/artifacts/msr-redeploy-3030-20260712T125823Z/perf-stat-restream-current-20260712T130031Z.csv`
 - `.local/artifacts/msr-redeploy-3030-20260712T125823Z/pidstat-threads-restream-current-20260712T130107Z.txt`
 - `.local/artifacts/msr-redeploy-3030-20260712T125823Z/perf-report-restream-current-20260712T130204Z.txt`
+
+### RTMP payload ownership micro-benchmark — 2026-07-12 (VPS)
+
+Follow-up to the current MSR RTMP profile and negative RTMP burst-coalescing
+result. This benchmark isolates only the Raw-to-RTMP payload handoff below
+`rml_rtmp::ChunkSerializer`: current production shape reuses a conversion `Vec`
+then copies into `Bytes`; alternatives avoid that final copy by moving a fresh
+or replaced `Vec` into `Bytes`.
+
+Command:
+
+```sh
+scripts/build/resource-limit.sh cargo bench --bench codec_conversions -- \
+  'codec/rtmp_payload_ownership' --warm-up-time 1 --measurement-time 2 \
+  --sample-size 20
+```
+
+Raw output:
+`.local/artifacts/bench-rtmp-payload-ownership-20260712/output.txt`
+
+| Payload | Current reuse+copy | Fresh Vec→Bytes | Replace reused Vec→Bytes | Best observed delta |
+|---|---:|---:|---:|---:|
+| 8 KiB P-frame | `527.46 ns` | `503.44 ns` | `472.51 ns` | `-10.4%` |
+| 30 KiB / 3-NALU P-frame | `2.4251 us` | `1.7831 us` | `1.7556 us` | `-27.6%` |
+| 80 KiB IDR | `6.1042 us` | `4.3466 us` | `4.4666 us` | `-28.8%` |
+| 207 B AAC | `35.333 ns` | `35.529 ns` | — | no signal |
+
+Interpretation: the copy into `Bytes` is expensive enough for video payloads to
+justify a scoped runtime experiment, but not for audio. The promising runtime
+shape is not burst write coalescing; it is converting into a buffer whose
+ownership can be moved into `Bytes` before `rml_rtmp` serialization. Correctness
+risk remains: each RTMP egress must keep independent buffers and must not reuse
+a buffer after handing ownership to `Bytes`.

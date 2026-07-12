@@ -154,3 +154,18 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   with MediaMTX bytes advancing by 7.09 GB while RSS held flat around 1.09 GB,
   so the memory evidence currently looks like allocator/native growth to a
   plateau rather than an unbounded ring-buffer leak.
+
+## 2026-07-12 15:18 MSR RTMP OWNERSHIP BENCH + BACKLOG GROOMED [codex]
+- What: ran the focused `codec/rtmp_payload_ownership` benchmark added in
+  `6efa461`, recorded the medians in `baselines.md`, and filed MSR-derived
+  backlog items for RTMP payload ownership, CPU affinity/bin-packing, and
+  allocator arena limits.
+- Gates: `scripts/build/resource-limit.sh cargo bench --bench
+  codec_conversions -- 'codec/rtmp_payload_ownership' --warm-up-time 1
+  --measurement-time 2 --sample-size 20` passed on an idle host.
+- Commit: (this commit)
+- Follow-ups: Q-011, Q-012, Q-013.
+- Notes: video payload ownership transfer is promising in isolation
+  (`-10%` to `-29%` median for 8 KiB to 80 KiB frames), but audio was noise and
+  no runtime RTMP change should land without a full before/after MSR receiver
+  proof and process counters.
