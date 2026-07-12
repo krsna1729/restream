@@ -216,6 +216,49 @@ Interpretation for the next optimization pass:
   observed, so memory growth is currently acceptable for the connection-scale
   baseline.
 
+### Mahashivratri msr Tokio worker sweep — 2026-07-12 (VPS)
+
+Host: `vmi3423592`, commit `6f7f28e`. Single-variable sweep of
+`RESTREAM_TOKIO_WORKER_THREADS` at one 300-output checkpoint:
+
+```sh
+RESTREAM_TOKIO_WORKER_THREADS=<n> MSR_OUTPUT_COUNTS=300 \
+  WORK_DIR=.local/artifacts/msr-worker-sweep-20260712/w<n>-300 \
+  BENCH_BUILD=never scripts/harness/run.sh msr
+```
+
+Each run attached `perf stat -p <restream-pid>` to the Restream process only.
+Every run passed with `300/300` MediaMTX paths ready, `bytesReceived` growing
+through `/v3/paths/list`, and zero warn/error/panic lines in the run logs.
+
+| Tokio workers | MediaMTX ready | MediaMTX bytes delta | CPU avg % | CPU peak % | RSS peak | AVIO HWM peak | IPC | Cache miss % | Branch miss % | Context switches/s | Migrations/s |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 300/300 | 38.2 MB | 288.9 | 339.5 | 143 MB | 902 KB | 0.26 | 31.82 | 8.66 | 2,205 | 560 |
+| 3 | 300/300 | 40.8 MB | 239.4 | 283.8 | 150 MB | 862 KB | 0.24 | 33.45 | 10.03 | 3,403 | 1,029 |
+| 4 | 300/300 | 39.0 MB | 252.8 | 302.2 | 158 MB | 795 KB | 0.27 | 33.38 | 9.43 | 3,385 | 1,070 |
+| 6 | 300/300 | 47.8 MB | 278.8 | 331.5 | 161 MB | 633 KB | 0.23 | 32.46 | 9.93 | 2,676 | 775 |
+
+Interpretation:
+
+- 3 workers was the best CPU result in this short 300-output pass, using about
+  5% less average CPU than 4 workers and about 14% less than 6 workers.
+- 2 workers is too constrained for this shape: it had the worst CPU and the
+  longest attached perf duration despite passing liveness.
+- The worker count did not fix cache locality by itself. IPC stayed below 0.3
+  and cache misses stayed above 31% in every run, so changing the default worker
+  count alone is not enough evidence for a production default change.
+- 3 workers is the best candidate for the next full 1,200-output confirmation
+  run, but the default should not be changed until that full run also wins.
+
+A follow-up thread census at `RESTREAM_TOKIO_WORKER_THREADS=3` and 300 outputs
+peaked at 66 Restream threads. The SRT threads were already proportional to SRT
+socket count: 16 `SRT:RcvQ:*` plus 16 `SRT:SndQ:*` for 15 SRT egresses plus the
+SRT ingest, with `SRT:TsbPd` and `SRT:GC` also present. This confirms that the
+full MSR shape's 60 SRT egresses will keep carrying roughly one RcvQ/SndQ pair
+per SRT socket unless sockets share libsrt muxers. The next structural
+optimization target is therefore SRT muxer/thread sharing, before hot/cold
+member layout work.
+
 ## Standing optimization targets (2026-06-27 CPU profile, task-clock 999 Hz)
 
 | Self % | Symbol | Meaning | Backlog |

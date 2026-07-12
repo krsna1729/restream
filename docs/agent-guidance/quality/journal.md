@@ -82,3 +82,22 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   MediaMTX, and publisher logs. The process-mode perf run passed but MediaMTX
   emitted one SRT TS decode warning near shutdown/load, so that run is retained
   for counters, not as the log-noise baseline.
+
+## 2026-07-12 12:15 MSR WORKER-SWEEP PROFILING DONE [codex]
+- What: ran a short 300-output MSR worker-count sweep with
+  `RESTREAM_TOKIO_WORKER_THREADS=2,3,4,6`, process-mode `perf stat -p`, and
+  MediaMTX `/v3/paths/list` byte-growth proof at every checkpoint. Added a
+  follow-up 3-worker thread census to check whether the SRT thread issue is
+  visible before the full 1,200-output shape.
+- Gates: all four sweep runs PASS with `300/300` MediaMTX paths ready and bytes
+  growing; all four sweep logs had zero warn/error/panic lines; 3-worker thread
+  census run PASS with `300/300` ready.
+- Commit: (this commit)
+- Follow-ups: 3 workers had the best CPU result at 300 outputs, but IPC stayed
+  below 0.3 and cache misses stayed above 31% for every worker count, so do not
+  change the production default yet. Promote 3 workers to a full 1,200-output
+  confirmation run, then prioritize SRT muxer/thread sharing: the census showed
+  16 `SRT:RcvQ:*` plus 16 `SRT:SndQ:*` threads at only 15 SRT egresses plus
+  ingest, which scales directly into the 60-SRT-output MSR shape.
+- Notes: 2 workers passed liveness but was too constrained; 6 workers passed
+  but used more CPU/RSS than the 3-worker run at this checkpoint.
