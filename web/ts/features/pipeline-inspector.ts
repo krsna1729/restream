@@ -3,8 +3,12 @@ import { state } from "../core/state.js";
 import { escapeHtml, escapeRedactedHtml, getUrlParam } from "../core/utils.js";
 import type { OutputView, PipelineView } from "../types.js";
 import { openDiagnosticsModal } from "./diagnostics.js";
-import { getResourceMap } from "../core/api.js";
-import type { ResourceMapNode, ResourceMapSnapshot } from "../core/api.js";
+import { getPipelineSummary, getResourceMap } from "../core/api.js";
+import type {
+  PipelineSummarySnapshot,
+  ResourceMapNode,
+  ResourceMapSnapshot,
+} from "../core/api.js";
 import { fetchProcessingGraph, renderGraphInto } from "./graph.js";
 import {
   isOutputFlapping,
@@ -30,6 +34,9 @@ let graphRequestSeq = 0;
 let graphRenderedStateKey: string | null = null;
 let graphAutoRefresh = true;
 let forceRuntimeScope = false;
+let summaryRequestSeq = 0;
+let summaryInFlight: Promise<void> | null = null;
+const pipelineSummaryCache = new Map<string, PipelineSummarySnapshot>();
 
 const RUNTIME_SCOPE_VALUE = "__runtime";
 const RESOURCE_MAP_TOP_N = 25;
@@ -172,6 +179,7 @@ export function renderPipelineInspector(): void {
   }
 
   renderSummary(pipe, invalidPipelineSelection);
+  if (pipe) refreshPipelineSummary(pipe.id);
   renderDiagnostics(pipe);
 
   const refreshBtn = document.getElementById(
@@ -258,8 +266,15 @@ function renderSummary(
     return;
   }
 
+  const apiSummary = pipelineSummaryCache.get(pipe.id) || null;
   const health = pipelineHealthLabel(pipe);
+  const apiOutputTotal = apiSummary?.outputs?.total;
+  const apiOutputRunning = apiSummary?.outputs?.running;
+  const graph = apiSummary?.graph;
+  const alerts = apiSummary?.alerts || [];
+  const outputPreviewLimit = 12;
   const outputs = pipe.outs
+    .slice(0, outputPreviewLimit)
     .map((out) => {
       const stateLabel = outputStateLabel(out);
       const encodingLabel = outputViewEncodingLabel(out);
@@ -272,6 +287,7 @@ function renderSummary(
             </div>`;
     })
     .join("");
+  const remainingOutputs = Math.max(0, pipe.outs.length - outputPreviewLimit);
 
   container.innerHTML = `<section class="border-base-content/10 bg-base-200 rounded-lg border p-3">
         <div class="mb-2 flex min-w-0 items-start justify-between gap-2">
@@ -283,11 +299,31 @@ function renderSummary(
             <div><dt class="text-base-content/60">Publisher</dt><dd>${escapeHtml(pipe.input.publisher?.protocol || "--")}</dd></div>
             <div><dt class="text-base-content/60">Input Rate</dt><dd>${formatBitrate(pipe.stats.inputBitrateKbps)}</dd></div>
             <div><dt class="text-base-content/60">Output Rate</dt><dd>${formatBitrate(pipe.stats.outputBitrateKbps)}</dd></div>
+            <div><dt class="text-base-content/60">Outputs</dt><dd>${Number.isFinite(apiOutputRunning as number) && Number.isFinite(apiOutputTotal as number) ? `${apiOutputRunning}/${apiOutputTotal}` : `${pipe.outs.filter(isOutputRunning).length}/${pipe.outs.length}`}</dd></div>
+            <div><dt class="text-base-content/60">Alerts</dt><dd>${apiSummary ? alerts.length : "loading"}</dd></div>
+            <div><dt class="text-base-content/60">Graph</dt><dd>${graph?.hasGraph ? `${graph.activeNodes ?? 0}/${graph.nodes ?? 0} active` : apiSummary ? "not active" : "loading"}</dd></div>
             <div><dt class="text-base-content/60">Received</dt><dd>${formatBytes(pipe.input.bytesReceived)}</dd></div>
             <div><dt class="text-base-content/60">Sent</dt><dd>${formatBytes(pipe.input.bytesSent)}</dd></div>
         </dl>
-        <div class="mt-3">${outputs || '<div class="text-base-content/60 text-sm">No outputs configured.</div>'}</div>
+        <div class="mt-3">${outputs || '<div class="text-base-content/60 text-sm">No outputs configured.</div>'}${remainingOutputs ? `<div class="text-base-content/60 border-base-content/10 border-t pt-2 text-xs">+${remainingOutputs} more outputs in Operate</div>` : ""}</div>
     </section>`;
+}
+
+function refreshPipelineSummary(pipelineId: string): void {
+  if (pipelineSummaryCache.has(pipelineId)) return;
+  if (summaryInFlight) return;
+  const requestSeq = ++summaryRequestSeq;
+  summaryInFlight = getPipelineSummary(pipelineId)
+    .then((summary) => {
+      if (!summary || requestSeq !== summaryRequestSeq) return;
+      pipelineSummaryCache.set(pipelineId, summary);
+      const pipe = selectedPipeline();
+      if (pipe?.id === pipelineId) renderSummary(pipe);
+    })
+    .catch(() => {})
+    .finally(() => {
+      summaryInFlight = null;
+    });
 }
 
 function renderDiagnostics(pipe: PipelineView | null): void {

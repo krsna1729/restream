@@ -4,6 +4,13 @@ import { outputViewEncodingLabel } from "../core/output-config.js";
 import { openOutputMonitoringUrl } from "./control-room.js";
 import { getOutputControlIntent } from "./output-control-state.js";
 import { pipelineViewDependencies } from "./pipeline-dependencies.js";
+import {
+  isOutputFlapping,
+  isOutputIntentStopped,
+  isOutputRunning,
+  isOutputRetrying,
+  isOutputUnexpectedlyDown,
+} from "../core/output-status.js";
 import type { OutputView, PipelineView } from "../types.js";
 
 interface OutputCardRefs {
@@ -28,6 +35,9 @@ interface OutputMetricSpec {
 }
 
 const outputCardRefs = new WeakMap<HTMLElement, OutputCardRefs>();
+const expandedOutputLists = new Set<string>();
+const OUTPUT_CARD_LIMIT = 8;
+const OUTPUT_FOCUS_LIMIT = 5;
 
 function setTextIfChanged(target: HTMLElement, text: string): void {
   if (target.textContent !== text) {
@@ -355,7 +365,7 @@ function createOutputCard(pipeId: string, outputId: string): HTMLElement {
 
   const error = document.createElement("div");
   error.dataset.role = "output-error";
-  error.className = "text-error hidden text-xs leading-5";
+  error.className = "text-error hidden break-words text-xs leading-5";
 
   content.append(header, metrics, error);
 
@@ -370,7 +380,7 @@ function createOutputCard(pipeId: string, outputId: string): HTMLElement {
   const menu = document.createElement("ul");
   menu.tabIndex = 0;
   menu.className =
-    "dropdown-content menu bg-base-100 border-base-content/10 z-20 mt-2 w-36 rounded-lg border p-1 shadow";
+    "dropdown-content menu dashboard-action-menu bg-base-100 border-base-content/10 z-20 mt-2 w-36 rounded-lg border p-1 shadow";
 
   const { button: historyButton, item: historyItem } = createMenuAction(
     "History",
@@ -413,6 +423,175 @@ function createOutputCard(pipeId: string, outputId: string): HTMLElement {
   });
 
   return card;
+}
+
+function outputStatusBucket(output: OutputView): {
+  key: string;
+  label: string;
+  className: string;
+} {
+  if (isOutputIntentStopped(output)) {
+    return {
+      key: "stopped",
+      label: "Stopped",
+      className: "border-base-content/10 bg-base-100/80 text-base-content/70",
+    };
+  }
+  if (isOutputUnexpectedlyDown(output)) {
+    return {
+      key: "down",
+      label: "Down",
+      className: "border-error/30 bg-error/10 text-error",
+    };
+  }
+  if (isOutputRetrying(output)) {
+    return {
+      key: "retrying",
+      label: "Retrying",
+      className: "border-warning/35 bg-warning/10 text-warning",
+    };
+  }
+  if (isOutputFlapping(output)) {
+    return {
+      key: "flapping",
+      label: "Flapping",
+      className: "border-warning/35 bg-warning/10 text-warning",
+    };
+  }
+  if (output.lastError || output.status === "failed") {
+    return {
+      key: "error",
+      label: "Error",
+      className: "border-error/30 bg-error/10 text-error",
+    };
+  }
+  if (output.status === "stalled" || output.status === "warning") {
+    return {
+      key: "warning",
+      label: "Warning",
+      className: "border-warning/35 bg-warning/10 text-warning",
+    };
+  }
+  if (isOutputRunning(output)) {
+    return {
+      key: "running",
+      label: "Running",
+      className: "border-success/30 bg-success/10 text-success",
+    };
+  }
+  return {
+    key: "other",
+    label: "Other",
+    className: "border-base-content/10 bg-base-100/80 text-base-content/70",
+  };
+}
+
+function renderOutputSummary(pipe: PipelineView): void {
+  const container = document.getElementById("outputs-summary");
+  if (!container) return;
+
+  const counts = new Map<string, { label: string; className: string; count: number }>();
+  for (const output of pipe.outs) {
+    const bucket = outputStatusBucket(output);
+    const existing = counts.get(bucket.key) || {
+      label: bucket.label,
+      className: bucket.className,
+      count: 0,
+    };
+    existing.count += 1;
+    counts.set(bucket.key, existing);
+  }
+
+  const order = ["down", "error", "retrying", "flapping", "warning", "running", "stopped", "other"];
+  const countCards = order
+    .map((key) => counts.get(key))
+    .filter(Boolean)
+    .map(
+      (entry) => `<div class="${entry?.className} rounded-lg border px-3 py-2">
+        <div class="text-[0.65rem] font-semibold uppercase opacity-70">${escapeHtml(entry?.label || "")}</div>
+        <div class="mt-1 text-xl font-semibold tabular-nums">${entry?.count ?? 0}</div>
+      </div>`,
+    )
+    .join("");
+
+  const totalBitrate = pipe.outs.reduce(
+    (sum, output) => sum + Math.max(0, output.bitrateKbps || 0),
+    0,
+  );
+  const activeOutputs = pipe.outs.filter(isOutputRunning).length;
+  container.innerHTML = `<section class="border-base-content/10 bg-base-100 rounded-lg border p-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div class="text-base-content/70 text-xs font-semibold uppercase">Output Rollup</div>
+          <div class="text-base-content/60 mt-1 text-xs">${activeOutputs}/${pipe.outs.length} active · ${totalBitrate >= 1000 ? `${(totalBitrate / 1000).toFixed(1)} Mb/s` : `${totalBitrate.toFixed(0)} Kb/s`} aggregate</div>
+        </div>
+        <button type="button" class="btn btn-xs btn-accent btn-outline" id="add-out-summary-btn">Add</button>
+      </div>
+      <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">${countCards || '<div class="text-base-content/60 text-sm">No outputs configured.</div>'}</div>
+    </section>`;
+  document.getElementById("add-out-summary-btn")?.addEventListener("click", () => {
+    window.addOutBtn?.();
+  });
+}
+
+function outputFocusScore(output: OutputView, pipeId: string): number {
+  if (isOutputUnexpectedlyDown(output)) return 100;
+  if (output.lastError || output.status === "failed") return 90;
+  if (isOutputRetrying(output)) return 80;
+  if (isOutputFlapping(output)) return 70;
+  if (output.status === "stalled" || output.status === "warning") return 60;
+  if (getOutputControlIntent(pipeId, output.id)) return 50;
+  return 0;
+}
+
+function renderOutputFocusList(pipe: PipelineView): void {
+  const container = document.getElementById("outputs-focus-list");
+  if (!container) return;
+  const focusOutputs = [...pipe.outs]
+    .map((output) => ({ output, score: outputFocusScore(output, pipe.id) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.output.name.localeCompare(b.output.name))
+    .slice(0, OUTPUT_FOCUS_LIMIT);
+
+  if (!focusOutputs.length) {
+    container.innerHTML = "";
+    return;
+  }
+
+  container.innerHTML = `<section class="border-warning/25 bg-warning/8 rounded-lg border p-3">
+      <div class="mb-2 text-xs font-semibold uppercase text-warning">Needs attention</div>
+      <div class="space-y-2">
+        ${focusOutputs
+          .map(({ output }) => {
+            const issue = buildOutputIssue(
+              output,
+              getOutputControlIntent(pipe.id, output.id),
+            );
+            return `<div class="border-base-content/10 bg-base-100/80 flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+              <div class="min-w-0">
+                <div class="truncate text-sm font-semibold">${escapeHtml(output.name)}</div>
+                <div class="text-base-content/60 truncate text-xs">${escapeHtml(issue?.title || output.phase || output.status || "Check output")}</div>
+              </div>
+              <button type="button" class="btn btn-xs btn-outline" data-action="history-output" data-output-id="${escapeHtml(output.id)}">History</button>
+            </div>`;
+          })
+          .join("")}
+      </div>
+    </section>`;
+  container
+    .querySelectorAll<HTMLButtonElement>("[data-action='history-output']")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        const outputId = button.dataset.outputId;
+        const output = pipe.outs.find((candidate) => candidate.id === outputId);
+        if (!output) return;
+        pipelineViewDependencies.openOutputHistoryModal?.(
+          pipe.id,
+          output.id,
+          output.name,
+        );
+      });
+    });
 }
 
 function syncOutputCard(
@@ -596,6 +775,38 @@ export function renderOutsColumn(selectedPipe: string | null): void {
   if (!outputsList) return;
   outputsList.dataset.pipeId = pipe.id;
   ensureOutputsListHandler(outputsList);
+  renderOutputSummary(pipe);
+  renderOutputFocusList(pipe);
+
+  const expanded = expandedOutputLists.has(pipe.id);
+  const shouldLimit = pipe.outs.length > OUTPUT_CARD_LIMIT && !expanded;
+  const renderedOutputs = shouldLimit
+    ? pipe.outs.slice(0, OUTPUT_CARD_LIMIT)
+    : pipe.outs;
+
+  const toolbar = document.getElementById("outputs-list-toolbar");
+  const caption = document.getElementById("outputs-list-caption");
+  const toggle = document.getElementById(
+    "outputs-toggle-full-list",
+  ) as HTMLButtonElement | null;
+  toolbar?.classList.toggle("hidden", pipe.outs.length <= OUTPUT_CARD_LIMIT);
+  toolbar?.classList.toggle("flex", pipe.outs.length > OUTPUT_CARD_LIMIT);
+  if (caption) {
+    caption.textContent = expanded
+      ? `Showing all ${pipe.outs.length} outputs`
+      : `Showing first ${renderedOutputs.length} of ${pipe.outs.length} outputs`;
+  }
+  if (toggle) {
+    toggle.textContent = expanded ? "Show less" : "Show all";
+    toggle.onclick = () => {
+      if (expandedOutputLists.has(pipe.id)) {
+        expandedOutputLists.delete(pipe.id);
+      } else {
+        expandedOutputLists.add(pipe.id);
+      }
+      renderOutsColumn(pipe.id);
+    };
+  }
 
   const existingCards = new Map<string, HTMLElement>();
   Array.from(outputsList.children).forEach((child) => {
@@ -603,7 +814,7 @@ export function renderOutsColumn(selectedPipe: string | null): void {
     existingCards.set(child.dataset.outputKey, child);
   });
 
-  for (const [index, output] of pipe.outs.entries()) {
+  for (const [index, output] of renderedOutputs.entries()) {
     const cardKey = outputCardKey(pipe.id, output.id);
     let card = existingCards.get(cardKey);
     if (!card) {

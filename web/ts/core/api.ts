@@ -384,6 +384,37 @@ export interface ResourceMapSnapshot {
   attribution?: Record<string, string[]>;
 }
 
+export interface PipelineSummarySnapshot {
+  generatedAt: string;
+  pipelineId: string;
+  input?: Record<string, unknown>;
+  source?: {
+    status?: string;
+    bitrateKbps?: number | null;
+    protocol?: string | null;
+    readers?: number | null;
+  };
+  outputs?: {
+    total?: number;
+    running?: number;
+    list?: Array<{
+      id: string;
+      status?: string;
+      bitrateKbps?: number | null;
+    }>;
+  };
+  recording?: Record<string, unknown>;
+  hlsPreview?: Record<string, unknown>;
+  graph?: {
+    nodes?: number;
+    edges?: number;
+    activeNodes?: number;
+    inactiveNodes?: number;
+    hasGraph?: boolean;
+  };
+  alerts?: OperatorAlert[];
+}
+
 async function getOverview(): Promise<OverviewSnapshot | null> {
   return apiRequest<OverviewSnapshot>("/api/v1/overview");
 }
@@ -441,6 +472,14 @@ async function getResourceMap(
     suffix
       ? `/api/v1/engine/resource-map?${suffix}`
       : "/api/v1/engine/resource-map",
+  );
+}
+
+async function getPipelineSummary(
+  pipelineId: string,
+): Promise<PipelineSummarySnapshot | null> {
+  return apiRequest<PipelineSummarySnapshot>(
+    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/summary`,
   );
 }
 
@@ -1103,6 +1142,7 @@ export {
   getLifecycleEvents,
   getEngineTelemetry,
   getPipelineTelemetry,
+  getPipelineSummary,
   getStageTelemetry,
   getResourceMap,
   getStreamKeys,

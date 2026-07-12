@@ -541,11 +541,55 @@ test("processing graph collapses repeated egress leaves by count", async () => {
   });
 
   const html = container.innerHTML;
+  assert.match(html, /Click a grouped node to inspect its members/);
+  assert.match(html, /data-graph-aggregate-key/);
+  assert.match(html, /click to expand/);
   assert.match(html, /RTMP egress x5/);
+  assert.match(html, /branch starts: 5 leaves/);
+  assert.match(html, /fan-out: RTMP egress x5/);
   assert.match(html, /5 RTMP outputs/);
   assert.match(html, /5\/5 running/);
   assert.match(html, /SRT sender: Backup/);
   assert.doesNotMatch(html, /RTMP sender: Output 0/);
+});
+
+test("processing graph collapses repeated non-egress leaf stages at the branch point", async () => {
+  const { document } = installFakeDom();
+  const graph = await loadCompiledFrontendModule("features/graph.js");
+  const container = appendRoot(document, "div", "graph-target");
+  graph.renderGraphInto(container, {
+    pipelineId: "pipe-1",
+    nodes: [
+      {
+        id: "demux",
+        type: "demux",
+        label: "Program demux",
+        active: true,
+      },
+      ...Array.from({ length: 6 }, (_, index) => ({
+        id: `audio-${index}`,
+        type: "audio_filter",
+        label: `Audio filter ${index}`,
+        active: true,
+        details: {
+          phase: "active",
+          backend: "ffmpeg",
+        },
+      })),
+    ],
+    edges: Array.from({ length: 6 }, (_, index) => ({
+      from: "demux",
+      to: `audio-${index}`,
+      label: "audio track",
+    })),
+  });
+
+  const html = container.innerHTML;
+  assert.match(html, /Audio Filter x6/);
+  assert.match(html, /6 audio filter stages/);
+  assert.match(html, /branch starts: 6 leaves/);
+  assert.match(html, /fan-out: Audio Filter x6/);
+  assert.doesNotMatch(html, /Audio filter 0/);
 });
 
 test("monitor consumes and propagates the shared workspace selection", async () => {

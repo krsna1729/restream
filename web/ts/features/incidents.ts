@@ -67,6 +67,99 @@ function severityTone(severity: OperatorAlert["severity"]): string {
   return severity === "critical" ? "badge-error" : "badge-warning";
 }
 
+interface AlertGroup {
+  id: string;
+  severity: OperatorAlert["severity"];
+  pipelineId?: string;
+  stageId?: string;
+  stageIds: string[];
+  title: string;
+  cause: string;
+  recommendedAction: string;
+  alerts: OperatorAlert[];
+  outputIds: string[];
+  firstSeen?: string;
+  lastSeen?: string;
+}
+
+function alertGroupKey(alert: OperatorAlert): string {
+  if (alert.stageId) {
+    return [
+      alert.severity,
+      alert.pipelineId || "",
+      "stage",
+      alert.title,
+      alert.recommendedAction || "",
+    ].join("|");
+  }
+  return [
+    alert.severity,
+    alert.pipelineId || "",
+    alert.stageId || "",
+    alert.cause || alert.title,
+    alert.recommendedAction || "",
+  ].join("|");
+}
+
+function groupAlerts(alerts: OperatorAlert[]): AlertGroup[] {
+  const groups = new Map<string, AlertGroup>();
+  for (const alert of alerts) {
+    const key = alertGroupKey(alert);
+    const existing =
+      groups.get(key) ||
+      ({
+        id: key,
+        severity: alert.severity,
+        pipelineId: alert.pipelineId,
+        stageId: alert.stageId,
+        stageIds: [],
+        title: alert.stageId
+          ? `Upstream stage blocked outputs`
+          : alert.title,
+        cause: alert.cause,
+        recommendedAction: alert.recommendedAction,
+        alerts: [],
+        outputIds: [],
+        firstSeen: alert.firstSeen,
+        lastSeen: alert.lastSeen || alert.generatedAt,
+      } satisfies AlertGroup);
+    existing.alerts.push(alert);
+    if (alert.stageId && !existing.stageIds.includes(alert.stageId)) {
+      existing.stageIds.push(alert.stageId);
+    }
+    if (alert.outputId && !existing.outputIds.includes(alert.outputId)) {
+      existing.outputIds.push(alert.outputId);
+    }
+    const firstSeenMs = Date.parse(existing.firstSeen || "");
+    const alertFirstSeenMs = Date.parse(alert.firstSeen || alert.generatedAt);
+    if (
+      Number.isFinite(alertFirstSeenMs) &&
+      (!Number.isFinite(firstSeenMs) || alertFirstSeenMs < firstSeenMs)
+    ) {
+      existing.firstSeen = alert.firstSeen || alert.generatedAt;
+    }
+    const lastSeenMs = Date.parse(existing.lastSeen || "");
+    const alertLastSeenMs = Date.parse(alert.lastSeen || alert.generatedAt);
+    if (
+      Number.isFinite(alertLastSeenMs) &&
+      (!Number.isFinite(lastSeenMs) || alertLastSeenMs > lastSeenMs)
+    ) {
+      existing.lastSeen = alert.lastSeen || alert.generatedAt;
+    }
+    groups.set(key, existing);
+  }
+  return [...groups.values()].sort((left, right) => {
+    const severity =
+      Number(right.severity === "critical") -
+      Number(left.severity === "critical");
+    return (
+      severity ||
+      right.alerts.length - left.alerts.length ||
+      left.title.localeCompare(right.title)
+    );
+  });
+}
+
 function eventSummary(event: LifecycleEvent): string {
   if (event.error) return `${event.kind}: ${event.error}`;
   if (event.outputId) return `${event.kind}: ${event.outputId}`;
@@ -97,6 +190,68 @@ function renderAlert(alert: OperatorAlert): string {
   </article>`;
 }
 
+function renderAlertGroup(group: AlertGroup): string {
+  if (group.alerts.length === 1) return renderAlert(group.alerts[0]);
+  const stageCount = group.stageIds.length;
+  const title =
+    stageCount > 1 && group.title.includes("stage")
+      ? group.title.replace("stage", "stages")
+      : group.title;
+  const cause =
+    stageCount > 1
+      ? `${stageCount} upstream stages are not delivering packets to dependent outputs.`
+      : group.cause;
+  const evidence = group.alerts
+    .flatMap((alert) => alert.evidence || [])
+    .filter((item, index, all) => all.indexOf(item) === index)
+    .slice(0, 5)
+    .map((item) => `<li>${escapeHtml(item)}</li>`)
+    .join("");
+  const sampleOutputs = group.outputIds.slice(0, 6);
+  const remainingOutputs = Math.max(0, group.outputIds.length - sampleOutputs.length);
+  const impactGridClass = stageCount
+    ? "sm:grid-cols-[8rem_8rem_1fr]"
+    : "sm:grid-cols-[8rem_1fr]";
+  return `<article class="border-base-content/10 bg-base-100 rounded-lg border p-4" data-alert-group-id="${escapeHtml(group.id)}">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div class="min-w-0">
+        <h3 class="font-semibold">${escapeHtml(title)}</h3>
+        <p class="text-base-content/60 mt-1 text-xs">${escapeHtml(group.pipelineId || "fleet")}${stageCount ? ` / ${stageCount} stages` : group.stageId ? ` / ${escapeHtml(group.stageId)}` : ""}</p>
+      </div>
+      <div class="flex shrink-0 items-center gap-2">
+        <span class="badge badge-outline">${group.alerts.length} alerts</span>
+        <span class="badge ${severityTone(group.severity)}">${escapeHtml(group.severity)}</span>
+      </div>
+    </div>
+    <p class="mt-3 text-sm">${escapeHtml(cause)}</p>
+    <div class="mt-3 grid gap-2 ${impactGridClass}">
+      <div class="bg-base-200 rounded-md p-3">
+        <div class="text-base-content/60 text-xs font-semibold uppercase">Blast radius</div>
+        <div class="mt-1 text-lg font-semibold tabular-nums">${group.outputIds.length || group.alerts.length}</div>
+        <div class="text-base-content/60 text-xs">${group.outputIds.length ? "outputs affected" : "conditions"}</div>
+      </div>
+      ${
+        stageCount
+          ? `<div class="bg-base-200 rounded-md p-3">
+        <div class="text-base-content/60 text-xs font-semibold uppercase">Stages</div>
+        <div class="mt-1 text-lg font-semibold tabular-nums">${stageCount}</div>
+        <div class="text-base-content/60 text-xs">upstream</div>
+      </div>`
+          : ""
+      }
+      <div class="bg-base-200 rounded-md p-3 text-sm">
+        <span class="font-medium">Recommended action:</span> ${escapeHtml(group.recommendedAction)}
+      </div>
+    </div>
+    ${sampleOutputs.length ? `<details class="mt-3 text-sm"><summary class="cursor-pointer font-medium">Affected outputs</summary><div class="mt-2 flex flex-wrap gap-1">${sampleOutputs.map((id) => `<code class="bg-base-200 rounded px-1.5 py-1 text-xs">${escapeHtml(id)}</code>`).join("")}${remainingOutputs ? `<span class="text-base-content/60 px-1.5 py-1 text-xs">+${remainingOutputs} more</span>` : ""}</div></details>` : ""}
+    ${evidence ? `<details class="mt-3 text-sm"><summary class="cursor-pointer font-medium">Evidence</summary><ul class="mt-2 list-disc space-y-1 pl-5">${evidence}</ul></details>` : ""}
+    <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/60">
+      <span>Last seen ${escapeHtml(formatTime(group.lastSeen))}</span>
+      ${group.pipelineId ? `<button type="button" class="btn btn-xs btn-outline" data-open-incident-pipeline="${escapeHtml(group.pipelineId)}">Open pipeline</button>` : ""}
+    </div>
+  </article>`;
+}
+
 function renderEvent(event: LifecycleEvent): string {
   return `<li class="border-base-content/10 border-b py-3 last:border-0">
     <div class="flex items-start justify-between gap-3"><span class="text-sm font-medium">${escapeHtml(eventSummary(event))}</span><time datetime="${escapeHtml(event.timestamp)}" class="text-base-content/50 whitespace-nowrap text-xs">${escapeHtml(formatTime(event.timestamp))}</time></div>
@@ -118,6 +273,7 @@ export function renderIncidentsHtml(
         Number(left.severity === "critical");
       return severity || left.title.localeCompare(right.title);
     });
+  const alertGroups = groupAlerts(alerts);
   const critical = alerts.filter(
     (alert) => alert.severity === "critical",
   ).length;
@@ -153,7 +309,7 @@ export function renderIncidentsHtml(
       <div class="stat bg-base-200 rounded-lg"><div class="stat-title">Failed outputs (fleet)</div><div class="stat-value text-2xl">${overview?.failedOutputs ?? "—"}</div></div>
     </section>
     <div class="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,.65fr)]">
-      <section><h2 class="mb-3 font-semibold">Active alerts</h2><div class="space-y-3">${data.loaded && data.alerts && !alerts.length ? `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">No active alerts${pipelineId ? " for this pipeline" : ""}.</div>` : alerts.map(renderAlert).join("")}</div></section>
+      <section><h2 class="mb-3 font-semibold">Active alerts</h2><div class="space-y-3">${data.loaded && data.alerts && !alerts.length ? `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">No active alerts${pipelineId ? " for this pipeline" : ""}.</div>` : alertGroups.map(renderAlertGroup).join("")}</div></section>
       <section class="border-base-content/10 bg-base-200 self-start rounded-lg border p-4"><h2 class="font-semibold">Recent lifecycle events</h2><ul class="mt-2">${data.loaded && data.events && !events.length ? `<li class="py-6 text-center text-sm text-base-content/60">No recent lifecycle events.</li>` : events.map(renderEvent).join("")}</ul></section>
     </div>
   </div>`;
