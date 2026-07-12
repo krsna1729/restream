@@ -8,6 +8,7 @@ use crate::planner::backend_policy::BackendPolicy;
 /// Keep this as the single source of truth: tests and harness fallbacks use the same
 /// value so they cannot silently recreate the legacy repository-root `media/` directory.
 pub const DEFAULT_MEDIA_DIR: &str = ".restream/media";
+const EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR: usize = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServerPorts {
@@ -125,6 +126,23 @@ fn env_bool(name: &str) -> Option<bool> {
     })
 }
 
+fn derive_external_ffmpeg_permits(
+    cpus: usize,
+    reserve: usize,
+    per_child: usize,
+    hard_cap: usize,
+) -> usize {
+    let cpu_budgeted = cpus
+        .saturating_sub(reserve)
+        .max(1)
+        .div_ceil(per_child.max(1))
+        .max(1);
+    cpu_budgeted
+        .max(EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR)
+        .min(hard_cap)
+        .max(1)
+}
+
 impl ServerPorts {
     pub fn from_env() -> Self {
         Self {
@@ -200,7 +218,8 @@ impl Default for AppConfig {
         let cpus = std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
             .unwrap_or(1);
-        let derived_permits = cpus.saturating_sub(2).max(1).div_ceil(2).max(1);
+        let derived_permits =
+            derive_external_ffmpeg_permits(cpus, 2.min(cpus.saturating_sub(1)), 2, usize::MAX);
 
         Self {
             ports,
@@ -320,12 +339,7 @@ impl AppConfig {
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(usize::MAX);
-            let derived = cpus
-                .saturating_sub(reserve)
-                .max(1)
-                .div_ceil(per_child)
-                .max(1);
-            derived.min(hard_cap).max(1)
+            derive_external_ffmpeg_permits(cpus, reserve, per_child, hard_cap)
         };
 
         Self {
@@ -553,6 +567,47 @@ mod tests {
         with_env_vars(&[("RESTREAM_SECURE_SESSION_COOKIES", "true")], || {
             assert!(AppConfig::from_env().secure_session_cookies);
         });
+    }
+
+    #[test]
+    fn external_ffmpeg_derivation_keeps_live_dependency_graph_moving() {
+        assert_eq!(
+            derive_external_ffmpeg_permits(6, 2, 2, usize::MAX),
+            EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR
+        );
+        assert_eq!(
+            derive_external_ffmpeg_permits(2, 1, 2, usize::MAX),
+            EXTERNAL_FFMPEG_LIVE_LIVENESS_FLOOR
+        );
+        assert_eq!(derive_external_ffmpeg_permits(64, 2, 2, usize::MAX), 31);
+        assert_eq!(derive_external_ffmpeg_permits(6, 2, 2, 3), 3);
+    }
+
+    #[test]
+    fn external_ffmpeg_env_override_and_hard_cap_are_preserved() {
+        with_env_overlay(
+            &[("RESTREAM_EXTERNAL_FFMPEG_PERMITS", "2")],
+            &[
+                "RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN",
+                "RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE",
+                "RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD",
+            ],
+            || {
+                assert_eq!(AppConfig::from_env().external_ffmpeg_permits, 2);
+            },
+        );
+
+        with_env_overlay(
+            &[("RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN", "3")],
+            &[
+                "RESTREAM_EXTERNAL_FFMPEG_PERMITS",
+                "RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE",
+                "RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD",
+            ],
+            || {
+                assert_eq!(AppConfig::from_env().external_ffmpeg_permits, 3);
+            },
+        );
     }
 
     #[test]

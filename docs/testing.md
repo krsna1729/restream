@@ -512,7 +512,8 @@ Runtime thread and process limits relevant to matrix and fast-breadth runs:
 | `HARNESS_FFMPEG_THREADS` | Harness publisher FFmpeg | `2` | Caps encoder/reader threads for harness-side publishers. |
 | `RESTREAM_EXTERNAL_FFMPEG_THREADS` | External stage FFmpeg children | `2` | Caps per-child FFmpeg worker threads in runtime transcoder stages. |
 | `RESTREAM_RECORDING_FFMPEG_THREADS` | Recording remux FFmpeg child | `2` | Caps thread fanout during TS->MP4 remux. |
-| `RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN` | Restream stage scheduler | derived | Hard cap for concurrent external FFmpeg stage children. |
+| `RESTREAM_EXTERNAL_FFMPEG_PERMITS` | Restream stage scheduler | unset | Explicit override for concurrent external FFmpeg stage children. |
+| `RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN` | Restream stage scheduler | derived with live-stage floor 5 | Hard cap for concurrent external FFmpeg stage children. The default floor prevents all-external HEVC live graphs from starving dependent stages; set this lower only for constrained-capacity proof runs. |
 | `RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE` | Restream stage scheduler | `2` | CPU headroom reserved for Tokio + listeners while deriving child cap. |
 | `RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD` | Restream stage scheduler | `2` | Expected CPU budget per external FFmpeg child when deriving child cap. |
 | `RESTREAM_TOKIO_WORKER_THREADS` | Restream Tokio runtime | `min(max(cpus,2),16)` | Explicit runtime worker thread cap for async tasks. |
