@@ -48,6 +48,8 @@ mod hls_put;
 mod live_modes;
 #[path = "test_harness/media_probes.rs"]
 mod media_probes;
+#[path = "test_harness/mediamtx_probe.rs"]
+mod mediamtx_probe;
 #[path = "test_harness/mixed_adaptive_ring.rs"]
 mod mixed_adaptive_ring;
 #[path = "test_harness/mixed_manifest.rs"]

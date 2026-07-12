@@ -524,6 +524,7 @@ struct ResourceSample {
 }
 
 /// Rollup statistics for a resource-sweep scenario.
+#[derive(Clone)]
 struct ResourceAggregate {
     scenario: String,
     label: String,

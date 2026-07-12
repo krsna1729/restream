@@ -212,6 +212,11 @@ MSR stands for **Mahashivratri**. It is an additive,
 bench-profile-only harness mode and is not part of the default suite. Its safe
 default runs the first 30 outputs; set `MSR_FULL=1` for the canonical
 30/120/300/600/900/1,200 ramp or override `MSR_OUTPUT_COUNTS` directly.
+Each checkpoint must now prove both Restream output progress and sink-side
+MediaMTX health by querying `/v3/paths/list`: every expected sink path must be
+`ready=true`, and aggregate `bytesReceived` must grow across the sample window.
+The harness writes the machine-readable rollup to `msr-results.json` and a
+human report to `msr-report.md`.
 
 Run the deterministic plan smoke, bounded default, or full Mahashivratri ramp:
 
@@ -289,8 +294,10 @@ per-output backend cost from physical-link saturation. At each step record:
 Correctness probing should occur once per distinct language/subset shape plus a
 deterministic sample of duplicate hot-language outputs. Spawning an `ffprobe`
 process for all 1,200 outputs would measure probe-process fan-out more than the
-backend. The harness sink should count progress on every connection and reserve
-full decode/probe checks for representative routes.
+backend. The scale checkpoint should use a generic receiver-health signal for
+every output path, currently MediaMTX `/v3/paths/list` readiness plus
+`bytesReceived` growth, and reserve full decode/probe checks for representative
+routes.
 
 ### Phase 3: bitrate and codec envelope
 
@@ -343,8 +350,8 @@ resource/ramp infrastructure:
 - a typed `HeroLanguageFanoutConfig` owning rank counts, protocol assignment,
   codec, resolution, frame rate, and SRT subset/all variants;
 - a declarative scenario file rather than 1,200 hand-authored output rows;
-- harness-owned high-concurrency RTMP and SRT sinks where available, avoiding
-  one helper process per output;
+- generic receiver-health adapters, starting with MediaMTX path-health polling,
+  avoiding one helper process per output;
 - production output creation through the existing HTTP API;
 - incremental `scenario.json`, JSONL assertions, raw 1 Hz samples, CSV summary,
   and final JSON result;
@@ -401,7 +408,7 @@ Eventually, a passing canonical run should require:
 - [x] Exact 30-track transport mapping built from the checked-in `2v16a` fixture
 - [x] Deterministic topology unit tests added
 - [x] `msr` mode registered
-- [ ] Harness-owned sinks proven at the required connection counts
+- [ ] Generic receiver-health proof recorded at the required connection counts
 - [ ] Phase 1 correctness run passing
 - [ ] Phase 2 bounded Zipf ramp baseline recorded
 - [ ] Phase 3 1080p/4K and H.264/HEVC envelope recorded
