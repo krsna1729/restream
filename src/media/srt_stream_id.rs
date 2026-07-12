@@ -17,12 +17,7 @@ pub(super) fn strip_query(value: &str) -> &str {
 pub(super) fn normalize_srt_stream_key(value: &str) -> String {
     let without_query = strip_query(value).trim();
     let decoded = percent_decode(without_query);
-    strip_query(&decoded)
-        .rsplit('/')
-        .next()
-        .unwrap_or(decoded.as_str())
-        .trim()
-        .to_string()
+    strip_query(&decoded).trim().to_string()
 }
 
 /// Decode percent-encoded characters in a URL query parameter value.

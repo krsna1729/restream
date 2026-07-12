@@ -134,8 +134,8 @@ Create and start 4 outputs (loop over name|url|encoding triples):
 for SPEC in \
   "RTMP_source|rtmp://127.0.0.1:33080/live/rtmp-src|source" \
   "RTMP_720p|rtmp://127.0.0.1:33080/live/rtmp-720p|720p" \
-  "SRT_source|srt://127.0.0.1:34080?streamid=publish:live/srt-src&pkt_size=1316|source" \
-  "SRT_720p|srt://127.0.0.1:34080?streamid=publish:live/srt-720p&pkt_size=1316|720p"; do
+  "SRT_source|srt://127.0.0.1:34080?streamid=publish:srt-src&pkt_size=1316|source" \
+  "SRT_720p|srt://127.0.0.1:34080?streamid=publish:srt-720p&pkt_size=1316|720p"; do
   IFS='|' read -r NAME URL ENC <<< "$SPEC"
   OID=$(curl -sf -b "$WORK/cookies.txt" \
     -X POST "http://127.0.0.1:39280/pipelines/$PIPE_ID/outputs" \
@@ -153,7 +153,7 @@ Start the 2v16a SRT publisher (H.264 1080p30 at stream index 1, all 16 audio tra
 ffmpeg -nostdin -hide_banner -loglevel error \
   -re -stream_loop -1 -i test/fixtures/media-library/colorbar-timer-2v16a.mp4 \
   -map 0:1 -map 0:a? -c copy \
-  -f mpegts 'srt://127.0.0.1:31280?streamid=publish:live/live&pkt_size=1316' \
+  -f mpegts 'srt://127.0.0.1:31280?streamid=publish:live&pkt_size=1316' \
   >> "$WORK/ffmpeg-pub.log" 2>&1 &
 echo $! > "$WORK/ffmpeg-pub.pid"
 ```
@@ -207,9 +207,9 @@ Print the final summary box:
 ```
 Dashboard: http://127.0.0.1:39280/
 Login:     admin
-Ingest:    srt://127.0.0.1:31280  (publish:live/live)
+Ingest:    srt://127.0.0.1:31280  (publish:live)
 RTMP sink: rtmp://127.0.0.1:33080/live/{rtmp-src, rtmp-720p}
-SRT sink:  srt://127.0.0.1:34080  (publish:live/{srt-src, srt-720p})
+SRT sink:  srt://127.0.0.1:34080  (publish:{srt-src, srt-720p})
 HLS:       http://127.0.0.1:35080
 Logs:      /tmp/restream-live/{restream,mediamtx,ffmpeg-pub}.log
 ```

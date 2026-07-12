@@ -153,7 +153,8 @@ scripts/build/resource-limit.sh cargo test prop_source_stage_chunked_input_prese
 scripts/build/resource-limit.sh cargo test replacement_video_stage_preserves_codec_hint_and_audio_tracks --test transcoder -- --nocapture
 scripts/build/resource-limit.sh cargo test prop_multi_reader_migration_preserves_each_reader_order --test ring_migration -- --nocapture
 scripts/build/resource-limit.sh cargo test media::avio::tests --lib -- --nocapture
-scripts/build/resource-limit.sh cargo test srt_stream_ids_normalize_equivalent --lib -- --nocapture
+scripts/build/resource-limit.sh cargo test srt_stream_ids_normalize_plain --lib -- --nocapture
+scripts/build/resource-limit.sh cargo test srt_stream_ids_keep_slashes_as_literal_key_data --lib -- --nocapture
 scripts/build/resource-limit.sh cargo test srt_sender_semaphore --lib -- --nocapture
 scripts/build/resource-limit.sh cargo test --bin test_harness tests::kill_and_wait_child_terminates_spawned_process -- --exact --nocapture
 N_PER_GROUP=1 scripts/build/resource-limit.sh cargo run --bin test_harness -- fault.output-stall --no-netns

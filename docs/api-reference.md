@@ -115,7 +115,7 @@ does not enumerate unused or future credentials:
     "label": "Stream 1",
     "ingestUrls": {
       "rtmp": "rtmp://stream.example.com:1935/live/stream-key",
-      "srt": "srt://stream.example.com:10080?streamid=publish:live/stream-key"
+      "srt": "srt://stream.example.com:10080?streamid=publish:stream-key"
     }
   }
 ]

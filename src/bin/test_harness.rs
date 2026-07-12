@@ -118,7 +118,7 @@ fn planned_mixed_stage_count(
             (0..duplicates_per_output).map(move |duplicate| {
                 let url = match output_case.protocol() {
                     MixedOutputProtocol::Rtmp => "rtmp://example/live/out",
-                    MixedOutputProtocol::Srt => "srt://example:9000?streamid=publish:live/out",
+                    MixedOutputProtocol::Srt => "srt://example:9000?streamid=publish:out",
                 };
                 Output {
                     id: format!("{}-{duplicate}", output_case.id()),

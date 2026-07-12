@@ -374,7 +374,7 @@ fn decode_scan_video_dts_fallback_applies_to_rtmp_and_srt_muxer_warnings() {
         Some("non-monoton"),
     ));
     assert!(decode_scan_needs_video_dts_fallback(
-        "srt://127.0.0.1:9999?streamid=read:live/test",
+        "srt://127.0.0.1:9999?streamid=read:test",
         Some(0),
         Some("non monoton"),
     ));
@@ -1383,11 +1383,11 @@ fn sweep_output_kind_centralizes_urls_and_multi_audio_encoding() {
     );
     assert_eq!(
         SweepOutputKind::Srt720p.publish_url(1936, 8891, "out"),
-        "srt://127.0.0.1:8891?streamid=publish:live/out"
+        "srt://127.0.0.1:8891?streamid=publish:out"
     );
     assert_eq!(
         SweepOutputKind::Srt720p.read_url(1936, 8891, "out"),
-        "srt://127.0.0.1:8891?streamid=read:live/out&timeout=30000000"
+        "srt://127.0.0.1:8891?streamid=read:out&timeout=30000000"
     );
     assert_eq!(SweepOutputKind::Rtmp720p.encoding(true), "720p+atrack:0");
     assert_eq!(SweepOutputKind::Srt720p.encoding(true), "720p+atrack:0,1");

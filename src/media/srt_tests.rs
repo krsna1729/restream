@@ -68,25 +68,21 @@ async fn srt_server_shutdown_exits_with_no_connections() {
 fn parses_srt_stream_ids_from_common_tools() {
     let cases = [
         (
-            "publish:live/key01?latency=240000",
+            "publish:key01?latency=240000",
             SrtConnectionMode::Publish,
             "key01",
         ),
         ("publisher:key02", SrtConnectionMode::Publish, "key02"),
         ("key03", SrtConnectionMode::Publish, "key03"),
-        ("read:live/key04", SrtConnectionMode::Read, "key04"),
+        ("read:key04", SrtConnectionMode::Read, "key04"),
         ("play:key05", SrtConnectionMode::Read, "key05"),
-        ("subscriber:live/key06", SrtConnectionMode::Read, "key06"),
+        ("subscriber:key06", SrtConnectionMode::Read, "key06"),
         (
-            "#!::r=live/key07,m=publish,latency=240000",
+            "#!::r=key07,m=publish,latency=240000",
             SrtConnectionMode::Publish,
             "key07",
         ),
-        (
-            "#!::r=live/key08,m=request",
-            SrtConnectionMode::Read,
-            "key08",
-        ),
+        ("#!::r=key08,m=request", SrtConnectionMode::Read, "key08"),
     ];
 
     for (input, mode, key) in cases {
@@ -97,13 +93,11 @@ fn parses_srt_stream_ids_from_common_tools() {
 }
 
 #[test]
-fn srt_stream_ids_normalize_equivalent_publish_keys_before_registration() {
+fn srt_stream_ids_normalize_plain_publish_keys_before_registration() {
     let cases = [
-        "publish:live/key01",
-        "publish:live%2Fkey01",
-        "publisher:live%2fkey01?latency=240000",
-        "#!::r=live/key01,m=publish,latency=240000",
-        "#!::r=live%2Fkey01,m=publish,latency=240000",
+        "publish:key01",
+        "publisher:key01?latency=240000",
+        "#!::r=key01,m=publish,latency=240000",
     ];
 
     for input in cases {
@@ -142,13 +136,12 @@ fn srt_egress_preroll_is_reserved_for_1080p_variants() {
 }
 
 #[test]
-fn srt_stream_ids_normalize_equivalent_read_keys_before_auth() {
+fn srt_stream_ids_normalize_plain_read_keys_before_auth() {
     let cases = [
-        "read:live/key02",
-        "play:live%2Fkey02",
-        "subscriber:live%2fkey02?latency=240000",
-        "#!::r=live/key02,m=request",
-        "#!::r=live%2Fkey02,m=request",
+        "read:key02",
+        "play:key02",
+        "subscriber:key02?latency=240000",
+        "#!::r=key02,m=request",
     ];
 
     for input in cases {
@@ -156,6 +149,17 @@ fn srt_stream_ids_normalize_equivalent_read_keys_before_auth() {
         assert_eq!(parsed.mode, SrtConnectionMode::Read, "input={input}");
         assert_eq!(parsed.stream_key, "key02", "input={input}");
     }
+}
+
+#[test]
+fn srt_stream_ids_keep_slashes_as_literal_key_data() {
+    let parsed = parse_srt_stream_id("publish:live/key01");
+    assert_eq!(parsed.mode, SrtConnectionMode::Publish);
+    assert_eq!(parsed.stream_key, "live/key01");
+
+    let parsed = parse_srt_stream_id("#!::r=live%2Fkey02,m=request");
+    assert_eq!(parsed.mode, SrtConnectionMode::Read);
+    assert_eq!(parsed.stream_key, "live/key02");
 }
 
 #[test]
@@ -325,19 +329,19 @@ fn egress_url_parses_simple_target() {
 
 #[test]
 fn egress_url_parses_streamid() {
-    let u = parse_srt_egress_url("srt://host:9000?streamid=publish:live/key1");
+    let u = parse_srt_egress_url("srt://host:9000?streamid=publish:key1");
     assert_eq!(u.host_port, "host:9000");
-    assert_eq!(u.streamid, "publish:live/key1");
+    assert_eq!(u.streamid, "publish:key1");
     assert!(u.bond_addrs.is_empty());
 }
 
 // --- Regression: issue #6 (Round 5) — SRT stream ID percent-decode ---
 // Before the fix, percent-encoded characters in the streamid query parameter
-// were passed through raw. `publish:live%2Fkey` would be compared against DB
+// were passed through raw. Percent-encoded stream IDs would be compared against DB
 // stream keys verbatim, causing silent auth failure.
 #[test]
 fn percent_decode_basic() {
-    assert_eq!(percent_decode("publish:live%2Fkey"), "publish:live/key");
+    assert_eq!(percent_decode("publish:key%2Done"), "publish:key-one");
     assert_eq!(percent_decode("hello%20world"), "hello world");
     assert_eq!(percent_decode("no_encoding"), "no_encoding");
     assert_eq!(percent_decode("%41%42%43"), "ABC"); // A=0x41, B=0x42, C=0x43
@@ -352,10 +356,10 @@ fn percent_decode_incomplete_sequence_passthrough() {
 
 #[test]
 fn egress_url_percent_decodes_streamid() {
-    // Percent-encoded slash in streamid must be decoded before use.
-    let u = parse_srt_egress_url("srt://host:9000?streamid=publish%3Alive%2Fmykey");
+    // Percent-encoded streamid characters must be decoded before use.
+    let u = parse_srt_egress_url("srt://host:9000?streamid=publish%3Amykey");
     assert_eq!(
-        u.streamid, "publish:live/mykey",
+        u.streamid, "publish:mykey",
         "percent-encoded streamid must be decoded in egress URL"
     );
 }
@@ -668,7 +672,7 @@ async fn start_srt_egress_handles_invalid_streamid_without_panic() {
         .register_egress_attempt(
             "out-id",
             "pipe-id",
-            "srt://127.0.0.1:12345?streamid=publish:live/mykey",
+            "srt://127.0.0.1:12345?streamid=publish:mykey",
             None,
         )
         .await;
@@ -676,7 +680,7 @@ async fn start_srt_egress_handles_invalid_streamid_without_panic() {
         "out-id".to_string(),
         "pipe-id".to_string(),
         "source".to_string(),
-        "srt://127.0.0.1:12345?streamid=publish:live/\x00mykey".to_string(),
+        "srt://127.0.0.1:12345?streamid=publish:\x00mykey".to_string(),
         ring_buffer,
         engine,
         registration,

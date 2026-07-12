@@ -103,11 +103,11 @@ mod tests {
 
     #[test]
     fn redacts_url_credentials_path_tail_and_query_values() {
-        let raw = "srt://user:pass@example.com/live/stream-key-secret?streamid=publish:live/stream-key-secret&passphrase=secret-pass-123&pbkeylen=16";
+        let raw = "srt://user:pass@example.com/stream-key-secret?streamid=publish:stream-key-secret&passphrase=secret-pass-123&pbkeylen=16";
 
         let redacted = redact_url(raw);
 
-        assert!(redacted.contains("srt://user...pass@example.com/live/stre...cret?"));
+        assert!(redacted.contains("srt://user...pass@example.com/stre...cret?"));
         assert!(redacted.contains("streamid=publ...cret"));
         assert!(redacted.contains("passphrase=secr...-123"));
         assert!(redacted.contains("pbkeylen=16"));

@@ -13,8 +13,8 @@ pub(crate) enum HarnessSrtMode {
 impl HarnessSrtMode {
     fn streamid(self, stream_key: &str) -> String {
         match self {
-            Self::Publish => format!("publish:live/{stream_key}"),
-            Self::Read => format!("read:live/{stream_key}"),
+            Self::Publish => format!("publish:{stream_key}"),
+            Self::Read => format!("read:{stream_key}"),
         }
     }
 }
@@ -28,6 +28,10 @@ pub(crate) fn harness_srt_output_url(port: u16, stream_key: &str, mode: HarnessS
         url.push_str(&format!("&timeout={HARNESS_SRT_TIMEOUT_US}"));
     }
     url
+}
+
+pub(crate) fn harness_srt_standard_publish_url(port: u16, stream_key: &str) -> String {
+    format!("srt://127.0.0.1:{port}?streamid=#!::m=publish,r={stream_key}")
 }
 
 pub(crate) fn harness_srt_ffmpeg_url(
@@ -69,15 +73,19 @@ mod tests {
     fn harness_srt_urls_share_named_defaults() {
         assert_eq!(
             harness_srt_output_url(9000, "out", HarnessSrtMode::Publish),
-            "srt://127.0.0.1:9000?streamid=publish:live/out"
+            "srt://127.0.0.1:9000?streamid=publish:out"
         );
         assert_eq!(
             harness_srt_output_url(9000, "out", HarnessSrtMode::Read),
-            "srt://127.0.0.1:9000?streamid=read:live/out&timeout=30000000"
+            "srt://127.0.0.1:9000?streamid=read:out&timeout=30000000"
         );
         assert_eq!(
             harness_srt_ffmpeg_url(9000, "in", HarnessSrtMode::Publish, None),
-            "srt://127.0.0.1:9000?streamid=publish:live/in&pkt_size=1316&latency=200000"
+            "srt://127.0.0.1:9000?streamid=publish:in&pkt_size=1316&latency=200000"
+        );
+        assert_eq!(
+            harness_srt_standard_publish_url(9000, "out"),
+            "srt://127.0.0.1:9000?streamid=#!::m=publish,r=out"
         );
         assert_eq!(
             harness_srt_ffmpeg_listener_url(9000),

@@ -179,8 +179,9 @@ surface already covers it.
   - `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream`
 - `src/media/srt.rs`
   - `epoll_waiter_coordination`
-  - `srt_stream_ids_normalize_equivalent_publish_keys_before_registration`
-  - `srt_stream_ids_normalize_equivalent_read_keys_before_auth`
+  - `srt_stream_ids_normalize_plain_publish_keys_before_registration`
+  - `srt_stream_ids_normalize_plain_read_keys_before_auth`
+  - `srt_stream_ids_keep_slashes_as_literal_key_data`
   - `srt_sender_semaphore_is_bounded`
   - `srt_sender_semaphore_releases_on_drop`
 - `src/media/ts_chunk_ring.rs`

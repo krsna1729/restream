@@ -109,7 +109,7 @@ Generated publisher URLs use the configured ingest host and fixed native ports:
 
 ```text
 rtmp://<ingestHost>:1935/live/<streamKey>
-srt://<ingestHost>:10080?streamid=publish:live/<streamKey>
+srt://<ingestHost>:10080?streamid=publish:<streamKey>
 ```
 
 Pipelines may supply an explicit stream key, or omit it and let the API generate
@@ -256,7 +256,7 @@ has not approved unprivileged namespaces.
 SRT egress backup links can be supplied with:
 
 ```text
-srt://primary.example:10080?streamid=publish:live/key&bond=backup1.example:10080,backup2.example:10080
+srt://primary.example:10080?streamid=publish:key&bond=backup1.example:10080,backup2.example:10080
 ```
 
 This code path is unit-tested for URL parsing and socket-option constants, but

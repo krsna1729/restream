@@ -1773,7 +1773,7 @@ async fn processing_graph_routes_srt_egress_through_ts_mux() {
         id: "out-srt".to_string(),
         pipeline_id: pipeline_id.to_string(),
         name: "SRT Target".to_string(),
-        url: "srt://example.com:9000?streamid=publish:live/test".to_string(),
+        url: "srt://example.com:9000?streamid=publish:test".to_string(),
         monitoring_url: None,
         desired_state: DesiredOutputState::Running,
         config: crate::domain::output_spec::OutputConfig::parse("source"),

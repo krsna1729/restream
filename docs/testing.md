@@ -605,9 +605,9 @@ Current local shape used on June 27, 2026:
 |---|---|
 | Restream dashboard/API | `http://127.0.0.1:39280` |
 | Restream RTMP ingest | `rtmp://127.0.0.1:32080/live/<streamKey>` |
-| Restream SRT ingest | `srt://127.0.0.1:31280?streamid=publish:live/<streamKey>` |
+| Restream SRT ingest | `srt://127.0.0.1:31280?streamid=publish:<streamKey>` |
 | MediaMTX RTMP sink | `rtmp://127.0.0.1:33080/live/<path>` |
-| MediaMTX SRT sink | `srt://127.0.0.1:34080?streamid=publish:live/<path>` |
+| MediaMTX SRT sink | `srt://127.0.0.1:34080?streamid=publish:<path>` |
 | MediaMTX HLS sink | `http://127.0.0.1:35080/<path>/index.m3u8` |
 | Runtime work dir | `/tmp/restream-live-current` |
 

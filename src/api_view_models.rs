@@ -27,7 +27,7 @@ pub(crate) fn pipeline_response_json(
         ),
         "ingestUrls": {
             "rtmp": format!("rtmp://{}:{}/live/{}", effective_ingest_host, rtmp_port, pipeline.stream_key),
-            "srt": format!("srt://{}:{}?streamid=publish:live/{}", effective_ingest_host, srt_port, pipeline.stream_key)
+            "srt": format!("srt://{}:{}?streamid=publish:{}", effective_ingest_host, srt_port, pipeline.stream_key)
         }
     })
 }
@@ -1020,7 +1020,7 @@ mod tests {
         );
         assert_eq!(
             pipeline_json["ingestUrls"]["srt"],
-            "srt://ingest.example:10080?streamid=publish:live/stream-key"
+            "srt://ingest.example:10080?streamid=publish:stream-key"
         );
         assert_eq!(pipeline_json["srtIngestPolicy"]["mode"], "encrypted");
         assert_eq!(pipeline_json["srtIngestPolicy"]["pbkeylen"], 24);

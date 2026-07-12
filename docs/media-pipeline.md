@@ -545,7 +545,7 @@ depends on the distro `libsrt` package.
 Backup links via `bond=` URL parameter:
 
 ```text
-srt://primary:10080?streamid=publish:live/key&bond=backup1:10080,backup2:10080
+srt://primary:10080?streamid=publish:key&bond=backup1:10080,backup2:10080
 ```
 
 Creates an `SRT_GTYPE_BACKUP` group. Both single-connection and bonded egress groups now call `srt_set_highbitrate_opts(client_sock)` immediately after creation to prevent packet drops and buffer overflows under high bitrates.
@@ -564,14 +564,16 @@ probe protocols.
 The listener accepts these shapes:
 
 ```text
-publish:live/<key>        publisher:<key>
-read:live/<key>           play:<key>           subscriber:<key>
+publish:<key>             publisher:<key>
+read:<key>                play:<key>           subscriber:<key>
 <key>
-#!::r=live/<key>,m=publish
-#!::r=live/<key>,m=request
+#!::r=<key>,m=publish
+#!::r=<key>,m=request
 ```
 
 Query parameters are stripped before database validation.
+Slash-delimited application prefixes are RTMP-only; SRT treats the decoded
+resource string as the stream key.
 
 ### Media streams only
 

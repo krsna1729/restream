@@ -942,7 +942,7 @@ async fn output_urls_are_parsed_normalized_and_host_required() {
             "PATCH",
             &format!("/api/v1/pipelines/p_url_norm/outputs/{output_id}"),
             &cookie,
-            Some(r#"{"name":"Normalized","url":" SRT://SINK.EXAMPLE:9000?streamid=publish:live/key ","monitoringUrl":null,"config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
+            Some(r#"{"name":"Normalized","url":" SRT://SINK.EXAMPLE:9000?streamid=publish:key ","monitoringUrl":null,"config":{"video":{"mode":"source"},"audio":{"mode":"all"}}}"#),
         ))
         .await
         .unwrap();
@@ -950,7 +950,7 @@ async fn output_urls_are_parsed_normalized_and_host_required() {
     let json = body_json(resp).await;
     assert_eq!(
         json["output"]["url"],
-        "srt://sink.example:9000?streamid=publish:live/key"
+        "srt://sink.example:9000?streamid=publish:key"
     );
 
     let resp = app
@@ -1233,7 +1233,7 @@ async fn config_patch_ingest_host_persists_and_updates_ingest_urls() {
     );
     assert_eq!(
         json["pipelines"][0]["ingestUrls"]["srt"],
-        "srt://ingest.example.com:10080?streamid=publish:live/key01"
+        "srt://ingest.example.com:10080?streamid=publish:key01"
     );
 
     let resp = app
@@ -1561,7 +1561,7 @@ async fn stream_keys_returns_array() {
     );
     assert_eq!(
         keys[0]["ingestUrls"]["srt"],
-        "srt://ingest.example.com:10080?streamid=publish:live/configured-key"
+        "srt://ingest.example.com:10080?streamid=publish:configured-key"
     );
 }
 

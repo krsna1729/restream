@@ -198,7 +198,7 @@ mod tests {
         };
         let url = match protocol_case % 3 {
             0 => format!("rtmp://example/live/out-{index}"),
-            1 => format!("srt://example:9000?streamid=publish:live/out-{index}"),
+            1 => format!("srt://example:9000?streamid=publish:out-{index}"),
             _ => format!("https://example/live/out-{index}.m3u8"),
         };
 
