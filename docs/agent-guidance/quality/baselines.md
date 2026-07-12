@@ -936,3 +936,75 @@ Raw artifacts:
 - `.local/artifacts/msr-arena2-3031-20260712T161905Z/pidstat-threads-restream-arena2.txt`
 - `.local/artifacts/msr-arena2-3031-20260712T161905Z/restream-smaps-rollup-before-perf.txt`
 - `.local/artifacts/msr-arena2-3031-20260712T161905Z/restream-smaps-rollup-plus2m.txt`
+
+### Exploratory MSR thread-affinity partition probe - 2026-07-12 (local)
+
+External, reversible `taskset` probe on the live `MALLOC_ARENA_MAX=2` MSR run
+above. This did not change runtime code. The original thread masks were saved,
+SRT threads were temporarily pinned to CPUs `0-1`, and all other Restream
+threads were pinned to CPUs `2-5`; masks were restored to `0-5` after the
+sample. This is not a clean Q-012 completion run because it sits on top of the
+arena-cap experiment, but it is useful triage for whether internal affinity is
+worth designing.
+
+Current code already sizes Tokio workers from effective CPU capacity:
+Rust available parallelism, process `Cpus_allowed_list`, and cgroup v2
+`cpu.max`, using `effective_cpus / 3` rounded up and clamped to `1..8`. The
+live process had mask `0-5` and `82` threads. The `tokio-rt-worker` Linux
+thread name is overloaded: it includes idle blocking-pool threads, not just
+busy async scheduler workers. The hot sample showed only two busy Tokio
+workers, so raw thread count alone is not a capacity problem.
+
+Thread census before partitioning:
+
+| Thread group | Threads | 5 s CPU sample | Notes |
+|---|---:|---:|---|
+| Tokio runtime/blocking-pool | `64` | `96.60%` | only two hot; most sleeping |
+| SRT receive queue | `2` | `19.00%` | `SRT:RcvQ:w2` hot |
+| SRT send queue | `2` | `8.60%` | `SRT:SndQ:w2` hot |
+| SQLite workers | `10` | `1.00%` | mostly idle |
+| Main/restream thread | `1` | `1.80%` | low-duty |
+| SRT timestamp/playback | `1` | `0.40%` | low-duty |
+| SRT garbage collector | `1` | `0.00%` | idle |
+| Tracing file appender | `1` | `0.00%` | idle |
+
+Thread CPU was concentrated in two Tokio workers plus the shared SRT muxer
+threads:
+
+| Thread | Hot sample |
+|---|---:|
+| `tokio-rt-worker` tid `611213` | `43.80%` CPU |
+| `tokio-rt-worker` tid `611212` | `43.80%` CPU |
+| `SRT:RcvQ:w2` | `16.80%` CPU |
+| `SRT:SndQ:w2` | `8.60%` CPU |
+| `SRT:RcvQ:w1` | `2.20%` CPU |
+
+Affinity-partitioned process counters over 15 s:
+
+| Metric | Arena-cap unpinned | Arena-cap partition probe |
+|---|---:|---:|
+| MediaMTX ready | `1200/1200` | `1200/1200` |
+| MediaMTX bytes delta | `169,653,485` over 3 s | `220,513,390` over 3 s |
+| CPU utilized | `2.600` CPUs | `2.458` CPUs |
+| IPC | `0.374` | `0.350` |
+| Cache misses | `18.37%` | `19.00%` |
+| Branch misses | `8.50%` | `8.88%` |
+| Context switches | `5.495 K/sec` | `6.292 K/sec` |
+| CPU migrations | `712.867/sec` | `553.133/sec` |
+| Page faults | `76.467/sec` | `0.067/sec` |
+
+Conclusion: coarse partitioning is plausible but not proven. It improved CPU
+and migrations in this short sample while worsening IPC, cache misses, branch
+misses, and context switches. Do not add internal affinity yet. If Q-012 moves
+to code, it should first run a clean default-runtime A/B and then design
+ownership-aware placement: derive partitions from the effective CPU mask and
+pin only long-lived, high-duty thread families (Tokio workers and shared SRT
+muxers), with an explicit opt-in and concurrency proof gates.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-arena2-3031-20260712T161905Z/affinity-probe/original-affinity.txt`
+- `.local/artifacts/msr-arena2-3031-20260712T161905Z/affinity-probe/mediamtx-proof-before-perf.json`
+- `.local/artifacts/msr-arena2-3031-20260712T161905Z/affinity-probe/mediamtx-proof-after-perf.json`
+- `.local/artifacts/msr-arena2-3031-20260712T161905Z/affinity-probe/perf-stat-partitioned.csv`
+- `.local/artifacts/msr-arena2-3031-20260712T161905Z/affinity-probe/pidstat-partitioned.txt`
