@@ -19,7 +19,7 @@ use crate::events::EventLog;
 use crate::media::avio::MemoryQueue;
 use crate::media::engine::{
     ActiveEgress, ActiveIngest, EgressRetryState, HlsConsumers, ListenerSocketStats,
-    RecentEgressOutcome, RecentIngestOutcome,
+    RecentEgressOutcome, RecentIngestOutcome, RtmpListenerStats,
 };
 use crate::media::hls::HlsStore;
 use crate::media::hls_fmp4::Fmp4HlsStore;
@@ -179,6 +179,7 @@ impl StageRegistry {
 
 pub struct RuntimeInfra {
     pub listener_stats: Arc<ListenerSocketStats>,
+    pub rtmp_listener_stats: Arc<RtmpListenerStats>,
     pub os_threads: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
     pub listener_shutdowns: std::sync::Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
     pub sender_semaphore: Arc<tokio::sync::Semaphore>,
@@ -198,6 +199,7 @@ impl RuntimeInfra {
         let external_ffmpeg_permits = config.external_ffmpeg_permits;
         Self {
             listener_stats: Arc::new(ListenerSocketStats::default()),
+            rtmp_listener_stats: Arc::new(RtmpListenerStats::default()),
             os_threads: std::sync::Mutex::new(Vec::new()),
             listener_shutdowns: std::sync::Mutex::new(Vec::new()),
             sender_semaphore: Arc::new(tokio::sync::Semaphore::new(512)),

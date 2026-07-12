@@ -109,6 +109,79 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
         });
     }
 
+    let nofile = &snapshot["runtimeLimits"]["nofile"];
+    if nofile
+        .get("satisfied")
+        .and_then(|value| value.as_bool())
+        .is_some_and(|satisfied| !satisfied)
+    {
+        let configured = nofile
+            .get("configured")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+        let soft = nofile.get("soft").and_then(|value| value.as_u64());
+        let hard = nofile.get("hard").and_then(|value| value.as_u64());
+        let mut evidence = vec![format!("configured = {}", configured)];
+        if let Some(soft) = soft {
+            evidence.push(format!("soft = {}", soft));
+        }
+        if let Some(hard) = hard {
+            evidence.push(format!("hard = {}", hard));
+        }
+        alerts.push(Alert {
+            id: "engine:runtime:nofile_limit_too_low".into(),
+            severity: Severity::Warning,
+            scope: Scope::Engine,
+            pipeline_id: None,
+            stage_id: None,
+            output_id: None,
+            title: "Runtime file descriptor limit is below configured target".into(),
+            cause: "The process cannot open enough sockets/files for high fanout workloads."
+                .into(),
+            evidence,
+            recommended_action:
+                "Run the documented host bootstrap/configuration and restart Restream with the requested nofile limit available."
+                    .into(),
+            generated_at: generated_at.clone(),
+            first_seen: None,
+            last_seen: None,
+        });
+    }
+
+    let rtmp = &snapshot["rtmpListener"];
+    let fd_exhaustion = rtmp
+        .get("fdExhaustionErrors")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    if fd_exhaustion > 0 {
+        let accept_errors = rtmp
+            .get("acceptErrors")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+        alerts.push(Alert {
+            id: "engine:rtmp_listener:fd_exhaustion".into(),
+            severity: Severity::Critical,
+            scope: Scope::Engine,
+            pipeline_id: None,
+            stage_id: None,
+            output_id: None,
+            title: "RTMP listener exhausted file descriptors".into(),
+            cause:
+                "The RTMP listener hit the process or host open-file limit while accepting connections."
+                    .into(),
+            evidence: vec![
+                format!("fdExhaustionErrors = {}", fd_exhaustion),
+                format!("acceptErrors = {}", accept_errors),
+            ],
+            recommended_action:
+                "Raise the process/host nofile limit, reduce concurrent connections, and restart affected publishers."
+                    .into(),
+            generated_at: generated_at.clone(),
+            first_seen: None,
+            last_seen: None,
+        });
+    }
+
     // ── Per-pipeline checks ───────────────────────────────────────────────────
 
     if let Some(pipelines) = snapshot.get("pipelines").and_then(|v| v.as_object()) {
@@ -1095,6 +1168,58 @@ mod tests {
         assert_eq!(alerts.len(), 1);
         assert_eq!(alerts[0].severity, Severity::Warning);
         assert_eq!(alerts[0].scope, Scope::Engine);
+    }
+
+    #[test]
+    fn low_nofile_limit_yields_engine_warning() {
+        let snap = json!({
+            "generatedAt": "2026-06-25T00:00:00Z",
+            "runtimeLimits": {
+                "nofile": {
+                    "configured": 65536,
+                    "soft": 1024,
+                    "hard": 1024,
+                    "satisfied": false
+                }
+            },
+            "srtListener": { "udpDrops": 0 },
+            "pipelines": {}
+        });
+        let alerts = derive_alerts(&snap);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].severity, Severity::Warning);
+        assert_eq!(alerts[0].scope, Scope::Engine);
+        assert_eq!(alerts[0].id, "engine:runtime:nofile_limit_too_low");
+        assert!(
+            alerts[0]
+                .evidence
+                .iter()
+                .any(|evidence| evidence == "soft = 1024")
+        );
+    }
+
+    #[test]
+    fn rtmp_fd_exhaustion_yields_critical_engine_alert() {
+        let snap = json!({
+            "generatedAt": "2026-06-25T00:00:00Z",
+            "rtmpListener": {
+                "acceptErrors": 7,
+                "fdExhaustionErrors": 3
+            },
+            "srtListener": { "udpDrops": 0 },
+            "pipelines": {}
+        });
+        let alerts = derive_alerts(&snap);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].severity, Severity::Critical);
+        assert_eq!(alerts[0].scope, Scope::Engine);
+        assert_eq!(alerts[0].id, "engine:rtmp_listener:fd_exhaustion");
+        assert!(
+            alerts[0]
+                .evidence
+                .iter()
+                .any(|evidence| evidence == "fdExhaustionErrors = 3")
+        );
     }
 
     #[test]

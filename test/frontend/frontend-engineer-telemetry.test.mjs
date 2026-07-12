@@ -14,6 +14,7 @@ test("telemetry renders zero/null ring values, escapes labels, and distinguishes
     null,
     null,
     null,
+    null,
     [{ id: "p1", name: "One" }],
     "p1",
   );
@@ -55,6 +56,19 @@ test("telemetry renders zero/null ring values, escapes labels, and distinguishes
       egresses: [],
     },
     null,
+    {
+      status: "ready",
+      hostSettings: [
+        {
+          key: "net.core.rmem_max",
+          label: "Kernel receive buffer ceiling",
+          current: 26214400,
+          required: 26214400,
+          unit: "bytes",
+          status: "ok",
+        },
+      ],
+    },
     [{ id: "p1", name: "Pipe <bad>" }],
     "p1",
     { loaded: true },
@@ -64,6 +78,8 @@ test("telemetry renders zero/null ring values, escapes labels, and distinguishes
   assert.match(html, /Transcoder buffers[\s\S]*>0</);
   assert.doesNotMatch(html, /reader <x>|video <bad>|Pipe <bad>/);
   assert.match(html, /View video &lt;bad&gt; telemetry details/);
+  assert.match(html, /Kernel receive buffer ceiling/);
+  assert.match(html, /25 MiB/);
 
   const retained = renderEngineerTelemetryHtml(
     {
@@ -88,6 +104,7 @@ test("telemetry renders zero/null ring values, escapes labels, and distinguishes
       kind: "video:720p",
       metrics: { packetsIn: 12 },
     },
+    null,
     [{ id: "p1", name: "One" }],
     "p1",
     { loaded: true, stageUnavailable: true },
@@ -107,7 +124,7 @@ test("telemetry starts a new pipeline request and ignores the stale selection", 
     new Promise((resolve) =>
       pending.push({
         url: String(url),
-        wave: Math.floor(pending.length / 2),
+        wave: Math.floor(pending.length / 3),
         resolve,
       }),
     );
@@ -143,7 +160,21 @@ test("telemetry starts a new pipeline request and ignores the stale selection", 
   const resolveWave = (wave) => {
     for (const request of pending.filter((item) => item.wave === wave)) {
       const pipelineId = wave === 1 ? "p2" : "p1";
-      const data = request.url.includes("/engine/")
+      const data = request.url.includes("/engine/health")
+        ? {
+            status: "ready",
+            hostSettings: [
+              {
+                key: "runtime.nofile",
+                label: "Open file descriptors",
+                current: 65536,
+                required: 65536,
+                unit: "fds",
+                status: "ok",
+              },
+            ],
+          }
+        : request.url.includes("/engine/")
         ? {
             generatedAt: "",
             ingests: Array.from({ length: wave + 1 }, () => ({

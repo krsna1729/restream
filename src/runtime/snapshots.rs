@@ -202,11 +202,18 @@ pub struct FileIngestDependencySnapshot {
     pub child_registered: bool,
 }
 
-/// Shared listener socket buffer occupancy, updated by the SRT monitor task.
+/// Shared SRT listener socket state, updated by the SRT monitor task.
 #[derive(Debug, Default)]
 pub struct ListenerSocketStats {
     pub bonding_available: AtomicBool,
     pub rx_queue_bytes: AtomicU64,
     pub rx_queue_max_bytes: AtomicU64,
     pub drops: AtomicU64,
+}
+
+/// Shared RTMP listener accept/error counters.
+#[derive(Debug, Default)]
+pub struct RtmpListenerStats {
+    pub rtmp_accept_errors: AtomicU64,
+    pub rtmp_fd_exhaustion_errors: AtomicU64,
 }

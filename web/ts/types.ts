@@ -260,6 +260,25 @@ export interface HlsPreviewHealth {
   playlistBytes?: number;
 }
 
+export interface RuntimeNofileLimit {
+  configured?: number | null;
+  soft?: number | null;
+  hard?: number | null;
+  satisfied?: boolean;
+  error?: string;
+  unsupported?: boolean;
+}
+
+export interface HostSettingRow {
+  key: string;
+  label: string;
+  current?: number | null;
+  required?: number | null;
+  unit?: string;
+  status?: "ok" | "warning" | "unknown" | string;
+  detail?: string | null;
+}
+
 export interface PipelineHealth {
   input?: InputHealth;
   outputs?: Record<string, OutputHealth>;
@@ -270,6 +289,15 @@ export interface PipelineHealth {
 export interface HealthData {
   status?: string;
   pipelines?: Record<string, PipelineHealth>;
+  runtimeLimits?: {
+    nofile?: RuntimeNofileLimit;
+  };
+  hostSettings?: HostSettingRow[];
+  rtmpListener?: {
+    acceptErrors?: number;
+    fdExhaustionErrors?: number;
+  };
+  srtListener?: Record<string, unknown> | null;
 }
 
 export interface SystemMetrics {

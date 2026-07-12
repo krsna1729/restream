@@ -1,9 +1,11 @@
 import {
   getEngineTelemetry,
+  getHealth,
   getPipelineTelemetry,
   getStageTelemetry,
 } from "../core/api.js";
 import { escapeHtml } from "../core/utils.js";
+import type { HealthData, HostSettingRow } from "../types.js";
 import type {
   EngineTelemetrySnapshot,
   PipelineTelemetrySnapshot,
@@ -35,6 +37,7 @@ const inFlightByPipeline = new Map<
 let engineSnapshot: EngineTelemetrySnapshot | null = null;
 let pipelineSnapshot: PipelineTelemetrySnapshot | null = null;
 let stageSnapshot: StageTelemetrySnapshot | null = null;
+let healthSnapshot: HealthData | null = null;
 let telemetryLoaded = false;
 let telemetryUnavailable = false;
 let stageUnavailable = false;
@@ -56,6 +59,42 @@ function formatBytes(value: unknown): string {
     unit += 1;
   }
   return `${amount >= 10 || unit === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`;
+}
+
+function formatHostSettingValue(value: unknown, unit: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  if (unit === "bytes") return formatBytes(value);
+  return value.toLocaleString();
+}
+
+function hostSettingTone(status: unknown): string {
+  if (status === "ok") return "badge-success";
+  if (status === "warning") return "badge-warning";
+  return "badge-ghost";
+}
+
+function renderHostSettings(settings: HostSettingRow[] | undefined): string {
+  const rows = settings || [];
+  if (!rows.length) {
+    return `<p class="text-base-content/60 mt-3 text-sm">No host settings reported.</p>`;
+  }
+  return `<div class="mt-3 overflow-x-auto">
+    <table class="table table-sm">
+      <thead><tr><th>Setting</th><th>Current</th><th>Required</th><th>Status</th><th>Info</th></tr></thead>
+      <tbody>${rows
+        .map(
+          (row) => `<tr>
+            <td><div class="font-medium">${escapeHtml(row.label || row.key)}</div><div class="text-base-content/50 text-xs">${escapeHtml(row.key)}</div></td>
+            <td class="font-mono">${escapeHtml(formatHostSettingValue(row.current, row.unit))}</td>
+            <td class="font-mono">${escapeHtml(formatHostSettingValue(row.required, row.unit))}</td>
+            <td><span class="badge badge-sm ${hostSettingTone(row.status)}">${escapeHtml(row.status || "unknown")}</span></td>
+            <td class="max-w-sm text-sm text-base-content/70">${escapeHtml(row.detail || "—")}</td>
+          </tr>`,
+        )
+        .join("")}</tbody>
+    </table>
+  </div>`;
 }
 
 function metricRows(metrics: TelemetryMetrics | undefined): string {
@@ -88,6 +127,7 @@ export function renderEngineerTelemetryHtml(
   engine: EngineTelemetrySnapshot | null,
   pipeline: PipelineTelemetrySnapshot | null,
   stage: StageTelemetrySnapshot | null,
+  health: HealthData | null,
   pipelines: TelemetryPipelineOption[],
   pipelineId: string,
   status: {
@@ -120,6 +160,10 @@ export function renderEngineerTelemetryHtml(
       <div class="stat bg-base-200 rounded-lg"><div class="stat-title">Egresses</div><div class="stat-value text-2xl">${engine?.egresses.length ?? "—"}</div></div>
       <div class="stat bg-base-200 rounded-lg"><div class="stat-title">Transcoder buffers</div><div class="stat-value text-2xl">${engine?.activeTranscoderBuffers ?? "—"}</div></div>
     </section>
+    <section class="border-base-content/10 bg-base-200 rounded-lg border p-4" aria-label="Host settings">
+      <div class="flex flex-wrap items-center justify-between gap-2"><h2 class="font-semibold">Host settings</h2><span class="text-base-content/50 text-xs">${health?.status ? `health ${escapeHtml(health.status)}` : "health unavailable"}</span></div>
+      ${renderHostSettings(health?.hostSettings)}
+    </section>
     ${
       pipelineId && pipeline
         ? `<div class="grid gap-4 xl:grid-cols-[minmax(20rem,.75fr)_minmax(0,1.25fr)]">
@@ -145,6 +189,7 @@ function paintTelemetry(): void {
     engineSnapshot,
     pipelineSnapshot,
     stageSnapshot,
+    healthSnapshot,
     viewOptions.pipelines,
     selectedPipelineId,
     {
@@ -201,8 +246,9 @@ export async function refreshEngineerTelemetry(force = false): Promise<void> {
   const pipelineAtRequest = selectedPipelineId;
   const stageAtRequest = selectedStageKey;
   const request = (async () => {
-    const [engine, pipeline, stage] = await Promise.all([
+    const [engine, health, pipeline, stage] = await Promise.all([
       getEngineTelemetry(),
+      getHealth({ view: "summary" }),
       pipelineAtRequest
         ? getPipelineTelemetry(pipelineAtRequest)
         : Promise.resolve(null),
@@ -216,10 +262,13 @@ export async function refreshEngineerTelemetry(force = false): Promise<void> {
     )
       return;
     engineSnapshot = engine ?? engineSnapshot;
+    healthSnapshot = health ?? healthSnapshot;
     if (pipelineAtRequest) pipelineSnapshot = pipeline ?? pipelineSnapshot;
     telemetryLoaded = true;
     telemetryUnavailable =
-      engine === null || (Boolean(pipelineAtRequest) && pipeline === null);
+      engine === null ||
+      health === null ||
+      (Boolean(pipelineAtRequest) && pipeline === null);
     if (stageAtRequest && stageAtRequest === selectedStageKey) {
       if (stage) stageSnapshot = stage;
       stageUnavailable = stage === null;

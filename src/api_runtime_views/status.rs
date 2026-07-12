@@ -9,6 +9,112 @@ use std::sync::atomic::Ordering;
 use crate::api_view_models;
 use crate::media::engine::MediaEngine;
 
+const REQUIRED_RMEM_MAX: u64 = 26_214_400;
+const REQUIRED_WMEM_MAX: u64 = 8_388_608;
+
+#[cfg(unix)]
+fn nofile_limit_json(configured: u64) -> serde_json::Value {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit writes to the provided rlimit struct for the current
+    // process. The pointer is valid for the duration of the call.
+    let read_ok = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0 };
+    if !read_ok {
+        return serde_json::json!({
+            "configured": configured,
+            "soft": null,
+            "hard": null,
+            "satisfied": false,
+            "error": "getrlimit failed",
+        });
+    }
+    serde_json::json!({
+        "configured": configured,
+        "soft": limit.rlim_cur,
+        "hard": limit.rlim_max,
+        "satisfied": limit.rlim_cur >= configured,
+    })
+}
+
+#[cfg(not(unix))]
+fn nofile_limit_json(configured: u64) -> serde_json::Value {
+    serde_json::json!({
+        "configured": configured,
+        "soft": null,
+        "hard": null,
+        "satisfied": true,
+        "unsupported": true,
+    })
+}
+
+fn proc_sys_u64(key: &str) -> Option<u64> {
+    let path = format!("/proc/sys/{}", key.replace('.', "/"));
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+}
+
+fn host_setting_json(
+    key: &str,
+    label: &str,
+    current: Option<u64>,
+    required: u64,
+    unit: &str,
+    detail: Option<String>,
+) -> serde_json::Value {
+    let status = current.map_or(
+        "unknown",
+        |value| {
+            if value >= required { "ok" } else { "warning" }
+        },
+    );
+    serde_json::json!({
+        "key": key,
+        "label": label,
+        "current": current,
+        "required": required,
+        "unit": unit,
+        "status": status,
+        "detail": detail,
+    })
+}
+
+fn host_settings_json(engine: &MediaEngine) -> serde_json::Value {
+    let nofile = nofile_limit_json(engine.config.tuning.nofile_limit);
+    let nofile_soft = nofile.get("soft").and_then(|value| value.as_u64());
+    let nofile_hard = nofile.get("hard").and_then(|value| value.as_u64());
+    let nofile_detail = nofile_hard.map(|hard| format!("hard limit {hard}"));
+
+    serde_json::json!([
+        host_setting_json(
+            "runtime.nofile",
+            "Open file descriptors",
+            nofile_soft,
+            engine.config.tuning.nofile_limit,
+            "fds",
+            nofile_detail,
+        ),
+        host_setting_json(
+            "net.core.rmem_max",
+            "Kernel receive buffer ceiling",
+            proc_sys_u64("net.core.rmem_max"),
+            REQUIRED_RMEM_MAX,
+            "bytes",
+            Some("needed for SRT UDP receive buffers".to_string()),
+        ),
+        host_setting_json(
+            "net.core.wmem_max",
+            "Kernel send buffer ceiling",
+            proc_sys_u64("net.core.wmem_max"),
+            REQUIRED_WMEM_MAX,
+            "bytes",
+            Some("needed for SRT UDP send buffers".to_string()),
+        ),
+    ])
+}
+
 pub(crate) async fn output_status(
     engine: &MediaEngine,
     output_id: &str,
@@ -236,6 +342,16 @@ pub(crate) async fn health_snapshot(
         .listener_stats
         .bonding_available
         .load(Ordering::Relaxed);
+    let rtmp_accept_errors = engine
+        .runtime
+        .rtmp_listener_stats
+        .rtmp_accept_errors
+        .load(Ordering::Relaxed);
+    let rtmp_fd_exhaustion_errors = engine
+        .runtime
+        .rtmp_listener_stats
+        .rtmp_fd_exhaustion_errors
+        .load(Ordering::Relaxed);
 
     let mut stages_json = serde_json::Map::new();
     for pipeline_id in pipeline_ids {
@@ -250,6 +366,14 @@ pub(crate) async fn health_snapshot(
         "status": "ready",
         "pipelines": serde_json::Value::Object(pipelines_json),
         "stages": serde_json::Value::Object(stages_json),
+        "runtimeLimits": {
+            "nofile": nofile_limit_json(engine.config.tuning.nofile_limit),
+        },
+        "hostSettings": host_settings_json(engine),
+        "rtmpListener": {
+            "acceptErrors": rtmp_accept_errors,
+            "fdExhaustionErrors": rtmp_fd_exhaustion_errors,
+        },
         "srtListener": {
             "bondingAvailable": bonding_available,
             "udpRxQueueBytes": rx_queue,
@@ -374,5 +498,9 @@ pub(crate) async fn health_summary_snapshot(
     serde_json::json!({
         "status": "ready",
         "pipelines": serde_json::Value::Object(pipelines_json),
+        "runtimeLimits": {
+            "nofile": nofile_limit_json(engine.config.tuning.nofile_limit),
+        },
+        "hostSettings": host_settings_json(engine),
     })
 }

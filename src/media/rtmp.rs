@@ -85,7 +85,28 @@ pub async fn start_rtmp_server_on(
     let listener = match bind_rtmp_listener_with_backlog(port, backlog) {
         Ok(l) => l,
         Err(e) => {
-            error!("Failed to bind TCP listener on {}: {:?}", addr, e);
+            let fd_exhaustion = is_fd_exhaustion_error(&e);
+            if fd_exhaustion {
+                engine
+                    .runtime
+                    .rtmp_listener_stats
+                    .rtmp_fd_exhaustion_errors
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            error!(
+                event_class = "resource",
+                event_type = if fd_exhaustion {
+                    "rtmp.listener.fd_exhausted"
+                } else {
+                    "rtmp.listener.bind_failed"
+                },
+                addr = %addr,
+                error = %e,
+                error_kind = ?e.kind(),
+                raw_os_error = ?e.raw_os_error(),
+                fd_exhaustion,
+                "failed to bind RTMP TCP listener",
+            );
             return;
         }
     };
@@ -122,10 +143,42 @@ pub async fn start_rtmp_server_on(
                 });
             }
             Err(e) => {
-                error!("Accept error: {:?}", e);
+                engine
+                    .runtime
+                    .rtmp_listener_stats
+                    .rtmp_accept_errors
+                    .fetch_add(1, Ordering::Relaxed);
+                let fd_exhaustion = is_fd_exhaustion_error(&e);
+                if fd_exhaustion {
+                    engine
+                        .runtime
+                        .rtmp_listener_stats
+                        .rtmp_fd_exhaustion_errors
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                error!(
+                    event_class = "resource",
+                    event_type = if fd_exhaustion {
+                        "rtmp.listener.fd_exhausted"
+                    } else {
+                        "rtmp.listener.accept_failed"
+                    },
+                    error = %e,
+                    error_kind = ?e.kind(),
+                    raw_os_error = ?e.raw_os_error(),
+                    fd_exhaustion,
+                    "RTMP listener accept failed",
+                );
+                if fd_exhaustion {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
             }
         }
     }
+}
+
+fn is_fd_exhaustion_error(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE))
 }
 
 fn bind_rtmp_listener_with_backlog(port: u16, backlog: u32) -> Result<TcpListener, std::io::Error> {

@@ -675,6 +675,12 @@ The dashboard currently uses:
 
 Authenticated native state snapshot:
 
+Query params:
+
+| Param | Default | Notes |
+| --- | --- | --- |
+| `view` | `full` | `summary` returns compact pipeline health. |
+
 ```json
 {
   "generatedAt": "2026-06-20T12:00:00Z",
@@ -718,7 +724,48 @@ Authenticated native state snapshot:
     "udpRxQueueBytes": 0,
     "udpRxQueuePeakBytes": 0,
     "udpDrops": 0
-  }
+  },
+  "rtmpListener": {
+    "acceptErrors": 0,
+    "fdExhaustionErrors": 0
+  },
+  "runtimeLimits": {
+    "nofile": {
+      "configured": 65536,
+      "soft": 65536,
+      "hard": 65536,
+      "satisfied": true
+    }
+  },
+  "hostSettings": [
+    {
+      "key": "runtime.nofile",
+      "label": "Open file descriptors",
+      "current": 65536,
+      "required": 65536,
+      "unit": "fds",
+      "status": "ok",
+      "detail": "hard limit 65536"
+    },
+    {
+      "key": "net.core.rmem_max",
+      "label": "Kernel receive buffer ceiling",
+      "current": 26214400,
+      "required": 26214400,
+      "unit": "bytes",
+      "status": "ok",
+      "detail": "needed for SRT UDP receive buffers"
+    },
+    {
+      "key": "net.core.wmem_max",
+      "label": "Kernel send buffer ceiling",
+      "current": 8388608,
+      "required": 8388608,
+      "unit": "bytes",
+      "status": "ok",
+      "detail": "needed for SRT UDP send buffers"
+    }
+  ]
 }
 ```
 
@@ -944,13 +991,32 @@ Summary response shape:
       },
       "recording": { "enabled": false, "active": false }
     }
-  }
+  },
+  "runtimeLimits": {
+    "nofile": {
+      "configured": 65536,
+      "soft": 65536,
+      "hard": 65536,
+      "satisfied": true
+    }
+  },
+  "hostSettings": [
+    {
+      "key": "runtime.nofile",
+      "label": "Open file descriptors",
+      "current": 65536,
+      "required": 65536,
+      "unit": "fds",
+      "status": "ok",
+      "detail": "hard limit 65536"
+    }
+  ]
 }
 ```
 
 ### `GET /api/v1/overview`
 
-Engine-wide operator summary: pipeline counts, alert rollup, SRT listener state.
+Engine-wide operator summary: pipeline counts, alert rollup, and listener state.
 
 ```json
 {
@@ -970,7 +1036,9 @@ Aggregate alerts across all pipelines. Each alert carries `id`, `severity`,
 `scope`, `evidence`, `recommendedAction`, `firstSeen`, and `lastSeen` fields.
 Sorted Critical-first. `firstSeen` is stamped on first observation;
 `lastSeen` updates on every subsequent observation. Resolved alerts are
-pruned automatically.
+pruned automatically. Engine-level alerts include SRT UDP drops, RTMP listener
+file-descriptor exhaustion, and a runtime nofile limit below the configured
+target.
 
 ```json
 {

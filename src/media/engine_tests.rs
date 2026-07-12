@@ -36,6 +36,10 @@ async fn test_health_snapshot_with_disconnect_grace(
     .await
 }
 
+async fn test_health_summary_snapshot(engine: &MediaEngine) -> serde_json::Value {
+    crate::api_runtime_views::health_summary_snapshot(engine, &[], &HashMap::new(), 0).await
+}
+
 #[test]
 fn pipe_metrics_snapshot_correctness() {
     let pm = PipeMetrics::default();
@@ -1110,6 +1114,77 @@ async fn health_snapshot_exposes_bonding_and_member_telemetry() {
 }
 
 #[tokio::test]
+async fn health_snapshot_exposes_runtime_limit_and_rtmp_listener_errors() {
+    let engine = MediaEngine::new();
+    engine
+        .runtime
+        .rtmp_listener_stats
+        .rtmp_accept_errors
+        .store(7, Ordering::Relaxed);
+    engine
+        .runtime
+        .rtmp_listener_stats
+        .rtmp_fd_exhaustion_errors
+        .store(3, Ordering::Relaxed);
+
+    let snapshot = test_health_snapshot(&engine, &[], &HashMap::new()).await;
+
+    assert_eq!(snapshot["rtmpListener"]["acceptErrors"], 7);
+    assert_eq!(snapshot["rtmpListener"]["fdExhaustionErrors"], 3);
+    assert_eq!(
+        snapshot["runtimeLimits"]["nofile"]["configured"],
+        engine.config.tuning.nofile_limit
+    );
+    let host_settings = snapshot["hostSettings"]
+        .as_array()
+        .expect("host settings should be an array");
+    assert!(
+        host_settings
+            .iter()
+            .any(|setting| setting["key"] == "runtime.nofile"),
+        "host settings should expose the process nofile row"
+    );
+    assert!(
+        host_settings
+            .iter()
+            .any(|setting| setting["key"] == "net.core.rmem_max"),
+        "host settings should expose the SRT receive buffer ceiling row"
+    );
+    assert!(
+        host_settings
+            .iter()
+            .any(|setting| setting["key"] == "net.core.wmem_max"),
+        "host settings should expose the SRT send buffer ceiling row"
+    );
+    assert!(
+        !host_settings
+            .iter()
+            .any(|setting| setting["key"] == "kernel.perf_event_paranoid"),
+        "host settings should not expose profiling-only settings"
+    );
+    assert!(
+        snapshot["runtimeLimits"]["nofile"]
+            .get("satisfied")
+            .and_then(|value| value.as_bool())
+            .is_some(),
+        "nofile limit snapshot should expose whether the configured target is satisfied"
+    );
+}
+
+#[tokio::test]
+async fn health_summary_includes_runtime_host_settings() {
+    let engine = MediaEngine::new();
+
+    let summary = test_health_summary_snapshot(&engine).await;
+    assert!(
+        summary["hostSettings"]
+            .as_array()
+            .is_some_and(|settings| !settings.is_empty()),
+        "summary health should expose runtime host settings"
+    );
+}
+
+#[tokio::test]
 async fn unregister_ingest_cancels_token() {
     let engine = MediaEngine::new();
     let token = engine
@@ -1347,6 +1422,35 @@ async fn egress_blocked_by_phase_reports_waiting_upstream_stage() {
         engine.egress_blocked_by_snapshot(egress).await
     };
     assert_eq!(blocked, None, "producing stage must not block egress");
+}
+
+#[tokio::test]
+async fn health_snapshot_drops_egress_registry_before_stage_blocked_lookup() {
+    let engine = Arc::new(MediaEngine::new());
+    let key = StageKey::new("pipe-1", StageKind::video_preset("720p"));
+    engine
+        .register_egress_attempt("out-1", "pipe-1", "rtmp://example.com/live/key", Some(key))
+        .await;
+
+    let stage_write = engine.stages.runtimes.write().await;
+    let health = {
+        let engine = engine.clone();
+        tokio::spawn(async move {
+            test_health_snapshot(&engine, &[String::from("pipe-1")], &HashMap::new()).await
+        })
+    };
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let active_write = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        engine.egresses.active.write(),
+    )
+    .await
+    .expect("health snapshot must not hold egresses.active while awaiting stage registries");
+    drop(active_write);
+
+    drop(stage_write);
+    health.await.expect("health snapshot task should not panic");
 }
 
 #[tokio::test]

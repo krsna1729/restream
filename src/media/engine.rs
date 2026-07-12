@@ -26,7 +26,7 @@ use crate::media::ts_chunk_ring::TsChunkRing;
 pub use crate::runtime::snapshots::{
     AudioMeta, EgressDiagSnapshot, FileIngestDependencySnapshot, HlsDependencySnapshot,
     IngestDiagSnapshot, ListenerSocketStats, PublisherQuality, RingBufferDiagSnapshot,
-    SrtListenerDiagSnapshot, VideoMeta,
+    RtmpListenerStats, SrtListenerDiagSnapshot, VideoMeta,
 };
 
 pub(crate) const EGRESS_PROGRESS_STALE_MS: u64 = 10_000;
