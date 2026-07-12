@@ -1634,27 +1634,33 @@ impl MediaEngine {
         phase: &str,
         message: impl Into<String>,
     ) {
-        let egresses = self.egresses.active.read().await;
-        if let Some(egress) = egresses.get(output_id) {
-            let message = message.into();
-            let pipeline_id = egress.pipeline_id.clone();
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::Failed;
-            *egress
-                .failure_phase
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = Some(phase.to_string());
-            *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(message.clone());
-            egress
-                .last_error_ms
-                .store(Self::now_epoch_ms(), Ordering::Relaxed);
-            self.runtime
-                .event_log
-                .emit(crate::events::EventKind::EgressFailed {
+        let message = message.into();
+        let event = {
+            let egresses = self.egresses.active.read().await;
+            if let Some(egress) = egresses.get(output_id) {
+                let pipeline_id = egress.pipeline_id.clone();
+                *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::Failed;
+                *egress
+                    .failure_phase
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(phase.to_string());
+                *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(message.clone());
+                egress
+                    .last_error_ms
+                    .store(Self::now_epoch_ms(), Ordering::Relaxed);
+                Some(crate::events::EventKind::EgressFailed {
                     pipeline_id,
                     output_id: output_id.to_string(),
                     phase: phase.to_string(),
                     error: message,
-                });
+                })
+            } else {
+                None
+            }
+        };
+        if let Some(event) = event {
+            self.runtime.event_log.emit(event);
         }
     }
 
@@ -1666,28 +1672,33 @@ impl MediaEngine {
         message: impl Into<String>,
     ) -> bool {
         let message = message.into();
-        self.with_current_egress(output_id, registration, |egress| {
-            let pipeline_id = egress.pipeline_id.clone();
-            *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::Failed;
-            *egress
-                .failure_phase
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = Some(phase.to_string());
-            *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(message.clone());
-            egress
-                .last_error_ms
-                .store(Self::now_epoch_ms(), Ordering::Relaxed);
-            self.runtime
-                .event_log
-                .emit(crate::events::EventKind::EgressFailed {
+        let event = self
+            .with_current_egress(output_id, registration, |egress| {
+                let pipeline_id = egress.pipeline_id.clone();
+                *egress.phase.lock().unwrap_or_else(|e| e.into_inner()) = EgressPhase::Failed;
+                *egress
+                    .failure_phase
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(phase.to_string());
+                *egress.last_error.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(message.clone());
+                egress
+                    .last_error_ms
+                    .store(Self::now_epoch_ms(), Ordering::Relaxed);
+                crate::events::EventKind::EgressFailed {
                     pipeline_id,
                     output_id: output_id.to_string(),
                     phase: phase.to_string(),
                     error: message.clone(),
-                });
-        })
-        .await
-        .is_some()
+                }
+            })
+            .await;
+        if let Some(event) = event {
+            self.runtime.event_log.emit(event);
+            true
+        } else {
+            false
+        }
     }
 
     /// Update bytes received counter for an active ingest (lock-free atomic).

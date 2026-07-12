@@ -14,4 +14,5 @@ run_step() {
 
 run_common_concurrency_checks run_step
 
+scripts/build/resource-limit.sh cargo test api_runtime_views::status::tests::health --lib
 scripts/build/resource-limit.sh cargo test --bin test_harness -- --nocapture
