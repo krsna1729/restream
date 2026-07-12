@@ -307,6 +307,58 @@ for now. Any future heuristic should size from the process's effective CPU
 quota/mask and workload shape (ingests, output count, SRT egress count, stage
 sharing, and external transcoders), not from MSR alone.
 
+### Mahashivratri msr dashboard run after health snapshot lock fix — 2026-07-12 (local)
+
+Host: local development box, commit `844a7c3` plus prior MSR fixes. Full MSR
+shape left running for dashboard inspection on `127.0.0.1:3030`:
+
+```sh
+RESTREAM_HTTP=3030 MSR_OUTPUT_COUNTS=1200 MSR_SAMPLE_SECS=3600 \
+  MSR_SAMPLE_INTERVAL_MS=5000 MSR_SINK_SAMPLE_SECS=3 MSR_NO_CLEANUP=1 \
+  WORK_DIR=.local/artifacts/msr-dashboard-live-3030-20260712T110026 \
+  BENCH_BUILD=never scripts/harness/run.sh msr -- --no-netns
+```
+
+MediaMTX receiver proof stayed green during the live observation window:
+`1200/1200` paths ready through paginated `/v3/paths/list`, with aggregate
+`bytesReceived` growing from `14,033,112,477` to `14,201,173,521` over a
+3-second spot check. Artifacts:
+`.local/artifacts/msr-dashboard-live-3030-20260712T110026/`.
+
+Process-mode `perf stat` attached to the live Restream pid only:
+
+| Counter | Value | Note |
+|---|---:|---|
+| task-clock | 64,991.62 ms | 4.276 CPUs utilized over 15 s |
+| cycles | 71,242,974,987 | 68% multiplexed |
+| instructions | 26,126,232,306 | IPC 0.37 |
+| cache references | 3,638,096,570 | 64% multiplexed |
+| cache misses | 725,116,472 | 19.93% of cache refs |
+| branches | 5,362,681,943 | 67% multiplexed |
+| branch misses | 547,496,712 | 10.21% of branches |
+| context switches | 334,252 | 5.143 K/sec |
+| CPU migrations | 8,498 | 130.755/sec |
+| page faults | 232 | all minor in this short sample |
+
+Thread census over the same live shape found 210 Restream threads. The six hot
+Tokio scheduler workers carried roughly 17-21% CPU each, with one additional
+Tokio worker at ~2%. The 60 SRT egresses plus one SRT ingest again created one
+`SRT:RcvQ:*` worker per socket, each around 0.9-1.4% CPU, for about another
+core of aggregate scheduler/system overhead. `SRT:SndQ:*` threads were mostly
+near-idle but still present one-per-muxer.
+
+Interpretation:
+
+- The health snapshot lock fix did not introduce an obvious control-plane
+  wedge: `/healthz` stayed responsive while MediaMTX continued to receive all
+  1,200 paths.
+- IPC, cache miss rate, branch miss rate, and migration rate continue to point
+  at locality/scheduler pressure before data-structure field layout as the
+  next optimization class.
+- The structural SRT opportunity remains muxer/socket sharing or otherwise
+  reducing the per-SRT-egress native thread footprint. Worker-count heuristics
+  should use effective CPU quota/mask plus workload shape, not MSR alone.
+
 ## Standing optimization targets (2026-06-27 CPU profile, task-clock 999 Hz)
 
 | Self % | Symbol | Meaning | Backlog |

@@ -117,3 +117,22 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Notes: perf counters improved in isolation (IPC 0.31, cache misses 22.35%),
   but the warning profile shows the runtime was under-provisioned for the
   full-scale lifecycle/control-plane burst.
+
+## 2026-07-12 13:05 MSR DASHBOARD PERF SNAPSHOT AFTER HEALTH FIX [codex]
+- What: left a full 1,200-output MSR run active on `127.0.0.1:3030` after
+  committing `844a7c3` (health snapshots no longer hold coupled registry
+  guards). Attached process-mode `perf stat` to the live Restream pid and
+  captured a `/proc` thread CPU census without restarting or reshaping the
+  dashboard workload.
+- Gates: measurement-only while live; no cargo/check/clippy run because
+  Restream, MediaMTX, and ffmpeg were intentionally running. Restream
+  `/healthz` stayed responsive, and MediaMTX `/v3/paths/list` reported
+  `1200/1200` paths ready with bytes growing over a 3-second spot check.
+- Commit: (this commit)
+- Follow-ups: 12h soak plus live egress-failure health-latency proof remains
+  open. Optimization should prioritize effective-CPU/workload-shape worker
+  heuristics and SRT muxer/thread sharing before hot/cold member layout work.
+- Notes: current live sample used 4.276 Restream CPUs with IPC 0.37,
+  19.93% cache misses, 10.21% branch misses, and 130.755 migrations/sec.
+  Thread census again showed six hot Tokio scheduler workers plus roughly one
+  low-CPU `SRT:RcvQ:*` thread per SRT socket.
