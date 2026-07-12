@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use super::TestPorts;
+use super::{HarnessSrtMode, TestPorts, harness_srt_ffmpeg_url, harness_srt_output_url};
 
 /// Declarative cell for retry-budget exhaustion coverage against an unreachable sink.
 #[derive(Deserialize, Serialize)]
@@ -30,10 +30,9 @@ impl HarnessPublisherProtocol {
     pub(crate) fn publish_url(self, ports: &TestPorts, stream_key: &str) -> String {
         match self {
             Self::Rtmp => format!("rtmp://127.0.0.1:{}/live/{stream_key}", ports.rtmp),
-            Self::Srt => format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{stream_key}&pkt_size=1316",
-                ports.srt
-            ),
+            Self::Srt => {
+                harness_srt_ffmpeg_url(ports.srt, stream_key, HarnessSrtMode::Publish, None)
+            }
         }
     }
 
@@ -51,9 +50,9 @@ impl HarnessPublisherProtocol {
     pub(crate) fn retry_limit_output_url(self, dead_sink_port: u16) -> String {
         match self {
             Self::Rtmp => format!("rtmp://127.0.0.1:{dead_sink_port}/live/retry-limit"),
-            Self::Srt => format!(
-                "srt://127.0.0.1:{dead_sink_port}?streamid=publish:live/retry-limit&pkt_size=1316"
-            ),
+            Self::Srt => {
+                harness_srt_output_url(dead_sink_port, "retry-limit", HarnessSrtMode::Publish)
+            }
         }
     }
 }

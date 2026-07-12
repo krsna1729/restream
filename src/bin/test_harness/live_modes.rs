@@ -306,9 +306,10 @@ async fn run_ramp_config(
     for n in 1..=env.n_outputs {
         let url = match config.out_proto {
             "rtmp" => format!("rtmp://127.0.0.1:{}/live/{}-{n}", env.mtx_rtmp, config.name),
-            "srt" => format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{}-{n}",
-                env.mtx_srt, config.name
+            "srt" => harness_srt_output_url(
+                env.mtx_srt,
+                &format!("{}-{n}", config.name),
+                HarnessSrtMode::Publish,
             ),
             other => return Err(format!("unsupported ramp output protocol {other}")),
         };
@@ -382,10 +383,7 @@ async fn spawn_ramp_publisher(
             "flv",
         ),
         "srt" => (
-            format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{stream_key}&latency=200000",
-                env.restream_srt
-            ),
+            harness_srt_ffmpeg_url(env.restream_srt, stream_key, HarnessSrtMode::Publish, None),
             "mpegts",
         ),
         other => return Err(format!("unsupported ramp ingest protocol {other}")),
@@ -812,9 +810,10 @@ fn read_url(config: RampConfig, env: &RampEnv, output_index: usize) -> String {
             "rtmp://127.0.0.1:{}/live/{}-{output_index}",
             env.mtx_rtmp, config.name
         ),
-        "srt" => format!(
-            "srt://127.0.0.1:{}?streamid=read:live/{}-{output_index}&timeout=30000000",
-            env.mtx_srt, config.name
+        "srt" => harness_srt_output_url(
+            env.mtx_srt,
+            &format!("{}-{output_index}", config.name),
+            HarnessSrtMode::Read,
         ),
         _ => String::new(),
     }
@@ -920,22 +919,11 @@ pub(crate) async fn probe_dims_ramp_with_cookie(
 }
 
 fn srt_publish_url(port: u16, stream_key: &str, crypto: Option<(&str, u32)>) -> String {
-    let mut url =
-        format!("srt://127.0.0.1:{port}?streamid=publish:live/{stream_key}&pkt_size=1316");
-    if let Some((passphrase, pbkeylen)) = crypto {
-        url.push_str(&format!("&passphrase={passphrase}&pbkeylen={pbkeylen}"));
-    }
-    url
+    harness_srt_ffmpeg_url(port, stream_key, HarnessSrtMode::Publish, crypto)
 }
 
 fn srt_read_url(port: u16, stream_key: &str, crypto: Option<(&str, u32)>) -> String {
-    let mut url = format!(
-        "srt://127.0.0.1:{port}?streamid=read:live/{stream_key}&mode=caller&transtype=live&latency=100"
-    );
-    if let Some((passphrase, pbkeylen)) = crypto {
-        url.push_str(&format!("&passphrase={passphrase}&pbkeylen={pbkeylen}"));
-    }
-    url
+    harness_srt_ffmpeg_url(port, stream_key, HarnessSrtMode::Read, crypto)
 }
 
 async fn expect_ingest_rejected(

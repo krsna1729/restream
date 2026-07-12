@@ -90,10 +90,7 @@ pub(crate) fn mixed_output_publish_url(
             format!("rtmp://127.0.0.1:{}/live/{output_name}", env.mtx_rtmp)
         }
         MixedOutputProtocol::Srt => {
-            format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{output_name}",
-                env.mtx_srt
-            )
+            harness_srt_output_url(env.mtx_srt, &output_name, HarnessSrtMode::Publish)
         }
     }
 }
@@ -108,10 +105,7 @@ pub(crate) fn mixed_output_read_url(
     match case.protocol() {
         MixedOutputProtocol::Rtmp => mixed_output_publish_url(env, cfg, case, index),
         MixedOutputProtocol::Srt => {
-            format!(
-                "srt://127.0.0.1:{}?streamid=read:live/{output_name}&timeout=30000000",
-                env.mtx_srt
-            )
+            harness_srt_output_url(env.mtx_srt, &output_name, HarnessSrtMode::Read)
         }
     }
 }

@@ -128,18 +128,12 @@ async fn fault_srt_egress_sink_disappear(
 
     let sink_pid = create_pipeline(api, "srt-sink-target").await?;
 
-    let sink_url = format!(
-        "srt://127.0.0.1:{}?streamid=publish:live/srt-sink-target&pkt_size=1316",
-        ports.srt
-    );
+    let sink_url = harness_srt_output_url(ports.srt, "srt-sink-target", HarnessSrtMode::Publish);
     let oid = create_output(api, &pid, "srt-sink", &sink_url, "source").await?;
 
     let mut pub_child = spawn_publisher(
         fixture_h264,
-        &format!(
-            "srt://127.0.0.1:{}?streamid=publish:live/fault-egress-srt&pkt_size=1316",
-            ports.srt
-        ),
+        &harness_srt_ffmpeg_url(ports.srt, "fault-egress-srt", HarnessSrtMode::Publish, None),
         "mpegts",
         true,
     )

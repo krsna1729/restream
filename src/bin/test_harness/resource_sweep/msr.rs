@@ -143,10 +143,7 @@ fn spawn_msr_publisher(env: &ResourceSweepEnv, stream_key: &str) -> Result<Child
     )?;
     let log_path = env.work_dir.join("publisher-msr.log");
     let url = append_srt_crypto(
-        format!(
-            "srt://127.0.0.1:{}?streamid=publish:live/{stream_key}&latency=200000",
-            env.restream_srt
-        ),
+        harness_srt_ffmpeg_url(env.restream_srt, stream_key, HarnessSrtMode::Publish, None),
         &env.srt_crypto,
     );
     spawn_publisher_with_selection(
@@ -161,10 +158,9 @@ fn spawn_msr_publisher(env: &ResourceSweepEnv, stream_key: &str) -> Result<Child
 fn msr_output_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> String {
     match output.protocol {
         MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{}/live/{}", env.mtx_rtmp, output.name),
-        MsrProtocol::Srt => format!(
-            "srt://127.0.0.1:{}?streamid=publish:live/{}",
-            env.mtx_srt, output.name
-        ),
+        MsrProtocol::Srt => {
+            harness_srt_output_url(env.mtx_srt, &output.name, HarnessSrtMode::Publish)
+        }
     }
 }
 

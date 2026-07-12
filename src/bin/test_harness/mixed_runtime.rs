@@ -69,10 +69,7 @@ pub(crate) async fn spawn_mixed_live_publisher(
             "flv",
         ),
         MixedInputProtocol::Srt => (
-            format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{stream_key}&latency=200000",
-                env.restream_srt
-            ),
+            harness_srt_ffmpeg_url(env.restream_srt, stream_key, HarnessSrtMode::Publish, None),
             "mpegts",
         ),
         MixedInputProtocol::File => {
@@ -102,10 +99,7 @@ pub(crate) async fn spawn_mixed_srt_multi_publisher(
     let fixture = mixed_input_fixture(case)?;
     spawn_publisher_with_selection(
         &fixture,
-        &format!(
-            "srt://127.0.0.1:{}?streamid=publish:live/{stream_key}&latency=200000",
-            env.restream_srt
-        ),
+        &harness_srt_ffmpeg_url(env.restream_srt, stream_key, HarnessSrtMode::Publish, None),
         "mpegts",
         PublishTrackSelection::AllStreams,
         Some(&log_path),

@@ -42,9 +42,11 @@ pub(super) async fn recovery_live_cases(
 
         let mut pub_child = spawn_publisher(
             fixture_h264,
-            &format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/fault-srt-replacement-race&pkt_size=1316",
-                ports.srt
+            &harness_srt_ffmpeg_url(
+                ports.srt,
+                "fault-srt-replacement-race",
+                HarnessSrtMode::Publish,
+                None,
             ),
             "mpegts",
             true,
@@ -66,9 +68,11 @@ pub(super) async fn recovery_live_cases(
 
         // Reconnect immediately so the old ingest's late disconnect/unregister
         // cleanup races a replacement publisher on the same pipeline.
-        let replacement_url = format!(
-            "srt://127.0.0.1:{}?streamid=publish:live/fault-srt-replacement-race&pkt_size=1316",
-            ports.srt
+        let replacement_url = harness_srt_ffmpeg_url(
+            ports.srt,
+            "fault-srt-replacement-race",
+            HarnessSrtMode::Publish,
+            None,
         );
         let mut replacement_child =
             Some(spawn_publisher(fixture_h264, &replacement_url, "mpegts", true).await?);
@@ -640,19 +644,18 @@ pub(super) async fn recovery_live_cases(
             api,
             &pid,
             "srt-sink-flap",
-            &format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/{}&pkt_size=1316",
-                ports.srt, sink_stream_key
-            ),
+            &harness_srt_output_url(ports.srt, sink_stream_key, HarnessSrtMode::Publish),
             "source",
         )
         .await?;
 
         let mut pub_child = spawn_publisher(
             fixture_h264,
-            &format!(
-                "srt://127.0.0.1:{}?streamid=publish:live/fault-srt-sink-flap&pkt_size=1316",
-                ports.srt
+            &harness_srt_ffmpeg_url(
+                ports.srt,
+                "fault-srt-sink-flap",
+                HarnessSrtMode::Publish,
+                None,
             ),
             "mpegts",
             true,

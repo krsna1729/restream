@@ -62,6 +62,8 @@ mod output_progress;
 mod resource_sweep;
 #[path = "test_harness/sinks.rs"]
 mod sinks;
+#[path = "test_harness/srt_urls.rs"]
+mod srt_urls;
 #[path = "test_harness/suite.rs"]
 mod suite;
 #[path = "test_harness/workflow_exec.rs"]
@@ -82,6 +84,7 @@ pub(crate) use mode_specs::*;
 use output_progress::*;
 use resource_sweep::*;
 use sinks::*;
+use srt_urls::*;
 use suite::*;
 use workflow_exec::*;
 

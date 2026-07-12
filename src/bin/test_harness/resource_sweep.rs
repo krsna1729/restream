@@ -219,7 +219,7 @@ impl SweepOutputKind {
                 format!("rtmp://127.0.0.1:{rtmp_port}/live/{name}")
             }
             Self::SrtSource | Self::SrtSourceDownmix | Self::Srt720p | Self::Srt1080p => {
-                format!("srt://127.0.0.1:{srt_port}?streamid=publish:live/{name}")
+                harness_srt_output_url(srt_port, name, HarnessSrtMode::Publish)
             }
         }
     }
@@ -230,7 +230,7 @@ impl SweepOutputKind {
                 format!("rtmp://127.0.0.1:{rtmp_port}/live/{name}")
             }
             Self::SrtSource | Self::SrtSourceDownmix | Self::Srt720p | Self::Srt1080p => {
-                format!("srt://127.0.0.1:{srt_port}?streamid=read:live/{name}&timeout=30000000")
+                harness_srt_output_url(srt_port, name, HarnessSrtMode::Read)
             }
         }
     }
@@ -1389,9 +1389,7 @@ fn spawn_resource_publisher_with_bitrate(
     } else {
         (
             append_srt_crypto(
-                format!(
-                    "srt://127.0.0.1:{restream_srt}?streamid=publish:live/{stream_key}&latency=200000"
-                ),
+                harness_srt_ffmpeg_url(restream_srt, stream_key, HarnessSrtMode::Publish, None),
                 srt_crypto,
             ),
             "mpegts",

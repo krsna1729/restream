@@ -293,10 +293,7 @@ where
             )
             .await?;
             *next_sink_offset += 1;
-            direct_urls.push(format!(
-                "srt://127.0.0.1:{}?pkt_size=1316&latency=200000",
-                sink.port
-            ));
+            direct_urls.push(harness_srt_ffmpeg_publish_url(sink.port));
             sinks.push(sink);
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -339,17 +336,11 @@ pub(crate) async fn spawn_ffmpeg_signal_sink(
     let capture_path = env.work_dir.join(format!("{stem}.signal.mkv"));
     let publish_url = match case.protocol() {
         MixedOutputProtocol::Rtmp => format!("rtmp://127.0.0.1:{port}/live/{stem}"),
-        MixedOutputProtocol::Srt => {
-            format!("srt://127.0.0.1:{port}?pkt_size=1316&latency=200000")
-        }
+        MixedOutputProtocol::Srt => harness_srt_ffmpeg_publish_url(port),
     };
     let listen_url = match case.protocol() {
         MixedOutputProtocol::Rtmp => publish_url.clone(),
-        MixedOutputProtocol::Srt => {
-            format!(
-                "srt://127.0.0.1:{port}?mode=listener&transtype=live&timeout=30000000&latency=200000"
-            )
-        }
+        MixedOutputProtocol::Srt => harness_srt_ffmpeg_listener_url(port),
     };
     let mut command = Command::new("ffmpeg");
     command.args(["-y", "-nostdin", "-hide_banner", "-v", "warning"]);
@@ -599,8 +590,7 @@ pub(crate) async fn spawn_ffmpeg_srt_sink(
     let log_path = env.work_dir.join(format!("{stem}.ffmpeg-srt-sink.log"));
     let log = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
     let err = log.try_clone().map_err(|e| e.to_string())?;
-    let listener_url =
-        format!("srt://127.0.0.1:{port}?mode=listener&transtype=live&timeout=30000000");
+    let listener_url = harness_srt_ffmpeg_listener_url(port);
     let probe_interval = format!("%+{}", env.ffmpeg_srt_sink_seconds);
     let child = Command::new("ffprobe")
         .args([
