@@ -303,7 +303,8 @@ async fn start_bitrate_sweep_stack(env: &BitrateSweepEnv) -> Result<ResourceSwee
         ),
     )
     .map_err(|e| e.to_string())?;
-    let mut mediamtx = Command::new("mediamtx")
+    let mut mediamtx_command = Command::new("mediamtx");
+    let mut mediamtx = remove_mediamtx_config_env(&mut mediamtx_command)
         .arg(&env.mediamtx_config)
         .stdout(Stdio::from(mediamtx_log))
         .stderr(Stdio::from(mediamtx_err))

@@ -223,12 +223,9 @@ async fn start_ramp_mediamtx(env: &RampEnv) -> Result<Child, String> {
     .map_err(|e| e.to_string())?;
     let log = std::fs::File::create(&env.mediamtx_log).map_err(|e| e.to_string())?;
     let stderr_log = log.try_clone().map_err(|e| e.to_string())?;
-    let mut child = Command::new("mediamtx")
+    let mut command = Command::new("mediamtx");
+    let mut child = remove_mediamtx_config_env(&mut command)
         .arg(&env.mediamtx_config)
-        .env_remove("MTX_RTMP")
-        .env_remove("MTX_SRT")
-        .env_remove("MTX_HLS")
-        .env_remove("MTX_API")
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr_log))
         .kill_on_drop(true)
@@ -261,12 +258,9 @@ async fn start_local_mediamtx(
     .map_err(|e| e.to_string())?;
     let log = std::fs::File::create(log_path).map_err(|e| e.to_string())?;
     let stderr_log = log.try_clone().map_err(|e| e.to_string())?;
-    let mut child = Command::new("mediamtx")
+    let mut command = Command::new("mediamtx");
+    let mut child = remove_mediamtx_config_env(&mut command)
         .arg(config_path)
-        .env_remove("MTX_RTMP")
-        .env_remove("MTX_SRT")
-        .env_remove("MTX_HLS")
-        .env_remove("MTX_API")
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr_log))
         .kill_on_drop(true)

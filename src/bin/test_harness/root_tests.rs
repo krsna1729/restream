@@ -24,6 +24,30 @@ fn default_work_db_path_stays_under_work_dir() {
 }
 
 #[test]
+fn mediamtx_child_env_removes_harness_port_overrides() {
+    let mut command = Command::new("mediamtx");
+    for name in MEDIAMTX_CONFIG_ENV_NAMES {
+        command.env(name, "12345");
+    }
+
+    remove_mediamtx_config_env(&mut command);
+
+    let envs: HashMap<String, Option<String>> = command
+        .as_std()
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.map(|value| value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    for name in MEDIAMTX_CONFIG_ENV_NAMES {
+        assert_eq!(envs.get(name), Some(&None));
+    }
+}
+
+#[test]
 fn harness_source_does_not_use_repo_root_data_db_fallback() {
     let source = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
