@@ -84,11 +84,14 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: SRT muxer reuse and 2-worker Tokio policy cut CPU, but migrations
   remained high (`~230-337/sec` in 2026-07-12 MSR samples). Any pinning must be
   container-orchestration aware and derived from the effective CPU mask, not
-  hard-coded host CPUs. A live external `taskset` partition probe on the
-  arena-capped MSR run reduced short-window CPU/migrations but worsened
-  IPC/cache/context-switches, so do not add internal pinning without a clean
-  default-runtime A/B and a thread ownership design.
-- Status: open, narrowed by external probe (Filed: 2026-07-12 by groom)
+  hard-coded host CPUs. Live external `taskset` partition probes showed the
+  direction is promising only on a clean default-runtime run: SRT helpers on
+  CPUs `0-1` and other Restream threads on `2-5` reduced CPU, cache misses,
+  context switches, and migrations while preserving MediaMTX receiver health.
+  Do not add internal pinning without an ownership-aware design and concurrency
+  proof gates.
+- Status: open, narrowed to an opt-in runtime affinity design (Filed:
+  2026-07-12 by groom)
 
 ### Q-013 [efficiency] [sonnet] Test allocator arena limits for MSR memory plateau
 - Goal: a single-variable MSR run proves whether `MALLOC_ARENA_MAX` or an

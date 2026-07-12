@@ -1008,3 +1008,79 @@ Raw artifacts:
 - `.local/artifacts/msr-arena2-3031-20260712T161905Z/affinity-probe/mediamtx-proof-after-perf.json`
 - `.local/artifacts/msr-arena2-3031-20260712T161905Z/affinity-probe/perf-stat-partitioned.csv`
 - `.local/artifacts/msr-arena2-3031-20260712T161905Z/affinity-probe/pidstat-partitioned.txt`
+
+### Clean MSR thread-affinity partition probe - 2026-07-12 (local)
+
+Follow-up to remove the allocator-cap caveat from the exploratory probe above.
+This run used the normal restored runtime environment: no `MALLOC_ARENA_MAX`,
+no `RESTREAM_TOKIO_WORKER_THREADS`, bench-profile binaries, and 1,200-output
+loopback MediaMTX sink. The only changed variable during the second sample was
+external, reversible `taskset` placement: SRT helper threads on CPUs `0-1`,
+all other Restream threads on CPUs `2-5`, then restored to the original masks.
+No runtime code changed.
+
+MediaMTX receiver proof and log hygiene:
+
+| Check | Default scheduler | Partition probe |
+|---|---:|---:|
+| MediaMTX ready before perf | `1200/1200` | `1200/1200` |
+| MediaMTX bytes delta before perf | `183,179,690` over 3 s | `176,024,437` over 3 s |
+| MediaMTX ready after perf | `1200/1200` | `1200/1200` |
+| MediaMTX bytes delta after perf | `201,126,121` over 3 s | `152,000,730` over 3 s |
+| Restream warn/error/panic lines | `0` | `0` |
+
+Thread census on the clean default sample:
+
+| Thread group | Threads | 5 s CPU sample | What it does |
+|---|---:|---:|---|
+| Tokio runtime/blocking-pool | `64` | `93.20%` | async runtime plus mostly idle blocking-pool threads; two hot workers |
+| SRT receive queue | `2` | `16.40%` | libsrt receive workers for shared SRT sockets/muxers |
+| SRT send queue | `2` | `7.80%` | libsrt send workers for SRT egress traffic |
+| SQLite workers | `10` | `1.00%` | SQLx SQLite worker pool, mostly idle |
+| Main/restream thread | `1` | `1.20%` | process main thread, low-duty after startup |
+| SRT timestamp/playback | `1` | `0.60%` | libsrt timestamp/playback delivery worker |
+| SRT garbage collector | `1` | `0.00%` | libsrt helper |
+| Tracing file appender | `1` | `0.00%` | async log/file appender |
+
+Hot threads on the default sample were two Tokio workers (`42.20%`, `41.80%`),
+one SRT receive worker (`14.40%`), one SRT send worker (`7.80%`), one mild
+Tokio worker (`2.20%`), and one mild SRT receive worker (`2.00%`). The
+important shape is not 64 busy Tokio workers; it is two hot Tokio workers plus
+two hot shared SRT queue workers and many idle helper threads.
+
+Process counters over matching 15 s `perf stat -p` windows:
+
+| Metric | Default scheduler | Partition probe |
+|---|---:|---:|
+| CPU utilized | `2.321` CPUs | `2.051` CPUs |
+| IPC | `0.336` | `0.420` |
+| Cache misses | `20.80%` | `16.25%` |
+| Branch misses | `8.73%` | `8.53%` |
+| Context switches | `7.663 K/sec` | `4.330 K/sec` |
+| CPU migrations | `920.333/sec` | `288.533/sec` |
+| Page faults | `7.200/sec` | `58.733/sec` |
+
+Conclusion: ownership-aware CPU partitioning is the best remaining performance
+lead from the MSR thread work. On a clean default run it reduced CPU by about
+`0.27` cores, cut migrations by about `69%`, reduced context switches by about
+`43%`, and improved IPC/cache-miss rate while MediaMTX still received all
+1,200 streams. It should still not become unconditional runtime behavior from
+this probe alone: internal affinity would change thread lifecycle/concurrency
+semantics, must derive masks from the effective CPU set/cgroup quota, needs
+clear ownership of which code creates each long-lived thread family, and needs
+an opt-in plus concurrency proof gates. The next Q-012 step should design that
+opt-in placement boundary; it is no longer a blind investigation.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/mediamtx-proof-default-before-perf.json`
+- `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/mediamtx-proof-default-after-perf.json`
+- `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/perf-stat-default.csv`
+- `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/pidstat-default.txt`
+- `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/thread-census-default.txt`
+- `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/affinity-probe/original-affinity.txt`
+- `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/affinity-probe/mediamtx-proof-partition-before-perf.json`
+- `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/affinity-probe/mediamtx-proof-partition-after-perf.json`
+- `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/affinity-probe/perf-stat-partitioned.csv`
+- `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/affinity-probe/pidstat-partitioned.txt`
+- `.local/artifacts/msr-affinity-clean-3030-20260712T163159Z/affinity-probe/thread-census-partitioned.txt`

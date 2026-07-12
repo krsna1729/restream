@@ -246,3 +246,24 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   from `712.867/sec` to `553.133/sec`, but worsened IPC (`0.374` to `0.350`),
   cache misses (`18.37%` to `19.00%`), branch misses (`8.50%` to `8.88%`), and
   context switches (`5.495 K/sec` to `6.292 K/sec`).
+
+## 2026-07-12 17:05 Q-012 CLEAN AFFINITY A/B [codex]
+- What: reran the external affinity partition probe on a clean default MSR run
+  with no allocator cap and no worker override. SRT helper threads were
+  temporarily pinned to CPUs `0-1`, all other Restream threads to CPUs `2-5`,
+  then restored to the original masks. No runtime code changed.
+- Gates: MediaMTX `/v3/paths/list` stayed at `1200/1200` ready with bytes
+  growing before and after both perf windows. Restream logs had zero
+  warn/error/panic lines.
+- Commit: (this commit)
+- Follow-ups: Q-012 remains open but is now narrowed to an opt-in,
+  ownership-aware runtime affinity design. Any code change must derive
+  partitions from the effective CPU mask/cgroup quota and run concurrency proof
+  gates because it changes thread lifecycle/placement behavior.
+- Notes: default scheduler used `2.321` cores, IPC `0.336`, cache misses
+  `20.80%`, context switches `7.663 K/sec`, and migrations `920.333/sec`.
+  Partitioning used `2.051` cores, IPC `0.420`, cache misses `16.25%`,
+  context switches `4.330 K/sec`, and migrations `288.533/sec`; page faults
+  were the one worse counter (`7.200/sec` to `58.733/sec`). The clean thread
+  census again showed `82` threads total with two hot Tokio workers and two hot
+  shared SRT queue workers, not 64 busy Tokio workers.
