@@ -134,14 +134,20 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   heuristics and SRT muxer/thread sharing before hot/cold member layout work.
   Add one allocator-arena experiment (`MALLOC_ARENA_MAX` or alternate allocator)
   before data-structure field-layout work because RSS growth was private
-  anonymous memory while named media buffers stayed flat.
+  anonymous memory while named media buffers stayed flat. If graph refresh is
+  promoted from ad hoc inspection to regular operations, add a server-side
+  grouped-leaf graph view: the current raw MSR graph is complete but 9.33 MB.
 - Notes: current live sample used 4.276 Restream CPUs with IPC 0.37,
   19.93% cache misses, 10.21% branch misses, and 130.755 migrations/sec.
   Thread census again showed six hot Tokio scheduler workers plus roughly one
   low-CPU `SRT:RcvQ:*` thread per SRT socket. RSS rose from 323,884 KiB to
-  742,996 KiB over the observed 1,200-output window; `/proc` attributed most of
-  it to private anonymous mappings, including several nearly-full 64 MiB arenas.
+  1,088,120 KiB over the observed 1,200-output window; `/proc` attributed most
+  of it to private anonymous mappings, including several nearly-full 64 MiB
+  arenas.
   The authenticated health proof split the control-plane cost: full health was
   bounded but heavy (~3.95 MB, p50 392 ms), summary health was fast (~175 KB,
   p50 28 ms), and dashboard runtime summary stayed around p50 362 ms because
-  metrics collection performs a synchronous 250 ms network-rate sample.
+  metrics collection performs a synchronous 250 ms network-rate sample. The
+  raw pipeline graph endpoint returned the full MSR topology (1,259 nodes,
+  1,258 edges) in ~401 ms p50, and the frontend now folds repeated egress
+  leaves locally.

@@ -347,12 +347,20 @@ Authenticated health/status latency under the same live load:
 | `/api/v1/engine/health` | 30 | 3.95 MB | 392 ms | 934 ms | 1,768 ms | Full per-output payload; bounded but heavy |
 | `/api/v1/engine/health?view=summary` | 20 | 174-175 KB | 28 ms | 44 ms | 46 ms | Broad dashboard health shape |
 | `/api/v1/dashboard/runtime?health_view=summary&metrics_view=summary` | 20 | 175 KB | 362 ms | 444 ms | 460 ms | Dominated by metrics network sampler |
+| `/api/v1/pipelines/<id>/graph` | 5 | 9.33 MB | 401 ms | — | 594 ms | Full raw MSR topology: 1,259 nodes, 1,258 edges |
 
 The dashboard runtime path stayed bounded, but the latency split matters:
 health summary itself is not the bottleneck. `build_system_metrics_snapshot`
 does a deliberate 250 ms network delta sample even for `view=summary`, so
 runtime dashboard refreshes pay that wall-clock cost regardless of the health
 snapshot lock fix.
+
+The raw processing graph endpoint returned the full MSR topology: 1 ingest,
+1 demux, 1 source ring, 30 audio-filter stages, 26 packetizers, and all 1,200
+egress leaves. Frontend rendering now folds repeated egress leaves by count,
+but the API payload remains a measured control-plane cost. A future server-side
+graph view could preserve full topology while returning repeated homogeneous
+leaf groups directly.
 
 Thread census over the same live shape found 210 Restream threads. The six hot
 Tokio scheduler workers carried roughly 17-21% CPU each, with one additional
@@ -362,13 +370,14 @@ core of aggregate scheduler/system overhead. `SRT:SndQ:*` threads were mostly
 near-idle but still present one-per-muxer.
 
 RSS rose during the live dashboard window even though named media buffers were
-flat. Across 68 5-second samples at the 1,200-output shape, RSS grew from
-323,884 KiB to 742,996 KiB while AVIO HWM stayed at 3.2-4.5 MiB, source rings
-stayed around 16-17 MiB, transcoder rings around 20-22 MiB, and TSMux rings
-around 9.5-10.9 MiB. `/proc/<pid>/smaps_rollup` attributed 662,312 KiB to
-private anonymous memory; `pmap -x` showed multiple nearly-full 64 MiB anonymous
-regions plus a 36 MiB heap. That shape is consistent with allocator arena
-retention/thread churn rather than bounded media-ring growth.
+flat. Across 215 5-second samples at the 1,200-output shape, RSS grew from
+323,884 KiB to 1,088,120 KiB while AVIO HWM stayed at 3.2-4.5 MiB, source rings
+stayed around 16-17 MiB, transcoder rings around 20-22 MiB, TSMux rings around
+9.5-10.9 MiB, and retained payload stayed below 50 MiB. `/proc/<pid>/smaps_rollup`
+later reported 1,036,576 KiB private anonymous memory out of 1,091,340 KiB RSS;
+`pmap -x` showed multiple nearly-full 64 MiB anonymous regions plus a 36 MiB
+heap. That shape is consistent with allocator arena retention, native-library
+buffers, or thread churn rather than bounded media-ring growth.
 
 Interpretation:
 
@@ -382,6 +391,9 @@ Interpretation:
 - The next control-plane latency win is to avoid doing a synchronous 250 ms
   network-rate sample on every dashboard runtime summary refresh, for example
   by caching/updating network counters out-of-band.
+- The processing graph is now visually usable at MSR scale, but the raw
+  9.33 MB graph response is large enough to justify a future grouped-leaf API
+  view if graph refresh becomes part of regular operations.
 - The structural SRT opportunity remains muxer/socket sharing or otherwise
   reducing the per-SRT-egress native thread footprint. Worker-count heuristics
   should use effective CPU quota/mask plus workload shape, not MSR alone.
