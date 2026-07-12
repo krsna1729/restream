@@ -19,8 +19,8 @@ use criterion::{
     BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
 };
 use restream::media::codec::{
-    annexb_to_avcc, annexb_to_avcc_with_scratch, audio_for_rtmp, audio_for_ts, avcc_to_annexb,
-    video_for_rtmp, video_for_ts,
+    annexb_to_avcc, annexb_to_avcc_with_scratch, audio_for_rtmp, audio_for_rtmp_into, audio_for_ts,
+    avcc_to_annexb, video_for_rtmp, video_for_rtmp_with_composition_into, video_for_ts,
 };
 use restream::media::ring_buffer::PayloadFormat;
 
@@ -300,6 +300,88 @@ fn bench_audio_for_rtmp(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// rtmp_payload_ownership
+// ---------------------------------------------------------------------------
+
+/// Isolate the RTMP egress payload handoff cost seen in MSR perf samples.
+///
+/// Production currently converts Raw payloads into a reusable Vec and then
+/// copies that Vec into Bytes for rml_rtmp. Alternatives here avoid that copy,
+/// but may reintroduce per-packet allocation or buffer ownership churn. This
+/// benchmark is intentionally below the session serializer so we can decide
+/// whether a runtime experiment is worth the correctness risk.
+fn bench_rtmp_payload_ownership(c: &mut Criterion) {
+    let mut group = c.benchmark_group("codec/rtmp_payload_ownership");
+
+    for (label, num_nalus, nalu_size, is_key) in [
+        ("video_pframe_8k", 1, 8 * 1024, false),
+        ("video_pframe_30k_3nalu", 3, 10 * 1024, false),
+        ("video_idr_80k", 1, 80 * 1024, true),
+    ] {
+        let annexb = make_annexb(num_nalus, nalu_size);
+        group.throughput(Throughput::Bytes(annexb.len() as u64));
+
+        group.bench_with_input(
+            BenchmarkId::new("reuse_vec_then_copy_to_bytes", label),
+            &annexb,
+            |b, data| {
+                let mut out = Vec::with_capacity(data.len() + 5);
+                b.iter(|| {
+                    assert!(video_for_rtmp_with_composition_into(
+                        data, is_key, 0, &mut out
+                    ));
+                    black_box(Bytes::copy_from_slice(&out));
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("fresh_vec_then_bytes_from_vec", label),
+            &annexb,
+            |b, data| {
+                b.iter(|| {
+                    let mut out = Vec::with_capacity(data.len() + 5);
+                    assert!(video_for_rtmp_with_composition_into(
+                        data, is_key, 0, &mut out
+                    ));
+                    black_box(Bytes::from(out));
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("take_reused_vec_then_replace", label),
+            &annexb,
+            |b, data| {
+                let mut out = Vec::with_capacity(data.len() + 5);
+                b.iter(|| {
+                    assert!(video_for_rtmp_with_composition_into(
+                        data, is_key, 0, &mut out
+                    ));
+                    let payload = std::mem::replace(&mut out, Vec::with_capacity(data.len() + 5));
+                    black_box(Bytes::from(payload));
+                })
+            },
+        );
+    }
+
+    let adts = make_adts_audio(200);
+    group.throughput(Throughput::Bytes(adts.len() as u64));
+    group.bench_function("audio_reuse_vec_then_copy_to_bytes", |b| {
+        let mut out = Vec::with_capacity(adts.len() + 2);
+        b.iter(|| {
+            audio_for_rtmp_into(&adts, &mut out);
+            black_box(Bytes::copy_from_slice(&out));
+        })
+    });
+    group.bench_function("audio_fresh_vec_then_bytes_from_vec", |b| {
+        b.iter(|| black_box(Bytes::from(audio_for_rtmp(&adts))))
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // packet_to_bytes  (transcoder output: copy_from_slice vs Bytes::from_owner)
 // ---------------------------------------------------------------------------
 
@@ -360,6 +442,7 @@ criterion_group!(
     bench_video_for_rtmp,
     bench_audio_for_ts,
     bench_audio_for_rtmp,
+    bench_rtmp_payload_ownership,
     bench_packet_to_bytes,
 );
 criterion_main!(benches);
