@@ -33,9 +33,17 @@ done
 
 if ((${#missing[@]} == 0)); then
     echo "ci-system-deps: $profile profile already satisfied"
-    exit 0
+else
+    echo "ci-system-deps: installing $profile profile: ${missing[*]}"
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq "${missing[@]}"
 fi
 
-echo "ci-system-deps: installing $profile profile: ${missing[*]}"
-sudo apt-get update -qq
-sudo apt-get install -y -qq "${missing[@]}"
+# The live profile is the CI counterpart of the documented harness runtime.
+# Keep MediaMTX installation in its canonical bootstrap script rather than
+# duplicating the pinned release URL here. GitHub runners intentionally use
+# host networking for the harness, so they must not persist or validate the
+# optional host sysctl setup.
+if [[ "$profile" == "live" ]]; then
+    scripts/dev/bootstrap-runtime.sh --mediamtx-only --skip-harness-host-check
+fi
