@@ -635,6 +635,45 @@ impl RingBuffer {
         stats
     }
 
+    /// Estimate the aggregate encoded payload bitrate from packets currently
+    /// retained in the ring.
+    ///
+    /// This is sampled only during stage startup. It deliberately uses media
+    /// DTS rather than wall-clock arrival time: a publisher can deliver in
+    /// bursts, while FFmpeg's probe must cover a bounded amount of media time.
+    /// Require a meaningful window so a single large keyframe cannot be
+    /// mistaken for the steady stream rate.
+    pub fn observed_payload_bitrate_bps(&self) -> Option<u64> {
+        const MIN_OBSERVATION_MS: i64 = 250;
+
+        let mut payload_bytes = 0u64;
+        let mut min_dts = i64::MAX;
+        let mut max_dts = i64::MIN;
+        let mut packets = 0usize;
+
+        for slot in &self.slots {
+            let Some(packet) = slot.data.load_full() else {
+                continue;
+            };
+            payload_bytes = payload_bytes.saturating_add(packet.payload.len() as u64);
+            min_dts = min_dts.min(packet.dts);
+            max_dts = max_dts.max(packet.dts);
+            packets += 1;
+        }
+
+        let span_ms = max_dts.checked_sub(min_dts)?;
+        if packets < 2 || payload_bytes == 0 || span_ms < MIN_OBSERVATION_MS {
+            return None;
+        }
+
+        Some(
+            payload_bytes
+                .saturating_mul(8)
+                .saturating_mul(1_000)
+                .div_ceil(span_ms as u64),
+        )
+    }
+
     pub fn reader_snapshots(&self) -> Vec<ReaderSnapshot> {
         let write_idx = self.get_write_idx();
         let now_us = self.elapsed_us();

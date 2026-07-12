@@ -56,8 +56,8 @@ mod ffmpeg_process;
 use ffmpeg_process::{ExternalStdinSink, spawn_external_stderr_logger};
 pub use ffmpeg_process::{
     build_stage_ffmpeg_args, build_stage_ffmpeg_args_for_input,
-    build_stage_ffmpeg_args_for_input_streams, build_stage_ffmpeg_video_only_args,
-    build_stage_ffmpeg_video_only_args_for_input,
+    build_stage_ffmpeg_args_for_input_streams, build_stage_ffmpeg_args_for_observed_input_streams,
+    build_stage_ffmpeg_video_only_args, build_stage_ffmpeg_video_only_args_for_input,
 };
 
 /// Stdin writes or stdout reads exceeding this threshold are counted as stalls/idles.
@@ -153,12 +153,20 @@ pub(crate) async fn run_external_ffmpeg_backend(
     });
 
     let ffmpeg_preset = external_stage_arg_preset(&plan, &encoding);
-    let args = build_stage_ffmpeg_args_for_input_streams(
+    let observed_bitrate_bps = plan
+        .input
+        .video_meta
+        .as_ref()
+        .and_then(|video| video.bw)
+        .filter(|bitrate| bitrate.is_finite() && *bitrate > 0.0)
+        .map(|bitrate| bitrate.round() as u64);
+    let args = build_stage_ffmpeg_args_for_observed_input_streams(
         &ffmpeg_preset,
         output_codec,
         probe_codec,
         include_audio,
         plan.input.audio_tracks.len(),
+        observed_bitrate_bps,
     );
     info!(?args, "FFMPEG ARGS");
     let correlation_id = crate::logging::next_correlation_id("stage");

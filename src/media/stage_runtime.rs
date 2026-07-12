@@ -502,6 +502,17 @@ pub(crate) async fn wait_for_stage_metadata(
                     return None;
                 }
 
+                // Size the external probe from the stream Restream has already
+                // demuxed, not from resolution/codec guesses. The source ring
+                // normally contains at least one reconciler interval of media
+                // by the time a stage is created; short/just-started streams
+                // retain the conservative codec floor in startup_policy.
+                if video.bw.is_none()
+                    && let Some(observed_bitrate_bps) = source_buffer.observed_payload_bitrate_bps()
+                {
+                    video.bw = Some(observed_bitrate_bps as f64);
+                }
+
                 Some((video, audio_tracks))
             })
         };

@@ -868,6 +868,33 @@ fn payload_stats_reports_retained_ring_bytes() {
 }
 
 #[test]
+fn observed_payload_bitrate_uses_retained_media_time() {
+    let rb = RingBuffer::new(8);
+    for dts in [0, 250, 500, 750, 1000] {
+        rb.push(MediaPacket {
+            media_type: MediaType::Video,
+            track_index: 0,
+            pts: dts,
+            dts,
+            is_keyframe: dts == 0,
+            format: PayloadFormat::Raw,
+            payload: Bytes::from(vec![0; 37_500]),
+        });
+    }
+
+    assert_eq!(rb.observed_payload_bitrate_bps(), Some(1_500_000));
+}
+
+#[test]
+fn observed_payload_bitrate_rejects_a_too_short_window() {
+    let rb = RingBuffer::new(4);
+    rb.push(video_packet(0, 0, true));
+    rb.push(video_packet(100, 100, false));
+
+    assert_eq!(rb.observed_payload_bitrate_bps(), None);
+}
+
+#[test]
 fn active_reader_count_tracks_live_readers() {
     let rb = Arc::new(RingBuffer::new(16));
     assert_eq!(rb.active_reader_count(), 0, "empty ring has no readers");

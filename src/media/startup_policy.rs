@@ -4,13 +4,11 @@ use crate::domain::output_spec::{OutputEncodingSpec, VideoCodecKind, VideoSelect
 use crate::media::profiles;
 
 const DEFAULT_KEYFRAME_PREROLL_PACKETS: usize = 32;
-// H.264 with AAC MPEG-TS needs more than FFmpeg's 64 KiB/0.5 s startup
-// window to observe the AAC sample rate after a live join. Keep this bounded
-// 128 KiB/1 s base distinct from the rejected multi-megabyte file probe: a
-// low-byte-rate live H.264 marker stream emits ~155 KiB of payload over the
-// no-EOS proof window, so 256 KiB can still leave the external stage in
-// `firstInput` until EOS. Multi-audio stages grow from this floor because
-// FFmpeg must discover each input stream before `0:a?` can map/copy it.
+// These are safety floors, not the normal live policy. Restream measures the
+// encoded payload rate from the source ring and covers one bounded media-time
+// window below. The floor handles a stage created before a useful rate sample
+// exists; the cap prevents a high-rate source from turning probe data into an
+// unbounded allocation or multi-second startup wait.
 const EXT_STAGE_ANALYZE_DURATION_US_DEFAULT: u64 = 1_000_000;
 const EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT: usize = 128 * 1024;
 // External stages consume a persistent MPEG-TS pipe, not a finite file. A
@@ -26,6 +24,8 @@ const EXT_STAGE_ANALYZE_DURATION_US_HEVC: u64 = 1_000_000;
 const EXT_STAGE_PROBE_SIZE_BYTES_HEVC: usize = 512 * 1024;
 const EXT_STAGE_PROBE_SIZE_BYTES_AUDIO_TRACK: usize = 16 * 1024;
 const EXT_STAGE_PROBE_SIZE_BYTES_MAX: usize = 1024 * 1024;
+const EXT_STAGE_PROBE_RATE_MARGIN_NUMERATOR: u64 = 5;
+const EXT_STAGE_PROBE_RATE_MARGIN_DENOMINATOR: u64 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExtStageProbeContext {
@@ -33,6 +33,8 @@ pub struct ExtStageProbeContext {
     pub include_audio: bool,
     pub audio_track_count: usize,
     pub passthrough: bool,
+    /// Aggregate encoded payload bitrate observed by Restream's source ring.
+    pub observed_bitrate_bps: Option<u64>,
 }
 
 impl ExtStageProbeContext {
@@ -42,6 +44,7 @@ impl ExtStageProbeContext {
             include_audio: true,
             audio_track_count: 1,
             passthrough: false,
+            observed_bitrate_bps: None,
         }
     }
 }
@@ -90,6 +93,17 @@ pub fn ext_stage_probe_budget_for(context: ExtStageProbeContext) -> (u64, usize)
         )
     };
 
+    let observed_window_bytes = context.observed_bitrate_bps.map(|bitrate_bps| {
+        bitrate_bps
+            .saturating_mul(analyze_duration_us)
+            .div_ceil(8 * 1_000_000)
+            .saturating_mul(EXT_STAGE_PROBE_RATE_MARGIN_NUMERATOR)
+            .div_ceil(EXT_STAGE_PROBE_RATE_MARGIN_DENOMINATOR) as usize
+    });
+    let stream_probe_size = observed_window_bytes
+        .unwrap_or(base_probe_size)
+        .max(base_probe_size);
+
     let audio_tracks = if context.include_audio {
         context.audio_track_count
     } else {
@@ -98,7 +112,7 @@ pub fn ext_stage_probe_budget_for(context: ExtStageProbeContext) -> (u64, usize)
     let audio_probe_size = audio_tracks
         .saturating_sub(1)
         .saturating_mul(EXT_STAGE_PROBE_SIZE_BYTES_AUDIO_TRACK);
-    let probe_size_bytes = base_probe_size
+    let probe_size_bytes = stream_probe_size
         .saturating_add(audio_probe_size)
         .min(EXT_STAGE_PROBE_SIZE_BYTES_MAX);
 
@@ -111,6 +125,7 @@ pub fn ext_stage_passthrough_probe_budget() -> (u64, usize) {
         include_audio: true,
         audio_track_count: 1,
         passthrough: true,
+        observed_bitrate_bps: None,
     })
 }
 
@@ -179,6 +194,7 @@ mod tests {
                         include_audio: true,
                         audio_track_count: 1,
                         passthrough: false,
+                        observed_bitrate_bps: None,
                     }),
                     (1_000_000, base_probe_size),
                     "codec={codec:?} height={height}"
@@ -203,6 +219,7 @@ mod tests {
                     include_audio: true,
                     audio_track_count: tracks,
                     passthrough: false,
+                    observed_bitrate_bps: None,
                 }),
                 (1_000_000, expected_probe_size),
                 "codec={codec:?} tracks={tracks}"
@@ -218,6 +235,7 @@ mod tests {
                 include_audio: false,
                 audio_track_count: 30,
                 passthrough: false,
+                observed_bitrate_bps: None,
             }),
             (1_000_000, 128 * 1024)
         );
@@ -231,6 +249,7 @@ mod tests {
                 include_audio: true,
                 audio_track_count: 100,
                 passthrough: false,
+                observed_bitrate_bps: None,
             }),
             (1_000_000, EXT_STAGE_PROBE_SIZE_BYTES_MAX)
         );
@@ -241,6 +260,47 @@ mod tests {
         assert_eq!(
             ext_stage_keyframe_preroll_packets(),
             DEFAULT_KEYFRAME_PREROLL_PACKETS
+        );
+    }
+
+    #[test]
+    fn external_stage_probe_budget_uses_observed_payload_rate() {
+        let budget = |observed_bitrate_bps| {
+            ext_stage_probe_budget_for(ExtStageProbeContext {
+                codec: VideoCodecKind::H264,
+                include_audio: true,
+                audio_track_count: 1,
+                passthrough: false,
+                observed_bitrate_bps: Some(observed_bitrate_bps),
+            })
+        };
+
+        assert_eq!(budget(640_000), (1_000_000, 128 * 1024));
+        assert_eq!(budget(1_500_000), (1_000_000, 234_375));
+        assert_eq!(budget(8_000_000), (1_000_000, 1024 * 1024));
+    }
+
+    #[test]
+    fn observed_rate_and_audio_count_compose_under_the_global_cap() {
+        assert_eq!(
+            ext_stage_probe_budget_for(ExtStageProbeContext {
+                codec: VideoCodecKind::H264,
+                include_audio: true,
+                audio_track_count: 3,
+                passthrough: false,
+                observed_bitrate_bps: Some(1_500_000),
+            }),
+            (1_000_000, 267_143)
+        );
+        assert_eq!(
+            ext_stage_probe_budget_for(ExtStageProbeContext {
+                codec: VideoCodecKind::Hevc,
+                include_audio: true,
+                audio_track_count: 30,
+                passthrough: false,
+                observed_bitrate_bps: Some(8_000_000),
+            }),
+            (1_000_000, 1024 * 1024)
         );
     }
 }

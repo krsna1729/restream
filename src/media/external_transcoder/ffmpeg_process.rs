@@ -93,6 +93,7 @@ fn build_stage_ffmpeg_args_inner(
     probe_codec: &str,
     include_audio: bool,
     audio_track_count: usize,
+    observed_bitrate_bps: Option<u64>,
     threads: Option<u32>,
 ) -> Vec<String> {
     // Strip the internal stage-key prefix ("video:720p" -> "720p").
@@ -116,6 +117,7 @@ fn build_stage_ffmpeg_args_inner(
             include_audio,
             audio_track_count: probed_audio_track_count,
             passthrough: full_stream_passthrough,
+            observed_bitrate_bps,
         });
     let ffmpeg_threads = threads.unwrap_or(2).max(1);
 
@@ -247,7 +249,7 @@ fn build_stage_ffmpeg_args_inner(
 }
 
 pub fn build_stage_ffmpeg_args(preset: &str, input_codec: &str) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, true, 1, None)
+    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, true, 1, None, None)
 }
 
 /// Like [`build_stage_ffmpeg_args`], but sizes FFmpeg's input probe budget from
@@ -259,7 +261,7 @@ pub fn build_stage_ffmpeg_args_for_input(
     input_codec: &str,
     probe_codec: &str,
 ) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, true, 1, None)
+    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, true, 1, None, None)
 }
 
 pub fn build_stage_ffmpeg_args_for_input_streams(
@@ -269,7 +271,7 @@ pub fn build_stage_ffmpeg_args_for_input_streams(
     include_audio: bool,
     audio_track_count: usize,
 ) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(
+    build_stage_ffmpeg_args_for_observed_input_streams(
         preset,
         input_codec,
         probe_codec,
@@ -279,8 +281,27 @@ pub fn build_stage_ffmpeg_args_for_input_streams(
     )
 }
 
+pub fn build_stage_ffmpeg_args_for_observed_input_streams(
+    preset: &str,
+    input_codec: &str,
+    probe_codec: &str,
+    include_audio: bool,
+    audio_track_count: usize,
+    observed_bitrate_bps: Option<u64>,
+) -> Vec<String> {
+    build_stage_ffmpeg_args_inner(
+        preset,
+        input_codec,
+        probe_codec,
+        include_audio,
+        audio_track_count,
+        observed_bitrate_bps,
+        None,
+    )
+}
+
 pub fn build_stage_ffmpeg_video_only_args(preset: &str, input_codec: &str) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, false, 0, None)
+    build_stage_ffmpeg_args_inner(preset, input_codec, input_codec, false, 0, None, None)
 }
 
 pub fn build_stage_ffmpeg_video_only_args_for_input(
@@ -288,7 +309,7 @@ pub fn build_stage_ffmpeg_video_only_args_for_input(
     input_codec: &str,
     probe_codec: &str,
 ) -> Vec<String> {
-    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, false, 0, None)
+    build_stage_ffmpeg_args_inner(preset, input_codec, probe_codec, false, 0, None, None)
 }
 
 fn stage_audio_routing(preset: &str) -> Option<AudioRouting> {
@@ -1117,6 +1138,122 @@ mod tests {
             }
         };
         assert!(live_bytes > 0, "ffmpeg stdout should not be empty");
+
+        let mut stdin = writer.join().expect("join writer");
+        let _ = std::io::Write::flush(&mut stdin);
+        drop(stdin);
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = reader.join();
+    }
+
+    #[test]
+    fn observed_rate_probe_transcodes_h264_aac_bitrate_fixture_before_pipe_closes() {
+        // Regression: the 1.5 Mbps SRT bitrate-sweep row failed when a fixed
+        // 128 KiB probe ended inside the leading video burst, before FFmpeg
+        // had parsed AAC channel/sample-rate parameters. Derive the same rate
+        // Restream observes from retained packets and keep stdin open while
+        // proving that the dynamic budget emits output.
+        let path = crate::test_fixtures::bench_transport_fixture("h264", "1.5M", false)
+            .expect("1.5 Mbps H.264/AAC fixture");
+        let file_bytes = std::fs::read(&path).expect("read bitrate fixture");
+        let mut demuxer = TsDemuxer::new();
+        let mut packets = Vec::new();
+        for chunk in file_bytes.chunks(1316) {
+            demuxer.feed(chunk);
+            demuxer.drain_into(&mut packets);
+        }
+        demuxer.flush();
+        demuxer.drain_into(&mut packets);
+
+        let mut probe = demuxer.take_probe().expect("probe bitrate fixture");
+        let video = probe.video.take().expect("H.264 video metadata");
+        let audio_tracks = probe.audio_tracks;
+        let min_dts = packets.iter().map(|packet| packet.dts).min().unwrap();
+        let max_dts = packets.iter().map(|packet| packet.dts).max().unwrap();
+        let payload_bytes: u64 = packets
+            .iter()
+            .map(|packet| packet.payload.len() as u64)
+            .sum();
+        let observed_bitrate_bps = payload_bytes
+            .saturating_mul(8)
+            .saturating_mul(1_000)
+            .div_ceil((max_dts - min_dts) as u64);
+
+        let args = build_stage_ffmpeg_args_for_observed_input_streams(
+            "720p",
+            "h264",
+            "h264",
+            true,
+            audio_tracks.len(),
+            Some(observed_bitrate_bps),
+        );
+        let probe_size: usize = arg_after(&args, "-probesize").parse().unwrap();
+        assert!(
+            probe_size > 128 * 1024,
+            "observed bitrate must lift the failed 128 KiB probe floor"
+        );
+        assert!(
+            probe_size <= 1024 * 1024,
+            "live probe must remain under the global startup cap"
+        );
+
+        let mut feeder = TsPacketFeeder::new(
+            Some(&video),
+            std::sync::Arc::new(audio_tracks),
+            PacketFeedConfig::default(),
+        );
+        let mut ts_bytes = Vec::new();
+        let mut packet_buf = Vec::new();
+        for packet in &packets {
+            packet_buf.clear();
+            if feeder.extend_ts_for_packet(packet, &mut packet_buf) {
+                ts_bytes.extend_from_slice(&packet_buf);
+            }
+        }
+
+        let ffmpeg = crate::ffmpeg_extract::ensure_ffmpeg_extracted();
+        let mut child = std::process::Command::new(ffmpeg)
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn bundled dynamic-probe transcode");
+        let mut stdout = child.stdout.take().expect("stdout pipe");
+        let mut stdin = child.stdin.take().expect("stdin pipe");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut buf = [0u8; 188 * 16];
+            if let Ok(n) = std::io::Read::read(&mut stdout, &mut buf) {
+                let _ = tx.send(n);
+            }
+        });
+        let writer = std::thread::spawn(move || {
+            for chunk in ts_bytes.chunks(1316) {
+                if std::io::Write::write_all(&mut stdin, chunk).is_err() {
+                    break;
+                }
+            }
+            stdin
+        });
+
+        let live_bytes = match rx.recv_timeout(std::time::Duration::from_secs(12)) {
+            Ok(n) => n,
+            Err(err) => {
+                let mut stdin = writer.join().expect("join writer");
+                let _ = std::io::Write::flush(&mut stdin);
+                drop(stdin);
+                let _ = child.kill();
+                let output = child.wait_with_output().expect("wait for ffmpeg");
+                let _ = reader.join();
+                panic!(
+                    "dynamic probe should emit before stdin closes: {err}; stderr={}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        };
+        assert!(live_bytes > 0, "dynamic-probe stdout should not be empty");
 
         let mut stdin = writer.join().expect("join writer");
         let _ = std::io::Write::flush(&mut stdin);
