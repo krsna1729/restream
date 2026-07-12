@@ -541,6 +541,9 @@ test("processing graph collapses repeated egress leaves by count", async () => {
   });
 
   const html = container.innerHTML;
+  assert.match(html, /Click a grouped node to inspect its members/);
+  assert.match(html, /data-graph-aggregate-key/);
+  assert.match(html, /click to expand/);
   assert.match(html, /RTMP egress x5/);
   assert.match(html, /branch starts: 5 leaves/);
   assert.match(html, /fan-out: RTMP egress x5/);
