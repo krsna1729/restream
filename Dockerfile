@@ -75,11 +75,19 @@ RUN npm run build:frontend
 #
 # scripts/build/app-native.sh is used for both so Docker never re-implements the
 # static-link flags or verification logic.
+
 FROM native-deps AS rust-build
 
 WORKDIR /workspace
-ENV RESTREAM_BUILD_GIT_COMMIT=source-distribution \
-    RESTREAM_BUILD_TIMESTAMP=1970-01-01T00:00:00Z \
+# Release provenance is supplied by the caller because `.git/` is deliberately
+# excluded from the build context. Keeping these arguments mandatory prevents a
+# published image from silently claiming a synthetic commit or Unix epoch.
+ARG RESTREAM_BUILD_GIT_COMMIT
+ARG RESTREAM_BUILD_TIMESTAMP
+RUN test -n "$RESTREAM_BUILD_GIT_COMMIT" \
+    && test -n "$RESTREAM_BUILD_TIMESTAMP"
+ENV RESTREAM_BUILD_GIT_COMMIT=${RESTREAM_BUILD_GIT_COMMIT} \
+    RESTREAM_BUILD_TIMESTAMP=${RESTREAM_BUILD_TIMESTAMP} \
     RESTREAM_SKIP_SBOM=1
 
 COPY scripts/build/app-native.sh scripts/build/app-native.sh
@@ -137,6 +145,14 @@ FROM scratch AS runtime-scratch
 
 COPY --from=runtime-tree /runtime/ /
 COPY --from=runtime-tree /workspace/target/release/restream /restream
+COPY distribution/ /usr/share/doc/restream/distribution/
+
+ARG RESTREAM_BUILD_GIT_COMMIT
+ARG RESTREAM_BUILD_TIMESTAMP
+LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
+    org.opencontainers.image.revision="${RESTREAM_BUILD_GIT_COMMIT}" \
+    org.opencontainers.image.created="${RESTREAM_BUILD_TIMESTAMP}" \
+    org.opencontainers.image.licenses="MIT AND GPL-2.0-or-later AND MPL-2.0 AND Apache-2.0"
 
 EXPOSE 3030 1935 10080/udp
 
@@ -153,6 +169,14 @@ FROM ubuntu:24.04 AS runtime-ubuntu
 
 COPY --from=runtime-tree /runtime/ /
 COPY --from=runtime-tree /workspace/target/release/restream /restream
+COPY distribution/ /usr/share/doc/restream/distribution/
+
+ARG RESTREAM_BUILD_GIT_COMMIT
+ARG RESTREAM_BUILD_TIMESTAMP
+LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
+    org.opencontainers.image.revision="${RESTREAM_BUILD_GIT_COMMIT}" \
+    org.opencontainers.image.created="${RESTREAM_BUILD_TIMESTAMP}" \
+    org.opencontainers.image.licenses="MIT AND GPL-2.0-or-later AND MPL-2.0 AND Apache-2.0"
 
 EXPOSE 3030 1935 10080/udp
 USER 1000:1000
@@ -161,13 +185,20 @@ ENTRYPOINT ["/restream"]
 
 # ── Stage 5: live-harness image ──────────────────────────────────────────────
 #
-# Build explicitly with `docker build --target harness -t restream:harness .`.
+# Build explicitly with the same provenance args documented in README.md:
+# `docker build --build-arg RESTREAM_BUILD_GIT_COMMIT=... --build-arg RESTREAM_BUILD_TIMESTAMP=... --target harness -t restream:harness .`.
 # It contains every generated executable used in live validation (`restream`,
 # bench-profile `test_harness`, and the embedded static FFmpeg), the pinned
 # MediaMTX peer, committed fixtures, and only the OS tools the harness invokes.
 FROM ubuntu:24.04 AS harness
 
 WORKDIR /workspace
+ARG RESTREAM_BUILD_GIT_COMMIT
+ARG RESTREAM_BUILD_TIMESTAMP
+LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
+    org.opencontainers.image.revision="${RESTREAM_BUILD_GIT_COMMIT}" \
+    org.opencontainers.image.created="${RESTREAM_BUILD_TIMESTAMP}" \
+    org.opencontainers.image.licenses="MIT AND GPL-2.0-or-later AND MPL-2.0 AND Apache-2.0"
 COPY scripts/dev/bootstrap-runtime.sh scripts/dev/bootstrap-runtime.sh
 COPY scripts/dev/harness-host-prereqs.sh scripts/dev/harness-host-prereqs.sh
 RUN scripts/dev/bootstrap-runtime.sh --skip-harness-host-check
@@ -176,9 +207,14 @@ COPY --from=harness-build /workspace/target/bench/test_harness /workspace/target
 COPY --from=harness-build /workspace/public/bin/ffmpeg /workspace/public/bin/ffmpeg
 COPY test/fixtures/ test/fixtures/
 COPY test/harness/ test/harness/
+COPY distribution/ /usr/share/doc/restream/distribution/
 
 ENV PATH="/workspace/target/bench:${PATH}" \
     RESTREAM_REPO_ROOT=/workspace
+
+# Make the explicitly selected target directly runnable. Individual harness
+# modes remain ordinary arguments, including `--no-netns` for host networking.
+ENTRYPOINT ["/workspace/target/bench/test_harness"]
 
 # Keep the production scratch runtime as Docker's implicit final target. The
 # harness remains an explicit `--target harness` validation image; otherwise a

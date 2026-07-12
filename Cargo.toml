@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.96"
 publish = false
 license = "MIT"
-repository = "https://github.com/live-miracles/restream"
+repository = "https://github.com/krsna1729/restream"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

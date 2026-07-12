@@ -55,7 +55,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker build --target runtime -t "$IMAGE" .
+build_commit="$(git rev-parse HEAD)"
+build_timestamp="$(git show -s --format=%cI HEAD)"
+docker build \
+    --build-arg "RESTREAM_BUILD_GIT_COMMIT=$build_commit" \
+    --build-arg "RESTREAM_BUILD_TIMESTAMP=$build_timestamp" \
+    --target runtime \
+    -t "$IMAGE" \
+    .
 
 user="$(docker image inspect --format '{{.Config.User}}' "$IMAGE")"
 if [[ "$user" != "1000:1000" ]]; then

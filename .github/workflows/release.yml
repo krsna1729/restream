@@ -12,6 +12,11 @@ permissions:
 jobs:
   certify-and-publish:
     runs-on: ubuntu-latest
+    env:
+      # workflow_dispatch runs from a branch, whose ref_name may contain '/'
+      # and is not a valid package version/path. Give non-tag evidence a stable,
+      # filename-safe local label while preserving the exact v* release tag.
+      RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.0.0-ci-{0}', github.run_number) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -48,13 +53,19 @@ jobs:
         # namespace used by the default isolated mode; use the harness's
         # documented host-network fallback and run suite modes serially.
         run: scripts/harness/run.sh suite -- --no-netns --run-id release-${{ github.sha }} --continue-on-fail
+      - name: Package every supported Linux binary
+        # This canonical script installs the locked frontend dependencies and
+        # builds generated assets before compiling the feature-enabled binaries.
+        run: scripts/release/package-binaries.sh "$RELEASE_VERSION"
       - name: Release evidence and OCI asset
+        # Pass the completed bundle so its exact restream executable emits the
+        # SBOM; certifying a separate default-feature rebuild would leave the
+        # downloadable feature-enabled artifact unscanned.
         run: |
           scripts/check/release-evidence.sh \
-            dist/restream-${{ github.ref_name || github.sha }}-oci.tar.gz \
-            dist/restream-${{ github.ref_name || github.sha }}.sbom.cdx.json
-      - name: Package every supported Linux binary
-        run: scripts/release/package-binaries.sh ${{ github.ref_name || github.sha }}
+            "dist/restream-${RELEASE_VERSION}-oci.tar.gz" \
+            "dist/restream-${RELEASE_VERSION}.sbom.cdx.json" \
+            "dist/restream-${RELEASE_VERSION}-linux-x86_64.tar.gz"
       - name: Publish certified scratch image
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -66,7 +77,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: release-evidence
+          name: release-evidence-${{ env.RELEASE_VERSION }}
           path: |
             dist/
             .local/artifacts/release-${{ github.sha }}/

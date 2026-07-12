@@ -30,7 +30,22 @@ case "$PROFILE" in
 esac
 
 cd "$ROOT"
-RESTREAM_BUILD_ROOT="$BUILD_ROOT" cargo build "${cargo_args[@]}" --bin restream
+build_targets=()
+if [[ -n "${RESTREAM_BUILD_BINS:-}" ]]; then
+    read -r -a requested_bins <<<"$RESTREAM_BUILD_BINS"
+    for binary in "${requested_bins[@]}"; do
+        build_targets+=(--bin "$binary")
+    done
+else
+    build_targets=(--bin restream)
+fi
+
+feature_args=()
+if [[ -n "${RESTREAM_BUILD_FEATURES:-}" ]]; then
+    feature_args=(--features "$RESTREAM_BUILD_FEATURES")
+fi
+
+RESTREAM_BUILD_ROOT="$BUILD_ROOT" cargo build "${cargo_args[@]}" "${build_targets[@]}" "${feature_args[@]}"
 
 BINARY="${CARGO_TARGET_DIR:-$ROOT/target}/$binary_dir/restream"
 # The checked-in SBOM is a source-distribution snapshot. Release certification
@@ -45,6 +60,21 @@ printf '%s\n' "$ldd_output"
 if grep -Eq 'libsrt|libsrt-' <<<"$ldd_output"; then
     echo "Native linkage verification failed: $BINARY still links libsrt dynamically." >&2
     exit 1
+fi
+
+if [[ -n "${RESTREAM_BUILD_BINS:-}" ]]; then
+    for binary in "${requested_bins[@]}"; do
+        built="${CARGO_TARGET_DIR:-$ROOT/target}/$binary_dir/$binary"
+        [[ -x "$built" ]] || {
+            echo "Native build verification failed: expected executable is missing: $built" >&2
+            exit 1
+        }
+        binary_ldd_output="$(ldd "$built" 2>&1 || true)"
+        if grep -Eq 'libsrt|libsrt-' <<<"$binary_ldd_output"; then
+            echo "Native linkage verification failed: $built still links libsrt dynamically." >&2
+            exit 1
+        fi
+    done
 fi
 
 echo "Verified: $BINARY does not link libsrt dynamically."

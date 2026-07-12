@@ -19,10 +19,15 @@ artifact that needs provenance and license review.
   `tracing/release_max_level_*` features without an explicit observability
   review.
 
-Run `scripts/check/release-evidence.sh <oci-archive> <release-sbom>` for the
-canonical local gate. The checked-in SBOM is a source snapshot; certification
-writes its commit-specific SBOM to the supplied release path so its provenance
-does not dirty the checkout. A `v*` tag runs the same gate, the full
+Run `scripts/release/package-binaries.sh <version>` followed by
+`scripts/check/release-evidence.sh <oci-archive> <release-sbom> <binary-bundle>`
+for the canonical artifact gate. Supplying the completed binary bundle makes
+its exact feature-enabled `restream` executable emit the SBOM that the
+vulnerability scanners inspect. Omitting the bundle retains a source-only
+certification form for development checks. The checked-in SBOM is a source
+snapshot; certification writes its commit-specific SBOM to the supplied
+release path so its provenance does not dirty the checkout. A `v*` tag runs
+the artifact gate, the full
 bench-harness suite, and publishes the
 scratch OCI runtime archive, a checksummed Linux x86_64 bundle containing every
 supported executable plus its verified runtime closure, and the runtime SBOM.
@@ -55,7 +60,7 @@ native build.
 Restream is MIT-licensed. The runtime image also includes GPL-licensed native
 components (including x264/x265 and potentially GPL-configured FFmpeg), so a
 released image must retain the corresponding third-party license notices and
-source-offer obligations; the application license does not replace them.
+source availability; the application license does not replace them.
 
 ## Dependency Policy
 

@@ -23,6 +23,19 @@ source bundle:
 - `target/` and `.local/artifacts/`: Rust build and harness outputs.
 - `node_modules/`: installed frontend dependencies.
 
+## Binary and container distributions
+
+Release artifacts include the checked-in `distribution/` directory. It carries
+the Restream license, a native-component license index, and the applicable GPL,
+MPL, and Apache license texts. The same directory is copied into scratch images
+at `/usr/share/doc/restream/distribution/` and is the canonical input for binary
+bundles; do not maintain a second set of release notices in a packaging script.
+
+The GPL-enabled FFmpeg build statically links x264 and x265. Consequently, a
+binary or container release must be paired with the GitHub source archive for
+its exact Git commit. The immutable native source pins and build flags live in
+`scripts/build/native/` and `scripts/build/native-deps.sh`.
+
 Regenerate the native prefix with:
 
 ```sh

@@ -12,22 +12,44 @@ VERSION="${1:?usage: scripts/release/package-binaries.sh <version>}"
 ARCH="${RESTREAM_RELEASE_ARCH:-linux-x86_64}"
 OUT_DIR="${RESTREAM_RELEASE_DIR:-dist}"
 
-case "$VERSION" in
-    v[0-9]*|[0-9]*) ;;
-    *) echo "package-binaries: version must start with v or a digit: $VERSION" >&2; exit 2 ;;
-esac
+if [[ ! "$VERSION" =~ ^v?[0-9][0-9A-Za-z._+-]*$ ]]; then
+    echo "package-binaries: version must be a filename-safe release label: $VERSION" >&2
+    exit 2
+fi
 
-for command in cargo tar sha256sum; do
+for command in cargo npm tar sha256sum; do
     command -v "$command" >/dev/null || {
         echo "package-binaries: required command not found: $command" >&2
         exit 1
     }
 done
 
-# `restream-mcp` is feature-gated. Build it with the ordinary application and
-# harness CLIs so a release cannot accidentally omit a supported executable.
-scripts/build/resource-limit.sh cargo build --release --bins \
-    --features mcp-server,mcp-http-backend
+# A clean release checkout has neither node_modules nor generated public assets.
+# Install exactly the locked frontend dependencies here, then reuse the ordinary
+# preparation script so the Rust build embeds the same browser assets developers
+# build locally. Keeping this in the packaging script prevents CI and local
+# release callers from accidentally publishing the source tree's empty public/.
+npm ci --include=optional
+scripts/dev/prepare.sh
+for asset in \
+    public/index.html \
+    public/login.html \
+    public/output.css \
+    public/js/features/dashboard-entry.js \
+    public/js/lib/hls.min.js; do
+    [[ -s "$asset" ]] || {
+        echo "package-binaries: required generated frontend asset is missing: $asset" >&2
+        exit 1
+    }
+done
+
+# `restream-mcp` is feature-gated. Build the supported executable set through
+# the native script so release packaging reuses the same static-link environment
+# and linkage checks as the scratch image.
+RESTREAM_BUILD_PROFILE=release \
+RESTREAM_BUILD_BINS="restream restream-mcp test_harness test_harness_dsl" \
+RESTREAM_BUILD_FEATURES="mcp-server,mcp-http-backend" \
+    scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 
 tmp="$(mktemp -d)"
 stage="$tmp/restream-$VERSION-$ARCH"
@@ -38,6 +60,7 @@ trap cleanup EXIT
 
 mkdir -p "$stage/bin" "$stage/rootfs"
 bash scripts/build/runtime-rootfs.sh target/release/restream "$stage/rootfs"
+cp -a distribution "$stage/distribution"
 
 for binary in restream restream-mcp test_harness test_harness_dsl; do
     source="target/release/$binary"
@@ -106,6 +129,9 @@ Run the server:
 The bundle contains every supported Linux executable and the loader/library
 closure from the scratch image that was smoke-tested for this release. It does
 not require host FFmpeg, SRT, or C/C++ runtime packages.
+
+License texts, the third-party component index, and source information are in
+the distribution/ directory and must remain beside the binaries.
 
 test_harness and test_harness_dsl are included for inspection and debugging.
 Run live integration tests from a source checkout with scripts/harness/run.sh;

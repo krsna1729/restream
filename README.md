@@ -98,11 +98,20 @@ closure, certificates, timezone/NSS files, and the writable runtime paths; the
 media stack and embedded FFmpeg remain static.
 
 ```sh
-docker build -t restream:container .
+docker build \
+  --build-arg RESTREAM_BUILD_GIT_COMMIT="$(git rev-parse HEAD)" \
+  --build-arg RESTREAM_BUILD_TIMESTAMP="$(git show -s --format=%cI HEAD)" \
+  -t restream:container .
 docker run --rm \
   -e RESTREAM_INITIAL_ADMIN_PASSWORD=change-me \
   -p 3030:3030 restream:container
 ```
+
+The provenance arguments are required because `.git/` is intentionally absent
+from the Docker context. They are embedded in both the binary and OCI labels;
+the build fails instead of publishing placeholder provenance when either is
+missing. License and source information is available inside the scratch image
+at `/usr/share/doc/restream/distribution/`.
 
 Bare Restream and the container use the same owned layout under `.restream/`:
 `data/restream.db` (including WAL/SHM sidecars and the initial-password file),
@@ -117,14 +126,19 @@ MediaMTX, FFmpeg/ffprobe, and committed fixtures without carrying a compiler or
 source checkout:
 
 ```sh
-docker build --target harness -t restream:harness .
-docker run --rm --network host restream:harness mixed.live.srt.h264.a1.bf0 -- --no-netns
+docker build \
+  --build-arg RESTREAM_BUILD_GIT_COMMIT="$(git rev-parse HEAD)" \
+  --build-arg RESTREAM_BUILD_TIMESTAMP="$(git show -s --format=%cI HEAD)" \
+  --target harness -t restream:harness .
+docker run --rm --network host \
+  restream:harness mixed.live.srt.h264.a1.bf0 --no-netns
 ```
 
 Use `--network host` for harness modes that open loopback publishers and sinks;
-the normal production image needs only its documented TCP/UDP ports. The
-`runtime-ubuntu` target remains available as a compatibility fallback, but the
-default image is `runtime`/scratch.
+the harness binary is the target's entry point, so modes and harness flags are
+passed directly. The normal production image needs only its documented TCP/UDP
+ports. The `runtime-ubuntu` target remains available as a compatibility
+fallback, but the default image is `runtime`/scratch.
 
 ## Read Next
 
