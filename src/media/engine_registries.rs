@@ -1,5 +1,12 @@
 //! Registry structs for `MediaEngine` state ownership, grouping the
 //! synchronized maps and sets that back ingest, egress, HLS, and stage lifecycles.
+//!
+//! Registry access rule: do not hold registry guards across awaits that acquire
+//! another registry. Snapshot paths should copy or render the fields they need
+//! inside a bounded scope, drop all guards, then perform async enrichment such
+//! as stage or HLS lookups. Lifecycle paths that must touch more than one
+//! registry keep the critical section short and avoid calling out while guards
+//! are live.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

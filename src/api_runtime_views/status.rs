@@ -15,31 +15,45 @@ pub(crate) async fn output_status(
 ) -> Option<serde_json::Value> {
     let retry = engine.egresses.retry.read().await.get(output_id).cloned();
     let recent = engine.egresses.recent.read().await.get(output_id).cloned();
-    let egresses = engine.egresses.active.read().await;
-    if let Some(egress) = egresses.get(output_id) {
-        let blocked_by = engine.egress_blocked_by_snapshot(egress).await;
-        let mut value =
-            api_view_models::egress_runtime_json(egress, false, true, blocked_by.as_ref());
-        api_view_models::apply_recent_egress_instability_json(&mut value, recent.as_ref());
-        api_view_models::apply_egress_retry_state_json(&mut value, retry.as_ref());
-        value["totalSize"] = serde_json::json!(egress.bytes_sent.load(Ordering::Relaxed));
-        value["bitrateKbps"] = serde_json::json!(MediaEngine::sample_egress_bitrate_kbps(egress));
-        value["startedAt"] = serde_json::Value::String(egress.started_at.clone());
+    let active = {
+        let egresses = engine.egresses.active.read().await;
+        egresses.get(output_id).map(|egress| {
+            let terminal_stage_key = egress.terminal_stage_key.clone();
+            let mut value = api_view_models::egress_runtime_json(egress, false, true, None);
+            api_view_models::apply_recent_egress_instability_json(&mut value, recent.as_ref());
+            api_view_models::apply_egress_retry_state_json(&mut value, retry.as_ref());
+            value["totalSize"] = serde_json::json!(egress.bytes_sent.load(Ordering::Relaxed));
+            value["bitrateKbps"] =
+                serde_json::json!(MediaEngine::sample_egress_bitrate_kbps(egress));
+            value["startedAt"] = serde_json::Value::String(egress.started_at.clone());
 
-        let explanation = crate::runtime::output::OutputRuntimeExplanation {
-            output_id: crate::domain::ids::OutputId::new(&egress.output_id),
-            output_name: egress.output_name.clone(),
-            encoding: egress.encoding.clone(),
-            url: egress.target_url.clone(),
-            phase: *egress.phase.lock().unwrap_or_else(|e| e.into_inner()),
-            terminal_stage: egress.terminal_stage_key.clone(),
-            blocked_by: blocked_by.map(|b| b.key),
+            let explanation = crate::runtime::output::OutputRuntimeExplanation {
+                output_id: crate::domain::ids::OutputId::new(&egress.output_id),
+                output_name: egress.output_name.clone(),
+                encoding: egress.encoding.clone(),
+                url: egress.target_url.clone(),
+                phase: *egress.phase.lock().unwrap_or_else(|e| e.into_inner()),
+                terminal_stage: terminal_stage_key.clone(),
+                blocked_by: None,
+            };
+            (value, explanation, terminal_stage_key)
+        })
+    };
+
+    if let Some((mut value, mut explanation, terminal_stage_key)) = active {
+        let blocked_by = if let Some(key) = terminal_stage_key.as_ref() {
+            engine.egress_blocked_by_stage_snapshot(key).await
+        } else {
+            None
         };
+        if let Some(blocked_by) = blocked_by {
+            explanation.blocked_by = Some(blocked_by.key.clone());
+            value["blockedBy"] = blocked_by.to_json();
+        }
         value["explanation"] = api_view_models::output_runtime_explanation_json(&explanation);
 
         return Some(value);
     }
-    drop(egresses);
 
     recent.as_ref().map(|outcome| {
         let mut value = api_view_models::recent_egress_runtime_json(outcome, false);
@@ -66,126 +80,144 @@ pub(crate) async fn health_snapshot(
         );
     }
 
-    let ingests = engine.ingests.active.read().await;
-    let egresses = engine.egresses.active.read().await;
-    let rec_tokens = engine.recordings.cancel_tokens.read().await;
-    let recent_ingests = engine.ingests.recent.read().await;
-    let recent_egresses = engine.egresses.recent.read().await;
-    let retry_egresses = engine.egresses.retry.read().await;
-    let pipelines = engine.ingests.pipelines.read().await;
+    let (mut pipelines_json, blocked_requests) = {
+        let ingests = engine.ingests.active.read().await;
+        let egresses = engine.egresses.active.read().await;
+        let rec_tokens = engine.recordings.cancel_tokens.read().await;
+        let recent_ingests = engine.ingests.recent.read().await;
+        let recent_egresses = engine.egresses.recent.read().await;
+        let retry_egresses = engine.egresses.retry.read().await;
+        let pipelines = engine.ingests.pipelines.read().await;
 
-    let mut pipelines_json = serde_json::Map::new();
+        let mut pipelines_json = serde_json::Map::new();
+        let mut blocked_requests = Vec::new();
 
-    for pipeline_id in pipeline_ids {
-        let ingest_opt = ingests.get(pipeline_id.as_str());
-        let pipeline_rb = pipelines.get(pipeline_id.as_str());
-        let reader_snapshots = pipeline_rb
-            .map(|rb| rb.reader_snapshots())
-            .unwrap_or_default();
-        let readers_count = reader_snapshots.len();
-        let reader_metrics: Vec<serde_json::Value> = reader_snapshots
-            .iter()
-            .map(api_view_models::reader_snapshot_json)
-            .collect();
+        for pipeline_id in pipeline_ids {
+            let ingest_opt = ingests.get(pipeline_id.as_str());
+            let pipeline_rb = pipelines.get(pipeline_id.as_str());
+            let reader_snapshots = pipeline_rb
+                .map(|rb| rb.reader_snapshots())
+                .unwrap_or_default();
+            let readers_count = reader_snapshots.len();
+            let reader_metrics: Vec<serde_json::Value> = reader_snapshots
+                .iter()
+                .map(api_view_models::reader_snapshot_json)
+                .collect();
 
-        let mut total_bytes_sent = 0u64;
-        for (_, egress) in egresses.iter() {
-            if egress.pipeline_id == *pipeline_id {
-                total_bytes_sent += egress.bytes_sent.load(Ordering::Relaxed);
+            let mut total_bytes_sent = 0u64;
+            for (_, egress) in egresses.iter() {
+                if egress.pipeline_id == *pipeline_id {
+                    total_bytes_sent += egress.bytes_sent.load(Ordering::Relaxed);
+                }
             }
-        }
 
-        let input_json = if let Some(ingest) = ingest_opt {
-            api_view_models::active_pipeline_input_json(
-                ingest,
-                recent_ingests.get(pipeline_id.as_str()),
-                total_bytes_sent,
-                readers_count,
-                reader_metrics,
-            )
-        } else {
-            let recent = recent_ingests.get(pipeline_id.as_str());
-            api_view_models::inactive_pipeline_input_json(
-                recent,
-                total_bytes_sent,
-                readers_count,
-                reader_metrics,
-                disconnect_grace_ms,
-            )
-        };
+            let input_json = if let Some(ingest) = ingest_opt {
+                api_view_models::active_pipeline_input_json(
+                    ingest,
+                    recent_ingests.get(pipeline_id.as_str()),
+                    total_bytes_sent,
+                    readers_count,
+                    reader_metrics,
+                )
+            } else {
+                let recent = recent_ingests.get(pipeline_id.as_str());
+                api_view_models::inactive_pipeline_input_json(
+                    recent,
+                    total_bytes_sent,
+                    readers_count,
+                    reader_metrics,
+                    disconnect_grace_ms,
+                )
+            };
 
-        let mut outputs_json = serde_json::Map::new();
-        for (egress_key, egress) in egresses.iter() {
-            if egress.pipeline_id == *pipeline_id {
-                let output_id = egress_key;
-                let bytes_sent = egress.bytes_sent.load(Ordering::Relaxed);
-                let bitrate_kbps = MediaEngine::sample_egress_bitrate_kbps(egress);
+            let mut outputs_json = serde_json::Map::new();
+            for (egress_key, egress) in egresses.iter() {
+                if egress.pipeline_id == *pipeline_id {
+                    let output_id = egress_key;
+                    let bytes_sent = egress.bytes_sent.load(Ordering::Relaxed);
+                    let bitrate_kbps = MediaEngine::sample_egress_bitrate_kbps(egress);
 
-                let has_ingest = ingests.contains_key(pipeline_id.as_str());
-                let blocked_by = engine.egress_blocked_by_snapshot(egress).await;
-
-                let mut output_json = api_view_models::egress_runtime_json(
-                    egress,
-                    false,
-                    has_ingest,
-                    blocked_by.as_ref(),
-                );
-                api_view_models::apply_recent_egress_instability_json(
-                    &mut output_json,
-                    recent_egresses.get(output_id),
-                );
-                api_view_models::apply_egress_retry_state_json(
-                    &mut output_json,
-                    retry_egresses.get(output_id),
-                );
-                output_json["totalSize"] = serde_json::json!(bytes_sent);
-                output_json["bitrateKbps"] = serde_json::json!(bitrate_kbps);
-                output_json["startedAt"] = serde_json::Value::String(egress.started_at.clone());
-                outputs_json.insert(output_id.to_string(), output_json);
+                    let has_ingest = ingests.contains_key(pipeline_id.as_str());
+                    let mut output_json =
+                        api_view_models::egress_runtime_json(egress, false, has_ingest, None);
+                    api_view_models::apply_recent_egress_instability_json(
+                        &mut output_json,
+                        recent_egresses.get(output_id),
+                    );
+                    api_view_models::apply_egress_retry_state_json(
+                        &mut output_json,
+                        retry_egresses.get(output_id),
+                    );
+                    output_json["totalSize"] = serde_json::json!(bytes_sent);
+                    output_json["bitrateKbps"] = serde_json::json!(bitrate_kbps);
+                    output_json["startedAt"] = serde_json::Value::String(egress.started_at.clone());
+                    if let Some(key) = egress.terminal_stage_key.clone() {
+                        blocked_requests.push((pipeline_id.clone(), output_id.to_string(), key));
+                    }
+                    outputs_json.insert(output_id.to_string(), output_json);
+                }
             }
-        }
-        for (output_id, outcome) in recent_egresses.iter() {
-            if outcome.pipeline_id == *pipeline_id && !outputs_json.contains_key(output_id) {
-                let mut output_json = api_view_models::recent_egress_runtime_json(outcome, false);
-                api_view_models::apply_recent_egress_instability_json(
-                    &mut output_json,
-                    Some(outcome),
-                );
-                api_view_models::apply_egress_retry_state_json(
-                    &mut output_json,
-                    retry_egresses.get(output_id),
-                );
-                output_json["totalSize"] = serde_json::json!(outcome.bytes_sent);
-                output_json["bitrateKbps"] = serde_json::Value::Null;
-                output_json["startedAt"] = serde_json::Value::String(outcome.started_at.clone());
-                outputs_json.insert(output_id.to_string(), output_json);
+            for (output_id, outcome) in recent_egresses.iter() {
+                if outcome.pipeline_id == *pipeline_id && !outputs_json.contains_key(output_id) {
+                    let mut output_json =
+                        api_view_models::recent_egress_runtime_json(outcome, false);
+                    api_view_models::apply_recent_egress_instability_json(
+                        &mut output_json,
+                        Some(outcome),
+                    );
+                    api_view_models::apply_egress_retry_state_json(
+                        &mut output_json,
+                        retry_egresses.get(output_id),
+                    );
+                    output_json["totalSize"] = serde_json::json!(outcome.bytes_sent);
+                    output_json["bitrateKbps"] = serde_json::Value::Null;
+                    output_json["startedAt"] =
+                        serde_json::Value::String(outcome.started_at.clone());
+                    outputs_json.insert(output_id.to_string(), output_json);
+                }
             }
-        }
 
-        let rec_enabled = recording_enabled.get(pipeline_id).copied().unwrap_or(false);
-        let rec_active = rec_tokens
-            .get(pipeline_id.as_str())
-            .is_some_and(|token| !token.is_cancelled());
-        let hls_snapshot = hls_snapshots
-            .get(pipeline_id)
-            .expect("precomputed HLS snapshot");
+            let rec_enabled = recording_enabled.get(pipeline_id).copied().unwrap_or(false);
+            let rec_active = rec_tokens
+                .get(pipeline_id.as_str())
+                .is_some_and(|token| !token.is_cancelled());
+            let hls_snapshot = hls_snapshots
+                .get(pipeline_id)
+                .expect("precomputed HLS snapshot");
 
-        pipelines_json.insert(
-            pipeline_id.clone(),
-            api_view_models::pipeline_health_json(
-                input_json,
-                outputs_json,
-                rec_enabled,
-                rec_active,
-                api_view_models::hls_preview_json(
-                    hls_snapshot.active,
-                    hls_snapshot.persistent_consumers,
-                    hls_snapshot.last_access_age_ms,
-                    hls_snapshot.segments,
-                    hls_snapshot.playlist_bytes,
+            pipelines_json.insert(
+                pipeline_id.clone(),
+                api_view_models::pipeline_health_json(
+                    input_json,
+                    outputs_json,
+                    rec_enabled,
+                    rec_active,
+                    api_view_models::hls_preview_json(
+                        hls_snapshot.active,
+                        hls_snapshot.persistent_consumers,
+                        hls_snapshot.last_access_age_ms,
+                        hls_snapshot.segments,
+                        hls_snapshot.playlist_bytes,
+                    ),
                 ),
-            ),
-        );
+            );
+        }
+
+        (pipelines_json, blocked_requests)
+    };
+
+    for (pipeline_id, output_id, key) in blocked_requests {
+        let Some(blocked_by) = engine.egress_blocked_by_stage_snapshot(&key).await else {
+            continue;
+        };
+        if let Some(output_json) = pipelines_json
+            .get_mut(&pipeline_id)
+            .and_then(|pipeline| pipeline.get_mut("outputs"))
+            .and_then(|outputs| outputs.as_object_mut())
+            .and_then(|outputs| outputs.get_mut(&output_id))
+        {
+            output_json["blockedBy"] = blocked_by.to_json();
+        }
     }
 
     let rx_queue = engine

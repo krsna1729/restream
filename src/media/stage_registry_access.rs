@@ -239,6 +239,15 @@ impl MediaEngine {
         egress: &ActiveEgress,
     ) -> Option<StageRuntimeSnapshot> {
         let key = egress.terminal_stage_key.as_ref()?;
+        self.egress_blocked_by_stage_snapshot(key).await
+    }
+
+    /// Key-based variant of `egress_blocked_by_snapshot` for callers that
+    /// need to drop egress registry guards before awaiting stage registries.
+    pub async fn egress_blocked_by_stage_snapshot(
+        &self,
+        key: &StageKey,
+    ) -> Option<StageRuntimeSnapshot> {
         let (lifecycle, metrics) = self.stage_snapshot_parts(key).await?;
         if matches!(lifecycle.phase, StagePhase::Producing) {
             return None;
