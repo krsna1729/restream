@@ -311,6 +311,23 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   this short run (`135.93%` avg CPU, `421,892 KiB` RSS peak), so it is a
   rejected tuning path for now.
 
+## 2026-07-12 17:32 Q-012 TOKIO THREAD-NAME PROBE [codex]
+- What: added a distinct `restream-tokio` thread name for Restream's Tokio
+  runtime so future `ps -L`/`top -H` samples can separate Rust runtime threads
+  from libsrt, SQLite, tracing, and native helper threads.
+- Gates: `cargo fmt --all --check`, focused binary unit test, `cargo check
+  --bin restream`, and `cargo clippy --bin restream -- -D warnings` passed.
+- Commit: (this commit)
+- Follow-ups: a temporary bench-profile probe using the `rs-tokio-*` prefix
+  proved the prior `tokio-rt-worker` census belonged to Restream's main runtime,
+  not an unrelated dependency runtime. Tokio reused only the two scheduler
+  worker identities across many replacement/blocking threads, so the committed
+  form is a fixed family label instead of a misleading unique suffix.
+- Notes: the short 1,200-output probe passed with MediaMTX `1200/1200` and
+  `133.2 MB` byte growth. It reached the same broad shape as the final baseline:
+  low-80s total threads, two hot Tokio scheduler workers, SRT queue workers next,
+  and many idle Tokio-family threads.
+
 ## 2026-07-12 17:45 MSR FULL FINAL PASS [codex]
 - What: ran the full Mahashivratri MSR ramp from committed bench-profile
   binaries after the performance series and systemd placement guidance commit.

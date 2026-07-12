@@ -1226,3 +1226,20 @@ Raw artifacts:
 - `.local/artifacts/msr-blocking-cap32-visible-20260712T152209Z/health-tokio.json`
 - `.local/artifacts/msr-blocking-cap32-visible-20260712T152209Z/thread-watch.txt`
 - `.local/artifacts/msr-blocking-cap32-visible-20260712T152209Z/thread-census-live.txt`
+
+### Tokio thread-name attribution probe - 2026-07-12 (local)
+
+A temporary bench-profile probe renamed Restream's Tokio runtime threads with an
+`rs-tokio-*` prefix and reran a short 1,200-output MSR checkpoint. Result:
+`PASS`, MediaMTX `1200/1200`, and `133.2 MB` `bytesReceived` growth. The live
+census no longer showed default `tokio-rt-worker`; the large idle thread family
+belonged to Restream's main Tokio runtime. Tokio reused the two scheduler worker
+identities across replacement/blocking threads, so the committed runtime label is
+the fixed group name `restream-tokio`, not a misleading unique suffix.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-thread-name-census-20260712T152953Z/msr.json`
+- `.local/artifacts/msr-thread-name-census-20260712T152953Z/msr-report.md`
+- `.local/artifacts/msr-thread-name-census-20260712T152953Z/thread-watch.txt`
+- `.local/artifacts/msr-thread-name-census-20260712T152953Z/thread-census-live.txt`

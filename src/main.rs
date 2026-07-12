@@ -2,6 +2,8 @@
 //! The tokio multi-threaded runtime is used for all async I/O.
 //! CPU-bound FFmpeg work runs on dedicated OS threads (see `src/lib.rs` docs).
 
+const TOKIO_THREAD_NAME: &str = "restream-tokio";
+
 fn main() {
     let mut args = std::env::args_os();
     let _program = args.next();
@@ -51,10 +53,24 @@ fn main() {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(worker_threads)
         .max_blocking_threads(max_blocking_threads)
+        .thread_name(TOKIO_THREAD_NAME)
         .enable_all()
         .build()
         .expect("Failed to build tokio runtime")
         .block_on(restream::run_app(config));
 
     restream::ffmpeg_extract::cleanup_ffmpeg();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokio_thread_name_fits_linux_comm_limit() {
+        assert!(
+            TOKIO_THREAD_NAME.len() <= 15,
+            "Linux task comm truncates names longer than 15 bytes"
+        );
+    }
 }

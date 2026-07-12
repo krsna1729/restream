@@ -112,7 +112,10 @@ The runtime also exposes its resolved Tokio sizing in `/api/v1/engine/health`
 and the engineer telemetry host-settings table. `RESTREAM_TOKIO_WORKER_THREADS`
 controls async scheduler workers; `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` controls
 Tokio `spawn_blocking` capacity for blocking handshakes and waiters. Those knobs
-do not cap native helper threads created by FFmpeg, SQLite, or libsrt.
+do not cap native helper threads created by FFmpeg, SQLite, or libsrt. Restream
+names its Tokio runtime threads `restream-tokio` so process tools can separate
+them from `SRT:*`, `sqlx-sqlite-*`, and other native helper threads; that label
+covers Tokio scheduler, blocking, and replacement worker threads.
 
 ## SQLite Performance Settings
 
