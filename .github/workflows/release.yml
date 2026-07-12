@@ -38,7 +38,10 @@ jobs:
         # Keep the resource-limit shared lock and harness runtime setup in the
         # canonical runner. Calling target/bench/test_harness directly skips
         # that contract and makes every suite mode fail before it can start.
-        run: scripts/harness/run.sh suite -- --run-id release-${{ github.sha }} --continue-on-fail
+        # GitHub-hosted runners cannot reliably create the user/network
+        # namespace used by the default isolated mode; use the harness's
+        # documented host-network fallback and run suite modes serially.
+        run: scripts/harness/run.sh suite -- --no-netns --run-id release-${{ github.sha }} --continue-on-fail
       - name: Release evidence and OCI asset
         run: |
           scripts/check/release-evidence.sh \
