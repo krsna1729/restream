@@ -25,7 +25,18 @@ struct MediaMtxPathSnapshot {
     paths: HashMap<String, MediaMtxPathStats>,
 }
 
+struct MediaMtxPathPage {
+    snapshot: MediaMtxPathSnapshot,
+    page_count: Option<usize>,
+    item_count: Option<usize>,
+}
+
+#[cfg(test)]
 fn parse_mediamtx_path_snapshot(value: &Value) -> MediaMtxPathSnapshot {
+    parse_mediamtx_path_page(value).snapshot
+}
+
+fn parse_mediamtx_path_page(value: &Value) -> MediaMtxPathPage {
     let mut snapshot = MediaMtxPathSnapshot::default();
     for item in value["items"].as_array().into_iter().flatten() {
         let Some(name) = item["name"].as_str() else {
@@ -45,24 +56,69 @@ fn parse_mediamtx_path_snapshot(value: &Value) -> MediaMtxPathSnapshot {
             },
         );
     }
-    snapshot
+    MediaMtxPathPage {
+        snapshot,
+        page_count: value["pageCount"].as_u64().map(|count| count as usize),
+        item_count: value["itemCount"].as_u64().map(|count| count as usize),
+    }
 }
 
 async fn fetch_mediamtx_path_snapshot(mtx_api: u16) -> Result<MediaMtxPathSnapshot, String> {
-    let url = format!("http://127.0.0.1:{mtx_api}/v3/paths/list");
-    let body = reqwest::Client::new()
-        .get(url)
-        .send()
-        .await
-        .map_err(|error| format!("failed to query MediaMTX paths API: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("MediaMTX paths API returned an error: {error}"))?
-        .text()
-        .await
-        .map_err(|error| format!("failed to read MediaMTX paths API response: {error}"))?;
-    let value = serde_json::from_str::<Value>(&body)
-        .map_err(|error| format!("failed to parse MediaMTX paths API response: {error}"))?;
-    Ok(parse_mediamtx_path_snapshot(&value))
+    const ITEMS_PER_PAGE: usize = 100;
+    const MAX_PAGES: usize = 10_000;
+
+    let client = reqwest::Client::new();
+    let mut combined = MediaMtxPathSnapshot::default();
+    let mut page = 0usize;
+    let mut expected_item_count = None;
+
+    loop {
+        let url = format!(
+            "http://127.0.0.1:{mtx_api}/v3/paths/list?page={page}&itemsPerPage={ITEMS_PER_PAGE}"
+        );
+        let body = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|error| format!("failed to query MediaMTX paths API: {error}"))?
+            .error_for_status()
+            .map_err(|error| format!("MediaMTX paths API returned an error: {error}"))?
+            .text()
+            .await
+            .map_err(|error| format!("failed to read MediaMTX paths API response: {error}"))?;
+        let value = serde_json::from_str::<Value>(&body)
+            .map_err(|error| format!("failed to parse MediaMTX paths API response: {error}"))?;
+        let parsed = parse_mediamtx_path_page(&value);
+        expected_item_count = expected_item_count.or(parsed.item_count);
+        let page_items = parsed.snapshot.paths.len();
+        combined.paths.extend(parsed.snapshot.paths);
+
+        if let Some(page_count) = parsed.page_count {
+            if page + 1 >= page_count {
+                break;
+            }
+        } else if page_items < ITEMS_PER_PAGE {
+            break;
+        }
+
+        page += 1;
+        if page >= MAX_PAGES {
+            return Err(format!(
+                "MediaMTX paths API pagination exceeded {MAX_PAGES} pages"
+            ));
+        }
+    }
+
+    if let Some(item_count) = expected_item_count
+        && combined.paths.len() < item_count
+    {
+        return Err(format!(
+            "MediaMTX paths API returned {} unique paths across pages, expected {item_count}",
+            combined.paths.len()
+        ));
+    }
+
+    Ok(combined)
 }
 
 fn summarize_paths(paths: &[String]) -> String {
@@ -141,8 +197,10 @@ fn evaluate_mediamtx_path_health(
             ));
         }
         return Err(format!(
-            "MediaMTX path health failed for {} expected paths: {}",
+            "MediaMTX path health failed for {} expected paths (observed before={} after={}): {}",
             expected_paths.len(),
+            before.paths.len(),
+            after.paths.len(),
             reasons.join("; ")
         ));
     }
@@ -216,6 +274,8 @@ mod tests {
     #[test]
     fn parses_mediamtx_paths_and_accepts_growing_ready_outputs() {
         let before = parse_mediamtx_path_snapshot(&json!({
+            "itemCount": 2,
+            "pageCount": 1,
             "items": [
                 {"name": "live/a", "ready": true, "bytesReceived": 100, "readers": []},
                 {"name": "live/b", "ready": true, "bytesReceived": 200, "readers": [{"id": "r1"}]}
@@ -238,6 +298,19 @@ mod tests {
         assert_eq!(health.bytes_received_before, 300);
         assert_eq!(health.bytes_received_after, 400);
         assert_eq!(health.bytes_received_delta, 100);
+    }
+
+    #[test]
+    fn parses_mediamtx_path_page_metadata_for_pagination() {
+        let page = parse_mediamtx_path_page(&json!({
+            "itemCount": 120,
+            "pageCount": 2,
+            "items": [{"name": "live/a", "ready": true, "bytesReceived": 100}]
+        }));
+
+        assert_eq!(page.item_count, Some(120));
+        assert_eq!(page.page_count, Some(2));
+        assert!(page.snapshot.paths.contains_key("live/a"));
     }
 
     #[test]
