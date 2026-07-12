@@ -426,6 +426,7 @@ fn socket_option_constants_match_srt_header() {
     assert_eq!(SRTO_RCVBUF, 6);
     assert_eq!(SRTO_UDP_SNDBUF, 8);
     assert_eq!(SRTO_UDP_RCVBUF, 9);
+    assert_eq!(SRTO_REUSEADDR, 15);
     assert_eq!(SRTO_MAXBW, 16);
     assert_eq!(SRTO_LATENCY, 23);
     assert_eq!(SRTO_LOSSMAXTTL, 42);

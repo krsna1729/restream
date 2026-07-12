@@ -383,6 +383,7 @@ pub const SRTO_SNDBUF: c_int = 5;
 pub const SRTO_RCVBUF: c_int = 6;
 pub const SRTO_UDP_SNDBUF: c_int = 8;
 pub const SRTO_UDP_RCVBUF: c_int = 9;
+pub const SRTO_REUSEADDR: c_int = 15;
 pub const SRTO_MAXBW: c_int = 16;
 pub const SRTO_LATENCY: c_int = 23;
 pub const SRTO_INPUTBW: c_int = 24;

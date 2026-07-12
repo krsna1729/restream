@@ -608,3 +608,58 @@ bucket in scheduler/futex wakeups (`__pv_queued_spin_lock_slowpath` via
 3. Treat `memmove` as a secondary copy target. It is visible but far below
    scheduler/libsrt costs in this workload, so AVIO/TsMux copy removal should
    stay behind correctness proof and targeted bench evidence.
+
+### MSR SRT egress muxer reuse proof — 2026-07-12 (VPS)
+
+Same host, bench-profile binaries, 1 SRT ingest, 30 audio tracks, 1,200 active
+egress outputs (`rtmp:1140`, `srt:60`). This run validates the runtime SRT
+egress change that sets `SRTO_REUSEADDR` for non-bonded egress sockets and
+reuses the first successful local UDP muxer port for later compatible egresses.
+Bonded SRT egress remains on its existing group path.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-srt-muxer-reuse-3030-20260712T121114Z/redeploy.log`
+- `.local/artifacts/msr-srt-muxer-reuse-3030-20260712T121114Z/restream.log`
+- `.local/artifacts/msr-srt-muxer-reuse-3030-20260712T121114Z/perf-stat-restream-srt-muxer-reuse.csv`
+- `.local/artifacts/msr-srt-muxer-reuse-3030-20260712T121114Z/pidstat-threads-restream-srt-muxer-reuse.txt`
+
+Correctness proof:
+
+| Check | Result |
+|---|---:|
+| Restream health | `ready` |
+| Runtime graph active egress | `rtmp:1140`, `srt:60` |
+| MediaMTX paths ready | `1200/1200` |
+| MediaMTX bytes received | `6,511,473,976` and advancing |
+| Runtime alerts | `0` |
+| Logged reusable muxer port | `51702` |
+
+Process counters over a 20 s `perf stat -p <restream-pid>` attach:
+
+| Metric | Before | After |
+|---|---:|---:|
+| CPU utilized | `4.243` CPUs | `2.992` CPUs |
+| Instructions per cycle | `0.34` | `0.34` |
+| Cache misses | `20.76%` | `19.38%` |
+| Branch misses | `10.63%` | `8.53%` |
+| Context switches | `5.334 K/sec` | `2.215 K/sec` |
+| CPU migrations | `136.610/sec` | `201.210/sec` |
+
+Thread-family CPU from `pidstat -t` averages:
+
+| Thread family | Before threads / CPU | After threads / CPU |
+|---|---:|---:|
+| Tokio runtime workers | `68 / 137.35%` | `68 / 108.95%` |
+| SRT RcvQ workers | `61 / 125.00%` | `2 / 17.74%` |
+| SRT SndQ workers | `61 / 29.07%` | `2 / 8.65%` |
+| SRT TsbPd | `1 / 0.79%` | `1 / 0.30%` |
+| sqlx workers | `10 / 0.40%` | `10 / 0.30%` |
+
+Interpretation: muxer reuse removed 118 libsrt worker threads and about
+1.25 cores of steady CPU from this MSR shape while preserving all MediaMTX
+receiver health. The next optimization target is Tokio/system scheduling:
+worker count is still 68, the six scheduler workers are hot, and CPU migration
+rate did not improve with SRT thread collapse. Any Tokio heuristic should be
+driven by effective CPU mask plus workload shape (ingests, outputs, SRT count,
+and stage sharing), not MSR alone.

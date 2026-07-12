@@ -323,6 +323,94 @@ pub(super) fn estimate_ts_accum_capacity(packets: &[Arc<MediaPacket>]) -> usize 
         .max(188)
 }
 
+fn set_srt_reuseaddr(sock: SRTSOCKET) -> Result<(), String> {
+    let reuse: c_int = 1;
+    // SAFETY: SRTO_REUSEADDR is a pre-bind socket option. `reuse` is a valid
+    // c_int flag whose pointer stays live for the duration of the FFI call.
+    unsafe {
+        check_srt_option_result(
+            "SRTO_REUSEADDR",
+            srt_setsockopt(
+                sock,
+                0,
+                SRTO_REUSEADDR,
+                &reuse as *const _ as *const c_void,
+                std::mem::size_of::<c_int>() as c_int,
+            ),
+        )
+    }
+}
+
+fn bind_srt_egress_muxer_port(sock: SRTSOCKET, port: u16) -> Result<(), String> {
+    let sin = to_sockaddr_in(SocketAddr::from(([0, 0, 0, 0], port)));
+    // SAFETY: srt_bind binds a valid SRT socket to a stack-allocated IPv4
+    // sockaddr. SRTO_REUSEADDR was set before this call by the caller.
+    let result = unsafe { srt_bind(sock, &sin, std::mem::size_of::<sockaddr_in>() as c_int) };
+    if result >= 0 {
+        Ok(())
+    } else {
+        let (code, message) = last_srt_error();
+        Err(format!(
+            "failed to bind reusable SRT egress muxer port {port}: {message} ({code})"
+        ))
+    }
+}
+
+fn connected_srt_local_port(sock: SRTSOCKET) -> Result<u16, String> {
+    let mut sin: sockaddr_in = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<sockaddr_in>() as c_int;
+    // SAFETY: srt_getsockname writes the local IPv4 socket address into `sin`
+    // and updates `len`; both pointers are valid for the duration of the call.
+    let result = unsafe { srt_getsockname(sock, &mut sin, &mut len) };
+    if result >= 0 {
+        Ok(u16::from_be(sin.sin_port))
+    } else {
+        let (code, message) = last_srt_error();
+        Err(format!(
+            "failed to read reusable SRT egress muxer port: {message} ({code})"
+        ))
+    }
+}
+
+enum SrtEgressMuxerPortClaim<'a> {
+    First(std::sync::MutexGuard<'a, Option<u16>>),
+    Reuse(u16),
+}
+
+impl SrtEgressMuxerPortClaim<'_> {
+    fn bind_port(&self) -> Option<u16> {
+        match self {
+            SrtEgressMuxerPortClaim::First(_) => None,
+            SrtEgressMuxerPortClaim::Reuse(port) => Some(*port),
+        }
+    }
+
+    fn record_first_connected_port(self, port: u16) -> bool {
+        match self {
+            SrtEgressMuxerPortClaim::First(mut guard) => {
+                if guard.is_none() {
+                    *guard = Some(port);
+                    true
+                } else {
+                    false
+                }
+            }
+            SrtEgressMuxerPortClaim::Reuse(_) => false,
+        }
+    }
+}
+
+fn claim_srt_egress_muxer_port(
+    state: &std::sync::Mutex<Option<u16>>,
+) -> SrtEgressMuxerPortClaim<'_> {
+    let guard = state.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(port) = *guard {
+        SrtEgressMuxerPortClaim::Reuse(port)
+    } else {
+        SrtEgressMuxerPortClaim::First(guard)
+    }
+}
+
 // SRT Egress Client
 pub async fn start_srt_egress(
     output_id: String,
@@ -405,6 +493,7 @@ pub async fn start_srt_egress(
     // fanout (AGENTS.md: blocking SRT calls belong on dedicated OS threads),
     // so the whole connect step (socket/group creation through connect)
     // runs via spawn_blocking instead.
+    let srt_egress_muxer_port = engine.srt_egress_muxer_port_handle();
     let connect_result = tokio::task::spawn_blocking(move || -> Result<SRTSOCKET, String> {
         let client_sock: SRTSOCKET;
         if use_bonding {
@@ -549,6 +638,12 @@ pub async fn start_srt_egress(
                 return Err("failed to create socket".to_string());
             }
             srt_set_highbitrate_opts(client_sock);
+            if let Err(error) = set_srt_reuseaddr(client_sock) {
+                unsafe {
+                    srt_close(client_sock);
+                }
+                return Err(error);
+            }
             if let Some(crypto) = &url_crypto
                 && let Err(error) = apply_srt_crypto_socket(client_sock, crypto)
             {
@@ -583,6 +678,16 @@ pub async fn start_srt_egress(
                 }
             }
 
+            let muxer_port_claim = claim_srt_egress_muxer_port(&srt_egress_muxer_port);
+            if let Some(port) = muxer_port_claim.bind_port()
+                && let Err(error) = bind_srt_egress_muxer_port(client_sock, port)
+            {
+                unsafe {
+                    srt_close(client_sock);
+                }
+                return Err(error);
+            }
+
             let sin = to_sockaddr_in(addr);
 
             // SAFETY: srt_connect opens a connection to the target address.
@@ -601,6 +706,17 @@ pub async fn start_srt_egress(
                     srt_close(client_sock);
                 }
                 return Err("connection failed".to_string());
+            }
+
+            match connected_srt_local_port(client_sock) {
+                Ok(port) if muxer_port_claim.record_first_connected_port(port) => {
+                    info!(
+                        port,
+                        "[srt-egress] Reusing local UDP muxer port for compatible egress sockets"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => warn!(err = %error, "[srt-egress] connected without recording reusable muxer port"),
             }
 
             info!("Connected to {}", redact_url(&target_url));
@@ -835,4 +951,30 @@ pub async fn start_srt_egress(
     engine
         .remove_egress_queue_if_current(&output_id, &registration)
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn srt_egress_muxer_port_claim_serializes_first_port_selection() {
+        let state = std::sync::Mutex::new(None);
+
+        let first_claim = claim_srt_egress_muxer_port(&state);
+        assert_eq!(first_claim.bind_port(), None);
+        assert!(
+            state.try_lock().is_err(),
+            "first connector must hold the claim until it records the connected local port"
+        );
+        assert!(first_claim.record_first_connected_port(41000));
+
+        let reuse_claim = claim_srt_egress_muxer_port(&state);
+        assert_eq!(reuse_claim.bind_port(), Some(41000));
+        assert!(
+            !reuse_claim.record_first_connected_port(42000),
+            "later connectors must not replace the learned muxer port"
+        );
+        assert_eq!(*state.lock().unwrap(), Some(41000));
+    }
 }

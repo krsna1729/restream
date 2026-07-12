@@ -266,6 +266,10 @@ impl MediaEngine {
         self.runtime.sender_semaphore.clone()
     }
 
+    pub fn srt_egress_muxer_port_handle(&self) -> Arc<std::sync::Mutex<Option<u16>>> {
+        self.runtime.srt_egress_muxer_port.clone()
+    }
+
     pub async fn stop_file_ingest_child(&self, ingest_id: &str) -> bool {
         let mut children = self.file_ingests.children.write().await;
         let Some(mut child) = children.remove(ingest_id) else {

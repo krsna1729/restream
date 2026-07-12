@@ -9,8 +9,8 @@
 //! are live.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock as TokioRwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -183,6 +183,7 @@ pub struct RuntimeInfra {
     pub os_threads: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
     pub listener_shutdowns: std::sync::Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
     pub sender_semaphore: Arc<tokio::sync::Semaphore>,
+    pub srt_egress_muxer_port: Arc<Mutex<Option<u16>>>,
     pub external_ffmpeg_semaphore: Arc<tokio::sync::Semaphore>,
     pub diag_semaphores: TokioRwLock<HashMap<String, Arc<tokio::sync::Semaphore>>>,
     pub event_log: Arc<EventLog>,
@@ -203,6 +204,7 @@ impl RuntimeInfra {
             os_threads: std::sync::Mutex::new(Vec::new()),
             listener_shutdowns: std::sync::Mutex::new(Vec::new()),
             sender_semaphore: Arc::new(tokio::sync::Semaphore::new(512)),
+            srt_egress_muxer_port: Arc::new(Mutex::new(None)),
             external_ffmpeg_semaphore: Arc::new(tokio::sync::Semaphore::new(
                 external_ffmpeg_permits,
             )),
