@@ -1170,8 +1170,8 @@ Independent 1,200-output receiver proof around a 15 s process-mode
 | IPC | `0.307` |
 | Cache misses | `20.41%` |
 | Branch misses | `9.62%` |
-| Context switches | `7.507 K/sec` |
-| CPU migrations | `909.133/sec` |
+| Context switches | `3.209 K/sec` |
+| CPU migrations | `388.668/sec` |
 | Page faults | `0/sec` |
 | RSS / PSS | `339,136 / 320,408 KiB` |
 | Private anonymous | `285,268 KiB` |
@@ -1243,3 +1243,34 @@ Raw artifacts:
 - `.local/artifacts/msr-thread-name-census-20260712T152953Z/msr-report.md`
 - `.local/artifacts/msr-thread-name-census-20260712T152953Z/thread-watch.txt`
 - `.local/artifacts/msr-thread-name-census-20260712T152953Z/thread-census-live.txt`
+
+### Tokio blocking keepalive negative result - 2026-07-12 (local)
+
+A temporary prototype exposed `RESTREAM_TOKIO_THREAD_KEEP_ALIVE_MS` and set the
+Tokio runtime blocking-thread keepalive to `100 ms` for a short 1,200-output
+MSR checkpoint. The harness reported `PASS`, and MediaMTX had `1200/1200`
+paths ready with `141.1 MB` aggregate `bytesReceived` growth, but the thread
+family did not shrink and the run was heavier than the final uncapped baseline.
+
+| Metric | Final uncapped baseline | Keepalive `100 ms` prototype |
+|---|---:|---:|
+| MediaMTX ready | `1200/1200` | `1200/1200` |
+| MediaMTX bytes delta | `208,072,764` over 3 s | `141.1 MB` over 2 s |
+| CPU average | `126.87%` | `146.9%` |
+| CPU peak | `131.90%` | `157.0%` |
+| RSS peak | `329.5 MB` | `429 MB` |
+| Restream threads | `82` | `82` |
+| Tokio-named threads | `64` | `64` |
+
+Conclusion: keepalive tuning is rejected. The 64-ish Tokio-named threads are
+Tokio-owned, but this result argues against them being simple idle blocking
+threads that can be reclaimed by reducing keepalive. The next useful proof is
+per-thread attribution (`tid`, `comm`, `wchan`, CPU deltas, and stack/perf
+samples) during a live MSR checkpoint.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-tokio-keepalive100-20260712T153747Z/msr.json`
+- `.local/artifacts/msr-tokio-keepalive100-20260712T153747Z/msr-report.md`
+- `.local/artifacts/msr-tokio-keepalive100-20260712T153747Z/health-tokio.json`
+- `.local/artifacts/msr-tokio-keepalive100-20260712T153747Z/thread-watch.txt`

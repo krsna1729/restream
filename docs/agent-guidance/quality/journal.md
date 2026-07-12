@@ -328,6 +328,25 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   low-80s total threads, two hot Tokio scheduler workers, SRT queue workers next,
   and many idle Tokio-family threads.
 
+## 2026-07-12 17:40 Q-012 TOKIO KEEPALIVE PROTOTYPE REJECTED [codex]
+- What: prototyped a `RESTREAM_TOKIO_THREAD_KEEP_ALIVE_MS` runtime knob and ran
+  a short 1,200-output MSR checkpoint with `100 ms` keepalive, then removed the
+  runtime code before commit.
+- Gates: focused config/health tests and `cargo check --bin restream` passed
+  before the live run; bench-profile harness rebuilt successfully; live MSR
+  reported `PASS` with MediaMTX `1200/1200` ready and `141.1 MB` aggregate
+  `bytesReceived` growth.
+- Commit: (this commit records the rejected result; no Tokio keepalive runtime
+  code remains)
+- Follow-ups: do not add a keepalive knob or lower idle-thread retention as a
+  default tuning path. The `100 ms` run did not shrink the Tokio-named thread
+  family, which suggests the extra threads are not merely idle blocking workers
+  awaiting keepalive expiry.
+- Notes: artifact `.local/artifacts/msr-tokio-keepalive100-20260712T153747Z`
+  reached `82` total Restream threads and `64` `restream-tokio` threads, while
+  CPU/RSS worsened (`146.9%` average CPU, `429 MB` RSS peak) versus the final
+  uncapped baseline (`126.87%`, `329.5 MB`).
+
 ## 2026-07-12 17:45 MSR FULL FINAL PASS [codex]
 - What: ran the full Mahashivratri MSR ramp from committed bench-profile
   binaries after the performance series and systemd placement guidance commit.
@@ -343,5 +362,5 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   `126.87%/131.90%`, RSS peak `329.5 MB`, AVIO HWM `3.3 MB`, and MediaMTX
   bytes delta `208,072,764` over 3 s. Independent process-mode perf at 1,200
   outputs measured `2.339` CPUs, IPC `0.307`, cache misses `20.41%`,
-  context switches `7.507 K/sec`, and migrations `909.133/sec` while MediaMTX
+  context switches `3.209 K/sec`, and migrations `388.668/sec` while MediaMTX
   remained `1200/1200` with bytes growing before and after the perf window.
