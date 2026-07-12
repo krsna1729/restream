@@ -7,6 +7,8 @@ pub(crate) struct MediaMtxPathHealth {
     pub(crate) expected_paths: usize,
     pub(crate) ready_paths: usize,
     pub(crate) reader_count: usize,
+    pub(crate) paths_with_tracks: usize,
+    pub(crate) inbound_frame_errors: u64,
     pub(crate) bytes_received_before: u64,
     pub(crate) bytes_received_after: u64,
     pub(crate) bytes_received_delta: u64,
@@ -18,6 +20,8 @@ struct MediaMtxPathStats {
     ready: bool,
     bytes_received: u64,
     readers: usize,
+    track_count: usize,
+    inbound_frame_errors: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -53,6 +57,8 @@ fn parse_mediamtx_path_page(value: &Value) -> MediaMtxPathPage {
                 ready: item["ready"].as_bool().unwrap_or(false),
                 bytes_received: item["bytesReceived"].as_u64().unwrap_or(0),
                 readers,
+                track_count: media_mtx_track_count(item),
+                inbound_frame_errors: sum_named_u64(item, "inboundFramesInError"),
             },
         );
     }
@@ -60,6 +66,32 @@ fn parse_mediamtx_path_page(value: &Value) -> MediaMtxPathPage {
         snapshot,
         page_count: value["pageCount"].as_u64().map(|count| count as usize),
         item_count: value["itemCount"].as_u64().map(|count| count as usize),
+    }
+}
+
+fn media_mtx_track_count(item: &Value) -> usize {
+    item["tracks"]
+        .as_array()
+        .map(Vec::len)
+        .or_else(|| item["tracks"].as_object().map(serde_json::Map::len))
+        .unwrap_or(0)
+}
+
+fn sum_named_u64(value: &Value, key: &str) -> u64 {
+    match value {
+        Value::Object(map) => map
+            .iter()
+            .map(|(name, child)| {
+                let own = if name == key {
+                    child.as_u64().unwrap_or(0)
+                } else {
+                    0
+                };
+                own.saturating_add(sum_named_u64(child, key))
+            })
+            .sum(),
+        Value::Array(items) => items.iter().map(|item| sum_named_u64(item, key)).sum(),
+        _ => 0,
     }
 }
 
@@ -138,9 +170,13 @@ fn evaluate_mediamtx_path_health(
     let mut missing_before = Vec::new();
     let mut missing_after = Vec::new();
     let mut not_ready = Vec::new();
+    let mut missing_tracks = Vec::new();
+    let mut inbound_errors = Vec::new();
     let mut stalled = Vec::new();
     let mut ready_paths = 0usize;
     let mut reader_count = 0usize;
+    let mut paths_with_tracks = 0usize;
+    let mut inbound_frame_errors = 0u64;
     let mut bytes_received_before = 0u64;
     let mut bytes_received_after = 0u64;
 
@@ -158,6 +194,16 @@ fn evaluate_mediamtx_path_health(
         } else {
             not_ready.push(path.clone());
         }
+        if after_stats.track_count > 0 {
+            paths_with_tracks += 1;
+        } else {
+            missing_tracks.push(path.clone());
+        }
+        if after_stats.inbound_frame_errors > 0 {
+            inbound_frame_errors =
+                inbound_frame_errors.saturating_add(after_stats.inbound_frame_errors);
+            inbound_errors.push(format!("{path} ({})", after_stats.inbound_frame_errors));
+        }
         if after_stats.bytes_received <= before_stats.bytes_received {
             stalled.push(format!(
                 "{path} ({} -> {})",
@@ -172,6 +218,8 @@ fn evaluate_mediamtx_path_health(
     if !missing_before.is_empty()
         || !missing_after.is_empty()
         || !not_ready.is_empty()
+        || !missing_tracks.is_empty()
+        || !inbound_errors.is_empty()
         || !stalled.is_empty()
     {
         let mut reasons = Vec::new();
@@ -189,6 +237,18 @@ fn evaluate_mediamtx_path_health(
         }
         if !not_ready.is_empty() {
             reasons.push(format!("not ready: {}", summarize_paths(&not_ready)));
+        }
+        if !missing_tracks.is_empty() {
+            reasons.push(format!(
+                "missing tracks: {}",
+                summarize_paths(&missing_tracks)
+            ));
+        }
+        if !inbound_errors.is_empty() {
+            reasons.push(format!(
+                "inbound frame errors: {}",
+                summarize_paths(&inbound_errors)
+            ));
         }
         if !stalled.is_empty() {
             reasons.push(format!(
@@ -209,6 +269,8 @@ fn evaluate_mediamtx_path_health(
         expected_paths: expected_paths.len(),
         ready_paths,
         reader_count,
+        paths_with_tracks,
+        inbound_frame_errors,
         bytes_received_before,
         bytes_received_after,
         bytes_received_delta: bytes_received_after.saturating_sub(bytes_received_before),
@@ -260,6 +322,8 @@ pub(crate) fn mediamtx_path_health_json(
         "expectedPaths": health.expected_paths,
         "readyPaths": health.ready_paths,
         "readerCount": health.reader_count,
+        "pathsWithTracks": health.paths_with_tracks,
+        "inboundFrameErrors": health.inbound_frame_errors,
         "bytesReceivedBefore": health.bytes_received_before,
         "bytesReceivedAfter": health.bytes_received_after,
         "bytesReceivedDelta": health.bytes_received_delta,
@@ -277,14 +341,14 @@ mod tests {
             "itemCount": 2,
             "pageCount": 1,
             "items": [
-                {"name": "live/a", "ready": true, "bytesReceived": 100, "readers": []},
-                {"name": "live/b", "ready": true, "bytesReceived": 200, "readers": [{"id": "r1"}]}
+                {"name": "live/a", "ready": true, "bytesReceived": 100, "readers": [], "tracks": ["H264", "MPEG-4 Audio"]},
+                {"name": "live/b", "ready": true, "bytesReceived": 200, "readers": [{"id": "r1"}], "tracks": ["H264", "MPEG-4 Audio"]}
             ]
         }));
         let after = parse_mediamtx_path_snapshot(&json!({
             "items": [
-                {"name": "live/a", "ready": true, "bytesReceived": 140, "readers": []},
-                {"name": "live/b", "ready": true, "bytesReceived": 260, "readers": [{"id": "r1"}, {"id": "r2"}]}
+                {"name": "live/a", "ready": true, "bytesReceived": 140, "readers": [], "tracks": ["H264", "MPEG-4 Audio"]},
+                {"name": "live/b", "ready": true, "bytesReceived": 260, "readers": [{"id": "r1"}, {"id": "r2"}], "tracks": ["H264", "MPEG-4 Audio"]}
             ]
         }));
 
@@ -295,6 +359,8 @@ mod tests {
         assert_eq!(health.expected_paths, 2);
         assert_eq!(health.ready_paths, 2);
         assert_eq!(health.reader_count, 2);
+        assert_eq!(health.paths_with_tracks, 2);
+        assert_eq!(health.inbound_frame_errors, 0);
         assert_eq!(health.bytes_received_before, 300);
         assert_eq!(health.bytes_received_after, 400);
         assert_eq!(health.bytes_received_delta, 100);
@@ -316,10 +382,10 @@ mod tests {
     #[test]
     fn rejects_mediamtx_path_without_byte_growth() {
         let before = parse_mediamtx_path_snapshot(&json!({
-            "items": [{"name": "live/a", "ready": true, "bytesReceived": 100}]
+            "items": [{"name": "live/a", "ready": true, "bytesReceived": 100, "tracks": ["H264"]}]
         }));
         let after = parse_mediamtx_path_snapshot(&json!({
-            "items": [{"name": "live/a", "ready": true, "bytesReceived": 100}]
+            "items": [{"name": "live/a", "ready": true, "bytesReceived": 100, "tracks": ["H264"]}]
         }));
 
         let error = evaluate_mediamtx_path_health(&["live/a".into()], &before, &after, 3)
@@ -327,6 +393,28 @@ mod tests {
 
         assert!(error.contains("bytesReceived stalled"));
         assert!(error.contains("live/a (100 -> 100)"));
+    }
+
+    #[test]
+    fn rejects_mediamtx_path_with_inbound_frame_errors() {
+        let before = parse_mediamtx_path_snapshot(&json!({
+            "items": [{"name": "live/a", "ready": true, "bytesReceived": 100, "tracks": ["H264"]}]
+        }));
+        let after = parse_mediamtx_path_snapshot(&json!({
+            "items": [{
+                "name": "live/a",
+                "ready": true,
+                "bytesReceived": 200,
+                "tracks": ["H264"],
+                "source": {"stats": {"inboundFramesInError": 2}}
+            }]
+        }));
+
+        let error = evaluate_mediamtx_path_health(&["live/a".into()], &before, &after, 3)
+            .expect_err("MediaMTX inbound frame errors must fail the checkpoint");
+
+        assert!(error.contains("inbound frame errors"));
+        assert!(error.contains("live/a (2)"));
     }
 
     #[test]

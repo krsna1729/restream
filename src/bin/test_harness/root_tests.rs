@@ -1494,7 +1494,7 @@ fn ramp_json_dsl_carries_current_config_contract() {
 
 #[test]
 fn resource_egress_scenario_table_carries_branch_contract() {
-    assert_eq!(resource_egress_scenarios().len(), 8);
+    assert_eq!(resource_egress_scenarios().len(), 10);
     assert_eq!(
         resource_egress_scenarios()
             .iter()
@@ -1507,6 +1507,18 @@ fn resource_egress_scenario_table_carries_branch_contract() {
             .unwrap()
             .config_index,
         2
+    );
+    assert_eq!(
+        resource_egress_scenario("egress-growth-source-srt")
+            .unwrap()
+            .output_kinds,
+        vec![SweepOutputKind::SrtSource]
+    );
+    assert_eq!(
+        resource_egress_scenario("egress-growth-transcode-srt")
+            .unwrap()
+            .output_kinds,
+        vec![SweepOutputKind::Srt720p]
     );
     assert_eq!(
         resource_egress_scenario("egress-growth-source-plus-transcode-dual-mixed")

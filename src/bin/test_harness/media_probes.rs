@@ -243,6 +243,58 @@ pub(crate) async fn ffprobe_video_packets(url: &str, output_path: &Path) -> Resu
     serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())
 }
 
+pub(crate) async fn ffprobe_live_sample(
+    url: &str,
+    output_path: &Path,
+    sample_secs: u64,
+    probesize: &str,
+    analyzeduration: &str,
+) -> Result<Value, String> {
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let read_interval = format!("%+{}", sample_secs.max(1));
+    let child = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-probesize",
+            probesize,
+            "-analyzeduration",
+            analyzeduration,
+            "-read_intervals",
+            &read_interval,
+            "-show_streams",
+            "-show_packets",
+            "-show_entries",
+            "stream=index,codec_name,codec_type,width,height,sample_rate,channels:packet=stream_index,pts_time,dts_time,size",
+            "-of",
+            "json",
+            url,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    let timeout_secs = sample_secs.saturating_add(20).max(25);
+    let output = tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output())
+        .await
+        .map_err(|_| format!("ffprobe live sample timed out after {timeout_secs}s: {url}"))?
+        .map_err(|e| e.to_string())?;
+    std::fs::write(output_path, &output.stdout).map_err(|e| e.to_string())?;
+    let stderr_path = output_path.with_extension("ffprobe.stderr.log");
+    std::fs::write(&stderr_path, &output.stderr).map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(format!(
+            "ffprobe live sample failed for {url}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())
+}
+
 fn packet_times(packet_probe: &Value) -> impl Iterator<Item = (Option<f64>, Option<f64>)> + '_ {
     packet_probe["packets"]
         .as_array()

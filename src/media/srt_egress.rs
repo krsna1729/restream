@@ -411,6 +411,22 @@ fn claim_srt_egress_muxer_port(
     }
 }
 
+fn parse_srt_egress_reuse_local_port(raw: Option<&str>) -> bool {
+    match raw.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("0" | "false" | "no" | "off") => false,
+        Some("1" | "true" | "yes" | "on") => true,
+        _ => true,
+    }
+}
+
+fn srt_egress_reuse_local_port_enabled() -> bool {
+    parse_srt_egress_reuse_local_port(
+        std::env::var("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT")
+            .ok()
+            .as_deref(),
+    )
+}
+
 // SRT Egress Client
 pub async fn start_srt_egress(
     output_id: String,
@@ -494,6 +510,7 @@ pub async fn start_srt_egress(
     // so the whole connect step (socket/group creation through connect)
     // runs via spawn_blocking instead.
     let srt_egress_muxer_port = engine.srt_egress_muxer_port_handle();
+    let reuse_local_srt_egress_port = srt_egress_reuse_local_port_enabled();
     let connect_result = tokio::task::spawn_blocking(move || -> Result<SRTSOCKET, String> {
         let client_sock: SRTSOCKET;
         if use_bonding {
@@ -678,8 +695,11 @@ pub async fn start_srt_egress(
                 }
             }
 
-            let muxer_port_claim = claim_srt_egress_muxer_port(&srt_egress_muxer_port);
-            if let Some(port) = muxer_port_claim.bind_port()
+            let muxer_port_claim = reuse_local_srt_egress_port
+                .then(|| claim_srt_egress_muxer_port(&srt_egress_muxer_port));
+            if let Some(port) = muxer_port_claim
+                .as_ref()
+                .and_then(SrtEgressMuxerPortClaim::bind_port)
                 && let Err(error) = bind_srt_egress_muxer_port(client_sock, port)
             {
                 unsafe {
@@ -709,7 +729,10 @@ pub async fn start_srt_egress(
             }
 
             match connected_srt_local_port(client_sock) {
-                Ok(port) if muxer_port_claim.record_first_connected_port(port) => {
+                Ok(port)
+                    if muxer_port_claim
+                        .is_some_and(|claim| claim.record_first_connected_port(port)) =>
+                {
                     info!(
                         port,
                         "[srt-egress] Reusing local UDP muxer port for compatible egress sockets"
@@ -976,5 +999,14 @@ mod tests {
             "later connectors must not replace the learned muxer port"
         );
         assert_eq!(*state.lock().unwrap(), Some(41000));
+    }
+
+    #[test]
+    fn srt_egress_reuse_local_port_parser_defaults_on_and_allows_override() {
+        assert!(parse_srt_egress_reuse_local_port(None));
+        assert!(parse_srt_egress_reuse_local_port(Some("true")));
+        assert!(parse_srt_egress_reuse_local_port(Some("1")));
+        assert!(!parse_srt_egress_reuse_local_port(Some("false")));
+        assert!(!parse_srt_egress_reuse_local_port(Some("0")));
     }
 }

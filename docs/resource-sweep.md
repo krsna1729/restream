@@ -56,7 +56,7 @@ Useful env vars:
 - `RESOURCE_SWEEP_SETTLE_SECS=6`
 - `RESOURCE_SWEEP_EGRESS_COUNTS=1,3,6`
 - `RESOURCE_SWEEP_INGEST_COUNTS=1,2,4`
-- `RESOURCE_SWEEP_SCENARIOS=baseline-empty,ingest-only,ingest-growth-same,ingest-growth-mixed,egress-growth-source-same,egress-growth-source-mixed,egress-growth-transcode-same,egress-growth-transcode-mixed,egress-growth-source-plus-transcode-mixed,egress-growth-transcode-dual-mixed,egress-growth-source-plus-transcode-dual-mixed,egress-growth-hevc-bridge`
+- `RESOURCE_SWEEP_SCENARIOS=baseline-empty,ingest-only,ingest-growth-same,ingest-growth-mixed,egress-growth-source-same,egress-growth-source-srt,egress-growth-source-mixed,egress-growth-transcode-same,egress-growth-transcode-srt,egress-growth-transcode-mixed,egress-growth-source-plus-transcode-mixed,egress-growth-transcode-dual-mixed,egress-growth-source-plus-transcode-dual-mixed,egress-growth-hevc-bridge`
 - `RESOURCE_SWEEP_LIFECYCLE=isolated|continuous|cumulative`
 - `RESOURCE_SWEEP_NO_CLEANUP=1` to leave the final scenario running
 
@@ -77,6 +77,10 @@ RESOURCE_SWEEP_SCENARIOS=egress-growth-transcode-mixed \
 RESOURCE_SWEEP_EGRESS_COUNTS=10 \
 ./scripts/harness/run.sh resource-sweep
 
+RESOURCE_SWEEP_SCENARIOS=egress-growth-source-same,egress-growth-source-srt \
+RESOURCE_SWEEP_EGRESS_COUNTS=50,100,200 \
+./scripts/harness/run.sh resource-sweep
+
 RESOURCE_SWEEP_SCENARIOS=egress-growth-hevc-bridge \
 RESOURCE_SWEEP_EGRESS_COUNTS=10 \
 ./scripts/harness/run.sh resource-sweep
@@ -95,6 +99,20 @@ SRT_CRYPTO_MATRIX_VARIANTS=plaintext,enc16,enc24,enc32 \
 BRANCH_MATRIX_SCENARIOS=egress-growth-source-mixed \
 ./scripts/harness/run.sh srt-crypto-matrix
 ```
+
+For MSR full certification, `MSR_FULL=1` runs an A/V marker signal-calibration
+phase ahead of the canonical 30-audio MSR phase. The calibration phase keeps the
+same checkpoints, Zipf output plan, and protocol mix, but uses the checked-in
+two-audio A/V marker fixture so sampled outputs can be validated for marker
+sync, audio PTS gaps, decode errors, clipping, and impulse/click artifacts.
+Every MSR checkpoint also validates the MediaMTX path API before and after the
+resource sample. Expected paths must be ready, expose tracks, show
+`bytesReceived` growth, and report zero `inboundFramesInError`. A deterministic
+random output sample is then probed with `ffprobe` using explicit
+`MSR_FFPROBE_PROBESIZE`, `MSR_FFPROBE_ANALYZEDURATION`, and
+`MSR_FFPROBE_SAMPLE_SECS`; the emitted JSON includes the sample size, seed, and
+without-replacement detection confidence for the configured defect-rate
+assumption.
 
 To leave the last scenario up for interactive inspection:
 

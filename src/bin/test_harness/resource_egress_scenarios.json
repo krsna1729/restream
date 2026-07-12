@@ -7,6 +7,13 @@
     ]
   },
   {
+    "name": "egress-growth-source-srt",
+    "configIndex": 1,
+    "outputKinds": [
+      "srtSource"
+    ]
+  },
+  {
     "name": "egress-growth-source-mixed",
     "configIndex": 1,
     "outputKinds": [
@@ -21,6 +28,13 @@
     "configIndex": 1,
     "outputKinds": [
       "rtmp720p"
+    ]
+  },
+  {
+    "name": "egress-growth-transcode-srt",
+    "configIndex": 1,
+    "outputKinds": [
+      "srt720p"
     ]
   },
   {

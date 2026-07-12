@@ -889,6 +889,7 @@ knobs.
 Useful narrow-loop knobs:
 
 - `RESOURCE_SWEEP_SCENARIOS=...` to run only a named slice such as
+  `egress-growth-source-same`, `egress-growth-source-srt`,
   `egress-growth-transcode-mixed`, `egress-growth-transcode-dual-mixed`, or
   `egress-growth-hevc-bridge`
 - `RESOURCE_SWEEP_EGRESS_COUNTS=10` or `RESOURCE_SWEEP_INGEST_COUNTS=5` to pin
@@ -897,6 +898,36 @@ Useful narrow-loop knobs:
   attribution against additive growth
 - `RESOURCE_SWEEP_SAMPLE_SECS=30` when you want enough time to attach `perf`
   during a single scenario
+
+Protocol-isolated egress calibration uses the source passthrough rows:
+
+```sh
+RESOURCE_SWEEP_SCENARIOS=egress-growth-source-same,egress-growth-source-srt \
+RESOURCE_SWEEP_EGRESS_COUNTS=50,100,200 \
+./scripts/harness/run.sh resource-sweep
+```
+
+The MSR harness keeps the canonical 95/5 split by default. For protocol
+calibration, set `MSR_PROTOCOL_MIX=rtmp-only`, `MSR_PROTOCOL_MIX=srt-only`, or
+`MSR_PROTOCOL_MIX=srt-every:N`. `MSR_FULL=1` also runs a signal-calibration
+phase before the canonical 30-audio phase: it uses the same checkpoints,
+Zipf fan-out, and protocol mix with the A/V marker fixture, then validates a
+deterministic RTMP/SRT sample at each checkpoint for decode health, marker
+offset/drift, audio PTS gaps, clipping, and impulse/click artifacts.
+Canonical MSR checkpoints also run deterministic sampled `ffprobe` readback
+against MediaMTX outputs. The gate records `MSR_FFPROBE_SAMPLE_COUNT`,
+`MSR_FFPROBE_SEED`, `MSR_FFPROBE_SAMPLE_SECS`, `MSR_FFPROBE_PROBESIZE`,
+`MSR_FFPROBE_ANALYZEDURATION`, and the confidence of detecting at least one
+bad output under `MSR_FFPROBE_DEFECT_RATE`. For full certification, the default
+sample count is 60, which gives more than 95% detection confidence if at least
+5% of the 1,200 outputs are bad; quick local runs default to four samples.
+The MediaMTX API is checked before and after each resource sample, and expected
+paths must be ready, have tracks, grow `bytesReceived`, and report zero inbound
+frame errors.
+
+SRT egresses normally reuse one local UDP port for compatible outbound sockets.
+Set `RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT=0` to disable that reuse during
+MediaMTX or network-stack debugging without disabling shared TS muxer stages.
 
 ### `bitrate-sweep` — bitrate sensitivity sweep
 

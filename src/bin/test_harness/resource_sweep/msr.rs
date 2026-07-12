@@ -9,7 +9,9 @@ const MSR_RANK_COUNTS: [usize; 30] = [
     13, 12, 12, 11, 11, 10, 10,
 ];
 const MSR_TOTAL_OUTPUTS: usize = 1_200;
+#[cfg(test)]
 const MSR_RTMP_OUTPUTS: usize = 1_140;
+#[cfg(test)]
 const MSR_SRT_OUTPUTS: usize = 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +29,83 @@ impl MsrProtocol {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MsrProtocolMix {
+    Canonical,
+    RtmpOnly,
+    SrtOnly,
+    SrtEvery(usize),
+}
+
+impl MsrProtocolMix {
+    fn from_env() -> Result<Self, String> {
+        let raw = match std::env::var("MSR_PROTOCOL_MIX") {
+            Ok(value) if !value.trim().is_empty() => value,
+            _ => return Ok(Self::Canonical),
+        };
+        Self::parse(&raw)
+    }
+
+    fn parse(raw: &str) -> Result<Self, String> {
+        let value = raw.trim().to_ascii_lowercase();
+        match value.as_str() {
+            "canonical" | "default" | "95/5" | "95-5" | "rtmp95-srt5" => Ok(Self::Canonical),
+            "rtmp" | "rtmp-only" | "rtmp_only" => Ok(Self::RtmpOnly),
+            "srt" | "srt-only" | "srt_only" => Ok(Self::SrtOnly),
+            _ => {
+                let Some(step) = value
+                    .strip_prefix("srt-every:")
+                    .or_else(|| value.strip_prefix("srt_every:"))
+                    .or_else(|| value.strip_prefix("every:"))
+                else {
+                    return Err(format!(
+                        "MSR_PROTOCOL_MIX must be canonical, rtmp-only, srt-only, or srt-every:N (got {raw:?})"
+                    ));
+                };
+                let every = step.parse::<usize>().map_err(|_| {
+                    format!("MSR_PROTOCOL_MIX has invalid srt-every value {step:?}")
+                })?;
+                if every == 0 {
+                    return Err(
+                        "MSR_PROTOCOL_MIX srt-every value must be greater than zero".to_string()
+                    );
+                }
+                Ok(Self::SrtEvery(every))
+            }
+        }
+    }
+
+    fn protocol_for_ordinal(self, ordinal: usize) -> MsrProtocol {
+        match self {
+            Self::Canonical => {
+                if ordinal.is_multiple_of(20) {
+                    MsrProtocol::Srt
+                } else {
+                    MsrProtocol::Rtmp
+                }
+            }
+            Self::RtmpOnly => MsrProtocol::Rtmp,
+            Self::SrtOnly => MsrProtocol::Srt,
+            Self::SrtEvery(every) => {
+                if ordinal.is_multiple_of(every) {
+                    MsrProtocol::Srt
+                } else {
+                    MsrProtocol::Rtmp
+                }
+            }
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Canonical => "canonical-95-5",
+            Self::RtmpOnly => "rtmp-only",
+            Self::SrtOnly => "srt-only",
+            Self::SrtEvery(_) => "custom-srt-every",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MsrOutputSpec {
     ordinal: usize,
@@ -38,32 +117,128 @@ struct MsrOutputSpec {
     name: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MsrRunProfile {
+    Canonical,
+    SignalCalibration,
+}
+
+impl MsrRunProfile {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Canonical => "canonical",
+            Self::SignalCalibration => "signal-calibration",
+        }
+    }
+
+    const fn scenario(self) -> &'static str {
+        match self {
+            Self::Canonical => "mahashivratri",
+            Self::SignalCalibration => "mahashivratri-signal-calibration",
+        }
+    }
+
+    const fn output_prefix(self) -> &'static str {
+        match self {
+            Self::Canonical => "msr",
+            Self::SignalCalibration => "msr-signal",
+        }
+    }
+
+    const fn stream_key(self) -> &'static str {
+        match self {
+            Self::Canonical => "msr-hero",
+            Self::SignalCalibration => "msr-signal-hero",
+        }
+    }
+
+    const fn pipeline_name(self) -> &'static str {
+        match self {
+            Self::Canonical => "MSR hero scenario",
+            Self::SignalCalibration => "MSR signal calibration",
+        }
+    }
+
+    const fn ingest_types(self) -> &'static str {
+        match self {
+            Self::Canonical => "h264-srt-30a",
+            Self::SignalCalibration => "h264-srt-av-marker-2a",
+        }
+    }
+
+    const fn audio_tracks(self) -> usize {
+        match self {
+            Self::Canonical => 30,
+            Self::SignalCalibration => 2,
+        }
+    }
+
+    const fn stereo_tracks(self) -> usize {
+        match self {
+            Self::Canonical => 29,
+            Self::SignalCalibration => 2,
+        }
+    }
+
+    const fn surround_tracks(self) -> usize {
+        match self {
+            Self::Canonical => 1,
+            Self::SignalCalibration => 0,
+        }
+    }
+
+    fn output_encoding(self, rank_index: usize) -> String {
+        match self {
+            Self::Canonical => format!("source+atrack:{rank_index}"),
+            Self::SignalCalibration => format!("source+atrack:{}", rank_index % 2),
+        }
+    }
+
+    fn fixture(self) -> Result<PathBuf, String> {
+        match self {
+            Self::Canonical => restream::test_fixtures::checked_in_fixture(
+                "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
+            ),
+            Self::SignalCalibration => {
+                restream::test_fixtures::av_marker_transport_fixture("h264", true)
+            }
+        }
+    }
+
+    const fn publisher_selection(self) -> PublishTrackSelection {
+        match self {
+            Self::Canonical => PublishTrackSelection::MsrThirtyAudio,
+            Self::SignalCalibration => PublishTrackSelection::AllStreams,
+        }
+    }
+}
+
 struct MsrCheckpointAggregate {
     resource: ResourceAggregate,
     path_health: MediaMtxPathHealth,
+    post_sample_path_health: MediaMtxPathHealth,
+    ffprobe_checks: Vec<Value>,
 }
 
-fn msr_output_plan() -> Vec<MsrOutputSpec> {
+fn msr_output_plan_for_mix_and_profile(
+    mix: MsrProtocolMix,
+    profile: MsrRunProfile,
+) -> Vec<MsrOutputSpec> {
     let mut plan = Vec::with_capacity(MSR_TOTAL_OUTPUTS);
     for (rank_index, count) in MSR_RANK_COUNTS.iter().copied().enumerate() {
         for within_rank in 0..count {
             let ordinal = plan.len() + 1;
-            // Exactly every twentieth output uses SRT. This produces the
-            // canonical 95/5 split while distributing SRT across rank groups.
-            let protocol = if ordinal.is_multiple_of(20) {
-                MsrProtocol::Srt
-            } else {
-                MsrProtocol::Rtmp
-            };
+            let protocol = mix.protocol_for_ordinal(ordinal);
             plan.push(MsrOutputSpec {
                 ordinal,
                 rank: rank_index + 1,
                 language_code: MSR_LANGUAGE_CODES[rank_index],
                 language_name: MSR_LANGUAGE_NAMES[rank_index],
                 protocol,
-                encoding: format!("source+atrack:{rank_index}"),
+                encoding: profile.output_encoding(rank_index),
                 name: format!(
-                    "msr-rank{:02}-{}-{:04}",
+                    "{}-rank{:02}-{}-{:04}",
+                    profile.output_prefix(),
                     rank_index + 1,
                     protocol.label(),
                     within_rank + 1
@@ -72,6 +247,15 @@ fn msr_output_plan() -> Vec<MsrOutputSpec> {
         }
     }
     plan
+}
+
+fn msr_output_plan_for_mix(mix: MsrProtocolMix) -> Vec<MsrOutputSpec> {
+    msr_output_plan_for_mix_and_profile(mix, MsrRunProfile::Canonical)
+}
+
+#[cfg(test)]
+fn msr_output_plan() -> Vec<MsrOutputSpec> {
+    msr_output_plan_for_mix(MsrProtocolMix::Canonical)
 }
 
 fn msr_checkpoints() -> Result<Vec<usize>, String> {
@@ -99,17 +283,21 @@ fn msr_checkpoints() -> Result<Vec<usize>, String> {
     Ok(checkpoints)
 }
 
-fn msr_plan_json(plan: &[MsrOutputSpec], checkpoints: &[usize]) -> Value {
+fn msr_plan_json(
+    plan: &[MsrOutputSpec],
+    checkpoints: &[usize],
+    mix: MsrProtocolMix,
+    profile: MsrRunProfile,
+) -> Value {
     let rtmp = plan
         .iter()
         .filter(|output| output.protocol == MsrProtocol::Rtmp)
         .count();
     let srt = plan.len().saturating_sub(rtmp);
-    debug_assert_eq!(rtmp, MSR_RTMP_OUTPUTS);
-    debug_assert_eq!(srt, MSR_SRT_OUTPUTS);
     json!({
         "mode": MSR_MODE,
-        "scenario": "mahashivratri",
+        "scenario": profile.scenario(),
+        "profile": profile.label(),
         "zipf": {
             "exponent": 1.0,
             "hotCount": 300,
@@ -118,17 +306,18 @@ fn msr_plan_json(plan: &[MsrOutputSpec], checkpoints: &[usize]) -> Value {
         "ingest": {
             "protocol": "srt",
             "video": { "codec": "h264", "width": 1920, "height": 1080, "fps": 30 },
-            "audioTracks": 30,
-            "stereoTracks": 29,
-            "surroundTracks": 1,
-            "surroundLayout": "5.1",
+            "audioTracks": profile.audio_tracks(),
+            "stereoTracks": profile.stereo_tracks(),
+            "surroundTracks": profile.surround_tracks(),
+            "surroundLayout": if profile.surround_tracks() > 0 { "5.1" } else { "none" },
         },
         "outputs": {
             "total": plan.len(),
             "rtmp": rtmp,
             "srt": srt,
-            "rtmpPercent": 95,
-            "srtPercent": 5,
+            "protocolMix": mix.label(),
+            "rtmpPercent": (rtmp * 100) / plan.len().max(1),
+            "srtPercent": (srt * 100) / plan.len().max(1),
             "checkpoints": checkpoints,
         },
         "languages": MSR_LANGUAGE_NAMES,
@@ -145,11 +334,15 @@ fn msr_plan_json(plan: &[MsrOutputSpec], checkpoints: &[usize]) -> Value {
     })
 }
 
-fn spawn_msr_publisher(env: &ResourceSweepEnv, stream_key: &str) -> Result<Child, String> {
-    let fixture = restream::test_fixtures::checked_in_fixture(
-        "test/fixtures/media-library/colorbar-timer-2v16a.mp4",
-    )?;
-    let log_path = env.work_dir.join("publisher-msr.log");
+fn spawn_msr_publisher(
+    env: &ResourceSweepEnv,
+    stream_key: &str,
+    profile: MsrRunProfile,
+) -> Result<Child, String> {
+    let fixture = profile.fixture()?;
+    let log_path = env
+        .work_dir
+        .join(format!("publisher-{}.log", profile.output_prefix()));
     let url = append_srt_crypto(
         harness_srt_ffmpeg_url(env.restream_srt, stream_key, HarnessSrtMode::Publish, None),
         &env.srt_crypto,
@@ -158,7 +351,7 @@ fn spawn_msr_publisher(env: &ResourceSweepEnv, stream_key: &str) -> Result<Child
         &fixture,
         &url,
         "mpegts",
-        PublishTrackSelection::MsrThirtyAudio,
+        profile.publisher_selection(),
         Some(&log_path),
     )
 }
@@ -177,6 +370,15 @@ fn msr_mediamtx_path(output: &MsrOutputSpec) -> String {
     }
 }
 
+fn msr_read_url(env: &ResourceSweepEnv, output: &MsrOutputSpec) -> String {
+    match output.protocol {
+        MsrProtocol::Rtmp => format!("rtmp://127.0.0.1:{}/live/{}", env.mtx_rtmp, output.name),
+        MsrProtocol::Srt => {
+            harness_srt_ffmpeg_url(env.mtx_srt, &output.name, HarnessSrtMode::Read, None)
+        }
+    }
+}
+
 fn msr_progress_timeout(output_count: usize) -> Duration {
     scaled_output_progress_timeout(
         output_count,
@@ -192,6 +394,18 @@ fn msr_checkpoint_aggregate_json(aggregate: &MsrCheckpointAggregate) -> Value {
         object.insert(
             "mediamtxPathHealth".to_string(),
             mediamtx_path_health_json(MSR_MODE, &aggregate.resource.label, &aggregate.path_health),
+        );
+        object.insert(
+            "mediamtxPostSamplePathHealth".to_string(),
+            mediamtx_path_health_json(
+                MSR_MODE,
+                &format!("{}-post-sample", aggregate.resource.label),
+                &aggregate.post_sample_path_health,
+            ),
+        );
+        object.insert(
+            "ffprobeSamples".to_string(),
+            Value::Array(aggregate.ffprobe_checks.clone()),
         );
     }
     value
@@ -219,10 +433,16 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
-fn format_msr_report(executed_outputs: usize, aggregates: &[MsrCheckpointAggregate]) -> String {
+fn format_msr_report(
+    executed_outputs: usize,
+    audio_tracks: usize,
+    rtmp_outputs: usize,
+    srt_outputs: usize,
+    aggregates: &[MsrCheckpointAggregate],
+) -> String {
     let mut report = format!(
         "Status: PASS at every checkpoint including {executed_outputs} outputs \
-         (1 SRT ingest, 30 audio tracks, Zipf fan-out, 95% RTMP / 5% SRT, \
+         (1 SRT ingest, {audio_tracks} audio tracks, Zipf fan-out, {rtmp_outputs} RTMP / {srt_outputs} SRT, \
          1080p30 H.264 passthrough, loopback MediaMTX path API byte-growth proof).\n\n"
     );
     report.push_str("| Outputs | Egress mix | MediaMTX ready | MediaMTX bytes delta | CPU avg % | CPU peak % | RSS peak | AVIO HWM peak | Samples |\n");
@@ -254,46 +474,430 @@ fn format_msr_report(executed_outputs: usize, aggregates: &[MsrCheckpointAggrega
     report
 }
 
-pub(crate) async fn msr() -> Result<Value, String> {
-    let plan = msr_output_plan();
-    let checkpoints = msr_checkpoints()?;
-    let plan_json = msr_plan_json(&plan, &checkpoints);
-    if std::env::var("MSR_PLAN_ONLY").ok().as_deref() == Some("1") {
-        return Ok(json!({
-            "status": "PLAN",
-            "plan": plan_json,
-        }));
-    }
+fn msr_ffprobe_sample_count(output_count: usize) -> usize {
+    let default = if std::env::var("MSR_FULL").ok().as_deref() == Some("1") {
+        "60"
+    } else {
+        "4"
+    };
+    env_usize("MSR_FFPROBE_SAMPLE_COUNT", default.parse().unwrap())
+        .min(output_count)
+        .max(usize::from(output_count > 0))
+}
 
-    let mut env = ResourceSweepEnv::from_env_with_default_dir(".local/artifacts/msr")?;
+fn msr_ffprobe_seed() -> u64 {
+    std::env::var("MSR_FFPROBE_SEED")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0x5eed_5eed_cafe_babe)
+}
+
+fn msr_ffprobe_detection_confidence(
+    sample_count: usize,
+    population: usize,
+    defect_rate: f64,
+) -> f64 {
+    if population == 0 || sample_count == 0 || defect_rate <= 0.0 {
+        return 0.0;
+    }
+    let bad = ((population as f64) * defect_rate)
+        .ceil()
+        .clamp(1.0, population as f64) as usize;
+    let sample_count = sample_count.min(population);
+    let mut miss_probability = 1.0f64;
+    for draw in 0..sample_count {
+        let remaining = population.saturating_sub(draw);
+        let good_remaining = population.saturating_sub(bad).saturating_sub(draw);
+        if remaining == 0 {
+            break;
+        }
+        miss_probability *= good_remaining as f64 / remaining as f64;
+    }
+    (1.0 - miss_probability).clamp(0.0, 1.0)
+}
+
+fn msr_ffprobe_sample_outputs(
+    outputs: &[MsrOutputSpec],
+    sample_count: usize,
+    seed: u64,
+) -> Vec<MsrOutputSpec> {
+    if outputs.is_empty() || sample_count == 0 {
+        return Vec::new();
+    }
+    let mut indexes = Vec::with_capacity(outputs.len());
+    let mut state = seed;
+    for index in 0..outputs.len() {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        indexes.push((state, index));
+    }
+    indexes.sort_unstable_by_key(|(rank, _)| *rank);
+    let mut selected = indexes
+        .into_iter()
+        .take(sample_count.min(outputs.len()))
+        .map(|(_, index)| index)
+        .collect::<Vec<_>>();
+    if !selected
+        .iter()
+        .any(|index| outputs[*index].protocol == MsrProtocol::Srt)
+        && let Some(srt_index) = outputs
+            .iter()
+            .position(|output| output.protocol == MsrProtocol::Srt)
+    {
+        if selected.len() < sample_count.min(outputs.len()) {
+            selected.push(srt_index);
+        } else if let Some(last) = selected.last_mut() {
+            *last = srt_index;
+        }
+    }
+    selected.sort_unstable();
+    selected.dedup();
+    selected
+        .into_iter()
+        .map(|index| outputs[index].clone())
+        .collect()
+}
+
+fn validate_msr_ffprobe_sample(output: &MsrOutputSpec, probe: &Value) -> Result<Value, String> {
+    let streams = probe["streams"]
+        .as_array()
+        .ok_or_else(|| format!("{} ffprobe output has no streams array", output.name))?;
+    let video_stream = streams
+        .iter()
+        .find(|stream| stream["codec_type"].as_str() == Some("video"))
+        .ok_or_else(|| format!("{} ffprobe did not find a video stream", output.name))?;
+    let video_codec = video_stream["codec_name"].as_str().unwrap_or("");
+    if !matches!(video_codec, "h264" | "hevc") {
+        return Err(format!(
+            "{} ffprobe found unexpected video codec {video_codec:?}",
+            output.name
+        ));
+    }
+    let audio_streams = streams
+        .iter()
+        .filter(|stream| stream["codec_type"].as_str() == Some("audio"))
+        .count();
+    if audio_streams == 0 {
+        return Err(format!(
+            "{} ffprobe did not find an audio stream",
+            output.name
+        ));
+    }
+    let video_index = video_stream["index"].as_i64().unwrap_or(0);
+    let mut video_packets = 0usize;
+    let mut last_dts = None;
+    for packet in probe["packets"].as_array().into_iter().flatten() {
+        if packet["stream_index"].as_i64() != Some(video_index) {
+            continue;
+        }
+        let Some(dts) = packet["dts_time"]
+            .as_str()
+            .and_then(|value| value.parse::<f64>().ok())
+        else {
+            continue;
+        };
+        if let Some(previous) = last_dts
+            && dts < previous
+        {
+            return Err(format!(
+                "{} ffprobe observed non-monotone video DTS ({previous} -> {dts})",
+                output.name
+            ));
+        }
+        last_dts = Some(dts);
+        video_packets += 1;
+    }
+    if video_packets == 0 {
+        return Err(format!(
+            "{} ffprobe did not capture any video packets",
+            output.name
+        ));
+    }
+    Ok(json!({
+        "videoCodec": video_codec,
+        "audioStreams": audio_streams,
+        "videoPackets": video_packets,
+    }))
+}
+
+async fn run_msr_ffprobe_checkpoint(
+    env: &ResourceSweepEnv,
+    checkpoint: usize,
+    outputs: &[MsrOutputSpec],
+) -> Result<Vec<Value>, String> {
+    let sample_count = msr_ffprobe_sample_count(outputs.len());
+    let seed = msr_ffprobe_seed();
+    let duration = env_secs("MSR_FFPROBE_SAMPLE_SECS", 5);
+    let probesize = std::env::var("MSR_FFPROBE_PROBESIZE").unwrap_or_else(|_| "10M".to_string());
+    let analyzeduration =
+        std::env::var("MSR_FFPROBE_ANALYZEDURATION").unwrap_or_else(|_| "10M".to_string());
+    let defect_rate = std::env::var("MSR_FFPROBE_DEFECT_RATE")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(0.05);
+    let samples = msr_ffprobe_sample_outputs(outputs, sample_count, seed);
+    let confidence = msr_ffprobe_detection_confidence(samples.len(), outputs.len(), defect_rate);
+    let mut checks = Vec::new();
+    for output in samples {
+        let url = msr_read_url(env, &output);
+        let label = format!("{}-{}-{}", MSR_MODE, checkpoint, output.name);
+        let probe_path = env
+            .work_dir
+            .join(format!("{}.ffprobe.json", safe_artifact_stem(&label)));
+        let probe =
+            ffprobe_live_sample(&url, &probe_path, duration, &probesize, &analyzeduration).await?;
+        let shape = validate_msr_ffprobe_sample(&output, &probe)?;
+        let check = json!({
+            "kind": "msrFfprobeSample",
+            "mode": MSR_MODE,
+            "checkpoint": checkpoint,
+            "sampleCount": sample_count,
+            "population": outputs.len(),
+            "seed": seed,
+            "durationSecs": duration,
+            "probesize": probesize,
+            "analyzeduration": analyzeduration,
+            "defectRateAssumption": defect_rate,
+            "detectionConfidence": confidence,
+            "output": {
+                "name": output.name,
+                "ordinal": output.ordinal,
+                "rank": output.rank,
+                "protocol": output.protocol.label(),
+                "encoding": output.encoding,
+            },
+            "url": url,
+            "artifact": probe_path,
+            "shape": shape,
+        });
+        append_line(
+            &env.samples_jsonl,
+            &format!("{}\n", serde_json::to_string(&check).unwrap()),
+        )?;
+        checks.push(check);
+    }
+    Ok(checks)
+}
+
+fn msr_signal_calibration_enabled() -> bool {
+    match std::env::var("MSR_SIGNAL_CALIBRATION") {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => std::env::var("MSR_FULL").ok().as_deref() == Some("1"),
+    }
+}
+
+fn configure_msr_env(mut env: ResourceSweepEnv, profile: MsrRunProfile) -> ResourceSweepEnv {
     env.lifecycle = ResourceSweepLifecycle::Continuous;
     env.sample_secs = env_secs("MSR_SAMPLE_SECS", 6);
     env.sample_interval_ms = env_secs("MSR_SAMPLE_INTERVAL_MS", 1000);
     env.settle_secs = env_secs("MSR_SETTLE_SECS", 4);
-    env.no_cleanup = std::env::var("MSR_NO_CLEANUP")
-        .ok()
-        .is_some_and(|value| value == "1");
-    env.summary_json = env.work_dir.join("msr-results.json");
-    env.summary_csv = env.work_dir.join("msr-results.csv");
-    env.samples_jsonl = env.work_dir.join("msr-samples.jsonl");
-    env.restream_log = env.work_dir.join("restream.log");
-    env.mediamtx_log = env.work_dir.join("mediamtx.log");
-    env.mediamtx_config = env.work_dir.join("mediamtx.yml");
+    env.summary_json = env
+        .work_dir
+        .join(format!("{}-results.json", profile.output_prefix()));
+    env.summary_csv = env
+        .work_dir
+        .join(format!("{}-results.csv", profile.output_prefix()));
+    env.samples_jsonl = env
+        .work_dir
+        .join(format!("{}-samples.jsonl", profile.output_prefix()));
+    env.restream_log = env
+        .work_dir
+        .join(format!("{}-restream.log", profile.output_prefix()));
+    env.mediamtx_log = env
+        .work_dir
+        .join(format!("{}-mediamtx.log", profile.output_prefix()));
+    env.mediamtx_config = env
+        .work_dir
+        .join(format!("{}-mediamtx.yml", profile.output_prefix()));
     if std::env::var_os("RESTREAM_DB_PATH").is_none() {
-        env.restream_db_path = env.work_dir.join("msr.db");
+        env.restream_db_path = env.work_dir.join(format!("{}.db", profile.output_prefix()));
+    }
+    env
+}
+
+struct MsrPhaseResult {
+    env: ResourceSweepEnv,
+    report_md: PathBuf,
+    plan_json: Value,
+    executed_outputs: usize,
+    aggregates: Vec<MsrCheckpointAggregate>,
+    signal_checks: Vec<Value>,
+}
+
+fn msr_signal_sample_outputs(outputs: &[MsrOutputSpec], limit: usize) -> Vec<MsrOutputSpec> {
+    if limit == 0 || outputs.is_empty() {
+        return Vec::new();
+    }
+    let mut indexes = Vec::new();
+    fn push_unique(indexes: &mut Vec<usize>, output_count: usize, index: usize) {
+        if index < output_count && !indexes.contains(&index) {
+            indexes.push(index);
+        }
     }
 
+    push_unique(&mut indexes, outputs.len(), 0);
+    if let Some(index) = outputs
+        .iter()
+        .position(|output| output.protocol == MsrProtocol::Srt)
+    {
+        push_unique(&mut indexes, outputs.len(), index);
+    }
+    push_unique(&mut indexes, outputs.len(), outputs.len() / 2);
+    push_unique(&mut indexes, outputs.len(), outputs.len().saturating_sub(1));
+    if indexes.len() < limit {
+        for index in (0..outputs.len()).step_by((outputs.len() / limit.max(1)).max(1)) {
+            push_unique(&mut indexes, outputs.len(), index);
+            if indexes.len() >= limit {
+                break;
+            }
+        }
+    }
+    indexes
+        .into_iter()
+        .take(limit)
+        .map(|index| outputs[index].clone())
+        .collect()
+}
+
+async fn run_msr_signal_check(
+    env: &ResourceSweepEnv,
+    checkpoint: usize,
+    output: &MsrOutputSpec,
+    duration: u64,
+) -> Result<Value, String> {
+    let url = msr_read_url(env, output);
+    let label = format!("{}-{}-{}", MSR_MODE, checkpoint, output.name);
+    let stem = safe_artifact_stem(&label);
+    let capture_path = env.work_dir.join(format!("{stem}.signal.mkv"));
+    let blackdetect_log = env.work_dir.join(format!("{stem}.blackdetect.log"));
+    let silencedetect_log = env.work_dir.join(format!("{stem}.silencedetect.log"));
+    let ashowinfo_log = env.work_dir.join(format!("{stem}.ashowinfo.log"));
+    let astats_log = env.work_dir.join(format!("{stem}.astats.log"));
+
+    capture_signal_sample(&url, &capture_path, duration).await?;
+    let black = run_ffmpeg_filter_log(
+        &capture_path,
+        duration,
+        &[
+            "-vf",
+            "blackdetect=d=0.05:pix_th=0.10",
+            "-an",
+            "-f",
+            "null",
+            "-",
+        ],
+        &blackdetect_log,
+    )
+    .await?;
+    let silence = run_ffmpeg_filter_log(
+        &capture_path,
+        duration,
+        &[
+            "-af",
+            "silencedetect=n=-35dB:d=0.05",
+            "-vn",
+            "-f",
+            "null",
+            "-",
+        ],
+        &silencedetect_log,
+    )
+    .await?;
+    let ashow = run_ffmpeg_filter_log(
+        &capture_path,
+        duration,
+        &["-af", "ashowinfo", "-vn", "-f", "null", "-"],
+        &ashowinfo_log,
+    )
+    .await?;
+    let astats = run_ffmpeg_filter_log(
+        &capture_path,
+        duration,
+        &["-af", "astats=metadata=1:reset=1", "-vn", "-f", "null", "-"],
+        &astats_log,
+    )
+    .await?;
+    let pcm = decode_pcm_quality(&capture_path, duration).await?;
+    let report = validate_signal_quality_with_tolerances(
+        &black,
+        &silence,
+        &ashow,
+        &astats,
+        pcm,
+        &SignalTolerances::default(),
+    )
+    .map_err(|error| format!("{} signal validation failed: {error}", output.name))?;
+    Ok(json!({
+        "kind": "msrSignalQuality",
+        "mode": MSR_MODE,
+        "checkpoint": checkpoint,
+        "output": {
+            "name": output.name,
+            "ordinal": output.ordinal,
+            "rank": output.rank,
+            "protocol": output.protocol.label(),
+            "encoding": output.encoding,
+        },
+        "quality": signal_report_json(
+            &label,
+            &url,
+            duration,
+            &capture_path,
+            &blackdetect_log,
+            &silencedetect_log,
+            &ashowinfo_log,
+            &astats_log,
+            &report,
+        ),
+    }))
+}
+
+async fn run_msr_signal_checkpoint(
+    env: &ResourceSweepEnv,
+    checkpoint: usize,
+    outputs: &[MsrOutputSpec],
+) -> Result<Vec<Value>, String> {
+    let sample_limit = env_usize("MSR_SIGNAL_SAMPLES_PER_CHECKPOINT", 4);
+    let duration = env_secs("MSR_SIGNAL_SAMPLE_SECS", 20);
+    let mut checks = Vec::new();
+    for output in msr_signal_sample_outputs(outputs, sample_limit) {
+        let check = run_msr_signal_check(env, checkpoint, &output, duration).await?;
+        append_line(
+            &env.samples_jsonl,
+            &format!("{}\n", serde_json::to_string(&check).unwrap()),
+        )?;
+        checks.push(check);
+    }
+    Ok(checks)
+}
+
+async fn run_msr_phase(
+    env: ResourceSweepEnv,
+    protocol_mix: MsrProtocolMix,
+    checkpoints: &[usize],
+    profile: MsrRunProfile,
+) -> Result<MsrPhaseResult, String> {
+    let plan = msr_output_plan_for_mix_and_profile(protocol_mix, profile);
+    let plan_json = msr_plan_json(&plan, checkpoints, protocol_mix, profile);
+
     std::fs::create_dir_all(&env.work_dir).map_err(|error| error.to_string())?;
-    let report_md = env.work_dir.join("msr-report.md");
+    let report_md = env
+        .work_dir
+        .join(format!("{}-report.md", profile.output_prefix()));
     let _ = std::fs::remove_file(&env.summary_json);
     let _ = std::fs::remove_file(&env.summary_csv);
     let _ = std::fs::remove_file(&env.samples_jsonl);
     let _ = std::fs::remove_file(&report_md);
 
     let mut stack = start_resource_sweep_stack(&env).await?;
-    let stream_key = "msr-hero";
-    let pipeline_id = create_resource_pipeline(&stack.api, "MSR hero scenario", stream_key).await?;
-    let mut publisher = spawn_msr_publisher(&env, stream_key)?;
+    let stream_key = profile.stream_key();
+    let pipeline_id =
+        create_resource_pipeline(&stack.api, profile.pipeline_name(), stream_key).await?;
+    let mut publisher = spawn_msr_publisher(&env, stream_key, profile)?;
     wait_for_api_input_live(&stack.api, &pipeline_id, Duration::from_secs(60)).await?;
 
     let max_outputs = *checkpoints
@@ -301,6 +905,7 @@ pub(crate) async fn msr() -> Result<Value, String> {
         .ok_or("MSR checkpoint list unexpectedly empty".to_string())?;
     let mut output_ids = Vec::with_capacity(max_outputs);
     let mut aggregates = Vec::with_capacity(checkpoints.len());
+    let mut signal_checks = Vec::new();
 
     for output in plan.iter().take(max_outputs) {
         let url = msr_output_url(&env, output);
@@ -353,6 +958,14 @@ pub(crate) async fn msr() -> Result<Value, String> {
                     .unwrap()
                 ),
             )?;
+            let ffprobe_checks =
+                run_msr_ffprobe_checkpoint(&env, output.ordinal, &plan[..output.ordinal]).await?;
+            if profile == MsrRunProfile::SignalCalibration {
+                signal_checks.extend(
+                    run_msr_signal_checkpoint(&env, output.ordinal, &plan[..output.ordinal])
+                        .await?,
+                );
+            }
             let resource = sample_resource_window(
                 &env,
                 &mut stack,
@@ -361,15 +974,36 @@ pub(crate) async fn msr() -> Result<Value, String> {
                     label,
                     pipelines: 1,
                     outputs: output.ordinal,
-                    ingest_types: "h264-srt-30a".to_string(),
+                    ingest_types: profile.ingest_types().to_string(),
                     egress_mix: format!("rtmp:{rtmp_count},srt:{srt_count}"),
                     transcode: "no",
                 },
             )
             .await?;
+            let post_sample_path_health = verify_mediamtx_path_health(
+                env.mtx_api,
+                &expected_mediamtx_paths,
+                env_secs("MSR_SINK_POST_SAMPLE_SECS", 2),
+                Duration::from_secs(env_secs("MSR_SINK_TIMEOUT_SECS", 60)),
+            )
+            .await?;
+            append_line(
+                &env.samples_jsonl,
+                &format!(
+                    "{}\n",
+                    serde_json::to_string(&mediamtx_path_health_json(
+                        MSR_MODE,
+                        &format!("{}-post-sample", output.ordinal),
+                        &post_sample_path_health
+                    ))
+                    .unwrap()
+                ),
+            )?;
             aggregates.push(MsrCheckpointAggregate {
                 resource,
                 path_health,
+                post_sample_path_health,
+                ffprobe_checks,
             });
         }
     }
@@ -379,23 +1013,40 @@ pub(crate) async fn msr() -> Result<Value, String> {
         .map(|aggregate| aggregate.resource.clone())
         .collect::<Vec<_>>();
     write_resource_sweep_csv(&env.summary_csv, &resource_aggregates)?;
-    std::fs::write(&report_md, format_msr_report(output_ids.len(), &aggregates))
-        .map_err(|error| error.to_string())?;
+    let rtmp_outputs = plan
+        .iter()
+        .take(output_ids.len())
+        .filter(|output| output.protocol == MsrProtocol::Rtmp)
+        .count();
+    let srt_outputs = output_ids.len().saturating_sub(rtmp_outputs);
+    std::fs::write(
+        &report_md,
+        format_msr_report(
+            output_ids.len(),
+            profile.audio_tracks(),
+            rtmp_outputs,
+            srt_outputs,
+            &aggregates,
+        ),
+    )
+    .map_err(|error| error.to_string())?;
     let result = json!({
         "mode": MSR_MODE,
         "status": "PASS",
-        "plan": plan_json,
+        "profile": profile.label(),
+        "plan": plan_json.clone(),
         "executedOutputs": output_ids.len(),
         "artifacts": {
-            "summaryJson": env.summary_json,
-            "summaryCsv": env.summary_csv,
-            "reportMd": report_md,
-            "samplesJsonl": env.samples_jsonl,
-            "publisherLog": env.work_dir.join("publisher-msr.log"),
-            "restreamLog": env.restream_log,
-            "mediamtxLog": env.mediamtx_log,
+            "summaryJson": env.summary_json.clone(),
+            "summaryCsv": env.summary_csv.clone(),
+            "reportMd": report_md.clone(),
+            "samplesJsonl": env.samples_jsonl.clone(),
+            "publisherLog": env.work_dir.join(format!("publisher-{}.log", profile.output_prefix())),
+            "restreamLog": env.restream_log.clone(),
+            "mediamtxLog": env.mediamtx_log.clone(),
         },
         "aggregates": aggregates.iter().map(msr_checkpoint_aggregate_json).collect::<Vec<_>>(),
+        "signalChecks": signal_checks.clone(),
     });
     std::fs::write(
         &env.summary_json,
@@ -413,6 +1064,124 @@ pub(crate) async fn msr() -> Result<Value, String> {
         stop_child(&mut stack.restream).await;
         stop_child(&mut stack.mediamtx).await;
     }
+    Ok(MsrPhaseResult {
+        env,
+        report_md,
+        plan_json,
+        executed_outputs: output_ids.len(),
+        aggregates,
+        signal_checks,
+    })
+}
+
+pub(crate) async fn msr() -> Result<Value, String> {
+    let protocol_mix = MsrProtocolMix::from_env()?;
+    let checkpoints = msr_checkpoints()?;
+    let canonical_plan = msr_output_plan_for_mix(protocol_mix);
+    let canonical_plan_json = msr_plan_json(
+        &canonical_plan,
+        &checkpoints,
+        protocol_mix,
+        MsrRunProfile::Canonical,
+    );
+    let signal_calibration = msr_signal_calibration_enabled();
+    if std::env::var("MSR_PLAN_ONLY").ok().as_deref() == Some("1") {
+        return Ok(json!({
+            "status": "PLAN",
+            "plan": canonical_plan_json,
+            "signalCalibration": signal_calibration.then(|| {
+                let signal_plan = msr_output_plan_for_mix_and_profile(
+                    protocol_mix,
+                    MsrRunProfile::SignalCalibration,
+                );
+                msr_plan_json(
+                    &signal_plan,
+                    &checkpoints,
+                    protocol_mix,
+                    MsrRunProfile::SignalCalibration,
+                )
+            }),
+        }));
+    }
+
+    let mut base_env = ResourceSweepEnv::from_env_with_default_dir(".local/artifacts/msr")?;
+    base_env.no_cleanup = std::env::var("MSR_NO_CLEANUP")
+        .ok()
+        .is_some_and(|value| value == "1");
+
+    let calibration = if signal_calibration {
+        let mut signal_env = base_env.clone();
+        signal_env.work_dir = base_env.work_dir.join("signal-calibration");
+        signal_env.no_cleanup = false;
+        let signal_env = configure_msr_env(signal_env, MsrRunProfile::SignalCalibration);
+        Some(
+            run_msr_phase(
+                signal_env,
+                protocol_mix,
+                &checkpoints,
+                MsrRunProfile::SignalCalibration,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    let canonical_env = configure_msr_env(base_env, MsrRunProfile::Canonical);
+    let canonical = run_msr_phase(
+        canonical_env,
+        protocol_mix,
+        &checkpoints,
+        MsrRunProfile::Canonical,
+    )
+    .await?;
+
+    let final_summary_json = canonical.env.summary_json.clone();
+    let result = json!({
+        "mode": MSR_MODE,
+        "status": "PASS",
+        "plan": canonical.plan_json.clone(),
+        "executedOutputs": canonical.executed_outputs,
+        "artifacts": {
+            "summaryJson": canonical.env.summary_json.clone(),
+            "summaryCsv": canonical.env.summary_csv.clone(),
+            "reportMd": canonical.report_md.clone(),
+            "samplesJsonl": canonical.env.samples_jsonl.clone(),
+            "publisherLog": canonical.env.work_dir.join("publisher-msr.log"),
+            "restreamLog": canonical.env.restream_log.clone(),
+            "mediamtxLog": canonical.env.mediamtx_log.clone(),
+            "signalCalibration": calibration.as_ref().map(|phase| json!({
+                "summaryJson": phase.env.summary_json.clone(),
+                "summaryCsv": phase.env.summary_csv.clone(),
+                "reportMd": phase.report_md.clone(),
+                "samplesJsonl": phase.env.samples_jsonl.clone(),
+                "publisherLog": phase.env.work_dir.join("publisher-msr-signal.log"),
+                "restreamLog": phase.env.restream_log.clone(),
+                "mediamtxLog": phase.env.mediamtx_log.clone(),
+            })),
+        },
+        "aggregates": canonical
+            .aggregates
+            .iter()
+            .map(msr_checkpoint_aggregate_json)
+            .collect::<Vec<_>>(),
+        "signalCalibration": calibration.as_ref().map(|phase| json!({
+            "profile": MsrRunProfile::SignalCalibration.label(),
+            "plan": phase.plan_json.clone(),
+            "executedOutputs": phase.executed_outputs,
+            "signalChecks": phase.signal_checks.clone(),
+            "aggregates": phase
+                .aggregates
+                .iter()
+                .map(msr_checkpoint_aggregate_json)
+                .collect::<Vec<_>>(),
+        })),
+    });
+    std::fs::write(
+        &final_summary_json,
+        serde_json::to_vec_pretty(&result).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     Ok(result)
 }
 
@@ -440,6 +1209,63 @@ mod tests {
     }
 
     #[test]
+    fn protocol_mix_can_generate_isolated_plans() {
+        let rtmp_plan = msr_output_plan_for_mix(MsrProtocolMix::RtmpOnly);
+        assert_eq!(
+            rtmp_plan
+                .iter()
+                .filter(|output| output.protocol == MsrProtocol::Rtmp)
+                .count(),
+            MSR_TOTAL_OUTPUTS
+        );
+        assert_eq!(
+            rtmp_plan
+                .iter()
+                .filter(|output| output.protocol == MsrProtocol::Srt)
+                .count(),
+            0
+        );
+
+        let srt_plan = msr_output_plan_for_mix(MsrProtocolMix::SrtOnly);
+        assert_eq!(
+            srt_plan
+                .iter()
+                .filter(|output| output.protocol == MsrProtocol::Rtmp)
+                .count(),
+            0
+        );
+        assert_eq!(
+            srt_plan
+                .iter()
+                .filter(|output| output.protocol == MsrProtocol::Srt)
+                .count(),
+            MSR_TOTAL_OUTPUTS
+        );
+    }
+
+    #[test]
+    fn protocol_mix_parser_accepts_calibration_shapes() {
+        assert_eq!(
+            MsrProtocolMix::parse("canonical").unwrap(),
+            MsrProtocolMix::Canonical
+        );
+        assert_eq!(
+            MsrProtocolMix::parse("rtmp-only").unwrap(),
+            MsrProtocolMix::RtmpOnly
+        );
+        assert_eq!(
+            MsrProtocolMix::parse("srt-only").unwrap(),
+            MsrProtocolMix::SrtOnly
+        );
+        assert_eq!(
+            MsrProtocolMix::parse("srt-every:10").unwrap(),
+            MsrProtocolMix::SrtEvery(10)
+        );
+        assert!(MsrProtocolMix::parse("srt-every:0").is_err());
+        assert!(MsrProtocolMix::parse("banana").is_err());
+    }
+
+    #[test]
     fn every_output_selects_its_rank_audio_track() {
         for output in msr_output_plan() {
             assert_eq!(output.language_code, MSR_LANGUAGE_CODES[output.rank - 1]);
@@ -449,6 +1275,51 @@ mod tests {
                 format!("source+atrack:{}", output.rank - 1)
             );
         }
+    }
+
+    #[test]
+    fn signal_calibration_keeps_full_shape_but_uses_two_track_oracle_fixture() {
+        let plan = msr_output_plan_for_mix_and_profile(
+            MsrProtocolMix::Canonical,
+            MsrRunProfile::SignalCalibration,
+        );
+
+        assert_eq!(plan.len(), MSR_TOTAL_OUTPUTS);
+        assert_eq!(
+            plan.iter()
+                .filter(|output| output.protocol == MsrProtocol::Rtmp)
+                .count(),
+            MSR_RTMP_OUTPUTS
+        );
+        assert_eq!(
+            plan.iter()
+                .filter(|output| output.protocol == MsrProtocol::Srt)
+                .count(),
+            MSR_SRT_OUTPUTS
+        );
+        assert!(
+            plan.iter()
+                .all(|output| output.name.starts_with("msr-signal-rank"))
+        );
+        assert!(plan.iter().all(|output| {
+            output.encoding == "source+atrack:0" || output.encoding == "source+atrack:1"
+        }));
+        assert_eq!(MsrRunProfile::SignalCalibration.audio_tracks(), 2);
+    }
+
+    #[test]
+    fn signal_sample_selection_is_deterministic_and_includes_srt_when_present() {
+        let plan = msr_output_plan();
+        let samples = msr_signal_sample_outputs(&plan[..30], 4);
+
+        assert_eq!(samples.len(), 4);
+        assert_eq!(samples[0].ordinal, 1);
+        assert!(
+            samples
+                .iter()
+                .any(|output| output.protocol == MsrProtocol::Srt),
+            "checkpoint sample should include the SRT output when one exists"
+        );
     }
 
     #[test]
@@ -562,17 +1433,56 @@ mod tests {
                 expected_paths: 30,
                 ready_paths: 30,
                 reader_count: 0,
+                paths_with_tracks: 30,
+                inbound_frame_errors: 0,
                 bytes_received_before: 1_000,
                 bytes_received_after: 5_000_000,
                 bytes_received_delta: 4_999_000,
                 sample_secs: 3,
             },
+            post_sample_path_health: MediaMtxPathHealth {
+                expected_paths: 30,
+                ready_paths: 30,
+                reader_count: 0,
+                paths_with_tracks: 30,
+                inbound_frame_errors: 0,
+                bytes_received_before: 5_000_000,
+                bytes_received_after: 6_000_000,
+                bytes_received_delta: 1_000_000,
+                sample_secs: 2,
+            },
+            ffprobe_checks: Vec::new(),
         };
 
-        let report = format_msr_report(30, &[aggregate]);
+        let report = format_msr_report(30, 30, 29, 1, &[aggregate]);
 
         assert!(report.contains("MediaMTX ready"));
         assert!(report.contains("MediaMTX bytes delta"));
         assert!(report.contains("| 30 | rtmp:29,srt:1 | 30/30 |"));
+    }
+
+    #[test]
+    fn ffprobe_sample_selection_is_seeded_and_includes_srt_when_present() {
+        let plan = msr_output_plan();
+        let samples = msr_ffprobe_sample_outputs(&plan[..30], 4, 1234);
+
+        assert_eq!(samples.len(), 4);
+        assert!(
+            samples
+                .iter()
+                .any(|output| output.protocol == MsrProtocol::Srt),
+            "sampled correctness gate should include an SRT output when the checkpoint has one"
+        );
+        assert_eq!(samples, msr_ffprobe_sample_outputs(&plan[..30], 4, 1234));
+    }
+
+    #[test]
+    fn ffprobe_confidence_uses_without_replacement_detection_math() {
+        let confidence = msr_ffprobe_detection_confidence(60, 1200, 0.05);
+
+        assert!(
+            confidence > 0.95,
+            "60 samples should give >95% chance to catch at least one defect when >=5% are bad"
+        );
     }
 }
