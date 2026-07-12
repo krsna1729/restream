@@ -46,6 +46,12 @@ done
 # `restream-mcp` is feature-gated. Build the supported executable set through
 # the native script so release packaging reuses the same static-link environment
 # and linkage checks as the scratch image.
+# Keep packaging clean-checkout friendly. app-native.sh emits an SBOM as part
+# of its linkage proof, but release-evidence.sh later regenerates the certified
+# SBOM from the exact bundled executable; writing this intermediate proof under
+# dist/ prevents local release packaging from mutating the checked-in snapshot.
+build_sbom="$OUT_DIR/restream-$VERSION.build.sbom.cdx.json"
+RESTREAM_SBOM_PATH="$build_sbom" \
 RESTREAM_BUILD_PROFILE=release \
 RESTREAM_BUILD_BINS="restream restream-mcp test_harness test_harness_dsl" \
 RESTREAM_BUILD_FEATURES="mcp-server,mcp-http-backend" \
