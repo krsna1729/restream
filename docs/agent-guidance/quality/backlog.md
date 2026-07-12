@@ -68,7 +68,8 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   micro-benchmark added in `6efa461` showed video handoff wins of 10-29% by
   avoiding the final copy into `Bytes`, while audio was noise. Do not repeat
   burst write coalescing (`b19cb17` rejected it).
-- Status: open (Filed: 2026-07-12 by groom)
+- Status: done (Rejected at MSR runtime scale in this change. Filed:
+  2026-07-12 by groom)
 
 ### Q-012 [performance] [opus] Evaluate CPU affinity for Tokio/SRT/RTMP thread families
 - Goal: a measured decision on whether internal thread affinity/bin-packing

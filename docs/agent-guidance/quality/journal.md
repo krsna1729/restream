@@ -169,3 +169,21 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   (`-10%` to `-29%` median for 8 KiB to 80 KiB frames), but audio was noise and
   no runtime RTMP change should land without a full before/after MSR receiver
   proof and process counters.
+
+## 2026-07-12 15:36 Q-011 DONE [codex]
+- What: tested the RTMP Raw video payload ownership transfer at full MSR scale
+  and rejected it; the runtime code was reverted to the reusable-buffer +
+  `Bytes::copy_from_slice` path.
+- Gates: `scripts/build/resource-limit.sh cargo test rtmp --lib` passed
+  (`82` tests); `scripts/build/resource-limit.sh cargo bench --bench
+  codec_conversions -- 'codec/rtmp_payload_ownership' --warm-up-time 1
+  --measurement-time 2 --sample-size 20` passed; full 1,200-output MSR
+  experiment reached `1200/1200` MediaMTX paths ready with bytes growing; 20 s
+  `perf stat -p` collected.
+- Commit: (this commit)
+- Follow-ups: keep Q-012 and Q-013; do not pursue per-packet Vec ownership
+  transfer for RTMP video without a different allocator/serializer design.
+- Notes: experiment CPU was `2.468` cores vs the current recorded baseline
+  `2.304`, cache misses were slightly worse, and page faults rose to
+  `60.491/sec`; context-switch/migration reductions were not enough to make it
+  a net win.

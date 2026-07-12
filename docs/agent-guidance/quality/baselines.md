@@ -793,3 +793,43 @@ shape is not burst write coalescing; it is converting into a buffer whose
 ownership can be moved into `Bytes` before `rml_rtmp` serialization. Correctness
 risk remains: each RTMP egress must keep independent buffers and must not reuse
 a buffer after handing ownership to `Bytes`.
+
+### Negative result: RTMP Raw video payload ownership transfer — 2026-07-12 (VPS)
+
+Hypothesis: the micro-benchmark win above would carry into full MSR if Raw
+video conversion moved the converted `Vec<u8>` into `Bytes` instead of copying
+the reusable conversion buffer. The runtime experiment changed only the Raw
+video RTMP egress handoff; audio stayed on the existing reusable-buffer +
+`Bytes::copy_from_slice` path.
+
+Correctness proof:
+
+| Check | Result |
+|---|---:|
+| Scoped RTMP tests | `82 passed` |
+| MediaMTX paths ready | `1200/1200` |
+| MediaMTX bytes delta | `202,990,188` over 3 s |
+| Startup Restream/MediaMTX errors | `0` |
+
+Process counters over a 20 s `perf stat -p <restream-pid>` attach:
+
+| Metric | Current baseline | Ownership transfer experiment |
+|---|---:|---:|
+| CPU utilized | `2.304` CPUs | `2.468` CPUs |
+| IPC | `0.36` | `0.37` |
+| Cache misses | `18.04%` | `18.29%` |
+| Context switches | `3.050 K/sec` | `2.598 K/sec` |
+| CPU migrations | `337.348/sec` | `301.908/sec` |
+| Page faults | `1.834/sec` | `60.491/sec` |
+
+Conclusion: despite the micro-benchmark win, the full MSR workload got more
+expensive. The extra allocation/page-fault pressure outweighed the removed copy,
+while context-switch and migration reductions were not enough to compensate.
+The runtime code was reverted. Future RTMP work should look below this handoff
+at `rml_rtmp::ChunkSerializer` allocation behavior or a true reusable outbound
+serialization buffer, not per-packet `Vec` ownership transfer.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-rtmp-ownership-3030-20260712T132924Z/perf-stat-restream-ownership-20260712T133014Z.csv`
+- `.local/artifacts/msr-rtmp-ownership-3030-20260712T132924Z/pidstat-threads-restream-ownership-20260712T133046Z.txt`
