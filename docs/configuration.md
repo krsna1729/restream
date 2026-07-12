@@ -20,6 +20,7 @@ in SQLite.
 | Media packet ring depth (source/ingest) | `1024` packets | `RESTREAM_RING_CAPACITY` |
 | Media packet ring depth (transcoder output) | `512` packets | `RESTREAM_TRANSCODER_RING_CAPACITY` (720p30 output ≈ 80 pkt/s → 512 slots ≈ 6.4 s jitter headroom; lower than source ring because I-frame payloads are large) |
 | Shared SRT TS ring depth | `256` chunks | `RESTREAM_TS_RING_CAPACITY` (SRT protocol's own send buffer absorbs network jitter; this ring only bridges muxer → socket write, typically sub-millisecond) |
+| SRT egress muxer shards per media cohort | `1` | `RESTREAM_SRT_EGRESS_MUXER_SHARDS` (raises the deterministic cap on shared TS muxer stages per pipeline+encoding; use to trade extra mux CPU/memory for smaller SRT fanout blast radius) |
 | AVIO queue capacity (async↔OS-thread bridge) | `524288` bytes (512 KiB) | `RESTREAM_AVIO_QUEUE_CAPACITY` (measured peak HWM = 398 KiB at 8 Mb/s RTMP with zero blocked writes; raise only for very high-latency SRT links) |
 | File descriptor limit | `65536` | `RESTREAM_NOFILE_LIMIT` |
 | Output reconciliation interval | 1 second | `RESTREAM_RECONCILE_INTERVAL_MS` |

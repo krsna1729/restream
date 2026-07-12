@@ -109,6 +109,7 @@ pub struct AppConfig {
     pub no_color: bool,
     pub srt_passphrase: Option<String>,
     pub srt_pbkeylen: i32,
+    pub srt_egress_muxer_shards: usize,
     pub use_internal_file_ingest: bool,
     pub initial_admin_password: Option<String>,
     pub secure_session_cookies: bool,
@@ -368,6 +369,7 @@ impl Default for AppConfig {
             no_color: false,
             srt_passphrase: None,
             srt_pbkeylen: 16,
+            srt_egress_muxer_shards: 1,
             use_internal_file_ingest: false,
             initial_admin_password: None,
             secure_session_cookies: false,
@@ -427,6 +429,7 @@ impl AppConfig {
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
             .unwrap_or(16);
+        let srt_egress_muxer_shards = env_usize("RESTREAM_SRT_EGRESS_MUXER_SHARDS", 1).clamp(1, 64);
         let use_internal_file_ingest =
             std::env::var_os("RESTREAM_USE_INTERNAL_FILE_INGEST").is_some();
         let initial_admin_password = std::env::var("RESTREAM_INITIAL_ADMIN_PASSWORD").ok();
@@ -489,6 +492,7 @@ impl AppConfig {
             no_color,
             srt_passphrase,
             srt_pbkeylen,
+            srt_egress_muxer_shards,
             use_internal_file_ingest,
             initial_admin_password,
             secure_session_cookies,
@@ -551,6 +555,7 @@ impl AppConfig {
                 "requireBonding": self.require_srt_bonding,
                 "passphraseConfigured": self.srt_passphrase.is_some(),
                 "pbkeylen": self.srt_pbkeylen,
+                "egressMuxerShards": self.srt_egress_muxer_shards,
             },
             "security": {
                 "secureSessionCookies": self.secure_session_cookies,
@@ -742,6 +747,7 @@ mod tests {
                 ("RESTREAM_RTMP_PREAUTH_BUFFER_BYTES", "1024"),
                 ("RESTREAM_RTMP_STREAM_BUFFER_BYTES", "65536"),
                 ("RESTREAM_RTMP_EGRESS_CHUNK_SIZE", "32"),
+                ("RESTREAM_SRT_EGRESS_MUXER_SHARDS", "128"),
             ],
             || {
                 let config = AppConfig::from_env();
@@ -750,6 +756,7 @@ mod tests {
                 assert_eq!(config.rtmp_preauth_buffer_bytes, 16 * 1024);
                 assert_eq!(config.rtmp_stream_buffer_bytes, 128 * 1024);
                 assert_eq!(config.rtmp_egress_chunk_size, 128);
+                assert_eq!(config.srt_egress_muxer_shards, 64);
             },
         );
     }

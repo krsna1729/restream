@@ -427,6 +427,27 @@ fn srt_egress_reuse_local_port_enabled() -> bool {
     )
 }
 
+fn stable_srt_muxer_shard(output_id: &str, shard_count: usize) -> usize {
+    let shard_count = shard_count.max(1);
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in output_id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (hash as usize) % shard_count
+}
+
+fn srt_egress_muxer_stage_key(encoding: &str, output_id: &str, shard_count: usize) -> String {
+    if shard_count <= 1 {
+        encoding.to_string()
+    } else {
+        format!(
+            "{encoding}:srt-mux-shard:{}",
+            stable_srt_muxer_shard(output_id, shard_count)
+        )
+    }
+}
+
 // SRT Egress Client
 pub async fn start_srt_egress(
     output_id: String,
@@ -762,8 +783,10 @@ pub async fn start_srt_egress(
         }
     };
 
+    let muxer_stage_key =
+        srt_egress_muxer_stage_key(&encoding, &output_id, engine.config.srt_egress_muxer_shards);
     let shared_muxer = engine
-        .get_or_create_ts_muxer_stage(&pipeline_id, &encoding, ring_buffer.clone())
+        .get_or_create_ts_muxer_stage(&pipeline_id, &muxer_stage_key, ring_buffer.clone())
         .await;
     egress_phase!(EgressPhase::Sending);
 
@@ -1008,5 +1031,27 @@ mod tests {
         assert!(parse_srt_egress_reuse_local_port(Some("1")));
         assert!(!parse_srt_egress_reuse_local_port(Some("false")));
         assert!(!parse_srt_egress_reuse_local_port(Some("0")));
+    }
+
+    #[test]
+    fn srt_egress_muxer_stage_key_preserves_default_and_shards_deterministically() {
+        assert_eq!(
+            srt_egress_muxer_stage_key("source+atrack:0", "out-a", 1),
+            "source+atrack:0"
+        );
+        let first = srt_egress_muxer_stage_key("source+atrack:0", "out-a", 4);
+        let second = srt_egress_muxer_stage_key("source+atrack:0", "out-a", 4);
+
+        assert_eq!(first, second);
+        assert!(first.starts_with("source+atrack:0:srt-mux-shard:"));
+    }
+
+    #[test]
+    fn stable_srt_muxer_shard_stays_inside_cap() {
+        for shard_count in [1, 2, 4, 16, 64] {
+            for output_id in ["a", "b", "msr-rank01-srt-0020", "another-output"] {
+                assert!(stable_srt_muxer_shard(output_id, shard_count) < shard_count);
+            }
+        }
     }
 }
