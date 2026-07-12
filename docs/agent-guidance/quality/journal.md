@@ -141,3 +141,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   low-CPU `SRT:RcvQ:*` thread per SRT socket. RSS rose from 323,884 KiB to
   742,996 KiB over the observed 1,200-output window; `/proc` attributed most of
   it to private anonymous mappings, including several nearly-full 64 MiB arenas.
+  The authenticated health proof split the control-plane cost: full health was
+  bounded but heavy (~3.95 MB, p50 392 ms), summary health was fast (~175 KB,
+  p50 28 ms), and dashboard runtime summary stayed around p50 362 ms because
+  metrics collection performs a synchronous 250 ms network-rate sample.

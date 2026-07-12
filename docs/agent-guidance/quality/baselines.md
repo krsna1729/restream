@@ -340,6 +340,20 @@ Process-mode `perf stat` attached to the live Restream pid only:
 | CPU migrations | 8,498 | 130.755/sec |
 | page faults | 232 | all minor in this short sample |
 
+Authenticated health/status latency under the same live load:
+
+| Endpoint | Samples | Response size | p50 | p95 | Max | Notes |
+|---|---:|---:|---:|---:|---:|---|
+| `/api/v1/engine/health` | 30 | 3.95 MB | 392 ms | 934 ms | 1,768 ms | Full per-output payload; bounded but heavy |
+| `/api/v1/engine/health?view=summary` | 20 | 174-175 KB | 28 ms | 44 ms | 46 ms | Broad dashboard health shape |
+| `/api/v1/dashboard/runtime?health_view=summary&metrics_view=summary` | 20 | 175 KB | 362 ms | 444 ms | 460 ms | Dominated by metrics network sampler |
+
+The dashboard runtime path stayed bounded, but the latency split matters:
+health summary itself is not the bottleneck. `build_system_metrics_snapshot`
+does a deliberate 250 ms network delta sample even for `view=summary`, so
+runtime dashboard refreshes pay that wall-clock cost regardless of the health
+snapshot lock fix.
+
 Thread census over the same live shape found 210 Restream threads. The six hot
 Tokio scheduler workers carried roughly 17-21% CPU each, with one additional
 Tokio worker at ~2%. The 60 SRT egresses plus one SRT ingest again created one
@@ -360,10 +374,14 @@ Interpretation:
 
 - The health snapshot lock fix did not introduce an obvious control-plane
   wedge: `/healthz` stayed responsive while MediaMTX continued to receive all
-  1,200 paths.
+  1,200 paths, and authenticated `/api/v1/engine/health?view=summary` stayed
+  under 50 ms in the live sample.
 - IPC, cache miss rate, branch miss rate, and migration rate continue to point
   at locality/scheduler pressure before data-structure field layout as the
   next optimization class.
+- The next control-plane latency win is to avoid doing a synchronous 250 ms
+  network-rate sample on every dashboard runtime summary refresh, for example
+  by caching/updating network counters out-of-band.
 - The structural SRT opportunity remains muxer/socket sharing or otherwise
   reducing the per-SRT-egress native thread footprint. Worker-count heuristics
   should use effective CPU quota/mask plus workload shape, not MSR alone.
