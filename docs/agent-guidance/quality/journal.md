@@ -150,4 +150,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   metrics collection performs a synchronous 250 ms network-rate sample. The
   raw pipeline graph endpoint returned the full MSR topology (1,259 nodes,
   1,258 edges) in ~401 ms p50, and the frontend now folds repeated egress
-  leaves locally.
+  leaves locally. A later 2-minute observation showed summary health p50 33 ms
+  with MediaMTX bytes advancing by 7.09 GB while RSS held flat around 1.09 GB,
+  so the memory evidence currently looks like allocator/native growth to a
+  plateau rather than an unbounded ring-buffer leak.

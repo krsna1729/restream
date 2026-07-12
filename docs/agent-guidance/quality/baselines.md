@@ -379,6 +379,12 @@ later reported 1,036,576 KiB private anonymous memory out of 1,091,340 KiB RSS;
 heap. That shape is consistent with allocator arena retention, native-library
 buffers, or thread churn rather than bounded media-ring growth.
 
+A follow-up 2-minute observation at the same 1,200-output shape showed summary
+health remained responsive (`p50=33 ms`, `p95=77 ms`, max `387 ms`) while
+MediaMTX bytes advanced by 7.09 GB. RSS/anonymous memory held essentially flat
+around 1.09 GB during that window, so the current evidence is allocator/native
+memory growth to a plateau, not an unbounded ring-buffer leak.
+
 Interpretation:
 
 - The health snapshot lock fix did not introduce an obvious control-plane
@@ -399,8 +405,8 @@ Interpretation:
   should use effective CPU quota/mask plus workload shape, not MSR alone.
 - The memory follow-up should test `MALLOC_ARENA_MAX`/allocator choices as a
   single-variable MSR run before changing hot-path data structures. The evidence
-  points first at allocator arena retention from thread count, not a named ring
-  buffer leak.
+  points first at allocator arena retention or native per-thread buffers, not a
+  named ring buffer leak.
 
 ## Standing optimization targets (2026-06-27 CPU profile, task-clock 999 Hz)
 
