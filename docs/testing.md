@@ -517,7 +517,7 @@ Runtime thread and process limits relevant to matrix and fast-breadth runs:
 | `RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE` | Restream stage scheduler | `2` | CPU headroom reserved for Tokio + listeners while deriving child cap. |
 | `RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD` | Restream stage scheduler | `2` | Expected CPU budget per external FFmpeg child when deriving child cap. |
 | `RESTREAM_TOKIO_WORKER_THREADS` | Restream Tokio runtime | effective CPUs / 3, rounded up, clamped to `1..8` | Explicit runtime worker thread cap for async tasks. Effective CPUs are bounded by process CPU mask and cgroup v2 CPU quota when available. |
-| `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` | Restream Tokio runtime | `512` | Caps Tokio blocking pool size. |
+| `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` | Restream Tokio runtime | `512` | Caps Tokio `spawn_blocking` pool size for blocking handshakes/waiters. This does not cap libsrt's own `SRT:*` native worker threads. |
 | `HARNESS_TOKIO_WORKER_THREADS` | Test harness Tokio runtime | `min(max(cpus,2),16)` | Caps harness-side async worker threads. |
 | `HARNESS_TOKIO_MAX_BLOCKING_THREADS` | Test harness Tokio runtime | `256` | Caps harness blocking task pool size. |
 | `RESTREAM_RTMP_LISTENER_BACKLOG` | Restream RTMP listener | `1024` | Explicit accept backlog for RTMP ingest socket. |

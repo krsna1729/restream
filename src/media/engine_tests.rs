@@ -1157,6 +1157,18 @@ async fn health_snapshot_exposes_runtime_limit_and_rtmp_listener_errors() {
         "host settings should expose the SRT send buffer ceiling row"
     );
     assert!(
+        host_settings
+            .iter()
+            .any(|setting| setting["key"] == "runtime.tokio.worker_threads"),
+        "host settings should expose Tokio worker sizing"
+    );
+    assert!(
+        host_settings
+            .iter()
+            .any(|setting| setting["key"] == "runtime.tokio.max_blocking_threads"),
+        "host settings should expose Tokio blocking-pool sizing"
+    );
+    assert!(
         !host_settings
             .iter()
             .any(|setting| setting["key"] == "kernel.perf_event_paranoid"),

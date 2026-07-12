@@ -290,6 +290,27 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   `16.25%` cache misses, `4.330 K/sec` context switches), so the code was
   correctly rejected.
 
+## 2026-07-12 17:24 Q-012 TOKIO BLOCKING CAP PROBE [codex]
+- What: moved resolved Tokio runtime sizing into typed config and surfaced it in
+  `/api/v1/engine/health` host settings plus the startup summary, then reran a
+  short 1,200-output MSR checkpoint with `RESTREAM_TOKIO_MAX_BLOCKING_THREADS=32`.
+- Gates: `cargo fmt --all --check`, `cargo check`, `cargo clippy --all-targets
+  -- -D warnings`, and full `cargo test` passed. The first full test attempt hit
+  a transient HLS uploader retry assertion; the focused rerun and full rerun
+  passed. The MSR checkpoint status was `PASS` with MediaMTX `1200/1200` ready
+  and `139.4 MB` aggregate `bytesReceived` growth.
+- Commit: (this commit)
+- Follow-ups: do not lower the default Tokio blocking cap yet. Health proved
+  the child process resolved `workerThreads=2` and `maxBlockingThreads=32`, but
+  the live census still reached `85-86` total threads and `66-68`
+  `tokio-rt-worker`-named threads. That means the observed 64-ish named threads
+  are not explained solely by the main runtime cap; keep investigating Tokio
+  worker replacement/dependency internals before changing defaults.
+- Notes: compared with the final uncapped 1,200-output baseline
+  (`126.87%` avg CPU, `329.5 MB` RSS peak), the cap-32 checkpoint was worse in
+  this short run (`135.93%` avg CPU, `421,892 KiB` RSS peak), so it is a
+  rejected tuning path for now.
+
 ## 2026-07-12 17:45 MSR FULL FINAL PASS [codex]
 - What: ran the full Mahashivratri MSR ramp from committed bench-profile
   binaries after the performance series and systemd placement guidance commit.

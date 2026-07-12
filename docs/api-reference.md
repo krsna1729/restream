@@ -766,6 +766,24 @@ Query params:
       "detail": "needed for SRT UDP send buffers"
     },
     {
+      "key": "runtime.tokio.worker_threads",
+      "label": "Tokio async workers",
+      "current": 2,
+      "required": null,
+      "unit": "threads",
+      "status": "ok",
+      "detail": "async scheduler worker count; too many workers increased migrations and cache misses in MSR profiling"
+    },
+    {
+      "key": "runtime.tokio.max_blocking_threads",
+      "label": "Tokio blocking thread cap",
+      "current": 512,
+      "required": null,
+      "unit": "threads",
+      "status": "ok",
+      "detail": "upper bound for spawn_blocking work such as SRT handshakes and epoll waiters; protects ramp-up latency without unbounded idle thread footprint"
+    },
+    {
       "key": "runtime.cpu.available_parallelism",
       "label": "Available CPU parallelism",
       "current": 6,

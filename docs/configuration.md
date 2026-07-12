@@ -108,6 +108,12 @@ host. MSR profiling showed thread-family partitioning can help, but the runtime
 does not currently pin individual thread families; keep fine-grained placement
 experiments outside production defaults until they have host-specific proof.
 
+The runtime also exposes its resolved Tokio sizing in `/api/v1/engine/health`
+and the engineer telemetry host-settings table. `RESTREAM_TOKIO_WORKER_THREADS`
+controls async scheduler workers; `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` controls
+Tokio `spawn_blocking` capacity for blocking handshakes and waiters. Those knobs
+do not cap native helper threads created by FFmpeg, SQLite, or libsrt.
+
 ## SQLite Performance Settings
 
 The following PRAGMAs are applied at startup after WAL mode is enabled:

@@ -1193,3 +1193,36 @@ Raw artifacts:
 - `.local/artifacts/msr-final-full-20260712T165925Z/pidstat-final.txt`
 - `.local/artifacts/msr-final-full-20260712T165925Z/thread-census-final.txt`
 - `.local/artifacts/msr-final-full-20260712T165925Z/restream-smaps-rollup-final.txt`
+
+### Tokio blocking cap visibility and cap-32 negative result - 2026-07-12 (local)
+
+Follow-up to the MSR thread census. The runtime now exposes resolved Tokio
+runtime sizing in the startup summary and `hostSettings`:
+`runtime.tokio.worker_threads` and `runtime.tokio.max_blocking_threads`.
+
+Short proof command shape:
+
+```sh
+RESTREAM_TOKIO_MAX_BLOCKING_THREADS=32 \
+  MSR_OUTPUT_COUNTS=1200 MSR_SAMPLE_SECS=8 MSR_SAMPLE_INTERVAL_MS=4000 \
+  MSR_SINK_SAMPLE_SECS=2 BENCH_BUILD=never \
+  WORK_DIR=.local/artifacts/msr-blocking-cap32-visible-20260712T152209Z \
+  scripts/harness/run.sh msr -- --no-netns
+```
+
+Result: `PASS`, with MediaMTX `1200/1200` ready and `139.4 MB`
+`bytesReceived` growth. Health and the startup summary both proved the child
+process resolved `workerThreads=2` and `maxBlockingThreads=32`, but the live
+thread census still reached `85-86` total Restream threads and `66-68`
+`tokio-rt-worker`-named threads. The cap-32 run was also worse than the final
+uncapped 1,200-output checkpoint (`135.93%` average CPU and `421,892 KiB` RSS
+peak versus `126.87%` and `329.5 MB`), so lowering the default blocking cap is
+rejected for now.
+
+Raw artifacts:
+
+- `.local/artifacts/msr-blocking-cap32-visible-20260712T152209Z/msr.json`
+- `.local/artifacts/msr-blocking-cap32-visible-20260712T152209Z/msr-report.md`
+- `.local/artifacts/msr-blocking-cap32-visible-20260712T152209Z/health-tokio.json`
+- `.local/artifacts/msr-blocking-cap32-visible-20260712T152209Z/thread-watch.txt`
+- `.local/artifacts/msr-blocking-cap32-visible-20260712T152209Z/thread-census-live.txt`

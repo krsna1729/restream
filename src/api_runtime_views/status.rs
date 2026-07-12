@@ -259,6 +259,20 @@ fn host_settings_json(engine: &MediaEngine) -> serde_json::Value {
             "bytes",
             Some("needed for SRT UDP send buffers".to_string()),
         ),
+        host_info_setting_json(
+            "runtime.tokio.worker_threads",
+            "Tokio async workers",
+            serde_json::json!(engine.config.tokio_runtime.worker_threads),
+            "threads",
+            "async scheduler worker count; too many workers increased migrations and cache misses in MSR profiling",
+        ),
+        host_info_setting_json(
+            "runtime.tokio.max_blocking_threads",
+            "Tokio blocking thread cap",
+            serde_json::json!(engine.config.tokio_runtime.max_blocking_threads),
+            "threads",
+            "upper bound for spawn_blocking work such as SRT handshakes and epoll waiters; protects ramp-up latency without unbounded idle thread footprint",
+        ),
     ];
     rows.extend(cpu_capacity_settings());
     serde_json::json!(rows)

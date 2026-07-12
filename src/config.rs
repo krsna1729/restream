@@ -28,6 +28,22 @@ pub struct RuntimeTuning {
     pub hls_idle_timeout_ms: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokioRuntimeConfig {
+    pub worker_threads: usize,
+    pub max_blocking_threads: usize,
+}
+
+impl Default for TokioRuntimeConfig {
+    fn default() -> Self {
+        let effective_cpus = effective_cpu_count();
+        Self {
+            worker_threads: default_tokio_worker_threads(effective_cpus),
+            max_blocking_threads: 512,
+        }
+    }
+}
+
 impl Default for RuntimeTuning {
     fn default() -> Self {
         Self {
@@ -66,6 +82,7 @@ pub struct AppConfig {
     pub ports: ServerPorts,
     pub http_bind_addr: String,
     pub tuning: RuntimeTuning,
+    pub tokio_runtime: TokioRuntimeConfig,
     pub db_path: String,
     pub media_dir: String,
     pub log_retention_days: u64,
@@ -115,6 +132,83 @@ fn env_usize(name: &str, default: usize) -> usize {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
+}
+
+fn available_parallelism_count() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+}
+
+fn parse_cpu_list_count(value: &str) -> Option<usize> {
+    let mut count = 0usize;
+    for item in value.trim().split(',').filter(|item| !item.is_empty()) {
+        let (start, end) = match item.split_once('-') {
+            Some((start, end)) => (start.trim(), end.trim()),
+            None => {
+                item.trim().parse::<usize>().ok()?;
+                count = count.checked_add(1)?;
+                continue;
+            }
+        };
+        let start = start.parse::<usize>().ok()?;
+        let end = end.parse::<usize>().ok()?;
+        if end < start {
+            return None;
+        }
+        count = count.checked_add(end - start + 1)?;
+    }
+    (count > 0).then_some(count)
+}
+
+fn parse_cpu_allowed_list(status: &str) -> Option<usize> {
+    status.lines().find_map(|line| {
+        line.strip_prefix("Cpus_allowed_list:")
+            .and_then(parse_cpu_list_count)
+    })
+}
+
+fn process_cpu_mask_count() -> Option<usize> {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| parse_cpu_allowed_list(&status))
+}
+
+fn parse_cpu_max_quota(value: &str) -> Option<usize> {
+    let mut parts = value.split_whitespace();
+    let quota = parts.next()?;
+    let period = parts.next()?.parse::<usize>().ok()?;
+    if quota == "max" || period == 0 {
+        return None;
+    }
+    let quota = quota.parse::<usize>().ok()?;
+    Some(quota.div_ceil(period).max(1))
+}
+
+fn cgroup_cpu_quota_count() -> Option<usize> {
+    std::fs::read_to_string("/sys/fs/cgroup/cpu.max")
+        .ok()
+        .and_then(|cpu_max| parse_cpu_max_quota(&cpu_max))
+}
+
+fn effective_cpu_count() -> usize {
+    let mut cpus = available_parallelism_count().max(1);
+    if let Some(mask_cpus) = process_cpu_mask_count() {
+        cpus = cpus.min(mask_cpus.max(1));
+    }
+    if let Some(quota_cpus) = cgroup_cpu_quota_count() {
+        cpus = cpus.min(quota_cpus.max(1));
+    }
+    cpus.max(1)
+}
+
+fn default_tokio_worker_threads(effective_cpus: usize) -> usize {
+    let effective_cpus = effective_cpus.max(1);
+    if effective_cpus <= 2 {
+        effective_cpus
+    } else {
+        effective_cpus.div_ceil(3).clamp(2, 8)
+    }
 }
 
 fn env_bool(name: &str) -> Option<bool> {
@@ -196,6 +290,21 @@ impl RuntimeTuning {
     }
 }
 
+impl TokioRuntimeConfig {
+    pub fn from_env() -> Self {
+        let defaults = Self::default();
+        Self {
+            worker_threads: env_usize("RESTREAM_TOKIO_WORKER_THREADS", defaults.worker_threads)
+                .max(1),
+            max_blocking_threads: env_usize(
+                "RESTREAM_TOKIO_MAX_BLOCKING_THREADS",
+                defaults.max_blocking_threads,
+            )
+            .max(1),
+        }
+    }
+}
+
 impl BackendPolicy {
     pub fn from_env() -> Self {
         Self {
@@ -215,6 +324,7 @@ impl Default for AppConfig {
             srt: 10080,
         };
         let tuning = RuntimeTuning::default();
+        let tokio_runtime = TokioRuntimeConfig::default();
         let cpus = std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
             .unwrap_or(1);
@@ -225,6 +335,7 @@ impl Default for AppConfig {
             ports,
             http_bind_addr: "127.0.0.1".to_string(),
             tuning,
+            tokio_runtime,
             db_path: ".restream/data/restream.db".to_string(),
             media_dir: DEFAULT_MEDIA_DIR.to_string(),
             log_retention_days: 7,
@@ -268,6 +379,7 @@ impl AppConfig {
         let http_bind_addr =
             std::env::var("RESTREAM_HTTP_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
         let tuning = RuntimeTuning::from_env();
+        let tokio_runtime = TokioRuntimeConfig::from_env();
         let db_path = std::env::var("RESTREAM_DB_PATH")
             .unwrap_or_else(|_| ".restream/data/restream.db".to_string());
         let media_dir =
@@ -346,6 +458,7 @@ impl AppConfig {
             ports,
             http_bind_addr,
             tuning,
+            tokio_runtime,
             db_path,
             media_dir,
             log_retention_days,
@@ -393,6 +506,10 @@ impl AppConfig {
                 "outputRetryBaseMs": self.tuning.output_retry_base_ms,
                 "outputRetryMaxMs": self.tuning.output_retry_max_ms,
                 "hlsIdleTimeoutMs": self.tuning.hls_idle_timeout_ms,
+            },
+            "tokio": {
+                "workerThreads": self.tokio_runtime.worker_threads,
+                "maxBlockingThreads": self.tokio_runtime.max_blocking_threads,
             },
             "paths": {
                 "db": self.db_path,
@@ -649,6 +766,42 @@ mod tests {
     }
 
     #[test]
+    fn tokio_runtime_config_tracks_cpu_limits_and_overrides() {
+        assert_eq!(parse_cpu_list_count("0"), Some(1));
+        assert_eq!(parse_cpu_list_count("0-5"), Some(6));
+        assert_eq!(parse_cpu_list_count("0-1,4,6-7"), Some(5));
+        assert_eq!(parse_cpu_list_count("3-1"), None);
+        assert_eq!(parse_cpu_list_count(""), None);
+        assert_eq!(
+            parse_cpu_allowed_list("Name:\trestream\nCpus_allowed_list:\t0-1,4\n"),
+            Some(3)
+        );
+        assert_eq!(parse_cpu_max_quota("max 100000"), None);
+        assert_eq!(parse_cpu_max_quota("100000 100000"), Some(1));
+        assert_eq!(parse_cpu_max_quota("150000 100000"), Some(2));
+        assert_eq!(parse_cpu_max_quota("250000 100000"), Some(3));
+
+        assert_eq!(default_tokio_worker_threads(1), 1);
+        assert_eq!(default_tokio_worker_threads(2), 2);
+        assert_eq!(default_tokio_worker_threads(6), 2);
+        assert_eq!(default_tokio_worker_threads(12), 4);
+        assert_eq!(default_tokio_worker_threads(64), 8);
+
+        with_env_vars(
+            &[
+                ("RESTREAM_TOKIO_WORKER_THREADS", "3"),
+                ("RESTREAM_TOKIO_MAX_BLOCKING_THREADS", "32"),
+            ],
+            || {
+                let runtime = TokioRuntimeConfig::from_env();
+                assert_eq!(runtime.worker_threads, 3);
+                assert_eq!(runtime.max_blocking_threads, 32);
+                assert_eq!(AppConfig::from_env().tokio_runtime, runtime);
+            },
+        );
+    }
+
+    #[test]
     fn backend_policy_is_loaded_by_config_module() {
         with_env_vars(
             &[
@@ -724,6 +877,14 @@ mod tests {
         let summary = config.effective_summary();
         assert_eq!(summary["ports"]["http"], 3030);
         assert_eq!(summary["tuning"]["reconcilerIntervalMs"], 1000);
+        assert_eq!(
+            summary["tokio"]["workerThreads"],
+            config.tokio_runtime.worker_threads
+        );
+        assert_eq!(
+            summary["tokio"]["maxBlockingThreads"],
+            config.tokio_runtime.max_blocking_threads
+        );
         assert_eq!(summary["paths"]["ffmpegBin"], "/usr/bin/ffmpeg");
         assert_eq!(summary["backendPolicy"]["internalHlsPreview"], false);
         assert_eq!(
