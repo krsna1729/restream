@@ -1040,12 +1040,9 @@ pub(crate) fn mixed_output_protocol_name(protocol: MixedOutputProtocol) -> &'sta
 #[cfg(test)]
 mod tests {
     use super::*;
-    use restream::application::models::Output;
-    use restream::domain::output_spec::OutputConfig;
     use restream::domain::stage::StageKind;
-    use restream::domain::state::DesiredOutputState;
     use restream::planner::backend_policy::BackendPolicy;
-    use restream::planner::graph_plan::plan_pipeline_graph;
+    use restream::planner::graph_plan::{PlannedOutput, plan_pipeline_graph};
 
     fn planned_stage_count_from_graph(
         case: MixedInputCase,
@@ -1059,15 +1056,11 @@ mod tests {
                         MixedOutputProtocol::Rtmp => "rtmp://example/live/out",
                         MixedOutputProtocol::Srt => "srt://example:9000?streamid=publish:out",
                     };
-                    Output {
-                        id: format!("{}-{duplicate}", output_case.id()),
-                        pipeline_id: "pipe".to_string(),
-                        name: output_case.id().to_string(),
-                        url: url.to_string(),
-                        monitoring_url: None,
-                        desired_state: DesiredOutputState::Running,
-                        config: OutputConfig::parse(output_case.encoding()),
-                    }
+                    PlannedOutput::new(
+                        format!("{}-{duplicate}", output_case.id()),
+                        output_case.encoding(),
+                        url,
+                    )
                 })
             })
             .collect::<Vec<_>>();

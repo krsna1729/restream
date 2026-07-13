@@ -406,7 +406,7 @@ struct StagePlan {
 
 ### Tasks
 
-1. Keep `application::output_path::OutputPath` but make it emit `StageGraphPlan` or use it inside the new planner.
+1. Keep `planner::output_path::OutputPath` inside the planner and have application code adapt persisted output models into planner inputs.
 2. Add planner for:
    - output egress
    - HLS preview

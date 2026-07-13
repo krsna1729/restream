@@ -6,6 +6,7 @@ use crate::domain::output_spec::{EgressProtocol, OutputUrlScheme, VideoCodecKind
 use crate::domain::stage::{StageKey, StageKind};
 use crate::media::engine::MediaEngine;
 use crate::media::ring_buffer::RingBuffer;
+use crate::planner::graph_plan::PlannedOutput;
 use std::sync::Arc;
 
 /// Prepared runtime attachment point for an output.
@@ -37,18 +38,23 @@ pub async fn prepare_output_ring(engine: &Arc<MediaEngine>, output: &Output) -> 
 
     let url_scheme = OutputUrlScheme::from_url(&output.url);
     let backend_policy = engine.backend_policy();
+    let planned_output = PlannedOutput::new(
+        output.id.as_str(),
+        output.encoding_string(),
+        output.url.as_str(),
+    );
     let plan = if url_scheme.is_hls_family() {
         crate::planner::graph_plan::plan_hls_output_graph(
             &output.pipeline_id,
             ingest_video_codec.as_deref(),
-            output,
+            &planned_output,
             &backend_policy,
         )
     } else {
         crate::planner::graph_plan::plan_pipeline_graph(
             &output.pipeline_id,
             ingest_video_codec.as_deref(),
-            std::slice::from_ref(output),
+            std::slice::from_ref(&planned_output),
             false,
             &backend_policy,
         )

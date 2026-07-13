@@ -215,6 +215,30 @@ fn hls_preview_runtime_execution_stays_out_of_planner() {
 }
 
 #[test]
+fn planner_stays_independent_of_application_models() {
+    for (name, source) in [
+        ("planner/mod.rs", include_str!("../src/planner/mod.rs")),
+        (
+            "planner/backend_policy.rs",
+            include_str!("../src/planner/backend_policy.rs"),
+        ),
+        (
+            "planner/graph_plan.rs",
+            include_str!("../src/planner/graph_plan.rs"),
+        ),
+        (
+            "planner/output_path.rs",
+            include_str!("../src/planner/output_path.rs"),
+        ),
+    ] {
+        assert!(
+            !source.contains("crate::application::") && !source.contains("restream::application::"),
+            "{name} must not import application-layer models or helpers"
+        );
+    }
+}
+
+#[test]
 fn db_module_uses_explicit_repository_exports() {
     let db_mod = include_str!("../src/db/mod.rs");
     assert!(
