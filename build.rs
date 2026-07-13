@@ -125,10 +125,43 @@ fn main() {
     ] {
         probe_pinned_package(package, &prefix, true);
     }
+    emit_ffmpeg_static_archive_group();
 
     embed_pkg_version("RESTREAM_BUILD_X264_VERSION", "x264");
     embed_pkg_version("RESTREAM_BUILD_X265_VERSION", "x265");
     embed_pkg_version("RESTREAM_BUILD_MBEDTLS_VERSION", "mbedcrypto");
+}
+
+fn emit_ffmpeg_static_archive_group() {
+    // pkg-config and ffmpeg-sys can leave static FFmpeg archives in an order
+    // that is valid for dynamic linking but not for GNU ld's one-pass archive
+    // resolution. Repeat the repo-managed archives in a final group so
+    // cross-archive references such as swscale -> avutil resolve deterministically.
+    const FFMPEG_STATIC_GROUP_LIBS: &[&str] = &[
+        "avfilter",
+        "avformat",
+        "avcodec",
+        "swscale",
+        "swresample",
+        "avutil",
+        "x264",
+        "x265",
+        "stdc++",
+        "gcc",
+        "rt",
+        "dl",
+        "m",
+        "atomic",
+        "pthread",
+    ];
+
+    println!("cargo:rustc-link-arg=-Wl,-Bstatic");
+    println!("cargo:rustc-link-arg=-Wl,--start-group");
+    for library in FFMPEG_STATIC_GROUP_LIBS {
+        println!("cargo:rustc-link-arg=-l{library}");
+    }
+    println!("cargo:rustc-link-arg=-Wl,--end-group");
+    println!("cargo:rustc-link-arg=-Wl,-Bdynamic");
 }
 
 fn embed_pkg_version(env_name: &str, package: &str) {
