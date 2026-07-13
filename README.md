@@ -51,6 +51,10 @@ fixtures, MediaMTX, or host network setup.
 `scripts/build/app-static.sh` remains an engineering build path. It is not a
 single-file release contract until its static-runtime proof is restored.
 
+Release operators should follow [docs/release-runbook.md](docs/release-runbook.md);
+it wraps local due diligence, GitHub dry-runs, and gated tag publishing in
+scripts so the process is repeatable.
+
 For a host source build, install the dependencies described in
 [docs/development.md](docs/development.md), then use the daily loop below.
 
