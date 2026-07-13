@@ -45,4 +45,4 @@ bash ./scripts/check/concurrency/contract.sh
 
 ## Read this reference when needed
 
-- [../../concurrency-proofing.md](../../concurrency-proofing.md)
+- [../../../concurrency-proofing.md](../../../concurrency-proofing.md)

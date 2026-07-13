@@ -71,7 +71,9 @@ in on demand, and verify with the narrowest gate first.
 - Skill bodies load on invocation; the canonical versions live in
   `docs/agent-guidance/skills/`. Claude Code shims are generated locally by
   `scripts/agent/setup-skills.sh` (`.claude/` is gitignored;
-  `agent-worktree.sh` runs it automatically in new worktrees).
+  `scripts/agent/worktree.sh` runs it automatically in new worktrees). After
+  adding or editing a canonical skill, run `scripts/agent/setup-skills.sh` to
+  refresh local shims.
 - Pick the first gate by files touched, then broaden to full
   `scripts/build/resource-limit.sh cargo test` only when the change crosses module
   boundaries or shared contracts. Treat unrelated full-suite failures as
