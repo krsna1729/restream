@@ -4,17 +4,38 @@
 //! preview requests, providing a single source of truth for transcoders,
 //! HLS previews, and recordings.
 
-use crate::application::models::Output;
 use crate::domain::ids::{OutputId, PipelineId};
 use crate::domain::stage::{StageKey, StageKind};
 use crate::domain::state::StageBackendKind;
 use crate::planner::backend_policy::BackendPolicy;
+use crate::planner::output_path::OutputPath;
 use crate::runtime::graph::{GraphRole, StageGraphPlan};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedOutput {
+    pub id: OutputId,
+    pub encoding: String,
+    pub url: String,
+}
+
+impl PlannedOutput {
+    pub fn new(
+        id: impl Into<OutputId>,
+        encoding: impl Into<String>,
+        url: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            encoding: encoding.into(),
+            url: url.into(),
+        }
+    }
+}
 
 pub fn plan_pipeline_graph(
     pipeline_id: &str,
     ingest_codec: Option<&str>,
-    outputs: &[Output],
+    outputs: &[PlannedOutput],
     hls_preview_active: bool,
     policy: &BackendPolicy,
 ) -> StageGraphPlan {
@@ -22,7 +43,7 @@ pub fn plan_pipeline_graph(
     let terminal_stage = StageKey::new(pipeline_id_typed.clone(), StageKind::Source);
     let output_id_typed = outputs
         .first()
-        .map(|o| OutputId::new(&o.id))
+        .map(|o| o.id.clone())
         .unwrap_or_else(|| OutputId::new(""));
 
     let mut plan = StageGraphPlan::new(
@@ -40,12 +61,7 @@ pub fn plan_pipeline_graph(
 
     // 2. Add outputs stages
     for (index, output) in outputs.iter().enumerate() {
-        let encoding = output.encoding_string();
-        let output_path = crate::application::output_path::OutputPath::resolve(
-            pipeline_id,
-            &encoding,
-            &output.url,
-        );
+        let output_path = OutputPath::resolve(pipeline_id, &output.encoding, &output.url);
         if index == 0 {
             plan.terminal_stage = output_path.terminal_stage_key(ingest_codec);
         }
@@ -83,7 +99,7 @@ pub fn plan_pipeline_graph(
 pub fn plan_hls_output_graph(
     pipeline_id: &str,
     ingest_codec: Option<&str>,
-    output: &Output,
+    output: &PlannedOutput,
     policy: &BackendPolicy,
 ) -> StageGraphPlan {
     let mut plan = plan_pipeline_graph(
@@ -99,7 +115,7 @@ pub fn plan_hls_output_graph(
     plan.add_stage(hls_key.clone(), policy.select_backend(&hls_kind));
     plan.terminal_stage = hls_key;
     plan.role = GraphRole::HlsOutput {
-        output_id: OutputId::new(&output.id),
+        output_id: output.id.clone(),
     };
     plan
 }
@@ -176,12 +192,15 @@ fn is_hevc_preview_codec(codec: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::output_spec::OutputConfig;
-    use crate::domain::state::DesiredOutputState;
     use proptest::prelude::*;
     use std::collections::HashSet;
 
-    fn output_for_case(index: usize, video_case: u8, audio_case: u8, protocol_case: u8) -> Output {
+    fn output_for_case(
+        index: usize,
+        video_case: u8,
+        audio_case: u8,
+        protocol_case: u8,
+    ) -> PlannedOutput {
         let video = match video_case % 3 {
             0 => "source",
             1 => "720p",
@@ -203,14 +222,10 @@ mod tests {
             _ => format!("https://example/live/out-{index}.m3u8"),
         };
 
-        Output {
-            id: format!("out_{index}"),
-            pipeline_id: "pipe_prop".to_string(),
-            name: format!("Output {index}"),
+        PlannedOutput {
+            id: OutputId::new(format!("out_{index}")),
+            encoding,
             url,
-            monitoring_url: None,
-            desired_state: DesiredOutputState::Running,
-            config: OutputConfig::parse(&encoding),
         }
     }
 
@@ -297,15 +312,7 @@ mod tests {
     #[test]
     fn plan_pipeline_graph_sets_terminal_stage_from_output_path() {
         let policy = BackendPolicy::default();
-        let output = Output {
-            id: "out_1".to_string(),
-            pipeline_id: "pipe_1".to_string(),
-            name: "Output".to_string(),
-            url: "rtmp://example/live".to_string(),
-            monitoring_url: None,
-            desired_state: DesiredOutputState::Running,
-            config: crate::domain::output_spec::OutputConfig::parse("720p+atrack:0"),
-        };
+        let output = PlannedOutput::new("out_1", "720p+atrack:0", "rtmp://example/live");
 
         let plan = plan_pipeline_graph("pipe_1", Some("hevc"), &[output], false, &policy);
 
@@ -357,15 +364,7 @@ mod tests {
     #[test]
     fn hls_output_graph_terminates_at_protocol_segmenter() {
         let policy = BackendPolicy::default();
-        let output = Output {
-            id: "out_1".to_string(),
-            pipeline_id: "pipe_1".to_string(),
-            name: "HLS Output".to_string(),
-            url: "https://example.com/live/out.m3u8".to_string(),
-            monitoring_url: None,
-            desired_state: DesiredOutputState::Running,
-            config: crate::domain::output_spec::OutputConfig::parse("720p"),
-        };
+        let output = PlannedOutput::new("out_1", "720p", "https://example.com/live/out.m3u8");
         let plan = plan_hls_output_graph("pipe_1", Some("hevc"), &output, &policy);
 
         assert_eq!(

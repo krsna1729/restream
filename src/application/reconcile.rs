@@ -166,19 +166,12 @@ pub fn collect_needed_stage_keys<'a>(
         if output.effective_has_ingest
             && (output.is_active || output.desired_state == DesiredOutputState::Running)
         {
-            let dummy_output = Output {
-                id: "".to_string(),
-                pipeline_id: output.pipeline_id.to_string(),
-                name: "".to_string(),
-                url: output.url.to_string(),
-                monitoring_url: None,
-                desired_state: output.desired_state,
-                config: crate::domain::output_spec::OutputConfig::parse(&output.encoding),
-            };
+            let planned_output =
+                crate::planner::graph_plan::PlannedOutput::new("", output.encoding, output.url);
             let plan = crate::planner::graph_plan::plan_pipeline_graph(
                 output.pipeline_id,
                 output.ingest_video_codec.as_deref(),
-                &[dummy_output],
+                &[planned_output],
                 false,
                 policy,
             );

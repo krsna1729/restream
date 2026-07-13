@@ -3,6 +3,7 @@
 use crate::application::models::Output;
 use crate::domain::output_spec::OutputUrlScheme;
 use crate::planner::backend_policy::BackendPolicy;
+use crate::planner::graph_plan::PlannedOutput;
 use crate::runtime::graph::StageGraphPlan;
 
 pub struct DesiredPipelineGraphs {
@@ -16,28 +17,30 @@ pub fn desired_pipeline_graphs(
     outputs: &[Output],
     policy: &BackendPolicy,
 ) -> DesiredPipelineGraphs {
+    let planned_outputs = outputs.iter().map(planned_output).collect::<Vec<_>>();
     let aggregate = crate::planner::graph_plan::plan_pipeline_graph(
         pipeline_id,
         ingest_codec,
-        outputs,
+        &planned_outputs,
         false,
         policy,
     );
     let outputs = outputs
         .iter()
         .map(|output| {
+            let planned = planned_output(output);
             if OutputUrlScheme::from_url(&output.url).is_hls_family() {
                 crate::planner::graph_plan::plan_hls_output_graph(
                     pipeline_id,
                     ingest_codec,
-                    output,
+                    &planned,
                     policy,
                 )
             } else {
                 crate::planner::graph_plan::plan_pipeline_graph(
                     pipeline_id,
                     ingest_codec,
-                    std::slice::from_ref(output),
+                    std::slice::from_ref(&planned),
                     false,
                     policy,
                 )
@@ -46,6 +49,14 @@ pub fn desired_pipeline_graphs(
         .collect();
 
     DesiredPipelineGraphs { aggregate, outputs }
+}
+
+fn planned_output(output: &Output) -> PlannedOutput {
+    PlannedOutput::new(
+        output.id.as_str(),
+        output.encoding_string(),
+        output.url.as_str(),
+    )
 }
 
 #[cfg(test)]

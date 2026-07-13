@@ -9,7 +9,7 @@ use crate::domain::output_spec::VideoCodecKind;
 use crate::domain::stage::{StageKey, StageKind};
 use crate::domain::state::DesiredOutputState;
 use crate::media::engine::MediaEngine;
-use crate::planner::graph_plan::{plan_pipeline_graph, plan_recording_graph};
+use crate::planner::graph_plan::{PlannedOutput, plan_pipeline_graph, plan_recording_graph};
 use std::collections::{HashMap, HashSet};
 
 pub(crate) async fn processing_graph(
@@ -117,7 +117,13 @@ pub(crate) async fn processing_graph(
                 && (output.desired_state == DesiredOutputState::Running
                     || egresses.contains_key(&output.id))
         })
-        .map(|output| (*output).to_owned())
+        .map(|output| {
+            PlannedOutput::new(
+                output.id.as_str(),
+                output.encoding_string(),
+                output.url.as_str(),
+            )
+        })
         .collect::<Vec<_>>();
     let backend_policy = engine.backend_policy();
     let visible_stage_plan = plan_pipeline_graph(
@@ -220,7 +226,11 @@ pub(crate) async fn processing_graph(
             egress.map(|egress| egress.metrics.snapshot()),
         ));
 
-        let output_for_plan = [(*output).to_owned()];
+        let output_for_plan = [PlannedOutput::new(
+            output.id.as_str(),
+            encoding.as_str(),
+            output.url.as_str(),
+        )];
         let output_stage_plan = plan_pipeline_graph(
             pipeline_id,
             ingest_is_hevc.then_some("hevc"),
