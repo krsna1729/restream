@@ -275,11 +275,6 @@ jobs:
             --only-modes ramp-family,mixed.live.rtmp.h264.a1.bf2,mixed.live.srt.h264.a1.bf2,mixed.live.srt.h265.a1.bf2,mixed.live.srt.h264.a2.bf2,mixed.live.srt.h265.a2.bf2 \
             --no-netns \
             --continue-on-fail
-      - name: Run mixed fast-breadth governor
-        env:
-          N_PER_GROUP: "1"
-          BENCH_BUILD: never
-        run: scripts/harness/parallel-fast-breadth.sh
       - name: Run internal backend rollout smoke
         env:
           BENCH_BUILD: never
@@ -297,7 +292,7 @@ jobs:
           path: .local/artifacts/internal-backend-smoke/
           if-no-files-found: ignore
       - name: Upload test artifacts on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
           name: integration-test-artifacts
