@@ -75,8 +75,8 @@ async fn fault_rtmp_egress_sink_disappear(
             break;
         }
     }
-    stop_generalized_sink_server(recovered_server);
     let final_output = observe_final_output(api, &pid, &oid).await;
+    stop_generalized_sink_server(recovered_server);
     let retry_phase_ok = output_retry_or_cleanup_phase_ok(&retry);
     println!(
         "[fault] RTMP egress sink disappear: {} (phase={}, hasError={}, sawRetrying={}, healthSawRetrying={}, recovered={}, recoveryStatus={}, finalRetrying={}, {:.1}s)",

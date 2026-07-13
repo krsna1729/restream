@@ -68,11 +68,10 @@ jobs:
     timeout-minutes: 35
     strategy:
       fail-fast: false
-      # Keep this below the GitHub Free hosted-runner ceiling. Starting all
-      # harness jobs at once made every shard hit apt, artifact download, and
-      # MediaMTX bootstrap together; the release script owns per-shard timeouts,
-      # while this cap smooths setup bursts without serializing the suite.
-      max-parallel: 12
+      # Shards run inside the prebuilt CI harness image, so the old apt and
+      # MediaMTX bootstrap burst is gone. Keep a small cap below the full shard
+      # count to smooth image/artifact pulls while using most hosted capacity.
+      max-parallel: 20
       matrix:
         shard:
           - smoke
