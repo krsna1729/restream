@@ -653,49 +653,8 @@ pub fn status_and_sbom(bonding_available: bool) -> (Value, Value) {
     (status, sbom)
 }
 
-fn normalize_sbom_for_repo_compare(sbom: &mut serde_json::Value) {
-    if let Some(metadata) = sbom
-        .get_mut("metadata")
-        .and_then(|value| value.as_object_mut())
-    {
-        metadata.remove("timestamp");
-        remove_sbom_properties_named(metadata.get_mut("component"), SBOM_REPO_VOLATILE_PROPERTIES);
-        remove_sbom_properties_named(
-            metadata.get_mut("properties"),
-            SBOM_REPO_VOLATILE_PROPERTIES,
-        );
-    }
-}
-
-const SBOM_REPO_VOLATILE_PROPERTIES: &[&str] = &["restream:gitCommit", "restream:nativeBuildId"];
-
-fn remove_sbom_properties_named(value: Option<&mut serde_json::Value>, names: &[&str]) {
-    let Some(value) = value else {
-        return;
-    };
-    let properties = if let Some(object) = value.as_object_mut() {
-        object.get_mut("properties")
-    } else {
-        Some(value)
-    };
-    let Some(properties) = properties.and_then(|value| value.as_array_mut()) else {
-        return;
-    };
-    properties.retain(|property| {
-        property
-            .get("name")
-            .and_then(|name| name.as_str())
-            .is_none_or(|name| !names.contains(&name))
-    });
-}
-
-pub fn emit_sbom(path: &Path, deterministic: bool) -> Result<(), String> {
+pub fn emit_sbom(path: &Path) -> Result<(), String> {
     let (_, sbom) = status_and_sbom(false);
-
-    let mut output_sbom = sbom.clone();
-    if deterministic {
-        normalize_sbom_for_repo_compare(&mut output_sbom);
-    }
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| {
@@ -705,7 +664,7 @@ pub fn emit_sbom(path: &Path, deterministic: bool) -> Result<(), String> {
             )
         })?;
     }
-    let bytes = serde_json::to_vec_pretty(&output_sbom)
+    let bytes = serde_json::to_vec_pretty(&sbom)
         .map_err(|error| format!("failed to serialize SBOM JSON: {error}"))?;
     std::fs::write(
         path,
@@ -720,53 +679,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn repo_sbom_compare_ignores_volatile_build_provenance() {
-        let mut left = serde_json::json!({
-            "metadata": {
-                "timestamp": "2026-06-28T01:00:00Z",
-                "component": {
-                    "properties": [
-                        { "name": "restream:gitCommit", "value": "old" },
-                        { "name": "restream:nativeBuildId", "value": "old-native" },
-                        { "name": "restream:licenseFile", "value": "LICENSE" }
-                    ]
-                },
-                "properties": [
-                    { "name": "restream:gitCommit", "value": "old" },
-                    { "name": "restream:nativeBuildId", "value": "old-native" },
-                    { "name": "restream:generatedBy", "value": "running process" }
-                ]
-            },
-            "components": [{ "name": "restream" }]
-        });
-        let mut right = serde_json::json!({
-            "metadata": {
-                "timestamp": "2026-06-29T01:00:00Z",
-                "component": {
-                    "properties": [
-                        { "name": "restream:gitCommit", "value": "new" },
-                        { "name": "restream:nativeBuildId", "value": "new-native" },
-                        { "name": "restream:licenseFile", "value": "LICENSE" }
-                    ]
-                },
-                "properties": [
-                    { "name": "restream:gitCommit", "value": "new" },
-                    { "name": "restream:nativeBuildId", "value": "new-native" },
-                    { "name": "restream:generatedBy", "value": "running process" }
-                ]
-            },
-            "components": [{ "name": "restream" }]
-        });
-
-        normalize_sbom_for_repo_compare(&mut left);
-        normalize_sbom_for_repo_compare(&mut right);
-
-        assert_eq!(left, right);
-    }
-
-    #[test]
-    fn runtime_sbom_keeps_full_provenance_before_cli_normalization() {
-        let (_, mut sbom) = status_and_sbom(false);
+    fn runtime_sbom_keeps_full_provenance() {
+        let (_, sbom) = status_and_sbom(false);
 
         assert!(
             sbom.pointer("/metadata/timestamp").is_some(),
@@ -781,11 +695,17 @@ mod tests {
                     == Some("restream:gitCommit"))),
             "runtime SBOM should expose git commit provenance"
         );
-
-        normalize_sbom_for_repo_compare(&mut sbom);
         assert!(
-            sbom.pointer("/metadata/timestamp").is_none(),
-            "CLI/repo SBOM normalization should remove volatile timestamp"
+            sbom.pointer("/components")
+                .and_then(|value| value.as_array())
+                .is_some_and(|components| components.iter().any(|component| component
+                    .get("properties")
+                    .and_then(|value| value.as_array())
+                    .is_some_and(|properties| properties.iter().any(|property| property
+                        .get("name")
+                        .and_then(|name| name.as_str())
+                        == Some("restream:ffmpegConfiguration"))))),
+            "runtime SBOM should expose native FFmpeg configuration provenance"
         );
     }
 }

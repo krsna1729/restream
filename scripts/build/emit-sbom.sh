@@ -15,9 +15,4 @@ if [[ "${RESTREAM_SKIP_SBOM:-0}" == "1" ]]; then
 fi
 
 mkdir -p "$(dirname "$SBOM")"
-sbom_flag="--emit-sbom"
-if [[ "${RESTREAM_DETERMINISTIC_SBOM:-0}" == "1" ]]; then
-    sbom_flag="--emit-sbom-deterministic"
-fi
-
-"$BINARY" "$sbom_flag" "$SBOM"
+"$BINARY" --emit-sbom "$SBOM"

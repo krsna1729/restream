@@ -32,7 +32,7 @@ cargo rustc --profile "$PROFILE" --bin restream -- \
     -C link-arg=-no-pie
 
 BINARY="$CARGO_TARGET_DIR/$PROFILE/restream"
-SBOM="${RESTREAM_SBOM_PATH:-$ROOT/sbom/restream-runtime.cdx.json}"
+SBOM="${RESTREAM_SBOM_PATH:-$ROOT/dist/restream-runtime.cdx.json}"
 file "$BINARY"
 "$BUILD_ROOT/prefix/bin/restream-ffmpeg-capabilities"
 

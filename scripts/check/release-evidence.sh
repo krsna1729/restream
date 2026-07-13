@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 cd "$ROOT"
 ARCHIVE="${1:-}"
-SBOM="${2:-sbom/restream-runtime.cdx.json}"
+SBOM="${2:-dist/restream-runtime.cdx.json}"
 BINARY_BUNDLE="${3:-}"
 
 for command in cargo-audit cargo-deny grype trivy; do

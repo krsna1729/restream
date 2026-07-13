@@ -20,6 +20,7 @@ old/
 /logs/
 /media/
 /runtime/
+/dist/
 
 # Log files
 log/

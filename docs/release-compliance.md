@@ -28,11 +28,10 @@ into a temporary directory, starts only its `./run restream` launcher, and
 fetches `/login`, authenticated `/`, CSS, JavaScript, HLS, and logo assets so
 release CI proves the binary carries the embedded frontend instead of relying
 on the source tree's `public/` directory. Omitting the bundle retains a
-source-only certification form for development checks. The checked-in SBOM is
-a deterministic source snapshot generated with
-`restream --emit-sbom-deterministic`; certification writes its commit-specific
-SBOM to the supplied release path with `restream --emit-sbom` so its provenance
-does not dirty the checkout. A `v*`
+source-only certification form for development checks. Generated SBOMs are not
+checked into the repository: CI smoke-tests `restream --emit-sbom`, while
+release certification writes the commit-specific full-provenance SBOM to
+`dist/` from the exact bundled executable. A `v*`
 tag runs the artifact gate, the full bench-harness suite, and publishes the
 scratch OCI runtime archive, a checksummed Linux x86_64 bundle containing every
 supported executable plus its verified runtime closure, and the runtime SBOM.

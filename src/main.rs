@@ -8,8 +8,7 @@ fn main() {
     let mut args = std::env::args_os();
     let _program = args.next();
     if let Some(flag) = args.next() {
-        if flag == "--emit-sbom" || flag == "--emit-sbom-deterministic" {
-            let deterministic = flag == "--emit-sbom-deterministic";
+        if flag == "--emit-sbom" {
             let Some(path) = args.next() else {
                 print_usage_and_exit();
             };
@@ -17,7 +16,7 @@ fn main() {
                 print_usage_and_exit();
             }
             let path = std::path::Path::new(&path);
-            let result = restream::emit_sbom(path, deterministic);
+            let result = restream::emit_sbom(path);
             match result {
                 Ok(()) => {
                     println!("updated {}", path.display());
@@ -54,7 +53,7 @@ fn main() {
 }
 
 fn print_usage_and_exit() -> ! {
-    eprintln!("usage: restream [--emit-sbom <path> | --emit-sbom-deterministic <path>]");
+    eprintln!("usage: restream [--emit-sbom <path>]");
     std::process::exit(2);
 }
 

@@ -48,10 +48,7 @@ fi
 RESTREAM_BUILD_ROOT="$BUILD_ROOT" cargo build "${cargo_args[@]}" "${build_targets[@]}" "${feature_args[@]}"
 
 BINARY="${CARGO_TARGET_DIR:-$ROOT/target}/$binary_dir/restream"
-# The checked-in SBOM is a source-distribution snapshot. Release certification
-# writes a commit-specific SBOM to dist/ instead, because its provenance fields
-# intentionally change on every tag.
-SBOM="${RESTREAM_SBOM_PATH:-$ROOT/sbom/restream-runtime.cdx.json}"
+SBOM="${RESTREAM_SBOM_PATH:-$ROOT/dist/restream-runtime.cdx.json}"
 file "$BINARY"
 
 ldd_output="$(ldd "$BINARY" 2>&1 || true)"
