@@ -329,8 +329,15 @@ jobs:
         run: npm run build:frontend
       - name: Build release binary
         run: scripts/build/resource-limit.sh cargo build --release
+      - name: Seed media library
+        run: |
+          mkdir -p .local/e2e/media .local/e2e/logs
+          cp test/fixtures/media-library/colorbar-timer-2v16a.mp4 .local/e2e/media/
       - name: Start app
         env:
+          RESTREAM_DB_PATH: .local/e2e/restream.db
+          RESTREAM_MEDIA_DIR: .local/e2e/media
+          RESTREAM_LOG_DIR: .local/e2e/logs
           RESTREAM_INITIAL_ADMIN_PASSWORD: admin
         run: ./target/release/restream &
       - name: Wait for app
