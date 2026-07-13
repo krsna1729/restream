@@ -19,6 +19,13 @@ pub(crate) async fn wait_for_outputs_progress_with_env(
     mixed_env: Option<&MixedEnv>,
 ) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
+    let started = Instant::now();
+    let mut next_log = started + Duration::from_secs(10);
+    println!(
+        "[harness-progress] outputs-progress start pipeline={pipeline_id} outputs={} timeout={}s",
+        output_ids.len(),
+        timeout.as_secs()
+    );
     loop {
         let health = api.get_json("/api/v1/engine/health").await?;
         let mut progressed = 0usize;
@@ -77,7 +84,27 @@ pub(crate) async fn wait_for_outputs_progress_with_env(
             }
         }
         if progressed == output_ids.len() {
+            println!(
+                "[harness-progress] outputs-progress pass pipeline={pipeline_id} outputs={}/{} elapsed={}s",
+                progressed,
+                output_ids.len(),
+                started.elapsed().as_secs()
+            );
             return Ok(());
+        }
+        if Instant::now() >= next_log {
+            let first_stalled = stalled
+                .first()
+                .map(|entry| entry.lines().next().unwrap_or("unknown"))
+                .unwrap_or("none");
+            println!(
+                "[harness-progress] outputs-progress wait pipeline={pipeline_id} outputs={}/{} elapsed={}s remaining={}s firstStalled={first_stalled}",
+                progressed,
+                output_ids.len(),
+                started.elapsed().as_secs(),
+                deadline.saturating_duration_since(Instant::now()).as_secs()
+            );
+            next_log += Duration::from_secs(10);
         }
         if Instant::now() >= deadline {
             let stage_diagnostics = pipeline_stage_diagnostics(api, pipeline_id)

@@ -300,6 +300,33 @@ fn harness_progress_status_consumes_existing_fields() {
         source.contains("timed out waiting for outputs to make progress"),
         "progress deadline failures should call out timeout explicitly"
     );
+    assert!(
+        source.contains("[harness-progress] outputs-progress start")
+            && source.contains("[harness-progress] outputs-progress wait")
+            && source.contains("[harness-progress] outputs-progress pass"),
+        "live harness output waits should emit coarse progress in CI logs"
+    );
+}
+
+#[test]
+fn ingest_waits_emit_live_progress_markers() {
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/bin/test_harness/live_modes.rs"
+    ));
+
+    assert!(
+        source.contains("[harness-progress] input-live start")
+            && source.contains("[harness-progress] input-live wait")
+            && source.contains("[harness-progress] input-live pass"),
+        "input-live waits should emit coarse progress in CI logs"
+    );
+    assert!(
+        source.contains("[harness-progress] input-media-ready start")
+            && source.contains("[harness-progress] input-media-ready wait")
+            && source.contains("[harness-progress] input-media-ready pass"),
+        "media-ready waits should emit coarse progress in CI logs"
+    );
 }
 
 #[test]

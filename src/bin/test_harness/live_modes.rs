@@ -403,6 +403,12 @@ pub(crate) async fn wait_for_api_input_live(
     timeout: Duration,
 ) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
+    let started = Instant::now();
+    let mut next_log = started + Duration::from_secs(10);
+    println!(
+        "[harness-progress] input-live start pipeline={pipeline_id} timeout={}s",
+        timeout.as_secs()
+    );
     loop {
         if let Ok(health) = api.get_json("/api/v1/engine/health").await
             && health["pipelines"][pipeline_id]["input"]["status"] == "on"
@@ -411,7 +417,19 @@ pub(crate) async fn wait_for_api_input_live(
                 .unwrap_or(0)
                 > 0
         {
+            println!(
+                "[harness-progress] input-live pass pipeline={pipeline_id} elapsed={}s",
+                started.elapsed().as_secs()
+            );
             return Ok(());
+        }
+        if Instant::now() >= next_log {
+            println!(
+                "[harness-progress] input-live wait pipeline={pipeline_id} elapsed={}s remaining={}s",
+                started.elapsed().as_secs(),
+                deadline.saturating_duration_since(Instant::now()).as_secs()
+            );
+            next_log += Duration::from_secs(10);
         }
         if Instant::now() >= deadline {
             return Err(format!(
@@ -429,7 +447,13 @@ pub(crate) async fn wait_for_api_input_media_ready(
     timeout: Duration,
 ) -> Result<Value, String> {
     let deadline = Instant::now() + timeout;
+    let started = Instant::now();
+    let mut next_log = started + Duration::from_secs(10);
     let mut last_snapshot = Value::Null;
+    println!(
+        "[harness-progress] input-media-ready start pipeline={pipeline_id} timeout={}s",
+        timeout.as_secs()
+    );
 
     loop {
         if let Ok(health) = api.get_json("/api/v1/engine/health").await {
@@ -445,9 +469,29 @@ pub(crate) async fn wait_for_api_input_media_ready(
                     .map(|tracks| !tracks.is_empty())
                     .unwrap_or(false);
                 if input_live && has_video && has_audio {
+                    println!(
+                        "[harness-progress] input-media-ready pass pipeline={pipeline_id} elapsed={}s",
+                        started.elapsed().as_secs()
+                    );
                     return Ok(snapshot);
                 }
             }
+        }
+        if Instant::now() >= next_log {
+            let input = &last_snapshot["input"];
+            println!(
+                "[harness-progress] input-media-ready wait pipeline={pipeline_id} elapsed={}s remaining={}s status={} bytes={} video={} audioTracks={}",
+                started.elapsed().as_secs(),
+                deadline.saturating_duration_since(Instant::now()).as_secs(),
+                input["status"].as_str().unwrap_or("unknown"),
+                input["bytesReceived"].as_u64().unwrap_or(0),
+                !input["video"].is_null(),
+                input["audioTracks"]
+                    .as_array()
+                    .map(|tracks| tracks.len())
+                    .unwrap_or(0)
+            );
+            next_log += Duration::from_secs(10);
         }
         if Instant::now() >= deadline {
             return Err(format!(
