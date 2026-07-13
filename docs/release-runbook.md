@@ -27,6 +27,12 @@ behind the full harness matrix. If a future plan or repository policy lowers
 that concurrency, change only the workflow cap; shard ownership remains in the
 script.
 
+Each shard has a script-owned timeout so a stuck runner leg fails with a clear
+`TIMEOUT` instead of consuming the full GitHub job limit: small and bitrate
+shards use 10 minutes, heavier mixed/resource/recovery shards use 15 minutes,
+and unknown future shards fall back to 20 minutes. The workflow job timeout is
+slightly higher so artifacts can still upload after the script exits.
+
 ## 1. Run local due diligence
 
 Use a release-style version string, usually the tag you intend to publish:

@@ -45,7 +45,7 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 head_sha="$(git rev-parse HEAD)"
-run_json="$(gh run view "$RUN_ID" --json status,conclusion,headSha,workflowName,event,url)"
+run_json="$(gh run view "$RUN_ID" --json status,conclusion,headSha,workflowName,event,url,jobs)"
 status="$(jq -r '.status' <<<"$run_json")"
 conclusion="$(jq -r '.conclusion' <<<"$run_json")"
 run_sha="$(jq -r '.headSha' <<<"$run_json")"
@@ -65,6 +65,13 @@ if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
     echo "tag-and-publish: dry-run is not green: status=$status conclusion=$conclusion url=$url" >&2
     exit 1
 fi
+for required_job in "Package and release evidence" "Certify release dry-run"; do
+    job_conclusion="$(jq -r --arg name "$required_job" '[.jobs[] | select(.name == $name) | .conclusion][0] // "missing"' <<<"$run_json")"
+    if [[ "$job_conclusion" != "success" ]]; then
+        echo "tag-and-publish: required release job '$required_job' was '$job_conclusion', expected success: $url" >&2
+        exit 1
+    fi
+done
 if [[ "$run_sha" != "$head_sha" ]]; then
     echo "tag-and-publish: dry-run SHA $run_sha does not match HEAD $head_sha" >&2
     exit 1

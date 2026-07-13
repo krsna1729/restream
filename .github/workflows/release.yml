@@ -57,6 +57,7 @@ jobs:
     name: Full live harness (${{ matrix.shard }})
     runs-on: ubuntu-latest
     needs: prepare-build
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       # GitHub Free currently allows 20 standard hosted jobs concurrently.
