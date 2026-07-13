@@ -116,6 +116,10 @@ name = "codec_conversions"
 harness = false
 
 [[bench]]
+name = "rtmp_serializer"
+harness = false
+
+[[bench]]
 name = "stage_metrics"
 harness = false
 

@@ -351,7 +351,7 @@ impl Default for AppConfig {
             rtmp_handshake_timeout_ms: 10_000,
             rtmp_preauth_buffer_bytes: 128 * 1024,
             rtmp_stream_buffer_bytes: 8 * 1024 * 1024,
-            rtmp_egress_chunk_size: 4096,
+            rtmp_egress_chunk_size: 16 * 1024,
             ffmpeg_threads: None,
             avio_capacity: 512 * 1024,
             hls_min_segment_ms: 1.0,
@@ -398,7 +398,7 @@ impl AppConfig {
             env_usize("RESTREAM_RTMP_STREAM_BUFFER_BYTES", 8 * 1024 * 1024)
                 .clamp(128 * 1024, 64 * 1024 * 1024);
         let rtmp_egress_chunk_size =
-            env_u32("RESTREAM_RTMP_EGRESS_CHUNK_SIZE", 4096).clamp(128, 1024 * 1024);
+            env_u32("RESTREAM_RTMP_EGRESS_CHUNK_SIZE", 16 * 1024).clamp(128, 1024 * 1024);
         let ffmpeg_threads = std::env::var("RESTREAM_EXTERNAL_FFMPEG_THREADS")
             .ok()
             .and_then(|v| v.parse::<u32>().ok());
