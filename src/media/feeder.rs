@@ -511,7 +511,7 @@ mod tests {
         ));
         std::fs::write(&output_path, &output).expect("remuxed fixture must be writable");
 
-        let ffmpeg = std::process::Command::new("ffmpeg")
+        let ffmpeg = std::process::Command::new(crate::ffmpeg_extract::ensure_ffmpeg_extracted())
             .args(["-nostdin", "-hide_banner", "-v", "warning", "-i"])
             .arg(&output_path)
             .args(["-t", "5", "-map", "0", "-f", "null", "-"])

@@ -422,9 +422,9 @@ FFMPEG_FINGERPRINT="$(
             --enable-swresample \
             --enable-protocol=file,pipe \
             --enable-demuxer=mpegts,matroska,mov \
-            --enable-muxer=mpegts,matroska,mov \
+            --enable-muxer=mpegts,matroska,mov,null \
             --enable-decoder=h264,hevc,aac,mp3,ac3,eac3 \
-            --enable-encoder=aac,ac3,libx264,libx265 \
+            --enable-encoder=aac,ac3,libx264,libx265,wrapped_avframe,pcm_s16le \
             --enable-parser=h264,hevc,aac,ac3 \
             --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc \
             --enable-filter=scale,crop,transpose,format,aformat,aresample,pan
@@ -459,9 +459,9 @@ if ! stamp_matches "$FFMPEG_STAMP" "$FFMPEG_FINGERPRINT" ||
         --enable-swresample \
         --enable-protocol=file,pipe \
         --enable-demuxer=mpegts,matroska,mov \
-        --enable-muxer=mpegts,matroska,mov \
+        --enable-muxer=mpegts,matroska,mov,null \
         --enable-decoder=h264,hevc,aac,mp3,ac3,eac3 \
-        --enable-encoder=aac,ac3,libx264,libx265 \
+        --enable-encoder=aac,ac3,libx264,libx265,wrapped_avframe,pcm_s16le \
         --enable-parser=h264,hevc,aac,ac3 \
         --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc \
         --enable-filter=scale,crop,transpose,format,aformat,aresample,pan
@@ -534,9 +534,9 @@ if ! stamp_matches "$FFMPEG_BIN_STAMP" "$FFMPEG_FINGERPRINT" ||
         --enable-swresample \
         --enable-protocol=file,pipe \
         --enable-demuxer=mpegts,matroska,mov \
-        --enable-muxer=mpegts,matroska,mov \
+        --enable-muxer=mpegts,matroska,mov,null \
         --enable-decoder=h264,hevc,aac,mp3,ac3,eac3 \
-        --enable-encoder=aac,ac3,libx264,libx265 \
+        --enable-encoder=aac,ac3,libx264,libx265,wrapped_avframe,pcm_s16le \
         --enable-parser=h264,hevc,aac,ac3 \
         --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc \
         --enable-filter=scale,crop,transpose,format,aformat,aresample,pan

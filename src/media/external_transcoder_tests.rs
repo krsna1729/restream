@@ -1910,8 +1910,9 @@ fn feeder_remuxed_single_audio_hevc_fixture_decodes_as_ts_file() {
     );
 
     let ts_path = write_temp_ts_artifact("hevc-feeder-remux", &ts_bytes);
-    let output = std::process::Command::new("ffmpeg")
+    let output = std::process::Command::new(crate::ffmpeg_extract::ensure_ffmpeg_extracted())
         .args([
+            "-nostdin",
             "-v",
             "error",
             "-i",
