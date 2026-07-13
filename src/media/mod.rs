@@ -28,6 +28,7 @@ pub mod recording;
 pub mod ring_buffer;
 pub mod rtmp;
 pub mod security;
+pub mod snapshots;
 pub mod srt;
 pub mod stage_lifecycle;
 pub mod stage_metrics;

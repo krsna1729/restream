@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use crate::runtime::snapshots::{
+use crate::media::snapshots::{
     EgressDiagSnapshot, FileIngestDependencySnapshot, HlsDependencySnapshot, IngestDiagSnapshot,
     RingBufferDiagSnapshot, SrtListenerDiagSnapshot,
 };
