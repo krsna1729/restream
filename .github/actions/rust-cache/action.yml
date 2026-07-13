@@ -6,7 +6,7 @@ runs:
   steps:
     - uses: Swatinem/rust-cache@v2
       with:
-        shared-key: ${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'Cargo.toml', 'build.rs', '.cargo/config.toml') }}
+        shared-key: restream-${{ runner.os }}-${{ runner.arch }}
         cache-targets: true
         cache-all-crates: true
         workspaces: |
