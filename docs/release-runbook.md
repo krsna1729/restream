@@ -20,13 +20,28 @@ CI may take longer the first time a worker misses the native static dependency c
 The GitHub release workflow keeps the full live harness coverage, but it does
 not run the old monolithic suite in one job. It builds the canonical bench
 harness binaries once, uploads them as a short-lived artifact, then fans out
-stable shard names through `scripts/release/harness-shard.sh`. GitHub Free
-standard hosted runners allow more concurrency than we use here, but the
-workflow caps the matrix at 12 to avoid every shard hitting apt, artifact
-download, and MediaMTX bootstrap at once. Packaging/evidence stays behind the
-full harness matrix. If a future plan or repository policy changes the
+stable shard names through `scripts/release/harness-shard.sh`. Each shard runs
+inside the prebuilt `ci-harness-runtime` Docker target through
+`scripts/ci/run-harness-shard-in-runtime.sh`, so apt and the pinned MediaMTX
+download happen when the CI runtime image is published, not once per shard.
+GitHub Free standard hosted runners allow more concurrency than we use here,
+but the workflow caps the matrix at 12 to smooth artifact downloads and live
+process startup without serializing the suite. Packaging/evidence stays behind
+the full harness matrix. If a future plan or repository policy changes the
 concurrency, change only the workflow cap; shard ownership remains in
 `scripts/lib/release-shards.sh`.
+
+Refresh the CI harness runtime image after changing Docker/runtime bootstrap
+inputs:
+
+```sh
+gh workflow run ci-harness-runtime-image.yml --ref <release-branch>
+```
+
+The image is published as
+`ghcr.io/krsna1729/restream-ci-harness-runtime:ubuntu24`. The Release workflow
+expects this image to exist before a dry-run; if the image pull fails, publish
+the runtime image first rather than falling back to per-shard apt installs.
 
 Each shard has a script-owned timeout so a stuck runner leg fails with a clear
 `TIMEOUT` instead of consuming the full GitHub job limit. The buckets are grouped
@@ -38,13 +53,14 @@ timeout is slightly higher so artifacts can still upload after the script exits.
 Inspect the catalog with `scripts/release/harness-shard.sh list`, and inspect a
 single shard with `scripts/release/harness-shard.sh explain <shard>`.
 Setup is bounded separately: CI system dependency installation retries apt
-operations and wraps the runtime MediaMTX bootstrap with a short timeout, so a
-single wedged hosted runner fails in setup instead of looking like a harness
-hang.
+operations and wraps MediaMTX bootstrap with a short timeout, so a single wedged
+hosted runner fails in setup instead of looking like a harness hang. Release
+harness shards should not use that path; they should run in the CI harness
+runtime image so setup stalls cannot masquerade as harness failures.
 Release CI uses the same script-owned dependency profiles as local setup: build
-jobs install only the Rust/native build group, while full live harness shards
-install only the runtime harness group plus pinned MediaMTX. Keep package names
-in `scripts/lib/debian-packages.sh`; workflows and wrapper scripts should select
+jobs install only the Rust/native build group, while the CI harness image is
+built from the runtime harness group plus pinned MediaMTX. Keep package names in
+`scripts/lib/debian-packages.sh`; workflows and wrapper scripts should select
 profiles, not maintain package lists.
 
 ## 1. Run local due diligence

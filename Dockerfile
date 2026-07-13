@@ -34,11 +34,12 @@ ENV RESTREAM_REPO_ROOT=/workspace
 # do not invalidate this expensive stage.
 COPY package.json package-lock.json ./
 COPY rust-toolchain.toml rust-toolchain.toml
-COPY scripts/dev/bootstrap.sh scripts/dev/bootstrap.sh
-COPY scripts/dev/harness-host-prereqs.sh scripts/dev/harness-host-prereqs.sh
-COPY scripts/dev/install-git-hooks.sh scripts/dev/install-git-hooks.sh
-COPY scripts/build/resource-limit.sh scripts/build/resource-limit.sh
-COPY scripts/build/native-deps.sh scripts/build/native-deps.sh
+COPY scripts/lib/ scripts/lib/
+# Keep this stage script-aware but not script-global: copying all of scripts/
+# would make unrelated release/harness/frontend helper edits rebuild the static
+# native prefix. Add only bootstrap/native-build owners here.
+COPY scripts/dev/bootstrap.sh scripts/dev/harness-host-prereqs.sh scripts/dev/install-git-hooks.sh scripts/dev/
+COPY scripts/build/resource-limit.sh scripts/build/native-deps.sh scripts/build/
 COPY scripts/build/native/ scripts/build/native/
 COPY scripts/native/ scripts/native/
 COPY .githooks/ .githooks/
@@ -90,9 +91,7 @@ ENV RESTREAM_BUILD_GIT_COMMIT=${RESTREAM_BUILD_GIT_COMMIT} \
     RESTREAM_BUILD_TIMESTAMP=${RESTREAM_BUILD_TIMESTAMP} \
     RESTREAM_SKIP_SBOM=1
 
-COPY scripts/build/app-native.sh scripts/build/app-native.sh
-COPY scripts/build/bench-harness.sh scripts/build/bench-harness.sh
-COPY scripts/build/runtime-rootfs.sh scripts/build/runtime-rootfs.sh
+COPY scripts/build/app-native.sh scripts/build/bench-harness.sh scripts/build/runtime-rootfs.sh scripts/build/
 
 # Warm the release dependency graph without copying the real application code.
 # The dummy main compiles the full dependency set into .local/build/static/cargo-target
@@ -183,14 +182,29 @@ USER 1000:1000
 ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
 ENTRYPOINT ["/restream"]
 
-# ── Stage 5: live-harness image ──────────────────────────────────────────────
+# ── Stage 5: CI/live-harness runtime images ──────────────────────────────────
+#
+# This target is intentionally source-light: it carries only the host tools the
+# live harness invokes (FFmpeg/ffprobe, MediaMTX, networking utilities, SQLite,
+# certificates). GitHub release shards mount a checked-out repo plus prepared
+# bench binaries into this image, so package installation happens once when the
+# CI runtime image is published instead of once per matrix shard.
+FROM ubuntu:24.04 AS ci-harness-runtime
+
+WORKDIR /workspace
+ENV RESTREAM_REPO_ROOT=/workspace
+COPY scripts/lib/ scripts/lib/
+COPY scripts/dev/bootstrap-runtime.sh scripts/dev/harness-host-prereqs.sh scripts/dev/
+RUN scripts/dev/bootstrap-runtime.sh --skip-harness-host-check
+
+# ── Stage 6: live-harness image ──────────────────────────────────────────────
 #
 # Build explicitly with the same provenance args documented in README.md:
 # `docker build --build-arg RESTREAM_BUILD_GIT_COMMIT=... --build-arg RESTREAM_BUILD_TIMESTAMP=... --target harness -t restream:harness .`.
 # It contains every generated executable used in live validation (`restream`,
 # bench-profile `test_harness`, and the embedded static FFmpeg), the pinned
 # MediaMTX peer, committed fixtures, and only the OS tools the harness invokes.
-FROM ubuntu:24.04 AS harness
+FROM ci-harness-runtime AS harness
 
 WORKDIR /workspace
 ARG RESTREAM_BUILD_GIT_COMMIT
@@ -199,9 +213,6 @@ LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
     org.opencontainers.image.revision="${RESTREAM_BUILD_GIT_COMMIT}" \
     org.opencontainers.image.created="${RESTREAM_BUILD_TIMESTAMP}" \
     org.opencontainers.image.licenses="MIT AND GPL-2.0-or-later AND MPL-2.0 AND Apache-2.0"
-COPY scripts/dev/bootstrap-runtime.sh scripts/dev/bootstrap-runtime.sh
-COPY scripts/dev/harness-host-prereqs.sh scripts/dev/harness-host-prereqs.sh
-RUN scripts/dev/bootstrap-runtime.sh --skip-harness-host-check
 COPY --from=harness-build /workspace/target/bench/restream /workspace/target/bench/restream
 COPY --from=harness-build /workspace/target/bench/test_harness /workspace/target/bench/test_harness
 COPY --from=harness-build /workspace/public/bin/ffmpeg /workspace/public/bin/ffmpeg

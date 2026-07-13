@@ -20,6 +20,10 @@ env:
   # not a valid package version/path. Give non-tag evidence a stable,
   # filename-safe local label while preserving the exact v* release tag.
   RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.0.0-ci-{0}', github.run_number) }}
+  # Live harness shards run inside this prebuilt runtime image so the matrix
+  # does not repeat apt/MediaMTX setup. Keep its contents in Dockerfile +
+  # scripts/dev/bootstrap-runtime.sh, not in release.yml.
+  RESTREAM_CI_HARNESS_IMAGE: ghcr.io/${{ github.repository }}-ci-harness-runtime:ubuntu24
 
 jobs:
   prepare-build:
@@ -94,8 +98,6 @@ jobs:
           - fault.resilience
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/system-deps
-        with: { profile: harness-runtime }
       - uses: actions/download-artifact@v8
         with:
           name: release-harness-bin-${{ github.sha }}
@@ -108,7 +110,8 @@ jobs:
       - name: Run full release harness shard
         env:
           BENCH_BUILD: never
-        run: scripts/release/harness-shard.sh "${{ matrix.shard }}"
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci/run-harness-shard-in-runtime.sh "${{ matrix.shard }}"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

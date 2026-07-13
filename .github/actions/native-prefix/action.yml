@@ -13,7 +13,7 @@ runs:
           .local/build/static/env.sh
           .local/build/static/ffmpeg-standalone-build
           public/bin/ffmpeg
-        key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/native/native-inputs.lock', 'scripts/native/mbedtls-config-srt.h', 'test/native/ffmpeg-capabilities.c') }}
+        key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/lib/common.sh', 'scripts/lib/debian-packages.sh', 'scripts/build/native/native-inputs.lock', 'scripts/native/mbedtls-config-srt.h', 'test/native/ffmpeg-capabilities.c') }}
         restore-keys: |
           static-prefix-${{ runner.os }}-${{ runner.arch }}-
     - name: Report native prefix cache state

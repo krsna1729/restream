@@ -1,0 +1,42 @@
+name: CI harness runtime image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - feat/rust-backend-rewrite-v2
+    paths:
+      - Dockerfile
+      - scripts/dev/bootstrap-runtime.sh
+      - scripts/dev/harness-host-prereqs.sh
+      - scripts/lib/**
+      - .github/workflows/ci-harness-runtime-image.yml
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  RESTREAM_CI_HARNESS_IMAGE: ghcr.io/${{ github.repository }}-ci-harness-runtime:ubuntu24
+
+jobs:
+  publish:
+    name: Publish CI harness runtime image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and push runtime image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker pull "$RESTREAM_CI_HARNESS_IMAGE" || true
+          docker build \
+            --target ci-harness-runtime \
+            --cache-from "$RESTREAM_CI_HARNESS_IMAGE" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -t "$RESTREAM_CI_HARNESS_IMAGE" \
+            .
+          docker push "$RESTREAM_CI_HARNESS_IMAGE"
