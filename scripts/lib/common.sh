@@ -48,6 +48,22 @@ restream_with_timeout() {
     timeout --kill-after="${RESTREAM_TIMEOUT_KILL_AFTER:-30s}" "$limit" "$@"
 }
 
+restream_with_timeout_as_root() {
+    local label=$1
+    local limit=$2
+    shift 2
+    restream_with_timeout "$label" "$limit" bash -c '
+        if [[ "$(id -u)" -eq 0 ]]; then
+            exec "$@"
+        elif command -v sudo >/dev/null 2>&1; then
+            exec sudo "$@"
+        else
+            echo "need sudo to run as root: $*" >&2
+            exit 1
+        fi
+    ' bash "$@"
+}
+
 restream_retry() {
     local label=$1
     local attempts=$2

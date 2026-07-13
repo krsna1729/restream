@@ -108,11 +108,11 @@ restream_debian_install_packages() {
     local apt_retry_delay="${RESTREAM_APT_RETRY_DELAY:-5}"
 
     restream_retry "apt-get update" "$apt_attempts" "$apt_retry_delay" \
-        restream_with_timeout "apt-get update" "$apt_timeout" \
-        restream_run_as_root apt-get update -qq
+        restream_with_timeout_as_root "apt-get update" "$apt_timeout" \
+        apt-get update -qq
     restream_retry "apt-get install" "$apt_attempts" "$apt_retry_delay" \
-        restream_with_timeout "apt-get install" "$apt_timeout" \
-        restream_run_as_root apt-get install -y -qq "${missing[@]}"
+        restream_with_timeout_as_root "apt-get install" "$apt_timeout" \
+        apt-get install -y -qq "${missing[@]}"
 }
 
 restream_debian_install_groups() {
