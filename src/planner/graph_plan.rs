@@ -462,5 +462,108 @@ mod tests {
                 );
             }
         }
+
+        #[test]
+        fn plan_hls_output_graph_preserves_protocol_segmenter_invariants(
+            ingest_is_hevc in any::<bool>(),
+            video_case in 0_u8..3,
+            audio_case in 0_u8..3,
+        ) {
+            let output = output_for_case(0, video_case, audio_case, 2);
+            let policy = BackendPolicy::default();
+            let ingest_codec = if ingest_is_hevc { Some("hevc") } else { Some("h264") };
+            let plan = plan_hls_output_graph("pipe_prop", ingest_codec, &output, &policy);
+            let stage_keys = plan
+                .stages
+                .iter()
+                .map(|stage| stage.key.clone())
+                .collect::<HashSet<_>>();
+
+            prop_assert_eq!(
+                plan.role,
+                GraphRole::HlsOutput {
+                    output_id: OutputId::new("out_0")
+                }
+            );
+            let terminal_is_hls_segmenter =
+                matches!(plan.terminal_stage.kind, StageKind::HlsSegmenter { .. });
+            prop_assert!(terminal_is_hls_segmenter);
+            prop_assert!(stage_keys.contains(&plan.terminal_stage));
+            prop_assert_eq!(stage_keys.len(), plan.stages.len(), "stage keys must be unique");
+            prop_assert!(
+                plan.stages.iter().any(|stage| {
+                    stage.key == plan.terminal_stage && stage.backend == StageBackend::HlsSegmenter
+                }),
+                "terminal HLS protocol stage must use HLS segmenter backend"
+            );
+            prop_assert!(
+                plan.edges.iter().any(|edge| edge.to == plan.terminal_stage),
+                "HLS terminal stage must have an input edge"
+            );
+
+            if ingest_is_hevc {
+                for stage in &plan.stages {
+                    prop_assert!(
+                        !contains_unqualified_video_preset(&stage.kind),
+                        "HEVC HLS output plan leaked unqualified video stage {:?}",
+                        stage.kind
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn plan_hls_preview_graph_preserves_codec_specific_terminal_shape(
+            codec_case in 0_u8..3,
+        ) {
+            let codec = match codec_case {
+                0 => "h264",
+                1 => "hevc",
+                _ => "h265",
+            };
+            let policy = BackendPolicy::default();
+            let plan = plan_hls_preview_graph("pipe_prop", Some(codec), &policy)
+                .expect("known codec should produce a preview graph");
+            let stage_keys = plan
+                .stages
+                .iter()
+                .map(|stage| stage.key.clone())
+                .collect::<HashSet<_>>();
+
+            prop_assert_eq!(plan.role, GraphRole::HlsPreview);
+            let terminal_is_hls_segmenter =
+                matches!(plan.terminal_stage.kind, StageKind::HlsSegmenter { .. });
+            prop_assert!(terminal_is_hls_segmenter);
+            prop_assert!(stage_keys.contains(&plan.terminal_stage));
+            prop_assert_eq!(stage_keys.len(), plan.stages.len(), "stage keys must be unique");
+            let terminal_has_hls_backend = plan.stages.iter().any(|stage| {
+                stage.key == plan.terminal_stage && stage.backend == StageBackend::HlsSegmenter
+            });
+            prop_assert!(terminal_has_hls_backend);
+
+            let is_hevc = is_hevc_preview_codec(codec);
+            prop_assert_eq!(
+                plan.stages.iter().any(|stage| matches!(stage.kind, StageKind::Preview { .. })),
+                is_hevc,
+                "only HEVC preview should insert a preview transcode stage"
+            );
+            if is_hevc {
+                prop_assert!(
+                    plan.edges.iter().any(|edge| {
+                        matches!(edge.from.kind, StageKind::Preview { .. })
+                            && edge.to == plan.terminal_stage
+                    }),
+                    "HEVC preview segmenter should consume the preview stage"
+                );
+            } else {
+                prop_assert!(
+                    plan.edges.iter().any(|edge| {
+                        edge.from == StageKey::new("pipe_prop", StageKind::source())
+                            && edge.to == plan.terminal_stage
+                    }),
+                    "H.264 preview segmenter should consume source directly"
+                );
+            }
+        }
     }
 }

@@ -209,6 +209,21 @@ pub struct SrtMuxerReleaseResult {
 }
 
 impl SrtMuxerShardPool {
+    #[cfg(test)]
+    pub(crate) fn test_snapshot(
+        &self,
+    ) -> (
+        HashMap<String, SrtMuxerAssignment>,
+        Vec<usize>,
+        HashSet<usize>,
+    ) {
+        (
+            self.assignments.clone(),
+            self.shard_occupancy.clone(),
+            self.retiring_shards.clone(),
+        )
+    }
+
     pub fn assign(
         &mut self,
         output_id: &str,

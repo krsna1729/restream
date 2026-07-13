@@ -140,6 +140,7 @@ pub fn ext_stage_passthrough_probe_budget() -> (u64, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn srt_preroll_is_reserved_for_hd_presets_by_dimensions() {
@@ -340,5 +341,58 @@ mod tests {
             }),
             (1_000_000, EXT_STAGE_PROBE_SIZE_BYTES_MAX)
         );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn proptest_external_stage_probe_budget_stays_bounded_and_formula_driven(
+            codec_is_hevc in any::<bool>(),
+            include_audio in any::<bool>(),
+            audio_track_count in 0usize..=128,
+            passthrough in any::<bool>(),
+            observed_bitrate_bps in prop::option::of(0u64..=80_000_000),
+        ) {
+            let codec = if codec_is_hevc {
+                VideoCodecKind::Hevc
+            } else {
+                VideoCodecKind::H264
+            };
+            let context = ExtStageProbeContext {
+                codec,
+                include_audio,
+                audio_track_count,
+                passthrough,
+                observed_bitrate_bps,
+            };
+            let (analyze_duration_us, probe_size_bytes) = ext_stage_probe_budget_for(context);
+
+            prop_assert_eq!(analyze_duration_us, 1_000_000);
+            prop_assert!(probe_size_bytes <= EXT_STAGE_PROBE_SIZE_BYTES_MAX);
+
+            let base_probe_size = if codec.is_hevc() || passthrough {
+                EXT_STAGE_PROBE_SIZE_BYTES_HEVC
+            } else {
+                EXT_STAGE_PROBE_SIZE_BYTES_DEFAULT
+            };
+            let expected = if let Some(bitrate_bps) = observed_bitrate_bps {
+                bitrate_bps
+                    .saturating_mul(analyze_duration_us)
+                    .div_ceil(8 * 1_000_000)
+                    .saturating_mul(EXT_STAGE_PROBE_RATE_MARGIN_NUMERATOR)
+                    .div_ceil(EXT_STAGE_PROBE_RATE_MARGIN_DENOMINATOR) as usize
+            } else {
+                let audio_tracks = if include_audio { audio_track_count } else { 0 };
+                base_probe_size.saturating_add(
+                    audio_tracks
+                        .saturating_sub(1)
+                        .saturating_mul(EXT_STAGE_PROBE_SIZE_BYTES_AUDIO_TRACK),
+                )
+            }
+            .min(EXT_STAGE_PROBE_SIZE_BYTES_MAX);
+
+            prop_assert_eq!(probe_size_bytes, expected);
+        }
     }
 }

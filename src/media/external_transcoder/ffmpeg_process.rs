@@ -443,6 +443,7 @@ mod tests {
     use crate::domain::transcode_profile::TranscodeProfile;
     use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
     use crate::media::mpegts::TsDemuxer;
+    use proptest::prelude::*;
     use std::sync::{Mutex, MutexGuard};
 
     static PROFILE_CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -471,6 +472,67 @@ mod tests {
             .position(|arg| arg == flag)
             .unwrap_or_else(|| panic!("missing ffmpeg arg {flag}"));
         &args[pos + 1]
+    }
+
+    fn preset_for_probe_property(case: u8, audio_track_count: usize) -> String {
+        match case % 6 {
+            0 => "720p".to_string(),
+            1 => "1080p".to_string(),
+            2 => "source".to_string(),
+            3 => format!("downmix:{}", audio_track_count.saturating_sub(1)),
+            4 => format!("remap:0:1:{}", audio_track_count.saturating_sub(1)),
+            _ => "audio:atrack:0:from:720p".to_string(),
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(96))]
+
+        #[test]
+        fn proptest_stage_args_probe_flags_follow_startup_policy(
+            preset_case in 0u8..12,
+            input_codec_is_hevc in any::<bool>(),
+            probe_codec_is_hevc in any::<bool>(),
+            include_audio in any::<bool>(),
+            audio_track_count in 0usize..=64,
+            observed_bitrate_bps in prop::option::of(0u64..=80_000_000),
+        ) {
+            let input_codec = if input_codec_is_hevc { "hevc" } else { "h264" };
+            let probe_codec = if probe_codec_is_hevc { "hevc" } else { "h264" };
+            let preset = preset_for_probe_property(preset_case, audio_track_count);
+            let args = build_stage_ffmpeg_args_for_observed_input_streams(
+                &preset,
+                input_codec,
+                probe_codec,
+                include_audio,
+                audio_track_count,
+                observed_bitrate_bps,
+            );
+
+            let stage_spec = StagePresetSpec::parse(&preset);
+            let audio_routing = stage_audio_routing(&preset);
+            let full_stream_passthrough =
+                matches!(stage_spec.video_encoding(), "source" | "") && audio_routing.is_none();
+            let probed_audio_track_count =
+                probe_audio_track_count(&audio_routing, include_audio, audio_track_count);
+            let (expected_analyze_duration_us, expected_probe_size_bytes) =
+                startup_policy::ext_stage_probe_budget_for(startup_policy::ExtStageProbeContext {
+                    codec: VideoCodecKind::from_codec_name(probe_codec),
+                    include_audio,
+                    audio_track_count: probed_audio_track_count,
+                    passthrough: full_stream_passthrough,
+                    observed_bitrate_bps,
+                });
+
+            prop_assert_eq!(
+                arg_after(&args, "-analyzeduration"),
+                expected_analyze_duration_us.to_string()
+            );
+            prop_assert_eq!(
+                arg_after(&args, "-probesize"),
+                expected_probe_size_bytes.to_string()
+            );
+        }
     }
 
     #[test]
