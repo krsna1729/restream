@@ -2,6 +2,7 @@ use super::flv::{BitReader, parse_sps_video_info, sps_dimensions};
 use super::*;
 use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
 use crate::media::ring_buffer::{MediaType, RingBuffer};
+use proptest::prelude::*;
 
 #[tokio::test]
 async fn client_handshake_can_be_bounded_when_peer_is_silent() {
@@ -86,6 +87,32 @@ fn rtmp_video_droppability_matches_rml_contract() {
         !rtmp_video_packet_can_be_dropped(&[0x12, 0x01], false),
         "unclassified video payloads must fail closed until a future drop policy can prove safety"
     );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    #[test]
+    fn proptest_rtmp_video_droppability_fails_closed(
+        mut payload in proptest::collection::vec(any::<u8>(), 0..32),
+        is_keyframe in any::<bool>(),
+    ) {
+        let expected = !is_keyframe
+            && payload.len() >= 2
+            && matches!(payload[0] & 0x0f, 7 | 12)
+            && payload[1] != 0
+            && (payload[0] >> 4) != 1;
+
+        prop_assert_eq!(rtmp_video_packet_can_be_dropped(&payload, is_keyframe), expected);
+
+        if !payload.is_empty() {
+            payload[0] = (payload[0] & 0xf0) | 0x02;
+            prop_assert!(
+                !rtmp_video_packet_can_be_dropped(&payload, false),
+                "unknown FLV video codecs must not be marked droppable"
+            );
+        }
+    }
 }
 
 #[test]
@@ -718,6 +745,32 @@ fn parses_signed_flv_video_composition_time() {
     assert_eq!(flv_video_composition_time_ms(&[0xaf, 0x01, 0, 0, 40]), 0);
 }
 
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    #[test]
+    fn proptest_flv_video_composition_time_sign_extends_signed_24bit(
+        composition_time in -8_388_608i32..=8_388_607,
+    ) {
+        let encoded = (composition_time & 0x00ff_ffff) as u32;
+        let payload = [
+            0x27,
+            0x01,
+            ((encoded >> 16) & 0xff) as u8,
+            ((encoded >> 8) & 0xff) as u8,
+            (encoded & 0xff) as u8,
+        ];
+
+        prop_assert_eq!(flv_video_composition_time_ms(&payload), composition_time);
+
+        let sequence_header = [0x17, 0x00, payload[2], payload[3], payload[4]];
+        prop_assert_eq!(flv_video_composition_time_ms(&sequence_header), 0);
+
+        let audio_like = [0xaf, 0x01, payload[2], payload[3], payload[4]];
+        prop_assert_eq!(flv_video_composition_time_ms(&audio_like), 0);
+    }
+}
+
 #[test]
 fn sps_parser_1080p() {
     // Minimal SPS for 1920x1080 Baseline profile
@@ -1049,6 +1102,51 @@ fn rtmp_timestamp_guard_keeps_audio_and_video_independent() {
     assert_eq!(guard.enforce_ms(MediaType::Audio, 100), 100);
     assert_eq!(guard.enforce_ms(MediaType::Video, 100), 101);
     assert_eq!(guard.enforce_ms(MediaType::Audio, 100), 101);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    #[test]
+    fn proptest_rtmp_timestamp_guard_is_bounded_and_monotone_per_media(
+        events in proptest::collection::vec((any::<bool>(), -1_000i64..=(u32::MAX as i64 + 1_000)), 1..128),
+    ) {
+        let mut guard = RtmpTimestampGuard::new();
+        let mut expected_video = i64::MIN;
+        let mut expected_audio = i64::MIN;
+
+        for (is_video, input_ts) in events {
+            let media_type = if is_video {
+                MediaType::Video
+            } else {
+                MediaType::Audio
+            };
+            let expected_slot = if is_video {
+                &mut expected_video
+            } else {
+                &mut expected_audio
+            };
+
+            let mut expected = input_ts.clamp(0, u32::MAX as i64);
+            if expected <= *expected_slot {
+                expected = (*expected_slot + 1).min(u32::MAX as i64);
+            }
+            *expected_slot = expected;
+
+            let actual = guard.enforce_ms(media_type, input_ts);
+            prop_assert_eq!(actual, expected);
+            prop_assert!((0..=u32::MAX as i64).contains(&actual));
+        }
+    }
+
+    #[test]
+    fn proptest_refreshed_video_sequence_header_timestamp_precedes_media(
+        media_ts in any::<u32>(),
+    ) {
+        let refreshed = refreshed_video_sequence_header_timestamp(RtmpTimestamp::new(media_ts));
+        prop_assert_eq!(refreshed.value, media_ts.saturating_sub(1));
+        prop_assert!(refreshed.value <= media_ts);
+    }
 }
 
 #[test]
