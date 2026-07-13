@@ -10,8 +10,8 @@ use std::fmt;
 
 use crate::domain::stage::StageKey;
 
-/// Backend kind for a media stage, used in lifecycle tracking.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// Backend kind for a media stage, used in graph planning and lifecycle tracking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum StageBackendKind {
     AudioRouter,

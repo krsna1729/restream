@@ -11,9 +11,9 @@ use crate::alerts;
 use crate::api_view_models;
 use crate::application::services::ApiError;
 use crate::domain::srt_ingest::SrtPipelineIngestConfig;
+use crate::domain::state::StageBackendKind;
 use crate::logging::types::AppLogFilters;
 use crate::media::srt::serialize_pipeline_srt_ingest_policy;
-use crate::planner::backend_policy::StageBackend;
 use crate::runtime::graph::{GraphRole, StageGraphPlan};
 
 use super::file_ingest::{
@@ -794,12 +794,12 @@ fn graph_role_json(role: &GraphRole) -> serde_json::Value {
     }
 }
 
-fn stage_backend_name(backend: StageBackend) -> &'static str {
+fn stage_backend_name(backend: StageBackendKind) -> &'static str {
     match backend {
-        StageBackend::AudioRouter => "audioRouter",
-        StageBackend::InternalFfmpeg => "internalFfmpeg",
-        StageBackend::ExternalFfmpeg => "externalFfmpeg",
-        StageBackend::HlsSegmenter => "hlsSegmenter",
-        StageBackend::Recording => "recording",
+        StageBackendKind::AudioRouter => "audioRouter",
+        StageBackendKind::InternalFfmpeg => "internalFfmpeg",
+        StageBackendKind::ExternalFfmpeg => "externalFfmpeg",
+        StageBackendKind::HlsSegmenter => "hlsSegmenter",
+        StageBackendKind::Recording => "recording",
     }
 }
