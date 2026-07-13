@@ -3,11 +3,31 @@ use std::sync::RwLock;
 
 use tracing::warn;
 
-use crate::application::models::Pipeline;
 use crate::domain::srt_ingest::{ResolvedSrtIngestConfig, SrtGlobalIngestConfig};
 use crate::secret_display::redact_secret;
 
 use super::parse_pipeline_srt_ingest_policy;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SrtIngestPolicyEntry {
+    pub pipeline_id: String,
+    pub stream_key: String,
+    pub serialized_policy: Option<String>,
+}
+
+impl SrtIngestPolicyEntry {
+    pub fn new(
+        pipeline_id: impl Into<String>,
+        stream_key: impl Into<String>,
+        serialized_policy: Option<String>,
+    ) -> Self {
+        Self {
+            pipeline_id: pipeline_id.into(),
+            stream_key: stream_key.into(),
+            serialized_policy,
+        }
+    }
+}
 
 pub struct SrtIngestPolicyStore {
     inner: RwLock<SrtIngestPolicySnapshot>,
@@ -20,15 +40,15 @@ struct SrtIngestPolicySnapshot {
 }
 
 impl SrtIngestPolicyStore {
-    pub fn new(global: SrtGlobalIngestConfig, pipelines: &[Pipeline]) -> Self {
+    pub fn new(global: SrtGlobalIngestConfig, entries: &[SrtIngestPolicyEntry]) -> Self {
         Self {
-            inner: RwLock::new(build_policy_snapshot(global, pipelines)),
+            inner: RwLock::new(build_policy_snapshot(global, entries)),
         }
     }
 
-    pub fn replace(&self, global: SrtGlobalIngestConfig, pipelines: &[Pipeline]) {
+    pub fn replace(&self, global: SrtGlobalIngestConfig, entries: &[SrtIngestPolicyEntry]) {
         let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        *guard = build_policy_snapshot(global, pipelines);
+        *guard = build_policy_snapshot(global, entries);
     }
 
     pub fn global_config(&self) -> SrtGlobalIngestConfig {
@@ -51,26 +71,25 @@ impl SrtIngestPolicyStore {
 
 fn build_policy_snapshot(
     global: SrtGlobalIngestConfig,
-    pipelines: &[Pipeline],
+    entries: &[SrtIngestPolicyEntry],
 ) -> SrtIngestPolicySnapshot {
-    let mut per_stream_key = HashMap::with_capacity(pipelines.len());
-    for pipeline in pipelines {
-        let pipeline_policy =
-            parse_pipeline_srt_ingest_policy(pipeline.srt_ingest_policy.as_deref())
-                .unwrap_or_default();
+    let mut per_stream_key = HashMap::with_capacity(entries.len());
+    for entry in entries {
+        let pipeline_policy = parse_pipeline_srt_ingest_policy(entry.serialized_policy.as_deref())
+            .unwrap_or_default();
         match pipeline_policy.resolve(&global) {
             Ok(resolved) => {
-                per_stream_key.insert(pipeline.stream_key.clone(), resolved);
+                per_stream_key.insert(entry.stream_key.clone(), resolved);
             }
             Err(error) => {
                 warn!(
-                    pipeline_id = %pipeline.id,
-                    stream_key = %redact_secret(&pipeline.stream_key),
+                    pipeline_id = %entry.pipeline_id,
+                    stream_key = %redact_secret(&entry.stream_key),
                     err = %error,
                     "ignoring invalid persisted SRT ingest policy"
                 );
                 if let Ok(resolved) = global.resolve() {
-                    per_stream_key.insert(pipeline.stream_key.clone(), resolved);
+                    per_stream_key.insert(entry.stream_key.clone(), resolved);
                 }
             }
         }
@@ -87,14 +106,8 @@ mod tests {
     use crate::domain::srt_ingest::{SrtGlobalIngestMode, SrtPipelineIngestConfig};
     use crate::media::srt::serialize_pipeline_srt_ingest_policy;
 
-    fn pipeline_with_policy(policy: Option<String>) -> Pipeline {
-        Pipeline {
-            id: "pipeline-1".to_string(),
-            name: "Pipeline One".to_string(),
-            stream_key: "stream-one".to_string(),
-            input_source: None,
-            srt_ingest_policy: policy,
-        }
+    fn policy_entry(policy: Option<String>) -> SrtIngestPolicyEntry {
+        SrtIngestPolicyEntry::new("pipeline-1", "stream-one", policy)
     }
 
     #[test]
@@ -106,7 +119,7 @@ mod tests {
         };
         let policy = serialize_pipeline_srt_ingest_policy(&SrtPipelineIngestConfig::default())
             .expect("serialize inherited policy");
-        let store = SrtIngestPolicyStore::new(global, &[pipeline_with_policy(Some(policy))]);
+        let store = SrtIngestPolicyStore::new(global, &[policy_entry(Some(policy))]);
 
         assert_eq!(store.resolved_policy("stream-one"), None);
     }

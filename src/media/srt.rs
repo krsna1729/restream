@@ -72,7 +72,7 @@ use crate::secret_display::redact_secret;
 // At ~400 chunks/s for an 8 Mb/s stream, 256 slots ≈ 640 ms of absorption.
 #[path = "srt_policy.rs"]
 mod srt_policy;
-pub use srt_policy::SrtIngestPolicyStore;
+pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 
 // Raw SRT Types & FFI Bindings
 pub type SRTSOCKET = c_int;
