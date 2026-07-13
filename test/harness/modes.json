@@ -71,6 +71,7 @@
         "bitrate-sweep": {
           "suiteRef": "suites.json#suites.bitrate-sweep",
           "suiteDefault": true,
+          "suiteTimeoutSecs": 2400,
           "requires": {
             "portNamespace": true,
             "benchProfile": true

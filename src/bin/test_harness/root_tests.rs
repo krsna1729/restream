@@ -112,6 +112,11 @@ fn mixed_matrix_uses_heavyweight_suite_timeout_floor() {
     assert_eq!(suite_mode_timeout_secs("mixed.matrix", 900), 5400);
     assert_eq!(suite_mode_timeout_secs("mixed.matrix", 6000), 6000);
     assert_eq!(suite_mode_timeout_secs("resource-sweep", 900), 2400);
+    // The bitrate sweep runs real publisher, output, sampling, and probe
+    // loops at multiple bitrate points. Local release evidence finishes just
+    // under the default 900s ceiling, so hosted runners can hit an artificial
+    // timeout while the mode is still making expected progress.
+    assert_eq!(suite_mode_timeout_secs("bitrate-sweep", 900), 2400);
 }
 
 #[test]
