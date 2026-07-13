@@ -41,15 +41,15 @@ if [[ -n "$BINARY_BUNDLE" ]]; then
     trap cleanup EXIT
     tar -xzf "$BINARY_BUNDLE" -C "$bundle_root"
     mapfile -t bundled_bins < <(find "$bundle_root" -type f -path '*/bin/*' -perm -111 -print | sort)
-    if [[ "${#bundled_bins[@]}" -ne 4 ]]; then
-        echo "release-evidence: expected four executable files under bin/ in $BINARY_BUNDLE" >&2
+    if [[ "${#bundled_bins[@]}" -ne 3 ]]; then
+        echo "release-evidence: expected three executable files under bin/ in $BINARY_BUNDLE" >&2
         exit 1
     fi
     certified_binary=""
     for binary in "${bundled_bins[@]}"; do
         case "$(basename "$binary")" in
             restream) certified_binary="$binary" ;;
-            restream-mcp|test_harness|test_harness_dsl) ;;
+            restream-mcp|test_harness) ;;
             *)
                 echo "release-evidence: unexpected bundled executable: $binary" >&2
                 exit 1

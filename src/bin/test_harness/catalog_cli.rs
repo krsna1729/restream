@@ -1,46 +1,29 @@
-//! Manifest-backed integration harness planner.
+//! Read-only catalog inspection commands for the integration harness.
 //!
-//! This binary is intentionally additive: it validates and resolves the
-//! `test/harness` DSL without disturbing the existing `test_harness` runner.
-//!
-//! Usage:
-//!   cargo run --bin test_harness_dsl -- self-check
-//!   cargo run --bin test_harness_dsl -- list-modes
-//!   cargo run --bin test_harness_dsl -- resolve mixed.live.srt.h265.a2.bf2
-//!   cargo run --bin test_harness_dsl -- plan mixed.matrix
-//!
-//! The planner emits JSON and resolves canonical suite/runner/scenario modes.
-
-#[path = "test_harness/catalog.rs"]
-mod catalog;
-use catalog::*;
+//! These commands replace the former standalone DSL helper. Keeping them under
+//! `test_harness catalog ...` means release bundles ship one harness executable
+//! while preserving the same manifest self-check, resolution, and
+//! plan-inspection workflows.
 
 use serde_json::{Value, json};
-use std::env;
 use std::path::PathBuf;
-use std::process;
 
-#[derive(Debug, Clone)]
-struct Cli {
+use crate::catalog::{AppResult, HarnessCatalog};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CatalogCli {
     root: PathBuf,
     json: bool,
     command: String,
     args: Vec<String>,
 }
 
-fn main() {
-    if let Err(err) = run() {
-        eprintln!("error: {err}");
-        process::exit(1);
-    }
-}
-
-fn run() -> AppResult<()> {
-    let cli = parse_cli()?;
+pub(crate) fn run_catalog_cli(raw: &[String]) -> AppResult<()> {
+    let cli = parse_catalog_cli(raw)?;
 
     match cli.command.as_str() {
         "help" | "-h" | "--help" => {
-            print_usage();
+            print_catalog_usage();
             Ok(())
         }
         "self-check" => {
@@ -69,7 +52,7 @@ fn run() -> AppResult<()> {
             Ok(())
         }
         "resolve" => {
-            let mode = required_arg(&cli, "resolve <mode>")?;
+            let mode = required_catalog_arg(&cli, "catalog resolve <mode>")?;
             let catalog = HarnessCatalog::load(&cli.root)?;
             catalog.self_check()?;
             let resolved = catalog.resolve_mode(mode)?;
@@ -77,7 +60,7 @@ fn run() -> AppResult<()> {
             Ok(())
         }
         "plan" => {
-            let mode = required_arg(&cli, "plan <mode>")?;
+            let mode = required_catalog_arg(&cli, "catalog plan <mode>")?;
             let catalog = HarnessCatalog::load(&cli.root)?;
             catalog.self_check()?;
             let plan = catalog.plan_mode(mode)?;
@@ -85,14 +68,13 @@ fn run() -> AppResult<()> {
             Ok(())
         }
         other => Err(format!(
-            "unknown command {other:?}; run `test_harness_dsl help`"
+            "unknown catalog command {other:?}; run `test_harness catalog help`"
         )),
     }
 }
 
-fn parse_cli() -> AppResult<Cli> {
-    let raw: Vec<String> = env::args().skip(1).collect();
-    let mut root = env::var_os("HARNESS_CATALOG_DIR")
+fn parse_catalog_cli(raw: &[String]) -> AppResult<CatalogCli> {
+    let mut root = std::env::var_os("HARNESS_CATALOG_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("test/harness"));
     let mut json = false;
@@ -124,7 +106,7 @@ fn parse_cli() -> AppResult<Cli> {
         .unwrap_or_else(|| "help".to_string());
     let args = positionals.into_iter().skip(1).collect();
 
-    Ok(Cli {
+    Ok(CatalogCli {
         root,
         json,
         command,
@@ -132,22 +114,22 @@ fn parse_cli() -> AppResult<Cli> {
     })
 }
 
-fn required_arg<'a>(cli: &'a Cli, usage: &str) -> AppResult<&'a str> {
+fn required_catalog_arg<'a>(cli: &'a CatalogCli, usage: &str) -> AppResult<&'a str> {
     cli.args
         .first()
         .map(String::as_str)
-        .ok_or_else(|| format!("usage: test_harness_dsl {usage}"))
+        .ok_or_else(|| format!("usage: test_harness {usage}"))
 }
 
-fn print_usage() {
+fn print_catalog_usage() {
     println!(
-        r#"test_harness_dsl
+        r#"test_harness catalog
 
 Usage:
-  test_harness_dsl [--root test/harness] self-check
-  test_harness_dsl [--root test/harness] list-modes [--json]
-  test_harness_dsl [--root test/harness] resolve <mode>
-  test_harness_dsl [--root test/harness] plan <mode>
+  test_harness catalog [--root test/harness] self-check
+  test_harness catalog [--root test/harness] list-modes [--json]
+  test_harness catalog [--root test/harness] resolve <mode>
+  test_harness catalog [--root test/harness] plan <mode>
 
 Environment:
   HARNESS_CATALOG_DIR  Defaults the manifest root, usually test/harness.
@@ -189,5 +171,37 @@ fn print_mode_list(value: &Value) {
             }
         }
         println!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn catalog_cli_defaults_to_help_without_live_runner_side_effects() {
+        let cli = parse_catalog_cli(&[]).expect("parse default catalog cli");
+        assert_eq!(cli.command, "help");
+        assert_eq!(cli.root, PathBuf::from("test/harness"));
+    }
+
+    #[test]
+    fn catalog_cli_accepts_root_json_and_mode_argument() {
+        let cli = parse_catalog_cli(&strings(&[
+            "--root",
+            "custom/harness",
+            "--json",
+            "resolve",
+            "mixed.matrix",
+        ]))
+        .expect("parse catalog cli");
+        assert_eq!(cli.root, PathBuf::from("custom/harness"));
+        assert!(cli.json);
+        assert_eq!(cli.command, "resolve");
+        assert_eq!(cli.args, vec!["mixed.matrix"]);
     }
 }

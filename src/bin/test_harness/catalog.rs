@@ -1,9 +1,8 @@
 //! Manifest catalog loader for the `test/harness` DSL: parses, validates,
 //! resolves, and plans the JSON mode/suite/scenario/workflow manifests.
 //!
-//! Shared via `#[path]` inclusion by both `test_harness_dsl.rs` (the
-//! standalone planner binary) and `test_harness.rs` (the runtime runner,
-//! which reuses the mode index for its dispatch table).
+//! Shared by the runtime runner and its `test_harness catalog ...` read-only
+//! inspection commands. The runtime also reuses the mode index for dispatch.
 
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};

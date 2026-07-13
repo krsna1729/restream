@@ -53,7 +53,7 @@ done
 build_sbom="$OUT_DIR/restream-$VERSION.build.sbom.cdx.json"
 RESTREAM_SBOM_PATH="$build_sbom" \
 RESTREAM_BUILD_PROFILE=release \
-RESTREAM_BUILD_BINS="restream restream-mcp test_harness test_harness_dsl" \
+RESTREAM_BUILD_BINS="restream restream-mcp test_harness" \
 RESTREAM_BUILD_FEATURES="mcp-server,mcp-http-backend" \
     scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 
@@ -68,7 +68,7 @@ mkdir -p "$stage/bin" "$stage/rootfs"
 bash scripts/build/runtime-rootfs.sh target/release/restream "$stage/rootfs"
 cp -a distribution "$stage/distribution"
 
-for binary in restream restream-mcp test_harness test_harness_dsl; do
+for binary in restream restream-mcp test_harness; do
     source="target/release/$binary"
     [[ -x "$source" ]] || {
         echo "package-binaries: expected built executable is missing: $source" >&2
@@ -86,7 +86,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 binary=${1:---help}
 case "$binary" in
-  restream|restream-mcp|test_harness|test_harness_dsl)
+  restream|restream-mcp|test_harness)
     shift
     ;;
   -h|--help)
@@ -97,7 +97,6 @@ Available binaries:
   restream           media-server runtime
   restream-mcp       MCP server (feature-enabled build)
   test_harness       live integration harness
-  test_harness_dsl   harness DSL utility
 USAGE
     exit 0
     ;;
@@ -139,9 +138,10 @@ not require host FFmpeg, SRT, or C/C++ runtime packages.
 License texts, the third-party component index, and source information are in
 the distribution/ directory and must remain beside the binaries.
 
-test_harness and test_harness_dsl are included for inspection and debugging.
-Run live integration tests from a source checkout with scripts/harness/run.sh;
-they also require committed fixtures, MediaMTX, and the documented host setup.
+test_harness is included for inspection and debugging. Its read-only catalog
+inspection commands live under `./run test_harness catalog ...`. Run live
+integration tests from a source checkout with scripts/harness/run.sh; they also
+require committed fixtures, MediaMTX, and the documented host setup.
 EOF
 
 mkdir -p "$OUT_DIR"

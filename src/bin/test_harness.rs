@@ -34,6 +34,8 @@ mod api_client;
 #[path = "test_harness/catalog.rs"]
 #[allow(dead_code)]
 mod catalog;
+#[path = "test_harness/catalog_cli.rs"]
+mod catalog_cli;
 #[path = "test_harness/core.rs"]
 mod core;
 #[path = "test_harness/fault_manifest.rs"]
@@ -72,6 +74,7 @@ mod suite;
 mod workflow_exec;
 
 use api_client::*;
+use catalog_cli::*;
 use core::*;
 use fault_manifest::*;
 use fault_recovery::*;
@@ -195,11 +198,15 @@ fn ensure_loopback() {
 }
 
 async fn run() -> Result<(), String> {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let command = raw.first().cloned().unwrap_or_else(|| "suite".to_string());
+    if command == "catalog" {
+        return run_catalog_cli(&raw[1..]);
+    }
+
     ensure_loopback();
     maybe_prune_old_artifacts()?;
     maybe_global_process_cleanup();
-    let raw: Vec<String> = std::env::args().skip(1).collect();
-    let command = raw.first().cloned().unwrap_or_else(|| "suite".to_string());
     ensure_measurement_profile(&command, &raw[1..])?;
     let result = if command == MIXED_MATRIX_MODE {
         mixed_input_matrix_correctness().await
