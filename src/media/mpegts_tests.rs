@@ -1253,10 +1253,12 @@ proptest! {
         let packets = demuxer.drain();
 
         prop_assert_eq!(packets.len(), generated.len());
-        let mut last_dts_by_stream: BTreeMap<(u8, u32), i64> = BTreeMap::new();
+        type StreamKey = (u8, u32);
+        type ExpectedPacketsByStream = BTreeMap<StreamKey, VecDeque<(Vec<u8>, bool)>>;
+
+        let mut last_dts_by_stream: BTreeMap<StreamKey, i64> = BTreeMap::new();
         let mut seen_streams = BTreeSet::new();
-        let mut expected_by_stream: BTreeMap<(u8, u32), VecDeque<(Vec<u8>, bool)>> =
-            BTreeMap::new();
+        let mut expected_by_stream: ExpectedPacketsByStream = BTreeMap::new();
         for expected in &generated {
             expected_by_stream
                 .entry((expected.media_type as u8, expected.track_index))
