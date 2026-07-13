@@ -114,6 +114,29 @@ fn file_live_edge_duration_budget_covers_one_target_gop() {
 }
 
 #[test]
+fn explicit_restream_bin_is_allowed_for_measurement_candidates() {
+    let harness = Path::new("/repo/target/bench/test_harness");
+    let copied_candidate = Path::new("/tmp/restream-baseline");
+    let default_debug_restream = Path::new("/repo/target/debug/restream");
+
+    assert!(measurement_profile_ok_with_explicit(
+        harness,
+        copied_candidate,
+        true
+    ));
+    assert!(!measurement_profile_ok_with_explicit(
+        harness,
+        default_debug_restream,
+        false
+    ));
+    assert!(!measurement_profile_ok_with_explicit(
+        Path::new("/repo/target/debug/test_harness"),
+        copied_candidate,
+        true
+    ));
+}
+
+#[test]
 fn only_non_measurement_modes_parallelize_in_suite() {
     assert!(suite_mode_is_parallelizable("srt.policy", false));
     assert!(suite_mode_is_parallelizable("fault.egress-retry", false));

@@ -22,6 +22,22 @@ pub(crate) fn is_bench_profile(path: &Path) -> bool {
     matches!(path_profile(path), Some("bench"))
 }
 
+pub(crate) fn restream_bin_is_explicit() -> bool {
+    std::env::var_os("RESTREAM_BIN").is_some()
+}
+
+pub(crate) fn measurement_profile_ok_with_explicit(
+    harness_path: &Path,
+    restream_path: &Path,
+    explicit_restream_bin: bool,
+) -> bool {
+    is_bench_profile(harness_path) && (explicit_restream_bin || is_bench_profile(restream_path))
+}
+
+pub(crate) fn measurement_profile_ok(harness_path: &Path, restream_path: &Path) -> bool {
+    measurement_profile_ok_with_explicit(harness_path, restream_path, restream_bin_is_explicit())
+}
+
 pub(crate) fn default_work_db_path(work_dir: &Path, file_name: &str) -> PathBuf {
     // Keep mutable harness state scoped to each WORK_DIR so long suites do not
     // contend through a shared repo-root SQLite database.
@@ -104,7 +120,7 @@ pub(crate) fn ensure_measurement_profile(command: &str, raw: &[String]) -> Resul
 
     let harness_path = std::env::current_exe().map_err(|e| e.to_string())?;
     let restream_path = default_restream_bin();
-    if is_bench_profile(&harness_path) && is_bench_profile(&restream_path) {
+    if measurement_profile_ok(&harness_path, &restream_path) {
         return Ok(());
     }
 

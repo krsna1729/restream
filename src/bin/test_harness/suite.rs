@@ -683,12 +683,14 @@ pub(crate) async fn preflight_check() -> Result<Value, String> {
         }
     };
 
-    let profile_check = if is_bench_profile(&harness_bin) && is_bench_profile(&restream_bin) {
+    let explicit_restream_bin = restream_bin_is_explicit();
+    let profile_check = if measurement_profile_ok(&harness_bin, &restream_bin) {
         json!({
             "check": "profile",
             "harness": harness_bin.display().to_string(),
             "restream": restream_bin.display().to_string(),
             "required": "bench",
+            "explicitRestreamBin": explicit_restream_bin,
             "status": "ok"
         })
     } else {
@@ -697,6 +699,7 @@ pub(crate) async fn preflight_check() -> Result<Value, String> {
             "harness": harness_bin.display().to_string(),
             "restream": restream_bin.display().to_string(),
             "required": "bench",
+            "explicitRestreamBin": explicit_restream_bin,
             "status": "fail",
             "hint": "measurement modes require bench-profile binaries; run `scripts/build/bench-harness.sh` and use `target/bench/test_harness`"
         })
