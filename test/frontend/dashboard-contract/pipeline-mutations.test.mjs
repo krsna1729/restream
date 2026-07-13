@@ -598,6 +598,12 @@ test("recording patches local state immediately, while file-ingest falls back to
 
   pipelineView.setPipelineViewDependencies({
     refreshDashboardRuntime: dashboard.refreshDashboardRuntime,
+    awaitDashboardRuntimeMutationConvergence:
+      dashboard.awaitDashboardRuntimeMutationConvergence,
+    updateDashboardPipelineFileIngestState:
+      dashboard.updateDashboardPipelineFileIngestState,
+    updateDashboardPipelineRecordingState:
+      dashboard.updateDashboardPipelineRecordingState,
   });
   await dashboard.refreshDashboard();
   pipelineView.renderPipelineInfoColumn("pipe-1");

@@ -1,7 +1,6 @@
 import { escapeHtml, msToHHMMSS, sanitizeLogMessage } from "../core/utils.js";
 import { state } from "../core/state.js";
 import { outputViewEncodingLabel } from "../core/output-config.js";
-import { openOutputMonitoringUrl } from "./control-room.js";
 import { getOutputControlIntent } from "./output-control-state.js";
 import { pipelineViewDependencies } from "./pipeline-dependencies.js";
 import {
@@ -739,7 +738,7 @@ function ensureOutputsListHandler(outputsList: HTMLElement): void {
     }
 
     if (button.dataset.action === "monitor-output") {
-      openOutputMonitoringUrl(out.monitoringUrl);
+      pipelineViewDependencies.openOutputMonitoringUrl?.(out.monitoringUrl);
       return;
     }
 
