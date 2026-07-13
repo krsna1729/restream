@@ -485,6 +485,38 @@ fn frontend_features_do_not_import_app_composition_modules() {
 }
 
 #[test]
+fn frontend_render_modules_do_not_import_runtime_composition_modules() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let forbidden_edges = [
+        (
+            "web/ts/features/pipeline-view.ts",
+            "from \"./dashboard.js\"",
+        ),
+        ("web/ts/features/pipeline-view.ts", "from './dashboard.js'"),
+        (
+            "web/ts/features/pipeline-output-list.ts",
+            "from \"./control-room.js\"",
+        ),
+        (
+            "web/ts/features/pipeline-output-list.ts",
+            "from './control-room.js'",
+        ),
+    ];
+    let mut offenders = Vec::new();
+    for (relative_path, needle) in forbidden_edges {
+        let source = std::fs::read_to_string(manifest_dir.join(relative_path))
+            .expect("frontend render module should be UTF-8");
+        if source.contains(needle) {
+            offenders.push(format!("{relative_path} imports {needle}"));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "render modules should use app-wired dependencies instead of runtime composition imports: {offenders:?}"
+    );
+}
+
+#[test]
 fn source_distribution_manifest_matches_declared_build_inputs() {
     let manifest = include_str!("../docs/source-distribution.md");
     for required in [

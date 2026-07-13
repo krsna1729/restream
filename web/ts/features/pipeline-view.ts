@@ -36,11 +36,6 @@ import {
   setAudioTrackStoredLabel,
 } from "./audio-track-labels.js";
 import {
-  awaitDashboardRuntimeMutationConvergence,
-  updateDashboardPipelineFileIngestState,
-  updateDashboardPipelineRecordingState,
-} from "./dashboard.js";
-import {
   pipelineViewDependencies,
   setPipelineViewDependencies,
 } from "./pipeline-dependencies.js";
@@ -597,7 +592,10 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
           ? await stopRecording(pipe.id)
           : await startRecording(pipe.id);
         if (res !== null) {
-          updateDashboardPipelineRecordingState(pipe.id, res);
+          pipelineViewDependencies.updateDashboardPipelineRecordingState?.(
+            pipe.id,
+            res,
+          );
         }
       } finally {
         setPendingRecordingIntent(pipe.id, null);
@@ -653,18 +651,21 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
           : await startIngest(fileIngest.id as string);
         try {
           if (res !== null) {
-            updateDashboardPipelineFileIngestState(pipe.id, {
-              configured: true,
-              id: res.id,
-              filename: res.filename,
-              streamKey: res.streamKey,
-              loop: res.loop,
-              startTime: res.startTime,
-              liveOptimized: res.liveOptimized,
-              targetGopSeconds: res.targetGopSeconds,
-              running: res.running,
-            });
-            void awaitDashboardRuntimeMutationConvergence();
+            pipelineViewDependencies.updateDashboardPipelineFileIngestState?.(
+              pipe.id,
+              {
+                configured: true,
+                id: res.id,
+                filename: res.filename,
+                streamKey: res.streamKey,
+                loop: res.loop,
+                startTime: res.startTime,
+                liveOptimized: res.liveOptimized,
+                targetGopSeconds: res.targetGopSeconds,
+                running: res.running,
+              },
+            );
+            void pipelineViewDependencies.awaitDashboardRuntimeMutationConvergence?.();
           }
         } finally {
           setPendingFileIngestIntent(pipe.id, null);

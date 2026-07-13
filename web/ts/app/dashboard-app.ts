@@ -1,7 +1,10 @@
 import {
+  awaitDashboardRuntimeMutationConvergence,
   refreshDashboard,
   refreshDashboardRuntime,
   setDashboardHooks,
+  updateDashboardPipelineFileIngestState,
+  updateDashboardPipelineRecordingState,
 } from "../features/dashboard.js";
 import {
   deleteOutBtn,
@@ -29,7 +32,10 @@ import {
 import { setPipelineInspectorDependencies } from "../features/pipeline-inspector.js";
 import { selectPipeline } from "../features/render.js";
 import { getUrlParam } from "../core/utils.js";
-import { setControlRoomWorkspaceDependencies } from "../features/control-room.js";
+import {
+  openOutputMonitoringUrl,
+  setControlRoomWorkspaceDependencies,
+} from "../features/control-room.js";
 
 let dashboardAppInitialized = false;
 
@@ -55,8 +61,12 @@ export function initDashboardApp(): void {
     deleteOutBtn,
     refreshDashboard,
     refreshDashboardRuntime,
+    awaitDashboardRuntimeMutationConvergence,
+    updateDashboardPipelineFileIngestState,
+    updateDashboardPipelineRecordingState,
     openDiagnosticsModal,
     openGraphExplorer: openInspectGraph,
+    openOutputMonitoringUrl,
   });
 
   setPipelineInspectorDependencies({
