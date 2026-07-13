@@ -91,7 +91,7 @@ ENV RESTREAM_BUILD_GIT_COMMIT=${RESTREAM_BUILD_GIT_COMMIT} \
     RESTREAM_BUILD_TIMESTAMP=${RESTREAM_BUILD_TIMESTAMP} \
     RESTREAM_SKIP_SBOM=1
 
-COPY scripts/build/app-native.sh scripts/build/bench-harness.sh scripts/build/runtime-rootfs.sh scripts/build/
+COPY scripts/build/app-native.sh scripts/build/bench-harness.sh scripts/build/emit-sbom.sh scripts/build/runtime-rootfs.sh scripts/build/
 
 # Warm the release dependency graph without copying the real application code.
 # The dummy main compiles the full dependency set into .local/build/static/cargo-target
