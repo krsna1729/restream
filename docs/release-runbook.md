@@ -28,10 +28,16 @@ that concurrency, change only the workflow cap; shard ownership remains in the
 script.
 
 Each shard has a script-owned timeout so a stuck runner leg fails with a clear
-`TIMEOUT` instead of consuming the full GitHub job limit: small and bitrate
-shards use 10 minutes, heavier mixed/resource/recovery shards use 15 minutes,
-and unknown future shards fall back to 20 minutes. The workflow job timeout is
-slightly higher so artifacts can still upload after the script exits.
+`TIMEOUT` instead of consuming the full GitHub job limit. The buckets are grouped
+from observed local shard timings and kept at least 2x over those timings:
+smoke/correctness shards use 5 minutes, small mixed shards use 15 minutes,
+medium mixed/resource shards use 25 minutes, full bitrate measurement shards use
+30 minutes, and unknown future shards fall back to 20 minutes. The workflow job
+timeout is slightly higher so artifacts can still upload after the script exits.
+Setup is bounded separately: CI system dependency installation retries apt
+operations and wraps the runtime MediaMTX bootstrap with a short timeout, so a
+single wedged hosted runner fails in setup instead of looking like a harness
+hang.
 
 ## 1. Run local due diligence
 

@@ -63,12 +63,11 @@ jobs:
     timeout-minutes: 35
     strategy:
       fail-fast: false
-      # GitHub Free currently allows 20 standard hosted jobs concurrently.
-      # Package/evidence intentionally waits for the full harness matrix, so
-      # the matrix can use the whole standard-runner free-plan concurrency
-      # budget without exceeding it. Matrix size itself is separately capped by
-      # GitHub at 256 jobs.
-      max-parallel: 20
+      # Keep this below the GitHub Free hosted-runner ceiling. Starting all
+      # harness jobs at once made every shard hit apt, artifact download, and
+      # MediaMTX bootstrap together; the release script owns per-shard timeouts,
+      # while this cap smooths setup bursts without serializing the suite.
+      max-parallel: 12
       matrix:
         shard:
           - smoke

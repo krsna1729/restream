@@ -112,7 +112,16 @@ install_mediamtx() {
     tmpdir="$(mktemp -d)"
     trap 'rm -rf "$tmpdir"' RETURN
     echo "bootstrap-runtime: installing mediamtx ${MEDIAMTX_VERSION}"
-    curl -fsSL "$archive_url" -o "$tmpdir/$archive_name"
+    # CI and fresh runtime hosts rely on this download path. Bound and retry it
+    # so a bad GitHub/release CDN connection does not leave setup apparently
+    # stuck before the harness has a chance to emit its own progress logs.
+    curl --fail --show-error --location \
+        --connect-timeout 20 \
+        --max-time "${RESTREAM_BOOTSTRAP_DOWNLOAD_TIMEOUT_SECS:-120}" \
+        --retry 3 \
+        --retry-delay 2 \
+        --retry-all-errors \
+        "$archive_url" -o "$tmpdir/$archive_name"
     tar -xzf "$tmpdir/$archive_name" -C "$tmpdir"
     extracted_bin="$tmpdir/mediamtx"
     if [[ ! -x "$extracted_bin" ]]; then
