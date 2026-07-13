@@ -80,6 +80,7 @@ fn to_libc_sockaddr(addr: SocketAddr) -> (libc::sockaddr_storage, c_int) {
 
 pub fn start_shared_ts_muxer(
     pipeline_id: &str,
+    stage_key: &str,
     source_ring: Arc<RingBuffer>,
     engine: Arc<MediaEngine>,
     cancel: CancellationToken,
@@ -90,6 +91,7 @@ pub fn start_shared_ts_muxer(
     ));
     let ts_ring_clone = ts_ring.clone();
     let pipeline_id_str = pipeline_id.to_string();
+    let stage_key_str = stage_key.to_string();
 
     tokio::spawn(async move {
         // Wait for ingest metadata before starting the MPEG-TS muxer
@@ -186,7 +188,7 @@ pub fn start_shared_ts_muxer(
             };
 
         let mut reader = Reader::new(
-            format!("ts_shared_muxer:{}", pipeline_id_str),
+            format!("ts_shared_muxer:{}:{}", pipeline_id_str, stage_key_str),
             source_ring.clone(),
         );
         let mut video_conv_buf = Vec::<u8>::new();
@@ -425,27 +427,6 @@ fn srt_egress_reuse_local_port_enabled() -> bool {
             .ok()
             .as_deref(),
     )
-}
-
-fn stable_srt_muxer_shard(output_id: &str, shard_count: usize) -> usize {
-    let shard_count = shard_count.max(1);
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in output_id.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    (hash as usize) % shard_count
-}
-
-fn srt_egress_muxer_stage_key(encoding: &str, output_id: &str, shard_count: usize) -> String {
-    if shard_count <= 1 {
-        encoding.to_string()
-    } else {
-        format!(
-            "{encoding}:srt-mux-shard:{}",
-            stable_srt_muxer_shard(output_id, shard_count)
-        )
-    }
 }
 
 // SRT Egress Client
@@ -783,8 +764,9 @@ pub async fn start_srt_egress(
         }
     };
 
-    let muxer_stage_key =
-        srt_egress_muxer_stage_key(&encoding, &output_id, engine.config.srt_egress_muxer_shards);
+    let muxer_stage_key = engine
+        .assign_srt_egress_muxer_stage(&pipeline_id, &encoding, &output_id, registration.attempt_id)
+        .await;
     let shared_muxer = engine
         .get_or_create_ts_muxer_stage(&pipeline_id, &muxer_stage_key, ring_buffer.clone())
         .await;
@@ -798,6 +780,14 @@ pub async fn start_srt_egress(
         .await
     {
         out_queue.close();
+        engine
+            .release_srt_egress_muxer_stage(
+                &pipeline_id,
+                &encoding,
+                &output_id,
+                registration.attempt_id,
+            )
+            .await;
         // SAFETY: Valid socket, clean up when a replacement attempt won the slot.
         unsafe {
             srt_close(client_sock);
@@ -1031,27 +1021,5 @@ mod tests {
         assert!(parse_srt_egress_reuse_local_port(Some("1")));
         assert!(!parse_srt_egress_reuse_local_port(Some("false")));
         assert!(!parse_srt_egress_reuse_local_port(Some("0")));
-    }
-
-    #[test]
-    fn srt_egress_muxer_stage_key_preserves_default_and_shards_deterministically() {
-        assert_eq!(
-            srt_egress_muxer_stage_key("source+atrack:0", "out-a", 1),
-            "source+atrack:0"
-        );
-        let first = srt_egress_muxer_stage_key("source+atrack:0", "out-a", 4);
-        let second = srt_egress_muxer_stage_key("source+atrack:0", "out-a", 4);
-
-        assert_eq!(first, second);
-        assert!(first.starts_with("source+atrack:0:srt-mux-shard:"));
-    }
-
-    #[test]
-    fn stable_srt_muxer_shard_stays_inside_cap() {
-        for shard_count in [1, 2, 4, 16, 64] {
-            for output_id in ["a", "b", "msr-rank01-srt-0020", "another-output"] {
-                assert!(stable_srt_muxer_shard(output_id, shard_count) < shard_count);
-            }
-        }
     }
 }

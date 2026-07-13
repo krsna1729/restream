@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::domain::stage::{StageKey, StageKind};
 use crate::domain::state::{EgressPhase, EgressRuntimeStatus, EgressStatus};
@@ -996,6 +996,7 @@ impl MediaEngine {
         let cancel = CancellationToken::new();
         let shared_muxer = crate::media::srt::start_shared_ts_muxer(
             pipeline_id,
+            stage_key,
             source_ring,
             self.clone(),
             cancel,
@@ -1003,6 +1004,97 @@ impl MediaEngine {
 
         stages.insert(key, shared_muxer.clone());
         shared_muxer
+    }
+
+    fn srt_muxer_cohort_key(pipeline_id: &str, encoding: &str) -> String {
+        format!("{pipeline_id}\u{1f}{encoding}")
+    }
+
+    fn srt_muxer_stage_key(encoding: &str, shard_index: usize) -> String {
+        format!("{encoding}:srt-mux-shard:{shard_index}")
+    }
+
+    pub async fn assign_srt_egress_muxer_stage(
+        &self,
+        pipeline_id: &str,
+        encoding: &str,
+        output_id: &str,
+        attempt_id: u64,
+    ) -> String {
+        let max_outputs_per_shard = self.config.srt_egress_muxer_max_outputs_per_shard;
+        if max_outputs_per_shard == 0 {
+            return encoding.to_string();
+        }
+
+        let max_shards = self.config.srt_egress_muxer_max_shards.max(1);
+        let cohort_key = Self::srt_muxer_cohort_key(pipeline_id, encoding);
+        let mut pools = self.stages.srt_muxer_shards.write().await;
+        let result = pools.entry(cohort_key.clone()).or_default().assign(
+            output_id,
+            attempt_id,
+            max_outputs_per_shard,
+            max_shards,
+        );
+        drop(pools);
+
+        if result.should_warn_overflow {
+            warn!(
+                pipeline_id,
+                encoding,
+                cohort_key,
+                max_outputs_per_shard,
+                max_shards,
+                shard_count = result.shard_count,
+                shard_index = result.shard_index,
+                shard_occupancy = result.shard_occupancy,
+                "SRT muxer shard cap exceeded; additional outputs are sharing existing muxers"
+            );
+        }
+
+        Self::srt_muxer_stage_key(encoding, result.shard_index)
+    }
+
+    pub async fn release_srt_egress_muxer_stage(
+        &self,
+        pipeline_id: &str,
+        encoding: &str,
+        output_id: &str,
+        attempt_id: u64,
+    ) {
+        if self.config.srt_egress_muxer_max_outputs_per_shard == 0 {
+            return;
+        }
+
+        let cohort_key = Self::srt_muxer_cohort_key(pipeline_id, encoding);
+        let mut pools = self.stages.srt_muxer_shards.write().await;
+        let Some(pool) = pools.get_mut(&cohort_key) else {
+            return;
+        };
+        let Some(result) = pool.release(output_id, attempt_id) else {
+            return;
+        };
+        drop(pools);
+
+        if result.shard_empty {
+            let stage_key = Self::srt_muxer_stage_key(encoding, result.shard_index);
+            self.remove_ts_muxer_stage(pipeline_id, &stage_key).await;
+
+            let mut pools = self.stages.srt_muxer_shards.write().await;
+            if let Some(pool) = pools.get_mut(&cohort_key) {
+                pool.finish_retiring(result.shard_index);
+                if pool.is_empty() {
+                    pools.remove(&cohort_key);
+                }
+            }
+        }
+    }
+
+    async fn remove_ts_muxer_stage(&self, pipeline_id: &str, stage_key: &str) {
+        let key = format!("{}:{}", pipeline_id, stage_key);
+        let mut stages = self.stages.ts_muxers.write().await;
+        if let Some(stage) = stages.remove(&key) {
+            stage.cancel.cancel();
+        }
     }
 
     pub async fn sweep_unused_stages(&self) {
@@ -1358,6 +1450,15 @@ impl MediaEngine {
         }
 
         let mut egresses = self.egresses.active.write().await;
+        let release_srt_muxer = egresses.get(output_id).and_then(|egress| {
+            (egress.protocol == "srt").then(|| {
+                (
+                    egress.pipeline_id.clone(),
+                    egress.encoding.clone(),
+                    egress.attempt_id,
+                )
+            })
+        });
         let pipeline_id = egresses
             .get(output_id)
             .map(|e| e.pipeline_id.clone())
@@ -1373,6 +1474,11 @@ impl MediaEngine {
         });
         egresses.remove(output_id);
         drop(egresses);
+
+        if let Some((srt_pipeline_id, encoding, attempt_id)) = release_srt_muxer {
+            self.release_srt_egress_muxer_stage(&srt_pipeline_id, &encoding, output_id, attempt_id)
+                .await;
+        }
 
         if let Some(outcome) = recent_outcome {
             self.egresses
@@ -1411,6 +1517,13 @@ impl MediaEngine {
             token.cancel();
         }
 
+        let release_srt_muxer = (active.protocol == "srt").then(|| {
+            (
+                active.pipeline_id.clone(),
+                active.encoding.clone(),
+                active.attempt_id,
+            )
+        });
         let pipeline_id = active.pipeline_id.clone();
         let has_ingest = self
             .ingests
@@ -1422,6 +1535,11 @@ impl MediaEngine {
             Self::build_recent_egress_outcome(previous_recent.as_ref(), active, has_ingest);
         egresses.remove(output_id);
         drop(egresses);
+
+        if let Some((srt_pipeline_id, encoding, attempt_id)) = release_srt_muxer {
+            self.release_srt_egress_muxer_stage(&srt_pipeline_id, &encoding, output_id, attempt_id)
+                .await;
+        }
 
         self.egresses
             .recent

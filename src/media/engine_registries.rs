@@ -157,6 +157,7 @@ pub struct StageRegistry {
     pub runtimes: TokioRwLock<HashMap<StageKey, StageRuntime>>,
     pub metrics: TokioRwLock<HashMap<StageKey, Arc<StageMetrics>>>,
     pub ts_muxers: TokioRwLock<HashMap<String, Arc<TsChunkRing>>>,
+    pub srt_muxer_shards: TokioRwLock<HashMap<String, SrtMuxerShardPool>>,
     pub lifecycles: TokioRwLock<HashMap<StageKey, Arc<StageLifecycle>>>,
 }
 
@@ -172,8 +173,164 @@ impl StageRegistry {
             runtimes: TokioRwLock::new(HashMap::new()),
             metrics: TokioRwLock::new(HashMap::new()),
             ts_muxers: TokioRwLock::new(HashMap::new()),
+            srt_muxer_shards: TokioRwLock::new(HashMap::new()),
             lifecycles: TokioRwLock::new(HashMap::new()),
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SrtMuxerAssignment {
+    pub attempt_id: u64,
+    pub shard_index: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct SrtMuxerShardPool {
+    assignments: HashMap<String, SrtMuxerAssignment>,
+    shard_occupancy: Vec<usize>,
+    retiring_shards: HashSet<usize>,
+    overflow_warned: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct SrtMuxerAssignResult {
+    pub shard_index: usize,
+    pub shard_count: usize,
+    pub shard_occupancy: usize,
+    pub overflowed: bool,
+    pub should_warn_overflow: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct SrtMuxerReleaseResult {
+    pub shard_index: usize,
+    pub shard_empty: bool,
+}
+
+impl SrtMuxerShardPool {
+    pub fn assign(
+        &mut self,
+        output_id: &str,
+        attempt_id: u64,
+        max_outputs_per_shard: usize,
+        max_shards: usize,
+    ) -> SrtMuxerAssignResult {
+        debug_assert!(max_outputs_per_shard > 0);
+        debug_assert!(max_shards > 0);
+
+        if let Some(existing) = self.assignments.get(output_id).cloned() {
+            if existing.attempt_id == attempt_id {
+                let occupancy = self
+                    .shard_occupancy
+                    .get(existing.shard_index)
+                    .copied()
+                    .unwrap_or_default();
+                return SrtMuxerAssignResult {
+                    shard_index: existing.shard_index,
+                    shard_count: self.shard_occupancy.len(),
+                    shard_occupancy: occupancy,
+                    overflowed: occupancy > max_outputs_per_shard,
+                    should_warn_overflow: false,
+                };
+            }
+            self.release_assignment(output_id, existing.attempt_id, false);
+        }
+
+        let mut overflowed = false;
+        let shard_index = if let Some((index, _)) = self
+            .shard_occupancy
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !self.retiring_shards.contains(index))
+            .filter(|(_, occupancy)| **occupancy < max_outputs_per_shard)
+            .min_by_key(|(_, occupancy)| **occupancy)
+        {
+            index
+        } else if self.shard_occupancy.len() < max_shards {
+            self.shard_occupancy.push(0);
+            self.shard_occupancy.len() - 1
+        } else {
+            overflowed = true;
+            self.shard_occupancy
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !self.retiring_shards.contains(index))
+                .min_by_key(|(_, occupancy)| **occupancy)
+                .or_else(|| {
+                    self.shard_occupancy
+                        .iter()
+                        .enumerate()
+                        .min_by_key(|(_, occupancy)| **occupancy)
+                })
+                .map(|(index, _)| index)
+                .unwrap_or_else(|| {
+                    self.shard_occupancy.push(0);
+                    0
+                })
+        };
+
+        self.shard_occupancy[shard_index] += 1;
+        let shard_occupancy = self.shard_occupancy[shard_index];
+        self.assignments.insert(
+            output_id.to_string(),
+            SrtMuxerAssignment {
+                attempt_id,
+                shard_index,
+            },
+        );
+
+        let should_warn_overflow = overflowed && !self.overflow_warned;
+        if overflowed {
+            self.overflow_warned = true;
+        }
+
+        SrtMuxerAssignResult {
+            shard_index,
+            shard_count: self.shard_occupancy.len(),
+            shard_occupancy,
+            overflowed,
+            should_warn_overflow,
+        }
+    }
+
+    pub fn release(&mut self, output_id: &str, attempt_id: u64) -> Option<SrtMuxerReleaseResult> {
+        self.release_assignment(output_id, attempt_id, true)
+    }
+
+    fn release_assignment(
+        &mut self,
+        output_id: &str,
+        attempt_id: u64,
+        retire_empty_shard: bool,
+    ) -> Option<SrtMuxerReleaseResult> {
+        let existing = self.assignments.get(output_id)?;
+        if existing.attempt_id != attempt_id {
+            return None;
+        }
+        let existing = self.assignments.remove(output_id)?;
+        if let Some(occupancy) = self.shard_occupancy.get_mut(existing.shard_index) {
+            *occupancy = occupancy.saturating_sub(1);
+        }
+        let shard_empty = self
+            .shard_occupancy
+            .get(existing.shard_index)
+            .is_none_or(|occupancy| *occupancy == 0);
+        if retire_empty_shard && shard_empty {
+            self.retiring_shards.insert(existing.shard_index);
+        }
+        Some(SrtMuxerReleaseResult {
+            shard_index: existing.shard_index,
+            shard_empty,
+        })
+    }
+
+    pub fn finish_retiring(&mut self, shard_index: usize) {
+        self.retiring_shards.remove(&shard_index);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.assignments.is_empty()
     }
 }
 
@@ -211,5 +368,29 @@ impl RuntimeInfra {
             diag_semaphores: TokioRwLock::new(HashMap::new()),
             event_log: Arc::new(EventLog::new()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SrtMuxerShardPool;
+
+    #[test]
+    fn retiring_empty_srt_muxer_shard_is_not_reused_until_cleanup_finishes() {
+        let mut pool = SrtMuxerShardPool::default();
+
+        let first = pool.assign("out-1", 1, 1, 8);
+        assert_eq!(first.shard_index, 0);
+
+        let release = pool.release("out-1", 1).expect("assignment released");
+        assert_eq!(release.shard_index, 0);
+        assert!(release.shard_empty);
+
+        let during_cleanup = pool.assign("out-2", 1, 1, 8);
+        assert_eq!(during_cleanup.shard_index, 1);
+
+        pool.finish_retiring(0);
+        let after_cleanup = pool.assign("out-3", 1, 1, 8);
+        assert_eq!(after_cleanup.shard_index, 0);
     }
 }

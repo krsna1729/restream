@@ -1243,6 +1243,134 @@ async fn egress_unregister_idempotent() {
     engine.unregister_egress("out-1").await;
 }
 
+fn engine_with_srt_muxer_caps(max_outputs_per_shard: usize, max_shards: usize) -> MediaEngine {
+    MediaEngine::new_with_config(Arc::new(crate::AppConfig {
+        srt_egress_muxer_max_outputs_per_shard: max_outputs_per_shard,
+        srt_egress_muxer_max_shards: max_shards,
+        ..crate::AppConfig::default()
+    }))
+}
+
+#[tokio::test]
+async fn srt_muxer_assignment_creates_new_shards_at_output_threshold() {
+    let engine = engine_with_srt_muxer_caps(2, 8);
+
+    let first = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-1", 1)
+        .await;
+    let second = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-2", 1)
+        .await;
+    let third = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-3", 1)
+        .await;
+
+    assert_eq!(first, "source:srt-mux-shard:0");
+    assert_eq!(second, "source:srt-mux-shard:0");
+    assert_eq!(third, "source:srt-mux-shard:1");
+}
+
+#[tokio::test]
+async fn srt_muxer_assignment_reuses_freed_empty_shard() {
+    let engine = engine_with_srt_muxer_caps(1, 8);
+
+    let first = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-1", 1)
+        .await;
+    let second = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-2", 1)
+        .await;
+    engine
+        .release_srt_egress_muxer_stage("pipe-1", "source", "out-1", 1)
+        .await;
+    let third = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-3", 1)
+        .await;
+
+    assert_eq!(first, "source:srt-mux-shard:0");
+    assert_eq!(second, "source:srt-mux-shard:1");
+    assert_eq!(third, "source:srt-mux-shard:0");
+}
+
+#[tokio::test]
+async fn srt_muxer_assignment_degrades_to_least_loaded_at_max_shards() {
+    let engine = engine_with_srt_muxer_caps(1, 2);
+
+    let first = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-1", 1)
+        .await;
+    let second = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-2", 1)
+        .await;
+    let third = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-3", 1)
+        .await;
+    let fourth = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-4", 1)
+        .await;
+
+    assert_eq!(first, "source:srt-mux-shard:0");
+    assert_eq!(second, "source:srt-mux-shard:1");
+    assert_eq!(third, "source:srt-mux-shard:0");
+    assert_eq!(fourth, "source:srt-mux-shard:1");
+}
+
+#[tokio::test]
+async fn stale_srt_muxer_release_cannot_remove_replacement_assignment() {
+    let engine = engine_with_srt_muxer_caps(1, 8);
+
+    let first = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-race", 1)
+        .await;
+    let replacement = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-race", 2)
+        .await;
+    engine
+        .release_srt_egress_muxer_stage("pipe-1", "source", "out-race", 1)
+        .await;
+    let still_current = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-race", 2)
+        .await;
+
+    assert_eq!(first, "source:srt-mux-shard:0");
+    assert_eq!(replacement, "source:srt-mux-shard:0");
+    assert_eq!(still_current, replacement);
+}
+
+#[tokio::test]
+async fn empty_srt_muxer_shard_cancels_and_removes_ts_stage() {
+    let engine = Arc::new(engine_with_srt_muxer_caps(1, 8));
+    let source_ring = Arc::new(RingBuffer::new(8));
+    let stage_key = engine
+        .assign_srt_egress_muxer_stage("pipe-1", "source", "out-1", 1)
+        .await;
+    let ts_ring = engine
+        .get_or_create_ts_muxer_stage("pipe-1", &stage_key, source_ring)
+        .await;
+
+    assert!(
+        engine
+            .stages
+            .ts_muxers
+            .read()
+            .await
+            .contains_key("pipe-1:source:srt-mux-shard:0")
+    );
+    engine
+        .release_srt_egress_muxer_stage("pipe-1", "source", "out-1", 1)
+        .await;
+
+    assert!(ts_ring.cancel.is_cancelled());
+    assert!(
+        !engine
+            .stages
+            .ts_muxers
+            .read()
+            .await
+            .contains_key("pipe-1:source:srt-mux-shard:0")
+    );
+}
+
 #[tokio::test]
 async fn stale_egress_unregister_cannot_clobber_replacement_attempt() {
     let engine = MediaEngine::new();
