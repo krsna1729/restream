@@ -242,6 +242,7 @@ jobs:
     name: Integration test (ramp + mixed-scale)
     runs-on: ubuntu-24.04
     needs: test
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -278,7 +279,7 @@ jobs:
         env:
           N_PER_GROUP: "1"
           BENCH_BUILD: never
-        run: scripts/harness/run.sh mixed.fast-breadth -- --no-netns
+        run: scripts/harness/parallel-fast-breadth.sh
       - name: Run internal backend rollout smoke
         env:
           BENCH_BUILD: never
