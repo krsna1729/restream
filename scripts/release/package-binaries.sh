@@ -125,7 +125,7 @@ License texts, the third-party component index, and source information are in
 the distribution/ directory and must remain beside the binaries.
 
 test_harness is included for inspection and debugging. Its read-only catalog
-inspection commands live under `./run test_harness catalog ...`. Run live
+inspection commands live under './run test_harness catalog ...'. Run live
 integration tests from a source checkout with scripts/harness/run.sh; they also
 require committed fixtures, MediaMTX, and the documented host setup.
 EOF
