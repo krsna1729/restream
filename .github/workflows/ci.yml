@@ -161,6 +161,13 @@ jobs:
         uses: ./.github/actions/native-prefix
       - name: Restore Rust build cache
         uses: ./.github/actions/rust-cache
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Build frontend assets for embedded API tests
+        run: npm run build:frontend
       - name: Rust test hygiene gate
         run: ./scripts/check/test-hygiene.sh
       - name: Fixture discipline gate
@@ -204,6 +211,13 @@ jobs:
         uses: ./.github/actions/native-prefix
       - name: Restore Rust build cache
         uses: ./.github/actions/rust-cache
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Build frontend assets for embedded API tests
+        run: npm run build:frontend
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate coverage
