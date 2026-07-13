@@ -60,6 +60,35 @@ fn harness_source_does_not_use_repo_root_data_db_fallback() {
 }
 
 #[test]
+fn release_shards_keep_ci_logs_progress_first() {
+    let harness_source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/bin/test_harness.rs"
+    ));
+    let release_wrapper = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/scripts/release/harness-shard.sh"
+    ));
+
+    assert!(
+        harness_source.contains("TEST_HARNESS_SUPPRESS_SUCCESS_JSON"),
+        "harness should expose an explicit opt-out for success JSON in CI logs"
+    );
+    assert!(
+        harness_source.contains("!env_flag(\"TEST_HARNESS_SUPPRESS_SUCCESS_JSON\")"),
+        "success JSON should remain the default for local one-off runs"
+    );
+    assert!(
+        release_wrapper.contains("TEST_HARNESS_SUPPRESS_SUCCESS_JSON=1"),
+        "release shards should upload JSON artifacts without dumping them into progress logs"
+    );
+    assert!(
+        release_wrapper.contains("artifact paths"),
+        "release wrapper comment should preserve why artifact lines stay visible"
+    );
+}
+
+#[test]
 fn strip_netns_opt_removes_only_the_opt_out_flag() {
     let raw = vec![
         "bitrate-sweep".to_string(),

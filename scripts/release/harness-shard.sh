@@ -85,7 +85,12 @@ run_mode() {
     local mode=$1
     shift || true
     echo "[release-shard] run $shard: $mode"
-    scripts/harness/run.sh "$mode" -- "${common_args[@]}" "$@"
+    # Release CI uploads the JSON artifacts separately; printing the full
+    # pretty JSON for every successful mode makes 22 parallel shard logs hard
+    # to scan and mixes machine payloads with progress lines. Keep progress,
+    # failure diagnostics, and artifact paths in stdout/stderr, but suppress
+    # redundant success payloads in this release wrapper.
+    TEST_HARNESS_SUPPRESS_SUCCESS_JSON=1 scripts/harness/run.sh "$mode" -- "${common_args[@]}" "$@"
 }
 
 while IFS=$'\t' read -r kind value; do

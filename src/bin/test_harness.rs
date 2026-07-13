@@ -249,7 +249,9 @@ async fn run() -> Result<(), String> {
             }
             std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap())
                 .map_err(|e| e.to_string())?;
-            println!("{}", serde_json::to_string_pretty(&value).unwrap());
+            if !env_flag("TEST_HARNESS_SUPPRESS_SUCCESS_JSON") {
+                println!("{}", serde_json::to_string_pretty(&value).unwrap());
+            }
             println!("artifact={}", path.display());
             // Skip runtime teardown — OS threads holding FFmpeg/SRT C contexts
             // race with global cleanup and cause spurious segfaults on exit.

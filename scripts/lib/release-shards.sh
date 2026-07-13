@@ -55,10 +55,10 @@ restream_release_shard_timeout() {
         smoke|branch-matrix)
             echo 5m
             ;;
-        mixed.live.rtmp.h264.a1|mixed.live.srt.h264.a1|mixed.live.srt.h265.a1|mixed.file.h264.a1|mixed.file.h265.a1|fault.resilience|srt-crypto-matrix|ramp-family)
+        mixed.live.rtmp.h264.a1|mixed.live.srt.h264.a1|mixed.file.h264.a1|fault.resilience|srt-crypto-matrix|ramp-family)
             echo 15m
             ;;
-        mixed.live.srt.h264.a2|mixed.live.srt.h265.a2|mixed.file.h264.a2|mixed.file.h265.a2|resource-sweep.*)
+        mixed.live.srt.h264.a2|mixed.live.srt.h265.a1|mixed.live.srt.h265.a2|mixed.file.h264.a2|mixed.file.h265.a1|mixed.file.h265.a2|resource-sweep.*)
             echo 25m
             ;;
         bitrate-sweep.*)
