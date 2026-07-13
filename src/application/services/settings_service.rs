@@ -5,7 +5,7 @@ use crate::application::ports::{IngestHostStore, JobStore, MetaStore, MetaStoreW
 use crate::application::recording::load_recording_enabled_map;
 use crate::application::recording::save_recording_settings;
 use crate::application::settings::{BACKEND_POLICY_META_KEY, load_settings_snapshot};
-use crate::application::srt_ingest::load_global_srt_ingest_config;
+use crate::application::srt_ingest::{load_global_srt_ingest_config, srt_ingest_policy_entries};
 use crate::application::{
     ingest_security::save_ingest_security_config, transcode_profiles::save_transcode_profiles,
 };
@@ -154,7 +154,8 @@ impl SettingsService {
             load_global_srt_ingest_config(self.meta_store.as_ref(), srt_passphrase, srt_pbkeylen)
                 .await;
         let pipelines = self.list_pipelines().await?;
-        policy_store.replace(global, &pipelines);
+        let entries = srt_ingest_policy_entries(&pipelines);
+        policy_store.replace(global, &entries);
         Ok(())
     }
 

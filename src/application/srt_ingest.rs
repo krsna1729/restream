@@ -1,9 +1,10 @@
 //! Application-layer SRT ingest configuration loading and policy-store refresh
 //! that connect persisted settings and pipeline catalogs to runtime enforcement.
 
+use crate::application::models::Pipeline;
 use crate::application::ports::{MetaStore, PipelineStore, PipelineStoreError};
 use crate::domain::srt_ingest::{SrtGlobalIngestConfig, SrtGlobalIngestMode};
-use crate::media::srt::SrtIngestPolicyStore;
+use crate::media::srt::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
 use tracing::warn;
 
 pub const SRT_INGEST_GLOBAL_CONFIG_META_KEY: &str = "srt_ingest_global_config";
@@ -41,7 +42,8 @@ pub async fn load_policy_store(
 ) -> Result<SrtIngestPolicyStore, PipelineStoreError> {
     let global = load_global_srt_ingest_config(meta_store, srt_passphrase, srt_pbkeylen).await;
     let pipelines = pipeline_catalog.list_pipelines().await?;
-    Ok(SrtIngestPolicyStore::new(global, &pipelines))
+    let entries = srt_ingest_policy_entries(&pipelines);
+    Ok(SrtIngestPolicyStore::new(global, &entries))
 }
 
 pub async fn refresh_policy_store(
@@ -53,8 +55,22 @@ pub async fn refresh_policy_store(
 ) -> Result<(), PipelineStoreError> {
     let global = load_global_srt_ingest_config(meta_store, srt_passphrase, srt_pbkeylen).await;
     let pipelines = pipeline_catalog.list_pipelines().await?;
-    policy_store.replace(global, &pipelines);
+    let entries = srt_ingest_policy_entries(&pipelines);
+    policy_store.replace(global, &entries);
     Ok(())
+}
+
+pub fn srt_ingest_policy_entries(pipelines: &[Pipeline]) -> Vec<SrtIngestPolicyEntry> {
+    pipelines
+        .iter()
+        .map(|pipeline| {
+            SrtIngestPolicyEntry::new(
+                pipeline.id.as_str(),
+                pipeline.stream_key.as_str(),
+                pipeline.srt_ingest_policy.clone(),
+            )
+        })
+        .collect()
 }
 
 fn srt_global_config_from_appconfig(

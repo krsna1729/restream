@@ -239,6 +239,17 @@ fn planner_stays_independent_of_application_models() {
 }
 
 #[test]
+fn srt_policy_store_stays_independent_of_application_models() {
+    let srt_policy = include_str!("../src/media/srt_policy.rs");
+    assert!(srt_policy.contains("pub struct SrtIngestPolicyEntry"));
+    assert!(
+        !srt_policy.contains("crate::application::")
+            && !srt_policy.contains("restream::application::"),
+        "media SRT policy store should depend on narrow policy entries, not application models"
+    );
+}
+
+#[test]
 fn db_module_uses_explicit_repository_exports() {
     let db_mod = include_str!("../src/db/mod.rs");
     assert!(
