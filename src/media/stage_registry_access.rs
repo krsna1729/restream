@@ -7,12 +7,15 @@ use crate::media::avio::MemoryQueue;
 use crate::media::engine::{ActiveEgress, MediaEngine, hls_preview_registry_key};
 use crate::media::engine_registries::StageRuntime;
 use crate::media::pipe_metrics::PipeMetrics;
+use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_lifecycle::{
     StageBackendKind, StageLifecycle, StageLifecycleSnapshot, StagePhase,
 };
 use crate::media::stage_metrics::StageMetrics;
+use crate::media::ts_chunk_ring::TsChunkRing;
 use crate::runtime::stage::StageRuntimeSnapshot;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 impl MediaEngine {
     pub async fn register_input_queue(&self, key: StageKey, queue: Arc<MemoryQueue>) {
@@ -86,6 +89,125 @@ impl MediaEngine {
 
     pub async fn remove_stage_runtime(&self, key: &StageKey) {
         self.stages.runtimes.write().await.remove(key);
+    }
+
+    pub async fn get_or_create_ts_muxer_stage(
+        self: &Arc<Self>,
+        pipeline_id: &str,
+        stage_key: &str,
+        source_ring: Arc<RingBuffer>,
+    ) -> Arc<TsChunkRing> {
+        let key = format!("{}:{}", pipeline_id, stage_key);
+
+        let mut stages = self.stages.ts_muxers.write().await;
+        if let Some(stage) = stages.get(&key)
+            && !stage.cancel.is_cancelled()
+        {
+            return stage.clone();
+        }
+
+        let cancel = CancellationToken::new();
+        let shared_muxer = crate::media::srt::start_shared_ts_muxer(
+            pipeline_id,
+            stage_key,
+            source_ring,
+            self.clone(),
+            cancel,
+        );
+
+        stages.insert(key, shared_muxer.clone());
+        shared_muxer
+    }
+
+    fn srt_muxer_cohort_key(pipeline_id: &str, encoding: &str) -> String {
+        format!("{pipeline_id}\u{1f}{encoding}")
+    }
+
+    fn srt_muxer_stage_key(encoding: &str, shard_index: usize) -> String {
+        format!("{encoding}:srt-mux-shard:{shard_index}")
+    }
+
+    pub async fn assign_srt_egress_muxer_stage(
+        &self,
+        pipeline_id: &str,
+        encoding: &str,
+        output_id: &str,
+        attempt_id: u64,
+    ) -> String {
+        let max_outputs_per_shard = self.config.srt_egress_muxer_max_outputs_per_shard;
+        if max_outputs_per_shard == 0 {
+            return encoding.to_string();
+        }
+
+        let max_shards = self.config.srt_egress_muxer_max_shards.max(1);
+        let cohort_key = Self::srt_muxer_cohort_key(pipeline_id, encoding);
+        let mut pools = self.stages.srt_muxer_shards.write().await;
+        let result = pools.entry(cohort_key.clone()).or_default().assign(
+            output_id,
+            attempt_id,
+            max_outputs_per_shard,
+            max_shards,
+        );
+        drop(pools);
+
+        if result.should_warn_overflow {
+            warn!(
+                pipeline_id,
+                encoding,
+                cohort_key,
+                max_outputs_per_shard,
+                max_shards,
+                shard_count = result.shard_count,
+                shard_index = result.shard_index,
+                shard_occupancy = result.shard_occupancy,
+                "SRT muxer shard cap exceeded; additional outputs are sharing existing muxers"
+            );
+        }
+
+        Self::srt_muxer_stage_key(encoding, result.shard_index)
+    }
+
+    pub async fn release_srt_egress_muxer_stage(
+        &self,
+        pipeline_id: &str,
+        encoding: &str,
+        output_id: &str,
+        attempt_id: u64,
+    ) {
+        if self.config.srt_egress_muxer_max_outputs_per_shard == 0 {
+            return;
+        }
+
+        let cohort_key = Self::srt_muxer_cohort_key(pipeline_id, encoding);
+        let mut pools = self.stages.srt_muxer_shards.write().await;
+        let Some(pool) = pools.get_mut(&cohort_key) else {
+            return;
+        };
+        let Some(result) = pool.release(output_id, attempt_id) else {
+            return;
+        };
+        drop(pools);
+
+        if result.shard_empty {
+            let stage_key = Self::srt_muxer_stage_key(encoding, result.shard_index);
+            self.remove_ts_muxer_stage(pipeline_id, &stage_key).await;
+
+            let mut pools = self.stages.srt_muxer_shards.write().await;
+            if let Some(pool) = pools.get_mut(&cohort_key) {
+                pool.finish_retiring(result.shard_index);
+                if pool.is_empty() {
+                    pools.remove(&cohort_key);
+                }
+            }
+        }
+    }
+
+    async fn remove_ts_muxer_stage(&self, pipeline_id: &str, stage_key: &str) {
+        let key = format!("{}:{}", pipeline_id, stage_key);
+        let mut stages = self.stages.ts_muxers.write().await;
+        if let Some(stage) = stages.remove(&key) {
+            stage.cancel.cancel();
+        }
     }
 
     pub async fn get_or_create_stage_lifecycle(
