@@ -9,7 +9,7 @@ import {
 
 test("pipeline workspace canonicalizes legacy inspect and control URLs", async () => {
   const workspace = await loadCompiledFrontendModule(
-    "app/pipeline-workspace.js",
+    "core/pipeline-workspace.js",
   );
 
   const inspect = workspace.resolveDashboardLocation(
@@ -36,7 +36,7 @@ test("pipeline workspace canonicalizes legacy inspect and control URLs", async (
 
 test("dashboard URL resolution removes pipeline state outside the workspace", async () => {
   const workspace = await loadCompiledFrontendModule(
-    "app/pipeline-workspace.js",
+    "core/pipeline-workspace.js",
   );
 
   const overview = workspace.resolveDashboardLocation(
@@ -59,7 +59,7 @@ test("dashboard URL resolution removes pipeline state outside the workspace", as
 
 test("pipeline workspace defaults and URL builders preserve only relevant state", async () => {
   const workspace = await loadCompiledFrontendModule(
-    "app/pipeline-workspace.js",
+    "core/pipeline-workspace.js",
   );
 
   const selected = workspace.resolveDashboardLocation(
@@ -100,10 +100,10 @@ test("pipeline workspace shell exposes one active subordinate view", async () =>
   const inspectPanel = appendRoot(document, "section", "inspect-mode-panel");
   const monitorPanel = appendRoot(document, "section", "control-mode-panel");
 
-  const workspace = await loadCompiledFrontendModule(
-    "app/pipeline-workspace.js",
+  const shell = await loadCompiledFrontendModule(
+    "features/pipeline-workspace-shell.js",
   );
-  workspace.syncPipelineWorkspaceShell("pipeline", "inspect");
+  shell.syncPipelineWorkspaceShell("pipeline", "inspect");
 
   assert.equal(bar.classList.contains("hidden"), false);
   assert.equal(operate.getAttribute("aria-selected"), "false");
@@ -116,7 +116,7 @@ test("pipeline workspace shell exposes one active subordinate view", async () =>
   assert.equal(inspectPanel.classList.contains("hidden"), false);
   assert.equal(monitorPanel.classList.contains("hidden"), true);
 
-  workspace.syncPipelineWorkspaceShell("overview", "inspect");
+  shell.syncPipelineWorkspaceShell("overview", "inspect");
   assert.equal(bar.classList.contains("hidden"), true);
   assert.equal(inspectPanel.classList.contains("hidden"), true);
 });
@@ -168,7 +168,7 @@ test("inspector treats URL pipeline selection as authoritative across views", as
   };
 
   const workspace = await loadCompiledFrontendModule(
-    "app/pipeline-workspace.js",
+    "core/pipeline-workspace.js",
   );
   const inspector = await loadCompiledFrontendModule(
     "features/pipeline-inspector.js",

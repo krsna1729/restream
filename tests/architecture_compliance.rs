@@ -460,6 +460,31 @@ fn frontend_tooling_and_vendored_assets_are_reproducible() {
 }
 
 #[test]
+fn frontend_features_do_not_import_app_composition_modules() {
+    let features_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/ts/features");
+    let mut offenders = Vec::new();
+    for entry in std::fs::read_dir(&features_dir).expect("features dir should exist") {
+        let path = entry.expect("feature entry should be readable").path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("ts") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("feature source should be UTF-8");
+        if source.contains("../app/") {
+            offenders.push(
+                path.strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                    .unwrap()
+                    .display()
+                    .to_string(),
+            );
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "feature modules should not import app composition modules: {offenders:?}"
+    );
+}
+
+#[test]
 fn source_distribution_manifest_matches_declared_build_inputs() {
     let manifest = include_str!("../docs/source-distribution.md");
     for required in [

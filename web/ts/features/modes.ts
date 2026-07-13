@@ -46,12 +46,12 @@ import {
   dashboardModeUrl,
   pipelineWorkspaceUrl,
   resolveDashboardLocation,
-  syncPipelineWorkspaceShell,
-} from "../app/pipeline-workspace.js";
+} from "../core/pipeline-workspace.js";
 import type {
   DashboardMode,
   PipelineWorkspaceView,
-} from "../app/pipeline-workspace.js";
+} from "../core/pipeline-workspace.js";
+import { syncPipelineWorkspaceShell } from "./pipeline-workspace-shell.js";
 
 const runtimeDashboardModes = new Set<DashboardMode>(["overview", "pipeline"]);
 let currentMode: DashboardMode | null = null;

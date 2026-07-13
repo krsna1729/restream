@@ -19,7 +19,7 @@ import { renderPipelines, renderMetrics } from "./render.js";
 import { syncHistoryPollingWithVisibility } from "../history/controller.js";
 import { state } from "../core/state.js";
 import { createManagedLogStream } from "../core/log-stream.js";
-import { resolveDashboardLocation } from "../app/pipeline-workspace.js";
+import { resolveDashboardLocation } from "../core/pipeline-workspace.js";
 import type {
   AppLogRow,
   ConfigOutput,

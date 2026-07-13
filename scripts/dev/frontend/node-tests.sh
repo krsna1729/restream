@@ -48,7 +48,7 @@ NODE_COVERAGE_EXCLUDES=(
   "web/ts/core/api.ts"
   "web/ts/core/state.ts"
   "web/ts/features/control-room.ts"
-  "web/ts/features/dashboard-entry.ts"
+  "web/ts/app/dashboard-entry.ts"
   "web/ts/features/diagnostics.ts"
   "web/ts/features/editor.ts"
   "web/ts/features/graph.ts"
