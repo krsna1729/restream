@@ -7,7 +7,8 @@
 use crate::application::models::Output;
 use crate::domain::ids::{OutputId, PipelineId};
 use crate::domain::stage::{StageKey, StageKind};
-use crate::planner::backend_policy::{BackendPolicy, StageBackend};
+use crate::domain::state::StageBackendKind;
+use crate::planner::backend_policy::BackendPolicy;
 use crate::runtime::graph::{GraphRole, StageGraphPlan};
 
 pub fn plan_pipeline_graph(
@@ -34,7 +35,7 @@ pub fn plan_pipeline_graph(
     // 1. Source stage is always present
     plan.add_stage(
         StageKey::new(pipeline_id_typed.clone(), StageKind::Source),
-        StageBackend::AudioRouter, // Source doesn't run a transcoder
+        StageBackendKind::AudioRouter, // Source doesn't run a transcoder
     );
 
     // 2. Add outputs stages
@@ -127,7 +128,7 @@ pub fn plan_hls_preview_graph(
 
     plan.add_stage(
         StageKey::new(pipeline_id_typed.clone(), source_kind.clone()),
-        StageBackend::AudioRouter,
+        StageBackendKind::AudioRouter,
     );
     if is_hevc_preview_codec(codec) {
         let preview_key = StageKey::new(
@@ -159,7 +160,7 @@ pub fn plan_recording_graph(pipeline_id: &str, policy: &BackendPolicy) -> StageG
 
     plan.add_stage(
         StageKey::new(pipeline_id_typed, StageKind::Source),
-        StageBackend::AudioRouter,
+        StageBackendKind::AudioRouter,
     );
     plan.add_stage(
         recording_key,
@@ -279,7 +280,7 @@ mod tests {
         assert!(plan.stages.iter().any(|s| s.kind == StageKind::Source));
         assert!(plan.stages.iter().any(|s| {
             s.kind == StageKind::hls_segmenter(StageKind::source())
-                && s.backend == StageBackend::HlsSegmenter
+                && s.backend == StageBackendKind::HlsSegmenter
         }));
         assert!(plan.edges.iter().any(|edge| {
             edge.from == StageKey::new("pipe_1", StageKind::source())
@@ -345,7 +346,7 @@ mod tests {
             StageKey::new("pipe_1", StageKind::recording())
         );
         assert!(plan.stages.iter().any(|stage| {
-            stage.kind == StageKind::recording() && stage.backend == StageBackend::Recording
+            stage.kind == StageKind::recording() && stage.backend == StageBackendKind::Recording
         }));
         assert!(plan.edges.iter().any(|edge| {
             edge.from == StageKey::new("pipe_1", StageKind::source())
@@ -380,7 +381,7 @@ mod tests {
         );
         assert!(plan.stages.iter().any(|stage| {
             stage.kind == StageKind::hls_segmenter(hevc_720p.clone())
-                && stage.backend == StageBackend::HlsSegmenter
+                && stage.backend == StageBackendKind::HlsSegmenter
         }));
         assert!(
             plan.edges.iter().any(|edge| {
@@ -492,7 +493,8 @@ mod tests {
             prop_assert_eq!(stage_keys.len(), plan.stages.len(), "stage keys must be unique");
             prop_assert!(
                 plan.stages.iter().any(|stage| {
-                    stage.key == plan.terminal_stage && stage.backend == StageBackend::HlsSegmenter
+                    stage.key == plan.terminal_stage
+                        && stage.backend == StageBackendKind::HlsSegmenter
                 }),
                 "terminal HLS protocol stage must use HLS segmenter backend"
             );
@@ -537,7 +539,7 @@ mod tests {
             prop_assert!(stage_keys.contains(&plan.terminal_stage));
             prop_assert_eq!(stage_keys.len(), plan.stages.len(), "stage keys must be unique");
             let terminal_has_hls_backend = plan.stages.iter().any(|stage| {
-                stage.key == plan.terminal_stage && stage.backend == StageBackend::HlsSegmenter
+                stage.key == plan.terminal_stage && stage.backend == StageBackendKind::HlsSegmenter
             });
             prop_assert!(terminal_has_hls_backend);
 

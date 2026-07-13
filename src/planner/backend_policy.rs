@@ -5,16 +5,8 @@
 
 use crate::domain::audio_routing::{AudioRouting, parse_audio_operation};
 use crate::domain::stage::StageKind;
+use crate::domain::state::StageBackendKind;
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StageBackend {
-    AudioRouter,
-    InternalFfmpeg,
-    ExternalFfmpeg,
-    HlsSegmenter,
-    Recording,
-}
 
 /// Per-stage-family backend policy.
 ///
@@ -30,34 +22,36 @@ pub struct BackendPolicy {
 }
 
 impl BackendPolicy {
-    pub fn select_backend(&self, stage: &StageKind) -> StageBackend {
+    pub fn select_backend(&self, stage: &StageKind) -> StageBackendKind {
         match stage {
             StageKind::AudioRoute { operation, .. } => {
                 let routing = parse_audio_operation(operation);
                 if is_lightweight_audio_route(&routing) {
-                    StageBackend::AudioRouter
+                    StageBackendKind::AudioRouter
                 } else if self.internal_complex_audio {
-                    StageBackend::InternalFfmpeg
+                    StageBackendKind::InternalFfmpeg
                 } else {
-                    StageBackend::ExternalFfmpeg
+                    StageBackendKind::ExternalFfmpeg
                 }
             }
             StageKind::VideoPreset { .. } => {
                 if self.internal_video_presets {
-                    StageBackend::InternalFfmpeg
+                    StageBackendKind::InternalFfmpeg
                 } else {
-                    StageBackend::ExternalFfmpeg
+                    StageBackendKind::ExternalFfmpeg
                 }
             }
             StageKind::CodecEdge { operation, .. }
                 if operation == "hevc_to_h264" && self.internal_hevc_to_h264 =>
             {
-                StageBackend::InternalFfmpeg
+                StageBackendKind::InternalFfmpeg
             }
-            StageKind::Preview { .. } if self.internal_hls_preview => StageBackend::InternalFfmpeg,
-            StageKind::Hls | StageKind::HlsSegmenter { .. } => StageBackend::HlsSegmenter,
-            StageKind::Recording => StageBackend::Recording,
-            _ => StageBackend::ExternalFfmpeg,
+            StageKind::Preview { .. } if self.internal_hls_preview => {
+                StageBackendKind::InternalFfmpeg
+            }
+            StageKind::Hls | StageKind::HlsSegmenter { .. } => StageBackendKind::HlsSegmenter,
+            StageKind::Recording => StageBackendKind::Recording,
+            _ => StageBackendKind::ExternalFfmpeg,
         }
     }
 }
@@ -82,7 +76,7 @@ mod tests {
         let policy = default_policy();
         let stage = StageKind::audio_route("atrack:0", StageKind::source());
 
-        assert_eq!(policy.select_backend(&stage), StageBackend::AudioRouter);
+        assert_eq!(policy.select_backend(&stage), StageBackendKind::AudioRouter);
     }
 
     #[test]
@@ -90,7 +84,10 @@ mod tests {
         let policy = default_policy();
         let stage = StageKind::audio_route("downmix:0", StageKind::source());
 
-        assert_eq!(policy.select_backend(&stage), StageBackend::ExternalFfmpeg);
+        assert_eq!(
+            policy.select_backend(&stage),
+            StageBackendKind::ExternalFfmpeg
+        );
     }
 
     #[test]
@@ -98,7 +95,10 @@ mod tests {
         let policy = default_policy();
         let stage = StageKind::audio_route("remap:0:1", StageKind::source());
 
-        assert_eq!(policy.select_backend(&stage), StageBackend::ExternalFfmpeg);
+        assert_eq!(
+            policy.select_backend(&stage),
+            StageBackendKind::ExternalFfmpeg
+        );
     }
 
     #[test]
@@ -107,7 +107,7 @@ mod tests {
 
         assert_eq!(
             policy.select_backend(&StageKind::video_preset("720p")),
-            StageBackend::ExternalFfmpeg
+            StageBackendKind::ExternalFfmpeg
         );
     }
 
@@ -120,7 +120,7 @@ mod tests {
 
         assert_eq!(
             policy.select_backend(&StageKind::video_preset("720p")),
-            StageBackend::InternalFfmpeg
+            StageBackendKind::InternalFfmpeg
         );
     }
 
@@ -133,7 +133,7 @@ mod tests {
 
         assert_eq!(
             policy.select_backend(&StageKind::codec_edge("hevc_to_h264", StageKind::source())),
-            StageBackend::InternalFfmpeg
+            StageBackendKind::InternalFfmpeg
         );
     }
 
@@ -147,7 +147,7 @@ mod tests {
 
         assert_eq!(
             policy.select_backend(&StageKind::codec_edge("hevc_to_h264", StageKind::source())),
-            StageBackend::ExternalFfmpeg
+            StageBackendKind::ExternalFfmpeg
         );
     }
 
@@ -161,7 +161,7 @@ mod tests {
 
         assert_eq!(
             policy.select_backend(&StageKind::video_preset("720p")),
-            StageBackend::ExternalFfmpeg
+            StageBackendKind::ExternalFfmpeg
         );
     }
 
@@ -170,7 +170,10 @@ mod tests {
         let policy = default_policy();
         let stage = StageKind::audio_route("downmix:0", StageKind::source());
 
-        assert_eq!(policy.select_backend(&stage), StageBackend::ExternalFfmpeg);
+        assert_eq!(
+            policy.select_backend(&stage),
+            StageBackendKind::ExternalFfmpeg
+        );
     }
 
     #[test]
@@ -181,7 +184,10 @@ mod tests {
         };
         let stage = StageKind::audio_route("downmix:0", StageKind::source());
 
-        assert_eq!(policy.select_backend(&stage), StageBackend::InternalFfmpeg);
+        assert_eq!(
+            policy.select_backend(&stage),
+            StageBackendKind::InternalFfmpeg
+        );
     }
 
     #[test]
@@ -190,7 +196,7 @@ mod tests {
 
         assert_eq!(
             policy.select_backend(&StageKind::preview("h264", StageKind::source())),
-            StageBackend::ExternalFfmpeg
+            StageBackendKind::ExternalFfmpeg
         );
     }
 
@@ -203,7 +209,7 @@ mod tests {
 
         assert_eq!(
             policy.select_backend(&StageKind::preview("h264", StageKind::source())),
-            StageBackend::InternalFfmpeg
+            StageBackendKind::InternalFfmpeg
         );
     }
 
@@ -213,11 +219,11 @@ mod tests {
 
         assert_eq!(
             policy.select_backend(&StageKind::hls()),
-            StageBackend::HlsSegmenter
+            StageBackendKind::HlsSegmenter
         );
         assert_eq!(
             policy.select_backend(&StageKind::recording()),
-            StageBackend::Recording
+            StageBackendKind::Recording
         );
     }
 }

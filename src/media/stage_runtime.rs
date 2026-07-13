@@ -26,7 +26,7 @@ use crate::media::ffmpeg::stage_plan::{
 use crate::media::ring_buffer::RingBuffer;
 use crate::media::stage_lifecycle::{StageBackendKind, StageLifecycle, StagePhase};
 use crate::media::stage_metrics::StageMetrics;
-use crate::planner::backend_policy::{BackendPolicy, StageBackend};
+use crate::planner::backend_policy::BackendPolicy;
 use crate::runtime::stage::StageRuntimeSnapshot;
 
 /// Handle to an admitted stage. Consumers read from `ring`; the runtime manager
@@ -74,7 +74,7 @@ impl StageRuntimeManager {
         source_ring: Arc<RingBuffer>,
         input_codec_override: Option<&str>,
     ) -> (StageHandle, bool) {
-        let backend_kind = backend_kind_for_stage(&key.kind, &self.policy);
+        let backend_kind = self.policy.select_backend(&key.kind);
         let lifecycle = self
             .engine
             .get_or_create_stage_lifecycle_with_backend(
@@ -148,7 +148,7 @@ impl StageRuntimeManager {
     }
 
     /// Compute the backend policy choice for a stage without acquiring permits.
-    pub fn select_backend(&self, kind: &StageKind) -> StageBackend {
+    pub fn select_backend(&self, kind: &StageKind) -> StageBackendKind {
         self.policy.select_backend(kind)
     }
 
@@ -185,7 +185,7 @@ impl StageRuntimeManager {
         let backend = self.select_backend(&key.kind);
 
         if let Some(audio_op) = key.kind.audio_operation()
-            && backend == StageBackend::AudioRouter
+            && backend == StageBackendKind::AudioRouter
         {
             let pipeline_id = key.pipeline.to_string();
             let output_ring = handle.ring.clone();
@@ -297,7 +297,7 @@ impl StageRuntimeManager {
             };
 
             match backend {
-                StageBackend::InternalFfmpeg => {
+                StageBackendKind::InternalFfmpeg => {
                     info!(
                         pipeline_id = %pipeline_id,
                         stage = %key,
@@ -310,7 +310,7 @@ impl StageRuntimeManager {
                         tracing::error!(stage = %key, error = %e, "internal ffmpeg stage failed");
                     }
                 }
-                StageBackend::ExternalFfmpeg => {
+                StageBackendKind::ExternalFfmpeg => {
                     info!(
                         pipeline_id = %pipeline_id,
                         stage = %key,
@@ -323,9 +323,9 @@ impl StageRuntimeManager {
                         tracing::error!(stage = %key, error = %e, "external ffmpeg stage failed");
                     }
                 }
-                StageBackend::AudioRouter
-                | StageBackend::HlsSegmenter
-                | StageBackend::Recording => {}
+                StageBackendKind::AudioRouter
+                | StageBackendKind::HlsSegmenter
+                | StageBackendKind::Recording => {}
             }
         });
     }
@@ -522,17 +522,6 @@ pub(crate) async fn wait_for_stage_metadata(
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-}
-
-fn backend_kind_for_stage(kind: &StageKind, policy: &BackendPolicy) -> StageBackendKind {
-    use crate::planner::backend_policy::StageBackend;
-    match policy.select_backend(kind) {
-        StageBackend::AudioRouter => StageBackendKind::AudioRouter,
-        StageBackend::InternalFfmpeg => StageBackendKind::InternalFfmpeg,
-        StageBackend::ExternalFfmpeg => StageBackendKind::ExternalFfmpeg,
-        StageBackend::HlsSegmenter => StageBackendKind::HlsSegmenter,
-        StageBackend::Recording => StageBackendKind::Recording,
     }
 }
 

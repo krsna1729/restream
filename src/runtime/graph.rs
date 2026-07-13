@@ -1,6 +1,6 @@
 use crate::domain::ids::{OutputId, PipelineId};
 use crate::domain::stage::{StageKey, StageKind};
-use crate::planner::backend_policy::StageBackend;
+use crate::domain::state::StageBackendKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GraphRole {
@@ -16,7 +16,7 @@ pub struct StagePlan {
     pub key: StageKey,
     pub kind: StageKind,
     pub input: Option<StageKey>,
-    pub backend: StageBackend,
+    pub backend: StageBackendKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +45,7 @@ impl StageGraphPlan {
         }
     }
 
-    pub fn add_stage(&mut self, key: StageKey, backend: StageBackend) {
+    pub fn add_stage(&mut self, key: StageKey, backend: StageBackendKind) {
         if self.stages.iter().any(|s| s.key == key) {
             return;
         }
