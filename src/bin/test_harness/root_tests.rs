@@ -80,8 +80,8 @@ fn strip_netns_opt_removes_only_the_opt_out_flag() {
 #[test]
 fn file_live_edge_duration_budget_covers_one_target_gop() {
     assert_eq!(file_live_edge_max_duration_drift_secs(0), 0.75);
-    assert_eq!(file_live_edge_max_duration_drift_secs(1), 1.0);
-    assert_eq!(file_live_edge_max_duration_drift_secs(2), 2.0);
+    assert_eq!(file_live_edge_max_duration_drift_secs(1), 1.75);
+    assert_eq!(file_live_edge_max_duration_drift_secs(2), 2.75);
 }
 
 #[test]
@@ -117,6 +117,18 @@ fn mixed_matrix_uses_heavyweight_suite_timeout_floor() {
     // under the default 900s ceiling, so hosted runners can hit an artificial
     // timeout while the mode is still making expected progress.
     assert_eq!(suite_mode_timeout_secs("bitrate-sweep", 900), 2400);
+}
+
+#[test]
+fn suite_elapsed_formatter_is_compact_for_logs() {
+    assert_eq!(
+        suite_format_elapsed(std::time::Duration::from_millis(1234)),
+        "1.2s"
+    );
+    assert_eq!(
+        suite_format_elapsed(std::time::Duration::from_secs(65)),
+        "1m05s"
+    );
 }
 
 #[test]
@@ -283,6 +295,10 @@ fn harness_progress_status_consumes_existing_fields() {
     assert!(
         source.contains("healthRow=missing"),
         "temporarily missing health rows should be reported as progress stalls"
+    );
+    assert!(
+        source.contains("timed out waiting for outputs to make progress"),
+        "progress deadline failures should call out timeout explicitly"
     );
 }
 

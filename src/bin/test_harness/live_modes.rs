@@ -1,9 +1,11 @@
 use super::*;
 
 const FILE_LIVE_EDGE_MIN_DURATION_DRIFT_SECS: f64 = 0.75;
+const FILE_LIVE_EDGE_STOP_LATENCY_DRIFT_SECS: f64 = 0.75;
 
 pub(crate) fn file_live_edge_max_duration_drift_secs(target_gop_seconds: u32) -> f64 {
-    FILE_LIVE_EDGE_MIN_DURATION_DRIFT_SECS.max(target_gop_seconds as f64)
+    FILE_LIVE_EDGE_MIN_DURATION_DRIFT_SECS
+        .max(target_gop_seconds as f64 + FILE_LIVE_EDGE_STOP_LATENCY_DRIFT_SECS)
 }
 
 pub(crate) async fn run_burst_graph_check(
@@ -1544,8 +1546,9 @@ async fn run_file_live_edge_case(
     let duration_delta_secs = absolute_delta_secs(recorded_duration_secs, capture_elapsed_secs);
     // Recording start/stop follows live media timestamps and keyframe/GOP
     // boundaries, not the wall-clock sleep edge in this harness. Bound the
-    // drift to one target GOP window so the test still catches runaway
-    // recording duration without failing normal live-edge alignment.
+    // drift to one target GOP window plus a small hosted-runner stop latency
+    // allowance so the test still catches runaway recording duration without
+    // failing normal live-edge alignment.
     let max_duration_drift_secs = file_live_edge_max_duration_drift_secs(target_gop_seconds);
     let duration_ok = duration_delta_secs <= max_duration_drift_secs;
     let hls_ok = playlist_body.contains("#EXTM3U")

@@ -84,7 +84,7 @@ pub(crate) async fn wait_for_outputs_progress_with_env(
                 .await
                 .unwrap_or_default();
             return Err(format!(
-                "outputs did not make progress for pipeline {pipeline_id} within {:?}: {progressed}/{}; stalled={}{}",
+                "timed out waiting for outputs to make progress for pipeline {pipeline_id} within {:?}: {progressed}/{}; stalled={}{}",
                 timeout,
                 output_ids.len(),
                 stalled.join(", "),

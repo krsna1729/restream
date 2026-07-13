@@ -27,14 +27,17 @@ struct SuiteModeOutcome {
     mode_dir: PathBuf,
     started_at: String,
     finished_at: String,
+    elapsed: Duration,
     exit_ok: bool,
-    timed_out: bool,
+    suite_timed_out: bool,
+    child_reported_timeout: bool,
     timeout_secs: u64,
 }
 
 struct SuiteSpawnOutcome {
     exit_ok: bool,
     timed_out: bool,
+    child_reported_timeout: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -48,6 +51,7 @@ async fn suite_run_mode(
     timeout: Duration,
 ) -> Result<SuiteModeOutcome, String> {
     let started_at = Utc::now().to_rfc3339();
+    let started = Instant::now();
     let spawn_mode_dir = mode_dir.clone();
     let spawn_mode = mode.clone();
     let exit_ok = tokio::task::spawn_blocking(move || {
@@ -63,14 +67,17 @@ async fn suite_run_mode(
     })
     .await
     .map_err(|e| format!("suite worker join failed for {mode}: {e}"))??;
+    let elapsed = started.elapsed();
     let finished_at = Utc::now().to_rfc3339();
     Ok(SuiteModeOutcome {
         mode,
         mode_dir,
         started_at,
         finished_at,
+        elapsed,
         exit_ok: exit_ok.exit_ok,
-        timed_out: exit_ok.timed_out,
+        suite_timed_out: exit_ok.timed_out,
+        child_reported_timeout: exit_ok.child_reported_timeout,
         timeout_secs: timeout.as_secs(),
     })
 }
@@ -247,10 +254,22 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
                     &outcome.finished_at,
                     &outcome.mode_dir,
                     preflight_only,
-                    outcome.timed_out,
+                    outcome.suite_timed_out,
+                    outcome.child_reported_timeout,
                     outcome.timeout_secs,
+                    outcome.elapsed,
                 )?;
-                println!("[suite] {}: {mode_status}", outcome.mode);
+                println!(
+                    "{}",
+                    suite_status_line(
+                        &outcome.mode,
+                        mode_status,
+                        outcome.elapsed,
+                        outcome.suite_timed_out,
+                        outcome.child_reported_timeout,
+                        outcome.timeout_secs,
+                    )
+                );
             }
             index = batch_end;
         } else {
@@ -271,6 +290,7 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
             let mode_timeout_secs = suite_mode_timeout_secs(mode, mode_timeout_secs);
             let mode_timeout = Duration::from_secs(mode_timeout_secs);
 
+            let mode_started_instant = Instant::now();
             let outcome = suite_spawn_mode(
                 &exe,
                 mode,
@@ -280,7 +300,7 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
                 use_host_net,
                 mode_timeout,
             )?;
-            let mode_status = if outcome.timed_out {
+            let mode_status = if outcome.timed_out || outcome.child_reported_timeout {
                 "TIMEOUT"
             } else if outcome.exit_ok {
                 "PASS"
@@ -291,6 +311,7 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
                 overall_ok = false;
             }
 
+            let mode_elapsed = mode_started_instant.elapsed();
             let mode_finished = Utc::now().to_rfc3339();
             suite_append_result(
                 &results_jsonl,
@@ -301,9 +322,21 @@ pub(crate) async fn suite_run() -> Result<Value, String> {
                 &mode_dir,
                 preflight_only,
                 outcome.timed_out,
+                outcome.child_reported_timeout,
                 mode_timeout_secs,
+                mode_elapsed,
             )?;
-            println!("[suite] {mode}: {mode_status}");
+            println!(
+                "{}",
+                suite_status_line(
+                    mode,
+                    mode_status,
+                    mode_elapsed,
+                    outcome.timed_out,
+                    outcome.child_reported_timeout,
+                    mode_timeout_secs,
+                )
+            );
             index += 1;
         }
 
@@ -387,6 +420,8 @@ fn suite_spawn_mode(
             return Ok(SuiteSpawnOutcome {
                 exit_ok: status.success(),
                 timed_out: false,
+                child_reported_timeout: !status.success()
+                    && suite_child_log_reports_timeout(&log_path),
             });
         }
         if Instant::now() >= deadline {
@@ -409,6 +444,7 @@ fn suite_spawn_mode(
             return Ok(SuiteSpawnOutcome {
                 exit_ok: false,
                 timed_out: true,
+                child_reported_timeout: true,
             });
         }
         std::thread::sleep(Duration::from_millis(250));
@@ -441,7 +477,7 @@ fn terminate_suite_process_group(child: &mut std::process::Child) {
 }
 
 fn suite_mode_status(outcome: &SuiteModeOutcome) -> &'static str {
-    if outcome.timed_out {
+    if outcome.suite_timed_out || outcome.child_reported_timeout {
         "TIMEOUT"
     } else if outcome.exit_ok {
         "PASS"
@@ -493,19 +529,25 @@ fn suite_append_result(
     mode_dir: &Path,
     preflight_only: bool,
     timed_out: bool,
+    child_reported_timeout: bool,
     mode_timeout_secs: u64,
+    elapsed: Duration,
 ) -> Result<(), String> {
+    let elapsed_seconds = elapsed.as_secs_f64();
     let line = json!({
         "mode": mode,
         "status": status,
         "startedAt": started_at,
         "finishedAt": finished_at,
+        "elapsedSeconds": elapsed_seconds,
         "workDir": mode_dir,
         "log": mode_dir.join("run.log"),
         "evidenceKind": if preflight_only { "preflight" } else { "execution" },
         "executed": !preflight_only,
         "command": if preflight_only { "preflight" } else { mode },
-        "timedOut": timed_out,
+        "timedOut": timed_out || child_reported_timeout,
+        "suiteTimedOut": timed_out,
+        "childReportedTimeout": child_reported_timeout,
         "timeoutSeconds": mode_timeout_secs,
         "timeoutArtifact": if timed_out { Value::String(mode_dir.join("timeout.json").display().to_string()) } else { Value::Null },
     });
@@ -519,6 +561,60 @@ fn suite_append_result(
         serde_json::to_string(&line).map_err(|e| e.to_string())?
     )
     .map_err(|e| e.to_string())
+}
+
+pub(crate) fn suite_format_elapsed(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs_f64();
+    if seconds < 60.0 {
+        format!("{seconds:.1}s")
+    } else {
+        let total_seconds = elapsed.as_secs();
+        let minutes = total_seconds / 60;
+        let seconds = total_seconds % 60;
+        format!("{minutes}m{seconds:02}s")
+    }
+}
+
+fn suite_status_line(
+    mode: &str,
+    status: &str,
+    elapsed: Duration,
+    suite_timed_out: bool,
+    child_reported_timeout: bool,
+    timeout_secs: u64,
+) -> String {
+    if status == "TIMEOUT" {
+        let reason = if suite_timed_out {
+            "suite limit reached"
+        } else if child_reported_timeout {
+            "child reported timeout"
+        } else {
+            "timeout"
+        };
+        format!(
+            "[suite] {mode}: TIMEOUT after {} ({reason}; limit {})",
+            suite_format_elapsed(elapsed),
+            suite_format_elapsed(Duration::from_secs(timeout_secs))
+        )
+    } else {
+        format!(
+            "[suite] {mode}: {status} ({})",
+            suite_format_elapsed(elapsed)
+        )
+    }
+}
+
+fn suite_child_log_reports_timeout(log_path: &Path) -> bool {
+    let Ok(log) = std::fs::read_to_string(log_path) else {
+        return false;
+    };
+    log.lines().rev().take(80).any(|line| {
+        let lower = line.to_ascii_lowercase();
+        lower.contains("test harness failed:")
+            && (lower.contains("timed out")
+                || lower.contains("timeout")
+                || lower.contains("did not make progress"))
+    })
 }
 
 // ── Preflight check ───────────────────────────────────────────────────────────
@@ -701,7 +797,9 @@ mod tests {
             &mode_dir,
             true,
             false,
+            false,
             120,
+            Duration::from_secs(1),
         )
         .expect("append result");
 
@@ -718,7 +816,10 @@ mod tests {
         assert_eq!(result_json["evidenceKind"], "preflight");
         assert_eq!(result_json["executed"], false);
         assert_eq!(result_json["command"], "preflight");
+        assert_eq!(result_json["elapsedSeconds"], 1.0);
         assert_eq!(result_json["timedOut"], false);
+        assert_eq!(result_json["suiteTimedOut"], false);
+        assert_eq!(result_json["childReportedTimeout"], false);
 
         std::fs::remove_dir_all(root).expect("remove suite evidence directory");
     }
@@ -741,6 +842,7 @@ mod tests {
 
         assert!(!outcome.exit_ok);
         assert!(outcome.timed_out);
+        assert!(outcome.child_reported_timeout);
         let artifact: Value = serde_json::from_slice(
             &std::fs::read(root.join("timeout.json")).expect("read timeout artifact"),
         )
@@ -755,5 +857,31 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).expect("remove timeout evidence directory");
+    }
+
+    #[test]
+    fn suite_child_timeout_failure_is_reported_as_timeout() {
+        let root = unique_test_root("suite-child-timeout");
+        std::fs::create_dir_all(&root).expect("create child timeout evidence directory");
+        std::fs::write(
+            root.join("run.log"),
+            "test harness failed: signal sink timed out\n",
+        )
+        .expect("write child timeout log");
+
+        assert!(suite_child_log_reports_timeout(&root.join("run.log")));
+        assert_eq!(
+            suite_status_line(
+                "resource-sweep",
+                "TIMEOUT",
+                Duration::from_secs(568),
+                false,
+                true,
+                2400,
+            ),
+            "[suite] resource-sweep: TIMEOUT after 9m28s (child reported timeout; limit 40m00s)"
+        );
+
+        std::fs::remove_dir_all(root).expect("remove child timeout evidence directory");
     }
 }
