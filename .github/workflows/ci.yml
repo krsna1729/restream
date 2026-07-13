@@ -248,6 +248,13 @@ jobs:
         uses: ./.github/actions/native-prefix
       - name: Restore Rust build cache
         uses: ./.github/actions/rust-cache
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Build frontend assets for embedded binaries
+        run: npm run build:frontend
       - name: Build canonical bench harness binaries
         run: ./scripts/build/bench-harness.sh
       - name: Run integration suite
@@ -313,6 +320,8 @@ jobs:
       - run: npm ci
       - name: Install Playwright browsers
         run: npx playwright install chromium
+      - name: Build frontend assets for embedded binary
+        run: npm run build:frontend
       - name: Build release binary
         run: scripts/build/resource-limit.sh cargo build --release
       - name: Start app
