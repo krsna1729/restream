@@ -171,7 +171,7 @@ fn output_cleanup_residue(
         if settings_output_exists(settings, pipeline_id, output_id) {
             residue.push(json!({"outputId": output_id, "surface": "settings.outputs"}));
         }
-        if health_output_exists(health, pipeline_id, output_id) {
+        if health_output_has_runtime_residue(health, pipeline_id, output_id) {
             residue.push(json!({"outputId": output_id, "surface": "engine.health.outputs"}));
         }
         if telemetry_egress_exists(telemetry, output_id) {
@@ -197,10 +197,11 @@ fn settings_output_exists(settings: &Value, pipeline_id: &str, output_id: &str) 
     })
 }
 
-fn health_output_exists(health: &Value, pipeline_id: &str, output_id: &str) -> bool {
+fn health_output_has_runtime_residue(health: &Value, pipeline_id: &str, output_id: &str) -> bool {
     health["pipelines"][pipeline_id]["outputs"]
         .as_object()
-        .is_some_and(|outputs| outputs.contains_key(output_id))
+        .and_then(|outputs| outputs.get(output_id))
+        .is_some_and(|output| output["endedAt"].as_str().is_none())
 }
 
 fn telemetry_egress_exists(telemetry: &Value, output_id: &str) -> bool {
@@ -280,6 +281,31 @@ mod tests {
             &output_ids,
             &json!({"outputs": []}),
             &json!({"pipelines": {"pipe-1": {"outputs": {}}}}),
+            &json!({"egresses": [], "memoryAccounting": {"avioEgressQueues": []}}),
+        );
+
+        assert!(residue.is_empty());
+    }
+
+    #[test]
+    fn output_cleanup_residue_accepts_recent_health_tombstones() {
+        let output_ids = vec!["out-1".to_string()];
+        let residue = output_cleanup_residue(
+            "pipe-1",
+            &output_ids,
+            &json!({"outputs": []}),
+            &json!({
+                "pipelines": {
+                    "pipe-1": {
+                        "outputs": {
+                            "out-1": {
+                                "status": "stopped",
+                                "endedAt": "2026-07-13T00:00:00Z"
+                            }
+                        }
+                    }
+                }
+            }),
             &json!({"egresses": [], "memoryAccounting": {"avioEgressQueues": []}}),
         );
 
