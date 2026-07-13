@@ -81,7 +81,7 @@ frontend_assets_exist() {
     [[ -s public/index.html ]] &&
         [[ -s public/login.html ]] &&
         [[ -s public/output.css ]] &&
-        [[ -s public/js/features/dashboard-entry.js ]] &&
+        [[ -s public/js/app/dashboard-entry.js ]] &&
         [[ -s public/js/lib/hls.min.js ]]
 }
 
@@ -132,7 +132,7 @@ for asset in \
     public/index.html \
     public/login.html \
     public/output.css \
-    public/js/features/dashboard-entry.js \
+    public/js/app/dashboard-entry.js \
     public/js/lib/hls.min.js \
     public/bin/ffmpeg; do
     [[ -s "$asset" ]] || {

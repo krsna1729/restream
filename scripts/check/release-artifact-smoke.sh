@@ -125,7 +125,7 @@ assert_nonempty() {
 assert_contains "/login" "Restream Login"
 assert_contains "/output.css" "--color-base-100"
 assert_contains "/base-path.js" "__RESTREAM_BASE_PATH__"
-assert_contains "/js/features/dashboard-entry.js" "dashboard"
+assert_contains "/js/app/dashboard-entry.js" "dashboard"
 assert_contains "/js/lib/hls.min.js" "Hls"
 assert_nonempty "/logo.png"
 
@@ -136,7 +136,7 @@ curl --fail --silent --show-error \
     -d '{"password":"release-smoke-password"}' \
     "$base_url/api/v1/auth/login" >/dev/null
 curl --fail --silent --show-error -b "$cookie_jar" "$base_url/" -o "$runtime/index.html"
-if ! grep -Fq -- "js/features/dashboard-entry.js" "$runtime/index.html"; then
+if ! grep -Fq -- "js/app/dashboard-entry.js" "$runtime/index.html"; then
     echo "release-artifact-smoke: authenticated index did not contain dashboard asset reference" >&2
     exit 1
 fi
