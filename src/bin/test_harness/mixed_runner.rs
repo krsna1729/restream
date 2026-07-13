@@ -50,7 +50,9 @@ pub(super) use mixed_control::{
     mixed_output_progress_timeout_for_case, mixed_progress_output_ids,
 };
 pub(super) use mixed_executor::{ScenarioExecutionContext, scenario_executor_for_plan};
-pub(super) use mixed_lifecycle::{stop_mixed_outputs, wait_for_outputs_stopped};
+pub(super) use mixed_lifecycle::{
+    delete_and_verify_mixed_outputs, stop_mixed_outputs, wait_for_outputs_stopped,
+};
 #[cfg(test)]
 pub(super) use mixed_matrix_runner::{
     matrix_case_progress_rows, mixed_matrix_cases_can_share_wave, mixed_runtime_log_noise_lines,
@@ -834,10 +836,10 @@ pub(super) async fn run_mixed_anchor_config(
     let lifecycle_started = Instant::now();
     let lifecycle_result =
         wait_for_outputs_stopped(api, &pipeline_id, &output_ids, Duration::from_secs(60)).await;
-    if env.check_selected("lifecycle")
-        && resume.allows(&mixed_scenario_check_id(cfg, "clean_shutdown"))
-    {
-        if let Err(error) = lifecycle_result {
+    if let Err(error) = &lifecycle_result {
+        if env.check_selected("lifecycle")
+            && resume.allows(&mixed_scenario_check_id(cfg, "clean_shutdown"))
+        {
             emit_mixed_result(
                 env,
                 cfg,
@@ -850,8 +852,21 @@ pub(super) async fn run_mixed_anchor_config(
                     "requested": output_ids.len(),
                 })),
             )?;
-            return Err("lifecycle: outputs did not all stop within 60 s".to_string());
         }
+        return Err(error.clone());
+    }
+    let delete_summary = delete_and_verify_mixed_outputs(
+        env,
+        api,
+        cfg,
+        &pipeline_id,
+        &output_ids,
+        Duration::from_secs(30),
+    )
+    .await?;
+    if env.check_selected("lifecycle")
+        && resume.allows(&mixed_scenario_check_id(cfg, "clean_shutdown"))
+    {
         emit_mixed_result(
             env,
             cfg,
@@ -860,13 +875,12 @@ pub(super) async fn run_mixed_anchor_config(
             lifecycle_started.elapsed(),
             Some(json!({
                 "stopped": output_ids.len(),
+                "deleted": delete_summary["deleted"],
             })),
         )?;
-        log_mixed_ok(env, "lifecycle: all outputs stopped")?;
-    } else if lifecycle_result.is_err() {
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        log_mixed_ok(env, "lifecycle: all outputs stopped and deleted")?;
     } else {
-        log_mixed_ok(env, "lifecycle: all outputs stopped")?;
+        log_mixed_ok(env, "lifecycle: all outputs stopped and deleted")?;
     }
 
     if env.check_selected("runtime-log") {
@@ -1040,7 +1054,31 @@ pub(super) async fn run_mixed_live_config(
 
     stop_child(&mut publisher).await;
     stop_mixed_outputs(api, &pipeline_id, &output_ids).await;
-    tokio::time::sleep(Duration::from_secs(8)).await;
+    wait_for_outputs_stopped(api, &pipeline_id, &output_ids, Duration::from_secs(60)).await?;
+    let delete_summary = delete_and_verify_mixed_outputs(
+        env,
+        api,
+        cfg,
+        &pipeline_id,
+        &output_ids,
+        Duration::from_secs(30),
+    )
+    .await?;
+    if env.check_selected("lifecycle")
+        && resume.allows(&mixed_scenario_check_id(cfg, "clean_shutdown"))
+    {
+        emit_mixed_result(
+            env,
+            cfg,
+            &mixed_scenario_check_id(cfg, "clean_shutdown"),
+            "pass",
+            Duration::ZERO,
+            Some(json!({
+                "stopped": output_ids.len(),
+                "deleted": delete_summary["deleted"],
+            })),
+        )?;
+    }
 
     if let Some(error) = sink_probe_failure {
         return Err(error);
@@ -1226,15 +1264,17 @@ pub(super) async fn run_mixed_file_config(
     let rss_peak = process_rss_kb(restream_pid).await.unwrap_or(0);
     let growth_kb = rss_peak.saturating_sub(rss_baseline);
 
-    for (i, output_id) in output_ids.iter().enumerate() {
-        api.post_empty(&format!(
-            "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop"
-        ))
-        .await?;
-        if i % 4 == 3 {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
+    stop_mixed_outputs(api, &pipeline_id, &output_ids).await;
+    wait_for_outputs_stopped(api, &pipeline_id, &output_ids, Duration::from_secs(60)).await?;
+    delete_and_verify_mixed_outputs(
+        env,
+        api,
+        cfg,
+        &pipeline_id,
+        &output_ids,
+        Duration::from_secs(30),
+    )
+    .await?;
 
     api.post_empty(&format!("/api/v1/ingests/{ingest_id}/stop"))
         .await?;
