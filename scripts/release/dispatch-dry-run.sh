@@ -6,6 +6,8 @@ set -euo pipefail
 
 ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 cd "$ROOT"
+# shellcheck source=scripts/lib/release-common.sh
+source "$ROOT/scripts/lib/release-common.sh"
 
 usage() {
     cat <<'EOF'
@@ -27,18 +29,11 @@ if [[ $# -gt 1 ]]; then
     exit 2
 fi
 
-REF="${1:-$(git branch --show-current)}"
-if [[ -z "$REF" ]]; then
+REF="$(restream_release_ref_or_current_branch "${1:-}")" || {
     echo "dispatch-dry-run: could not infer branch; pass a ref explicitly" >&2
     exit 2
-fi
-
-for command in gh jq; do
-    command -v "$command" >/dev/null || {
-        echo "dispatch-dry-run: required command not found: $command" >&2
-        exit 1
-    }
-done
+}
+restream_require_commands gh jq
 
 gh workflow run release.yml --ref "$REF"
 sleep "${RESTREAM_RELEASE_DISPATCH_SETTLE_SECS:-3}"

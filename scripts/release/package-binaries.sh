@@ -7,22 +7,15 @@ set -euo pipefail
 
 ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 cd "$ROOT"
+# shellcheck source=scripts/lib/release-common.sh
+source "$ROOT/scripts/lib/release-common.sh"
 
 VERSION="${1:?usage: scripts/release/package-binaries.sh <version>}"
 ARCH="${RESTREAM_RELEASE_ARCH:-linux-x86_64}"
 OUT_DIR="${RESTREAM_RELEASE_DIR:-dist}"
 
-if [[ ! "$VERSION" =~ ^v?[0-9][0-9A-Za-z._+-]*$ ]]; then
-    echo "package-binaries: version must be a filename-safe release label: $VERSION" >&2
-    exit 2
-fi
-
-for command in cargo npm tar sha256sum; do
-    command -v "$command" >/dev/null || {
-        echo "package-binaries: required command not found: $command" >&2
-        exit 1
-    }
-done
+restream_release_require_version package-binaries "$VERSION"
+restream_require_commands cargo npm tar sha256sum
 
 # A clean release checkout has neither node_modules nor generated public assets.
 # Reuse the canonical release preparation script so packaging, CI, and local

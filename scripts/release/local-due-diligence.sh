@@ -6,6 +6,8 @@ set -euo pipefail
 
 ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 cd "$ROOT"
+# shellcheck source=scripts/lib/release-common.sh
+source "$ROOT/scripts/lib/release-common.sh"
 
 usage() {
     cat <<'EOF'
@@ -54,10 +56,7 @@ if [[ -z "$VERSION" ]]; then
     usage >&2
     exit 2
 fi
-if [[ ! "$VERSION" =~ ^v?[0-9][0-9A-Za-z._+-]*$ ]]; then
-    echo "local-due-diligence: version must be filename-safe: $VERSION" >&2
-    exit 2
-fi
+restream_release_require_version local-due-diligence "$VERSION"
 
 sha="$(git rev-parse --short=12 HEAD)"
 run_id="local-release-${VERSION}-${sha}"

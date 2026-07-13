@@ -5,6 +5,8 @@ set -euo pipefail
 
 ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 cd "$ROOT"
+# shellcheck source=scripts/lib/release-common.sh
+source "$ROOT/scripts/lib/release-common.sh"
 
 usage() {
     cat <<'EOF'
@@ -26,23 +28,9 @@ if [[ -z "$TAG" || -z "$RUN_ID" ]]; then
     usage >&2
     exit 2
 fi
-if [[ ! "$TAG" =~ ^v[0-9][0-9A-Za-z._-]*$ ]]; then
-    echo "tag-and-publish: tag must start with v and be release-safe, got: $TAG" >&2
-    exit 2
-fi
-
-for command in gh jq git; do
-    command -v "$command" >/dev/null || {
-        echo "tag-and-publish: required command not found: $command" >&2
-        exit 1
-    }
-done
-
-if [[ -n "$(git status --porcelain)" ]]; then
-    echo "tag-and-publish: checkout must be clean before tagging" >&2
-    git status --short >&2
-    exit 1
-fi
+restream_release_require_tag tag-and-publish "$TAG"
+restream_require_commands gh jq git
+restream_release_require_clean_checkout tag-and-publish
 
 head_sha="$(git rev-parse HEAD)"
 run_json="$(gh run view "$RUN_ID" --json status,conclusion,headSha,workflowName,event,url,jobs)"
