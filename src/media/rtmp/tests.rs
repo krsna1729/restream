@@ -78,6 +78,14 @@ fn rtmp_video_droppability_matches_rml_contract() {
         rtmp_video_packet_can_be_dropped(&[0x27, 0x01, 0x00, 0x00, 0x28], false),
         "interframes may be marked droppable for future slow-consumer policies"
     );
+    assert!(
+        !rtmp_video_packet_can_be_dropped(&[0x27, 0x01, 0x00, 0x00, 0x28], true),
+        "packet metadata wins over FLV tag classification when it says keyframe"
+    );
+    assert!(
+        !rtmp_video_packet_can_be_dropped(&[0x12, 0x01], false),
+        "unclassified video payloads must fail closed until a future drop policy can prove safety"
+    );
 }
 
 #[test]

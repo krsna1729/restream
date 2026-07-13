@@ -1758,9 +1758,9 @@ fn rtmp_output_waits_for_video(ring_buffer: &RingBuffer) -> bool {
 
 fn rtmp_video_packet_can_be_dropped(payload: &[u8], is_keyframe: bool) -> bool {
     !is_keyframe
-        && !matches!(
+        && matches!(
             classify_flv_video_packet(payload),
-            Some(FlvVideoPacketKind::SequenceHeader)
+            Some(FlvVideoPacketKind::Interframe)
         )
 }
 

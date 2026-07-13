@@ -143,3 +143,25 @@ The remaining external caveat is real network validation through a second host
 or controlled external RTMP endpoint to cover physical MTU, NIC queues, WAN
 loss, and receiver implementation variance. TCP should segment 16 KiB
 application writes normally, and the netem run supports that path locally.
+
+## R2 correctness prerequisite: RTMP droppability semantics
+
+Before any sharded sender or slow-consumer fast-forward policy, the RTMP
+`can_be_dropped` bit must be conservative. `rml_rtmp` documents the flag as safe
+only for non-header media packets that can be dropped without corrupting later
+chunks. The current egress publish path sends sequence headers with
+`can_be_dropped=false` and routes ordinary video packets through
+`rtmp_video_packet_can_be_dropped`.
+
+Tightened the helper to return `true` only for positively classified FLV
+interframes when packet metadata does not mark the packet as a keyframe.
+Unknown or malformed video payloads now fail closed as non-droppable.
+
+Verification:
+
+```sh
+scripts/build/resource-limit.sh cargo test rtmp_video_droppability_matches_rml_contract --lib
+scripts/build/resource-limit.sh cargo test rtmp --lib
+```
+
+Result: `PASS`; the broader RTMP library filter ran 83 tests.
