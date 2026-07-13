@@ -109,6 +109,7 @@ pub struct AppConfig {
     pub no_color: bool,
     pub srt_passphrase: Option<String>,
     pub srt_pbkeylen: i32,
+    pub srt_egress_reuse_local_port: bool,
     pub srt_egress_muxer_max_outputs_per_shard: usize,
     pub srt_egress_muxer_max_shards: usize,
     pub use_internal_file_ingest: bool,
@@ -221,6 +222,16 @@ fn env_bool(name: &str) -> Option<bool> {
             "1" | "true" | "yes" | "on"
         )
     })
+}
+
+fn env_bool_default_true(name: &str) -> bool {
+    !matches!(
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("0" | "false" | "no" | "off")
+    )
 }
 
 fn derive_external_ffmpeg_permits(
@@ -370,6 +381,7 @@ impl Default for AppConfig {
             no_color: false,
             srt_passphrase: None,
             srt_pbkeylen: 16,
+            srt_egress_reuse_local_port: true,
             srt_egress_muxer_max_outputs_per_shard: 0,
             srt_egress_muxer_max_shards: 64,
             use_internal_file_ingest: false,
@@ -431,6 +443,8 @@ impl AppConfig {
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
             .unwrap_or(16);
+        let srt_egress_reuse_local_port =
+            env_bool_default_true("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT");
         let srt_egress_muxer_max_outputs_per_shard =
             env_usize("RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD", 0).min(10_000);
         let srt_egress_muxer_max_shards =
@@ -497,6 +511,7 @@ impl AppConfig {
             no_color,
             srt_passphrase,
             srt_pbkeylen,
+            srt_egress_reuse_local_port,
             srt_egress_muxer_max_outputs_per_shard,
             srt_egress_muxer_max_shards,
             use_internal_file_ingest,
@@ -879,6 +894,25 @@ mod tests {
                 assert!(!policy.internal_complex_audio);
             },
         );
+    }
+
+    #[test]
+    fn srt_egress_reuse_local_port_defaults_on_and_allows_override() {
+        with_env_overlay(&[], &["RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT"], || {
+            assert!(AppConfig::from_env().srt_egress_reuse_local_port);
+        });
+        with_env_vars(&[("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT", "true")], || {
+            assert!(AppConfig::from_env().srt_egress_reuse_local_port);
+        });
+        with_env_vars(&[("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT", "1")], || {
+            assert!(AppConfig::from_env().srt_egress_reuse_local_port);
+        });
+        with_env_vars(&[("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT", "false")], || {
+            assert!(!AppConfig::from_env().srt_egress_reuse_local_port);
+        });
+        with_env_vars(&[("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT", "0")], || {
+            assert!(!AppConfig::from_env().srt_egress_reuse_local_port);
+        });
     }
 
     #[test]
