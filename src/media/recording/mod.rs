@@ -8,7 +8,7 @@
 //! ends we optionally remux the completed `.ts` into `.mp4` via the configured
 //! FFmpeg subprocess when that binary exposes the MP4 muxer.
 
-use crate::application::recording::RecordingSettings;
+use crate::domain::recording::RecordingSettings;
 use crate::domain::stage::StageKey;
 use crate::media::engine::MediaEngine;
 use crate::media::feeder::{PacketFeedConfig, TsPacketFeeder};
