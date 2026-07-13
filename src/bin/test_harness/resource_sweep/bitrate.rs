@@ -313,7 +313,7 @@ async fn start_bitrate_sweep_stack(env: &BitrateSweepEnv) -> Result<ResourceSwee
         .map_err(|e| e.to_string())?;
     if let Err(err) = wait_for_http_ok(
         &format!("http://127.0.0.1:{}/v3/paths/list", env.mtx_api),
-        Duration::from_secs(30),
+        Duration::from_secs(60),
     )
     .await
     {
@@ -341,7 +341,7 @@ async fn start_bitrate_sweep_stack(env: &BitrateSweepEnv) -> Result<ResourceSwee
     let mut restream = restream_cmd.spawn().map_err(|e| e.to_string())?;
     if let Err(err) = wait_for_http_ok(
         &format!("http://127.0.0.1:{}/healthz", env.restream_http),
-        Duration::from_secs(30),
+        Duration::from_secs(60),
     )
     .await
     {
