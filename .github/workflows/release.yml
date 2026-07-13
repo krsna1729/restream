@@ -9,14 +9,22 @@ permissions:
   contents: write
   packages: write
 
+# Branch dry-runs should not stack stale release attempts. Tag runs are kept
+# independent because a published tag is an immutable release event.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  # workflow_dispatch runs from a branch, whose ref_name may contain '/' and is
+  # not a valid package version/path. Give non-tag evidence a stable,
+  # filename-safe local label while preserving the exact v* release tag.
+  RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.0.0-ci-{0}', github.run_number) }}
+
 jobs:
-  certify-and-publish:
+  prepare-build:
+    name: Prepare harness binaries
     runs-on: ubuntu-latest
-    env:
-      # workflow_dispatch runs from a branch, whose ref_name may contain '/'
-      # and is not a valid package version/path. Give non-tag evidence a stable,
-      # filename-safe local label while preserving the exact v* release tag.
-      RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.0.0-ci-{0}', github.run_number) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -27,9 +35,104 @@ jobs:
       - uses: ./.github/actions/system-deps
         with: { profile: live }
       - uses: ./.github/actions/native-prefix
-      # Reuse the repository's established prebuilt installer instead of
-      # compiling two audit CLIs on every hosted release runner. The release
-      # gate below still invokes the canonical release-evidence script.
+      - name: Prepare release build tree
+        # Clean runners do not have generated public/ assets. The harness
+        # compile embeds public/ before packaging runs, so prepare the tree via
+        # the same canonical release script used by packaging instead of
+        # relying on developer-local generated files.
+        run: scripts/release/prepare-build-tree.sh
+      - name: Build canonical bench harness binaries
+        run: scripts/build/bench-harness.sh
+      - name: Stage harness binary artifact
+        run: |
+          mkdir -p .local/release-harness-bin
+          cp target/bench/restream target/bench/test_harness .local/release-harness-bin/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-harness-bin-${{ github.sha }}
+          path: .local/release-harness-bin/*
+          retention-days: 1
+
+  full-live-harness:
+    name: Full live harness (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    needs: prepare-build
+    strategy:
+      fail-fast: false
+      # GitHub Free currently allows 20 standard hosted jobs concurrently.
+      # Package/evidence intentionally waits for the full harness matrix, so
+      # the matrix can use the whole standard-runner free-plan concurrency
+      # budget without exceeding it. Matrix size itself is separately capped by
+      # GitHub at 256 jobs.
+      max-parallel: 20
+      matrix:
+        shard:
+          - smoke
+          - mixed.live.rtmp.h264.a1
+          - mixed.live.srt.h264.a1
+          - mixed.live.srt.h264.a2
+          - mixed.live.srt.h265.a1
+          - mixed.live.srt.h265.a2
+          - mixed.file.h264.a1
+          - mixed.file.h264.a2
+          - mixed.file.h265.a1
+          - mixed.file.h265.a2
+          - bitrate-sweep.h264-rtmp
+          - bitrate-sweep.h264-srt
+          - bitrate-sweep.h265-srt
+          - bitrate-sweep.mixed-h264-a2
+          - bitrate-sweep.mixed-h265-a2
+          - resource-sweep.source
+          - resource-sweep.transcode
+          - resource-sweep.hevc
+          - ramp-family
+          - srt-crypto-matrix
+          - branch-matrix
+          - fault.resilience
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/system-deps
+        with: { profile: live }
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-harness-bin-${{ github.sha }}
+          path: .local/release-harness-bin
+      - name: Install prepared harness binaries
+        run: |
+          mkdir -p target/bench
+          cp .local/release-harness-bin/restream .local/release-harness-bin/test_harness target/bench/
+          chmod 0755 target/bench/restream target/bench/test_harness
+      - name: Run full release harness shard
+        env:
+          BENCH_BUILD: never
+        run: scripts/release/harness-shard.sh "${{ matrix.shard }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-harness-${{ matrix.shard }}-${{ github.sha }}
+          path: .local/artifacts/release-${{ github.sha }}-${{ matrix.shard }}/
+          if-no-files-found: ignore
+          retention-days: 3
+
+  package-evidence:
+    name: Package and release evidence
+    runs-on: ubuntu-latest
+    needs:
+      - prepare-build
+      - full-live-harness
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: ./.github/actions/system-deps
+        with: { profile: live }
+      - uses: ./.github/actions/native-prefix
+      # Reuse established installers instead of compiling audit/scanner CLIs on
+      # every hosted release worker. The canonical release-evidence script below
+      # still owns the actual policy.
       - name: Install cargo-audit
         uses: taiki-e/install-action@cargo-audit
       - name: Install cargo-deny
@@ -41,20 +144,6 @@ jobs:
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
           echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
           sudo apt-get update -qq && sudo apt-get install -y -qq trivy
-      - name: Prepare release build tree
-        # Clean runners do not have generated public/ assets. The harness
-        # compile embeds public/ before packaging runs, so prepare the tree via
-        # the same canonical release script used by packaging instead of
-        # relying on developer-local generated files.
-        run: scripts/release/prepare-build-tree.sh
-      - name: Full live harness suite
-        # Keep the resource-limit shared lock and harness runtime setup in the
-        # canonical runner. Calling target/bench/test_harness directly skips
-        # that contract and makes every suite mode fail before it can start.
-        # GitHub-hosted runners cannot reliably create the user/network
-        # namespace used by the default isolated mode; use the harness's
-        # documented host-network fallback and run suite modes serially.
-        run: scripts/harness/run.sh suite -- --no-netns --run-id release-${{ github.sha }} --continue-on-fail
       - name: Package every supported Linux binary
         # This canonical script installs the locked frontend dependencies and
         # builds generated assets before compiling the feature-enabled binaries.
@@ -68,23 +157,46 @@ jobs:
             "dist/restream-${RELEASE_VERSION}-oci.tar.gz" \
             "dist/restream-${RELEASE_VERSION}.sbom.cdx.json" \
             "dist/restream-${RELEASE_VERSION}-linux-x86_64.tar.gz"
-      - name: Publish certified scratch image
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RESTREAM_REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
-        run: |
-          echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          scripts/release/publish-image.sh "$GITHUB_REF_NAME"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: release-evidence-${{ env.RELEASE_VERSION }}
+          name: release-dist-${{ env.RELEASE_VERSION }}-${{ github.sha }}
           path: |
             dist/
             .local/artifacts/release-${{ github.sha }}/
+          if-no-files-found: ignore
+          retention-days: 3
+
+  certify:
+    name: Certify release dry-run
+    runs-on: ubuntu-latest
+    needs:
+      - package-evidence
+    steps:
+      - run: |
+          echo "Release dry-run certified: full live harness shards and package evidence passed."
+
+  publish:
+    name: Publish certified release
+    runs-on: ubuntu-latest
+    needs: certify
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-dist-${{ env.RELEASE_VERSION }}-${{ github.sha }}
+          path: .
+      - name: Publish certified scratch image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESTREAM_REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+          RESTREAM_CONTAINER_IMAGE: restream:release
+        run: |
+          docker load -i "dist/restream-${RELEASE_VERSION}-oci.tar.gz"
+          echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          scripts/release/publish-image.sh "$GITHUB_REF_NAME"
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

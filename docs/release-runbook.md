@@ -17,6 +17,16 @@ The tag publish step is deliberately separate. Branch workflow dispatches never 
 
 CI may take longer the first time a worker misses the native static dependency cache. The release workflow restores the canonical native prefix cache before building and saves it immediately after a miss so later jobs do not pay that cost again.
 
+The GitHub release workflow keeps the full live harness coverage, but it does
+not run the old monolithic suite in one job. It builds the canonical bench
+harness binaries once, uploads them as a short-lived artifact, then fans out
+stable shard names through `scripts/release/harness-shard.sh`. GitHub Free
+standard hosted runners currently allow 20 concurrent jobs, so the workflow
+sets the harness matrix `max-parallel` to 20 and keeps packaging/evidence
+behind the full harness matrix. If a future plan or repository policy lowers
+that concurrency, change only the workflow cap; shard ownership remains in the
+script.
+
 ## 1. Run local due diligence
 
 Use a release-style version string, usually the tag you intend to publish:
@@ -52,6 +62,16 @@ scripts/release/dispatch-dry-run.sh feat/rust-backend-rewrite-v2
 ```
 
 The script prints the newest Release workflow run for that branch, including the run id, URL, status, and head SHA. Keep the run id for the publish step.
+
+The dry-run is green only after:
+
+- every full live harness shard has passed;
+- `scripts/release/package-binaries.sh <version>` has packaged all supported Linux executables;
+- `scripts/check/release-evidence.sh <oci-tarball> <sbom> <binary-bundle>` has passed.
+
+Packaging and release evidence intentionally start after the harness matrix is
+green, so a broken live release candidate does not spend scanner/container time
+producing artifacts that cannot be published.
 
 Monitor it with:
 
