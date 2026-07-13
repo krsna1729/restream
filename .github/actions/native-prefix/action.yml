@@ -7,8 +7,13 @@ runs:
     - id: restore
       uses: actions/cache/restore@v4
       with:
-        path: .local/build/static/prefix
-        key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/app-static.sh', 'scripts/build/app-native.sh', 'scripts/build/native/native-inputs.lock', 'scripts/native/mbedtls-config-srt.h') }}
+        path: |
+          .local/build/static/prefix
+          .local/build/static/stamps
+          .local/build/static/env.sh
+          .local/build/static/ffmpeg-standalone-build
+          public/bin/ffmpeg
+        key: static-prefix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build/native-deps.sh', 'scripts/build/native/native-inputs.lock', 'scripts/native/mbedtls-config-srt.h', 'test/native/ffmpeg-capabilities.c') }}
     - name: Report native prefix cache state
       shell: bash
       run: |
@@ -23,5 +28,10 @@ runs:
       uses: actions/cache/save@v4
       continue-on-error: true
       with:
-        path: .local/build/static/prefix
+        path: |
+          .local/build/static/prefix
+          .local/build/static/stamps
+          .local/build/static/env.sh
+          .local/build/static/ffmpeg-standalone-build
+          public/bin/ffmpeg
         key: ${{ steps.restore.outputs.cache-primary-key }}
