@@ -583,7 +583,6 @@ pub(crate) async fn run_sink_probe(
     let audio = metrics.audio_count.load(Ordering::Relaxed);
     let keyframes = metrics.keyframe_count.load(Ordering::Relaxed);
     let summary = metrics.summary();
-    stop_generalized_sink_server(server);
 
     // Stop the output
     let _ = api
@@ -591,6 +590,8 @@ pub(crate) async fn run_sink_probe(
             "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop"
         ))
         .await;
+    wait_for_sink_probe_stopped(api, pipeline_id, &output_id).await;
+    stop_generalized_sink_server(server);
 
     let passed = video >= min_video && audio > 0 && keyframes > 0 && dts_ok;
     if !passed {
@@ -608,4 +609,22 @@ pub(crate) async fn run_sink_probe(
         summary,
         output_id,
     })
+}
+
+async fn wait_for_sink_probe_stopped(api: &RampApi, pipeline_id: &str, output_id: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match api
+            .get_output_status_or_not_found(pipeline_id, output_id)
+            .await
+        {
+            Ok(None) => return,
+            Ok(Some((status, _))) if status.status != "running" => return,
+            Ok(Some(_)) | Err(_) => {}
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
