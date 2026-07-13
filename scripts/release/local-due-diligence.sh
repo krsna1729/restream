@@ -67,6 +67,7 @@ oci="${RESTREAM_RELEASE_DIR:-dist}/restream-${VERSION}-oci.tar.gz"
 sbom="${RESTREAM_RELEASE_DIR:-dist}/restream-${VERSION}.sbom.cdx.json"
 
 cargo fmt --all --check
+scripts/release/prepare-build-tree.sh
 npm run test:frontend
 scripts/check/api-contract.sh
 scripts/check/test-hygiene.sh

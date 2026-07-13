@@ -37,6 +37,12 @@ jobs:
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
           echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
           sudo apt-get update -qq && sudo apt-get install -y -qq trivy
+      - name: Prepare release build tree
+        # Clean runners do not have generated public/ assets. The harness
+        # compile embeds public/ before packaging runs, so prepare the tree via
+        # the same canonical release script used by packaging instead of
+        # relying on developer-local generated files.
+        run: scripts/release/prepare-build-tree.sh
       - name: Full live harness suite
         # Keep the resource-limit shared lock and harness runtime setup in the
         # canonical runner. Calling target/bench/test_harness directly skips

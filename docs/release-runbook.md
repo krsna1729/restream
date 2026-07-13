@@ -32,6 +32,7 @@ This wrapper intentionally reuses the repo scripts instead of duplicating their 
 - `scripts/check/api-contract.sh`
 - `scripts/check/test-hygiene.sh`
 - `scripts/check/fixture-discipline.sh`
+- `scripts/release/prepare-build-tree.sh`
 - `scripts/harness/run.sh suite -- --run-id <derived-id> --continue-on-fail`
 - `scripts/release/package-binaries.sh <version>`
 - `scripts/check/release-evidence.sh <oci-tarball> <sbom> <binary-bundle>`

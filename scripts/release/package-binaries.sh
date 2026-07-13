@@ -25,23 +25,9 @@ for command in cargo npm tar sha256sum; do
 done
 
 # A clean release checkout has neither node_modules nor generated public assets.
-# Install exactly the locked frontend dependencies here, then reuse the ordinary
-# preparation script so the Rust build embeds the same browser assets developers
-# build locally. Keeping this in the packaging script prevents CI and local
-# release callers from accidentally publishing the source tree's empty public/.
-npm ci --include=optional
-scripts/dev/prepare.sh
-for asset in \
-    public/index.html \
-    public/login.html \
-    public/output.css \
-    public/js/features/dashboard-entry.js \
-    public/js/lib/hls.min.js; do
-    [[ -s "$asset" ]] || {
-        echo "package-binaries: required generated frontend asset is missing: $asset" >&2
-        exit 1
-    }
-done
+# Reuse the canonical release preparation script so packaging, CI, and local
+# due diligence cannot drift on whether public/ and public/bin/ffmpeg exist.
+scripts/release/prepare-build-tree.sh
 
 # `restream-mcp` is feature-gated. Build the supported executable set through
 # the native script so release packaging reuses the same static-link environment
