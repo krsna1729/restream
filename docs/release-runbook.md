@@ -21,11 +21,12 @@ The GitHub release workflow keeps the full live harness coverage, but it does
 not run the old monolithic suite in one job. It builds the canonical bench
 harness binaries once, uploads them as a short-lived artifact, then fans out
 stable shard names through `scripts/release/harness-shard.sh`. GitHub Free
-standard hosted runners currently allow 20 concurrent jobs, so the workflow
-sets the harness matrix `max-parallel` to 20 and keeps packaging/evidence
-behind the full harness matrix. If a future plan or repository policy lowers
-that concurrency, change only the workflow cap; shard ownership remains in the
-script.
+standard hosted runners allow more concurrency than we use here, but the
+workflow caps the matrix at 12 to avoid every shard hitting apt, artifact
+download, and MediaMTX bootstrap at once. Packaging/evidence stays behind the
+full harness matrix. If a future plan or repository policy changes the
+concurrency, change only the workflow cap; shard ownership remains in
+`scripts/lib/release-shards.sh`.
 
 Each shard has a script-owned timeout so a stuck runner leg fails with a clear
 `TIMEOUT` instead of consuming the full GitHub job limit. The buckets are grouped
@@ -34,6 +35,8 @@ smoke/correctness shards use 5 minutes, small mixed shards use 15 minutes,
 medium mixed/resource shards use 25 minutes, full bitrate measurement shards use
 30 minutes, and unknown future shards fall back to 20 minutes. The workflow job
 timeout is slightly higher so artifacts can still upload after the script exits.
+Inspect the catalog with `scripts/release/harness-shard.sh list`, and inspect a
+single shard with `scripts/release/harness-shard.sh explain <shard>`.
 Setup is bounded separately: CI system dependency installation retries apt
 operations and wraps the runtime MediaMTX bootstrap with a short timeout, so a
 single wedged hosted runner fails in setup instead of looking like a harness

@@ -1,47 +1,63 @@
 #!/usr/bin/env bash
-# Run one release harness shard. GitHub Actions Free allows 20 standard hosted
-# jobs at once; release.yml caps the matrix below that and uses these stable
-# shard names so the coverage split stays in repo code instead of YAML.
+# Run or inspect one release harness shard. The shard catalog lives in
+# scripts/lib/release-shards.sh so CI, docs, and local release due diligence do
+# not grow separate shard/timeout maps.
 set -euo pipefail
 
 ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 cd "$ROOT"
+# shellcheck source=scripts/lib/release-shards.sh
+source "$ROOT/scripts/lib/release-shards.sh"
 
 usage() {
     cat <<'EOF' >&2
-usage: scripts/release/harness-shard.sh <shard>
-
-Full-release shards:
-  smoke
-  mixed.live.rtmp.h264.a1
-  mixed.live.srt.h264.a1
-  mixed.live.srt.h264.a2
-  mixed.live.srt.h265.a1
-  mixed.live.srt.h265.a2
-  mixed.file.h264.a1
-  mixed.file.h264.a2
-  mixed.file.h265.a1
-  mixed.file.h265.a2
-  bitrate-sweep.h264-rtmp
-  bitrate-sweep.h264-srt
-  bitrate-sweep.h265-srt
-  bitrate-sweep.mixed-h264-a2
-  bitrate-sweep.mixed-h265-a2
-  resource-sweep.source
-  resource-sweep.transcode
-  resource-sweep.hevc
-  ramp-family
-  srt-crypto-matrix
-  branch-matrix
-  fault.resilience
+usage:
+  scripts/release/harness-shard.sh <shard>
+  scripts/release/harness-shard.sh run <shard>
+  scripts/release/harness-shard.sh list
+  scripts/release/harness-shard.sh timeout <shard>
+  scripts/release/harness-shard.sh explain <shard>
 EOF
 }
 
-shard="${1:-}"
-if [[ -z "$shard" || "$shard" == "--help" || "$shard" == "-h" ]]; then
+command_name="${1:-}"
+case "$command_name" in
+    ""|-h|--help)
+        usage
+        [[ -n "$command_name" ]] && exit 0 || exit 2
+        ;;
+    list)
+        restream_release_shard_list
+        exit 0
+        ;;
+    timeout)
+        shard="${2:-}"
+        [[ -n "$shard" ]] || { usage; exit 2; }
+        restream_release_shard_exists "$shard" || { echo "harness-shard: unknown shard '$shard'" >&2; exit 2; }
+        restream_release_shard_timeout "$shard"
+        exit 0
+        ;;
+    explain)
+        shard="${2:-}"
+        [[ -n "$shard" ]] || { usage; exit 2; }
+        restream_release_shard_explain "$shard"
+        exit 0
+        ;;
+    run)
+        shard="${2:-}"
+        [[ -n "$shard" ]] || { usage; exit 2; }
+        ;;
+    *)
+        # Preserve the original CI/user interface: a bare shard name runs it.
+        shard="$command_name"
+        ;;
+esac
+
+restream_release_shard_exists "$shard" || {
+    echo "harness-shard: unknown shard '$shard'" >&2
     usage
-    [[ -n "$shard" ]] && exit 0 || exit 2
-fi
+    exit 2
+}
 
 safe_shard="${shard//[^A-Za-z0-9_.-]/-}"
 run_id="${RELEASE_HARNESS_RUN_ID:-release-${GITHUB_SHA:-local}-$safe_shard}"
@@ -49,58 +65,18 @@ common_args=(--no-netns --run-id "$run_id")
 shard_started_at=$SECONDS
 shard_timeout="${RELEASE_HARNESS_SHARD_TIMEOUT:-}"
 
-default_shard_timeout() {
-    # Keep these grouped by observed local shard cost, not by intuition about
-    # the scenario names. The release dry-run previously put
-    # mixed.live.srt.h265.a1 in the same 10m bucket as tiny smoke checks; on a
-    # contended hosted runner that produced a CI timeout before the harness
-    # could emit useful failure evidence. Use at least 2x the latest local
-    # release timings, then round up to a small number of stable buckets:
-    #   - smoke/correctness: <= ~1.5m locally -> 5m
-    #   - small mixed shards: <= ~6m locally -> 15m
-    #   - medium mixed/measurement shards: <= ~12.5m locally -> 25m
-    #   - full bitrate measurement family: <= ~15m locally -> 30m
-    # The workflow job timeout is intentionally above the largest bucket so
-    # this script, not GitHub, owns the explicit TIMEOUT line.
-    case "$shard" in
-        smoke|branch-matrix)
-            echo 5m
-            ;;
-        mixed.live.rtmp.h264.a1|mixed.live.srt.h264.a1|mixed.live.srt.h265.a1|mixed.file.h264.a1|mixed.file.h265.a1|fault.resilience|srt-crypto-matrix|ramp-family)
-            echo 15m
-            ;;
-        mixed.live.srt.h264.a2|mixed.live.srt.h265.a2|mixed.file.h264.a2|mixed.file.h265.a2|resource-sweep.*)
-            echo 25m
-            ;;
-        bitrate-sweep.*)
-            echo 30m
-            ;;
-        *)
-            echo 20m
-            ;;
-    esac
-}
-
-format_elapsed() {
-    local total=$1
-    printf '%dm%02ds' $((total / 60)) $((total % 60))
-}
-
 if [[ "${RELEASE_HARNESS_SHARD_TIMEOUT_ACTIVE:-0}" != "1" ]]; then
-    command -v timeout >/dev/null || {
-        echo "harness-shard: required command not found: timeout" >&2
-        exit 1
-    }
-    shard_timeout="${shard_timeout:-$(default_shard_timeout)}"
+    restream_require_command timeout
+    shard_timeout="${shard_timeout:-$(restream_release_shard_timeout "$shard")}"
     echo "[release-shard] timeout $shard: $shard_timeout"
     set +e
     RELEASE_HARNESS_SHARD_TIMEOUT_ACTIVE=1 \
-        timeout --kill-after=30s "$shard_timeout" "$0" "$shard"
+        timeout --kill-after=30s "$shard_timeout" "$0" run "$shard"
     status=$?
     set -e
     elapsed=$((SECONDS - shard_started_at))
     if [[ "$status" -eq 124 || "$status" -eq 137 || "$status" -eq 143 ]]; then
-        echo "[release-shard] TIMEOUT $shard after $(format_elapsed "$elapsed") (limit $shard_timeout)" >&2
+        echo "[release-shard] TIMEOUT $shard after $(restream_format_elapsed "$elapsed") (limit $shard_timeout)" >&2
     fi
     exit "$status"
 fi
@@ -112,112 +88,22 @@ run_mode() {
     scripts/harness/run.sh "$mode" -- "${common_args[@]}" "$@"
 }
 
-run_many_modes() {
-    local mode
-    for mode in "$@"; do
-        run_mode "$mode"
-    done
-}
+while IFS=$'\t' read -r kind value; do
+    case "$kind" in
+        mode)
+            run_mode "$value"
+            ;;
+        bitrate)
+            BITRATE_SWEEP_CONFIGS="$value" run_mode bitrate-sweep
+            ;;
+        resource)
+            RESOURCE_SWEEP_SCENARIOS="$value" run_mode resource-sweep
+            ;;
+        *)
+            echo "harness-shard: invalid plan row for $shard: $kind $value" >&2
+            exit 1
+            ;;
+    esac
+done < <(restream_release_shard_plan "$shard")
 
-run_bitrate_config() {
-    local config=$1
-    BITRATE_SWEEP_CONFIGS="$config" run_mode bitrate-sweep
-}
-
-run_resource_scenarios() {
-    local scenarios=$1
-    RESOURCE_SWEEP_SCENARIOS="$scenarios" run_mode resource-sweep
-}
-
-case "$shard" in
-    smoke)
-        run_many_modes api-smoke file.live-edge srt.policy
-        ;;
-
-    mixed.live.rtmp.h264.a1)
-        run_many_modes \
-            mixed.live.rtmp.h264.a1.bf0 \
-            mixed.live.rtmp.h264.a1.bf2
-        ;;
-    mixed.live.srt.h264.a1)
-        run_many_modes \
-            mixed.live.srt.h264.a1.bf0 \
-            mixed.live.srt.h264.a1.bf2
-        ;;
-    mixed.live.srt.h264.a2)
-        run_many_modes \
-            mixed.live.srt.h264.a2.bf0 \
-            mixed.live.srt.h264.a2.bf2
-        ;;
-    mixed.live.srt.h265.a1)
-        run_many_modes \
-            mixed.live.srt.h265.a1.bf0 \
-            mixed.live.srt.h265.a1.bf2
-        ;;
-    mixed.live.srt.h265.a2)
-        run_many_modes \
-            mixed.live.srt.h265.a2.bf0 \
-            mixed.live.srt.h265.a2.bf2
-        ;;
-
-    mixed.file.h264.a1)
-        run_many_modes \
-            mixed.asset.file.h264.a1.bf0 \
-            mixed.asset.file.h264.a1.bf2
-        ;;
-    mixed.file.h264.a2)
-        run_many_modes \
-            mixed.asset.file.h264.a2.bf0 \
-            mixed.asset.file.h264.a2.bf2
-        ;;
-    mixed.file.h265.a1)
-        run_many_modes \
-            mixed.asset.file.h265.a1.bf0 \
-            mixed.asset.file.h265.a1.bf2
-        ;;
-    mixed.file.h265.a2)
-        run_many_modes \
-            mixed.asset.file.h265.a2.bf0 \
-            mixed.asset.file.h265.a2.bf2
-        ;;
-
-    bitrate-sweep.h264-rtmp)
-        run_bitrate_config h264-rtmp
-        ;;
-    bitrate-sweep.h264-srt)
-        run_bitrate_config h264-srt
-        ;;
-    bitrate-sweep.h265-srt)
-        run_bitrate_config h265-srt
-        ;;
-    bitrate-sweep.mixed-h264-a2)
-        run_bitrate_config mixed.live.srt.h264.a2.bf2
-        ;;
-    bitrate-sweep.mixed-h265-a2)
-        run_bitrate_config mixed.live.srt.h265.a2.bf2
-        ;;
-
-    resource-sweep.source)
-        run_resource_scenarios \
-            resource.egress-growth-source-same,resource.egress-growth-source-mixed
-        ;;
-    resource-sweep.transcode)
-        run_resource_scenarios \
-            resource.egress-growth-transcode-same,resource.egress-growth-transcode-mixed,resource.egress-growth-source-plus-transcode-mixed,resource.egress-growth-transcode-dual-mixed,resource.egress-growth-source-plus-transcode-dual-mixed
-        ;;
-    resource-sweep.hevc)
-        run_resource_scenarios resource.egress-growth-hevc-bridge
-        ;;
-
-    ramp-family|srt-crypto-matrix|branch-matrix|fault.resilience)
-        run_mode "$shard"
-        ;;
-
-    *)
-        echo "harness-shard: unknown shard '$shard'" >&2
-        usage
-        exit 2
-        ;;
-esac
-
-echo "[release-shard] PASS $shard ($(format_elapsed "$((SECONDS - shard_started_at))"))"
+echo "[release-shard] PASS $shard ($(restream_format_elapsed "$((SECONDS - shard_started_at))"))"
