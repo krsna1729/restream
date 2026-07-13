@@ -32,7 +32,15 @@ cp /etc/services "$rootfs/etc/services"
 cp -L /etc/resolv.conf "$rootfs/etc/resolv.conf"
 printf 'restream:x:1000:1000:restream:/nonexistent:/sbin/nologin\n' > "$rootfs/etc/passwd"
 printf 'restream:x:1000:\n' > "$rootfs/etc/group"
-chown -R 1000:1000 "$restream_home"
+if [[ "$(id -u)" -eq 0 ]]; then
+    chown -R 1000:1000 "$restream_home"
+else
+    # Docker builds this rootfs as root, so the scratch image still gets a
+    # writable /.restream for USER 1000:1000. Release tarball packaging runs as
+    # an unprivileged CI user and only uses rootfs/ as a loader/library closure;
+    # `./run restream` creates .restream beside the bundle, not inside rootfs/.
+    echo "runtime-rootfs: skipping .restream chown; not running as root"
+fi
 
 # Keep this parser deliberately constrained to absolute ELF paths reported by
 # ldd. Any failure aborts the package step: a scratch image without its loader
