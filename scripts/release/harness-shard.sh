@@ -50,12 +50,30 @@ shard_started_at=$SECONDS
 shard_timeout="${RELEASE_HARNESS_SHARD_TIMEOUT:-}"
 
 default_shard_timeout() {
+    # Keep these grouped by observed local shard cost, not by intuition about
+    # the scenario names. The release dry-run previously put
+    # mixed.live.srt.h265.a1 in the same 10m bucket as tiny smoke checks; on a
+    # contended hosted runner that produced a CI timeout before the harness
+    # could emit useful failure evidence. Use at least 2x the latest local
+    # release timings, then round up to a small number of stable buckets:
+    #   - smoke/correctness: <= ~1.5m locally -> 5m
+    #   - small mixed shards: <= ~6m locally -> 15m
+    #   - medium mixed/measurement shards: <= ~12.5m locally -> 25m
+    #   - full bitrate measurement family: <= ~15m locally -> 30m
+    # The workflow job timeout is intentionally above the largest bucket so
+    # this script, not GitHub, owns the explicit TIMEOUT line.
     case "$shard" in
-        smoke|mixed.live.rtmp.h264.a1|mixed.live.srt.h264.a1|mixed.live.srt.h265.a1|bitrate-sweep.*)
-            echo 10m
+        smoke|branch-matrix)
+            echo 5m
             ;;
-        mixed.live.srt.h264.a2|mixed.live.srt.h265.a2|mixed.file.*|resource-sweep.*|ramp-family|srt-crypto-matrix|branch-matrix|fault.resilience)
+        mixed.live.rtmp.h264.a1|mixed.live.srt.h264.a1|mixed.live.srt.h265.a1|mixed.file.h264.a1|mixed.file.h265.a1|fault.resilience|srt-crypto-matrix|ramp-family)
             echo 15m
+            ;;
+        mixed.live.srt.h264.a2|mixed.live.srt.h265.a2|mixed.file.h264.a2|mixed.file.h265.a2|resource-sweep.*)
+            echo 25m
+            ;;
+        bitrate-sweep.*)
+            echo 30m
             ;;
         *)
             echo 20m
