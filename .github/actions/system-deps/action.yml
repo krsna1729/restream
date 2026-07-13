@@ -3,7 +3,7 @@ description: Install one canonical Ubuntu system-dependency profile for CI.
 
 inputs:
   profile:
-    description: base, browser, or live
+    description: base/build, browser/browser-build, live/live-build, harness-runtime/live-runtime, or native-build
     required: true
     default: base
 

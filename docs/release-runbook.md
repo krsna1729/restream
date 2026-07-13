@@ -38,6 +38,11 @@ Setup is bounded separately: CI system dependency installation retries apt
 operations and wraps the runtime MediaMTX bootstrap with a short timeout, so a
 single wedged hosted runner fails in setup instead of looking like a harness
 hang.
+Release CI uses the same script-owned dependency profiles as local setup: build
+jobs install only the Rust/native build group, while full live harness shards
+install only the runtime harness group plus pinned MediaMTX. Keep package names
+in `scripts/lib/debian-packages.sh`; workflows and wrapper scripts should select
+profiles, not maintain package lists.
 
 ## 1. Run local due diligence
 

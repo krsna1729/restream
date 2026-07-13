@@ -1,16 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -n "${RESTREAM_REPO_ROOT:-}" ]]; then
-    ROOT="$RESTREAM_REPO_ROOT"
-elif command -v git >/dev/null 2>&1 && git rev-parse --show-toplevel >/dev/null 2>&1; then
-    ROOT="$(git rev-parse --show-toplevel)"
-else
-    # Container/tarball onboarding can run before Git is installed. Resolve
-    # the repository from this script's canonical location instead of making
-    # the bootstrapper depend on the tool it is about to provision.
-    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-fi
+ROOT="${RESTREAM_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# shellcheck source=scripts/lib/debian-packages.sh
+source "$ROOT/scripts/lib/debian-packages.sh"
 RUST_TOOLCHAIN=""
 if [[ -f "$ROOT/rust-toolchain.toml" ]]; then
     RUST_TOOLCHAIN="$(sed -n 's/^channel = "\(.*\)"/\1/p' "$ROOT/rust-toolchain.toml")"
@@ -91,46 +84,6 @@ if ! command -v apt-get >/dev/null; then
     exit 1
 fi
 
-APT_PACKAGES=(
-    build-essential
-    bzip2
-    ca-certificates
-    clang
-    cmake
-    curl
-    ffmpeg
-    file
-    git
-    jq
-    libavcodec-dev
-    libavdevice-dev
-    libavfilter-dev
-    libavformat-dev
-    libavutil-dev
-    libswresample-dev
-    libswscale-dev
-    mold
-    nasm
-    ninja-build
-    perl
-    pkg-config
-    iproute2
-    sqlite3
-    tzdata
-    util-linux
-)
-
-run_as_root() {
-    if [[ "$(id -u)" -eq 0 ]]; then
-        "$@"
-    elif command -v sudo >/dev/null; then
-        sudo "$@"
-    else
-        echo "bootstrap-dev: need sudo to install: $*" >&2
-        exit 1
-    fi
-}
-
 ensure_frontend_node_toolchain() {
     local current_major=""
     if command -v node >/dev/null 2>&1; then
@@ -145,24 +98,11 @@ ensure_frontend_node_toolchain() {
     fi
 
     echo "bootstrap-dev: installing Node.js ${FRONTEND_NODE_MAJOR}.x frontend toolchain"
-    run_as_root bash -lc "curl -fsSL https://deb.nodesource.com/setup_${FRONTEND_NODE_MAJOR}.x | bash -"
-    run_as_root apt-get install -y nodejs
+    restream_run_as_root bash -lc "curl -fsSL https://deb.nodesource.com/setup_${FRONTEND_NODE_MAJOR}.x | bash -"
+    restream_run_as_root apt-get install -y nodejs
 }
 
-missing_packages=()
-for package in "${APT_PACKAGES[@]}"; do
-    if ! dpkg-query -W "$package" >/dev/null 2>&1; then
-        missing_packages+=("$package")
-    fi
-done
-
-if ((${#missing_packages[@]})); then
-    echo "bootstrap-dev: installing apt packages: ${missing_packages[*]}"
-    run_as_root apt-get update
-    run_as_root apt-get install -y "${missing_packages[@]}"
-else
-    echo "bootstrap-dev: apt packages already present"
-fi
+restream_debian_install_groups dev-workstation
 
 export PATH="$HOME/.cargo/bin:$PATH"
 

@@ -14,6 +14,9 @@ if [[ -z "${RESTREAM_BUILD_LOCK_HELD:-}" ]]; then
     exit 2
 fi
 
+# shellcheck source=scripts/lib/debian-packages.sh
+source "$ROOT/scripts/lib/debian-packages.sh"
+
 SRT_VERSION="${SRT_VERSION:-v1.5.5}"
 FFMPEG_VERSION="${FFMPEG_VERSION:-n8.1.2}"
 X264_COMMIT="${X264_COMMIT:-b35605ace3ddf7c1a5d67a2eb553f034aef41d55}"
@@ -60,30 +63,7 @@ mkdir -p "$TOOLS" "$SOURCES" "$PREFIX" "$STAMPS"
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
 if command -v apt-get >/dev/null; then
-    missing_packages=()
-    command -v cc >/dev/null || missing_packages+=(build-essential)
-    command -v git >/dev/null || missing_packages+=(git)
-    command -v cmake >/dev/null || missing_packages+=(cmake)
-    command -v ninja >/dev/null || missing_packages+=(ninja-build)
-    command -v nasm >/dev/null || missing_packages+=(nasm)
-    command -v pkg-config >/dev/null || missing_packages+=(pkg-config)
-    command -v perl >/dev/null || missing_packages+=(perl)
-    command -v curl >/dev/null || missing_packages+=(curl)
-    command -v bzip2 >/dev/null || missing_packages+=(bzip2)
-
-    if ((${#missing_packages[@]})); then
-        if [[ "$(id -u)" -eq 0 ]]; then
-            apt-get update
-            apt-get install -y "${missing_packages[@]}"
-        elif command -v sudo >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y "${missing_packages[@]}"
-        else
-            echo "missing build packages: ${missing_packages[*]}" >&2
-            echo "install them with apt, or run this script as root" >&2
-            exit 1
-        fi
-    fi
+    restream_debian_install_groups native-build
 elif ! command -v cmake >/dev/null || ! command -v ninja >/dev/null; then
     echo "setup-static-build: cmake and ninja are required on non-apt hosts" >&2
     echo "install them manually before running this script" >&2

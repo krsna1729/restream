@@ -6,13 +6,9 @@
 # machine setup by accident.
 set -euo pipefail
 
-if [[ -n "${RESTREAM_REPO_ROOT:-}" ]]; then
-    ROOT="$RESTREAM_REPO_ROOT"
-elif command -v git >/dev/null 2>&1 && git rev-parse --show-toplevel >/dev/null 2>&1; then
-    ROOT="$(git rev-parse --show-toplevel)"
-else
-    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-fi
+ROOT="${RESTREAM_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# shellcheck source=scripts/lib/debian-packages.sh
+source "$ROOT/scripts/lib/debian-packages.sh"
 
 MEDIAMTX_VERSION="${RESTREAM_MEDIAMTX_VERSION:-v1.19.1}"
 INSTALL_PACKAGES=1
@@ -73,17 +69,6 @@ if [[ "$(uname -s)" != "Linux" ]] || ! command -v apt-get >/dev/null; then
     exit 1
 fi
 
-run_as_root() {
-    if [[ "$(id -u)" -eq 0 ]]; then
-        "$@"
-    elif command -v sudo >/dev/null; then
-        sudo "$@"
-    else
-        echo "bootstrap-runtime: need sudo to install: $*" >&2
-        exit 1
-    fi
-}
-
 mediamtx_archive_name() {
     case "$(uname -m)" in
         x86_64) echo "mediamtx_${MEDIAMTX_VERSION}_linux_amd64.tar.gz" ;;
@@ -128,22 +113,11 @@ install_mediamtx() {
         echo "bootstrap-runtime: mediamtx archive did not contain an executable binary" >&2
         exit 1
     fi
-    run_as_root install -m 0755 "$extracted_bin" "$target_bin"
+    restream_run_as_root install -m 0755 "$extracted_bin" "$target_bin"
 }
 
 if (( INSTALL_PACKAGES )); then
-    packages=(ca-certificates curl ffmpeg iproute2 jq sqlite3 util-linux)
-    missing=()
-    for package in "${packages[@]}"; do
-        dpkg-query -W "$package" >/dev/null 2>&1 || missing+=("$package")
-    done
-    if ((${#missing[@]})); then
-        echo "bootstrap-runtime: installing apt packages: ${missing[*]}"
-        run_as_root apt-get update
-        run_as_root apt-get install -y "${missing[@]}"
-    else
-        echo "bootstrap-runtime: runtime packages already present"
-    fi
+    restream_debian_install_groups harness-runtime
 fi
 
 if (( INSTALL_MEDIAMTX )); then

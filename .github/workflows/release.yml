@@ -33,7 +33,7 @@ jobs:
           node-version: '22'
           cache: npm
       - uses: ./.github/actions/system-deps
-        with: { profile: live }
+        with: { profile: build }
       - uses: ./.github/actions/native-prefix
       - name: Prepare release build tree
         # Clean runners do not have generated public/ assets. The harness
@@ -95,7 +95,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/system-deps
-        with: { profile: live }
+        with: { profile: harness-runtime }
       - uses: actions/download-artifact@v8
         with:
           name: release-harness-bin-${{ github.sha }}
@@ -131,7 +131,7 @@ jobs:
           node-version: '22'
           cache: npm
       - uses: ./.github/actions/system-deps
-        with: { profile: live }
+        with: { profile: build }
       - uses: ./.github/actions/native-prefix
       # Reuse established installers instead of compiling audit/scanner CLIs on
       # every hosted release worker. The canonical release-evidence script below
