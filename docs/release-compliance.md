@@ -23,12 +23,15 @@ Run `scripts/release/package-binaries.sh <version>` followed by
 `scripts/check/release-evidence.sh <oci-archive> <release-sbom> <binary-bundle>`
 for the canonical artifact gate. Supplying the completed binary bundle makes
 its exact feature-enabled `restream` executable emit the SBOM that the
-vulnerability scanners inspect. Omitting the bundle retains a source-only
-certification form for development checks. The checked-in SBOM is a source
-snapshot; certification writes its commit-specific SBOM to the supplied
-release path so its provenance does not dirty the checkout. A `v*` tag runs
-the artifact gate, the full
-bench-harness suite, and publishes the
+vulnerability scanners inspect. The same gate unpacks the downloadable bundle
+into a temporary directory, starts only its `./run restream` launcher, and
+fetches `/login`, authenticated `/`, CSS, JavaScript, HLS, and logo assets so
+release CI proves the binary carries the embedded frontend instead of relying
+on the source tree's `public/` directory. Omitting the bundle retains a
+source-only certification form for development checks. The checked-in SBOM is
+a source snapshot; certification writes its commit-specific SBOM to the
+supplied release path so its provenance does not dirty the checkout. A `v*`
+tag runs the artifact gate, the full bench-harness suite, and publishes the
 scratch OCI runtime archive, a checksummed Linux x86_64 bundle containing every
 supported executable plus its verified runtime closure, and the runtime SBOM.
 The certified scratch image is also published to GHCR as both the version tag
@@ -37,7 +40,8 @@ and `latest` only after those gates pass.
 The binary bundle is the supported host-download path: unpack it and use
 `./run restream`. Its launcher uses the loader and libraries captured from the
 same smoke-tested scratch image, so it does not rely on host FFmpeg, SRT, or
-C/C++ runtime packages. The diagnostic harness binaries are shipped too, but
+C/C++ runtime packages. The diagnostic `test_harness` binary is shipped too,
+including read-only `./run test_harness catalog ...` inspection commands, but
 live integration runs still belong in a source checkout because they need the
 checked-in fixtures, MediaMTX, and documented host prerequisites.
 

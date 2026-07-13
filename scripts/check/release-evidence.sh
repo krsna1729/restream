@@ -83,6 +83,9 @@ grype "sbom:$SBOM" --fail-on high
 trivy sbom --exit-code 1 --severity HIGH,CRITICAL "$SBOM"
 
 if [[ -n "$ARCHIVE" ]]; then
+    if [[ -n "$BINARY_BUNDLE" ]]; then
+        scripts/check/release-artifact-smoke.sh "$BINARY_BUNDLE"
+    fi
     scripts/check/container-smoke.sh --image restream:release --archive "$ARCHIVE"
 else
     scripts/check/container-smoke.sh --image restream:release
