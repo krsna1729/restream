@@ -1,6 +1,6 @@
 ---
 name: perf-sweep
-description: Measure, guard, or improve ONE hot-path performance or resource-efficiency target with before/after evidence — bench ledger comparison, allocation/lock/copy hunt, or RSS/ring telemetry check. Use for backlog items tagged [performance] or [efficiency], or when asked to find regressions, cut memory, or speed up the data path.
+description: Measure, attribute, guard, or improve ONE hot-path performance or resource-efficiency target with before/after evidence. Use for backlog items tagged [performance] or [efficiency], regression and CPU/RSS investigations, WSL or hardware-PMU profiling plans, scheduler/cache/allocation attribution, and experiment design.
 ---
 
 # Skill: perf-sweep
@@ -63,13 +63,32 @@ chased, or one optimization with before/after proof.
 5. No measurable win after two attempts → revert fully, journal the numbers
    and the hypothesis that failed (negative results save the next agent time).
 
+## Mode D — advanced attribution or experiment plan
+
+Use this when asked what currently dominates, what extra hardware `perf` would
+show, or how to design experiments without PMU access.
+
+1. Read [references/advanced-attribution.md](references/advanced-attribution.md).
+2. Freeze the evidence boundary: commit/tree, dirty files, workload, host,
+   protocol mix, bitrate, output count, and correctness proof.
+3. Choose the platform branch:
+   - PMU available: validate exposed events, then attribute per process and hot
+     TID with non-multiplexed event groups and user/kernel call graphs.
+   - PMU unavailable: use `/proc`, `pidstat`, short `strace -f -c`, heaptrack,
+     and existing queue/ring/receiver telemetry. Do not claim IPC/cache causes.
+4. Decompose one dimension at a time: ingest-only, RTMP-only, canonical mix,
+   bounded SRT calibration, worker count, bitrate, or output count.
+5. Return a ranked experiment plan with normalization and accept/reject gates;
+   do not convert an attribution gap into an implementation recommendation.
+
 ## Discovery recipe (finding new [performance]/[efficiency] items)
 
 - Read the CPU-profile table and jitter-headroom table in
   `docs/agent-guidance/quality/baselines.md` for known standing opportunities.
 - Suites in the ledger not verified in >14 days → file a Mode A item each.
 - `perf` on WSL2: hardware PMU counters are unavailable; use
-  `perf record -e task-clock` (software sampling) with `perf_event_paranoid=-1`.
+  `perf record -e task-clock` when available, otherwise follow the `/proc`
+  fallback in `references/advanced-attribution.md`.
 
 ## Rules
 
@@ -79,5 +98,7 @@ chased, or one optimization with before/after proof.
   same measurement.
 - Do not add diagnostic readers or metrics that alter production pipeline
   behavior to "help measure".
+- Normalize live comparisons by delivered bytes or packets and output-seconds;
+  path readiness alone is not equal work.
 - `[opus]`-tagged architecture changes (e.g. AVIO→TsMux copy elimination) are
   off-limits below opus tier even if the numbers are tempting.
