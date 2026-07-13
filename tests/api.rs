@@ -5416,14 +5416,14 @@ async fn agent_plan_validates_and_previews_stage_impact() {
     assert!(
         added_nodes
             .iter()
-            .any(|node| node["stageKey"].as_str() == Some("video:720p"))
+            .any(|node| node["stageKey"].as_str() == Some("video:720p:codec:hevc"))
     );
     assert!(
         body["impact"]["sharedStageCandidates"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|stage| stage.as_str() == Some("video:720p"))
+            .any(|stage| stage.as_str() == Some("video:720p:codec:hevc"))
     );
 }
 

@@ -226,7 +226,6 @@ pub fn route_catalog() -> Value {
         {"tool": "get_agent_capabilities", "method": "GET", "path": "/api/v1/agent/capabilities", "auth": "session", "feature": "agent-plane", "mutates": false, "responseSchema": "AgentCapabilities"},
         {"tool": "get_agent_context", "method": "GET", "path": "/api/v1/agent/context", "auth": "session", "feature": "agent-plane", "mutates": false, "responseSchema": "AgentContextV1"},
         {"tool": "investigate_pipeline_issue", "method": "POST", "path": "/api/v1/agent/investigations", "auth": "session", "feature": "agent-plane", "mutates": false, "requestSchema": "InvestigationRequest", "responseSchema": "InvestigationResponse"},
-        {"tool": "inspect_resource_map", "method": "GET", "path": "/api/v1/engine/resource-map", "auth": "session", "feature": "core", "mutates": false, "responseSchema": "ResourceMapSnapshot"},
         {"tool": "plan_pipeline_change", "method": "POST", "path": "/api/v1/agent/plans", "auth": "session", "feature": "agent-plane", "mutates": false, "requestSchema": "PlanRequest", "responseSchema": "PlanResponse"},
         {"tool": "validate_change", "method": "POST", "path": "/api/v1/agent/plans/validate", "auth": "session", "feature": "agent-plane", "mutates": false, "requestSchema": "PlanRequest", "responseSchema": "ValidationResult"},
         {"tool": "preview_graph_diff", "method": "POST", "path": "/api/v1/agent/graph-diff-preview", "auth": "session", "feature": "agent-plane", "mutates": false, "requestSchema": "PlanRequest", "responseSchema": "GraphDiffPreview"},
@@ -985,7 +984,7 @@ mod tests {
             .iter()
             .filter_map(|node| node["stageKey"].as_str())
             .collect();
-        assert!(stages.contains(&"video:720p"));
+        assert!(stages.contains(&"video:720p:codec:hevc"));
         assert!(
             stages
                 .iter()
@@ -1012,7 +1011,7 @@ mod tests {
         };
         let current_graph = serde_json::json!({
             "nodes": [
-                {"stageKey": "pipe-a:video:720p"}
+                {"stageKey": "pipe-a:video:720p:codec:hevc"}
             ]
         });
 
@@ -1023,7 +1022,7 @@ mod tests {
             .filter_map(|node| node["stageKey"].as_str())
             .collect::<Vec<_>>();
 
-        assert!(!stages.contains(&"video:720p"));
+        assert!(!stages.contains(&"video:720p:codec:hevc"));
         assert!(stages.iter().any(|stage| stage.starts_with("hevc_to_h264")));
     }
 }
