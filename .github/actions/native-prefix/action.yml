@@ -5,7 +5,7 @@ runs:
   using: composite
   steps:
     - id: restore
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         path: |
           .local/build/static/prefix
@@ -27,7 +27,7 @@ runs:
       run: scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
     - if: steps.restore.outputs.cache-hit != 'true'
       name: Save native prefix cache
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v5
       continue-on-error: true
       with:
         path: |
