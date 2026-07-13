@@ -407,6 +407,12 @@ pub async fn run_app(config: Arc<AppConfig>) {
     engine.set_backend_policy(backend_policy);
     let pipeline_lookup: Arc<dyn crate::application::ports::PipelineStore> =
         Arc::new(pipeline_store);
+    let ingest_authenticator = Arc::new(
+        crate::application::ingest::PipelineStoreIngestAuthenticator::new(
+            pipeline_lookup.clone(),
+            security.clone(),
+        ),
+    );
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     engine.set_event_sink(event_tx);
     {
@@ -469,11 +475,11 @@ pub async fn run_app(config: Arc<AppConfig>) {
     // Start RTMP server — capture handle to detect early exit (M3).
     let security_clone = security.clone();
     let engine_clone = engine.clone();
-    let pipeline_lookup_clone = pipeline_lookup.clone();
+    let ingest_authenticator_clone = ingest_authenticator.clone();
     let rtmp_port = ports.rtmp;
     let mut rtmp_handle = tokio::spawn(async move {
         crate::media::rtmp::start_rtmp_server_on(
-            pipeline_lookup_clone,
+            ingest_authenticator_clone,
             security_clone,
             engine_clone,
             rtmp_port,
@@ -484,7 +490,7 @@ pub async fn run_app(config: Arc<AppConfig>) {
 
     // Start SRT server — pass security for rate limiting (H1).
     let srt_server = Arc::new(crate::media::srt::SrtServer::new(
-        pipeline_lookup,
+        ingest_authenticator,
         engine.clone(),
         security.clone(),
         srt_ingest_policy_store,

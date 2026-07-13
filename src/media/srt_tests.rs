@@ -27,10 +27,19 @@ async fn srt_server_shutdown_exits_with_no_connections() {
     let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
     crate::db::setup_database_schema(&pool).await.unwrap();
     let engine = Arc::new(MediaEngine::new());
+    let security = Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG));
+    let pipeline_store =
+        Arc::new(crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(pool));
+    let pipeline_access = Arc::new(
+        crate::application::ingest::PipelineStoreIngestAuthenticator::new(
+            pipeline_store,
+            security.clone(),
+        ),
+    );
     let server = Arc::new(SrtServer::new(
-        Arc::new(crate::infrastructure::sqlite_ports::SqlitePipelineStore::new(pool)),
+        pipeline_access,
         engine.clone(),
-        Arc::new(IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG)),
+        security,
         Arc::new(SrtIngestPolicyStore::new(
             SrtGlobalIngestConfig::default(),
             &[],
