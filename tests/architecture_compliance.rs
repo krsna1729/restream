@@ -250,6 +250,29 @@ fn srt_policy_store_stays_independent_of_application_models() {
 }
 
 #[test]
+fn media_snapshot_types_are_media_owned() {
+    let runtime_snapshots = include_str!("../src/runtime/snapshots.rs");
+    assert!(runtime_snapshots.contains("pub use crate::media::snapshots::*;"));
+
+    for (name, source) in [
+        ("media/engine.rs", include_str!("../src/media/engine.rs")),
+        (
+            "media/engine_snapshots.rs",
+            include_str!("../src/media/engine_snapshots.rs"),
+        ),
+        (
+            "media/protocols/srt/quality.rs",
+            include_str!("../src/media/protocols/srt/quality.rs"),
+        ),
+    ] {
+        assert!(
+            !source.contains("crate::runtime::snapshots"),
+            "{name} should import media-owned snapshot DTOs directly"
+        );
+    }
+}
+
+#[test]
 fn db_module_uses_explicit_repository_exports() {
     let db_mod = include_str!("../src/db/mod.rs");
     assert!(

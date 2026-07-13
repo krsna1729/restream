@@ -21,12 +21,12 @@ use crate::media::engine_registries::{
 };
 pub use crate::media::pipe_metrics::PipeMetrics;
 use crate::media::ring_buffer::{MediaType, Reader, RingBuffer};
-pub use crate::media::stage_metrics::StageMetrics;
-pub use crate::runtime::snapshots::{
+pub use crate::media::snapshots::{
     AudioMeta, EgressDiagSnapshot, FileIngestDependencySnapshot, HlsDependencySnapshot,
     IngestDiagSnapshot, ListenerSocketStats, PublisherQuality, RingBufferDiagSnapshot,
     RtmpListenerStats, SrtListenerDiagSnapshot, VideoMeta,
 };
+pub use crate::media::stage_metrics::StageMetrics;
 
 pub(crate) const EGRESS_PROGRESS_STALE_MS: u64 = 10_000;
 pub(crate) const INGEST_FLAP_WINDOW_MS: u64 = 30_000;
