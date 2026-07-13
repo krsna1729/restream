@@ -120,6 +120,33 @@ fn mixed_matrix_uses_heavyweight_suite_timeout_floor() {
 }
 
 #[test]
+fn suite_defaults_run_fast_signal_before_heavy_release_modes() {
+    assert_eq!(
+        suite_default_modes(),
+        vec![
+            "api-smoke",
+            "file.live-edge",
+            "srt.policy",
+            "branch-matrix",
+            "fault.resilience",
+            "srt-crypto-matrix",
+            "ramp-family",
+            "resource-sweep",
+            "bitrate-sweep",
+            "mixed.matrix",
+        ]
+    );
+
+    for mode in suite_default_modes() {
+        let spec = mode_spec(&mode).unwrap_or_else(|| panic!("{mode} must be listed"));
+        assert!(
+            spec.suite_order.is_some(),
+            "{mode} must declare suiteOrder so release suite ordering stays intentional"
+        );
+    }
+}
+
+#[test]
 fn fault_output_stall_sibling_count_honors_n_per_group_cap() {
     assert_eq!(effective_fault_output_stall_siblings(12, None), 12);
     assert_eq!(effective_fault_output_stall_siblings(12, Some(1)), 1);

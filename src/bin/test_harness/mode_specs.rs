@@ -17,6 +17,7 @@ pub(crate) struct HarnessModeSpec {
     pub(crate) requires_port_namespace: bool,
     pub(crate) requires_bench_profile: bool,
     pub(crate) suite_timeout_secs: Option<u64>,
+    pub(crate) suite_order: Option<u64>,
 }
 
 pub(crate) fn harness_catalog_root() -> PathBuf {
@@ -54,6 +55,7 @@ fn builtin_mode_specs() -> &'static [HarnessModeSpec] {
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
                     suite_timeout_secs: entry.spec.get("suiteTimeoutSecs").and_then(Value::as_u64),
+                    suite_order: entry.spec.get("suiteOrder").and_then(Value::as_u64),
                 }
             })
             .collect()
@@ -69,6 +71,7 @@ fn mixed_input_mode_spec(case: MixedInputCase) -> HarnessModeSpec {
         // under one harness-level profile policy rather than varying by cell.
         requires_bench_profile: true,
         suite_timeout_secs: None,
+        suite_order: None,
     }
 }
 
@@ -92,11 +95,15 @@ pub(crate) fn all_mode_specs() -> Vec<HarnessModeSpec> {
 }
 
 pub(crate) fn suite_default_modes() -> Vec<String> {
-    all_mode_specs()
+    let mut specs: Vec<_> = all_mode_specs()
         .into_iter()
         .filter(|spec| spec.suite_default)
-        .map(|spec| spec.name)
-        .collect()
+        .collect();
+    // Default release evidence should surface cheap failures first. The catalog
+    // is indexed alphabetically for deterministic lookup, so make suite runtime
+    // intent explicit instead of relying on JSON/object ordering.
+    specs.sort_by_key(|spec| (spec.suite_order.unwrap_or(u64::MAX), spec.name.clone()));
+    specs.into_iter().map(|spec| spec.name).collect()
 }
 
 pub(crate) fn supported_mode_names() -> Vec<String> {

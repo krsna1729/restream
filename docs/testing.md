@@ -1311,14 +1311,39 @@ in its own subdirectory, and records one JSONL result per mode in
   timeout (`TEST_HARNESS_SUITE_MODE_TIMEOUT_SECS` provides the same override)
 - `--continue-on-fail` to keep collecting artifacts after the first failure
 
+Default release-evidence modes run in ascending expected-duration order so CI
+surfaces cheap failures before long measurement sweeps. The order is declared
+as `suiteOrder` in `test/harness/modes.json`; do not rely on JSON object order,
+because the catalog lookup is alphabetized internally.
+
+| Order | Mode | Last local release duration |
+|---:|---|---:|
+| 1 | `api-smoke` | 2s |
+| 2 | `file.live-edge` | 32s |
+| 3 | `srt.policy` | 55s |
+| 4 | `branch-matrix` | 1m 29s |
+| 5 | `fault.resilience` | 3m 12s |
+| 6 | `srt-crypto-matrix` | 5m 54s |
+| 7 | `ramp-family` | 7m 5s |
+| 8 | `resource-sweep` | 7m 43s |
+| 9 | `bitrate-sweep` | 14m 1s |
+| 10 | `mixed.matrix` | 49m 6s |
+
+Parallel-safe correctness modes may still overlap when namespace isolation is
+available, but the suite writes their JSONL results in completion order so the
+fastest checks become visible as soon as they finish.
+
 Heavyweight suite-default modes can declare a larger catalog timeout floor in
 `test/harness/modes.json`. `mixed.matrix` does this because it performs the
 full RTMP/SRT, H.264/H.265, audio-track, HLS, recording, and decode-scan
 matrix. `resource-sweep` also declares a floor because the release-default
-growth cases include source, transcode, and dual-transcode stacks. These floors
-are caps, not sleeps: they only prevent the suite from killing a mode that is
-still making expected progress. The default 15-minute cap is still used for
-ordinary modes.
+growth cases include source, transcode, and dual-transcode stacks.
+`bitrate-sweep` declares the same floor because it runs real publisher, output,
+sampling, and probe loops across multiple bitrate points and can finish near
+the default 15-minute ceiling on a fast local machine. These floors are caps,
+not sleeps: they only prevent the suite from killing a mode that is still
+making expected progress. The default 15-minute cap is still used for ordinary
+modes.
 
 The aggregate manifest and each JSONL row label their evidence as `preflight`
 or `execution`; a successful `--preflight-only` run therefore cannot be

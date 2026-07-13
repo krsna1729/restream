@@ -18,6 +18,7 @@
         "mixed.matrix": {
           "suiteRef": "suites.json#suites.mixed.matrix",
           "suiteDefault": true,
+          "suiteOrder": 1000,
           "suiteTimeoutSecs": 5400,
           "requires": {
             "portNamespace": true,
@@ -43,6 +44,7 @@
         "ramp-family": {
           "suiteRef": "suites.json#suites.ramp-family",
           "suiteDefault": true,
+          "suiteOrder": 700,
           "requires": {
             "portNamespace": true,
             "benchProfile": true
@@ -61,6 +63,7 @@
         "resource-sweep": {
           "suiteRef": "suites.json#suites.resource-sweep",
           "suiteDefault": true,
+          "suiteOrder": 800,
           "suiteTimeoutSecs": 2400,
           "requires": {
             "portNamespace": true,
@@ -71,6 +74,7 @@
         "bitrate-sweep": {
           "suiteRef": "suites.json#suites.bitrate-sweep",
           "suiteDefault": true,
+          "suiteOrder": 900,
           "suiteTimeoutSecs": 2400,
           "requires": {
             "portNamespace": true,
@@ -81,6 +85,7 @@
         "branch-matrix": {
           "suiteRef": "suites.json#suites.branch-matrix",
           "suiteDefault": true,
+          "suiteOrder": 400,
           "requires": {
             "portNamespace": true,
             "benchProfile": true
@@ -99,6 +104,7 @@
         "srt-crypto-matrix": {
           "suiteRef": "suites.json#suites.srt-crypto-matrix",
           "suiteDefault": true,
+          "suiteOrder": 600,
           "requires": {
             "portNamespace": true,
             "benchProfile": true
@@ -113,6 +119,7 @@
       "modes": {
         "api-smoke": {
           "suiteDefault": true,
+          "suiteOrder": 100,
           "requires": {
             "portNamespace": true,
             "benchProfile": false
@@ -129,6 +136,7 @@
         },
         "srt.policy": {
           "suiteDefault": true,
+          "suiteOrder": 300,
           "requires": {
             "portNamespace": true,
             "benchProfile": false
@@ -154,6 +162,7 @@
         },
         "file.live-edge": {
           "suiteDefault": true,
+          "suiteOrder": 200,
           "requires": {
             "portNamespace": true,
             "benchProfile": false
@@ -186,6 +195,7 @@
         },
         "fault.resilience": {
           "suiteDefault": true,
+          "suiteOrder": 500,
           "requires": {
             "portNamespace": true,
             "benchProfile": false

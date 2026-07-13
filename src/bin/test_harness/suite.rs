@@ -23,7 +23,6 @@ pub(crate) fn suite_mode_is_parallelizable(mode: &str, preflight_only: bool) -> 
 
 /// Result summary for one child mode launched by the aggregate suite runner.
 struct SuiteModeOutcome {
-    index: usize,
     mode: String,
     mode_dir: PathBuf,
     started_at: String,
@@ -47,7 +46,6 @@ async fn suite_run_mode(
     has_unshare: bool,
     use_host_net: bool,
     timeout: Duration,
-    index: usize,
 ) -> Result<SuiteModeOutcome, String> {
     let started_at = Utc::now().to_rfc3339();
     let spawn_mode_dir = mode_dir.clone();
@@ -67,7 +65,6 @@ async fn suite_run_mode(
     .map_err(|e| format!("suite worker join failed for {mode}: {e}"))??;
     let finished_at = Utc::now().to_rfc3339();
     Ok(SuiteModeOutcome {
-        index,
         mode,
         mode_dir,
         started_at,
@@ -88,7 +85,7 @@ async fn suite_run_parallel_batch(
     default_timeout_secs: u64,
 ) -> Result<Vec<SuiteModeOutcome>, String> {
     let mut join_set = tokio::task::JoinSet::new();
-    for (offset, mode) in modes.iter().enumerate() {
+    for mode in modes {
         let mode_dir = work_root.join(mode);
         std::fs::create_dir_all(&mode_dir).map_err(|e| e.to_string())?;
         let command = if preflight_only {
@@ -109,21 +106,20 @@ async fn suite_run_parallel_batch(
             has_unshare,
             use_host_net,
             timeout,
-            offset,
         ));
     }
 
-    let mut outcomes: Vec<Option<SuiteModeOutcome>> = (0..modes.len()).map(|_| None).collect();
+    let mut outcomes = Vec::with_capacity(modes.len());
     while let Some(result) = join_set.join_next().await {
         let outcome = result.map_err(|e| format!("suite batch join failed: {e}"))??;
-        let index = outcome.index;
-        outcomes[index] = Some(outcome);
+        // Keep completed outcomes in finish order so the aggregate suite writes
+        // early evidence for fast siblings instead of hiding them behind the
+        // slowest parallel child. This is especially useful in CI release runs,
+        // where the first actionable signal should arrive within seconds.
+        outcomes.push(outcome);
     }
 
-    outcomes
-        .into_iter()
-        .map(|outcome| outcome.ok_or("suite batch produced an empty result slot".to_string()))
-        .collect()
+    Ok(outcomes)
 }
 
 pub(crate) async fn suite_run() -> Result<Value, String> {
