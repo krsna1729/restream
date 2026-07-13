@@ -50,15 +50,17 @@ restream_release_shard_timeout() {
     #   - smoke/correctness: <= ~1.5m locally -> 5m
     #   - small mixed shards: <= ~6m locally -> 15m
     #   - medium mixed/measurement shards: <= ~12.5m locally -> 25m
+    #     srt-crypto-matrix reached full output progress on hosted runners but
+    #     still needed cleanup/completion time beyond the 15m bucket.
     #   - full bitrate measurement family: <= ~15m locally -> 30m
     case "$shard" in
         smoke|branch-matrix)
             echo 5m
             ;;
-        mixed.live.rtmp.h264.a1|mixed.live.srt.h264.a1|mixed.file.h264.a1|fault.resilience|srt-crypto-matrix|ramp-family)
+        mixed.live.rtmp.h264.a1|mixed.live.srt.h264.a1|mixed.file.h264.a1|fault.resilience|ramp-family)
             echo 15m
             ;;
-        mixed.live.srt.h264.a2|mixed.live.srt.h265.a1|mixed.live.srt.h265.a2|mixed.file.h264.a2|mixed.file.h265.a1|mixed.file.h265.a2|resource-sweep.*)
+        mixed.live.srt.h264.a2|mixed.live.srt.h265.a1|mixed.live.srt.h265.a2|mixed.file.h264.a2|mixed.file.h265.a1|mixed.file.h265.a2|srt-crypto-matrix|resource-sweep.*)
             echo 25m
             ;;
         bitrate-sweep.*)

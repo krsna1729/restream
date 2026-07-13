@@ -129,11 +129,17 @@ run_harness_mode() {
   local mode="$1"
   local work_dir="$2"
   local log_file="$LOG_DIR/${mode}.log"
+  local -a extra_args=()
+
+  if [[ -n "${CONCURRENCY_HARNESS_ARGS:-}" ]]; then
+    # shellcheck disable=SC2206
+    extra_args=(${CONCURRENCY_HARNESS_ARGS})
+  fi
 
   cleanup_runtime
   if ! RESTREAM_BIN=target/debug/restream \
     WORK_DIR="$work_dir" \
-    target/debug/test_harness "$mode" >"$log_file" 2>&1; then
+    target/debug/test_harness "$mode" "${extra_args[@]}" >"$log_file" 2>&1; then
     cat "$log_file"
     cleanup_runtime
     assert_no_runtime_processes "$mode failure cleanup"

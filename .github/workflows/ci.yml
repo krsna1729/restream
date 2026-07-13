@@ -145,6 +145,11 @@ jobs:
       - name: Restore Rust build cache
         uses: ./.github/actions/rust-cache
       - name: Run concurrency contract gate
+        env:
+          # Hosted runners cannot preserve the optional private network
+          # namespace setup; keep the live fault slices on the same host-network
+          # fallback used by the other hosted harness jobs.
+          CONCURRENCY_HARNESS_ARGS: "--no-netns"
         run: bash ./scripts/check/concurrency/contract.sh
 
   test:
@@ -325,6 +330,8 @@ jobs:
       - name: Build release binary
         run: scripts/build/resource-limit.sh cargo build --release
       - name: Start app
+        env:
+          RESTREAM_INITIAL_ADMIN_PASSWORD: admin
         run: ./target/release/restream &
       - name: Wait for app
         run: |
@@ -344,5 +351,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: playwright-results
-          path: test-results/
+          path: .local/test-results/
           if-no-files-found: ignore
