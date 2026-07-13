@@ -5,6 +5,9 @@ on:
     - cron: '0 3 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
@@ -12,8 +15,9 @@ env:
 jobs:
   sbom-scan:
     name: SBOM Generation & Vulnerability Scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
+      contents: read
       security-events: write
       issues: write
     steps:
@@ -21,38 +25,30 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Install system deps
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libssl-dev pkg-config clang mold
+        uses: ./.github/actions/system-deps
+        with:
+          profile: base
 
       - name: Restore or build native prefix
         uses: ./.github/actions/native-prefix
+      - name: Restore Rust build cache
+        uses: ./.github/actions/rust-cache
 
       - name: Build binary
-        run: scripts/build/resource-limit.sh cargo build --profile bench
+        run: scripts/build/bench-harness.sh
 
       - name: Generate SBOM from runtime code path
         run: |
           ./target/bench/restream --emit-sbom restream.cdx.json
 
-      - name: Install grype
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+      - name: Install security tools
+        uses: ./.github/actions/security-tools
 
       - name: Run grype
         run: |
           grype sbom:restream.cdx.json \
             --output sarif=grype-results.sarif \
             --output json=grype-results.json || true
-
-      - name: Install trivy
-        run: |
-          sudo apt-get install -y -qq wget apt-transport-https gnupg lsb-release
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | \
-            sudo tee /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq trivy
 
       - name: Run trivy
         run: |
@@ -133,22 +129,22 @@ jobs:
 
   cargo-audit:
     name: cargo-audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        uses: taiki-e/install-action@cargo-audit
       - name: Run cargo audit
         run: cargo audit
 
   cargo-deny:
     name: cargo-deny
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
+        uses: taiki-e/install-action@cargo-deny
       - name: Run cargo deny
         run: cargo deny check advisories licenses bans sources

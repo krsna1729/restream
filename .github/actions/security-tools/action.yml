@@ -1,0 +1,15 @@
+name: Security tools
+description: Install the release and SBOM security scanners used by CI.
+
+runs:
+  using: composite
+  steps:
+    - name: Install cargo-audit
+      uses: taiki-e/install-action@cargo-audit
+    - name: Install cargo-deny
+      uses: taiki-e/install-action@cargo-deny
+    - name: Install grype
+      shell: bash
+      run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+    - name: Install trivy
+      uses: aquasecurity/setup-trivy@v0.3.1

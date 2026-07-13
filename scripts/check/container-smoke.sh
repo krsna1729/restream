@@ -57,12 +57,22 @@ trap cleanup EXIT
 
 build_commit="$(git rev-parse HEAD)"
 build_timestamp="$(git show -s --format=%cI HEAD)"
-docker build \
+docker_build_args=(
     --build-arg "RESTREAM_BUILD_GIT_COMMIT=$build_commit" \
     --build-arg "RESTREAM_BUILD_TIMESTAMP=$build_timestamp" \
     --target runtime \
-    -t "$IMAGE" \
-    .
+    -t "$IMAGE"
+)
+if [[ "${RESTREAM_DOCKER_GHA_CACHE:-0}" == "1" ]]; then
+    docker buildx build \
+        "${docker_build_args[@]}" \
+        --cache-from "type=gha,scope=runtime-release" \
+        --cache-to "type=gha,mode=max,scope=runtime-release" \
+        --load \
+        .
+else
+    docker build "${docker_build_args[@]}" .
+fi
 
 user="$(docker image inspect --format '{{.Config.User}}' "$IMAGE")"
 if [[ "$user" != "1000:1000" ]]; then

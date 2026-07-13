@@ -23,20 +23,21 @@ env:
 jobs:
   publish:
     name: Publish CI harness runtime image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
       - name: Build and push runtime image
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          docker pull "$RESTREAM_CI_HARNESS_IMAGE" || true
-          docker build \
+          docker buildx build \
             --target ci-harness-runtime \
-            --cache-from "$RESTREAM_CI_HARNESS_IMAGE" \
+            --cache-from "type=gha,scope=ci-harness-runtime" \
+            --cache-to "type=gha,mode=max,scope=ci-harness-runtime" \
             --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
             -t "$RESTREAM_CI_HARNESS_IMAGE" \
+            --push \
             .
-          docker push "$RESTREAM_CI_HARNESS_IMAGE"

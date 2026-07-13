@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
+  packages: read
 
 # Branch dry-runs should not stack stale release attempts. Tag runs are kept
 # independent because a published tag is an immutable release event.
@@ -28,7 +28,7 @@ env:
 jobs:
   prepare-build:
     name: Prepare harness binaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -39,6 +39,7 @@ jobs:
       - uses: ./.github/actions/system-deps
         with: { profile: build }
       - uses: ./.github/actions/native-prefix
+      - uses: ./.github/actions/rust-cache
       - name: Prepare release build tree
         # Clean runners do not have generated public/ assets. The harness
         # compile embeds public/ before packaging runs, so prepare the tree via
@@ -59,7 +60,7 @@ jobs:
 
   full-live-harness:
     name: Full live harness (${{ matrix.shard }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: prepare-build
     # The shard script owns scenario-specific timeout messages. Keep the
     # workflow ceiling above its largest 30m bucket so GitHub does not cut the
@@ -122,7 +123,7 @@ jobs:
 
   package-evidence:
     name: Package and release evidence
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs:
       - prepare-build
       - full-live-harness
@@ -136,25 +137,16 @@ jobs:
       - uses: ./.github/actions/system-deps
         with: { profile: build }
       - uses: ./.github/actions/native-prefix
-      # Reuse established installers instead of compiling audit/scanner CLIs on
-      # every hosted release worker. The canonical release-evidence script below
-      # still owns the actual policy.
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@cargo-audit
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@cargo-deny
-      - run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
-      - run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq wget apt-transport-https gnupg lsb-release
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update -qq && sudo apt-get install -y -qq trivy
+      - uses: ./.github/actions/rust-cache
+      - uses: ./.github/actions/security-tools
+      - uses: docker/setup-buildx-action@v3
       - name: Package every supported Linux binary
         # This canonical script installs the locked frontend dependencies and
         # builds generated assets before compiling the feature-enabled binaries.
         run: scripts/release/package-binaries.sh "$RELEASE_VERSION"
       - name: Release evidence and OCI asset
+        env:
+          RESTREAM_DOCKER_GHA_CACHE: "1"
         # Pass the completed bundle so its exact restream executable emits the
         # SBOM; certifying a separate default-feature rebuild would leave the
         # downloadable feature-enabled artifact unscanned.
@@ -175,7 +167,7 @@ jobs:
 
   certify:
     name: Certify release dry-run
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs:
       - package-evidence
     steps:
@@ -184,9 +176,12 @@ jobs:
 
   publish:
     name: Publish certified release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: certify
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
