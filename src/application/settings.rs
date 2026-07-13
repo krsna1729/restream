@@ -4,9 +4,10 @@
 //! `crate::api`, while persistence details stay behind the existing ports.
 
 use crate::application::ports::{IngestHostStore, MetaStore};
-use crate::application::recording::{RecordingSettings, load_recording_settings};
+use crate::application::recording::load_recording_settings;
 use crate::application::srt_ingest::load_global_srt_ingest_config;
 use crate::domain::ingest_security::IngestSecurityConfig;
+use crate::domain::recording::RecordingSettings;
 use crate::domain::srt_ingest::SrtGlobalIngestConfig;
 use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::media::security::IngestSecurityService;

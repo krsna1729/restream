@@ -3,13 +3,14 @@ use std::sync::Arc;
 use crate::application::models::{Job, Output, Pipeline};
 use crate::application::ports::{IngestHostStore, JobStore, MetaStore, MetaStoreWriter};
 use crate::application::recording::load_recording_enabled_map;
-use crate::application::recording::{RecordingSettings, save_recording_settings};
+use crate::application::recording::save_recording_settings;
 use crate::application::settings::{BACKEND_POLICY_META_KEY, load_settings_snapshot};
 use crate::application::srt_ingest::load_global_srt_ingest_config;
 use crate::application::{
     ingest_security::save_ingest_security_config, transcode_profiles::save_transcode_profiles,
 };
 use crate::domain::ingest_security::IngestSecurityConfig;
+use crate::domain::recording::RecordingSettings;
 use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::media::security::IngestSecurityService;
 use crate::media::srt::SrtIngestPolicyStore;

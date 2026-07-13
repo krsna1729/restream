@@ -5,18 +5,13 @@ use crate::application::ports::{MetaLookupError, MetaStore, MetaStoreWriter};
 use crate::application::reconcile::RecordingCommand;
 use crate::media::engine::MediaEngine;
 use crate::media::recording::{RecordingMetadataReporter, RecordingStart};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 pub const RECORDING_SETTINGS_META_KEY: &str = "recording_settings";
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct RecordingSettings {
-    pub retain_source_ts: bool,
-}
+pub use crate::domain::recording::RecordingSettings;
 
 pub fn recording_enabled_meta_key(pipeline_id: &str) -> String {
     format!("recording_enabled:{pipeline_id}")

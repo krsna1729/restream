@@ -33,7 +33,7 @@ pub struct ConfigPatchPayload {
     pub server_name: Option<String>,
     pub ingest_host: Option<String>,
     pub ingest_security: Option<IngestSecurityConfig>,
-    pub recording_settings: Option<crate::application::recording::RecordingSettings>,
+    pub recording_settings: Option<crate::domain::recording::RecordingSettings>,
     pub srt_ingest: Option<SrtGlobalIngestConfig>,
     pub transcode_profiles: Option<TranscodeProfiles>,
     pub backend_policy: Option<BackendPolicy>,
