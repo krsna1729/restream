@@ -181,6 +181,8 @@ jobs:
       - name: Restore Rust build cache
         uses: ./.github/actions/rust-cache
       - name: Rebuild committed SBOM
+        env:
+          RESTREAM_DETERMINISTIC_SBOM: "1"
         run: scripts/build/resource-limit.sh ./scripts/build/app-native.sh
       - name: Verify committed SBOM is up to date
         run: git diff --exit-code -- sbom/restream-runtime.cdx.json

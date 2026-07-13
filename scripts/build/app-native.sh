@@ -78,9 +78,4 @@ if [[ -n "${RESTREAM_BUILD_BINS:-}" ]]; then
 fi
 
 echo "Verified: $BINARY does not link libsrt dynamically."
-if [[ "${RESTREAM_SKIP_SBOM:-0}" == "1" ]]; then
-    echo "Skipping SBOM emission (RESTREAM_SKIP_SBOM=1)."
-else
-    mkdir -p "$(dirname "$SBOM")"
-    "$BINARY" --emit-sbom "$SBOM"
-fi
+"$ROOT/scripts/build/emit-sbom.sh" "$BINARY" "$SBOM"

@@ -8,27 +8,19 @@ fn main() {
     let mut args = std::env::args_os();
     let _program = args.next();
     if let Some(flag) = args.next() {
-        if flag == "--emit-sbom" {
+        if flag == "--emit-sbom" || flag == "--emit-sbom-deterministic" {
+            let deterministic = flag == "--emit-sbom-deterministic";
             let Some(path) = args.next() else {
-                eprintln!("usage: restream --emit-sbom <path>");
-                std::process::exit(2);
+                print_usage_and_exit();
             };
             if args.next().is_some() {
-                eprintln!("usage: restream --emit-sbom <path>");
-                std::process::exit(2);
+                print_usage_and_exit();
             }
-            let result = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to build tokio runtime")
-                .block_on(restream::emit_repo_sbom(std::path::Path::new(&path)));
+            let path = std::path::Path::new(&path);
+            let result = restream::emit_sbom(path, deterministic);
             match result {
-                Ok(true) => {
-                    println!("updated {}", std::path::Path::new(&path).display());
-                    return;
-                }
-                Ok(false) => {
-                    println!("unchanged {}", std::path::Path::new(&path).display());
+                Ok(()) => {
+                    println!("updated {}", path.display());
                     return;
                 }
                 Err(error) => {
@@ -37,8 +29,7 @@ fn main() {
                 }
             }
         }
-        eprintln!("usage: restream [--emit-sbom <path>]");
-        std::process::exit(2);
+        print_usage_and_exit();
     }
 
     let config = std::sync::Arc::new(restream::AppConfig::from_env());
@@ -60,6 +51,11 @@ fn main() {
         .block_on(restream::run_app(config));
 
     restream::ffmpeg_extract::cleanup_ffmpeg();
+}
+
+fn print_usage_and_exit() -> ! {
+    eprintln!("usage: restream [--emit-sbom <path> | --emit-sbom-deterministic <path>]");
+    std::process::exit(2);
 }
 
 #[cfg(test)]

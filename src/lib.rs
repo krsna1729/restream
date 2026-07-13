@@ -57,7 +57,7 @@ pub mod planner;
 pub mod runtime;
 pub use config::{AppConfig, RuntimeTuning, ServerPorts, TokioRuntimeConfig};
 pub mod runtime_info;
-pub use runtime_info::emit_repo_sbom;
+pub use runtime_info::emit_sbom;
 pub mod secret_display;
 pub mod test_fixtures;
 

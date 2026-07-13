@@ -32,7 +32,7 @@ cargo rustc --profile "$PROFILE" --bin restream -- \
     -C link-arg=-no-pie
 
 BINARY="$CARGO_TARGET_DIR/$PROFILE/restream"
-SBOM="$ROOT/sbom/restream-runtime.cdx.json"
+SBOM="${RESTREAM_SBOM_PATH:-$ROOT/sbom/restream-runtime.cdx.json}"
 file "$BINARY"
 "$BUILD_ROOT/prefix/bin/restream-ffmpeg-capabilities"
 
@@ -55,8 +55,4 @@ if ! "$BINARY" --help >/dev/null 2>&1; then
 fi
 echo "Verified: $BINARY starts successfully."
 
-if [[ "${RESTREAM_SKIP_SBOM:-0}" == "1" ]]; then
-    echo "Skipping SBOM emission (RESTREAM_SKIP_SBOM=1)."
-else
-    "$BINARY" --emit-sbom "$SBOM"
-fi
+"$ROOT/scripts/build/emit-sbom.sh" "$BINARY" "$SBOM"

@@ -1208,11 +1208,11 @@
       "version": "0.8.6"
     },
     {
-      "bom-ref": "pkg:cargo/crossbeam-epoch@0.9.18",
+      "bom-ref": "pkg:cargo/crossbeam-epoch@0.9.20",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+          "content": "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
         }
       ],
       "licenses": [
@@ -1239,9 +1239,9 @@
           "value": "registry+https://github.com/rust-lang/crates.io-index"
         }
       ],
-      "purl": "pkg:cargo/crossbeam-epoch@0.9.18",
+      "purl": "pkg:cargo/crossbeam-epoch@0.9.20",
       "type": "library",
-      "version": "0.9.18"
+      "version": "0.9.20"
     },
     {
       "bom-ref": "pkg:cargo/crossbeam-queue@0.3.12",
@@ -9160,7 +9160,7 @@
         "pkg:cargo/crc32fast@1.5.0",
         "pkg:cargo/crossbeam-channel@0.5.15",
         "pkg:cargo/crossbeam-deque@0.8.6",
-        "pkg:cargo/crossbeam-epoch@0.9.18",
+        "pkg:cargo/crossbeam-epoch@0.9.20",
         "pkg:cargo/crossbeam-queue@0.3.12",
         "pkg:cargo/crossbeam-utils@0.8.21",
         "pkg:cargo/crypto-common@0.1.7",
@@ -9638,7 +9638,7 @@
     },
     {
       "dependsOn": [
-        "pkg:cargo/crossbeam-epoch@0.9.18",
+        "pkg:cargo/crossbeam-epoch@0.9.20",
         "pkg:cargo/crossbeam-utils@0.8.21"
       ],
       "ref": "pkg:cargo/crossbeam-deque@0.8.6"
@@ -9647,7 +9647,7 @@
       "dependsOn": [
         "pkg:cargo/crossbeam-utils@0.8.21"
       ],
-      "ref": "pkg:cargo/crossbeam-epoch@0.9.18"
+      "ref": "pkg:cargo/crossbeam-epoch@0.9.20"
     },
     {
       "dependsOn": [
@@ -11091,14 +11091,6 @@
       "name": "restream",
       "properties": [
         {
-          "name": "restream:gitCommit",
-          "value": "6f0afdf1bc605d0c9bbec4603d847a2df0117a1d"
-        },
-        {
-          "name": "restream:nativeBuildId",
-          "value": "73765ce8948ebff28e85fdd11b491d54b4e96c6468a016360fd1110af2ef12f0"
-        },
-        {
           "name": "restream:licenseFile",
           "value": ""
         }
@@ -11115,17 +11107,8 @@
       {
         "name": "restream:rustDependencySource",
         "value": "resolved normal Cargo dependency closure"
-      },
-      {
-        "name": "restream:gitCommit",
-        "value": "6f0afdf1bc605d0c9bbec4603d847a2df0117a1d"
-      },
-      {
-        "name": "restream:nativeBuildId",
-        "value": "73765ce8948ebff28e85fdd11b491d54b4e96c6468a016360fd1110af2ef12f0"
       }
     ],
-    "timestamp": "2026-07-12T01:12:42+05:30",
     "tools": {
       "components": [
         {
