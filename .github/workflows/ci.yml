@@ -161,7 +161,7 @@ jobs:
       - name: Install system dependencies
         uses: ./.github/actions/system-deps
         with:
-          profile: base
+          profile: browser
       - name: Restore or build native prefix
         uses: ./.github/actions/native-prefix
       - name: Restore Rust build cache
