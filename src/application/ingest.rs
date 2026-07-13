@@ -7,12 +7,91 @@ use crate::application::ports::{
     PipelineStoreError,
 };
 use crate::media::engine::MediaEngine;
+use crate::media::ingest_auth::{
+    AuthenticatedPipeline, PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessFuture,
+    PipelineAccessMode,
+};
 use crate::media::security::{IngestSecurityService, RateLimitScope};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum IngestAuthError {
     InvalidStreamKey,
     LookupFailed(PipelineStoreError),
+}
+
+pub struct PipelineStoreIngestAuthenticator {
+    pipeline_lookup: Arc<dyn PipelineStore>,
+    security: Arc<IngestSecurityService>,
+}
+
+impl PipelineStoreIngestAuthenticator {
+    pub fn new(
+        pipeline_lookup: Arc<dyn PipelineStore>,
+        security: Arc<IngestSecurityService>,
+    ) -> Self {
+        Self {
+            pipeline_lookup,
+            security,
+        }
+    }
+}
+
+impl PipelineAccessAuthenticator for PipelineStoreIngestAuthenticator {
+    fn authenticate<'a>(
+        &'a self,
+        mode: PipelineAccessMode,
+        stream_key: &'a str,
+        client_ip: &'a str,
+    ) -> PipelineAccessFuture<'a> {
+        Box::pin(async move {
+            let pipeline = match mode {
+                PipelineAccessMode::RtmpPublish => authenticate_publish_stream_key(
+                    self.pipeline_lookup.as_ref(),
+                    &self.security,
+                    stream_key,
+                    client_ip,
+                )
+                .await
+                .map_err(pipeline_access_error)?,
+                PipelineAccessMode::RtmpPlay => self
+                    .pipeline_lookup
+                    .get_pipeline_by_stream_key(stream_key)
+                    .await
+                    .map_err(|err| PipelineAccessError::LookupFailed(err.to_string()))?
+                    .ok_or(PipelineAccessError::InvalidStreamKey)?,
+                PipelineAccessMode::SrtPublish => authenticate_srt_stream_key(
+                    self.pipeline_lookup.as_ref(),
+                    &self.security,
+                    stream_key,
+                    client_ip,
+                    RateLimitScope::SrtPublish,
+                )
+                .await
+                .map_err(pipeline_access_error)?,
+                PipelineAccessMode::SrtRead => authenticate_srt_stream_key(
+                    self.pipeline_lookup.as_ref(),
+                    &self.security,
+                    stream_key,
+                    client_ip,
+                    RateLimitScope::SrtRead,
+                )
+                .await
+                .map_err(pipeline_access_error)?,
+            };
+
+            Ok(AuthenticatedPipeline { id: pipeline.id })
+        })
+    }
+}
+
+fn pipeline_access_error(error: IngestAuthError) -> PipelineAccessError {
+    match error {
+        IngestAuthError::InvalidStreamKey => PipelineAccessError::InvalidStreamKey,
+        IngestAuthError::LookupFailed(error) => {
+            PipelineAccessError::LookupFailed(error.to_string())
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -611,6 +690,43 @@ mod tests {
                 .is_ip_banned_for(RateLimitScope::SrtPublish, ip)
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn pipeline_access_authenticator_resolves_rtmp_play_without_rate_limit_side_effects() {
+        let lookup = Arc::new(FakePipelineStore::success("live"));
+        let security = Arc::new(IngestSecurityService::new(test_security_config()));
+        let auth = PipelineStoreIngestAuthenticator::new(lookup, security.clone());
+
+        let pipeline = auth
+            .authenticate(PipelineAccessMode::RtmpPlay, "live", "10.0.0.4")
+            .await
+            .unwrap();
+
+        assert_eq!(pipeline.id, "pipeline-1");
+        assert!(security.snapshots().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pipeline_access_authenticator_records_srt_publish_failures() {
+        let lookup = Arc::new(FakePipelineStore {
+            pipelines: HashMap::new(),
+            error: None,
+        });
+        let security = Arc::new(IngestSecurityService::new(test_security_config()));
+        let auth = PipelineStoreIngestAuthenticator::new(lookup, security.clone());
+        let ip = "10.0.0.5";
+
+        let result = auth
+            .authenticate(PipelineAccessMode::SrtPublish, "missing", ip)
+            .await;
+
+        assert!(matches!(result, Err(PipelineAccessError::InvalidStreamKey)));
+        let snapshots = security.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].scope, "srt-publish");
+        assert_eq!(snapshots[0].ip, ip);
+        assert_eq!(snapshots[0].failure_count, 1);
     }
 
     #[tokio::test]

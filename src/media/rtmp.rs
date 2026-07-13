@@ -7,8 +7,6 @@
 //! Egress: connects to an RTMP target URL and forwards packets from the
 //! `RingBuffer` via a `Reader`. Cancellation via `CancellationToken`.
 
-use crate::application::ingest::{IngestAuthError, authenticate_publish_stream_key};
-use crate::application::ports::PipelineStore;
 use crate::domain::state::EgressPhase;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
@@ -32,6 +30,9 @@ use crate::media::codec;
 use crate::media::engine::{
     AudioMeta, EgressRegistration, IngestRegistration, MediaEngine, PublisherQuality, StageMetrics,
     VideoMeta,
+};
+use crate::media::ingest_auth::{
+    PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode,
 };
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
 use crate::media::security::IngestSecurityService;
@@ -67,15 +68,15 @@ struct RtmpIngestHandle {
 
 /// RTMP Ingest Server
 pub async fn start_rtmp_server(
-    pipeline_lookup: Arc<dyn PipelineStore>,
+    pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
     security: Arc<IngestSecurityService>,
     engine: Arc<MediaEngine>,
 ) {
-    start_rtmp_server_on(pipeline_lookup, security, engine, 1935).await;
+    start_rtmp_server_on(pipeline_access, security, engine, 1935).await;
 }
 
 pub async fn start_rtmp_server_on(
-    pipeline_lookup: Arc<dyn PipelineStore>,
+    pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
     security: Arc<IngestSecurityService>,
     engine: Arc<MediaEngine>,
     port: u16,
@@ -124,7 +125,7 @@ pub async fn start_rtmp_server_on(
                         continue;
                     }
                 };
-                let pipeline_lookup_clone = pipeline_lookup.clone();
+                let pipeline_access_clone = pipeline_access.clone();
                 let security_clone = security.clone();
                 let engine_clone = engine.clone();
                 tokio::spawn(async move {
@@ -132,7 +133,7 @@ pub async fn start_rtmp_server_on(
                     if let Err(e) = handle_rtmp_client(
                         socket,
                         addr,
-                        pipeline_lookup_clone,
+                        pipeline_access_clone,
                         security_clone,
                         engine_clone,
                     )
@@ -328,7 +329,7 @@ where
 async fn handle_rtmp_client(
     mut socket: TcpStream,
     client_addr: SocketAddr,
-    pipeline_lookup: Arc<dyn PipelineStore>,
+    pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
     security: Arc<IngestSecurityService>,
     engine: Arc<MediaEngine>,
 ) -> Result<(), &'static str> {
@@ -376,7 +377,7 @@ async fn handle_rtmp_client(
             &mut session,
             results,
             &mut socket,
-            pipeline_lookup.as_ref(),
+            pipeline_access.as_ref(),
             &security,
             &engine,
             &client_ip,
@@ -427,7 +428,7 @@ async fn handle_rtmp_client(
                     &mut session,
                     results,
                     &mut socket,
-                    pipeline_lookup.as_ref(),
+                    pipeline_access.as_ref(),
                     &security,
                     &engine,
                     &client_ip,
@@ -526,7 +527,7 @@ async fn handle_session_results(
     session: &mut ServerSession,
     results: Vec<ServerSessionResult>,
     socket: &mut TcpStream,
-    pipeline_lookup: &dyn PipelineStore,
+    pipeline_access: &dyn PipelineAccessAuthenticator,
     security: &IngestSecurityService,
     engine: &MediaEngine,
     client_ip: &str,
@@ -577,16 +578,12 @@ async fn handle_session_results(
                         }
 
                         // Validate stream key against database pipelines
-                        let pipeline = match authenticate_publish_stream_key(
-                            pipeline_lookup,
-                            security,
-                            &stream_key,
-                            client_ip,
-                        )
-                        .await
+                        let pipeline = match pipeline_access
+                            .authenticate(PipelineAccessMode::RtmpPublish, &stream_key, client_ip)
+                            .await
                         {
                             Ok(pipeline) => pipeline,
-                            Err(IngestAuthError::InvalidStreamKey) => {
+                            Err(PipelineAccessError::InvalidStreamKey) => {
                                 warn!(
                                     stream_key = %redact_secret(&stream_key),
                                     "publish stream key not found"
@@ -598,8 +595,8 @@ async fn handle_session_results(
                                 );
                                 return Err("Invalid stream key");
                             }
-                            Err(IngestAuthError::LookupFailed(err)) => {
-                                error!("publish stream key lookup failed: {:?}", err);
+                            Err(PipelineAccessError::LookupFailed(err)) => {
+                                error!("publish stream key lookup failed: {}", err);
                                 let _ = session.reject_request(
                                     request_id,
                                     "NetStream.Publish.BadName",
@@ -816,12 +813,12 @@ async fn handle_session_results(
                         stream_id,
                     } => {
                         // Look up pipeline by stream key
-                        let pipeline = match pipeline_lookup
-                            .get_pipeline_by_stream_key(&stream_key)
+                        let pipeline = match pipeline_access
+                            .authenticate(PipelineAccessMode::RtmpPlay, &stream_key, client_ip)
                             .await
                         {
-                            Ok(Some(pipeline)) => pipeline,
-                            Ok(None) => {
+                            Ok(pipeline) => pipeline,
+                            Err(PipelineAccessError::InvalidStreamKey) => {
                                 let _ = session.reject_request(
                                     request_id,
                                     "NetStream.Play.StreamNotFound",
@@ -829,8 +826,8 @@ async fn handle_session_results(
                                 );
                                 return Err("Invalid stream key for play");
                             }
-                            Err(err) => {
-                                error!("play stream key lookup failed: {:?}", err);
+                            Err(PipelineAccessError::LookupFailed(err)) => {
+                                error!("play stream key lookup failed: {}", err);
                                 let _ = session.reject_request(
                                     request_id,
                                     "NetStream.Play.StreamNotFound",

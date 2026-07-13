@@ -54,11 +54,10 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::application::ingest::authenticate_srt_stream_key;
-use crate::application::ports::PipelineStore;
 use crate::domain::srt_ingest::ResolvedSrtIngestConfig;
 use crate::domain::state::EgressPhase;
 use crate::media::engine::{EgressRegistration, MediaEngine, PublisherQuality};
+use crate::media::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessMode};
 use crate::media::ring_buffer::{MediaPacket, MediaType, Reader, RingBuffer};
 use crate::media::security::RateLimitScope;
 use crate::media::startup_policy;
@@ -962,7 +961,7 @@ impl EpollWaiterSignal {
 }
 
 pub struct SrtServer {
-    pipeline_lookup: Arc<dyn PipelineStore>,
+    pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
     engine: Arc<MediaEngine>,
     security: Arc<crate::media::security::IngestSecurityService>,
     ingest_policy_store: Arc<SrtIngestPolicyStore>,
@@ -970,7 +969,7 @@ pub struct SrtServer {
 
 impl SrtServer {
     pub fn new(
-        pipeline_lookup: Arc<dyn PipelineStore>,
+        pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
         engine: Arc<MediaEngine>,
         security: Arc<crate::media::security::IngestSecurityService>,
         ingest_policy_store: Arc<SrtIngestPolicyStore>,
@@ -984,7 +983,7 @@ impl SrtServer {
         }
         check_sysctl_limits();
         Self {
-            pipeline_lookup,
+            pipeline_access,
             engine,
             security,
             ingest_policy_store,
@@ -1266,21 +1265,17 @@ impl SrtServer {
         let parsed = parse_srt_stream_id(&streamid);
         let is_reader = parsed.mode == SrtConnectionMode::Read;
         let stream_key = parsed.stream_key.as_str();
-        let rate_limit_scope = if is_reader {
-            RateLimitScope::SrtRead
+        let access_mode = if is_reader {
+            PipelineAccessMode::SrtRead
         } else {
-            RateLimitScope::SrtPublish
+            PipelineAccessMode::SrtPublish
         };
 
         // Query pipeline for stream key validation
-        let pipeline = match authenticate_srt_stream_key(
-            self.pipeline_lookup.as_ref(),
-            &self.security,
-            stream_key,
-            &client_ip,
-            rate_limit_scope,
-        )
-        .await
+        let pipeline = match self
+            .pipeline_access
+            .authenticate(access_mode, stream_key, &client_ip)
+            .await
         {
             Ok(pipeline) => pipeline,
             Err(_) => {
