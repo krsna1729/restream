@@ -23,14 +23,6 @@ jobs:
       - uses: ./.github/actions/system-deps
         with: { profile: live }
       - uses: ./.github/actions/native-prefix
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: release-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       # Reuse the repository's established prebuilt installer instead of
       # compiling two audit CLIs on every hosted release runner. The release
       # gate below still invokes the canonical release-evidence script.

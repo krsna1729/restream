@@ -43,16 +43,6 @@ jobs:
           profile: base
       - name: Restore or build native prefix
         uses: ./.github/actions/native-prefix
-      - name: Restore cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: clippy-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: clippy-${{ runner.os }}-
       - name: Rust clippy (strict for lib)
         run: scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings
       - name: Rust clippy (warn only for all targets)
@@ -88,16 +78,6 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Restore cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: api-contract-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: api-contract-${{ runner.os }}-
       - name: Run API contract gate
         run: ./scripts/check/api-contract.sh
 
@@ -154,16 +134,6 @@ jobs:
           profile: live
       - name: Restore or build native prefix
         uses: ./.github/actions/native-prefix
-      - name: Restore cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: concurrency-contract-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: concurrency-contract-${{ runner.os }}-
       - name: Run concurrency contract gate
         run: bash ./scripts/check/concurrency/contract.sh
 
@@ -180,16 +150,6 @@ jobs:
           profile: base
       - name: Restore or build native prefix
         uses: ./.github/actions/native-prefix
-      - name: Restore cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: test-${{ runner.os }}-
       - name: Rust test hygiene gate
         run: ./scripts/check/test-hygiene.sh
       - name: Fixture discipline gate
@@ -207,16 +167,6 @@ jobs:
           profile: base
       - name: Restore or build native prefix
         uses: ./.github/actions/native-prefix
-      - name: Restore cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: sbom-sync-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: sbom-sync-${{ runner.os }}-
       - name: Rebuild committed SBOM
         run: scripts/build/resource-limit.sh ./scripts/build/app-native.sh
       - name: Verify committed SBOM is up to date
@@ -237,16 +187,6 @@ jobs:
           profile: base
       - name: Restore or build native prefix
         uses: ./.github/actions/native-prefix
-      - name: Restore cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: coverage-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: coverage-${{ runner.os }}-
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate coverage
@@ -275,16 +215,6 @@ jobs:
           profile: live
       - name: Restore or build native prefix
         uses: ./.github/actions/native-prefix
-      - name: Restore cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: integration-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: integration-${{ runner.os }}-
       - name: Build canonical bench harness binaries
         run: ./scripts/build/bench-harness.sh
       - name: Run integration suite
@@ -345,16 +275,6 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Restore cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: playwright-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: playwright-${{ runner.os }}-
       - run: npm ci
       - name: Install Playwright browsers
         run: npx playwright install chromium
