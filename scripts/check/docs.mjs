@@ -80,6 +80,7 @@ function proseHeadings(lines) {
 
 const maintainedProse = new Set([
   "README.md",
+  "ARCHITECTURE_GUARDRAILS.md",
   "docs/README.md",
   "docs/development.md",
   "docs/architecture.md",
@@ -96,6 +97,7 @@ const maintainedProse = new Set([
   "docs/testing.md",
   "docs/agent-plane-integration.md",
   "docs/mcp-rust-architecture.md",
+  "docs/parallel-agent-framework.md",
   "docs/source-distribution.md",
   "docs/release-compliance.md",
   "docs/release-runbook.md",
@@ -113,6 +115,44 @@ const conceptualDiagramGlyphs = /[┌┐┘┬┴┼▼▲►◄║╔╗╚╝]
 const mermaidEmoji = /[\u{1F300}-\u{1FAFF}✅❌⚠⭐✓]/u;
 const files = markdownFiles();
 const errors = [];
+const maintainedShellBlocks = new Map();
+
+function collectMaintainedShellBlocks(relative, lines) {
+  let language = null;
+  let startLine = null;
+  let body = [];
+
+  lines.forEach((line, index) => {
+    const fence = /^\s*```([^\s`]*)/.exec(line);
+    if (!fence) {
+      if (language !== null) body.push(line.replace(/\s+$/, ""));
+      return;
+    }
+
+    if (language === null) {
+      language = fence[1].toLowerCase();
+      startLine = index + 1;
+      body = [];
+      return;
+    }
+
+    if (["sh", "bash"].includes(language)) {
+      const normalized = body.join("\n").trim();
+      const commands = body.filter(
+        (entry) => entry.trim() && !entry.trimStart().startsWith("#"),
+      );
+      if (commands.length >= 2) {
+        const locations = maintainedShellBlocks.get(normalized) ?? [];
+        locations.push(`${relative}:${startLine}`);
+        maintainedShellBlocks.set(normalized, locations);
+      }
+    }
+
+    language = null;
+    startLine = null;
+    body = [];
+  });
+}
 
 const svgFiles = new Set();
 collectByExtension(path.join(root, "docs"), ".svg", svgFiles);
@@ -130,6 +170,10 @@ for (const filename of files) {
   const h1 = headings.filter(({ level }) => level === 1);
   const h2 = headings.filter(({ level }) => level === 2);
   let fenceLanguage = null;
+
+  if (maintainedProse.has(relative)) {
+    collectMaintainedShellBlocks(relative, lines);
+  }
 
   // Skill packages optimize for immediate execution, so a TOC is needless
   // preamble. Legal text and one-section shims also need no navigation.
@@ -209,6 +253,11 @@ for (const filename of files) {
         `${relative}:${lineNumber}: high-churn inventory belongs in source or dated evidence`,
       );
     }
+    if (maintainedProse.has(relative) && /\bapt-get\s+install\b/.test(line)) {
+      errors.push(
+        `${relative}:${lineNumber}: package inventory belongs in scripts/lib/debian-packages.sh`,
+      );
+    }
 
     for (const match of line.matchAll(linkPattern)) {
       const [, label, target] = match;
@@ -234,6 +283,15 @@ for (const filename of files) {
       }
     }
   });
+}
+
+for (const locations of maintainedShellBlocks.values()) {
+  const distinctFiles = new Set(locations.map((entry) => entry.split(":", 1)[0]));
+  if (distinctFiles.size > 1) {
+    errors.push(
+      `duplicate multi-line shell recipe in maintained prose: ${locations.join(", ")}`,
+    );
+  }
 }
 
 // The central index must reach every Markdown file except itself.

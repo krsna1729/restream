@@ -1,7 +1,7 @@
 # Documentation Audit — 2026-07-14
 
-This audit covers all 61 tracked Markdown files at commit `b50d52f4`, plus
-their links to current source, scripts, routes, tests, and generated assets.
+This audit covers the tracked Markdown set and its links to current source,
+scripts, routes, tests, and generated assets as of 2026-07-14.
 It distinguishes maintained product guidance from design records, agent
 contracts, measurement ledgers, and legal text so each audience has a clear
 entry point without discarding useful history.
@@ -68,8 +68,9 @@ current paths.
 - The configuration reference omitted four centralized runtime settings:
   ingest-disconnect grace, file-log retention, secure session cookies, and SRT
   egress local-port reuse.
-- The developer guide's benchmark list omitted the current `hls_fmp4_cost` and
-  `rtmp_serializer` suites declared in `Cargo.toml`.
+- The developer guide copied Debian packages, build steps, frontend commands,
+  harness invocations, and benchmark mechanics already owned by scripts,
+  `package.json`, `Cargo.toml`, and the testing guide.
 
 ### Broken navigation
 
@@ -85,9 +86,10 @@ document had a consistent TOC marker.
 
 ### Content overlap
 
-- `README.md` and `development.md` both own setup and the daily loop. The README
-  should keep the ten-minute path; the developer guide should own detailed
-  prerequisites and workflows.
+- `README.md` and `development.md` both owned setup and the daily loop. The
+  README should keep the ten-minute path; the developer guide should explain
+  workflow intent and route readers to executable owners. Bootstrap scripts
+  and `scripts/lib/debian-packages.sh` own exact prerequisites.
 - `testing.md` mixes maintained test policy, a route coverage matrix, live-mode
   reference, dated validation results, a future plan, resource measurements,
   and findings. `testing-strategy.md` separately explains the two-tier
@@ -176,7 +178,7 @@ and directory-local README files remain near the code or artifact they govern.
 |---|---|---|
 | `README.md` | Everyone | Keep short; setup and route to the docs index |
 | `docs/README.md` | Everyone | New canonical documentation index |
-| `docs/development.md` | Contributors | Keep; remove product-change diary material |
+| `docs/development.md` | Contributors | Keep workflow guidance; scripts own package lists and command composition |
 | `docs/release-runbook.md` | Release operators | Keep as task guide |
 | `test/harness/README.md` | Harness contributors | Keep beside manifests; expand only with DSL changes |
 
@@ -250,6 +252,8 @@ The minimal contract is intentionally small:
 - explicit `Current guidance`, `Proposal`, or `Evidence as of YYYY-MM-DD`
   status near the top of non-obvious documents;
 - no hard-coded source line counts in maintained prose;
+- no copied package lists, script internals, or executable inventories when a
+  script, manifest, CLI help surface, or generated report already owns them;
 - no claim of complete route/config/test inventory unless a check derives it
   from source.
 
@@ -270,6 +274,8 @@ Remove or generate these high-churn details:
 - manually counted routes, tests, benchmarks, modes, assertions, or modules;
 - exhaustive source-file inventories duplicated outside their owning module or
   generated report;
+- Debian package names, release gate sequences, harness subcommands, or build
+  recipes already encoded by executable owners;
 - current coverage percentages and benchmark/resource measurements without a
   dated evidence boundary;
 - completed-phase progress logs embedded in current architecture or developer
@@ -281,6 +287,9 @@ Remove or generate these high-churn details:
 | API route totals | Router constants and a generated route inventory |
 | Test or assertion totals | Test runner output or a generated CI artifact |
 | Benchmark suite inventory | `Cargo.toml`, validated by a docs check when a curated list is useful |
+| Debian package inventory | `scripts/lib/debian-packages.sh` groups selected by bootstrap/CI scripts |
+| Release gate and artifact sequence | `scripts/release/` and `scripts/check/release-evidence.sh` |
+| Harness commands and mode inventory | `test_harness catalog help`, manifests, and `scripts/harness/run.sh` |
 | Coverage percentages | Dated coverage artifact linked from the evidence index |
 | Performance and resource numbers | Dated baseline ledger with commit, host, and replay command |
 | Migration completion details | Frozen gap-analysis/evidence record, not the current architecture guide |
@@ -291,9 +300,8 @@ fact represents a contract change or merely normal repository churn.
 
 ## Consolidation sequence
 
-1. **Navigation and correctness** — land `docs/README.md`, local TOCs, broken
-   link fixes, and obvious removed-path corrections. This is the current
-   bounded change.
+1. **Navigation and correctness — complete in this audit branch.** Add the
+   central index, local TOCs, broken-link checks, and removed-path corrections.
 2. **Automated docs gate** — `scripts/check/docs.mjs` validates
    relative links, TOC presence/freshness, and one H1. Extend it to flag known
    removed paths, compare router constants with the documented route inventory,
@@ -311,6 +319,10 @@ fact represents a contract change or merely normal repository churn.
    rewrites in one mechanical commit.
 7. **Reference generation** — generate route/config indexes into checked docs
    or validate hand-written docs against source in CI.
+8. **Executable ownership cleanup — complete for current guides.** Remove
+   copied package lists, internal release sequences, manual worktree/cache
+   recipes, repeated MCP payloads, and exact subprocess commands from prose;
+   link each guide to its script, manifest, CLI, or contract owner.
 
 Do not start with mass renames. Stable links and executable agent contracts are
 more valuable than a perfect directory tree, and the first move should happen
@@ -335,4 +347,6 @@ The consolidation is complete when:
   than manually counted;
 - maintained prose contains no source line counts, file-size rankings, or
   manually maintained test/route totals;
+- maintained prose does not duplicate package lists, script-owned command
+  sequences, CLI inventories, or exact process arguments;
 - dated evidence states its commit, environment, and replay command.

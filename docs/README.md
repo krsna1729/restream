@@ -207,6 +207,15 @@ above remain the better way to learn the system.
   remain code-formatted.
 - Keep tutorials and quick starts short. Put exhaustive contracts in reference
   documents and measurements in dated evidence records.
+- Let executable artifacts own executable detail. Scripts own package lists,
+  build steps, gate sequences, and release mechanics; manifests and lockfiles
+  own versions and asset inventories; CLI help owns modes and flags; source
+  code owns spawned-process arguments. Documentation should explain why and
+  when to use those owners, then link to or invoke their public entrypoint.
+- Include a command example only when it is itself the supported user or
+  contributor entrypoint. Do not copy a helper script's internal commands into
+  prose, and do not repeat the same multi-line shell recipe across maintained
+  guides.
 - When a source rename or command rename lands, update the relevant canonical
   doc in the same change and run `node scripts/check/docs.mjs`. The staged gate
   router selects this check automatically for Markdown and documentation-check
