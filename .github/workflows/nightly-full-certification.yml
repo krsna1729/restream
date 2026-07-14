@@ -36,6 +36,26 @@ jobs:
       - name: Run workspace tests with all features
         run: scripts/build/resource-limit.sh cargo test --workspace --all-features -- --nocapture
 
+  docker-runtime-source-build:
+    name: Nightly Docker runtime source-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/ci-bootstrap
+        with:
+          node_version: '22'
+          system_deps_profile: build
+          native_prefix: 'true'
+          rust_cache: 'true'
+      - uses: docker/setup-buildx-action@v4
+      - name: Prepare build tree
+        run: scripts/release/prepare-build-tree.sh
+      - name: Smoke production runtime image
+        env:
+          RESTREAM_CONTAINER_IMAGE: restream:nightly-runtime-smoke
+          RESTREAM_DOCKER_GHA_CACHE: "1"
+        run: scripts/check/container-smoke.sh --image "$RESTREAM_CONTAINER_IMAGE"
+
   nightly-harness-build:
     name: Nightly harness release build
     runs-on: ubuntu-24.04
@@ -89,9 +109,10 @@ jobs:
   nightly-failure-issue:
     name: Nightly failure issue
     runs-on: ubuntu-24.04
-    if: ${{ always() && (needs.all-features-tests.result == 'failure' || needs.nightly-harness-build.result == 'failure' || needs.nightly-harness.result == 'failure') }}
+    if: ${{ always() && (needs.all-features-tests.result == 'failure' || needs.docker-runtime-source-build.result == 'failure' || needs.nightly-harness-build.result == 'failure' || needs.nightly-harness.result == 'failure') }}
     needs:
       - all-features-tests
+      - docker-runtime-source-build
       - nightly-harness-build
       - nightly-harness
     permissions:
@@ -104,6 +125,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ALL_FEATURES_RESULT: ${{ needs.all-features-tests.result }}
+          DOCKER_RUNTIME_RESULT: ${{ needs.docker-runtime-source-build.result }}
           HARNESS_BUILD_RESULT: ${{ needs.nightly-harness-build.result }}
           HARNESS_RESULT: ${{ needs.nightly-harness.result }}
         run: |
@@ -114,6 +136,7 @@ jobs:
           The nightly full-certification workflow reported at least one failure.
 
           - all-features workspace tests: $ALL_FEATURES_RESULT
+          - docker runtime source-build: $DOCKER_RUNTIME_RESULT
           - nightly harness build: $HARNESS_BUILD_RESULT
           - nightly harness matrix: $HARNESS_RESULT
 
