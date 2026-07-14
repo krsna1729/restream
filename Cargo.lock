@@ -2129,7 +2129,7 @@ dependencies = [
  "scrypt",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "shiguredo_mp4",
  "sqlx",
  "sysinfo",
