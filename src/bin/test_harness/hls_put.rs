@@ -139,7 +139,7 @@ pub(crate) async fn start_hls_put_sink(
     });
     let app = Router::new()
         .route("/healthz", get(|| async { StatusCode::NO_CONTENT }))
-        .route("/*path", put(hls_put_sink_put))
+        .route("/{*path}", put(hls_put_sink_put))
         .layer(DefaultBodyLimit::disable())
         .with_state(state);
     let listener = TcpListener::bind(("127.0.0.1", port))
@@ -170,7 +170,7 @@ pub(crate) async fn start_hls_put_hang_sink(
     let app = Router::new()
         .route("/healthz", get(|| async { StatusCode::NO_CONTENT }))
         .route(
-            "/*path",
+            "/{*path}",
             put(
                 |State(state): State<HlsPutHangSinkState>,
                  OriginalUri(_uri): OriginalUri,
