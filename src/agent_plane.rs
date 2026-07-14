@@ -13,7 +13,7 @@ use crate::application::models::{Ingest, Output, Pipeline};
 use crate::domain::output_spec::{OutputConfig, OutputUrlScheme};
 use crate::domain::state::DesiredOutputState;
 use crate::planner::backend_policy::BackendPolicy;
-use crate::planner::graph_plan::plan_pipeline_graph;
+use crate::planner::graph_plan::{PlannedOutput, plan_pipeline_graph};
 
 const OUTPUT_URL_SCHEME_ERROR: &str =
     "Supported schemes are rtmp://, rtmps://, srt://, hls://, http://, and https://";
@@ -822,13 +822,24 @@ fn planned_candidate_stage_kinds(pipeline_id: &str, change: &ProposedChange) -> 
             .unwrap_or(DesiredOutputState::Stopped),
         config: config.clone(),
     };
+    let planned_output = PlannedOutput::new(
+        output.id.as_str(),
+        output.encoding_string(),
+        output.url.as_str(),
+    );
     let policy = BackendPolicy::default();
-    plan_pipeline_graph(pipeline_id, Some("hevc"), &[output], false, &policy)
-        .stages
-        .into_iter()
-        .filter(|stage| stage.kind != crate::domain::stage::StageKind::Source)
-        .map(|stage| stage.kind.to_string())
-        .collect()
+    plan_pipeline_graph(
+        pipeline_id,
+        Some("hevc"),
+        std::slice::from_ref(&planned_output),
+        false,
+        &policy,
+    )
+    .stages
+    .into_iter()
+    .filter(|stage| stage.kind != crate::domain::stage::StageKind::Source)
+    .map(|stage| stage.kind.to_string())
+    .collect()
 }
 
 fn impact_preview(request: &PlanRequest) -> ImpactPreview {
