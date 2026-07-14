@@ -154,10 +154,11 @@ gh release view v0.2.0 --json tagName,targetCommitish,assets,url
 Expected release assets include:
 
 - `restream-v0.2.0-linux-x86_64.tar.gz`
-- `restream-v0.2.0-linux-x86_64.tar.gz.sha256`
 - `restream-v0.2.0-oci.tar.gz`
-- `restream-v0.2.0-oci.tar.gz.sha256`
 - `restream-v0.2.0.sbom.cdx.json`
+
+GitHub exposes a SHA-256 digest beside each release asset, so the release does
+not publish separate checksum sidecars.
 
 Check the container registry tags:
 

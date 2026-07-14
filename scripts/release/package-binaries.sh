@@ -15,7 +15,7 @@ ARCH="${RESTREAM_RELEASE_ARCH:-linux-x86_64}"
 OUT_DIR="${RESTREAM_RELEASE_DIR:-dist}"
 
 restream_release_require_version package-binaries "$VERSION"
-restream_require_commands cargo npm tar sha256sum
+restream_require_commands cargo npm tar
 
 # A clean release checkout has neither node_modules nor generated public assets.
 # Reuse the canonical release preparation script so packaging, CI, and local
@@ -127,6 +127,5 @@ mkdir -p "$OUT_DIR"
 archive="$OUT_DIR/restream-$VERSION-$ARCH.tar.gz"
 tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
     -C "$tmp" -czf "$archive" "$(basename "$stage")"
-sha256sum "$archive" >"$archive.sha256"
 
 echo "package-binaries: PASS archive=$archive"

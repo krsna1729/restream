@@ -112,7 +112,6 @@ fi
 if [[ -n "$ARCHIVE" ]]; then
     mkdir -p "$(dirname "$ARCHIVE")"
     docker save "$IMAGE" | gzip -n >"$ARCHIVE"
-    sha256sum "$ARCHIVE" >"${ARCHIVE}.sha256"
 fi
 
 echo "container-smoke: PASS image=$IMAGE"

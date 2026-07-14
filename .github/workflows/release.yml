@@ -202,7 +202,5 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" \
             dist/restream-"$GITHUB_REF_NAME"-oci.tar.gz \
-            dist/restream-"$GITHUB_REF_NAME"-oci.tar.gz.sha256 \
             dist/restream-"$GITHUB_REF_NAME"-linux-x86_64.tar.gz \
-            dist/restream-"$GITHUB_REF_NAME"-linux-x86_64.tar.gz.sha256 \
             dist/restream-"$GITHUB_REF_NAME".sbom.cdx.json --generate-notes
