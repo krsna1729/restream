@@ -1,279 +1,100 @@
-# Agent Plane, MCP, and Skill Integration
+# Agent plane, MCP, and skill integration
 
-This document turns the existing agent-plane API into a practical agent
-integration design for this repository.
+This document defines the ownership boundary between Restream's agent plane,
+MCP transport, and repository skill. Exact routes, schemas, and tool payloads
+belong to their contract owners.
 
 ## Contents
 
 - [Recommended layering](#recommended-layering)
 - [Browser boundary](#browser-boundary)
-- [Why use the agent plane instead of raw APIs](#why-use-the-agent-plane-instead-of-raw-apis)
-- [Minimal MCP tool catalog](#minimal-mcp-tool-catalog)
-- [Suggested MCP tool shapes](#suggested-mcp-tool-shapes)
-- [Wrapper rules](#wrapper-rules)
-- [Example workflow](#example-workflow)
-- [Suggested production path](#suggested-production-path)
+- [Ownership split](#ownership-split)
+- [Why agents use the agent plane](#why-agents-use-the-agent-plane)
+- [Contract owners](#contract-owners)
+- [Safe workflow](#safe-workflow)
 - [Shared Rust implementation](#shared-rust-implementation)
 
 ## Recommended layering
 
 ```mermaid
 flowchart LR
-    Human["human request"] --> Agent["Codex / Claude / Copilot agent"]
-    Agent --> Skill["repository-specific skill"]
-    Skill --> Mcp["MCP server wrapper"]
-    Mcp --> Api["/api/v1/agent/*"]
-    Api --> Core["control-plane services and media runtime"]
+    Human["Human request"] --> Agent["Tool-calling agent"]
+    Agent --> Skill["Repository skill"]
+    Skill --> Mcp["MCP transport"]
+    Mcp --> Api["Agent-plane API"]
+    Api --> Core["Application and media runtime"]
 ```
 
-Keep business logic in the product:
-
-- the agent plane owns redaction, validation, approval, apply, and verify
-- the MCP server owns transport and tool exposure
-- the skill owns agent behavior and sequencing
-
-Do not put plan/apply safety policy in the MCP wrapper. That would duplicate
-logic that already exists in the application.
+The wrapper stays thin so safety and product behavior are enforced once, inside
+Restream.
 
 ## Browser boundary
 
-The dashboard is not currently an agent client. Its normal operator workflows
-use the authenticated `/api/v1` control-plane routes directly. The existing
-diagnostics "Ask AI" action is a manual handoff that copies a prompt and opens
-an external chat; it does not host an agent in the browser.
+The dashboard is not an agent client. Its ordinary operator workflows use the
+authenticated control-plane API. The diagnostics “Ask AI” action is a manual
+handoff to an external chat, not an embedded tool-calling runtime.
 
-Do not couple ordinary dashboard reads or mutations to `/api/v1/agent/*`.
-A future browser approval inbox or embedded agent requires a separately designed
-authenticated workflow, durable/listable operations, and an explicit human
-approval experience. Until then, the agent routes remain the task-oriented
-boundary for MCP and other external agent clients.
+Do not couple dashboard reads or mutations to the agent routes. A future
+approval inbox or embedded agent needs a separately designed authenticated
+workflow and an explicit human approval experience.
 
-## Why use the agent plane instead of raw APIs
+## Ownership split
 
-The control plane is object-oriented:
-
-- pipelines
-- outputs
-- settings
-- alerts
-- diagnostics
-
-The agent plane is task-oriented:
-
-- capability discovery
-- redacted state context
-- investigation bundles
-- plan and validation
-- approval-gated execution
-- post-change verification
-
-An MCP wrapper should therefore prefer `/api/v1/agent/*` over raw
-`/api/v1/pipelines/*` mutation routes.
-
-## Minimal MCP tool catalog
-
-Start with a thin wrapper around the agent routes that already exist.
-
-| MCP tool | Method | Route |
+| Layer | Owns | Must not own |
 |---|---|---|
-| `get_agent_capabilities` | `GET` | `/api/v1/agent/capabilities` |
-| `get_agent_context` | `GET` | `/api/v1/agent/context` |
-| `investigate_pipeline_issue` | `POST` | `/api/v1/agent/investigations` |
-| `plan_pipeline_change` | `POST` | `/api/v1/agent/plans` |
-| `validate_change` | `POST` | `/api/v1/agent/plans/validate` |
-| `preview_graph_diff` | `POST` | `/api/v1/agent/graph-diff-preview` |
-| `create_agent_operation` | `POST` | `/api/v1/agent/operations` |
-| `get_agent_operation` | `GET` | `/api/v1/agent/operations/:operation_id` |
-| `approve_agent_operation` | `POST` | `/api/v1/agent/operations/:operation_id/approve` |
-| `apply_agent_operation` | `POST` | `/api/v1/agent/operations/:operation_id/apply` |
-| `verify_agent_operation` | `POST` | `/api/v1/agent/operations/:operation_id/verify` |
+| Agent plane | redaction, validation, planning, approval state, apply, verification | transport-specific MCP behavior |
+| MCP transport | authentication handoff, tool exposure, request/response transport | business validation or alternate approval semantics |
+| Repository skill | investigation and mutation sequence, stop conditions, human interaction | raw control-plane mutation shortcuts |
+| Dashboard | direct human operator workflows | hidden agent execution |
 
-## Suggested MCP tool shapes
+This split keeps product policy in one place and prevents an MCP wrapper or
+prompt from redefining success.
 
-These tool schemas are intentionally thin. The wrapper should mostly pass
-through request and response bodies.
+## Why agents use the agent plane
 
-### `get_agent_context`
+The control plane exposes object-oriented pipeline, output, setting, alert, and
+diagnostic operations. The agent plane exposes task-oriented, redacted,
+approval-aware workflows.
 
-Input:
+External agents should use the agent plane for investigation and mutation
+planning. They must not bypass it with raw output or pipeline mutation routes
+when an approval-gated agent operation is required.
 
-```json
-{}
-```
+## Contract owners
 
-Output:
+- [API reference](api-reference.md) owns the public HTTP route and response
+  contracts.
+- [MCP tool contract](agent-guidance/skills/restream-ops-agent/references/tool-contract.md)
+  owns the exact tool-to-route map, JSON request examples, supported change
+  kinds, and interpretation rules.
+- [Restream ops agent skill](agent-guidance/skills/restream-ops-agent/SKILL.md)
+  owns the executable agent sequence and approval stop conditions.
+- [MCP Rust architecture](mcp-rust-architecture.md) owns shared implementation,
+  feature, backend, and deployment-mode design.
 
-- direct pass-through of `AgentContextV1`
+Do not repeat the tool catalog or payload examples here. That previously made a
+single contract change require edits in three documents.
 
-### `investigate_pipeline_issue`
+## Safe workflow
 
-Input:
+A mutation workflow has five conceptual phases:
 
-```json
-{
-  "workflow": "investigatePipelineIssue",
-  "pipelineId": "p1",
-  "outputId": "out_123",
-  "eventLimit": 25
-}
-```
+1. discover capabilities and gather redacted context;
+2. investigate or plan without mutating;
+3. create an auditable operation;
+4. stop for explicit human approval when required;
+5. apply and verify through the operation boundary.
 
-Output:
-
-- direct pass-through of `InvestigationResponse`
-
-### `plan_pipeline_change`
-
-Input:
-
-```json
-{
-  "intent": "Attach a stopped YouTube RTMP output",
-  "pipelineId": "p1",
-  "proposedChanges": [{
-    "kind": "addOutput",
-    "name": "YouTube Primary",
-    "url": "rtmp://a.rtmp.youtube.com/live2/xxxx-xxxx",
-    "config": {
-      "video": { "mode": "source" },
-      "audio": { "mode": "all" }
-    },
-    "desiredState": "stopped"
-  }]
-}
-```
-
-Output:
-
-- direct pass-through of `PlanResponse`
-
-### `create_agent_operation`
-
-Input:
-
-```json
-{
-  "intent": "Attach a stopped YouTube RTMP output",
-  "pipelineId": "p1",
-  "idempotencyKey": "req-123",
-  "actor": "ops-agent",
-  "agentId": "codex-restream",
-  "toolIdentity": "restream-mcp",
-  "proposedChanges": [{
-    "kind": "addOutput",
-    "name": "YouTube Primary",
-    "url": "rtmp://a.rtmp.youtube.com/live2/xxxx-xxxx",
-    "config": {
-      "video": { "mode": "source" },
-      "audio": { "mode": "all" }
-    },
-    "desiredState": "stopped"
-  }]
-}
-```
-
-Output:
-
-- direct pass-through of `OperationRecord`
-
-### `approve_agent_operation`
-
-Input:
-
-```json
-{
-  "operationId": "op_123",
-  "approvedBy": "human-operator",
-  "reason": "Reviewed graph and blast radius"
-}
-```
-
-Wrapper behavior:
-
-- extract `operationId` from tool input
-- send `{ "approvedBy": "...", "reason": "..." }` to the route body
-
-### `apply_agent_operation`
-
-Input:
-
-```json
-{
-  "operationId": "op_123"
-}
-```
-
-### `verify_agent_operation`
-
-Input:
-
-```json
-{
-  "operationId": "op_123"
-}
-```
-
-## Wrapper rules
-
-The MCP server should enforce only transport-level conventions:
-
-- require authenticated session/cookie or bearer-style gateway credential
-- return raw platform validation failures instead of rewriting them
-- preserve `compiledIn: false` and feature-gated `404` responses
-- expose operation IDs and plan IDs unchanged
-- avoid logging raw URLs or stream keys
-
-It should not:
-
-- invent new approval semantics
-- bypass `/api/v1/agent/*` to call raw mutation routes
-- reinterpret verification results into success when the platform says failure
-
-## Example workflow
-
-User request:
-
-> Add a YouTube output to pipeline `p1`, keep it stopped, ask before applying,
-> and verify afterward.
-
-Expected agent sequence:
-
-1. `get_agent_capabilities`
-2. `get_agent_context`
-3. `plan_pipeline_change`
-4. If `validation.valid == false`, stop and explain errors.
-5. `create_agent_operation`
-6. Wait for human approval.
-7. `approve_agent_operation`
-8. `apply_agent_operation`
-9. `verify_agent_operation`
-10. Summarize:
-   - what changed
-   - whether verification passed
-   - whether runtime is stopped/running/pending input
-
-## Suggested production path
-
-If this repository promotes the pattern beyond docs:
-
-1. Keep the existing in-process agent plane as the source of truth.
-2. Add a small authenticated MCP gateway process or module.
-3. Expose only the minimal tool catalog above.
-4. Ship a repo-specific skill so agents follow the right workflow.
-
-That keeps the control-plane API human-friendly while making the platform
-usable by serious tool-calling agents without asking them to improvise safety.
+Validation failure, disabled execution, missing approval, or failed
+verification is a stop condition. The exact calls and fields are intentionally
+left to the tool contract and skill.
 
 ## Shared Rust implementation
 
-If this repository wants embedded MCP, sidecar MCP, and central gateway modes
-without forking logic, keep the implementation in shared Rust and keep MCP as a
-transport adapter.
+Embedded, sidecar, and central-gateway modes should reuse shared Rust handlers
+and backend traits. MCP remains a transport adapter rather than a second
+implementation of planning or execution policy.
 
-See [mcp-rust-architecture.md](mcp-rust-architecture.md) for:
-
-- recommended module layout
-- backend trait shape
-- feature-flag plan
-- deployment-mode tradeoffs
-- migration steps from the current code
+See [MCP Rust architecture](mcp-rust-architecture.md) for the module layout,
+feature boundaries, deployment tradeoffs, authentication model, and migration
+path.

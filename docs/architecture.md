@@ -541,12 +541,6 @@ Configured file ingest has two backends:
   in-process through linked libavformat/libavcodec and feed the same
   `TsDemuxer` path without a subprocess.
 
-The subprocess path uses:
-
-```text
-ffmpeg -re [-stream_loop -1] [-ss <start>] -i media/<file> -map 0 -c copy -f mpegts pipe:1
-```
-
 Both backends converge on `TsDemuxer`, push `MediaPacket`s into the source
 ring, track running state by ingest ID, and stop through the API without any
 RTMP loopback hop.

@@ -17,14 +17,15 @@ Run the live protocol correctness matrix and media validation suites. Use after 
    cover the changed protocols, codecs, timestamp shape, encryption policy, or
    multi-audio behavior:
    ```sh
-   target/bench/test_harness catalog self-check
-   target/bench/test_harness catalog list-modes
+   target/bench/test_harness catalog help
    target/bench/test_harness catalog plan <mode>
    scripts/harness/run.sh <mode>
    ```
    - If a mode fails: report failures and ask whether to continue to media validation.
 
-3. Run the bounded media validation suite: `scripts/build/resource-limit.sh ./scripts/harness/media-validation.sh`
+3. Run the bounded media validation suite:
+   `scripts/harness/media-validation.sh`. The suite delegates each mode to the
+   harness wrapper, which owns build-lock handling.
 
 4. Report a summary of all runs: pass/fail counts, any failures with their output.
 

@@ -26,8 +26,8 @@ green gates, an honest journal entry, and no collateral edits.
 ## Hard safety rules (read every iteration, no exceptions)
 
 1. **Never run `cargo build/test/clippy/check/bench` while restream, mediamtx,
-   or ffmpeg are running.** This 8 GB WSL2 host kernel-panics on memory
-   pressure. Preflight check: `pgrep -x restream; pgrep -x mediamtx; pgrep -x ffmpeg`.
+   or ffmpeg are running.** Static native builds and live media processes can
+   exhaust constrained hosts. Preflight check: `pgrep -x restream; pgrep -x mediamtx; pgrep -x ffmpeg`.
    If any are running and you did not start them, **skip the iteration**
    (journal `SKIPPED: host busy`) — do not kill processes you don't own.
 2. Prefix every heavy command with `scripts/build/resource-limit.sh`.
@@ -44,12 +44,8 @@ green gates, an honest journal entry, and no collateral edits.
 
 ## Model tier gate
 
-Backlog items carry a tier tag. Attempt only items at or below your tier:
-
-- Haiku-class → `[haiku]` only (read-only audits, inventories, doc updates)
-- Sonnet-class → `[haiku]` and `[sonnet]` (scoped fixes, tests, proofs)
-- Opus-class or above → any, including `[opus]` (concurrency redesign,
-  hot-path architecture, benchmark-driven decisions)
+Backlog items carry a tier tag. `AGENTS.md` owns the current model-to-tier
+mapping; this skill enforces that mapping rather than copying it.
 
 If the top item is above your tier, skip it (leave it open) and take the next
 eligible one. Never "just try" an above-tier item.
@@ -106,9 +102,10 @@ Run, in order, stopping at first failure:
    `bash ./scripts/check/concurrency/fast.sh`.
 
 **Two-strike rule:** if a gate fails, you get one focused fix attempt. If it
-fails again, revert your working edits (`git checkout -- <your files only>`,
-never files you didn't touch), mark the item `blocked` with a precise note of
-what failed and why, journal `FAILED`, and end the iteration.
+fails again, undo only your own hunks with an explicit inverse patch, mark the
+item `blocked` with a precise note of what failed and why, journal `FAILED`,
+and end the iteration. Never use a whole-file restore when unrelated work may
+share that file.
 
 ### 5. Record and commit
 

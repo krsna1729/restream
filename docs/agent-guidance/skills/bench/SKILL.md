@@ -21,9 +21,9 @@ copy the current target list into this skill.
    map them to the changed production path, and ask which relevant target to
    run if more than one remains plausible.
 2. Kill any live pipeline first (WSL2 memory safety): confirm `pgrep -x restream`, `pgrep -x mediamtx`, `pgrep -x ffmpeg` are all empty before building.
-3. Build with bench profile: `scripts/build/resource-limit.sh cargo build --profile bench`
-4. Run: `scripts/build/resource-limit.sh cargo bench --bench <name>`
-5. Report the Criterion summary (throughput, latency, change % if a baseline exists).
+3. Run `scripts/build/resource-limit.sh cargo bench --bench <name>`. Cargo owns
+   the benchmark build; do not add a separate pre-build step.
+4. Report the Criterion summary (throughput, latency, change % if a baseline exists).
 
 ## Workflow for before/after comparison
 

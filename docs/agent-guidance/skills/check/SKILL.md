@@ -9,7 +9,7 @@ Run the standard pre-commit quality loop for this repo: format check, clippy, th
 
 ## Safety preflight
 
-Never run cargo alongside a live pipeline on this 8 GB WSL2 host:
+Never run Cargo alongside a live pipeline on a constrained host:
 
 ```sh
 pgrep -x restream || pgrep -x mediamtx || pgrep -x ffmpeg
@@ -31,5 +31,7 @@ If all three pass, report a short summary: "fmt ✓  clippy ✓  tests ✓" and 
 - Never use `--release`; use `--profile bench` only if explicitly building for benchmarks.
 - `cargo fmt` (without `--check`) auto-fixes; only use `--check` here unless the user explicitly asks to format.
 - Use `cargo fmt --all` / `cargo fmt --all --check`; do not run `rustfmt` directly.
-- The resource limiter acquires `.local/build/lock`; it is safe to run alongside other agents.
+- The resource limiter uses `RESTREAM_BUILD_LOCK_FILE` when supplied. In an
+  agent worktree, source `.agent-state/setup.env` so all worktrees share the
+  host-global lock selected by `scripts/agent/worktree.sh`.
 - Passing test logs must stay quiet: no warnings, panic text, or FFmpeg probe chatter (see `scripts/check/test-hygiene.sh`).

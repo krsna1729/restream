@@ -561,11 +561,10 @@ matches the configured stream key, and `409` if that ingest ID already has a
 running file ingest or the target pipeline already has another active
 publisher.
 
-By default the backend is the embedded `public/bin/ffmpeg` subprocess:
-
-```text
-ffmpeg -re [-stream_loop -1] [-ss <start>] -i media/<file> -map 0 -c copy -f mpegts pipe:1
-```
+By default the backend is the embedded `public/bin/ffmpeg` subprocess. The
+application service owns its argument construction; the API contract is the
+requested loop, start-time, and optimization behavior rather than a copied
+process command.
 
 Set `RESTREAM_USE_INTERNAL_FILE_INGEST=1` to switch passthrough
 `liveOptimized=false` starts to the in-process remux path instead.

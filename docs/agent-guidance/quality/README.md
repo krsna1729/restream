@@ -39,7 +39,7 @@ All skill bodies are agent-neutral: the canonical instructions are the
 `docs/agent-guidance/skills/<name>/SKILL.md` files. Claude Code registers
 them through thin shims in `.claude/skills/<name>/SKILL.md`, generated
 locally by `scripts/agent/setup-skills.sh` (`.claude/` is gitignored;
-`agent-worktree.sh` runs the generator automatically). Agents without a
+`scripts/agent/worktree.sh` runs the generator automatically). Agents without a
 skill system read the canonical files directly (wired via `AGENTS.md`
 § Autonomous Quality Loops).
 
@@ -62,24 +62,15 @@ Fixed cadence: `/loop 45m /quality-loop`. Overnight grooming on a cheap model:
 `claude --model haiku` → `/loop /backlog-groom` (haiku takes only `[haiku]`
 items and read-only discovery, enforced by the tier gate in the skill).
 
-### Model guidance (matches AGENTS.md)
-
-- **haiku** — inventories, audits, doc updates, grooming. Cheap fuel that
-  keeps the backlog sharp for bigger models.
-- **sonnet** — the workhorse: scoped fixes, tests, proofs, measured tweaks.
-  Default for unattended loops.
-- **opus** — `[opus]` items only when a human is nearby: concurrency
-  redesign, hot-path architecture, pooling decisions.
-
 ## Host safety (why loops are conservative here)
 
-This is an 8 GB WSL2 host with no swap; static FFmpeg links make concurrent
-heavy builds a kernel-panic risk. Therefore, and non-negotiably:
+Static native links and live media processes make concurrent heavy work unsafe
+on constrained hosts. The repository therefore uses these non-negotiable
+coordination rules:
 
 - **One quality loop per host.** For parallel agents, use
-  `scripts/agent/worktree.sh` and export
-  `RESTREAM_BUILD_LOCK_FILE=/tmp/restream-build.lock` so the build lock is
-  host-global, not per-worktree.
+  `scripts/agent/worktree.sh` and source the generated
+  `.agent-state/setup.env`; the helper owns the host-global build-lock value.
 - Loops never kill media processes they didn't start; they skip the iteration
   instead (a human may be mid-demo via `/respin`).
 - Measurement iterations require an otherwise idle host, so bench items may
@@ -102,3 +93,6 @@ shape — discovery recipe + execution recipe + binding rules — into
 `docs/agent-guidance/skills/<name>/SKILL.md`, mapping its tag in the
 quality-loop dispatch table, and re-running `scripts/agent/setup-skills.sh`
 to refresh the local registration shims.
+
+Model-tier definitions and task routing belong in `AGENTS.md`; do not maintain
+a second model-capability table here.

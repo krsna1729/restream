@@ -242,12 +242,9 @@ Each definition stores:
 - `liveOptimized`
 - `targetGopSeconds`
 
-`liveOptimized=false` keeps the default passthrough path. With the subprocess
-backend that means:
-
-```text
-ffmpeg -re [-stream_loop -1] [-ss <start>] -i media/<file> -map 0 -c copy -f mpegts pipe:1
-```
+`liveOptimized=false` keeps the default passthrough path. The application
+service owns the exact subprocess arguments; this reference documents the
+user-visible settings and resulting behavior.
 
 `liveOptimized=true` forces the subprocess backend even when
 `RESTREAM_USE_INTERNAL_FILE_INGEST=1`. In that mode the embedded FFmpeg binary

@@ -273,13 +273,9 @@ borrowed payload slice is returned directly (zero copy).
 
 ## Harness coverage
 
-The live harness owns the changing scenario inventory. Inspect it instead of
-copying mode and stage-count tables into this guide:
-
-```sh
-target/bench/test_harness catalog list-modes
-target/bench/test_harness catalog plan <mode>
-```
+The live harness owns the changing scenario inventory. Use the catalog
+inspection workflow in [Testing](testing.md#live-integration-tests) instead of
+copying mode, scenario, or stage-count tables into this guide.
 
 The canonical scenario definitions live in `test/harness/scenarios/` and the
 generated mixed-matrix catalog under `src/bin/test_harness/`. Representative

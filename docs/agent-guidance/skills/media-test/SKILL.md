@@ -25,9 +25,9 @@ Run scoped media pipeline tests, then optionally escalate to live harness tests.
    - If no argument given: ask the user which module or filter to use.
 
 3. If step 2 passes, report the scoped results, then ask: "Scoped tests pass.
-   Escalate to the live harness? This takes several minutes." Use
-   `target/bench/test_harness catalog list-modes` and `catalog plan <mode>` to
-   select the narrowest current mode whose plan crosses the changed boundary.
+   Escalate to the live harness? This takes several minutes." Ask
+   `target/bench/test_harness catalog help` for the current inspection commands,
+   then plan the narrowest mode that crosses the changed boundary.
 
 4. If the user confirms, run the chosen mode through
    `scripts/harness/run.sh <mode>` so the canonical bench-profile harness is

@@ -272,15 +272,13 @@ generated evidence instead:
 ## Live integration tests
 
 The checked-in manifest catalog under `test/harness/` is the command and
-workflow source of truth. Do not copy a complete mode list into this guide.
-Build the canonical bench-profile harness and inspect the current catalog:
+workflow source of truth. Do not copy its modes or catalog subcommands into
+this guide. Prepare the current bench-profile harness and ask the binary for
+its catalog usage:
 
 ```sh
-scripts/build/bench-harness.sh
-target/bench/test_harness catalog self-check
-target/bench/test_harness catalog list-modes
-target/bench/test_harness catalog resolve <mode>
-target/bench/test_harness catalog plan <mode>
+scripts/harness/run.sh --prepare
+target/bench/test_harness catalog help
 ```
 
 Run a mode through the wrapper so stale binaries are rebuilt and the shared
@@ -308,9 +306,9 @@ Choose the narrowest catalog mode that crosses the changed boundary:
 - performance or capacity — a measurement workflow, run serially with
   bench-profile binaries.
 
-Use `catalog resolve` to see the canonical mode kind and requirements, and
-`catalog plan` to inspect services, scenarios, checks, timeouts, and artifacts
-before spending time on a live run.
+Use the catalog's current inspection commands to resolve a mode and review its
+services, scenarios, checks, timeouts, and artifacts before spending time on a
+live run.
 
 ### Fixtures and artifacts
 
