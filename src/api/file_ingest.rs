@@ -57,6 +57,8 @@ pub fn validate_pipeline_file_ingest_payload(
     validate_file_ingest_filename(&payload.filename)
 }
 
+/// Ensures the ingest filename stays relative to the configured media
+/// directory before any runtime or filesystem work is attempted.
 pub fn validate_file_ingest_filename(filename: &str) -> Option<Response> {
     if filename.trim().is_empty() {
         return Some(
@@ -114,6 +116,8 @@ fn file_ingest_config_input(payload: PipelineFileIngestPayload) -> FileIngestCon
     }
 }
 
+/// Normalizes the optional file-ingest payload into the service-layer shape and
+/// returns the rebuilt pipeline file-ingest state.
 pub async fn apply_pipeline_file_ingest_payload(
     state: &Arc<AppState>,
     pipeline: &crate::application::models::Pipeline,
@@ -128,6 +132,8 @@ pub async fn apply_pipeline_file_ingest_payload(
         .map_err(IntoResponse::into_response)
 }
 
+/// Returns the current file-ingest configuration and runtime flag for one
+/// pipeline.
 pub async fn pipeline_file_ingest_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -146,6 +152,8 @@ pub async fn pipeline_file_ingest_get_handler(
     Ok(file_ingest_state_response(file_ingest_state))
 }
 
+/// Persists the file-ingest configuration for one pipeline after validating
+/// the transport payload.
 pub async fn pipeline_file_ingest_put_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -174,6 +182,7 @@ pub async fn pipeline_file_ingest_put_handler(
     Ok(file_ingest_state_response(file_ingest_state))
 }
 
+/// Clears the configured file-ingest payload for one pipeline.
 pub async fn pipeline_file_ingest_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -192,6 +201,8 @@ pub async fn pipeline_file_ingest_delete_handler(
     Ok(deleted_response())
 }
 
+/// Legacy custom-encoding read endpoint kept on a permanent `410 Gone`
+/// transport contract until a supported replacement exists.
 pub async fn custom_encoding_get(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -209,6 +220,8 @@ pub struct CustomEncodingPayload {
     pub ffmpeg_args: String,
 }
 
+/// Legacy custom-encoding write endpoint kept on a permanent `410 Gone`
+/// transport contract until a supported replacement exists.
 pub async fn custom_encoding_put(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
