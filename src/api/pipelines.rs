@@ -120,6 +120,21 @@ fn serialize_srt_ingest_policy(
     }
 }
 
+async fn pipeline_health_snapshot(state: &AppState, pipeline_id: &str) -> serde_json::Value {
+    let pipeline_id = pipeline_id.to_string();
+    let pipeline_ids = std::slice::from_ref(&pipeline_id);
+    let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
+
+    // Pipeline-scoped transport views intentionally use an immediate snapshot so
+    // alerts and diagnostics reflect current runtime state without grace-window delay.
+    crate::api_runtime_views::health_snapshot(&state.engine, pipeline_ids, &recording_enabled, 0)
+        .await
+}
+
+fn snapshot_generated_at(snapshot: &serde_json::Value) -> String {
+    snapshot["generatedAt"].as_str().unwrap_or("").to_string()
+}
+
 pub async fn pipelines_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -489,22 +504,13 @@ pub async fn pipeline_alerts_handler(
         return response;
     }
 
-    let recording_enabled = recording_enabled_map(&state, std::slice::from_ref(&pipeline_id)).await;
-
-    let snapshot = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        std::slice::from_ref(&pipeline_id),
-        &recording_enabled,
-        0,
-    )
-    .await;
-    let generated_at = snapshot["generatedAt"].as_str().unwrap_or("").to_string();
+    let snapshot = pipeline_health_snapshot(&state, &pipeline_id).await;
     let mut alert_list = alerts::derive_alerts(&snapshot);
     state
         .alert_tracker
         .track_pipeline(&pipeline_id, &mut alert_list);
     Json(serde_json::json!({
-        "generatedAt": generated_at,
+        "generatedAt": snapshot_generated_at(&snapshot),
         "alerts": alert_list,
     }))
     .into_response()
@@ -528,15 +534,8 @@ pub async fn pipeline_diagnostics_context_handler(
         return Ok((StatusCode::NOT_FOUND, "Pipeline not found").into_response());
     }
 
-    let recording_enabled = recording_enabled_map(&state, std::slice::from_ref(&pipeline_id)).await;
-    let health = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        std::slice::from_ref(&pipeline_id),
-        &recording_enabled,
-        0,
-    )
-    .await;
-    let generated_at = health["generatedAt"].as_str().unwrap_or("").to_string();
+    let health = pipeline_health_snapshot(&state, &pipeline_id).await;
+    let generated_at = snapshot_generated_at(&health);
 
     let pipeline_outputs = state.output_service.list_for_pipeline(&pipeline_id).await?;
     let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
@@ -611,17 +610,8 @@ pub async fn v1_pipeline_summary_handler(
         return Ok((StatusCode::NOT_FOUND, "Pipeline not found").into_response());
     }
 
-    let recording_enabled = recording_enabled_map(&state, std::slice::from_ref(&pipeline_id)).await;
-
-    let snapshot = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        std::slice::from_ref(&pipeline_id),
-        &recording_enabled,
-        0,
-    )
-    .await;
-
-    let generated_at = snapshot["generatedAt"].as_str().unwrap_or("").to_string();
+    let snapshot = pipeline_health_snapshot(&state, &pipeline_id).await;
+    let generated_at = snapshot_generated_at(&snapshot);
 
     let pip = &snapshot["pipelines"][&pipeline_id];
     let pipeline_outputs = state.output_service.list_for_pipeline(&pipeline_id).await?;
