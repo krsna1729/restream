@@ -54,7 +54,7 @@ on:
         required: true
         type: string
     secrets:
-      github_token:
+      gh_token:
         required: true
 
 permissions:
@@ -88,7 +88,7 @@ jobs:
           BENCH_BUILD: never
           HARNESS_BIN: ${{ inputs.harness_bin }}
           RESTREAM_BIN: ${{ inputs.restream_bin }}
-          GH_TOKEN: ${{ secrets.github_token }}
+          GH_TOKEN: ${{ secrets.gh_token }}
         run: scripts/ci/run-harness-shard-in-runtime.sh "${{ matrix.shard }}"
       - uses: actions/upload-artifact@v7
         if: ${{ inputs.upload_artifacts_mode == 'always' || failure() || cancelled() }}

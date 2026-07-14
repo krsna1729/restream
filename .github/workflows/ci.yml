@@ -232,7 +232,7 @@ jobs:
       shards_json: >-
         ["smoke","mixed.live.rtmp.h264.a1","mixed.live.srt.h264.a1","mixed.live.srt.h265.a1","mixed.live.srt.h265.a2"]
     secrets:
-      github_token: ${{ github.token }}
+      gh_token: ${{ github.token }}
 
   internal-backend-smoke:
     name: Internal media backend smoke
