@@ -263,47 +263,25 @@ jobs:
           retention-days: 1
 
   integration-shards:
-    name: PR live-smoke shard (${{ matrix.shard }})
-    runs-on: ubuntu-24.04
     needs: integration-build
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      max-parallel: 5
-      matrix:
-        # PR CI runs a correctness slice: cheap harness smoke, RTMP ingest,
-        # SRT/H.264 anchor coverage, HEVC bridge coverage, and HEVC
-        # multi-audio routing. Release dry-runs own the exhaustive file-ingest,
-        # bitrate/resource measurement, crypto, branch, ramp, and fault matrix.
-        shard:
-          - smoke
-          - mixed.live.rtmp.h264.a1
-          - mixed.live.srt.h264.a1
-          - mixed.live.srt.h265.a1
-          - mixed.live.srt.h265.a2
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: ci-harness-bin-${{ github.sha }}
-          path: .local/ci-harness-bin
-      - name: Install PR live-smoke harness binaries
-        run: |
-          mkdir -p target/bench
-          cp .local/ci-harness-bin/restream .local/ci-harness-bin/test_harness target/bench/
-          chmod 0755 target/bench/restream target/bench/test_harness
-      - name: Run PR live-smoke shard
-        env:
-          BENCH_BUILD: never
-          GH_TOKEN: ${{ github.token }}
-        run: scripts/ci/run-harness-shard-in-runtime.sh "${{ matrix.shard }}"
-      - name: Upload PR live-smoke artifacts on failure
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: integration-${{ matrix.shard }}-artifacts
-          path: .local/artifacts/
-          if-no-files-found: ignore
+    uses: ./.github/workflows/_harness-runtime-shards.yml
+    with:
+      artifact_name: ci-harness-bin-${{ github.sha }}
+      artifact_path: .local/ci-harness-bin
+      install_dir: target/bench
+      harness_bin: target/bench/test_harness
+      restream_bin: target/bench/restream
+      shard_name_prefix: PR live-smoke shard
+      artifact_upload_prefix: integration
+      artifact_upload_path: .local/artifacts/
+      artifact_retention_days: 3
+      upload_artifacts_mode: failure_or_cancelled
+      timeout_minutes: 30
+      max_parallel: 5
+      shards_json: >-
+        ["smoke","mixed.live.rtmp.h264.a1","mixed.live.srt.h264.a1","mixed.live.srt.h265.a1","mixed.live.srt.h265.a2"]
+    secrets:
+      github_token: ${{ github.token }}
 
   internal-backend-smoke:
     name: Internal media backend smoke

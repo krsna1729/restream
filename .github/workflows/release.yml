@@ -69,69 +69,25 @@ jobs:
           retention-days: 1
 
   full-live-harness:
-    name: Release live harness shard (${{ matrix.shard }})
-    runs-on: ubuntu-24.04
     needs: package-build
-    # The shard script owns scenario-specific timeout messages. Keep the
-    # workflow ceiling above its largest 30m bucket so GitHub does not cut the
-    # process off before it can print TIMEOUT and upload harness artifacts.
-    timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      # Shards run inside the prebuilt CI harness image, so the old apt and
-      # MediaMTX bootstrap burst is gone. Keep a small cap below the full shard
-      # count to smooth image/artifact pulls while using most hosted capacity.
-      max-parallel: 20
-      matrix:
-        shard:
-          - smoke
-          - mixed.live.rtmp.h264.a1
-          - mixed.live.srt.h264.a1
-          - mixed.live.srt.h264.a2
-          - mixed.live.srt.h265.a1
-          - mixed.live.srt.h265.a2
-          - mixed.file.h264.a1
-          - mixed.file.h264.a2
-          - mixed.file.h265.a1
-          - mixed.file.h265.a2
-          - bitrate-sweep.h264-rtmp
-          - bitrate-sweep.h264-srt
-          - bitrate-sweep.h265-srt
-          - bitrate-sweep.mixed-h264-a2
-          - bitrate-sweep.mixed-h265-a2
-          - resource-sweep.source
-          - resource-sweep.transcode
-          - resource-sweep.hevc
-          - ramp-family
-          - srt-crypto-matrix
-          - branch-matrix
-          - fault.resilience
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: release-certify-bin-${{ github.sha }}
-          path: .local/release-certify-bin
-      - name: Install release certification binaries
-        run: |
-          mkdir -p target/release
-          cp .local/release-certify-bin/restream target/release/restream
-          cp .local/release-certify-bin/test_harness target/release/test_harness
-          chmod 0755 target/release/restream target/release/test_harness
-      - name: Run release live harness shard
-        env:
-          BENCH_BUILD: never
-          HARNESS_BIN: target/release/test_harness
-          RESTREAM_BIN: target/release/restream
-          GH_TOKEN: ${{ github.token }}
-        run: scripts/ci/run-harness-shard-in-runtime.sh "${{ matrix.shard }}"
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: release-harness-${{ matrix.shard }}-${{ github.sha }}
-          path: .local/artifacts/release-${{ github.sha }}-${{ matrix.shard }}/
-          if-no-files-found: ignore
-          retention-days: 3
+    uses: ./.github/workflows/_harness-runtime-shards.yml
+    with:
+      artifact_name: release-certify-bin-${{ github.sha }}
+      artifact_path: .local/release-certify-bin
+      install_dir: target/release
+      harness_bin: target/release/test_harness
+      restream_bin: target/release/restream
+      shard_name_prefix: Release live harness shard
+      artifact_upload_prefix: release-harness
+      artifact_upload_path: .local/artifacts/
+      artifact_retention_days: 3
+      upload_artifacts_mode: always
+      timeout_minutes: 35
+      max_parallel: 20
+      shards_json: >-
+        ["smoke","mixed.live.rtmp.h264.a1","mixed.live.srt.h264.a1","mixed.live.srt.h264.a2","mixed.live.srt.h265.a1","mixed.live.srt.h265.a2","mixed.file.h264.a1","mixed.file.h264.a2","mixed.file.h265.a1","mixed.file.h265.a2","bitrate-sweep.h264-rtmp","bitrate-sweep.h264-srt","bitrate-sweep.h265-srt","bitrate-sweep.mixed-h264-a2","bitrate-sweep.mixed-h265-a2","resource-sweep.source","resource-sweep.transcode","resource-sweep.hevc","ramp-family","srt-crypto-matrix","branch-matrix","fault.resilience"]
+    secrets:
+      github_token: ${{ github.token }}
 
   package-evidence:
     name: Release package and evidence
