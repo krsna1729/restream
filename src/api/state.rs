@@ -1,3 +1,9 @@
+//! Shared API transport-state helpers.
+//!
+//! This module wires together `AppState` and provides the small boundary
+//! helpers that handlers reuse for authentication, cookie management, length
+//! checks, and common runtime lookups.
+
 use axum::{
     Json,
     http::{HeaderMap, StatusCode, header},
@@ -42,6 +48,10 @@ pub const SESSION_MAX_AGE_SECONDS: i64 = 30 * 24 * 60 * 60;
 pub const PASSWORD_META_KEY: &str = "dashboardPasswordHash";
 pub const BOOTSTRAP_PASSWORD_PROMPT_META_KEY: &str = "dashboardPasswordPrompt";
 pub const DEFAULT_INGEST_HOST: &str = "localhost";
+
+fn session_cookie_security_attr(secure: bool) -> &'static str {
+    if secure { "; Secure" } else { "" }
+}
 
 pub struct PortConfig {
     pub rtmp: u16,
@@ -259,6 +269,8 @@ impl AppState {
             }
         }
 
+        // The in-memory session set is only a fast cache; SQLite remains the
+        // source of truth for expiry and cross-process/session-store recovery.
         let created_at = match self.auth_service.get_session_created_at(&token_hash).await {
             Ok(Some(created_at)) => created_at,
             Ok(None) => {
@@ -384,19 +396,17 @@ pub async fn require_hls_access(
 }
 
 pub fn make_session_cookie(token: &str, max_age: i64, secure: bool) -> String {
-    let secure_attr = if secure { "; Secure" } else { "" };
     format!(
         "{}={}; HttpOnly; Path=/; SameSite=Strict; Max-Age={}",
         SESSION_COOKIE_NAME, token, max_age
-    ) + secure_attr
+    ) + session_cookie_security_attr(secure)
 }
 
 pub fn clear_session_cookie(secure: bool) -> String {
-    let secure_attr = if secure { "; Secure" } else { "" };
     format!(
         "{}={}; HttpOnly; Path=/; SameSite=Strict; Max-Age=0",
         SESSION_COOKIE_NAME, ""
-    ) + secure_attr
+    ) + session_cookie_security_attr(secure)
 }
 
 pub async fn refresh_srt_ingest_policy_store(state: &AppState) {
@@ -450,5 +460,21 @@ mod runtime_config_tests {
             runtime.ingest_disconnect_grace_ms,
             app_config.tuning.ingest_disconnect_grace_ms
         );
+    }
+
+    #[test]
+    fn session_cookie_security_attr_matches_flag() {
+        assert_eq!(session_cookie_security_attr(true), "; Secure");
+        assert_eq!(session_cookie_security_attr(false), "");
+    }
+
+    #[test]
+    fn make_and_clear_session_cookie_share_security_policy() {
+        let secure_cookie = make_session_cookie("token", 60, true);
+        let cleared_cookie = clear_session_cookie(true);
+
+        assert!(secure_cookie.contains("; Secure"));
+        assert!(cleared_cookie.contains("; Secure"));
+        assert!(cleared_cookie.contains("Max-Age=0"));
     }
 }
