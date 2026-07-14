@@ -1,3 +1,9 @@
+//! Application service wrapper for assembling read-only agent context.
+//!
+//! This module gathers data from several persistence ports so the API layer can
+//! expose a single operator/agent context view without duplicating cross-store
+//! reads or fallback policy.
+
 use std::sync::Arc;
 
 use crate::application::models::{Ingest, Job, Output, Pipeline};
@@ -7,6 +13,8 @@ use crate::application::ports::{
 use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
 use crate::media::security::IngestSecurityService;
 use crate::planner::backend_policy::BackendPolicy;
+
+const CUSTOM_ENCODING_META_KEY: &str = "custom_encoding";
 
 #[derive(Debug)]
 pub struct AgentContextCatalog {
@@ -18,7 +26,7 @@ pub struct AgentContextCatalog {
     pub custom_encoding_len: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct AgentPipelineOutputCatalog {
     pub pipelines: Vec<Pipeline>,
     pub outputs: Vec<Output>,
@@ -39,6 +47,8 @@ pub struct AgentService {
 }
 
 impl AgentService {
+    /// Builds the service from the stores needed to assemble agent-facing
+    /// read-only catalog views.
     pub fn with_stores(
         pipeline_store: Arc<dyn PipelineStore>,
         output_store: Arc<dyn OutputStore>,
@@ -80,7 +90,7 @@ impl AgentService {
         .ok();
         let custom_encoding_len = self
             .meta_store
-            .get_meta("custom_encoding")
+            .get_meta(CUSTOM_ENCODING_META_KEY)
             .await
             .ok()
             .flatten()
@@ -100,10 +110,7 @@ impl AgentService {
     pub async fn load_pipeline_output_catalog(&self) -> AgentPipelineOutputCatalog {
         self.try_load_pipeline_output_catalog()
             .await
-            .unwrap_or_else(|_| AgentPipelineOutputCatalog {
-                pipelines: Vec::new(),
-                outputs: Vec::new(),
-            })
+            .unwrap_or_default()
     }
 
     pub async fn try_load_pipeline_output_catalog(

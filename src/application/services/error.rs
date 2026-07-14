@@ -1,3 +1,9 @@
+//! Shared application-service error boundary.
+//!
+//! Services return `ApiError` so handlers can keep transport-layer response
+//! shaping in one place while service modules still report typed not-found,
+//! conflict, and internal failures consistently.
+
 use std::fmt;
 
 use axum::{
@@ -27,14 +33,20 @@ impl fmt::Display for ApiError {
 }
 
 impl ApiError {
+    /// Constructor for service-level not-found failures that should surface as
+    /// `404 Not Found` at the HTTP boundary.
     pub fn not_found(msg: impl Into<String>) -> Self {
         Self::NotFound(msg.into())
     }
 
+    /// Constructor for service-level conflicts that should surface as
+    /// `409 Conflict` at the HTTP boundary.
     pub fn conflict(msg: impl Into<String>) -> Self {
         Self::Conflict(msg.into())
     }
 
+    /// Constructor for unexpected service failures that should surface as
+    /// `500 Internal Server Error` at the HTTP boundary.
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::Internal(msg.into())
     }
