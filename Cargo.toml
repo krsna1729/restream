@@ -63,7 +63,7 @@ sha2 = "0.10"
 
 [dev-dependencies]
 criterion = "0.8"
-tower = { version = "0.4", features = ["util"] }
+tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 pulp = { version = "0.22", features = ["x86-v4"] }
 wide = "1.5"
