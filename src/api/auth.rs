@@ -1,8 +1,12 @@
+//! Authentication HTTP handlers own the dashboard session boundary: password
+//! verification, session-cookie lifecycle, and a small set of authenticated
+//! configuration endpoints related to rate limits and stream-key discovery.
+
 use axum::{
     Json,
     extract::State,
     http::{HeaderMap, StatusCode, header},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::path::Path;
@@ -38,6 +42,16 @@ pub struct RateLimitResetPayload {
 
 const BOOTSTRAP_PROMPT_PENDING: &str = "pending";
 const BOOTSTRAP_PROMPT_DISMISSED: &str = "dismissed";
+
+async fn require_authenticated_token(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<String, Response> {
+    match get_session_token_from_headers(headers) {
+        Some(token) if state.is_authenticated(&token).await => Ok(token),
+        _ => Err((StatusCode::UNAUTHORIZED, "Unauthorized").into_response()),
+    }
+}
 
 fn select_initial_admin_password(env_password: Option<String>) -> (String, bool) {
     match env_password {
@@ -335,9 +349,9 @@ pub async fn change_password_handler(
     headers: HeaderMap,
     Json(payload): Json<ChangePasswordPayload>,
 ) -> impl IntoResponse {
-    let token = match get_session_token_from_headers(&headers) {
-        Some(token) if state.is_authenticated(&token).await => token,
-        _ => return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
+    let token = match require_authenticated_token(&state, &headers).await {
+        Ok(token) => token,
+        Err(response) => return response,
     };
     let token_hash = hash_session_token(&token);
 
@@ -414,6 +428,8 @@ pub async fn change_password_handler(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     state.retain_only_session_hash(&token_hash).await;
+    // Once the bootstrap password has been replaced successfully, suppress the
+    // operator reminder for the current installation.
     let _ = state
         .auth_service
         .set_meta(
@@ -429,12 +445,8 @@ pub async fn dismiss_password_change_prompt_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Err(response) = require_authenticated_token(&state, &headers).await {
+        return response;
     }
 
     if state
@@ -456,12 +468,8 @@ pub async fn rate_limits_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Err(response) = require_authenticated_token(&state, &headers).await {
+        return response;
     }
 
     let attempts = state
@@ -485,12 +493,8 @@ pub async fn rate_limits_reset_handler(
     headers: HeaderMap,
     Json(payload): Json<RateLimitResetPayload>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Err(response) = require_authenticated_token(&state, &headers).await {
+        return response;
     }
 
     let scope = match payload.scope.as_deref() {
@@ -514,12 +518,8 @@ pub async fn audio_caps_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Err(response) = require_authenticated_token(&state, &headers).await {
+        return response;
     }
 
     Json(serde_json::json!({
@@ -555,12 +555,8 @@ pub async fn stream_keys_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Err(response) = require_authenticated_token(&state, &headers).await {
+        return response;
     }
 
     let host = state.pipeline_service.get_ingest_host().await;
