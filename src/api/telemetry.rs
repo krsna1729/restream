@@ -1,8 +1,13 @@
+//! Telemetry HTTP handlers expose runtime health, metrics, diagnostics, and
+//! event snapshots. This module keeps query-to-view selection and transport
+//! policy close to the API boundary while delegating heavy lifting to runtime
+//! view builders and the diagnostics engine.
+
 use axum::{
     Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode, header},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -65,6 +70,25 @@ impl ResourceMapQuery {
         };
         ResourceMapOptions::new(view, self.top_n)
     }
+}
+
+fn unauthorized_json_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "Unauthorized" })),
+    )
+        .into_response()
+}
+
+fn dashboard_runtime_requested_pipeline<'a>(
+    query: &'a DashboardRuntimeQuery,
+    all_pipeline_ids: &'a [String],
+) -> Option<&'a str> {
+    query.pipeline_id.as_deref().filter(|pipeline_id| {
+        all_pipeline_ids
+            .iter()
+            .any(|candidate| candidate == *pipeline_id)
+    })
 }
 
 pub fn expected_media_path(media_dir: &str, filename: &str) -> PathBuf {
@@ -137,18 +161,10 @@ pub async fn pipeline_diagnostics_run_handler(
 ) -> impl IntoResponse {
     if let Some(token) = get_session_token_from_headers(&headers) {
         if !state.is_authenticated(&token).await {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Unauthorized" })),
-            )
-                .into_response();
+            return unauthorized_json_response();
         }
     } else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Unauthorized" })),
-        )
-            .into_response();
+        return unauthorized_json_response();
     }
 
     let probe_protocol = match state
@@ -463,11 +479,7 @@ pub async fn v1_dashboard_runtime_handler(
         Ok(pipeline_ids) => pipeline_ids,
         Err(error) => return error.into_response(),
     };
-    let requested_pipeline_id = query.pipeline_id.as_deref().filter(|pipeline_id| {
-        all_pipeline_ids
-            .iter()
-            .any(|candidate| candidate == *pipeline_id)
-    });
+    let requested_pipeline_id = dashboard_runtime_requested_pipeline(&query, &all_pipeline_ids);
     let health_pipeline_ids = select_dashboard_runtime_pipeline_ids(
         requested_pipeline_id,
         summary_health,
@@ -639,12 +651,8 @@ pub async fn status_sbom_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let bonding_available = state.engine.bonding_available();
@@ -861,12 +869,8 @@ pub async fn metrics_system_handler(
     headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<MetricsSystemQuery>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let response =
@@ -1004,5 +1008,46 @@ pub async fn v1_stage_telemetry_handler(
     match crate::api_runtime_views::stage_telemetry_by_display(&state.engine, &stage_key).await {
         Some(val) => Json(val).into_response(),
         None => (StatusCode::NOT_FOUND, "Stage not found").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DashboardRuntimeQuery, ResourceMapQuery, dashboard_runtime_requested_pipeline,
+        unauthorized_json_response,
+    };
+    use crate::api_runtime_views::ResourceMapView;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn resource_map_query_defaults_to_grouped_view() {
+        let query = ResourceMapQuery {
+            pipeline_id: None,
+            view: None,
+            top_n: None,
+        };
+
+        assert!(matches!(query.options().view, ResourceMapView::Grouped));
+    }
+
+    #[test]
+    fn dashboard_runtime_requested_pipeline_requires_known_pipeline() {
+        let query = DashboardRuntimeQuery {
+            health_view: None,
+            metrics_view: None,
+            pipeline_id: Some("pipe-2".to_string()),
+        };
+        let ids = vec!["pipe-1".to_string()];
+
+        assert_eq!(dashboard_runtime_requested_pipeline(&query, &ids), None);
+    }
+
+    #[test]
+    fn diagnostics_unauthorized_response_uses_json_contract() {
+        assert_eq!(
+            unauthorized_json_response().status(),
+            StatusCode::UNAUTHORIZED
+        );
     }
 }
