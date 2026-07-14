@@ -8,9 +8,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: read
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  RESTREAM_CI_HARNESS_IMAGE: ghcr.io/${{ github.repository }}-ci-harness-runtime:ubuntu24
 
 jobs:
   format:
@@ -238,18 +243,17 @@ jobs:
           echo "=== Coverage summary ==="
           cargo llvm-cov report --summary-only 2>/dev/null || true
 
-  integration:
-    name: Integration test (ramp + mixed-scale)
+  integration-build:
+    name: Prepare integration harness binaries
     runs-on: ubuntu-24.04
     needs: test
-    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Install system dependencies
         uses: ./.github/actions/system-deps
         with:
-          profile: live
+          profile: build
       - name: Restore or build native prefix
         uses: ./.github/actions/native-prefix
       - name: Restore Rust build cache
@@ -263,40 +267,91 @@ jobs:
         run: npm run build:frontend
       - name: Build canonical bench harness binaries
         run: ./scripts/build/bench-harness.sh
-      - name: Run integration suite
+      - name: Stage integration harness artifact
+        run: |
+          mkdir -p .local/ci-harness-bin
+          cp target/bench/restream target/bench/test_harness .local/ci-harness-bin/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-harness-bin-${{ github.sha }}
+          path: .local/ci-harness-bin/*
+          retention-days: 1
+
+  integration-shards:
+    name: Integration shard (${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    needs: integration-build
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        # PR CI runs a correctness slice: cheap harness smoke, RTMP ingest,
+        # SRT/H.264 anchor coverage, HEVC bridge coverage, and HEVC
+        # multi-audio routing. Release dry-runs own the exhaustive file-ingest,
+        # bitrate/resource measurement, crypto, branch, ramp, and fault matrix.
+        shard:
+          - smoke
+          - mixed.live.rtmp.h264.a1
+          - mixed.live.srt.h264.a1
+          - mixed.live.srt.h265.a1
+          - mixed.live.srt.h265.a2
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ci-harness-bin-${{ github.sha }}
+          path: .local/ci-harness-bin
+      - name: Install prepared harness binaries
+        run: |
+          mkdir -p target/bench
+          cp .local/ci-harness-bin/restream .local/ci-harness-bin/test_harness target/bench/
+          chmod 0755 target/bench/restream target/bench/test_harness
+      - name: Run integration shard
         env:
           BENCH_BUILD: never
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci/run-harness-shard-in-runtime.sh "${{ matrix.shard }}"
+      - name: Upload integration artifacts on failure
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-${{ matrix.shard }}-artifacts
+          path: .local/artifacts/
+          if-no-files-found: ignore
+
+  internal-backend-smoke:
+    name: Internal backend smoke
+    runs-on: ubuntu-24.04
+    needs: integration-build
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ci-harness-bin-${{ github.sha }}
+          path: .local/ci-harness-bin
+      - name: Install prepared harness binaries
         run: |
-          # The live dependency profile already installs FFmpeg and delegates
-          # pinned MediaMTX setup to bootstrap-runtime.sh. Keep execution on the
-          # same bench builder/runner developers use so CI cannot silently test
-          # release-profile measurements or drift into a third setup path.
-          scripts/harness/run.sh suite -- \
-            --only-modes ramp-family,mixed.live.rtmp.h264.a1.bf2,mixed.live.srt.h264.a1.bf2,mixed.live.srt.h265.a1.bf2,mixed.live.srt.h264.a2.bf2,mixed.live.srt.h265.a2.bf2 \
-            --no-netns \
-            --continue-on-fail
+          mkdir -p target/bench
+          cp .local/ci-harness-bin/restream .local/ci-harness-bin/test_harness target/bench/
+          chmod 0755 target/bench/restream target/bench/test_harness
       - name: Run internal backend rollout smoke
         env:
           BENCH_BUILD: never
+          GH_TOKEN: ${{ github.token }}
           INTERNAL_BACKEND_SMOKE_CONTINUE_ON_FAIL: "1"
           # Hosted runners cannot preserve the SRT sysctls inside the optional
           # user namespace; keep all live slices on the same host-network
           # fallback instead of letting this nested runner regress separately.
           TEST_HARNESS_USE_HOST_NET: "1"
-        run: ./scripts/harness/rollouts/internal-backend-smoke.sh
+        run: scripts/ci/run-in-harness-runtime.sh scripts/harness/rollouts/internal-backend-smoke.sh
       - name: Upload internal backend smoke artifacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: internal-backend-smoke
           path: .local/artifacts/internal-backend-smoke/
-          if-no-files-found: ignore
-      - name: Upload test artifacts on failure
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: integration-test-artifacts
-          path: .local/artifacts/
           if-no-files-found: ignore
 
   playwright:
