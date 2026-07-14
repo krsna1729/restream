@@ -33,7 +33,7 @@ libsqlite3-sys = { version = "0.37.0", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 bytes = "1.12"
-sysinfo = "0.30"
+sysinfo = "0.39"
 libc = "0.2"
 futures-util = "0.3"
 scrypt = { version = "0.11", features = ["simple"] }
@@ -62,7 +62,7 @@ serde_json = "1.0"
 sha2 = "0.10"
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 tower = { version = "0.4", features = ["util"] }
 http-body-util = "0.1"
 pulp = { version = "0.22", features = ["x86-v4"] }

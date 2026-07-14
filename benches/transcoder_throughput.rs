@@ -3,10 +3,11 @@
 //! The stage demuxes input MPEG-TS and pushes `MediaPacket`s directly to the
 //! output `RingBuffer` — no output mux/demux round-trip.
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use restream::media::avio::MemoryQueue;
 use restream::media::ring_buffer::{Reader, RingBuffer};
 use restream::media::transcoder::run_ffmpeg_transcoder_stage;
+use std::hint::black_box;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 

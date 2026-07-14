@@ -11,8 +11,9 @@
 //!   - `wide`:   fixed-width SIMD types with compile-time dispatch
 //!   - `std`:    copy_from_slice / iter::position (libc memcpy / scalar baseline)
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use memchr::memchr;
+use std::hint::black_box;
 
 // --- pulp: runtime-dispatched byte search ---
 

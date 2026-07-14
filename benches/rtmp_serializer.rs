@@ -1,11 +1,10 @@
 use bytes::Bytes;
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rml_rtmp::chunk_io::ChunkSerializer;
 use rml_rtmp::messages::MessagePayload;
 use rml_rtmp::time::RtmpTimestamp;
 use std::collections::HashMap;
+use std::hint::black_box;
 
 const MAX_INITIAL_TIMESTAMP: u32 = 16_777_215;
 
