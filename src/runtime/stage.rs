@@ -24,7 +24,7 @@ impl StageRuntimeSnapshot {
     pub fn to_json(&self) -> serde_json::Value {
         let mut obj = serde_json::json!({
             "stage": self.key.to_string(),
-            "backend": serde_json::to_value(&self.backend).unwrap_or_default(),
+            "backend": serde_json::to_value(self.backend).unwrap_or_default(),
             "phase": phase_name(&self.phase),
             "phaseDetail": serde_json::to_value(&self.phase).unwrap_or_default(),
             "bytesIn": self.bytes_in,

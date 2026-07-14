@@ -717,7 +717,7 @@ mod tests {
             StagePhase::WaitingForCapacity { backend }
             | StagePhase::CapacityAcquired { backend }
             | StagePhase::StartingBackend { backend }
-            | StagePhase::BackendSpawned { backend, .. } => backend.clone(),
+            | StagePhase::BackendSpawned { backend, .. } => *backend,
             _ => StageBackendKind::ExternalFfmpeg,
         };
         StageRuntimeSnapshot {
