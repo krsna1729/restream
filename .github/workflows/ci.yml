@@ -28,7 +28,7 @@ jobs:
           components: rustfmt
       - name: Check Rust formatting
         run: cargo fmt --all --check
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -84,7 +84,7 @@ jobs:
         uses: ./.github/actions/native-prefix
       - name: Restore Rust cache for API contract
         uses: ./.github/actions/rust-cache
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -97,7 +97,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -124,7 +124,7 @@ jobs:
         uses: ./.github/actions/native-prefix
       - name: Restore Rust cache for frontend app E2E
         uses: ./.github/actions/rust-cache
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -171,7 +171,7 @@ jobs:
         uses: ./.github/actions/native-prefix
       - name: Restore Rust cache for Rust tests
         uses: ./.github/actions/rust-cache
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -200,7 +200,7 @@ jobs:
         uses: ./.github/actions/native-prefix
       - name: Restore Rust cache for coverage
         uses: ./.github/actions/rust-cache
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -212,7 +212,7 @@ jobs:
       - name: Generate workspace coverage
         run: scripts/build/resource-limit.sh cargo llvm-cov --workspace --lcov --output-path coverage.lcov
       - name: Upload workspace coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: coverage.lcov
           fail_ci_if_error: false
@@ -237,7 +237,7 @@ jobs:
         uses: ./.github/actions/native-prefix
       - name: Restore Rust cache for PR live-smoke build
         uses: ./.github/actions/rust-cache
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -348,7 +348,7 @@ jobs:
         uses: ./.github/actions/native-prefix
       - name: Restore Rust cache for HLS E2E
         uses: ./.github/actions/rust-cache
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
