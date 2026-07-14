@@ -55,6 +55,8 @@ fn incorrect_password_response() -> Response {
         .into_response()
 }
 
+// Some authenticated auth endpoints need the raw session token so they can keep
+// the current session alive while rotating or pruning the rest.
 async fn require_authenticated_token(
     state: &AppState,
     headers: &HeaderMap,
@@ -72,6 +74,8 @@ fn select_initial_admin_password(env_password: Option<String>) -> (String, bool)
     }
 }
 
+// Generates a local-only bootstrap secret for first-run flows when no explicit
+// initial admin password was configured.
 fn generate_bootstrap_password() -> String {
     use rand::RngExt;
     let mut bytes = [0u8; 32];
@@ -79,6 +83,8 @@ fn generate_bootstrap_password() -> String {
     to_hex(&bytes)
 }
 
+// Persist the generated bootstrap password with restrictive file permissions so
+// operators can fetch it once without exposing it through the API surface.
 fn write_bootstrap_password_file(path: &Path, password: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -107,6 +113,7 @@ fn write_bootstrap_password_file(path: &Path, password: &str) -> std::io::Result
     Ok(())
 }
 
+/// Derives a salted password hash for dashboard auth storage.
 pub fn hash_password(password: &str) -> String {
     use rand::RngExt;
     use scrypt::Params;
@@ -128,6 +135,7 @@ pub fn hash_password(password: &str) -> String {
     format!("{}:{}", salt, hash)
 }
 
+/// Verifies one candidate dashboard password against the stored salted hash.
 pub fn verify_password(password: &str, stored: &str) -> bool {
     use scrypt::Params;
 
@@ -147,6 +155,8 @@ pub fn verify_password(password: &str, stored: &str) -> bool {
     constant_time_eq(hex_hash.as_bytes(), stored_hash.as_bytes())
 }
 
+// Compares variable-length byte slices without early exits so password checks
+// do not leak mismatch position through timing.
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     let mut diff = left.len() ^ right.len();
     let max_len = left.len().max(right.len());
@@ -170,16 +180,19 @@ fn validate_new_dashboard_password(password: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn dismiss_bootstrap_password_prompt(state: &AppState) {
+async fn set_bootstrap_password_prompt(state: &AppState, value: &'static str) {
     let _ = state
         .auth_service
-        .set_meta(
-            BOOTSTRAP_PASSWORD_PROMPT_META_KEY,
-            BOOTSTRAP_PROMPT_DISMISSED,
-        )
+        .set_meta(BOOTSTRAP_PASSWORD_PROMPT_META_KEY, value)
         .await;
 }
 
+async fn dismiss_bootstrap_password_prompt(state: &AppState) {
+    set_bootstrap_password_prompt(state, BOOTSTRAP_PROMPT_DISMISSED).await;
+}
+
+/// Initializes dashboard auth state, generating a bootstrap password if no
+/// stored password hash exists yet.
 pub async fn initialize_auth(
     db_pool: &sqlx::SqlitePool,
     sessions_set: &TokioRwLock<std::collections::HashSet<String>>,
@@ -187,6 +200,8 @@ pub async fn initialize_auth(
     initialize_auth_with_bootstrap_file(db_pool, sessions_set, None, None).await;
 }
 
+/// Test-only auth bootstrap helper that seeds a known password before loading
+/// persisted sessions into the in-memory cache.
 pub async fn initialize_auth_for_test(
     db_pool: &sqlx::SqlitePool,
     sessions_set: &TokioRwLock<std::collections::HashSet<String>>,
@@ -206,6 +221,8 @@ pub async fn initialize_auth_for_test(
     initialize_auth(db_pool, sessions_set).await;
 }
 
+/// Full auth bootstrap path used by startup, including optional bootstrap-file
+/// persistence and session-cache warmup from SQLite.
 pub async fn initialize_auth_with_bootstrap_file(
     db_pool: &sqlx::SqlitePool,
     sessions_set: &TokioRwLock<std::collections::HashSet<String>>,
@@ -263,6 +280,8 @@ pub async fn initialize_auth_with_bootstrap_file(
     }
 }
 
+/// Verifies the submitted dashboard password, creates a new persisted session,
+/// and returns the raw token only in the response cookie.
 pub async fn login_post_handler(
     State(state): State<Arc<AppState>>,
     connect_info: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
@@ -339,6 +358,8 @@ pub async fn login_post_handler(
         .into_response()
 }
 
+/// Deletes the current dashboard session from both the in-memory cache and the
+/// SQLite-backed session store, then clears the cookie.
 pub async fn logout_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -358,6 +379,8 @@ pub async fn logout_handler(
     )
 }
 
+/// Rotates the dashboard password after verifying the current password and
+/// prunes every persisted session except the caller's current one.
 pub async fn change_password_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -449,6 +472,8 @@ pub async fn change_password_handler(
     ok_json_response()
 }
 
+/// Lets an authenticated operator dismiss the bootstrap password reminder for
+/// the current installation once the default secret has been handled safely.
 pub async fn dismiss_password_change_prompt_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -472,6 +497,8 @@ pub async fn dismiss_password_change_prompt_handler(
     ok_json_response()
 }
 
+/// Returns the operator-visible security failure snapshots used by the rate
+/// limit admin view.
 pub async fn rate_limits_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -522,6 +549,8 @@ pub async fn rate_limits_reset_handler(
     Json(serde_json::json!({ "ok": true, "removed": removed })).into_response()
 }
 
+/// Exposes the static platform audio capability matrix used by the dashboard
+/// and agent surfaces when validating output plans.
 pub async fn audio_caps_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -559,6 +588,8 @@ pub async fn audio_caps_handler(
     .into_response()
 }
 
+/// Returns the current ingest URLs for every configured pipeline without
+/// exposing unrelated pipeline internals.
 pub async fn stream_keys_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
