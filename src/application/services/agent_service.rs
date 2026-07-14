@@ -17,6 +17,8 @@ use crate::planner::backend_policy::BackendPolicy;
 const CUSTOM_ENCODING_META_KEY: &str = "custom_encoding";
 
 #[derive(Debug)]
+/// Read-only catalog bundle used by agent context routes that need pipelines,
+/// outputs, jobs, ingests, and settings in one payload.
 pub struct AgentContextCatalog {
     pub pipelines: Vec<Pipeline>,
     pub outputs: Vec<Output>,
@@ -27,6 +29,8 @@ pub struct AgentContextCatalog {
 }
 
 #[derive(Debug, Default)]
+/// Smaller read-only catalog used by agent plan/apply flows that only need the
+/// pipeline and output inventory.
 pub struct AgentPipelineOutputCatalog {
     pub pipelines: Vec<Pipeline>,
     pub outputs: Vec<Output>,
@@ -67,6 +71,8 @@ impl AgentService {
         }
     }
 
+    /// Loads the full read-only catalog used by agent context endpoints,
+    /// tolerating individual store failures with empty/default fallbacks.
     pub async fn load_context_catalog(
         &self,
         security: &IngestSecurityService,
@@ -107,12 +113,16 @@ impl AgentService {
         }
     }
 
+    /// Loads the pipeline/output catalog and falls back to an empty catalog if
+    /// either store read fails.
     pub async fn load_pipeline_output_catalog(&self) -> AgentPipelineOutputCatalog {
         self.try_load_pipeline_output_catalog()
             .await
             .unwrap_or_default()
     }
 
+    /// Loads the pipeline/output catalog and surfaces store failures as strings
+    /// for agent routes that want explicit error handling.
     pub async fn try_load_pipeline_output_catalog(
         &self,
     ) -> Result<AgentPipelineOutputCatalog, String> {
