@@ -80,6 +80,10 @@ fn unauthorized_json_response() -> Response {
         .into_response()
 }
 
+fn snapshot_generated_at(snapshot: &serde_json::Value) -> String {
+    snapshot["generatedAt"].as_str().unwrap_or("").to_string()
+}
+
 fn dashboard_runtime_requested_pipeline<'a>(
     query: &'a DashboardRuntimeQuery,
     all_pipeline_ids: &'a [String],
@@ -164,6 +168,8 @@ pub async fn pipeline_diagnostics_run_handler(
             return unauthorized_json_response();
         }
     } else {
+        // Diagnostics runs are API-only callers, so auth failures must stay on
+        // the JSON contract instead of inheriting any HTML/session redirect flow.
         return unauthorized_json_response();
     }
 
@@ -961,10 +967,8 @@ pub async fn v1_overview_handler(
         }
     }
 
-    let generated_at = snapshot["generatedAt"].as_str().unwrap_or("").to_string();
-
     Json(serde_json::json!({
-        "generatedAt": generated_at,
+        "generatedAt": snapshot_generated_at(&snapshot),
         "totalPipelines": total,
         "activePipelines": active,
         "degradedPipelines": degraded,
@@ -1015,7 +1019,7 @@ pub async fn v1_stage_telemetry_handler(
 mod tests {
     use super::{
         DashboardRuntimeQuery, ResourceMapQuery, dashboard_runtime_requested_pipeline,
-        unauthorized_json_response,
+        snapshot_generated_at, unauthorized_json_response,
     };
     use crate::api_runtime_views::ResourceMapView;
     use axum::http::StatusCode;
@@ -1048,6 +1052,15 @@ mod tests {
         assert_eq!(
             unauthorized_json_response().status(),
             StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[test]
+    fn snapshot_generated_at_falls_back_to_empty_string() {
+        assert_eq!(snapshot_generated_at(&serde_json::json!({})), "");
+        assert_eq!(
+            snapshot_generated_at(&serde_json::json!({"generatedAt": "2026-07-14T00:00:00Z"})),
+            "2026-07-14T00:00:00Z"
         );
     }
 }
