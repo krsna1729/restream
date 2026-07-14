@@ -12,6 +12,8 @@ use crate::application::ports::{IngestLookup, IngestWriter};
 use super::error::{ApiError, ApiResult};
 
 #[derive(Clone)]
+/// Application service that coordinates ingest catalog reads and persisted
+/// ingest mutations across the lookup/write port split.
 pub struct IngestService {
     lookup: Arc<dyn IngestLookup>,
     writer: Arc<dyn IngestWriter>,
@@ -24,10 +26,14 @@ impl IngestService {
         Self { lookup, writer }
     }
 
+    /// Builds the shared not-found error shape used when callers reference an
+    /// ingest ID that is missing from the catalog.
     fn ingest_not_found(id: &str) -> ApiError {
         ApiError::not_found(format!("ingest {id} not found"))
     }
 
+    /// Lists every persisted ingest record without applying higher-level
+    /// transport or runtime filtering.
     pub async fn list_ingests(&self) -> ApiResult<Vec<Ingest>> {
         self.lookup
             .list_ingests()
@@ -35,6 +41,8 @@ impl IngestService {
             .map_err(|e| ApiError::internal(format!("list ingests: {e}")))
     }
 
+    /// Resolves one ingest by ID and upgrades missing-store results into the
+    /// service layer's stable not-found error.
     pub async fn get_by_id(&self, id: &str) -> ApiResult<Ingest> {
         self.lookup
             .get_ingest(id)
@@ -44,6 +52,8 @@ impl IngestService {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Persists a new ingest record with the caller-provided media source,
+    /// stream key, looping flags, and live-optimization settings.
     pub async fn create_ingest(
         &self,
         id: &str,
@@ -69,6 +79,8 @@ impl IngestService {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Updates one persisted ingest and normalizes a missing row into the
+    /// service layer's stable not-found error.
     pub async fn update_ingest(
         &self,
         id: &str,
@@ -94,6 +106,7 @@ impl IngestService {
             .ok_or_else(|| Self::ingest_not_found(id))
     }
 
+    /// Lists all ingest records that point at one media-library filename.
     pub async fn list_for_filename(&self, filename: &str) -> ApiResult<Vec<Ingest>> {
         self.lookup
             .list_ingests_for_filename(filename)
@@ -101,6 +114,7 @@ impl IngestService {
             .map_err(|e| ApiError::internal(format!("list ingests for filename: {e}")))
     }
 
+    /// Deletes one persisted ingest record from the catalog.
     pub async fn delete_ingest(&self, id: &str) -> ApiResult<bool> {
         self.writer
             .delete_ingest(id)
