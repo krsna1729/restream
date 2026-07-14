@@ -43,10 +43,14 @@ fn request_targets_authenticated_html(path: &str) -> bool {
     path.ends_with(".html")
 }
 
+/// Serves one embedded asset without conditional request headers, mainly for
+/// internal call sites that already know caching state is irrelevant.
 pub fn serve_embedded(path: &str) -> Response {
     serve_embedded_with_headers(path, &HeaderMap::new())
 }
 
+/// Serves one embedded or disk-backed dashboard asset and applies the module's
+/// shared cache and ETag policy.
 pub fn serve_embedded_with_headers(path: &str, headers: &HeaderMap) -> Response {
     let content_type = static_asset_content_type(path);
 
@@ -78,6 +82,8 @@ pub fn serve_embedded_with_headers(path: &str, headers: &HeaderMap) -> Response 
     }
 }
 
+// Centralize the static asset cache contract here so development disk reads,
+// embedded assets, and conditional GET handling all emit the same headers.
 fn static_asset_response(
     path: &str,
     content_type: &'static str,
@@ -132,6 +138,8 @@ fn cache_control(path: &str) -> HeaderValue {
     }
 }
 
+/// Serves the public login page, redirecting already-authenticated sessions
+/// back into the dashboard shell instead.
 pub async fn login_get_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     // The login page is public, but authenticated sessions should land in the
     // app shell instead of seeing the sign-in screen again.
@@ -143,26 +151,34 @@ pub async fn login_get_handler(State(state): State<Arc<AppState>>, headers: Head
     serve_embedded_with_headers("login.html", &headers).into_response()
 }
 
+/// Historical redirect for `/login` routes that should land on the login HTML
+/// entrypoint.
 pub async fn login_html_redirect_handler() -> impl IntoResponse {
     Redirect::to("login")
 }
 
+/// Redirects the legacy settings HTML path into the SPA mode selector.
 pub async fn settings_html_redirect_handler() -> impl IntoResponse {
     Redirect::to("./?mode=settings")
 }
 
+/// Redirects the legacy status HTML path into the SPA mode selector.
 pub async fn status_html_redirect_handler() -> impl IntoResponse {
     Redirect::to("./?mode=status")
 }
 
+/// Serves the embedded dashboard logo asset.
 pub async fn logo_handler(headers: HeaderMap) -> impl IntoResponse {
     serve_embedded_with_headers("logo.png", &headers)
 }
 
+/// Serves the compiled dashboard stylesheet asset.
 pub async fn css_handler(headers: HeaderMap) -> impl IntoResponse {
     serve_embedded_with_headers("output.css", &headers)
 }
 
+/// Serves embedded assets directly when requested by path, otherwise applies
+/// the authenticated SPA-shell fallback for dashboard routes.
 pub async fn spa_fallback_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -183,6 +199,8 @@ pub async fn spa_fallback_handler(
     serve_embedded_with_headers("index.html", &headers).into_response()
 }
 
+/// Shared JSON 404 response for unknown API routes, keeping API misses off the
+/// HTML SPA fallback path.
 pub async fn api_not_found_handler(uri: Uri) -> impl IntoResponse {
     (
         StatusCode::NOT_FOUND,
