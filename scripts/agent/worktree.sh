@@ -61,6 +61,8 @@ Defaults:
   - seed a pruned high-value debug target subset from the source tree
   - do not copy incremental compilation state unless explicitly requested
   - seed .cargo/ and node_modules/ from the source tree when present
+  - install locked frontend dependencies in the destination worktree when the
+    seeded node_modules/ tree is missing or incomplete
   - share .local/build/static and public/bin from the source tree when present
 
 Options:
@@ -213,6 +215,35 @@ sync_tree() {
         run_cmd mkdir -p "$(dirname "$target_path")"
         run_cmd cp -a "$source_path" "$target_path"
     fi
+}
+
+frontend_deps_ready() {
+    local worktree_root="$1"
+
+    [[ -x "$worktree_root/node_modules/.bin/tsc" ]] &&
+        [[ -x "$worktree_root/node_modules/.bin/tailwindcss" ]] &&
+        [[ -f "$worktree_root/node_modules/hls.js/dist/hls.min.js" ]]
+}
+
+ensure_frontend_deps() {
+    local worktree_root="$1"
+
+    if [[ ! -f "$worktree_root/package-lock.json" ]]; then
+        info "skip frontend dependency check: package-lock.json missing in worktree"
+        return 0
+    fi
+
+    if frontend_deps_ready "$worktree_root"; then
+        info "frontend dependencies ready in worktree"
+        return 0
+    fi
+
+    command -v npm >/dev/null 2>&1 || die "npm is required to hydrate frontend dependencies for the worktree"
+
+    info "install locked frontend dependencies in worktree"
+    run_cmd npm ci --include=optional --prefix "$worktree_root"
+
+    frontend_deps_ready "$worktree_root" || die "frontend dependency check failed after npm ci in $worktree_root"
 }
 
 copy_file_if_present() {
@@ -674,6 +705,9 @@ fi
 
 if ((SEED_NODE)); then
     sync_tree "$NODE_SOURCE" "$WORKTREE_PATH/node_modules" "node_modules"
+    ensure_frontend_deps "$WORKTREE_PATH"
+else
+    info "skip node_modules seeding by request"
 fi
 
 if ((SHARE_STATIC)); then
