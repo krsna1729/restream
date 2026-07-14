@@ -10,6 +10,8 @@ use crate::application::ports::PipelineStore;
 use super::error::{ApiError, ApiResult};
 
 #[derive(Clone)]
+/// Application service that exposes lightweight persistence-backed health
+/// probes for the dashboard and external liveness checks.
 pub struct HealthService {
     store: Arc<dyn PipelineStore>,
 }
@@ -20,6 +22,8 @@ impl HealthService {
         Self { store }
     }
 
+    /// Performs the low-cost database health probe by issuing one catalog read
+    /// against the pipeline store and translating success into a simple boolean.
     pub async fn check_db(&self) -> ApiResult<bool> {
         self.store
             .list_pipelines()
