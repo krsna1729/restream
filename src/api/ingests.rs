@@ -41,6 +41,8 @@ struct NormalizedIngestPayload {
     target_gop_seconds: u32,
 }
 
+/// Applies the API-level default and lower bound for live-optimized GOP sizing
+/// before the value reaches the service layer.
 pub fn sanitize_target_gop_seconds(value: Option<u32>) -> u32 {
     value
         .unwrap_or(crate::application::models::DEFAULT_FILE_INGEST_TARGET_GOP_SECONDS)
@@ -149,6 +151,8 @@ fn map_stop_ingest_error(error: ApiError) -> Response {
     }
 }
 
+/// Lists every persisted file ingest and annotates each row with its current
+/// runtime-running flag from the media engine.
 pub async fn ingests_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -166,6 +170,8 @@ pub async fn ingests_get_handler(
     Ok(Json(res).into_response())
 }
 
+/// Creates one persisted file ingest after normalizing the API payload into the
+/// service-layer request shape.
 pub async fn ingests_post_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -197,6 +203,8 @@ pub async fn ingests_post_handler(
     Ok(ingest_json_response(&ingest, false))
 }
 
+/// Updates one persisted file ingest and returns the latest runtime-running
+/// state for its id.
 pub async fn ingests_update_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -229,6 +237,8 @@ pub async fn ingests_update_handler(
     Ok(ingest_json_response(&ingest, running))
 }
 
+/// Deletes one ingest and lets the file-ingest service clear any associated
+/// runtime state before the response is returned.
 pub async fn ingests_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -245,6 +255,8 @@ pub async fn ingests_delete_handler(
     Ok(Json(serde_json::json!({"deleted": true})).into_response())
 }
 
+/// Starts the selected file ingest, mapping runtime startup failures onto the
+/// ingest API's transport error contract.
 pub async fn ingests_start_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -268,6 +280,8 @@ pub async fn ingests_start_handler(
     ingest_json_response(&ingest, true)
 }
 
+/// Stops the selected file ingest and returns the persisted ingest row with a
+/// cleared runtime-running flag.
 pub async fn ingests_stop_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
