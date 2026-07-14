@@ -75,7 +75,7 @@ if [[ -n "$ARCHIVE" ]]; then
     if [[ -n "$BINARY_BUNDLE" ]]; then
         scripts/check/release-artifact-smoke.sh "$BINARY_BUNDLE"
     fi
-    scripts/check/container-smoke.sh --image restream:release --archive "$ARCHIVE"
+    scripts/check/container-smoke.sh --image restream:release --load-archive "$ARCHIVE"
 else
     scripts/check/container-smoke.sh --image restream:release
 fi

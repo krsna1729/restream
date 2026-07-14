@@ -8,15 +8,16 @@ cd "$ROOT"
 
 IMAGE="${RESTREAM_CONTAINER_IMAGE:-restream:release-smoke}"
 ARCHIVE=""
+LOAD_ARCHIVE=""
 
 usage() {
     cat <<'EOF'
-Usage: scripts/check/container-smoke.sh [--image NAME] [--archive PATH]
+Usage: scripts/check/container-smoke.sh [--image NAME] [--archive PATH] [--load-archive PATH]
 
-Builds Docker's default `runtime` target, proves it is a scratch image that
-starts with no mounts, and verifies that it does not contain /tmp. When
---archive is supplied, writes a reproducible gzip-compressed OCI/Docker image
-archive suitable for a GitHub Release asset.
+Builds Docker's default `runtime` target, or loads an existing image archive,
+proves it is a scratch image that starts with no mounts, and verifies that it
+does not contain /tmp. When --archive is supplied, writes a reproducible
+gzip-compressed OCI/Docker image archive suitable for a GitHub Release asset.
 EOF
 }
 
@@ -28,6 +29,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --archive)
             ARCHIVE=${2:?--archive requires a value}
+            shift 2
+            ;;
+        --load-archive)
+            LOAD_ARCHIVE=${2:?--load-archive requires a value}
             shift 2
             ;;
         -h|--help)
@@ -55,23 +60,31 @@ cleanup() {
 }
 trap cleanup EXIT
 
-build_commit="$(git rev-parse HEAD)"
-build_timestamp="$(git show -s --format=%cI HEAD)"
-docker_build_args=(
-    --build-arg "RESTREAM_BUILD_GIT_COMMIT=$build_commit" \
-    --build-arg "RESTREAM_BUILD_TIMESTAMP=$build_timestamp" \
-    --target runtime \
-    -t "$IMAGE"
-)
-if [[ "${RESTREAM_DOCKER_GHA_CACHE:-0}" == "1" ]]; then
-    docker buildx build \
-        "${docker_build_args[@]}" \
-        --cache-from "type=gha,scope=runtime-release" \
-        --cache-to "type=gha,mode=max,scope=runtime-release" \
-        --load \
-        .
+if [[ -n "$LOAD_ARCHIVE" ]]; then
+    [[ -s "$LOAD_ARCHIVE" ]] || {
+        echo "container-smoke: archive not found: $LOAD_ARCHIVE" >&2
+        exit 1
+    }
+    docker load -i "$LOAD_ARCHIVE"
 else
-    docker build "${docker_build_args[@]}" .
+    build_commit="$(git rev-parse HEAD)"
+    build_timestamp="$(git show -s --format=%cI HEAD)"
+    docker_build_args=(
+        --build-arg "RESTREAM_BUILD_GIT_COMMIT=$build_commit" \
+        --build-arg "RESTREAM_BUILD_TIMESTAMP=$build_timestamp" \
+        --target runtime \
+        -t "$IMAGE"
+    )
+    if [[ "${RESTREAM_DOCKER_GHA_CACHE:-0}" == "1" ]]; then
+        docker buildx build \
+            "${docker_build_args[@]}" \
+            --cache-from "type=gha,scope=runtime-release" \
+            --cache-to "type=gha,mode=max,scope=runtime-release" \
+            --load \
+            .
+    else
+        docker build "${docker_build_args[@]}" .
+    fi
 fi
 
 user="$(docker image inspect --format '{{.Config.User}}' "$IMAGE")"

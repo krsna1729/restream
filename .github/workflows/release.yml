@@ -37,6 +37,7 @@ jobs:
           system_deps_profile: build
           native_prefix: 'true'
           rust_cache: 'true'
+      - uses: docker/setup-buildx-action@v4
       - name: Prepare release build tree
         # Clean runners do not have generated public/ assets. The harness
         # compile embeds public/ before packaging runs, so prepare the tree via
@@ -44,6 +45,8 @@ jobs:
         # relying on developer-local generated files.
         run: scripts/release/prepare-build-tree.sh
       - name: Package release Linux binaries
+        env:
+          RESTREAM_DOCKER_GHA_CACHE: "1"
         # Build the exact downloadable release payload first so every later
         # certification step reads from the same shipped bytes.
         run: scripts/release/package-binaries.sh "$RELEASE_VERSION"
@@ -100,7 +103,6 @@ jobs:
           native_prefix: 'true'
           rust_cache: 'true'
       - uses: ./.github/actions/security-tools
-      - uses: docker/setup-buildx-action@v4
       - uses: actions/download-artifact@v8
         with:
           name: release-dist-${{ env.RELEASE_VERSION }}-${{ github.sha }}
@@ -108,8 +110,6 @@ jobs:
           # path matches the archive layout produced by package-binaries.sh.
           path: dist
       - name: Verify release evidence and OCI asset
-        env:
-          RESTREAM_DOCKER_GHA_CACHE: "1"
         # Pass the completed bundle so its exact restream executable emits the
         # SBOM; certifying a separate default-feature rebuild would leave the
         # downloadable feature-enabled artifact unscanned.

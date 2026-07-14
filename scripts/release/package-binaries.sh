@@ -79,4 +79,6 @@ do
     echo "package-binaries: PASS archive=$archive"
 done
 
+scripts/release/package-runtime-image.sh "$VERSION"
+
 echo "package-binaries: PASS sbom=$release_sbom"
