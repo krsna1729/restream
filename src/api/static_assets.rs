@@ -8,7 +8,7 @@ use rust_embed::RustEmbed;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
-use super::state::{AppState, get_session_token_from_headers, request_is_authenticated};
+use super::state::{AppState, get_session_token_from_headers, request_is_authenticated, to_hex};
 
 #[derive(RustEmbed)]
 #[folder = "public/"]
@@ -95,7 +95,7 @@ fn asset_etag(path: &str, data: &[u8]) -> String {
     hasher.update(path.as_bytes());
     hasher.update([0]);
     hasher.update(data);
-    format!("\"{:x}\"", hasher.finalize())
+    format!("\"{}\"", to_hex(&hasher.finalize()))
 }
 
 fn header_value(value: &str) -> HeaderValue {
