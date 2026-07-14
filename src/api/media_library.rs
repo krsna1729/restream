@@ -1,3 +1,7 @@
+//! Media-library HTTP handlers own the boundary between dashboard requests and
+//! filesystem-backed media operations. They validate filenames, translate path
+//! errors into HTTP responses, and delegate the actual media work to services.
+
 use axum::{
     Json,
     body::Body,
@@ -18,7 +22,7 @@ use crate::application::services::{
     media_library_service::{MediaDeleteError, MediaRenameError},
 };
 
-use super::state::{AppState, get_session_token_from_headers, require_authenticated};
+use super::state::{AppState, require_authenticated};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +31,16 @@ pub struct MediaRenamePayload {
 }
 
 pub const MAX_MEDIA_UPLOAD_BYTES: usize = 8 * 1024 * 1024 * 1024;
+
+fn media_directory_error_response(status: StatusCode) -> Response {
+    match status {
+        StatusCode::INTERNAL_SERVER_ERROR => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "Media directory error").into_response()
+        }
+        StatusCode::NOT_FOUND => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        _ => (StatusCode::BAD_REQUEST, "Invalid path").into_response(),
+    }
+}
 
 pub async fn recording_start_handler(
     State(state): State<Arc<AppState>>,
@@ -76,12 +90,8 @@ pub async fn media_list_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let files = state
@@ -100,12 +110,8 @@ pub async fn media_upload_handler(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Response {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let mut uploaded = None;
@@ -269,12 +275,8 @@ pub async fn media_analysis_handler(
     headers: HeaderMap,
     Path(filename): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let path = match media_path_under_root(&state.media_dir, &filename) {
@@ -522,12 +524,8 @@ pub async fn media_file_handler(
     headers: HeaderMap,
     Path(filename): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let path = match media_path_under_root(&state.media_dir, &filename) {
@@ -545,23 +543,13 @@ pub async fn media_delete_handler(
     headers: HeaderMap,
     Path(filename): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let canonical_path = match media_path_under_root(&state.media_dir, &filename) {
         Ok(path) => path,
-        Err(StatusCode::INTERNAL_SERVER_ERROR) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Media directory error").into_response();
-        }
-        Err(StatusCode::NOT_FOUND) => {
-            return (StatusCode::NOT_FOUND, "File not found").into_response();
-        }
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid path").into_response(),
+        Err(status) => return media_directory_error_response(status),
     };
 
     match state
@@ -599,12 +587,8 @@ pub async fn media_rename_handler(
     Path(filename): Path<String>,
     Json(payload): Json<MediaRenamePayload>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let new_name = payload.new_name.trim();
@@ -628,20 +612,11 @@ pub async fn media_rename_handler(
 
     let source_path = match media_path_under_root(&state.media_dir, &filename) {
         Ok(path) => path,
-        Err(StatusCode::INTERNAL_SERVER_ERROR) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Media directory error").into_response();
-        }
-        Err(StatusCode::NOT_FOUND) => {
-            return (StatusCode::NOT_FOUND, "File not found").into_response();
-        }
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid path").into_response(),
+        Err(status) => return media_directory_error_response(status),
     };
     let destination_path = match media_destination_path_under_root(&state.media_dir, new_name) {
         Ok(path) => path,
-        Err(StatusCode::INTERNAL_SERVER_ERROR) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Media directory error").into_response();
-        }
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid path").into_response(),
+        Err(status) => return media_directory_error_response(status),
     };
     if destination_path.exists() {
         return (
@@ -737,5 +712,12 @@ mod tests {
 
         assert_eq!(err, StatusCode::BAD_REQUEST);
         let _ = std::fs::remove_dir_all(media_dir);
+    }
+
+    #[test]
+    fn media_directory_error_response_preserves_not_found_status() {
+        let response = media_directory_error_response(StatusCode::NOT_FOUND);
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
