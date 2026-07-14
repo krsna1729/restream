@@ -1,3 +1,9 @@
+//! Application service wrapper for output catalog and desired-state operations.
+//!
+//! This module keeps output persistence and desired-state requests on the
+//! application boundary so HTTP handlers can work in terms of output records and
+//! lifecycle intent without depending on store-specific details.
+
 use std::sync::Arc;
 
 use crate::application::models::Output;
@@ -18,8 +24,14 @@ pub struct OutputService {
 }
 
 impl OutputService {
+    /// Build the service from any `OutputStore` implementation.
+    /// Useful for tests that want to inject an in-memory or fake store.
     pub fn with_store(store: Arc<dyn OutputStore>) -> Self {
         Self { store }
+    }
+
+    fn output_not_found(id: &str) -> ApiError {
+        ApiError::not_found(format!("output {id} not found"))
     }
 
     pub async fn list_outputs(&self) -> ApiResult<Vec<Output>> {
@@ -41,7 +53,7 @@ impl OutputService {
             .get_output(pipeline_id, id)
             .await
             .map_err(|e| ApiError::internal(format!("get output: {e}")))?
-            .ok_or_else(|| ApiError::not_found(format!("output {id} not found")))
+            .ok_or_else(|| Self::output_not_found(id))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -55,6 +67,8 @@ impl OutputService {
         desired_state: &str,
         config: &OutputConfig,
     ) -> ApiResult<Output> {
+        // API callers still pass desired state as transport text; convert it to
+        // the domain enum once here before persistence sees it.
         let desired_state = DesiredOutputState::from(desired_state);
         self.store
             .create_output(
@@ -83,7 +97,7 @@ impl OutputService {
             .update_output(pipeline_id, id, name, url, monitoring_url, config)
             .await
             .map_err(|e| ApiError::internal(format!("update output: {e}")))?
-            .ok_or_else(|| ApiError::not_found(format!("output {id} not found")))
+            .ok_or_else(|| Self::output_not_found(id))
     }
 
     pub async fn delete_output(&self, pipeline_id: &str, id: &str) -> ApiResult<bool> {
