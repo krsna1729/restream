@@ -46,6 +46,8 @@ fn recording_state_response(enabled: bool, active: bool) -> Response {
     Json(serde_json::json!({ "enabled": enabled, "active": active })).into_response()
 }
 
+/// Enables recording for one pipeline and reports both the desired flag and
+/// the current runtime-active state after the request.
 pub async fn recording_start_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
@@ -71,6 +73,8 @@ pub async fn recording_start_handler(
     Ok(recording_state_response(true, active))
 }
 
+/// Disables recording for one pipeline and reports the cleared desired/runtime
+/// state once the request completes.
 pub async fn recording_stop_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
@@ -90,6 +94,7 @@ pub async fn recording_stop_handler(
     Ok(recording_state_response(false, false))
 }
 
+/// Lists the current media-library rows assembled by the service layer.
 pub async fn media_list_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -313,6 +318,8 @@ pub async fn media_analysis_handler(
     Json(analysis).into_response()
 }
 
+/// Maps one supported media filename to its HTTP content type for streaming and
+/// download responses.
 pub fn media_content_type(filename: &str) -> &'static str {
     match filename
         .rsplit('.')
@@ -329,6 +336,7 @@ pub fn media_content_type(filename: &str) -> &'static str {
     }
 }
 
+/// Returns the lowercase extension for one media filename, if present.
 pub fn media_extension(filename: &str) -> Option<String> {
     filename
         .rsplit('.')
@@ -336,6 +344,8 @@ pub fn media_extension(filename: &str) -> Option<String> {
         .map(|value| value.to_ascii_lowercase())
 }
 
+/// Limits the library surface to the media extensions explicitly supported by
+/// the dashboard and playback handlers.
 pub fn media_filename_is_supported(filename: &str) -> bool {
     matches!(
         media_extension(filename).as_deref(),
@@ -343,6 +353,8 @@ pub fn media_filename_is_supported(filename: &str) -> bool {
     )
 }
 
+/// Rejects nested paths and path-component tricks so callers can only target a
+/// plain filename at the media-library boundary.
 pub fn is_plain_media_filename(filename: &str) -> bool {
     let path = std::path::Path::new(filename);
     path.components().count() == 1
@@ -351,6 +363,8 @@ pub fn is_plain_media_filename(filename: &str) -> bool {
             .is_some_and(|name| name == std::ffi::OsStr::new(filename))
 }
 
+/// Validates one user-supplied media filename before any filesystem lookup or
+/// destination-path construction happens.
 pub fn validate_media_filename(filename: &str) -> Result<(), StatusCode> {
     if filename.trim().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
@@ -361,6 +375,8 @@ pub fn validate_media_filename(filename: &str) -> Result<(), StatusCode> {
     Ok(())
 }
 
+/// Resolves an existing media filename under the configured library root,
+/// rejecting traversal and symlink escapes via canonicalization.
 pub fn media_path_under_root(
     media_dir: &str,
     filename: &str,
@@ -387,6 +403,8 @@ pub struct MediaByteRange {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MediaRangeParseError;
 
+/// Parses a single RFC 7233 byte-range header into an inclusive byte span for
+/// media streaming responses.
 pub fn parse_media_range_header(
     range: &str,
     size: u64,
@@ -445,6 +463,8 @@ fn media_range_not_satisfiable_response(size: u64) -> Response {
     response
 }
 
+// Streams a media file with optional byte-range support while keeping range
+// validation and HTTP header shaping local to the transport boundary.
 async fn media_file_response(
     path: std::path::PathBuf,
     filename: &str,
@@ -508,6 +528,8 @@ async fn media_file_response(
     Ok(response)
 }
 
+/// Builds the destination path for a new media-library file without requiring
+/// the target file to exist yet.
 pub fn media_destination_path_under_root(
     media_dir: &str,
     filename: &str,
@@ -527,6 +549,8 @@ pub fn media_destination_path_under_root(
     Ok(path)
 }
 
+/// Streams one media file from the library, supporting byte ranges for video
+/// playback clients.
 pub async fn media_file_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -546,6 +570,8 @@ pub async fn media_file_handler(
     }
 }
 
+/// Deletes one media file after the service layer confirms it is safe to
+/// remove any ingest or recording companions tied to it.
 pub async fn media_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -589,6 +615,8 @@ pub async fn media_delete_handler(
     }
 }
 
+/// Renames one media file within the library while preserving extension rules
+/// and companion artifact consistency.
 pub async fn media_rename_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
