@@ -27,6 +27,21 @@ function collectMarkdown(directory, files) {
   }
 }
 
+function collectByExtension(directory, extension, files) {
+  if (!fs.existsSync(directory)) return;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const filename = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      collectByExtension(filename, extension, files);
+    } else if (
+      entry.isFile() &&
+      entry.name.toLowerCase().endsWith(extension.toLowerCase())
+    ) {
+      files.add(path.resolve(filename));
+    }
+  }
+}
+
 function markdownFiles() {
   const tracked = execFileSync("git", ["ls-files", "*.md"], {
     encoding: "utf8",
@@ -94,8 +109,18 @@ const highChurnHeadings = new Set([
   "Available suites include:",
 ]);
 const linkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
+const conceptualDiagramGlyphs = /[┌┐┘┬┴┼▼▲►◄║╔╗╚╝]/;
+const mermaidEmoji = /[\u{1F300}-\u{1FAFF}✅❌⚠⭐✓]/u;
 const files = markdownFiles();
 const errors = [];
+
+const svgFiles = new Set();
+collectByExtension(path.join(root, "docs"), ".svg", svgFiles);
+for (const filename of svgFiles) {
+  errors.push(
+    `${relativePath(filename)}: documentation diagrams must use Mermaid, not checked-in SVG`,
+  );
+}
 
 for (const filename of files) {
   const relative = relativePath(filename);
@@ -104,6 +129,7 @@ for (const filename of files) {
   const headings = proseHeadings(lines);
   const h1 = headings.filter(({ level }) => level === 1);
   const h2 = headings.filter(({ level }) => level === 2);
+  let fenceLanguage = null;
 
   // Skill packages optimize for immediate execution, so a TOC is needless
   // preamble. Legal text and one-section shims also need no navigation.
@@ -134,6 +160,45 @@ for (const filename of files) {
 
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
+    const fence = /^\s*```([^\s`]*)/.exec(line);
+    if (fence) {
+      fenceLanguage = fenceLanguage === null ? fence[1].toLowerCase() : null;
+      if (
+        fenceLanguage === "mermaid" &&
+        !/^flowchart (?:LR|TD)$/.test(lines[index + 1] ?? "")
+      ) {
+        errors.push(
+          `${relative}:${lineNumber}: Mermaid diagrams must start with flowchart LR or flowchart TD`,
+        );
+      }
+      return;
+    }
+    if (fenceLanguage === "mermaid") {
+      if (/^\s*graph\s/.test(line)) {
+        errors.push(
+          `${relative}:${lineNumber}: use flowchart instead of the legacy Mermaid graph alias`,
+        );
+      }
+      if (
+        /^\s*(?:classDef|class|linkStyle|style)\b|^\s*%%\{init:/i.test(
+          line,
+        )
+      ) {
+        errors.push(
+          `${relative}:${lineNumber}: Mermaid diagrams must not define custom theme styling`,
+        );
+      }
+      if (mermaidEmoji.test(line) || /<\/?b>/.test(line)) {
+        errors.push(
+          `${relative}:${lineNumber}: Mermaid labels should be plain and theme-independent`,
+        );
+      }
+    }
+    if (fenceLanguage !== "mermaid" && conceptualDiagramGlyphs.test(line)) {
+      errors.push(
+        `${relative}:${lineNumber}: conceptual diagram should use a Mermaid fence`,
+      );
+    }
     if (maintainedProse.has(relative) && volatileCount.test(line)) {
       errors.push(
         `${relative}:${lineNumber}: volatile count belongs in generated or dated evidence`,
@@ -148,6 +213,11 @@ for (const filename of files) {
     for (const match of line.matchAll(linkPattern)) {
       const [, label, target] = match;
       const linkTarget = target.split("#", 1)[0];
+      if (/\.svg$/i.test(linkTarget)) {
+        errors.push(
+          `${relative}:${lineNumber}: link documentation diagrams as Mermaid source, not SVG`,
+        );
+      }
       if (
         !linkTarget ||
         linkTarget.includes("://") ||

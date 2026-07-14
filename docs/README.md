@@ -192,6 +192,14 @@ above remain the better way to learn the system.
   documentation set.
 - Start with one H1 title, use sentence-case headings, and use `sh` for shell
   command fences unless syntax specific to Bash is required.
+- Use Mermaid for conceptual diagrams. Prefer `flowchart LR` for pipelines and
+  `flowchart TD` for layers, ownership, or lifecycle flow. Keep labels plain,
+  omit custom colors and theme-dependent styling, and summarize the important
+  relationship in nearby prose.
+- Use Markdown tables for comparisons and matrices. Reserve `text` fences for
+  literal terminal output, protocol or command syntax, captured results, and
+  file trees. Do not check in SVG renderings of documentation diagrams; they
+  duplicate the Markdown source and are easy to leave stale.
 - State whether a document is current guidance, a proposal, or dated evidence.
   Current behavior must point to current source paths and runnable commands.
 - Prefer links over bare repository paths when the path is part of a reading
