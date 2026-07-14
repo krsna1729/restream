@@ -14,6 +14,7 @@ use std::{future::Future, sync::Arc};
 use super::state::{AppState, require_hls_access};
 use crate::application::hls_preview::{self, HlsPreviewReadError};
 
+/// Serves the single-playlist HLS view for one pipeline.
 pub async fn hls_playlist_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
@@ -26,6 +27,7 @@ pub async fn hls_playlist_handler(
     .await
 }
 
+/// Serves the multivariant/master HLS playlist for one pipeline.
 pub async fn hls_master_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
@@ -38,6 +40,7 @@ pub async fn hls_master_handler(
     .await
 }
 
+/// Serves the video media playlist for one pipeline's HLS preview.
 pub async fn hls_video_playlist_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
@@ -50,6 +53,7 @@ pub async fn hls_video_playlist_handler(
     .await
 }
 
+/// Serves one audio-track media playlist for a pipeline's HLS preview.
 pub async fn hls_audio_playlist_handler(
     State(state): State<Arc<AppState>>,
     Path((pipeline_id, track_index)): Path<(String, u32)>,
@@ -62,6 +66,7 @@ pub async fn hls_audio_playlist_handler(
     .await
 }
 
+/// Backward-compatible alias for the default video segment route.
 pub async fn hls_segment_handler(
     State(state): State<Arc<AppState>>,
     Path((pipeline_id, segment)): Path<(String, String)>,
@@ -74,6 +79,7 @@ pub async fn hls_segment_handler(
     .await
 }
 
+/// Serves one video media segment from the HLS preview surface.
 pub async fn hls_video_segment_handler(
     State(state): State<Arc<AppState>>,
     Path((pipeline_id, segment)): Path<(String, String)>,
@@ -86,6 +92,7 @@ pub async fn hls_video_segment_handler(
     .await
 }
 
+/// Serves the MP4 init segment for the pipeline's video rendition.
 pub async fn hls_video_init_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
@@ -98,6 +105,7 @@ pub async fn hls_video_init_handler(
     .await
 }
 
+/// Serves one audio media segment for the selected HLS audio track.
 pub async fn hls_audio_segment_handler(
     State(state): State<Arc<AppState>>,
     Path((pipeline_id, track_index, segment)): Path<(String, u32, String)>,
@@ -110,6 +118,7 @@ pub async fn hls_audio_segment_handler(
     .await
 }
 
+/// Serves the MP4 init segment for one HLS audio rendition.
 pub async fn hls_audio_init_handler(
     State(state): State<Arc<AppState>>,
     Path((pipeline_id, track_index)): Path<(String, u32)>,
@@ -161,6 +170,8 @@ where
     media_response(load_media().await, content_type)
 }
 
+// Playlist endpoints always return the Apple playlist content type and map the
+// preview-layer read error into the shared HLS JSON error contract.
 fn playlist_response(result: Result<String, HlsPreviewReadError>) -> Response {
     match result {
         Ok(playlist) => (
@@ -173,6 +184,8 @@ fn playlist_response(result: Result<String, HlsPreviewReadError>) -> Response {
     }
 }
 
+// Segment/init endpoints vary only by content type; the preview error envelope
+// stays identical across the HLS media routes.
 fn media_response(
     result: Result<bytes::Bytes, HlsPreviewReadError>,
     content_type: &'static str,
@@ -183,6 +196,8 @@ fn media_response(
     }
 }
 
+// Keep the HLS preview read errors mapped here so route handlers stay focused
+// on which preview artifact they expose rather than transport error shaping.
 fn hls_preview_error_response(err: HlsPreviewReadError) -> Response {
     match err {
         HlsPreviewReadError::NoStream => {
