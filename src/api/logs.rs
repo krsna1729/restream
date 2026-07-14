@@ -1,3 +1,7 @@
+//! Log HTTP handlers expose historical and streaming log views at the API
+//! boundary. This module translates query parameters into log-service filters
+//! and keeps SSE framing/filtering logic close to the transport layer.
+
 use axum::{
     Json,
     extract::State,
@@ -9,7 +13,7 @@ use std::sync::Arc;
 
 use crate::logging::types::AppLogFilters;
 
-use super::state::{AppState, get_session_token_from_headers};
+use super::state::{AppState, require_authenticated};
 
 #[derive(Deserialize)]
 pub struct LogsQuery {
@@ -38,6 +42,23 @@ pub struct LogsStreamQuery {
     pub include_restream: Option<bool>,
     pub prefix: Option<String>,
     pub last_event_id: Option<i64>,
+}
+
+fn build_logs_filters(query: LogsQuery) -> AppLogFilters {
+    AppLogFilters {
+        after_id: query.after_id,
+        level: query.level,
+        since: query.since,
+        until: query.until,
+        target: query.target,
+        scope: query.scope,
+        pipeline_id: query.pipeline_id,
+        output_id: query.output_id,
+        event_class: query.event_class,
+        prefix: query.prefix,
+        limit: query.limit.map(|limit| limit as i64),
+        order: query.order,
+    }
 }
 
 pub fn log_stream_scope_matches(
@@ -116,33 +137,25 @@ fn log_row_sse_frame(row: &crate::logging::AppLogRow) -> String {
     format!("id: {}\nevent: log\ndata: {}\n\n", row.id, data)
 }
 
+fn log_level_passes(min_level: &str, level: &str) -> bool {
+    match min_level {
+        "error" => level == "ERROR",
+        "warn" => matches!(level, "ERROR" | "WARN"),
+        "debug" => matches!(level, "ERROR" | "WARN" | "INFO" | "DEBUG"),
+        _ => matches!(level, "ERROR" | "WARN" | "INFO"),
+    }
+}
+
 pub async fn logs_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<LogsQuery>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
-    let filters = AppLogFilters {
-        after_id: query.after_id,
-        level: query.level,
-        since: query.since,
-        until: query.until,
-        target: query.target,
-        scope: query.scope,
-        pipeline_id: query.pipeline_id,
-        output_id: query.output_id,
-        event_class: query.event_class,
-        prefix: query.prefix,
-        limit: query.limit.map(|l| l as i64),
-        order: query.order,
-    };
+    let filters = build_logs_filters(query);
 
     let logs = state
         .log_service
@@ -164,12 +177,8 @@ pub async fn logs_stream_handler(
     headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<LogsStreamQuery>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let resume_from: Option<i64> = headers
@@ -195,14 +204,6 @@ pub async fn logs_stream_handler(
     let mut broadcast_rx = state.log_broadcast.subscribe();
 
     tokio::spawn(async move {
-        let level_passes = |level: &str| -> bool {
-            match min_level.as_str() {
-                "error" => level == "ERROR",
-                "warn" => matches!(level, "ERROR" | "WARN"),
-                "debug" => matches!(level, "ERROR" | "WARN" | "INFO" | "DEBUG"),
-                _ => matches!(level, "ERROR" | "WARN" | "INFO"),
-            }
-        };
         let mut delivered_through = resume_from.unwrap_or(0);
         if resume_from.is_some() {
             loop {
@@ -252,7 +253,7 @@ pub async fn logs_stream_handler(
                     match entry {
                         Ok(e) => {
                             if e.id <= delivered_through { continue; }
-                            if !level_passes(&e.level) { continue; }
+                            if !log_level_passes(&min_level, &e.level) { continue; }
                             if !log_broadcast_matches_stream_filters(
                                 &e,
                                 filter_target.as_deref(),
@@ -300,7 +301,36 @@ pub async fn logs_stream_handler(
 
 #[cfg(test)]
 mod tests {
-    use super::log_row_sse_frame;
+    use super::{LogsQuery, build_logs_filters, log_level_passes, log_row_sse_frame};
+
+    #[test]
+    fn build_logs_filters_preserves_limit_and_scope_fields() {
+        let filters = build_logs_filters(LogsQuery {
+            after_id: Some(10),
+            level: Some("warn".to_string()),
+            since: None,
+            until: None,
+            target: None,
+            scope: Some("pipeline".to_string()),
+            pipeline_id: Some("pipe-1".to_string()),
+            output_id: None,
+            event_class: None,
+            prefix: None,
+            limit: Some(25),
+            order: Some("asc".to_string()),
+        });
+
+        assert_eq!(filters.after_id, Some(10));
+        assert_eq!(filters.scope.as_deref(), Some("pipeline"));
+        assert_eq!(filters.limit, Some(25));
+    }
+
+    #[test]
+    fn log_level_passes_respects_warn_threshold() {
+        assert!(log_level_passes("warn", "ERROR"));
+        assert!(log_level_passes("warn", "WARN"));
+        assert!(!log_level_passes("warn", "INFO"));
+    }
 
     #[test]
     fn sse_frame_preserves_persisted_id_and_lifecycle_metadata() {
