@@ -1,220 +1,107 @@
-# Testing strategy: two tiers
+# Testing decision record: unit and live tiers
+
+Status: accepted and implemented.
+
+This record explains why Restream uses two correctness tiers. It is not the
+command reference; use [Testing](testing.md) to choose and run a gate.
 
 ## Contents
 
 - [Decision](#decision)
-- [Why we removed the middle](#why-we-removed-the-middle)
-- [Tier 1 — Unit (cargo test)](#tier-1-unit-cargo-test)
-- [Tier 2 — Live (binary + API + ffmpeg over localhost)](#tier-2-live-binary-api-ffmpeg-over-localhost)
-- [Benchmarks (orthogonal to the two tiers)](#benchmarks-orthogonal-to-the-two-tiers)
-- [Phased rollout](#phased-rollout)
+- [Why there is no middle tier](#why-there-is-no-middle-tier)
+- [Tier responsibilities](#tier-responsibilities)
+- [Correctness versus measurement](#correctness-versus-measurement)
+- [Implemented outcome](#implemented-outcome)
+- [Ongoing rules](#ongoing-rules)
 
 ## Decision
 
-There are **two** test tiers, not three. We drop "in-process integration" and the
-proposed in-memory edge subsystem entirely.
+Restream has two correctness tiers:
 
-- **Unit** (`cargo test`, synthetic packets) — pure logic and fault injection, in
-  isolation, in milliseconds. The precise oracle.
-- **Live** (the `restream` binary, driven over its HTTP API, fed and drained by real
-  ffmpeg over localhost) — everything end-to-end: the real engine, ring buffers,
-  transcoder, demux/mux, wire framing, the API, and the DB.
+1. **Unit and component tests** run through `cargo test`. They exercise pure
+   logic, deterministic state machines, crafted packets/bytes, and bounded
+   concurrency models without requiring a running service.
+2. **Live tests** start the real `restream` binary, control it through the HTTP
+   API, and publish/read media over real localhost RTMP, SRT, HTTP, and file
+   boundaries.
 
-Nothing in between.
+Benchmarks are a separate measurement workflow, not a third correctness tier.
 
-## Why we removed the middle
+## Why there is no middle tier
 
-### "In-process integration" was a redundant axis
+The former “in-process integration” modes called `MediaEngine::new()` directly
+while still using real FFmpeg processes and localhost sockets. They exercised
+the same engine code as live tests but bypassed process startup, API wiring,
+persistence, and reconciliation. Maintaining both shapes duplicated harness
+infrastructure without creating a distinct proof boundary.
 
-The current harness "in-process" tests (`correctness`, `burst-verify`, `egress`,
-`hevc-*`, `bframe-rtmp`, …) **already use real ffmpeg over real localhost sockets.** The
-only thing "in-process" about them is that they call `MediaEngine::new()` directly
-instead of spawning the `restream` binary. That difference exercises the *same engine
-code* two ways — it does not test anything new. Converging every one of them onto the
-binary + API loses no coverage and deletes an entire axis of duplication.
+An in-memory ingest/egress subsystem was also rejected. Its two useful
+properties already have better homes:
 
-### The in-memory source/sink subsystem was not worth it
+- deterministic malformed, reordered, gapped, or truncated input belongs in
+  unit/component tests near the parser, demuxer, or ring buffer;
+- exact egress assertions belong at a real harness sink receiving the wire
+  output of the running binary.
 
-An earlier draft proposed in-memory ingest/egress stage types so internal-vs-external
-would "just be a switch." Its only unique value over real-ffmpeg-plus-ffprobe was:
+The result is a clearer choice: prove logic without I/O, or prove the assembled
+system through its public process and protocol boundaries.
 
-1. **Deterministic packet-level input** — already covered at the unit tier with synthetic
-   packets (e.g. the `DtsEnforcer` tests in
-   [`src/media/ring_buffer.rs`](../src/media/ring_buffer.rs)).
-2. **Precise output capture** — asserting on exact emitted `MediaPacket`s instead of
-   ffprobe's interpretation. A real but small gain.
+## Tier responsibilities
 
-Neither justifies building and maintaining two new stage types, a replay-capture format,
-and an internal/external switch. ffmpeg-over-localhost covers the live surface; synthetic
-packets cover the pure-logic surface; nothing needs the layer between them. With the
-in-memory edges gone, there is only one live mode, so there is no switch to maintain.
+| Concern | Unit/component tier | Live tier |
+|---|---|---|
+| Timestamp math and DTS/PTS rules | Primary proof with synthetic packets | Representative wire round-trip |
+| Parser/demux fault isolation | Crafted bytes and deterministic errors | Process remains healthy during protocol faults |
+| Ring arithmetic and wake/cancel ordering | Unit, property, or loom model | Lifecycle/recovery assertion when externally visible |
+| API, database, and reconciliation | Focused handler/service tests where useful | Real binary controlled through `/api/v1/*` |
+| Protocol framing and interoperability | Pure codec/container helpers | Real RTMP/SRT/HLS/file traffic and readback |
+| Resource shape and throughput | Not a correctness claim | Bench-profile measurement after correctness passes |
 
-### What this costs us, and where it goes instead
+The live harness may act as controller, publisher, and sink in one process, but
+the system under test remains the separately spawned `restream` binary. A
+third-party sink such as MediaMTX or FFmpeg is added only when interoperability
+or decode validation is the property being proved.
 
-The one capability genuinely lost is **fault injection into the running engine** — feeding
-malformed, reordered, or gapped packets to prove the engine isolates faults and never
-crashes (`AGENTS.md`: "no internal or external failure path may crash the engine").
-ffmpeg will not emit malformed data on demand. This belongs as **targeted unit/component
-tests of the demuxer and ring buffer with crafted bytes** — the tier we are keeping
-anyway — not as a full-pipeline subsystem.
+## Correctness versus measurement
 
-Precise output capture is **not** lost: the harness is the egress sink (see Tier 2), so
-it parses the real received stream itself and asserts on it directly. No ffprobe proxy is
-required for structural properties.
+Correctness asks whether a protocol, timestamp, stream selection, lifecycle,
+or recovery contract holds. Measurement asks how much CPU, memory, latency, or
+throughput a known-correct path consumes.
 
----
+Keep those workflows separate:
 
-## Tier 1 — Unit (`cargo test`)
+- correctness can use normal test profiles and parallelism when isolation is
+  sound;
+- measurement uses bench-profile binaries, fixed fixtures, and serial runs;
+- a faster result never compensates for a weakened correctness oracle;
+- a passing correctness test is not evidence of production-scale capacity.
 
-Synthetic packets, pure logic, no ffmpeg, no sockets. Runs in the fast loop. This is the
-oracle and the home for everything that does not require real media or real I/O.
+## Implemented outcome
 
-Covers:
+The migration described by this decision is complete:
 
-- Timestamp math, DTS enforcement (`DtsEnforcer` — already well covered), composition
-  offsets, PTS/DTS ordering.
-- Burst accounting (`burstCount`, `avgBurstSize`) over `push_batch` / `pull_burst`.
-- Payload format dispatch (`Flv` / `Raw`).
-- **Fault injection**: malformed / reordered / gapped / truncated packets into the
-  demuxer and ring buffer; assert graceful handling, no panic, no corruption.
+- direct `MediaEngine::new()` harness modes were removed or re-tiered;
+- pure burst, timestamp, parser, and fault properties live in Rust tests;
+- shared child-process, port, fixture, and API helpers drive the real binary;
+- `api-smoke` covers authentication, persistence, and lifecycle without media;
+- mixed live scenarios combine protocol, codec, graph, HLS, and readback
+  assertions instead of spawning a separate pipeline for every property;
+- file-ingest and disconnect/recovery behavior have live modes;
+- benchmarks remain outside the correctness tier model.
 
-Existing synthetic builders to reuse: `test_video_packet` / `test_audio_packet` in
-`engine.rs`; the `mod tests` patterns in `ring_buffer.rs`.
+Current mode names, scenario composition, and commands are intentionally not
+copied here. The harness catalog and [Testing](testing.md) are the maintained
+sources of truth.
 
-### Re-tiering work (do first)
+## Ongoing rules
 
-- **`matrix-in-memory`** (currently a harness binary command) constructs packets in
-  memory and asserts with no ffmpeg or sockets. It is a unit test in the wrong place.
-  **Move to `#[cfg(test)]`.**
-- **Burst accounting** and **B-frame timestamp counting**: extract the pure-logic
-  assertions from `burst-verify` / `timestamp.bframe` into unit tests.
-
----
-
-## Tier 2 — Live (binary + API + ffmpeg over localhost)
-
-The single integration tier. The `restream` binary runs as a child process (the system
-under test); the test_harness drives it through the HTTP REST API.
-
-The harness plays **three roles in one process**, which is the key simplification:
-
-1. **Controller** — creates pipelines/outputs via the API, starts/stops them.
-2. **Source** — ffmpeg publishes real encoded streams to restream's RTMP/SRT ingest, so
-   restream's real demuxer is exercised with real media.
-3. **Sink** — the harness itself opens a real RTMP/SRT listening socket and restream does
-   a normal egress to it. The harness receives the real stream over localhost, parses it,
-   and asserts **test-case-specific** correctness directly on the received packets.
-
-Because the harness knows the test case, the sink verifies exactly what that case needs
-(DTS order, composition offset, codec, packet/keyframe counts, payload format) on the
-real wire output — more precise than shelling out to ffprobe, and with no extra process.
-
-### The harness-as-sink is already prototyped
-
-[`src/bin/test_harness.rs`](../src/bin/test_harness.rs) already binds a real RTMP sink on
-`SINK_PORT` (synthesized per process unless overridden) (`start_rtmp_server_on` /
-`handle_sink_client` / `SinkMetrics`): full
-server-side handshake, a real `ServerSession`, real media received over the socket. Today
-it only counts bytes/messages (`network_load`). The work is to **generalize it from
-counting to test-case-aware assertion** and reuse it as the standard egress sink for live
-tests.
-
-This is a real network sink in the harness process — **not** the rejected in-memory sink
-*stage inside restream*. restream does an ordinary egress; real mux on restream's side and
-real demux on the harness's side are both exercised, so wire framing is covered. There is
-no new restream code and no internal/external switch.
-
-### When a separate sink process is still needed
-
-Spawn `mediamtx` (or ffmpeg) as the sink **only for interoperability / correctness
-probing** — confirming a real third-party server accepts restream's egress, or feeding
-restream's output back through ffprobe for full decode validation (does it actually decode
-to 1280x720 H.264). Default live tests use the harness sink; interop is the exception.
-
-This is what `ramp-family` and `mixed-*` already do (with mediamtx). **All current
-in-process harness tests migrate to this shape** — spawn the binary, create the pipeline
-via API, publish with ffmpeg, receive egress in the harness sink, assert.
-
-### Pack maximum signal into the existing live runs
-
-`mixed-*` already runs 5 real ingest cases through the binary. Rather than bespoke
-single-purpose tests, assert as many properties as possible **on those same live runs**,
-via ffprobe and `/api/v1/engine`:
-
-| Property | Assert on live runs via |
-|---|---|
-| DTS monotonicity | harness sink (received packet timestamps) |
-| B-frame composition offset (PTS>DTS) | harness sink, wherever the source has B-frames |
-| Payload format (`Flv`/`Raw`) | harness sink |
-| Packet / keyframe counts, GOP cadence | harness sink |
-| Burst reader stats | `/api/v1/engine` processing graph |
-| Transcoder sharing (≤1 H.264 instance) | `/api/v1/engine` (already asserted) |
-| Audio route correctness | harness sink + ffprobe decode check |
-| Codec edge (H.265→H.264) | ffprobe decode check (interop sink) |
-
-Principle: **every property observable at a pipeline edge should be asserted on at least
-one live run**, and live runs should be reused to assert many properties at once rather
-than spawning a separate ffmpeg pipeline per property. Unit tests prove the logic in
-isolation; the live assertions prove it still holds wired into the real engine, API, and
-concurrency.
-
-### New: `api-smoke`
-
-One lightweight live test for the API/DB/lifecycle layer that no media test targets
-directly: spin up the binary, walk the API (auth, pipeline/output CRUD, start/stop),
-restart the child, and assert pipelines survived (DB persistence). No media. Cheap; add
-to the default suite.
-
-### Shared infrastructure
-
-- **`TestPorts` + `start_restream_child`** — spawn the binary with configurable ports and
-  `WORK_DIR`, wait for `/healthz`. De-duplicates `start_ramp_restream` /
-  `start_mixed_restream`.
-- **Generalized harness sink** — promote the existing `start_rtmp_server_on` /
-  `handle_sink_client` / `SinkMetrics` path from byte-counting to a reusable sink that
-  exposes received packets (timestamps, format, keyframe flags, counts) for assertions,
-  plus an SRT equivalent. This is the single source of truth for egress correctness.
-- **ffprobe verifier (decode-only)** — keep one consolidated ffprobe helper for the cases
-  that need actual decode validation or interop, not for structural assertions.
-
----
-
-## Benchmarks (orthogonal to the two tiers)
-
-Benchmarks measure speed, not correctness; they are not a third test tier. Two cleanups:
-
-- **`benches/simd_alternatives.rs`** compares `memchr`/`pulp`/`wide`/`scalar`. Per the
-  SIMD rules in `AGENTS.md` this is a **one-time decision benchmark** to pick an
-  implementation, not a continuous regression guard. Run on demand, not in the routine
-  bench loop; the scalar oracle for the chosen path lives in unit tests.
-- **`benches/matrix_throughput.rs`** (throughput) and the `matrix` correctness logic
-  build the same format×codec matrix — have them **share one fixture builder** so the
-  matrix is defined once. Likewise confirm `stage_feeder` and `stage_metrics` are not
-  measuring the same path under two names.
-
----
-
-## Phased rollout
-
-Phases 0–5 are complete.
-
-0. **Re-tier** — done. Unit tests cover burst accounting, DTS enforcement, and fault
-   injection. `simd_alternatives` marked as a decision bench.
-1. **`TestPorts` + `start_restream_child`** + **generalized harness sink** — done.
-2. **Migrate in-process tests to live** — done. All `MediaEngine::new()` direct-call tests
-   deleted: `hls-put`, `burst-verify`, `matrix`, `matrix-in-memory`, `hevc-load`,
-   `network`, `in-process`. No whitebox tier exists; the engine is only tested via unit
-   tests and through the binary.
-3. **`api-smoke`** — done, in the default suite.
-4. **Expand `mixed-*` assertions** — done. `mixed.live.srt.h264.a1` now includes:
-   - `sink-probe` (DTS monotonicity, video/audio/keyframe counts via harness RTMP sink)
-   - `hls-put-probe` (HLS PUT upload: playlist, content types, segment decode via harness
-     HTTP PUT sink)
-   - `burst-graph` (ring buffer burst stats via `/api/v1/pipelines/:id/graph` API)
-5. **Fault resilience + file ingest coverage** — done. New test modes:
-   - `fault.resilience`: publisher disconnect detection (RTMP kill → input off, SRT kill →
-     input off, file-ingest stop → input off) and egress sink disappearance (RTMP sink
-     gone → output error/reconnect, SRT sink gone → output error/reconnect).
-   - `mixed.asset.file.h264.a1` and `mixed.asset.file.h264.a2`: file-ingest as input source with RTMP+SRT egress mixed-input load.
-   - `wait_for_api_input_off()` helper verifies `/api/v1/engine/health` transitions to `"off"` within
-     a timeout after publisher disconnects.
+- Add a unit/component test when the invariant can be proved without real I/O.
+- Add or extend a live scenario when the invariant crosses a process, protocol,
+  persistence, or lifecycle boundary.
+- Prefer enriching an existing representative live run over adding another
+  single-purpose end-to-end pipeline.
+- Use checked-in fixtures through `src/test_fixtures.rs`.
+- Keep fault injection close to the parser or state machine unless the fault's
+  externally visible recovery behavior requires the live tier.
+- Treat benchmarks and scale runs as evidence only after the relevant
+  correctness gates pass.

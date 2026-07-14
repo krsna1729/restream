@@ -7,10 +7,10 @@ It does not expose a Prometheus text endpoint, proxy Grafana, or poll a sidecar.
 ## Contents
 
 - [Endpoints](#endpoints)
-- [/api/v1/engine/health Field Derivation](#apiv1enginehealth-field-derivation)
-- [Diagnostic Checks](#diagnostic-checks)
-- [Known Instrumentation Gaps](#known-instrumentation-gaps)
-- [Application Residency Design](#application-residency-design)
+- [/api/v1/engine/health field derivation](#apiv1enginehealth-field-derivation)
+- [Diagnostic checks](#diagnostic-checks)
+- [Known instrumentation gaps](#known-instrumentation-gaps)
+- [Future instrumentation](#future-instrumentation)
 - [Prometheus and Grafana](#prometheus-and-grafana)
 
 ## Endpoints
@@ -29,8 +29,8 @@ It does not expose a Prometheus text endpoint, proxy Grafana, or poll a sidecar.
 | `GET /api/v1/overview` | Session | Engine-wide operator summary: pipeline counts, alert rollup, SRT listener |
 | `GET /api/v1/alerts` | Session | Aggregate alerts across all pipelines with `firstSeen`/`lastSeen` tracking |
 | `GET /api/v1/events` | Session | Lifecycle event log (ingest, stage, egress transitions) |
-| `GET /api/logs` | Session | Process log query: level, module, pipeline, time range, event class filters |
-| `GET /api/logs/stream` | Session | SSE live tail with Last-Event-ID resumption and 20 s heartbeat |
+| `GET /api/v1/logs` | Session | Process log query: level, module, pipeline, time range, event class filters |
+| `GET /api/v1/logs/stream` | Session | SSE live tail with Last-Event-ID resumption and 20 s heartbeat |
 | `GET /api/v1/pipelines/:id/summary` | Session | Operator pipeline view: source, outputs, alerts |
 | `GET /api/v1/pipelines/:id/alerts` | Session | Per-pipeline alert list |
 | `GET /api/v1/engine/telemetry` | Session | Engineer: all ingests, stages, egresses, transcoder buffers |
@@ -39,12 +39,12 @@ It does not expose a Prometheus text endpoint, proxy Grafana, or poll a sidecar.
 
 See [API Reference](api-reference.md) for request/response details.
 
-## `/api/v1/engine/health` Field Derivation
+## `/api/v1/engine/health` field derivation
 
 `GET /api/v1/engine/health` is built on demand from native `MediaEngine` state and per-pipeline
 recording settings in SQLite.
 
-### Top-Level Shape
+### Top-level shape
 
 ```json
 {
@@ -62,7 +62,7 @@ recording settings in SQLite.
 
 `status` is currently always `ready` when the handler returns.
 
-### Input Status
+### Input status
 
 | Condition | `input.status` |
 |---|---|
@@ -90,7 +90,7 @@ live source-ring readers, and `readerMetrics` exposes each reader's lag slots,
 overflow count, unread packet age, read/write indexes, and burst-size stats.
 `unexpectedReaders.count` remains a placeholder.
 
-### RTMP Publisher Quality
+### RTMP publisher quality
 
 On Linux, the accepted socket is queried with `TCP_INFO` and `SO_MEMINFO` about
 every two seconds. Fields include RTT, receive RTT, bytes received,
@@ -100,7 +100,7 @@ occupancy, and a rate derived from consecutive byte samples.
 The first rate sample is unavailable (no prior counter exists). On unsupported
 hosts or collection failure, `tcpStatsUnavailableReason` explains the absence.
 
-### SRT Publisher Quality
+### SRT publisher quality
 
 The receive loop samples `srt_bistats()` approximately once per second.
 Cumulative loss/drop/retransmit/undecrypt counters are retained for context;
@@ -120,7 +120,7 @@ bonded publishers it additionally reports:
 
 The member-count fields are omitted for ordinary single-link publishers.
 
-### Output Status
+### Output status
 
 Active native egresses appear in `pipelines[id].outputs`:
 
@@ -200,7 +200,7 @@ hangs, the output surfaces a structured `upload_segment` or `upload_playlist`
 failure and transitions through the normal retrying/backoff contract instead of
 remaining wedged in an active-but-stuck sender loop.
 
-### Egress Telemetry Parity Status
+### Egress telemetry parity status
 
 Implemented egress parity:
 
@@ -238,7 +238,7 @@ as:
 }
 ```
 
-### Recording State
+### Recording state
 
 ```json
 {
@@ -252,7 +252,7 @@ as:
 - `enabled` comes from SQLite key `recording_enabled:<pipelineId>`.
 - `active` reflects a live recording cancellation token.
 
-### SRT Listener State
+### SRT listener state
 
 The shared SRT listener monitor reads Linux `/proc/net/udp` and tracks:
 
@@ -265,7 +265,7 @@ These are listener-wide values, not per-pipeline. `bondingAvailable: false`
 means ordinary SRT works but the pinned repo-managed libsrt build was not
 prepared with bonding support or the wrong binary was linked.
 
-## Diagnostic Checks
+## Diagnostic checks
 
 The JSON diagnostic run (`POST /api/v1/pipelines/:id/diagnostics/run`) is
 protocol-aware and infers the protocol from the active ingest; the request has
@@ -308,7 +308,7 @@ and reports any kernel drop count.
 The active ingest selects the RTMP, SRT, or file check set. Returns `404`
 without an active ingest.
 
-## Known Instrumentation Gaps
+## Known instrumentation gaps
 
 These should be fixed before adding new timing work:
 
@@ -325,71 +325,27 @@ These should be fixed before adding new timing work:
   Diagnostics must still avoid implying those mux paths are healthy merely
   because their task/token is active.
 
-## Application Residency Design
+## Future instrumentation
 
-The diagnostics design treats application residency, reader lag, packet
-lineage, and transcode lineage as future instrumentation work.
+Packet-residency and end-to-end lineage timing are not part of the current API
+contract. If added, they must preserve these boundaries:
 
-### Design Principles
+- no per-packet allocation, logging, serialization, or shared global lock;
+- application residence time remains separate from media PTS/DTS;
+- timing begins and ends only where the same packet identity survives;
+- transcoders terminate source-packet lineage because they create new packets;
+- task-local fixed-size aggregates publish compact snapshots at the existing
+  health/diagnostic interval;
+- every instrumentation change includes a before/after hot-path benchmark.
 
-- **Protect the hot path**: no per-packet allocation, lock, logging, or
-  serialization for diagnostics.
-- **Measure only where lineage exists**: start timing at the first boundary
-  where a media packet has a stable identity; stop at the last boundary where
-  that identity is still available.
-- **Preserve media time separately**: PTS/DTS describe the media timeline;
-  application timestamps describe processing and queue residence.
+Useful future analyses include queue residence, direct-ingest-to-egress
+latency, timestamp discontinuities, GOP stability, A/V interleaving, and
+publisher stalls. Decode-only properties should continue to use explicit
+readback evidence unless decoded frames already exist in the production path.
 
-### Minimal Packet Timing Contract (not yet implemented)
-
-```rust
-pub struct PacketTiming {
-    pub pipeline_enter_ns: u64,
-    pub ring_push_ns: u64,
-}
-```
-
-### Traceable Boundaries
-
-| Path | Start | End | Notes |
-|---|---|---|---|
-| RTMP ingest → RTMP egress | `MediaPacket` creation | `socket.write_all()` completion | Full lineage available |
-| SRT ingest → SRT egress | TsDemuxer packet output | `srt_send()` completion | Full lineage available |
-| Through transcoder | Source packet | Transcoder `MemoryQueue` write | Lineage ends at queue write; transcoder creates new packets |
-| HLS / recording | Source packet | Component `MemoryQueue` write | Lineage ends at queue write |
-
-### Low-Overhead Aggregation
-
-Keep mutable diagnostic aggregates with the task or reader that already owns
-the operation. Do not update a shared global histogram from every packet. Once
-per health/diagnostic interval, publish a compact immutable snapshot to the
-engine.
-
-### Implementation Sequence
-
-1. Correct existing diagnostics (ring-buffer semantics, stale ffprobe claims).
-2. Add `packet_id` and two initial timestamps to `MediaPacket`.
-3. Add fixed-size residency histograms and packet-lineage timestamps.
-4. Instrument direct RTMP and SRT egress call boundaries.
-5. Port useful old ffprobe analyses (bitrate, GOP, PTS/DTS validation,
-   interleaving, stall detection) from existing packet metadata.
-6. Benchmark with diagnostics enabled vs disabled.
-
-### Analyses From the Old ffprobe Code
-
-These should move in-process when the required packet data exists:
-
-- codec, profile, dimensions, FPS, sample rate, channels, and format checks
-- packet counts and bitrate by media type and track
-- PTS/DTS monotonicity, duplicates, discontinuities, and missing timestamps
-- audio/video packet interleaving and startup gap
-- keyframe interval and GOP stability
-- A/V clock drift
-- decode warnings and missing references
-- publisher stalls from sampled counters
-
-Decoded-frame-only checks should wait until frames naturally exist in the
-processing path.
+This section records constraints, not an implementation sequence. Concrete
+work belongs in [current priorities](current-priorities.md) or the quality
+backlog with a named proof and performance gate.
 
 ## Prometheus and Grafana
 

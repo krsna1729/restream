@@ -8,6 +8,7 @@
 ## Contents
 
 - [Progress Log](#progress-log)
+- [Resource-sharing footprint (2026-06-23)](#resource-sharing-footprint-2026-06-23)
 - [Hot-Path Layout Follow-Up Audit (2026-07-02)](#hot-path-layout-follow-up-audit-2026-07-02)
 - [Per-Frame Allocation Audit (2026-06-23)](#per-frame-allocation-audit-2026-06-23)
 
@@ -49,6 +50,25 @@
 | BytesMut burst alloc in SRT shared muxer | Complete | `srt.rs` shared muxer replaced per-chunk `Bytes::copy_from_slice` (one `malloc+memcpy` per muxed packet) with a single `BytesMut::with_capacity(65536)` per burst, then `Bytes::slice()` for each chunk (refcount bump only, no malloc). Benchmark `ts_chunk_burst_alloc` (bench-dev, x86-64 Zen): `per_chunk_copy_from_slice` ~3.93 µs vs `burst_bytesmut_then_slice` ~2.23 µs per 32-chunk burst — **~43% faster**, ~1.7 µs saved per burst. |
 | Batched external transcoder stdin writes | Complete | `external_transcoder.rs` now accumulates all feedable packets from a 32-packet ring burst into one stdin write while preserving packet/byte metrics via `record_in_batch`. Benchmark `data_path/burst_mux_write` (`--profile bench`, 2026-07-02): per-packet write ~33.0 µs vs batch accumulate write ~12.1 µs per 32-packet burst, about **63% lower** in the modeled queue/write path. |
 | `TsMuxer::mux_packet_by_stream_idx` hot-path bypass | Complete | `TsPacketFeeder::extend_ts_for_packet` already computes `stream_idx` for `DtsEnforcer`; it now passes that index straight to a new `mux_packet_by_stream_idx()` entry point instead of letting `mux_packet()` redo an equivalent linear `(media_type, track_index)` scan. Benchmark `stage_feeder` (`--profile bench`, `--baseline before_stream_idx_bypass`, 2026-07-03): `single_packet/audio_raw_aac_200b` ~72.2 ns → ~46.2 ns (**~35.6% lower**, p<0.05); `burst/30_video_30_audio_packets` ~33.4 µs → ~33.4 µs (**~4.1% lower**, p<0.05); `single_packet/video_raw_h264_8k` and `multi_audio/64_audio_packets_16_tracks` showed no significant change; the unrelated `dts_enforcer` control group was flat, confirming the comparison methodology. |
+
+## Resource-sharing footprint (2026-06-23)
+
+Bitrate scaling and load tests at 1.5, 4.0, and 8.0 Mbps produced this dated
+resource snapshot:
+
+- One external FFmpeg subprocess served each unique pipeline/preset stage and
+  held roughly 422–431 MB across the tested bitrates.
+- In-process H.265-to-H.264 conversion was shared per upstream key. Each tested
+  converter used roughly 67–83% of one core and added about 130–180 MB to the
+  Restream process. Source and preset upstreams remained separate stages.
+- Each RTMP or SRT destination kept its own sender task and lightweight packet
+  formatting. The observed incremental footprint was roughly 350 KB–1 MB per
+  output with negligible CPU in this run.
+
+These values describe that machine, build, fixture, and date. The maintained
+[media pipeline](../media-pipeline.md) documents the sharing contract without
+carrying the measurements forward as current capacity claims.
+
 ## Hot-Path Layout Follow-Up Audit (2026-07-02)
 
 The current layout audit did not find a justified custom-SIMD replacement for

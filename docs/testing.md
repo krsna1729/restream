@@ -1,16 +1,22 @@
 # Testing
 
+This is the current verification guide. Start with the smallest gate that can
+prove the changed behavior, then broaden according to the affected boundary.
+The accepted tiering rationale lives in the
+[testing decision record](testing-strategy.md); current commands and policies
+live here and in `AGENTS.md`.
+
 ## Contents
 
-- [Rust Test Suite](#rust-test-suite)
-- [Frontend Test Split](#frontend-test-split)
-- [Parallelism Policy](#parallelism-policy)
-- [Scoped Verification Loop](#scoped-verification-loop)
+- [Rust test suite](#rust-test-suite)
+- [Frontend test split](#frontend-test-split)
+- [Parallelism policy](#parallelism-policy)
+- [Scoped verification loop](#scoped-verification-loop)
 - [Evidence and generated inventories](#evidence-and-generated-inventories)
 - [Live integration tests](#live-integration-tests)
-- [Capability Gates](#capability-gates)
+- [Capability gates](#capability-gates)
 
-## Rust Test Suite
+## Rust test suite
 
 Run the repo gate:
 
@@ -33,7 +39,8 @@ scripts/build/resource-limit.sh cargo test
 Keep successful logs quiet. New tests should not land with compiler warnings,
 panic text, FFmpeg probe chatter, or similar “expected noise” in passing runs;
 fix or suppress that output at the helper level instead.
-## Frontend Test Split
+
+## Frontend test split
 
 Frontend confidence is intentionally split between TypeScript ownership and
 compiled-bundle smoke coverage:
@@ -57,7 +64,7 @@ This keeps detailed behavior and coverage attached to the TypeScript source of
 truth without dropping confidence in the emitted browser bundle, while avoiding
 misleading Node-only coverage targets for browser-heavy modules.
 
-### Layered UI Strategy
+### Layered UI strategy
 
 Treat frontend confidence as four layers, each owning a different kind of risk:
 
@@ -90,7 +97,7 @@ For the native fMP4 preview path specifically:
   proves the full browser flow against the running app, including real video
   load and alternate-audio selection.
 
-### UI Scenario Matrices
+### UI scenario matrices
 
 When a dashboard surface starts accumulating too many manual "click every state"
 checks, add a fake-DOM scenario matrix instead of growing Playwright coverage
@@ -125,7 +132,7 @@ Historical architecture-regression artifacts are indexed in
 failure class to its durable fixture, harness replay command, generated-artifact
 location, or proof gate; generated `.local/artifacts/` run directories remain
 uncommitted.
-## Parallelism Policy
+## Parallelism policy
 
 Keep correctness throughput high, but treat measurement fidelity as a separate
 constraint.
@@ -144,7 +151,7 @@ constraint.
   measurement. `scripts/build/resource-limit.sh cargo bench --no-run` is the safe fan-out
   step; actual `cargo bench --bench ...` execution should stay serial unless the
   runs are explicitly resource-isolated.
-## Scoped Verification Loop
+## Scoped verification loop
 
 Prefer the smallest test and benchmark set that directly covers the changed
 behavior, then broaden only when the risk calls for it. This keeps agent and
@@ -184,7 +191,7 @@ changes a shared contract, affects protocol behavior, or touches a hot path
 whose blast radius is unclear. If an unrelated full-suite test or benchmark
 fails, report it separately from the scoped signal for the current change.
 
-### Composable Verification Stages
+### Composable verification stages
 
 Large suites should be broken into named stages that can run independently and
 compose into larger gates. A failure in one stage should identify the affected
@@ -328,7 +335,7 @@ For the rationale behind this split, see
 [testing-strategy.md](testing-strategy.md). For protocol-specific execution,
 use the canonical protocol-test skill or inspect the relevant catalog plan.
 
-## Capability Gates
+## Capability gates
 
 These capabilities must be treated as test results, not assumptions:
 

@@ -1,416 +1,185 @@
-# Logging Architecture
+# Logging
 
-Restream uses the `tracing` ecosystem as a unified logging facade. All
-`println!`/`eprintln!` callsites are replaced with structured macros
-(`error!`, `warn!`, `info!`, `debug!`, `trace!`). A single subscriber
-fans events out to four independent sinks simultaneously. Process logs
-are queryable and streamable via `/api/logs` and `/api/logs/stream`.
+Restream uses `tracing` for process logs and lifecycle events. A callsite emits
+one structured event; the logging subsystem writes it to the console, an
+optional daily JSON file, and SQLite-backed history. Persisted rows are then
+broadcast to authenticated SSE clients.
 
-This document covers the logging architecture only. The former `job_logs`
-and `lifecycle_events` tables have been removed; all durable log storage
-now goes through `app_logs`. The history UI calls `/api/logs` with
-`pipeline_id`/`output_id`/`event_class` filters instead of relying on the
-pipeline-scoped history endpoints.
+This guide owns the runtime design, level policy, and callsite rules. The
+[API reference](api-reference.md#process-logs) owns request and response
+details, while [configuration](configuration.md) owns environment variables
+and defaults.
 
 ## Contents
 
-- [Overview](#overview)
-- [Level Policy](#level-policy)
-- [Sinks](#sinks)
-- [Spans and Pipeline Context](#spans-and-pipeline-context)
-- [API](#api)
-- [src/logging.rs](#srcloggingrs)
-- [Dependency additions](#dependency-additions)
-- [Callsite conventions](#callsite-conventions)
-- [Level decisions and audit evidence](#level-decisions-and-audit-evidence)
+- [Data flow](#data-flow)
+- [Level policy](#level-policy)
+- [Sinks and persistence](#sinks-and-persistence)
+- [Pipeline and output context](#pipeline-and-output-context)
+- [Query and live-tail API](#query-and-live-tail-api)
+- [Callsite rules](#callsite-rules)
+- [Implementation map](#implementation-map)
 - [Invariants](#invariants)
 
-## Overview
+## Data flow
 
 ```text
-callsites (error! warn! info! debug! trace!)
+tracing callsite
     |
-    v
-tracing facade  (compile-time level strip via Cargo features)
-    |
-    v
-tracing_subscriber::Registry + EnvFilter
-    |
-    +---> fmt::Layer      --> stdout / stderr
-    +---> FileLayer       --> optional RESTREAM_LOG_DIR/restream.log.YYYY-MM-DD
-    +---> DbLayer         --> app_logs table (SQLite, batched)
-    `---> BroadcastLayer  --> tokio broadcast channel --> SSE subscribers
-                                                          (GET /api/logs/stream)
+    +-- console layer -------------> stdout / stderr
+    +-- non-blocking file layer ---> restream.log.YYYY-MM-DD
+    `-- non-blocking DB layer -----> bounded channel
+                                      |
+                                      v
+                              batched SQLite commit
+                                      |
+                                      v
+                              broadcast persisted row
+                                      |
+                                      v
+                              /api/v1/logs/stream
 ```
 
-Hot paths (`src/media/ring_buffer.rs`, `src/media/avio.rs`) carry zero
-logging. The architecture enforces this by convention: those modules
-contain no tracing macro calls, and the CI clippy pass will catch any
-accidental addition.
+There are three subscriber layers. SSE is not a fourth tracing layer: the
+background database task broadcasts rows only after their transaction commits,
+so reconnect cursors always refer to durable positive IDs.
 
-## Level Policy
+`Cargo.toml` enables `tracing`'s `max_level_debug` feature, so `trace!`
+callsites are compiled out. `RUST_LOG`, defaulting to `info`, filters the
+console and file layers. SQLite history independently retains all compiled
+`error`, `warn`, and `info` events.
 
-Levels follow RFC 5424 severity ordering, narrowed to five:
+## Level policy
 
-| Level | Used for |
+| Level | Use it for |
 |---|---|
-| `error` | A task or delivery path has stopped due to a fault that is not the remote client's fault — socket allocation failure, FFmpeg crash, DB write failure, panic in an egress task |
-| `warn` | Recoverable or expected-from-clients problems — invalid stream key, auth rejection, client disconnect mid-session, resource limits reached, transient accept errors |
-| `info` | Lifecycle transitions an operator cares about — server start, ingest connect/disconnect, egress start/stop, codec discovered, ring reader registered/deregistered |
-| `debug` | Internal diagnostics useful during investigation — ring buffer creation, AVIO queue creation, stage sweeping, FFmpeg stdout close on normal shutdown |
-| `trace` | Reserved — not used in production. Available for one-off local investigation only. |
+| `error` | A system fault stopped a task or delivery path and requires operator attention: database failure, panic, unrecoverable allocation/setup failure, or a crashed media worker. |
+| `warn` | A recoverable or client-caused condition: rejected authentication, malformed input, destination refusal followed by retry, transient network failure, or enforced resource limit. |
+| `info` | An operator-visible lifecycle transition: server readiness, ingest connect/disconnect, output start/stop/retry, recording transition, or codec discovery. |
+| `debug` | Investigation detail about internal mechanisms, reconciliation, registry changes, or setup that would obscure normal lifecycle events. |
 
-### Deciding between `error` and `warn`
+Two questions usually settle the level:
 
-The key question is: **who is at fault and does the process continue?**
+1. Did the system lose the ability to deliver this task or stream? Use
+   `error`; otherwise prefer `warn` for a condition it can reject or recover.
+2. Would an operator need the event to reconstruct the lifecycle? Use `info`;
+   otherwise use `debug`.
 
-- **`error`**: system cannot continue delivering for this pipeline/output — e.g., egress
-  socket creation failed, FFmpeg child crashed, DB write failed. Something that would
-  page an on-call engineer.
-- **`warn`**: a remote client did something unexpected, or a transient condition that the
-  process will recover from automatically — e.g., client sent an invalid stream key,
-  connection was rejected by the destination (retry will follow), accept loop got a
-  transient error.
+Do not promote destination failures to `error` merely because they are
+important to one output. If the reconciler will retry a remote refusal, it is a
+recoverable `warn`; emit `error` when the local delivery task itself cannot
+continue safely.
 
-### Deciding between `info` and `debug`
+## Sinks and persistence
 
-- **`info`**: an operator reading logs should see it — state changes that matter for
-  understanding what the system was doing at a point in time.
-- **`debug`**: implementation detail useful when actively investigating an issue — fires
-  frequently enough (e.g., every reconciler tick) that it would obscure `info` events
-  in production, or is an internal mechanism the operator doesn't need unless debugging.
+### Console
 
-### Compile-time stripping
+`error` and `warn` go to stderr. `info` and `debug` go to stdout. Both use the
+standard text formatter with module targets; ANSI color follows the configured
+`no_color` setting.
 
-```toml
-# Cargo.toml  — dev / CI
-[dependencies]
-tracing = { version = "0.1", features = ["max_level_debug"] }
+### Daily file
 
-# Cargo.toml  — release / bench profile
-# strip debug + trace at compile time; call sites become dead code
-[profile.bench.package.tracing]
-# set via feature flag in Cargo.toml profile section:
-# tracing = { version = "0.1", features = ["release_max_level_info"] }
-```
+The file layer writes JSON through `tracing_appender::non_blocking`. It rolls
+daily under `RESTREAM_LOG_DIR` using names such as
+`restream.log.2026-07-14`. The default directory is `.restream/logs/`; an empty
+value disables this sink. `LoggingHandles` retains the writer guard for the
+process lifetime so buffered events flush during shutdown.
 
-At compile time with `release_max_level_info`, the `debug!` and `trace!`
-macros expand to nothing. The optimizer removes the branches entirely —
-no string formatting, no function call overhead. `error`, `warn`, and
-`info` remain fully instrumented.
+`RESTREAM_LOG_RETENTION_DAYS` applies to SQLite history cleanup, not deletion
+of rolled files. File retention belongs to the host or container log policy.
 
-For extreme performance investigation where even `info` overhead is
-measurable, rebuild with `release_max_level_warn`.
+### SQLite history and SSE handoff
 
-### Runtime filtering
+The database layer accepts `error`, `warn`, and `info` events. Its callsite path
+uses `try_send` into a bounded channel with capacity 4096 and never waits for
+SQLite. If the channel is full, the event is dropped rather than applying
+backpressure to application work.
 
-At runtime, `RUST_LOG` controls which compiled-in levels actually reach
-subscribers:
+The background task collects at most 64 rows or waits 100 ms, then commits the
+batch to `app_logs`. Only committed rows are broadcast. The broadcast channel
+holds 256 rows; a lagged SSE receiver is closed so the client can reconnect and
+backfill from its last durable event ID.
 
-```sh
-# default
-RUST_LOG=info
+SQLite history retains `RESTREAM_LOG_RETENTION_DAYS` days, defaulting to seven.
+The reconciler performs cleanup periodically.
 
-# verbose SRT debugging without flooding other modules
-RUST_LOG=info,restream::media::srt=debug
+## Pipeline and output context
 
-# silence noisy module
-RUST_LOG=info,restream::media::h264_transcoder=warn
-```
-
-`EnvFilter` is evaluated once per event before any sink is touched.
-
-## Sinks
-
-### 1. fmt::Layer — stdout / stderr
-
-`error!` events go to stderr; all others go to stdout. The stdout/stderr
-format is the default `tracing_subscriber` text formatter, while the file
-sink uses JSON.
-
-JSON format makes log lines parseable by Datadog, Loki, Cloud Logging,
-and similar without a parsing rule.
-
-### 2. FileLayer — rolling file
-
-Uses `tracing-appender::rolling::daily(RESTREAM_LOG_DIR, "restream.log")` wrapped
-in `non_blocking()`. The file sink runs in a background OS thread;
-callsites never block on disk I/O.
-
-The `WorkerGuard` returned by `non_blocking()` is held for the process
-lifetime in `run_app()`. On shutdown the guard is dropped last, flushing
-any buffered lines before the process exits.
-
-File names: `RESTREAM_LOG_DIR/restream.log.2026-06-27`. No log rotation library is
-required — daily rotation is built into `tracing-appender`.
-
-The default directory is `.restream/logs/`. Set `RESTREAM_LOG_DIR` to place
-rotated JSON log files elsewhere, or to an empty string to disable the file
-sink while keeping stdout/stderr and SQLite-backed history active.
-
-### 3. DbLayer — SQLite (`app_logs` table)
-
-The `DbLayer::on_event()` implementation does one thing: push a
-`LogEntry` onto a bounded `mpsc` channel (capacity 4096). A dedicated
-tokio task drains the channel and batch-inserts rows every 100 ms using
-a single `INSERT INTO app_logs VALUES (...),(...),...`.
-
-If the channel is full (consumer can't keep up), the layer calls
-`try_send` and silently drops the entry rather than blocking the
-callsite. A counter tracks drops and is included in the next successful
-batch via a synthetic `warn` row.
-
-Only `≥ info` level events are written to the database. `debug` and
-`trace` are filtered before the channel send.
-
-#### Schema
-
-```sql
-CREATE TABLE IF NOT EXISTS app_logs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts          TEXT    NOT NULL,           -- RFC3339
-    level       TEXT    NOT NULL,           -- ERROR / WARN / INFO / DEBUG
-    target      TEXT    NOT NULL,           -- module path: "restream::media::srt"
-    message     TEXT    NOT NULL,
-    fields      TEXT,                       -- JSON object of structured fields
-    pipeline_id TEXT,                       -- populated from enclosing span when available
-    output_id   TEXT                        -- populated from enclosing span when available
-);
-
-CREATE INDEX idx_app_logs_ts       ON app_logs(ts DESC);
-CREATE INDEX idx_app_logs_level    ON app_logs(level, ts DESC);
-CREATE INDEX idx_app_logs_target   ON app_logs(target, ts DESC);
-CREATE INDEX idx_app_logs_pipeline ON app_logs(pipeline_id, ts DESC)
-    WHERE pipeline_id IS NOT NULL;
-```
-
-Retention is controlled by `RESTREAM_LOG_RETENTION_DAYS` (default: 7).
-A cleanup task runs once per hour and calls
-`DELETE FROM app_logs WHERE ts < datetime('now', '-N days')`.
-
-### 4. BroadcastLayer — SSE live tail
-
-`BroadcastLayer::on_event()` calls `broadcast::Sender::send()` on a
-channel with capacity 256. If all receivers are caught up this is a
-non-blocking clone of the `LogEntry`. If a receiver's buffer is full,
-`broadcast` automatically marks it as lagged and the next `recv()` on
-that receiver returns `RecvError::Lagged` — the SSE handler closes that
-connection so the client reconnects and backfills from the database.
-
-Only `≥ info` level events are broadcast.
-
-## Spans and Pipeline Context
-
-`tracing` spans propagate structured context to all child events. Wrap
-long-lived work units in a span so that `pipeline_id` and `output_id`
-are injected automatically:
+Long-lived work should carry `pipeline_id` and, when applicable, `output_id`.
+Callsites may provide those fields directly or inherit them from an enclosing
+span. For spawned async work, instrument the future so the context crosses the
+task boundary:
 
 ```rust
-// In the reconciler before spawning an egress task:
 let span = tracing::info_span!(
     "egress",
     pipeline_id = %pipeline_id,
-    output_id   = %output_id,
+    output_id = %output_id,
 );
-let _guard = span.enter();
 
-// All info!/warn!/error! inside this scope carry pipeline_id + output_id.
-// DbLayer extracts these from the span's field set and populates the
-// indexed columns in app_logs.
-info!(url = %target_url, "starting egress");
+tokio::spawn(run_output().instrument(span));
 ```
 
-This lets `/api/logs?pipeline_id=abc123` return all log entries for a
-pipeline across every module without manual tagging at each callsite.
+Lifecycle events also provide stable `event_class` and `event_type` fields.
+The dashboard uses those fields to group history without parsing human-readable
+messages.
 
-## API
+## Query and live-tail API
 
-### `GET /api/logs`
+Both endpoints require an authenticated session:
 
-Returns paginated log entries from the `app_logs` table.
+- `GET /api/v1/logs` returns persisted rows and supports level, time, target,
+  scope, pipeline, output, event-class, message-prefix, cursor, ordering, and
+  limit filters.
+- `GET /api/v1/logs/stream` returns `event: log` SSE frames, supports the core
+  scope filters, and sends a heartbeat every 20 seconds.
 
-**Authentication:** session token required (same as all authenticated endpoints).
+The stream resumes from the `Last-Event-ID` header or `last_event_id` query
+parameter. Backfill reads SQLite in ascending ID order before switching to the
+live broadcast. If the receiver falls behind, the server closes the stream;
+browser reconnection resumes from the last delivered durable ID.
 
-**Query parameters:**
+See the [process-log API reference](api-reference.md#process-logs) for the
+complete filter and response contract.
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `level` | `error\|warn\|info\|debug` | `info` | Minimum level |
-| `since` | RFC3339 | — | Inclusive lower bound on `ts` |
-| `until` | RFC3339 | — | Exclusive upper bound on `ts` |
-| `target` | string | — | Module prefix filter (`restream::media::srt`) |
-| `pipeline_id` | string | — | Restrict to a single pipeline |
-| `output_id` | string | — | Restrict to a single output (requires `pipeline_id`) |
-| `limit` | integer | `200` | 1–1000 |
-| `order` | `asc\|desc` | `desc` | Sort order on `ts` |
+## Callsite rules
 
-**Response:**
+- Use structured fields instead of embedding identifiers in message text.
+- Keep messages stable and human-readable; use `event_type` for machine-facing
+  lifecycle classification.
+- Do not add `[module]` prefixes. The tracing target already identifies the
+  source module.
+- Never log inside packet-level push, pull, read, mux, demux, or send loops.
+- Control operations such as stage creation, reader registration, resize, or
+  teardown may log at `debug` or `info` according to operator value.
+- Passing tests should not emit expected warnings, panic text, or media-tool
+  chatter. Suppress expected noise at the test helper.
+- Keep point-in-time callsite inventories in dated evidence, not this guide.
 
-```json
-{
-  "logs": [
-    {
-      "id": 4522,
-      "ts": "2026-06-27T14:23:05.123Z",
-      "level": "INFO",
-      "target": "restream::media::srt",
-      "message": "ingest connected",
-      "fields": { "stream_id": "live/abc", "remote": "1.2.3.4:5000" },
-      "pipelineId": "abc123",
-      "outputId": null
-    }
-  ],
-  "total": 1,
-  "hasMore": false
-}
-```
+For a level audit, enumerate current callsites from `src/`, apply the policy
+above, fix mismatches with scoped tests, and update this document only when the
+policy or an invariant changes.
 
-### `GET /api/logs/stream`
+## Implementation map
 
-SSE live tail of new log entries. Accepts the same query parameters as
-`GET /api/logs` for filtering.
-
-**Connection flow:**
-
-1. On connect, handler reads `Last-Event-ID` header (or `?last_event_id=`
-   query param) and backfills any entries with `id > last_event_id` from
-   the database as `event: log` frames.
-2. Handler subscribes to the broadcast channel.
-3. Incoming broadcast entries that match the caller's filter are sent as
-   `event: log` frames.
-4. A `event: ping` comment (`: ping`) is sent every 20 seconds to keep
-   the connection alive through proxies.
-
-**SSE frame format:**
-
-```
-id: 4523
-event: log
-data: {"id":4523,"ts":"2026-06-27T14:23:06Z","level":"WARN","target":"restream::media::engine","message":"ring buffer 80% full","fields":{"fill":0.80},"pipelineId":"abc123","outputId":null}
-
-: ping
-
-```
-
-**Client reconnection:** browsers reconnect automatically on dropped SSE
-connections and send `Last-Event-ID: 4523`. The handler backfills missed
-entries from the database, then resumes the live tail. No entries are
-lost as long as the reconnect happens within the `app_logs` retention
-window (default 7 days).
-
-**Response headers:**
-
-```
-Content-Type:      text/event-stream
-Cache-Control:     no-cache
-X-Accel-Buffering: no
-```
-
-`X-Accel-Buffering: no` disables nginx upstream buffering if nginx sits
-in front. Cloudflare Tunnel (cloudflared) and GCP HTTP Load Balancer
-both pass chunked transfer responses through without buffering when
-`Content-Type: text/event-stream` is set.
-
-**Infrastructure notes:**
-
-- **Cloudflare Tunnel:** cloudflared runs on the VM and streams bytes
-  directly to CF's edge. No response buffering in the tunnel path.
-  No special CF configuration required.
-- **GCP HTTP LB:** set the backend service timeout to `3600` seconds.
-  The default 30s timeout tears down streaming connections.
-  Chunked transfer is supported natively.
-
-## `src/logging.rs`
-
-All subscriber construction lives in a single module: `src/logging.rs`.
-`run_app()` calls `logging::init()` as its first action, before the
-tokio runtime spawns any tasks.
-
-```rust
-pub struct LoggingHandles {
-    pub log_tx:      mpsc::Sender<LogEntry>,      // DbLayer feed
-    pub broadcast_tx: broadcast::Sender<LogEntry>, // SSE feed
-    _file_guard:     tracing_appender::non_blocking::WorkerGuard,
-}
-
-pub fn init(db_pool: SqlitePool) -> LoggingHandles { ... }
-```
-
-`LoggingHandles` is stored in `AppState` so that:
-- `broadcast_tx` can be cloned into each `/api/logs/stream` handler.
-- `_file_guard` is kept alive for the process lifetime.
-- The DB drain task holds `log_tx`'s paired receiver.
-
-## Dependency additions
-
-```toml
-[dependencies]
-tracing            = { version = "0.1", features = ["max_level_debug"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-tracing-appender   = "0.2"
-```
-
-No other new dependencies. `tokio::sync::{mpsc, broadcast}`, `sqlx`, and
-`axum` SSE patterns are already in the tree.
-
-## Callsite conventions
-
-All `println!`/`eprintln!` calls have been replaced with tracing macros.
-The `[tag]` prefix that appeared in print messages is gone — the `target`
-field (module path) carries that information automatically.
-
-```rust
-// ✗ old
-eprintln!("[srt] socket error: {}", e);
-
-// ✓ new
-error!(err = %e, "socket error");
-```
-
-Lifecycle transition events carry `event_class = "lifecycle"` and
-`event_type` fields so the history UI can filter them:
-
-```rust
-info!(
-    pipeline_id = %pipeline_id,
-    output_id   = %output_id,
-    event_class = "lifecycle",
-    event_type  = "lifecycle.start",
-    "output job started",
-);
-```
-
-Never log inside packet-level loops in `src/media/ring_buffer.rs` or
-`src/media/avio.rs` (push, pull, read). Control operations such as
-creation, resize, or reader registration are not hot and may use `debug!`
-or `info!`.
-
-## Level decisions and audit evidence
-
-This guide owns the stable level policy and invariants, not a copied inventory
-of tracing callsites. The source tree is the callsite source of truth.
-
-For a logging audit:
-
-1. enumerate current `tracing` callsites from `src/`;
-2. evaluate non-obvious choices against the level policy above;
-3. fix mismatches with scoped tests;
-4. update this guide only if the policy or an invariant changes;
-5. put any point-in-time callsite inventory in a dated evidence artifact, not
-   in maintained prose.
-
-This keeps module splits and ordinary callsite additions from creating
-unrelated documentation churn.
+| Concern | Source of truth |
+|---|---|
+| Subscriber layers, span inheritance, batching, post-commit broadcast | `src/logging.rs` |
+| Shared log DTOs and filters | `src/logging/types.rs` |
+| SQLite schema | `src/db/schema.rs` |
+| Persistence and filtering queries | `src/db/log_repo.rs` |
+| HTTP query and SSE behavior | `src/api/logs.rs` |
+| Route registration | `src/api/router.rs` |
+| Runtime defaults | `src/config.rs` and [configuration](configuration.md) |
 
 ## Invariants
 
-- No `println!` or `eprintln!` in `src/` after migration (enforced by a
-  `clippy::print_stdout` / `clippy::print_stderr` deny in `src/lib.rs`).
-- No logging macros inside packet-level loops in `ring_buffer.rs` or `avio.rs` (push/pull/read). Control-plane paths (creation, resize, reader registration) may log.
-- `DbLayer::on_event()` and `BroadcastLayer::on_event()` must not block.
-  Both use `try_send` / non-blocking broadcast send only.
-- `WorkerGuard` for the file sink must outlive all log calls — hold it in
-  `LoggingHandles` inside `AppState`, drop after `shutdown()` completes.
-- Spans providing `pipeline_id` context must be entered before any
-  `tokio::spawn` that should carry the context; use `.instrument(span)`
-  on the future, not `span.enter()`, for async tasks.
+- No `println!` or `eprintln!` in `src/`; crate lints enforce this.
+- No logging in packet-level loops in `ring_buffer.rs` or `avio.rs`.
+- Subscriber callsites never block on SQLite or SSE consumers.
+- SSE publishes only rows that committed successfully and therefore have a
+  stable database ID.
+- The file writer guard outlives all application tasks that may emit logs.
+- Async work that needs pipeline/output inheritance uses `.instrument(span)`;
+  a temporary `span.enter()` guard must not be held across task boundaries.

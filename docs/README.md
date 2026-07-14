@@ -50,8 +50,8 @@ media behavior or a hot path.
 - [Concurrency proofing](concurrency-proofing.md) — proof ladder and gates.
 - [Stage boundary proof map](stage-boundary-proof-map.md) — current invariant
   coverage by runtime boundary.
-- [Testing strategy](testing-strategy.md) — why the repository uses unit and
-  live tiers.
+- [Testing decision record](testing-strategy.md) — why the repository uses
+  unit and live correctness tiers.
 - [Matrix resource constraints](matrix-resource-constraints.md) and
   [resource sweep](resource-sweep.md) — scale-model constraints and replay.
 - [Agent plane integration](agent-plane-integration.md) and
@@ -73,6 +73,8 @@ measurement rather than the current product contract:
   record. Use [architecture.md](architecture.md) for current behavior.
 - [Run-to-completion analysis](run-to-completion-analysis.md) — historical
   protocol-path analysis; verify volatile file maps against current code.
+- [Testing decision record](testing-strategy.md) — accepted rationale for the
+  unit/live tier boundary. Use [testing.md](testing.md) for current commands.
 - [Concurrency proof coverage report](concurrency-proof-coverage-2026-07-02.md)
   — dated proof snapshot. Use [concurrency-proofing.md](concurrency-proofing.md)
   and the stage proof map for maintained guidance.
@@ -139,7 +141,6 @@ above remain the better way to learn the system.
 - [Resource sweep](resource-sweep.md)
 - [Source distribution](source-distribution.md)
 - [Stage boundary proof map](stage-boundary-proof-map.md)
-- [Testing strategy](testing-strategy.md)
 - [Testing](testing.md)
 
 ### Plans, scenarios, and evidence
@@ -151,6 +152,7 @@ above remain the better way to learn the system.
 - [Documentation audit — 2026-07-14](documentation-audit-2026-07-14.md)
 - [Mahashivratri hero scenario](mahashivratri-hero-scenario.md)
 - [Run-to-completion analysis](run-to-completion-analysis.md)
+- [Testing decision record](testing-strategy.md)
 - [Testing snapshots — 2026-06-20 to 2026-07-01](evidence/testing-snapshots-2026-06-20-to-2026-07-01.md)
 - [High-performance audits — 2026-06-23 to 2026-07-03](evidence/high-performance-audits-2026-06-23-to-2026-07-03.md)
 - [Quality program](agent-guidance/quality/README.md)

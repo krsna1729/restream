@@ -43,7 +43,7 @@ in SQLite.
 | Failed-output restart max backoff | 300 seconds | `RESTREAM_OUTPUT_RETRY_MAX_MS` |
 | Ingest disconnect grace period | 5000 ms | `RESTREAM_INGEST_DISCONNECT_GRACE_MS` |
 | Idle HLS segmenter timeout | 60 seconds | `RESTREAM_HLS_IDLE_TIMEOUT_MS` |
-| File-log retention | 7 days | `RESTREAM_LOG_RETENTION_DAYS` |
+| SQLite log-history retention | 7 days | `RESTREAM_LOG_RETENTION_DAYS` |
 | Secure-only session cookies | Disabled | `RESTREAM_SECURE_SESSION_COOKIES` (`1`/`true` enables the `Secure` cookie attribute for HTTPS deployments) |
 | RTMP accept backlog | `1024` | `RESTREAM_RTMP_LISTENER_BACKLOG` |
 | RTMP concurrent connection cap | `512` | `RESTREAM_RTMP_MAX_CONNECTIONS` |

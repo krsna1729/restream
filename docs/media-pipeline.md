@@ -9,23 +9,21 @@ For the performance optimization plan and benchmark results, see
 
 ## Contents
 
-- [Current Shape](#current-shape)
-- [Transcoder Stages](#transcoder-stages)
-- [Protocol and Codec Boundaries](#protocol-and-codec-boundaries)
-- [Resolution Presets](#resolution-presets)
-- [H.265 Egress Policy](#h265-egress-policy)
-- [Current Protocol Matrix](#current-protocol-matrix)
-- [Minimum Work Per Consumer](#minimum-work-per-consumer)
-- [Scale Test Pipeline Paths](#scale-test-pipeline-paths)
-- [What Is Shared When Multiple Outputs Use the Same Encoding](#what-is-shared-when-multiple-outputs-use-the-same-encoding)
-- [Audio Stage Cache](#audio-stage-cache)
-- [Buffer Sizing (4K 60fps Target)](#buffer-sizing-4k-60fps-target)
-- [SRT Bonding](#srt-bonding)
-- [Protocol Correctness Requirements](#protocol-correctness-requirements)
-- [Stage Sharing Design](#stage-sharing-design)
-- [Code Gaps](#code-gaps)
+- [Current shape](#current-shape)
+- [Transcoder stages](#transcoder-stages)
+- [Protocol and codec boundaries](#protocol-and-codec-boundaries)
+- [Resolution presets](#resolution-presets)
+- [H.265 egress policy](#h265-egress-policy)
+- [Current protocol matrix](#current-protocol-matrix)
+- [Minimum work per consumer](#minimum-work-per-consumer)
+- [Harness coverage](#harness-coverage)
+- [What is shared when outputs use the same encoding](#what-is-shared-when-outputs-use-the-same-encoding)
+- [Audio stage cache](#audio-stage-cache)
+- [Buffer sizing for 4K 60fps](#buffer-sizing-for-4k-60fps)
+- [SRT bonding](#srt-bonding)
+- [Protocol correctness requirements](#protocol-correctness-requirements)
 
-## Current Shape
+## Current shape
 
 ```mermaid
 flowchart TD
@@ -74,7 +72,7 @@ flowchart TD
     SR -->|"any format · 720p"| TIN
 ```
 
-## Transcoder Stages
+## Transcoder stages
 
 Every non-passthrough encoding creates a **shared stage**: one process per
 `(pipeline_id, preset)` pair regardless of how many outputs use that preset.
@@ -182,7 +180,7 @@ most battle-tested path for production deployments. The legacy global
 
 
 
-## Protocol and Codec Boundaries
+## Protocol and codec boundaries
 
 | Area | Current state |
 |---|---|
@@ -197,7 +195,7 @@ most battle-tested path for production deployments. The legacy global
 | RTMPS output | `rtmps://` URLs accepted by API and routed through RTMP egress with Rustls wrapping before the RTMP handshake |
 | Custom output encoding | Not applied; `custom` is rejected by output create/update instead of being exposed as a passthrough runtime option |
 
-## Resolution Presets
+## Resolution presets
 
 The external transcoder stage applies `scale=WxH` and re-encodes preserving the
 input codec: `libx265 -preset veryfast` for H.265 input, `libx264 -preset
@@ -213,7 +211,7 @@ with `RESTREAM_INTERNAL_VIDEO_PRESETS=1`) uses the same preset table via
 | `1080p` | 1920×1080 | `scale=1920:1080` |
 
 
-## H.265 Egress Policy
+## H.265 egress policy
 
 Standard RTMP (non-Enhanced) does not carry H.265. The reconciler enforces:
 
@@ -227,7 +225,7 @@ Standard RTMP (non-Enhanced) does not carry H.265. The reconciler enforces:
 
 Enhanced RTMP/HEVC packetization is not implemented.
 
-## Current Protocol Matrix
+## Current protocol matrix
 
 | Ingest | RTMP egress | SRT egress | HLS preview | Recording |
 |---|---|---|---|---|
@@ -243,7 +241,7 @@ one video-only rendition plus separate audio-only playlists for alternate
 tracks. Remote HLS outputs intentionally remain MPEG-TS because HTTP PUT ingest
 targets commonly require `.ts` media segments.
 
-## Minimum Work Per Consumer
+## Minimum work per consumer
 
 All consumers that process packets from a ring buffer avoid per-packet heap
 allocation by using the zero-allocation `_into` variants:
@@ -261,227 +259,28 @@ Scratch buffers (`video_conv_buf`, `audio_conv_buf`) are allocated once at
 consumer startup and reused across packets. For `PayloadFormat::Raw` video, the
 borrowed payload slice is returned directly (zero copy).
 
-## Scale Test Pipeline Paths
+## Harness coverage
 
-`scripts/build/resource-limit.sh target/bench/test_harness mixed.matrix` exercises
-the closed-GOP input matrix. Individual rows use the scenario grammar
-`mixed.<source>.<ingest>.<video>.<audio>.<reorder>`, where `reorder` is `bf0`
-or `bf2` based on the source-side B-frame signal. The current table uses
-`source` values `live` and `asset`, ingest values `srt`, `rtmp`, and `file`,
-video values `h264` and `h265`, and audio values `a1` and `a2`. RTMP input is
-intentionally limited to `mixed.live.rtmp.h264.a1.{bf0,bf2}`, because standard
-RTMP ingest carries H.264 with one audio track in the current product contract.
-SRT and file ingest cover both H.264/H.265 and single/multi-track fixtures.
+The live harness owns the changing scenario inventory. Inspect it instead of
+copying mode and stage-count tables into this guide:
 
-Each single-track row fans out to RTMP and SRT `source`, `720p`, and `1080p`
-outputs. Each multi-track row uses the expanded selected-track table: RTMP
-always receives an explicit one-audio subset, while SRT receives both all-track
-outputs and selected one-audio subsets for `source`, `720p`, and `1080p`.
-HLS preview and recording are input-scoped assertions that run once per row
-rather than multiplying across every egress. The traces below show the exact
-mux/demux, conversion, and transcoding
-at every hop for each path. The topology does not change between `bf0` and
-`bf2`, so the path traces below use the reordered `bf2` examples.
-
-### mixed.live.rtmp.h264.a1.bf2 — H.264 RTMP ingest
-
-```
-RTMP ingest (TCP)
-  → RTMP parser / FLV demux (inline async tokio task)
-  → source_ring [Flv, H.264 + AAC]
-
-source outputs
-  RTMP-src:  source_ring ──► Bytes::clone → FLV tag → RTMP socket  (zero mux/demux)
-  SRT-src:   source_ring ──► strip 5-byte FLV video hdr
-                          ──► TsMuxer → MPEG-TS → SRT socket
-
-720p outputs  (shared: 1 ext FFmpeg subprocess for all 720p outputs)
-  source_ring
-    ──► [Flv] strip FLV hdr, inject SPS/PPS → TsMuxer → MPEG-TS → FFmpeg stdin
-    ──► [FFmpeg subprocess] scale=1280:720, libx264
-    ──► FFmpeg stdout → TsDemuxer → output_ring [Raw, H.264 + AAC]
-  RTMP-720p: output_ring ──► video_for_rtmp (AVCC wrap) → FLV tag → RTMP socket
-  SRT-720p:  output_ring ──► TsMuxer → MPEG-TS → SRT socket
+```sh
+target/bench/test_harness catalog list-modes
+target/bench/test_harness catalog plan <mode>
 ```
 
-**Stages spawned:** 1 ext FFmpeg subprocess (`video:720p`).
+The canonical scenario definitions live in `test/harness/scenarios/` and the
+generated mixed-matrix catalog under `src/bin/test_harness/`. Representative
+rows cover RTMP, SRT, and file ingest; H.264 and H.265; single- and
+multi-audio; passthrough and preset stages; B-frame timestamp behavior; and
+cross-protocol egress.
 
----
+Tests should assert the stable sharing contract rather than a copied process
+count: identical `(pipeline_id, stage_key)` values reuse expensive work, while
+each destination keeps its own sender. Current scenario composition and
+resource measurements belong to the catalog and dated evidence.
 
-### mixed.live.srt.h264.a1.bf2 — H.264 SRT ingest
-
-```
-SRT ingest (UDP)
-  → srt_recv (non-blocking + SRT epoll) → TsDemuxer (inline async tokio task)
-  → source_ring [Raw, H.264 + AAC]
-
-source outputs
-  RTMP-src:  source_ring ──► build_avcc_seq_hdr + video_for_rtmp → FLV tag → RTMP socket
-  SRT-src:   source_ring ──► TsMuxer → MPEG-TS → SRT socket  (no codec conversion)
-
-720p outputs  (same stage shape as h264-rtmp 720p)
-  source_ring
-    ──► [Raw] inject SPS/PPS from cache → TsMuxer → MPEG-TS → FFmpeg stdin
-    ──► [FFmpeg subprocess] scale=1280:720, libx264
-    ──► FFmpeg stdout → TsDemuxer → output_ring [Raw, H.264 + AAC]
-  RTMP-720p: output_ring ──► video_for_rtmp → FLV tag → RTMP socket
-  SRT-720p:  output_ring ──► TsMuxer → MPEG-TS → SRT socket
-```
-
-**Stages spawned:** 1 ext FFmpeg subprocess (`video:720p`).
-
-Key difference from `mixed.live.rtmp.h264.a1.bf2`: `source_ring` holds `Raw` packets.
-RTMP-src must reconstruct AVCC/FLV headers (`build_avcc_seq_hdr + video_for_rtmp`)
-rather than byte-cloning. SRT-src is a plain `TsMuxer` pass-through for both
-ingest types.
-
----
-
-### mixed.live.srt.h265.a1.bf2 — H.265 SRT ingest
-
-Standard RTMP cannot carry H.265. The reconciler inserts a `hevc_to_h264`
-stage **after** any video-preset transcoding, keyed by the upstream stage so
-RTMP-passthrough and RTMP-720p each get an independent converter. SRT outputs
-receive native H.265. The `video:720p` stage is shared between RTMP and SRT.
-
-```
-SRT ingest
-  → TsDemuxer (inline async)
-  → source_ring [Raw, H.265 + AAC]
-
-RTMP-src  (reconciler: needs_rtmp_h264_conv = true, is_passthrough = true)
-  source_ring ──► TsMuxer → MPEG-TS
-    ──► MemoryQueue → [int OS thread] libavcodec H.265 decode → H.264 encode
-    ──► TsDemuxer → h264_src_ring [Raw, H.264 + AAC]  (key: hevc_to_h264:from:source)
-  h264_src_ring ──► video_for_rtmp → FLV tag → RTMP socket
-
-SRT-src  (reconciler: needs_rtmp_h264_conv = false, is_passthrough = true)
-  source_ring ──► TsMuxer → MPEG-TS → SRT socket  (HEVC in MPEG-TS, no conversion)
-
-720p outputs  (shared ext FFmpeg subprocess; RTMP and SRT share the preset ring)
-  source_ring
-    ──► [Raw] inject SPS/PPS from cache → TsMuxer → MPEG-TS → FFmpeg stdin
-    ──► [FFmpeg subprocess] scale=1280:720, libx265   ← H.265 in → H.265 out
-    ──► FFmpeg stdout → TsDemuxer → output_ring [Raw, H.265 720p + AAC]
-
-SRT-720p  (needs_rtmp_h264_conv = false)
-  output_ring ──► TsMuxer → MPEG-TS → SRT socket  (H.265 720p, no conversion)
-
-RTMP-720p  (needs_rtmp_h264_conv = true)
-  output_ring ──► TsMuxer → MPEG-TS
-    ──► MemoryQueue → [int OS thread] libavcodec H.265 decode → H.264 encode
-    ──► TsDemuxer → h264_720p_ring [Raw, H.264 720p + AAC]  (key: hevc_to_h264:from:720p)
-  h264_720p_ring ──► video_for_rtmp → FLV tag → RTMP socket
-```
-
-**Stages spawned:** 1 int OS thread (`hevc_to_h264:from:source`) +
-1 ext FFmpeg subprocess (`video:720p`, libx265 encoder) +
-1 int OS thread (`hevc_to_h264:from:720p`).
-
----
-
-### mixed.live.srt.h264.a2.bf2 — H.264 SRT ingest, 2 audio tracks
-
-Publisher sends video + 2 AAC audio tracks. Compound encodings select audio tracks
-per egress type:
-- RTMP: `720p+atrack:0`   — select only track 0
-- SRT:  `720p+atrack:0,1` — pass both tracks
-
-```
-SRT ingest
-  → TsDemuxer (preserves two AAC PIDs as track 0 and track 1)
-  → source_ring [Raw, H.264 + AAC track0 + AAC track1]
-
-source outputs
-  RTMP-src / SRT-src: identical to `mixed.live.srt.h264.a1.bf2` source paths above.
-
-RTMP-720p  encoding = "720p+atrack:0"
-  source_ring → video:720p ext FFmpeg (shared) → output_ring [H.264 + track0 + track1]
-  output_ring → audio:atrack:0:from:720p (tokio task, SelectTracks{0})
-             → audio0_ring [H.264 + track0 only]
-  audio0_ring ──► video_for_rtmp → FLV tag → RTMP socket
-
-SRT-720p  encoding = "720p+atrack:0,1"
-  output_ring (same shared video:720p ring)
-  output_ring → audio:atrack:0,1:from:720p (tokio task, SelectTracks{0,1})
-             → audio01_ring [H.264 + track0 + track1]
-  audio01_ring ──► TsMuxer → MPEG-TS → SRT socket
-```
-
-**Stages spawned:** 1 ext FFmpeg subprocess (`video:720p`) + 2 audio-routing
-tokio tasks (`audio:atrack:0:from:720p` and `audio:atrack:0,1:from:720p`).
-Audio-routing stages are pure packet filters — no OS threads, no FFmpeg.
-
----
-
-### mixed.live.srt.h265.a2.bf2 — H.265 SRT ingest, 2 audio tracks
-
-Combines H.265→H.264 conversion (post-preset, RTMP only) with multi-audio
-track routing.
-
-```
-SRT ingest
-  → TsDemuxer (H.265 video + 2 AAC audio track PIDs)
-  → source_ring [Raw, H.265 + AAC track0 + AAC track1]
-
-RTMP-src / SRT-src: identical to `mixed.live.srt.h265.a1.bf2` source paths above.
-
-720p preset  (shared ext FFmpeg subprocess)
-  source_ring
-    ──► [FFmpeg subprocess] scale=1280:720, libx265
-    ──► output_ring [Raw, H.265 720p + track0 + track1]
-
-RTMP-720p  encoding = "720p+atrack:0"
-  output_ring ──► TsMuxer → MPEG-TS
-    ──► MemoryQueue → [int OS thread] libavcodec H.265 decode → H.264 encode
-    ──► TsDemuxer → h264_720p_ring  (key: hevc_to_h264:from:720p)
-  h264_720p_ring → audio:atrack:0:from:hevc_to_h264:from:720p (tokio task) → h264_audio0_ring [H.264 720p + track0]
-  h264_audio0_ring ──► video_for_rtmp → FLV tag → RTMP socket
-
-SRT-720p  encoding = "720p+atrack:0,1"
-  output_ring → audio:atrack:0,1:from:720p (tokio task) → audio01_ring
-  audio01_ring ──► TsMuxer → MPEG-TS → SRT socket
-```
-
-**Stages spawned:** 1 int OS thread (`hevc_to_h264:from:source`, for RTMP-src) +
-1 ext FFmpeg subprocess (`video:720p`, libx265) +
-2 audio-routing tokio tasks +
-1 int OS thread (`hevc_to_h264:from:720p`, shared by all RTMP selected-audio
-720p outputs).
-
----
-
-### Summary: stage counts per ingest config
-
-All counts are **per pipeline**. Stages are shared regardless of how many
-outputs use the same encoding — adding a 100th `720p` output does not spawn
-a second subprocess.
-
-| Ingest config | Ext FFmpeg subprocesses | Int OS threads | Audio-routing tokio tasks |
-|---|:---:|:---:|:---:|
-| `h264-*-single` | 2 (`video:720p`, `video:1080p`) | 0 | 0 |
-| `h265-*-single` | 2 (`video:720p`, `video:1080p`) | 3 (`hevc_to_h264` from `source`, `720p`, `1080p`) | 0 |
-| `h264-*-multi` | 2 (`video:720p`, `video:1080p`) | 0 | 6 |
-| `h265-*-multi` | 2 (`video:720p`, `video:1080p`) | 3 (`hevc_to_h264` from `source`, `720p`, `1080p`) | 12 |
-
-> **Why three H.265 codec-edge OS threads?** RTMP egress cannot publish HEVC,
-> so each RTMP video shape feeds a keyed `hevc_to_h264` stage. Audio selection
-> happens after that codec edge for selected-track RTMP outputs, so `atrack:0`
-> and `atrack:1` share the same source/720p/1080p HEVC→H.264 conversion. In
-> mixed multi-audio rows the SRT selected-track routes still preserve HEVC, so
-> those audio routes are distinct from the RTMP-after-codec audio routes.
-> This is not a global minimum for every node type: audio-route count rises
-> from 6 to 12 for H.265 multi rows. That is intentional because audio routing
-> is cheap compared with a libavcodec decode/encode OS thread, and because SRT
-> and RTMP selected-track outputs need different upstream codec shapes.
-
-The `ext_ffmpeg#` column in scale test output matches "Ext FFmpeg subprocesses".
-In-process RSS growth (restream parent) correlates with "Int OS threads" — each
-`hevc_to_h264` thread adds ~130–180 MB to the parent's RSS.
-
----
-
-## What Is Shared When Multiple Outputs Use the Same Encoding
+## What is shared when outputs use the same encoding
 
 Stage sharing is keyed by `(pipeline_id, stage_key)`:
 
@@ -499,14 +298,10 @@ outweigh the ~700 ns per frame conversion cost. What IS shared is the far more
 expensive encode stage (CPU-bound, seconds of latency). This invariant is
 covered by `same_encoding_outputs_share_one_transcoder_stage` in engine tests.
 
-### Resource Sharing Footprint (Verified June 23, 2026)
+The dated resource measurements that originally followed this section now live
+in [high-performance audit evidence](evidence/high-performance-audits-2026-06-23-to-2026-07-03.md#resource-sharing-footprint-2026-06-23).
 
-Bitrate scaling and load tests of the pipeline configurations at 1.5M, 4.0M, and 8.0M verified the following sharing footprints:
-* **External Transcoder Subprocess (Shared):** The CPU-bound H.264 transcoding runs in an external `ffmpeg` subprocess. The memory footprint of this child process remains fixed at **~422 MB to 431 MB** regardless of ingest bitrate (from 1.5M to 8.0M), as frames and scale filters are allocated statically on startup. Only one subprocess is spawned per unique `(pipeline_id, preset)`.
-* **In-Process Transcoding (Shared per upstream key):** In-process H.265→H.264 conversion (`hevc_to_h264`) runs inside the Restream parent process using FFmpeg C-FFI bindings. Stages are keyed by `(pipeline, upstream)` — all RTMP egresses on the same encoding share one converter, but RTMP-passthrough (`from:source`) and RTMP-720p (`from:720p`) are **separate** stages. Each stage consumes **67% to 83%** of a core and adds **~130 MB to 180 MB** RSS to the parent process. Configs with both passthrough and preset RTMP outputs can therefore have 2 such stages.
-* **Egress Senders (Not Shared):** Each downstream egress stream (RTMP/SRT) runs as an independent Tokio task. Each task does its own lightweight packet formatting (e.g. `video_for_rtmp_into` or `video_for_ts_into`) and network socket writes. The resource overhead per output is extremely lightweight, scaling at **~350 KB to 1 MB** RSS delta per output with negligible CPU usage.
-
-## Audio Stage Cache
+## Audio stage cache
 
 Output reconciliation splits compound encodings into a video stage and an audio
 stage. Audio stages are keyed by the upstream stage identity as well as the
@@ -518,7 +313,7 @@ audio tracks. `remap` and `downmix` stages run through the external FFmpeg
 stage, copy video, filter one selected audio track to stereo AAC, and then feed
 the normal MPEG-TS demux back into the shared output ring.
 
-## Buffer Sizing (4K 60fps Target)
+## Buffer sizing for 4K 60fps
 
 | Component | Size | Constraint | Source |
 |---|---|---|---|
@@ -540,7 +335,7 @@ the normal MPEG-TS demux back into the shared output ring.
 Runtime verification: `srt_log_effective_opts` reads back values after
 `srt_setsockopt` and warns if the kernel clamped UDP buffers.
 
-## SRT Bonding
+## SRT bonding
 
 ### Ingest
 
@@ -568,7 +363,7 @@ srt://primary:10080?streamid=publish:key&bond=backup1:10080,backup2:10080
 
 Creates an `SRT_GTYPE_BACKUP` group. Both single-connection and bonded egress groups now call `srt_set_highbitrate_opts(client_sock)` immediately after creation to prevent packet drops and buffer overflows under high bitrates.
 
-## Protocol Correctness Requirements
+## Protocol correctness requirements
 
 ### Probe with matching ingest protocol
 
@@ -625,92 +420,3 @@ H.265 must be tested explicitly and cannot be inferred from H.264 results.
 SRT/MPEG-TS should preserve HEVC codec identity. RTMP H.265 requires Enhanced
 RTMP handling. Until RTMP H.265 is proven end-to-end, diagnostics should prefer
 SRT read/probe for SRT H.265 publishers.
-
-## Stage Sharing Design
-
-### Near-Term Model
-
-Share expensive video work and carry all audio through each unique video
-preset, then apply audio selection as a cheap late step:
-
-```mermaid
-flowchart LR
-  SRC["source"]
-  V720["720p video stage\nvideo + all audio"]
-  V1080["1080p video stage\nvideo + all audio"]
-  A720_0["select: atrack:0"]
-  A720_01["select: atrack:0,1"]
-  A1080_0["select: atrack:0"]
-  O1["output A"]
-  O2["output B"]
-  O3["output C"]
-
-  SRC --> V720
-  SRC --> V1080
-  V720 --> A720_0 --> O1
-  V720 --> A720_01 --> O2
-  V1080 --> A1080_0 --> O3
-```
-
-### Protocol Package Sharing
-
-Outputs can share a packaging stage when pipeline, video preset, audio routing,
-codec parameters, container settings, and timing policy all match. For SRT,
-sharing final TS packets is straightforward. For RTMP, the shareable layer is
-the media message/FLV payload; each connection wraps those for its own session.
-
-### Target Architecture
-
-```mermaid
-flowchart LR
-  CANON["canonical packets"]
-  VIDEO["shared video stages"]
-  AUDIO["late audio select"]
-  PACK["shared packaging"]
-  SEND["per-destination sender"]
-
-  CANON --> VIDEO --> AUDIO --> PACK --> SEND
-```
-
-```text
-normalize once → share video → carry all audio → select audio late
-→ share packaging for identical final shapes → separate senders
-```
-
-### Recommended Implementation Order
-
-1. Implement the decode/filter/encode packet loop.
-2. Introduce explicit stage identifiers (`Source`, `VideoPreset`, `AudioSelect`,
-   `Package`, `Sender`).
-3. Carry all audio through each unique video preset, select late.
-4. Add package-stage sharing for identical final media shapes.
-5. Strengthen `MediaPacket` or introduce a canonical packet type with codec
-   parameters, time bases, and payload framing.
-6. Replace file-ingest child processes with in-process demux/remux.
-
-## Code Gaps
-
-These remain useful hardening themes even though the rewrite-status document is
-gone:
-
-- **Internal transcoder**: built-in video profiles run decode/scale/encode;
-  non-built-in/custom profiles require explicit profiling and matrix evidence
-  before being advertised.
-- **Recording**: packet-payload-to-`CustomInput` contract needs repair. ~~Implemented as raw MPEG-TS write; no FFmpeg dependency.~~
-- **Recording** (resolved): `recording.rs` writes raw MPEG-TS via `MemoryQueue`; naming was `run_mkv_muxer` (now `run_ts_writer`). Container upgrade (MP4/MKV) is a future roadmap item.
-- **HLS upload**: HTTP/HTTPS output URLs run the shared segmenter and PUT
-  `seg<N>.ts` objects plus the playlist to the target URL.
-- **Custom encoding**: `/api/v1/encodings/custom` persists future args, but output
-  create/update rejects `custom` so operators cannot select an inactive path.
-- **RTMPS**: URL parser accepts it and the reconciler dispatches it through
-  RTMP egress with Rustls wrapping before the RTMP handshake.
-- **SRT→RTMP egress**: Raw Annex-B/ADTS packets are converted to FLV/AVCC/AAC
-  for RTMP egress. `cargo run --bin test_harness -- mixed.live.srt.h264.a1.bf0`
-  verifies the live H.264/AAC cross-protocol packetization path.
-- **File ingest**: implemented with child FFmpeg; running state is checked from
-  the tracked child process, and exited children are reaped.
-- **Ring buffer**: source-ring reader snapshots expose lag slots, overflow
-  count, burst-size stats, and unread packet age through health, graph, and
-  diagnostics.
-- **MemoryQueue**: `stats()` exposes current buffer depth, capacity, high-water
-  mark, blocked write count, blocked write time, and closed state.
