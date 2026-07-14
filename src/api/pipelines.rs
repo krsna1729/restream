@@ -37,10 +37,10 @@ pub struct PipelinePayload {
 }
 
 fn generate_stream_key() -> String {
-    use rand::RngCore;
+    use rand::RngExt;
 
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill(&mut bytes);
     format!("sk_{}", to_hex(&bytes))
 }
 

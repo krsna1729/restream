@@ -1,12 +1,12 @@
 ---
 name: log-audit
-description: Audit every tracing callsite in src/ for correct log level (error/warn/info/debug), fix mismatches in place, and update the callsite audit table in docs/logging.md. Use when asked to audit logging, fix log levels, or when log noise/severity looks wrong.
+description: Audit every tracing callsite in src/ for correct log level (error/warn/info/debug), fix mismatches in place, and update logging policy only when the decision rules change. Use when asked to audit logging, fix log levels, or when log noise/severity looks wrong.
 ---
 
 # Skill: log-audit
 
-Audit every tracing callsite in `src/` for correct log level, fix mismatches,
-and update the callsite audit table in `docs/logging.md`.
+Audit every tracing callsite in `src/` for correct log level and fix
+mismatches. Keep point-in-time callsite inventories out of maintained prose.
 
 ## Decision rules
 
@@ -60,10 +60,10 @@ due to a fault that is *not* the remote client's fault:
 
 4. Compile-check: `scripts/build/resource-limit.sh cargo check`
 
-5. Update `docs/logging.md` § "Callsite Audit":
-   - Add or update the row for each changed callsite.
-   - Record the *reasoning*, not just the level. One sentence is enough.
-   - If a new module appears, add a subsection for it.
+5. Update `docs/logging.md` only when the level policy or an invariant changes.
+   If the user needs a durable point-in-time inventory, write a dated evidence
+   record with the source revision and audit command instead of a maintained
+   per-module table.
 
 6. Commit: one commit for the callsite fixes, including the doc update.
 
@@ -74,5 +74,5 @@ due to a fault that is *not* the remote client's fault:
   production subscribers.
 - `ring_buffer.rs` and `avio.rs` packet loops must stay logging-free; control
   paths (creation, resize, registration) may use `debug!` or `info!`.
-- After fixing, re-read the audit section in `docs/logging.md` to confirm every
-  changed callsite has an entry explaining why.
+- After fixing, re-read the decision rules in `docs/logging.md` and confirm the
+  changes follow them without introducing a new exception.

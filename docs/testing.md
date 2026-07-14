@@ -1,6 +1,22 @@
 # Testing
 
-## Rust Test Suite
+This is the current verification guide. Start with the smallest gate that can
+prove the changed behavior, then broaden according to the affected boundary.
+The accepted tiering rationale lives in the
+[testing decision record](testing-strategy.md); current commands and policies
+live here and in `AGENTS.md`.
+
+## Contents
+
+- [Rust test suite](#rust-test-suite)
+- [Frontend test split](#frontend-test-split)
+- [Parallelism policy](#parallelism-policy)
+- [Scoped verification loop](#scoped-verification-loop)
+- [Evidence and generated inventories](#evidence-and-generated-inventories)
+- [Live integration tests](#live-integration-tests)
+- [Capability gates](#capability-gates)
+
+## Rust test suite
 
 Run the repo gate:
 
@@ -24,7 +40,7 @@ Keep successful logs quiet. New tests should not land with compiler warnings,
 panic text, FFmpeg probe chatter, or similar “expected noise” in passing runs;
 fix or suppress that output at the helper level instead.
 
-## Frontend Test Split
+## Frontend test split
 
 Frontend confidence is intentionally split between TypeScript ownership and
 compiled-bundle smoke coverage:
@@ -48,7 +64,7 @@ This keeps detailed behavior and coverage attached to the TypeScript source of
 truth without dropping confidence in the emitted browser bundle, while avoiding
 misleading Node-only coverage targets for browser-heavy modules.
 
-### Layered UI Strategy
+### Layered UI strategy
 
 Treat frontend confidence as four layers, each owning a different kind of risk:
 
@@ -81,7 +97,7 @@ For the native fMP4 preview path specifically:
   proves the full browser flow against the running app, including real video
   load and alternate-audio selection.
 
-### UI Scenario Matrices
+### UI scenario matrices
 
 When a dashboard surface starts accumulating too many manual "click every state"
 checks, add a fake-DOM scenario matrix instead of growing Playwright coverage
@@ -102,8 +118,8 @@ for every badge and branch.
   slice that serves the compiled frontend assets from a lightweight local static
   server instead of requiring the full Rust dashboard app to be started first.
 
-As of June 29, 2026 `cargo test -- --list` enumerates 621 tests across unit,
-integration, harness, and doctest targets.
+Use `cargo test -- --list` when a current test inventory is needed; do not copy
+the resulting count into maintained documentation.
 
 Checked-in fixture contracts now cover the committed benchmark/test media under
 `test/fixtures/transport/`, so the transcoder and fixture-dependent suites no longer rely
@@ -116,8 +132,7 @@ Historical architecture-regression artifacts are indexed in
 failure class to its durable fixture, harness replay command, generated-artifact
 location, or proof gate; generated `.local/artifacts/` run directories remain
 uncommitted.
-
-## Parallelism Policy
+## Parallelism policy
 
 Keep correctness throughput high, but treat measurement fidelity as a separate
 constraint.
@@ -136,8 +151,7 @@ constraint.
   measurement. `scripts/build/resource-limit.sh cargo bench --no-run` is the safe fan-out
   step; actual `cargo bench --bench ...` execution should stay serial unless the
   runs are explicitly resource-isolated.
-
-## Scoped Verification Loop
+## Scoped verification loop
 
 Prefer the smallest test and benchmark set that directly covers the changed
 behavior, then broaden only when the risk calls for it. This keeps agent and
@@ -177,7 +191,7 @@ changes a shared contract, affects protocol behavior, or touches a hot path
 whose blast radius is unclear. If an unrelated full-suite test or benchmark
 fails, report it separately from the scoped signal for the current change.
 
-### Composable Verification Stages
+### Composable verification stages
 
 Large suites should be broken into named stages that can run independently and
 compose into larger gates. A failure in one stage should identify the affected
@@ -241,1190 +255,86 @@ deletion-cancellation of egress tasks, media list / analysis / rename / delete
 behavior, pipeline and aggregate alerts response shape, system metrics
 structured response, agent graph-diff-preview compiled-out behavior, and
 operator telemetry/events/overview/summary endpoints.
+## Evidence and generated inventories
 
-## API Route Coverage Matrix
+Maintained testing guidance intentionally does not copy route totals, test
+counts, coverage percentages, or resource snapshots. Use the owning source or
+generated evidence instead:
 
-Every route in `src/api.rs` audited against unit tests (`tests/api.rs`) and
-live integration tests (`src/bin/test_harness.rs`). As of June 27, 2026 all
-59 routes have at least one test. Legend: ✓ = covered, — = not covered,
-~ = precondition only.
+- routes: `PUBLIC_ROUTE_PATHS` and `AUTHENTICATED_ROUTE_PATHS` in
+  `src/api/router.rs`, checked by `tests/api.rs`;
+- Rust tests: `cargo test -- --list` and the test runner output;
+- coverage: `npm run test:frontend:coverage` and the repository coverage
+  workflow/artifacts;
+- performance and resource evidence: the dated
+  [quality baseline ledger](agent-guidance/quality/baselines.md) and CI
+  artifacts produced by the owning workflow.
 
-**Auth**
+## Live integration tests
 
-| Method | Route | Unit | Live | Notes |
-|---|---|:---:|:---:|---|
-| `POST` | `/api/auth/login` | ✓ | ✓ | |
-| `POST` | `/api/auth/logout` | ✓ | — | |
-| `POST` | `/api/auth/change-password` | ✓ | — | |
-
-**Config**
-
-| Method | Route | Unit | Live | Notes |
-|---|---|:---:|:---:|---|
-| `GET` | `/api/v1/settings` | ✓ | ✓ | |
-| `PATCH` | `/api/v1/settings` | ✓ | — | 3 tests incl. transcode profiles |
-| `GET` | `/audio-caps` | ✓ | — | |
-| `GET` | `/api/v1/stream-keys` | ✓ | — | |
-
-**Pipelines**
-
-| Method | Route | Unit | Live | Notes |
-|---|---|:---:|:---:|---|
-| `GET` | `/api/v1/pipelines` | ✓ | ✓ | |
-| `POST` | `/api/v1/pipelines` | ✓ | ✓ | Create |
-| `PATCH` | `/api/v1/pipelines/:id` | ✓ | — | Update |
-| `DELETE` | `/api/v1/pipelines/:id` | ✓ | ✓ | fault.resilience SRT test |
-
-**File ingest**
-
-| Method | Route | Unit | Live | Notes |
-|---|---|:---:|:---:|---|
-| `GET` | `/api/v1/pipelines/:id/file-ingest` | ✓ | — | |
-| `PUT` | `/api/v1/pipelines/:id/file-ingest` | ✓ | ✓ | |
-| `DELETE` | `/api/v1/pipelines/:id/file-ingest` | ✓ | — | |
-
-**Outputs**
-
-| Method | Route | Unit | Live | Notes |
-|---|---|:---:|:---:|---|
-| `POST` | `/api/v1/pipelines/:id/outputs` | ✓ | ✓ | Create |
-| `PATCH` | `/api/v1/pipelines/:id/outputs/:oid` | ✓ | — | Update |
-| `DELETE` | `/api/v1/pipelines/:id/outputs/:oid` | ✓ | — | |
-| `POST` | `/api/v1/pipelines/:id/outputs/:oid/start` | ✓ | ✓ | |
-| `POST` | `/api/v1/pipelines/:id/outputs/:oid/stop` | ✓ | ✓ | |
-| `GET` | `/api/v1/pipelines/:id/outputs/:oid/status` | ✓ | ✓ | |
-
-**Pipeline detail**
-
-| Method | Route | Unit | Live | Notes |
-|---|---|:---:|:---:|---|
-| `GET` | `/api/v1/pipelines/:id/probe` | — | ✓ | mixed-input, correctness-* |
-| `GET` | `/api/v1/pipelines/:id/graph` | ✓ | ✓ | |
-| `GET` | `/api/v1/pipelines/:id/alerts` | ✓ | — | auth + response shape |
-| `POST` | `/api/v1/pipelines/:id/diagnostics/run` | ✓ | — | Auth, method, JSON response shape, and busy `429` |
-| `POST` | `/api/v1/pipelines/:id/recording/start` | — | ✓ | mixed.live.srt.h264.a1.bf2 |
-| `POST` | `/api/v1/pipelines/:id/recording/stop` | — | ✓ | mixed.live.srt.h264.a1.bf2 |
-
-**Encodings**
-
-| Method | Route | Unit | Live | Notes |
-|---|---|:---:|:---:|---|
-| `GET` | `/api/v1/encodings/custom` | ✓ | — | |
-| `PUT` | `/api/v1/encodings/custom` | ✓ | — | |
-
-**Ingests**
-
-| Method | Route | Unit | Live | Notes |
-|---|---|:---:|:---:|---|
-| `GET` | `/api/v1/ingests` | ✓ | ✓ | |
-| `POST` | `/api/v1/ingests` | ✓ | — | |
-| `PUT` | `/api/v1/ingests/:id` | ✓ | — | |
-| `DELETE` | `/api/v1/ingests/:id` | ✓ | — | |
-| `POST` | `/api/v1/ingests/:id/start` | ✓ | ✓ | |
-| `POST` | `/api/v1/ingests/:id/stop` | — | ✓ | fault.resilience |
-
-**Status and health**
-
-| Method | Route | Unit | Live | Notes |
-|---|---|:---:|:---:|---|
-| `GET` | `/api/v1/engine` | ✓ | — | |
-| `GET` | `/api/v1/engine/sbom` | ✓ | — | |
-| `GET` | `/api/v1/media` | ✓ | — | |
-| `POST` | `/api/v1/media/upload` | ✓ | ✓ | authenticated multipart upload; duplicate/path traversal proof |
-| `GET` | `/api/v1/media/:filename/analysis` | ✓ | — | |
-| `PATCH` | `/api/v1/media/:filename` | ✓ | — | Rename + ingest reference update |
-| `DELETE` | `/api/v1/media/:filename` | ✓ | — | Path traversal tested |
-| `GET` | `/api/v1/dashboard/runtime` | ✓ | — | Frontend contract + Node transport tests |
-| `GET` | `/api/v1/engine/health` | ✓ | ✓ | |
-| `GET` | `/healthz` | ✓ | ✓ | |
-| `GET` | `/metrics/system` | ✓ | — | Structured cpu/memory/disk/network |
-
-**V1 operator API**
-
-| Method | Route | Unit | Live | Notes |
-|---|---|:---:|:---:|---|
-| `GET` | `/api/logs` | — | — | New; unit tests pending |
-| `GET` | `/api/logs/stream` | — | — | SSE; new; unit tests pending |
-| `GET` | `/api/v1/alerts` | ✓ | — | Aggregate across all pipelines |
-| `GET` | `/api/v1/events` | ✓ | — | Filtering tested |
-| `GET` | `/api/v1/overview` | ✓ | — | |
-| `GET` | `/api/v1/engine/telemetry` | ✓ | — | |
-| `GET` | `/api/v1/pipelines/:id/telemetry` | ✓ | — | |
-| `GET` | `/api/v1/stages/:key/telemetry` | ✓ | — | |
-| `GET` | `/api/v1/pipelines/:id/summary` | ✓ | — | |
-
-**Agent API**
-
-| Method | Route | Unit | Live | Notes |
-|---|---|:---:|:---:|---|
-| `GET` | `/api/v1/agent/capabilities` | ✓ | — | |
-| `GET` | `/api/v1/agent/context` | ✓ | — | |
-| `POST` | `/api/v1/agent/investigations` | ✓ | — | |
-| `POST` | `/api/v1/agent/plans` | ✓ | — | |
-| `POST` | `/api/v1/agent/plans/validate` | ✓ | — | |
-| `POST` | `/api/v1/agent/graph-diff-preview` | ✓ | — | 404 when compiled out |
-| `POST` | `/api/v1/agent/operations` | ✓ | — | |
-| `GET` | `/api/v1/agent/operations/:id` | ✓ | — | |
-| `POST` | `/.../operations/:id/approve` | ✓ | — | |
-| `POST` | `/.../operations/:id/apply` | ✓ | — | |
-| `POST` | `/.../operations/:id/verify` | ✓ | — | |
-| `POST` | `/api/v1/agent/verify` | ✓ | — | 404 when compiled out |
-
-Frontend transport/control layering now has explicit Node-scope coverage for:
-- the combined `/api/v1/dashboard/runtime` fetch shape that replaces paired dashboard health+metrics reads
-- selected-pipeline runtime refreshes using `pipeline_id` to keep sibling pipeline summaries live while enriching the active pipeline entry with full detail
-- output start/stop mutations reusing lifecycle SSE convergence with a runtime-refresh fallback instead of always forcing an immediate runtime GET
-- recording start/stop mutations patching local operator state directly instead of forcing a runtime refresh
-- file-ingest start/stop falling back to runtime refreshes only when no lifecycle stream is already open
-- output toggle responsiveness while start/stop API requests are in flight
-- output create/update mutations reusing returned payloads instead of refetching dashboard settings
-- pipeline create/update mutations reusing returned payloads instead of refetching dashboard settings
-- pipeline and output deletes patching dashboard state locally instead of refetching dashboard settings
-- restream process-indicator transitions driven by lifecycle logs and health recovery
-- restream process-indicator reachability updates from metrics-only non-runtime modes
-- non-runtime mode lifecycle SSE behavior that keeps process state live without re-enabling health polls
-- status mode avoiding a duplicate lifecycle-only SSE by reusing its restream log stream
-
-## Code Coverage
-
-Line coverage from `cargo llvm-cov` (unit tests only, June 29, 2026):
-
-Compared with the June 27, 2026 snapshot, covered lines increased from
-`13,250` to `13,784` (`+534`), but total instrumented lines increased from
-`23,918` to `25,399` (`+1,481`), so overall unit-only line coverage moved from
-`55.4%` to `54.3%` (`-1.1` percentage points).
-
-![Coverage by module](coverage-by-module.svg)
-
-| Module | Lines | Covered | Coverage |
-|---|---:|---:|---:|
-| `pipe_metrics` | 21 | 21 | 100.0% |
-| `engine_registries` | 49 | 49 | 100.0% |
-| `events` | 284 | 274 | **96.5%** |
-| `alerts` | 517 | 506 | 97.9% |
-| `security` | 220 | 210 | 95.5% |
-| `ring_buffer` | 1,096 | 1,040 | 94.9% |
-| `feeder` | 226 | 215 | 95.1% |
-| `file_ingest` | 558 | 515 | 92.3% |
-| `codec` | 730 | 660 | 90.4% |
-| `mpegts` | 2,444 | 2,028 | 83.0% |
-| `hls_upload` | 232 | 207 | 89.2% |
-| `profiles` | 333 | 285 | 85.6% |
-| `stage_metrics` | 44 | 37 | 84.1% |
-| `engine` | 3,551 | 2,743 | 77.3% |
-| `domain/stage` | 227 | 180 | 79.3% |
-| `avio` | 502 | 388 | 77.3% |
-| `hls` | 565 | 428 | **75.8%** |
-| `recording` | 309 | 193 | **62.5%** |
-| `external_transcoder` | 581 | 364 | **62.7%** |
-| `srt` | 2,471 | 1,183 | 47.9% |
-| `rtmp` | 1,660 | 644 | 38.8% |
-| `api` | 3,951 | 385 | 9.7%† |
-| `db` | 801 | 0 | 0.0%† |
-| **Total** | **25,399** | **13,784** | **54.3%** |
-
-† `api.rs` is tested via 66 integration tests in `tests/api.rs` which `llvm-cov --lib` does not instrument. `db.rs` is tested via `tests/db.rs`. Their unit-only coverage is not representative.
-
-These numbers reflect unit-test-only instrumentation. `api.rs` shows 7% because
-`cargo llvm-cov` does not instrument `tests/api.rs` integration tests by
-default — the real API test coverage is much higher (66 tests across all 59
-routes). Similarly, `db.rs`, `rtmp.rs`, and `srt.rs` are primarily exercised by
-the live integration harness which is not captured by `llvm-cov`.
-
-### Coverage interpretation
-
-- **≥80% (14 modules)**: core media pipeline logic — ring buffer, codec,
-  MPEG-TS, engine, HLS upload, file ingest, alerts, events, security, profiles,
-  feeder, stage_metrics. Well covered by unit tests.
-- **50–79% (6 modules)**: socket-heavy protocol handlers, HLS store, and
-  recording logic. Primarily exercised by the live harness with real ffmpeg;
-  unit-testing their socket loops would require significant mocking for little
-  added benefit.
-- **<50% (7 modules)**: API/DB/diagnostics layers tested through integration
-  tests not captured by `llvm-cov`, or FFmpeg-dependent transcoder code that
-  requires the binary running.
-
-## Live Integration Tests
-
-All live integration tests are unified under one entry point:
+The checked-in manifest catalog under `test/harness/` is the command and
+workflow source of truth. Do not copy its modes or catalog subcommands into
+this guide. Prepare the current bench-profile harness and ask the binary for
+its catalog usage:
 
 ```sh
-scripts/build/resource-limit.sh target/debug/test_harness [--no-netns] <mode>
+scripts/harness/run.sh --prepare
+target/bench/test_harness catalog help
 ```
 
-`scripts/build/resource-limit.sh` only constrains build/test command parallelism. It
-does not sandbox runtime CPU or memory for `restream`, MediaMTX, or FFmpeg
-children once the harness process starts.
-
-By default every mode that manages its own server processes runs inside a
-private loopback network namespace (`unshare --net`) so ports never conflict
-with the host. Pass `--no-netns` to skip namespace re-exec.
-On a fresh Linux host, either bootstrap reports namespace and SRT-buffer
-readiness. Use `scripts/dev/bootstrap.sh --configure-harness-host` or
-`scripts/dev/bootstrap-runtime.sh --configure-harness-host` only when you
-explicitly want to persist the documented host sysctls.
-When no explicit `RESTREAM_*` or `MTX_*` port env vars are set, the harness
-also synthesizes a per-process high-port bundle instead of reusing the legacy
-3030/1935/10080 defaults, so correctness runs stay isolated even when the
-namespace wrapper is unavailable or constrained.
-
-For concurrency-sensitive changes, run the focused proof gate first:
+Run a mode through the wrapper so stale binaries are rebuilt and the shared
+build lock is respected:
 
 ```sh
-bash ./scripts/check/concurrency/fast.sh
+scripts/harness/run.sh <mode>
+scripts/harness/run.sh <mode> -- --no-netns
 ```
 
-The current model/property/unit proof inventory is tracked in
-[Concurrency Proof Coverage Report - 2026-07-02](concurrency-proof-coverage-2026-07-02.md).
-Use that report to choose a narrower serial validation set when developing in a
-resource-constrained environment, then run the full gate before broad sign-off.
-
-Then run the full live contract gate:
-
-```sh
-bash ./scripts/check/concurrency/contract.sh
-```
-
-Required tools: `ffmpeg`, `ffprobe`, `mediamtx`, `curl`, `jq`.
-On Debian/Ubuntu, `./scripts/dev/bootstrap.sh` installs everything above.
-
-Common runner flags:
-
-| Flag | Purpose |
-|---|---|
-| `--preflight` | Check binary, dependencies, namespace support, and host-mode port conflicts without starting the test. |
-| `--fast` | Set `N_PER_GROUP=1`, `N_OUTPUTS=1`, `SNAP_EVERY=999`, and skip snapshot sleeps for quick agent loops. |
-| `--json <path>` | Write JSONL assertion records alongside the human-readable log. Failed ffprobe assertions include stderr and log tails. |
-| `ONLY_CHECKS=<checks>` | Run selected mixed-input assertion groups. Supported checks: `smoke`, `ffprobe`, `signal`, `soak-drift`, `hls`, `recording`, `stage-sharing`, `lifecycle`, `load`. |
-| `--skip-load` | Skip resource snapshot sleeps and load assertion records while preserving correctness setup. |
-| `--resume-from <id>` | Skip named assertion records until the requested assertion ID is reached. |
-| `RSS_BASELINE=<path>` | Compare mixed-input RSS summaries against a saved CSV baseline. `RSS_BASELINE_THRESHOLD_PCT` defaults to 5. |
-| `SAVE_RSS_BASELINE=<path>` | Save the current mixed-input RSS summary as a baseline CSV. |
-
-The runner kills only processes it starts. Set `ALLOW_GLOBAL_PROCESS_CLEANUP=1`
-only when you explicitly want the legacy host-wide `restream`/`mediamtx`
-cleanup before a run.
-
-Runtime thread and process limits relevant to matrix and fast-breadth runs:
-
-| Env var | Scope | Default | Purpose |
-|---|---|---|---|
-| `HARNESS_FFMPEG_THREADS` | Harness publisher FFmpeg | `2` | Caps encoder/reader threads for harness-side publishers. |
-| `RESTREAM_EXTERNAL_FFMPEG_THREADS` | External stage FFmpeg children | `2` | Caps per-child FFmpeg worker threads in runtime transcoder stages. |
-| `RESTREAM_RECORDING_FFMPEG_THREADS` | Recording remux FFmpeg child | `2` | Caps thread fanout during TS->MP4 remux. |
-| `RESTREAM_EXTERNAL_FFMPEG_PERMITS` | Restream stage scheduler | unset | Explicit override for concurrent external FFmpeg stage children. |
-| `RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN` | Restream stage scheduler | derived with live-stage floor 5 | Hard cap for concurrent external FFmpeg stage children. The default floor prevents all-external HEVC live graphs from starving dependent stages; set this lower only for constrained-capacity proof runs. |
-| `RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE` | Restream stage scheduler | `2` | CPU headroom reserved for Tokio + listeners while deriving child cap. |
-| `RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD` | Restream stage scheduler | `2` | Expected CPU budget per external FFmpeg child when deriving child cap. |
-| `RESTREAM_TOKIO_WORKER_THREADS` | Restream Tokio runtime | effective CPUs / 3, rounded up, clamped to `1..8` | Explicit runtime worker thread cap for async tasks. Effective CPUs are bounded by process CPU mask and cgroup v2 CPU quota when available. |
-| `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` | Restream Tokio runtime | `512` | Caps Tokio `spawn_blocking` pool size for blocking handshakes/waiters. This does not cap libsrt's own `SRT:*` native worker threads. |
-| `HARNESS_TOKIO_WORKER_THREADS` | Test harness Tokio runtime | `min(max(cpus,2),16)` | Caps harness-side async worker threads. |
-| `HARNESS_TOKIO_MAX_BLOCKING_THREADS` | Test harness Tokio runtime | `256` | Caps harness blocking task pool size. |
-| `RESTREAM_RTMP_LISTENER_BACKLOG` | Restream RTMP listener | `1024` | Explicit accept backlog for RTMP ingest socket. |
-
-Optional per-stack cgroup limits for harness-managed processes:
-
-- Set `HARNESS_USE_CGROUP_WRAPPER=1` to route harness-spawned `restream`,
-  MediaMTX, and publisher FFmpeg processes through `scripts/native/cgroup-wrap.sh`.
-- Set `HARNESS_CGROUP_CPU_MAX` (for example `200%`) and/or
-  `HARNESS_CGROUP_MEMORY_MAX` (for example `2G`) to apply limits.
-- Scopes are named per stack using synthesized ports (for example
-  `restream-<http-port>`, `mediamtx-<api-port>`) so parallel matrix stacks
-  do not collide.
-
-Detailed rationale and sizing notes are tracked in
-[docs/matrix-resource-constraints.md](matrix-resource-constraints.md).
-
-### Matrix quick reference
-
-The live protocol/input matrix has two primary entry points: `mixed.matrix`
-for the full correctness sweep and `mixed.fast-breadth` for a quick
-failure-shape sweep.
-
-| Goal | Command |
-|---|---|
-| Full matrix | `scripts/harness/run.sh mixed.matrix` |
-| Single scenario | `scripts/harness/run.sh mixed.live.srt.h264.a1.bf2` |
-| Fast breadth, parallel families | `scripts/harness/parallel-fast-breadth.sh` |
-| Fast breadth, one family | `N_PER_GROUP=1 scripts/harness/run.sh mixed.fast-breadth -- --no-netns` |
-
-Useful matrix knobs:
-
-- `MIXED_MATRIX_FAIL_FAST=1` — stop at the first failing scenario instead of
-  continuing and emitting an aggregate failure list.
-- `ONLY_CHECKS=stage-sharing` — run only the stage-sharing assertion.
-- `ONLY_CHECKS=hls` — run only the HLS preview/recording assertions.
-- `N_PER_GROUP=2` — validate that identical outputs share processing stages
-  (default for the full matrix).
-
-### Artifact Disk Guards
-
-Live integration runs write logs, JSONL assertions, ffprobe stderr, SQLite
-fixtures, generated media, and manifests under `.local/artifacts/` by default.
-The runner applies two disk-safety guards before starting live services:
-
-- `RESTREAM_ARTIFACT_MIN_FREE_MB` (default `2048`) fails the run when the
-  artifact filesystem has less free space than the configured floor. Set it to
-  `0` only for an intentional no-floor diagnostic run.
-- old top-level `.local/artifacts/` directories are pruned so only the latest
-  three runs remain. The active run directory is protected. Set
-  `KEEP_ARTIFACTS=1` only for a deliberate manual-retention/debug session.
-
-`preflight` emits an `artifact-disk` JSON record with the artifact root,
-current free MB, configured floor, and pass/fail status. Protocol-matrix runs
-inherit the same guard for each delegated mode. When `--no-netns` is used,
-preflight emits the candidate `ports` list and checks the actual ports a mode
-binds: legacy live modes check the configured Restream/MediaMTX ports, while
-Rust-only harness modes check the synthesized helper loopback ports for the
-harness sink, direct SRT probes, and the dummy HLS PUT sink. Override
-`SINK_PORT`, `HLS_PUT_PORT`, `FFMPEG_SRT_SINK_BASE`, or
-`FFMPEG_SIGNAL_SINK_BASE` only when a run needs a fixed external port layout.
-If a measurement live mode needs `target/bench/restream` and the repo-managed
-static SRT archive is also missing, the binary check points agents at
-`scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` before the bench-profile
-build step.
-
-Typical quick agent loop:
-
-```sh
-scripts/build/resource-limit.sh target/debug/test_harness preflight
-scripts/build/resource-limit.sh target/bench/test_harness mixed.live.srt.h264.a1.bf2
-```
-
-### Manual Dashboard Live Env
-
-For UI/debug sessions it is useful to run a long-lived dashboard plus an
-independent MediaMTX sink outside the integration wrapper. This is not a
-release certification gate; it is an operator-facing smoke setup that makes the
-dashboard, processing graph, status page, HLS preview, output history, and
-media library easy to inspect while real traffic is flowing.
-
-Current local shape used on June 27, 2026:
-
-| Component | Ports / paths |
-|---|---|
-| Restream dashboard/API | `http://127.0.0.1:39280` |
-| Restream RTMP ingest | `rtmp://127.0.0.1:32080/live/<streamKey>` |
-| Restream SRT ingest | `srt://127.0.0.1:31280?streamid=publish:<streamKey>` |
-| MediaMTX RTMP sink | `rtmp://127.0.0.1:33080/live/<path>` |
-| MediaMTX SRT sink | `srt://127.0.0.1:34080?streamid=publish:<path>` |
-| MediaMTX HLS sink | `http://127.0.0.1:35080/<path>/index.m3u8` |
-| Runtime work dir | `/tmp/restream-live-current` |
-
-The live traffic is published by one combined FFmpeg process with three looping
-inputs and multiple outputs:
-
-| Pipeline | Ingest | Expected input | Sink outputs |
-|---|---|---|---|
-| `RTMP 1080p50 H264` | RTMP | H.264 `1920x1080` 50 fps, at least 8 Mbps | RTMP source sink, SRT source sink |
-| `SRT 4K60 H264` | SRT | H.264 `3840x2160` 60 fps, at least 20 Mbps, two AAC tracks | SRT source sink, RTMP source sink |
-| `SRT 4K60 H265` | SRT | HEVC `3840x2160` 60 fps, at least 20 Mbps, two AAC tracks | SRT HEVC passthrough sink, RTMP H.264 compatibility sink |
-
-Expected sink-probe behavior:
-
-- SRT sinks should preserve the source codec, dimensions, and frame rate.
-- RTMP sinks from H.264 sources should remain H.264 at source dimensions.
-- RTMP from the H.265 source uses the `hevc_to_h264` compatibility stage. It is
-  expected to probe as H.264, not HEVC, and may not preserve the source frame
-  rate exactly while that compatibility path is under active tuning.
-- MediaMTX accepting these streams is interop evidence for the live setup, not
-  proof that every protocol-matrix release gate has passed.
-
-### `ramp` — Sequential output ramp
-
-```sh
-N_OUTPUTS=10 scripts/build/resource-limit.sh target/debug/test_harness ramp
-```
-
-Sweeps eight ingest×egress×encoding combinations (RTMP/SRT ingest × RTMP/SRT
-output × source/720p encoding). For each config, outputs are added one by one
-and RSS + FFmpeg subprocess counts are snapshotted at every step. Useful for
-spotting per-output memory growth and spotting encoding-stage leaks.
-
-Env: `N_OUTPUTS` (default 10), `ISOLATE=1` (restart restream+mediamtx per
-config for a clean baseline), `SNAP_EVERY` (default 1, snapshot every N outputs).
-
-The public shell mode has begun moving behind typed Rust harness slices. By
-default, all eight ramp configs are delegated to
-`cargo run --bin test_harness -- ramp-family`, which starts the production
-`restream` binary and MediaMTX, drives the HTTP API, and appends the same
-`scale.csv` and `summary.txt` formats. Set `RAMP_RUST_FAMILY=0` to force the
-legacy all-bash ramp path while bisecting harness behavior, or set
-`RAMP_FAMILY_CONFIGS` to hand a subset back to bash for focused comparisons.
-
-### `mixed.matrix` — Mixed input/output correctness
-
-Run the full matrix:
-
-```sh
-./scripts/harness/run.sh mixed.matrix
-```
-
-Run one scenario for focused debugging:
-
-```sh
-./scripts/harness/run.sh mixed.live.srt.h264.a1.bf2
-```
-
-Run only the HLS/recording slice:
-
-```sh
-N_PER_GROUP=2 ONLY_CHECKS=hls ./scripts/harness/run.sh mixed.matrix
-```
-
-Exercises the table-driven input matrix. Names follow
-`mixed.<source>.<ingest>.<video>.<audio>.<reorder>`, where `reorder` is
-`bf0` or `bf2` based on the source-side B-frame signal. The current matrix uses
-`source` values `live` and `asset`, ingest values `srt`, `rtmp`, and `file`,
-video values `h264` and `h265`, and audio values `a1` and `a2`. RTMP ingest
-intentionally has only the H.264/single-audio shape because standard RTMP input
-is H.264 with one audio track; there is no `mixed.live.rtmp.h265.*` or
-multi-track RTMP ingest row unless the product contract changes.
-
-| Scenario family | Variants | Ingest | Codec | Audio | Role |
-|---|---|---|---|:---:|---|
-| `mixed.asset.file.h264.a1.{bf0,bf2}` | 2 | file | H.264 | 1 | file-ingest H.264 baseline plus no-reorder sibling |
-| `mixed.asset.file.h265.a1.{bf0,bf2}` | 2 | file | H.265 | 1 | file-ingest HEVC baseline plus no-reorder sibling |
-| `mixed.asset.file.h264.a2.{bf0,bf2}` | 2 | file | H.264 | 2 | file-ingest multi-audio routing |
-| `mixed.asset.file.h265.a2.{bf0,bf2}` | 2 | file | H.265 | 2 | file-ingest HEVC + multi-audio routing |
-| `mixed.live.rtmp.h264.a1.{bf0,bf2}` | 2 | RTMP | H.264 | 1 | RTMP/FLV ingest baseline |
-| `mixed.live.srt.h264.a1.{bf0,bf2}` | 2 | SRT | H.264 | 1 | HLS + smoke + fatal ffprobe + stop lifecycle |
-| `mixed.live.srt.h265.a1.{bf0,bf2}` | 2 | SRT | H.265 | 1 | HEVC bridge and stage-sharing assertion |
-| `mixed.live.srt.h264.a2.{bf0,bf2}` | 2 | SRT | H.264 | 2 | multi-audio track routing |
-| `mixed.live.srt.h265.a2.{bf0,bf2}` | 2 | SRT | H.265 | 2 | HEVC + multi-audio |
-
-Each row can be run through `scripts/harness/run.sh <scenario-id>`, for
-example `scripts/harness/run.sh mixed.live.srt.h265.a2.bf2`. By default the
-aggregate `mixed.matrix` reuses one shared Restream+MediaMTX stack per input
-family (`live-rtmp`, `live-srt`, `file-ingest`) and executes up to two cases per
-wave inside that stack, while still writing each case to its own work directory.
-Set `MIXED_MATRIX_SERIAL=1` to force the legacy fully serial execution order
-when bisecting.
-
-By default, full matrix runs now continue across scenario failures and emit an
-aggregate failure list at the end so one bad row does not hide later coverage.
-Set `MIXED_MATRIX_FAIL_FAST=1` when you need the old stop-at-first-failure
-behavior for tighter bisects.
-
-Signal quality checks are part of the full matrix default check set. Unless
-`ONLY_CHECKS` is explicitly set, every mixed row includes `signal` in its check
-selection. Matrix runs also default `COLLECT_FAILURES=1` and write
-`assertions.jsonl` in `WORK_DIR` unless `COLLECT_FAILURES` or `ASSERTION_LOG`
-is overridden.
-
-`scripts/harness/run.sh` is the canonical measurement entrypoint: it
-builds bench-profile binaries first (unless `BENCH_BUILD=0` is set) and then
-executes `target/bench/test_harness` via `scripts/build/resource-limit.sh`.
-
-While `mixed.matrix` is running, `WORK_DIR/scenario.json` is refreshed
-incrementally with live progress counters and per-case status. The `progress`
-section includes total/completed/in-progress/pending counts for both cases and
-output cells so operators can track sweep completion without tailing logs.
-
-The row structure is deliberately two-layered:
-
-| Scope | Coverage |
-|---|---|
-| Input-scoped | One HLS preview assertion per input row; one recording assertion per input row. |
-| Output-scoped | Every legal RTMP/SRT egress row for the input track layout. |
-
-Single-track inputs run this egress table:
-
-| Protocol | Encodings | Expected audio tracks |
-|---|---|---:|
-| RTMP | `source`, `720p`, `1080p` | 1 |
-| SRT | `source`, `720p`, `1080p` | 1 |
-
-Multi-track inputs, including file multi fixtures, run the expanded table:
-
-| Protocol | Encodings | Expected audio tracks |
-|---|---|---:|
-| RTMP | `source+atrack:0`, `source+atrack:1`, `720p+atrack:0`, `720p+atrack:1`, `1080p+atrack:0`, `1080p+atrack:1` | 1 |
-| SRT | `source`, `720p`, `1080p` | 2 |
-| SRT | `source+atrack:0`, `source+atrack:1`, `720p+atrack:0`, `720p+atrack:1`, `1080p+atrack:0`, `1080p+atrack:1` | 1 |
-
-HLS preview currently asserts the browser-compatible preview contract:
-H.264 input remains source-size H.264 served fMP4 HLS, while H.265 input is
-converted to 720p H.264 before the preview fMP4 path. The HLS assertion also
-checks that the master playlist exposes the source audio-track count as
-alternate audio renditions.
-
-Recording is intentionally input-scoped rather than multiplied by every egress:
-it starts/stops once after the input is live, then validates the operator-visible
-MP4 has the source video codec (`h264` or `hevc`) and the expected source
-audio-track count.
-
-**H.264 SRT single (`mixed.live.srt.h264.a1.bf2`)** runs three merged correctness checks in
-addition to the resource measurements:
-
-1. **Smoke** — after source outputs are live, asserts no external transcoder has
-   fired (source passthrough must not trigger the 720p encoder).
-2. **Fatal ffprobe** — after all groups, `verify_stream` (fatal, 30×2s retries)
-   on RTMP-src, RTMP-720p, SRT-src, SRT-720p, HLS/mediamtx, and HLS/restream
-   endpoints.
-3. **Signal quality** — captures consumer-visible output, detects flash/beep
-   markers, checks marker offset/drift, runs `ashowinfo`, `astats`,
-   `silencedetect`, and scans decoded PCM for clipping and impulse-sized sample
-   steps. The mixed correctness matrix uses checked-in A/V marker fixtures
-   (`av-marker-*-bf0*.ts` and `av-marker-*.ts`) so this is a real oracle rather
-   than arbitrary-content probing.
-4. **Stop lifecycle** — calls `/stop` on every output and polls `/api/v1/settings` until
-   all reach `"stopped"` within 60 s.
-
-`AV_SIGNAL_SECONDS` controls normal signal capture length and defaults to 20 s.
-`ONLY_CHECKS=soak-drift` switches signal capture to `AV_SOAK_SECONDS`, default
-120 s, so nightly/soak runs can stretch marker drift measurement without
-changing the matrix code.
-
-`ONLY_CHECKS=stage-sharing` asserts that the live processing graph has exactly
-the expected unique `transcoder`, `audio_filter`, and `codec_edge` nodes for the
-row. This is the live `N_PER_GROUP` sharing check: increasing output count must
-not add processing stages when the output encoding/protocol shape is identical.
-`N_PER_GROUP=2` is enough to catch accidental per-output stage duplication
-because the second output in every group has the same processing shape as the
-first. It does not, by itself, cover every processing graph shape; coverage of
-source/720p/1080p, RTMP/SRT, all-audio/subset-audio, HLS preview, and recording
-comes from the table-driven mixed input/output matrix.
-Because `ONLY_CHECKS=stage-sharing` does not attach every readback consumer,
-the live assertion treats audio-route nodes as an upper bound. Video transcode
-and codec-edge nodes are exact, and `codec_edge=3` for H.265 multi is the
-expensive-stage invariant the check is designed to protect.
-
-Expected resource counts (see
-[media-pipeline.md § Scale Test Pipeline Paths](media-pipeline.md#scale-test-pipeline-paths)):
-
-| Config | Video stages | Audio-route stages | Codec-edge stages |
-|---|:---:|:---:|:---:|
-| `h264-*-single` | 2 (`720p`, `1080p`) | 0 | 0 |
-| `h265-*-single` | 2 (`720p`, `1080p`) | 0 | 3 (`source`, `720p`, `1080p` RTMP paths) |
-| `h264-*-multi` | 2 (`720p`, `1080p`) | 6 | 0 |
-| `h265-*-multi` | 2 (`720p`, `1080p`) | 12 | 3 (`source`, `720p`, `1080p` RTMP paths) |
-
-Env: `N_PER_GROUP` (default 2).
-
-The mixed matrix DSL lives in
-`src/bin/test_harness/mixed_matrix.json`. That JSON file owns the stable input
-IDs, source axes, output rows, default checks, selected fast-breadth rows,
-rationales, and shared batch packing. The carry-over guard is
-`mixed_json_dsl_carries_current_matrix_contract`, which proves the JSON expands
-to every current mixed row, output matrix, and fast-breadth batch before the
-live runner spends time on media processes.
-
-Typed expansion still lives in `src/bin/test_harness/mixed_manifest.rs`: axis
-enums, JSON validation, source adapters, and expected stage-count formulas
-belong there. Runtime verbs live in `src/bin/test_harness/mixed_runner.rs`:
-process lifecycle, sink/probe orchestration, API calls, and assertions. When
-adding a scenario, update the JSON DSL first, then update the typed expansion
-or runner verbs only if the existing axes cannot describe the new behavior.
-
-Smaller harness tables follow the same rule: `test/harness/modes.json`,
-`ramp_configs.json`, `sweep_configs.json`, `resource_egress_scenarios.json`,
-and `fault_cases.json` own declarative rows; Rust owns typed parsing,
-validation, process verbs, and assertions. Prefer extending those manifests
-over adding function-per-row Rust.
-
-### `mixed.fast-breadth` — 5-minute breadth sweep
-
-```sh
-./scripts/build/bench-harness.sh
-scripts/harness/parallel-fast-breadth.sh
-```
-
-`mixed.fast-breadth` is the quick failure-shape sweep for the mixed matrix. It
-keeps `N_PER_GROUP=1`, `SKIP_LOAD=1`, and `COLLECT_FAILURES=1` by default, then
-reuses one shared Restream+MediaMTX stack per transport family.
-
-`scripts/harness/parallel-fast-breadth.sh` is the wall-clock path when the
-goal is "collect the broad reports first, analyze afterward". It launches three
-independent `mixed.fast-breadth` processes concurrently:
-
-- `live-rtmp`
-- `live-srt`
-- `file-ingest`
-
-Each process gets its own work directory, SQLite DB, synthesized artifact set,
-and explicit port bundle so the three shared stacks can run side-by-side
-without colliding on host ports. The launcher waits for every batch to finish
-before printing artifact locations, then merges:
-
-- per-batch `assertions.jsonl` into `<root>/assertions.jsonl`
-- per-batch `timing.jsonl` into `<root>/timing.jsonl`
-- per-batch stdout/stderr paths into `<root>/report-index.txt`
-
-The parallel launcher uses `MIXED_FAST_BREADTH_GROUPS=<group>` together with
-`--no-netns`, unique port bundles, and isolated work directories so the three
-families can run side-by-side on the host without waiting for namespace
-re-exec. That env var also remains available for ad hoc targeting from the
-aggregate `mixed.fast-breadth` entry point.
-
-By default the launcher also coexists with unrelated live demo processes: it
-records any pre-existing `restream`, `mediamtx`, or `ffmpeg` rows in
-`preexisting-runtime-processes.txt`, then uses its own high port ranges. Set
-`REQUIRE_CLEAN_RUNTIME=1` when a clean-host preflight is required instead.
-
-Set `FFMPEG_BIN_PATH=/usr/bin/ffmpeg` explicitly only for streaming-logic
-diagnosis against the system binary. Normal runs use the embedded standalone
-`public/bin/ffmpeg` through the production `restream` child. All selected
-`ffprobe` checks emit fatal JSONL assertions and honor `RESUME_FROM`.
-
-### `resource-sweep` — CPU and memory attribution sweep
-
-```sh
-./scripts/build/bench-harness.sh
-./target/bench/test_harness resource-sweep
-```
-
-Measures current-code CPU and memory across baseline, ingest-only, ingest
-growth, egress growth, source-vs-transcode, and HEVC bridge scenarios. The
-Rust harness records:
-
-- process RSS plus `smaps_rollup` (`Anonymous`, `Private_Dirty`, `Shared_Clean`, `Pss`)
-- internal memory accounting from `/api/v1/engine/telemetry`
-- child FFmpeg RSS and CPU
-- 1 Hz raw samples and per-stage aggregates
-
-See [resource-sweep.md](resource-sweep.md) for the artifact layout and env
-knobs.
-
-Useful narrow-loop knobs:
-
-- `RESOURCE_SWEEP_SCENARIOS=...` to run only a named slice such as
-  `egress-growth-source-same`, `egress-growth-source-srt`,
-  `egress-growth-transcode-mixed`, `egress-growth-transcode-dual-mixed`, or
-  `egress-growth-hevc-bridge`
-- `RESOURCE_SWEEP_EGRESS_COUNTS=10` or `RESOURCE_SWEEP_INGEST_COUNTS=5` to pin
-  the fanout/fanin you care about
-- `RESOURCE_SWEEP_LIFECYCLE=isolated|continuous|cumulative` to compare clean
-  attribution against additive growth
-- `RESOURCE_SWEEP_SAMPLE_SECS=30` when you want enough time to attach `perf`
-  during a single scenario
-
-Protocol-isolated egress calibration uses the source passthrough rows:
-
-```sh
-RESOURCE_SWEEP_SCENARIOS=egress-growth-source-same,egress-growth-source-srt \
-RESOURCE_SWEEP_EGRESS_COUNTS=50,100,200 \
-./scripts/harness/run.sh resource-sweep
-```
-
-The MSR harness keeps the canonical 95/5 split by default. For protocol
-calibration, set `MSR_PROTOCOL_MIX=rtmp-only`, `MSR_PROTOCOL_MIX=srt-only`, or
-`MSR_PROTOCOL_MIX=srt-every:N`. `MSR_FULL=1` also runs a signal-calibration
-phase before the canonical 30-audio phase: it uses the same checkpoints,
-Zipf fan-out, and protocol mix with the A/V marker fixture, then validates a
-deterministic RTMP/SRT sample at each checkpoint for decode health, marker
-offset/drift, audio PTS gaps, clipping, and impulse/click artifacts.
-Canonical MSR checkpoints also run deterministic sampled `ffprobe` readback
-against MediaMTX outputs. The gate records `MSR_FFPROBE_SAMPLE_COUNT`,
-`MSR_FFPROBE_SEED`, `MSR_FFPROBE_SAMPLE_SECS`, `MSR_FFPROBE_PROBESIZE`,
-`MSR_FFPROBE_ANALYZEDURATION`, and the confidence of detecting at least one
-bad output under `MSR_FFPROBE_DEFECT_RATE`. For full certification, the default
-sample count is 60, which gives more than 95% detection confidence if at least
-5% of the 1,200 outputs are bad; quick local runs default to four samples.
-The MediaMTX API is checked before and after each resource sample, and expected
-paths must be ready, have tracks, grow `bytesReceived`, and report zero inbound
-frame errors.
-
-SRT egresses normally reuse one local UDP port for compatible outbound sockets.
-Set `RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT=0` to disable that reuse during
-MediaMTX or network-stack debugging without disabling shared TS muxer stages.
-
-### `bitrate-sweep` — bitrate sensitivity sweep
-
-```sh
-./scripts/build/bench-harness.sh
-./target/bench/test_harness bitrate-sweep
-```
-
-This Rust harness mode runs the five ingest shapes at configurable bitrate
-points and records a focused bitrate-sensitivity report:
-
-- parent and child RSS/CPU
-- retained payload min/max/final plus growth rate
-- source/transcoder/tsmux ring peaks
-- AVIO queue fill and HWM
-- source-ring overflow counts
-- correctness of RTMP source, RTMP 720p, SRT source, and SRT 720p outputs
-
-Artifacts are written to `.local/artifacts/bitrate-sweep/` by default:
-
-- `bitrate-sweep-results.json`
-- `bitrate-sweep-results.csv`
-- `bitrate-sweep-samples.jsonl`
-- `restream.log`, `mediamtx.log`, and publisher logs
-
-Useful env vars:
-
-- `BITRATE_SWEEP_CONFIGS=h264-rtmp,h264-srt,h265-srt,h264-srt-multi,h265-srt-multi`
-- `BITRATE_SWEEP_BITRATES=1.5M,4M,8M`
-- `BITRATE_SWEEP_OUTPUT_GROUPS=1`
-- `BITRATE_SWEEP_STABILIZE_SECS=30`
-- `BITRATE_SWEEP_SAMPLE_INTERVAL_SECS=5`
-
-### `branch-matrix` — passthrough vs transcode family baseline
-
-```sh
-./scripts/build/bench-harness.sh
-./target/bench/test_harness branch-matrix
-```
-
-This is a focused current-code baseline for one question: how much cost comes
-from passthrough fanout versus adding another distinct transcode family.
-
-It runs five fixed H.264 SRT egress shapes:
-
-- source only
-- one shared transcode family (`720p`)
-- source + one shared transcode family
-- two shared transcode families (`720p` + `1080p`)
-- source + two shared transcode families
-
-Artifacts are written to `.local/artifacts/branch-matrix/` by default:
-
-- `branch-matrix-results.json`
-- `branch-matrix-results.csv`
-- `branch-matrix-summary.md`
-- `branch-matrix-samples.jsonl`
-
-Useful env vars:
-
-- `BRANCH_MATRIX_EGRESS_COUNT=10`
-- `BRANCH_MATRIX_SCENARIOS=egress-growth-source-mixed,egress-growth-transcode-mixed`
-- `RESOURCE_SWEEP_SAMPLE_SECS=6`
-- `RESOURCE_SWEEP_SETTLE_SECS=4`
-- `RESOURCE_SWEEP_LIFECYCLE=isolated|continuous|cumulative`
-- `RESTREAM_INTERNAL_VIDEO_PRESETS=1` to capture the internal video-preset
-  backend baseline; add `RESTREAM_INTERNAL_HEVC_TO_H264=1`,
-  `RESTREAM_INTERNAL_HLS_PREVIEW=1`, or `RESTREAM_INTERNAL_AUDIO_COMPLEX=1`
-  only for the stage family under test
-- `HARNESS_SRT_PASSPHRASE=0123456789abcd` and `HARNESS_SRT_PBKEYLEN=16` to
-  rerun the matrix with encrypted SRT ingest
-
-### `backend-policy-matrix` — internal/external stage-family policy
-
-`mixed.matrix` stays symmetric and media-shape focused. Use
-`backend-policy-matrix` when validating the four independent internal backend
-toggles:
-
-- `RESTREAM_INTERNAL_VIDEO_PRESETS`
-- `RESTREAM_INTERNAL_HEVC_TO_H264`
-- `RESTREAM_INTERNAL_HLS_PREVIEW`
-- `RESTREAM_INTERNAL_AUDIO_COMPLEX`
-
-The default variant set is the external baseline, each one-hot internal family,
-and all-internal:
-
-```sh
-./scripts/harness/run.sh backend-policy-matrix
-```
-
-Artifacts are written under `.local/artifacts/backend-policy-matrix/` by default.
-Set `BACKEND_POLICY_MATRIX_VARIANTS` to a comma-separated subset such as
-`internal-video-presets,internal-hls-preview`, or `default`/`all` for the full
-default set. The mode reuses branch/resource probes for video presets and the
-HEVC bridge, runs a mixed HLS-preview sentinel for the preview backend, and
-uses a downmix resource probe for complex-audio routing.
-
-### `srt-crypto-matrix` — plaintext vs AES-128/192/256 ingest
-
-```sh
-./scripts/build/bench-harness.sh
-RESTREAM_BIN=target/bench/restream \
-./target/bench/test_harness srt-crypto-matrix
-```
-
-Runs the branch-matrix sweep four times against the same focused H.264 SRT
-ingest scenario family:
-
-- plaintext
-- encrypted AES-128 (`pbkeylen=16`)
-- encrypted AES-192 (`pbkeylen=24`)
-- encrypted AES-256 (`pbkeylen=32`)
-
-Each variant gets its own subdirectory under `.local/artifacts/branch-matrix/`.
-The harness configures both sides of each ingest consistently: the Restream SRT
-listener gets the matching passphrase/key length, and every SRT publisher URL in
-that run gets the corresponding `passphrase`/`pbkeylen` query parameters.
-
-Useful env vars:
-
-- `SRT_CRYPTO_MATRIX_VARIANTS=plaintext,enc16,enc24,enc32`
-- `BRANCH_MATRIX_SCENARIOS=egress-growth-source-mixed`
-- `BRANCH_MATRIX_EGRESS_COUNT=1`
-- `RESOURCE_SWEEP_SAMPLE_SECS=2`
-- `RESOURCE_SWEEP_SETTLE_SECS=1`
-
-### `bonding` — SRT socket bonding
-
-```sh
-scripts/build/resource-limit.sh target/debug/test_harness bonding
-```
-
-Verifies libsrt group-socket bonding using dedicated C helper binaries compiled
-from `test/native/srt-bond-server.c` and `test/native/srt-bond-client.c` against a statically
-linked libsrt 1.5.5 built with `ENABLE_BONDING=ON`. The script calls
-`scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` automatically on first
-run.
-
-Two bonding modes are tested:
-
-| Mode | Members | `failover` | Messages |
-|---|:---:|:---:|:---:|
-| `broadcast` | 2 | 0 | 1 |
-| `backup` | 2 | 1 | 2 |
-
-Fails if `SRTO_GROUPCONNECT` is unavailable, the two member sockets do not
-attach to the group, or backup delivery does not continue after the primary
-member closes.
-
-Note: `bonding` runs on the host network (random ports) so it is exempt from
-netns re-exec even without `--no-netns`.
-For real multi-NIC or dual-WAN validation, remember that upstream SRT also
-recommends `ENABLE_PKTINFO=ON`; otherwise a wildcard listener may reply from
-the wrong source IP and make a healthy bonding implementation look broken.
-
-### `mixed.live.srt.h264.a1.bf2` — Closed-GOP probe bundle
-
-```sh
-scripts/build/resource-limit.sh target/bench/test_harness mixed.live.srt.h264.a1.bf2
-```
-
-Streams a closed-GOP RTMP/SRT matrix across H.264/H.265, 1080p/4K, selected
-frame rates, and single/dual-audio variants. Each case starts a source output,
-waits for ingest, samples `/api/v1/pipelines/:id/graph`, and fails if active ring
-readers do not report positive `burstCount` and `avgBurstSize` telemetry.
-
-Env: `BURST_SETTLE_SECS` (default 8), `BURST_CONFIGS` (optional
-space-separated config allow-list, e.g. `BURST_CONFIGS="srt-h265-1080p-24fps-1a"`).
-
-The former anchor checks now live in the normalized `mixed.live.srt.h264.a1.bf2`
-table row; the matrix publishers, burst graph assertions, and HLS PUT probe
-checks are implemented in Rust.
-
-### HLS PUT probe
-
-Publishes one SRT H.264/AAC input, starts both HTTP/YouTube-style `file=` and
-path-style HLS PUT outputs, and verifies that a local dummy sink receives
-`seg<N>.ts` media segments plus playlists with the expected content types. The
-path-style output also verifies signed query preservation. Uploaded segments
-from both output shapes are probed with `ffprobe`. The mode then restarts the
-dummy sink and requires fresh segment PUTs after recovery for both shapes.
-
-Env: `HLS_PUT_PORT` (default: synthesized per-process helper port unless
-overridden), `HLS_PUT_SETTLE_SECS` (default 8), `HLS_PUT_RESTART_SECS`
-(default 12).
-
-The HLS PUT probe runs as part of `mixed.live.srt.h264.a1.bf2` and validates dummy PUT
-sink delivery, signed-query preservation, ffprobe readability, and restart
-recovery behavior.
-
-### `timestamp.bframe` — RTMP B-frame timestamp round-trip
-
-```sh
-scripts/build/resource-limit.sh target/debug/test_harness timestamp.bframe
-```
-
-Publishes one RTMP H.264/AAC input with B-frames, starts an RTMP source output,
-and probes the egress packet stream with `ffprobe -show_packets`. The mode also
-installs explicit `h264_bf0` and `h264_bf2` transcode profiles, then verifies
-that real RTMP transcode outputs expose the expected packet shape: no packets
-with `PTS > DTS` for `bframes=0`, and reordered video packets for `bframes=2`,
-while DTS stays monotone in every case.
-
-The public shell mode is now a thin artifact/summary wrapper around
-`cargo run --bin test_harness -- timestamp.bframe`; the live scenario, packet probe,
-and assertions are implemented in Rust.
-
-## Validation Results: June 20, 2026
-
-Environment: WSL2, 20 logical CPUs, 7.6 GiB RAM, 2 GiB swap.
-
-### Correctness
-
-An eight-second generated H.264/AAC MPEG-TS file was looped through real FFmpeg
-publishers.
-
-| Test | Result | External `ffprobe` |
-|---|---|---|
-| File → RTMP ingest → RTMP read | PASS | H.264 640x360 + AAC 48 kHz mono |
-| File → SRT ingest → SRT read | PASS | H.264 640x360 + AAC 48 kHz mono |
-| RTMP source → RTMP egress → RTMP sink read | PASS | H.264 640x360 + AAC 48 kHz mono |
-| RTMP source → SRT egress → SRT sink read | PASS | H.264 640x360 + AAC 48 kHz mono |
-
-Every probe contained exactly one video and one audio stream.
-
-### In-Process Load
-
-```text
-500 RingBuffer readers, 2,000 source packets, 1,316-byte payload
-→ 1,000,000/1,000,000 deliveries, 1.316 GB logical, 51.36 M deliveries/s
-→ 27,516 KiB peak RSS
-```
-
-### Bounded Network Load
-
-```text
-32 RTMP egress sessions, in-process RTMP handshake-and-discard sink, 5s hold
-→ 32/32 connections, 9,408 media messages, 9.686 Mbps aggregate
-→ 28,800 KiB peak RSS
-```
-
-### FFmpeg Assembly Benchmark (June 21, 2026)
-
-Matched static FFmpeg 6.1.5, pinned single-CPU, median of seven runs:
-
-| Workload | No x86 asm | x86 asm | Speedup |
-|---|---:|---:|---:|
-| 4K HEVC decode, 3s | 2.48 s | 1.27 s | 1.95× |
-| 1080p H.264 decode, 5s | 0.62 s | 0.29 s | 2.14× |
-| 4K HEVC decode + 1080p scale, 2s | 3.82 s | 1.22 s | 3.13× |
-| 4K HEVC → 1080p H.264/x264, 2s | 5.45 s | 2.49 s | 2.19× |
-
-## End-to-End Test Plan
-
-### Deterministic Fixtures
-
-**Dual-Audio H.264:**
-```bash
-ffmpeg -y \
-  -f lavfi -i "testsrc2=size=1920x1080:rate=30" \
-  -f lavfi -i "sine=frequency=440:sample_rate=48000" \
-  -f lavfi -i "sine=frequency=880:sample_rate=48000" \
-  -t 120 \
-  -map 0:v -map 1:a -map 2:a \
-  -c:v libx264 -preset slow -g 60 -bf 2 \
-  -c:a aac -b:a 128k \
-  -metadata:s:a:0 title=track-440hz \
-  -metadata:s:a:1 title=track-880hz \
-  .local/artifacts/dual-audio-h264.mkv
-```
-
-**Dual-Audio H.265:**
-```bash
-ffmpeg -y \
-  -f lavfi -i "testsrc2=size=1920x1080:rate=30" \
-  -f lavfi -i "sine=frequency=440:sample_rate=48000" \
-  -f lavfi -i "sine=frequency=880:sample_rate=48000" \
-  -t 120 \
-  -map 0:v -map 1:a -map 2:a \
-  -c:v libx265 -preset slow -x265-params "keyint=60:bframes=2" \
-  -c:a aac -b:a 128k \
-  .local/artifacts/dual-audio-h265.mkv
-```
-
-Also retain short 10-second versions for smoke tests.
-
-### Phase 1: Ingest Equivalence
-
-Publish the same H.264 fixture to both RTMP and SRT pipelines. Verify:
-
-- both active within 10 seconds
-- correct protocol reported
-- bytes and bitrate increase continuously
-- process survives sequence headers, B-frames, reconnects, and shutdown
-- no subtitle, data, or unknown streams in the media ring
-
-### Phase 2: Probe Matching
-
-Use both engine snapshots (`/api/v1/pipelines/:id/probe`) and external `ffprobe` via
-matching protocol. Compare: video codec, dimensions, frame rate, audio codec,
-sample rate, channels, track count, GOP interval.
-
-| Field | Tolerance |
-|---|---|
-| Codec, dimensions, sample rate, channels | Exact |
-| Frame rate | ±0.01 fps |
-| GOP interval | ±1 frame |
-| Average bitrate | ±10% after warm-up |
-| A/V start offset | ≤ 50 ms |
-| A/V drift over 10 min | ≤ 20 ms |
-
-### Phase 3: Egress Correctness Matrix
-
-2 ingests × 6 video shapes × 6 audio modes × 3 protocols = 216 cases.
-Use pairwise reduction for CI; full Cartesian nightly. Always include collision
-cases (`720p+atrack:0`, `720p+atrack:1`, `1080p+atrack:0`, `source+atrack:0`)
-to prove stage sharing and audio isolation.
-
-Per-output assertions:
-
-- correct stream count and types
-- resolution matches preset
-- all packets decode for 30s with `-xerror`
-- DTS monotonic per stream
-- valid PTS/DTS reordering for B-frames
-- A/V start offset ≤ 50 ms
-- no drift beyond 20 ms over long test
-- stopping one output does not interrupt shared stages
-
-Audio routing content assertions (via `astats`, `channelsplit`, frequency
-detection):
-
-| Routing | Assertion |
-|---|---|
-| `passthrough` | Both 440 Hz and 880 Hz tracks remain |
-| `atrack:0` | Only 440 Hz |
-| `atrack:1` | Only 880 Hz |
-| `atrack:0,1` | Both in requested order |
-| `remap:0:1:0` | Correct channel derivation |
-| `downmix:0` | Stereo with expected contribution |
-
-### Phase 4: H.265 Coverage
-
-Publish H.265 via SRT. Verify SRT passthrough preserves HEVC identity, RTMP
-egress capability test, no silent HEVC-as-H.264 mislabeling.
-
-`cargo run --bin test_harness -- mixed.live.srt.h265.a1.bf2` covers both HEVC
-edges from a single scenario: it ingests H.265 over SRT and, through its
-multi-protocol output plan, verifies the RTMP leg (shared `hevc_to_h264` stage,
-H.264 video plus AAC audio at the RTMP read endpoint) and the SRT leg (native
-HEVC passthrough, HEVC video plus AAC audio at the SRT read endpoint) together.
-
-`cargo run --bin test_harness -- mixed.live.srt.h264.a1.bf0` covers the direct
-cross-protocol packetization path: it ingests H.264/AAC over SRT, loops it
-through RTMP egress, and verifies H.264 video plus AAC audio at the RTMP read
-endpoint.
-
-### Phase 5: Recovery and Isolation
-
-- publisher stop/restart
-- sink restart during active outputs
-- 1%, 3%, 5% packet loss + 50 ms jitter on SRT
-- add/remove outputs sharing video stages
-- one slow sink does not stall others
-- readers recover at keyframe after ring overflow
-- shared stages survive while dependents exist, terminate after last stops
-
-### Phase 6: Scale Benchmarks
-
-**In-process** (no network): 500 null consumers, deterministic packet replay.
-Measures engine CPU/memory independent of network.
-
-**Networked**: custom separate-process sink (RTMP/SRT/HLS PUT listeners),
-ramp 1→10→50→100→250→500 outputs, hold 30 min at 500, 2-hour soak.
-
-Functional gates: 500/500 publishing, all receive bytes, no unexpected
-termination, aggregate bitrate ±5%, no ring overflow, resources return to
-baseline on stop.
-
-### Automation
-
-Currently checked in:
-
-```text
-scripts/build/resource-limit.sh target/debug/test_harness ramp-family
-scripts/build/resource-limit.sh target/bench/test_harness mixed.live.srt.h264.a1.bf2
-scripts/build/resource-limit.sh target/debug/test_harness bonding
-scripts/build/resource-limit.sh target/debug/test_harness timestamp.bframe
-scripts/build/resource-limit.sh target/debug/test_harness mixed.live.srt.h264.a1.bf0
-scripts/build/resource-limit.sh target/debug/test_harness mixed.live.srt.h265.a1.bf2
-./target/bench/test_harness resource-sweep
-./target/bench/test_harness bitrate-sweep
-scripts/harness/media-validation.sh
-```
-
-Aggregate release-evidence runner:
-
-```sh
-scripts/harness/run.sh suite -- --run-id <run-id>
-```
-
-Use `test_harness suite` as the canonical aggregate orchestrator. It creates
-`.local/artifacts/<run-id>/manifest.json`, runs each checked-in integration mode
-in its own subdirectory, and records one JSONL result per mode in
-`.local/artifacts/<run-id>/results.jsonl`. Supported suite options are:
-
-- `--run-id <id>` to choose the artifact run id
-- `--work-root <path>` to choose the aggregate artifact directory
-- `--only-modes mixed.live.srt.h264.a1.bf2,timestamp.bframe` to run a subset
-- `--preflight-only` to run readiness checks without starting live services
-- `--mode-timeout-secs <seconds>` to override the bounded 15-minute child-mode
-  timeout (`TEST_HARNESS_SUITE_MODE_TIMEOUT_SECS` provides the same override)
-- `--continue-on-fail` to keep collecting artifacts after the first failure
-
-Default release-evidence modes run in ascending expected-duration order so CI
-surfaces cheap failures before long measurement sweeps. The order is declared
-as `suiteOrder` in `test/harness/modes.json`; do not rely on JSON object order,
-because the catalog lookup is alphabetized internally.
-
-| Order | Mode | Last local release duration |
-|---:|---|---:|
-| 1 | `api-smoke` | 2s |
-| 2 | `file.live-edge` | 32s |
-| 3 | `srt.policy` | 55s |
-| 4 | `branch-matrix` | 1m 29s |
-| 5 | `fault.resilience` | 3m 12s |
-| 6 | `srt-crypto-matrix` | 5m 54s |
-| 7 | `ramp-family` | 7m 5s |
-| 8 | `resource-sweep` | 7m 43s |
-| 9 | `bitrate-sweep` | 14m 1s |
-| 10 | `mixed.matrix` | 49m 6s |
-
-Parallel-safe correctness modes may still overlap when namespace isolation is
-available, but the suite writes their JSONL results in completion order so the
-fastest checks become visible as soon as they finish.
-
-Heavyweight suite-default modes can declare a larger catalog timeout floor in
-`test/harness/modes.json`. `mixed.matrix` does this because it performs the
-full RTMP/SRT, H.264/H.265, audio-track, HLS, recording, and decode-scan
-matrix. `resource-sweep` also declares a floor because the release-default
-growth cases include source, transcode, and dual-transcode stacks.
-`bitrate-sweep` declares the same floor because it runs real publisher, output,
-sampling, and probe loops across multiple bitrate points and can finish near
-the default 15-minute ceiling on a fast local machine. These floors are caps,
-not sleeps: they only prevent the suite from killing a mode that is still
-making expected progress. The default 15-minute cap is still used for ordinary
-modes.
-
-The aggregate manifest and each JSONL row label their evidence as `preflight`
-or `execution`; a successful `--preflight-only` run therefore cannot be
-mistaken for proof that the live mode ran. Timed-out children are terminated as
-one owned process group and write `timeout.json` beside `run.log` before the
-suite continues or fails.
-
-Why the aggregate runner lives in `test_harness` instead of a separate
-`protocol_matrix` binary:
-
-- The suite and the per-mode scenarios already share the same artifact layout,
-  loopback namespace handling, fixture generation, child-process helpers, and
-  result serialization.
-- Keeping orchestration and mode execution in one binary avoids a second Rust
-  surface that can drift in CLI semantics, manifest shape, or per-mode naming.
-- `suite_run()` can spawn the same executable for each mode, which keeps the
-  aggregate runner honest: it exercises the exact per-mode entrypoints used in
-  focused runs instead of re-implementing them in a parallel binary.
-- The old shell-plus-`protocol_matrix` path no longer buys us anything. The
-  aggregate orchestration logic is already implemented in `test_harness`, so
-  the extra wrapper only adds another compatibility surface to maintain.
-
-`mixed.live.srt.h264.a1.bf2`, `timestamp.bframe`, `mixed.live.srt.h264.a1.bf0`,
-and `mixed.live.srt.h265.a1.bf2` are behind typed Rust
-harness entry points, and `ramp-family` runs the full eight-config ramp matrix.
-`mixed.live.srt.h264.a1.bf2` owns the former anchor probe bundle.
-
-`test_harness` writes `manifest.json` in the selected `WORK_DIR`
-for each checked-in mode. The manifest starts as `RUNNING` and is finalized to
-`PASS` or `FAIL` with timestamps, git head, network mode, and primary artifact
-paths. This applies even to setup failures after the mode has initialized its
-artifact directory, making failed matrix attempts auditable instead of silent.
-
-Planned scenario families for the remaining matrix should be added as
-`test_harness` entries:
-
-```text
-ingest-equivalence
-egress-matrix
-h265
-recovery
-scale-inprocess
-scale-500
-```
-
-Each completed matrix run should write artifacts to `.local/artifacts/<run-id>/` with manifest,
-environment, per-case results (PASS/FAIL/EXPECTED_FAIL/SKIPPED/INFRA_FAILURE),
-ffprobe output, captures, metrics, logs, and summary.
-
-## Capability Gates
+Integration tests use a private loopback namespace by default. Use
+`--no-netns` only when the host cannot create the namespace or the test must
+interact with a host service. Never build while Restream, MediaMTX, or FFmpeg
+live-pipeline processes are running.
+
+### Choosing a live proof
+
+Choose the narrowest catalog mode that crosses the changed boundary:
+
+- protocol or codec behavior — one matching mixed RTMP/SRT scenario;
+- teardown or recovery — the matching fault workflow;
+- HLS, recording, or file ingest — a scenario whose resolved plan includes the
+  relevant sink and checks;
+- broad regression confidence — a catalog suite after the scoped mode passes;
+- performance or capacity — a measurement workflow, run serially with
+  bench-profile binaries.
+
+Use the catalog's current inspection commands to resolve a mode and review its
+services, scenarios, checks, timeouts, and artifacts before spending time on a
+live run.
+
+### Fixtures and artifacts
+
+Harness publishers and probes must resolve committed media through
+`src/test_fixtures.rs`. Add new assets to the checked-in fixture contract; do
+not generate substitute media inline for a passing test.
+
+Each run writes under `.local/artifacts/` using its run identity. Preserve the
+manifest, result stream, logs, probe output, and failure snapshots needed to
+explain the verdict. Generated run directories are evidence, not source, and
+must not be committed.
+
+### Correctness and measurement remain separate
+
+Correctness modes answer whether protocols, timestamps, stream selection,
+lifecycle, and recovery satisfy their contracts. Measurement modes answer how
+much CPU, memory, latency, or throughput a known-correct path consumes. Do not
+weaken correctness checks to make a measurement pass, and do not use debug
+binaries for resource or performance conclusions.
+
+For the rationale behind this split, see
+[testing-strategy.md](testing-strategy.md). For protocol-specific execution,
+use the canonical protocol-test skill or inspect the relevant catalog plan.
+
+## Capability gates
 
 These capabilities must be treated as test results, not assumptions:
 
@@ -1444,143 +354,3 @@ These capabilities must be treated as test results, not assumptions:
 | Audio remap/downmix | Channel-level filtering is implemented for the default runtime; full audio-content matrix remains required |
 | Custom encoding | Runtime output selection must stay rejected until custom args are applied by a transcoder backend |
 | Bonded SRT ingest | Separate-process broadcast + backup tests |
-
-## Current Resource Measurements (2026-06-28)
-
-These numbers are authoritative current-code measurements generated by the Rust
-harness:
-
-- `.local/artifacts/resource-sweep-authoritative/resource-sweep-results.csv`
-- `.local/artifacts/bitrate-sweep-authoritative/bitrate-sweep-results.csv`
-
-Both sweeps use live ingest/egress, sample `/proc`, and cross-check against
-`/api/v1/engine/telemetry`.
-
-### Resource Sweep Snapshot
-
-Isolated sweep, current default code:
-
-| Scenario | Restream MB | Child FFmpeg MB | Combined MB | Restream CPU % | Child FFmpeg CPU % | Total CPU % |
-|---|---:|---:|---:|---:|---:|---:|
-| Empty baseline | 72.8 | 0.0 | 72.8 | 1.15 | 0.00 | 1.15 |
-| Same ingest growth, 5x H.264 SRT | 82.6 | 0.0 | 82.6 | 7.27 | 0.00 | 7.27 |
-| Mixed ingest growth, 5 ingest types | 75.9 | 0.0 | 75.9 | 8.92 | 0.00 | 8.92 |
-| Mixed source egress, 20 outputs | 83.8 | 0.0 | 83.8 | 11.86 | 0.00 | 11.86 |
-| Mixed 720p transcode egress, 20 outputs | 120.3 | 166.5 | 286.8 | 17.96 | 33.69 | 51.65 |
-| HEVC bridge, 10 RTMP source outputs | 158.7 | 0.0 | 158.7 | 71.82 | 0.00 | 71.82 |
-
-Current queue/ring peaks for those same rows:
-
-| Scenario | Source Ring MB | Transcoder Ring MB | TsMux Ring MB | AVIO HWM MB |
-|---|---:|---:|---:|---:|
-| Empty baseline | 0.1 | 0.0 | 0.0 | 0.0 |
-| Same ingest growth, 5x H.264 SRT | 19.0 | 0.0 | 0.0 | 0.0 |
-| Mixed ingest growth, 5 ingest types | 15.6 | 0.0 | 0.0 | 0.0 |
-| Mixed source egress, 20 outputs | 5.8 | 0.0 | 1.5 | 0.5 |
-| Mixed 720p transcode egress, 20 outputs | 5.7 | 8.3 | 4.3 | 4.6 |
-| HEVC bridge, 10 RTMP source outputs | 5.8 | 8.2 | 0.0 | 0.0 |
-
-Takeaways:
-
-- Idle baseline is about `73 MB` in the Restream process before live traffic.
-- Ingest fan-in without transcode is cheap in RSS: `~76-83 MB` for five live
-  pipelines depending on mix.
-- Mixed `720p` transcode egress is the main external-process memory consumer:
-  `~120 MB` in Restream plus `~166 MB` in the child FFmpeg at 20 outputs.
-- HEVC bridge remains expensive in-process: `~159 MB` and `~72%` CPU at 10
-  source outputs, with no external child involved.
-
-### Bitrate Sweep
-
-Bitrate sweep runs one pipeline with four outputs (`RTMP source`, `RTMP 720p`,
-`SRT source`, `SRT 720p`) and verifies all four with `ffprobe`.
-
-| Ingest Config | Bitrate | Restream MB | Child FFmpeg MB | Combined MB | Restream CPU % | Child FFmpeg CPU % | Total CPU % | Correctness |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| `h264-rtmp` | 1.5M | 86.9 | 167.0 | 253.9 | 7.63 | 33.49 | 41.12 | PASS |
-| `h264-rtmp` | 4M | 103.2 | 166.9 | 270.1 | 6.43 | 33.13 | 39.56 | PASS |
-| `h264-rtmp` | 8M | 118.2 | 169.2 | 287.3 | 5.69 | 31.99 | 37.68 | PASS |
-| `h264-srt` | 1.5M | 93.7 | 166.5 | 260.2 | 7.16 | 34.79 | 41.95 | PASS |
-| `h264-srt` | 4M | 112.3 | 167.4 | 279.7 | 7.76 | 37.85 | 45.61 | PASS |
-| `h264-srt` | 8M | 136.7 | 160.8 | 297.5 | 7.66 | 36.76 | 44.42 | PASS |
-| `h265-srt` | 1.5M | 220.1 | 317.0 | 537.1 | 173.84 | 256.39 | 430.23 | PASS |
-| `h265-srt` | 4M | 241.8 | 299.7 | 541.5 | 146.59 | 160.12 | 306.71 | PASS |
-| `h265-srt` | 8M | 278.4 | 303.3 | 581.6 | 161.90 | 148.84 | 310.75 | PASS |
-| `h264-srt-multi` | 1.5M | 93.8 | 167.4 | 261.2 | 7.89 | 38.91 | 46.80 | PASS |
-| `h264-srt-multi` | 4M | 111.2 | 168.1 | 279.3 | 8.19 | 39.01 | 47.20 | PASS |
-| `h264-srt-multi` | 8M | 135.1 | 170.3 | 305.4 | 8.99 | 37.95 | 46.94 | PASS |
-| `h265-srt-multi` | 1.5M | 215.8 | 317.9 | 533.7 | 168.13 | 243.90 | 412.03 | PASS |
-| `h265-srt-multi` | 4M | 240.8 | 300.1 | 541.0 | 125.86 | 141.00 | 266.86 | PASS |
-| `h265-srt-multi` | 8M | 252.0 | 316.7 | 568.6 | 160.18 | 159.96 | 320.14 | PASS |
-
-Current bitrate-sweep takeaways:
-
-- H.264 ingest scales upward with bitrate mostly in retained memory, not in a
-  proportional jump in CPU. Combined memory ends up in the `~254-305 MB` range
-  for the four-output shape.
-- External FFmpeg RSS is comparatively flat for H.264 cases, roughly
-  `161-170 MB`, while Restream parent RSS grows with bitrate and protocol mix.
-- H.265 ingest is much more expensive because the bridge/transcode path is
-  active. Combined memory is `~534-582 MB`, and total CPU is `~267-430%`
-  depending on bitrate and audio shape.
-- All 15 current cases passed output correctness.
-
-## Media Correctness Findings (2026-07-01)
-
-These issues were found while hardening the `mixed.live.srt.h265.a2.bf2` live matrix
-around the checked-in H.265 + two-audio fixture.
-
-### Fixed Runtime Issues
-
-- RTMP egress could emit equal or backward timestamps when source packets had
-  repeated millisecond DTS/PTS. Runtime now guards RTMP video and audio
-  timestamps independently, and unit tests cover repeated video DTS, repeated
-  audio PTS, and A/V stream independence.
-- MPEG-TS muxing could emit equal DTS when packet timestamps repeated at
-  millisecond precision. The muxer now enforces strictly increasing 90 kHz DTS
-  per elementary stream, with unit coverage for repeated timestamps and
-  independent audio tracks.
-- SRT selected-track egress could advertise ingest audio tracks that were not
-  present in the routed output ring. The shared TS muxer now prefers routed
-  `RingBuffer::audio_tracks()` metadata when available, and the regression test
-  verifies the PMT contains only the selected audio track.
-- ADTS audio payloads can contain multiple AAC frames inside one PES. Treating
-  only the PES start timestamp as occupied allowed the next PES to collide with
-  the final internal AAC frame after FFprobe split the frames. The muxer now
-  reserves the full ADTS frame span before accepting the next DTS. Unit coverage
-  includes deterministic multi-frame AAC and a property test for ADTS frame
-  counting.
-- RTMP egress wrapped Raw Annex B H.264 as FLV/AVCC with composition time `0`.
-  B-frame fixtures therefore lost their `PTS-DTS` offset on RTMP output and the
-  mixed-file multi live row exposed downstream duplicate/non-monotonic DTS
-  warnings. The Raw H.264 RTMP wrapper now preserves signed 24-bit FLV
-  composition time, with unit coverage for positive and negative offsets.
-
-### Validator Lessons
-
-- MediaMTX remains valuable as an interoperability sink, but it is not the only
-  correctness oracle. Direct `ffprobe`/`ffmpeg` sinks are required when debugging
-  muxer-level timestamp failures.
-- MediaMTX SRT readback reproduced non-monotonic DTS with Restream bypassed in
-  a direct FFmpeg-to-MediaMTX control. That specific path is therefore treated
-  as a compatibility/readback signal, not strict proof of Restream muxer output.
-- FFmpeg decode-to-`null` can introduce muxer-layer DTS warnings after decode,
-  especially with multi-audio PCM output. The direct SRT sink now uses
-  `ffprobe` compact packet output for stream shape and packet timestamp checks,
-  avoiding false positives from a newly-created output muxer.
-- FFprobe packet dumps may print elementary streams in demuxer flush order, not
-  raw physical TS packet order. The harness validates duplicate DTS and large
-  per-stream gaps after sorting each stream's timestamps instead of requiring
-  the printed order to be monotonic.
-
-### Required Controls
-
-- Probe the checked-in fixture before blaming Restream:
-  `ffprobe -v warning -show_entries program=:stream=index,codec_type,width,height:packet=stream_index,dts_time,pts_time -of compact=p=1:nk=0 test/fixtures/transport/bench-h265-1_5m-2a.ts`.
-- For sink disputes, run FFmpeg/FFprobe directly against the sink path with
-  Restream bypassed. If the control reproduces the warning, keep MediaMTX in
-  the matrix for interoperability but use a direct FFmpeg-family sink for muxer
-  correctness.
-- The direct SRT correctness mode is `SRT_SINK=ffmpeg` on
-  `mixed.live.srt.h265.a2.bf2`; it validates stream dimensions, selected audio-track
-  count, duplicate DTS, large DTS gaps, and FFmpeg-family probe warnings.

@@ -1,6 +1,7 @@
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use restream::media::srt::*;
 use std::ffi::c_int;
+use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 const BENCH_LATENCY_MS: c_int = 20;

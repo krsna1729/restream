@@ -222,7 +222,7 @@ async fn check_system_resources(idx: u32, media_dir: &str) -> DiagResult {
     let mut sys = System::new_all();
     sys.refresh_all();
 
-    let cpu_pct: f32 = sys.global_cpu_info().cpu_usage();
+    let cpu_pct: f32 = sys.global_cpu_usage();
     let total_mem = sys.total_memory();
     let used_mem = sys.used_memory();
     let mem_pct = (used_mem * 100).checked_div(total_mem).unwrap_or(0);

@@ -14,10 +14,10 @@ chased, or one optimization with before/after proof.
 
 - **Serial only:** nothing else may build or run on the host during any
   measurement. Kill-check first: `pgrep -x restream; pgrep -x mediamtx; pgrep -x ffmpeg`.
-- Bench profile only: `scripts/build/resource-limit.sh cargo build --profile bench`,
-  `scripts/build/resource-limit.sh cargo bench --bench <name>`. Never `--release`,
-  never `target/debug` for measurement harness modes
-  (`scripts/build/bench-harness.sh` → `target/bench/test_harness`).
+- Bench profile only: use
+  `scripts/build/resource-limit.sh cargo bench --bench <name>` for Criterion
+  and `scripts/harness/run.sh <mode>` for measurement harness workflows. Never
+  use `--release` or a `target/debug` harness binary.
 - Every claim needs numbers from this machine, this session. No "should be
   faster".
 - Durable results go to `docs/agent-guidance/quality/baselines.md`; Criterion's
@@ -25,11 +25,9 @@ chased, or one optimization with before/after proof.
 
 ## Mode A — ledger check (performance guard)
 
-1. Pick the least-recently-measured suite in `baselines.md`
-   (`ring_buffer`, `avio_throughput`, `high_performance_data_path`,
-   `matrix_throughput`, `srt_ingest_latency`, `transcoder_throughput`,
-   `hls_cost`, `hls_fmp4_cost`, `stage_feeder`, `stage_metrics`,
-   `codec_conversions`, `simd_alternatives`, `alert_tracker`).
+1. Read the benchmark targets from `Cargo.toml` and compare them with the
+   entries in `baselines.md`. Pick the least-recently-measured applicable
+   target; do not maintain a duplicate suite list in this skill.
 2. Run it; compare medians against the ledger.
 3. Within noise (±5% for throughput suites unless the ledger row says
    otherwise) → update the "last verified" date, done.
@@ -40,8 +38,8 @@ chased, or one optimization with before/after proof.
 
 ## Mode B — resource check (efficiency guard)
 
-1. Run `scripts/build/resource-limit.sh target/bench/test_harness resource-sweep`
-   (serial, bench harness).
+1. Run `scripts/harness/run.sh resource-sweep` serially. The wrapper owns the
+   bench-harness build and lock handling.
 2. Compare RSS, ring payload, and AVIO high-water marks against the resource
    table in `baselines.md`.
 3. Record; regressions become filed items with numbers, same as Mode A.

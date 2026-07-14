@@ -7,9 +7,7 @@
 use std::num::NonZeroU32;
 
 use bytes::Bytes;
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use restream::media::engine::{AudioMeta, VideoMeta};
 use restream::media::hls::HlsConfig;
 use restream::media::hls_fmp4::Fmp4HlsStore;
@@ -22,6 +20,7 @@ use shiguredo_mp4::{
     descriptors::{DecoderConfigDescriptor, DecoderSpecificInfo, EsDescriptor, SlConfigDescriptor},
     mux::{Fmp4SegmentMuxer, Sample},
 };
+use std::hint::black_box;
 
 const SEGMENT_SECONDS: u32 = 6;
 const WINDOW_SEGMENTS: usize = 10;

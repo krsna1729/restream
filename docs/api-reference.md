@@ -5,6 +5,26 @@ Base URL: `http://localhost:3030`
 JSON uses camelCase. Unless noted otherwise, routes require the `session` cookie
 returned by login.
 
+## Contents
+
+- [Request Limits](#request-limits)
+- [Authentication](#authentication)
+- [Configuration and Discovery](#configuration-and-discovery)
+- [Pipelines](#pipelines)
+- [Outputs](#outputs)
+- [Process Logs](#process-logs)
+- [Output Status](#output-status)
+- [Probe, Graph, and Diagnostics](#probe-graph-and-diagnostics)
+- [Optional Agent Plane](#optional-agent-plane)
+- [Recording](#recording)
+- [File Ingest](#file-ingest)
+- [Media Files](#media-files)
+- [Custom Encoding](#custom-encoding)
+- [Health and Status](#health-and-status)
+- [HLS Pull](#hls-pull)
+- [Operator v1 Endpoints](#operator-v1-endpoints)
+- [Engineer v1 Endpoints](#engineer-v1-endpoints)
+
 ## Request Limits
 
 | Limit | Value |
@@ -541,11 +561,10 @@ matches the configured stream key, and `409` if that ingest ID already has a
 running file ingest or the target pipeline already has another active
 publisher.
 
-By default the backend is the embedded `public/bin/ffmpeg` subprocess:
-
-```text
-ffmpeg -re [-stream_loop -1] [-ss <start>] -i media/<file> -map 0 -c copy -f mpegts pipe:1
-```
+By default the backend is the embedded `public/bin/ffmpeg` subprocess. The
+application service owns its argument construction; the API contract is the
+requested loop, start-time, and optimization behavior rather than a copied
+process command.
 
 Set `RESTREAM_USE_INTERNAL_FILE_INGEST=1` to switch passthrough
 `liveOptimized=false` starts to the in-process remux path instead.

@@ -132,6 +132,11 @@ RESOURCE_SWEEP_LIFECYCLE=cumulative ./scripts/harness/run.sh resource-sweep
 - `continuous`: keep the same processes alive across the whole sweep and only rotate pipelines/publishers
 - `cumulative`: keep the same processes and leave prior publishers/pipelines running so later rows show additive growth
 
+## Contents
+
+- [Current Authoritative Snapshot (June 28, 2026)](#current-authoritative-snapshot-june-28-2026)
+- [Profiling Workflow](#profiling-workflow)
+
 ## Current Authoritative Snapshot (June 28, 2026)
 
 Source artifacts:

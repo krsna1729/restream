@@ -1,108 +1,76 @@
-## Current Priorities
+# Current priorities
 
-This document replaces the old rewrite/status/master-plan documents.
-The Rust rewrite is no longer the main story; this file keeps only the work
-that still appears worth pursuing from those plans.
+This page records durable priority themes. It is not a second backlog or
+architecture map: actionable items and implementation detail stay with their
+owning documents.
 
-## Current State
+## Contents
 
-The repository already has:
+- [Priority themes](#priority-themes)
+- [Sources of actionable work](#sources-of-actionable-work)
+- [Non-goals](#non-goals)
+- [Review rule](#review-rule)
 
-- a Rust-native control plane and media runtime
-- native RTMP/SRT ingest and egress
-- shared runtime graph/telemetry surfaces
-- an application layer for orchestration and persistence policy
-- domain-owned typed config for key control-plane schemas
-- agent-plane and MCP scaffolding
+## Priority themes
 
-The main remaining work is not "finish the rewrite." It is focused hardening,
-cleanup, and selective platform improvements.
+### Tighten real ownership boundaries
 
-## Worth Pursuing
+Continue layering work only where it removes observable coupling or duplicated
+orchestration. The [layering roadmap](layering-roadmap.md) owns the current
+sequence and the [layering audit skill](agent-guidance/skills/layering-audit/SKILL.md)
+owns stop rules.
 
-### 1. Keep tightening layer boundaries
+### Preserve shared media work
 
-Continue only where there is still real coupling to remove:
+Share expensive transforms and protocol packaging by typed stage identity while
+keeping destination-specific sender state at the edge. Current behavior and
+invariants belong in [Media pipeline](media-pipeline.md) and
+[Architecture](architecture.md).
 
-- shrink large edge/runtime files when ownership becomes clearer
-- keep moving persistence policy out of runtime-heavy modules
-- keep JSON/view shaping close to the API edge
-- avoid new modules or crates unless they remove real complexity
+### Harden proof and recovery
 
-Primary references:
+Prioritize causality-rich diagnostics, deterministic correctness proofs,
+fault-isolated recovery, and live protocol evidence. Gate selection belongs in
+[Testing](testing.md); open quality work belongs in the
+[quality backlog](agent-guidance/quality/backlog.md).
 
-- [architecture.md](architecture.md)
-- [layering-roadmap.md](layering-roadmap.md)
-- [agent-guidance/skills/layering-audit/SKILL.md](agent-guidance/skills/layering-audit/SKILL.md)
+### Keep the Rust and FFmpeg boundary pragmatic
 
-### 2. Finish runtime/view separation
+Rust owns orchestration, lifecycle, telemetry, and transport control. FFmpeg
+remains appropriate for codec-heavy transforms. Changes to that boundary need
+correctness and performance evidence rather than a language-purity goal.
 
-The engine should keep owning typed runtime state, while API-facing JSON stays
-in edge/view-model code.
+### Treat advanced paths conservatively
 
-Still-useful direction:
+Do not advertise custom or incomplete runtime paths as supported without
+validation, operator-visible failure behavior, and representative matrix
+evidence.
 
-- keep `api_runtime_views` and `api_view_models` as the HTTP-facing shape layer
-- avoid pushing more `serde_json::Value` assembly back into runtime internals
+## Sources of actionable work
 
-### 3. Continue selective stage-sharing and planner cleanup
+Use these owners instead of copying their current items here:
 
-The intended direction still stands:
+- [Quality backlog](agent-guidance/quality/backlog.md) for prioritized,
+  executable hardening items;
+- [Layering roadmap](layering-roadmap.md) for ordered ownership refactors;
+- [Stage boundary proof map](stage-boundary-proof-map.md) for proof gaps;
+- [Regression artifacts](regression-artifacts.md) for historical replay
+  obligations.
 
-- share expensive transforms aggressively
-- keep per-output state only for the last-hop sender concerns
-- keep stage identity and planning typed rather than stringly
+This page changes only when the project's priority themes change.
 
-This matters more than any crate split.
+## Non-goals
 
-### 4. Preserve the Rust-platform plus selective-FFmpeg strategy
+The following themes do not justify work by themselves:
 
-The architectural choice remains sound:
+- rewrite a working owner without a concrete correctness or ownership gain;
+- split modules or crates without clearer ownership;
+- replace FFmpeg for ideological reasons;
+- duplicate active backlog items in another planning document;
+- turn completed plans or dated snapshots into current guidance.
 
-- Rust owns orchestration, lifecycle, telemetry, and transport control
-- FFmpeg remains the right place for codec-heavy transforms
+## Review rule
 
-Do not treat "remove FFmpeg" as an active goal.
-
-### 5. Harden quality, diagnostics, and operational safety
-
-The still-relevant operational themes are:
-
-- media-quality regression protection
-- safe defaults for transforms and compatibility behavior
-- strong diagnostics for source, stage, and output faults
-- safe control-plane mutation flows with auditability
-
-Primary references:
-
-- [testing.md](testing.md)
-- [testing-strategy.md](testing-strategy.md)
-- [mahashivratri-hero-scenario.md](mahashivratri-hero-scenario.md)
-- [observability.md](observability.md)
-- [agent-plane-integration.md](agent-plane-integration.md)
-
-### 6. Treat custom/advanced paths conservatively
-
-Keep the current standard:
-
-- do not advertise custom encoding/runtime paths as fully supported without
-  profiling and matrix evidence
-- keep inactive or incomplete advanced paths explicitly gated or rejected
-
-## Not Current Priorities
-
-These older themes should not drive work by themselves:
-
-- "finish the rewrite" as a broad program
-- preserve old Node.js or MediaMTX mental models
-- split crates for their own sake
-- expand pure-Rust codec work for ideological reasons
-- keep obsolete v2/v3 plan artifact trees alive
-
-## How To Use This
-
-Use this file as the replacement for the old top-level planning/status docs.
-
-- For current architecture truth: read [architecture.md](architecture.md)
-- For layering decisions: read [layering-roadmap.md](layering-roadmap.md)
-- For testing/proof gates: read [testing.md](testing.md) and [AGENTS.md](../AGENTS.md)
+Review this page at major releases or architectural pivots. Routine item
+completion belongs in its owning backlog, roadmap, proof map, or evidence
+record—not in a status diary here.

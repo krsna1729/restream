@@ -4,6 +4,18 @@ The Rust runtime has a small environment configuration surface for deployment
 paths, listener ports, and operational tuning. User-facing settings are stored
 in SQLite.
 
+## Contents
+
+- [Fixed Runtime Values and Environment Variables](#fixed-runtime-values-and-environment-variables)
+- [SQLite-Backed Settings](#sqlite-backed-settings)
+- [Linux Service Placement](#linux-service-placement)
+- [SQLite Performance Settings](#sqlite-performance-settings)
+- [Ingest URLs](#ingest-urls)
+- [Output Configuration](#output-configuration)
+- [File Ingest Configuration](#file-ingest-configuration)
+- [SRT Socket Policy](#srt-socket-policy)
+- [HLS Pull and Authorization](#hls-pull-and-authorization)
+
 ## Fixed Runtime Values and Environment Variables
 
 | Value | Default setting | Environment Variable Override |
@@ -11,9 +23,14 @@ in SQLite.
 | Dashboard/API listener | `127.0.0.1:3030` | `RESTREAM_HTTP_BIND_ADDR`, `RESTREAM_HTTP_PORT` |
 | RTMP listener | `0.0.0.0:1935` | `RESTREAM_RTMP_PORT` |
 | SRT listener | `0.0.0.0:10080` | `RESTREAM_SRT_PORT` |
+| Tokio scheduler workers | Derived from the effective CPU mask/quota | `RESTREAM_TOKIO_WORKER_THREADS` |
+| Tokio blocking-thread ceiling | `512` | `RESTREAM_TOKIO_MAX_BLOCKING_THREADS` |
 | Transcoder backend | External FFmpeg subprocess | `RESTREAM_INTERNAL_VIDEO_PRESETS`, `RESTREAM_INTERNAL_HEVC_TO_H264`, `RESTREAM_INTERNAL_HLS_PREVIEW`, and `RESTREAM_INTERNAL_AUDIO_COMPLEX` (`1`/`true`/`yes`/`on` enable each in-process stage family independently) |
 | File-ingest backend | External embedded FFmpeg subprocess | `RESTREAM_USE_INTERNAL_FILE_INGEST` (`1`/`true`/`yes`/`on` to enable in-process remux + demux for passthrough file ingest) |
 | External transcoder and file-ingest executable | Embedded `public/bin/ffmpeg`, extracted to `.restream/runtime/ffmpeg/` at startup | `FFMPEG_BIN_PATH` |
+| External FFmpeg codec threads | FFmpeg-selected | `RESTREAM_EXTERNAL_FFMPEG_THREADS` |
+| Recording remux FFmpeg threads | FFmpeg-selected | `RESTREAM_RECORDING_FFMPEG_THREADS` |
+| Concurrent external FFmpeg stages | Derived from available CPUs | `RESTREAM_EXTERNAL_FFMPEG_PERMITS`; derivation can be tuned with `RESTREAM_EXTERNAL_FFMPEG_CPU_RESERVE`, `RESTREAM_EXTERNAL_FFMPEG_CPU_PER_CHILD`, and `RESTREAM_EXTERNAL_FFMPEG_MAX_CHILDREN` |
 | SQLite database | `.restream/data/restream.db` (with WAL/SHM sidecars) | `RESTREAM_DB_PATH` |
 | Media directory | `.restream/media/` | `RESTREAM_MEDIA_DIR` |
 | Text file log directory | `.restream/logs/` | `RESTREAM_LOG_DIR` |
@@ -22,13 +39,19 @@ in SQLite.
 | Shared SRT TS ring depth | `256` chunks | `RESTREAM_TS_RING_CAPACITY` (SRT protocol's own send buffer absorbs network jitter; this ring only bridges muxer → socket write, typically sub-millisecond) |
 | SRT egress muxer max outputs per shard | `0` | `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` (disabled at `0`; when set, SRT egress creates a new shared TS muxer shard as each pipeline+encoding cohort crosses this many outputs) |
 | SRT egress muxer max shards | `64` | `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` (hard guardrail for dynamic SRT muxer sharding; once reached, new outputs are assigned to the least-loaded existing shard and a warning is emitted) |
+| SRT egress local-port reuse | Enabled | `RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT` (`0`/`false` disables reuse) |
+| Require libsrt bonding support | Disabled | `RESTREAM_REQUIRE_SRT_BONDING` (presence makes unavailable bonding support a startup/test prerequisite) |
+| SRT encryption | Disabled | `RESTREAM_SRT_PASSPHRASE`; `RESTREAM_SRT_PBKEYLEN` selects the key length and defaults to `16` |
 | AVIO queue capacity (async↔OS-thread bridge) | `524288` bytes (512 KiB) | `RESTREAM_AVIO_QUEUE_CAPACITY` (measured peak HWM = 398 KiB at 8 Mb/s RTMP with zero blocked writes; raise only for very high-latency SRT links) |
 | File descriptor limit | `65536` | `RESTREAM_NOFILE_LIMIT` |
 | Output reconciliation interval | 1 second | `RESTREAM_RECONCILE_INTERVAL_MS` |
 | Failed-output max retries | `10` | `RESTREAM_OUTPUT_MAX_RETRIES` |
 | Failed-output restart base backoff | 5 seconds | `RESTREAM_OUTPUT_RETRY_BASE_MS` |
 | Failed-output restart max backoff | 300 seconds | `RESTREAM_OUTPUT_RETRY_MAX_MS` |
+| Ingest disconnect grace period | 5000 ms | `RESTREAM_INGEST_DISCONNECT_GRACE_MS` |
 | Idle HLS segmenter timeout | 60 seconds | `RESTREAM_HLS_IDLE_TIMEOUT_MS` |
+| SQLite log-history retention | 7 days | `RESTREAM_LOG_RETENTION_DAYS` |
+| Secure-only session cookies | Disabled | `RESTREAM_SECURE_SESSION_COOKIES` (`1`/`true` enables the `Secure` cookie attribute for HTTPS deployments) |
 | RTMP accept backlog | `1024` | `RESTREAM_RTMP_LISTENER_BACKLOG` |
 | RTMP concurrent connection cap | `512` | `RESTREAM_RTMP_MAX_CONNECTIONS` |
 | RTMP handshake timeout | `10000` ms | `RESTREAM_RTMP_HANDSHAKE_TIMEOUT_MS` |
@@ -38,10 +61,6 @@ in SQLite.
 | HLS minimum segment length | 1 second | `RESTREAM_HLS_MIN_SEGMENT_MS` |
 | HLS live window length | 20 segments | `RESTREAM_HLS_MAX_SEGMENTS` |
 | HLS segment accumulator capacity | 8 MiB | `RESTREAM_HLS_SEGMENT_CAPACITY_BYTES` |
-
-The Rust server does not currently read the old Node environment variables such
-as `BASE_PATH`, `PUBLIC_INGEST_HOST`, `HEALTH_SNAPSHOT_INTERVAL_MS`,
-or the old output-recovery knobs. Do not depend on those variables.
 
 `FFMPEG_BIN_PATH` overrides the shared subprocess FFmpeg path used by the
 external transcoder, the default file-ingest backend, and post-recording
@@ -226,12 +245,9 @@ Each definition stores:
 - `liveOptimized`
 - `targetGopSeconds`
 
-`liveOptimized=false` keeps the default passthrough path. With the subprocess
-backend that means:
-
-```text
-ffmpeg -re [-stream_loop -1] [-ss <start>] -i media/<file> -map 0 -c copy -f mpegts pipe:1
-```
+`liveOptimized=false` keeps the default passthrough path. The application
+service owns the exact subprocess arguments; this reference documents the
+user-visible settings and resulting behavior.
 
 `liveOptimized=true` forces the subprocess backend even when
 `RESTREAM_USE_INTERNAL_FILE_INGEST=1`. In that mode the embedded FFmpeg binary

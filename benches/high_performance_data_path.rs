@@ -1,7 +1,5 @@
 use bytes::{Bytes, BytesMut};
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use memchr::memchr;
 use restream::media::avio::MemoryQueue;
 use restream::media::engine::MediaEngine;
@@ -10,6 +8,7 @@ use restream::media::mpegts::{TsDemuxer, TsMuxer};
 use restream::media::ring_buffer::{
     MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer, RingSlot,
 };
+use std::hint::black_box;
 use std::mem::{align_of, size_of};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;

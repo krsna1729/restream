@@ -3,6 +3,17 @@
 This document turns the layering audit into an execution order that is safe for
 an active repo: narrow seams first, broader packaging later.
 
+## Contents
+
+- [Current Shape](#current-shape)
+- [Ownership Matrix](#ownership-matrix)
+- [What We Already Moved](#what-we-already-moved)
+- [Layering Ladder](#layering-ladder)
+- [Refactor Order](#refactor-order)
+- [What Should Not Be Split Yet](#what-should-not-be-split-yet)
+- [Working Rules](#working-rules)
+- [Immediate Next Steps](#immediate-next-steps)
+
 ## Current Shape
 
 The backend already has promising boundaries:
@@ -213,8 +224,8 @@ Good backend examples in this repo:
 
 Good frontend examples in this repo:
 
-- `web/ts/features/pipeline-output-list`
-- `web/ts/features/pipeline-dependencies`
+- `web/ts/features/pipeline-output-list.ts`
+- `web/ts/features/pipeline-dependencies.ts`
 
 ### 3. Visibility boundary
 

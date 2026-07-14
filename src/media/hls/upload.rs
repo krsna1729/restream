@@ -406,7 +406,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::<(String, String, Vec<u8>)>::new()));
         let seen_for_handler = seen.clone();
         let app = Router::new().route(
-            "/*path",
+            "/{*path}",
             put(move |uri: OriginalUri, headers: HeaderMap, body: Bytes| {
                 let seen = seen_for_handler.clone();
                 async move {
@@ -488,7 +488,7 @@ mod tests {
     #[tokio::test]
     async fn put_bytes_times_out_against_hung_sink() {
         let app = Router::new().route(
-            "/*path",
+            "/{*path}",
             put(|| async {
                 tokio::time::sleep(Duration::from_millis(250)).await;
                 StatusCode::NO_CONTENT
@@ -522,7 +522,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(HashMap::<String, usize>::new()));
         let seen_for_handler = seen.clone();
         let app = Router::new().route(
-            "/*path",
+            "/{*path}",
             put(move |uri: OriginalUri| {
                 let seen = seen_for_handler.clone();
                 async move {
