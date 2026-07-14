@@ -229,11 +229,11 @@ pub async fn initialize_auth_with_bootstrap_file(
 
 pub async fn login_post_handler(
     State(state): State<Arc<AppState>>,
-    connect_info: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>,
+    connect_info: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     Json(payload): Json<LoginPayload>,
 ) -> impl IntoResponse {
     let client_ip = connect_info
-        .map(|ci| ci.0.ip().to_string())
+        .map(|ci| ci.0.0.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
     if let Some(ban_remaining) =
