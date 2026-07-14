@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - master
-      - feat/rust-backend-rewrite-v2
   pull_request:
   workflow_dispatch:
 
@@ -56,6 +55,13 @@ jobs:
         run: scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings
       - name: Run clippy for all targets
         run: scripts/build/resource-limit.sh cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run clippy for MCP-enabled release surface
+        run: |
+          scripts/build/resource-limit.sh cargo clippy \
+            --workspace \
+            --all-targets \
+            --features mcp-server,mcp-http-backend \
+            -- -D warnings
 
   architecture-guardrails:
     name: Source architecture audit
