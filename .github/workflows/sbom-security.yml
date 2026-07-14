@@ -22,17 +22,11 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Install scanner system dependencies
-        uses: ./.github/actions/system-deps
+      - uses: ./.github/actions/ci-bootstrap
         with:
-          profile: base
-
-      - name: Restore native prefix for scheduled SBOM scan
-        uses: ./.github/actions/native-prefix
-      - name: Restore Rust cache for scheduled SBOM scan
-        uses: ./.github/actions/rust-cache
+          system_deps_profile: base
+          native_prefix: 'true'
+          rust_cache: 'true'
 
       - name: Build bench binary for SBOM scan
         run: scripts/build/bench-harness.sh
@@ -132,7 +126,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: ./.github/actions/ci-bootstrap
       - name: Install cargo-audit
         uses: taiki-e/install-action@cargo-audit
       - name: Run scheduled cargo audit
@@ -143,7 +137,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: ./.github/actions/ci-bootstrap
       - name: Install cargo-deny
         uses: taiki-e/install-action@cargo-deny
       - name: Run scheduled cargo deny

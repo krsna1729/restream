@@ -689,7 +689,7 @@ pub(crate) async fn preflight_check() -> Result<Value, String> {
             "check": "profile",
             "harness": harness_bin.display().to_string(),
             "restream": restream_bin.display().to_string(),
-            "required": "bench",
+            "required": "optimized",
             "explicitRestreamBin": explicit_restream_bin,
             "status": "ok"
         })
@@ -698,10 +698,10 @@ pub(crate) async fn preflight_check() -> Result<Value, String> {
             "check": "profile",
             "harness": harness_bin.display().to_string(),
             "restream": restream_bin.display().to_string(),
-            "required": "bench",
+            "required": "optimized",
             "explicitRestreamBin": explicit_restream_bin,
             "status": "fail",
-            "hint": "measurement modes require bench-profile binaries; run `scripts/build/bench-harness.sh` and use `target/bench/test_harness`"
+            "hint": "measurement modes require optimized binaries; use `target/release/test_harness` in release CI, or run `scripts/build/bench-harness.sh` locally"
         })
     };
 

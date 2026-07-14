@@ -1,0 +1,60 @@
+name: CI bootstrap
+description: Shared Rust and Node setup for GitHub Actions jobs.
+
+inputs:
+  rust_components:
+    description: Optional comma-separated Rust components to install.
+    required: false
+    default: ""
+  node_version:
+    description: Optional Node.js version to install. Leave empty to skip Node setup.
+    required: false
+    default: ""
+  npm_ci:
+    description: Whether to run npm ci after Node setup.
+    required: false
+    default: "false"
+  system_deps_profile:
+    description: Optional system dependency profile to install.
+    required: false
+    default: ""
+  native_prefix:
+    description: Whether to restore the cached native prefix.
+    required: false
+    default: "false"
+  rust_cache:
+    description: Whether to restore the Rust cache.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - if: ${{ inputs.rust_components != '' }}
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        components: ${{ inputs.rust_components }}
+
+    - if: ${{ inputs.rust_components == '' }}
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+
+    - if: ${{ inputs.node_version != '' }}
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node_version }}
+        cache: npm
+
+    - if: ${{ inputs.system_deps_profile != '' }}
+      uses: ./.github/actions/system-deps
+      with:
+        profile: ${{ inputs.system_deps_profile }}
+
+    - if: ${{ inputs.native_prefix == 'true' }}
+      uses: ./.github/actions/native-prefix
+
+    - if: ${{ inputs.rust_cache == 'true' }}
+      uses: ./.github/actions/rust-cache
+
+    - if: ${{ inputs.npm_ci == 'true' }}
+      shell: bash
+      run: npm ci

@@ -1,0 +1,99 @@
+name: Harness runtime shards
+
+on:
+  workflow_call:
+    inputs:
+      artifact_name:
+        required: true
+        type: string
+      artifact_path:
+        required: false
+        type: string
+        default: .local/harness-bin
+      install_dir:
+        required: false
+        type: string
+        default: target/release
+      harness_bin:
+        required: false
+        type: string
+        default: target/release/test_harness
+      restream_bin:
+        required: false
+        type: string
+        default: target/release/restream
+      shard_name_prefix:
+        required: false
+        type: string
+        default: Harness shard
+      artifact_upload_prefix:
+        required: false
+        type: string
+        default: harness
+      artifact_upload_path:
+        required: false
+        type: string
+        default: .local/artifacts/
+      artifact_retention_days:
+        required: false
+        type: number
+        default: 3
+      upload_artifacts_mode:
+        required: false
+        type: string
+        default: always
+      timeout_minutes:
+        required: false
+        type: number
+        default: 35
+      max_parallel:
+        required: false
+        type: number
+        default: 20
+      shards_json:
+        required: true
+        type: string
+    secrets:
+      gh_token:
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  run-shards:
+    name: ${{ inputs.shard_name_prefix }} (${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        shard: ${{ fromJson(inputs.shards_json) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.artifact_path }}
+      - name: Install harness binaries
+        run: |
+          mkdir -p "${{ inputs.install_dir }}"
+          cp "${{ inputs.artifact_path }}/restream" "${{ inputs.restream_bin }}"
+          cp "${{ inputs.artifact_path }}/test_harness" "${{ inputs.harness_bin }}"
+          chmod 0755 "${{ inputs.restream_bin }}" "${{ inputs.harness_bin }}"
+      - name: Run harness shard
+        env:
+          BENCH_BUILD: never
+          HARNESS_BIN: ${{ inputs.harness_bin }}
+          RESTREAM_BIN: ${{ inputs.restream_bin }}
+          GH_TOKEN: ${{ secrets.gh_token }}
+        run: scripts/ci/run-harness-shard-in-runtime.sh "${{ matrix.shard }}"
+      - uses: actions/upload-artifact@v7
+        if: ${{ inputs.upload_artifacts_mode == 'always' || failure() || cancelled() }}
+        with:
+          name: ${{ inputs.artifact_upload_prefix }}-${{ matrix.shard }}-${{ github.sha }}
+          path: ${{ inputs.artifact_upload_path }}
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact_retention_days }}

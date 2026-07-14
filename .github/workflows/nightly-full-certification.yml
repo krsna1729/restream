@@ -1,0 +1,138 @@
+name: Nightly full certification
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: nightly-full-certification-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RESTREAM_CI_HARNESS_IMAGE: ghcr.io/${{ github.repository }}-ci-harness-runtime:ubuntu24
+
+jobs:
+  all-features-tests:
+    name: All-features workspace tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/ci-bootstrap
+        with:
+          node_version: '22'
+          npm_ci: 'true'
+          system_deps_profile: base
+          native_prefix: 'true'
+          rust_cache: 'true'
+      - name: Build frontend assets
+        run: npm run build:frontend
+      - name: Run workspace tests with all features
+        run: scripts/build/resource-limit.sh cargo test --workspace --all-features -- --nocapture
+
+  nightly-harness-build:
+    name: Nightly harness release build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/ci-bootstrap
+        with:
+          node_version: '22'
+          system_deps_profile: build
+          native_prefix: 'true'
+          rust_cache: 'true'
+      - name: Prepare build tree
+        run: scripts/release/prepare-build-tree.sh
+      - name: Build release harness binaries
+        run: |
+          RESTREAM_BUILD_PROFILE=release \
+          RESTREAM_BUILD_BINS="restream test_harness" \
+          scripts/build/resource-limit.sh ./scripts/build/app-native.sh
+      - name: Stage nightly harness binaries
+        run: |
+          mkdir -p .local/nightly-harness-bin
+          cp target/release/restream .local/nightly-harness-bin/restream
+          cp target/release/test_harness .local/nightly-harness-bin/test_harness
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nightly-harness-bin-${{ github.sha }}
+          path: .local/nightly-harness-bin/*
+          retention-days: 2
+
+  nightly-harness:
+    needs: nightly-harness-build
+    uses: ./.github/workflows/_harness-runtime-shards.yml
+    with:
+      artifact_name: nightly-harness-bin-${{ github.sha }}
+      artifact_path: .local/nightly-harness-bin
+      install_dir: target/release
+      harness_bin: target/release/test_harness
+      restream_bin: target/release/restream
+      shard_name_prefix: Nightly harness shard
+      artifact_upload_prefix: nightly-harness
+      artifact_upload_path: .local/artifacts/
+      artifact_retention_days: 3
+      upload_artifacts_mode: always
+      timeout_minutes: 35
+      max_parallel: 20
+      shards_json: >-
+        ["smoke","mixed.live.rtmp.h264.a1","mixed.live.srt.h264.a1","mixed.live.srt.h264.a2","mixed.live.srt.h265.a1","mixed.live.srt.h265.a2","mixed.file.h264.a1","mixed.file.h264.a2","mixed.file.h265.a1","mixed.file.h265.a2","bitrate-sweep.h264-rtmp","bitrate-sweep.h264-srt","bitrate-sweep.h265-srt","bitrate-sweep.mixed-h264-a2","bitrate-sweep.mixed-h265-a2","resource-sweep.source","resource-sweep.transcode","resource-sweep.hevc","ramp-family","srt-crypto-matrix","branch-matrix","fault.resilience"]
+    secrets:
+      gh_token: ${{ github.token }}
+
+  nightly-failure-issue:
+    name: Nightly failure issue
+    runs-on: ubuntu-24.04
+    if: ${{ always() && (needs.all-features-tests.result == 'failure' || needs.nightly-harness-build.result == 'failure' || needs.nightly-harness.result == 'failure') }}
+    needs:
+      - all-features-tests
+      - nightly-harness-build
+      - nightly-harness
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: File or update nightly failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ALL_FEATURES_RESULT: ${{ needs.all-features-tests.result }}
+          HARNESS_BUILD_RESULT: ${{ needs.nightly-harness-build.result }}
+          HARNESS_RESULT: ${{ needs.nightly-harness.result }}
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          BODY=$(cat <<EOF
+          ## Nightly full certification failure - $DATE
+
+          The nightly full-certification workflow reported at least one failure.
+
+          - all-features workspace tests: $ALL_FEATURES_RESULT
+          - nightly harness build: $HARNESS_BUILD_RESULT
+          - nightly harness matrix: $HARNESS_RESULT
+
+          Run: $RUN_URL
+
+          Please inspect the failed jobs and artifacts in the linked workflow run.
+          EOF
+          )
+
+          EXISTING=$(gh issue list \
+            --state open \
+            --search 'in:title "Nightly full certification failing"' \
+            --json number,title \
+            --jq '.[] | select(.title == "Nightly full certification failing") | .number' \
+            | head -n1)
+          if [ -z "$EXISTING" ]; then
+            gh issue create \
+              --title "Nightly full certification failing" \
+              --body "$BODY"
+          else
+            gh issue comment "$EXISTING" --body "$BODY"
+          fi
