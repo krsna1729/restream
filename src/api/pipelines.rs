@@ -777,39 +777,6 @@ fn stage_graph_plan_json(plan: &StageGraphPlan) -> serde_json::Value {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{PipelinePayload, requested_stream_key, validate_pipeline_payload};
-    use axum::http::StatusCode;
-
-    fn payload_with_name(name: &str) -> PipelinePayload {
-        PipelinePayload {
-            name: name.to_string(),
-            stream_key: None,
-            input_source: None,
-            srt_ingest_policy: None,
-            file_ingest: None,
-        }
-    }
-
-    #[test]
-    fn requested_stream_key_trims_and_drops_empty_values() {
-        assert_eq!(
-            requested_stream_key(Some("  example  ")),
-            Some("example".to_string())
-        );
-        assert_eq!(requested_stream_key(Some("   ")), None);
-        assert_eq!(requested_stream_key(None), None);
-    }
-
-    #[test]
-    fn validate_pipeline_payload_rejects_blank_names() {
-        let response = validate_pipeline_payload(&payload_with_name("   "))
-            .expect("blank names should be rejected");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-}
-
 /// Serializes the list form used by graph and diagnostics endpoints.
 fn stage_graph_plans_json(plans: &[StageGraphPlan]) -> serde_json::Value {
     serde_json::Value::Array(plans.iter().map(stage_graph_plan_json).collect())
@@ -840,5 +807,38 @@ fn stage_backend_name(backend: StageBackendKind) -> &'static str {
         StageBackendKind::ExternalFfmpeg => "externalFfmpeg",
         StageBackendKind::HlsSegmenter => "hlsSegmenter",
         StageBackendKind::Recording => "recording",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PipelinePayload, requested_stream_key, validate_pipeline_payload};
+    use axum::http::StatusCode;
+
+    fn payload_with_name(name: &str) -> PipelinePayload {
+        PipelinePayload {
+            name: name.to_string(),
+            stream_key: None,
+            input_source: None,
+            srt_ingest_policy: None,
+            file_ingest: None,
+        }
+    }
+
+    #[test]
+    fn requested_stream_key_trims_and_drops_empty_values() {
+        assert_eq!(
+            requested_stream_key(Some("  example  ")),
+            Some("example".to_string())
+        );
+        assert_eq!(requested_stream_key(Some("   ")), None);
+        assert_eq!(requested_stream_key(None), None);
+    }
+
+    #[test]
+    fn validate_pipeline_payload_rejects_blank_names() {
+        let response = validate_pipeline_payload(&payload_with_name("   "))
+            .expect("blank names should be rejected");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
