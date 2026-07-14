@@ -77,10 +77,14 @@ fn normalize_supported_url(
     Some(parsed.to_string())
 }
 
+/// Canonicalizes one output URL into the host-normalized form persisted by the
+/// API and application layers.
 pub fn normalize_output_url(url: &str) -> Option<String> {
     normalize_supported_url(url, OutputUrlScheme::is_supported_output)
 }
 
+/// Canonicalizes an optional monitoring URL, treating blank input as absent so
+/// callers do not need to special-case empty form fields.
 pub fn normalize_monitoring_url(url: Option<&str>) -> Result<Option<String>, &'static str> {
     let trimmed = url.unwrap_or_default().trim();
     if trimmed.is_empty() {
@@ -110,6 +114,8 @@ pub struct YoutubeMonitoringStatusResponse {
     pub title: Option<String>,
 }
 
+/// Accepts the common YouTube watch/share/live URL shapes and converts them to
+/// one canonical watch URL for monitoring fetches.
 pub fn normalize_youtube_watch_url(url: &str) -> Option<String> {
     let parsed = Url::parse(url).ok()?;
     let host = parsed
@@ -148,10 +154,13 @@ pub fn normalize_youtube_watch_url(url: &str) -> Option<String> {
     Some(format!("https://www.youtube.com/watch?v={video_id}"))
 }
 
+/// Small HTML substring probe used for the YouTube monitoring response shape.
 pub fn youtube_watch_page_contains_flag(html: &str, flag: &str) -> bool {
     html.contains(flag)
 }
 
+/// Extracts the HTML `<title>` content and applies only the minimal entity
+/// decoding needed by the monitoring UI.
 pub fn extract_html_title(html: &str) -> Option<String> {
     let start = html.find("<title>")?;
     let rest = &html[start + "<title>".len()..];
@@ -167,6 +176,7 @@ pub fn extract_html_title(html: &str) -> Option<String> {
     })
 }
 
+/// Shapes one YouTube monitoring response from the fetched watch-page HTML.
 pub fn parse_youtube_monitoring_status(
     canonical_watch_url: String,
     html: &str,
@@ -189,6 +199,8 @@ enum YoutubeMonitoringFetchError {
     TooLarge,
 }
 
+// Monitoring fetches use short timeouts and a bounded response size because
+// they are advisory dashboard checks, not stream-critical control paths.
 fn youtube_monitoring_client() -> Result<reqwest::Client, YoutubeMonitoringFetchError> {
     reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
@@ -223,6 +235,8 @@ async fn fetch_limited_text(
     String::from_utf8(body).map_err(|_| YoutubeMonitoringFetchError::Body)
 }
 
+// Transport-specific fetch failures stay mapped at the API boundary so the
+// dashboard receives stable status codes and user-facing error strings.
 fn youtube_fetch_error_response(error: YoutubeMonitoringFetchError) -> axum::response::Response {
     match error {
         YoutubeMonitoringFetchError::BuildClient => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -275,6 +289,8 @@ fn output_state_response(
     .into_response()
 }
 
+// Validate and canonicalize output mutations at the HTTP boundary so services
+// only ever see normalized absolute URLs and supported config choices.
 fn validate_output_payload(payload: &OutputPayload) -> Result<ValidatedOutputPayload, Response> {
     if let Some(response) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
         return Err(response);
@@ -302,9 +318,6 @@ fn validate_output_payload(payload: &OutputPayload) -> Result<ValidatedOutputPay
     let Some(url) = normalize_output_url(&payload.url) else {
         return Err(bad_request(OUTPUT_URL_PARSE_ERROR));
     };
-    if !is_supported_output_url(&url) {
-        return Err(bad_request(OUTPUT_URL_SCHEME_ERROR));
-    }
     let monitoring_url =
         normalize_monitoring_url(payload.monitoring_url.as_deref()).map_err(bad_request)?;
 
@@ -315,6 +328,8 @@ fn validate_output_payload(payload: &OutputPayload) -> Result<ValidatedOutputPay
     })
 }
 
+/// Fetches and summarizes lightweight YouTube watch-page metadata for output
+/// monitoring setup flows.
 pub async fn youtube_monitoring_status_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -350,6 +365,8 @@ pub async fn youtube_monitoring_status_handler(
     Json(parse_youtube_monitoring_status(canonical_watch_url, &html)).into_response()
 }
 
+/// Creates one stopped output after validating and normalizing its transport
+/// URLs at the API boundary.
 pub async fn outputs_create_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -434,6 +451,8 @@ pub async fn outputs_update_handler(
     Ok(Json(output_response_body("Output updated", &updated)).into_response())
 }
 
+/// Deletes one output and clears any runtime egress registration that may still
+/// be associated with its id.
 pub async fn outputs_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -454,6 +473,8 @@ pub async fn outputs_delete_handler(
     Ok(Json(serde_json::json!({"message": "Output deleted"})).into_response())
 }
 
+/// Requests the running desired state for one output and returns the standard
+/// output-state response envelope.
 pub async fn outputs_start_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -470,6 +491,8 @@ pub async fn outputs_start_handler(
     Ok(output_state_response("Output started", "running", &output))
 }
 
+/// Requests the stopped desired state for one output and returns the standard
+/// output-state response envelope.
 pub async fn outputs_stop_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -486,6 +509,8 @@ pub async fn outputs_stop_handler(
     Ok(output_state_response("Output stopped", "stopped", &output))
 }
 
+/// Reads the runtime status view for one output without exposing broader
+/// pipeline or engine internals.
 pub async fn output_status_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
