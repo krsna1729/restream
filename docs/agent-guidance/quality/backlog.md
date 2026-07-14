@@ -10,6 +10,12 @@ Dimensions: `proof` (correct/proven) · `resilience` (reliable/resilient) ·
 Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 (concurrency/hot-path architecture).
 
+## Contents
+
+- [Open](#open)
+- [Blocked](#blocked)
+- [Archive](#archive)
+
 ## Open
 
 ### Q-001 [proof] [sonnet] Establish the per-module coverage map

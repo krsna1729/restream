@@ -3,6 +3,14 @@
 Use this reference for read-only performance analysis, experiment design, and
 profiling beyond a single Criterion suite.
 
+## Contents
+
+- [Establish the evidence boundary](#establish-the-evidence-boundary)
+- [Hardware-PMU branch](#hardware-pmu-branch)
+- [No-PMU / WSL branch](#no-pmu-wsl-branch)
+- [Attribution order for this repository](#attribution-order-for-this-repository)
+- [Required analysis output](#required-analysis-output)
+
 ## Establish the evidence boundary
 
 Record before interpreting results:

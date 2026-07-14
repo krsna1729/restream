@@ -11,23 +11,15 @@ Run a Criterion benchmark suite for this repo. Use before and after a hot-path c
 
 `/bench <bench_name>`
 
-Available bench names (from `benches/`):
-- `ring_buffer` — ring buffer throughput
-- `avio_throughput` — AVIO queue throughput
-- `high_performance_data_path` — end-to-end data path
-- `hls_cost` — HLS segmentation cost
-- `hls_fmp4_cost` — HLS fMP4 segmentation cost
-- `matrix_throughput` — matrix/mux throughput
-- `srt_ingest_latency` — SRT ingest latency
-- `transcoder_throughput` — transcoder throughput
-- `stage_feeder`, `stage_metrics` — stage pipeline
-- `codec_conversions` — codec conversion costs
-- `simd_alternatives` — SIMD vs scalar comparison
-- `alert_tracker` — alert tracking overhead
+Benchmark names come from the `[[bench]]` declarations in `Cargo.toml`; the
+implementations under `benches/` describe the measured production path. Do not
+copy the current target list into this skill.
 
 ## Steps
 
-1. If no argument given, list available bench names and ask which to run.
+1. If no argument is given, read the `[[bench]]` declarations in `Cargo.toml`,
+   map them to the changed production path, and ask which relevant target to
+   run if more than one remains plausible.
 2. Kill any live pipeline first (WSL2 memory safety): confirm `pgrep -x restream`, `pgrep -x mediamtx`, `pgrep -x ffmpeg` are all empty before building.
 3. Build with bench profile: `scripts/build/resource-limit.sh cargo build --profile bench`
 4. Run: `scripts/build/resource-limit.sh cargo bench --bench <name>`

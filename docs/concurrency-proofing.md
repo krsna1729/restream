@@ -11,6 +11,16 @@ This repo has several correctness-sensitive boundaries:
 The goal is not just "tests exist". The goal is that each boundary has the
 right kind of proof for the failure mode it can exhibit.
 
+## Contents
+
+- [Proof Ladder](#proof-ladder)
+- [Which Proof To Add](#which-proof-to-add)
+- [Gate Commands](#gate-commands)
+- [Required Update Discipline](#required-update-discipline)
+- [Common Failure Patterns](#common-failure-patterns)
+- [Current Mandatory Surfaces](#current-mandatory-surfaces)
+- [Next Gaps](#next-gaps)
+
 ## Proof Ladder
 
 Use the narrowest proof that can actually catch the bug:
@@ -175,7 +185,7 @@ surface already covers it.
   - `proptest_external_output_dts_routing_preserves_per_stream_monotonicity`
   - `external_720p_stage_emits_live_packets_for_h264_marker_fixture`
   - `external_1080p_stage_remuxes_marker_fixture_with_monotone_dts`
-- `src/media/hls.rs`
+- `src/media/hls/`
   - `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream`
 - `src/media/srt.rs`
   - `epoll_waiter_coordination`

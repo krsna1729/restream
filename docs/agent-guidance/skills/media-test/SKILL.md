@@ -24,11 +24,14 @@ Run scoped media pipeline tests, then optionally escalate to live harness tests.
    - If this fails: report the failures clearly and **stop**. Do not escalate.
    - If no argument given: ask the user which module or filter to use.
 
-3. If step 2 passes, report the scoped results, then ask: "Scoped tests pass. Escalate to the live harness? This takes several minutes." Escalation options:
-   - `scripts/build/resource-limit.sh target/debug/test_harness mixed.live.srt.h264.a1.bf0` / `mixed.live.rtmp.h264.a1.bf0` — protocol-scoped correctness
-   - `scripts/build/resource-limit.sh target/debug/test_harness mixed-anchor` — scale/integration anchor
+3. If step 2 passes, report the scoped results, then ask: "Scoped tests pass.
+   Escalate to the live harness? This takes several minutes." Use
+   `target/bench/test_harness catalog list-modes` and `catalog plan <mode>` to
+   select the narrowest current mode whose plan crosses the changed boundary.
 
-4. If the user confirms, build the harness first (`scripts/build/resource-limit.sh cargo build --bin test_harness`) and run the chosen mode.
+4. If the user confirms, run the chosen mode through
+   `scripts/harness/run.sh <mode>` so the canonical bench-profile harness is
+   built when needed.
 
 ## Notes
 - For timestamp/AV-sync changes use filter `av_sync`.

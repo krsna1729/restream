@@ -4,6 +4,18 @@ The Rust runtime has a small environment configuration surface for deployment
 paths, listener ports, and operational tuning. User-facing settings are stored
 in SQLite.
 
+## Contents
+
+- [Fixed Runtime Values and Environment Variables](#fixed-runtime-values-and-environment-variables)
+- [SQLite-Backed Settings](#sqlite-backed-settings)
+- [Linux Service Placement](#linux-service-placement)
+- [SQLite Performance Settings](#sqlite-performance-settings)
+- [Ingest URLs](#ingest-urls)
+- [Output Configuration](#output-configuration)
+- [File Ingest Configuration](#file-ingest-configuration)
+- [SRT Socket Policy](#srt-socket-policy)
+- [HLS Pull and Authorization](#hls-pull-and-authorization)
+
 ## Fixed Runtime Values and Environment Variables
 
 | Value | Default setting | Environment Variable Override |
@@ -22,13 +34,17 @@ in SQLite.
 | Shared SRT TS ring depth | `256` chunks | `RESTREAM_TS_RING_CAPACITY` (SRT protocol's own send buffer absorbs network jitter; this ring only bridges muxer → socket write, typically sub-millisecond) |
 | SRT egress muxer max outputs per shard | `0` | `RESTREAM_SRT_EGRESS_MUXER_MAX_OUTPUTS_PER_SHARD` (disabled at `0`; when set, SRT egress creates a new shared TS muxer shard as each pipeline+encoding cohort crosses this many outputs) |
 | SRT egress muxer max shards | `64` | `RESTREAM_SRT_EGRESS_MUXER_MAX_SHARDS` (hard guardrail for dynamic SRT muxer sharding; once reached, new outputs are assigned to the least-loaded existing shard and a warning is emitted) |
+| SRT egress local-port reuse | Enabled | `RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT` (`0`/`false` disables reuse) |
 | AVIO queue capacity (async↔OS-thread bridge) | `524288` bytes (512 KiB) | `RESTREAM_AVIO_QUEUE_CAPACITY` (measured peak HWM = 398 KiB at 8 Mb/s RTMP with zero blocked writes; raise only for very high-latency SRT links) |
 | File descriptor limit | `65536` | `RESTREAM_NOFILE_LIMIT` |
 | Output reconciliation interval | 1 second | `RESTREAM_RECONCILE_INTERVAL_MS` |
 | Failed-output max retries | `10` | `RESTREAM_OUTPUT_MAX_RETRIES` |
 | Failed-output restart base backoff | 5 seconds | `RESTREAM_OUTPUT_RETRY_BASE_MS` |
 | Failed-output restart max backoff | 300 seconds | `RESTREAM_OUTPUT_RETRY_MAX_MS` |
+| Ingest disconnect grace period | 5000 ms | `RESTREAM_INGEST_DISCONNECT_GRACE_MS` |
 | Idle HLS segmenter timeout | 60 seconds | `RESTREAM_HLS_IDLE_TIMEOUT_MS` |
+| File-log retention | 7 days | `RESTREAM_LOG_RETENTION_DAYS` |
+| Secure-only session cookies | Disabled | `RESTREAM_SECURE_SESSION_COOKIES` (`1`/`true` enables the `Secure` cookie attribute for HTTPS deployments) |
 | RTMP accept backlog | `1024` | `RESTREAM_RTMP_LISTENER_BACKLOG` |
 | RTMP concurrent connection cap | `512` | `RESTREAM_RTMP_MAX_CONNECTIONS` |
 | RTMP handshake timeout | `10000` ms | `RESTREAM_RTMP_HANDSHAKE_TIMEOUT_MS` |

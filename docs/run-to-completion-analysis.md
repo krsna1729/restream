@@ -1,8 +1,31 @@
 # Run-to-Completion Analysis: Protocol Combination Graph
 
+> **Status: historical analysis.** The protocol reasoning remains useful, but
+> file names and ownership maps are a point-in-time snapshot. Verify them
+> against [the maintained architecture overview](architecture.md).
+
 This document maps every ingest/egress/transcoding branch, identifies decoupling points, and explains why run-to-completion is not achievable for all paths.
 
 **Note:** ASCII diagrams below can also be viewed as clean SVG renderings in [diagrams/](diagrams/)
+
+## Contents
+
+- [Complete System Architecture](#complete-system-architecture)
+- [Thread and Task Topology](#thread-and-task-topology)
+- [Decoupling Boundaries Summary](#decoupling-boundaries-summary)
+- [Blocking Boundaries (Cannot Be Removed)](#blocking-boundaries-cannot-be-removed)
+- [Protocol Matrix](#protocol-matrix)
+- [Branch-by-Branch Analysis](#branch-by-branch-analysis)
+- [Visual Flow Graphs: All 10 Paths](#visual-flow-graphs-all-10-paths)
+- [Summary: Fundamental Decoupling Boundaries](#summary-fundamental-decoupling-boundaries)
+- [Current Run-to-Completion Opportunities](#current-run-to-completion-opportunities)
+- [Recommended Focus Areas](#recommended-focus-areas)
+- [Critical Files for Reference](#critical-files-for-reference)
+- [Path Comparison Chart](#path-comparison-chart)
+- [Latency Model: Where Time Is Spent](#latency-model-where-time-is-spent)
+- [Optimization Opportunity Matrix](#optimization-opportunity-matrix)
+- [Decoupling Decision Tree](#decoupling-decision-tree)
+- [Key Takeaways](#key-takeaways)
 
 ## Complete System Architecture
 
@@ -802,15 +825,13 @@ graph LR
 
 ## Critical Files for Reference
 
-- `src/media/engine.rs` (1,583 lines) — Stage graph, output reconciliation
-- `src/media/ring_buffer.rs` (568 lines) — Lock-free SPMC ring, hot-path core
-- `src/media/mpegts.rs` (2,111 lines) — TsDemuxer, TsMuxer, packet conversion
-- `src/media/transcoder.rs` (420 lines) — Feeder/reader tasks, external FFmpeg subprocess
-- `src/media/srt.rs` (2,387 lines) — SRT ingest, shared muxer, egress sender threads
-- `src/media/rtmp.rs` (1,690 lines) — RTMP ingest/egress tasks
-- `src/media/hls.rs` (338 lines) — Segmenter task, segment store, HTTP routes
-- `src/media/recording.rs` (228 lines) — Feeder + writer thread
-- `src/lib.rs` (525 lines) — App composition, reconciler main loop
+- media engine — stage graph and output reconciliation
+- ring buffers — lock-free SPMC hot-path fan-out
+- MPEG-TS — demux, mux, and packet conversion
+- transcoder adapters — feeder/reader tasks and FFmpeg execution
+- SRT and RTMP adapters — ingest, packaging, and egress transport
+- HLS and recording modules — segment/storage and writer lifecycle
+- application composition — startup, service wiring, and reconciliation
 
 ---
 

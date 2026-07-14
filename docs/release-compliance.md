@@ -4,6 +4,13 @@ This project builds a self-contained media server from Rust crates plus native
 media libraries. Treat every distributed binary or container image as a release
 artifact that needs provenance and license review.
 
+## Contents
+
+- [Required Release Evidence](#required-release-evidence)
+- [Native License Basis](#native-license-basis)
+- [Application License](#application-license)
+- [Dependency Policy](#dependency-policy)
+
 ## Required Release Evidence
 
 - Build from the checked-in lockfiles and the repo-managed static native prefix.

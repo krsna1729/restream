@@ -4,6 +4,12 @@ This repository keeps architectural drift visible through CI and local scripts.
 The guardrails are intentionally small and mechanical: they do not prove the
 whole design is ideal, but they catch the highest-risk regressions early.
 
+## Contents
+
+- [Source Audit](#source-audit)
+- [Regression Artifacts](#regression-artifacts)
+- [Related Gates](#related-gates)
+
 ## Source Audit
 
 Run:
@@ -15,14 +21,16 @@ Run:
 The audit enforces:
 
 - `src/media/` must not import API modules.
-- Large files may not grow beyond their current no-growth baselines:
-  - `src/media/engine.rs`: 6587 lines
-  - `src/bin/test_harness.rs`: 10282 lines
+- Audited Rust, authored TypeScript, and hand-written JavaScript test files may
+  not exceed 2,000 lines.
 - Production code must not add raw `std::env::var` reads outside the approved
   config/startup/test-harness boundaries.
+- API modules must not start FFmpeg/transcoder stages directly.
+- Harness code must not read the removed output-status `state` field.
 
-The script also writes `target/source-audit.json` with line counts, route-module
-count, repository-module count, feature-cfg count, and forbidden-import counts.
+The script also writes `target/source-audit.json` with line counts, public
+function and route inventories, harness modes/suites, environment-variable
+usage, feature gates, forbidden imports, and output-status schema drift.
 
 ## Regression Artifacts
 

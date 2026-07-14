@@ -5,6 +5,26 @@ Base URL: `http://localhost:3030`
 JSON uses camelCase. Unless noted otherwise, routes require the `session` cookie
 returned by login.
 
+## Contents
+
+- [Request Limits](#request-limits)
+- [Authentication](#authentication)
+- [Configuration and Discovery](#configuration-and-discovery)
+- [Pipelines](#pipelines)
+- [Outputs](#outputs)
+- [Process Logs](#process-logs)
+- [Output Status](#output-status)
+- [Probe, Graph, and Diagnostics](#probe-graph-and-diagnostics)
+- [Optional Agent Plane](#optional-agent-plane)
+- [Recording](#recording)
+- [File Ingest](#file-ingest)
+- [Media Files](#media-files)
+- [Custom Encoding](#custom-encoding)
+- [Health and Status](#health-and-status)
+- [HLS Pull](#hls-pull)
+- [Operator v1 Endpoints](#operator-v1-endpoints)
+- [Engineer v1 Endpoints](#engineer-v1-endpoints)
+
 ## Request Limits
 
 | Limit | Value |

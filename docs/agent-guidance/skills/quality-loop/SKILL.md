@@ -60,7 +60,7 @@ eligible one. Never "just try" an above-tier item.
 
 - `git status --short` — note pre-existing modifications (leave them alone).
 - Media-process check per hard rule 1.
-- Read the last ~40 lines of `journal.md` and all of `backlog.md`.
+- Read the most recent journal entries and all of `backlog.md`.
 - If the previous journal entry is an unresolved `FAILED` for an item still
   marked `in-progress`, your first job is to finish cleaning it up (revert
   stray edits, mark it `blocked` with notes) — that is this iteration's work.

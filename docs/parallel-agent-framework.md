@@ -7,6 +7,30 @@ runtime measurements.
 It is a planning document, not a claim that every item below is already
 implemented.
 
+## Contents
+
+- [Why This Repo Needs A Specific Framework](#why-this-repo-needs-a-specific-framework)
+- [Goals](#goals)
+- [Workload Classes](#workload-classes)
+- [Standard Layout](#standard-layout)
+- [Framework Rules](#framework-rules)
+- [1. Source Isolation: One Agent, One Worktree](#1-source-isolation-one-agent-one-worktree)
+- [2. Build Isolation: One Host-Wide Heavy Cargo Lane](#2-build-isolation-one-host-wide-heavy-cargo-lane)
+- [3. Live Harness Isolation: Docker First, Native Netns Second](#3-live-harness-isolation-docker-first-native-netns-second)
+- [4. Measurement Isolation: Never Parallelize Bench-Like Runs](#4-measurement-isolation-never-parallelize-bench-like-runs)
+- [5. One-Off Debug Sessions: Treat Them As Named Environments](#5-one-off-debug-sessions-treat-them-as-named-environments)
+- [Agent Roles](#agent-roles)
+- [Recommended Parallelism Limits For This Host](#recommended-parallelism-limits-for-this-host)
+- [Concrete Command Patterns](#concrete-command-patterns)
+- [Worktree setup](#worktree-setup)
+- [Scoped unit verification](#scoped-unit-verification)
+- [Correctness live harness in Docker](#correctness-live-harness-in-docker)
+- [Correctness live harness with native netns fallback](#correctness-live-harness-with-native-netns-fallback)
+- [Serial measurement run](#serial-measurement-run)
+- [Helper Scripts](#helper-scripts)
+- [Suggested Rollout](#suggested-rollout)
+- [Decision Summary](#decision-summary)
+
 ## Why This Repo Needs A Specific Framework
 
 This repository already has strong building blocks for isolation:

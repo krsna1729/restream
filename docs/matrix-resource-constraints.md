@@ -5,6 +5,18 @@ protocol/input matrix runners. It complements [testing.md](testing.md), which
 describes how to run the matrix, by explaining *what is bounded* and *what is
 not*.
 
+## Contents
+
+- [Executive summary](#executive-summary)
+- [Build-time constraints only](#build-time-constraints-only)
+- [Runtime constraints that exist](#runtime-constraints-that-exist)
+- [Matrix and fast-breadth concurrency model](#matrix-and-fast-breadth-concurrency-model)
+- [What is NOT constrained](#what-is-not-constrained)
+- [Harness/runtime knobs status](#harnessruntime-knobs-status)
+- [Measured resource baselines](#measured-resource-baselines)
+- [Recommendations](#recommendations)
+- [Bottom line](#bottom-line)
+
 ## Executive summary
 
 The full matrix and fast-breadth modes are **partially constrained**. Every
@@ -93,9 +105,9 @@ the SRT egress path.
 
 | Limit | Default | Env knob | Location |
 |---|---|---|---|
-| Max segments | 20 | `RESTREAM_HLS_MAX_SEGMENTS` | [src/media/hls.rs](../src/media/hls.rs) |
-| Segment accumulator capacity | 8 MiB | `RESTREAM_HLS_SEGMENT_CAPACITY_BYTES` | [src/media/hls.rs](../src/media/hls.rs) |
-| Min segment length | 1 s | `RESTREAM_HLS_MIN_SEGMENT_MS` | [src/media/hls.rs](../src/media/hls.rs) |
+| Max segments | 20 | `RESTREAM_HLS_MAX_SEGMENTS` | [src/config.rs](../src/config.rs) |
+| Segment accumulator capacity | 8 MiB | `RESTREAM_HLS_SEGMENT_CAPACITY_BYTES` | [src/config.rs](../src/config.rs) |
+| Min segment length | 1 s | `RESTREAM_HLS_MIN_SEGMENT_MS` | [src/config.rs](../src/config.rs) |
 
 The fMP4 preview store uses the same `HlsConfig` bounds.
 

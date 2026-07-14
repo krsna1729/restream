@@ -25,11 +25,9 @@ chased, or one optimization with before/after proof.
 
 ## Mode A — ledger check (performance guard)
 
-1. Pick the least-recently-measured suite in `baselines.md`
-   (`ring_buffer`, `avio_throughput`, `high_performance_data_path`,
-   `matrix_throughput`, `srt_ingest_latency`, `transcoder_throughput`,
-   `hls_cost`, `hls_fmp4_cost`, `stage_feeder`, `stage_metrics`,
-   `codec_conversions`, `simd_alternatives`, `alert_tracker`).
+1. Read the benchmark targets from `Cargo.toml` and compare them with the
+   entries in `baselines.md`. Pick the least-recently-measured applicable
+   target; do not maintain a duplicate suite list in this skill.
 2. Run it; compare medians against the ledger.
 3. Within noise (±5% for throughput suites unless the ledger row says
    otherwise) → update the "last verified" date, done.

@@ -10,6 +10,23 @@ three deployment modes open:
 The design goal is simple: keep agent logic in shared Rust code, and keep
 transport concerns thin.
 
+## Contents
+
+- [Design principles](#design-principles)
+- [Target layering](#target-layering)
+- [Recommended module layout](#recommended-module-layout)
+- [Shared trait boundary](#shared-trait-boundary)
+- [Two backend implementations](#two-backend-implementations)
+- [MCP tool layer](#mcp-tool-layer)
+- [Feature flags](#feature-flags)
+- [Binary and deployment modes](#binary-and-deployment-modes)
+- [Release examples](#release-examples)
+- [Deferred work](#deferred-work)
+- [Auth model](#auth-model)
+- [Migration path from current code](#migration-path-from-current-code)
+- [What not to do](#what-not-to-do)
+- [Recommendation for this repository](#recommendation-for-this-repository)
+
 ## Design principles
 
 - Put business logic in shared Rust modules, not in the MCP transport.

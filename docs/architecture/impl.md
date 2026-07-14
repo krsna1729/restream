@@ -1,5 +1,50 @@
 # Restream Implementation Plan: Whole-Codebase Path to the Ideal Architecture
 
+> **Status: completed migration plan and design record.** Historical source
+> paths describe the code that this plan set out to split. Use
+> [the gap analysis](arch_gap_analysis.md) for completion evidence and
+> [the maintained architecture overview](../architecture.md) for current code.
+
+## Contents
+
+- [Purpose](#purpose)
+- [Guiding constraints](#guiding-constraints)
+- [Evidence driving the plan](#evidence-driving-the-plan)
+- [Phase 0 — Baseline and guardrails](#phase-0-baseline-and-guardrails)
+- [Phase 1 — Define core contracts without moving code](#phase-1-define-core-contracts-without-moving-code)
+- [Phase 2 — Make configuration typed and centralized](#phase-2-make-configuration-typed-and-centralized)
+- [Phase 3 — Split API into route modules](#phase-3-split-api-into-route-modules)
+- [Phase 4 — Move API logic into application services](#phase-4-move-api-logic-into-application-services)
+- [Phase 5 — Repository modules and persistence cleanup](#phase-5-repository-modules-and-persistence-cleanup)
+- [Phase 6 — Runtime graph plan as the single planning model](#phase-6-runtime-graph-plan-as-the-single-planning-model)
+- [Phase 7 — First-class stage lifecycle](#phase-7-first-class-stage-lifecycle)
+- [Phase 8 — Dependency-aware output status](#phase-8-dependency-aware-output-status)
+- [Phase 9 — FFmpeg narrow waist](#phase-9-ffmpeg-narrow-waist)
+- [Phase 10 — HLS preview joins the graph runtime](#phase-10-hls-preview-joins-the-graph-runtime)
+- [Phase 11 — Recording lifecycle and media library metadata](#phase-11-recording-lifecycle-and-media-library-metadata)
+- [Phase 12 — Health, alerts, and diagnostics v2](#phase-12-health-alerts-and-diagnostics-v2)
+- [Phase 13 — Test harness v2 reporting](#phase-13-test-harness-v2-reporting)
+- [Phase 14 — Agent/MCP cleanup](#phase-14-agentmcp-cleanup)
+- [Phase 15 — Large-file split after contracts exist](#phase-15-large-file-split-after-contracts-exist)
+- [Phase 16 — Default policy and rollout](#phase-16-default-policy-and-rollout)
+- [Detailed task backlog](#detailed-task-backlog)
+- [Concrete validation commands](#concrete-validation-commands)
+- [New tests to add](#new-tests-to-add)
+- [Risk register](#risk-register)
+- [Definition of done for the ideal point](#definition-of-done-for-the-ideal-point)
+- [Recommended first sprint](#recommended-first-sprint)
+- [Addendum: Full-Codebase and Harness Implementation Pass](#addendum-full-codebase-and-harness-implementation-pass)
+- [Phase A — Source-wide audit automation](#phase-a-source-wide-audit-automation)
+- [Phase B — Harness v2 semantic model](#phase-b-harness-v2-semantic-model)
+- [Phase C — Harness typed API client](#phase-c-harness-typed-api-client)
+- [Phase D — Harness root-cause reporting](#phase-d-harness-root-cause-reporting)
+- [Phase E — Harness artifact index](#phase-e-harness-artifact-index)
+- [Phase F — Harness execution symmetry](#phase-f-harness-execution-symmetry)
+- [Phase G — Harness/report module split](#phase-g-harnessreport-module-split)
+- [Phase H — Whole-codebase service and adapter split](#phase-h-whole-codebase-service-and-adapter-split)
+- [Phase I — Harness as architectural governor](#phase-i-harness-as-architectural-governor)
+- [Updated first sprint](#updated-first-sprint)
+
 ## Purpose
 
 This document turns `architecture.md` into an incremental implementation plan for the entire codebase. It is organized by phases that can be landed independently. The media graph work is important, but it is only one track. The plan also covers API boundaries, application services, persistence, observability, agent/MCP, and the test harness.
@@ -1011,7 +1056,7 @@ This sprint directly addresses the known operational pain while laying the found
 
 ---
 
-# Addendum: Full-Codebase and Harness Implementation Pass
+## Addendum: Full-Codebase and Harness Implementation Pass
 
 The previous plan covered the whole codebase at architectural level. This addendum makes the harness and source-wide cleanup concrete enough to execute. The bar is relevance: every new abstraction must remove duplicate work, make an ugly one-off harder, or make a failure explain itself.
 

@@ -1,5 +1,14 @@
 # Testing strategy: two tiers
 
+## Contents
+
+- [Decision](#decision)
+- [Why we removed the middle](#why-we-removed-the-middle)
+- [Tier 1 — Unit (cargo test)](#tier-1-unit-cargo-test)
+- [Tier 2 — Live (binary + API + ffmpeg over localhost)](#tier-2-live-binary-api-ffmpeg-over-localhost)
+- [Benchmarks (orthogonal to the two tiers)](#benchmarks-orthogonal-to-the-two-tiers)
+- [Phased rollout](#phased-rollout)
+
 ## Decision
 
 There are **two** test tiers, not three. We drop "in-process integration" and the

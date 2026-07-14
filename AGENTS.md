@@ -2,6 +2,20 @@
 
 Instructions for AI coding agents in this repository.
 
+## Contents
+
+- [Core Rules](#core-rules)
+- [Repository Map](#repository-map)
+- [Commands](#commands)
+- [Inner Loop](#inner-loop)
+- [Build and Worktree Safety](#build-and-worktree-safety)
+- [Media Rules](#media-rules)
+- [Hot-Path Rules](#hot-path-rules)
+- [Testing](#testing)
+- [Autonomous Quality Loops](#autonomous-quality-loops)
+- [Operational Guidance](#operational-guidance)
+- [Key References](#key-references)
+
 ## Core Rules
 
 - Keep changes small, intentional, and consistent with existing Rust/TypeScript patterns.

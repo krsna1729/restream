@@ -1,5 +1,12 @@
 # RTMP Egress Experiments - 2026-07-13
 
+## Contents
+
+- [R1 serializer construction microbench](#r1-serializer-construction-microbench)
+- [RTMP egress chunk-size sweep](#rtmp-egress-chunk-size-sweep)
+- [Receiver compatibility and constrained-network evidence](#receiver-compatibility-and-constrained-network-evidence)
+- [R2 correctness prerequisite: RTMP droppability semantics](#r2-correctness-prerequisite-rtmp-droppability-semantics)
+
 ## R1 serializer construction microbench
 
 Added `benches/rtmp_serializer.rs` to compare current `rml_rtmp`

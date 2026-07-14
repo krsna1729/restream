@@ -3,6 +3,18 @@
 This document turns the existing agent-plane API into a practical agent
 integration design for this repository.
 
+## Contents
+
+- [Recommended layering](#recommended-layering)
+- [Browser boundary](#browser-boundary)
+- [Why use the agent plane instead of raw APIs](#why-use-the-agent-plane-instead-of-raw-apis)
+- [Minimal MCP tool catalog](#minimal-mcp-tool-catalog)
+- [Suggested MCP tool shapes](#suggested-mcp-tool-shapes)
+- [Wrapper rules](#wrapper-rules)
+- [Example workflow](#example-workflow)
+- [Suggested production path](#suggested-production-path)
+- [Shared Rust implementation](#shared-rust-implementation)
+
 ## Recommended layering
 
 ```text

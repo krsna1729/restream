@@ -7,6 +7,24 @@ requirements.
 For the performance optimization plan and benchmark results, see
 [High-Performance Data Path](high-performance-data-path.md).
 
+## Contents
+
+- [Current Shape](#current-shape)
+- [Transcoder Stages](#transcoder-stages)
+- [Protocol and Codec Boundaries](#protocol-and-codec-boundaries)
+- [Resolution Presets](#resolution-presets)
+- [H.265 Egress Policy](#h265-egress-policy)
+- [Current Protocol Matrix](#current-protocol-matrix)
+- [Minimum Work Per Consumer](#minimum-work-per-consumer)
+- [Scale Test Pipeline Paths](#scale-test-pipeline-paths)
+- [What Is Shared When Multiple Outputs Use the Same Encoding](#what-is-shared-when-multiple-outputs-use-the-same-encoding)
+- [Audio Stage Cache](#audio-stage-cache)
+- [Buffer Sizing (4K 60fps Target)](#buffer-sizing-4k-60fps-target)
+- [SRT Bonding](#srt-bonding)
+- [Protocol Correctness Requirements](#protocol-correctness-requirements)
+- [Stage Sharing Design](#stage-sharing-design)
+- [Code Gaps](#code-gaps)
+
 ## Current Shape
 
 ```mermaid

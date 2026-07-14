@@ -5,6 +5,32 @@ media path. The previous Node.js/MediaMTX runtime is archived under `old/`.
 MediaMTX may be used as an independent test sink, but it is not a production
 dependency.
 
+## Contents
+
+- [Layer Ownership](#layer-ownership)
+- [System Shape](#system-shape)
+- [Concurrency](#concurrency)
+- [Thread Inventory](#thread-inventory)
+- [Core affinity](#core-affinity)
+- [Packet Flow](#packet-flow)
+- [Ring Buffer](#ring-buffer)
+- [Packet Walk: RTMP ingest → RTMP egress](#packet-walk-rtmp-ingest-rtmp-egress)
+- [Packet Walk: SRT ingest → transcoded SRT egress](#packet-walk-srt-ingest-transcoded-srt-egress)
+- [Packet Walk: SRT ingest → SRT egress (no transcoding)](#packet-walk-srt-ingest-srt-egress-no-transcoding)
+- [Packet Walk: HLS segmenter](#packet-walk-hls-segmenter)
+- [Packet Walk: TS recording](#packet-walk-ts-recording)
+- [Complete System Diagram](#complete-system-diagram)
+- [Synchronization at Each Boundary](#synchronization-at-each-boundary)
+- [Memory Ordering (ring buffer hot path)](#memory-ordering-ring-buffer-hot-path)
+- [Shared Processing Stages](#shared-processing-stages)
+- [HLS and Recording](#hls-and-recording)
+- [File Ingest](#file-ingest)
+- [State and Authentication](#state-and-authentication)
+- [libsrt Internal Threads](#libsrt-internal-threads)
+- [Design Rationale: Why OS Threads for FFmpeg](#design-rationale-why-os-threads-for-ffmpeg)
+- [Legacy MediaMTX Migration](#legacy-mediamtx-migration)
+- [Key source areas](#key-source-areas)
+
 ## Layer Ownership
 
 These boundaries are intentional. When refactoring, prefer moving code toward
@@ -834,23 +860,25 @@ isolated interoperability sink in protocol tests.
 The old MediaMTX Prometheus/Grafana setup belongs to the archived implementation
 under `old/`. The current Rust binary has no `/metrics` text endpoint.
 
-## Key Files
+## Key source areas
 
-| File | Lines | Responsibility |
-|---|---:|---|
-| `src/lib.rs` | 525 | App composition and reconciliation |
-| `src/api.rs` | 1,946 | Router, auth, REST/SSE handlers, embedded assets |
-| `src/db.rs` | 803 | SQLite schema and queries |
-| `src/diag.rs` | 986 | Native diagnostics |
-| `src/media/engine.rs` | 1,583 | Active state and health/graph snapshots |
-| `src/media/ring_buffer.rs` | 568 | Lock-free packet fan-out |
-| `src/media/mpegts.rs` | 2,111 | Native MPEG-TS demuxer and muxer |
-| `src/media/codec.rs` | 798 | Codec helpers, Annex-B scanning, FLV stripping, zero-alloc `_into` variants |
-| `src/media/avio.rs` | 340 | In-memory FFmpeg AVIO and MemoryQueue |
-| `src/media/rtmp.rs` | 1,690 | RTMP server/client (rtmp:// + rtmps://) |
-| `src/media/srt.rs` | 2,387 | SRT server/client, bonding, stats |
-| `src/media/tcp_stats.rs` | 253 | Linux RTMP receiver socket metrics |
-| `src/media/hls.rs` | 338 | In-memory HLS segmenter and store |
-| `src/media/recording.rs` | 228 | MPEG-TS recording |
-| `src/media/transcoder.rs` | 420 | Shared video/audio stages |
-| `src/media/security.rs` | 221 | Ingest rate-limit, IP ban, bounded tracked-IP map |
+Line counts are intentionally omitted because the source audit owns that
+volatile inventory. These paths are the maintained ownership map:
+
+| Source area | Responsibility |
+|---|---|
+| `src/lib.rs`, `src/infrastructure/` | App composition, service wiring, and reconciliation |
+| `src/api/` | Router, auth, REST/SSE handlers, and embedded assets |
+| `src/application/` | Control-plane orchestration and service ports |
+| `src/domain/` | Stable IDs, state, output specs, and validation vocabulary |
+| `src/db/` | SQLite schema and repositories |
+| `src/runtime/`, `src/api_runtime_views/` | Runtime models and operator-facing snapshots |
+| `src/diag.rs` | Native diagnostics |
+| `src/media/engine.rs`, `src/media/engine_*` | Active media state, lifecycle, and snapshots |
+| `src/media/ring_buffer.rs`, `src/media/ts_chunk_ring.rs` | Packet and MPEG-TS fan-out |
+| `src/media/mpegts.rs`, `src/media/codec.rs` | Native MPEG-TS and codec transforms |
+| `src/media/avio.rs` | In-memory FFmpeg AVIO and queues |
+| `src/media/rtmp.rs`, `src/media/srt*.rs` | RTMP and SRT protocol adapters |
+| `src/media/hls/`, `src/media/engine_hls.rs` | In-memory HLS stores, segmenters, upload, and lifecycle |
+| `src/media/recording/` | Recording lifecycle, writer, and catalog |
+| `src/media/transcoder.rs`, `src/media/external_transcoder.rs` | Shared internal and external transcoder stages |

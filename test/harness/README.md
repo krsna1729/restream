@@ -5,6 +5,11 @@ This directory is the new manifest surface for the integration harness.
 The Rust harness loads this surface for canonical suites, scenario-backed
 matrix runs, and special workflow inventory.
 
+## Contents
+
+- [Ownership split](#ownership-split)
+- [Compatibility](#compatibility)
+
 ## Ownership split
 
 Rust keeps:

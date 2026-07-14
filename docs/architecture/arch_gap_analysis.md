@@ -1,5 +1,9 @@
 # Architecture Gap Analysis: Current Code vs. Ideal State
 
+> **Status: completion evidence.** This audit records the migration against
+> [the implementation plan](impl.md). It is not the primary current-state
+> architecture guide; use [architecture.md](../architecture.md) for that.
+
 > **Reference documents**: [arch.md](arch.md) · [impl.md](impl.md)
 >
 > Audit standard: this is a deep implementation audit, not a symbol-existence
@@ -8,6 +12,17 @@
 > `arch.md`.
 
 ---
+
+## Contents
+
+- [Executive Summary](#executive-summary)
+- [Bug-Fix and Proof Ledger](#bug-fix-and-proof-ledger)
+- [Phase-by-Phase Status](#phase-by-phase-status)
+- [Phases 13-16 Snapshot](#phases-13-16-snapshot)
+- [Addendum Phases A-I Snapshot](#addendum-phases-a-i-snapshot)
+- [Critical Remaining Gaps](#critical-remaining-gaps)
+- [Summary Scorecard](#summary-scorecard)
+- [Answer to the Expanded Goal](#answer-to-the-expanded-goal)
 
 ## Executive Summary
 
@@ -399,7 +414,7 @@ is not confused with the still-open addendum.
 
 | Phase | Status | Notes |
 |---|---|---|
-| Phase A — Source-wide audit automation | ✅ Complete for current governor scope | `scripts/check/source-audit.sh` now enforces the 2,000-line cap across `src`, `public/ts`, and hand-written JS/MJS tests; fails media→API imports, API FFmpeg/transcoder stage starts, removed harness `state` status-field reads, unapproved raw env access, and output-status schema drift between `api_view_models::egress_runtime_json` and harness `ApiOutputStatus`; writes `target/source-audit.json` with line counts, public function inventory, API route counts, harness mode/suite inventory, env-var usage, feature-cfg sites, forbidden-import counts, and output status schema diff. CI uploads the report in `.github/workflows/ci.yml`. |
+| Phase A — Source-wide audit automation | ✅ Complete for current governor scope | `scripts/check/source-audit.sh` enforces the 2,000-line cap across `src`, authored frontend source in `web/ts`, and hand-written JS/MJS tests; fails media→API imports, API FFmpeg/transcoder stage starts, removed harness `state` status-field reads, unapproved raw env access, and output-status schema drift between `api_view_models::egress_runtime_json` and harness `ApiOutputStatus`; writes `target/source-audit.json` with line counts, public function inventory, API route counts, harness mode/suite inventory, env-var usage, feature-cfg sites, forbidden-import counts, and output status schema diff. The embedded JSON inventory still scans the old generated `public/ts` path and should be aligned with the shell gate. CI uploads the report in `.github/workflows/ci.yml`. |
 | Phase B — Harness v2 semantic model | ✅ Complete for current mixed matrix | `HarnessOutputCell`, `HarnessOutputRegistry`, per-scenario `outputs.json`, progress-stall semantic cell labels, and scenario/matrix embedding are implemented in `mixed_artifacts.rs`, `mixed_runner.rs`, and mixed output builders. |
 | Phase C — Harness typed API client | ✅ Complete for output-status DTO scope | `ApiOutputStatus`, `ApiOutputMetrics`, and `ApiBlockedByStage` now parse output status rows with required `status`/`rawStatus`/`phase`; progress, live-output, stalled-output, fault recovery, DSL workflow, HLS PUT, and probe snapshot paths fetch output status through the typed helper before using or embedding the raw artifact payload. Remaining raw status JSON is limited to an intentional cleanup/error-envelope path that is not guaranteed to match the output-status DTO shape. |
 | Phase D — Harness root-cause reporting | ✅ Complete for current taxonomy | `FailureCause` carries the full `impl.md` taxonomy, root-cause summaries include `cells`, and tests cover blocked stage, capacity, first output, keyframe, parameter sets, timestamp discontinuity, protocol connect, HLS segments, recording identity, runtime log, lifecycle stop, infrastructure, no-progress classification, and structured JSON failure rows. The classifier now inspects structured fields such as `blockedBy`, capacity phases, keyframe phases, and typed message/error fields before falling back to message substrings. |

@@ -8,6 +8,14 @@ only, recorded with date + commit. Update a row only with fresh numbers from
 this machine; never copy numbers you did not measure. Historical sections are
 reference points — do not overwrite them, add new dated rows.
 
+## Contents
+
+- [Benchmark ledger (Criterion medians)](#benchmark-ledger-criterion-medians)
+- [Resource ledger (resource-sweep / scale runs)](#resource-ledger-resource-sweep-scale-runs)
+- [Standing optimization targets (2026-06-27 CPU profile, task-clock 999 Hz)](#standing-optimization-targets-2026-06-27-cpu-profile-task-clock-999-hz)
+- [Profiling notes (VPS — hardware counters available)](#profiling-notes-vps-hardware-counters-available)
+- [Profiling notes (WSL2)](#profiling-notes-wsl2)
+
 ## Benchmark ledger (Criterion medians)
 
 | Suite | Metric | Median | Noise ± | Commit | Date | Last verified |

@@ -1,8 +1,20 @@
 # Concurrency Proof Coverage Report - 2026-07-02
 
+> **Status: evidence as of 2026-07-02.** For maintained proof policy and the
+> current boundary map, use [concurrency-proofing.md](concurrency-proofing.md)
+> and [stage-boundary-proof-map.md](stage-boundary-proof-map.md).
+
 Baseline: `0efa0d4` on `feat/rust-backend-rewrite-v2` after merging the proof work from the isolated `codex/proof-*` branches.
 
 This report summarizes the model, property, unit, and live-harness proof surface for concurrency primitives and thread/process hop boundaries. It is intentionally proof-oriented rather than line-coverage-oriented.
+
+## Contents
+
+- [Summary](#summary)
+- [New Proof Coverage Added In This Sweep](#new-proof-coverage-added-in-this-sweep)
+- [Gate Inventory](#gate-inventory)
+- [Validation Performed During The Sweep](#validation-performed-during-the-sweep)
+- [Remaining Gaps](#remaining-gaps)
 
 ## Summary
 
@@ -67,7 +79,7 @@ This report summarizes the model, property, unit, and live-harness proof surface
 
 ### Recording / HLS Timestamp Boundaries
 
-- `src/media/hls.rs`
+- `src/media/hls/`
   - Added `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream`, a deterministic in-memory proof that demuxed DTS values stay non-decreasing per stream across consecutive HLS MPEG-TS segment boundaries.
   - Coverage includes both packet-level DTS monotonicity and explicit first-packet-vs-previous-segment-last boundary checks after HLS keyframe-triggered segmentation.
 - `src/media/recording.rs`

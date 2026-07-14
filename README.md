@@ -7,6 +7,16 @@ and the media-stage orchestration around transcoding.
 This README is intentionally short. It should get a new developer from clone to
 useful context without making them read the whole system on day one.
 
+## Contents
+
+- [Start Here](#start-here)
+- [Running Restream](#running-restream)
+- [Daily Loop](#daily-loop)
+- [Codebase Map](#codebase-map)
+- [Scratch Runtime and Live-Harness Containers](#scratch-runtime-and-live-harness-containers)
+- [Read Next](#read-next)
+- [Expectations](#expectations)
+
 ## Start Here
 
 On Debian/Ubuntu, the fastest setup path is:
@@ -82,7 +92,7 @@ diagnostic all-files report.
 
 ## Codebase Map
 
-- `src/api.rs` and `src/lib.rs`: app startup, routes, runtime wiring
+- `src/api/` and `src/lib.rs`: routes, handlers, app startup, and runtime wiring
 - `src/media/`: ingest, egress, mux/demux, ring buffers, HLS, transcoding
 - `src/domain/`: persisted models and business logic
 - `src/planner/`: pipeline planning/orchestration helpers
@@ -145,6 +155,7 @@ fallback, but the default image is `runtime`/scratch.
 
 ## Read Next
 
+- [Documentation Guide](docs/README.md): reading paths and the complete documentation index
 - [Developer Guide](docs/development.md): setup, inner loop, tests, benchmarks, static build
 - [Architecture](docs/architecture.md): runtime shape and major moving parts
 - [Configuration](docs/configuration.md): env vars, ports, paths, persisted settings

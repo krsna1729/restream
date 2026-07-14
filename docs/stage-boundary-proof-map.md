@@ -4,6 +4,11 @@ This map tracks the proof wall around stage boundaries. The goal is not line
 coverage; it is to prove that packets, lifecycle state, capacity waits,
 cancellation, and diagnostics cross each boundary without losing causality.
 
+## Contents
+
+- [Boundary Matrix](#boundary-matrix)
+- [Priority Order](#priority-order)
+
 ## Boundary Matrix
 
 | Boundary | Contract to prove | Current proof | Next confidence target |

@@ -7,6 +7,15 @@ This project has two release gates:
 
 The tag publish step is deliberately separate. Branch workflow dispatches never publish a GitHub Release or GHCR image. Only a `v*` tag does that.
 
+## Contents
+
+- [Prerequisites](#prerequisites)
+- [1. Run local due diligence](#1-run-local-due-diligence)
+- [2. Dispatch the GitHub dry-run](#2-dispatch-the-github-dry-run)
+- [3. Publish by tag](#3-publish-by-tag)
+- [4. Verify published artifacts](#4-verify-published-artifacts)
+- [Failed publish](#failed-publish)
+
 ## Prerequisites
 
 - Clean checkout on the release branch.

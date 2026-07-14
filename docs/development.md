@@ -3,6 +3,17 @@
 This guide is the longer companion to the top-level README. Use it when you
 need setup details, the normal edit/test loop, or release-build notes.
 
+## Contents
+
+- [Quick Start](#quick-start)
+- [Running The Binary Directly](#running-the-binary-directly)
+- [Manual Prerequisites](#manual-prerequisites)
+- [Inner Loop](#inner-loop)
+- [Testing](#testing)
+- [Benchmarks](#benchmarks)
+- [Static Release Build](#static-release-build)
+- [Recommended Reading Order](#recommended-reading-order)
+
 ## Quick Start
 
 For a fresh Debian/Ubuntu machine:
@@ -113,74 +124,21 @@ npm run test:frontend
 npm run test:frontend:browser-dom
 ```
 
-Edit `web/ts/`, not generated files in `public/js/`. The build now re-syncs
-the browser HLS runtime from the `hls.js` npm dependency automatically.
-Frontend orchestration entrypoints live in `web/ts/app/`, shared transport
-and state helpers in `web/ts/core/`, bounded UI modules in
-`web/ts/features/`, and history-specific UI in `web/ts/history/`.
-The Node-based frontend suite now uses a temporary sourcemapped test build so
-coverage reports point at `web/ts/**`, while `npm run test:frontend:js-smoke`
-keeps a smaller direct check against the shipped `public/js/**` bundle.
-Use `npm run test:frontend:coverage` for the Node-scope TypeScript coverage
-gate. That covered surface now includes the dashboard/history/status transport
-modules that own the polling-vs-SSE split, plus the small reactive helpers for
-output control intent and Rust-process lifecycle indication. Use
-`npm run test:frontend:coverage:all` when you want the broader all-files
-report as a diagnostic view.
+Edit authored files under `web/`; do not hand-edit generated `public/js/` or
+`public/output.css`. The main ownership boundaries are:
 
-The dashboard runtime surface now prefers a single `/api/v1/dashboard/runtime`
-snapshot whenever a refresh needs both engine health and host metrics; only
-metrics-only modes still hit `/metrics/system` directly. In selected-pipeline
-detail modes, summary health requests now include the selected `pipeline_id` so
-the backend can keep summary liveness for every pipeline while upgrading the
-active pipeline entry to the full runtime shape in the same response.
-Output start/stop now reuse the mutation response to patch local desired state
-immediately, then let the already-open lifecycle SSE drive the runtime re-sync
-with a short `/api/v1/dashboard/runtime` fallback if no wakeup arrives. The
-button busy state now stays pinned until the selected output actually reaches
-the requested runtime state, so unrelated lifecycle wakeups do not clear
-operator feedback early.
-File-ingest start/stop now follow the same pattern when a lifecycle stream is
-already open, while cold/no-stream file-ingest controls still fall back
-directly to a runtime refresh. The file-ingest button now also shows its own
-`Starting...` / `Stopping...` in-flight state immediately so operators do not
-have to infer whether the backend accepted the click, and it clears as soon as
-the mutation response confirms the new `running` flag while the runtime refresh
-continues in the background. Recording start/stop is different in transport shape: the mutation
-response already contains the operator-facing `enabled` / `active` state, so
-the dashboard patches local recording state immediately instead of forcing a
-follow-up runtime fetch, while the button itself still shows immediate
-`Starting...` / `Stopping...` feedback during the request. Status mode now
-reuses its own restream log SSE
-instead of opening a second lifecycle-only dashboard stream on top. Settings
-and media modes also use their existing metrics refresh to mark the Rust
-process indicator as running immediately, rather than waiting for a later
-lifecycle event to clear the initial "Connecting" state. The same reachability
-hint now also clears stale `Stopped` / `Faulted` badges once the API is back,
-without overriding an in-progress `Stopping` state. Output create/update
-flows, output deletes, pipeline create/update flows, and pipeline deletes now
-reuse returned mutation payloads or apply targeted local removals to patch
-dashboard state immediately instead of following each mutation with another
-`/api/v1/settings?view=dashboard` fetch. Pipeline edit/create now also reuses
-the dashboard's inline `fileIngest` state when opening the modal and sends file
-ingest changes inside the same pipeline mutation, removing the extra
-`GET/PUT/DELETE /api/v1/pipelines/:id/file-ingest` round-trips from the common
-editor flow. Status mode now also opts out of the dashboard's background
-`/metrics/system` poll entirely because that screen already has its own engine
-snapshot plus restream-log SSE; this removes a redundant heartbeat without
-changing the operator-visible status feed.
+- `web/ts/app/` — application composition and workspace orchestration;
+- `web/ts/core/` — shared transport, state, and protocol contracts;
+- `web/ts/features/` — bounded user-facing capabilities;
+- `web/ts/history/` — history-specific state and rendering;
+- `web/styles/input.css` — authored styles.
 
-Recommended transport split for this dashboard:
-
-| UI surface | Transport | Why |
-| --- | --- | --- |
-| Restream lifecycle, output/pipeline history live tails, global process indicator | SSE (`/api/v1/logs/stream`) | These are edge-triggered event streams where waiting for the next poll feels laggy and wasteful. SSE stays on plain HTTP, survives ordinary load balancers / tunnels more easily than WebSockets, and gives us `Last-Event-ID` resume without inventing a custom session layer. |
-| Dashboard runtime cards, pipeline detail runtime, inspect graph refreshes, host metrics | Polling snapshot (`/api/v1/dashboard/runtime`, `/metrics/system`) | These are durable state snapshots, not append-only events. Polling keeps the backend contract simple, lets the client recover from missed lifecycle events, and avoids pushing high-frequency metric streams through proxies. |
-| Mutations that already return the user-visible state (`recording`, config edits, create/update/delete flows) | Mutation response + local patch | If the response already contains what the operator needs to see, refetching immediately is redundant. Patch local state and rerender. |
-| Mutations that need runtime confirmation (`output` and `file-ingest` start/stop) | Mutation response + immediate local intent + lifecycle SSE + bounded poll fallback | The click should feel instant, but the runtime still has to converge. Show the in-flight intent immediately, let lifecycle SSE wake the confirming runtime refresh when available, and keep one short fallback refresh for cold/no-stream cases. |
-| Background / hidden tabs | Slower polling, close SSE | Hidden tabs should not hold open hot event streams or 5 s runtime polls. Resume from the last event id or take a fresh snapshot when visible again. |
-
-The practical rule is: use SSE for sparse, operator-visible edges; use polling for compact snapshots that must stay self-healing; use mutation responses whenever they already carry the exact UI state.
+Use `npm run test:frontend:coverage` for the maintained Node-side coverage gate
+and `npm run test:frontend:coverage:all` only as a diagnostic all-files view.
+Use Playwright when behavior depends on real navigation, focus, media playback,
+layout, or browser APIs. Current endpoint and runtime contracts belong in
+[the API reference](api-reference.md) and
+[observability guide](observability.md), not in this setup guide.
 
 ## Testing
 
@@ -203,20 +161,10 @@ scripts/build/resource-limit.sh cargo bench --bench <name>
 scripts/build/resource-limit.sh cargo bench
 ```
 
-Available suites include:
-
-- `ring_buffer`
-- `avio_throughput`
-- `high_performance_data_path`
-- `hls_cost`
-- `matrix_throughput`
-- `srt_ingest_latency`
-- `transcoder_throughput`
-- `codec_conversions`
-- `stage_metrics`
-- `alert_tracker`
-- `stage_feeder`
-- `simd_alternatives`
+Benchmark targets are declared in `Cargo.toml` and implemented under
+`benches/`; use those as the inventory instead of copying a list into this
+guide. The [high-performance data-path guide](high-performance-data-path.md)
+maps production concerns to the benchmark workflow.
 
 For the SRT crypto migration specifically, compare plaintext vs encrypted local
 socket cost with:
@@ -230,9 +178,6 @@ timed iteration and compares `plain`, `aes128`, `aes192`, and `aes256` via
 `SRTO_PBKEYLEN=16/24/32`. That keeps the MPEG-TS-over-SRT packet shape stable
 and makes the benchmark answer the narrower question we actually care about:
 whether stronger SRT encryption changes hot-path cost.
-
-For the optimization roadmap behind those benches, see
-[High-Performance Data Path](high-performance-data-path.md).
 
 ## Static Release Build
 

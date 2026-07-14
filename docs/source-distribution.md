@@ -3,6 +3,12 @@
 This repository is the source distribution. It intentionally does not commit
 large generated native build artifacts.
 
+## Contents
+
+- [Committed Inputs](#committed-inputs)
+- [Generated Artifacts](#generated-artifacts)
+- [Binary and container distributions](#binary-and-container-distributions)
+
 ## Committed Inputs
 
 - Rust sources, tests, benchmarks, `Cargo.toml`, and `Cargo.lock`.

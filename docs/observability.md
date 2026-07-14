@@ -4,6 +4,15 @@ The Rust runtime exposes JSON diagnostics directly from process state and SSE
 for live log/event feeds.
 It does not expose a Prometheus text endpoint, proxy Grafana, or poll a sidecar.
 
+## Contents
+
+- [Endpoints](#endpoints)
+- [/api/v1/engine/health Field Derivation](#apiv1enginehealth-field-derivation)
+- [Diagnostic Checks](#diagnostic-checks)
+- [Known Instrumentation Gaps](#known-instrumentation-gaps)
+- [Application Residency Design](#application-residency-design)
+- [Prometheus and Grafana](#prometheus-and-grafana)
+
 ## Endpoints
 
 | Surface | Authentication | Purpose |

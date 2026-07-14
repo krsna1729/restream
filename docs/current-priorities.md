@@ -1,8 +1,15 @@
-## Current Priorities
+# Current priorities
 
 This document replaces the old rewrite/status/master-plan documents.
 The Rust rewrite is no longer the main story; this file keeps only the work
 that still appears worth pursuing from those plans.
+
+## Contents
+
+- [Current State](#current-state)
+- [Worth Pursuing](#worth-pursuing)
+- [Not Current Priorities](#not-current-priorities)
+- [How To Use This](#how-to-use-this)
 
 ## Current State
 

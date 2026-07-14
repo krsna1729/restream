@@ -3,6 +3,17 @@
 This document explains how the static FFmpeg version is selected for restream
 release builds.
 
+## Contents
+
+- [Quick Start](#quick-start)
+- [Build Workflow](#build-workflow)
+- [Version Information](#version-information)
+- [Breaking Changes](#breaking-changes)
+- [Environment Variables](#environment-variables)
+- [Manual Version Update](#manual-version-update)
+- [Troubleshooting](#troubleshooting)
+- [See Also](#see-also)
+
 ## Quick Start
 
 The current static build default is FFmpeg `n8.1.2`, matching the
@@ -134,10 +145,10 @@ grep "FFMPEG_VERSION" scripts/build/native-deps.sh
 ### Transcoding failures with new FFmpeg version
 - Check FFmpeg version compatibility: `ffmpeg -version`
 - Verify codec support: `ffmpeg -codecs | grep h264`
-- Enable verbose logging for transcoder (see [observability.md](../observability.md))
+- Enable verbose logging for transcoder (see [observability.md](observability.md))
 
 ## See Also
 
-- [High-Performance Data Path](../high-performance-data-path.md) — CPU optimization strategy
-- [Media Pipeline](../media-pipeline.md) — Architecture and threading model
+- [High-Performance Data Path](high-performance-data-path.md) — CPU optimization strategy
+- [Media Pipeline](media-pipeline.md) — Architecture and threading model
 - [Configuration](./configuration.md) — Other environment variables

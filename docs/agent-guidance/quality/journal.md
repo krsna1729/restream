@@ -9,6 +9,27 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 
 ---
 
+## Contents
+
+- [2026-07-03 00:00 BOOTSTRAP DONE [opus]](#2026-07-03-0000-bootstrap-done-opus)
+- [2026-07-11 20:45 MSR FULL-SCALE RAMP DONE [fable]](#2026-07-11-2045-msr-full-scale-ramp-done-fable)
+- [2026-07-11 21:50 VPS HW-COUNTER PROFILING DONE [fable]](#2026-07-11-2150-vps-hw-counter-profiling-done-fable)
+- [2026-07-12 12:05 MSR RECEIVER-PROVED BASELINE + PROCESS PERF DONE [codex]](#2026-07-12-1205-msr-receiver-proved-baseline-process-perf-done-codex)
+- [2026-07-12 12:15 MSR WORKER-SWEEP PROFILING DONE [codex]](#2026-07-12-1215-msr-worker-sweep-profiling-done-codex)
+- [2026-07-12 12:32 MSR 3-WORKER FULL CONFIRMATION REJECTED [codex]](#2026-07-12-1232-msr-3-worker-full-confirmation-rejected-codex)
+- [2026-07-12 13:05 MSR DASHBOARD PERF SNAPSHOT AFTER HEALTH FIX [codex]](#2026-07-12-1305-msr-dashboard-perf-snapshot-after-health-fix-codex)
+- [2026-07-12 15:18 MSR RTMP OWNERSHIP BENCH + BACKLOG GROOMED [codex]](#2026-07-12-1518-msr-rtmp-ownership-bench-backlog-groomed-codex)
+- [2026-07-12 15:36 Q-011 DONE [codex]](#2026-07-12-1536-q-011-done-codex)
+- [2026-07-12 15:55 MSR RESTORED DASHBOARD SAMPLE [codex]](#2026-07-12-1555-msr-restored-dashboard-sample-codex)
+- [2026-07-12 16:30 Q-013 DONE [codex]](#2026-07-12-1630-q-013-done-codex)
+- [2026-07-12 16:45 Q-012 AFFINITY PROBE [codex]](#2026-07-12-1645-q-012-affinity-probe-codex)
+- [2026-07-12 17:05 Q-012 CLEAN AFFINITY A/B [codex]](#2026-07-12-1705-q-012-clean-affinity-ab-codex)
+- [2026-07-12 17:20 Q-012 RUNTIME AFFINITY PROTOTYPE REJECTED [codex]](#2026-07-12-1720-q-012-runtime-affinity-prototype-rejected-codex)
+- [2026-07-12 17:24 Q-012 TOKIO BLOCKING CAP PROBE [codex]](#2026-07-12-1724-q-012-tokio-blocking-cap-probe-codex)
+- [2026-07-12 17:32 Q-012 TOKIO THREAD-NAME PROBE [codex]](#2026-07-12-1732-q-012-tokio-thread-name-probe-codex)
+- [2026-07-12 17:40 Q-012 TOKIO KEEPALIVE PROTOTYPE REJECTED [codex]](#2026-07-12-1740-q-012-tokio-keepalive-prototype-rejected-codex)
+- [2026-07-12 17:45 MSR FULL FINAL PASS [codex]](#2026-07-12-1745-msr-full-final-pass-codex)
+
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
   resilience-sweep, perf-sweep, modularity-sweep, backlog-groom), state files,

@@ -1,5 +1,36 @@
 # Restream Architecture: Target State for the Whole Codebase
 
+> **Status: design record.** This document preserves the target-state model and
+> the source snapshot that motivated it. For current runtime ownership and
+> source paths, use [the maintained architecture overview](../architecture.md).
+
+## Contents
+
+- [Purpose](#purpose)
+- [Non-goals](#non-goals)
+- [Current codebase map](#current-codebase-map)
+- [Architectural diagnosis](#architectural-diagnosis)
+- [Target layering](#target-layering)
+- [Core bounded contexts](#core-bounded-contexts)
+- [Domain model conventions](#domain-model-conventions)
+- [Runtime graph invariants](#runtime-graph-invariants)
+- [API architecture](#api-architecture)
+- [Persistence architecture](#persistence-architecture)
+- [Configuration architecture](#configuration-architecture)
+- [Security architecture](#security-architecture)
+- [Agent architecture](#agent-architecture)
+- [Observability architecture](#observability-architecture)
+- [Test architecture](#test-architecture)
+- [Module naming target](#module-naming-target)
+- [Aesthetic standards](#aesthetic-standards)
+- [Migration principle](#migration-principle)
+- [Ideal end state](#ideal-end-state)
+- [Addendum: Relevance-First Whole-Codebase Audit](#addendum-relevance-first-whole-codebase-audit)
+- [Source-wide heat map](#source-wide-heat-map)
+- [Codebase-level relevance standards](#codebase-level-relevance-standards)
+- [Whole-codebase target contracts](#whole-codebase-target-contracts)
+- [Test harness: full audit](#test-harness-full-audit)
+
 ## Purpose
 
 This document defines the target architecture for the entire `restream` codebase, not just the internal/external FFmpeg subsystem. The goal is to make the system easy to reason about, easy to operate under failure, and pleasant to evolve without adding more one-off paths.
@@ -826,24 +857,27 @@ That is the architecture standard.
 
 ---
 
-# Addendum: Relevance-First Whole-Codebase Audit
+## Addendum: Relevance-First Whole-Codebase Audit
 
 This addendum is a stricter pass over the entire source tree, including the bench/test harness. The standard is simple: every layer must answer the next human question. A runtime status should explain causality. A test failure should point to the failed semantic cell and blocked dependency. A module boundary should make the right thing the easy thing and the ugly one-off hard to introduce.
 
 ## Source-wide heat map
 
-The source tree contains several healthy domain concepts, but the largest files show where the architecture still relies on accumulation rather than crisp boundaries.
+The source snapshot contained several healthy domain concepts, but these
+responsibility clusters showed where the architecture relied on accumulation
+rather than crisp boundaries. Exact file sizes are intentionally omitted; the
+source-audit artifact owns that inventory.
 
-| File or area | Approx. size in uploaded source | Current smell | Target shape |
-|---|---:|---|---|
-| `src/bin/test_harness.rs` | 10,244 lines | Dispatch, process control, sinks, probes, sweeps, resource accounting, API helpers, and reporting share one global namespace. | Thin binary shell plus `test_harness/core`, `scenario`, `stack`, `probes`, `sinks`, `reports`, `modes`. |
-| `src/api.rs` | 7,795 lines | Route handlers, validation, application logic, media/HLS internals, and file serving are coupled. | Route modules call application services and read models only. |
-| `src/media/engine.rs` | 6,236 lines | Ingest, egress, stages, HLS, recording, diagnostics, and lifecycle maps are one engine object. | Runtime graph orchestrator plus separate registries/services for ingest, output, stage, HLS, recording. |
-| `src/media/srt.rs` | 4,627 lines | Protocol server, egress, socket quality, startup policy, bonding, and tests live together. | SRT transport adapter split by ingest, egress, quality, URL/config, tests. |
-| `src/media/rtmp.rs` | 3,600 lines | RTMP server, egress, FLV helpers, startup wait, and codec behavior mix. | RTMP transport adapter split by protocol session, ingest, egress, FLV codec helpers. |
-| `src/media/external_transcoder.rs` | 2,984 lines | FFmpeg command construction, stage input feeding, child lifecycle, stdout demux, stderr, metrics, and backend policy details mix. | External backend adapter behind shared FFmpeg stage plan/input/output/lifecycle contracts. |
-| `src/media/transcoder.rs` | 1,417 lines | Internal backend, audio routing, scaling, timestamp policy, and env rereads mix. | Internal backend adapter; shared planner/input pump/output normalizer used by both internal and external paths. |
-| `src/bin/test_harness/mixed_runner.rs` | 2,389 lines | Scenario lifecycle, matrix scheduling, stack binding, output fanout, checks, and result assembly mix. | Matrix scheduler plus per-source scenario runners plus report aggregator. |
+| File or area in the audited snapshot | Architectural smell | Target shape |
+|---|---|---|
+| Test harness root | Dispatch, process control, sinks, probes, sweeps, resource accounting, API helpers, and reporting shared one global namespace. | Thin binary shell plus focused core, scenario, stack, probe, sink, report, and mode owners. |
+| API monolith | Route handlers, validation, application logic, media/HLS internals, and file serving were coupled. | Route modules call application services and read models only. |
+| Media engine | Ingest, egress, stages, HLS, recording, diagnostics, and lifecycle maps accumulated in one engine object. | Runtime graph orchestrator plus separate registries/services for ingest, output, stage, HLS, and recording. |
+| SRT adapter | Protocol server, egress, socket quality, startup policy, bonding, and tests lived together. | SRT transport adapter split by ingest, egress, quality, URL/config, and tests. |
+| RTMP adapter | Server, egress, FLV helpers, startup wait, and codec behavior were mixed. | RTMP transport adapter split by protocol session, ingest, egress, and FLV codec helpers. |
+| External transcoder | Command construction, stage input, child lifecycle, output demux, stderr, metrics, and policy details were mixed. | External backend behind shared FFmpeg stage-plan, input, output, and lifecycle contracts. |
+| Internal transcoder | Backend execution, audio routing, scaling, timestamp policy, and configuration were mixed. | Internal backend sharing planner, input-pump, and output-normalizer contracts. |
+| Mixed scenario runner | Scenario lifecycle, scheduling, stack binding, fanout, checks, and result assembly were mixed. | Matrix scheduler plus per-source runners and a report aggregator. |
 
 This does not mean every large file must be split first. It means every change should move behavior behind one of the target contracts instead of adding another branch inside these files.
 

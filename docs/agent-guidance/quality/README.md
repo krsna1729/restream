@@ -9,6 +9,14 @@ The design premise: a small model is safe and productive when every step is
 mechanical gates, and (4) journaled so the next iteration starts informed.
 The skills provide the rails; the state files provide the memory.
 
+## Contents
+
+- [Pieces](#pieces)
+- [Running it](#running-it)
+- [Host safety (why loops are conservative here)](#host-safety-why-loops-are-conservative-here)
+- [Reviewing what the loop did](#reviewing-what-the-loop-did)
+- [Extending](#extending)
+
 ## Pieces
 
 | Piece | Where | Role |
