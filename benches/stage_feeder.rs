@@ -4,10 +4,11 @@
 //!   cargo bench --bench stage_feeder --profile bench-dev
 
 use bytes::Bytes;
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use restream::media::engine::{AudioMeta, VideoMeta};
 use restream::media::feeder::{PacketFeedConfig, TsPacketFeeder};
 use restream::media::ring_buffer::{DtsEnforcer, MediaPacket, MediaType, PayloadFormat};
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn video_meta() -> VideoMeta {

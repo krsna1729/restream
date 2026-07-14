@@ -1,8 +1,7 @@
 use bytes::Bytes;
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use restream::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
+use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread;

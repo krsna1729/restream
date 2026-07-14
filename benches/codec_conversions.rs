@@ -15,14 +15,13 @@
 //!   Audio AAC  ≈ 200–400 B  (one frame)
 
 use bytes::Bytes;
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use restream::media::codec::{
     annexb_to_avcc, annexb_to_avcc_with_scratch, audio_for_rtmp, audio_for_rtmp_into, audio_for_ts,
     avcc_to_annexb, video_for_rtmp, video_for_rtmp_with_composition_into, video_for_ts,
 };
 use restream::media::ring_buffer::PayloadFormat;
+use std::hint::black_box;
 
 // ---------------------------------------------------------------------------
 // OwnedVec: local stand-in for OwnedFfmpegPacket in codec/packet_to_bytes bench.
