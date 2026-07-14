@@ -32,6 +32,10 @@ use super::state::{
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Transport payload for pipeline create and update requests.
+///
+/// Optional nested `Option` fields preserve the difference between leaving a
+/// field unchanged, clearing it, and replacing it with a new value.
 pub struct PipelinePayload {
     pub name: String,
     pub stream_key: Option<String>,
@@ -40,6 +44,7 @@ pub struct PipelinePayload {
     pub file_ingest: Option<Option<PipelineFileIngestPayload>>,
 }
 
+/// Generates a dashboard-managed stream key when callers do not provide one.
 fn generate_stream_key() -> String {
     use rand::RngExt;
 
@@ -48,6 +53,8 @@ fn generate_stream_key() -> String {
     format!("sk_{}", to_hex(&bytes))
 }
 
+/// Normalizes storage-layer duplicate-key variants into one conflict branch at
+/// the HTTP boundary.
 fn is_duplicate_stream_key_error(err: &ApiError) -> bool {
     let message = err.to_string();
     message.contains("duplicate stream key")
@@ -55,6 +62,7 @@ fn is_duplicate_stream_key_error(err: &ApiError) -> bool {
         || message.contains("UNIQUE constraint failed: pipelines.stream_key")
 }
 
+/// Shared conflict response for user-visible stream-key collisions.
 fn duplicate_stream_key_response() -> Response {
     (
         StatusCode::CONFLICT,
@@ -65,6 +73,8 @@ fn duplicate_stream_key_response() -> Response {
         .into_response()
 }
 
+/// Trims caller-supplied stream keys and treats empty values as "generate one
+/// for me" so create handlers can fall back to random keys.
 fn requested_stream_key(stream_key: Option<&str>) -> Option<String> {
     stream_key
         .map(str::trim)
@@ -72,6 +82,7 @@ fn requested_stream_key(stream_key: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Rejects transport-level payload issues before any pipeline mutation starts.
 fn validate_pipeline_payload(payload: &PipelinePayload) -> Option<Response> {
     if let Some(response) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
         return Some(response);
@@ -109,6 +120,8 @@ fn validate_pipeline_payload(payload: &PipelinePayload) -> Option<Response> {
     None
 }
 
+/// Serializes the optional ingest policy into the persisted wire format while
+/// containing serialization failures at the transport boundary.
 fn serialize_srt_ingest_policy(
     policy: Option<&SrtPipelineIngestConfig>,
 ) -> Result<Option<String>, Response> {
@@ -120,6 +133,8 @@ fn serialize_srt_ingest_policy(
     }
 }
 
+/// Captures an immediate pipeline-scoped health view for alerts and diagnostics
+/// endpoints that should ignore dashboard grace-period smoothing.
 async fn pipeline_health_snapshot(state: &AppState, pipeline_id: &str) -> serde_json::Value {
     let pipeline_id = pipeline_id.to_string();
     let pipeline_ids = std::slice::from_ref(&pipeline_id);
@@ -131,10 +146,13 @@ async fn pipeline_health_snapshot(state: &AppState, pipeline_id: &str) -> serde_
         .await
 }
 
+/// Pulls the shared generation timestamp from runtime health snapshots so
+/// pipeline endpoints report one consistent clock value.
 fn snapshot_generated_at(snapshot: &serde_json::Value) -> String {
     snapshot["generatedAt"].as_str().unwrap_or("").to_string()
 }
 
+/// Lists persisted pipelines and reshapes them into the dashboard summary view.
 pub async fn pipelines_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -163,6 +181,8 @@ pub async fn pipelines_get_handler(
     }
 }
 
+/// Returns one pipeline plus its outputs so the detail view can hydrate in one
+/// authenticated round-trip.
 pub async fn pipeline_detail_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -194,6 +214,8 @@ pub async fn pipeline_detail_handler(
     .into_response()
 }
 
+/// Creates a pipeline, retrying rare auto-generated stream-key collisions
+/// before surfacing an internal error.
 pub async fn pipelines_post_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -272,13 +294,14 @@ pub async fn pipelines_post_handler(
                     .into_response();
             }
             Err(err) => {
-                if is_duplicate_stream_key_error(&err) && requested_stream_key.is_none() {
+                let duplicate_stream_key = is_duplicate_stream_key_error(&err);
+                if duplicate_stream_key && requested_stream_key.is_none() {
                     if attempt + 1 < max_attempts {
                         continue;
                     }
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
-                if is_duplicate_stream_key_error(&err) {
+                if duplicate_stream_key {
                     return duplicate_stream_key_response();
                 } else {
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -289,6 +312,8 @@ pub async fn pipelines_post_handler(
     StatusCode::INTERNAL_SERVER_ERROR.into_response()
 }
 
+/// Updates one pipeline while preserving stored values for patch fields callers
+/// omit from the request body.
 pub async fn pipelines_update_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -316,15 +341,10 @@ pub async fn pipelines_update_handler(
         .stream_key
         .unwrap_or_else(|| existing_stream_key.clone());
     let input_source = payload.input_source.unwrap_or(existing_input_source);
-    let srt_ingest_policy = match payload
-        .srt_ingest_policy
-        .as_ref()
-        .map(serialize_pipeline_srt_ingest_policy)
-        .transpose()
-    {
+    let srt_ingest_policy = match serialize_srt_ingest_policy(payload.srt_ingest_policy.as_ref()) {
         Ok(Some(value)) => Some(value),
         Ok(None) => existing_srt_ingest_policy,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(response) => return response,
     };
 
     if let Ok(active_pipelines) = state.pipeline_service.list_pipelines().await
@@ -383,6 +403,8 @@ pub async fn pipelines_update_handler(
     }
 }
 
+/// Deletes a pipeline only after tearing down runtime state that still points
+/// at its outputs, ingest, stages, and HLS helpers.
 pub async fn pipelines_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -427,6 +449,7 @@ pub async fn pipelines_delete_handler(
     }
 }
 
+/// Returns the live ingest probe snapshot for one active pipeline input.
 pub async fn pipeline_probe_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -446,6 +469,8 @@ pub async fn pipeline_probe_handler(
     }
 }
 
+/// Combines the runtime processing graph with the desired graph plan so the UI
+/// can compare actual and intended topology in one response.
 pub async fn pipeline_graph_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -495,6 +520,8 @@ pub async fn pipeline_graph_handler(
     Ok(Json(graph).into_response())
 }
 
+/// Derives the current alert set for one pipeline from the immediate health
+/// snapshot and the alert tracker's sticky state.
 pub async fn pipeline_alerts_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -516,6 +543,8 @@ pub async fn pipeline_alerts_handler(
     .into_response()
 }
 
+/// Packages the main troubleshooting context for one pipeline, including
+/// health, graphs, alerts, recent events, and recent logs.
 pub async fn pipeline_diagnostics_context_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -592,6 +621,8 @@ pub async fn pipeline_diagnostics_context_handler(
     .into_response())
 }
 
+/// Builds the compact pipeline summary consumed by cards and lightweight
+/// dashboard status surfaces.
 pub async fn v1_pipeline_summary_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -696,6 +727,8 @@ pub async fn v1_pipeline_summary_handler(
     .into_response())
 }
 
+/// Provides the default diagnostics log filter shell before callers add
+/// pipeline-specific constraints.
 fn empty_log_filters() -> AppLogFilters {
     AppLogFilters {
         after_id: None,
@@ -713,6 +746,7 @@ fn empty_log_filters() -> AppLogFilters {
     }
 }
 
+/// Serializes one desired stage graph plan into the dashboard JSON shape.
 fn stage_graph_plan_json(plan: &StageGraphPlan) -> serde_json::Value {
     serde_json::json!({
         "pipelineId": plan.pipeline_id.as_str(),
@@ -776,10 +810,12 @@ mod tests {
     }
 }
 
+/// Serializes the list form used by graph and diagnostics endpoints.
 fn stage_graph_plans_json(plans: &[StageGraphPlan]) -> serde_json::Value {
     serde_json::Value::Array(plans.iter().map(stage_graph_plan_json).collect())
 }
 
+/// Normalizes graph roles into stable JSON discriminators for the dashboard.
 fn graph_role_json(role: &GraphRole) -> serde_json::Value {
     match role {
         GraphRole::Output { output_id } => serde_json::json!({
@@ -796,6 +832,7 @@ fn graph_role_json(role: &GraphRole) -> serde_json::Value {
     }
 }
 
+/// Maps runtime backend enums to the dashboard's camelCase transport names.
 fn stage_backend_name(backend: StageBackendKind) -> &'static str {
     match backend {
         StageBackendKind::AudioRouter => "audioRouter",
