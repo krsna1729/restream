@@ -31,42 +31,31 @@ if [[ -n "$BINARY_BUNDLE" ]]; then
         exit 1
     }
 
-    # Certify the bytes users will download. Previously this gate rebuilt the
-    # default-feature app while package-binaries.sh later shipped an app built
-    # with the MCP feature set, leaving the downloadable executable unscanned.
+    # Certify the bytes users will download. The restream host archive contains
+    # one executable plus the release SBOM and compliance files.
     bundle_root="$(mktemp -d)"
     cleanup() {
         rm -rf "$bundle_root"
     }
     trap cleanup EXIT
     tar -xzf "$BINARY_BUNDLE" -C "$bundle_root"
-    mapfile -t bundled_bins < <(find "$bundle_root" -type f -path '*/bin/*' -perm -111 -print | sort)
-    if [[ "${#bundled_bins[@]}" -ne 3 ]]; then
-        echo "release-evidence: expected three executable files under bin/ in $BINARY_BUNDLE" >&2
+    mapfile -t bundled_bins < <(find "$bundle_root" -type f -perm -111 -print | sort)
+    if [[ "${#bundled_bins[@]}" -ne 1 || "$(basename "${bundled_bins[0]}")" != "restream" ]]; then
+        echo "release-evidence: expected exactly one executable named restream in $BINARY_BUNDLE" >&2
         exit 1
     fi
-    certified_binary=""
-    for binary in "${bundled_bins[@]}"; do
-        case "$(basename "$binary")" in
-            restream) certified_binary="$binary" ;;
-            restream-mcp|test_harness) ;;
-            *)
-                echo "release-evidence: unexpected bundled executable: $binary" >&2
-                exit 1
-                ;;
-        esac
-        if ldd "$binary" 2>&1 | grep -Eq 'libsrt|libsrt-'; then
-            echo "release-evidence: packaged binary still links libsrt dynamically: $binary" >&2
-            exit 1
-        fi
-    done
-    [[ -n "$certified_binary" ]] || {
-        echo "release-evidence: expected executable bin/restream in $BINARY_BUNDLE" >&2
+    certified_binary="${bundled_bins[0]}"
+    if ldd "$certified_binary" 2>&1 | grep -Eq 'libsrt|libsrt-'; then
+        echo "release-evidence: packaged binary still links libsrt dynamically: $certified_binary" >&2
         exit 1
-    }
+    fi
+    mapfile -t bundled_sboms < <(find "$bundle_root" -type f -name '*.sbom.cdx.json' -print | sort)
+    if [[ "${#bundled_sboms[@]}" -ne 1 ]]; then
+        echo "release-evidence: expected exactly one SBOM inside $BINARY_BUNDLE" >&2
+        exit 1
+    fi
     mkdir -p "$(dirname "$SBOM")"
-    rm -f "$SBOM"
-    "$certified_binary" --emit-sbom "$SBOM"
+    cp "${bundled_sboms[0]}" "$SBOM"
 else
     # Preserve the source-certification form for local callers that are not
     # producing a downloadable bundle. Release automation always supplies the

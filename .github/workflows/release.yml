@@ -203,4 +203,6 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             dist/restream-"$GITHUB_REF_NAME"-oci.tar.gz \
             dist/restream-"$GITHUB_REF_NAME"-linux-x86_64.tar.gz \
-            dist/restream-"$GITHUB_REF_NAME".sbom.cdx.json --generate-notes
+            dist/restream-mcp-"$GITHUB_REF_NAME"-linux-x86_64.tar.gz \
+            dist/test-harness-"$GITHUB_REF_NAME"-linux-x86_64.tar.gz \
+            --generate-notes

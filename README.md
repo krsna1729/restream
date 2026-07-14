@@ -40,13 +40,12 @@ owner-only permissions.
 
 ## Running Restream
 
-The supported portable launch paths are the scratch container below and the
-checksummed Linux x86_64 bundle attached to each GitHub release. The bundle
-contains the native runtime closure verified by the container, so after
-unpacking it, run `./run restream` without host FFmpeg, SRT, or C/C++ runtime
-packages. It also contains the feature-enabled MCP and diagnostic harness
-executables; use live harness tooling from a source checkout when it needs
-fixtures, MediaMTX, or host network setup.
+The supported launch paths are the scratch container below and the Linux x86_64
+binary archives attached to each GitHub release. The Restream archive contains
+the `restream` binary, project license, third-party component notices, and the
+release SBOM. The `restream-mcp` and `test_harness` binaries are shipped as
+separate archives. Use live harness tooling from a source checkout when it
+needs fixtures, MediaMTX, or host network setup.
 
 `scripts/build/app-static.sh` remains an engineering build path. It is not a
 single-file release contract until its static-runtime proof is restored.

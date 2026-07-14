@@ -21,30 +21,24 @@ artifact that needs provenance and license review.
 
 Run `scripts/release/package-binaries.sh <version>` followed by
 `scripts/check/release-evidence.sh <oci-archive> <release-sbom> <binary-bundle>`
-for the canonical artifact gate. Supplying the completed binary bundle makes
-its exact feature-enabled `restream` executable emit the SBOM that the
-vulnerability scanners inspect. The same gate unpacks the downloadable bundle
-into a temporary directory, starts only its `./run restream` launcher, and
-fetches `/login`, authenticated `/`, CSS, JavaScript, HLS, and logo assets so
-release CI proves the binary carries the embedded frontend instead of relying
-on the source tree's `public/` directory. Omitting the bundle retains a
-source-only certification form for development checks. Generated SBOMs are not
-checked into the repository: CI smoke-tests `restream --emit-sbom`, while
-release certification writes the commit-specific full-provenance SBOM to
-`dist/` from the exact bundled executable. A `v*`
-tag runs the artifact gate, the full bench-harness suite, and publishes the
-scratch OCI runtime archive, a checksummed Linux x86_64 bundle containing every
-supported executable plus its verified runtime closure, and the runtime SBOM.
-The certified scratch image is also published to GHCR as both the version tag
-and `latest` only after those gates pass.
+for the canonical artifact gate. Supplying the completed Restream host archive
+makes the vulnerability scanners inspect the SBOM carried inside that archive.
+The same gate unpacks the downloadable archive into a temporary directory,
+starts its `restream` binary directly, and fetches `/login`, authenticated `/`,
+CSS, JavaScript, HLS, and logo assets so release CI proves the binary carries
+the embedded frontend instead of relying on the source tree's `public/`
+directory. Omitting the bundle retains a source-only certification form for
+development checks. Generated SBOMs are not checked into the repository: CI
+smoke-tests `restream --emit-sbom`, while release packaging writes the
+commit-specific full-provenance SBOM into the Restream host archive.
 
-The binary bundle is the supported host-download path: unpack it and use
-`./run restream`. Its launcher uses the loader and libraries captured from the
-same smoke-tested scratch image, so it does not rely on host FFmpeg, SRT, or
-C/C++ runtime packages. The diagnostic `test_harness` binary is shipped too,
-including read-only `./run test_harness catalog ...` inspection commands, but
-live integration runs still belong in a source checkout because they need the
-checked-in fixtures, MediaMTX, and documented host prerequisites.
+A `v*` tag runs the artifact gate, the full bench-harness suite, and publishes
+four GitHub Release assets: the Restream host binary archive, the
+`restream-mcp` host binary archive, the `test_harness` host binary archive, and
+the scratch OCI runtime archive. The Restream host archive also carries
+`LICENSE.md`, `THIRD_PARTY_COMPONENTS.md`, the third-party license texts under
+`licenses/`, and the release SBOM. The certified scratch image is published to
+GHCR as both the version tag and `latest` only after those gates pass.
 
 ## Native License Basis
 
@@ -52,6 +46,9 @@ The runtime SBOM reports the native libraries that are linked into the shipped
 binary. In the static build profile, FFmpeg components, x264, x265, SRT, Mbed
 TLS, SQLite, libstdc++, libgcc, glibc, and the Rust standard library may all be
 present in one artifact.
+The SBOM is release inventory and scanner input, not a replacement for the
+license texts, attribution notices, source-availability information, or
+copyright notices required by the applicable component licenses.
 
 x264 and x265 are reported as `GPL-2.0-or-later`. FFmpeg reports its effective
 license text at runtime and can also be GPL depending on the native build

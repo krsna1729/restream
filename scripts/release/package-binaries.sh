@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Package every supported Linux executable with the same runtime-rootfs builder
-# used by the smoke-tested scratch container. A raw ELF would silently depend
-# on the builder's glibc loader, so this bundle has one portable launch
-# contract.
+# Package release executables into small role-specific archives. The host binary
+# tarballs intentionally contain only the requested executable payloads and
+# compliance material; the scratch OCI archive remains the portable runtime
+# closure.
 set -euo pipefail
 
 ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
@@ -25,27 +25,18 @@ scripts/release/prepare-build-tree.sh
 # `restream-mcp` is feature-gated. Build the supported executable set through
 # the native script so release packaging reuses the same static-link environment
 # and linkage checks as the scratch image.
-# Keep packaging clean-checkout friendly. app-native.sh emits an SBOM as part
-# of its linkage proof, but release-evidence.sh later regenerates the certified
-# SBOM from the exact bundled executable; writing this intermediate proof under
-# dist/ prevents local release packaging from mutating the checked-in snapshot.
-build_sbom="$OUT_DIR/restream-$VERSION.build.sbom.cdx.json"
-RESTREAM_SBOM_PATH="$build_sbom" \
+release_sbom="$OUT_DIR/restream-$VERSION.sbom.cdx.json"
+RESTREAM_SBOM_PATH="$release_sbom" \
 RESTREAM_BUILD_PROFILE=release \
 RESTREAM_BUILD_BINS="restream restream-mcp test_harness" \
 RESTREAM_BUILD_FEATURES="mcp-server,mcp-http-backend" \
     scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 
 tmp="$(mktemp -d)"
-stage="$tmp/restream-$VERSION-$ARCH"
 cleanup() {
     rm -rf "$tmp"
 }
 trap cleanup EXIT
-
-mkdir -p "$stage/bin" "$stage/rootfs"
-bash scripts/build/runtime-rootfs.sh target/release/restream "$stage/rootfs"
-cp -a distribution "$stage/distribution"
 
 for binary in restream restream-mcp test_harness; do
     source="target/release/$binary"
@@ -53,79 +44,39 @@ for binary in restream restream-mcp test_harness; do
         echo "package-binaries: expected built executable is missing: $source" >&2
         exit 1
     }
-    install -m 0755 "$source" "$stage/bin/$binary"
 done
-
-cat >"$stage/run" <<'EOF'
-#!/bin/sh
-# Run a bundled executable through the loader and libraries certified in the
-# scratch image. The harness tools remain diagnostic tools; run them from a
-# source checkout when they need fixtures, MediaMTX, or host network setup.
-set -eu
-root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-binary=${1:---help}
-case "$binary" in
-  restream|restream-mcp|test_harness)
-    shift
-    ;;
-  -h|--help)
-    cat <<USAGE
-Usage: ./run <binary> [arguments...]
-
-Available binaries:
-  restream           media-server runtime
-  restream-mcp       MCP server (feature-enabled build)
-  test_harness       live integration harness
-USAGE
-    exit 0
-    ;;
-  *)
-    echo "unknown bundled binary: $binary" >&2
-    exit 2
-    ;;
-esac
-
-exec "$root/rootfs/lib64/ld-linux-x86-64.so.2" \
-  --library-path "$root/rootfs/lib/x86_64-linux-gnu:$root/rootfs/usr/lib/x86_64-linux-gnu" \
-  "$root/bin/$binary" "$@"
-EOF
-chmod 0755 "$stage/run"
-
-# Prove that the packaged loader can start a non-server CLI before publishing
-# it. `test_harness` deliberately rejects an unknown mode with exit 1; that
-# expected parser result catches a missing dynamic library without binding a
-# network port.
-set +e
-"$stage/run" test_harness --help >/dev/null 2>&1
-loader_status=$?
-set -e
-[[ "$loader_status" -eq 1 ]] || {
-    echo "package-binaries: bundled loader probe failed with $loader_status" >&2
+[[ -s "$release_sbom" ]] || {
+    echo "package-binaries: expected release SBOM is missing: $release_sbom" >&2
     exit 1
 }
 
-cat >"$stage/README.txt" <<EOF
-Restream $VERSION for $ARCH
+restream_stage="$tmp/restream-$VERSION-$ARCH"
+mkdir -p "$restream_stage"
+install -m 0755 target/release/restream "$restream_stage/restream"
+install -m 0644 LICENSE.md "$restream_stage/LICENSE.md"
+install -m 0644 distribution/THIRD_PARTY_COMPONENTS.md "$restream_stage/THIRD_PARTY_COMPONENTS.md"
+mkdir -p "$restream_stage/licenses"
+cp -a distribution/licenses/. "$restream_stage/licenses/"
+install -m 0644 "$release_sbom" "$restream_stage/restream-$VERSION.sbom.cdx.json"
 
-Run the server:
-  ./run restream
+mcp_stage="$tmp/restream-mcp-$VERSION-$ARCH"
+mkdir -p "$mcp_stage"
+install -m 0755 target/release/restream-mcp "$mcp_stage/restream-mcp"
 
-The bundle contains every supported Linux executable and the loader/library
-closure from the scratch image that was smoke-tested for this release. It does
-not require host FFmpeg, SRT, or C/C++ runtime packages.
-
-License texts, the third-party component index, and source information are in
-the distribution/ directory and must remain beside the binaries.
-
-test_harness is included for inspection and debugging. Its read-only catalog
-inspection commands live under './run test_harness catalog ...'. Run live
-integration tests from a source checkout with scripts/harness/run.sh; they also
-require committed fixtures, MediaMTX, and the documented host setup.
-EOF
+harness_stage="$tmp/test-harness-$VERSION-$ARCH"
+mkdir -p "$harness_stage"
+install -m 0755 target/release/test_harness "$harness_stage/test_harness"
 
 mkdir -p "$OUT_DIR"
-archive="$OUT_DIR/restream-$VERSION-$ARCH.tar.gz"
-tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
-    -C "$tmp" -czf "$archive" "$(basename "$stage")"
+for package in \
+    "restream-$VERSION-$ARCH" \
+    "restream-mcp-$VERSION-$ARCH" \
+    "test-harness-$VERSION-$ARCH"
+do
+    archive="$OUT_DIR/$package.tar.gz"
+    tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+        -C "$tmp" -czf "$archive" "$package"
+    echo "package-binaries: PASS archive=$archive"
+done
 
-echo "package-binaries: PASS archive=$archive"
+echo "package-binaries: PASS sbom=$release_sbom"

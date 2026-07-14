@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prove the downloadable binary bundle starts outside the source tree and serves
+# Prove the downloadable restream binary starts outside the source tree and serves
 # embedded frontend assets. This catches releases that only worked because
 # `public/` or other build-tree files happened to be present in CI.
 set -euo pipefail
@@ -42,11 +42,32 @@ if [[ "${#roots[@]}" -ne 1 ]]; then
     exit 1
 fi
 stage="${roots[0]}"
-run="$stage/run"
-[[ -x "$run" ]] || {
-    echo "release-artifact-smoke: missing executable bundle runner: $run" >&2
+binary="$stage/restream"
+[[ -x "$binary" ]] || {
+    echo "release-artifact-smoke: missing executable restream binary: $binary" >&2
     exit 1
 }
+for forbidden in "$stage/run" "$stage/rootfs" "$stage/README.txt"; do
+    [[ ! -e "$forbidden" ]] || {
+        echo "release-artifact-smoke: host binary archive must not contain $forbidden" >&2
+        exit 1
+    }
+done
+[[ -f "$stage/LICENSE.md" && -f "$stage/THIRD_PARTY_COMPONENTS.md" ]] || {
+    echo "release-artifact-smoke: restream archive is missing release compliance files" >&2
+    exit 1
+}
+for license in Apache-2.0.txt GPL-2.0.txt MPL-2.0.txt; do
+    [[ -f "$stage/licenses/$license" ]] || {
+        echo "release-artifact-smoke: restream archive is missing third-party license text: $license" >&2
+        exit 1
+    }
+done
+mapfile -t sboms < <(find "$stage" -maxdepth 1 -type f -name '*.sbom.cdx.json' -print | sort)
+if [[ "${#sboms[@]}" -ne 1 ]]; then
+    echo "release-artifact-smoke: expected exactly one SBOM in restream archive" >&2
+    exit 1
+fi
 
 port="$(python3 - <<'PY'
 import socket
@@ -82,7 +103,7 @@ mkdir -p "$runtime/media" "$runtime/logs" "$runtime/cwd"
     RESTREAM_MEDIA_DIR="$runtime/media" \
     RESTREAM_LOG_DIR="$runtime/logs" \
     RESTREAM_INITIAL_ADMIN_PASSWORD=release-smoke-password \
-        "$run" restream >"$runtime/restream.log" 2>&1 &
+        "$binary" >"$runtime/restream.log" 2>&1 &
     app_pid=$!
     echo "$app_pid" >"$runtime/app.pid"
 )

@@ -154,11 +154,14 @@ gh release view v0.2.0 --json tagName,targetCommitish,assets,url
 Expected release assets include:
 
 - `restream-v0.2.0-linux-x86_64.tar.gz`
+- `restream-mcp-v0.2.0-linux-x86_64.tar.gz`
+- `test-harness-v0.2.0-linux-x86_64.tar.gz`
 - `restream-v0.2.0-oci.tar.gz`
-- `restream-v0.2.0.sbom.cdx.json`
 
 GitHub exposes a SHA-256 digest beside each release asset, so the release does
-not publish separate checksum sidecars.
+not publish separate checksum sidecars. The Restream host tarball carries the
+release SBOM, the Restream license, and third-party component license notices
+inside the archive.
 
 Check the container registry tags:
 
@@ -174,10 +177,10 @@ docker load -i restream-v0.2.0-oci.tar.gz
 docker run --rm -e RESTREAM_INITIAL_ADMIN_PASSWORD=change-me -p 3030:3030 restream:v0.2.0
 ```
 
-Binary-bundle users can download the Linux tarball, unpack it, and run:
+Binary users can download the Restream Linux tarball, unpack it, and run:
 
 ```sh
-RESTREAM_INITIAL_ADMIN_PASSWORD=change-me ./run restream
+RESTREAM_INITIAL_ADMIN_PASSWORD=change-me ./restream
 ```
 
 ## Failed publish
