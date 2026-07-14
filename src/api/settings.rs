@@ -1,8 +1,12 @@
+//! Settings HTTP handlers sit at the dashboard/configuration boundary.
+//! They assemble a view model from several stores and normalize incoming
+//! settings updates before handing persistence off to application services.
+
 use axum::{
     Json,
     extract::State,
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -17,8 +21,7 @@ use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::planner::backend_policy::BackendPolicy;
 
 use super::state::{
-    AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, DEFAULT_INGEST_HOST,
-    get_session_token_from_headers,
+    AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, DEFAULT_INGEST_HOST, require_authenticated,
 };
 
 #[derive(Deserialize)]
@@ -39,17 +42,114 @@ pub struct ConfigPatchPayload {
     pub backend_policy: Option<BackendPolicy>,
 }
 
+#[derive(Debug, Clone)]
+struct NormalizedConfigPatch {
+    ingest_security: Option<IngestSecurityConfig>,
+    srt_ingest_json: Option<String>,
+}
+
+fn dashboard_password_change_recommended(meta: Option<String>) -> bool {
+    meta.as_deref() == Some("pending")
+}
+
+fn config_response_json(
+    settings: &crate::application::settings::SettingsSnapshot,
+    pipelines: Vec<serde_json::Value>,
+    outputs: &[crate::application::models::Output],
+    jobs_json: Vec<serde_json::Value>,
+    dashboard_password_change_recommended: bool,
+    is_dashboard_view: bool,
+) -> serde_json::Value {
+    if is_dashboard_view {
+        serde_json::json!({
+            "serverName": settings.server_name,
+            "ingestHost": settings.ingest_host,
+            "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
+            "backendPolicy": settings.backend_policy,
+            "transcodeProfiles": settings.transcode_profiles,
+            "pipelines": pipelines,
+            "outputs": api_view_models::output_response_json_list(outputs),
+            "jobs": jobs_json
+        })
+    } else {
+        serde_json::json!({
+            "serverName": settings.server_name,
+            "ingestHost": settings.ingest_host,
+            "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
+            "ingestSecurity": settings.ingest_security,
+            "recordingSettings": settings.recording_settings,
+            "srtIngest": settings.srt_ingest,
+            "backendPolicy": settings.backend_policy,
+            "transcodeProfiles": settings.transcode_profiles,
+            "pipelines": pipelines,
+            "outputs": api_view_models::output_response_json_list(outputs),
+            "jobs": jobs_json
+        })
+    }
+}
+
+fn validate_config_patch_payload(
+    payload: &ConfigPatchPayload,
+) -> Result<NormalizedConfigPatch, Response> {
+    if let Some(name) = payload.server_name.as_deref()
+        && name.trim().is_empty()
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "serverName must be a non-empty string",
+        )
+            .into_response());
+    }
+
+    let ingest_security = match payload.ingest_security.clone() {
+        Some(mut sec) => {
+            if let Err(error) = sec.validate() {
+                return Err((StatusCode::BAD_REQUEST, error).into_response());
+            }
+            sec.normalize();
+            Some(sec)
+        }
+        None => None,
+    };
+
+    let srt_ingest_json = match payload.srt_ingest.clone() {
+        Some(mut srt_ingest) => {
+            if let Err(error) = srt_ingest.validate() {
+                return Err((StatusCode::BAD_REQUEST, error).into_response());
+            }
+            match serde_json::to_string(&srt_ingest) {
+                Ok(value) => Some(value),
+                Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+            }
+        }
+        None => None,
+    };
+
+    if let Some(profiles) = payload.transcode_profiles.as_ref() {
+        for (name, profile) in profiles {
+            if let Err(err) = profile.validate() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid profile '{}': {}", name, err),
+                )
+                    .into_response());
+            }
+        }
+    }
+
+    Ok(NormalizedConfigPatch {
+        ingest_security,
+        srt_ingest_json,
+    })
+}
+
 pub async fn config_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<ConfigGetQuery>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let ingest_host = state
@@ -97,13 +197,13 @@ pub async fn config_get_handler(
         Ok(s) => s,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let dashboard_password_change_recommended = state
-        .settings_service
-        .get_meta(BOOTSTRAP_PASSWORD_PROMPT_META_KEY)
-        .await
-        .unwrap_or(None)
-        .as_deref()
-        == Some("pending");
+    let dashboard_password_change_recommended = dashboard_password_change_recommended(
+        state
+            .settings_service
+            .get_meta(BOOTSTRAP_PASSWORD_PROMPT_META_KEY)
+            .await
+            .unwrap_or(None),
+    );
     let is_dashboard_view = query.view.as_deref() == Some("dashboard");
     let jobs_json = if is_dashboard_view {
         Vec::new()
@@ -116,34 +216,15 @@ pub async fn config_get_handler(
         }
     };
 
-    let response = if is_dashboard_view {
-        serde_json::json!({
-            "serverName": settings.server_name,
-            "ingestHost": settings.ingest_host,
-            "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
-            "backendPolicy": settings.backend_policy,
-            "transcodeProfiles": settings.transcode_profiles,
-            "pipelines": pipelines,
-            "outputs": api_view_models::output_response_json_list(&outputs),
-            "jobs": jobs_json
-        })
-    } else {
-        serde_json::json!({
-            "serverName": settings.server_name,
-            "ingestHost": settings.ingest_host,
-            "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
-            "ingestSecurity": settings.ingest_security,
-            "recordingSettings": settings.recording_settings,
-            "srtIngest": settings.srt_ingest,
-            "backendPolicy": settings.backend_policy,
-            "transcodeProfiles": settings.transcode_profiles,
-            "pipelines": pipelines,
-            "outputs": api_view_models::output_response_json_list(&outputs),
-            "jobs": jobs_json
-        })
-    };
-
-    Json(response).into_response()
+    Json(config_response_json(
+        &settings,
+        pipelines,
+        &outputs,
+        jobs_json,
+        dashboard_password_change_recommended,
+        is_dashboard_view,
+    ))
+    .into_response()
 }
 
 pub async fn config_patch_handler(
@@ -151,59 +232,14 @@ pub async fn config_patch_handler(
     headers: HeaderMap,
     Json(payload): Json<ConfigPatchPayload>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
-    if let Some(ref name) = payload.server_name
-        && name.trim().is_empty()
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            "serverName must be a non-empty string",
-        )
-            .into_response();
-    }
-
-    let normalized_ingest_security = match payload.ingest_security.clone() {
-        Some(mut sec) => {
-            if let Err(error) = sec.validate() {
-                return (StatusCode::BAD_REQUEST, error).into_response();
-            }
-            sec.normalize();
-            Some(sec)
-        }
-        None => None,
+    let normalized = match validate_config_patch_payload(&payload) {
+        Ok(normalized) => normalized,
+        Err(response) => return response,
     };
-
-    let srt_ingest_json = match payload.srt_ingest.clone() {
-        Some(mut srt_ingest) => {
-            if let Err(error) = srt_ingest.validate() {
-                return (StatusCode::BAD_REQUEST, error).into_response();
-            }
-            match serde_json::to_string(&srt_ingest) {
-                Ok(value) => Some(value),
-                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            }
-        }
-        None => None,
-    };
-
-    if let Some(ref profiles) = payload.transcode_profiles {
-        for (name, profile) in profiles {
-            if let Err(err) = profile.validate() {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    format!("Invalid profile '{}': {}", name, err),
-                )
-                    .into_response();
-            }
-        }
-    }
 
     if let Some(ref name) = payload.server_name
         && state.settings_service.set_server_name(name).await.is_err()
@@ -217,7 +253,9 @@ pub async fn config_patch_handler(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    if let Some(sec) = normalized_ingest_security {
+    // Normalize and validate before persistence so every downstream consumer
+    // sees the same canonical security configuration.
+    if let Some(sec) = normalized.ingest_security {
         if state
             .settings_service
             .save_ingest_security_config(&sec)
@@ -239,7 +277,7 @@ pub async fn config_patch_handler(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    if let Some(raw_json) = srt_ingest_json {
+    if let Some(raw_json) = normalized.srt_ingest_json {
         if state
             .settings_service
             .set_meta(SRT_INGEST_GLOBAL_CONFIG_META_KEY, &raw_json)
@@ -290,4 +328,41 @@ pub async fn config_patch_handler(
         "transcodeProfiles": settings.transcode_profiles
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ConfigPatchPayload, dashboard_password_change_recommended, validate_config_patch_payload,
+    };
+    use axum::http::StatusCode;
+
+    #[test]
+    fn dashboard_password_change_recommended_only_for_pending_marker() {
+        assert!(dashboard_password_change_recommended(Some(
+            "pending".to_string()
+        )));
+        assert!(!dashboard_password_change_recommended(Some(
+            "dismissed".to_string()
+        )));
+        assert!(!dashboard_password_change_recommended(None));
+    }
+
+    #[test]
+    fn validate_config_patch_payload_rejects_blank_server_name() {
+        let payload = ConfigPatchPayload {
+            server_name: Some("   ".to_string()),
+            ingest_host: None,
+            ingest_security: None,
+            recording_settings: None,
+            srt_ingest: None,
+            transcode_profiles: None,
+            backend_policy: None,
+        };
+
+        let response =
+            validate_config_patch_payload(&payload).expect_err("blank server names should fail");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }
