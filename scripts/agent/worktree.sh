@@ -51,7 +51,7 @@ usage() {
     cat <<'EOF'
 Usage: scripts/agent/worktree.sh [options] <id>
 
-Create, refresh, or clean up an agent worktree with warm caches and shared
+Create, refresh, or clean up an agent worktree with warm caches and prepared
 static outputs.
 
 Defaults:
@@ -63,7 +63,7 @@ Defaults:
   - seed .cargo/ and node_modules/ from the source tree when present
   - install locked frontend dependencies in the destination worktree when the
     seeded node_modules/ tree is missing or incomplete
-  - share .local/build/static and public/bin from the source tree when present
+  - share .local/build/static and copy public/bin from the source tree when present
 
 Options:
   --cleanup                remove the worktree for <id> instead of creating/updating it
@@ -77,8 +77,8 @@ Options:
   --no-target-cache        skip target/ seeding
   --no-cargo-config        skip .cargo/ seeding
   --no-node-modules        skip node_modules/ seeding
-  --no-share-static        do not share .local/build/static or public/bin
-  --copy-static            copy .local/build/static and public/bin instead of sharing
+  --no-share-static        skip .local/build/static sharing and public/bin seeding
+  --copy-static            copy .local/build/static instead of sharing it
   --dry-run                print actions without mutating the repo
   -h, --help               show this help
 
@@ -88,6 +88,8 @@ Notes:
     build layer. Use --copy-static when working on that layer so native inputs
     are isolated but immediately buildable. Use --no-share-static only when the
     worktree should start without generated static artifacts.
+  - public/bin is always copied when static outputs are enabled. rust-embed does
+    not include files reached through a symlinked public/bin directory.
   - The default target warmup copies only high-value debug artifacts:
     debug/deps, debug/build, debug/.fingerprint, root debug binaries, and no
     incremental state unless --with-incremental is set.
@@ -175,13 +177,20 @@ sync_tree() {
     local target_path="$2"
     local label="$3"
     local rsync_status=0
+    local target_was_symlink=0
 
     if [[ ! -e "$source_path" ]]; then
         info "skip ${label}: source missing at $source_path"
         return 0
     fi
 
-    if [[ "$source_path" -ef "$target_path" ]]; then
+    if [[ -L "$target_path" ]]; then
+        target_was_symlink=1
+        info "replace symlinked ${label} with a copied snapshot: $target_path"
+        run_cmd rm "$target_path"
+    fi
+
+    if ((target_was_symlink == 0)) && [[ "$source_path" -ef "$target_path" ]]; then
         info "skip ${label}: source and target are the same path"
         return 0
     fi
@@ -712,13 +721,13 @@ fi
 
 if ((SHARE_STATIC)); then
     share_path "$STATIC_SOURCE_ROOT" "$WORKTREE_PATH/.local/build/static" ".local/build/static"
-    share_path "$PUBLIC_BIN_SOURCE" "$WORKTREE_PATH/public/bin" "public/bin"
+    sync_tree "$PUBLIC_BIN_SOURCE" "$WORKTREE_PATH/public/bin" "public/bin snapshot"
 elif ((COPY_STATIC)); then
     sync_tree "$STATIC_SOURCE_ROOT" "$WORKTREE_PATH/.local/build/static" ".local/build/static"
     rewrite_copied_static_pkgconfig "$STATIC_SOURCE_ROOT" "$WORKTREE_PATH/.local/build/static"
-    sync_tree "$PUBLIC_BIN_SOURCE" "$WORKTREE_PATH/public/bin" "public/bin"
+    sync_tree "$PUBLIC_BIN_SOURCE" "$WORKTREE_PATH/public/bin" "public/bin snapshot"
 else
-    info "skip shared static outputs by request"
+    info "skip static outputs and public/bin snapshot by request"
 fi
 
 AGENT_STATE_DIR="$WORKTREE_PATH/.agent-state"
