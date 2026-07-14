@@ -1,5 +1,6 @@
 # Local generated state
 /.local/
+/.agent-state/
 /target/
 
 # Old Node.js/TypeScript codebase (archived)
