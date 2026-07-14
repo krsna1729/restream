@@ -167,7 +167,7 @@ impl StageLifecycle {
         let inner = self.inner.lock().expect("stage lifecycle lock poisoned");
         StageLifecycleSnapshot {
             phase: inner.phase.clone(),
-            backend: inner.backend.clone(),
+            backend: inner.backend,
             phase_started_at: inner.phase_started_at,
             first_input_at: inner.first_input_at,
             first_output_at: inner.first_output_at,
@@ -188,7 +188,6 @@ impl StageLifecycle {
             .lock()
             .expect("stage lifecycle lock poisoned")
             .backend
-            .clone()
     }
 }
 
@@ -197,7 +196,7 @@ fn backend_kind_from_phase(phase: &StagePhase) -> Option<StageBackendKind> {
         StagePhase::WaitingForCapacity { backend }
         | StagePhase::CapacityAcquired { backend }
         | StagePhase::StartingBackend { backend }
-        | StagePhase::BackendSpawned { backend, .. } => Some(backend.clone()),
+        | StagePhase::BackendSpawned { backend, .. } => Some(*backend),
         _ => None,
     }
 }

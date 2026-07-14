@@ -299,7 +299,7 @@ impl MediaEngine {
 
         StageRuntimeSnapshot {
             key: key.clone(),
-            backend: lifecycle.backend.clone(),
+            backend: lifecycle.backend,
             phase: lifecycle.phase.clone(),
             bytes_in: metrics.bytes_in.load(Ordering::Relaxed),
             bytes_out: metrics.bytes_out.load(Ordering::Relaxed),
