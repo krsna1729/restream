@@ -1,3 +1,9 @@
+//! Application service wrapper for ingest catalog and write operations.
+//!
+//! This module keeps the lookup/write port split at the application boundary so
+//! callers can ask for ingest records or persist ingest mutations without
+//! knowing which lower-level store trait provides each capability.
+
 use std::sync::Arc;
 
 use crate::application::models::Ingest;
@@ -12,8 +18,14 @@ pub struct IngestService {
 }
 
 impl IngestService {
+    /// Build the service from separate lookup and write ports.
+    /// Useful for tests that want to mix fake readers and writers independently.
     pub fn with_ports(lookup: Arc<dyn IngestLookup>, writer: Arc<dyn IngestWriter>) -> Self {
         Self { lookup, writer }
+    }
+
+    fn ingest_not_found(id: &str) -> ApiError {
+        ApiError::not_found(format!("ingest {id} not found"))
     }
 
     pub async fn list_ingests(&self) -> ApiResult<Vec<Ingest>> {
@@ -28,7 +40,7 @@ impl IngestService {
             .get_ingest(id)
             .await
             .map_err(|e| ApiError::internal(format!("get ingest: {e}")))?
-            .ok_or_else(|| ApiError::not_found(format!("ingest {id} not found")))
+            .ok_or_else(|| Self::ingest_not_found(id))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -79,7 +91,7 @@ impl IngestService {
             )
             .await
             .map_err(|e| ApiError::internal(format!("update ingest: {e}")))?
-            .ok_or_else(|| ApiError::not_found(format!("ingest {id} not found")))
+            .ok_or_else(|| Self::ingest_not_found(id))
     }
 
     pub async fn list_for_filename(&self, filename: &str) -> ApiResult<Vec<Ingest>> {
