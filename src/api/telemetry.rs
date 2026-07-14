@@ -61,6 +61,8 @@ pub struct ResourceMapQuery {
 }
 
 impl ResourceMapQuery {
+    // Invalid or missing view names intentionally fall back to the grouped
+    // presentation so the telemetry surface stays permissive for dashboards.
     fn options(&self) -> ResourceMapOptions {
         let view = match self.view.as_deref() {
             Some("summary") => ResourceMapView::Summary,
@@ -80,6 +82,10 @@ fn unauthorized_json_response() -> Response {
         .into_response()
 }
 
+fn summary_view_requested(view: Option<&str>) -> bool {
+    view == Some("summary")
+}
+
 fn snapshot_generated_at(snapshot: &serde_json::Value) -> String {
     snapshot["generatedAt"].as_str().unwrap_or("").to_string()
 }
@@ -95,18 +101,23 @@ fn dashboard_runtime_requested_pipeline<'a>(
     })
 }
 
-pub fn expected_media_path(media_dir: &str, filename: &str) -> PathBuf {
+fn configured_media_root(media_dir: &str) -> PathBuf {
     let configured = PathBuf::from(media_dir);
-    let root = if configured.is_absolute() {
+    if configured.is_absolute() {
         configured
     } else {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(configured)
-    };
-    root.join(filename)
+    }
 }
 
+pub fn expected_media_path(media_dir: &str, filename: &str) -> PathBuf {
+    configured_media_root(media_dir).join(filename)
+}
+
+/// Builds the diagnostics context for one file-backed ingest, including a
+/// blocking media-file probe when the expected library file exists.
 pub async fn build_file_diagnostics_context(
     state: &AppState,
     pipeline_id: &str,
@@ -261,6 +272,8 @@ pub async fn status_get_handler(
     Json(status).into_response()
 }
 
+/// Builds the dashboard/system metrics payload, with a summary mode that keeps
+/// only the fields needed by compact operator surfaces.
 pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> serde_json::Value {
     let mut sys = System::new_all();
     sys.refresh_all();
@@ -279,14 +292,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     let engine = engine_metrics(&sys, core_count);
 
     let media_root = {
-        let configured = FsPath::new(&state.media_dir);
-        let absolute = if configured.is_absolute() {
-            configured.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(configured)
-        };
+        let absolute = configured_media_root(&state.media_dir);
         std::fs::canonicalize(&absolute).unwrap_or(absolute)
     };
     let disks = Disks::new_with_refreshed_list();
@@ -479,8 +485,8 @@ pub async fn v1_dashboard_runtime_handler(
         return response;
     }
 
-    let summary_health = query.health_view.as_deref() == Some("summary");
-    let summary_metrics = query.metrics_view.as_deref() == Some("summary");
+    let summary_health = summary_view_requested(query.health_view.as_deref());
+    let summary_metrics = summary_view_requested(query.metrics_view.as_deref());
     let all_pipeline_ids = match list_dashboard_runtime_pipeline_ids(&state).await {
         Ok(pipeline_ids) => pipeline_ids,
         Err(error) => return error.into_response(),
@@ -870,6 +876,8 @@ pub async fn v1_engine_resource_map_handler(
     Json(snapshot).into_response()
 }
 
+/// Returns the system metrics snapshot directly, using the query only to choose
+/// between the summary and full transport views.
 pub async fn metrics_system_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -880,7 +888,7 @@ pub async fn metrics_system_handler(
     }
 
     let response =
-        build_system_metrics_snapshot(&state, query.view.as_deref() == Some("summary")).await;
+        build_system_metrics_snapshot(&state, summary_view_requested(query.view.as_deref())).await;
     Json(response).into_response()
 }
 
@@ -1018,8 +1026,9 @@ pub async fn v1_stage_telemetry_handler(
 #[cfg(test)]
 mod tests {
     use super::{
-        DashboardRuntimeQuery, ResourceMapQuery, dashboard_runtime_requested_pipeline,
-        snapshot_generated_at, unauthorized_json_response,
+        DashboardRuntimeQuery, ResourceMapQuery, configured_media_root,
+        dashboard_runtime_requested_pipeline, snapshot_generated_at, summary_view_requested,
+        unauthorized_json_response,
     };
     use crate::api_runtime_views::ResourceMapView;
     use axum::http::StatusCode;
@@ -1061,6 +1070,22 @@ mod tests {
         assert_eq!(
             snapshot_generated_at(&serde_json::json!({"generatedAt": "2026-07-14T00:00:00Z"})),
             "2026-07-14T00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn summary_view_requested_only_matches_summary() {
+        assert!(summary_view_requested(Some("summary")));
+        assert!(!summary_view_requested(Some("detail")));
+        assert!(!summary_view_requested(None));
+    }
+
+    #[test]
+    fn configured_media_root_makes_relative_paths_absolute() {
+        assert!(configured_media_root("media").is_absolute());
+        assert_eq!(
+            configured_media_root("/tmp/media"),
+            std::path::PathBuf::from("/tmp/media")
         );
     }
 }
