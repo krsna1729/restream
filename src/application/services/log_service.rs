@@ -1,3 +1,9 @@
+//! Application service wrapper for persisted operator log queries.
+//!
+//! This module keeps log-store access and stream-backfill merge rules on the
+//! application boundary so handlers only need to shape HTTP-specific filters
+//! and responses.
+
 use std::sync::Arc;
 
 use crate::application::ports::LogStore;
@@ -11,6 +17,7 @@ pub struct LogService {
 }
 
 impl LogService {
+    /// Builds the service from the log persistence port it coordinates.
     pub fn with_store(store: Arc<dyn LogStore>) -> Self {
         Self { store }
     }
@@ -28,7 +35,7 @@ impl LogService {
         include_restream: bool,
     ) -> ApiResult<Vec<AppLogRow>> {
         let limit = filters.limit.unwrap_or(200).clamp(1, 1000);
-        if !include_restream || filters.pipeline_id.is_none() || filters.output_id.is_some() {
+        if !should_merge_restream_backfill(filters, include_restream) {
             return self.list_logs(filters).await;
         }
 
@@ -47,6 +54,10 @@ impl LogService {
 
         Ok(merged.into_values().take(limit as usize).collect())
     }
+}
+
+fn should_merge_restream_backfill(filters: &AppLogFilters, include_restream: bool) -> bool {
+    include_restream && filters.pipeline_id.is_some() && filters.output_id.is_none()
 }
 
 #[cfg(test)]

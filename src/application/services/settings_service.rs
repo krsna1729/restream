@@ -1,3 +1,9 @@
+//! Application service wrapper for dashboard settings reads and writes.
+//!
+//! This module keeps settings-specific meta keys and cross-store refresh logic
+//! on the application boundary so handlers can work in terms of operator
+//! settings rather than persistence details.
+
 use std::sync::Arc;
 
 use crate::application::models::{Job, Output, Pipeline};
@@ -20,6 +26,8 @@ use super::error::{ApiError, ApiResult};
 use super::output_service::OutputService;
 use super::pipeline_service::PipelineService;
 
+const SERVER_NAME_META_KEY: &str = "server_name";
+
 pub struct SettingsService {
     meta_store: Arc<dyn MetaStore>,
     meta_writer: Arc<dyn MetaStoreWriter>,
@@ -30,6 +38,8 @@ pub struct SettingsService {
 }
 
 impl SettingsService {
+    /// Builds the service from the stores needed to assemble and persist the
+    /// dashboard settings surface.
     pub fn with_stores(
         meta_store: Arc<dyn MetaStore>,
         meta_writer: Arc<dyn MetaStoreWriter>,
@@ -88,7 +98,7 @@ impl SettingsService {
 
     pub async fn set_server_name(&self, name: &str) -> ApiResult<()> {
         self.meta_writer
-            .set_meta("server_name", name)
+            .set_meta(SERVER_NAME_META_KEY, name)
             .await
             .map(|_| ())
             .map_err(|e| ApiError::internal(format!("set server name: {e}")))
@@ -150,6 +160,8 @@ impl SettingsService {
         srt_passphrase: Option<String>,
         srt_pbkeylen: i32,
     ) -> ApiResult<()> {
+        // Rebuild the policy store from persisted global settings plus the
+        // current pipeline catalog so libsrt sees one coherent snapshot.
         let global =
             load_global_srt_ingest_config(self.meta_store.as_ref(), srt_passphrase, srt_pbkeylen)
                 .await;
@@ -196,7 +208,7 @@ mod tests {
                 .meta
                 .lock()
                 .unwrap()
-                .insert("server_name".to_string(), "Control".to_string());
+                .insert(SERVER_NAME_META_KEY.to_string(), "Control".to_string());
             store
                 .meta
                 .lock()
