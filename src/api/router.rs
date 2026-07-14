@@ -72,7 +72,7 @@ pub const PUBLIC_ROUTE_PATHS: &[&str] = &[
     "/logo.png",
     "/output.css",
     "/api/v1/auth/login",
-    "/api/*path",
+    "/api/{*path}",
     "/healthz",
     "/metrics/system",
 ];
@@ -90,16 +90,16 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/engine/resource-map",
     "/api/v1/monitoring/youtube-status",
     "/api/v1/pipelines",
-    "/api/v1/pipelines/:id",
-    "/api/v1/pipelines/:pipeline_id/file-ingest",
-    "/api/v1/pipelines/:pipeline_id/outputs",
-    "/api/v1/pipelines/:pipeline_id/outputs/:output_id",
-    "/api/v1/pipelines/:pipeline_id/outputs/:output_id/start",
-    "/api/v1/pipelines/:pipeline_id/outputs/:output_id/stop",
-    "/api/v1/pipelines/:pipeline_id/outputs/:output_id/status",
-    "/api/v1/pipelines/:pipeline_id/probe",
-    "/api/v1/pipelines/:pipeline_id/graph",
-    "/api/v1/pipelines/:pipeline_id/alerts",
+    "/api/v1/pipelines/{id}",
+    "/api/v1/pipelines/{pipeline_id}/file-ingest",
+    "/api/v1/pipelines/{pipeline_id}/outputs",
+    "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}",
+    "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/start",
+    "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop",
+    "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status",
+    "/api/v1/pipelines/{pipeline_id}/probe",
+    "/api/v1/pipelines/{pipeline_id}/graph",
+    "/api/v1/pipelines/{pipeline_id}/alerts",
     "/api/v1/logs",
     "/api/v1/logs/stream",
     "/api/v1/alerts",
@@ -113,73 +113,73 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/agent/plans/validate",
     "/api/v1/agent/graph-diff-preview",
     "/api/v1/agent/operations",
-    "/api/v1/agent/operations/:operation_id",
-    "/api/v1/agent/operations/:operation_id/approve",
-    "/api/v1/agent/operations/:operation_id/apply",
-    "/api/v1/agent/operations/:operation_id/verify",
+    "/api/v1/agent/operations/{operation_id}",
+    "/api/v1/agent/operations/{operation_id}/approve",
+    "/api/v1/agent/operations/{operation_id}/apply",
+    "/api/v1/agent/operations/{operation_id}/verify",
     "/api/v1/agent/verify",
-    "/api/v1/pipelines/:pipeline_id/telemetry",
-    "/api/v1/stages/:stage_key/telemetry",
-    "/api/v1/pipelines/:pipeline_id/summary",
-    "/api/v1/pipelines/:pipeline_id/diagnostics/context",
-    "/api/v1/pipelines/:pipeline_id/diagnostics/run",
-    "/api/v1/pipelines/:pipeline_id/recording/start",
-    "/api/v1/pipelines/:pipeline_id/recording/stop",
+    "/api/v1/pipelines/{pipeline_id}/telemetry",
+    "/api/v1/stages/{stage_key}/telemetry",
+    "/api/v1/pipelines/{pipeline_id}/summary",
+    "/api/v1/pipelines/{pipeline_id}/diagnostics/context",
+    "/api/v1/pipelines/{pipeline_id}/diagnostics/run",
+    "/api/v1/pipelines/{pipeline_id}/recording/start",
+    "/api/v1/pipelines/{pipeline_id}/recording/stop",
     "/api/v1/encodings/custom",
     "/api/v1/ingests",
-    "/api/v1/ingests/:id",
-    "/api/v1/ingests/:id/start",
-    "/api/v1/ingests/:id/stop",
+    "/api/v1/ingests/{id}",
+    "/api/v1/ingests/{id}/start",
+    "/api/v1/ingests/{id}/stop",
     "/api/v1/engine",
     "/api/v1/engine/sbom",
     "/api/v1/engine/health",
     "/api/v1/media",
     "/api/v1/media/upload",
-    "/api/v1/media/:filename/analysis",
-    "/api/v1/media/:filename",
-    "/media/:filename",
-    "/hls/:pipeline_id",
-    "/hls/:pipeline_id/master.m3u8",
-    "/hls/:pipeline_id/index.m3u8",
-    "/hls/:pipeline_id/video/index.m3u8",
-    "/hls/:pipeline_id/video/init.mp4",
-    "/hls/:pipeline_id/video/:segment",
-    "/hls/:pipeline_id/audio/:track_index/index.m3u8",
-    "/hls/:pipeline_id/audio/:track_index/init.mp4",
-    "/hls/:pipeline_id/audio/:track_index/:segment",
-    "/hls/:pipeline_id/:segment",
+    "/api/v1/media/{filename}/analysis",
+    "/api/v1/media/{filename}",
+    "/media/{filename}",
+    "/hls/{pipeline_id}",
+    "/hls/{pipeline_id}/master.m3u8",
+    "/hls/{pipeline_id}/index.m3u8",
+    "/hls/{pipeline_id}/video/index.m3u8",
+    "/hls/{pipeline_id}/video/init.mp4",
+    "/hls/{pipeline_id}/video/{segment}",
+    "/hls/{pipeline_id}/audio/{track_index}/index.m3u8",
+    "/hls/{pipeline_id}/audio/{track_index}/init.mp4",
+    "/hls/{pipeline_id}/audio/{track_index}/{segment}",
+    "/hls/{pipeline_id}/{segment}",
 ];
 
 pub fn create_router(state: Arc<AppState>) -> Router {
     let hls_router = Router::new()
-        .route("/hls/:pipeline_id", get(hls_playlist_handler))
-        .route("/hls/:pipeline_id/master.m3u8", get(hls_master_handler))
-        .route("/hls/:pipeline_id/index.m3u8", get(hls_playlist_handler))
+        .route("/hls/{pipeline_id}", get(hls_playlist_handler))
+        .route("/hls/{pipeline_id}/master.m3u8", get(hls_master_handler))
+        .route("/hls/{pipeline_id}/index.m3u8", get(hls_playlist_handler))
         .route(
-            "/hls/:pipeline_id/video/index.m3u8",
+            "/hls/{pipeline_id}/video/index.m3u8",
             get(hls_video_playlist_handler),
         )
         .route(
-            "/hls/:pipeline_id/video/init.mp4",
+            "/hls/{pipeline_id}/video/init.mp4",
             get(hls_video_init_handler),
         )
         .route(
-            "/hls/:pipeline_id/video/:segment",
+            "/hls/{pipeline_id}/video/{segment}",
             get(hls_video_segment_handler),
         )
         .route(
-            "/hls/:pipeline_id/audio/:track_index/index.m3u8",
+            "/hls/{pipeline_id}/audio/{track_index}/index.m3u8",
             get(hls_audio_playlist_handler),
         )
         .route(
-            "/hls/:pipeline_id/audio/:track_index/init.mp4",
+            "/hls/{pipeline_id}/audio/{track_index}/init.mp4",
             get(hls_audio_init_handler),
         )
         .route(
-            "/hls/:pipeline_id/audio/:track_index/:segment",
+            "/hls/{pipeline_id}/audio/{track_index}/{segment}",
             get(hls_audio_segment_handler),
         )
-        .route("/hls/:pipeline_id/:segment", get(hls_segment_handler));
+        .route("/hls/{pipeline_id}/{segment}", get(hls_segment_handler));
 
     Router::new()
         .route("/login", get(login_get_handler))
@@ -222,47 +222,47 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(pipelines_get_handler).post(pipelines_post_handler),
         )
         .route(
-            "/api/v1/pipelines/:id",
+            "/api/v1/pipelines/{id}",
             get(pipeline_detail_handler)
                 .patch(pipelines_update_handler)
                 .delete(pipelines_delete_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/file-ingest",
+            "/api/v1/pipelines/{pipeline_id}/file-ingest",
             get(pipeline_file_ingest_get_handler)
                 .put(pipeline_file_ingest_put_handler)
                 .delete(pipeline_file_ingest_delete_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/outputs",
+            "/api/v1/pipelines/{pipeline_id}/outputs",
             post(outputs_create_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/outputs/:output_id",
+            "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}",
             patch(outputs_update_handler).delete(outputs_delete_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/outputs/:output_id/start",
+            "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/start",
             post(outputs_start_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/outputs/:output_id/stop",
+            "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/stop",
             post(outputs_stop_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/outputs/:output_id/status",
+            "/api/v1/pipelines/{pipeline_id}/outputs/{output_id}/status",
             get(output_status_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/probe",
+            "/api/v1/pipelines/{pipeline_id}/probe",
             get(pipeline_probe_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/graph",
+            "/api/v1/pipelines/{pipeline_id}/graph",
             get(pipeline_graph_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/alerts",
+            "/api/v1/pipelines/{pipeline_id}/alerts",
             get(pipeline_alerts_handler),
         )
         .route("/api/v1/logs", get(logs_handler))
@@ -298,48 +298,48 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             post(agent_operation_create_handler),
         )
         .route(
-            "/api/v1/agent/operations/:operation_id",
+            "/api/v1/agent/operations/{operation_id}",
             get(agent_operation_get_handler),
         )
         .route(
-            "/api/v1/agent/operations/:operation_id/approve",
+            "/api/v1/agent/operations/{operation_id}/approve",
             post(agent_operation_approve_handler),
         )
         .route(
-            "/api/v1/agent/operations/:operation_id/apply",
+            "/api/v1/agent/operations/{operation_id}/apply",
             post(agent_operation_apply_handler),
         )
         .route(
-            "/api/v1/agent/operations/:operation_id/verify",
+            "/api/v1/agent/operations/{operation_id}/verify",
             post(agent_operation_verify_handler),
         )
         .route("/api/v1/agent/verify", post(agent_verify_handler))
         .route(
-            "/api/v1/pipelines/:pipeline_id/telemetry",
+            "/api/v1/pipelines/{pipeline_id}/telemetry",
             get(v1_pipeline_telemetry_handler),
         )
         .route(
-            "/api/v1/stages/:stage_key/telemetry",
+            "/api/v1/stages/{stage_key}/telemetry",
             get(v1_stage_telemetry_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/summary",
+            "/api/v1/pipelines/{pipeline_id}/summary",
             get(v1_pipeline_summary_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/diagnostics/context",
+            "/api/v1/pipelines/{pipeline_id}/diagnostics/context",
             get(pipeline_diagnostics_context_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/diagnostics/run",
+            "/api/v1/pipelines/{pipeline_id}/diagnostics/run",
             post(pipeline_diagnostics_run_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/recording/start",
+            "/api/v1/pipelines/{pipeline_id}/recording/start",
             post(recording_start_handler),
         )
         .route(
-            "/api/v1/pipelines/:pipeline_id/recording/stop",
+            "/api/v1/pipelines/{pipeline_id}/recording/stop",
             post(recording_stop_handler),
         )
         .route(
@@ -351,11 +351,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(ingests_get_handler).post(ingests_post_handler),
         )
         .route(
-            "/api/v1/ingests/:id",
+            "/api/v1/ingests/{id}",
             put(ingests_update_handler).delete(ingests_delete_handler),
         )
-        .route("/api/v1/ingests/:id/start", post(ingests_start_handler))
-        .route("/api/v1/ingests/:id/stop", post(ingests_stop_handler))
+        .route("/api/v1/ingests/{id}/start", post(ingests_start_handler))
+        .route("/api/v1/ingests/{id}/stop", post(ingests_stop_handler))
         .route("/api/v1/engine", get(status_get_handler))
         .route("/api/v1/engine/sbom", get(status_sbom_get_handler))
         .route("/api/v1/engine/health", get(v1_engine_health_handler))
@@ -365,21 +365,21 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/v1/media", get(media_list_handler))
         .route(
-            "/api/v1/media/:filename/analysis",
+            "/api/v1/media/{filename}/analysis",
             get(media_analysis_handler),
         )
         .route(
-            "/api/v1/media/:filename",
+            "/api/v1/media/{filename}",
             patch(media_rename_handler).delete(media_delete_handler),
         )
         .route(
-            "/media/:filename",
+            "/media/{filename}",
             get(media_file_handler).head(media_file_handler),
         )
         .route("/healthz", get(healthz_get_handler))
         .route("/metrics/system", get(metrics_system_handler))
         .merge(hls_router)
-        .route("/api/*path", any(api_not_found_handler))
+        .route("/api/{*path}", any(api_not_found_handler))
         .fallback(get(spa_fallback_handler))
         .layer(CompressionLayer::new())
         .layer(DefaultBodyLimit::max(4 * 1024 * 1024))
