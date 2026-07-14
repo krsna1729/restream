@@ -135,7 +135,6 @@ above remain the better way to learn the system.
 
 ### Plans, scenarios, and evidence
 
-- [Documentation audit — 2026-07-14](documentation-audit-2026-07-14.md)
 - [Mahashivratri hero scenario](mahashivratri-hero-scenario.md)
 - [Testing decision record](testing-strategy.md)
 - [Quality program](agent-guidance/quality/README.md)
@@ -202,5 +201,4 @@ above remain the better way to learn the system.
 - When a source rename or command rename lands, update the relevant canonical
   doc in the same change and run `node scripts/check/docs.mjs`. The staged gate
   router selects this check automatically for Markdown and documentation-check
-  changes. The rationale and longer consolidation plan live in the
-  [documentation audit](documentation-audit-2026-07-14.md).
+  changes.

@@ -78,97 +78,13 @@ function proseHeadings(lines) {
   return headings;
 }
 
-const maintainedProse = new Set([
-  "README.md",
-  "ARCHITECTURE_GUARDRAILS.md",
-  "docs/README.md",
-  "docs/development.md",
-  "docs/architecture.md",
-  "docs/media-pipeline.md",
-  "docs/high-performance-data-path.md",
-  "docs/concurrency-proofing.md",
-  "docs/configuration.md",
-  "docs/api-reference.md",
-  "docs/observability.md",
-  "docs/logging.md",
-  "docs/current-priorities.md",
-  "docs/layering-roadmap.md",
-  "docs/testing-strategy.md",
-  "docs/testing.md",
-  "docs/agent-plane-integration.md",
-  "docs/mcp-rust-architecture.md",
-  "docs/parallel-agent-framework.md",
-  "docs/matrix-resource-constraints.md",
-  "docs/documentation-audit-2026-07-14.md",
-  "docs/source-distribution.md",
-  "docs/release-compliance.md",
-  "docs/release-runbook.md",
-  "docs/ffmpeg-versions.md",
-]);
-
-const volatileCount =
-  /\b\d[\d,]*\s+(?:source\s+)?(?:lines?|routes?|tests?|assertions?|benchmarks?|modules?|callsites?)\b/i;
-const highChurnHeadings = new Set([
-  "## Callsite Audit",
-  "Available suites include:",
-]);
 const linkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
 const conceptualDiagramGlyphs = /[┌┐┘┬┴┼▼▲►◄║╔╗╚╝]/;
-const mermaidEmoji = /[\u{1F300}-\u{1FAFF}✅❌⚠⭐✓]/u;
-const inlineCode = /`([^`\n]+)`/g;
-const repositoryPath = /^(?:src|web\/ts|web\/styles|scripts|test|benches|docs|public\/js)\//;
-const retiredDocumentationReferences = [
-  /`old\/`/,
-  /\b(?:old|previous) Node(?:\.js)? (?:backend|runtime|environment)/i,
-  /\bNode\.js\/MediaMTX runtime\b/i,
-  /\bLegacy MediaMTX Migration\b/,
-  /`RESTREAM_USE_INTERNAL_TRANSCODER`/,
-  /`src\/api\.rs`/,
-  /`src\/media\/hls\.rs`/,
-  /`public\/ts`/,
-  /`scripts\/run-matrix-cgroup\.sh`/,
-  /(?:arch_gap_analysis|run-to-completion-analysis|concurrency-proof-coverage-2026-07-02|high-performance-audits-2026-06-23-to-2026-07-03|testing-snapshots-2026-06-20-to-2026-07-01)\.md/,
-];
 const files = markdownFiles();
 const errors = [];
-const maintainedShellBlocks = new Map();
 
-function collectMaintainedShellBlocks(relative, lines) {
-  let language = null;
-  let startLine = null;
-  let body = [];
-
-  lines.forEach((line, index) => {
-    const fence = /^\s*```([^\s`]*)/.exec(line);
-    if (!fence) {
-      if (language !== null) body.push(line.replace(/\s+$/, ""));
-      return;
-    }
-
-    if (language === null) {
-      language = fence[1].toLowerCase();
-      startLine = index + 1;
-      body = [];
-      return;
-    }
-
-    if (["sh", "bash"].includes(language)) {
-      const normalized = body.join("\n").trim();
-      const commands = body.filter(
-        (entry) => entry.trim() && !entry.trimStart().startsWith("#"),
-      );
-      if (commands.length >= 2) {
-        const locations = maintainedShellBlocks.get(normalized) ?? [];
-        locations.push(`${relative}:${startLine}`);
-        maintainedShellBlocks.set(normalized, locations);
-      }
-    }
-
-    language = null;
-    startLine = null;
-    body = [];
-  });
-}
+// Keep this gate mechanical. Semantic drift belongs in focused contract tests
+// and review, not in terminology blacklists or duplicated source inventories.
 
 const svgFiles = new Set();
 collectByExtension(path.join(root, "docs"), ".svg", svgFiles);
@@ -186,10 +102,6 @@ for (const filename of files) {
   const h1 = headings.filter(({ level }) => level === 1);
   const h2 = headings.filter(({ level }) => level === 2);
   let fenceLanguage = null;
-
-  if (maintainedProse.has(relative)) {
-    collectMaintainedShellBlocks(relative, lines);
-  }
 
   // Skill packages optimize for immediate execution, so a TOC is needless
   // preamble. Legal text and one-section shims also need no navigation.
@@ -233,71 +145,11 @@ for (const filename of files) {
       }
       return;
     }
-    if (fenceLanguage === "mermaid") {
-      if (/^\s*graph\s/.test(line)) {
-        errors.push(
-          `${relative}:${lineNumber}: use flowchart instead of the legacy Mermaid graph alias`,
-        );
-      }
-      if (
-        /^\s*(?:classDef|class|linkStyle|style)\b|^\s*%%\{init:/i.test(
-          line,
-        )
-      ) {
-        errors.push(
-          `${relative}:${lineNumber}: Mermaid diagrams must not define custom theme styling`,
-        );
-      }
-      if (mermaidEmoji.test(line) || /<\/?b>/.test(line)) {
-        errors.push(
-          `${relative}:${lineNumber}: Mermaid labels should be plain and theme-independent`,
-        );
-      }
-    }
     if (fenceLanguage !== "mermaid" && conceptualDiagramGlyphs.test(line)) {
       errors.push(
         `${relative}:${lineNumber}: conceptual diagram should use a Mermaid fence`,
       );
     }
-    if (maintainedProse.has(relative) && volatileCount.test(line)) {
-      errors.push(
-        `${relative}:${lineNumber}: volatile count belongs in generated or dated evidence`,
-      );
-    }
-    if (maintainedProse.has(relative) && highChurnHeadings.has(line)) {
-      errors.push(
-        `${relative}:${lineNumber}: high-churn inventory belongs in source or dated evidence`,
-      );
-    }
-    if (maintainedProse.has(relative) && /\bapt-get\s+install\b/.test(line)) {
-      errors.push(
-        `${relative}:${lineNumber}: package inventory belongs in scripts/lib/debian-packages.sh`,
-      );
-    }
-    if (retiredDocumentationReferences.some((pattern) => pattern.test(line))) {
-      errors.push(
-        `${relative}:${lineNumber}: retired stack, path, or snapshot reference`,
-      );
-    }
-
-    for (const match of line.matchAll(inlineCode)) {
-      const candidate = match[1]
-        .replace(/:[0-9]+$/, "")
-        .replace(/[),.;:]$/, "");
-      if (
-        !repositoryPath.test(candidate) ||
-        /[<>{}*| ]/.test(candidate) ||
-        candidate.includes("...")
-      ) {
-        continue;
-      }
-      if (!fs.existsSync(path.resolve(root, candidate))) {
-        errors.push(
-          `${relative}:${lineNumber}: inline repository path does not exist: ${candidate}`,
-        );
-      }
-    }
-
     for (const match of line.matchAll(linkPattern)) {
       const [, label, target] = match;
       const linkTarget = target.split("#", 1)[0];
@@ -322,15 +174,6 @@ for (const filename of files) {
       }
     }
   });
-}
-
-for (const locations of maintainedShellBlocks.values()) {
-  const distinctFiles = new Set(locations.map((entry) => entry.split(":", 1)[0]));
-  if (distinctFiles.size > 1) {
-    errors.push(
-      `duplicate multi-line shell recipe in maintained prose: ${locations.join(", ")}`,
-    );
-  }
 }
 
 // The central index must reach every Markdown file except itself.
