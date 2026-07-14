@@ -105,16 +105,11 @@ add_recommendation() {
 
 module_filter_for_path() {
     local file="$1"
-    local stem parent
+    local stem
 
     case "$file" in
         src/bin/* | src/main.rs | src/lib.rs | */mod.rs)
             return 0
-            ;;
-        src/*.rs | src/*/*.rs | src/*/*/*.rs)
-            stem="${file##*/}"
-            stem="${stem%.rs}"
-            printf '%s\n' "$stem"
             ;;
         tests/*.rs)
             stem="${file##*/}"
@@ -125,7 +120,11 @@ module_filter_for_path() {
             return 0
             ;;
         *)
-            return 0
+            if [[ "$file" =~ ^src/.+\.rs$ ]]; then
+                stem="${file##*/}"
+                stem="${stem%.rs}"
+                printf '%s\n' "$stem"
+            fi
             ;;
     esac
 }
@@ -184,7 +183,7 @@ is_fixture_or_harness_file() {
 
 is_hot_path_file() {
     case "$1" in
-        src/media/* | src/media/*/* | benches/*)
+        src/media/* | benches/*)
             return 0
             ;;
         *)
