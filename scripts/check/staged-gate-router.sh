@@ -6,6 +6,7 @@ usage() {
 Usage: scripts/check/staged-gate-router.sh [options]
 
 Route changed files to the narrowest repo checks from AGENTS.md.
+Run only fast pre-commit gates automatically; print heavier follow-up gates.
 
 Options:
   --staged          inspect staged changes (default)
@@ -77,13 +78,15 @@ rust_files=()
 shell_files=()
 frontend_files=()
 module_filters=()
-recommended_gates=()
-declare -A selected_gates=()
+follow_up_gates=()
+manual_recommendations=()
+declare -A auto_gates=()
+declare -A seen_follow_ups=()
 declare -A seen_modules=()
-declare -A seen_recommendations=()
+declare -A seen_manual_recommendations=()
 
-add_gate() {
-    selected_gates["$1"]=1
+add_auto_gate() {
+    auto_gates["$1"]=1
 }
 
 add_module_filter() {
@@ -95,11 +98,19 @@ add_module_filter() {
     fi
 }
 
-add_recommendation() {
+add_follow_up_gate() {
     local gate="$1"
-    if [[ -z "${seen_recommendations[$gate]+x}" ]]; then
-        seen_recommendations["$gate"]=1
-        recommended_gates+=("$gate")
+    if [[ -z "${seen_follow_ups[$gate]+x}" ]]; then
+        seen_follow_ups["$gate"]=1
+        follow_up_gates+=("$gate")
+    fi
+}
+
+add_manual_recommendation() {
+    local gate="$1"
+    if [[ -z "${seen_manual_recommendations[$gate]+x}" ]]; then
+        seen_manual_recommendations["$gate"]=1
+        manual_recommendations+=("$gate")
     fi
 }
 
@@ -224,42 +235,43 @@ diff_contains_concurrency_change() {
 for file in "${changed_files[@]}"; do
     if [[ "$file" == *.rs ]]; then
         rust_files+=("$file")
-        add_gate "cargo fmt --all --check"
+        add_auto_gate "cargo fmt --all --check"
     fi
 
     if [[ "$file" == *.sh ]] || [[ "$file" == .githooks/* ]]; then
         shell_files+=("$file")
-        add_gate "bash -n staged shell files"
+        add_auto_gate "bash -n staged shell files"
     fi
 
     if is_frontend_file "$file"; then
         frontend_files+=("$file")
-        add_gate "npm run test:frontend"
+        add_auto_gate "npm run format:check"
+        add_follow_up_gate "npm run test:frontend"
     fi
 
     if is_lifecycle_file "$file"; then
-        add_gate "scripts/check/concurrency/contract.sh"
+        add_follow_up_gate "scripts/check/concurrency/contract.sh"
     fi
 
     if is_api_contract_file "$file"; then
-        add_gate "scripts/check/api-contract.sh"
+        add_follow_up_gate "scripts/check/api-contract.sh"
     fi
 
     if is_fixture_or_harness_file "$file"; then
-        add_gate "scripts/check/fixture-discipline.sh"
+        add_follow_up_gate "scripts/check/fixture-discipline.sh"
     fi
 
     if is_hot_path_file "$file"; then
-        add_recommendation "relevant scripts/build/resource-limit.sh cargo bench --bench <name>"
+        add_manual_recommendation "relevant scripts/build/resource-limit.sh cargo bench --bench <name>"
     fi
 
     if is_protocol_file "$file"; then
-        add_recommendation "scripts/build/resource-limit.sh target/debug/test_harness correctness*"
+        add_manual_recommendation "scripts/build/resource-limit.sh target/debug/test_harness correctness*"
     fi
 done
 
 if diff_contains_concurrency_change; then
-    add_gate "scripts/check/concurrency/fast.sh"
+    add_follow_up_gate "scripts/check/concurrency/fast.sh"
 fi
 
 for file in "${rust_files[@]}"; do
@@ -271,7 +283,9 @@ for file in "${rust_files[@]}"; do
 done
 
 if ((${#module_filters[@]} > 0)); then
-    add_gate "scoped cargo test filters"
+    for filter in "${module_filters[@]}"; do
+        add_follow_up_gate "scripts/build/resource-limit.sh cargo test ${filter}"
+    done
 fi
 
 echo "staged-gate-router: ${MODE} diff selected ${#changed_files[@]} file(s)"
@@ -280,19 +294,27 @@ for file in "${changed_files[@]}"; do
 done
 
 echo
-echo "staged-gate-router: selected gates"
-if ((${#selected_gates[@]} == 0)); then
+echo "staged-gate-router: fast pre-commit gates"
+if ((${#auto_gates[@]} == 0)); then
     echo "  (none)"
 else
-    for gate in "${!selected_gates[@]}"; do
+    for gate in "${!auto_gates[@]}"; do
         echo "  $gate"
     done | sort
 fi
 
-if ((${#recommended_gates[@]} > 0)); then
+if ((${#follow_up_gates[@]} > 0)); then
     echo
-    echo "staged-gate-router: recommended manual gates"
-    for gate in "${recommended_gates[@]}"; do
+    echo "staged-gate-router: recommended follow-up gates"
+    for gate in "${follow_up_gates[@]}"; do
+        echo "  $gate"
+    done
+fi
+
+if ((${#manual_recommendations[@]} > 0)); then
+    echo
+    echo "staged-gate-router: additional manual recommendations"
+    for gate in "${manual_recommendations[@]}"; do
         echo "  $gate"
     done
 fi
@@ -315,49 +337,16 @@ run_gate() {
     fi
 }
 
-run_cargo_gate() {
-    if pgrep -x restream >/dev/null 2>&1 ||
-        pgrep -x mediamtx >/dev/null 2>&1 ||
-        pgrep -x ffmpeg >/dev/null 2>&1; then
-        echo "staged-gate-router: refusing to run Cargo test gates while restream, mediamtx, or ffmpeg is running" >&2
-        echo "staged-gate-router: stop the live pipeline and retry, or inspect with --dry-run" >&2
-        exit 1
-    fi
-    run_gate scripts/build/resource-limit.sh cargo test "$@"
-}
-
-if [[ -n "${selected_gates["cargo fmt --all --check"]+x}" ]]; then
+if [[ -n "${auto_gates["cargo fmt --all --check"]+x}" ]]; then
     run_gate cargo fmt --all --check
 fi
 
-if [[ -n "${selected_gates["bash -n staged shell files"]+x}" ]]; then
+if [[ -n "${auto_gates["bash -n staged shell files"]+x}" ]]; then
     for file in "${shell_files[@]}"; do
         run_gate bash -n "$file"
     done
 fi
 
-if [[ -n "${selected_gates["npm run test:frontend"]+x}" ]]; then
-    run_gate npm run test:frontend
-fi
-
-if [[ -n "${selected_gates["scripts/check/api-contract.sh"]+x}" ]]; then
-    run_gate scripts/check/api-contract.sh
-fi
-
-if [[ -n "${selected_gates["scripts/check/fixture-discipline.sh"]+x}" ]]; then
-    run_gate scripts/check/fixture-discipline.sh
-fi
-
-if [[ -n "${selected_gates["scripts/check/concurrency/fast.sh"]+x}" ]]; then
-    run_gate scripts/check/concurrency/fast.sh
-fi
-
-if [[ -n "${selected_gates["scripts/check/concurrency/contract.sh"]+x}" ]]; then
-    run_gate scripts/check/concurrency/contract.sh
-fi
-
-if [[ -n "${selected_gates["scoped cargo test filters"]+x}" ]]; then
-    for filter in "${module_filters[@]}"; do
-        run_cargo_gate "$filter"
-    done
+if [[ -n "${auto_gates["npm run format:check"]+x}" ]]; then
+    run_gate npm run format:check
 fi
