@@ -49,16 +49,25 @@ async fn build_dashboard_health_snapshot(
     Ok(snapshot_with_recording_state(state, &pipeline_ids, summary).await)
 }
 
+fn summary_view_requested(view: Option<&str>) -> bool {
+    view == Some("summary")
+}
+
+/// Builds the full dashboard health snapshot for all dashboard-visible
+/// pipelines.
 pub async fn build_health_snapshot(state: &AppState) -> Result<serde_json::Value, ApiError> {
     build_dashboard_health_snapshot(state, false).await
 }
 
+/// Builds the summary dashboard health snapshot for all dashboard-visible
+/// pipelines.
 pub async fn build_health_summary_snapshot(
     state: &AppState,
 ) -> Result<serde_json::Value, ApiError> {
     build_dashboard_health_snapshot(state, true).await
 }
 
+/// Builds the full health snapshot for one caller-selected pipeline set.
 pub async fn build_health_snapshot_for_pipeline_ids(
     state: &AppState,
     pipeline_ids: &[String],
@@ -66,6 +75,7 @@ pub async fn build_health_snapshot_for_pipeline_ids(
     snapshot_with_recording_state(state, pipeline_ids, false).await
 }
 
+/// Builds the summary health snapshot for one caller-selected pipeline set.
 pub async fn build_health_summary_snapshot_for_pipeline_ids(
     state: &AppState,
     pipeline_ids: &[String],
@@ -73,6 +83,8 @@ pub async fn build_health_summary_snapshot_for_pipeline_ids(
     snapshot_with_recording_state(state, pipeline_ids, true).await
 }
 
+/// Chooses which pipeline ids should appear in the dashboard runtime health
+/// response, preserving the full set for summary mode.
 pub fn select_dashboard_runtime_pipeline_ids(
     requested_pipeline_id: Option<&str>,
     summary_health: bool,
@@ -89,6 +101,8 @@ pub fn select_dashboard_runtime_pipeline_ids(
         .unwrap_or(all_pipeline_ids)
 }
 
+/// Merges one focused full-health pipeline entry back into a broader summary
+/// payload without rebuilding the whole dashboard snapshot.
 pub fn merge_dashboard_runtime_focus_pipeline(
     health: &mut serde_json::Value,
     focused_health: &serde_json::Value,
@@ -129,6 +143,8 @@ pub async fn list_dashboard_runtime_pipeline_ids(
         .map_err(|err| ApiError::internal(format!("list dashboard pipeline ids: {err}")))
 }
 
+/// Returns the authenticated dashboard health snapshot, switching between full
+/// and summary view shapes at the transport boundary.
 pub async fn v1_engine_health_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -140,7 +156,7 @@ pub async fn v1_engine_health_handler(
 
     // The query only selects the transport view shape; both cases share the
     // same runtime snapshot pipeline and differ only in summary/full rendering.
-    let summary = query.view.as_deref() == Some("summary");
+    let summary = summary_view_requested(query.view.as_deref());
     let response = match build_dashboard_health_snapshot(&state, summary).await {
         Ok(response) => response,
         Err(error) => return error.into_response(),
@@ -148,13 +164,17 @@ pub async fn v1_engine_health_handler(
     Json(response).into_response()
 }
 
+/// Lightweight process health probe used by infrastructure and liveness checks.
 pub async fn healthz_get_handler() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok" }))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_dashboard_runtime_focus_pipeline, select_dashboard_runtime_pipeline_ids};
+    use super::{
+        merge_dashboard_runtime_focus_pipeline, select_dashboard_runtime_pipeline_ids,
+        summary_view_requested,
+    };
 
     #[test]
     fn select_dashboard_runtime_pipeline_ids_prefers_summary_over_focus() {
@@ -179,5 +199,12 @@ mod tests {
         merge_dashboard_runtime_focus_pipeline(&mut health, &focused, "pipe-1");
 
         assert_eq!(health["pipelines"]["pipe-1"]["status"], "running");
+    }
+
+    #[test]
+    fn summary_view_requested_only_matches_summary() {
+        assert!(summary_view_requested(Some("summary")));
+        assert!(!summary_view_requested(Some("detail")));
+        assert!(!summary_view_requested(None));
     }
 }
