@@ -11,7 +11,7 @@ use axum::{
 };
 use std::sync::Arc;
 
-#[cfg(feature = "agent-plane")]
+#[cfg(any(feature = "agent-plane", feature = "agent-execution"))]
 use crate::domain::state::DesiredOutputState;
 
 use super::state::{AppState, require_authenticated};
@@ -974,6 +974,33 @@ fn validate_len(field: &str, value: &str, max: usize) -> Result<(), String> {
     }
 }
 
+#[cfg(any(feature = "agent-plane", feature = "agent-execution"))]
+fn pipeline_input_is_on(pipeline_health: &serde_json::Value) -> bool {
+    pipeline_health["input"]["status"].as_str() == Some("on")
+}
+
+#[cfg(any(feature = "agent-plane", feature = "agent-execution"))]
+fn output_runtime_is_running(runtime: &serde_json::Value) -> bool {
+    runtime["status"].as_str() == Some("running")
+}
+
+#[cfg(feature = "agent-plane")]
+fn desired_output_reason(
+    desired_state: DesiredOutputState,
+    actual_status: &str,
+    input_is_on: bool,
+) -> &'static str {
+    if desired_state == DesiredOutputState::Running && !input_is_on {
+        "pendingInput"
+    } else if (desired_state == DesiredOutputState::Running && actual_status == "running")
+        || (desired_state == DesiredOutputState::Stopped && actual_status != "running")
+    {
+        "converged"
+    } else {
+        "desiredActualMismatch"
+    }
+}
+
 #[cfg(feature = "agent-execution")]
 async fn verify_agent_operation_by_id(
     state: &AppState,
@@ -994,6 +1021,9 @@ async fn verify_agent_operation_by_id(
 }
 
 #[cfg(feature = "agent-execution")]
+// Verification stays at the API boundary because it compares the requested
+// change intent against both persisted desired state and the latest runtime
+// health snapshot.
 async fn verify_agent_operation(
     state: &AppState,
     record: &crate::agent_execution::OperationRecord,
@@ -1033,13 +1063,12 @@ async fn verify_agent_operation(
                     {
                         (false, "desiredStateMismatch")
                     } else if change.desired_state.as_deref() == Some("running") {
-                        let status = runtime.and_then(|runtime| runtime["status"].as_str());
-                        let input_status = health["pipelines"][pipeline_id]["input"]["status"]
-                            .as_str()
+                        let status = runtime
+                            .and_then(|runtime| runtime["status"].as_str())
                             .unwrap_or("off");
-                        if status == Some("running") {
+                        if status == "running" {
                             (true, "running")
-                        } else if input_status != "on" {
+                        } else if !pipeline_input_is_on(&health["pipelines"][pipeline_id]) {
                             (false, "pendingInput")
                         } else {
                             (false, "notRunning")
@@ -1067,14 +1096,11 @@ async fn verify_agent_operation(
             }
             "startOutput" => {
                 let status = runtime.and_then(|runtime| runtime["status"].as_str());
-                let input_status = health["pipelines"][pipeline_id]["input"]["status"]
-                    .as_str()
-                    .unwrap_or("off");
                 if output.is_some_and(|output| output.desired_state == DesiredOutputState::Running)
-                    && status == Some("running")
+                    && runtime.is_some_and(output_runtime_is_running)
                 {
                     (true, "running")
-                } else if input_status != "on" {
+                } else if !pipeline_input_is_on(&health["pipelines"][pipeline_id]) {
                     (false, "pendingInput")
                 } else {
                     (false, "notRunning")
@@ -1195,6 +1221,8 @@ async fn agent_media_inventory(state: &AppState) -> serde_json::Value {
 }
 
 #[cfg(feature = "agent-plane")]
+// Desired-vs-actual is a read-only summary for agent context consumers, so it
+// lives here with the transport-facing JSON shaping instead of in persistence.
 fn agent_desired_vs_actual(
     pipelines: &[Pipeline],
     outputs: &[crate::application::models::Output],
@@ -1211,6 +1239,7 @@ fn agent_desired_vs_actual(
     for pipeline in pipelines {
         let pipeline_health = &health["pipelines"][&pipeline.id];
         let input_status = pipeline_health["input"]["status"].as_str().unwrap_or("off");
+        let input_is_on = pipeline_input_is_on(pipeline_health);
         let file_ingests: Vec<_> = ingests
             .iter()
             .filter(|ingest| ingest.stream_key == pipeline.stream_key)
@@ -1229,20 +1258,12 @@ fn agent_desired_vs_actual(
         for output in pipeline_outputs {
             let runtime = &pipeline_health["outputs"][&output.id];
             let actual = runtime["status"].as_str().unwrap_or("stopped");
-            let reason = if output.desired_state == DesiredOutputState::Running
-                && input_status != "on"
-            {
-                pending_count += 1;
-                "pendingInput"
-            } else if (output.desired_state == DesiredOutputState::Running && actual == "running")
-                || (output.desired_state == DesiredOutputState::Stopped && actual != "running")
-            {
-                converged_count += 1;
-                "converged"
-            } else {
-                drift_count += 1;
-                "desiredActualMismatch"
-            };
+            let reason = desired_output_reason(output.desired_state, actual, input_is_on);
+            match reason {
+                "pendingInput" => pending_count += 1,
+                "converged" => converged_count += 1,
+                _ => drift_count += 1,
+            }
             let recent_jobs: Vec<_> = jobs
                 .iter()
                 .filter(|job| job.pipeline_id == pipeline.id && job.output_id == output.id)
@@ -1603,7 +1624,10 @@ fn agent_operation_store_error(
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "agent-plane")]
-    use super::{agent_plan_graph_preview_json, agent_plan_validation_json};
+    use super::{
+        agent_plan_graph_preview_json, agent_plan_validation_json, desired_output_reason,
+        output_runtime_is_running, pipeline_input_is_on,
+    };
 
     #[cfg(feature = "agent-plane")]
     fn sample_plan_response() -> crate::agent_plane::PlanResponse {
@@ -1654,5 +1678,39 @@ mod tests {
         assert_eq!(value["planId"], "plan_123");
         assert_eq!(value["graphPreview"]["mode"], "preview");
         assert_eq!(value["impact"]["operatorSummary"], "summary");
+    }
+
+    #[cfg(feature = "agent-plane")]
+    #[test]
+    fn runtime_status_helpers_capture_agent_output_policy() {
+        assert!(pipeline_input_is_on(&serde_json::json!({
+            "input": { "status": "on" }
+        })));
+        assert!(!pipeline_input_is_on(&serde_json::json!({
+            "input": { "status": "off" }
+        })));
+        assert!(output_runtime_is_running(&serde_json::json!({
+            "status": "running"
+        })));
+        assert!(!output_runtime_is_running(&serde_json::json!({
+            "status": "stopped"
+        })));
+    }
+
+    #[cfg(feature = "agent-plane")]
+    #[test]
+    fn desired_output_reason_distinguishes_converged_pending_and_drifted() {
+        assert_eq!(
+            desired_output_reason(DesiredOutputState::Running, "running", true),
+            "converged"
+        );
+        assert_eq!(
+            desired_output_reason(DesiredOutputState::Running, "stopped", false),
+            "pendingInput"
+        );
+        assert_eq!(
+            desired_output_reason(DesiredOutputState::Stopped, "running", true),
+            "desiredActualMismatch"
+        );
     }
 }
