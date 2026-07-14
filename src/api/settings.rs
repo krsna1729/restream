@@ -60,6 +60,14 @@ fn effective_ingest_host(ingest_host: &str) -> &str {
     }
 }
 
+fn is_dashboard_view(query: &ConfigGetQuery) -> bool {
+    query.view.as_deref() == Some("dashboard")
+}
+
+fn wants_latest_jobs(query: &ConfigGetQuery) -> bool {
+    query.jobs.as_deref() == Some("latest")
+}
+
 // Dashboard mode intentionally omits a few operator-only settings while reusing
 // the same underlying settings snapshot as the full configuration response.
 fn config_response_json(
@@ -99,6 +107,8 @@ fn config_response_json(
     body
 }
 
+// Dashboard views never include jobs. Full config views can choose between the
+// latest job per output and the full job list via the `jobs` query parameter.
 async fn jobs_response_json(
     state: &AppState,
     query: &ConfigGetQuery,
@@ -109,13 +119,15 @@ async fn jobs_response_json(
     }
 
     let jobs = state.settings_service.list_jobs().await.unwrap_or_default();
-    if query.jobs.as_deref() == Some("latest") {
+    if wants_latest_jobs(query) {
         api_view_models::latest_job_response_json_list(&jobs)
     } else {
         api_view_models::job_response_json_list(&jobs)
     }
 }
 
+// Validate and normalize the mutable portions of the patch up front so the
+// persistence layer only sees canonical settings values.
 fn validate_config_patch_payload(
     payload: &ConfigPatchPayload,
 ) -> Result<NormalizedConfigPatch, Response> {
@@ -171,6 +183,8 @@ fn validate_config_patch_payload(
     })
 }
 
+/// Returns the dashboard configuration snapshot, shaping a narrower response
+/// when the caller asks for the operator-facing dashboard view.
 pub async fn config_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -228,7 +242,7 @@ pub async fn config_get_handler(
             .await
             .unwrap_or(None),
     );
-    let is_dashboard_view = query.view.as_deref() == Some("dashboard");
+    let is_dashboard_view = is_dashboard_view(&query);
     let jobs_json = jobs_response_json(&state, &query, is_dashboard_view).await;
 
     Json(config_response_json(
@@ -242,6 +256,8 @@ pub async fn config_get_handler(
     .into_response()
 }
 
+/// Persists the mutable dashboard settings surface after validation and then
+/// returns the refreshed canonical settings snapshot.
 pub async fn config_patch_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -348,8 +364,9 @@ pub async fn config_patch_handler(
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigPatchPayload, config_response_json, dashboard_password_change_recommended,
-        effective_ingest_host, validate_config_patch_payload,
+        ConfigGetQuery, ConfigPatchPayload, config_response_json,
+        dashboard_password_change_recommended, effective_ingest_host, is_dashboard_view,
+        validate_config_patch_payload, wants_latest_jobs,
     };
     use axum::http::StatusCode;
 
@@ -368,6 +385,23 @@ mod tests {
             "dismissed".to_string()
         )));
         assert!(!dashboard_password_change_recommended(None));
+    }
+
+    #[test]
+    fn query_helpers_name_dashboard_and_latest_job_modes() {
+        let dashboard_latest = ConfigGetQuery {
+            jobs: Some("latest".to_string()),
+            view: Some("dashboard".to_string()),
+        };
+        let full_all_jobs = ConfigGetQuery {
+            jobs: Some("all".to_string()),
+            view: None,
+        };
+
+        assert!(is_dashboard_view(&dashboard_latest));
+        assert!(wants_latest_jobs(&dashboard_latest));
+        assert!(!is_dashboard_view(&full_all_jobs));
+        assert!(!wants_latest_jobs(&full_all_jobs));
     }
 
     #[test]
