@@ -22,12 +22,12 @@ env:
 
 jobs:
   publish:
-    name: Publish CI harness runtime image
+    name: Build and publish CI harness runtime image
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
-      - name: Build and push runtime image
+      - name: Build and push CI harness runtime image
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

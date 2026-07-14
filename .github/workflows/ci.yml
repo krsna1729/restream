@@ -1,4 +1,4 @@
-name: CI
+name: PR and branch CI
 
 on:
   push:
@@ -19,81 +19,81 @@ env:
 
 jobs:
   format:
-    name: Format check
+    name: Source formatting and TS types
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt
-      - name: Rust format check
+      - name: Check Rust formatting
         run: cargo fmt --all --check
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: TypeScript compile check
+      - name: Check TypeScript types
         run: npx tsc -p tsconfig.json --noEmit
 
   lint:
-    name: Clippy
+    name: Rust lint
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
-      - name: Install system dependencies
+      - name: Install Rust lint dependencies
         uses: ./.github/actions/system-deps
         with:
           profile: base
-      - name: Restore or build native prefix
+      - name: Restore native prefix for Rust lint
         uses: ./.github/actions/native-prefix
-      - name: Restore Rust build cache
+      - name: Restore Rust cache for lint
         uses: ./.github/actions/rust-cache
-      - name: Rust clippy (strict for lib)
+      - name: Run clippy for library
         run: scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings
-      - name: Rust clippy (strict for all targets)
+      - name: Run clippy for all targets
         run: scripts/build/resource-limit.sh cargo clippy --workspace --all-targets -- -D warnings
 
   architecture-guardrails:
-    name: Architecture guardrails
+    name: Source architecture audit
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - name: Run source audit
+      - name: Check source size and generated-file boundaries
         run: ./scripts/check/source-audit.sh
-      - name: Upload source audit inventory
+      - name: Upload source audit report
         uses: actions/upload-artifact@v7
         with:
           name: source-audit
           path: target/source-audit.json
 
   api-contract:
-    name: API contract gate
+    name: API contract smoke
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install system dependencies
+      - name: Install API contract dependencies
         uses: ./.github/actions/system-deps
         with:
           profile: live
-      - name: Restore or build native prefix
+      - name: Restore native prefix for API contract
         uses: ./.github/actions/native-prefix
-      - name: Restore Rust build cache
+      - name: Restore Rust cache for API contract
         uses: ./.github/actions/rust-cache
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Run API contract gate
+      - name: Run API contract smoke
         run: ./scripts/check/api-contract.sh
 
   frontend:
-    name: Frontend source and browser-DOM gates
+    name: Frontend unit and browser DOM
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -102,54 +102,54 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Run frontend source tests
+      - name: Run frontend unit tests
         run: npm run test:frontend
-      - name: Install Chromium for browser-DOM tests
+      - name: Install Chromium for DOM tests
         run: npx playwright install --with-deps chromium
-      - name: Run browser-DOM tests
+      - name: Run browser DOM tests
         run: npm run test:frontend:browser-dom
 
   frontend-e2e:
-    name: Frontend full-app integration
+    name: Frontend app E2E
     runs-on: ubuntu-24.04
     needs: frontend
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install system dependencies
+      - name: Install frontend app E2E dependencies
         uses: ./.github/actions/system-deps
         with:
           profile: browser
-      - name: Restore or build native prefix
+      - name: Restore native prefix for frontend app E2E
         uses: ./.github/actions/native-prefix
-      - name: Restore Rust build cache
+      - name: Restore Rust cache for frontend app E2E
         uses: ./.github/actions/rust-cache
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Install Chromium for full-app tests
+      - name: Install Chromium for app E2E
         run: npx playwright install --with-deps chromium
-      - name: Run isolated app/browser integration
+      - name: Run isolated app E2E
         run: npm run test:e2e
 
   concurrency-contract:
-    name: Concurrency contract gate
+    name: Concurrency lifecycle proof
     runs-on: ubuntu-24.04
     needs: api-contract
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install system dependencies
+      - name: Install concurrency proof dependencies
         uses: ./.github/actions/system-deps
         with:
           profile: live
-      - name: Restore or build native prefix
+      - name: Restore native prefix for concurrency proof
         uses: ./.github/actions/native-prefix
-      - name: Restore Rust build cache
+      - name: Restore Rust cache for concurrency proof
         uses: ./.github/actions/rust-cache
-      - name: Run concurrency contract gate
+      - name: Run concurrency lifecycle proof
         env:
           # Hosted runners cannot preserve the optional private network
           # namespace setup; keep the live fault slices on the same host-network
@@ -158,54 +158,54 @@ jobs:
         run: bash ./scripts/check/concurrency/contract.sh
 
   test:
-    name: Unit & integration tests
+    name: Rust unit hygiene and fixtures
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install system dependencies
+      - name: Install Rust test dependencies
         uses: ./.github/actions/system-deps
         with:
           profile: base
-      - name: Restore or build native prefix
+      - name: Restore native prefix for Rust tests
         uses: ./.github/actions/native-prefix
-      - name: Restore Rust build cache
+      - name: Restore Rust cache for Rust tests
         uses: ./.github/actions/rust-cache
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Build frontend assets for embedded API tests
+      - name: Build frontend assets for Rust tests
         run: npm run build:frontend
-      - name: Rust test hygiene gate
+      - name: Check Rust test hygiene
         run: ./scripts/check/test-hygiene.sh
-      - name: Fixture discipline gate
+      - name: Check fixture discipline
         run: ./scripts/check/fixture-discipline.sh
 
   sbom-sync:
-    name: SBOM generation check
+    name: Runtime SBOM emit smoke
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install system dependencies
+      - name: Install runtime SBOM smoke dependencies
         uses: ./.github/actions/system-deps
         with:
           profile: base
-      - name: Restore or build native prefix
+      - name: Restore native prefix for runtime SBOM smoke
         uses: ./.github/actions/native-prefix
-      - name: Restore Rust build cache
+      - name: Restore Rust cache for runtime SBOM smoke
         uses: ./.github/actions/rust-cache
-      - name: Generate runtime SBOM
+      - name: Emit runtime SBOM
         env:
           RESTREAM_SBOM_PATH: target/ci-sbom/restream-runtime.cdx.json
         run: scripts/build/resource-limit.sh ./scripts/build/app-native.sh
-      - name: Verify SBOM file is present
+      - name: Check emitted SBOM exists
         run: test -s target/ci-sbom/restream-runtime.cdx.json
 
   coverage:
-    name: Code coverage
+    name: Workspace coverage report
     runs-on: ubuntu-24.04
     needs: test
     steps:
@@ -213,61 +213,61 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: llvm-tools-preview
-      - name: Install system dependencies
+      - name: Install coverage dependencies
         uses: ./.github/actions/system-deps
         with:
           profile: base
-      - name: Restore or build native prefix
+      - name: Restore native prefix for coverage
         uses: ./.github/actions/native-prefix
-      - name: Restore Rust build cache
+      - name: Restore Rust cache for coverage
         uses: ./.github/actions/rust-cache
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Build frontend assets for embedded API tests
+      - name: Build frontend assets for coverage
         run: npm run build:frontend
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Generate coverage
+      - name: Generate workspace coverage
         run: scripts/build/resource-limit.sh cargo llvm-cov --workspace --lcov --output-path coverage.lcov
-      - name: Upload coverage to Codecov
+      - name: Upload workspace coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           files: coverage.lcov
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
-      - name: Coverage summary
+      - name: Print coverage summary
         run: |
           echo "=== Coverage summary ==="
           cargo llvm-cov report --summary-only 2>/dev/null || true
 
   integration-build:
-    name: Prepare integration harness binaries
+    name: PR live-smoke harness build
     runs-on: ubuntu-24.04
     needs: test
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install system dependencies
+      - name: Install PR live-smoke build dependencies
         uses: ./.github/actions/system-deps
         with:
           profile: build
-      - name: Restore or build native prefix
+      - name: Restore native prefix for PR live-smoke build
         uses: ./.github/actions/native-prefix
-      - name: Restore Rust build cache
+      - name: Restore Rust cache for PR live-smoke build
         uses: ./.github/actions/rust-cache
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Build frontend assets for embedded binaries
+      - name: Build frontend assets for harness binaries
         run: npm run build:frontend
-      - name: Build canonical bench harness binaries
+      - name: Build bench-profile harness binaries
         run: ./scripts/build/bench-harness.sh
-      - name: Stage integration harness artifact
+      - name: Stage PR live-smoke harness artifact
         run: |
           mkdir -p .local/ci-harness-bin
           cp target/bench/restream target/bench/test_harness .local/ci-harness-bin/
@@ -278,7 +278,7 @@ jobs:
           retention-days: 1
 
   integration-shards:
-    name: Integration shard (${{ matrix.shard }})
+    name: PR live-smoke shard (${{ matrix.shard }})
     runs-on: ubuntu-24.04
     needs: integration-build
     timeout-minutes: 30
@@ -302,17 +302,17 @@ jobs:
         with:
           name: ci-harness-bin-${{ github.sha }}
           path: .local/ci-harness-bin
-      - name: Install prepared harness binaries
+      - name: Install PR live-smoke harness binaries
         run: |
           mkdir -p target/bench
           cp .local/ci-harness-bin/restream .local/ci-harness-bin/test_harness target/bench/
           chmod 0755 target/bench/restream target/bench/test_harness
-      - name: Run integration shard
+      - name: Run PR live-smoke shard
         env:
           BENCH_BUILD: never
           GH_TOKEN: ${{ github.token }}
         run: scripts/ci/run-harness-shard-in-runtime.sh "${{ matrix.shard }}"
-      - name: Upload integration artifacts on failure
+      - name: Upload PR live-smoke artifacts on failure
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
@@ -321,7 +321,7 @@ jobs:
           if-no-files-found: ignore
 
   internal-backend-smoke:
-    name: Internal backend smoke
+    name: Internal media backend smoke
     runs-on: ubuntu-24.04
     needs: integration-build
     timeout-minutes: 30
@@ -331,12 +331,12 @@ jobs:
         with:
           name: ci-harness-bin-${{ github.sha }}
           path: .local/ci-harness-bin
-      - name: Install prepared harness binaries
+      - name: Install internal-backend harness binaries
         run: |
           mkdir -p target/bench
           cp .local/ci-harness-bin/restream .local/ci-harness-bin/test_harness target/bench/
           chmod 0755 target/bench/restream target/bench/test_harness
-      - name: Run internal backend rollout smoke
+      - name: Run internal media backend rollout smoke
         env:
           BENCH_BUILD: never
           GH_TOKEN: ${{ github.token }}
@@ -346,7 +346,7 @@ jobs:
           # fallback instead of letting this nested runner regress separately.
           TEST_HARNESS_USE_HOST_NET: "1"
         run: scripts/ci/run-in-harness-runtime.sh scripts/harness/rollouts/internal-backend-smoke.sh
-      - name: Upload internal backend smoke artifacts
+      - name: Upload internal media backend artifacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -355,43 +355,43 @@ jobs:
           if-no-files-found: ignore
 
   playwright:
-    name: HLS player E2E
+    name: HLS browser playback E2E
     runs-on: ubuntu-24.04
     needs: test
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install system dependencies
+      - name: Install HLS E2E dependencies
         uses: ./.github/actions/system-deps
         with:
           profile: browser
-      - name: Restore or build native prefix
+      - name: Restore native prefix for HLS E2E
         uses: ./.github/actions/native-prefix
-      - name: Restore Rust build cache
+      - name: Restore Rust cache for HLS E2E
         uses: ./.github/actions/rust-cache
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Install Playwright browsers
+      - name: Install Chromium for HLS E2E
         run: npx playwright install chromium
-      - name: Build frontend assets for embedded binary
+      - name: Build frontend assets for HLS E2E
         run: npm run build:frontend
-      - name: Build release binary
+      - name: Build app binary for HLS E2E
         run: scripts/build/resource-limit.sh cargo build --release
-      - name: Seed media library
+      - name: Seed HLS E2E media library
         run: |
           mkdir -p .local/e2e/media .local/e2e/logs
           cp test/fixtures/media-library/colorbar-timer-2v16a.mp4 .local/e2e/media/
-      - name: Start app
+      - name: Start app for HLS E2E
         env:
           RESTREAM_DB_PATH: .local/e2e/restream.db
           RESTREAM_MEDIA_DIR: .local/e2e/media
           RESTREAM_LOG_DIR: .local/e2e/logs
           RESTREAM_INITIAL_ADMIN_PASSWORD: admin
         run: ./target/release/restream &
-      - name: Wait for app
+      - name: Wait for HLS E2E app
         run: |
           for i in $(seq 1 15); do
             if curl -sf http://localhost:3030/healthz; then
@@ -402,9 +402,9 @@ jobs:
           done
           echo "App did not become ready" >&2
           exit 1
-      - name: Run Playwright tests
+      - name: Run HLS Playwright tests
         run: npx playwright test
-      - name: Upload test results on failure
+      - name: Upload HLS E2E artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
