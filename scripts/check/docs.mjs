@@ -98,6 +98,8 @@ const maintainedProse = new Set([
   "docs/agent-plane-integration.md",
   "docs/mcp-rust-architecture.md",
   "docs/parallel-agent-framework.md",
+  "docs/matrix-resource-constraints.md",
+  "docs/documentation-audit-2026-07-14.md",
   "docs/source-distribution.md",
   "docs/release-compliance.md",
   "docs/release-runbook.md",
@@ -113,6 +115,20 @@ const highChurnHeadings = new Set([
 const linkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
 const conceptualDiagramGlyphs = /[┌┐┘┬┴┼▼▲►◄║╔╗╚╝]/;
 const mermaidEmoji = /[\u{1F300}-\u{1FAFF}✅❌⚠⭐✓]/u;
+const inlineCode = /`([^`\n]+)`/g;
+const repositoryPath = /^(?:src|web\/ts|web\/styles|scripts|test|benches|docs|public\/js)\//;
+const retiredDocumentationReferences = [
+  /`old\/`/,
+  /\b(?:old|previous) Node(?:\.js)? (?:backend|runtime|environment)/i,
+  /\bNode\.js\/MediaMTX runtime\b/i,
+  /\bLegacy MediaMTX Migration\b/,
+  /`RESTREAM_USE_INTERNAL_TRANSCODER`/,
+  /`src\/api\.rs`/,
+  /`src\/media\/hls\.rs`/,
+  /`public\/ts`/,
+  /`scripts\/run-matrix-cgroup\.sh`/,
+  /(?:arch_gap_analysis|run-to-completion-analysis|concurrency-proof-coverage-2026-07-02|high-performance-audits-2026-06-23-to-2026-07-03|testing-snapshots-2026-06-20-to-2026-07-01)\.md/,
+];
 const files = markdownFiles();
 const errors = [];
 const maintainedShellBlocks = new Map();
@@ -257,6 +273,29 @@ for (const filename of files) {
       errors.push(
         `${relative}:${lineNumber}: package inventory belongs in scripts/lib/debian-packages.sh`,
       );
+    }
+    if (retiredDocumentationReferences.some((pattern) => pattern.test(line))) {
+      errors.push(
+        `${relative}:${lineNumber}: retired stack, path, or snapshot reference`,
+      );
+    }
+
+    for (const match of line.matchAll(inlineCode)) {
+      const candidate = match[1]
+        .replace(/:[0-9]+$/, "")
+        .replace(/[),.;:]$/, "");
+      if (
+        !repositoryPath.test(candidate) ||
+        /[<>{}*| ]/.test(candidate) ||
+        candidate.includes("...")
+      ) {
+        continue;
+      }
+      if (!fs.existsSync(path.resolve(root, candidate))) {
+        errors.push(
+          `${relative}:${lineNumber}: inline repository path does not exist: ${candidate}`,
+        );
+      }
     }
 
     for (const match of line.matchAll(linkPattern)) {
