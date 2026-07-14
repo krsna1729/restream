@@ -815,8 +815,8 @@ fn planned_candidate_stage_kinds(pipeline_id: &str, change: &ProposedChange) -> 
         .stages
         .into_iter()
         .filter(|stage| stage.kind != crate::domain::stage::StageKind::Source)
-    .map(|stage| stage.kind.to_string())
-    .collect()
+        .map(|stage| stage.kind.to_string())
+        .collect()
 }
 
 fn impact_preview(request: &PlanRequest) -> ImpactPreview {
