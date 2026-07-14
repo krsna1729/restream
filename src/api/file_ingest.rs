@@ -30,6 +30,9 @@ pub struct PipelineFileIngestPayload {
     pub target_gop_seconds: Option<u32>,
 }
 
+// The API still exposes the historical custom-encoding endpoint, but the
+// transport contract is intentionally frozen at 410 until preset/source-only
+// output selection is replaced with a supported custom workflow.
 fn custom_encoding_gone_response() -> Response {
     (
         StatusCode::GONE,
@@ -85,6 +88,20 @@ pub fn validate_file_ingest_filename(filename: &str) -> Option<Response> {
     None
 }
 
+fn file_ingest_state_response(
+    state: crate::application::ingest::PipelineFileIngestState,
+) -> Response {
+    Json(api_view_models::file_ingest_response(
+        state.ingest,
+        state.running,
+    ))
+    .into_response()
+}
+
+fn deleted_response() -> Response {
+    Json(serde_json::json!({"deleted": true})).into_response()
+}
+
 fn file_ingest_config_input(payload: PipelineFileIngestPayload) -> FileIngestConfigInput {
     // Normalize optional request fields once so service callers do not each need
     // to re-apply the API defaults.
@@ -126,11 +143,7 @@ pub async fn pipeline_file_ingest_get_handler(
         .load_pipeline_file_ingest_state(&state.engine, &pipeline)
         .await?;
 
-    Ok(Json(api_view_models::file_ingest_response(
-        file_ingest_state.ingest,
-        file_ingest_state.running,
-    ))
-    .into_response())
+    Ok(file_ingest_state_response(file_ingest_state))
 }
 
 pub async fn pipeline_file_ingest_put_handler(
@@ -158,11 +171,7 @@ pub async fn pipeline_file_ingest_put_handler(
         )
         .await?;
 
-    Ok(Json(api_view_models::file_ingest_response(
-        file_ingest_state.ingest,
-        file_ingest_state.running,
-    ))
-    .into_response())
+    Ok(file_ingest_state_response(file_ingest_state))
 }
 
 pub async fn pipeline_file_ingest_delete_handler(
@@ -180,7 +189,7 @@ pub async fn pipeline_file_ingest_delete_handler(
         .apply_file_ingest_payload(&state.engine, &pipeline, None, Some(None))
         .await?;
 
-    Ok(Json(serde_json::json!({"deleted": true})).into_response())
+    Ok(deleted_response())
 }
 
 pub async fn custom_encoding_get(
@@ -237,5 +246,10 @@ mod tests {
     #[test]
     fn custom_encoding_gone_response_stays_gone() {
         assert_eq!(custom_encoding_gone_response().status(), StatusCode::GONE);
+    }
+
+    #[test]
+    fn deleted_response_uses_ok_status() {
+        assert_eq!(deleted_response().status(), StatusCode::OK);
     }
 }
