@@ -42,6 +42,10 @@ fn media_directory_error_response(status: StatusCode) -> Response {
     }
 }
 
+fn recording_state_response(enabled: bool, active: bool) -> Response {
+    Json(serde_json::json!({ "enabled": enabled, "active": active })).into_response()
+}
+
 pub async fn recording_start_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
@@ -64,7 +68,7 @@ pub async fn recording_start_handler(
         )
         .await?;
 
-    Ok(Json(serde_json::json!({ "enabled": true, "active": active })).into_response())
+    Ok(recording_state_response(true, active))
 }
 
 pub async fn recording_stop_handler(
@@ -83,7 +87,7 @@ pub async fn recording_stop_handler(
         .recording_stop(&state.engine, &pipeline_id)
         .await?;
 
-    Ok(Json(serde_json::json!({ "enabled": false, "active": false })).into_response())
+    Ok(recording_state_response(false, false))
 }
 
 pub async fn media_list_handler(
@@ -361,6 +365,8 @@ pub fn media_path_under_root(
     media_dir: &str,
     filename: &str,
 ) -> Result<std::path::PathBuf, StatusCode> {
+    // Existing-file lookups canonicalize both root and target so requests
+    // cannot escape the configured media directory through symlinks or parents.
     let _ = std::fs::create_dir_all(media_dir);
     let media_root =
         std::fs::canonicalize(media_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -506,6 +512,8 @@ pub fn media_destination_path_under_root(
     media_dir: &str,
     filename: &str,
 ) -> Result<std::path::PathBuf, StatusCode> {
+    // Destination paths validate the requested filename first, then join under
+    // the canonical media root without requiring the target file to exist yet.
     validate_media_filename(filename)?;
     let _ = std::fs::create_dir_all(media_dir);
     let media_root =
@@ -719,5 +727,12 @@ mod tests {
         let response = media_directory_error_response(StatusCode::NOT_FOUND);
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn recording_state_response_uses_ok_status() {
+        let response = recording_state_response(true, false);
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
