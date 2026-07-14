@@ -1,3 +1,9 @@
+//! Central routing table for the dashboard HTTP surface.
+//!
+//! The router intentionally keeps route registration near the transport layer
+//! so API modules own handlers while this file documents the public boundary
+//! between static assets, authenticated APIs, and HLS/media endpoints.
+
 use axum::{
     Router,
     extract::DefaultBodyLimit,
@@ -150,8 +156,10 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/hls/{pipeline_id}/{segment}",
 ];
 
-pub fn create_router(state: Arc<AppState>) -> Router {
-    let hls_router = Router::new()
+fn create_hls_router() -> Router<Arc<AppState>> {
+    // HLS endpoints are grouped separately because they expose the streaming
+    // surface and are easiest to scan when kept together.
+    Router::new()
         .route("/hls/{pipeline_id}", get(hls_playlist_handler))
         .route("/hls/{pipeline_id}/master.m3u8", get(hls_master_handler))
         .route("/hls/{pipeline_id}/index.m3u8", get(hls_playlist_handler))
@@ -179,8 +187,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/hls/{pipeline_id}/audio/{track_index}/{segment}",
             get(hls_audio_segment_handler),
         )
-        .route("/hls/{pipeline_id}/{segment}", get(hls_segment_handler));
+        .route("/hls/{pipeline_id}/{segment}", get(hls_segment_handler))
+}
 
+fn create_app_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/login", get(login_get_handler))
         .route("/login.html", get(login_html_redirect_handler))
@@ -378,9 +388,13 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route("/healthz", get(healthz_get_handler))
         .route("/metrics/system", get(metrics_system_handler))
-        .merge(hls_router)
+        .merge(create_hls_router())
         .route("/api/{*path}", any(api_not_found_handler))
         .fallback(get(spa_fallback_handler))
+}
+
+fn apply_standard_layers(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
+    router
         .layer(CompressionLayer::new())
         .layer(DefaultBodyLimit::max(4 * 1024 * 1024))
         .layer(SetResponseHeaderLayer::if_not_present(
@@ -391,5 +405,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             header::HeaderName::from_static("x-frame-options"),
             HeaderValue::from_static("SAMEORIGIN"),
         ))
-        .with_state(state)
+}
+
+pub fn create_router(state: Arc<AppState>) -> Router {
+    apply_standard_layers(create_app_router()).with_state(state)
 }

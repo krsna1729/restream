@@ -1,8 +1,12 @@
+//! Output HTTP handlers own request validation and response shaping for egress
+//! configuration. The application services remain responsible for persistence
+//! and state transitions once a request has been normalized at this boundary.
+
 use axum::{
     Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use futures_util::StreamExt;
 use reqwest::Url;
@@ -17,8 +21,8 @@ use crate::domain::output_spec::{OutputConfig, OutputUrlScheme};
 use crate::domain::state::DesiredOutputState;
 
 use super::state::{
-    AppState, MAX_ENCODING_LEN, MAX_NAME_LEN, MAX_URL_LEN, check_field_len,
-    get_session_token_from_headers, require_authenticated, to_hex,
+    AppState, MAX_ENCODING_LEN, MAX_NAME_LEN, MAX_URL_LEN, check_field_len, require_authenticated,
+    to_hex,
 };
 
 #[derive(Deserialize)]
@@ -34,6 +38,13 @@ impl OutputPayload {
     pub fn encoding_string(&self) -> String {
         self.config.to_encoding_string()
     }
+}
+
+#[derive(Debug, Clone)]
+struct ValidatedOutputPayload {
+    output_config: OutputConfig,
+    url: String,
+    monitoring_url: Option<String>,
 }
 
 pub fn is_supported_output_url(url: &str) -> bool {
@@ -233,6 +244,54 @@ fn youtube_fetch_error_response(error: YoutubeMonitoringFetchError) -> axum::res
     }
 }
 
+fn bad_request(message: impl Into<String>) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": message.into() })),
+    )
+        .into_response()
+}
+
+fn validate_output_payload(payload: &OutputPayload) -> Result<ValidatedOutputPayload, Response> {
+    if let Some(response) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
+        return Err(response);
+    }
+    if let Some(response) = check_field_len("url", &payload.url, MAX_URL_LEN) {
+        return Err(response);
+    }
+
+    let output_config = payload.config.clone();
+    let output_encoding = payload.encoding_string();
+    if let Some(response) = check_field_len("config", &output_encoding, MAX_ENCODING_LEN) {
+        return Err(response);
+    }
+    if let Some(monitoring_url) = payload.monitoring_url.as_deref()
+        && let Some(response) = check_field_len("monitoring_url", monitoring_url, MAX_URL_LEN)
+    {
+        return Err(response);
+    }
+    if output_config.is_custom_output() {
+        return Err(bad_request(CUSTOM_OUTPUT_ENCODING_ERROR));
+    }
+
+    // Normalize once at the API boundary so downstream services only receive
+    // absolute URLs in a canonical host/scheme form.
+    let Some(url) = normalize_output_url(&payload.url) else {
+        return Err(bad_request(OUTPUT_URL_PARSE_ERROR));
+    };
+    if !is_supported_output_url(&url) {
+        return Err(bad_request(OUTPUT_URL_SCHEME_ERROR));
+    }
+    let monitoring_url =
+        normalize_monitoring_url(payload.monitoring_url.as_deref()).map_err(bad_request)?;
+
+    Ok(ValidatedOutputPayload {
+        output_config,
+        url,
+        monitoring_url,
+    })
+}
+
 pub async fn youtube_monitoring_status_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -278,61 +337,10 @@ pub async fn outputs_create_handler(
         return Ok(response);
     }
 
-    if let Some(r) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
-        return Ok(r);
-    }
-    if let Some(r) = check_field_len("url", &payload.url, MAX_URL_LEN) {
-        return Ok(r);
-    }
-    let output_config = payload.config.clone();
-    let output_encoding = payload.encoding_string();
-    if let Some(r) = check_field_len("config", &output_encoding, MAX_ENCODING_LEN) {
-        return Ok(r);
-    }
-    if let Some(monitoring_url) = payload.monitoring_url.as_deref()
-        && let Some(r) = check_field_len("monitoring_url", monitoring_url, MAX_URL_LEN)
-    {
-        return Ok(r);
-    }
-    if output_config.is_custom_output() {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": CUSTOM_OUTPUT_ENCODING_ERROR
-            })),
-        )
-            .into_response());
-    }
-    let Some(url) = normalize_output_url(&payload.url) else {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": OUTPUT_URL_PARSE_ERROR
-            })),
-        )
-            .into_response());
+    let validated = match validate_output_payload(&payload) {
+        Ok(validated) => validated,
+        Err(response) => return Ok(response),
     };
-    let monitoring_url = match normalize_monitoring_url(payload.monitoring_url.as_deref()) {
-        Ok(url) => url,
-        Err(error) => {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": error
-                })),
-            )
-                .into_response());
-        }
-    };
-    if !is_supported_output_url(&url) {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": OUTPUT_URL_SCHEME_ERROR
-            })),
-        )
-            .into_response());
-    }
 
     let id = format!("output_{}", to_hex(&rand::random::<[u8; 8]>()));
 
@@ -342,10 +350,10 @@ pub async fn outputs_create_handler(
             &id,
             &pipeline_id,
             &payload.name,
-            &url,
-            monitoring_url.as_deref(),
+            &validated.url,
+            validated.monitoring_url.as_deref(),
             DesiredOutputState::Stopped.as_str(),
-            &output_config,
+            &validated.output_config,
         )
         .await?;
 
@@ -369,67 +377,16 @@ pub async fn outputs_update_handler(
         return Ok(response);
     }
 
-    if let Some(r) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
-        return Ok(r);
-    }
-    if let Some(r) = check_field_len("url", &payload.url, MAX_URL_LEN) {
-        return Ok(r);
-    }
-    let output_config = payload.config.clone();
-    let output_encoding = payload.encoding_string();
-    if let Some(r) = check_field_len("config", &output_encoding, MAX_ENCODING_LEN) {
-        return Ok(r);
-    }
-    if let Some(monitoring_url) = payload.monitoring_url.as_deref()
-        && let Some(r) = check_field_len("monitoring_url", monitoring_url, MAX_URL_LEN)
-    {
-        return Ok(r);
-    }
-    if output_config.is_custom_output() {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": CUSTOM_OUTPUT_ENCODING_ERROR
-            })),
-        )
-            .into_response());
-    }
-    let Some(url) = normalize_output_url(&payload.url) else {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": OUTPUT_URL_PARSE_ERROR
-            })),
-        )
-            .into_response());
+    let validated = match validate_output_payload(&payload) {
+        Ok(validated) => validated,
+        Err(response) => return Ok(response),
     };
-    let monitoring_url = match normalize_monitoring_url(payload.monitoring_url.as_deref()) {
-        Ok(url) => url,
-        Err(error) => {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": error
-                })),
-            )
-                .into_response());
-        }
-    };
-    if !is_supported_output_url(&url) {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": OUTPUT_URL_SCHEME_ERROR
-            })),
-        )
-            .into_response());
-    }
     let existing = state
         .output_service
         .get_by_id(&pipeline_id, &output_id)
         .await?;
     if existing.desired_state == DesiredOutputState::Running
-        && (existing.url != url || existing.config != output_config)
+        && (existing.url != validated.url || existing.config != validated.output_config)
     {
         return Ok((
             StatusCode::CONFLICT,
@@ -446,9 +403,9 @@ pub async fn outputs_update_handler(
             &pipeline_id,
             &output_id,
             &payload.name,
-            &url,
-            monitoring_url.as_deref(),
-            &output_config,
+            &validated.url,
+            validated.monitoring_url.as_deref(),
+            &validated.output_config,
         )
         .await?;
 
@@ -526,12 +483,8 @@ pub async fn output_status_handler(
     headers: HeaderMap,
     Path((_pipeline_id, output_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     match crate::api_runtime_views::output_status(&state.engine, &output_id).await {
@@ -547,8 +500,22 @@ pub async fn output_status_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::audio_routing::AudioRouting;
+    use crate::domain::output_spec::OutputVideoConfig;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    fn test_output_payload(url: &str) -> OutputPayload {
+        OutputPayload {
+            name: "Primary Output".to_string(),
+            url: url.to_string(),
+            config: OutputConfig {
+                video: OutputVideoConfig::Source,
+                audio: AudioRouting::Passthrough,
+            },
+            monitoring_url: None,
+        }
+    }
 
     async fn serve_once(status: &str, body: Vec<u8>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -590,5 +557,29 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error, YoutubeMonitoringFetchError::TooLarge);
+    }
+
+    #[test]
+    fn validate_output_payload_normalizes_urls() {
+        let validated = validate_output_payload(&test_output_payload("RTMP://EXAMPLE.COM/live"))
+            .expect("valid outputs should normalize");
+
+        assert_eq!(validated.url, "rtmp://example.com/live");
+    }
+
+    #[test]
+    fn validate_output_payload_rejects_custom_output_configs() {
+        let payload = OutputPayload {
+            config: OutputConfig {
+                video: OutputVideoConfig::Custom,
+                audio: AudioRouting::Passthrough,
+            },
+            ..test_output_payload("rtmp://example.com/live")
+        };
+
+        let response =
+            validate_output_payload(&payload).expect_err("custom outputs should be rejected");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

@@ -1,8 +1,13 @@
+//! Pipeline HTTP handlers sit at the boundary between the dashboard API and the
+//! application services. This module keeps request validation and response
+//! shaping close to the transport layer so the underlying services can stay
+//! focused on pipeline state transitions.
+
 use axum::{
     Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -22,8 +27,7 @@ use super::file_ingest::{
 };
 use super::state::{
     AppState, MAX_NAME_LEN, MAX_STREAM_KEY_LEN, MAX_URL_LEN, check_field_len,
-    get_session_token_from_headers, recording_enabled_map, refresh_srt_ingest_policy_store,
-    require_authenticated, to_hex,
+    recording_enabled_map, refresh_srt_ingest_policy_store, require_authenticated, to_hex,
 };
 
 #[derive(Deserialize)]
@@ -51,16 +55,77 @@ fn is_duplicate_stream_key_error(err: &ApiError) -> bool {
         || message.contains("UNIQUE constraint failed: pipelines.stream_key")
 }
 
+fn duplicate_stream_key_response() -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "error": "A pipeline with this stream key already exists"
+        })),
+    )
+        .into_response()
+}
+
+fn requested_stream_key(stream_key: Option<&str>) -> Option<String> {
+    stream_key
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string)
+}
+
+fn validate_pipeline_payload(payload: &PipelinePayload) -> Option<Response> {
+    if let Some(response) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
+        return Some(response);
+    }
+    if let Some(stream_key) = payload.stream_key.as_deref()
+        && let Some(response) = check_field_len("stream_key", stream_key, MAX_STREAM_KEY_LEN)
+    {
+        return Some(response);
+    }
+    if let Some(Some(source)) = payload.input_source.as_ref()
+        && let Some(response) = check_field_len("input_source", source, MAX_URL_LEN)
+    {
+        return Some(response);
+    }
+    if let Some(Some(file_ingest)) = payload.file_ingest.as_ref()
+        && let Some(response) = validate_pipeline_file_ingest_payload(file_ingest)
+    {
+        return Some(response);
+    }
+    if let Some(mut policy) = payload.srt_ingest_policy.clone()
+        && let Err(error) = policy.validate()
+    {
+        return Some((StatusCode::BAD_REQUEST, error).into_response());
+    }
+    if payload.name.trim().is_empty() {
+        return Some(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Pipeline name cannot be empty"})),
+            )
+                .into_response(),
+        );
+    }
+
+    None
+}
+
+fn serialize_srt_ingest_policy(
+    policy: Option<&SrtPipelineIngestConfig>,
+) -> Result<Option<String>, Response> {
+    match policy {
+        Some(policy) => serialize_pipeline_srt_ingest_policy(policy)
+            .map(Some)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        None => Ok(None),
+    }
+}
+
 pub async fn pipelines_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     match state.pipeline_service.list_pipelines().await {
@@ -119,64 +184,27 @@ pub async fn pipelines_post_handler(
     headers: HeaderMap,
     Json(payload): Json<PipelinePayload>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
-    if let Some(r) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
-        return r;
-    }
-    if let Some(ref k) = payload.stream_key
-        && let Some(r) = check_field_len("stream_key", k, MAX_STREAM_KEY_LEN)
-    {
-        return r;
-    }
-    if let Some(Some(ref source)) = payload.input_source
-        && let Some(r) = check_field_len("input_source", source, MAX_URL_LEN)
-    {
-        return r;
-    }
-    if let Some(Some(ref file_ingest)) = payload.file_ingest
-        && let Some(r) = validate_pipeline_file_ingest_payload(file_ingest)
-    {
-        return r;
-    }
-    if let Some(mut policy) = payload.srt_ingest_policy.clone()
-        && let Err(error) = policy.validate()
-    {
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
-    if payload.name.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Pipeline name cannot be empty"})),
-        )
-            .into_response();
+    if let Some(response) = validate_pipeline_payload(&payload) {
+        return response;
     }
 
-    let requested_stream_key = payload
-        .stream_key
-        .as_ref()
-        .map(|key| key.trim())
-        .filter(|key| !key.is_empty())
-        .map(str::to_string);
+    let requested_stream_key = requested_stream_key(payload.stream_key.as_deref());
 
     let input_source = payload
         .input_source
         .as_ref()
         .and_then(|source| source.as_deref());
-    let srt_ingest_policy = match payload.srt_ingest_policy.as_ref() {
-        Some(policy) => match serialize_pipeline_srt_ingest_policy(policy) {
-            Ok(value) => Some(value),
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        },
-        None => None,
+    let srt_ingest_policy = match serialize_srt_ingest_policy(payload.srt_ingest_policy.as_ref()) {
+        Ok(policy) => policy,
+        Err(response) => return response,
     };
 
+    // Auto-generated stream keys retry on collisions so callers do not need to
+    // handle rare random-key conflicts themselves.
     let max_attempts = if requested_stream_key.is_some() {
         1
     } else {
@@ -236,11 +264,7 @@ pub async fn pipelines_post_handler(
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
                 if is_duplicate_stream_key_error(&err) {
-                    return (
-                        StatusCode::CONFLICT,
-                        Json(serde_json::json!({"error": "A pipeline with this stream key already exists"})),
-                    )
-                    .into_response();
+                    return duplicate_stream_key_response();
                 } else {
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
@@ -256,43 +280,12 @@ pub async fn pipelines_update_handler(
     Path(id): Path<String>,
     Json(payload): Json<PipelinePayload>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
-    if let Some(r) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
-        return r;
-    }
-    if let Some(ref k) = payload.stream_key
-        && let Some(r) = check_field_len("stream_key", k, MAX_STREAM_KEY_LEN)
-    {
-        return r;
-    }
-    if let Some(Some(ref source)) = payload.input_source
-        && let Some(r) = check_field_len("input_source", source, MAX_URL_LEN)
-    {
-        return r;
-    }
-    if let Some(Some(ref file_ingest)) = payload.file_ingest
-        && let Some(r) = validate_pipeline_file_ingest_payload(file_ingest)
-    {
-        return r;
-    }
-    if let Some(mut policy) = payload.srt_ingest_policy.clone()
-        && let Err(error) = policy.validate()
-    {
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
-    if payload.name.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Pipeline name cannot be empty"})),
-        )
-            .into_response();
+    if let Some(response) = validate_pipeline_payload(&payload) {
+        return response;
     }
 
     let existing = match state.pipeline_service.get_by_id(&id).await {
@@ -324,11 +317,7 @@ pub async fn pipelines_update_handler(
             .iter()
             .any(|p| p.id != id && p.stream_key == stream_key)
     {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "A pipeline with this stream key already exists"})),
-        )
-            .into_response();
+        return duplicate_stream_key_response();
     }
 
     match state
@@ -371,11 +360,7 @@ pub async fn pipelines_update_handler(
         }
         Err(err) => {
             if is_duplicate_stream_key_error(&err) {
-                (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error": "A pipeline with this stream key already exists"})),
-                )
-                    .into_response()
+                duplicate_stream_key_response()
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
@@ -388,14 +373,12 @@ pub async fn pipelines_delete_handler(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
+    // The engine owns live runtime state, so we tear that down before removing
+    // the persisted pipeline row.
     if let Ok(outputs) = state.output_service.list_outputs().await {
         for output in outputs.iter().filter(|o| o.pipeline_id == id) {
             state.engine.unregister_egress(&output.id).await;
@@ -434,12 +417,8 @@ pub async fn pipeline_probe_handler(
     headers: HeaderMap,
     Path(pipeline_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let ingests = state.engine.ingests.active.read().await;
@@ -772,6 +751,39 @@ fn stage_graph_plan_json(plan: &StageGraphPlan) -> serde_json::Value {
             })
             .collect::<Vec<_>>(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PipelinePayload, requested_stream_key, validate_pipeline_payload};
+    use axum::http::StatusCode;
+
+    fn payload_with_name(name: &str) -> PipelinePayload {
+        PipelinePayload {
+            name: name.to_string(),
+            stream_key: None,
+            input_source: None,
+            srt_ingest_policy: None,
+            file_ingest: None,
+        }
+    }
+
+    #[test]
+    fn requested_stream_key_trims_and_drops_empty_values() {
+        assert_eq!(
+            requested_stream_key(Some("  example  ")),
+            Some("example".to_string())
+        );
+        assert_eq!(requested_stream_key(Some("   ")), None);
+        assert_eq!(requested_stream_key(None), None);
+    }
+
+    #[test]
+    fn validate_pipeline_payload_rejects_blank_names() {
+        let response = validate_pipeline_payload(&payload_with_name("   "))
+            .expect("blank names should be rejected");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }
 
 fn stage_graph_plans_json(plans: &[StageGraphPlan]) -> serde_json::Value {
