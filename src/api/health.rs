@@ -1,3 +1,7 @@
+//! Health HTTP handlers build runtime snapshots for dashboard and operator
+//! views. They stay close to the transport layer because they choose which
+//! pipeline set and snapshot shape should be exposed for each request.
+
 use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -8,6 +12,31 @@ use crate::application::services::ApiError;
 #[derive(Deserialize)]
 pub struct EngineHealthQuery {
     pub view: Option<String>,
+}
+
+async fn snapshot_with_recording_state(
+    state: &AppState,
+    pipeline_ids: &[String],
+    summary: bool,
+) -> serde_json::Value {
+    let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
+    if summary {
+        crate::api_runtime_views::health_summary_snapshot(
+            &state.engine,
+            pipeline_ids,
+            &recording_enabled,
+            state.ingest_disconnect_grace_ms,
+        )
+        .await
+    } else {
+        crate::api_runtime_views::health_snapshot(
+            &state.engine,
+            pipeline_ids,
+            &recording_enabled,
+            state.ingest_disconnect_grace_ms,
+        )
+        .await
+    }
 }
 
 pub async fn build_health_snapshot(state: &AppState) -> Result<serde_json::Value, ApiError> {
@@ -26,28 +55,14 @@ pub async fn build_health_snapshot_for_pipeline_ids(
     state: &AppState,
     pipeline_ids: &[String],
 ) -> serde_json::Value {
-    let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
-    crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        pipeline_ids,
-        &recording_enabled,
-        state.ingest_disconnect_grace_ms,
-    )
-    .await
+    snapshot_with_recording_state(state, pipeline_ids, false).await
 }
 
 pub async fn build_health_summary_snapshot_for_pipeline_ids(
     state: &AppState,
     pipeline_ids: &[String],
 ) -> serde_json::Value {
-    let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
-    crate::api_runtime_views::health_summary_snapshot(
-        &state.engine,
-        pipeline_ids,
-        &recording_enabled,
-        state.ingest_disconnect_grace_ms,
-    )
-    .await
+    snapshot_with_recording_state(state, pipeline_ids, true).await
 }
 
 pub fn select_dashboard_runtime_pipeline_ids(
@@ -108,6 +123,9 @@ pub async fn v1_engine_health_handler(
     if let Some(response) = require_authenticated(&state, &headers).await {
         return response;
     }
+
+    // The query only chooses the snapshot shape; both branches derive from the
+    // same runtime state helpers above.
     let response = if query.view.as_deref() == Some("summary") {
         match build_health_summary_snapshot(&state).await {
             Ok(response) => response,
@@ -124,4 +142,34 @@ pub async fn v1_engine_health_handler(
 
 pub async fn healthz_get_handler() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok" }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{merge_dashboard_runtime_focus_pipeline, select_dashboard_runtime_pipeline_ids};
+
+    #[test]
+    fn select_dashboard_runtime_pipeline_ids_prefers_summary_over_focus() {
+        let ids = select_dashboard_runtime_pipeline_ids(
+            Some("pipe-2"),
+            true,
+            vec!["pipe-1".to_string(), "pipe-2".to_string()],
+        );
+
+        assert_eq!(ids, vec!["pipe-1".to_string(), "pipe-2".to_string()]);
+    }
+
+    #[test]
+    fn merge_dashboard_runtime_focus_pipeline_inserts_focused_pipeline() {
+        let mut health = serde_json::json!({ "pipelines": {} });
+        let focused = serde_json::json!({
+            "pipelines": {
+                "pipe-1": { "status": "running" }
+            }
+        });
+
+        merge_dashboard_runtime_focus_pipeline(&mut health, &focused, "pipe-1");
+
+        assert_eq!(health["pipelines"]["pipe-1"]["status"], "running");
+    }
 }
