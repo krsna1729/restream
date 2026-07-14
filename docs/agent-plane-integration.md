@@ -17,13 +17,13 @@ integration design for this repository.
 
 ## Recommended layering
 
-```text
-human request
-  -> Codex / Claude / Copilot agent
-  -> repo-specific skill
-  -> MCP server wrapper
-  -> /api/v1/agent/*
-  -> core control-plane services and media runtime
+```mermaid
+flowchart LR
+    Human["human request"] --> Agent["Codex / Claude / Copilot agent"]
+    Agent --> Skill["repository-specific skill"]
+    Skill --> Mcp["MCP server wrapper"]
+    Mcp --> Api["/api/v1/agent/*"]
+    Api --> Core["control-plane services and media runtime"]
 ```
 
 Keep business logic in the product:

@@ -23,21 +23,22 @@ and defaults.
 
 ## Data flow
 
-```text
-tracing callsite
-    |
-    +-- console layer -------------> stdout / stderr
-    +-- non-blocking file layer ---> restream.log.YYYY-MM-DD
-    `-- non-blocking DB layer -----> bounded channel
-                                      |
-                                      v
-                              batched SQLite commit
-                                      |
-                                      v
-                              broadcast persisted row
-                                      |
-                                      v
-                              /api/v1/logs/stream
+```mermaid
+flowchart TD
+    Callsite["tracing callsite"]
+    Console["console layer"]
+    File["non-blocking file layer"]
+    Db["non-blocking database layer"]
+    Streams["stdout / stderr"]
+    Daily["restream.log.YYYY-MM-DD"]
+    Channel["bounded channel"]
+    Commit["batched SQLite commit"]
+    Broadcast["broadcast persisted row"]
+    Sse["/api/v1/logs/stream"]
+
+    Callsite --> Console --> Streams
+    Callsite --> File --> Daily
+    Callsite --> Db --> Channel --> Commit --> Broadcast --> Sse
 ```
 
 There are three subscriber layers. SSE is not a fourth tracing layer: the

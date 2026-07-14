@@ -205,22 +205,19 @@ reference-counted payloads.
 
 ## Target Shape
 
-```text
-control plane
-  -> immutable hot handles and shared stage graph
-
-socket workers
-  -> read burst
-  -> classify, timestamp, and account burst
-  -> bounded source ring
-
-shared workers
-  -> unique video transforms
-  -> late audio routing
-  -> unique protocol packaging
-
-package rings
-  -> sharded destination senders
+```mermaid
+flowchart TD
+    Control["control plane"] --> Handles["immutable hot handles and shared stage graph"]
+    Handles --> Socket["socket workers"]
+    Socket --> Burst["read burst"]
+    Burst --> Normalize["classify, timestamp, and account"]
+    Normalize --> Source["bounded source ring"]
+    Source --> Workers["shared workers"]
+    Workers --> Video["unique video transforms"]
+    Video --> Audio["late audio routing"]
+    Audio --> Package["unique protocol packaging"]
+    Package --> Rings["package rings"]
+    Rings --> Senders["sharded destination senders"]
 ```
 
 The control plane owns strings, hash maps, configuration, lifecycle, and
@@ -281,8 +278,12 @@ Batching should amortize:
 
 An ingest worker should process a received burst locally:
 
-```text
-parse -> classify -> normalize timestamps -> account -> publish
+```mermaid
+flowchart LR
+    Parse["parse"] --> Classify["classify"]
+    Classify --> Normalize["normalize timestamps"]
+    Normalize --> Account["account"]
+    Account --> Publish["publish"]
 ```
 
 Queue boundaries remain useful around expensive, shareable, or blocking work:
@@ -328,11 +329,11 @@ chunk. Expose capacity, occupancy, high-water mark, full events, and closure.
 
 Packaging should scale with unique media shape, not destination count:
 
-```text
-canonical packets
-  -> one MPEG-TS package stage
-  -> immutable 1316-byte chunk ring
-  -> many SRT senders
+```mermaid
+flowchart LR
+    Packets["canonical packets"] --> Package["one MPEG-TS package stage"]
+    Package --> Ring["immutable 1316-byte chunk ring"]
+    Ring --> Senders["many SRT senders"]
 ```
 
 Package identity must include upstream stage identity, codec shape, selected
@@ -583,11 +584,13 @@ Both HLS and SRT now utilize shared native packaging stages:
 - **HLS:** Uses one shared native `TsMuxer` segmenter per source pipeline. Browser preview requests keep it alive through access heartbeats, persistent HLS outputs hold a reference, and the reconciler removes idle segmenters after 60 seconds.
 - **SRT Egress and Play:** Share a single native `TsMuxer` task per pipeline+preset which feeds a shared `TsChunkRing` (SPMC lock-free package ring). Individual client loops consume pre-muxed 1316-byte packets directly from `TsChunkReader` and write to their bounded `MemoryQueue` buffers. This satisfies the high-performance shape:
 
-```text
-canonical packet burst
-  -> one native MPEG-TS package stage per final media shape
-  -> immutable 1316-byte package ring (TsChunkRing)
-  -> many destination senders (SRT play and egress loops)
+```mermaid
+flowchart LR
+    Burst["canonical packet burst"]
+    Burst --> Package["one native MPEG-TS package stage per final media shape"]
+    Package --> Ring["immutable 1316-byte TsChunkRing"]
+    Ring --> Play["SRT play senders"]
+    Ring --> Egress["SRT egress senders"]
 ```
 
 This design has been validated against `ffprobe` correctness checks, multi-track AAC, PCR/PTS/DTS monotone ordering, PAT/PMT cadence, and our end-to-end correctness protocol gates.

@@ -19,7 +19,6 @@ dependency.
 - [Packet Walk: SRT ingest → SRT egress (no transcoding)](#packet-walk-srt-ingest-srt-egress-no-transcoding)
 - [Packet Walk: HLS segmenter](#packet-walk-hls-segmenter)
 - [Packet Walk: TS recording](#packet-walk-ts-recording)
-- [Complete System Diagram](#complete-system-diagram)
 - [Synchronization at Each Boundary](#synchronization-at-each-boundary)
 - [Memory Ordering (ring buffer hot path)](#memory-ordering-ring-buffer-hot-path)
 - [Shared Processing Stages](#shared-processing-stages)
@@ -127,22 +126,22 @@ Should not own:
 
 ## System Shape
 
-```text
-Publisher
-  | RTMP or SRT
-  v
-+---------------------------- restream -----------------------------+
-| native ingest -> source RingBuffer                                |
-|                     |                                             |
-|                     +-> RTMP egress                               |
-|                     +-> SRT MPEG-TS egress                        |
-|                     +-> HLS segmenter (inline TsMuxer)            |
-|                     +-> MPEG-TS recorder                          |
-|                     `-> transform scaffold -> RingBuffer -> egress|
-|                                                                   |
-| Axum dashboard/API -> SQLite                                      |
-| reconciler (1 second) -> output and recording lifecycle           |
-+-------------------------------------------------------------------+
+```mermaid
+flowchart LR
+    Publisher["Publisher"] -->|RTMP or SRT| Ingest["Native ingest"]
+
+    subgraph Restream["restream"]
+        Ingest --> Source[("Source RingBuffer")]
+        Source --> Rtmp["RTMP egress"]
+        Source --> SrtPackage["Shared MPEG-TS packaging"] --> Srt["SRT egress"]
+        Source --> Hls["HLS segmenter"]
+        Source --> Recorder["MPEG-TS recorder"]
+        Source --> Transform["Shared transform stage"]
+        Transform --> Output[("Output RingBuffer")] --> Encoded["Encoded egress"]
+
+        Api["Axum dashboard and API"] --> Database[("SQLite")]
+        Reconciler["Reconciler"] --> Lifecycle["Output and recording lifecycle"]
+    end
 ```
 
 ## Concurrency
@@ -268,15 +267,22 @@ There is currently no active `core_affinity` wiring.
 
 ## Packet Flow
 
-```text
-RTMP:
-socket -> rml_rtmp -> FLV audio/video payload -> MediaPacket -> RingBuffer
+```mermaid
+flowchart LR
+    subgraph RtmpIngest["RTMP ingest"]
+        RtmpSocket["Socket"] --> Parser["rml_rtmp"] --> Flv["FLV audio and video payload"]
+        Flv --> FlvPacket["MediaPacket format: Flv"]
+    end
 
-SRT:
-libsrt socket -> MPEG-TS bytes -> TsDemuxer (inline async) -> MediaPacket -> RingBuffer
+    subgraph SrtIngest["SRT ingest"]
+        SrtSocket["libsrt socket"] --> Ts["MPEG-TS bytes"] --> Demux["Inline TsDemuxer"]
+        Demux --> RawPacket["MediaPacket format: Raw"]
+    end
 
-egress:
-RingBuffer Reader -> protocol/container packaging -> socket or local store
+    FlvPacket --> Ring[("RingBuffer")]
+    RawPacket --> Ring
+    Ring --> Reader["Independent reader"] --> Package["Protocol or container packaging"]
+    Package --> Destination["Socket or local store"]
 ```
 
 `MediaPacket` carries media type, track index, PTS, DTS, keyframe state,
@@ -327,238 +333,83 @@ audio-track count, and encoder behavior.
 
 ## Packet Walk: RTMP ingest → RTMP egress
 
-Zero thread hops. The entire path runs as tokio tasks on the async runtime.
+Zero thread hops. The entire path runs as Tokio tasks on the async runtime;
+the lock-free ring is the only application-level synchronization boundary.
 
-```
- ┌──────────────────────────────────────────────────────────────┐
- │  INGRESS NIC                                                 │
- └────────┬─────────────────────────────────────────────────────┘
-                                │ TCP segments
-                                ▼
-                       ┌────────────────────┐
-                       │ Kernel TCP stack   │  SO_RCVBUF = 8 MB
-                       │ default :1935 sock │
-                       └────────┬───────────┘
-                                │ socket ready (epoll)
-                                ▼
- ╔═══════════════════════════════════════════════════════════════╗
- ║  TOKIO RUNTIME  (effective CPU based worker count, any core)  ║
- ║                                                               ║
- ║  ┌─────────────────────────────────────────────────────────┐  ║
- ║  │ Task: RTMP ingest handler                               │  ║
- ║  │                                                         │  ║
- ║  │  socket.read().await                                    │  ║
- ║  │    → RTMP handshake                                     │  ║
- ║  │    → FLV demux (video/audio chunk parse)                │  ║
- ║  │    → ring_buffer.push(MediaPacket)                      │  ║
- ║  │         ArcSwap store + AtomicUsize Release             │  ║
- ║  │    → notify.notify_waiters()                            │  ║
- ║  └────────────────────────────┬────────────────────────────┘  ║
- ║                               │                               ║
- ║                 ┌─────────────┼─────────────┐                 ║
- ║                 ▼             ▼             ▼                 ║
- ║      ┌──────────────┐ ┌──────────────┐ ┌──────────────┐       ║
- ║      │   RingBuffer │ │   RingBuffer │ │   RingBuffer │       ║
- ║      │   Reader #1  │ │   Reader #2  │ │   Reader #3  │       ║
- ║      │   (Acquire)  │ │   (Acquire)  │ │   (Acquire)  │       ║
- ║      └──────┬───────┘ └──────┬───────┘ └──────┬───────┘       ║
- ║             │                │                │               ║
- ║      ┌──────┴───────┐ ┌──────┴───────┐ ┌──────┴───────┐       ║
- ║      │ Task: RTMP   │ │ Task: RTMP   │ │ Task: RTMP   │       ║
- ║      │ egress #1    │ │ egress #2    │ │ egress #3    │       ║
- ║      │              │ │              │ │              │       ║
- ║      │ pull()       │ │ pull()       │ │ pull()       │       ║
- ║      │ → FLV mux    │ │ → FLV mux    │ │ → FLV mux    │       ║
- ║      │ → write_all  │ │ → write_all  │ │ → write_all  │       ║
- ║      │   .await     │ │   .await     │ │   .await     │       ║
- ║      └──────┬───────┘ └──────┬───────┘ └──────┬───────┘       ║
- ║             │                │                │               ║
- ╚═════════════╪════════════════╪════════════════╪═══════════════╝
-               │                │                │
-               ▼                ▼                ▼
-      ┌─────────────────────────────────────────────────────┐
-      │ Kernel TCP stack  (3 × SO_SNDBUF = 8 MB each)       │
-      └────────────────────────────┬────────────────────────┘
-                              │ TCP segments
-                              ▼
-      ┌─────────────────────────────────────────────────────┐
-      │  EGRESS NIC                                         │
-      └─────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    IngressNic["Ingress NIC"] -->|TCP segments| KernelIn["Kernel TCP stack<br/>8 MB receive buffer"]
 
- Thread hops: 0
- Sync boundaries: 1 (RingBuffer push/pull, lock-free)
- OS threads spawned: 0 (pure async)
+    subgraph Tokio["Tokio runtime"]
+        KernelIn --> Ingest["RTMP ingest task"]
+        Ingest --> Handshake["RTMP handshake and chunk parsing"]
+        Handshake --> Demux["FLV audio and video demux"]
+        Demux --> Push["RingBuffer push<br/>Release store and Notify"]
+        Push --> Ring[("Source RingBuffer")]
+
+        Ring --> Reader1["Reader 1<br/>Acquire load"] --> Egress1["RTMP egress task 1<br/>FLV mux and async write"]
+        Ring --> Reader2["Reader 2<br/>Acquire load"] --> Egress2["RTMP egress task 2<br/>FLV mux and async write"]
+        Ring --> Reader3["Reader 3<br/>Acquire load"] --> Egress3["RTMP egress task 3<br/>FLV mux and async write"]
+    end
+
+    Egress1 --> KernelOut["Kernel TCP stack<br/>8 MB send buffer per socket"]
+    Egress2 --> KernelOut
+    Egress3 --> KernelOut
+    KernelOut -->|TCP segments| EgressNic["Egress NIC"]
 ```
 
 ### RingBuffer internals
 
-```
-               RingBuffer internals
- ┌──────────────────────────────────────────────────┐
- │                                                  │
- │  slots: [RingSlot; 4096]                         │
- │    each slot: ArcSwapOption<MediaPacket>         │
- │    densely packed (8 bytes per slot)             │
- │                                                  │
- │  write_idx: AlignedAtomicUsize (cache-line)  ──┐ │
- │  last_keyframe: AtomicUsize                    │ │
- │  notify: tokio::sync::Notify                   │ │
- │                                                │ │
- │  Producer writes:                              │ │
- │    slot[idx % 4096].store(pkt)                 │ │
- │    write_idx.store(idx+1, Release) ────────────┘ │
- │    notify.notify_waiters()                       │
- │                                                  │
- │  Consumer reads:                                 │
- │    write_idx.load(Acquire)                       │
- │    slot[read_idx % 4096].load_full()             │
- │    each reader has independent read_idx          │
- │                                                  │
- │  Total memory: 4096 × 8B = 32 KiB                │
- │  MediaPacket: 56B, 8B aligned                    │
- └──────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph State["RingBuffer state"]
+        Slots["4096 dense ArcSwapOption slots<br/>32 KiB of slot storage"]
+        Write["Cache-line-aligned write index"]
+        Keyframe["Last-keyframe index"]
+        Notify["tokio Notify"]
+    end
+
+    Producer["Single producer"] --> Store["Store packet in slot"]
+    Store --> Release["Advance write index with Release ordering"]
+    Release --> Wake["Notify waiting readers"]
+    Store --> Slots
+    Release --> Write
+    Wake --> Notify
+
+    Write --> Acquire1["Reader 1 loads write index with Acquire ordering"]
+    Write --> Acquire2["Reader 2 loads write index with Acquire ordering"]
+    Write --> AcquireN["Reader N loads write index with Acquire ordering"]
+    Slots --> Acquire1
+    Slots --> Acquire2
+    Slots --> AcquireN
 ```
 
 ## Packet Walk: SRT ingest → transcoded SRT egress
 
-Full path with transcoding. Each `═══▶` marks a thread hop across a
-synchronization boundary.
+The full transform path crosses the SRT accept channel, two lock-free rings,
+and two `MemoryQueue` boundaries. The application owns one transform thread
+and one blocking SRT sender thread for each output.
 
-```
- ┌───────────────────────────────────────────────────────────────────────┐
- │  INGRESS NIC                                                         │
- └───────┬──────────────────────────────────────────────────────────────┘
-         │ UDP datagrams
-         ▼
- ┌──────────────────────┐
- │ Kernel UDP stack     │  SO_RCVBUF = 8 MB
- │ default :10080 sock  │
- └───────┬──────────────┘
-         │
-         ▼
- ┌──────────────────────┐
- │ libsrt internals     │  opaque threads: retransmit, ACK,
- │ (not our threads)    │  reorder, loss recovery
- └───────┬──────────────┘
-         │ reassembled MPEG-TS stream
-         ▼
- ┌──────────────────────────────────────────────┐
- │ OS Thread: SRT accept loop                   │  std::thread::spawn
- │                                              │  blocks on srt_accept()
- │  accepted_sock ──── mpsc::send() ────────┐   │
- └──────────────────────────────────────────┼───┘
-                                            │
-  ══════════════════════════════════════════╪══  thread hop #1 (mpsc)
-                                            │
- ╔══════════════════════════════════════════╪═══════════════════════╗
- ║  TOKIO RUNTIME                           ▼                       ║
- ║  ┌────────────────────────────────────────────────────────────┐  ║
- ║  │ Task: SRT ingest handler                                   │  ║
- ║  │                                                            │  ║
- ║  │  loop:                                                     │  ║
- ║  │    srt_recv(sock) (non-blocking + long-lived epoll waiter) │  ║
- ║  │    demuxer.feed(buf)           ← inline TsDemuxer          │  ║
- ║  │    demuxer.drain_into(&mut packets)                        │  ║
- ║  │    ring_buffer.push_batch(&packets)                        │  ║
- ║  └─────────────────────────┬──────────────────────────────────┘  ║
- ╚════════════════════════════╪═════════════════════════════════════╝
-                              │
-              ┌───────────────┴────────────┐
-              ▼                            ▼
-  ┌──────────────────────┐     ┌──────────────────────┐
-  │    Source RingBuffer │     │  (other consumers:   │
-  │    4096 slots        │     │   HLS, recording,    │
-  │    lock-free SPMC    │     │   direct egress)     │
-  └──────────┬───────────┘     └──────────────────────┘
-             │
-  ═══════════╪═══════════════  thread hop #2 (Notify + Acquire)
-             │
- ╔═══════════╪═══════════════════════════════════════════════════════╗
- ║  TOKIO    ▼                                                       ║
- ║  ┌─────────────────────────────────────────────────────────────┐  ║
- ║  │ Task: transcode feeder                                      │  ║
- ║  │                                                             │  ║
- ║  │  reader.wait_for_data().await                               │  ║
- ║  │  while reader.pull_burst():                                 │  ║
- ║  │    input_queue.write_batch(packet.payload)                  │  ║
- ║  └──────────────────────────┬──────────────────────────────────┘  ║
- ╚═════════════════════════════╪═════════════════════════════════════╝
-                               │
-  ═════════════════════════════╪═══  thread hop #3 (MemoryQueue)
-                               │      Mutex + Condvar
-                               ▼
- ┌───────────────────────────────────────────────────────────────┐
- │ OS Thread: transcoder stage                                   │  std::thread
- │                                                               │  catch_unwind
- │  CustomInput ← input_queue                                    │
- │                                                               │
- │  loop:                                                        │
- │    av_read_frame() (demux input MPEG-TS)                      │
- │    → apply stream filter (audio routing)                      │
- │    → MediaPacket { pts, dts, payload, format: Raw }           │
- │    output_ring.push(packet) (direct RingBuffer push)          │
- └──────────────────────────┬────────────────────────────────────┘
-                            │
-               ┌────────────┴─────────────┐
-               ▼                          ▼
-  ┌────────────────────────┐   ┌───────────────────────┐
-  │  Transcoded RingBuffer │   │  (shared: egress #2,  │
-  │  4096 slots            │   │   egress #3 read      │
-  │  lock-free SPMC        │   │   from same ring)     │
-  └───────────┬────────────┘   └───────────────────────┘
-              │
-  ════════════╪═══════════════  thread hop #4 (Notify + Acquire)
-              │
- ╔════════════╪═══════════════════════════════════════════════════╗
- ║  TOKIO     ▼                                                   ║
- ║  ┌──────────────────────────────────────────────────────────┐  ║
- ║  │ Task: Shared SRT Muxer (1 per pipeline + preset)         │  ║
- ║  │  reader.wait_for_data().await                            │  ║
- ║  │  while reader.pull_burst():                              │  ║
- ║  │    video/audio_payload_for_mux() (strip FLV if needed)   │  ║
- ║  │    dts_enforcer.enforce()                                │  ║
- ║  │    TsMuxer::mux_packet() (inline, ~0.6µs/pkt)            │  ║
- ║  │    ts_ring.push()                                        │  ║
- ║  └────────────────────────────┬─────────────────────────────┘  ║
- ║                               │ (Lock-free SPMC)               ║
- ║                               ▼                                ║
- ║  ┌──────────────────────────────────────────────────────────┐  ║
- ║  │ Task: SRT egress handler (1 per output connection)       │  ║
- ║  │  ts_reader.pull_burst()                                  │  ║
- ║  │  → out_queue.write(ts_batch).await                       │  ║
- ║  └────────────────────────────┬─────────────────────────────┘  ║
- ╚═══════════════════════════════╪════════════════════════════════╝
-                                 │
-  ═══════════════════════════════╪═══  thread hop #5 (MemoryQueue)
-                                 │      Mutex + Condvar
-                                 ▼
- ┌───────────────────────────────────────────────────────────────┐
- │ OS Thread: SRT egress sender                                  │  std::thread
- │                                                               │  catch_unwind
- │  loop:                                                        │
- │    out_queue.read(buf) ← Condvar::wait                        │
- │    srt_send(sock, buf, len) → libsrt                          │
- │    update_egress_bytes() (every 100 KB)                       │
- └──────────────────────────┬────────────────────────────────────┘
-                            │
-                            ▼
- ┌───────────────────────────────────────────────────────────────┐
- │ libsrt internals          opaque sender threads               │
- └──────────────────────────┬────────────────────────────────────┘
-                            │
-                            ▼
- ┌───────────────────────────────────────────────────────────────┐
- │ Kernel UDP stack          SO_SNDBUF = 8 MB                    │
- └──────────────────────────┬────────────────────────────────────┘
-                            │ UDP datagrams
-                            ▼
- ┌───────────────────────────────────────────────────────────────┐
- │  EGRESS NIC                                                   │
- └───────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    IngressNic["Ingress NIC"] -->|UDP datagrams| KernelIn["Kernel UDP stack<br/>8 MB receive buffer"]
+    KernelIn --> LibsrtIn["libsrt receive, recovery, and reordering"]
+    LibsrtIn --> Accept["SRT accept OS thread<br/>blocking srt_accept"]
+    Accept -->|mpsc channel| Ingest["SRT ingest task<br/>nonblocking receive and inline TsDemuxer"]
+    Ingest -->|push_batch| Source[("Source RingBuffer")]
+    Source --> Other["Other readers<br/>HLS, recording, direct egress"]
 
- Thread hops: 4 (was 5 before inline TsDemuxer)
- Sync boundaries: 5 (2 lock-free rings, 1 MemoryQueue, 1 mpsc, 1 Notify wakeup)
- OS threads spawned: 2 (transcoder stage + sender)
+    Source -->|Notify and Acquire| Feeder["Transcode feeder task"]
+    Feeder -->|MemoryQueue| Transcoder["Transform OS thread<br/>demux, route, and emit packets"]
+    Transcoder --> Output[("Transcoded RingBuffer")]
+    Output --> OtherEncoded["Other encoded-output readers"]
+
+    Output -->|Notify and Acquire| Muxer["Shared SRT muxer task<br/>DTS enforcement and inline TsMuxer"]
+    Muxer --> TsRing[("TsChunkRing")]
+    TsRing --> Egress["SRT egress task<br/>one per output"]
+    Egress -->|MemoryQueue| Sender["SRT sender OS thread<br/>blocking srt_send"]
+    Sender --> LibsrtOut["libsrt transmit and retransmit"]
+    LibsrtOut --> KernelOut["Kernel UDP stack"] --> EgressNic["Egress NIC"]
 ```
 
 ## Packet Walk: SRT ingest → SRT egress (no transcoding)
@@ -566,152 +417,41 @@ synchronization boundary.
 When encoding is `source` (passthrough), no transcoder threads are spawned.
 The egress reads directly from the source RingBuffer.
 
-```
- INGRESS NIC
-     │ UDP
-     ▼
- Kernel → libsrt → SRT accept thread ──mpsc──▶ SRT ingest task
-                                                    │
-                                          srt_recv → inline TsDemuxer
-                                                    │
-                                          Source RingBuffer ◄── lock-free
-                                                    │
-           ┌────────────────────────────────────────┼────────────────┐
-           ▼                                        ▼                ▼
-  SRT egress task #1                    SRT egress task #2   SRT egress task #3
-  pull → inline TsMux → MQ              pull → TsMux → MQ    pull → TsMux → MQ
-           │                                        │                │
-  SRT sender thread                     SRT sender           SRT sender
-  srt_send()                            srt_send()           srt_send()
-           │                                        │                │
-           ▼                                        ▼                ▼
- Kernel → libsrt → EGRESS NIC
+```mermaid
+flowchart TD
+    Ingest["SRT ingest task<br/>inline TsDemuxer"] --> Source[("Source RingBuffer")]
+    Source --> Muxer["Shared SRT muxer task<br/>inline TsMuxer"]
+    Muxer --> TsRing[("TsChunkRing")]
 
- Thread hops: 4 (per egress path)
- OS threads spawned: 3 (sender per egress)
+    TsRing --> Egress1["Egress task 1"] --> Queue1["MemoryQueue 1"] --> Sender1["Sender OS thread 1"]
+    TsRing --> Egress2["Egress task 2"] --> Queue2["MemoryQueue 2"] --> Sender2["Sender OS thread 2"]
+    TsRing --> Egress3["Egress task 3"] --> Queue3["MemoryQueue 3"] --> Sender3["Sender OS thread 3"]
+
+    Sender1 --> Network["libsrt, kernel UDP, and egress NIC"]
+    Sender2 --> Network
+    Sender3 --> Network
 ```
 
 ## Packet Walk: HLS segmenter
 
-```
- Source RingBuffer
-     │
-     │  Notify + Acquire
-     ▼
- ╔════════════════════════════════════════════════════════════╗
- ║ TOKIO                                                      ║
- ║ ┌────────────────────────────────────────────────────────┐ ║
- ║ │ Task: HLS segmenter                                    │ ║
- ║ │   reader.pull_burst()                                  │ ║
- ║ │   TsMuxer::mux_packet() (inline, ~0.6µs/pkt)           │ ║
- ║ │   accumulate TS bytes in buffer                        │ ║
- ║ │   when keyframe + min_duration:                        │ ║
- ║ │     hls_store.push_segment(duration, bytes)            │ ║
- ║ │     ┌────────────────────────────────────────────────┐ │ ║
- ║ │     │  HlsStore (Mutex<VecDeque<HlsSegment>>)        │ │ ║
- ║ │     │  max_segments segments in memory               │ │ ║
- ║ │     │  served directly by Axum GET handler           │ │ ║
- ║ │     └────────────────────────────────────────────────┘ │ ║
- ║ └────────────────────────────────────────────────────────┘ ║
- ╚════════════════════════════════════════════════════════════╝
-
- Thread hops: 0
- OS threads spawned: 0 (inline TsMuxer in async task)
+```mermaid
+flowchart LR
+    Source[("Source RingBuffer")] --> Segmenter["HLS segmenter task"]
+    Segmenter --> Muxer["Inline TsMuxer"]
+    Muxer --> Buffer["Accumulate MPEG-TS bytes"]
+    Buffer --> Boundary{"Keyframe and minimum duration reached?"}
+    Boundary -->|No| Buffer
+    Boundary -->|Yes| Store["Push segment to in-memory HlsStore"]
+    Store --> Playlist["Axum playlist and segment handlers"]
 ```
 
 ## Packet Walk: TS recording
 
-```
- Source RingBuffer
-     │
-     │  Notify + Acquire
-     ▼
- ╔══════════════════════════════════════╗
- ║ TOKIO                                ║
- ║ ┌──────────────────────────────────┐ ║
- ║ │ Task: recording feeder           │ ║
- ║ │   reader.pull_burst()            │ ║
- ║ │   queue.write_batch(ts bytes)    │ ║
- ║ └───────────────┬──────────────────┘ ║
- ╚═════════════════╪════════════════════╝
-                   │
-   ════════════════╪════  thread hop (MemoryQueue, Condvar)
-                   ▼
- ┌──────────────────────────────────────┐
- │ OS Thread: TS writer                 │
- │   queue.read()                       │
- │   → raw MPEG-TS file write           │
- │   → file write (disk I/O)            │
- └──────────────────────────────────────┘
-
- Thread hops: 1
- OS threads spawned: 1
-```
-
-## Complete System Diagram
-
-```
-                            ┌───────────────────────────────────────┐
-                            │          INGRESS NIC                  │
-                            └──────┬──────────────┬─────────────────┘
-                                   │ TCP          │ UDP
-                                   ▼              ▼
-                            ┌──────────┐    ┌───────────┐
-                            │  Kernel  │    │  Kernel   │
-                            │  default │    │  default  │
-                            │   :1935  │    │  :10080   │
-                            └────┬─────┘    └─────┬─────┘
-                                 │                │
-                                 │                ▼
-                                 │         libsrt internals
-                                 │                │
-                                 │         SRT accept thread
-                                 │                │ mpsc
-                                 ▼                ▼
-                            ╔═══════════════════════════════════╗
-                            ║        TOKIO RUNTIME              ║
-                            ║  ┌────────────┐ ┌──────────────┐  ║
-                            ║  │RTMP ingest │ │ SRT ingest   │  ║
-                            ║  │  handler   │ │ handler +    │  ║
-                            ║  │            │ │ TsDemuxer    │  ║
-                            ║  └─────┬──────┘ └──────┬───────┘  ║
-                            ╚════════╪═══════════════╪══════════╝
-                                     │               │
-                                     ▼               ▼
-                            ┌────────────────────────────────────┐
-                            │       SOURCE RINGBUFFER            │
-                            │   4096 slots, lock-free SPMC       │
-                            └──┬────────┬────────┬───────┬───────┘
-                               │        │        │       │
-                    ┌──────────┘   ┌────┘   ┌────┘  ┌────┘
-                    ▼              ▼        ▼       ▼
-              RTMP egress    transcode   HLS          recording
-              tasks (async)  feeder     segmenter    feeder
-                    │         (task)    (inline       (task)
-                    │              │     TsMuxer)        │
-                    │         encoder      │         TS writer
-                    │         thread       │         thread
-                    │              │       │            │
-                    │         output       │          disk
-                    │         reader       │
-                    │         thread       │
-                    │              │       ▼
-                    │              ▼    HlsStore
-                    │     ┌─────────────────────┐
-                    │     │TRANSCODED RINGBUFFER│
-                    │     └──┬─────┬─────┬──────┘
-                    │        │     │     │
-                    │      SRT   SRT   SRT
-                    │      egress tasks
-                    │      (inline TsMux)
-                    │        │     │     │
-                    │      sendr sendr sendr
-                    │      thrd  thrd  thrd
-                    │        │     │     │
-                    ▼        ▼     ▼     ▼
-                ┌────────────────────────────────────┐
-                │         EGRESS NIC                 │
-                └────────────────────────────────────┘
+```mermaid
+flowchart LR
+    Source[("Source RingBuffer")] --> Feeder["Recording feeder task"]
+    Feeder -->|MPEG-TS batches through MemoryQueue| Writer["Recording OS thread<br/>blocking file writes"]
+    Writer --> Disk[("Recording file on disk")]
 ```
 
 ## Synchronization at Each Boundary
@@ -753,11 +493,13 @@ Typed output configs are lowered into two stage identities:
 
 Example:
 
-```text
-source ring
-  +-> video:720p -> audio:atrack:0:from:720p -> output A
-  |             `-> audio:atrack:1:from:720p -> output B
-  `-> source --------------------------------> output C
+```mermaid
+flowchart LR
+    Source[("Source RingBuffer")] --> Direct["Output C<br/>source passthrough"]
+    Source --> Video["Shared video:720p stage"]
+    Video --> Audio["Shared audio:aac:128k stage"]
+    Audio --> OutputA["Output A"]
+    Audio --> OutputB["Output B"]
 ```
 
 The stage cache prevents one encoder per destination. The current transcoder

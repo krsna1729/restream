@@ -38,16 +38,16 @@ transport concerns thin.
 
 ## Target layering
 
-```text
-shared Rust agent core
-  -> tool handlers
-  -> execution backend trait
-     -> in-process backend
-     -> HTTP backend
+```mermaid
+flowchart TD
+    Core["shared Rust agent core"] --> Handlers["tool handlers"]
+    Handlers --> Backend["execution backend trait"]
+    Backend --> InProcess["in-process backend"]
+    Backend --> Http["HTTP backend"]
 
-transports
-  -> Axum /api/v1/agent/*
-  -> MCP server transport
+    Core --> Transports["transport adapters"]
+    Transports --> Axum["Axum /api/v1/agent/*"]
+    Transports --> Mcp["MCP server transport"]
 ```
 
 That gives one logical implementation with two transport adapters.
@@ -202,12 +202,14 @@ Recommended additions:
 
 Suggested relationships:
 
-```text
-agent-execution -> agent-plane
-mcp-core -> agent-plane
-mcp-server -> mcp-core
-mcp-http-backend -> mcp-core
-mcp-embedded -> mcp-core + agent-plane
+```mermaid
+flowchart LR
+    Execution["agent-execution"] --> AgentPlane["agent-plane"]
+    McpCore["mcp-core"] --> AgentPlane
+    McpServer["mcp-server"] --> McpCore
+    HttpBackend["mcp-http-backend"] --> McpCore
+    Embedded["mcp-embedded"] --> McpCore
+    Embedded --> AgentPlane
 ```
 
 Do not make `mcp-server` imply `agent-execution`. Read-only and planning-only
@@ -234,11 +236,12 @@ development only with `RESTREAM_MCP_VERSION_CHECK=warn` or
 
 ### Embedded mode
 
-```text
-restream binary
-  - Axum UI/API
-  - /api/v1/agent/*
-  - MCP transport
+```mermaid
+flowchart TD
+    Restream["restream binary"]
+    Restream --> Ui["Axum UI/API"]
+    Restream --> AgentApi["/api/v1/agent/*"]
+    Restream --> Mcp["MCP transport"]
 ```
 
 Pros:
@@ -254,9 +257,9 @@ Cons:
 
 ### Sidecar mode
 
-```text
-restream         :3030
-restream-mcp     :4040
+```mermaid
+flowchart LR
+    Mcp["restream-mcp :4040"] -->|HTTP agent API| Restream["restream :3030"]
 ```
 
 Pros:
@@ -272,11 +275,11 @@ Cons:
 
 ### Central gateway mode
 
-```text
-restream-mcp-gateway
-  -> target restream instance A
-  -> target restream instance B
-  -> target restream instance C
+```mermaid
+flowchart LR
+    Gateway["restream-mcp-gateway"] --> A["restream instance A"]
+    Gateway --> B["restream instance B"]
+    Gateway --> C["restream instance C"]
 ```
 
 Pros:

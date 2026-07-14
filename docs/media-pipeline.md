@@ -79,13 +79,26 @@ Every non-passthrough encoding creates a **shared stage**: one process per
 
 ### Stage graph
 
-```
-source_ring
-    │  [if video preset]            video preset stage  (get_or_create_transcoder)
-    │  [if audio routing suffix]    audio filter stage  (get_or_create_transcoder)
-    │  [if RTMP + H.265 ingest]     hevc_to_h264 stage  (get_or_create_h264_transcoder)
-    ▼
-ring_buf  ◄── all egresses for this (pipeline, encoding) read here
+```mermaid
+flowchart TD
+    Source["source_ring"]
+    Video{"video preset?"}
+    VideoStage["shared video preset stage"]
+    Audio{"audio routing suffix?"}
+    AudioStage["shared audio filter stage"]
+    Hevc{"RTMP with H.265 upstream?"}
+    HevcStage["shared hevc_to_h264 stage"]
+    Output["final ring_buf"]
+    Egresses["all matching egress readers"]
+
+    Source --> Video
+    Video -->|yes| VideoStage --> Audio
+    Video -->|source passthrough| Audio
+    Audio -->|yes| AudioStage --> Hevc
+    Audio -->|no| Hevc
+    Hevc -->|yes| HevcStage --> Output
+    Hevc -->|no| Output
+    Output --> Egresses
 ```
 
 The `hevc_to_h264` stage is the **last** stage in the chain, applied only for
@@ -125,18 +138,17 @@ cross-contamination between presets.
 
 ### External transcoder (default)
 
-```
-source_ring
-    │  (Reader + TsMuxer → MPEG-TS bytes)
-    ▼
-FFmpeg stdin ──► [scale + libx265/libx264 + …] ──► FFmpeg stdout (MPEG-TS)
-                                                   │
-                                       TsDemuxer → MediaPackets (Raw)
-                                                   │
-                                             output_ring ◄── shared
-                                                   │
-                              ┌────────────────────┼──────────────┐
-                           RTMP-out1           SRT-out1       HLS-out1
+```mermaid
+flowchart LR
+    Source["source_ring"] --> Reader["Reader + TsMuxer"]
+    Reader -->|MPEG-TS bytes| Stdin["FFmpeg stdin"]
+    Stdin --> Encode["scale + libx264/libx265"]
+    Encode --> Stdout["FFmpeg stdout"]
+    Stdout --> Demux["TsDemuxer"]
+    Demux -->|Raw MediaPackets| Ring["shared output_ring"]
+    Ring --> Rtmp["RTMP output"]
+    Ring --> Srt["SRT output"]
+    Ring --> Hls["HLS output"]
 ```
 
 One `ffmpeg` subprocess per `(pipeline, preset)`. FFmpeg reads MPEG-TS from
@@ -284,12 +296,16 @@ resource measurements belong to the catalog and dated evidence.
 
 Stage sharing is keyed by `(pipeline_id, stage_key)`:
 
-```
-2 outputs: encoding="720p"
-  → get_or_create_transcoder("720p")  — returns same Arc<RingBuffer>
-  → 1 transcoder subprocess
-  → 2 independent RTMP egress tasks, each read from the shared ring
-  → per-packet codec work (video_for_rtmp_into) is done independently per egress
+```mermaid
+flowchart LR
+    A["output A: 720p"] --> Lookup["get_or_create_transcoder(720p)"]
+    B["output B: 720p"] --> Lookup
+    Lookup --> Stage["one shared transcoder"]
+    Stage --> Ring["shared Arc&lt;RingBuffer&gt;"]
+    Ring --> SenderA["independent sender A"]
+    Ring --> SenderB["independent sender B"]
+    SenderA --> FormatA["per-output packet formatting"]
+    SenderB --> FormatB["per-output packet formatting"]
 ```
 
 The per-packet format conversion (AVCC wrap, ADTS strip) is NOT shared between
