@@ -44,6 +44,9 @@ pub struct LogsStreamQuery {
     pub last_event_id: Option<i64>,
 }
 
+const DEFAULT_LOG_PAGE_LIMIT: u32 = 200;
+const MAX_STREAM_BACKFILL_PAGE_SIZE: i64 = 200;
+
 fn build_logs_filters(query: LogsQuery) -> AppLogFilters {
     AppLogFilters {
         after_id: query.after_id,
@@ -58,6 +61,70 @@ fn build_logs_filters(query: LogsQuery) -> AppLogFilters {
         prefix: query.prefix,
         limit: query.limit.map(|limit| limit as i64),
         order: query.order,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LogsStreamFilter {
+    min_level: String,
+    target: Option<String>,
+    scope: Option<String>,
+    pipeline_id: Option<String>,
+    output_id: Option<String>,
+    event_class: Option<String>,
+    include_restream: bool,
+    prefix: Option<String>,
+}
+
+impl LogsStreamFilter {
+    // Stream queries normalize transport-only options once so the backfill and
+    // live broadcast paths stay on the same filtering contract.
+    fn from_query(query: LogsStreamQuery) -> Self {
+        let include_restream = query.include_restream.unwrap_or(false)
+            && query.pipeline_id.is_some()
+            && query.output_id.is_none();
+
+        Self {
+            min_level: query.level.unwrap_or_else(|| "info".to_string()),
+            target: query.target,
+            scope: query.scope,
+            pipeline_id: query.pipeline_id,
+            output_id: query.output_id,
+            event_class: query.event_class,
+            include_restream,
+            prefix: query.prefix,
+        }
+    }
+
+    fn backfill_filters(&self, after_id: i64) -> AppLogFilters {
+        AppLogFilters {
+            after_id: Some(after_id),
+            level: Some(self.min_level.clone()),
+            since: None,
+            until: None,
+            target: self.target.clone(),
+            scope: self.scope.clone(),
+            pipeline_id: self.pipeline_id.clone(),
+            output_id: self.output_id.clone(),
+            event_class: self.event_class.clone(),
+            prefix: self.prefix.clone(),
+            limit: Some(MAX_STREAM_BACKFILL_PAGE_SIZE),
+            order: Some("asc".to_string()),
+        }
+    }
+
+    fn matches_broadcast(&self, entry: &crate::logging::LogBroadcast) -> bool {
+        log_level_passes(&self.min_level, &entry.level)
+            && log_broadcast_matches_stream_filters(
+                entry,
+                self.target.as_deref(),
+                self.scope.as_deref(),
+                self.pipeline_id.as_deref(),
+                self.output_id.as_deref(),
+                self.event_class.as_deref(),
+                self.include_restream,
+                self.prefix.as_deref(),
+            )
     }
 }
 
@@ -162,7 +229,11 @@ pub async fn logs_handler(
         .list_logs(&filters)
         .await
         .unwrap_or_default();
-    let has_more = logs.len() >= filters.limit.unwrap_or(200).clamp(1, 1000) as usize;
+    let has_more = logs.len()
+        >= filters
+            .limit
+            .unwrap_or(i64::from(DEFAULT_LOG_PAGE_LIMIT))
+            .clamp(1, 1000) as usize;
 
     Json(serde_json::json!({
         "logs": logs,
@@ -187,16 +258,7 @@ pub async fn logs_stream_handler(
         .and_then(|s| s.parse().ok())
         .or(query.last_event_id);
 
-    let min_level = query.level.unwrap_or_else(|| "info".to_string());
-    let filter_target = query.target;
-    let filter_scope = query.scope;
-    let filter_pipeline = query.pipeline_id;
-    let filter_output = query.output_id;
-    let filter_event_class = query.event_class;
-    let include_restream = query.include_restream.unwrap_or(false)
-        && filter_pipeline.is_some()
-        && filter_output.is_none();
-    let filter_prefix = query.prefix;
+    let filter = LogsStreamFilter::from_query(query);
 
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
 
@@ -209,21 +271,8 @@ pub async fn logs_stream_handler(
             loop {
                 let Ok(backfill) = log_service
                     .list_stream_backfill(
-                        &AppLogFilters {
-                            after_id: Some(delivered_through),
-                            level: Some(min_level.clone()),
-                            since: None,
-                            until: None,
-                            target: filter_target.clone(),
-                            scope: filter_scope.clone(),
-                            pipeline_id: filter_pipeline.clone(),
-                            output_id: filter_output.clone(),
-                            event_class: filter_event_class.clone(),
-                            prefix: filter_prefix.clone(),
-                            limit: Some(200),
-                            order: Some("asc".to_string()),
-                        },
-                        include_restream,
+                        &filter.backfill_filters(delivered_through),
+                        filter.include_restream,
                     )
                     .await
                 else {
@@ -253,17 +302,7 @@ pub async fn logs_stream_handler(
                     match entry {
                         Ok(e) => {
                             if e.id <= delivered_through { continue; }
-                            if !log_level_passes(&min_level, &e.level) { continue; }
-                            if !log_broadcast_matches_stream_filters(
-                                &e,
-                                filter_target.as_deref(),
-                                filter_scope.as_deref(),
-                                filter_pipeline.as_deref(),
-                                filter_output.as_deref(),
-                                filter_event_class.as_deref(),
-                                include_restream,
-                                filter_prefix.as_deref(),
-                            ) {
+                            if !filter.matches_broadcast(&e) {
                                 continue;
                             }
                             delivered_through = e.id;
@@ -301,7 +340,10 @@ pub async fn logs_stream_handler(
 
 #[cfg(test)]
 mod tests {
-    use super::{LogsQuery, build_logs_filters, log_level_passes, log_row_sse_frame};
+    use super::{
+        LogsQuery, LogsStreamFilter, LogsStreamQuery, MAX_STREAM_BACKFILL_PAGE_SIZE,
+        build_logs_filters, log_level_passes, log_row_sse_frame,
+    };
 
     #[test]
     fn build_logs_filters_preserves_limit_and_scope_fields() {
@@ -330,6 +372,45 @@ mod tests {
         assert!(log_level_passes("warn", "ERROR"));
         assert!(log_level_passes("warn", "WARN"));
         assert!(!log_level_passes("warn", "INFO"));
+    }
+
+    #[test]
+    fn stream_filter_enables_restream_only_for_pipeline_scope_without_output() {
+        let filter = LogsStreamFilter::from_query(LogsStreamQuery {
+            level: None,
+            target: None,
+            scope: None,
+            pipeline_id: Some("pipe-1".to_string()),
+            output_id: None,
+            event_class: None,
+            include_restream: Some(true),
+            prefix: None,
+            last_event_id: None,
+        });
+
+        assert!(filter.include_restream);
+    }
+
+    #[test]
+    fn stream_filter_builds_ascending_backfill_filters() {
+        let filter = LogsStreamFilter::from_query(LogsStreamQuery {
+            level: Some("debug".to_string()),
+            target: Some("restream::api".to_string()),
+            scope: Some("pipeline".to_string()),
+            pipeline_id: Some("pipe-1".to_string()),
+            output_id: None,
+            event_class: Some("lifecycle".to_string()),
+            include_restream: Some(false),
+            prefix: Some("engine".to_string()),
+            last_event_id: None,
+        });
+
+        let backfill = filter.backfill_filters(41);
+
+        assert_eq!(backfill.after_id, Some(41));
+        assert_eq!(backfill.level.as_deref(), Some("debug"));
+        assert_eq!(backfill.order.as_deref(), Some("asc"));
+        assert_eq!(backfill.limit, Some(MAX_STREAM_BACKFILL_PAGE_SIZE));
     }
 
     #[test]
