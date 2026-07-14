@@ -10,7 +10,7 @@ development or operation.
 - [Newcomer path](#newcomer-path)
 - [Operator and integrator path](#operator-and-integrator-path)
 - [Advanced contributor path](#advanced-contributor-path)
-- [Plans, decisions, and historical evidence](#plans-decisions-and-historical-evidence)
+- [Plans, decisions, and evidence](#plans-decisions-and-evidence)
 - [Agent and quality-program documentation](#agent-and-quality-program-documentation)
 - [Complete file index](#complete-file-index)
 - [Documentation rules](#documentation-rules)
@@ -46,7 +46,7 @@ media behavior or a hot path.
 
 - [Media pipeline](media-pipeline.md) — protocol, codec, and stage behavior.
 - [High-performance data path](high-performance-data-path.md) — hot-path
-  invariants and measured optimization patterns.
+  invariants and the measurement workflow.
 - [Concurrency proofing](concurrency-proofing.md) — proof ladder and gates.
 - [Stage boundary proof map](stage-boundary-proof-map.md) — current invariant
   coverage by runtime boundary.
@@ -59,32 +59,22 @@ media behavior or a hot path.
 - [Parallel agent framework](parallel-agent-framework.md) — isolated worktree,
   build, harness, and measurement policy.
 
-## Plans, decisions, and historical evidence
+## Plans, decisions, and evidence
 
-These documents are valuable, but some describe a point-in-time decision or
-measurement rather than the current product contract:
+These documents own active plans, durable decisions, workload definitions, or
+dated measurements. Completed migration plans and superseded implementation
+snapshots are intentionally left to Git history instead of remaining in the
+active documentation set.
 
 - [Current priorities](current-priorities.md) — maintained forward-looking
   priorities.
 - [Layering roadmap](layering-roadmap.md) — maintained refactor sequence.
-- [Target architecture](architecture/arch.md),
-  [implementation plan](architecture/impl.md), and
-  [gap analysis](architecture/arch_gap_analysis.md) — design and migration
-  record. Use [architecture.md](architecture.md) for current behavior.
-- [Run-to-completion analysis](run-to-completion-analysis.md) — historical
-  protocol-path analysis; verify volatile file maps against current code.
 - [Testing decision record](testing-strategy.md) — accepted rationale for the
   unit/live tier boundary. Use [testing.md](testing.md) for current commands.
-- [Concurrency proof coverage report](concurrency-proof-coverage-2026-07-02.md)
-  — dated proof snapshot. Use [concurrency-proofing.md](concurrency-proofing.md)
-  and the stage proof map for maintained guidance.
 - [Mahashivratri scenario](mahashivratri-hero-scenario.md) — durable scale
   workload definition.
 - [Regression artifact index](regression-artifacts.md) — durable replay map for
   historical failures.
-- [Testing snapshots — 2026-06-20 to 2026-07-01](evidence/testing-snapshots-2026-06-20-to-2026-07-01.md)
-  and [high-performance audits — 2026-06-23 to 2026-07-03](evidence/high-performance-audits-2026-06-23-to-2026-07-03.md)
-  — evidence removed from maintained guides to reduce documentation churn.
 
 Performance experiment records live under
 [`agent-guidance/quality/`](agent-guidance/quality/README.md). Their dates and
@@ -145,16 +135,9 @@ above remain the better way to learn the system.
 
 ### Plans, scenarios, and evidence
 
-- [Target architecture](architecture/arch.md)
-- [Architecture implementation plan](architecture/impl.md)
-- [Architecture gap analysis](architecture/arch_gap_analysis.md)
-- [Concurrency proof coverage — 2026-07-02](concurrency-proof-coverage-2026-07-02.md)
 - [Documentation audit — 2026-07-14](documentation-audit-2026-07-14.md)
 - [Mahashivratri hero scenario](mahashivratri-hero-scenario.md)
-- [Run-to-completion analysis](run-to-completion-analysis.md)
 - [Testing decision record](testing-strategy.md)
-- [Testing snapshots — 2026-06-20 to 2026-07-01](evidence/testing-snapshots-2026-06-20-to-2026-07-01.md)
-- [High-performance audits — 2026-06-23 to 2026-07-03](evidence/high-performance-audits-2026-06-23-to-2026-07-03.md)
 - [Quality program](agent-guidance/quality/README.md)
 - [Quality backlog](agent-guidance/quality/backlog.md)
 - [Performance and resource baselines](agent-guidance/quality/baselines.md)

@@ -266,8 +266,9 @@ generated evidence instead:
 - Rust tests: `cargo test -- --list` and the test runner output;
 - coverage: `npm run test:frontend:coverage` and the repository coverage
   workflow/artifacts;
-- historical matrices, measurements, and rollout plans:
-  [testing evidence snapshots](evidence/testing-snapshots-2026-06-20-to-2026-07-01.md).
+- performance and resource evidence: the dated
+  [quality baseline ledger](agent-guidance/quality/baselines.md) and CI
+  artifacts produced by the owning workflow.
 
 ## Live integration tests
 

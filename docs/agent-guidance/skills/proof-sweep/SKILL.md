@@ -49,8 +49,8 @@ anything during discovery):
   "no failure path may crash the engine").
 - **Invariant × proof cross-check:** for each AGENTS.md § Media Rules bullet,
   name the test that enforces it. Bullets with no test become items.
-- **Gate-coverage check:** read `docs/concurrency-proof-coverage-2026-07-02.md`
-  and diff its claims against `scripts/check/concurrency/fast.sh`;
+- **Gate-coverage check:** read `docs/stage-boundary-proof-map.md` and diff its
+  current proof claims against `scripts/check/concurrency/fast.sh`;
   uncovered rules become items.
 
 ## Rules

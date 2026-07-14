@@ -115,8 +115,10 @@ The full gate records a runtime-process baseline first, then asserts that the
 run leaves no new `restream`, `mediamtx`, `ffmpeg`, `ffprobe`, or
 `test_harness` survivors behind.
 
-The current proof inventory is summarized in
-[Concurrency Proof Coverage Report - 2026-07-02](concurrency-proof-coverage-2026-07-02.md).
+The maintained proof inventory is the
+[stage boundary proof map](stage-boundary-proof-map.md). It names the current
+boundary, invariant, enforcing proof, and remaining gap without copying gate
+internals into this guide.
 
 Both gates also carry explicit property/stress coverage for lifecycle
 permutations and thread-hop wakeups, rather than relying on the general
@@ -140,7 +142,7 @@ surface already covers it.
 - Silent wake loss: task/thread blocks forever after cancel or close.
 - Cancelled-stage reuse: registry returns a dead shared stage instead of a new one.
 - Teardown erases diagnosis: runtime cleanup drops the last structured error.
-- Harness drift: the live test still expects old cleanup behavior after runtime
+- Harness drift: the live test still expects outdated cleanup behavior after runtime
   semantics intentionally improved.
 - "Fast" local validation skips the actual proof gate, so model checks rot.
 

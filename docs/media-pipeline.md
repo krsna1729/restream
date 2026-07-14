@@ -175,9 +175,9 @@ Current behavior: for `video:*` presets, the internal path uses
 (`libx264` for H.264 input, `libx265` for H.265 input), while audio streams are
 passed through. Source passthrough still bypasses the video transcoder.
 
-The external FFmpeg subprocess backend remains the default and is still the
-most battle-tested path for production deployments. The legacy global
-`RESTREAM_USE_INTERNAL_TRANSCODER` switch is not used for backend selection.
+The external FFmpeg subprocess backend remains the default. Backend selection
+is explicit per stage family; there is no global switch that silently changes
+every transform path.
 
 ### Muxing stages summary
 
@@ -310,8 +310,9 @@ outweigh the ~700 ns per frame conversion cost. What IS shared is the far more
 expensive encode stage (CPU-bound, seconds of latency). This invariant is
 covered by `same_encoding_outputs_share_one_transcoder_stage` in engine tests.
 
-The dated resource measurements that originally followed this section now live
-in [high-performance audit evidence](evidence/high-performance-audits-2026-06-23-to-2026-07-03.md#resource-sharing-footprint-2026-06-23).
+Current measurements belong in the
+[quality baseline ledger](agent-guidance/quality/baselines.md). This guide owns
+the sharing invariant, not a copied performance snapshot.
 
 ## Audio stage cache
 
