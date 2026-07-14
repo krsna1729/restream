@@ -28,10 +28,14 @@ impl PipelineService {
         Self { store }
     }
 
+    /// Builds the shared not-found error shape used when callers reference a
+    /// pipeline ID that no longer exists in the catalog.
     fn pipeline_not_found(id: &str) -> ApiError {
         ApiError::not_found(format!("pipeline {id} not found"))
     }
 
+    /// Lists every persisted pipeline record without applying transport-level
+    /// filtering or shaping.
     pub async fn list_pipelines(&self) -> ApiResult<Vec<Pipeline>> {
         self.store
             .list_pipelines()
@@ -39,6 +43,8 @@ impl PipelineService {
             .map_err(|e| ApiError::internal(format!("list pipelines: {e}")))
     }
 
+    /// Resolves one pipeline by ID and upgrades missing-store results into the
+    /// service layer's stable not-found error.
     pub async fn get_by_id(&self, id: &str) -> ApiResult<Pipeline> {
         self.store
             .get_pipeline(id)
@@ -47,6 +53,8 @@ impl PipelineService {
             .ok_or_else(|| Self::pipeline_not_found(id))
     }
 
+    /// Looks up a pipeline by publish stream key for ingest routing and other
+    /// catalog lookups that start from transport credentials.
     pub async fn get_by_stream_key(&self, stream_key: &str) -> ApiResult<Option<Pipeline>> {
         self.store
             .get_pipeline_by_stream_key(stream_key)
@@ -54,6 +62,8 @@ impl PipelineService {
             .map_err(|e| ApiError::internal(format!("get pipeline by stream key: {e}")))
     }
 
+    /// Persists a new pipeline record with the caller-provided stream key,
+    /// source, and optional serialized SRT ingest policy.
     pub async fn create_pipeline(
         &self,
         id: &str,
@@ -68,6 +78,8 @@ impl PipelineService {
             .map_err(|e| ApiError::internal(format!("create pipeline: {e}")))
     }
 
+    /// Updates the mutable fields of one persisted pipeline and normalizes a
+    /// missing row into the service layer's stable not-found error.
     pub async fn update_pipeline(
         &self,
         id: &str,
@@ -83,6 +95,7 @@ impl PipelineService {
             .ok_or_else(|| Self::pipeline_not_found(id))
     }
 
+    /// Deletes one pipeline record from the persisted catalog.
     pub async fn delete_pipeline(&self, id: &str) -> ApiResult<bool> {
         self.store
             .delete_pipeline(id)
@@ -90,6 +103,8 @@ impl PipelineService {
             .map_err(|e| ApiError::internal(format!("delete pipeline: {e}")))
     }
 
+    /// Rewrites only the input-source field while carrying forward the rest of
+    /// the persisted pipeline record unchanged.
     pub async fn set_input_source(
         &self,
         id: &str,
