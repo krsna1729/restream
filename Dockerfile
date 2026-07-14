@@ -23,7 +23,7 @@
 # Docker intentionally does not duplicate package or toolchain logic here.
 # scripts/dev/bootstrap.sh is the source of truth for what a fresh Ubuntu 24.04
 # machine needs, and Docker consumes that script directly.
-FROM ubuntu:24.04 AS native-deps
+FROM ubuntu:26.04 AS native-deps
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -164,7 +164,7 @@ ENTRYPOINT ["/restream"]
 # Keep the old distro runtime available only as an escape hatch for operators
 # with an unusual NSS/DNS integration. The default production target below is
 # the verified scratch runtime above.
-FROM ubuntu:24.04 AS runtime-ubuntu
+FROM ubuntu:26.04 AS runtime-ubuntu
 
 COPY --from=runtime-tree /runtime/ /
 COPY --from=runtime-tree /workspace/target/release/restream /restream
@@ -189,7 +189,7 @@ ENTRYPOINT ["/restream"]
 # certificates). GitHub release shards mount a checked-out repo plus prepared
 # bench binaries into this image, so package installation happens once when the
 # CI runtime image is published instead of once per matrix shard.
-FROM ubuntu:24.04 AS ci-harness-runtime
+FROM ubuntu:26.04 AS ci-harness-runtime
 
 WORKDIR /workspace
 ENV RESTREAM_REPO_ROOT=/workspace
