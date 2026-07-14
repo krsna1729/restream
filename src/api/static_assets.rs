@@ -1,3 +1,7 @@
+//! Static asset handlers serve the embedded dashboard shell and gate access to
+//! authenticated HTML entrypoints. This module keeps cache and redirect policy
+//! close to the transport layer so asset delivery rules stay easy to audit.
+
 use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
@@ -14,12 +18,8 @@ use super::state::{AppState, get_session_token_from_headers, request_is_authenti
 #[folder = "public/"]
 pub struct EmbeddedAssets;
 
-pub fn serve_embedded(path: &str) -> Response {
-    serve_embedded_with_headers(path, &HeaderMap::new())
-}
-
-pub fn serve_embedded_with_headers(path: &str, headers: &HeaderMap) -> Response {
-    let content_type = match path.rsplit('.').next() {
+fn static_asset_content_type(path: &str) -> &'static str {
+    match path.rsplit('.').next() {
         Some("html") => "text/html; charset=utf-8",
         Some("css") => "text/css",
         Some("js") => "application/javascript",
@@ -28,7 +28,19 @@ pub fn serve_embedded_with_headers(path: &str, headers: &HeaderMap) -> Response 
         Some("ico") => "image/x-icon",
         Some("json") => "application/json",
         _ => "application/octet-stream",
-    };
+    }
+}
+
+fn login_redirect_response() -> Response {
+    Redirect::to("login").into_response()
+}
+
+pub fn serve_embedded(path: &str) -> Response {
+    serve_embedded_with_headers(path, &HeaderMap::new())
+}
+
+pub fn serve_embedded_with_headers(path: &str, headers: &HeaderMap) -> Response {
+    let content_type = static_asset_content_type(path);
 
     #[cfg(debug_assertions)]
     {
@@ -111,6 +123,8 @@ fn cache_control(path: &str) -> HeaderValue {
 }
 
 pub async fn login_get_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    // The login page is public, but authenticated sessions should land in the
+    // app shell instead of seeing the sign-in screen again.
     if let Some(token) = get_session_token_from_headers(&headers)
         && state.is_authenticated(&token).await
     {
@@ -147,12 +161,12 @@ pub async fn spa_fallback_handler(
     let path = uri.path().trim_start_matches('/');
     if !path.is_empty() && path.contains('.') {
         if path.ends_with(".html") && !request_is_authenticated(&state, &headers).await {
-            return Redirect::to("login").into_response();
+            return login_redirect_response();
         }
         return serve_embedded_with_headers(path, &headers).into_response();
     }
     if !request_is_authenticated(&state, &headers).await {
-        return Redirect::to("login").into_response();
+        return login_redirect_response();
     }
     serve_embedded_with_headers("index.html", &headers).into_response()
 }
@@ -167,4 +181,35 @@ pub async fn api_not_found_handler(uri: Uri) -> impl IntoResponse {
             "status": 404,
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cache_control, static_asset_content_type};
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn static_asset_content_type_matches_known_extensions() {
+        assert_eq!(
+            static_asset_content_type("index.html"),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(static_asset_content_type("output.css"), "text/css");
+        assert_eq!(
+            static_asset_content_type("asset.bin"),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn html_assets_disable_long_term_cache() {
+        assert_eq!(
+            cache_control("index.html"),
+            HeaderValue::from_static("no-cache")
+        );
+        assert_eq!(
+            cache_control("output.css"),
+            HeaderValue::from_static("public, max-age=3600")
+        );
+    }
 }
