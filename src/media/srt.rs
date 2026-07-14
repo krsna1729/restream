@@ -389,6 +389,7 @@ pub const SRTO_INPUTBW: c_int = 24;
 pub const SRTO_OHEADBW: c_int = 25;
 pub const SRTO_PASSPHRASE: c_int = 26;
 pub const SRTO_PBKEYLEN: c_int = 27;
+pub const SRTO_CONNTIMEO: c_int = 36;
 pub const SRTO_LOSSMAXTTL: c_int = 42;
 pub const SRTO_RCVLATENCY: c_int = 43;
 pub const SRTO_PEERLATENCY: c_int = 44;
@@ -555,6 +556,21 @@ fn srt_set_highbitrate_opts(sock: SRTSOCKET) {
             SRTO_MAXBW,
             &maxbw as *const _ as *const c_void,
             std::mem::size_of::<i64>() as c_int,
+        );
+    }
+}
+
+// SAFETY: srt_setsockopt writes a bounded integer timeout to a valid SRT
+// socket. The timeout value comes from validated process config.
+pub fn srt_set_connect_timeout(sock: SRTSOCKET, timeout_ms: u64) {
+    let timeout_ms = timeout_ms.min(c_int::MAX as u64) as c_int;
+    unsafe {
+        srt_setsockopt(
+            sock,
+            0,
+            SRTO_CONNTIMEO,
+            &timeout_ms as *const _ as *const c_void,
+            std::mem::size_of::<c_int>() as c_int,
         );
     }
 }

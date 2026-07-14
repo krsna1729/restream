@@ -109,6 +109,7 @@ pub struct AppConfig {
     pub no_color: bool,
     pub srt_passphrase: Option<String>,
     pub srt_pbkeylen: i32,
+    pub srt_connect_timeout_ms: u64,
     pub srt_egress_reuse_local_port: bool,
     pub srt_egress_muxer_max_outputs_per_shard: usize,
     pub srt_egress_muxer_max_shards: usize,
@@ -381,6 +382,7 @@ impl Default for AppConfig {
             no_color: false,
             srt_passphrase: None,
             srt_pbkeylen: 16,
+            srt_connect_timeout_ms: 3_000,
             srt_egress_reuse_local_port: true,
             srt_egress_muxer_max_outputs_per_shard: 0,
             srt_egress_muxer_max_shards: 64,
@@ -443,6 +445,7 @@ impl AppConfig {
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
             .unwrap_or(16);
+        let srt_connect_timeout_ms = env_u64("RESTREAM_SRT_CONNECT_TIMEOUT_MS", 3_000);
         let srt_egress_reuse_local_port =
             env_bool_default_true("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT");
         let srt_egress_muxer_max_outputs_per_shard =
@@ -511,6 +514,7 @@ impl AppConfig {
             no_color,
             srt_passphrase,
             srt_pbkeylen,
+            srt_connect_timeout_ms,
             srt_egress_reuse_local_port,
             srt_egress_muxer_max_outputs_per_shard,
             srt_egress_muxer_max_shards,
@@ -576,6 +580,7 @@ impl AppConfig {
                 "requireBonding": self.require_srt_bonding,
                 "passphraseConfigured": self.srt_passphrase.is_some(),
                 "pbkeylen": self.srt_pbkeylen,
+                "connectTimeoutMs": self.srt_connect_timeout_ms,
                 "egressMuxerMaxOutputsPerShard": self.srt_egress_muxer_max_outputs_per_shard,
                 "egressMuxerMaxShards": self.srt_egress_muxer_max_shards,
             },
@@ -912,6 +917,16 @@ mod tests {
         });
         with_env_vars(&[("RESTREAM_SRT_EGRESS_REUSE_LOCAL_PORT", "0")], || {
             assert!(!AppConfig::from_env().srt_egress_reuse_local_port);
+        });
+    }
+
+    #[test]
+    fn srt_connect_timeout_defaults_and_allows_override() {
+        with_env_overlay(&[], &["RESTREAM_SRT_CONNECT_TIMEOUT_MS"], || {
+            assert_eq!(AppConfig::from_env().srt_connect_timeout_ms, 3_000);
+        });
+        with_env_vars(&[("RESTREAM_SRT_CONNECT_TIMEOUT_MS", "500")], || {
+            assert_eq!(AppConfig::from_env().srt_connect_timeout_ms, 500);
         });
     }
 
