@@ -14,6 +14,8 @@ use crate::alerts;
 
 use super::state::{AppState, recording_enabled_map, require_authenticated};
 
+// Alerts are always derived from the dashboard health view so the alert list
+// reflects the same pipeline set and desired-recording state operators see.
 async fn dashboard_alert_snapshot(state: &AppState) -> serde_json::Value {
     let pipeline_ids = state
         .pipeline_service
@@ -28,10 +30,14 @@ async fn dashboard_alert_snapshot(state: &AppState) -> serde_json::Value {
         .await
 }
 
+// Keep the generated timestamp extraction in one place so alert responses use
+// the same snapshot timestamp even if the JSON shape grows later.
 fn snapshot_generated_at(snapshot: &serde_json::Value) -> String {
     snapshot["generatedAt"].as_str().unwrap_or("").to_string()
 }
 
+// Transport shaping for the alert payload stays local to this module so the
+// tracker and derivation code do not need to know the HTTP response schema.
 fn alerts_response(snapshot: &serde_json::Value, alerts: Vec<crate::alerts::Alert>) -> Response {
     Json(serde_json::json!({
         "generatedAt": snapshot_generated_at(snapshot),
@@ -40,6 +46,8 @@ fn alerts_response(snapshot: &serde_json::Value, alerts: Vec<crate::alerts::Aler
     .into_response()
 }
 
+/// Returns the authenticated dashboard alert feed derived from the current
+/// health snapshot and then passed through the alert tracker.
 pub async fn aggregate_alerts_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
