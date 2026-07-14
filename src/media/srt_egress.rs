@@ -497,6 +497,7 @@ pub async fn start_srt_egress(
     // runs via spawn_blocking instead.
     let srt_egress_muxer_port = engine.srt_egress_muxer_port_handle();
     let reuse_local_srt_egress_port = engine.config.srt_egress_reuse_local_port;
+    let srt_connect_timeout_ms = engine.config.srt_connect_timeout_ms;
     let connect_result = tokio::task::spawn_blocking(move || -> Result<SRTSOCKET, String> {
         let client_sock: SRTSOCKET;
         if use_bonding {
@@ -640,6 +641,7 @@ pub async fn start_srt_egress(
                 error!("Failed to create socket");
                 return Err("failed to create socket".to_string());
             }
+            srt_set_connect_timeout(client_sock, srt_connect_timeout_ms);
             srt_set_highbitrate_opts(client_sock);
             if let Err(error) = set_srt_reuseaddr(client_sock) {
                 unsafe {

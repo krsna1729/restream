@@ -574,6 +574,7 @@ pub(crate) async fn fault_egress_retry() -> Result<Value, String> {
         ("RESTREAM_OUTPUT_RETRY_BASE_MS", "200".to_string()),
         ("RESTREAM_OUTPUT_RETRY_MAX_MS", "400".to_string()),
         ("RESTREAM_RECONCILER_INTERVAL_MS", "100".to_string()),
+        ("RESTREAM_SRT_CONNECT_TIMEOUT_MS", "500".to_string()),
     ];
     let mut retry_limit_child = start_restream_child_with_env(
         &restream_bin,
