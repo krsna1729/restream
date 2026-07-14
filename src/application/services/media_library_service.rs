@@ -24,6 +24,8 @@ use super::ingest_service::IngestService;
 use super::pipeline_service::PipelineService;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Recording metadata projected onto a media-library row when a file is backed
+/// by a persisted recording session.
 pub struct MediaRecordingMetadata {
     pub recording_id: String,
     pub pipeline_id: String,
@@ -34,6 +36,8 @@ pub struct MediaRecordingMetadata {
     pub error: Option<String>,
 }
 
+/// Application service that joins filesystem entries, ingest references, and
+/// recording metadata into the dashboard's media-library view.
 pub struct MediaLibraryService {
     meta_store: Arc<dyn MetaStore>,
     meta_writer: Arc<dyn MetaStoreWriter>,
@@ -53,6 +57,8 @@ struct MediaDirEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Serialized media-library row exposed to the dashboard after source,
+/// conversion, ingest, and recording metadata are folded together.
 pub struct MediaLibraryFile {
     pub name: String,
     pub size: u64,
@@ -88,12 +94,16 @@ struct RecordingFields {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Planning failures for rename companion files before any filesystem changes
+/// are attempted.
 pub enum MediaRenamePlanError {
     ConvertedExists,
     ConversionStateExists,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// User-visible rename failures that distinguish preflight conflicts, I/O
+/// issues, and ingest-reference update problems.
 pub enum MediaRenameError {
     ConvertedExists,
     ConversionStateExists,
@@ -102,6 +112,8 @@ pub enum MediaRenameError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Delete failures that distinguish configured ingest dependencies from file
+/// removal and lookup problems.
 pub enum MediaDeleteError {
     HasConfiguredIngests,
     Dependency(String),
@@ -131,6 +143,8 @@ impl MediaLibraryService {
         }
     }
 
+    /// Attaches the optional recording metadata reporter used to enrich media
+    /// rows and recording lifecycle actions.
     pub fn with_recording_metadata(
         mut self,
         recording_metadata: RecordingMetadataReporter,
@@ -139,6 +153,8 @@ impl MediaLibraryService {
         self
     }
 
+    /// Resolves one pipeline so media-library flows can verify ownership before
+    /// starting or stopping recording work.
     pub async fn get_pipeline(&self, id: &str) -> ApiResult<Pipeline> {
         self.pipeline_service.get_by_id(id).await
     }
@@ -312,6 +328,8 @@ impl MediaLibraryService {
         files
     }
 
+    /// Enables recording for one pipeline and starts the runtime recording task
+    /// immediately when the pipeline is already ingesting live media.
     pub async fn recording_start(
         &self,
         engine: &Arc<MediaEngine>,
@@ -344,6 +362,8 @@ impl MediaLibraryService {
         Ok(engine.is_recording_active(pipeline_id).await)
     }
 
+    /// Disables recording for one pipeline and unregisters any active runtime
+    /// recorder from the media engine.
     pub async fn recording_stop(
         &self,
         engine: &Arc<MediaEngine>,
@@ -358,6 +378,8 @@ impl MediaLibraryService {
         Ok(())
     }
 
+    /// Indexes persisted recording rows by basename so media browser entries
+    /// can match either temporary TS files or finalized MP4 outputs.
     pub async fn recording_metadata_by_filename(
         &self,
         filenames: impl IntoIterator<Item = String>,
@@ -406,6 +428,8 @@ impl MediaLibraryService {
         Ok(metadata)
     }
 
+    /// Computes the set of filesystem paths that should be deleted for one
+    /// media entry, including recording companion files when present.
     pub fn delete_paths_for_media(&self, filename: &str, canonical_path: &Path) -> Vec<PathBuf> {
         let mut delete_paths = vec![canonical_path.to_path_buf()];
         if crate::media::recording::is_recording_source_filename(filename) {
@@ -421,6 +445,8 @@ impl MediaLibraryService {
         delete_paths
     }
 
+    /// Deletes one media entry after confirming that no configured ingests
+    /// still reference it.
     pub async fn delete_media_file(
         &self,
         filename: &str,
@@ -450,6 +476,8 @@ impl MediaLibraryService {
         }
     }
 
+    /// Plans the filesystem rename set for one media entry, including
+    /// recording companion files and conversion state when applicable.
     pub fn rename_pairs_for_media(
         &self,
         filename: &str,
@@ -480,6 +508,8 @@ impl MediaLibraryService {
         Ok(rename_pairs)
     }
 
+    /// Renames one media entry and then updates any ingest references that
+    /// point at it, rolling back earlier work if a later stage fails.
     pub async fn rename_media_file(
         &self,
         filename: &str,
@@ -541,6 +571,7 @@ impl MediaLibraryService {
     }
 }
 
+/// Projects optional recording metadata into the serialized media row fields.
 fn recording_fields(recording_meta: Option<&MediaRecordingMetadata>) -> RecordingFields {
     RecordingFields {
         recording_id: recording_meta.map(|row| row.recording_id.clone()),
@@ -553,6 +584,8 @@ fn recording_fields(recording_meta: Option<&MediaRecordingMetadata>) -> Recordin
     }
 }
 
+/// Best-effort rollback for ingest filename updates after a later rename step
+/// fails.
 async fn rollback_ingest_updates(ingest_service: &IngestService, updated_ingests: Vec<Ingest>) {
     for ingest in updated_ingests.into_iter().rev() {
         let _ = ingest_service
@@ -569,12 +602,16 @@ async fn rollback_ingest_updates(ingest_service: &IngestService, updated_ingests
     }
 }
 
+/// Best-effort filesystem rollback for rename steps that already completed
+/// before a later rename or ingest update failed.
 async fn rollback_renames(completed: Vec<(PathBuf, PathBuf)>) {
     for (rollback_from, rollback_to) in completed.into_iter().rev() {
         let _ = tokio::fs::rename(rollback_to, rollback_from).await;
     }
 }
 
+/// Limits the media browser to the source/recording extensions the dashboard
+/// currently knows how to present.
 fn media_filename_is_supported(filename: &str) -> bool {
     matches!(
         filename
@@ -586,6 +623,8 @@ fn media_filename_is_supported(filename: &str) -> bool {
     )
 }
 
+/// Normalizes filesystem modification metadata into both RFC3339 text and the
+/// millisecond sort key used while building media rows.
 fn entry_modified(metadata: &std::fs::Metadata) -> (String, i64) {
     let modified_ms = metadata
         .modified()
