@@ -1,3 +1,9 @@
+//! Media library service boundary for file-browser and recording helpers.
+//!
+//! This service joins filesystem state, ingest references, and recording
+//! metadata so handlers can expose one media-library view without duplicating
+//! cross-store coordination logic.
+
 use std::sync::Arc;
 
 use std::collections::{HashMap, HashSet};
@@ -70,6 +76,17 @@ pub struct MediaLibraryFile {
     pub recording_error: Option<String>,
 }
 
+#[derive(Default)]
+struct RecordingFields {
+    recording_id: Option<String>,
+    pipeline_id: Option<String>,
+    recording_status: Option<String>,
+    recording_started_at: Option<String>,
+    recording_ended_at: Option<String>,
+    recording_codec_summary: Option<String>,
+    recording_error: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaRenamePlanError {
     ConvertedExists,
@@ -93,6 +110,10 @@ pub enum MediaDeleteError {
 }
 
 impl MediaLibraryService {
+    /// Builds the service from the persistence ports it coordinates.
+    ///
+    /// Handlers stay HTTP-focused while this layer owns the cross-store joining
+    /// needed for media-library responses and rename/delete workflows.
     pub fn with_stores(
         meta_store: Arc<dyn MetaStore>,
         meta_writer: Arc<dyn MetaStoreWriter>,
@@ -122,6 +143,8 @@ impl MediaLibraryService {
         self.pipeline_service.get_by_id(id).await
     }
 
+    /// Lists visible media files and folds companion recording artifacts into a
+    /// single response row when possible.
     pub async fn list_media_files(&self, media_dir: &str) -> Vec<MediaLibraryFile> {
         let mut entries = HashMap::<String, MediaDirEntry>::new();
         if let Ok(mut media_dir_entries) = tokio::fs::read_dir(media_dir).await {
@@ -185,6 +208,15 @@ impl MediaLibraryService {
             } else {
                 "source"
             };
+            let RecordingFields {
+                recording_id,
+                pipeline_id,
+                recording_status,
+                recording_started_at,
+                recording_ended_at,
+                recording_codec_summary,
+                recording_error,
+            } = recording_fields(recording_meta);
 
             if crate::media::recording::is_recording_source_filename(&name) {
                 let source_path = Path::new(media_dir).join(&name);
@@ -242,14 +274,13 @@ impl MediaLibraryService {
                     conversion_status,
                     conversion_error,
                     conversion_updated_at,
-                    recording_id: recording_meta.map(|row| row.recording_id.clone()),
-                    pipeline_id: recording_meta.map(|row| row.pipeline_id.clone()),
-                    recording_status: recording_meta.map(|row| row.status.clone()),
-                    recording_started_at: recording_meta.map(|row| row.started_at.clone()),
-                    recording_ended_at: recording_meta.and_then(|row| row.ended_at.clone()),
-                    recording_codec_summary: recording_meta
-                        .and_then(|row| row.codec_summary.clone()),
-                    recording_error: recording_meta.and_then(|row| row.error.clone()),
+                    recording_id,
+                    pipeline_id,
+                    recording_status,
+                    recording_started_at,
+                    recording_ended_at,
+                    recording_codec_summary,
+                    recording_error,
                 });
                 continue;
             }
@@ -268,13 +299,13 @@ impl MediaLibraryService {
                 conversion_status: None,
                 conversion_error: None,
                 conversion_updated_at: None,
-                recording_id: recording_meta.map(|row| row.recording_id.clone()),
-                pipeline_id: recording_meta.map(|row| row.pipeline_id.clone()),
-                recording_status: recording_meta.map(|row| row.status.clone()),
-                recording_started_at: recording_meta.map(|row| row.started_at.clone()),
-                recording_ended_at: recording_meta.and_then(|row| row.ended_at.clone()),
-                recording_codec_summary: recording_meta.and_then(|row| row.codec_summary.clone()),
-                recording_error: recording_meta.and_then(|row| row.error.clone()),
+                recording_id,
+                pipeline_id,
+                recording_status,
+                recording_started_at,
+                recording_ended_at,
+                recording_codec_summary,
+                recording_error,
             });
         }
 
@@ -331,6 +362,9 @@ impl MediaLibraryService {
         &self,
         filenames: impl IntoIterator<Item = String>,
     ) -> ApiResult<HashMap<String, MediaRecordingMetadata>> {
+        // Index by basename so the media browser can match either temporary TS
+        // files or finalized MP4 outputs without caring which path the recorder
+        // persisted.
         let requested = filenames.into_iter().collect::<HashSet<_>>();
         if requested.is_empty() {
             return Ok(HashMap::new());
@@ -453,6 +487,9 @@ impl MediaLibraryService {
         source_path: &Path,
         destination_path: &Path,
     ) -> Result<usize, MediaRenameError> {
+        // Rename filesystem companions first, then update ingest references. If
+        // either stage fails, roll back the earlier step to keep the library
+        // and ingest configuration aligned.
         let rename_pairs = self
             .rename_pairs_for_media(filename, source_path, destination_path)
             .map_err(|error| match error {
@@ -501,6 +538,18 @@ impl MediaLibraryService {
         }
 
         Ok(ingests.len())
+    }
+}
+
+fn recording_fields(recording_meta: Option<&MediaRecordingMetadata>) -> RecordingFields {
+    RecordingFields {
+        recording_id: recording_meta.map(|row| row.recording_id.clone()),
+        pipeline_id: recording_meta.map(|row| row.pipeline_id.clone()),
+        recording_status: recording_meta.map(|row| row.status.clone()),
+        recording_started_at: recording_meta.map(|row| row.started_at.clone()),
+        recording_ended_at: recording_meta.and_then(|row| row.ended_at.clone()),
+        recording_codec_summary: recording_meta.and_then(|row| row.codec_summary.clone()),
+        recording_error: recording_meta.and_then(|row| row.error.clone()),
     }
 }
 
