@@ -69,14 +69,14 @@ jobs:
           path: target/source-audit.json
 
   docker-runtime-smoke:
-    name: Docker runtime source-build smoke
+    name: Docker runtime source-build smoke (targeted)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: scope
-        name: Check Docker runtime impact
+        name: Decide whether Docker runtime smoke is needed
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -100,8 +100,11 @@ jobs:
             echo "run=false" >>"$GITHUB_OUTPUT"
           fi
       - if: ${{ steps.scope.outputs.run == 'false' }}
-        name: Skip unchanged Docker runtime path
+        name: Runtime path unchanged; skip Docker smoke
         run: echo "Docker runtime source-build path unchanged; skipping smoke."
+      - if: ${{ steps.scope.outputs.run == 'true' }}
+        name: Runtime path changed; continue Docker smoke
+        run: echo "Docker runtime source-build path changed; continuing."
       - if: ${{ steps.scope.outputs.run == 'true' }}
         uses: ./.github/actions/ci-bootstrap
         with:
