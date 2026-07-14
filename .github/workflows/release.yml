@@ -104,7 +104,9 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: release-dist-${{ env.RELEASE_VERSION }}-${{ github.sha }}
-          path: .
+          # Restore the packaged release payload under dist/ so every later
+          # path matches the archive layout produced by package-binaries.sh.
+          path: dist
       - name: Verify release evidence and OCI asset
         env:
           RESTREAM_DOCKER_GHA_CACHE: "1"
@@ -149,7 +151,9 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: release-dist-${{ env.RELEASE_VERSION }}-${{ github.sha }}
-          path: .
+          # Publish reads the same dist/ layout produced during package-build
+          # and rehydrated during evidence verification.
+          path: dist
       - name: Publish release scratch image
         env:
           GH_TOKEN: ${{ github.token }}
