@@ -1,0 +1,42 @@
+# Dashboard Route Contract
+
+The URL is the canonical owner of dashboard location. A redesign must reuse
+`web/ts/core/pipeline-workspace.ts` rather than introduce a parallel router.
+
+## Canonical locations
+
+| Location | Canonical query |
+|---|---|
+| Overview | `?mode=overview` |
+| Incidents | `?mode=incidents` |
+| Telemetry | `?mode=telemetry` |
+| Pipeline Operate | `?mode=pipeline&view=operate&p=<pipeline-id>` |
+| Pipeline Inspect | `?mode=pipeline&view=inspect&p=<pipeline-id>` |
+| Pipeline Monitor | `?mode=pipeline&view=monitor&p=<pipeline-id>` |
+| Media | `?mode=media` |
+| Settings | `?mode=settings` |
+| Status | `?mode=status` |
+
+`p` is meaningful only in pipeline mode. Non-pipeline locations remove `view`
+and `p` while preserving unrelated query parameters.
+
+## Compatibility mappings
+
+| Incoming query | Canonical result |
+|---|---|
+| `?mode=inspect&p=x` | `?mode=pipeline&view=inspect&p=x` |
+| `?mode=control&p=x` | `?mode=pipeline&view=monitor&p=x` |
+| `?mode=admin` | `?mode=settings` |
+| missing `mode` with `p=x` | `?mode=pipeline&view=operate&p=x` |
+| missing `mode` and `p` | `?mode=overview` |
+
+## Required behavior
+
+- Initial resolution uses `replaceState` only when canonicalization is needed.
+- Operator navigation uses `pushState` and remains compatible with `popstate`.
+- A selected pipeline is reconciled by stable ID, name, or persisted hint when
+  configuration refreshes replace runtime IDs.
+- Invalid or absent pipeline selections remain safely representable.
+- Base-path deployment must preserve every query contract above.
+
+Existing proof: `test/frontend/frontend-pipeline-workspace.test.mjs`.
