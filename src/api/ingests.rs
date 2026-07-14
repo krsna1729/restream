@@ -32,7 +32,9 @@ pub struct IngestPayload {
 }
 
 #[derive(Debug, Clone)]
-struct ValidatedIngestPayload {
+struct NormalizedIngestPayload {
+    filename: String,
+    stream_key: String,
     loop_flag: bool,
     start_time: String,
     live_optimized: bool,
@@ -61,7 +63,13 @@ fn ingest_response(
     })
 }
 
-fn validate_ingest_payload(payload: &IngestPayload) -> Result<ValidatedIngestPayload, Response> {
+fn ingest_json_response(ingest: &crate::application::models::Ingest, running: bool) -> Response {
+    Json(ingest_response(ingest, running)).into_response()
+}
+
+// Normalize optional API defaults once so create/update handlers can pass a
+// single service-facing request shape instead of mixing raw and validated data.
+fn normalize_ingest_payload(payload: IngestPayload) -> Result<NormalizedIngestPayload, Response> {
     if let Some(response) = check_field_len("filename", &payload.filename, MAX_NAME_LEN) {
         return Err(response);
     }
@@ -77,9 +85,11 @@ fn validate_ingest_payload(payload: &IngestPayload) -> Result<ValidatedIngestPay
         return Err(response);
     }
 
-    Ok(ValidatedIngestPayload {
+    Ok(NormalizedIngestPayload {
+        filename: payload.filename,
+        stream_key: payload.stream_key,
         loop_flag: payload.loop_flag.unwrap_or(false),
-        start_time: payload.start_time.clone().unwrap_or_default(),
+        start_time: payload.start_time.unwrap_or_default(),
         live_optimized: payload.live_optimized.unwrap_or(false),
         target_gop_seconds: sanitize_target_gop_seconds(payload.target_gop_seconds),
     })
@@ -165,8 +175,8 @@ pub async fn ingests_post_handler(
         return Ok(response);
     }
 
-    let validated = match validate_ingest_payload(&payload) {
-        Ok(validated) => validated,
+    let normalized = match normalize_ingest_payload(payload) {
+        Ok(normalized) => normalized,
         Err(response) => return Ok(response),
     };
     let id = format!("ingest_{}", to_hex(&rand::random::<[u8; 8]>()));
@@ -175,16 +185,16 @@ pub async fn ingests_post_handler(
         .ingest_service
         .create_ingest(
             &id,
-            &payload.filename,
-            &payload.stream_key,
-            validated.loop_flag,
-            &validated.start_time,
-            validated.live_optimized,
-            validated.target_gop_seconds,
+            &normalized.filename,
+            &normalized.stream_key,
+            normalized.loop_flag,
+            &normalized.start_time,
+            normalized.live_optimized,
+            normalized.target_gop_seconds,
         )
         .await?;
 
-    Ok(Json(ingest_response(&ingest, false)).into_response())
+    Ok(ingest_json_response(&ingest, false))
 }
 
 pub async fn ingests_update_handler(
@@ -197,8 +207,8 @@ pub async fn ingests_update_handler(
         return Ok(response);
     }
 
-    let validated = match validate_ingest_payload(&payload) {
-        Ok(validated) => validated,
+    let normalized = match normalize_ingest_payload(payload) {
+        Ok(normalized) => normalized,
         Err(response) => return Ok(response),
     };
 
@@ -206,17 +216,17 @@ pub async fn ingests_update_handler(
         .ingest_service
         .update_ingest(
             &id,
-            &payload.filename,
-            &payload.stream_key,
-            validated.loop_flag,
-            &validated.start_time,
-            validated.live_optimized,
-            validated.target_gop_seconds,
+            &normalized.filename,
+            &normalized.stream_key,
+            normalized.loop_flag,
+            &normalized.start_time,
+            normalized.live_optimized,
+            normalized.target_gop_seconds,
         )
         .await?;
 
     let running = state.engine.is_file_ingest_running(&ingest.id).await;
-    Ok(Json(ingest_response(&ingest, running)).into_response())
+    Ok(ingest_json_response(&ingest, running))
 }
 
 pub async fn ingests_delete_handler(
@@ -255,7 +265,7 @@ pub async fn ingests_start_handler(
         Err(error) => return map_start_ingest_error(error),
     };
 
-    Json(ingest_response(&ingest, true)).into_response()
+    ingest_json_response(&ingest, true)
 }
 
 pub async fn ingests_stop_handler(
@@ -276,13 +286,14 @@ pub async fn ingests_stop_handler(
         Err(error) => return map_stop_ingest_error(error),
     };
 
-    Json(ingest_response(&ingest, false)).into_response()
+    ingest_json_response(&ingest, false)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        IngestPayload, map_start_ingest_error, sanitize_target_gop_seconds, validate_ingest_payload,
+        IngestPayload, map_start_ingest_error, normalize_ingest_payload,
+        sanitize_target_gop_seconds,
     };
     use crate::application::services::file_ingest_service::FileIngestStartError;
     use axum::http::StatusCode;
@@ -304,14 +315,16 @@ mod tests {
     }
 
     #[test]
-    fn validate_ingest_payload_normalizes_optional_fields() {
-        let validated =
-            validate_ingest_payload(&test_ingest_payload()).expect("payload should validate");
+    fn normalize_ingest_payload_applies_api_defaults() {
+        let normalized =
+            normalize_ingest_payload(test_ingest_payload()).expect("payload should validate");
 
-        assert!(!validated.loop_flag);
-        assert!(validated.start_time.is_empty());
-        assert!(!validated.live_optimized);
-        assert!(validated.target_gop_seconds >= 1);
+        assert_eq!(normalized.filename, "clips/example.ts");
+        assert_eq!(normalized.stream_key, "stream-key");
+        assert!(!normalized.loop_flag);
+        assert!(normalized.start_time.is_empty());
+        assert!(!normalized.live_optimized);
+        assert!(normalized.target_gop_seconds >= 1);
     }
 
     #[test]
