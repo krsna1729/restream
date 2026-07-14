@@ -294,7 +294,7 @@ fact represents a contract change or merely normal repository churn.
 1. **Navigation and correctness** — land `docs/README.md`, local TOCs, broken
    link fixes, and obvious removed-path corrections. This is the current
    bounded change.
-2. **Automated docs gate** — add a validator for
+2. **Automated docs gate** — `scripts/check/docs.mjs` validates
    relative links, TOC presence/freshness, and one H1. Extend it to flag known
    removed paths, compare router constants with the documented route inventory,
    and compare centralized production env keys with the configuration reference.

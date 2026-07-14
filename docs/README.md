@@ -198,5 +198,7 @@ above remain the better way to learn the system.
 - Keep tutorials and quick starts short. Put exhaustive contracts in reference
   documents and measurements in dated evidence records.
 - When a source rename or command rename lands, update the relevant canonical
-  doc in the same change. The rationale and longer consolidation plan live in
-  the [documentation audit](documentation-audit-2026-07-14.md).
+  doc in the same change and run `node scripts/check/docs.mjs`. The staged gate
+  router selects this check automatically for Markdown and documentation-check
+  changes. The rationale and longer consolidation plan live in the
+  [documentation audit](documentation-audit-2026-07-14.md).
