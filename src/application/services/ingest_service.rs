@@ -1,3 +1,9 @@
+//! Application service wrapper for ingest catalog and write operations.
+//!
+//! This module keeps the lookup/write port split at the application boundary so
+//! callers can ask for ingest records or persist ingest mutations without
+//! knowing which lower-level store trait provides each capability.
+
 use std::sync::Arc;
 
 use crate::application::models::Ingest;
@@ -6,16 +12,28 @@ use crate::application::ports::{IngestLookup, IngestWriter};
 use super::error::{ApiError, ApiResult};
 
 #[derive(Clone)]
+/// Application service that coordinates ingest catalog reads and persisted
+/// ingest mutations across the lookup/write port split.
 pub struct IngestService {
     lookup: Arc<dyn IngestLookup>,
     writer: Arc<dyn IngestWriter>,
 }
 
 impl IngestService {
+    /// Build the service from separate lookup and write ports.
+    /// Useful for tests that want to mix fake readers and writers independently.
     pub fn with_ports(lookup: Arc<dyn IngestLookup>, writer: Arc<dyn IngestWriter>) -> Self {
         Self { lookup, writer }
     }
 
+    /// Builds the shared not-found error shape used when callers reference an
+    /// ingest ID that is missing from the catalog.
+    fn ingest_not_found(id: &str) -> ApiError {
+        ApiError::not_found(format!("ingest {id} not found"))
+    }
+
+    /// Lists every persisted ingest record without applying higher-level
+    /// transport or runtime filtering.
     pub async fn list_ingests(&self) -> ApiResult<Vec<Ingest>> {
         self.lookup
             .list_ingests()
@@ -23,15 +41,19 @@ impl IngestService {
             .map_err(|e| ApiError::internal(format!("list ingests: {e}")))
     }
 
+    /// Resolves one ingest by ID and upgrades missing-store results into the
+    /// service layer's stable not-found error.
     pub async fn get_by_id(&self, id: &str) -> ApiResult<Ingest> {
         self.lookup
             .get_ingest(id)
             .await
             .map_err(|e| ApiError::internal(format!("get ingest: {e}")))?
-            .ok_or_else(|| ApiError::not_found(format!("ingest {id} not found")))
+            .ok_or_else(|| Self::ingest_not_found(id))
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Persists a new ingest record with the caller-provided media source,
+    /// stream key, looping flags, and live-optimization settings.
     pub async fn create_ingest(
         &self,
         id: &str,
@@ -57,6 +79,8 @@ impl IngestService {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Updates one persisted ingest and normalizes a missing row into the
+    /// service layer's stable not-found error.
     pub async fn update_ingest(
         &self,
         id: &str,
@@ -79,9 +103,10 @@ impl IngestService {
             )
             .await
             .map_err(|e| ApiError::internal(format!("update ingest: {e}")))?
-            .ok_or_else(|| ApiError::not_found(format!("ingest {id} not found")))
+            .ok_or_else(|| Self::ingest_not_found(id))
     }
 
+    /// Lists all ingest records that point at one media-library filename.
     pub async fn list_for_filename(&self, filename: &str) -> ApiResult<Vec<Ingest>> {
         self.lookup
             .list_ingests_for_filename(filename)
@@ -89,6 +114,7 @@ impl IngestService {
             .map_err(|e| ApiError::internal(format!("list ingests for filename: {e}")))
     }
 
+    /// Deletes one persisted ingest record from the catalog.
     pub async fn delete_ingest(&self, id: &str) -> ApiResult<bool> {
         self.writer
             .delete_ingest(id)

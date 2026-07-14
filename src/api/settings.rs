@@ -1,8 +1,12 @@
+//! Settings HTTP handlers sit at the dashboard/configuration boundary.
+//! They assemble a view model from several stores and normalize incoming
+//! settings updates before handing persistence off to application services.
+
 use axum::{
     Json,
     extract::State,
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -17,8 +21,7 @@ use crate::domain::transcode_profile::TranscodeProfiles;
 use crate::planner::backend_policy::BackendPolicy;
 
 use super::state::{
-    AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, DEFAULT_INGEST_HOST,
-    get_session_token_from_headers,
+    AppState, BOOTSTRAP_PASSWORD_PROMPT_META_KEY, DEFAULT_INGEST_HOST, require_authenticated,
 };
 
 #[derive(Deserialize)]
@@ -39,17 +42,162 @@ pub struct ConfigPatchPayload {
     pub backend_policy: Option<BackendPolicy>,
 }
 
+#[derive(Debug, Clone)]
+struct NormalizedConfigPatch {
+    ingest_security: Option<IngestSecurityConfig>,
+    srt_ingest_json: Option<String>,
+}
+
+type ValidationResponse = Box<Response>;
+
+fn dashboard_password_change_recommended(meta: Option<String>) -> bool {
+    meta.as_deref() == Some("pending")
+}
+
+fn effective_ingest_host(ingest_host: &str) -> &str {
+    if ingest_host.is_empty() {
+        DEFAULT_INGEST_HOST
+    } else {
+        ingest_host
+    }
+}
+
+fn is_dashboard_view(query: &ConfigGetQuery) -> bool {
+    query.view.as_deref() == Some("dashboard")
+}
+
+fn wants_latest_jobs(query: &ConfigGetQuery) -> bool {
+    query.jobs.as_deref() == Some("latest")
+}
+
+// Dashboard mode intentionally omits a few operator-only settings while reusing
+// the same underlying settings snapshot as the full configuration response.
+fn config_response_json(
+    settings: &crate::application::settings::SettingsSnapshot,
+    pipelines: Vec<serde_json::Value>,
+    outputs: &[crate::application::models::Output],
+    jobs_json: Vec<serde_json::Value>,
+    dashboard_password_change_recommended: bool,
+    is_dashboard_view: bool,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "serverName": settings.server_name,
+        "ingestHost": settings.ingest_host,
+        "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
+        "backendPolicy": settings.backend_policy,
+        "transcodeProfiles": settings.transcode_profiles,
+        "pipelines": pipelines,
+        "outputs": api_view_models::output_response_json_list(outputs),
+        "jobs": jobs_json
+    });
+
+    if !is_dashboard_view && let Some(body) = body.as_object_mut() {
+        body.insert(
+            "ingestSecurity".to_string(),
+            serde_json::json!(settings.ingest_security),
+        );
+        body.insert(
+            "recordingSettings".to_string(),
+            serde_json::json!(settings.recording_settings),
+        );
+        body.insert(
+            "srtIngest".to_string(),
+            serde_json::json!(settings.srt_ingest),
+        );
+    }
+
+    body
+}
+
+// Dashboard views never include jobs. Full config views can choose between the
+// latest job per output and the full job list via the `jobs` query parameter.
+async fn jobs_response_json(
+    state: &AppState,
+    query: &ConfigGetQuery,
+    is_dashboard_view: bool,
+) -> Vec<serde_json::Value> {
+    if is_dashboard_view {
+        return Vec::new();
+    }
+
+    let jobs = state.settings_service.list_jobs().await.unwrap_or_default();
+    if wants_latest_jobs(query) {
+        api_view_models::latest_job_response_json_list(&jobs)
+    } else {
+        api_view_models::job_response_json_list(&jobs)
+    }
+}
+
+// Validate and normalize the mutable portions of the patch up front so the
+// persistence layer only sees canonical settings values.
+fn validate_config_patch_payload(
+    payload: &ConfigPatchPayload,
+) -> Result<NormalizedConfigPatch, ValidationResponse> {
+    if let Some(name) = payload.server_name.as_deref()
+        && name.trim().is_empty()
+    {
+        return Err(Box::new(
+            (
+                StatusCode::BAD_REQUEST,
+                "serverName must be a non-empty string",
+            )
+                .into_response(),
+        ));
+    }
+
+    let ingest_security = match payload.ingest_security.clone() {
+        Some(mut sec) => {
+            if let Err(error) = sec.validate() {
+                return Err(Box::new((StatusCode::BAD_REQUEST, error).into_response()));
+            }
+            sec.normalize();
+            Some(sec)
+        }
+        None => None,
+    };
+
+    let srt_ingest_json = match payload.srt_ingest.clone() {
+        Some(mut srt_ingest) => {
+            if let Err(error) = srt_ingest.validate() {
+                return Err(Box::new((StatusCode::BAD_REQUEST, error).into_response()));
+            }
+            match serde_json::to_string(&srt_ingest) {
+                Ok(value) => Some(value),
+                Err(_) => return Err(Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response())),
+            }
+        }
+        None => None,
+    };
+
+    if let Some(profiles) = payload.transcode_profiles.as_ref() {
+        for (name, profile) in profiles {
+            if let Err(err) = profile.validate() {
+                return Err(Box::new(
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("Invalid profile '{}': {}", name, err),
+                    )
+                        .into_response(),
+                ));
+            }
+        }
+    }
+
+    Ok(NormalizedConfigPatch {
+        ingest_security,
+        srt_ingest_json,
+    })
+}
+
+/// Returns the dashboard configuration snapshot, shaping a narrower response
+/// when the caller asks for the operator-facing dashboard view.
 pub async fn config_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<ConfigGetQuery>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let ingest_host = state
@@ -57,11 +205,7 @@ pub async fn config_get_handler(
         .get_ingest_host_raw()
         .await
         .unwrap_or_default();
-    let effective_ingest_host = if ingest_host.is_empty() {
-        DEFAULT_INGEST_HOST
-    } else {
-        &ingest_host
-    };
+    let effective_ingest_host = effective_ingest_host(&ingest_host);
     let raw_pipelines = state
         .settings_service
         .list_pipelines()
@@ -97,113 +241,42 @@ pub async fn config_get_handler(
         Ok(s) => s,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let dashboard_password_change_recommended = state
-        .settings_service
-        .get_meta(BOOTSTRAP_PASSWORD_PROMPT_META_KEY)
-        .await
-        .unwrap_or(None)
-        .as_deref()
-        == Some("pending");
-    let is_dashboard_view = query.view.as_deref() == Some("dashboard");
-    let jobs_json = if is_dashboard_view {
-        Vec::new()
-    } else {
-        let jobs = state.settings_service.list_jobs().await.unwrap_or_default();
-        if query.jobs.as_deref() == Some("latest") {
-            api_view_models::latest_job_response_json_list(&jobs)
-        } else {
-            api_view_models::job_response_json_list(&jobs)
-        }
-    };
+    let dashboard_password_change_recommended = dashboard_password_change_recommended(
+        state
+            .settings_service
+            .get_meta(BOOTSTRAP_PASSWORD_PROMPT_META_KEY)
+            .await
+            .unwrap_or(None),
+    );
+    let is_dashboard_view = is_dashboard_view(&query);
+    let jobs_json = jobs_response_json(&state, &query, is_dashboard_view).await;
 
-    let response = if is_dashboard_view {
-        serde_json::json!({
-            "serverName": settings.server_name,
-            "ingestHost": settings.ingest_host,
-            "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
-            "backendPolicy": settings.backend_policy,
-            "transcodeProfiles": settings.transcode_profiles,
-            "pipelines": pipelines,
-            "outputs": api_view_models::output_response_json_list(&outputs),
-            "jobs": jobs_json
-        })
-    } else {
-        serde_json::json!({
-            "serverName": settings.server_name,
-            "ingestHost": settings.ingest_host,
-            "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
-            "ingestSecurity": settings.ingest_security,
-            "recordingSettings": settings.recording_settings,
-            "srtIngest": settings.srt_ingest,
-            "backendPolicy": settings.backend_policy,
-            "transcodeProfiles": settings.transcode_profiles,
-            "pipelines": pipelines,
-            "outputs": api_view_models::output_response_json_list(&outputs),
-            "jobs": jobs_json
-        })
-    };
-
-    Json(response).into_response()
+    Json(config_response_json(
+        &settings,
+        pipelines,
+        &outputs,
+        jobs_json,
+        dashboard_password_change_recommended,
+        is_dashboard_view,
+    ))
+    .into_response()
 }
 
+/// Persists the mutable dashboard settings surface after validation and then
+/// returns the refreshed canonical settings snapshot.
 pub async fn config_patch_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<ConfigPatchPayload>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
-    if let Some(ref name) = payload.server_name
-        && name.trim().is_empty()
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            "serverName must be a non-empty string",
-        )
-            .into_response();
-    }
-
-    let normalized_ingest_security = match payload.ingest_security.clone() {
-        Some(mut sec) => {
-            if let Err(error) = sec.validate() {
-                return (StatusCode::BAD_REQUEST, error).into_response();
-            }
-            sec.normalize();
-            Some(sec)
-        }
-        None => None,
+    let normalized = match validate_config_patch_payload(&payload) {
+        Ok(normalized) => normalized,
+        Err(response) => return *response,
     };
-
-    let srt_ingest_json = match payload.srt_ingest.clone() {
-        Some(mut srt_ingest) => {
-            if let Err(error) = srt_ingest.validate() {
-                return (StatusCode::BAD_REQUEST, error).into_response();
-            }
-            match serde_json::to_string(&srt_ingest) {
-                Ok(value) => Some(value),
-                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            }
-        }
-        None => None,
-    };
-
-    if let Some(ref profiles) = payload.transcode_profiles {
-        for (name, profile) in profiles {
-            if let Err(err) = profile.validate() {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    format!("Invalid profile '{}': {}", name, err),
-                )
-                    .into_response();
-            }
-        }
-    }
 
     if let Some(ref name) = payload.server_name
         && state.settings_service.set_server_name(name).await.is_err()
@@ -217,7 +290,9 @@ pub async fn config_patch_handler(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    if let Some(sec) = normalized_ingest_security {
+    // Normalize and validate before persistence so every downstream consumer
+    // sees the same canonical security configuration.
+    if let Some(sec) = normalized.ingest_security {
         if state
             .settings_service
             .save_ingest_security_config(&sec)
@@ -239,7 +314,7 @@ pub async fn config_patch_handler(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    if let Some(raw_json) = srt_ingest_json {
+    if let Some(raw_json) = normalized.srt_ingest_json {
         if state
             .settings_service
             .set_meta(SRT_INGEST_GLOBAL_CONFIG_META_KEY, &raw_json)
@@ -290,4 +365,85 @@ pub async fn config_patch_handler(
         "transcodeProfiles": settings.transcode_profiles
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ConfigGetQuery, ConfigPatchPayload, config_response_json,
+        dashboard_password_change_recommended, effective_ingest_host, is_dashboard_view,
+        validate_config_patch_payload, wants_latest_jobs,
+    };
+    use axum::http::StatusCode;
+
+    #[test]
+    fn effective_ingest_host_falls_back_to_default() {
+        assert_eq!(effective_ingest_host(""), super::DEFAULT_INGEST_HOST);
+        assert_eq!(effective_ingest_host("example.com"), "example.com");
+    }
+
+    #[test]
+    fn dashboard_password_change_recommended_only_for_pending_marker() {
+        assert!(dashboard_password_change_recommended(Some(
+            "pending".to_string()
+        )));
+        assert!(!dashboard_password_change_recommended(Some(
+            "dismissed".to_string()
+        )));
+        assert!(!dashboard_password_change_recommended(None));
+    }
+
+    #[test]
+    fn query_helpers_name_dashboard_and_latest_job_modes() {
+        let dashboard_latest = ConfigGetQuery {
+            jobs: Some("latest".to_string()),
+            view: Some("dashboard".to_string()),
+        };
+        let full_all_jobs = ConfigGetQuery {
+            jobs: Some("all".to_string()),
+            view: None,
+        };
+
+        assert!(is_dashboard_view(&dashboard_latest));
+        assert!(wants_latest_jobs(&dashboard_latest));
+        assert!(!is_dashboard_view(&full_all_jobs));
+        assert!(!wants_latest_jobs(&full_all_jobs));
+    }
+
+    #[test]
+    fn validate_config_patch_payload_rejects_blank_server_name() {
+        let payload = ConfigPatchPayload {
+            server_name: Some("   ".to_string()),
+            ingest_host: None,
+            ingest_security: None,
+            recording_settings: None,
+            srt_ingest: None,
+            transcode_profiles: None,
+            backend_policy: None,
+        };
+
+        let response =
+            validate_config_patch_payload(&payload).expect_err("blank server names should fail");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn config_response_json_omits_operator_only_fields_for_dashboard_view() {
+        let settings = crate::application::settings::SettingsSnapshot {
+            server_name: "restream".to_string(),
+            ingest_host: "localhost".to_string(),
+            ingest_security: crate::domain::ingest_security::IngestSecurityConfig::default(),
+            recording_settings: crate::domain::recording::RecordingSettings::default(),
+            srt_ingest: crate::domain::srt_ingest::SrtGlobalIngestConfig::default(),
+            backend_policy: crate::planner::backend_policy::BackendPolicy::default(),
+            transcode_profiles: crate::domain::transcode_profile::TranscodeProfiles::default(),
+        };
+
+        let response = config_response_json(&settings, Vec::new(), &[], Vec::new(), false, true);
+
+        assert!(response.get("ingestSecurity").is_none());
+        assert!(response.get("recordingSettings").is_none());
+        assert!(response.get("srtIngest").is_none());
+    }
 }

@@ -1,8 +1,13 @@
+//! Pipeline HTTP handlers sit at the boundary between the dashboard API and the
+//! application services. This module keeps request validation and response
+//! shaping close to the transport layer so the underlying services can stay
+//! focused on pipeline state transitions.
+
 use axum::{
     Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -22,12 +27,15 @@ use super::file_ingest::{
 };
 use super::state::{
     AppState, MAX_NAME_LEN, MAX_STREAM_KEY_LEN, MAX_URL_LEN, check_field_len,
-    get_session_token_from_headers, recording_enabled_map, refresh_srt_ingest_policy_store,
-    require_authenticated, to_hex,
+    recording_enabled_map, refresh_srt_ingest_policy_store, require_authenticated, to_hex,
 };
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Transport payload for pipeline create and update requests.
+///
+/// Optional nested `Option` fields preserve the difference between leaving a
+/// field unchanged, clearing it, and replacing it with a new value.
 pub struct PipelinePayload {
     pub name: String,
     pub stream_key: Option<String>,
@@ -36,6 +44,7 @@ pub struct PipelinePayload {
     pub file_ingest: Option<Option<PipelineFileIngestPayload>>,
 }
 
+/// Generates a dashboard-managed stream key when callers do not provide one.
 fn generate_stream_key() -> String {
     use rand::RngExt;
 
@@ -44,6 +53,8 @@ fn generate_stream_key() -> String {
     format!("sk_{}", to_hex(&bytes))
 }
 
+/// Normalizes storage-layer duplicate-key variants into one conflict branch at
+/// the HTTP boundary.
 fn is_duplicate_stream_key_error(err: &ApiError) -> bool {
     let message = err.to_string();
     message.contains("duplicate stream key")
@@ -51,16 +62,103 @@ fn is_duplicate_stream_key_error(err: &ApiError) -> bool {
         || message.contains("UNIQUE constraint failed: pipelines.stream_key")
 }
 
+/// Shared conflict response for user-visible stream-key collisions.
+fn duplicate_stream_key_response() -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "error": "A pipeline with this stream key already exists"
+        })),
+    )
+        .into_response()
+}
+
+/// Trims caller-supplied stream keys and treats empty values as "generate one
+/// for me" so create handlers can fall back to random keys.
+fn requested_stream_key(stream_key: Option<&str>) -> Option<String> {
+    stream_key
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string)
+}
+
+/// Rejects transport-level payload issues before any pipeline mutation starts.
+fn validate_pipeline_payload(payload: &PipelinePayload) -> Option<Response> {
+    if let Some(response) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
+        return Some(response);
+    }
+    if let Some(stream_key) = payload.stream_key.as_deref()
+        && let Some(response) = check_field_len("stream_key", stream_key, MAX_STREAM_KEY_LEN)
+    {
+        return Some(response);
+    }
+    if let Some(Some(source)) = payload.input_source.as_ref()
+        && let Some(response) = check_field_len("input_source", source, MAX_URL_LEN)
+    {
+        return Some(response);
+    }
+    if let Some(Some(file_ingest)) = payload.file_ingest.as_ref()
+        && let Some(response) = validate_pipeline_file_ingest_payload(file_ingest)
+    {
+        return Some(response);
+    }
+    if let Some(mut policy) = payload.srt_ingest_policy.clone()
+        && let Err(error) = policy.validate()
+    {
+        return Some((StatusCode::BAD_REQUEST, error).into_response());
+    }
+    if payload.name.trim().is_empty() {
+        return Some(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Pipeline name cannot be empty"})),
+            )
+                .into_response(),
+        );
+    }
+
+    None
+}
+
+/// Serializes the optional ingest policy into the persisted wire format while
+/// containing serialization failures at the transport boundary.
+fn serialize_srt_ingest_policy(
+    policy: Option<&SrtPipelineIngestConfig>,
+) -> Result<Option<String>, Box<Response>> {
+    match policy {
+        Some(policy) => serialize_pipeline_srt_ingest_policy(policy)
+            .map(Some)
+            .map_err(|_| Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response())),
+        None => Ok(None),
+    }
+}
+
+/// Captures an immediate pipeline-scoped health view for alerts and diagnostics
+/// endpoints that should ignore dashboard grace-period smoothing.
+async fn pipeline_health_snapshot(state: &AppState, pipeline_id: &str) -> serde_json::Value {
+    let pipeline_id = pipeline_id.to_string();
+    let pipeline_ids = std::slice::from_ref(&pipeline_id);
+    let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
+
+    // Pipeline-scoped transport views intentionally use an immediate snapshot so
+    // alerts and diagnostics reflect current runtime state without grace-window delay.
+    crate::api_runtime_views::health_snapshot(&state.engine, pipeline_ids, &recording_enabled, 0)
+        .await
+}
+
+/// Pulls the shared generation timestamp from runtime health snapshots so
+/// pipeline endpoints report one consistent clock value.
+fn snapshot_generated_at(snapshot: &serde_json::Value) -> String {
+    snapshot["generatedAt"].as_str().unwrap_or("").to_string()
+}
+
+/// Lists persisted pipelines and reshapes them into the dashboard summary view.
 pub async fn pipelines_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     match state.pipeline_service.list_pipelines().await {
@@ -83,6 +181,8 @@ pub async fn pipelines_get_handler(
     }
 }
 
+/// Returns one pipeline plus its outputs so the detail view can hydrate in one
+/// authenticated round-trip.
 pub async fn pipeline_detail_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -114,69 +214,34 @@ pub async fn pipeline_detail_handler(
     .into_response()
 }
 
+/// Creates a pipeline, retrying rare auto-generated stream-key collisions
+/// before surfacing an internal error.
 pub async fn pipelines_post_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<PipelinePayload>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
-    if let Some(r) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
-        return r;
-    }
-    if let Some(ref k) = payload.stream_key
-        && let Some(r) = check_field_len("stream_key", k, MAX_STREAM_KEY_LEN)
-    {
-        return r;
-    }
-    if let Some(Some(ref source)) = payload.input_source
-        && let Some(r) = check_field_len("input_source", source, MAX_URL_LEN)
-    {
-        return r;
-    }
-    if let Some(Some(ref file_ingest)) = payload.file_ingest
-        && let Some(r) = validate_pipeline_file_ingest_payload(file_ingest)
-    {
-        return r;
-    }
-    if let Some(mut policy) = payload.srt_ingest_policy.clone()
-        && let Err(error) = policy.validate()
-    {
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
-    if payload.name.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Pipeline name cannot be empty"})),
-        )
-            .into_response();
+    if let Some(response) = validate_pipeline_payload(&payload) {
+        return response;
     }
 
-    let requested_stream_key = payload
-        .stream_key
-        .as_ref()
-        .map(|key| key.trim())
-        .filter(|key| !key.is_empty())
-        .map(str::to_string);
+    let requested_stream_key = requested_stream_key(payload.stream_key.as_deref());
 
     let input_source = payload
         .input_source
         .as_ref()
         .and_then(|source| source.as_deref());
-    let srt_ingest_policy = match payload.srt_ingest_policy.as_ref() {
-        Some(policy) => match serialize_pipeline_srt_ingest_policy(policy) {
-            Ok(value) => Some(value),
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        },
-        None => None,
+    let srt_ingest_policy = match serialize_srt_ingest_policy(payload.srt_ingest_policy.as_ref()) {
+        Ok(policy) => policy,
+        Err(response) => return *response,
     };
 
+    // Auto-generated stream keys retry on collisions so callers do not need to
+    // handle rare random-key conflicts themselves.
     let max_attempts = if requested_stream_key.is_some() {
         1
     } else {
@@ -229,18 +294,15 @@ pub async fn pipelines_post_handler(
                     .into_response();
             }
             Err(err) => {
-                if is_duplicate_stream_key_error(&err) && requested_stream_key.is_none() {
+                let duplicate_stream_key = is_duplicate_stream_key_error(&err);
+                if duplicate_stream_key && requested_stream_key.is_none() {
                     if attempt + 1 < max_attempts {
                         continue;
                     }
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
-                if is_duplicate_stream_key_error(&err) {
-                    return (
-                        StatusCode::CONFLICT,
-                        Json(serde_json::json!({"error": "A pipeline with this stream key already exists"})),
-                    )
-                    .into_response();
+                if duplicate_stream_key {
+                    return duplicate_stream_key_response();
                 } else {
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
@@ -250,49 +312,20 @@ pub async fn pipelines_post_handler(
     StatusCode::INTERNAL_SERVER_ERROR.into_response()
 }
 
+/// Updates one pipeline while preserving stored values for patch fields callers
+/// omit from the request body.
 pub async fn pipelines_update_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(payload): Json<PipelinePayload>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
-    if let Some(r) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
-        return r;
-    }
-    if let Some(ref k) = payload.stream_key
-        && let Some(r) = check_field_len("stream_key", k, MAX_STREAM_KEY_LEN)
-    {
-        return r;
-    }
-    if let Some(Some(ref source)) = payload.input_source
-        && let Some(r) = check_field_len("input_source", source, MAX_URL_LEN)
-    {
-        return r;
-    }
-    if let Some(Some(ref file_ingest)) = payload.file_ingest
-        && let Some(r) = validate_pipeline_file_ingest_payload(file_ingest)
-    {
-        return r;
-    }
-    if let Some(mut policy) = payload.srt_ingest_policy.clone()
-        && let Err(error) = policy.validate()
-    {
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
-    if payload.name.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Pipeline name cannot be empty"})),
-        )
-            .into_response();
+    if let Some(response) = validate_pipeline_payload(&payload) {
+        return response;
     }
 
     let existing = match state.pipeline_service.get_by_id(&id).await {
@@ -308,15 +341,10 @@ pub async fn pipelines_update_handler(
         .stream_key
         .unwrap_or_else(|| existing_stream_key.clone());
     let input_source = payload.input_source.unwrap_or(existing_input_source);
-    let srt_ingest_policy = match payload
-        .srt_ingest_policy
-        .as_ref()
-        .map(serialize_pipeline_srt_ingest_policy)
-        .transpose()
-    {
+    let srt_ingest_policy = match serialize_srt_ingest_policy(payload.srt_ingest_policy.as_ref()) {
         Ok(Some(value)) => Some(value),
         Ok(None) => existing_srt_ingest_policy,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(response) => return *response,
     };
 
     if let Ok(active_pipelines) = state.pipeline_service.list_pipelines().await
@@ -324,11 +352,7 @@ pub async fn pipelines_update_handler(
             .iter()
             .any(|p| p.id != id && p.stream_key == stream_key)
     {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "A pipeline with this stream key already exists"})),
-        )
-            .into_response();
+        return duplicate_stream_key_response();
     }
 
     match state
@@ -371,11 +395,7 @@ pub async fn pipelines_update_handler(
         }
         Err(err) => {
             if is_duplicate_stream_key_error(&err) {
-                (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error": "A pipeline with this stream key already exists"})),
-                )
-                    .into_response()
+                duplicate_stream_key_response()
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
@@ -383,19 +403,19 @@ pub async fn pipelines_update_handler(
     }
 }
 
+/// Deletes a pipeline only after tearing down runtime state that still points
+/// at its outputs, ingest, stages, and HLS helpers.
 pub async fn pipelines_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
+    // The engine owns live runtime state, so we tear that down before removing
+    // the persisted pipeline row.
     if let Ok(outputs) = state.output_service.list_outputs().await {
         for output in outputs.iter().filter(|o| o.pipeline_id == id) {
             state.engine.unregister_egress(&output.id).await;
@@ -429,17 +449,14 @@ pub async fn pipelines_delete_handler(
     }
 }
 
+/// Returns the live ingest probe snapshot for one active pipeline input.
 pub async fn pipeline_probe_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(pipeline_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let ingests = state.engine.ingests.active.read().await;
@@ -452,6 +469,8 @@ pub async fn pipeline_probe_handler(
     }
 }
 
+/// Combines the runtime processing graph with the desired graph plan so the UI
+/// can compare actual and intended topology in one response.
 pub async fn pipeline_graph_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -501,6 +520,8 @@ pub async fn pipeline_graph_handler(
     Ok(Json(graph).into_response())
 }
 
+/// Derives the current alert set for one pipeline from the immediate health
+/// snapshot and the alert tracker's sticky state.
 pub async fn pipeline_alerts_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -510,27 +531,20 @@ pub async fn pipeline_alerts_handler(
         return response;
     }
 
-    let recording_enabled = recording_enabled_map(&state, std::slice::from_ref(&pipeline_id)).await;
-
-    let snapshot = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        std::slice::from_ref(&pipeline_id),
-        &recording_enabled,
-        0,
-    )
-    .await;
-    let generated_at = snapshot["generatedAt"].as_str().unwrap_or("").to_string();
+    let snapshot = pipeline_health_snapshot(&state, &pipeline_id).await;
     let mut alert_list = alerts::derive_alerts(&snapshot);
     state
         .alert_tracker
         .track_pipeline(&pipeline_id, &mut alert_list);
     Json(serde_json::json!({
-        "generatedAt": generated_at,
+        "generatedAt": snapshot_generated_at(&snapshot),
         "alerts": alert_list,
     }))
     .into_response()
 }
 
+/// Packages the main troubleshooting context for one pipeline, including
+/// health, graphs, alerts, recent events, and recent logs.
 pub async fn pipeline_diagnostics_context_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -549,15 +563,8 @@ pub async fn pipeline_diagnostics_context_handler(
         return Ok((StatusCode::NOT_FOUND, "Pipeline not found").into_response());
     }
 
-    let recording_enabled = recording_enabled_map(&state, std::slice::from_ref(&pipeline_id)).await;
-    let health = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        std::slice::from_ref(&pipeline_id),
-        &recording_enabled,
-        0,
-    )
-    .await;
-    let generated_at = health["generatedAt"].as_str().unwrap_or("").to_string();
+    let health = pipeline_health_snapshot(&state, &pipeline_id).await;
+    let generated_at = snapshot_generated_at(&health);
 
     let pipeline_outputs = state.output_service.list_for_pipeline(&pipeline_id).await?;
     let ingest_codec = state.engine.ingest_video_codec(&pipeline_id).await;
@@ -614,6 +621,8 @@ pub async fn pipeline_diagnostics_context_handler(
     .into_response())
 }
 
+/// Builds the compact pipeline summary consumed by cards and lightweight
+/// dashboard status surfaces.
 pub async fn v1_pipeline_summary_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -632,17 +641,8 @@ pub async fn v1_pipeline_summary_handler(
         return Ok((StatusCode::NOT_FOUND, "Pipeline not found").into_response());
     }
 
-    let recording_enabled = recording_enabled_map(&state, std::slice::from_ref(&pipeline_id)).await;
-
-    let snapshot = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        std::slice::from_ref(&pipeline_id),
-        &recording_enabled,
-        0,
-    )
-    .await;
-
-    let generated_at = snapshot["generatedAt"].as_str().unwrap_or("").to_string();
+    let snapshot = pipeline_health_snapshot(&state, &pipeline_id).await;
+    let generated_at = snapshot_generated_at(&snapshot);
 
     let pip = &snapshot["pipelines"][&pipeline_id];
     let pipeline_outputs = state.output_service.list_for_pipeline(&pipeline_id).await?;
@@ -727,6 +727,8 @@ pub async fn v1_pipeline_summary_handler(
     .into_response())
 }
 
+/// Provides the default diagnostics log filter shell before callers add
+/// pipeline-specific constraints.
 fn empty_log_filters() -> AppLogFilters {
     AppLogFilters {
         after_id: None,
@@ -744,6 +746,7 @@ fn empty_log_filters() -> AppLogFilters {
     }
 }
 
+/// Serializes one desired stage graph plan into the dashboard JSON shape.
 fn stage_graph_plan_json(plan: &StageGraphPlan) -> serde_json::Value {
     serde_json::json!({
         "pipelineId": plan.pipeline_id.as_str(),
@@ -774,10 +777,12 @@ fn stage_graph_plan_json(plan: &StageGraphPlan) -> serde_json::Value {
     })
 }
 
+/// Serializes the list form used by graph and diagnostics endpoints.
 fn stage_graph_plans_json(plans: &[StageGraphPlan]) -> serde_json::Value {
     serde_json::Value::Array(plans.iter().map(stage_graph_plan_json).collect())
 }
 
+/// Normalizes graph roles into stable JSON discriminators for the dashboard.
 fn graph_role_json(role: &GraphRole) -> serde_json::Value {
     match role {
         GraphRole::Output { output_id } => serde_json::json!({
@@ -794,6 +799,7 @@ fn graph_role_json(role: &GraphRole) -> serde_json::Value {
     }
 }
 
+/// Maps runtime backend enums to the dashboard's camelCase transport names.
 fn stage_backend_name(backend: StageBackendKind) -> &'static str {
     match backend {
         StageBackendKind::AudioRouter => "audioRouter",
@@ -801,5 +807,38 @@ fn stage_backend_name(backend: StageBackendKind) -> &'static str {
         StageBackendKind::ExternalFfmpeg => "externalFfmpeg",
         StageBackendKind::HlsSegmenter => "hlsSegmenter",
         StageBackendKind::Recording => "recording",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PipelinePayload, requested_stream_key, validate_pipeline_payload};
+    use axum::http::StatusCode;
+
+    fn payload_with_name(name: &str) -> PipelinePayload {
+        PipelinePayload {
+            name: name.to_string(),
+            stream_key: None,
+            input_source: None,
+            srt_ingest_policy: None,
+            file_ingest: None,
+        }
+    }
+
+    #[test]
+    fn requested_stream_key_trims_and_drops_empty_values() {
+        assert_eq!(
+            requested_stream_key(Some("  example  ")),
+            Some("example".to_string())
+        );
+        assert_eq!(requested_stream_key(Some("   ")), None);
+        assert_eq!(requested_stream_key(None), None);
+    }
+
+    #[test]
+    fn validate_pipeline_payload_rejects_blank_names() {
+        let response = validate_pipeline_payload(&payload_with_name("   "))
+            .expect("blank names should be rejected");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

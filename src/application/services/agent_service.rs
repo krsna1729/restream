@@ -1,3 +1,9 @@
+//! Application service wrapper for assembling read-only agent context.
+//!
+//! This module gathers data from several persistence ports so the API layer can
+//! expose a single operator/agent context view without duplicating cross-store
+//! reads or fallback policy.
+
 use std::sync::Arc;
 
 use crate::application::models::{Ingest, Job, Output, Pipeline};
@@ -8,7 +14,11 @@ use crate::application::settings::{SettingsSnapshot, load_settings_snapshot};
 use crate::media::security::IngestSecurityService;
 use crate::planner::backend_policy::BackendPolicy;
 
+const CUSTOM_ENCODING_META_KEY: &str = "custom_encoding";
+
 #[derive(Debug)]
+/// Read-only catalog bundle used by agent context routes that need pipelines,
+/// outputs, jobs, ingests, and settings in one payload.
 pub struct AgentContextCatalog {
     pub pipelines: Vec<Pipeline>,
     pub outputs: Vec<Output>,
@@ -18,7 +28,9 @@ pub struct AgentContextCatalog {
     pub custom_encoding_len: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
+/// Smaller read-only catalog used by agent plan/apply flows that only need the
+/// pipeline and output inventory.
 pub struct AgentPipelineOutputCatalog {
     pub pipelines: Vec<Pipeline>,
     pub outputs: Vec<Output>,
@@ -39,6 +51,8 @@ pub struct AgentService {
 }
 
 impl AgentService {
+    /// Builds the service from the stores needed to assemble agent-facing
+    /// read-only catalog views.
     pub fn with_stores(
         pipeline_store: Arc<dyn PipelineStore>,
         output_store: Arc<dyn OutputStore>,
@@ -57,6 +71,8 @@ impl AgentService {
         }
     }
 
+    /// Loads the full read-only catalog used by agent context endpoints,
+    /// tolerating individual store failures with empty/default fallbacks.
     pub async fn load_context_catalog(
         &self,
         security: &IngestSecurityService,
@@ -80,7 +96,7 @@ impl AgentService {
         .ok();
         let custom_encoding_len = self
             .meta_store
-            .get_meta("custom_encoding")
+            .get_meta(CUSTOM_ENCODING_META_KEY)
             .await
             .ok()
             .flatten()
@@ -97,15 +113,16 @@ impl AgentService {
         }
     }
 
+    /// Loads the pipeline/output catalog and falls back to an empty catalog if
+    /// either store read fails.
     pub async fn load_pipeline_output_catalog(&self) -> AgentPipelineOutputCatalog {
         self.try_load_pipeline_output_catalog()
             .await
-            .unwrap_or_else(|_| AgentPipelineOutputCatalog {
-                pipelines: Vec::new(),
-                outputs: Vec::new(),
-            })
+            .unwrap_or_default()
     }
 
+    /// Loads the pipeline/output catalog and surfaces store failures as strings
+    /// for agent routes that want explicit error handling.
     pub async fn try_load_pipeline_output_catalog(
         &self,
     ) -> Result<AgentPipelineOutputCatalog, String> {

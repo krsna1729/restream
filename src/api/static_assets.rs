@@ -1,3 +1,7 @@
+//! Static asset handlers serve the embedded dashboard shell and gate access to
+//! authenticated HTML entrypoints. This module keeps cache and redirect policy
+//! close to the transport layer so asset delivery rules stay easy to audit.
+
 use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
@@ -14,12 +18,8 @@ use super::state::{AppState, get_session_token_from_headers, request_is_authenti
 #[folder = "public/"]
 pub struct EmbeddedAssets;
 
-pub fn serve_embedded(path: &str) -> Response {
-    serve_embedded_with_headers(path, &HeaderMap::new())
-}
-
-pub fn serve_embedded_with_headers(path: &str, headers: &HeaderMap) -> Response {
-    let content_type = match path.rsplit('.').next() {
+fn static_asset_content_type(path: &str) -> &'static str {
+    match path.rsplit('.').next() {
         Some("html") => "text/html; charset=utf-8",
         Some("css") => "text/css",
         Some("js") => "application/javascript",
@@ -28,10 +28,36 @@ pub fn serve_embedded_with_headers(path: &str, headers: &HeaderMap) -> Response 
         Some("ico") => "image/x-icon",
         Some("json") => "application/json",
         _ => "application/octet-stream",
-    };
+    }
+}
+
+fn login_redirect_response() -> Response {
+    Redirect::to("login").into_response()
+}
+
+fn request_targets_embedded_asset(path: &str) -> bool {
+    !path.is_empty() && path.contains('.')
+}
+
+fn request_targets_authenticated_html(path: &str) -> bool {
+    path.ends_with(".html")
+}
+
+/// Serves one embedded asset without conditional request headers, mainly for
+/// internal call sites that already know caching state is irrelevant.
+pub fn serve_embedded(path: &str) -> Response {
+    serve_embedded_with_headers(path, &HeaderMap::new())
+}
+
+/// Serves one embedded or disk-backed dashboard asset and applies the module's
+/// shared cache and ETag policy.
+pub fn serve_embedded_with_headers(path: &str, headers: &HeaderMap) -> Response {
+    let content_type = static_asset_content_type(path);
 
     #[cfg(debug_assertions)]
     {
+        // Development builds prefer disk assets first so frontend edits do not
+        // need a Rust rebuild before the dashboard shell reflects them.
         let public_root = match std::fs::canonicalize("public") {
             Ok(p) => p,
             Err(_) => std::path::PathBuf::new(),
@@ -56,6 +82,8 @@ pub fn serve_embedded_with_headers(path: &str, headers: &HeaderMap) -> Response 
     }
 }
 
+// Centralize the static asset cache contract here so development disk reads,
+// embedded assets, and conditional GET handling all emit the same headers.
 fn static_asset_response(
     path: &str,
     content_type: &'static str,
@@ -110,7 +138,11 @@ fn cache_control(path: &str) -> HeaderValue {
     }
 }
 
+/// Serves the public login page, redirecting already-authenticated sessions
+/// back into the dashboard shell instead.
 pub async fn login_get_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    // The login page is public, but authenticated sessions should land in the
+    // app shell instead of seeing the sign-in screen again.
     if let Some(token) = get_session_token_from_headers(&headers)
         && state.is_authenticated(&token).await
     {
@@ -119,44 +151,56 @@ pub async fn login_get_handler(State(state): State<Arc<AppState>>, headers: Head
     serve_embedded_with_headers("login.html", &headers).into_response()
 }
 
+/// Historical redirect for `/login` routes that should land on the login HTML
+/// entrypoint.
 pub async fn login_html_redirect_handler() -> impl IntoResponse {
     Redirect::to("login")
 }
 
+/// Redirects the legacy settings HTML path into the SPA mode selector.
 pub async fn settings_html_redirect_handler() -> impl IntoResponse {
     Redirect::to("./?mode=settings")
 }
 
+/// Redirects the legacy status HTML path into the SPA mode selector.
 pub async fn status_html_redirect_handler() -> impl IntoResponse {
     Redirect::to("./?mode=status")
 }
 
+/// Serves the embedded dashboard logo asset.
 pub async fn logo_handler(headers: HeaderMap) -> impl IntoResponse {
     serve_embedded_with_headers("logo.png", &headers)
 }
 
+/// Serves the compiled dashboard stylesheet asset.
 pub async fn css_handler(headers: HeaderMap) -> impl IntoResponse {
     serve_embedded_with_headers("output.css", &headers)
 }
 
+/// Serves embedded assets directly when requested by path, otherwise applies
+/// the authenticated SPA-shell fallback for dashboard routes.
 pub async fn spa_fallback_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
     let path = uri.path().trim_start_matches('/');
-    if !path.is_empty() && path.contains('.') {
-        if path.ends_with(".html") && !request_is_authenticated(&state, &headers).await {
-            return Redirect::to("login").into_response();
+    if request_targets_embedded_asset(path) {
+        if request_targets_authenticated_html(path)
+            && !request_is_authenticated(&state, &headers).await
+        {
+            return login_redirect_response();
         }
         return serve_embedded_with_headers(path, &headers).into_response();
     }
     if !request_is_authenticated(&state, &headers).await {
-        return Redirect::to("login").into_response();
+        return login_redirect_response();
     }
     serve_embedded_with_headers("index.html", &headers).into_response()
 }
 
+/// Shared JSON 404 response for unknown API routes, keeping API misses off the
+/// HTML SPA fallback path.
 pub async fn api_not_found_handler(uri: Uri) -> impl IntoResponse {
     (
         StatusCode::NOT_FOUND,
@@ -167,4 +211,53 @@ pub async fn api_not_found_handler(uri: Uri) -> impl IntoResponse {
             "status": 404,
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        cache_control, request_targets_authenticated_html, request_targets_embedded_asset,
+        static_asset_content_type,
+    };
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn static_asset_content_type_matches_known_extensions() {
+        assert_eq!(
+            static_asset_content_type("index.html"),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(static_asset_content_type("output.css"), "text/css");
+        assert_eq!(
+            static_asset_content_type("asset.bin"),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn html_assets_disable_long_term_cache() {
+        assert_eq!(
+            cache_control("index.html"),
+            HeaderValue::from_static("no-cache")
+        );
+        assert_eq!(
+            cache_control("output.css"),
+            HeaderValue::from_static("public, max-age=3600")
+        );
+    }
+
+    #[test]
+    fn embedded_asset_detection_matches_spa_fallback_policy() {
+        assert!(request_targets_embedded_asset("output.css"));
+        assert!(request_targets_embedded_asset("nested/app.js"));
+        assert!(!request_targets_embedded_asset(""));
+        assert!(!request_targets_embedded_asset("dashboard"));
+    }
+
+    #[test]
+    fn authenticated_html_detection_only_matches_html_documents() {
+        assert!(request_targets_authenticated_html("login.html"));
+        assert!(request_targets_authenticated_html("nested/index.html"));
+        assert!(!request_targets_authenticated_html("output.css"));
+    }
 }

@@ -216,6 +216,19 @@ is_protocol_file() {
     esac
 }
 
+is_mcp_feature_surface_file() {
+    case "$1" in
+        src/api/agent.rs | \
+            src/agent_plane.rs | src/agent_backends/* | src/agent_core/* | \
+            src/agent_mcp/* | src/bin/restream-mcp.rs | src/lib.rs | Cargo.toml)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 diff_contains_concurrency_change() {
     ((${#rust_files[@]} > 0)) || return 1
 
@@ -271,6 +284,10 @@ for file in "${changed_files[@]}"; do
 
     if is_protocol_file "$file"; then
         add_manual_recommendation "scripts/build/resource-limit.sh target/debug/test_harness correctness*"
+    fi
+
+    if is_mcp_feature_surface_file "$file"; then
+        add_follow_up_gate "scripts/build/resource-limit.sh cargo clippy --workspace --all-targets --features mcp-server,mcp-http-backend -- -D warnings"
     fi
 done
 

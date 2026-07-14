@@ -1,3 +1,8 @@
+//! Application service wrapper for lightweight health probes.
+//!
+//! This module keeps store-backed liveness checks out of the HTTP layer so
+//! handlers only decide which probes to expose and how to serialize them.
+
 use std::sync::Arc;
 
 use crate::application::ports::PipelineStore;
@@ -5,15 +10,20 @@ use crate::application::ports::PipelineStore;
 use super::error::{ApiError, ApiResult};
 
 #[derive(Clone)]
+/// Application service that exposes lightweight persistence-backed health
+/// probes for the dashboard and external liveness checks.
 pub struct HealthService {
     store: Arc<dyn PipelineStore>,
 }
 
 impl HealthService {
+    /// Builds the service from the pipeline store used for low-cost DB checks.
     pub fn with_store(store: Arc<dyn PipelineStore>) -> Self {
         Self { store }
     }
 
+    /// Performs the low-cost database health probe by issuing one catalog read
+    /// against the pipeline store and translating success into a simple boolean.
     pub async fn check_db(&self) -> ApiResult<bool> {
         self.store
             .list_pipelines()

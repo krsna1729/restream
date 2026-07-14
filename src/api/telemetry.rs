@@ -1,8 +1,13 @@
+//! Telemetry HTTP handlers expose runtime health, metrics, diagnostics, and
+//! event snapshots. This module keeps query-to-view selection and transport
+//! policy close to the API boundary while delegating heavy lifting to runtime
+//! view builders and the diagnostics engine.
+
 use axum::{
     Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode, header},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -56,6 +61,8 @@ pub struct ResourceMapQuery {
 }
 
 impl ResourceMapQuery {
+    // Invalid or missing view names intentionally fall back to the grouped
+    // presentation so the telemetry surface stays permissive for dashboards.
     fn options(&self) -> ResourceMapOptions {
         let view = match self.view.as_deref() {
             Some("summary") => ResourceMapView::Summary,
@@ -67,18 +74,50 @@ impl ResourceMapQuery {
     }
 }
 
-pub fn expected_media_path(media_dir: &str, filename: &str) -> PathBuf {
+fn unauthorized_json_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "Unauthorized" })),
+    )
+        .into_response()
+}
+
+fn summary_view_requested(view: Option<&str>) -> bool {
+    view == Some("summary")
+}
+
+fn snapshot_generated_at(snapshot: &serde_json::Value) -> String {
+    snapshot["generatedAt"].as_str().unwrap_or("").to_string()
+}
+
+fn dashboard_runtime_requested_pipeline<'a>(
+    query: &'a DashboardRuntimeQuery,
+    all_pipeline_ids: &'a [String],
+) -> Option<&'a str> {
+    query.pipeline_id.as_deref().filter(|pipeline_id| {
+        all_pipeline_ids
+            .iter()
+            .any(|candidate| candidate == *pipeline_id)
+    })
+}
+
+fn configured_media_root(media_dir: &str) -> PathBuf {
     let configured = PathBuf::from(media_dir);
-    let root = if configured.is_absolute() {
+    if configured.is_absolute() {
         configured
     } else {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(configured)
-    };
-    root.join(filename)
+    }
 }
 
+pub fn expected_media_path(media_dir: &str, filename: &str) -> PathBuf {
+    configured_media_root(media_dir).join(filename)
+}
+
+/// Builds the diagnostics context for one file-backed ingest, including a
+/// blocking media-file probe when the expected library file exists.
 pub async fn build_file_diagnostics_context(
     state: &AppState,
     pipeline_id: &str,
@@ -137,18 +176,12 @@ pub async fn pipeline_diagnostics_run_handler(
 ) -> impl IntoResponse {
     if let Some(token) = get_session_token_from_headers(&headers) {
         if !state.is_authenticated(&token).await {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Unauthorized" })),
-            )
-                .into_response();
+            return unauthorized_json_response();
         }
     } else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Unauthorized" })),
-        )
-            .into_response();
+        // Diagnostics runs are API-only callers, so auth failures must stay on
+        // the JSON contract instead of inheriting any HTML/session redirect flow.
+        return unauthorized_json_response();
     }
 
     let probe_protocol = match state
@@ -239,6 +272,8 @@ pub async fn status_get_handler(
     Json(status).into_response()
 }
 
+/// Builds the dashboard/system metrics payload, with a summary mode that keeps
+/// only the fields needed by compact operator surfaces.
 pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> serde_json::Value {
     let mut sys = System::new_all();
     sys.refresh_all();
@@ -257,14 +292,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     let engine = engine_metrics(&sys, core_count);
 
     let media_root = {
-        let configured = FsPath::new(&state.media_dir);
-        let absolute = if configured.is_absolute() {
-            configured.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(configured)
-        };
+        let absolute = configured_media_root(&state.media_dir);
         std::fs::canonicalize(&absolute).unwrap_or(absolute)
     };
     let disks = Disks::new_with_refreshed_list();
@@ -457,17 +485,13 @@ pub async fn v1_dashboard_runtime_handler(
         return response;
     }
 
-    let summary_health = query.health_view.as_deref() == Some("summary");
-    let summary_metrics = query.metrics_view.as_deref() == Some("summary");
+    let summary_health = summary_view_requested(query.health_view.as_deref());
+    let summary_metrics = summary_view_requested(query.metrics_view.as_deref());
     let all_pipeline_ids = match list_dashboard_runtime_pipeline_ids(&state).await {
         Ok(pipeline_ids) => pipeline_ids,
         Err(error) => return error.into_response(),
     };
-    let requested_pipeline_id = query.pipeline_id.as_deref().filter(|pipeline_id| {
-        all_pipeline_ids
-            .iter()
-            .any(|candidate| candidate == *pipeline_id)
-    });
+    let requested_pipeline_id = dashboard_runtime_requested_pipeline(&query, &all_pipeline_ids);
     let health_pipeline_ids = select_dashboard_runtime_pipeline_ids(
         requested_pipeline_id,
         summary_health,
@@ -639,12 +663,8 @@ pub async fn status_sbom_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let bonding_available = state.engine.bonding_available();
@@ -856,21 +876,19 @@ pub async fn v1_engine_resource_map_handler(
     Json(snapshot).into_response()
 }
 
+/// Returns the system metrics snapshot directly, using the query only to choose
+/// between the summary and full transport views.
 pub async fn metrics_system_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<MetricsSystemQuery>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let response =
-        build_system_metrics_snapshot(&state, query.view.as_deref() == Some("summary")).await;
+        build_system_metrics_snapshot(&state, summary_view_requested(query.view.as_deref())).await;
     Json(response).into_response()
 }
 
@@ -957,10 +975,8 @@ pub async fn v1_overview_handler(
         }
     }
 
-    let generated_at = snapshot["generatedAt"].as_str().unwrap_or("").to_string();
-
     Json(serde_json::json!({
-        "generatedAt": generated_at,
+        "generatedAt": snapshot_generated_at(&snapshot),
         "totalPipelines": total,
         "activePipelines": active,
         "degradedPipelines": degraded,
@@ -1004,5 +1020,72 @@ pub async fn v1_stage_telemetry_handler(
     match crate::api_runtime_views::stage_telemetry_by_display(&state.engine, &stage_key).await {
         Some(val) => Json(val).into_response(),
         None => (StatusCode::NOT_FOUND, "Stage not found").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DashboardRuntimeQuery, ResourceMapQuery, configured_media_root,
+        dashboard_runtime_requested_pipeline, snapshot_generated_at, summary_view_requested,
+        unauthorized_json_response,
+    };
+    use crate::api_runtime_views::ResourceMapView;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn resource_map_query_defaults_to_grouped_view() {
+        let query = ResourceMapQuery {
+            pipeline_id: None,
+            view: None,
+            top_n: None,
+        };
+
+        assert!(matches!(query.options().view, ResourceMapView::Grouped));
+    }
+
+    #[test]
+    fn dashboard_runtime_requested_pipeline_requires_known_pipeline() {
+        let query = DashboardRuntimeQuery {
+            health_view: None,
+            metrics_view: None,
+            pipeline_id: Some("pipe-2".to_string()),
+        };
+        let ids = vec!["pipe-1".to_string()];
+
+        assert_eq!(dashboard_runtime_requested_pipeline(&query, &ids), None);
+    }
+
+    #[test]
+    fn diagnostics_unauthorized_response_uses_json_contract() {
+        assert_eq!(
+            unauthorized_json_response().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[test]
+    fn snapshot_generated_at_falls_back_to_empty_string() {
+        assert_eq!(snapshot_generated_at(&serde_json::json!({})), "");
+        assert_eq!(
+            snapshot_generated_at(&serde_json::json!({"generatedAt": "2026-07-14T00:00:00Z"})),
+            "2026-07-14T00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn summary_view_requested_only_matches_summary() {
+        assert!(summary_view_requested(Some("summary")));
+        assert!(!summary_view_requested(Some("detail")));
+        assert!(!summary_view_requested(None));
+    }
+
+    #[test]
+    fn configured_media_root_makes_relative_paths_absolute() {
+        assert!(configured_media_root("media").is_absolute());
+        assert_eq!(
+            configured_media_root("/tmp/media"),
+            std::path::PathBuf::from("/tmp/media")
+        );
     }
 }

@@ -1,3 +1,9 @@
+//! Application service wrapper for dashboard settings reads and writes.
+//!
+//! This module keeps settings-specific meta keys and cross-store refresh logic
+//! on the application boundary so handlers can work in terms of operator
+//! settings rather than persistence details.
+
 use std::sync::Arc;
 
 use crate::application::models::{Job, Output, Pipeline};
@@ -20,6 +26,10 @@ use super::error::{ApiError, ApiResult};
 use super::output_service::OutputService;
 use super::pipeline_service::PipelineService;
 
+const SERVER_NAME_META_KEY: &str = "server_name";
+
+/// Application service that assembles the operator-facing settings surface from
+/// meta/config stores plus pipeline and output catalog reads.
 pub struct SettingsService {
     meta_store: Arc<dyn MetaStore>,
     meta_writer: Arc<dyn MetaStoreWriter>,
@@ -30,6 +40,8 @@ pub struct SettingsService {
 }
 
 impl SettingsService {
+    /// Builds the service from the stores needed to assemble and persist the
+    /// dashboard settings surface.
     pub fn with_stores(
         meta_store: Arc<dyn MetaStore>,
         meta_writer: Arc<dyn MetaStoreWriter>,
@@ -48,6 +60,8 @@ impl SettingsService {
         }
     }
 
+    /// Loads the full dashboard settings snapshot by combining persisted meta
+    /// values, ingest-host configuration, and runtime security defaults.
     pub async fn load_snapshot(
         &self,
         security: &IngestSecurityService,
@@ -63,14 +77,19 @@ impl SettingsService {
         .map_err(|e| ApiError::internal(format!("load settings: {e}")))
     }
 
+    /// Lists pipelines for settings views that need the current catalog while
+    /// staying independent of pipeline-store details.
     pub async fn list_pipelines(&self) -> ApiResult<Vec<Pipeline>> {
         self.pipeline_service.list_pipelines().await
     }
 
+    /// Lists outputs for settings surfaces that need to summarize configured
+    /// egress targets alongside global settings.
     pub async fn list_outputs(&self) -> ApiResult<Vec<Output>> {
         self.output_service.list_outputs().await
     }
 
+    /// Lists background jobs that should appear in the operator settings view.
     pub async fn list_jobs(&self) -> ApiResult<Vec<Job>> {
         self.job_store
             .list_jobs()
@@ -78,6 +97,8 @@ impl SettingsService {
             .map_err(|e| ApiError::internal(format!("list jobs: {e}")))
     }
 
+    /// Returns the raw persisted ingest host value without applying the
+    /// pipeline service's localhost fallback.
     pub async fn get_ingest_host_raw(&self) -> ApiResult<String> {
         self.ingest_host_store
             .get_ingest_host()
@@ -86,14 +107,14 @@ impl SettingsService {
             .map_err(|e| ApiError::internal(format!("get ingest host: {e}")))
     }
 
+    /// Persists the operator-visible server name using the shared meta write
+    /// path used by other settings keys.
     pub async fn set_server_name(&self, name: &str) -> ApiResult<()> {
-        self.meta_writer
-            .set_meta("server_name", name)
-            .await
-            .map(|_| ())
-            .map_err(|e| ApiError::internal(format!("set server name: {e}")))
+        self.set_meta(SERVER_NAME_META_KEY, name).await
     }
 
+    /// Persists the ingest host override that pipeline and dashboard views use
+    /// for generated publish URLs.
     pub async fn set_ingest_host(&self, host: &str) -> ApiResult<()> {
         self.ingest_host_store
             .set_ingest_host(host)
@@ -102,6 +123,8 @@ impl SettingsService {
             .map_err(|e| ApiError::internal(format!("set ingest host: {e}")))
     }
 
+    /// Reads one arbitrary settings meta entry for callers that work with
+    /// feature-specific persisted values.
     pub async fn get_meta(&self, key: &str) -> ApiResult<Option<String>> {
         self.meta_store
             .get_meta(key)
@@ -109,6 +132,8 @@ impl SettingsService {
             .map_err(|e| ApiError::internal(format!("get meta: {e}")))
     }
 
+    /// Persists one arbitrary settings meta entry and hides the writer store's
+    /// concrete return value from higher layers.
     pub async fn set_meta(&self, key: &str, value: &str) -> ApiResult<()> {
         self.meta_writer
             .set_meta(key, value)
@@ -117,6 +142,8 @@ impl SettingsService {
             .map_err(|e| ApiError::internal(format!("set meta: {e}")))
     }
 
+    /// Saves the ingest security configuration through the shared meta-backed
+    /// application helper.
     pub async fn save_ingest_security_config(
         &self,
         config: &IngestSecurityConfig,
@@ -126,30 +153,40 @@ impl SettingsService {
             .map_err(|e| ApiError::internal(format!("save ingest security config: {e}")))
     }
 
+    /// Saves recording settings that influence operator-visible recording
+    /// behavior across pipelines.
     pub async fn save_recording_settings(&self, settings: &RecordingSettings) -> ApiResult<()> {
         save_recording_settings(self.meta_writer.as_ref(), settings)
             .await
             .map_err(|e| ApiError::internal(format!("save recording settings: {e}")))
     }
 
+    /// Saves the transcode profile catalog exposed through dashboard settings.
     pub async fn save_transcode_profiles(&self, profiles: &TranscodeProfiles) -> ApiResult<()> {
         save_transcode_profiles(self.meta_writer.as_ref(), profiles)
             .await
             .map_err(|e| ApiError::internal(format!("save transcode profiles: {e}")))
     }
 
+    /// Serializes and persists the default backend policy that planner-facing
+    /// settings screens expose to operators.
     pub async fn save_backend_policy(&self, policy: BackendPolicy) -> ApiResult<()> {
         let raw = serde_json::to_string(&policy)
             .map_err(|e| ApiError::internal(format!("serialize backend policy: {e}")))?;
         self.set_meta(BACKEND_POLICY_META_KEY, &raw).await
     }
 
+    /// Rebuilds the in-memory SRT ingest policy store from persisted global
+    /// settings plus the current pipeline catalog so runtime lookups see one
+    /// coherent snapshot.
     pub async fn refresh_srt_ingest_policy_store(
         &self,
         policy_store: &SrtIngestPolicyStore,
         srt_passphrase: Option<String>,
         srt_pbkeylen: i32,
     ) -> ApiResult<()> {
+        // Rebuild the policy store from persisted global settings plus the
+        // current pipeline catalog so libsrt sees one coherent snapshot.
         let global =
             load_global_srt_ingest_config(self.meta_store.as_ref(), srt_passphrase, srt_pbkeylen)
                 .await;
@@ -159,6 +196,8 @@ impl SettingsService {
         Ok(())
     }
 
+    /// Loads the per-pipeline recording toggle map used by health and settings
+    /// views that need to annotate many pipelines at once.
     pub async fn recording_enabled_map(
         &self,
         pipeline_ids: &[String],
@@ -196,7 +235,7 @@ mod tests {
                 .meta
                 .lock()
                 .unwrap()
-                .insert("server_name".to_string(), "Control".to_string());
+                .insert(SERVER_NAME_META_KEY.to_string(), "Control".to_string());
             store
                 .meta
                 .lock()

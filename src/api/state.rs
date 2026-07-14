@@ -1,3 +1,9 @@
+//! Shared API transport-state helpers.
+//!
+//! This module wires together `AppState` and provides the small boundary
+//! helpers that handlers reuse for authentication, cookie management, length
+//! checks, and common runtime lookups.
+
 use axum::{
     Json,
     http::{HeaderMap, StatusCode, header},
@@ -42,6 +48,10 @@ pub const SESSION_MAX_AGE_SECONDS: i64 = 30 * 24 * 60 * 60;
 pub const PASSWORD_META_KEY: &str = "dashboardPasswordHash";
 pub const BOOTSTRAP_PASSWORD_PROMPT_META_KEY: &str = "dashboardPasswordPrompt";
 pub const DEFAULT_INGEST_HOST: &str = "localhost";
+
+fn session_cookie_security_attr(secure: bool) -> &'static str {
+    if secure { "; Secure" } else { "" }
+}
 
 pub struct PortConfig {
     pub rtmp: u16,
@@ -111,6 +121,8 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Wires together the shared API state and the default service wrappers
+    /// built from the application's primary SQLite pool.
     pub fn new(
         db: SqlitePool,
         security: Arc<IngestSecurityService>,
@@ -162,6 +174,8 @@ impl AppState {
         }
     }
 
+    // Session hashes are mirrored in-memory so request auth can stay cheap
+    // while SQLite remains the durable source of truth.
     pub async fn add_session_hash(&self, token_hash: String) {
         self.sessions.write().await.insert(token_hash);
     }
@@ -250,6 +264,8 @@ impl AppState {
             .await
     }
 
+    /// Checks the cookie token against the in-memory session cache and then
+    /// re-validates it against persisted session state and expiry.
     pub async fn is_authenticated(&self, token: &str) -> bool {
         let token_hash = hash_session_token(token);
         {
@@ -259,6 +275,8 @@ impl AppState {
             }
         }
 
+        // The in-memory session set is only a fast cache; SQLite remains the
+        // source of truth for expiry and cross-process/session-store recovery.
         let created_at = match self.auth_service.get_session_created_at(&token_hash).await {
             Ok(Some(created_at)) => created_at,
             Ok(None) => {
@@ -331,6 +349,8 @@ impl AppState {
     }
 }
 
+/// Shared length guard for request fields that should fail fast at the HTTP
+/// boundary before services or stores see oversized input.
 pub fn check_field_len(field: &str, s: &str, max: usize) -> Option<Response> {
     if s.len() > max {
         Some(
@@ -347,6 +367,7 @@ pub fn check_field_len(field: &str, s: &str, max: usize) -> Option<Response> {
     }
 }
 
+/// Extracts the dashboard session token from the raw Cookie header, if present.
 pub fn get_session_token_from_headers(headers: &HeaderMap) -> Option<String> {
     let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
     for cookie in cookie_header.split(';') {
@@ -359,6 +380,7 @@ pub fn get_session_token_from_headers(headers: &HeaderMap) -> Option<String> {
     None
 }
 
+/// Convenience predicate for handlers that only need an auth yes/no answer.
 pub async fn request_is_authenticated(state: &AppState, headers: &HeaderMap) -> bool {
     if let Some(token) = get_session_token_from_headers(headers) {
         state.is_authenticated(&token).await
@@ -367,6 +389,8 @@ pub async fn request_is_authenticated(state: &AppState, headers: &HeaderMap) -> 
     }
 }
 
+/// Returns an HTTP response when the caller is not authenticated, letting
+/// handlers keep their transport contract local and linear.
 pub async fn require_authenticated(state: &AppState, headers: &HeaderMap) -> Option<Response> {
     if request_is_authenticated(state, headers).await {
         None
@@ -375,6 +399,8 @@ pub async fn require_authenticated(state: &AppState, headers: &HeaderMap) -> Opt
     }
 }
 
+/// HLS currently shares the same session-based access policy as the rest of
+/// the authenticated API surface.
 pub async fn require_hls_access(
     state: &AppState,
     headers: &HeaderMap,
@@ -383,46 +409,45 @@ pub async fn require_hls_access(
     require_authenticated(state, headers).await
 }
 
+/// Builds one dashboard session cookie with the repository's shared security
+/// attributes so login/logout flows stay consistent.
 pub fn make_session_cookie(token: &str, max_age: i64, secure: bool) -> String {
-    let secure_attr = if secure { "; Secure" } else { "" };
     format!(
         "{}={}; HttpOnly; Path=/; SameSite=Strict; Max-Age={}",
         SESSION_COOKIE_NAME, token, max_age
-    ) + secure_attr
+    ) + session_cookie_security_attr(secure)
 }
 
+/// Clears the dashboard session cookie using the same attributes as creation.
 pub fn clear_session_cookie(secure: bool) -> String {
-    let secure_attr = if secure { "; Secure" } else { "" };
     format!(
         "{}={}; HttpOnly; Path=/; SameSite=Strict; Max-Age=0",
         SESSION_COOKIE_NAME, ""
-    ) + secure_attr
+    ) + session_cookie_security_attr(secure)
 }
 
+/// Best-effort startup/runtime refresh for the in-memory libsrt policy store.
 pub async fn refresh_srt_ingest_policy_store(state: &AppState) {
-    if let Err(error) = state
-        .settings_service
-        .refresh_srt_ingest_policy_store(
-            &state.ingest_policy_store,
-            state.srt_passphrase.clone(),
-            state.srt_pbkeylen,
-        )
-        .await
-    {
+    if let Err(error) = state.refresh_srt_ingest_policy_store().await {
         warn!(err = %error, "failed to refresh SRT ingest policy store");
     }
 }
 
+/// Small hex encoder used by auth/session helpers that expose hash values as
+/// lowercase hex strings.
 pub fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+/// Hashes a raw session token before it is stored or looked up in persistence.
 pub fn hash_session_token(token: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(token.as_bytes());
     to_hex(&digest)
 }
 
+/// Loads the persisted recording-enabled flags for the requested pipelines so
+/// runtime views can merge desired recording state with live snapshots.
 pub async fn recording_enabled_map(
     state: &AppState,
     pipeline_ids: &[String],
@@ -450,5 +475,21 @@ mod runtime_config_tests {
             runtime.ingest_disconnect_grace_ms,
             app_config.tuning.ingest_disconnect_grace_ms
         );
+    }
+
+    #[test]
+    fn session_cookie_security_attr_matches_flag() {
+        assert_eq!(session_cookie_security_attr(true), "; Secure");
+        assert_eq!(session_cookie_security_attr(false), "");
+    }
+
+    #[test]
+    fn make_and_clear_session_cookie_share_security_policy() {
+        let secure_cookie = make_session_cookie("token", 60, true);
+        let cleared_cookie = clear_session_cookie(true);
+
+        assert!(secure_cookie.contains("; Secure"));
+        assert!(cleared_cookie.contains("; Secure"));
+        assert!(cleared_cookie.contains("Max-Age=0"));
     }
 }

@@ -11,7 +11,6 @@ use std::collections::HashSet;
 
 use crate::application::models::{Ingest, Output, Pipeline};
 use crate::domain::output_spec::{OutputConfig, OutputUrlScheme};
-use crate::domain::state::DesiredOutputState;
 use crate::planner::backend_policy::BackendPolicy;
 use crate::planner::graph_plan::{PlannedOutput, plan_pipeline_graph};
 
@@ -803,43 +802,21 @@ fn planned_candidate_stage_kinds(pipeline_id: &str, change: &ProposedChange) -> 
     let Some(config) = change_output_config(change) else {
         return Vec::new();
     };
-    let output = Output {
-        id: change
+    let output = PlannedOutput::new(
+        change
             .output_id
             .clone()
             .unwrap_or_else(|| "agent-preview-output".to_string()),
-        pipeline_id: pipeline_id.to_string(),
-        name: change
-            .name
-            .clone()
-            .unwrap_or_else(|| "Agent preview output".to_string()),
-        url: change.url.clone().unwrap_or_default(),
-        monitoring_url: change.monitoring_url.clone(),
-        desired_state: change
-            .desired_state
-            .as_deref()
-            .map(DesiredOutputState::from)
-            .unwrap_or(DesiredOutputState::Stopped),
-        config: config.clone(),
-    };
-    let planned_output = PlannedOutput::new(
-        output.id.as_str(),
-        output.encoding_string(),
-        output.url.as_str(),
+        config.to_encoding_string(),
+        change.url.clone().unwrap_or_default(),
     );
     let policy = BackendPolicy::default();
-    plan_pipeline_graph(
-        pipeline_id,
-        Some("hevc"),
-        std::slice::from_ref(&planned_output),
-        false,
-        &policy,
-    )
-    .stages
-    .into_iter()
-    .filter(|stage| stage.kind != crate::domain::stage::StageKind::Source)
-    .map(|stage| stage.kind.to_string())
-    .collect()
+    plan_pipeline_graph(pipeline_id, Some("hevc"), &[output], false, &policy)
+        .stages
+        .into_iter()
+        .filter(|stage| stage.kind != crate::domain::stage::StageKind::Source)
+        .map(|stage| stage.kind.to_string())
+        .collect()
 }
 
 fn impact_preview(request: &PlanRequest) -> ImpactPreview {

@@ -1,3 +1,7 @@
+//! Pipeline file-ingest handlers sit at the boundary between pipeline API
+//! payloads and the file-ingest service. This module validates filenames and
+//! normalizes optional ingest settings before handing runtime work to services.
+
 use axum::{
     Json,
     extract::{Path, State},
@@ -26,6 +30,19 @@ pub struct PipelineFileIngestPayload {
     pub target_gop_seconds: Option<u32>,
 }
 
+// The API still exposes the historical custom-encoding endpoint, but the
+// transport contract is intentionally frozen at 410 until preset/source-only
+// output selection is replaced with a supported custom workflow.
+fn custom_encoding_gone_response() -> Response {
+    (
+        StatusCode::GONE,
+        Json(serde_json::json!({
+            "error": "Custom encoding is not available yet; choose source or a preset encoding"
+        })),
+    )
+        .into_response()
+}
+
 pub fn validate_pipeline_file_ingest_payload(
     payload: &PipelineFileIngestPayload,
 ) -> Option<Response> {
@@ -40,6 +57,8 @@ pub fn validate_pipeline_file_ingest_payload(
     validate_file_ingest_filename(&payload.filename)
 }
 
+/// Ensures the ingest filename stays relative to the configured media
+/// directory before any runtime or filesystem work is attempted.
 pub fn validate_file_ingest_filename(filename: &str) -> Option<Response> {
     if filename.trim().is_empty() {
         return Some(
@@ -71,7 +90,23 @@ pub fn validate_file_ingest_filename(filename: &str) -> Option<Response> {
     None
 }
 
+fn file_ingest_state_response(
+    state: crate::application::ingest::PipelineFileIngestState,
+) -> Response {
+    Json(api_view_models::file_ingest_response(
+        state.ingest,
+        state.running,
+    ))
+    .into_response()
+}
+
+fn deleted_response() -> Response {
+    Json(serde_json::json!({"deleted": true})).into_response()
+}
+
 fn file_ingest_config_input(payload: PipelineFileIngestPayload) -> FileIngestConfigInput {
+    // Normalize optional request fields once so service callers do not each need
+    // to re-apply the API defaults.
     FileIngestConfigInput {
         filename: payload.filename,
         loop_flag: payload.loop_flag.unwrap_or(false),
@@ -81,6 +116,8 @@ fn file_ingest_config_input(payload: PipelineFileIngestPayload) -> FileIngestCon
     }
 }
 
+/// Normalizes the optional file-ingest payload into the service-layer shape and
+/// returns the rebuilt pipeline file-ingest state.
 pub async fn apply_pipeline_file_ingest_payload(
     state: &Arc<AppState>,
     pipeline: &crate::application::models::Pipeline,
@@ -95,6 +132,8 @@ pub async fn apply_pipeline_file_ingest_payload(
         .map_err(IntoResponse::into_response)
 }
 
+/// Returns the current file-ingest configuration and runtime flag for one
+/// pipeline.
 pub async fn pipeline_file_ingest_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -110,13 +149,11 @@ pub async fn pipeline_file_ingest_get_handler(
         .load_pipeline_file_ingest_state(&state.engine, &pipeline)
         .await?;
 
-    Ok(Json(api_view_models::file_ingest_response(
-        file_ingest_state.ingest,
-        file_ingest_state.running,
-    ))
-    .into_response())
+    Ok(file_ingest_state_response(file_ingest_state))
 }
 
+/// Persists the file-ingest configuration for one pipeline after validating
+/// the transport payload.
 pub async fn pipeline_file_ingest_put_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -142,13 +179,10 @@ pub async fn pipeline_file_ingest_put_handler(
         )
         .await?;
 
-    Ok(Json(api_view_models::file_ingest_response(
-        file_ingest_state.ingest,
-        file_ingest_state.running,
-    ))
-    .into_response())
+    Ok(file_ingest_state_response(file_ingest_state))
 }
 
+/// Clears the configured file-ingest payload for one pipeline.
 pub async fn pipeline_file_ingest_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -164,9 +198,11 @@ pub async fn pipeline_file_ingest_delete_handler(
         .apply_file_ingest_payload(&state.engine, &pipeline, None, Some(None))
         .await?;
 
-    Ok(Json(serde_json::json!({"deleted": true})).into_response())
+    Ok(deleted_response())
 }
 
+/// Legacy custom-encoding read endpoint kept on a permanent `410 Gone`
+/// transport contract until a supported replacement exists.
 pub async fn custom_encoding_get(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -175,13 +211,7 @@ pub async fn custom_encoding_get(
         return Ok(response);
     }
 
-    Ok((
-        StatusCode::GONE,
-        Json(serde_json::json!({
-            "error": "Custom encoding is not available yet; choose source or a preset encoding"
-        })),
-    )
-        .into_response())
+    Ok(custom_encoding_gone_response())
 }
 
 #[derive(Deserialize)]
@@ -190,6 +220,8 @@ pub struct CustomEncodingPayload {
     pub ffmpeg_args: String,
 }
 
+/// Legacy custom-encoding write endpoint kept on a permanent `410 Gone`
+/// transport contract until a supported replacement exists.
 pub async fn custom_encoding_put(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -200,13 +232,7 @@ pub async fn custom_encoding_put(
     }
     drop(payload.ffmpeg_args);
 
-    Ok((
-        StatusCode::GONE,
-        Json(serde_json::json!({
-            "error": "Custom encoding is not available yet; choose source or a preset encoding"
-        })),
-    )
-        .into_response())
+    Ok(custom_encoding_gone_response())
 }
 
 #[cfg(test)]
@@ -228,5 +254,15 @@ mod tests {
         assert!(!valid_filename("shows/../clip.mp4"));
         assert!(!valid_filename("./clip.mp4"));
         assert!(!valid_filename("/tmp/clip.mp4"));
+    }
+
+    #[test]
+    fn custom_encoding_gone_response_stays_gone() {
+        assert_eq!(custom_encoding_gone_response().status(), StatusCode::GONE);
+    }
+
+    #[test]
+    fn deleted_response_uses_ok_status() {
+        assert_eq!(deleted_response().status(), StatusCode::OK);
     }
 }

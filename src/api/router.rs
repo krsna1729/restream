@@ -1,3 +1,9 @@
+//! Central routing table for the dashboard HTTP surface.
+//!
+//! The router intentionally keeps route registration near the transport layer
+//! so API modules own handlers while this file documents the public boundary
+//! between static assets, authenticated APIs, and HLS/media endpoints.
+
 use axum::{
     Router,
     extract::DefaultBodyLimit,
@@ -64,6 +70,11 @@ use super::telemetry::{
     v1_pipeline_telemetry_handler, v1_stage_telemetry_handler,
 };
 
+const DEFAULT_API_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+
+// These path lists document which transport surfaces are intentionally public
+// versus session-gated. They are also reused by tests and external tooling that
+// want to reason about route exposure without rebuilding the router tree.
 pub const PUBLIC_ROUTE_PATHS: &[&str] = &[
     "/login",
     "/login.html",
@@ -77,6 +88,8 @@ pub const PUBLIC_ROUTE_PATHS: &[&str] = &[
     "/metrics/system",
 ];
 
+// Authenticated routes include both dashboard JSON APIs and media/HLS entry
+// points that should only resolve after the request has passed session checks.
 pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/auth/logout",
     "/api/v1/auth/change-password",
@@ -150,8 +163,12 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/hls/{pipeline_id}/{segment}",
 ];
 
-pub fn create_router(state: Arc<AppState>) -> Router {
-    let hls_router = Router::new()
+/// Registers the authenticated HLS transport surface separately from the main
+/// JSON API so streaming routes stay easy to audit as one group.
+fn create_hls_router() -> Router<Arc<AppState>> {
+    // HLS endpoints are grouped separately because they expose the streaming
+    // surface and are easiest to scan when kept together.
+    Router::new()
         .route("/hls/{pipeline_id}", get(hls_playlist_handler))
         .route("/hls/{pipeline_id}/master.m3u8", get(hls_master_handler))
         .route("/hls/{pipeline_id}/index.m3u8", get(hls_playlist_handler))
@@ -179,8 +196,14 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/hls/{pipeline_id}/audio/{track_index}/{segment}",
             get(hls_audio_segment_handler),
         )
-        .route("/hls/{pipeline_id}/{segment}", get(hls_segment_handler));
+        .route("/hls/{pipeline_id}/{segment}", get(hls_segment_handler))
+}
 
+/// Builds the complete dashboard router before transport-wide layers are
+/// applied, keeping route registration close to the public boundary list above.
+fn create_app_router() -> Router<Arc<AppState>> {
+    // Keep the full route table in one place so the public dashboard surface is
+    // easy to audit, even though individual handlers stay in smaller modules.
     Router::new()
         .route("/login", get(login_get_handler))
         .route("/login.html", get(login_html_redirect_handler))
@@ -378,11 +401,19 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route("/healthz", get(healthz_get_handler))
         .route("/metrics/system", get(metrics_system_handler))
-        .merge(hls_router)
+        .merge(create_hls_router())
         .route("/api/{*path}", any(api_not_found_handler))
         .fallback(get(spa_fallback_handler))
+}
+
+// These layers define transport-wide policy that should apply equally to JSON,
+// static assets, and streaming endpoints unless a route opts out explicitly.
+/// Applies baseline transport policy shared by dashboard APIs, static assets,
+/// and media endpoints unless a specific route opts out.
+fn apply_standard_layers(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
+    router
         .layer(CompressionLayer::new())
-        .layer(DefaultBodyLimit::max(4 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(DEFAULT_API_BODY_LIMIT_BYTES))
         .layer(SetResponseHeaderLayer::if_not_present(
             header::HeaderName::from_static("x-content-type-options"),
             HeaderValue::from_static("nosniff"),
@@ -391,5 +422,35 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             header::HeaderName::from_static("x-frame-options"),
             HeaderValue::from_static("SAMEORIGIN"),
         ))
-        .with_state(state)
+}
+
+/// Constructs the externally exposed application router with shared transport
+/// layers and the concrete application state attached.
+pub fn create_router(state: Arc<AppState>) -> Router {
+    apply_standard_layers(create_app_router()).with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AUTHENTICATED_ROUTE_PATHS, PUBLIC_ROUTE_PATHS};
+    use std::collections::HashSet;
+
+    #[test]
+    fn public_and_authenticated_route_lists_do_not_overlap() {
+        let public_routes = PUBLIC_ROUTE_PATHS.iter().copied().collect::<HashSet<_>>();
+
+        assert!(
+            AUTHENTICATED_ROUTE_PATHS
+                .iter()
+                .all(|path| !public_routes.contains(path))
+        );
+    }
+
+    #[test]
+    fn route_lists_cover_key_dashboard_boundaries() {
+        assert!(PUBLIC_ROUTE_PATHS.contains(&"/api/v1/auth/login"));
+        assert!(PUBLIC_ROUTE_PATHS.contains(&"/metrics/system"));
+        assert!(AUTHENTICATED_ROUTE_PATHS.contains(&"/api/v1/settings"));
+        assert!(AUTHENTICATED_ROUTE_PATHS.contains(&"/hls/{pipeline_id}/master.m3u8"));
+    }
 }

@@ -1,3 +1,7 @@
+//! Media-library HTTP handlers own the boundary between dashboard requests and
+//! filesystem-backed media operations. They validate filenames, translate path
+//! errors into HTTP responses, and delegate the actual media work to services.
+
 use axum::{
     Json,
     body::Body,
@@ -18,7 +22,7 @@ use crate::application::services::{
     media_library_service::{MediaDeleteError, MediaRenameError},
 };
 
-use super::state::{AppState, get_session_token_from_headers, require_authenticated};
+use super::state::{AppState, require_authenticated};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +32,22 @@ pub struct MediaRenamePayload {
 
 pub const MAX_MEDIA_UPLOAD_BYTES: usize = 8 * 1024 * 1024 * 1024;
 
+fn media_directory_error_response(status: StatusCode) -> Response {
+    match status {
+        StatusCode::INTERNAL_SERVER_ERROR => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "Media directory error").into_response()
+        }
+        StatusCode::NOT_FOUND => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        _ => (StatusCode::BAD_REQUEST, "Invalid path").into_response(),
+    }
+}
+
+fn recording_state_response(enabled: bool, active: bool) -> Response {
+    Json(serde_json::json!({ "enabled": enabled, "active": active })).into_response()
+}
+
+/// Enables recording for one pipeline and reports both the desired flag and
+/// the current runtime-active state after the request.
 pub async fn recording_start_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
@@ -50,9 +70,11 @@ pub async fn recording_start_handler(
         )
         .await?;
 
-    Ok(Json(serde_json::json!({ "enabled": true, "active": active })).into_response())
+    Ok(recording_state_response(true, active))
 }
 
+/// Disables recording for one pipeline and reports the cleared desired/runtime
+/// state once the request completes.
 pub async fn recording_stop_handler(
     State(state): State<Arc<AppState>>,
     Path(pipeline_id): Path<String>,
@@ -69,19 +91,16 @@ pub async fn recording_stop_handler(
         .recording_stop(&state.engine, &pipeline_id)
         .await?;
 
-    Ok(Json(serde_json::json!({ "enabled": false, "active": false })).into_response())
+    Ok(recording_state_response(false, false))
 }
 
+/// Lists the current media-library rows assembled by the service layer.
 pub async fn media_list_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let files = state
@@ -100,12 +119,8 @@ pub async fn media_upload_handler(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Response {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let mut uploaded = None;
@@ -269,12 +284,8 @@ pub async fn media_analysis_handler(
     headers: HeaderMap,
     Path(filename): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let path = match media_path_under_root(&state.media_dir, &filename) {
@@ -307,6 +318,8 @@ pub async fn media_analysis_handler(
     Json(analysis).into_response()
 }
 
+/// Maps one supported media filename to its HTTP content type for streaming and
+/// download responses.
 pub fn media_content_type(filename: &str) -> &'static str {
     match filename
         .rsplit('.')
@@ -323,6 +336,7 @@ pub fn media_content_type(filename: &str) -> &'static str {
     }
 }
 
+/// Returns the lowercase extension for one media filename, if present.
 pub fn media_extension(filename: &str) -> Option<String> {
     filename
         .rsplit('.')
@@ -330,6 +344,8 @@ pub fn media_extension(filename: &str) -> Option<String> {
         .map(|value| value.to_ascii_lowercase())
 }
 
+/// Limits the library surface to the media extensions explicitly supported by
+/// the dashboard and playback handlers.
 pub fn media_filename_is_supported(filename: &str) -> bool {
     matches!(
         media_extension(filename).as_deref(),
@@ -337,6 +353,8 @@ pub fn media_filename_is_supported(filename: &str) -> bool {
     )
 }
 
+/// Rejects nested paths and path-component tricks so callers can only target a
+/// plain filename at the media-library boundary.
 pub fn is_plain_media_filename(filename: &str) -> bool {
     let path = std::path::Path::new(filename);
     path.components().count() == 1
@@ -345,6 +363,8 @@ pub fn is_plain_media_filename(filename: &str) -> bool {
             .is_some_and(|name| name == std::ffi::OsStr::new(filename))
 }
 
+/// Validates one user-supplied media filename before any filesystem lookup or
+/// destination-path construction happens.
 pub fn validate_media_filename(filename: &str) -> Result<(), StatusCode> {
     if filename.trim().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
@@ -355,10 +375,14 @@ pub fn validate_media_filename(filename: &str) -> Result<(), StatusCode> {
     Ok(())
 }
 
+/// Resolves an existing media filename under the configured library root,
+/// rejecting traversal and symlink escapes via canonicalization.
 pub fn media_path_under_root(
     media_dir: &str,
     filename: &str,
 ) -> Result<std::path::PathBuf, StatusCode> {
+    // Existing-file lookups canonicalize both root and target so requests
+    // cannot escape the configured media directory through symlinks or parents.
     let _ = std::fs::create_dir_all(media_dir);
     let media_root =
         std::fs::canonicalize(media_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -379,6 +403,8 @@ pub struct MediaByteRange {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MediaRangeParseError;
 
+/// Parses a single RFC 7233 byte-range header into an inclusive byte span for
+/// media streaming responses.
 pub fn parse_media_range_header(
     range: &str,
     size: u64,
@@ -437,6 +463,8 @@ fn media_range_not_satisfiable_response(size: u64) -> Response {
     response
 }
 
+// Streams a media file with optional byte-range support while keeping range
+// validation and HTTP header shaping local to the transport boundary.
 async fn media_file_response(
     path: std::path::PathBuf,
     filename: &str,
@@ -500,10 +528,14 @@ async fn media_file_response(
     Ok(response)
 }
 
+/// Builds the destination path for a new media-library file without requiring
+/// the target file to exist yet.
 pub fn media_destination_path_under_root(
     media_dir: &str,
     filename: &str,
 ) -> Result<std::path::PathBuf, StatusCode> {
+    // Destination paths validate the requested filename first, then join under
+    // the canonical media root without requiring the target file to exist yet.
     validate_media_filename(filename)?;
     let _ = std::fs::create_dir_all(media_dir);
     let media_root =
@@ -517,17 +549,15 @@ pub fn media_destination_path_under_root(
     Ok(path)
 }
 
+/// Streams one media file from the library, supporting byte ranges for video
+/// playback clients.
 pub async fn media_file_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(filename): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let path = match media_path_under_root(&state.media_dir, &filename) {
@@ -540,28 +570,20 @@ pub async fn media_file_handler(
     }
 }
 
+/// Deletes one media file after the service layer confirms it is safe to
+/// remove any ingest or recording companions tied to it.
 pub async fn media_delete_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(filename): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let canonical_path = match media_path_under_root(&state.media_dir, &filename) {
         Ok(path) => path,
-        Err(StatusCode::INTERNAL_SERVER_ERROR) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Media directory error").into_response();
-        }
-        Err(StatusCode::NOT_FOUND) => {
-            return (StatusCode::NOT_FOUND, "File not found").into_response();
-        }
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid path").into_response(),
+        Err(status) => return media_directory_error_response(status),
     };
 
     match state
@@ -593,18 +615,16 @@ pub async fn media_delete_handler(
     }
 }
 
+/// Renames one media file within the library while preserving extension rules
+/// and companion artifact consistency.
 pub async fn media_rename_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(filename): Path<String>,
     Json(payload): Json<MediaRenamePayload>,
 ) -> impl IntoResponse {
-    if let Some(token) = get_session_token_from_headers(&headers) {
-        if !state.is_authenticated(&token).await {
-            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
-        }
-    } else {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    if let Some(response) = require_authenticated(&state, &headers).await {
+        return response;
     }
 
     let new_name = payload.new_name.trim();
@@ -628,20 +648,11 @@ pub async fn media_rename_handler(
 
     let source_path = match media_path_under_root(&state.media_dir, &filename) {
         Ok(path) => path,
-        Err(StatusCode::INTERNAL_SERVER_ERROR) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Media directory error").into_response();
-        }
-        Err(StatusCode::NOT_FOUND) => {
-            return (StatusCode::NOT_FOUND, "File not found").into_response();
-        }
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid path").into_response(),
+        Err(status) => return media_directory_error_response(status),
     };
     let destination_path = match media_destination_path_under_root(&state.media_dir, new_name) {
         Ok(path) => path,
-        Err(StatusCode::INTERNAL_SERVER_ERROR) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Media directory error").into_response();
-        }
-        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid path").into_response(),
+        Err(status) => return media_directory_error_response(status),
     };
     if destination_path.exists() {
         return (
@@ -737,5 +748,19 @@ mod tests {
 
         assert_eq!(err, StatusCode::BAD_REQUEST);
         let _ = std::fs::remove_dir_all(media_dir);
+    }
+
+    #[test]
+    fn media_directory_error_response_preserves_not_found_status() {
+        let response = media_directory_error_response(StatusCode::NOT_FOUND);
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn recording_state_response_uses_ok_status() {
+        let response = recording_state_response(true, false);
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

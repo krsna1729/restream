@@ -1,3 +1,8 @@
+//! Agent HTTP handlers expose the optional planning and execution surfaces used
+//! by operator-facing automation features. This module stays at the API
+//! boundary: it authenticates requests, selects the feature-gated surface to
+//! expose, and shapes responses from the agent planning/execution layers.
+
 use axum::{
     Json,
     extract::{Path, State},
@@ -6,35 +11,38 @@ use axum::{
 };
 use std::sync::Arc;
 
-#[cfg(feature = "agent-plane")]
+#[cfg(any(not(feature = "agent-plane"), not(feature = "agent-execution")))]
+use axum::response::Response;
+
+#[cfg(any(feature = "agent-plane", feature = "agent-execution"))]
 use crate::domain::state::DesiredOutputState;
 
 use super::state::{AppState, require_authenticated};
 
-#[cfg(not(feature = "agent-plane"))]
-fn agent_plane_unavailable() -> axum::response::Response {
+#[cfg(any(not(feature = "agent-plane"), not(feature = "agent-execution")))]
+/// Shared 404 payload for agent routes that are compiled out by feature flags.
+fn feature_unavailable_response(feature: &'static str) -> Response {
     (
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({
-            "error": "agent-plane feature is not compiled in",
-            "feature": "agent-plane",
+            "error": format!("{feature} feature is not compiled in"),
+            "feature": feature,
             "compiledIn": false
         })),
     )
         .into_response()
 }
 
+#[cfg(not(feature = "agent-plane"))]
+/// Shortcut response for builds without the agent planning surface.
+fn agent_plane_unavailable() -> Response {
+    feature_unavailable_response("agent-plane")
+}
+
 #[cfg(not(feature = "agent-execution"))]
-fn agent_execution_unavailable() -> axum::response::Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({
-            "error": "agent-execution feature is not compiled in",
-            "feature": "agent-execution",
-            "compiledIn": false
-        })),
-    )
-        .into_response()
+/// Shortcut response for builds without the agent execution surface.
+fn agent_execution_unavailable() -> Response {
+    feature_unavailable_response("agent-execution")
 }
 
 #[cfg(feature = "agent-plane")]
@@ -63,7 +71,32 @@ use sysinfo::{Disks, System};
 #[cfg(feature = "agent-plane")]
 const AGENT_PROCESSING_GRAPH_OUTPUT_LIMIT: usize = 50;
 
+#[cfg(any(feature = "agent-plane", feature = "agent-execution"))]
+/// Builds the immediate health snapshot shared by agent planning and execution
+/// flows so prompts and verification reflect current runtime state.
+async fn agent_health_snapshot(
+    state: &AppState,
+    pipeline_ids: &[String],
+) -> (std::collections::HashMap<String, bool>, serde_json::Value) {
+    let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
+
+    // Agent surfaces prefer an immediate snapshot because investigation and
+    // verification prompts should reflect the current runtime state, not a
+    // grace-window-smoothed operator view.
+    let health = crate::api_runtime_views::health_snapshot(
+        &state.engine,
+        pipeline_ids,
+        &recording_enabled,
+        0,
+    )
+    .await;
+
+    (recording_enabled, health)
+}
+
 #[cfg(feature = "agent-plane")]
+/// Returns the compiled capability manifest for authenticated agent-plane
+/// clients.
 pub async fn agent_capabilities_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -86,6 +119,7 @@ pub async fn agent_capabilities_handler(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Returns the full planning context document used by agent-plane clients.
 pub async fn agent_context_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -110,6 +144,8 @@ pub async fn agent_context_handler(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Returns an investigation payload for one optional pipeline/output focus by
+/// joining health, alerts, graphs, telemetry, and events.
 pub async fn agent_investigation_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -159,14 +195,7 @@ pub async fn agent_investigation_handler(
         .clone()
         .map(|pid| vec![pid])
         .unwrap_or_else(|| pipelines.iter().map(|p| p.id.clone()).collect());
-    let recording_enabled = recording_enabled_map(&state, &pipeline_ids).await;
-    let health = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        &pipeline_ids,
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let (_recording_enabled, health) = agent_health_snapshot(&state, &pipeline_ids).await;
     let alerts = alerts::derive_alerts(&health);
     let graph = if let Some(pid) = request.pipeline_id.as_deref()
         && pipeline_exists
@@ -227,6 +256,7 @@ pub async fn agent_investigation_handler(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Generates a full plan response for the requested agent action.
 pub async fn agent_plan_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -253,6 +283,28 @@ pub async fn agent_plan_handler(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Extracts only the validation view from a full agent plan response.
+fn agent_plan_validation_json(response: &crate::agent_plane::PlanResponse) -> serde_json::Value {
+    serde_json::json!({
+        "generatedAt": response.generated_at,
+        "planId": response.plan_id,
+        "validation": response.validation,
+    })
+}
+
+#[cfg(feature = "agent-plane")]
+/// Extracts only the graph preview view from a full agent plan response.
+fn agent_plan_graph_preview_json(response: &crate::agent_plane::PlanResponse) -> serde_json::Value {
+    serde_json::json!({
+        "generatedAt": response.generated_at,
+        "planId": response.plan_id,
+        "graphPreview": response.graph_preview,
+        "impact": response.impact,
+    })
+}
+
+#[cfg(feature = "agent-plane")]
+/// Generates a plan and returns only its validation payload.
 pub async fn agent_plan_validate_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -263,12 +315,7 @@ pub async fn agent_plan_validate_handler(
     }
 
     let response = build_agent_plan(&state, request).await;
-    Json(serde_json::json!({
-        "generatedAt": response.generated_at,
-        "planId": response.plan_id,
-        "validation": response.validation,
-    }))
-    .into_response()
+    Json(agent_plan_validation_json(&response)).into_response()
 }
 
 #[cfg(not(feature = "agent-plane"))]
@@ -284,6 +331,7 @@ pub async fn agent_plan_validate_handler(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Generates a plan and returns only its graph-diff preview payload.
 pub async fn agent_graph_diff_preview_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -294,13 +342,7 @@ pub async fn agent_graph_diff_preview_handler(
     }
 
     let response = build_agent_plan(&state, request).await;
-    Json(serde_json::json!({
-        "generatedAt": response.generated_at,
-        "planId": response.plan_id,
-        "graphPreview": response.graph_preview,
-        "impact": response.impact,
-    }))
-    .into_response()
+    Json(agent_plan_graph_preview_json(&response)).into_response()
 }
 
 #[cfg(not(feature = "agent-plane"))]
@@ -330,6 +372,7 @@ use super::state::MAX_URL_LEN;
 use crate::domain::output_spec::OutputConfig;
 
 #[cfg(feature = "agent-execution")]
+/// Creates or reuses an execution record for one requested agent operation.
 pub async fn agent_operation_create_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -366,6 +409,7 @@ pub async fn agent_operation_create_handler(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Returns one stored agent operation record by ID.
 pub async fn agent_operation_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -393,6 +437,7 @@ pub async fn agent_operation_get_handler(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Applies an approval decision to one pending agent operation.
 pub async fn agent_operation_approve_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -422,6 +467,8 @@ pub async fn agent_operation_approve_handler(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Applies one approved agent operation and records either its completed
+/// outcome or its failure result.
 pub async fn agent_operation_apply_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -470,6 +517,7 @@ pub async fn agent_operation_apply_handler(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Verifies one stored operation by ID against current persisted/runtime state.
 pub async fn agent_operation_verify_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -494,6 +542,7 @@ pub async fn agent_operation_verify_handler(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Verifies one stored operation from an explicit verify request payload.
 pub async fn agent_verify_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -518,6 +567,8 @@ pub async fn agent_verify_handler(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Builds the large redacted agent context document consumed by planning and
+/// investigation surfaces.
 async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let catalog = state.agent_context_catalog().await;
     let pipelines = catalog.pipelines;
@@ -526,14 +577,7 @@ async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let jobs = catalog.jobs;
     let jobs_json = api_view_models::job_response_json_list(&jobs);
     let ingests = catalog.ingests;
-    let recording_enabled = recording_enabled_map(state, &pipeline_ids).await;
-    let health = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        &pipeline_ids,
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let (recording_enabled, health) = agent_health_snapshot(state, &pipeline_ids).await;
     let alerts = alerts::derive_alerts(&health);
     let events = state.engine.recent_events(events::MAX_EVENTS, None);
     let engine_telemetry = crate::api_runtime_views::engine_telemetry(&state.engine).await;
@@ -638,6 +682,8 @@ struct AgentOperationApplyOutcome {
 }
 
 #[cfg(feature = "agent-execution")]
+/// Executes the change list for one stored agent operation and captures the
+/// transition/progress snapshots needed for the public record.
 async fn execute_agent_operation(
     state: &AppState,
     record: &crate::agent_execution::OperationRecord,
@@ -702,6 +748,8 @@ async fn execute_agent_operation(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Dispatches one proposed change to the concrete output/state mutation helper
+/// that owns that change type.
 async fn apply_agent_change(
     state: &AppState,
     pipeline_id: &str,
@@ -722,6 +770,8 @@ async fn apply_agent_change(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Creates one output described by an agent change after validating its
+/// transport-facing fields.
 async fn apply_agent_add_output(
     state: &AppState,
     pipeline_id: &str,
@@ -770,6 +820,8 @@ async fn apply_agent_add_output(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Updates one existing output described by an agent change, including desired
+/// state transitions when requested.
 async fn apply_agent_update_output(
     state: &AppState,
     pipeline_id: &str,
@@ -839,6 +891,7 @@ async fn apply_agent_update_output(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Removes one output referenced by an agent change.
 async fn apply_agent_remove_output(
     state: &AppState,
     pipeline_id: &str,
@@ -872,6 +925,8 @@ async fn apply_agent_remove_output(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Applies a start/stop desired-state request for one output referenced by an
+/// agent change.
 async fn apply_agent_desired_state(
     state: &AppState,
     pipeline_id: &str,
@@ -910,6 +965,8 @@ async fn apply_agent_desired_state(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Pulls one required string field out of a change payload and returns a
+/// stable validation error when it is missing.
 fn required_change_field<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str, String> {
     value
         .filter(|value| !value.trim().is_empty())
@@ -917,6 +974,8 @@ fn required_change_field<'a>(value: Option<&'a str>, field: &str) -> Result<&'a 
 }
 
 #[cfg(feature = "agent-execution")]
+/// Validates output-facing change fields before they are handed to the output
+/// service.
 fn validate_output_fields(
     name: &str,
     url: &str,
@@ -949,6 +1008,8 @@ fn validate_output_fields(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Shared max-length validator for change fields that map onto output service
+/// limits.
 fn validate_len(field: &str, value: &str, max: usize) -> Result<(), String> {
     if value.len() > max {
         Err(format!("{field} exceeds maximum length of {max} bytes"))
@@ -957,7 +1018,36 @@ fn validate_len(field: &str, value: &str, max: usize) -> Result<(), String> {
     }
 }
 
+#[cfg(any(feature = "agent-plane", feature = "agent-execution"))]
+fn pipeline_input_is_on(pipeline_health: &serde_json::Value) -> bool {
+    pipeline_health["input"]["status"].as_str() == Some("on")
+}
+
 #[cfg(feature = "agent-execution")]
+fn output_runtime_is_running(runtime: &serde_json::Value) -> bool {
+    runtime["status"].as_str() == Some("running")
+}
+
+#[cfg(feature = "agent-plane")]
+fn desired_output_reason(
+    desired_state: DesiredOutputState,
+    actual_status: &str,
+    input_is_on: bool,
+) -> &'static str {
+    if desired_state == DesiredOutputState::Running && !input_is_on {
+        "pendingInput"
+    } else if (desired_state == DesiredOutputState::Running && actual_status == "running")
+        || (desired_state == DesiredOutputState::Stopped && actual_status != "running")
+    {
+        "converged"
+    } else {
+        "desiredActualMismatch"
+    }
+}
+
+#[cfg(feature = "agent-execution")]
+/// Verifies one stored operation by ID and translates a missing record into a
+/// 404 response.
 async fn verify_agent_operation_by_id(
     state: &AppState,
     operation_id: &str,
@@ -977,6 +1067,9 @@ async fn verify_agent_operation_by_id(
 }
 
 #[cfg(feature = "agent-execution")]
+// Verification stays at the API boundary because it compares the requested
+// change intent against both persisted desired state and the latest runtime
+// health snapshot.
 async fn verify_agent_operation(
     state: &AppState,
     record: &crate::agent_execution::OperationRecord,
@@ -988,14 +1081,7 @@ async fn verify_agent_operation(
         .map(|pipeline| pipeline.id.clone())
         .collect();
     let outputs = catalog.outputs;
-    let recording_enabled = recording_enabled_map(state, &pipeline_ids).await;
-    let health = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        &pipeline_ids,
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let (_recording_enabled, health) = agent_health_snapshot(state, &pipeline_ids).await;
     let alerts = alerts::derive_alerts(&health);
     let mut checks = Vec::new();
     let mut success = true;
@@ -1023,13 +1109,12 @@ async fn verify_agent_operation(
                     {
                         (false, "desiredStateMismatch")
                     } else if change.desired_state.as_deref() == Some("running") {
-                        let status = runtime.and_then(|runtime| runtime["status"].as_str());
-                        let input_status = health["pipelines"][pipeline_id]["input"]["status"]
-                            .as_str()
+                        let status = runtime
+                            .and_then(|runtime| runtime["status"].as_str())
                             .unwrap_or("off");
-                        if status == Some("running") {
+                        if status == "running" {
                             (true, "running")
-                        } else if input_status != "on" {
+                        } else if !pipeline_input_is_on(&health["pipelines"][pipeline_id]) {
                             (false, "pendingInput")
                         } else {
                             (false, "notRunning")
@@ -1056,24 +1141,19 @@ async fn verify_agent_operation(
                 }
             }
             "startOutput" => {
-                let status = runtime.and_then(|runtime| runtime["status"].as_str());
-                let input_status = health["pipelines"][pipeline_id]["input"]["status"]
-                    .as_str()
-                    .unwrap_or("off");
                 if output.is_some_and(|output| output.desired_state == DesiredOutputState::Running)
-                    && status == Some("running")
+                    && runtime.is_some_and(output_runtime_is_running)
                 {
                     (true, "running")
-                } else if input_status != "on" {
+                } else if !pipeline_input_is_on(&health["pipelines"][pipeline_id]) {
                     (false, "pendingInput")
                 } else {
                     (false, "notRunning")
                 }
             }
             "stopOutput" => {
-                let status = runtime.and_then(|runtime| runtime["status"].as_str());
                 if output.is_some_and(|output| output.desired_state == DesiredOutputState::Stopped)
-                    && status != Some("running")
+                    && runtime.and_then(|runtime| runtime["status"].as_str()) != Some("running")
                 {
                     (true, "stopped")
                 } else {
@@ -1168,14 +1248,7 @@ async fn current_agent_alert_count(state: &AppState) -> usize {
         .iter()
         .map(|pipeline| pipeline.id.clone())
         .collect();
-    let recording_enabled = recording_enabled_map(state, &pipeline_ids).await;
-    let health = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        &pipeline_ids,
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let (_recording_enabled, health) = agent_health_snapshot(state, &pipeline_ids).await;
     alerts::derive_alerts(&health).len()
 }
 
@@ -1192,6 +1265,10 @@ async fn agent_media_inventory(state: &AppState) -> serde_json::Value {
 }
 
 #[cfg(feature = "agent-plane")]
+// Desired-vs-actual is a read-only summary for agent context consumers, so it
+// lives here with the transport-facing JSON shaping instead of in persistence.
+/// Summarizes desired-versus-actual pipeline/output state for planning and
+/// investigation consumers.
 fn agent_desired_vs_actual(
     pipelines: &[Pipeline],
     outputs: &[crate::application::models::Output],
@@ -1208,6 +1285,7 @@ fn agent_desired_vs_actual(
     for pipeline in pipelines {
         let pipeline_health = &health["pipelines"][&pipeline.id];
         let input_status = pipeline_health["input"]["status"].as_str().unwrap_or("off");
+        let input_is_on = pipeline_input_is_on(pipeline_health);
         let file_ingests: Vec<_> = ingests
             .iter()
             .filter(|ingest| ingest.stream_key == pipeline.stream_key)
@@ -1226,20 +1304,12 @@ fn agent_desired_vs_actual(
         for output in pipeline_outputs {
             let runtime = &pipeline_health["outputs"][&output.id];
             let actual = runtime["status"].as_str().unwrap_or("stopped");
-            let reason = if output.desired_state == DesiredOutputState::Running
-                && input_status != "on"
-            {
-                pending_count += 1;
-                "pendingInput"
-            } else if (output.desired_state == DesiredOutputState::Running && actual == "running")
-                || (output.desired_state == DesiredOutputState::Stopped && actual != "running")
-            {
-                converged_count += 1;
-                "converged"
-            } else {
-                drift_count += 1;
-                "desiredActualMismatch"
-            };
+            let reason = desired_output_reason(output.desired_state, actual, input_is_on);
+            match reason {
+                "pendingInput" => pending_count += 1,
+                "converged" => converged_count += 1,
+                _ => drift_count += 1,
+            }
             let recent_jobs: Vec<_> = jobs
                 .iter()
                 .filter(|job| job.pipeline_id == pipeline.id && job.output_id == output.id)
@@ -1314,6 +1384,8 @@ fn agent_desired_vs_actual(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Builds the condensed diagnostics summary section used in agent context and
+/// investigation responses.
 fn agent_diagnostics_summary(
     pipelines: &[Pipeline],
     outputs: &[crate::application::models::Output],
@@ -1396,6 +1468,8 @@ fn agent_diagnostics_summary(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Summarizes HLS, recording, file-ingest, and ingest-security dependencies
+/// for agent planning surfaces.
 async fn agent_dependency_summary(
     state: &AppState,
     pipelines: &[Pipeline],
@@ -1490,6 +1564,7 @@ async fn agent_dependency_summary(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Builds the storage summary subsection used in the agent context payload.
 async fn agent_storage_summary(state: &AppState, media: &serde_json::Value) -> serde_json::Value {
     let media_bytes = media["files"]
         .as_array()
@@ -1532,6 +1607,8 @@ async fn agent_storage_summary(state: &AppState, media: &serde_json::Value) -> s
 }
 
 #[cfg(feature = "agent-plane")]
+/// Builds the full plan response by combining the request with the current
+/// pipeline/output catalog and optional current graph.
 async fn build_agent_plan(
     state: &AppState,
     request: crate::agent_plane::PlanRequest,
@@ -1550,6 +1627,8 @@ async fn build_agent_plan(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Normalizes execution-store errors into stable HTTP responses for agent
+/// operation routes.
 fn agent_operation_store_error(
     err: crate::agent_execution::OperationStoreError,
 ) -> axum::response::Response {
@@ -1595,4 +1674,108 @@ fn agent_operation_store_error(
         })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "agent-plane")]
+    use super::{
+        agent_plan_graph_preview_json, agent_plan_validation_json, desired_output_reason,
+        pipeline_input_is_on,
+    };
+    #[cfg(feature = "agent-plane")]
+    use crate::domain::state::DesiredOutputState;
+
+    #[cfg(feature = "agent-plane")]
+    fn sample_plan_response() -> crate::agent_plane::PlanResponse {
+        crate::agent_plane::PlanResponse {
+            generated_at: "2026-07-14T00:00:00Z".to_string(),
+            plan_id: "plan_123".to_string(),
+            status: "draft",
+            intent: "Test plan".to_string(),
+            execution_enabled: true,
+            execution_note: "compiled in",
+            steps: Vec::new(),
+            validation: crate::agent_plane::ValidationResult {
+                valid: true,
+                errors: Vec::new(),
+                warnings: Vec::new(),
+            },
+            graph_preview: crate::agent_plane::GraphPreview {
+                mode: "preview",
+                added_nodes: Vec::new(),
+                removed_nodes: Vec::new(),
+                changed_edges: Vec::new(),
+                notes: vec!["note".to_string()],
+            },
+            impact: crate::agent_plane::ImpactPreview {
+                affected_pipelines: vec!["pipe-1".to_string()],
+                affected_outputs: Vec::new(),
+                shared_stage_candidates: Vec::new(),
+                operator_summary: "summary".to_string(),
+                engineering_notes: Vec::new(),
+            },
+        }
+    }
+
+    #[cfg(feature = "agent-plane")]
+    #[test]
+    fn agent_plan_validation_json_projects_validation_fields() {
+        let value = agent_plan_validation_json(&sample_plan_response());
+
+        assert_eq!(value["planId"], "plan_123");
+        assert_eq!(value["validation"]["valid"], true);
+    }
+
+    #[cfg(feature = "agent-plane")]
+    #[test]
+    fn agent_plan_graph_preview_json_projects_graph_preview_fields() {
+        let value = agent_plan_graph_preview_json(&sample_plan_response());
+
+        assert_eq!(value["planId"], "plan_123");
+        assert_eq!(value["graphPreview"]["mode"], "preview");
+        assert_eq!(value["impact"]["operatorSummary"], "summary");
+    }
+
+    #[cfg(feature = "agent-plane")]
+    #[test]
+    fn runtime_status_helpers_capture_agent_output_policy() {
+        assert!(pipeline_input_is_on(&serde_json::json!({
+            "input": { "status": "on" }
+        })));
+        assert!(!pipeline_input_is_on(&serde_json::json!({
+            "input": { "status": "off" }
+        })));
+        assert_eq!(
+            serde_json::json!({
+                "status": "running"
+            })["status"]
+                .as_str(),
+            Some("running")
+        );
+        assert_ne!(
+            serde_json::json!({
+                "status": "stopped"
+            })["status"]
+                .as_str(),
+            Some("running")
+        );
+    }
+
+    #[cfg(feature = "agent-plane")]
+    #[test]
+    fn desired_output_reason_distinguishes_converged_pending_and_drifted() {
+        assert_eq!(
+            desired_output_reason(DesiredOutputState::Running, "running", true),
+            "converged"
+        );
+        assert_eq!(
+            desired_output_reason(DesiredOutputState::Running, "stopped", false),
+            "pendingInput"
+        );
+        assert_eq!(
+            desired_output_reason(DesiredOutputState::Stopped, "running", true),
+            "desiredActualMismatch"
+        );
+    }
 }

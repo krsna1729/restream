@@ -1,3 +1,9 @@
+//! Application service wrapper for output catalog and desired-state operations.
+//!
+//! This module keeps output persistence and desired-state requests on the
+//! application boundary so HTTP handlers can work in terms of output records and
+//! lifecycle intent without depending on store-specific details.
+
 use std::sync::Arc;
 
 use crate::application::models::Output;
@@ -18,10 +24,19 @@ pub struct OutputService {
 }
 
 impl OutputService {
+    /// Build the service from any `OutputStore` implementation.
+    /// Useful for tests that want to inject an in-memory or fake store.
     pub fn with_store(store: Arc<dyn OutputStore>) -> Self {
         Self { store }
     }
 
+    /// Builds the shared not-found error shape used when an output lookup or
+    /// mutation cannot resolve the requested output ID.
+    fn output_not_found(id: &str) -> ApiError {
+        ApiError::not_found(format!("output {id} not found"))
+    }
+
+    /// Lists every persisted output record without applying pipeline filters.
     pub async fn list_outputs(&self) -> ApiResult<Vec<Output>> {
         self.store
             .list_outputs()
@@ -29,6 +44,8 @@ impl OutputService {
             .map_err(|e| ApiError::internal(format!("list outputs: {e}")))
     }
 
+    /// Lists the outputs attached to one pipeline for dashboard detail views
+    /// and runtime coordination.
     pub async fn list_for_pipeline(&self, pipeline_id: &str) -> ApiResult<Vec<Output>> {
         self.store
             .list_outputs_for_pipeline(pipeline_id)
@@ -36,15 +53,18 @@ impl OutputService {
             .map_err(|e| ApiError::internal(format!("list outputs for pipeline: {e}")))
     }
 
+    /// Resolves one persisted output by composite pipeline/output identity.
     pub async fn get_by_id(&self, pipeline_id: &str, id: &str) -> ApiResult<Output> {
         self.store
             .get_output(pipeline_id, id)
             .await
             .map_err(|e| ApiError::internal(format!("get output: {e}")))?
-            .ok_or_else(|| ApiError::not_found(format!("output {id} not found")))
+            .ok_or_else(|| Self::output_not_found(id))
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Persists a new output after translating transport-facing desired state
+    /// text into the domain enum expected by storage.
     pub async fn create_output(
         &self,
         id: &str,
@@ -55,6 +75,8 @@ impl OutputService {
         desired_state: &str,
         config: &OutputConfig,
     ) -> ApiResult<Output> {
+        // API callers still pass desired state as transport text; convert it to
+        // the domain enum once here before persistence sees it.
         let desired_state = DesiredOutputState::from(desired_state);
         self.store
             .create_output(
@@ -70,6 +92,8 @@ impl OutputService {
             .map_err(|e| ApiError::internal(format!("create output: {e}")))
     }
 
+    /// Updates the mutable settings for one persisted output while preserving
+    /// its desired-state lifecycle fields.
     pub async fn update_output(
         &self,
         pipeline_id: &str,
@@ -83,9 +107,10 @@ impl OutputService {
             .update_output(pipeline_id, id, name, url, monitoring_url, config)
             .await
             .map_err(|e| ApiError::internal(format!("update output: {e}")))?
-            .ok_or_else(|| ApiError::not_found(format!("output {id} not found")))
+            .ok_or_else(|| Self::output_not_found(id))
     }
 
+    /// Deletes one persisted output record by pipeline/output identity.
     pub async fn delete_output(&self, pipeline_id: &str, id: &str) -> ApiResult<bool> {
         self.store
             .delete_output(pipeline_id, id)
@@ -93,20 +118,35 @@ impl OutputService {
             .map_err(|e| ApiError::internal(format!("delete output: {e}")))
     }
 
+    /// Shared desired-state transition helper for start/stop lifecycle intents.
+    async fn desired_state_request(
+        &self,
+        pipeline_id: &str,
+        id: &str,
+        desired_state: DesiredOutputState,
+        action: &'static str,
+    ) -> ApiResult<Output> {
+        self.store
+            .set_output_desired_state(pipeline_id, id, desired_state)
+            .await
+            .map_err(|e| ApiError::internal(format!("{action}: {e}")))
+    }
+
     /// Set the output's desired state to `running`, resuming any stopped egress.
     pub async fn request_start(&self, pipeline_id: &str, id: &str) -> ApiResult<Output> {
-        self.store
-            .set_output_desired_state(pipeline_id, id, DesiredOutputState::Running)
-            .await
-            .map_err(|e| ApiError::internal(format!("request start: {e}")))
+        self.desired_state_request(
+            pipeline_id,
+            id,
+            DesiredOutputState::Running,
+            "request start",
+        )
+        .await
     }
 
     /// Set the output's desired state to `stopped`, halting any active egress.
     pub async fn request_stop(&self, pipeline_id: &str, id: &str) -> ApiResult<Output> {
-        self.store
-            .set_output_desired_state(pipeline_id, id, DesiredOutputState::Stopped)
+        self.desired_state_request(pipeline_id, id, DesiredOutputState::Stopped, "request stop")
             .await
-            .map_err(|e| ApiError::internal(format!("request stop: {e}")))
     }
 }
 
