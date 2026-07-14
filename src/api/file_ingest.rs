@@ -1,3 +1,7 @@
+//! Pipeline file-ingest handlers sit at the boundary between pipeline API
+//! payloads and the file-ingest service. This module validates filenames and
+//! normalizes optional ingest settings before handing runtime work to services.
+
 use axum::{
     Json,
     extract::{Path, State},
@@ -24,6 +28,16 @@ pub struct PipelineFileIngestPayload {
     pub start_time: Option<String>,
     pub live_optimized: Option<bool>,
     pub target_gop_seconds: Option<u32>,
+}
+
+fn custom_encoding_gone_response() -> Response {
+    (
+        StatusCode::GONE,
+        Json(serde_json::json!({
+            "error": "Custom encoding is not available yet; choose source or a preset encoding"
+        })),
+    )
+        .into_response()
 }
 
 pub fn validate_pipeline_file_ingest_payload(
@@ -72,6 +86,8 @@ pub fn validate_file_ingest_filename(filename: &str) -> Option<Response> {
 }
 
 fn file_ingest_config_input(payload: PipelineFileIngestPayload) -> FileIngestConfigInput {
+    // Normalize optional request fields once so service callers do not each need
+    // to re-apply the API defaults.
     FileIngestConfigInput {
         filename: payload.filename,
         loop_flag: payload.loop_flag.unwrap_or(false),
@@ -175,13 +191,7 @@ pub async fn custom_encoding_get(
         return Ok(response);
     }
 
-    Ok((
-        StatusCode::GONE,
-        Json(serde_json::json!({
-            "error": "Custom encoding is not available yet; choose source or a preset encoding"
-        })),
-    )
-        .into_response())
+    Ok(custom_encoding_gone_response())
 }
 
 #[derive(Deserialize)]
@@ -200,13 +210,7 @@ pub async fn custom_encoding_put(
     }
     drop(payload.ffmpeg_args);
 
-    Ok((
-        StatusCode::GONE,
-        Json(serde_json::json!({
-            "error": "Custom encoding is not available yet; choose source or a preset encoding"
-        })),
-    )
-        .into_response())
+    Ok(custom_encoding_gone_response())
 }
 
 #[cfg(test)]
@@ -228,5 +232,10 @@ mod tests {
         assert!(!valid_filename("shows/../clip.mp4"));
         assert!(!valid_filename("./clip.mp4"));
         assert!(!valid_filename("/tmp/clip.mp4"));
+    }
+
+    #[test]
+    fn custom_encoding_gone_response_stays_gone() {
+        assert_eq!(custom_encoding_gone_response().status(), StatusCode::GONE);
     }
 }
