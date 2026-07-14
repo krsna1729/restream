@@ -12,6 +12,9 @@ use super::error::{ApiError, ApiResult};
 
 const DASHBOARD_PASSWORD_HASH_META_KEY: &str = "dashboardPasswordHash";
 
+/// Application service that owns dashboard password-hash persistence and
+/// session-store mutations so HTTP handlers do not need to coordinate those
+/// records directly.
 pub struct AuthService {
     meta_store: Arc<dyn MetaStore>,
     meta_writer: Arc<dyn MetaStoreWriter>,
@@ -19,6 +22,8 @@ pub struct AuthService {
 }
 
 impl AuthService {
+    /// Builds the service from the meta and session stores needed for dashboard
+    /// authentication state.
     pub fn with_stores(
         meta_store: Arc<dyn MetaStore>,
         meta_writer: Arc<dyn MetaStoreWriter>,
@@ -31,6 +36,8 @@ impl AuthService {
         }
     }
 
+    /// Reads the persisted dashboard password hash used for interactive login
+    /// verification.
     pub async fn get_password_hash(&self) -> ApiResult<Option<String>> {
         self.meta_store
             .get_meta(DASHBOARD_PASSWORD_HASH_META_KEY)
@@ -38,6 +45,8 @@ impl AuthService {
             .map_err(|e| ApiError::internal(format!("get password hash: {e}")))
     }
 
+    /// Seeds the initial dashboard password hash only when bootstrap has not
+    /// already stored one.
     pub async fn ensure_password_hash(&self, hash: &str) -> ApiResult<()> {
         // Bootstrap flows should only seed an initial password; later changes
         // must go through the explicit password-update path.
@@ -47,14 +56,14 @@ impl AuthService {
         Ok(())
     }
 
+    /// Persists the dashboard password hash using the shared auth-meta write
+    /// path used by other auth settings.
     pub async fn set_password_hash(&self, hash: &str) -> ApiResult<()> {
-        self.meta_writer
-            .set_meta(DASHBOARD_PASSWORD_HASH_META_KEY, hash)
-            .await
-            .map(|_| ())
-            .map_err(|e| ApiError::internal(format!("set password hash: {e}")))
+        self.set_meta(DASHBOARD_PASSWORD_HASH_META_KEY, hash).await
     }
 
+    /// Persists one auth-specific meta entry while hiding the underlying store
+    /// return value from callers.
     pub async fn set_meta(&self, key: &str, value: &str) -> ApiResult<()> {
         self.meta_writer
             .set_meta(key, value)
@@ -63,6 +72,7 @@ impl AuthService {
             .map_err(|e| ApiError::internal(format!("set auth meta: {e}")))
     }
 
+    /// Creates a new dashboard session token with its creation timestamp.
     pub async fn create_session(&self, token: &str, ts: i64) -> ApiResult<()> {
         self.session_store
             .create_session(token, ts)
@@ -70,6 +80,7 @@ impl AuthService {
             .map_err(|e| ApiError::internal(format!("create session: {e}")))
     }
 
+    /// Deletes one dashboard session token.
     pub async fn delete_session(&self, token: &str) -> ApiResult<()> {
         self.session_store
             .delete_session(token)
@@ -77,6 +88,8 @@ impl AuthService {
             .map_err(|e| ApiError::internal(format!("delete session: {e}")))
     }
 
+    /// Deletes all dashboard sessions except the caller-selected token, which
+    /// is used after password changes and similar security events.
     pub async fn delete_sessions_except(&self, token: &str) -> ApiResult<()> {
         self.session_store
             .delete_sessions_except(token)
@@ -84,6 +97,8 @@ impl AuthService {
             .map_err(|e| ApiError::internal(format!("delete other sessions: {e}")))
     }
 
+    /// Reads the creation timestamp for one session token so callers can apply
+    /// session-age and timeout policy.
     pub async fn get_session_created_at(&self, token: &str) -> ApiResult<Option<i64>> {
         self.session_store
             .get_session_created_at(token)
@@ -91,6 +106,7 @@ impl AuthService {
             .map_err(|e| ApiError::internal(format!("get session created_at: {e}")))
     }
 
+    /// Prunes expired sessions according to the configured maximum age.
     pub async fn prune_expired_sessions(&self, max_age_ms: i64) -> ApiResult<()> {
         self.session_store
             .prune_expired_sessions(max_age_ms)
@@ -98,6 +114,7 @@ impl AuthService {
             .map_err(|e| ApiError::internal(format!("prune sessions: {e}")))
     }
 
+    /// Lists active dashboard session tokens for audit and housekeeping flows.
     pub async fn list_sessions(&self) -> ApiResult<Vec<String>> {
         self.session_store
             .list_sessions()
