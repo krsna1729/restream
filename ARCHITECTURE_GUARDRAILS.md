@@ -1,43 +1,47 @@
-# Architecture Guardrails
+# Architecture guardrails
 
-This repository keeps architectural drift visible through CI and local scripts.
-The guardrails are intentionally small and mechanical: they do not prove the
-whole design is ideal, but they catch the highest-risk regressions early.
+This page explains where architecture drift is enforced. The scripts own the
+exact checks and generated fields; architecture documents own the design
+rationale.
 
-## Source Audit
+## Contents
 
-Run:
+- [Source audit](#source-audit)
+- [Regression evidence](#regression-evidence)
+- [Gate selection](#gate-selection)
+
+## Source audit
+
+Run the canonical source audit:
 
 ```sh
-./scripts/check/source-audit.sh
+scripts/check/source-audit.sh
 ```
 
-The audit enforces:
+[scripts/check/source-audit.sh](scripts/check/source-audit.sh) is authoritative
+for the boundaries it rejects and the schema of `target/source-audit.json`.
+Do not copy its current import patterns, file limits, approved environment-read
+locations, schema fields, or generated inventories into this page. A change to
+one of those rules belongs in the script and its tests or CI wiring.
 
-- `src/media/` must not import API modules.
-- Large files may not grow beyond their current no-growth baselines:
-  - `src/media/engine.rs`: 6587 lines
-  - `src/bin/test_harness.rs`: 10282 lines
-- Production code must not add raw `std::env::var` reads outside the approved
-  config/startup/test-harness boundaries.
+The audit is deliberately mechanical. Passing it proves that the encoded
+high-risk regressions are absent; it does not prove that every module boundary
+is ideal. Current ownership guidance lives in
+[Architecture](docs/architecture.md) and the
+[layering audit skill](docs/agent-guidance/skills/layering-audit/SKILL.md).
 
-The script also writes `target/source-audit.json` with line counts, route-module
-count, repository-module count, feature-cfg count, and forbidden-import counts.
+## Regression evidence
 
-## Regression Artifacts
+[Regression artifacts](docs/regression-artifacts.md) maps historical failure
+classes to durable fixtures, focused tests, harness workflows, or generated
+artifact locations. Add evidence there when a new architecture guardrail is
+introduced instead of embedding a changing replay inventory here.
 
-Historical failure classes that drove the architecture phases are indexed in
-[`docs/regression-artifacts.md`](docs/regression-artifacts.md). The index links
-each failure class to a checked-in fixture, harness mode, proof gate, or
-documented generated-artifact location.
+## Gate selection
 
-## Related Gates
+[AGENTS.md](AGENTS.md) owns the file-to-first-gate routing used by agents, and
+[Testing](docs/testing.md) owns contributor-facing proof selection. This page
+does not maintain a second gate table.
 
-- API boundary changes: `./scripts/check/api-contract.sh`
-- Concurrency and lifecycle changes: `./scripts/check/concurrency/fast.sh`
-  and `./scripts/check/concurrency/contract.sh`
-- Fixture discipline: `./scripts/check/fixture-discipline.sh`
-- Test hygiene: `./scripts/check/test-hygiene.sh`
-
-When a phase intentionally changes ownership boundaries, update this file and
-the relevant script in the same commit.
+When an architecture boundary changes intentionally, update the executable
+audit, its proof, and the relevant architecture contract in the same change.

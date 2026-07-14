@@ -55,8 +55,8 @@ Run ONE probe, file items, fix nothing:
   invalid tag type, non-monotonic timestamps, mid-stream parameter change).
 - Grep FFmpeg/libsrt OS-thread spawns and verify `catch_unwind` coverage.
 - Run one harness fault mode and compare its assertions against
-  `docs/run-to-completion-analysis.md` — behaviors documented but unasserted
-  become items.
+  `docs/stage-boundary-proof-map.md` and `docs/regression-artifacts.md`;
+  behaviors documented but unasserted become items.
 - Check reconnect paths: source re-publish, egress retry backoff, SRT bond vs
   duplicate-publisher handling (duplicates are NOT bonds — AGENTS.md).
 

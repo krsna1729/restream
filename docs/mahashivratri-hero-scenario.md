@@ -1,5 +1,20 @@
 # Mahashivratri Hero Scenario: SRT Multi-Language Fan-Out
 
+## Contents
+
+- [Status](#status)
+- [Canonical Mahashivratri Workload](#canonical-mahashivratri-workload)
+- [Expected Current Runtime Graph](#expected-current-runtime-graph)
+- [Capacity Model](#capacity-model)
+- [Measured Baselines](#measured-baselines)
+- [Risks To Track](#risks-to-track)
+- [Representative Harness Plan](#representative-harness-plan)
+- [Harness Implementation Shape](#harness-implementation-shape)
+- [Proposed Controls](#proposed-controls)
+- [Acceptance Contract](#acceptance-contract)
+- [Tracking Checklist](#tracking-checklist)
+- [Related Documentation](#related-documentation)
+
 ## Status
 
 - **Scenario status:** canonical Mahashivratri capacity and correctness target

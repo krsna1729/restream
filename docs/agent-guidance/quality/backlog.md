@@ -10,6 +10,12 @@ Dimensions: `proof` (correct/proven) · `resilience` (reliable/resilient) ·
 Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 (concurrency/hot-path architecture).
 
+## Contents
+
+- [Open](#open)
+- [Blocked](#blocked)
+- [Archive](#archive)
+
 ## Open
 
 ### Q-001 [proof] [sonnet] Establish the per-module coverage map
@@ -146,14 +152,14 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   invisible.
 - Status: open (Filed: 2026-07-03 by bootstrap)
 
-### Q-007 [groom] [sonnet] Diff concurrency-proof coverage doc against the fast gate
-- Goal: every rule claimed in `docs/concurrency-proof-coverage-2026-07-02.md`
+### Q-007 [groom] [sonnet] Diff the stage proof map against the fast gate
+- Goal: every current rule claimed in `docs/stage-boundary-proof-map.md`
   mapped to its enforcement in `scripts/check/concurrency/fast.sh` /
   `scripts/check/concurrency/contract.sh`; uncovered rules filed as
   `[proof]` items (tier per rule complexity).
 - Files: read-only; output to backlog + journal.
 - Gates: none (grooming).
-- Context: the coverage doc is a point-in-time claim (2026-07-02); the gates
+- Context: the proof map is the maintained human-readable inventory; the gates
   are what actually bind. Drift between them is unproven confidence.
 - Status: open (Filed: 2026-07-03 by bootstrap)
 

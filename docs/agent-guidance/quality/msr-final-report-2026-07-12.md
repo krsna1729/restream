@@ -10,6 +10,18 @@ warn/error/panic lines.
 Artifact root:
 `.local/artifacts/msr-final-full-20260712T165925Z`
 
+## Contents
+
+- [Release Read](#release-read)
+- [Memory Scaling](#memory-scaling)
+- [RTMP vs SRT Read](#rtmp-vs-srt-read)
+- [1,200-Output Perf Snapshot](#1200-output-perf-snapshot)
+- [Perf Investigation Summary](#perf-investigation-summary)
+- [Thread Shape](#thread-shape)
+- [Mixed-Matrix Thread Shape](#mixed-matrix-thread-shape)
+- [Capacity Read](#capacity-read)
+- [Sampling Confidence](#sampling-confidence)
+
 ## Release Read
 
 Recommendation: **release candidate / controlled deployment is reasonable for

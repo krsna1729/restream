@@ -11,6 +11,16 @@ This repo has several correctness-sensitive boundaries:
 The goal is not just "tests exist". The goal is that each boundary has the
 right kind of proof for the failure mode it can exhibit.
 
+## Contents
+
+- [Proof Ladder](#proof-ladder)
+- [Which Proof To Add](#which-proof-to-add)
+- [Gate Commands](#gate-commands)
+- [Required Update Discipline](#required-update-discipline)
+- [Common Failure Patterns](#common-failure-patterns)
+- [Current Mandatory Surfaces](#current-mandatory-surfaces)
+- [Next Gaps](#next-gaps)
+
 ## Proof Ladder
 
 Use the narrowest proof that can actually catch the bug:
@@ -105,8 +115,10 @@ The full gate records a runtime-process baseline first, then asserts that the
 run leaves no new `restream`, `mediamtx`, `ffmpeg`, `ffprobe`, or
 `test_harness` survivors behind.
 
-The current proof inventory is summarized in
-[Concurrency Proof Coverage Report - 2026-07-02](concurrency-proof-coverage-2026-07-02.md).
+The maintained proof inventory is the
+[stage boundary proof map](stage-boundary-proof-map.md). It names the current
+boundary, invariant, enforcing proof, and remaining gap without copying gate
+internals into this guide.
 
 Both gates also carry explicit property/stress coverage for lifecycle
 permutations and thread-hop wakeups, rather than relying on the general
@@ -130,7 +142,7 @@ surface already covers it.
 - Silent wake loss: task/thread blocks forever after cancel or close.
 - Cancelled-stage reuse: registry returns a dead shared stage instead of a new one.
 - Teardown erases diagnosis: runtime cleanup drops the last structured error.
-- Harness drift: the live test still expects old cleanup behavior after runtime
+- Harness drift: the live test still expects outdated cleanup behavior after runtime
   semantics intentionally improved.
 - "Fast" local validation skips the actual proof gate, so model checks rot.
 
@@ -175,7 +187,7 @@ surface already covers it.
   - `proptest_external_output_dts_routing_preserves_per_stream_monotonicity`
   - `external_720p_stage_emits_live_packets_for_h264_marker_fixture`
   - `external_1080p_stage_remuxes_marker_fixture_with_monotone_dts`
-- `src/media/hls.rs`
+- `src/media/hls/`
   - `hls_segment_boundaries_preserve_non_decreasing_dts_per_stream`
 - `src/media/srt.rs`
   - `epoll_waiter_coordination`

@@ -7,21 +7,33 @@ and the media-stage orchestration around transcoding.
 This README is intentionally short. It should get a new developer from clone to
 useful context without making them read the whole system on day one.
 
-## Start Here
+## Contents
 
-On Debian/Ubuntu, the fastest setup path is:
+- [Start here](#start-here)
+- [Develop from source](#develop-from-source)
+- [Daily loop](#daily-loop)
+- [Codebase map](#codebase-map)
+- [Scratch runtime and live-harness containers](#scratch-runtime-and-live-harness-containers)
+- [Read next](#read-next)
+- [Expectations](#expectations)
+
+## Start here
+
+With the Linux x86_64 `restream` executable from a GitHub release in the
+current directory, start it directly:
 
 ```sh
-./scripts/dev/prepare.sh
-cargo run
+RESTREAM_INITIAL_ADMIN_PASSWORD=change-me ./restream
 ```
 
-`prepare.sh` is the clean-checkout contract: it verifies the committed Node
-toolchain, builds the pinned native prefix, and generates `public/` from the
-authored files in `web/`. Use `bootstrap.sh` only when a Debian/Ubuntu host
-still needs its system packages, Rust toolchain, Node, or Mediamtx installed.
+Choose a strong initial password outside local evaluation. Then open
+`http://localhost:3030`; stop the process with `Ctrl+C`. Runtime state is
+created under `.restream/` in the current directory.
 
-Then open `http://localhost:3030`.
+The release also provides the project license, third-party notices and license
+texts, and an SBOM. Release automation builds and certifies the downloadable
+bytes; `scripts/build/app-static.sh` is a separate engineering tool and is not
+the source of the archive.
 
 Default ports:
 
@@ -33,31 +45,38 @@ The dashboard/API binds to `127.0.0.1` by default. Override that with
 `RESTREAM_HTTP_BIND_ADDR` when you intentionally want to expose it on another
 interface.
 
-On first startup, Restream uses `RESTREAM_INITIAL_ADMIN_PASSWORD` when it is
-set. Otherwise it generates a high-entropy initial password and writes it next
-to the SQLite database as `restream-initial-admin-password.txt` with
-owner-only permissions.
+When `RESTREAM_INITIAL_ADMIN_PASSWORD` is unset, Restream generates a
+high-entropy initial password and writes it next to the SQLite database as
+`restream-initial-admin-password.txt` with owner-only permissions.
 
-## Running Restream
+Release operators should follow the [release runbook](docs/release-runbook.md),
+which owns local due diligence, GitHub dry-runs, and gated tag publishing.
 
-The supported launch paths are the scratch container below and the Linux x86_64
-binary archives attached to each GitHub release. The Restream archive contains
-the `restream` binary, project license, third-party component notices, and the
-release SBOM. The `restream-mcp` and `test_harness` binaries are shipped as
-separate archives. Use live harness tooling from a source checkout when it
-needs fixtures, MediaMTX, or host network setup.
+## Develop from source
 
-`scripts/build/app-static.sh` remains an engineering build path. It is not a
-single-file release contract until its static-runtime proof is restored.
+On a fresh Debian or Ubuntu development host, install the repository toolchain
+once:
 
-Release operators should follow [docs/release-runbook.md](docs/release-runbook.md);
-it wraps local due diligence, GitHub dry-runs, and gated tag publishing in
-scripts so the process is repeatable.
+```sh
+scripts/dev/bootstrap.sh
+```
 
-For a host source build, install the dependencies described in
-[docs/development.md](docs/development.md), then use the daily loop below.
+Then prepare generated inputs, build the development binary, and run that
+binary directly:
 
-## Daily Loop
+```sh
+scripts/dev/prepare.sh
+scripts/build/resource-limit.sh scripts/build/app-native.sh
+RESTREAM_INITIAL_ADMIN_PASSWORD=change-me target/debug/restream
+```
+
+`bootstrap.sh` owns host packages, Rust, Node, frontend dependencies, MediaMTX,
+and the pinned native prefix. `prepare.sh` assumes that host setup already
+exists; it refreshes the native prefix and generated frontend assets for the
+checkout. See the [developer guide](docs/development.md) for other Linux
+distributions and scoped workflows.
+
+## Daily loop
 
 Most backend work stays in this loop:
 
@@ -80,9 +99,9 @@ Use `npm run test:frontend:coverage` for the scoped Node-side TypeScript
 coverage gate and `npm run test:frontend:coverage:all` for the broader
 diagnostic all-files report.
 
-## Codebase Map
+## Codebase map
 
-- `src/api.rs` and `src/lib.rs`: app startup, routes, runtime wiring
+- `src/api/` and `src/lib.rs`: routes, handlers, app startup, and runtime wiring
 - `src/media/`: ingest, egress, mux/demux, ring buffers, HLS, transcoding
 - `src/domain/`: persisted models and business logic
 - `src/planner/`: pipeline planning/orchestration helpers
@@ -92,7 +111,7 @@ diagnostic all-files report.
 - `tests/`: Rust integration tests
 - `scripts/build/`, `scripts/check/`, `scripts/dev/`, `scripts/harness/`: builds, gates, setup, and live validation
 
-## Scratch Runtime and Live-Harness Containers
+## Scratch runtime and live-harness containers
 
 The Dockerfile rebuilds native dependencies and frontend output from the same
 committed scripts used locally in a clean build container, then produces a
@@ -107,7 +126,10 @@ docker build \
   -t restream:container .
 docker run --rm \
   -e RESTREAM_INITIAL_ADMIN_PASSWORD=change-me \
-  -p 3030:3030 restream:container
+  -p 3030:3030 \
+  -p 1935:1935 \
+  -p 10080:10080/udp \
+  restream:container
 ```
 
 The provenance arguments are required because `.git/` is intentionally absent
@@ -143,15 +165,16 @@ passed directly. The normal production image needs only its documented TCP/UDP
 ports. The `runtime-ubuntu` target remains available as a compatibility
 fallback, but the default image is `runtime`/scratch.
 
-## Read Next
+## Read next
 
+- [Documentation Guide](docs/README.md): reading paths and the complete documentation index
 - [Developer Guide](docs/development.md): setup, inner loop, tests, benchmarks, static build
 - [Architecture](docs/architecture.md): runtime shape and major moving parts
 - [Configuration](docs/configuration.md): env vars, ports, paths, persisted settings
 - [API Reference](docs/api-reference.md): route-level behavior
 - [Testing](docs/testing.md): verification strategy and live test entry points
 - [Observability](docs/observability.md): health, diagnostics, telemetry
-- [Current Priorities](docs/current-priorities.md): current platform priorities and still-relevant follow-up work
+- [Current Priorities](docs/current-priorities.md): durable platform priority themes and links to actionable work
 
 ## Expectations
 

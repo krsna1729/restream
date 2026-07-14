@@ -2,6 +2,20 @@
 
 Instructions for AI coding agents in this repository.
 
+## Contents
+
+- [Core Rules](#core-rules)
+- [Repository Map](#repository-map)
+- [Commands](#commands)
+- [Inner Loop](#inner-loop)
+- [Build and Worktree Safety](#build-and-worktree-safety)
+- [Media Rules](#media-rules)
+- [Hot-Path Rules](#hot-path-rules)
+- [Testing](#testing)
+- [Autonomous Quality Loops](#autonomous-quality-loops)
+- [Operational Guidance](#operational-guidance)
+- [Key References](#key-references)
+
 ## Core Rules
 
 - Keep changes small, intentional, and consistent with existing Rust/TypeScript patterns.
@@ -87,6 +101,7 @@ in on demand, and verify with the narrowest gate first.
 | concurrency primitives or thread hops | `scripts/check/concurrency/fast.sh` |
 | frontend/backend contract surface | `scripts/check/api-contract.sh` |
 | test media, fixtures, bench/harness setup | `scripts/check/fixture-discipline.sh` |
+| Markdown documentation | `node scripts/check/docs.mjs` |
 | `web/ts/`, `web/styles/input.css` | `npm run test:frontend` (plus Playwright for browser-only behavior) |
 | hot-path code | relevant `benches/` suite before and after |
 | RTMP/SRT/HLS protocol behavior | `test_harness` `correctness*` modes (protocol-test skill) |

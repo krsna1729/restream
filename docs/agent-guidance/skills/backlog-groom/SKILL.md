@@ -34,10 +34,10 @@ A well-formed item in `docs/agent-guidance/quality/backlog.md`:
 
 - **proof:** discovery recipes in the proof-sweep skill (coverage map,
   panic-path inventory, invariant cross-check, gate-coverage diff against
-  `docs/concurrency-proof-coverage-2026-07-02.md`).
+  `docs/stage-boundary-proof-map.md`).
 - **resilience:** discovery recipes in resilience-sweep; plus
-  `docs/run-to-completion-analysis.md` and `docs/resource-sweep.md` for
-  documented-but-unasserted behaviors.
+  `docs/stage-boundary-proof-map.md`, `docs/regression-artifacts.md`, and
+  `docs/resource-sweep.md` for documented-but-unasserted behaviors.
 - **modularity:** discovery recipes in modularity-sweep;
   `docs/layering-roadmap.md` topmost undone steps.
 - **efficiency/performance:** stale ledger rows and standing opportunities in

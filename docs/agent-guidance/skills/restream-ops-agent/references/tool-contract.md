@@ -2,6 +2,13 @@
 
 This reference file supports the `restream-ops-agent` skill.
 
+## Contents
+
+- [Tool mapping](#tool-mapping)
+- [Common request patterns](#common-request-patterns)
+- [Interpretation guidance](#interpretation-guidance)
+- [Output change kinds currently supported](#output-change-kinds-currently-supported)
+
 ## Tool mapping
 
 | Tool | Route | Use for |

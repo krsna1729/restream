@@ -233,6 +233,10 @@ diff_contains_concurrency_change() {
 }
 
 for file in "${changed_files[@]}"; do
+    if [[ "$file" == *.md ]] || [[ "$file" == "scripts/check/docs.mjs" ]]; then
+        add_auto_gate "node scripts/check/docs.mjs"
+    fi
+
     if [[ "$file" == *.rs ]]; then
         rust_files+=("$file")
         add_auto_gate "cargo fmt --all --check"
@@ -349,4 +353,8 @@ fi
 
 if [[ -n "${auto_gates["npm run format:check"]+x}" ]]; then
     run_gate npm run format:check
+fi
+
+if [[ -n "${auto_gates["node scripts/check/docs.mjs"]+x}" ]]; then
+    run_gate node scripts/check/docs.mjs
 fi
