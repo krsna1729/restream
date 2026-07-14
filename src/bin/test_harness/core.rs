@@ -18,8 +18,8 @@ fn path_profile(path: &Path) -> Option<&'static str> {
     None
 }
 
-pub(crate) fn is_bench_profile(path: &Path) -> bool {
-    matches!(path_profile(path), Some("bench"))
+pub(crate) fn is_optimized_profile(path: &Path) -> bool {
+    matches!(path_profile(path), Some("bench" | "release"))
 }
 
 pub(crate) fn restream_bin_is_explicit() -> bool {
@@ -31,7 +31,8 @@ pub(crate) fn measurement_profile_ok_with_explicit(
     restream_path: &Path,
     explicit_restream_bin: bool,
 ) -> bool {
-    is_bench_profile(harness_path) && (explicit_restream_bin || is_bench_profile(restream_path))
+    is_optimized_profile(harness_path)
+        && (explicit_restream_bin || is_optimized_profile(restream_path))
 }
 
 pub(crate) fn measurement_profile_ok(harness_path: &Path, restream_path: &Path) -> bool {
@@ -125,7 +126,7 @@ pub(crate) fn ensure_measurement_profile(command: &str, raw: &[String]) -> Resul
     }
 
     Err(format!(
-        "{command} requires bench-profile binaries for valid measurements; build them with `scripts/build/bench-harness.sh` and run `target/bench/test_harness`"
+        "{command} requires optimized measurement binaries; use `target/release/test_harness` in release CI, or build local measurement binaries with `scripts/build/bench-harness.sh`"
     ))
 }
 
