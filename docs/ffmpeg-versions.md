@@ -1,154 +1,80 @@
-# FFmpeg Version Configuration
+# FFmpeg version configuration
 
-This document explains how the static FFmpeg version is selected for restream
-release builds.
+This reference explains which files own native FFmpeg selection and how to
+change the pin without creating a second build recipe.
 
 ## Contents
 
-- [Quick Start](#quick-start)
-- [Build Workflow](#build-workflow)
-- [Version Information](#version-information)
-- [Breaking Changes](#breaking-changes)
-- [Environment Variables](#environment-variables)
-- [Manual Version Update](#manual-version-update)
+- [Sources of truth](#sources-of-truth)
+- [Build the pinned version](#build-the-pinned-version)
+- [Update the version](#update-the-version)
+- [Runtime executable override](#runtime-executable-override)
 - [Troubleshooting](#troubleshooting)
-- [See Also](#see-also)
 
-## Quick Start
+## Sources of truth
 
-The current static build default is FFmpeg `n8.1.2`, matching the
-`ffmpeg-next = "8.0"` Rust binding family in `Cargo.toml`.
+Two checked-in inputs must remain compatible:
 
-```bash
-scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
+- [scripts/build/native/native-inputs.lock](../scripts/build/native/native-inputs.lock)
+  owns the immutable FFmpeg tag and resolved upstream commit used by the native
+  build;
+- [Cargo.toml](../Cargo.toml) owns the `ffmpeg-next` Rust binding family.
+
+[scripts/build/native-deps.sh](../scripts/build/native-deps.sh) owns download,
+configuration, compilation, capability verification, and placement of the
+embedded `public/bin/ffmpeg`. It rejects a version override that disagrees
+with the committed lock. Do not copy its flags, dependency list, or output-copy
+steps into this document.
+
+## Build the pinned version
+
+Run the canonical native builder through the resource limiter:
+
+```sh
+scripts/build/resource-limit.sh scripts/build/native-deps.sh
 ```
 
-To test a different FFmpeg tag, override `FFMPEG_VERSION` for the external
-FFmpeg library and embedded subprocess binary, then update `ffmpeg-next` in
-`Cargo.toml` only when crossing Rust binding families.
+The script reuses a valid native prefix and explains how to request a rebuild
+when one is needed. Application build entrypoints consume the generated
+environment; callers should not reconstruct it with manual `pkg-config`,
+compiler, or copy commands.
 
-## Build Workflow
+## Update the version
 
-### 1. Select FFmpeg Version
-```bash
-FFMPEG_VERSION=n8.1.2 scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
-```
+A native-version change should be one reviewed change set:
 
-### 2. Build Static FFmpeg Binary
-```bash
-scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
-```
-This downloads, patches, and compiles FFmpeg from source with optimizations:
-- `x86-64-v3` baseline (AVX2 on Haswell 2013+)
-- `-O3 -ffast-math` optimizations
-- x86 ASM enabled via nasm
-- Minimal configuration (only codec/filter/protocol essentials, including
-  static x264/x265 encoders)
+1. Update the FFmpeg tag and resolved commit in
+   `scripts/build/native/native-inputs.lock`.
+2. Update the default consumed by `scripts/build/native-deps.sh` in the same
+   change.
+3. Change the `ffmpeg-next` dependency only when the selected FFmpeg release
+   crosses binding families or requires an API adjustment.
+4. Rebuild through the canonical native builder and run the media and release
+   gates appropriate to the changed codecs, filters, protocols, and artifact
+   surface.
 
-### 3. Build Rust Binary
-```bash
-scripts/build/resource-limit.sh ./scripts/build/app-static.sh
-```
-Compiles with:
-- Matching `ffmpeg-next` crate version
-- LTO enabled
-- x86-64-v3 CPU baseline with runtime fallback
+The lock file, not this page, answers “which version is current.” This avoids a
+version table becoming stale whenever the pin moves.
 
-### 4. (Optional) Embed in Binary
-If using Scenario 2 (lazy embedding), copy the binary to `public/bin/ffmpeg`:
-```bash
-mkdir -p public/bin
-cp .local/build/static/prefix/bin/ffmpeg public/bin/ffmpeg
-```
+## Runtime executable override
 
-## Version Information
+External transforms, subprocess file ingest, and recording remux normally use
+the embedded executable prepared by the native build. `FFMPEG_BIN_PATH`
+overrides that executable for a deployment; its user-facing contract belongs
+in [Configuration](configuration.md).
 
-| Version | Role | Notes |
-|---------|------|-------|
-| **8.1.2** | Current default | Static build tag `n8.1.2` |
-| **8.0** | Binding family | Rust crate family used by `ffmpeg-next = "8.0"` |
-| **6.1.5** | Historical validation | Previous static release validation baseline |
-
-### Compatibility Matrix
-
-| External | Internal | Rust Binary | Notes |
-|----------|----------|-------------|-------|
-| 8.1.2 | ffmpeg-next 8.0 | ✅ Current | Current build-script default |
-| 6.1.5 | ffmpeg-next 6.0 | Historical | Previous validation baseline |
-
-## Breaking Changes
-
-### FFmpeg 6.x → 7.x
-- Minor codec API changes (some deprecated options removed)
-- Transcoding logic remains stable
-- Risk: **Low**
-
-### FFmpeg 7.x → 8.x
-- Profile/level handling changes
-- Some encoding option deprecated
-- Risk: **Medium** (may need codec option adjustments)
-
-## Environment Variables
-
-When building, you can optionally set these directly on the resource-limited script:
-
-```bash
-# External FFmpeg version (library and embedded binary)
-export FFMPEG_VERSION=n8.1.2
-
-# Build root location
-export RESTREAM_BUILD_ROOT=/custom/build/path
-
-# Force rebuild
-export RESTREAM_REBUILD_NATIVE=1
-
-# Then build
-scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
-```
-
-## Manual Version Update
-
-If you prefer to configure manually:
-
-### Update External FFmpeg Version
-Edit `scripts/build/native-deps.sh`:
-```bash
-FFMPEG_VERSION="${FFMPEG_VERSION:-n8.1.2}"    # Change to desired tag
-```
-
-### Update Internal FFmpeg Version
-Edit `Cargo.toml`:
-```toml
-ffmpeg-next = { version = "8.0", default-features = false, features = ["codec", "filter", "format", "software-resampling", "software-scaling"] }
-```
+The linked in-process FFmpeg libraries are selected at build time and cannot be
+changed with the runtime executable override.
 
 ## Troubleshooting
 
-### "FFmpeg binary not found in PATH"
-If external transcoding fails:
-```bash
-# Verify binary was built
-ls -lh .local/build/static/prefix/bin/ffmpeg
-
-# Or specify explicitly
-export FFMPEG_BIN_PATH=/path/to/ffmpeg
-```
-
-### "ffmpeg-next crate compilation failed"
-Verify the crate version matches your FFmpeg binary:
-```bash
-# Check what version you're trying to use
-grep "ffmpeg-next" Cargo.toml
-grep "FFMPEG_VERSION" scripts/build/native-deps.sh
-```
-
-### Transcoding failures with new FFmpeg version
-- Check FFmpeg version compatibility: `ffmpeg -version`
-- Verify codec support: `ffmpeg -codecs | grep h264`
-- Enable verbose logging for transcoder (see [observability.md](observability.md))
-
-## See Also
-
-- [High-Performance Data Path](high-performance-data-path.md) — CPU optimization strategy
-- [Media Pipeline](media-pipeline.md) — Architecture and threading model
-- [Configuration](./configuration.md) — Other environment variables
+- If native setup rejects a version, compare the requested value with
+  `scripts/build/native/native-inputs.lock`; an unreviewed override is
+  intentionally unsupported.
+- If the embedded executable is missing, rerun the native builder rather than
+  copying a host binary into `public/bin/`.
+- If Rust compilation fails after a version update, check the
+  `ffmpeg-next` family in `Cargo.toml` and the compiler output before
+  changing features.
+- If runtime transcoding fails, verify the resolved executable and use
+  [Observability](observability.md) for stage and subprocess diagnostics.

@@ -1,61 +1,61 @@
-# Source Distribution Manifest
+# Source distribution manifest
 
-This repository is the source distribution. It intentionally does not commit
-large generated native build artifacts.
+This repository is the source distribution. It commits reproducible inputs and
+selected runtime frontend outputs, but not large native or Rust build trees.
 
 ## Contents
 
-- [Committed Inputs](#committed-inputs)
-- [Generated Artifacts](#generated-artifacts)
+- [Committed inputs](#committed-inputs)
+- [Generated local state](#generated-local-state)
+- [Preparation owners](#preparation-owners)
 - [Binary and container distributions](#binary-and-container-distributions)
 
-## Committed Inputs
+## Committed inputs
 
 - Rust sources, tests, benchmarks, `Cargo.toml`, and `Cargo.lock`.
-- Frontend TypeScript sources under `web/ts/`, static HTML/CSS inputs, and
-  generated `public/js/`/`public/output.css` artifacts for runtime embedding.
-- Node toolchain metadata: `package.json`, `package-lock.json`, and
-  `tsconfig.json`.
-- Native build scripts and metadata under `scripts/`, including the pinned
-  static-build workflow.
+- Authored frontend sources under `web/`, Node lockfiles, TypeScript
+  configuration, and the generated browser assets required for runtime
+  embedding.
+- Native build scripts, immutable source pins, patches, and configuration under
+  `scripts/build/` and `scripts/native/`.
+- License and distribution inputs under `distribution/`.
 
-## Generated Artifacts
+The presence of committed generated browser assets is a runtime-embedding
+contract. Their generation recipe remains owned by the frontend scripts and
+`package.json`, not by prose in this manifest.
 
-The following paths are generated locally and are not part of the committed
-source bundle:
+## Generated local state
 
-- `.local/build/static/prefix/`: static SRT, Mbed TLS, FFmpeg, x264, and x265 prefix.
-- `.local/build/static/env.sh`: generated native build environment.
-- `target/` and `.local/artifacts/`: Rust build and harness outputs.
+These paths are local outputs and are not part of the committed source bundle:
+
+- `.local/build/static/`: native prefix and generated build environment;
+- `target/`: Rust binaries, incremental state, reports, and Criterion data;
+- `.local/artifacts/`: harness and measurement evidence;
 - `node_modules/`: installed frontend dependencies.
+
+Runtime state under `.restream/` and local recordings are also outside the
+source distribution.
+
+## Preparation owners
+
+`scripts/dev/prepare.sh` owns clean-checkout preparation for development.
+`scripts/release/prepare-build-tree.sh` owns the stricter release-tree
+preparation used by packaging and CI.
+
+Do not duplicate their native-build, dependency-install, or frontend-generation
+steps here. A change to generated inputs or required outputs belongs in the
+owning script and its verification, with this manifest updated only when the
+distribution boundary itself changes.
 
 ## Binary and container distributions
 
-Release artifacts include the checked-in `distribution/` directory. It carries
-the Restream license, a native-component license index, and the applicable GPL,
-MPL, and Apache license texts. The same directory is copied into scratch images
-at `/usr/share/doc/restream/distribution/` and is the canonical input for binary
-bundles; do not maintain a second set of release notices in a packaging script.
+Release artifacts include the checked-in `distribution/` material. It carries
+the Restream license, native-component index, and applicable license texts. The
+same source is copied into scratch images and host bundles; packaging scripts
+must not maintain a second notice set.
 
-The GPL-enabled FFmpeg build statically links x264 and x265. Consequently, a
-binary or container release must be paired with the GitHub source archive for
-its exact Git commit. The immutable native source pins and build flags live in
-`scripts/build/native/` and `scripts/build/native-deps.sh`.
-
-Regenerate the native prefix with:
-
-```sh
-scripts/build/resource-limit.sh ./scripts/build/native-deps.sh
-```
-
-Regenerate frontend runtime assets with:
-
-```sh
-npm ci
-npm run build:frontend
-```
-
-The checked-in frontend bundle must remain reproducible from `web/ts/`,
-`package-lock.json`, and the vendored dependency versions. The HLS bundle sync
-step deliberately strips the `hls.min.js.map` source-map directive because the
-map is not shipped.
+The GPL-enabled native build links x264 and x265 and may make FFmpeg GPL.
+Binary and container releases therefore need source availability for the exact
+commit and all applicable notices. Immutable native pins live in
+`scripts/build/native/native-inputs.lock`; bundle contents and evidence are
+owned by the release scripts described in [Release compliance](release-compliance.md).
