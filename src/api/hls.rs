@@ -5,11 +5,11 @@
 use axum::{
     Json,
     extract::{OriginalUri, Path, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use super::state::{AppState, require_hls_access};
 use crate::application::hls_preview::{self, HlsPreviewReadError};
@@ -20,11 +20,10 @@ pub async fn hls_playlist_handler(
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(response) = require_hls_access(&state, &headers, &uri).await {
-        return response;
-    }
-
-    playlist_response(hls_preview::primary_playlist(state.engine.clone(), &pipeline_id).await)
+    playlist_with_hls_access(&state, &headers, &uri, || async {
+        hls_preview::primary_playlist(state.engine.clone(), &pipeline_id).await
+    })
+    .await
 }
 
 pub async fn hls_master_handler(
@@ -33,10 +32,10 @@ pub async fn hls_master_handler(
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(response) = require_hls_access(&state, &headers, &uri).await {
-        return response;
-    }
-    playlist_response(hls_preview::master_playlist(state.engine.clone(), &pipeline_id).await)
+    playlist_with_hls_access(&state, &headers, &uri, || async {
+        hls_preview::master_playlist(state.engine.clone(), &pipeline_id).await
+    })
+    .await
 }
 
 pub async fn hls_video_playlist_handler(
@@ -45,10 +44,10 @@ pub async fn hls_video_playlist_handler(
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(response) = require_hls_access(&state, &headers, &uri).await {
-        return response;
-    }
-    playlist_response(hls_preview::video_playlist(state.engine.clone(), &pipeline_id).await)
+    playlist_with_hls_access(&state, &headers, &uri, || async {
+        hls_preview::video_playlist(state.engine.clone(), &pipeline_id).await
+    })
+    .await
 }
 
 pub async fn hls_audio_playlist_handler(
@@ -57,12 +56,10 @@ pub async fn hls_audio_playlist_handler(
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(response) = require_hls_access(&state, &headers, &uri).await {
-        return response;
-    }
-    playlist_response(
-        hls_preview::audio_playlist(state.engine.clone(), &pipeline_id, track_index).await,
-    )
+    playlist_with_hls_access(&state, &headers, &uri, || async {
+        hls_preview::audio_playlist(state.engine.clone(), &pipeline_id, track_index).await
+    })
+    .await
 }
 
 pub async fn hls_segment_handler(
@@ -71,14 +68,10 @@ pub async fn hls_segment_handler(
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(response) = require_hls_access(&state, &headers, &uri).await {
-        return response;
-    }
-
-    media_response(
-        hls_preview::video_segment(state.engine.clone(), &pipeline_id, &segment).await,
-        "video/mp4",
-    )
+    media_with_hls_access(&state, &headers, &uri, "video/mp4", || async {
+        hls_preview::video_segment(state.engine.clone(), &pipeline_id, &segment).await
+    })
+    .await
 }
 
 pub async fn hls_video_segment_handler(
@@ -87,13 +80,10 @@ pub async fn hls_video_segment_handler(
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(response) = require_hls_access(&state, &headers, &uri).await {
-        return response;
-    }
-    media_response(
-        hls_preview::video_segment(state.engine.clone(), &pipeline_id, &segment).await,
-        "video/mp4",
-    )
+    media_with_hls_access(&state, &headers, &uri, "video/mp4", || async {
+        hls_preview::video_segment(state.engine.clone(), &pipeline_id, &segment).await
+    })
+    .await
 }
 
 pub async fn hls_video_init_handler(
@@ -102,13 +92,10 @@ pub async fn hls_video_init_handler(
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(response) = require_hls_access(&state, &headers, &uri).await {
-        return response;
-    }
-    media_response(
-        hls_preview::video_init_segment(state.engine.clone(), &pipeline_id).await,
-        "video/mp4",
-    )
+    media_with_hls_access(&state, &headers, &uri, "video/mp4", || async {
+        hls_preview::video_init_segment(state.engine.clone(), &pipeline_id).await
+    })
+    .await
 }
 
 pub async fn hls_audio_segment_handler(
@@ -117,13 +104,10 @@ pub async fn hls_audio_segment_handler(
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(response) = require_hls_access(&state, &headers, &uri).await {
-        return response;
-    }
-    media_response(
-        hls_preview::audio_segment(state.engine.clone(), &pipeline_id, track_index, &segment).await,
-        "audio/mp4",
-    )
+    media_with_hls_access(&state, &headers, &uri, "audio/mp4", || async {
+        hls_preview::audio_segment(state.engine.clone(), &pipeline_id, track_index, &segment).await
+    })
+    .await
 }
 
 pub async fn hls_audio_init_handler(
@@ -132,13 +116,49 @@ pub async fn hls_audio_init_handler(
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(response) = require_hls_access(&state, &headers, &uri).await {
+    media_with_hls_access(&state, &headers, &uri, "audio/mp4", || async {
+        hls_preview::audio_init_segment(state.engine.clone(), &pipeline_id, track_index).await
+    })
+    .await
+}
+
+// Keep the auth gate next to transport response shaping so HLS handlers only
+// describe which playlist source they expose.
+async fn playlist_with_hls_access<F, Fut>(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    uri: &Uri,
+    load_playlist: F,
+) -> Response
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<String, HlsPreviewReadError>>,
+{
+    if let Some(response) = require_hls_access(state, headers, uri).await {
         return response;
     }
-    media_response(
-        hls_preview::audio_init_segment(state.engine.clone(), &pipeline_id, track_index).await,
-        "audio/mp4",
-    )
+
+    playlist_response(load_playlist().await)
+}
+
+// Media endpoints share the same access gate and error envelope; only the
+// underlying preview read and content type vary by route.
+async fn media_with_hls_access<F, Fut>(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    uri: &Uri,
+    content_type: &'static str,
+    load_media: F,
+) -> Response
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<bytes::Bytes, HlsPreviewReadError>>,
+{
+    if let Some(response) = require_hls_access(state, headers, uri).await {
+        return response;
+    }
+
+    media_response(load_media().await, content_type)
 }
 
 fn playlist_response(result: Result<String, HlsPreviewReadError>) -> Response {
