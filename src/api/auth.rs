@@ -43,6 +43,18 @@ pub struct RateLimitResetPayload {
 const BOOTSTRAP_PROMPT_PENDING: &str = "pending";
 const BOOTSTRAP_PROMPT_DISMISSED: &str = "dismissed";
 
+fn ok_json_response() -> Response {
+    Json(serde_json::json!({"ok": true})).into_response()
+}
+
+fn incorrect_password_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({"error": "Incorrect password"})),
+    )
+        .into_response()
+}
+
 async fn require_authenticated_token(
     state: &AppState,
     headers: &HeaderMap,
@@ -158,6 +170,16 @@ fn validate_new_dashboard_password(password: &str) -> Result<(), String> {
     Ok(())
 }
 
+async fn dismiss_bootstrap_password_prompt(state: &AppState) {
+    let _ = state
+        .auth_service
+        .set_meta(
+            BOOTSTRAP_PASSWORD_PROMPT_META_KEY,
+            BOOTSTRAP_PROMPT_DISMISSED,
+        )
+        .await;
+}
+
 pub async fn initialize_auth(
     db_pool: &sqlx::SqlitePool,
     sessions_set: &TokioRwLock<std::collections::HashSet<String>>,
@@ -269,13 +291,7 @@ pub async fn login_post_handler(
     }
     let stored_hash = match state.auth_service.get_password_hash().await {
         Ok(Some(hash)) => hash,
-        _ => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error": "Incorrect password"})),
-            )
-                .into_response();
-        }
+        _ => return incorrect_password_response(),
     };
 
     let verified = tokio::task::spawn_blocking(move || verify_password(&password, &stored_hash))
@@ -284,12 +300,10 @@ pub async fn login_post_handler(
 
     if !verified {
         state.record_security_failure(RateLimitScope::DashboardLogin, &client_ip);
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "Incorrect password"})),
-        )
-            .into_response();
+        return incorrect_password_response();
     }
+    // Session creation crosses the transport/application boundary: the cookie
+    // stores the raw token while persistence and cache state only keep its hash.
     use rand::RngExt;
     let mut token_bytes = [0u8; 32];
     rand::rng().fill(&mut token_bytes);
@@ -430,15 +444,9 @@ pub async fn change_password_handler(
     state.retain_only_session_hash(&token_hash).await;
     // Once the bootstrap password has been replaced successfully, suppress the
     // operator reminder for the current installation.
-    let _ = state
-        .auth_service
-        .set_meta(
-            BOOTSTRAP_PASSWORD_PROMPT_META_KEY,
-            BOOTSTRAP_PROMPT_DISMISSED,
-        )
-        .await;
+    dismiss_bootstrap_password_prompt(&state).await;
 
-    Json(serde_json::json!({"ok": true})).into_response()
+    ok_json_response()
 }
 
 pub async fn dismiss_password_change_prompt_handler(
@@ -461,7 +469,7 @@ pub async fn dismiss_password_change_prompt_handler(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    Json(serde_json::json!({"ok": true})).into_response()
+    ok_json_response()
 }
 
 pub async fn rate_limits_handler(
@@ -585,9 +593,11 @@ pub async fn stream_keys_handler(
 #[cfg(test)]
 mod tests {
     use super::{
-        constant_time_eq, select_initial_admin_password, validate_new_dashboard_password,
+        constant_time_eq, incorrect_password_response, ok_json_response,
+        select_initial_admin_password, validate_new_dashboard_password,
         write_bootstrap_password_file,
     };
+    use axum::http::StatusCode;
 
     #[test]
     fn initial_admin_password_prefers_non_empty_env_value() {
@@ -641,5 +651,18 @@ mod tests {
             "New password must be at least 12 characters"
         );
         assert!(validate_new_dashboard_password("long-enough1").is_ok());
+    }
+
+    #[test]
+    fn auth_ok_helper_returns_ok_status() {
+        assert_eq!(ok_json_response().status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn incorrect_password_helper_returns_unauthorized_status() {
+        assert_eq!(
+            incorrect_password_response().status(),
+            StatusCode::UNAUTHORIZED
+        );
     }
 }
