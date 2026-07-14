@@ -91,10 +91,10 @@ left to the tool contract and skill.
 
 ## Shared Rust implementation
 
-Embedded, sidecar, and central-gateway modes should reuse shared Rust handlers
-and backend traits. MCP remains a transport adapter rather than a second
-implementation of planning or execution policy.
+The current `restream-mcp` sidecar uses the shared Rust backend trait and calls
+the product-native HTTP surface. MCP remains a transport adapter rather than a
+second implementation of planning or execution policy. The in-process backend
+is scaffolding and is not a supported deployment mode.
 
-See [MCP Rust architecture](mcp-rust-architecture.md) for the module layout,
-feature boundaries, deployment tradeoffs, authentication model, and migration
-path.
+See [MCP architecture](mcp-rust-architecture.md) for current module ownership,
+feature boundaries, authentication, and the deferred embedded boundary.

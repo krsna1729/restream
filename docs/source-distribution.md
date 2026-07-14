@@ -13,9 +13,9 @@ selected runtime frontend outputs, but not large native or Rust build trees.
 ## Committed inputs
 
 - Rust sources, tests, benchmarks, `Cargo.toml`, and `Cargo.lock`.
-- Authored frontend sources under `web/`, Node lockfiles, TypeScript
-  configuration, and the generated browser assets required for runtime
-  embedding.
+- Authored frontend sources under `web/`, `package-lock.json`, `tsconfig.json`,
+  and the generated browser assets required for runtime embedding. Vendored
+  HLS assets include `hls.min.js` and its distributable `hls.min.js.map`.
 - Native build scripts, immutable source pins, patches, and configuration under
   `scripts/build/` and `scripts/native/`.
 - License and distribution inputs under `distribution/`.
@@ -28,7 +28,8 @@ contract. Their generation recipe remains owned by the frontend scripts and
 
 These paths are local outputs and are not part of the committed source bundle:
 
-- `.local/build/static/`: native prefix and generated build environment;
+- `.local/build/static/prefix/`: installed native libraries and tools;
+- `.local/build/static/`: the surrounding generated build environment;
 - `target/`: Rust binaries, incremental state, reports, and Criterion data;
 - `.local/artifacts/`: harness and measurement evidence;
 - `node_modules/`: installed frontend dependencies.
@@ -46,6 +47,11 @@ Do not duplicate their native-build, dependency-install, or frontend-generation
 steps here. A change to generated inputs or required outputs belongs in the
 owning script and its verification, with this manifest updated only when the
 distribution boundary itself changes.
+
+The stable preparation entry points used by that verification are
+`scripts/build/resource-limit.sh ./scripts/build/native-deps.sh` for the native
+prefix and `npm run build:frontend` for embedded browser output. The scripts
+own their internal steps and flags.
 
 ## Binary and container distributions
 

@@ -10,7 +10,7 @@ license, source-availability, and startup evidence.
 - [Executable evidence owner](#executable-evidence-owner)
 - [Native license basis](#native-license-basis)
 - [Application license](#application-license)
-- [Dependency policy](#dependency-policy)
+- [Dependency Policy](#dependency-policy)
 
 ## Required release properties
 
@@ -18,7 +18,8 @@ A release must:
 
 - build from checked-in Rust, frontend, and native input locks;
 - preserve the exact source commit, build timestamp, native build identity, and
-  full-provenance runtime SBOM;
+  full-provenance runtime SBOM. The public identity field is
+  `restream.nativeBuildId`;
 - scan Rust dependencies and the SBOM under the repository's current policy;
 - prove the downloadable host binary starts outside the source tree and serves
   its embedded frontend;
@@ -42,6 +43,13 @@ Release operators should invoke those owners through the
 [release runbook](release-runbook.md). Do not copy their tool list, internal
 sequence, asset inventory, or smoke-test URLs into compliance prose; changing
 those is an executable-policy change and must happen in the scripts and CI.
+
+The enforced dependency-policy entry points are `cargo audit` and
+`cargo deny check advisories licenses bans sources`. They are named here as
+release requirements; arguments, installation, and orchestration remain owned
+by the evidence script. Release builds must also preserve diagnostic events;
+introducing a `tracing/release_max_level_*` compile-time cap requires an
+explicit observability review.
 
 Generated SBOMs and packaged artifacts remain build outputs. They are not
 checked into the source tree merely to document a release.
@@ -69,7 +77,7 @@ obligations of native components linked into or distributed with the runtime.
 The checked-in [third-party component manifest](../distribution/THIRD_PARTY_COMPONENTS.md)
 is the notice-chain entry point.
 
-## Dependency policy
+## Dependency Policy
 
 `deny.toml` owns Cargo source, advisory, license, ban, and duplicate-family
 policy. Temporary exceptions must remain documented beside that policy and

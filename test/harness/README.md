@@ -35,4 +35,4 @@ Manifests own:
 
 `test/harness/modes.json` is the canonical command surface. New entries should
 be `kind: suite`, `kind: scenario`, or an explicit special-workflow runner; do
-not add legacy manifest kinds.
+not add deprecated manifest kinds.

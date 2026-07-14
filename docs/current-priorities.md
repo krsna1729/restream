@@ -63,12 +63,11 @@ This page changes only when the project's priority themes change.
 
 The following themes do not justify work by themselves:
 
-- “finish the rewrite” as a broad program;
-- preserve removed Node.js or MediaMTX runtime mental models;
+- rewrite a working owner without a concrete correctness or ownership gain;
 - split modules or crates without clearer ownership;
 - replace FFmpeg for ideological reasons;
 - duplicate active backlog items in another planning document;
-- revive completed migration plans as current guidance.
+- turn completed plans or dated snapshots into current guidance.
 
 ## Review rule
 

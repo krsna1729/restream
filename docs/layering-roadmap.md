@@ -224,8 +224,8 @@ Good backend examples in this repo:
 
 Good frontend examples in this repo:
 
-- `web/ts/features/pipeline-output-list`
-- `web/ts/features/pipeline-dependencies`
+- `web/ts/features/pipeline-output-list.ts`
+- `web/ts/features/pipeline-dependencies.ts`
 
 ### 3. Visibility boundary
 

@@ -1,381 +1,132 @@
-# MCP Rust Architecture
+# MCP architecture
 
-This document describes how to add MCP support to `restream` while keeping all
-three deployment modes open:
-
-- embedded in the main `restream` binary
-- sidecar `restream-mcp` service
-- central MCP gateway for multiple `restream` instances
-
-The design goal is simple: keep agent logic in shared Rust code, and keep
-transport concerns thin.
+Restream provides a Rust `restream-mcp` sidecar that exposes the agent-plane
+workflow over MCP. It calls the product-native `/api/v1/agent/*` HTTP surface;
+it does not bypass approval or mutate raw control-plane routes.
 
 ## Contents
 
-- [Design principles](#design-principles)
-- [Target layering](#target-layering)
-- [Recommended module layout](#recommended-module-layout)
-- [Shared trait boundary](#shared-trait-boundary)
-- [Two backend implementations](#two-backend-implementations)
-- [MCP tool layer](#mcp-tool-layer)
-- [Feature flags](#feature-flags)
-- [Binary and deployment modes](#binary-and-deployment-modes)
-- [Release examples](#release-examples)
-- [Deferred work](#deferred-work)
-- [Auth model](#auth-model)
-- [Migration path from current code](#migration-path-from-current-code)
-- [What not to do](#what-not-to-do)
-- [Recommendation for this repository](#recommendation-for-this-repository)
+- [Current shape](#current-shape)
+- [Tool contract](#tool-contract)
+- [Build and run](#build-and-run)
+- [Authentication and compatibility](#authentication-and-compatibility)
+- [Feature boundaries](#feature-boundaries)
+- [Deferred embedded mode](#deferred-embedded-mode)
+- [Source ownership](#source-ownership)
 
-## Design principles
-
-- Put business logic in shared Rust modules, not in the MCP transport.
-- Keep `/api/v1/agent/*` as the product-native control surface.
-- Make both HTTP handlers and MCP tools call the same shared Rust code.
-- Support both in-process execution and HTTP-adapter execution.
-- Keep auth, redaction, validation, approval, apply, and verify semantics owned
-  by the platform.
-
-## Target layering
-
-```mermaid
-flowchart TD
-    Core["shared Rust agent core"] --> Handlers["tool handlers"]
-    Handlers --> Backend["execution backend trait"]
-    Backend --> InProcess["in-process backend"]
-    Backend --> Http["HTTP backend"]
-
-    Core --> Transports["transport adapters"]
-    Transports --> Axum["Axum /api/v1/agent/*"]
-    Transports --> Mcp["MCP server transport"]
-```
-
-That gives one logical implementation with two transport adapters.
-
-## Recommended module layout
-
-This can start as internal modules and later become separate crates if needed.
-
-```text
-src/
-  agent_plane.rs          # existing HTTP-facing planner/read models and helpers
-  agent_execution.rs      # existing operation lifecycle and verification logic
-  agent_mcp/
-    mod.rs                # public MCP-facing entry points
-    tools.rs              # MCP tool catalog and schemas
-    handlers.rs           # tool handlers using shared core traits
-    auth.rs               # MCP auth/session acquisition strategy
-    transport.rs          # streamable-http / stdio adapter glue
-  agent_core/
-    mod.rs
-    types.rs              # shared request/response structs
-    backend.rs            # trait for invoking agent operations
-    workflows.rs          # plan/apply/verify orchestration helpers
-    errors.rs             # typed errors, feature-gated unavailable errors
-    audit.rs              # common audit/event helpers when useful
-  agent_backends/
-    mod.rs
-    in_process.rs         # direct AppState / shared-function backend
-    http.rs               # calls /api/v1/agent/* over reqwest
-
-src/bin/
-  restream-mcp.rs         # standalone MCP server binary
-```
-
-## Shared trait boundary
-
-The key abstraction is the execution backend. MCP should not know whether it is
-talking to the local process or to a remote `restream` instance.
-
-Example shape:
-
-```rust
-#[async_trait::async_trait]
-pub trait AgentBackend: Send + Sync {
-    async fn capabilities(&self) -> Result<AgentCapabilities, AgentError>;
-    async fn context(&self) -> Result<serde_json::Value, AgentError>;
-    async fn investigate(
-        &self,
-        req: InvestigationRequest,
-    ) -> Result<serde_json::Value, AgentError>;
-    async fn plan(&self, req: PlanRequest) -> Result<PlanResponse, AgentError>;
-    async fn validate(&self, req: PlanRequest) -> Result<ValidationResult, AgentError>;
-    async fn graph_diff(&self, req: PlanRequest) -> Result<GraphPreview, AgentError>;
-    async fn create_operation(
-        &self,
-        req: OperationCreateRequest,
-    ) -> Result<serde_json::Value, AgentError>;
-    async fn get_operation(&self, operation_id: &str) -> Result<serde_json::Value, AgentError>;
-    async fn approve_operation(
-        &self,
-        operation_id: &str,
-        req: ApprovalRequest,
-    ) -> Result<serde_json::Value, AgentError>;
-    async fn apply_operation(&self, operation_id: &str) -> Result<serde_json::Value, AgentError>;
-    async fn verify_operation(&self, operation_id: &str) -> Result<serde_json::Value, AgentError>;
-}
-```
-
-This keeps the handlers transport-agnostic.
-
-## Two backend implementations
-
-### 1. In-process backend
-
-Use this when MCP is embedded in the main binary.
-
-Implementation idea:
-
-- hold `Arc<AppState>`
-- call shared functions already used by HTTP handlers
-- avoid unnecessary loopback HTTP
-
-Use this for:
-
-- lowest latency
-- local development
-- simplest single-binary deployment
-
-### 2. HTTP backend
-
-Use this for a sidecar or central gateway.
-
-Implementation idea:
-
-- use `reqwest`
-- call `/api/v1/agent/*`
-- preserve route status codes and response envelopes closely
-
-Use this for:
-
-- process isolation
-- independent scaling or restart policy
-- fleet-wide central gateway mode
-
-## MCP tool layer
-
-The MCP server should be very thin. Its job is:
-
-- expose tool names
-- validate tool input shape
-- call an `AgentBackend`
-- return the platform result
-
-It should not:
-
-- reinterpret verification success
-- infer unsupported actions
-- create new approval logic
-- bypass the agent plane for raw mutation routes
-
-Recommended initial tool names:
-
-- `get_agent_capabilities`
-- `get_agent_context`
-- `investigate_pipeline_issue`
-- `plan_pipeline_change`
-- `validate_change`
-- `preview_graph_diff`
-- `create_agent_operation`
-- `get_agent_operation`
-- `approve_agent_operation`
-- `apply_agent_operation`
-- `verify_agent_operation`
-
-## Feature flags
-
-Current flags:
-
-- `agent-plane`
-- `agent-execution`
-
-Recommended additions:
-
-- `mcp-core`
-  - compiles shared MCP-facing tool definitions and traits
-- `mcp-server`
-  - enables MCP transport server code
-- `mcp-http-backend`
-  - enables the reqwest-based backend
-- `mcp-embedded`
-  - enables the in-process backend for the main binary
-
-Suggested relationships:
+## Current shape
 
 ```mermaid
 flowchart LR
-    Execution["agent-execution"] --> AgentPlane["agent-plane"]
-    McpCore["mcp-core"] --> AgentPlane
-    McpServer["mcp-server"] --> McpCore
-    HttpBackend["mcp-http-backend"] --> McpCore
-    Embedded["mcp-embedded"] --> McpCore
-    Embedded --> AgentPlane
+    Client["MCP client"] -->|"streamable HTTP /mcp or stdio"| Sidecar["restream-mcp"]
+    Sidecar --> Catalog["MCP handlers and tool catalog"]
+    Catalog --> Backend["HTTP AgentBackend"]
+    Backend -->|"/api/v1/agent/*"| Server["restream"]
+    Server --> Core["Agent planning, approval, apply, and verify"]
 ```
 
-Do not make `mcp-server` imply `agent-execution`. Read-only and planning-only
-MCP should still be possible.
+The sidecar supports streamable HTTP and stdio transports. The default HTTP
+bind is loopback. Tool handlers depend on the shared `AgentBackend` trait, and
+the current runnable binary selects `HttpAgentBackend`.
 
-## Binary and deployment modes
+## Tool contract
 
-By default, the main `restream` build stays free of agent-plane MCP code. The
-recommended release split is:
+The catalog covers capabilities and context reads, investigation and planning,
+validation and graph preview, and the approval-gated operation lifecycle. Tool
+names and JSON schemas are defined once in `src/agent_mcp/tools.rs`; clients can
+inspect the compiled catalog instead of relying on a duplicated list:
 
-- `restream`
-  - build with default features
-- `restream-mcp`
-  - build separately with `--features mcp-server,mcp-http-backend`
-
-That means the production media/control-plane binary does not carry the MCP
-transport unless we explicitly opt into an embedded mode later.
-
-The current sidecar startup path also performs a compatibility probe against
-the target `restream` instance before serving MCP traffic. By default it
-expects the same application version and git commit on both sides. Override for
-development only with `RESTREAM_MCP_VERSION_CHECK=warn` or
-`RESTREAM_MCP_VERSION_CHECK=off`.
-
-### Embedded mode
-
-```mermaid
-flowchart TD
-    Restream["restream binary"]
-    Restream --> Ui["Axum UI/API"]
-    Restream --> AgentApi["/api/v1/agent/*"]
-    Restream --> Mcp["MCP transport"]
+```sh
+./restream-mcp --print-tools
 ```
 
-Pros:
+MCP transport code validates and dispatches requests. Agent-plane code remains
+the authority for redaction, plan validation, approval, apply, and verification
+semantics. Operational guidance is in
+[Agent-plane integration](agent-plane-integration.md).
 
-- simplest deployment
-- no extra network hop
-- easiest for local use
+## Build and run
 
-Cons:
+Build the server with the sidecar's required features:
 
-- MCP traffic shares process fate with the media/control plane
-- weaker separation for auth, rate limiting, and hardening
-
-### Sidecar mode
-
-```mermaid
-flowchart LR
-    Mcp["restream-mcp :4040"] -->|HTTP agent API| Restream["restream :3030"]
+```sh
+scripts/build/resource-limit.sh cargo build \
+  --bin restream-mcp \
+  --features mcp-server,mcp-http-backend
 ```
 
-Pros:
+With `restream` listening on its default HTTP address, start streamable HTTP:
 
-- clean operational boundary
-- separate rate limiting, auth, and audit knobs
-- easiest production default
-
-Cons:
-
-- one extra network hop
-- small amount of duplicated deployment plumbing
-
-### Central gateway mode
-
-```mermaid
-flowchart LR
-    Gateway["restream-mcp-gateway"] --> A["restream instance A"]
-    Gateway --> B["restream instance B"]
-    Gateway --> C["restream instance C"]
+```sh
+RESTREAM_AGENT_SESSION_COOKIE='session=<value>' \
+  target/debug/restream-mcp --bind 127.0.0.1:4040
 ```
 
-Pros:
+The MCP endpoint is `/mcp`. For a client that launches its server over stdio:
 
-- one agent endpoint for many deployments
-- useful for fleet operations and policy centralization
-
-Cons:
-
-- requires target discovery and routing
-- stronger auth and tenancy model required
-
-## Release examples
-
-Build the main product binary:
-
-```bash
-cargo build --release --bin restream
+```sh
+RESTREAM_AGENT_SESSION_COOKIE='session=<value>' \
+  target/debug/restream-mcp --stdio
 ```
 
-Build the sidecar MCP binary:
+`RESTREAM_AGENT_BASE_URL` changes the target server from
+`http://127.0.0.1:3030`.
 
-```bash
-cargo build --release --bin restream-mcp --features mcp-server,mcp-http-backend
-```
+## Authentication and compatibility
 
-Run the sidecar against a colocated `restream` instance:
+The HTTP backend can forward one of these credentials:
 
-```bash
-RESTREAM_AGENT_BASE_URL=http://127.0.0.1:3030 \
-cargo run --release --bin restream-mcp --features mcp-server,mcp-http-backend -- --bind 127.0.0.1:4040
-```
+- `RESTREAM_AGENT_SESSION_COOKIE` for the server's session cookie;
+- `RESTREAM_AGENT_BEARER_TOKEN` for deployments that terminate bearer auth at
+  a compatible boundary.
 
-## Deferred work
+If both are present, the session cookie is selected. Empty values mean no
+credential. Transport deployment must protect these values and use TLS when the
+server is remote.
 
-Deliberately deferred for a later pass:
+Before serving, the sidecar checks the target build identity and capabilities.
+`RESTREAM_MCP_VERSION_CHECK` accepts `strict` (the default), `warn`, or `off`.
+Use `off` only for deliberate compatibility testing.
 
-- release/deploy automation that always ships `restream` and `restream-mcp`
-  together as one rollout unit
+For streamable HTTP, `RESTREAM_MCP_ALLOWED_ORIGINS` is a comma-separated origin
+allowlist. An empty list does not grant a wildcard browser origin.
 
-The architecture assumes colocated releases, but the repo does not enforce
-that packaging workflow yet.
+## Feature boundaries
 
-## Auth model
+Cargo features keep the optional surface explicit:
 
-Keep auth strategy separate from business logic.
+| Feature | Adds |
+|---|---|
+| `agent-plane` | Agent read/planning API |
+| `agent-execution` | Approval-gated operation execution |
+| `mcp-core` | Shared MCP-facing backend and type contract |
+| `mcp-server` | MCP transport/server implementation |
+| `mcp-http-backend` | HTTP adapter to `/api/v1/agent/*` |
+| `mcp-embedded` | In-process backend scaffold |
 
-Recommended approach:
+The `restream-mcp` binary requires the server and HTTP-backend feature set to
+run. The exact dependency edges and binary requirements are owned by
+`Cargo.toml`.
 
-- shared handler layer accepts an auth/session context object
-- in-process backend uses local trusted identity
-- HTTP backend uses:
-  - dashboard session cookie, or
-  - dedicated service credential, if introduced later
+## Deferred embedded mode
 
-Do not bake a browser-only session assumption into the MCP core.
+`InProcessBackend` exists to preserve a future embedded boundary, but only its
+capabilities call is wired. Other operations return `NotYetImplemented`, and
+the main `restream` binary does not mount an MCP transport. Therefore embedded
+MCP is not a supported deployment mode today.
 
-## Migration path from current code
+Completing it requires routing the existing application workflows through the
+backend without duplicating HTTP handler policy. Until that happens, use the
+HTTP-backed sidecar.
 
-### Phase 1: extract shared core
+## Source ownership
 
-- move reusable request/response structs into `agent_core::types`
-- move common workflow helpers behind `AgentBackend`
-- keep existing HTTP behavior unchanged
-
-### Phase 2: add in-process backend
-
-- implement `agent_backends::in_process`
-- have MCP handlers call it directly
-
-### Phase 3: add standalone binary
-
-- add `src/bin/restream-mcp.rs`
-- implement streamable HTTP transport
-- use the HTTP backend first if that is simpler operationally
-
-### Phase 4: optional embedded transport
-
-- mount MCP transport in the main binary behind `mcp-server + mcp-embedded`
-
-## What not to do
-
-- Do not duplicate validation rules in the MCP server.
-- Do not make the MCP layer call raw pipeline/output mutation routes directly.
-- Do not hardwire deployment to a single port model.
-- Do not couple tool names to browser/dashboard concepts.
-- Do not let sidecar mode drift semantically from embedded mode.
-
-## Recommendation for this repository
-
-Best near-term path:
-
-1. Keep `/api/v1/agent/*` as the canonical product surface.
-2. Extract shared Rust logic behind an `AgentBackend` trait.
-3. Implement a standalone `restream-mcp` Rust binary first.
-4. Preserve an embedded mode as a later feature-flagged option.
-
-That keeps production deployment conservative while preserving the shared-code
-architecture needed for all three modes.
+| Path | Responsibility |
+|---|---|
+| `src/agent_core/` | Shared backend contract, request types, and errors |
+| `src/agent_backends/http.rs` | Current HTTP-backed execution adapter |
+| `src/agent_backends/in_process.rs` | Deferred embedded adapter scaffold |
+| `src/agent_mcp/` | Tool catalog, dispatch, and transports |
+| `src/bin/restream-mcp.rs` | CLI, environment, compatibility check, backend selection |
+| `src/agent_plane.rs`, `src/agent_execution.rs` | Product-native agent behavior |
+| `Cargo.toml` | Feature graph and binary requirements |

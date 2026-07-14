@@ -78,7 +78,7 @@ Keep those workflows separate:
 
 ## Implemented outcome
 
-The migration described by this decision is complete:
+This testing-tier decision is implemented:
 
 - direct `MediaEngine::new()` harness modes were removed or re-tiered;
 - pure burst, timestamp, parser, and fault properties live in Rust tests;

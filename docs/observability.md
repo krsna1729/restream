@@ -318,9 +318,6 @@ These should be fixed before adding new timing work:
 - `MemoryQueue::stats()` exposes current depth, capacity, high-water bytes,
   blocked write count, blocked write time, and closed state. These counters
   still need to be surfaced in higher-level graph/API snapshots where useful.
-- Some diagnostic-report copy still reflects the legacy ffprobe-based runner.
-  The native runner is protocol-aware, does not emit raw ffprobe packet/frame
-  dumps, and file-mode diagnostics are entirely in-process.
 - HLS, recording, and in-process transcoder input share the TS packet feeder.
   Diagnostics must still avoid implying those mux paths are healthy merely
   because their task/token is active.
@@ -349,9 +346,9 @@ backlog with a named proof and performance gate.
 
 ## Prometheus and Grafana
 
-No Rust equivalent exists yet. The old MediaMTX Prometheus/Grafana setup
-belongs to the archived implementation under `old/`.
+Restream does not expose a Prometheus text endpoint or bundle Grafana. Current
+metrics are authenticated JSON snapshots, principally `/metrics/system` and
+the engine/pipeline telemetry routes above.
 
-Recommended next step: export bounded process, pipeline, transport, ring-reader,
-and egress counters in Prometheus format without putting labels or allocation
-work on the packet hot path.
+If a Prometheus adapter is added, it should derive bounded snapshots from those
+current owners without labels, allocation, or collection work on packet loops.
