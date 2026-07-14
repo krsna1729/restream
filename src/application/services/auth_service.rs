@@ -1,8 +1,16 @@
+//! Application service wrapper for dashboard auth persistence.
+//!
+//! This module keeps the auth-specific meta keys and session-store operations on
+//! the application boundary so HTTP handlers and lower-level stores do not each
+//! need to remember how dashboard password/session records are named or grouped.
+
 use std::sync::Arc;
 
 use crate::application::ports::{MetaStore, MetaStoreWriter, SessionStore};
 
 use super::error::{ApiError, ApiResult};
+
+const DASHBOARD_PASSWORD_HASH_META_KEY: &str = "dashboardPasswordHash";
 
 pub struct AuthService {
     meta_store: Arc<dyn MetaStore>,
@@ -25,12 +33,14 @@ impl AuthService {
 
     pub async fn get_password_hash(&self) -> ApiResult<Option<String>> {
         self.meta_store
-            .get_meta("dashboardPasswordHash")
+            .get_meta(DASHBOARD_PASSWORD_HASH_META_KEY)
             .await
             .map_err(|e| ApiError::internal(format!("get password hash: {e}")))
     }
 
     pub async fn ensure_password_hash(&self, hash: &str) -> ApiResult<()> {
+        // Bootstrap flows should only seed an initial password; later changes
+        // must go through the explicit password-update path.
         if self.get_password_hash().await?.is_none() {
             self.set_password_hash(hash).await?;
         }
@@ -39,7 +49,7 @@ impl AuthService {
 
     pub async fn set_password_hash(&self, hash: &str) -> ApiResult<()> {
         self.meta_writer
-            .set_meta("dashboardPasswordHash", hash)
+            .set_meta(DASHBOARD_PASSWORD_HASH_META_KEY, hash)
             .await
             .map(|_| ())
             .map_err(|e| ApiError::internal(format!("set password hash: {e}")))
@@ -116,7 +126,7 @@ mod tests {
     impl MetaStore for FakeAuthStore {
         fn get_meta<'a>(&'a self, key: &'a str) -> MetaLookupFuture<'a> {
             Box::pin(async move {
-                if key == "dashboardPasswordHash" {
+                if key == DASHBOARD_PASSWORD_HASH_META_KEY {
                     Ok(self.password_hash.lock().unwrap().clone())
                 } else {
                     Ok(None)
@@ -128,7 +138,7 @@ mod tests {
     impl MetaStoreWriter for FakeAuthStore {
         fn set_meta<'a>(&'a self, key: &'a str, value: &'a str) -> MetaWriteFuture<'a> {
             Box::pin(async move {
-                if key == "dashboardPasswordHash" {
+                if key == DASHBOARD_PASSWORD_HASH_META_KEY {
                     *self.password_hash.lock().unwrap() = Some(value.to_string());
                     Ok(value.to_string())
                 } else {
