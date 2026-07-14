@@ -35,6 +35,14 @@ fn login_redirect_response() -> Response {
     Redirect::to("login").into_response()
 }
 
+fn request_targets_embedded_asset(path: &str) -> bool {
+    !path.is_empty() && path.contains('.')
+}
+
+fn request_targets_authenticated_html(path: &str) -> bool {
+    path.ends_with(".html")
+}
+
 pub fn serve_embedded(path: &str) -> Response {
     serve_embedded_with_headers(path, &HeaderMap::new())
 }
@@ -44,6 +52,8 @@ pub fn serve_embedded_with_headers(path: &str, headers: &HeaderMap) -> Response 
 
     #[cfg(debug_assertions)]
     {
+        // Development builds prefer disk assets first so frontend edits do not
+        // need a Rust rebuild before the dashboard shell reflects them.
         let public_root = match std::fs::canonicalize("public") {
             Ok(p) => p,
             Err(_) => std::path::PathBuf::new(),
@@ -159,8 +169,10 @@ pub async fn spa_fallback_handler(
     uri: Uri,
 ) -> Response {
     let path = uri.path().trim_start_matches('/');
-    if !path.is_empty() && path.contains('.') {
-        if path.ends_with(".html") && !request_is_authenticated(&state, &headers).await {
+    if request_targets_embedded_asset(path) {
+        if request_targets_authenticated_html(path)
+            && !request_is_authenticated(&state, &headers).await
+        {
             return login_redirect_response();
         }
         return serve_embedded_with_headers(path, &headers).into_response();
@@ -185,7 +197,10 @@ pub async fn api_not_found_handler(uri: Uri) -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_control, static_asset_content_type};
+    use super::{
+        cache_control, request_targets_authenticated_html, request_targets_embedded_asset,
+        static_asset_content_type,
+    };
     use axum::http::HeaderValue;
 
     #[test]
@@ -211,5 +226,20 @@ mod tests {
             cache_control("output.css"),
             HeaderValue::from_static("public, max-age=3600")
         );
+    }
+
+    #[test]
+    fn embedded_asset_detection_matches_spa_fallback_policy() {
+        assert!(request_targets_embedded_asset("output.css"));
+        assert!(request_targets_embedded_asset("nested/app.js"));
+        assert!(!request_targets_embedded_asset(""));
+        assert!(!request_targets_embedded_asset("dashboard"));
+    }
+
+    #[test]
+    fn authenticated_html_detection_only_matches_html_documents() {
+        assert!(request_targets_authenticated_html("login.html"));
+        assert!(request_targets_authenticated_html("nested/index.html"));
+        assert!(!request_targets_authenticated_html("output.css"));
     }
 }
