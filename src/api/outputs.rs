@@ -252,6 +252,29 @@ fn bad_request(message: impl Into<String>) -> Response {
         .into_response()
 }
 
+fn output_response_body(
+    message: &'static str,
+    output: &crate::application::models::Output,
+) -> serde_json::Value {
+    serde_json::json!({
+        "message": message,
+        "output": api_view_models::output_response_json(output)
+    })
+}
+
+fn output_state_response(
+    message: &'static str,
+    desired_state: &'static str,
+    output: &crate::application::models::Output,
+) -> Response {
+    Json(serde_json::json!({
+        "message": message,
+        "desiredState": desired_state,
+        "output": api_view_models::output_response_json(output)
+    }))
+    .into_response()
+}
+
 fn validate_output_payload(payload: &OutputPayload) -> Result<ValidatedOutputPayload, Response> {
     if let Some(response) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
         return Err(response);
@@ -357,12 +380,11 @@ pub async fn outputs_create_handler(
         )
         .await?;
 
+    // Creation is the one output mutation that returns a 201 transport status;
+    // the steady-state mutations below keep the same JSON envelope with 200s.
     Ok((
         StatusCode::CREATED,
-        Json(serde_json::json!({
-            "message": "Output created",
-            "output": api_view_models::output_response_json(&output)
-        })),
+        Json(output_response_body("Output created", &output)),
     )
         .into_response())
 }
@@ -409,11 +431,7 @@ pub async fn outputs_update_handler(
         )
         .await?;
 
-    Ok(Json(serde_json::json!({
-        "message": "Output updated",
-        "output": api_view_models::output_response_json(&updated)
-    }))
-    .into_response())
+    Ok(Json(output_response_body("Output updated", &updated)).into_response())
 }
 
 pub async fn outputs_delete_handler(
@@ -449,12 +467,7 @@ pub async fn outputs_start_handler(
         .output_service
         .request_start(&pipeline_id, &output_id)
         .await?;
-    Ok(Json(serde_json::json!({
-        "message": "Output started",
-        "desiredState": "running",
-        "output": api_view_models::output_response_json(&output)
-    }))
-    .into_response())
+    Ok(output_state_response("Output started", "running", &output))
 }
 
 pub async fn outputs_stop_handler(
@@ -470,12 +483,7 @@ pub async fn outputs_stop_handler(
         .output_service
         .request_stop(&pipeline_id, &output_id)
         .await?;
-    Ok(Json(serde_json::json!({
-        "message": "Output stopped",
-        "desiredState": "stopped",
-        "output": api_view_models::output_response_json(&output)
-    }))
-    .into_response())
+    Ok(output_state_response("Output stopped", "stopped", &output))
 }
 
 pub async fn output_status_handler(
@@ -581,5 +589,25 @@ mod tests {
             validate_output_payload(&payload).expect_err("custom outputs should be rejected");
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn output_state_response_uses_ok_status() {
+        let output = crate::application::models::Output {
+            id: "output-1".to_string(),
+            pipeline_id: "pipe-1".to_string(),
+            name: "Primary Output".to_string(),
+            url: "rtmp://example.com/live/stream".to_string(),
+            desired_state: DesiredOutputState::Stopped,
+            config: OutputConfig {
+                video: OutputVideoConfig::Source,
+                audio: AudioRouting::Passthrough,
+            },
+            monitoring_url: None,
+        };
+
+        let response = output_state_response("Output started", "running", &output);
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
