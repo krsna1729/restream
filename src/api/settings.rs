@@ -52,6 +52,16 @@ fn dashboard_password_change_recommended(meta: Option<String>) -> bool {
     meta.as_deref() == Some("pending")
 }
 
+fn effective_ingest_host(ingest_host: &str) -> &str {
+    if ingest_host.is_empty() {
+        DEFAULT_INGEST_HOST
+    } else {
+        ingest_host
+    }
+}
+
+// Dashboard mode intentionally omits a few operator-only settings while reusing
+// the same underlying settings snapshot as the full configuration response.
 fn config_response_json(
     settings: &crate::application::settings::SettingsSnapshot,
     pipelines: Vec<serde_json::Value>,
@@ -60,31 +70,49 @@ fn config_response_json(
     dashboard_password_change_recommended: bool,
     is_dashboard_view: bool,
 ) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "serverName": settings.server_name,
+        "ingestHost": settings.ingest_host,
+        "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
+        "backendPolicy": settings.backend_policy,
+        "transcodeProfiles": settings.transcode_profiles,
+        "pipelines": pipelines,
+        "outputs": api_view_models::output_response_json_list(outputs),
+        "jobs": jobs_json
+    });
+
+    if !is_dashboard_view && let Some(body) = body.as_object_mut() {
+        body.insert(
+            "ingestSecurity".to_string(),
+            serde_json::json!(settings.ingest_security),
+        );
+        body.insert(
+            "recordingSettings".to_string(),
+            serde_json::json!(settings.recording_settings),
+        );
+        body.insert(
+            "srtIngest".to_string(),
+            serde_json::json!(settings.srt_ingest),
+        );
+    }
+
+    body
+}
+
+async fn jobs_response_json(
+    state: &AppState,
+    query: &ConfigGetQuery,
+    is_dashboard_view: bool,
+) -> Vec<serde_json::Value> {
     if is_dashboard_view {
-        serde_json::json!({
-            "serverName": settings.server_name,
-            "ingestHost": settings.ingest_host,
-            "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
-            "backendPolicy": settings.backend_policy,
-            "transcodeProfiles": settings.transcode_profiles,
-            "pipelines": pipelines,
-            "outputs": api_view_models::output_response_json_list(outputs),
-            "jobs": jobs_json
-        })
+        return Vec::new();
+    }
+
+    let jobs = state.settings_service.list_jobs().await.unwrap_or_default();
+    if query.jobs.as_deref() == Some("latest") {
+        api_view_models::latest_job_response_json_list(&jobs)
     } else {
-        serde_json::json!({
-            "serverName": settings.server_name,
-            "ingestHost": settings.ingest_host,
-            "dashboardPasswordChangeRecommended": dashboard_password_change_recommended,
-            "ingestSecurity": settings.ingest_security,
-            "recordingSettings": settings.recording_settings,
-            "srtIngest": settings.srt_ingest,
-            "backendPolicy": settings.backend_policy,
-            "transcodeProfiles": settings.transcode_profiles,
-            "pipelines": pipelines,
-            "outputs": api_view_models::output_response_json_list(outputs),
-            "jobs": jobs_json
-        })
+        api_view_models::job_response_json_list(&jobs)
     }
 }
 
@@ -157,11 +185,7 @@ pub async fn config_get_handler(
         .get_ingest_host_raw()
         .await
         .unwrap_or_default();
-    let effective_ingest_host = if ingest_host.is_empty() {
-        DEFAULT_INGEST_HOST
-    } else {
-        &ingest_host
-    };
+    let effective_ingest_host = effective_ingest_host(&ingest_host);
     let raw_pipelines = state
         .settings_service
         .list_pipelines()
@@ -205,16 +229,7 @@ pub async fn config_get_handler(
             .unwrap_or(None),
     );
     let is_dashboard_view = query.view.as_deref() == Some("dashboard");
-    let jobs_json = if is_dashboard_view {
-        Vec::new()
-    } else {
-        let jobs = state.settings_service.list_jobs().await.unwrap_or_default();
-        if query.jobs.as_deref() == Some("latest") {
-            api_view_models::latest_job_response_json_list(&jobs)
-        } else {
-            api_view_models::job_response_json_list(&jobs)
-        }
-    };
+    let jobs_json = jobs_response_json(&state, &query, is_dashboard_view).await;
 
     Json(config_response_json(
         &settings,
@@ -333,9 +348,16 @@ pub async fn config_patch_handler(
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigPatchPayload, dashboard_password_change_recommended, validate_config_patch_payload,
+        ConfigPatchPayload, config_response_json, dashboard_password_change_recommended,
+        effective_ingest_host, validate_config_patch_payload,
     };
     use axum::http::StatusCode;
+
+    #[test]
+    fn effective_ingest_host_falls_back_to_default() {
+        assert_eq!(effective_ingest_host(""), super::DEFAULT_INGEST_HOST);
+        assert_eq!(effective_ingest_host("example.com"), "example.com");
+    }
 
     #[test]
     fn dashboard_password_change_recommended_only_for_pending_marker() {
@@ -364,5 +386,24 @@ mod tests {
             validate_config_patch_payload(&payload).expect_err("blank server names should fail");
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn config_response_json_omits_operator_only_fields_for_dashboard_view() {
+        let settings = crate::application::settings::SettingsSnapshot {
+            server_name: "restream".to_string(),
+            ingest_host: "localhost".to_string(),
+            ingest_security: crate::domain::ingest_security::IngestSecurityConfig::default(),
+            recording_settings: crate::domain::recording::RecordingSettings::default(),
+            srt_ingest: crate::domain::srt_ingest::SrtGlobalIngestConfig::default(),
+            backend_policy: crate::planner::backend_policy::BackendPolicy::default(),
+            transcode_profiles: crate::domain::transcode_profile::TranscodeProfiles::default(),
+        };
+
+        let response = config_response_json(&settings, Vec::new(), &[], Vec::new(), false, true);
+
+        assert!(response.get("ingestSecurity").is_none());
+        assert!(response.get("recordingSettings").is_none());
+        assert!(response.get("srtIngest").is_none());
     }
 }
