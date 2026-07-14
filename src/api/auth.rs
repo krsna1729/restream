@@ -47,9 +47,9 @@ fn select_initial_admin_password(env_password: Option<String>) -> (String, bool)
 }
 
 fn generate_bootstrap_password() -> String {
-    use rand::RngCore;
+    use rand::RngExt;
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill(&mut bytes);
     to_hex(&bytes)
 }
 
@@ -82,11 +82,11 @@ fn write_bootstrap_password_file(path: &Path, password: &str) -> std::io::Result
 }
 
 pub fn hash_password(password: &str) -> String {
-    use rand::RngCore;
+    use rand::RngExt;
     use scrypt::Params;
 
     let mut salt_bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut salt_bytes);
+    rand::rng().fill(&mut salt_bytes);
     let salt = to_hex(&salt_bytes);
 
     let mut hash_bytes = [0u8; 32];
@@ -276,9 +276,9 @@ pub async fn login_post_handler(
         )
             .into_response();
     }
-    use rand::RngCore;
+    use rand::RngExt;
     let mut token_bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut token_bytes);
+    rand::rng().fill(&mut token_bytes);
     let token = to_hex(&token_bytes);
     let token_hash = hash_session_token(&token);
 
