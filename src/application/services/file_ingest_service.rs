@@ -1,3 +1,10 @@
+//! Application service wrapper for file-ingest persistence and runtime
+//! lifecycle coordination.
+//!
+//! This module sits between HTTP handlers and the media engine: it resolves
+//! stored ingest configuration, validates media-library paths, and keeps the
+//! persistence/runtime cleanup steps aligned when file-ingest state changes.
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -54,6 +61,8 @@ pub struct FileIngestService {
 }
 
 impl FileIngestService {
+    /// Builds the service from the lookup/write ports and pipeline catalog it
+    /// needs to coordinate file-ingest state.
     pub fn with_ports(
         ingest_lookup: Arc<dyn IngestLookup>,
         ingest_writer: Arc<dyn IngestWriter>,
@@ -68,6 +77,10 @@ impl FileIngestService {
         }
     }
 
+    /// Builds the FFmpeg argument list for an external file-ingest child.
+    ///
+    /// Live-optimized ingests transcode into a low-latency H.264/AAC transport
+    /// stream; other ingests stay on the cheaper stream-copy path.
     pub fn build_file_ingest_args(ingest: &Ingest, file_path: &Path) -> Vec<String> {
         let mut args = vec![
             "-nostdin".into(),
@@ -132,6 +145,8 @@ impl FileIngestService {
         args
     }
 
+    /// Spawns the external FFmpeg process and hands its stdout/stderr pipes
+    /// back to the runtime task that will demux and monitor it.
     pub fn spawn_file_ingest_child(
         ingest: &Ingest,
         file_path: &Path,
@@ -162,6 +177,11 @@ impl FileIngestService {
         })
     }
 
+    /// Resolves one user-facing filename inside the configured media library.
+    ///
+    /// The path must stay relative to `media_dir`; canonicalization rejects
+    /// parent traversal, absolute paths, and symlink escapes before the media
+    /// engine attempts to read the file.
     pub fn resolve_media_file_path(
         media_dir: &Path,
         filename: &str,
@@ -198,6 +218,8 @@ impl FileIngestService {
         self.pipeline_service.get_by_id(id).await
     }
 
+    /// Rebuilds the derived file-ingest view for one pipeline after a create,
+    /// update, stop, or delete operation touches runtime state.
     pub async fn load_pipeline_file_ingest_state(
         &self,
         engine: &Arc<MediaEngine>,
@@ -208,26 +230,50 @@ impl FileIngestService {
             .map_err(|_| ApiError::internal("load pipeline file ingest state"))
     }
 
+    async fn get_ingest_or_not_found(&self, id: &str) -> ApiResult<Ingest> {
+        self.ingest_lookup
+            .get_ingest(id)
+            .await
+            .map_err(|err| ApiError::internal(format!("get ingest: {err}")))?
+            .ok_or_else(|| ApiError::not_found("Ingest not found"))
+    }
+
+    async fn clear_stream_key_runtime_state(
+        &self,
+        engine: &Arc<MediaEngine>,
+        stream_key: &str,
+        error_context: &'static str,
+    ) -> ApiResult<()> {
+        clear_stream_key_file_ingests(
+            self.pipeline_store.as_ref(),
+            self.ingest_lookup.as_ref(),
+            engine,
+            stream_key,
+        )
+        .await
+        .map_err(|err| ApiError::internal(format!("{error_context}: {err:?}")))
+    }
+
+    async fn clear_started_ingest_on_failure(
+        engine: &Arc<MediaEngine>,
+        ingest_id: &str,
+        pipeline_id: &str,
+    ) {
+        engine.clear_file_ingest_running(ingest_id).await;
+        engine.unregister_ingest(pipeline_id).await;
+    }
+
+    /// Deletes one stored ingest after clearing any runtime state tied to its
+    /// stream key, so the engine does not keep a stale file-ingest session.
     pub async fn delete_ingest_with_runtime_cleanup(
         &self,
         engine: &Arc<MediaEngine>,
         id: &str,
     ) -> ApiResult<()> {
-        let ingest = self
-            .ingest_lookup
-            .get_ingest(id)
-            .await
-            .map_err(|err| ApiError::internal(format!("get ingest: {err}")))?
-            .ok_or_else(|| ApiError::not_found("Ingest not found"))?;
+        let ingest = self.get_ingest_or_not_found(id).await?;
 
-        clear_stream_key_file_ingests(
-            self.pipeline_store.as_ref(),
-            self.ingest_lookup.as_ref(),
-            engine,
-            &ingest.stream_key,
-        )
-        .await
-        .map_err(|err| ApiError::internal(format!("clear file ingest state: {err:?}")))?;
+        self.clear_stream_key_runtime_state(engine, &ingest.stream_key, "clear file ingest state")
+            .await?;
 
         let _ = engine.stop_file_ingest_child(id).await;
         engine.clear_file_ingest_running(id).await;
@@ -243,26 +289,17 @@ impl FileIngestService {
         }
     }
 
+    /// Stops the runtime side of an ingest without deleting its persisted
+    /// configuration, returning the stored ingest record to the caller.
     pub async fn stop_ingest_with_runtime_cleanup(
         &self,
         engine: &Arc<MediaEngine>,
         id: &str,
     ) -> ApiResult<Ingest> {
-        let ingest = self
-            .ingest_lookup
-            .get_ingest(id)
-            .await
-            .map_err(|err| ApiError::internal(format!("get ingest: {err}")))?
-            .ok_or_else(|| ApiError::not_found("Ingest not found"))?;
+        let ingest = self.get_ingest_or_not_found(id).await?;
 
-        clear_stream_key_file_ingests(
-            self.pipeline_store.as_ref(),
-            self.ingest_lookup.as_ref(),
-            engine,
-            &ingest.stream_key,
-        )
-        .await
-        .map_err(|err| ApiError::internal(format!("clear file ingest state: {err:?}")))?;
+        self.clear_stream_key_runtime_state(engine, &ingest.stream_key, "clear file ingest state")
+            .await?;
 
         let _ = engine.stop_file_ingest_child(id).await;
         engine.clear_file_ingest_running(id).await;
@@ -270,6 +307,12 @@ impl FileIngestService {
         Ok(ingest)
     }
 
+    /// Starts one persisted file ingest against the media engine.
+    ///
+    /// This function resolves the stored ingest/pipeline pair first, then
+    /// registers the runtime attempt before choosing the internal ingest path
+    /// or the external FFmpeg child path. Any failure after registration must
+    /// unwind the runtime markers so the pipeline can be started again cleanly.
     pub async fn start_ingest(
         &self,
         engine: Arc<MediaEngine>,
@@ -328,16 +371,14 @@ impl FileIngestService {
                 ring_buffer,
                 registration,
             ) {
-                engine.clear_file_ingest_running(&ingest.id).await;
-                engine.unregister_ingest(&pipeline.id).await;
+                Self::clear_started_ingest_on_failure(&engine, &ingest.id, &pipeline.id).await;
                 return Err(FileIngestStartError::Spawn(err));
             }
         } else {
             let spawned = match Self::spawn_file_ingest_child(&ingest, &file_path) {
                 Ok(child) => child,
                 Err(err) => {
-                    engine.clear_file_ingest_running(&ingest.id).await;
-                    engine.unregister_ingest(&pipeline.id).await;
+                    Self::clear_started_ingest_on_failure(&engine, &ingest.id, &pipeline.id).await;
                     return Err(FileIngestStartError::Spawn(err));
                 }
             };
@@ -356,6 +397,8 @@ impl FileIngestService {
         Ok(ingest)
     }
 
+    // Reads the external FFmpeg MPEG-TS stream, updates ingest metadata, and
+    // pushes bounded batches into the pipeline ring buffer.
     async fn pump_file_ingest_stdout(
         engine: Arc<MediaEngine>,
         pipeline: Pipeline,
@@ -452,6 +495,8 @@ impl FileIngestService {
         Ok(())
     }
 
+    // Captures a bounded slice of FFmpeg stderr so operators can diagnose
+    // failures without letting stderr logging grow unbounded in memory.
     async fn log_file_ingest_stderr(
         ingest_id: &str,
         mut stderr: ChildStderr,
@@ -484,6 +529,8 @@ impl FileIngestService {
         Ok(())
     }
 
+    // Owns the lifecycle of one external FFmpeg-backed ingest attempt,
+    // including optional loop restarts and final runtime deregistration.
     async fn run_file_ingest_task(
         engine: Arc<MediaEngine>,
         ingest: Ingest,
@@ -594,6 +641,8 @@ impl FileIngestService {
             .await;
     }
 
+    /// Applies an optional file-ingest payload to one pipeline and then returns
+    /// the rebuilt derived state used by the dashboard.
     pub async fn apply_file_ingest_payload(
         &self,
         engine: &Arc<MediaEngine>,
@@ -604,14 +653,12 @@ impl FileIngestService {
         if let Some(previous_stream_key) =
             previous_stream_key.filter(|previous| *previous != pipeline.stream_key.as_str())
         {
-            clear_stream_key_file_ingests(
-                self.pipeline_store.as_ref(),
-                self.ingest_lookup.as_ref(),
+            self.clear_stream_key_runtime_state(
                 engine,
                 previous_stream_key,
+                "clear stream key file ingests (previous)",
             )
-            .await
-            .map_err(|_| ApiError::internal("clear stream key file ingests (previous)"))?;
+            .await?;
         }
 
         if let Some(payload) = payload {
@@ -643,24 +690,20 @@ impl FileIngestService {
                     .await
                     .map_err(|_| ApiError::internal("persist pipeline file ingest"))?;
 
-                    clear_stream_key_file_ingests(
-                        self.pipeline_store.as_ref(),
-                        self.ingest_lookup.as_ref(),
+                    self.clear_stream_key_runtime_state(
                         engine,
                         &pipeline.stream_key,
+                        "clear stream key file ingests (current)",
                     )
-                    .await
-                    .map_err(|_| ApiError::internal("clear stream key file ingests (current)"))?;
+                    .await?;
                 }
                 None => {
-                    clear_stream_key_file_ingests(
-                        self.pipeline_store.as_ref(),
-                        self.ingest_lookup.as_ref(),
+                    self.clear_stream_key_runtime_state(
                         engine,
                         &pipeline.stream_key,
+                        "clear stream key file ingests (current)",
                     )
-                    .await
-                    .map_err(|_| ApiError::internal("clear stream key file ingests (current)"))?;
+                    .await?;
 
                     remove_pipeline_file_ingest(
                         self.ingest_lookup.as_ref(),
