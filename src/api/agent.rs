@@ -17,6 +17,7 @@ use crate::domain::state::DesiredOutputState;
 use super::state::{AppState, require_authenticated};
 
 #[cfg(not(feature = "agent-plane"))]
+/// Shared 404 payload for agent routes that are compiled out by feature flags.
 fn feature_unavailable_response(feature: &'static str) -> Response {
     (
         StatusCode::NOT_FOUND,
@@ -30,11 +31,13 @@ fn feature_unavailable_response(feature: &'static str) -> Response {
 }
 
 #[cfg(not(feature = "agent-plane"))]
+/// Shortcut response for builds without the agent planning surface.
 fn agent_plane_unavailable() -> Response {
     feature_unavailable_response("agent-plane")
 }
 
 #[cfg(not(feature = "agent-execution"))]
+/// Shortcut response for builds without the agent execution surface.
 fn agent_execution_unavailable() -> Response {
     feature_unavailable_response("agent-execution")
 }
@@ -66,6 +69,8 @@ use sysinfo::{Disks, System};
 const AGENT_PROCESSING_GRAPH_OUTPUT_LIMIT: usize = 50;
 
 #[cfg(any(feature = "agent-plane", feature = "agent-execution"))]
+/// Builds the immediate health snapshot shared by agent planning and execution
+/// flows so prompts and verification reflect current runtime state.
 async fn agent_health_snapshot(
     state: &AppState,
     pipeline_ids: &[String],
@@ -87,6 +92,8 @@ async fn agent_health_snapshot(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Returns the compiled capability manifest for authenticated agent-plane
+/// clients.
 pub async fn agent_capabilities_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -109,6 +116,7 @@ pub async fn agent_capabilities_handler(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Returns the full planning context document used by agent-plane clients.
 pub async fn agent_context_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -133,6 +141,8 @@ pub async fn agent_context_handler(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Returns an investigation payload for one optional pipeline/output focus by
+/// joining health, alerts, graphs, telemetry, and events.
 pub async fn agent_investigation_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -243,6 +253,7 @@ pub async fn agent_investigation_handler(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Generates a full plan response for the requested agent action.
 pub async fn agent_plan_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -269,6 +280,7 @@ pub async fn agent_plan_handler(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Extracts only the validation view from a full agent plan response.
 fn agent_plan_validation_json(response: &crate::agent_plane::PlanResponse) -> serde_json::Value {
     serde_json::json!({
         "generatedAt": response.generated_at,
@@ -278,6 +290,7 @@ fn agent_plan_validation_json(response: &crate::agent_plane::PlanResponse) -> se
 }
 
 #[cfg(feature = "agent-plane")]
+/// Extracts only the graph preview view from a full agent plan response.
 fn agent_plan_graph_preview_json(response: &crate::agent_plane::PlanResponse) -> serde_json::Value {
     serde_json::json!({
         "generatedAt": response.generated_at,
@@ -288,6 +301,7 @@ fn agent_plan_graph_preview_json(response: &crate::agent_plane::PlanResponse) ->
 }
 
 #[cfg(feature = "agent-plane")]
+/// Generates a plan and returns only its validation payload.
 pub async fn agent_plan_validate_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -314,6 +328,7 @@ pub async fn agent_plan_validate_handler(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Generates a plan and returns only its graph-diff preview payload.
 pub async fn agent_graph_diff_preview_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -354,6 +369,7 @@ use super::state::MAX_URL_LEN;
 use crate::domain::output_spec::OutputConfig;
 
 #[cfg(feature = "agent-execution")]
+/// Creates or reuses an execution record for one requested agent operation.
 pub async fn agent_operation_create_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -390,6 +406,7 @@ pub async fn agent_operation_create_handler(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Returns one stored agent operation record by ID.
 pub async fn agent_operation_get_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -417,6 +434,7 @@ pub async fn agent_operation_get_handler(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Applies an approval decision to one pending agent operation.
 pub async fn agent_operation_approve_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -446,6 +464,8 @@ pub async fn agent_operation_approve_handler(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Applies one approved agent operation and records either its completed
+/// outcome or its failure result.
 pub async fn agent_operation_apply_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -494,6 +514,7 @@ pub async fn agent_operation_apply_handler(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Verifies one stored operation by ID against current persisted/runtime state.
 pub async fn agent_operation_verify_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -518,6 +539,7 @@ pub async fn agent_operation_verify_handler(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Verifies one stored operation from an explicit verify request payload.
 pub async fn agent_verify_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -542,6 +564,8 @@ pub async fn agent_verify_handler(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Builds the large redacted agent context document consumed by planning and
+/// investigation surfaces.
 async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let catalog = state.agent_context_catalog().await;
     let pipelines = catalog.pipelines;
@@ -655,6 +679,8 @@ struct AgentOperationApplyOutcome {
 }
 
 #[cfg(feature = "agent-execution")]
+/// Executes the change list for one stored agent operation and captures the
+/// transition/progress snapshots needed for the public record.
 async fn execute_agent_operation(
     state: &AppState,
     record: &crate::agent_execution::OperationRecord,
@@ -719,6 +745,8 @@ async fn execute_agent_operation(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Dispatches one proposed change to the concrete output/state mutation helper
+/// that owns that change type.
 async fn apply_agent_change(
     state: &AppState,
     pipeline_id: &str,
@@ -739,6 +767,8 @@ async fn apply_agent_change(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Creates one output described by an agent change after validating its
+/// transport-facing fields.
 async fn apply_agent_add_output(
     state: &AppState,
     pipeline_id: &str,
@@ -787,6 +817,8 @@ async fn apply_agent_add_output(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Updates one existing output described by an agent change, including desired
+/// state transitions when requested.
 async fn apply_agent_update_output(
     state: &AppState,
     pipeline_id: &str,
@@ -856,6 +888,7 @@ async fn apply_agent_update_output(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Removes one output referenced by an agent change.
 async fn apply_agent_remove_output(
     state: &AppState,
     pipeline_id: &str,
@@ -889,6 +922,8 @@ async fn apply_agent_remove_output(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Applies a start/stop desired-state request for one output referenced by an
+/// agent change.
 async fn apply_agent_desired_state(
     state: &AppState,
     pipeline_id: &str,
@@ -927,6 +962,8 @@ async fn apply_agent_desired_state(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Pulls one required string field out of a change payload and returns a
+/// stable validation error when it is missing.
 fn required_change_field<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str, String> {
     value
         .filter(|value| !value.trim().is_empty())
@@ -934,6 +971,8 @@ fn required_change_field<'a>(value: Option<&'a str>, field: &str) -> Result<&'a 
 }
 
 #[cfg(feature = "agent-execution")]
+/// Validates output-facing change fields before they are handed to the output
+/// service.
 fn validate_output_fields(
     name: &str,
     url: &str,
@@ -966,6 +1005,8 @@ fn validate_output_fields(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Shared max-length validator for change fields that map onto output service
+/// limits.
 fn validate_len(field: &str, value: &str, max: usize) -> Result<(), String> {
     if value.len() > max {
         Err(format!("{field} exceeds maximum length of {max} bytes"))
@@ -1002,6 +1043,8 @@ fn desired_output_reason(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Verifies one stored operation by ID and translates a missing record into a
+/// 404 response.
 async fn verify_agent_operation_by_id(
     state: &AppState,
     operation_id: &str,
@@ -1223,6 +1266,8 @@ async fn agent_media_inventory(state: &AppState) -> serde_json::Value {
 #[cfg(feature = "agent-plane")]
 // Desired-vs-actual is a read-only summary for agent context consumers, so it
 // lives here with the transport-facing JSON shaping instead of in persistence.
+/// Summarizes desired-versus-actual pipeline/output state for planning and
+/// investigation consumers.
 fn agent_desired_vs_actual(
     pipelines: &[Pipeline],
     outputs: &[crate::application::models::Output],
@@ -1338,6 +1383,8 @@ fn agent_desired_vs_actual(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Builds the condensed diagnostics summary section used in agent context and
+/// investigation responses.
 fn agent_diagnostics_summary(
     pipelines: &[Pipeline],
     outputs: &[crate::application::models::Output],
@@ -1420,6 +1467,8 @@ fn agent_diagnostics_summary(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Summarizes HLS, recording, file-ingest, and ingest-security dependencies
+/// for agent planning surfaces.
 async fn agent_dependency_summary(
     state: &AppState,
     pipelines: &[Pipeline],
@@ -1514,6 +1563,7 @@ async fn agent_dependency_summary(
 }
 
 #[cfg(feature = "agent-plane")]
+/// Builds the storage summary subsection used in the agent context payload.
 async fn agent_storage_summary(state: &AppState, media: &serde_json::Value) -> serde_json::Value {
     let media_bytes = media["files"]
         .as_array()
@@ -1556,6 +1606,8 @@ async fn agent_storage_summary(state: &AppState, media: &serde_json::Value) -> s
 }
 
 #[cfg(feature = "agent-plane")]
+/// Builds the full plan response by combining the request with the current
+/// pipeline/output catalog and optional current graph.
 async fn build_agent_plan(
     state: &AppState,
     request: crate::agent_plane::PlanRequest,
@@ -1574,6 +1626,8 @@ async fn build_agent_plan(
 }
 
 #[cfg(feature = "agent-execution")]
+/// Normalizes execution-store errors into stable HTTP responses for agent
+/// operation routes.
 fn agent_operation_store_error(
     err: crate::agent_execution::OperationStoreError,
 ) -> axum::response::Response {
