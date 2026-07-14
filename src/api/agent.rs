@@ -1,8 +1,13 @@
+//! Agent HTTP handlers expose the optional planning and execution surfaces used
+//! by operator-facing automation features. This module stays at the API
+//! boundary: it authenticates requests, selects the feature-gated surface to
+//! expose, and shapes responses from the agent planning/execution layers.
+
 use axum::{
     Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use std::sync::Arc;
 
@@ -12,29 +17,26 @@ use crate::domain::state::DesiredOutputState;
 use super::state::{AppState, require_authenticated};
 
 #[cfg(not(feature = "agent-plane"))]
-fn agent_plane_unavailable() -> axum::response::Response {
+fn feature_unavailable_response(feature: &'static str) -> Response {
     (
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({
-            "error": "agent-plane feature is not compiled in",
-            "feature": "agent-plane",
+            "error": format!("{feature} feature is not compiled in"),
+            "feature": feature,
             "compiledIn": false
         })),
     )
         .into_response()
 }
 
+#[cfg(not(feature = "agent-plane"))]
+fn agent_plane_unavailable() -> Response {
+    feature_unavailable_response("agent-plane")
+}
+
 #[cfg(not(feature = "agent-execution"))]
-fn agent_execution_unavailable() -> axum::response::Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({
-            "error": "agent-execution feature is not compiled in",
-            "feature": "agent-execution",
-            "compiledIn": false
-        })),
-    )
-        .into_response()
+fn agent_execution_unavailable() -> Response {
+    feature_unavailable_response("agent-execution")
 }
 
 #[cfg(feature = "agent-plane")]
@@ -253,6 +255,25 @@ pub async fn agent_plan_handler(
 }
 
 #[cfg(feature = "agent-plane")]
+fn agent_plan_validation_json(response: &crate::agent_plane::PlanResponse) -> serde_json::Value {
+    serde_json::json!({
+        "generatedAt": response.generated_at,
+        "planId": response.plan_id,
+        "validation": response.validation,
+    })
+}
+
+#[cfg(feature = "agent-plane")]
+fn agent_plan_graph_preview_json(response: &crate::agent_plane::PlanResponse) -> serde_json::Value {
+    serde_json::json!({
+        "generatedAt": response.generated_at,
+        "planId": response.plan_id,
+        "graphPreview": response.graph_preview,
+        "impact": response.impact,
+    })
+}
+
+#[cfg(feature = "agent-plane")]
 pub async fn agent_plan_validate_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -263,12 +284,7 @@ pub async fn agent_plan_validate_handler(
     }
 
     let response = build_agent_plan(&state, request).await;
-    Json(serde_json::json!({
-        "generatedAt": response.generated_at,
-        "planId": response.plan_id,
-        "validation": response.validation,
-    }))
-    .into_response()
+    Json(agent_plan_validation_json(&response)).into_response()
 }
 
 #[cfg(not(feature = "agent-plane"))]
@@ -294,13 +310,7 @@ pub async fn agent_graph_diff_preview_handler(
     }
 
     let response = build_agent_plan(&state, request).await;
-    Json(serde_json::json!({
-        "generatedAt": response.generated_at,
-        "planId": response.plan_id,
-        "graphPreview": response.graph_preview,
-        "impact": response.impact,
-    }))
-    .into_response()
+    Json(agent_plan_graph_preview_json(&response)).into_response()
 }
 
 #[cfg(not(feature = "agent-plane"))]
@@ -1595,4 +1605,61 @@ fn agent_operation_store_error(
         })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "agent-plane")]
+    use super::{agent_plan_graph_preview_json, agent_plan_validation_json};
+
+    #[cfg(feature = "agent-plane")]
+    fn sample_plan_response() -> crate::agent_plane::PlanResponse {
+        crate::agent_plane::PlanResponse {
+            generated_at: "2026-07-14T00:00:00Z".to_string(),
+            plan_id: "plan_123".to_string(),
+            status: "draft",
+            intent: "Test plan".to_string(),
+            execution_enabled: true,
+            execution_note: "compiled in",
+            steps: Vec::new(),
+            validation: crate::agent_plane::ValidationResult {
+                valid: true,
+                errors: Vec::new(),
+                warnings: Vec::new(),
+            },
+            graph_preview: crate::agent_plane::GraphPreview {
+                mode: "preview",
+                added_nodes: Vec::new(),
+                removed_nodes: Vec::new(),
+                changed_edges: Vec::new(),
+                notes: vec!["note".to_string()],
+            },
+            impact: crate::agent_plane::ImpactPreview {
+                affected_pipelines: vec!["pipe-1".to_string()],
+                affected_outputs: Vec::new(),
+                shared_stage_candidates: Vec::new(),
+                operator_summary: "summary".to_string(),
+                engineering_notes: Vec::new(),
+            },
+        }
+    }
+
+    #[cfg(feature = "agent-plane")]
+    #[test]
+    fn agent_plan_validation_json_projects_validation_fields() {
+        let value = agent_plan_validation_json(&sample_plan_response());
+
+        assert_eq!(value["planId"], "plan_123");
+        assert_eq!(value["validation"]["valid"], true);
+    }
+
+    #[cfg(feature = "agent-plane")]
+    #[test]
+    fn agent_plan_graph_preview_json_projects_graph_preview_fields() {
+        let value = agent_plan_graph_preview_json(&sample_plan_response());
+
+        assert_eq!(value["planId"], "plan_123");
+        assert_eq!(value["graphPreview"]["mode"], "preview");
+        assert_eq!(value["impact"]["operatorSummary"], "summary");
+    }
 }
