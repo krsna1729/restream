@@ -243,7 +243,7 @@ pub async fn build_system_metrics_snapshot(state: &AppState, summary: bool) -> s
     let mut sys = System::new_all();
     sys.refresh_all();
 
-    let cpu_pct = sys.global_cpu_info().cpu_usage() as f64;
+    let cpu_pct = sys.global_cpu_usage() as f64;
     let total_mem = sys.total_memory();
     let used_mem = sys.used_memory();
     let free_mem = total_mem.saturating_sub(used_mem);
@@ -520,7 +520,7 @@ pub fn cpu_status(sys: &System) -> serde_json::Value {
     let cpuinfo = read_cpuinfo_summary();
     let first_cpu = sys.cpus().first();
     let logical_cpus = sys.cpus().len();
-    let physical_cores = sys.physical_core_count();
+    let physical_cores = System::physical_core_count();
     let threads_per_core = physical_cores
         .filter(|cores| *cores > 0)
         .map(|cores| logical_cpus as f64 / cores as f64);
@@ -691,7 +691,7 @@ pub fn engine_process_pids(sys: &System) -> Vec<u32> {
     let mut pids = vec![own_pid];
 
     for (pid, process) in sys.processes() {
-        let name = process.name().to_ascii_lowercase();
+        let name = process.name().to_string_lossy().to_ascii_lowercase();
         if process.parent() == Some(own_sys_pid) && name.contains("ffmpeg") {
             pids.push(pid.as_u32());
         }
@@ -720,7 +720,13 @@ pub fn engine_metrics(sys: &System, core_count: usize) -> serde_json::Value {
         if let Some(process) = sys.process(sysinfo::Pid::from_u32(*pid)) {
             let memory = process.memory();
             total_memory = total_memory.saturating_add(memory);
-            if *pid != own_pid && process.name().to_ascii_lowercase().contains("ffmpeg") {
+            if *pid != own_pid
+                && process
+                    .name()
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .contains("ffmpeg")
+            {
                 external_ffmpeg_count += 1;
                 external_ffmpeg_memory = external_ffmpeg_memory.saturating_add(memory);
                 external_ffmpeg_ticks =
