@@ -24,16 +24,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: actions/setup-node@v7
+      - uses: ./.github/actions/ci-bootstrap
         with:
-          node-version: '22'
-          cache: npm
-      - uses: ./.github/actions/system-deps
-        with: { profile: base }
-      - uses: ./.github/actions/native-prefix
-      - uses: ./.github/actions/rust-cache
-      - run: npm ci
+          node_version: '22'
+          npm_ci: 'true'
+          system_deps_profile: base
+          native_prefix: 'true'
+          rust_cache: 'true'
       - name: Build frontend assets
         run: npm run build:frontend
       - name: Run workspace tests with all features
@@ -44,15 +41,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: actions/setup-node@v7
+      - uses: ./.github/actions/ci-bootstrap
         with:
-          node-version: '22'
-          cache: npm
-      - uses: ./.github/actions/system-deps
-        with: { profile: build }
-      - uses: ./.github/actions/native-prefix
-      - uses: ./.github/actions/rust-cache
+          node_version: '22'
+          system_deps_profile: build
+          native_prefix: 'true'
+          rust_cache: 'true'
       - name: Prepare build tree
         run: scripts/release/prepare-build-tree.sh
       - name: Build release harness binaries

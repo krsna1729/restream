@@ -22,16 +22,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: ./.github/actions/ci-bootstrap
         with:
-          components: rustfmt
+          rust_components: rustfmt
+          node_version: '22'
+          npm_ci: 'true'
       - name: Check Rust formatting
         run: cargo fmt --all --check
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
       - name: Check TypeScript types
         run: npx tsc -p tsconfig.json --noEmit
 
@@ -40,17 +37,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: ./.github/actions/ci-bootstrap
         with:
-          components: clippy
-      - name: Install Rust lint dependencies
-        uses: ./.github/actions/system-deps
-        with:
-          profile: base
-      - name: Restore native prefix for Rust lint
-        uses: ./.github/actions/native-prefix
-      - name: Restore Rust cache for lint
-        uses: ./.github/actions/rust-cache
+          rust_components: clippy
+          system_deps_profile: base
+          native_prefix: 'true'
+          rust_cache: 'true'
       - name: Run clippy for library
         run: scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings
       - name: Run clippy for all targets
@@ -81,20 +73,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install API contract dependencies
-        uses: ./.github/actions/system-deps
+      - uses: ./.github/actions/ci-bootstrap
         with:
-          profile: live
-      - name: Restore native prefix for API contract
-        uses: ./.github/actions/native-prefix
-      - name: Restore Rust cache for API contract
-        uses: ./.github/actions/rust-cache
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
+          node_version: '22'
+          npm_ci: 'true'
+          system_deps_profile: live
+          native_prefix: 'true'
+          rust_cache: 'true'
       - name: Run API contract smoke
         run: ./scripts/check/api-contract.sh
 
@@ -103,11 +88,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: ./.github/actions/ci-bootstrap
         with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
+          node_version: '22'
+          npm_ci: 'true'
       - name: Run frontend unit tests
         run: npm run test:frontend
       - name: Install Chromium for DOM tests
@@ -121,20 +105,13 @@ jobs:
     needs: frontend
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install frontend app E2E dependencies
-        uses: ./.github/actions/system-deps
+      - uses: ./.github/actions/ci-bootstrap
         with:
-          profile: browser
-      - name: Restore native prefix for frontend app E2E
-        uses: ./.github/actions/native-prefix
-      - name: Restore Rust cache for frontend app E2E
-        uses: ./.github/actions/rust-cache
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
+          node_version: '22'
+          npm_ci: 'true'
+          system_deps_profile: browser
+          native_prefix: 'true'
+          rust_cache: 'true'
       - name: Install Chromium for app E2E
         run: npx playwright install --with-deps chromium
       - name: Run isolated app E2E
@@ -146,15 +123,11 @@ jobs:
     needs: api-contract
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install concurrency proof dependencies
-        uses: ./.github/actions/system-deps
+      - uses: ./.github/actions/ci-bootstrap
         with:
-          profile: live
-      - name: Restore native prefix for concurrency proof
-        uses: ./.github/actions/native-prefix
-      - name: Restore Rust cache for concurrency proof
-        uses: ./.github/actions/rust-cache
+          system_deps_profile: live
+          native_prefix: 'true'
+          rust_cache: 'true'
       - name: Run concurrency lifecycle proof
         env:
           # Hosted runners cannot preserve the optional private network
@@ -168,20 +141,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install Rust test dependencies
-        uses: ./.github/actions/system-deps
+      - uses: ./.github/actions/ci-bootstrap
         with:
-          profile: base
-      - name: Restore native prefix for Rust tests
-        uses: ./.github/actions/native-prefix
-      - name: Restore Rust cache for Rust tests
-        uses: ./.github/actions/rust-cache
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
+          node_version: '22'
+          npm_ci: 'true'
+          system_deps_profile: base
+          native_prefix: 'true'
+          rust_cache: 'true'
       - name: Build frontend assets for Rust tests
         run: npm run build:frontend
       - name: Check Rust test hygiene
@@ -195,22 +161,14 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: ./.github/actions/ci-bootstrap
         with:
-          components: llvm-tools-preview
-      - name: Install coverage dependencies
-        uses: ./.github/actions/system-deps
-        with:
-          profile: base
-      - name: Restore native prefix for coverage
-        uses: ./.github/actions/native-prefix
-      - name: Restore Rust cache for coverage
-        uses: ./.github/actions/rust-cache
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
+          rust_components: llvm-tools-preview
+          node_version: '22'
+          npm_ci: 'true'
+          system_deps_profile: base
+          native_prefix: 'true'
+          rust_cache: 'true'
       - name: Build frontend assets for coverage
         run: npm run build:frontend
       - name: Install cargo-llvm-cov
@@ -234,20 +192,13 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install PR live-smoke build dependencies
-        uses: ./.github/actions/system-deps
+      - uses: ./.github/actions/ci-bootstrap
         with:
-          profile: build
-      - name: Restore native prefix for PR live-smoke build
-        uses: ./.github/actions/native-prefix
-      - name: Restore Rust cache for PR live-smoke build
-        uses: ./.github/actions/rust-cache
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
+          node_version: '22'
+          npm_ci: 'true'
+          system_deps_profile: build
+          native_prefix: 'true'
+          rust_cache: 'true'
       - name: Build frontend assets for harness binaries
         run: npm run build:frontend
       - name: Build bench-profile harness binaries
@@ -323,20 +274,13 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install HLS E2E dependencies
-        uses: ./.github/actions/system-deps
+      - uses: ./.github/actions/ci-bootstrap
         with:
-          profile: browser
-      - name: Restore native prefix for HLS E2E
-        uses: ./.github/actions/native-prefix
-      - name: Restore Rust cache for HLS E2E
-        uses: ./.github/actions/rust-cache
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
+          node_version: '22'
+          npm_ci: 'true'
+          system_deps_profile: browser
+          native_prefix: 'true'
+          rust_cache: 'true'
       - name: Install Chromium for HLS E2E
         run: npx playwright install chromium
       - name: Build frontend assets for HLS E2E
