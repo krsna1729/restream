@@ -65,6 +65,27 @@ use sysinfo::{Disks, System};
 #[cfg(feature = "agent-plane")]
 const AGENT_PROCESSING_GRAPH_OUTPUT_LIMIT: usize = 50;
 
+#[cfg(any(feature = "agent-plane", feature = "agent-execution"))]
+async fn agent_health_snapshot(
+    state: &AppState,
+    pipeline_ids: &[String],
+) -> (std::collections::HashMap<String, bool>, serde_json::Value) {
+    let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
+
+    // Agent surfaces prefer an immediate snapshot because investigation and
+    // verification prompts should reflect the current runtime state, not a
+    // grace-window-smoothed operator view.
+    let health = crate::api_runtime_views::health_snapshot(
+        &state.engine,
+        pipeline_ids,
+        &recording_enabled,
+        0,
+    )
+    .await;
+
+    (recording_enabled, health)
+}
+
 #[cfg(feature = "agent-plane")]
 pub async fn agent_capabilities_handler(
     State(state): State<Arc<AppState>>,
@@ -161,14 +182,7 @@ pub async fn agent_investigation_handler(
         .clone()
         .map(|pid| vec![pid])
         .unwrap_or_else(|| pipelines.iter().map(|p| p.id.clone()).collect());
-    let recording_enabled = recording_enabled_map(&state, &pipeline_ids).await;
-    let health = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        &pipeline_ids,
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let (_recording_enabled, health) = agent_health_snapshot(&state, &pipeline_ids).await;
     let alerts = alerts::derive_alerts(&health);
     let graph = if let Some(pid) = request.pipeline_id.as_deref()
         && pipeline_exists
@@ -536,14 +550,7 @@ async fn build_agent_context(state: &AppState) -> serde_json::Value {
     let jobs = catalog.jobs;
     let jobs_json = api_view_models::job_response_json_list(&jobs);
     let ingests = catalog.ingests;
-    let recording_enabled = recording_enabled_map(state, &pipeline_ids).await;
-    let health = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        &pipeline_ids,
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let (recording_enabled, health) = agent_health_snapshot(state, &pipeline_ids).await;
     let alerts = alerts::derive_alerts(&health);
     let events = state.engine.recent_events(events::MAX_EVENTS, None);
     let engine_telemetry = crate::api_runtime_views::engine_telemetry(&state.engine).await;
@@ -998,14 +1005,7 @@ async fn verify_agent_operation(
         .map(|pipeline| pipeline.id.clone())
         .collect();
     let outputs = catalog.outputs;
-    let recording_enabled = recording_enabled_map(state, &pipeline_ids).await;
-    let health = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        &pipeline_ids,
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let (_recording_enabled, health) = agent_health_snapshot(state, &pipeline_ids).await;
     let alerts = alerts::derive_alerts(&health);
     let mut checks = Vec::new();
     let mut success = true;
@@ -1178,14 +1178,7 @@ async fn current_agent_alert_count(state: &AppState) -> usize {
         .iter()
         .map(|pipeline| pipeline.id.clone())
         .collect();
-    let recording_enabled = recording_enabled_map(state, &pipeline_ids).await;
-    let health = crate::api_runtime_views::health_snapshot(
-        &state.engine,
-        &pipeline_ids,
-        &recording_enabled,
-        0,
-    )
-    .await;
+    let (_recording_enabled, health) = agent_health_snapshot(state, &pipeline_ids).await;
     alerts::derive_alerts(&health).len()
 }
 
