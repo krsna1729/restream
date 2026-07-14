@@ -167,8 +167,6 @@ Compared with the June 27, 2026 snapshot, covered lines increased from
 `23,918` to `25,399` (`+1,481`), so overall unit-only line coverage moved from
 `55.4%` to `54.3%` (`-1.1` percentage points).
 
-![Coverage by module](../coverage-by-module.svg)
-
 | Module | Lines | Covered | Coverage |
 |---|---:|---:|---:|
 | `pipe_metrics` | 21 | 21 | 100.0% |

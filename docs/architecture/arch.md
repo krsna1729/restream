@@ -98,45 +98,30 @@ The system’s main weakness is not one bug. It is that important runtime concep
 
 The target architecture is a layered, port-and-adapter style system.
 
-```text
-┌──────────────────────────────────────────────────────────────────────┐
-│ HTTP/UI/MCP/CLI adapters                                             │
-│ - Axum routes, static UI, MCP tools, bench harness client             │
-└─────────────────────────────┬────────────────────────────────────────┘
-                              │ request/response DTOs
-┌─────────────────────────────▼────────────────────────────────────────┐
-│ Application services                                                  │
-│ - pipeline service, output service, ingest service, recording service │
-│ - reconciler, graph planner facade, settings/security service         │
-└─────────────────────────────┬────────────────────────────────────────┘
-                              │ commands, queries, ports
-┌─────────────────────────────▼────────────────────────────────────────┐
-│ Domain model                                                          │
-│ - PipelineId, OutputId, OutputConfig, AudioRoute, StageKind, Codec    │
-│ - DesiredState, RuntimeState, error codes, policy types               │
-└─────────────────────────────┬────────────────────────────────────────┘
-                              │ stage graph plans
-┌─────────────────────────────▼────────────────────────────────────────┐
-│ Runtime graph                                                         │
-│ - StageGraphPlan, StageRuntime, OutputRuntime, IngestRuntime          │
-│ - lifecycle, admission, capacity, dependency status, metrics          │
-└─────────────────────────────┬────────────────────────────────────────┘
-                              │ backend/protocol ports
-┌─────────────────────────────▼────────────────────────────────────────┐
-│ Media/protocol adapters                                               │
-│ - RTMP, SRT, HLS, recording, file ingest, FFmpeg internal/external    │
-│ - RingBuffer, MemoryQueue, TS mux/demux, codec helpers                │
-└──────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    Interfaces["HTTP, UI, MCP, and CLI adapters<br/>Axum routes, static UI, MCP tools, harness client"]
+    Application["Application services<br/>pipeline, output, ingest, recording, reconciliation, settings"]
+    Domain["Domain model<br/>IDs, output config, audio routes, stage kinds, codecs, policy types"]
+    Runtime["Runtime graph<br/>plans, lifecycle, admission, capacity, dependencies, metrics"]
+    Media["Media and protocol adapters<br/>RTMP, SRT, HLS, recording, file ingest, FFmpeg, media primitives"]
+
+    Interfaces -->|Request and response DTOs| Application
+    Application -->|Commands, queries, and ports| Domain
+    Domain -->|Stage graph plans| Runtime
+    Runtime -->|Backend and protocol ports| Media
 ```
 
 Dependency rule:
 
-```text
-Adapters -> Application -> Domain
-Runtime graph -> Domain
-Media adapters -> Runtime graph contracts + media primitives
-Domain -> nothing above it
+```mermaid
+flowchart LR
+    Adapters["Adapters"] --> Application["Application"] --> Domain["Domain"]
+    Runtime["Runtime graph"] --> Domain
+    Media["Media adapters"] --> Contracts["Runtime graph contracts and media primitives"]
 ```
+
+The domain imports nothing from the layers above it.
 
 Allowed imports:
 
