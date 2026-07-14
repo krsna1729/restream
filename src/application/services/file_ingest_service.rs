@@ -26,6 +26,8 @@ use crate::media::engine::MediaEngine;
 use super::error::{ApiError, ApiResult};
 use super::pipeline_service::PipelineService;
 
+/// Transport-facing payload for creating or updating one persisted file ingest
+/// configuration before it is translated into the domain/storage model.
 pub struct FileIngestConfigInput {
     pub filename: String,
     pub loop_flag: bool,
@@ -34,6 +36,8 @@ pub struct FileIngestConfigInput {
     pub target_gop_seconds: u32,
 }
 
+/// Owns one spawned external FFmpeg child together with the pipes the runtime
+/// task needs to read and supervise.
 pub struct SpawnedFileIngestChild {
     pub child: Child,
     pub stdout: ChildStdout,
@@ -41,6 +45,8 @@ pub struct SpawnedFileIngestChild {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Start-time failures that callers need to distinguish between bad inputs,
+/// missing catalog state, and runtime/process startup problems.
 pub enum FileIngestStartError {
     NotFound,
     MissingPipelineForStreamKey,
@@ -53,6 +59,8 @@ pub enum FileIngestStartError {
     Spawn(String),
 }
 
+/// Application service that coordinates file-ingest persistence with runtime
+/// media-engine state so stored config and active ingest processes stay aligned.
 pub struct FileIngestService {
     ingest_lookup: Arc<dyn IngestLookup>,
     ingest_writer: Arc<dyn IngestWriter>,
@@ -214,6 +222,8 @@ impl FileIngestService {
         Ok(canonical_file)
     }
 
+    /// Resolves one pipeline through the shared pipeline service so file-ingest
+    /// handlers can validate pipeline ownership before touching ingest state.
     pub async fn get_pipeline(&self, id: &str) -> ApiResult<Pipeline> {
         self.pipeline_service.get_by_id(id).await
     }
@@ -230,6 +240,8 @@ impl FileIngestService {
             .map_err(|_| ApiError::internal("load pipeline file ingest state"))
     }
 
+    /// Looks up one ingest record and normalizes a missing row into the API
+    /// layer's stable not-found error.
     async fn get_ingest_or_not_found(&self, id: &str) -> ApiResult<Ingest> {
         self.ingest_lookup
             .get_ingest(id)
@@ -238,6 +250,8 @@ impl FileIngestService {
             .ok_or_else(|| ApiError::not_found("Ingest not found"))
     }
 
+    /// Clears any runtime markers and persisted runtime-derived state that are
+    /// keyed by one stream key after a stop/delete transition.
     async fn clear_stream_key_runtime_state(
         &self,
         engine: &Arc<MediaEngine>,
@@ -254,6 +268,8 @@ impl FileIngestService {
         .map_err(|err| ApiError::internal(format!("{error_context}: {err:?}")))
     }
 
+    /// Best-effort rollback for a start attempt that already registered runtime
+    /// state before a later spawn step failed.
     async fn clear_started_ingest_on_failure(
         engine: &Arc<MediaEngine>,
         ingest_id: &str,
