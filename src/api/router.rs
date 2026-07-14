@@ -163,6 +163,8 @@ pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/hls/{pipeline_id}/{segment}",
 ];
 
+/// Registers the authenticated HLS transport surface separately from the main
+/// JSON API so streaming routes stay easy to audit as one group.
 fn create_hls_router() -> Router<Arc<AppState>> {
     // HLS endpoints are grouped separately because they expose the streaming
     // surface and are easiest to scan when kept together.
@@ -197,6 +199,8 @@ fn create_hls_router() -> Router<Arc<AppState>> {
         .route("/hls/{pipeline_id}/{segment}", get(hls_segment_handler))
 }
 
+/// Builds the complete dashboard router before transport-wide layers are
+/// applied, keeping route registration close to the public boundary list above.
 fn create_app_router() -> Router<Arc<AppState>> {
     // Keep the full route table in one place so the public dashboard surface is
     // easy to audit, even though individual handlers stay in smaller modules.
@@ -404,6 +408,8 @@ fn create_app_router() -> Router<Arc<AppState>> {
 
 // These layers define transport-wide policy that should apply equally to JSON,
 // static assets, and streaming endpoints unless a route opts out explicitly.
+/// Applies baseline transport policy shared by dashboard APIs, static assets,
+/// and media endpoints unless a specific route opts out.
 fn apply_standard_layers(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     router
         .layer(CompressionLayer::new())
@@ -418,6 +424,8 @@ fn apply_standard_layers(router: Router<Arc<AppState>>) -> Router<Arc<AppState>>
         ))
 }
 
+/// Constructs the externally exposed application router with shared transport
+/// layers and the concrete application state attached.
 pub fn create_router(state: Arc<AppState>) -> Router {
     apply_standard_layers(create_app_router()).with_state(state)
 }
