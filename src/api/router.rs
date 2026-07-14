@@ -70,6 +70,11 @@ use super::telemetry::{
     v1_pipeline_telemetry_handler, v1_stage_telemetry_handler,
 };
 
+const DEFAULT_API_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+
+// These path lists document which transport surfaces are intentionally public
+// versus session-gated. They are also reused by tests and external tooling that
+// want to reason about route exposure without rebuilding the router tree.
 pub const PUBLIC_ROUTE_PATHS: &[&str] = &[
     "/login",
     "/login.html",
@@ -83,6 +88,8 @@ pub const PUBLIC_ROUTE_PATHS: &[&str] = &[
     "/metrics/system",
 ];
 
+// Authenticated routes include both dashboard JSON APIs and media/HLS entry
+// points that should only resolve after the request has passed session checks.
 pub const AUTHENTICATED_ROUTE_PATHS: &[&str] = &[
     "/api/v1/auth/logout",
     "/api/v1/auth/change-password",
@@ -191,6 +198,8 @@ fn create_hls_router() -> Router<Arc<AppState>> {
 }
 
 fn create_app_router() -> Router<Arc<AppState>> {
+    // Keep the full route table in one place so the public dashboard surface is
+    // easy to audit, even though individual handlers stay in smaller modules.
     Router::new()
         .route("/login", get(login_get_handler))
         .route("/login.html", get(login_html_redirect_handler))
@@ -393,10 +402,12 @@ fn create_app_router() -> Router<Arc<AppState>> {
         .fallback(get(spa_fallback_handler))
 }
 
+// These layers define transport-wide policy that should apply equally to JSON,
+// static assets, and streaming endpoints unless a route opts out explicitly.
 fn apply_standard_layers(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     router
         .layer(CompressionLayer::new())
-        .layer(DefaultBodyLimit::max(4 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(DEFAULT_API_BODY_LIMIT_BYTES))
         .layer(SetResponseHeaderLayer::if_not_present(
             header::HeaderName::from_static("x-content-type-options"),
             HeaderValue::from_static("nosniff"),
@@ -409,4 +420,29 @@ fn apply_standard_layers(router: Router<Arc<AppState>>) -> Router<Arc<AppState>>
 
 pub fn create_router(state: Arc<AppState>) -> Router {
     apply_standard_layers(create_app_router()).with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AUTHENTICATED_ROUTE_PATHS, PUBLIC_ROUTE_PATHS};
+    use std::collections::HashSet;
+
+    #[test]
+    fn public_and_authenticated_route_lists_do_not_overlap() {
+        let public_routes = PUBLIC_ROUTE_PATHS.iter().copied().collect::<HashSet<_>>();
+
+        assert!(
+            AUTHENTICATED_ROUTE_PATHS
+                .iter()
+                .all(|path| !public_routes.contains(path))
+        );
+    }
+
+    #[test]
+    fn route_lists_cover_key_dashboard_boundaries() {
+        assert!(PUBLIC_ROUTE_PATHS.contains(&"/api/v1/auth/login"));
+        assert!(PUBLIC_ROUTE_PATHS.contains(&"/metrics/system"));
+        assert!(AUTHENTICATED_ROUTE_PATHS.contains(&"/api/v1/settings"));
+        assert!(AUTHENTICATED_ROUTE_PATHS.contains(&"/hls/{pipeline_id}/master.m3u8"));
+    }
 }
