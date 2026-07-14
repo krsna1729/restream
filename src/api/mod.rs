@@ -1,3 +1,9 @@
+//! Dashboard API surface modules.
+//!
+//! Each submodule owns a small transport boundary: request validation, auth
+//! gating, and response shaping before control passes into application or
+//! runtime services.
+
 pub mod agent;
 pub mod alerts;
 pub mod auth;

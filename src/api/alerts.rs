@@ -1,3 +1,7 @@
+//! Alert HTTP handlers expose derived operator alerts from the runtime health
+//! snapshot. This module stays at the transport boundary so request auth,
+//! snapshot shaping, and alert-tracker state remain easy to audit together.
+
 use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use std::sync::Arc;
 
@@ -13,6 +17,8 @@ pub async fn aggregate_alerts_handler(
         return response;
     }
 
+    // Alerts are derived from the same health snapshot shape the dashboard uses
+    // so transport-only alert logic does not need to understand engine internals.
     let pipeline_ids = state
         .pipeline_service
         .list_pipeline_ids()

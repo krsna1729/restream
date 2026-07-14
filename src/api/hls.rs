@@ -1,3 +1,7 @@
+//! HLS preview HTTP handlers expose playlists and media segments while keeping
+//! access checks and transport-specific error mapping at the API boundary.
+//! The preview service remains responsible for reading playlist/segment data.
+
 use axum::{
     Json,
     extract::{OriginalUri, Path, State},
@@ -166,6 +170,8 @@ fn hls_preview_error_response(err: HlsPreviewReadError) -> Response {
         }
         HlsPreviewReadError::NoSegments { blocked_by } => {
             if let Some(cause) = blocked_by {
+                // Bubble the blocked stage back to the dashboard so operators can
+                // tell whether preview is waiting on an upstream video phase.
                 json_error_response(
                     StatusCode::NOT_FOUND,
                     "hlsNoSegments",
@@ -222,6 +228,8 @@ fn json_error_response(
     message: impl Into<String>,
     extra: Option<Value>,
 ) -> Response {
+    // Keep HLS errors on the same JSON envelope as the rest of the dashboard API
+    // while still allowing endpoint-specific metadata to be attached when useful.
     let mut body = json!({
         "error": message.into(),
         "status": status.as_u16(),
