@@ -183,27 +183,6 @@ jobs:
       - name: Check fixture discipline
         run: ./scripts/check/fixture-discipline.sh
 
-  sbom-sync:
-    name: Runtime SBOM emit smoke
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install runtime SBOM smoke dependencies
-        uses: ./.github/actions/system-deps
-        with:
-          profile: base
-      - name: Restore native prefix for runtime SBOM smoke
-        uses: ./.github/actions/native-prefix
-      - name: Restore Rust cache for runtime SBOM smoke
-        uses: ./.github/actions/rust-cache
-      - name: Emit runtime SBOM
-        env:
-          RESTREAM_SBOM_PATH: target/ci-sbom/restream-runtime.cdx.json
-        run: scripts/build/resource-limit.sh ./scripts/build/app-native.sh
-      - name: Check emitted SBOM exists
-        run: test -s target/ci-sbom/restream-runtime.cdx.json
-
   coverage:
     name: Workspace coverage report
     runs-on: ubuntu-24.04

@@ -28,9 +28,9 @@ starts its `restream` binary directly, and fetches `/login`, authenticated `/`,
 CSS, JavaScript, HLS, and logo assets so release CI proves the binary carries
 the embedded frontend instead of relying on the source tree's `public/`
 directory. Omitting the bundle retains a source-only certification form for
-development checks. Generated SBOMs are not checked into the repository: CI
-smoke-tests `restream --emit-sbom`, while release packaging writes the
-commit-specific full-provenance SBOM into the Restream host archive.
+development checks. Generated SBOMs are not checked into the repository or
+PR CI artifacts; release packaging writes the commit-specific full-provenance
+SBOM into the Restream host archive.
 
 A `v*` tag runs the artifact gate, the full bench-harness suite, and publishes
 four GitHub Release assets: the Restream host binary archive, the
