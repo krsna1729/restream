@@ -1683,6 +1683,8 @@ mod tests {
         agent_plan_graph_preview_json, agent_plan_validation_json, desired_output_reason,
         pipeline_input_is_on,
     };
+    #[cfg(feature = "agent-plane")]
+    use crate::domain::state::DesiredOutputState;
 
     #[cfg(feature = "agent-plane")]
     fn sample_plan_response() -> crate::agent_plane::PlanResponse {
