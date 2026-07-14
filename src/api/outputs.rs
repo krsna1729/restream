@@ -289,37 +289,41 @@ fn output_state_response(
     .into_response()
 }
 
+type ValidationResponse = Box<Response>;
+
 // Validate and canonicalize output mutations at the HTTP boundary so services
 // only ever see normalized absolute URLs and supported config choices.
-fn validate_output_payload(payload: &OutputPayload) -> Result<ValidatedOutputPayload, Response> {
+fn validate_output_payload(
+    payload: &OutputPayload,
+) -> Result<ValidatedOutputPayload, ValidationResponse> {
     if let Some(response) = check_field_len("name", &payload.name, MAX_NAME_LEN) {
-        return Err(response);
+        return Err(Box::new(response));
     }
     if let Some(response) = check_field_len("url", &payload.url, MAX_URL_LEN) {
-        return Err(response);
+        return Err(Box::new(response));
     }
 
     let output_config = payload.config.clone();
     let output_encoding = payload.encoding_string();
     if let Some(response) = check_field_len("config", &output_encoding, MAX_ENCODING_LEN) {
-        return Err(response);
+        return Err(Box::new(response));
     }
     if let Some(monitoring_url) = payload.monitoring_url.as_deref()
         && let Some(response) = check_field_len("monitoring_url", monitoring_url, MAX_URL_LEN)
     {
-        return Err(response);
+        return Err(Box::new(response));
     }
     if output_config.is_custom_output() {
-        return Err(bad_request(CUSTOM_OUTPUT_ENCODING_ERROR));
+        return Err(Box::new(bad_request(CUSTOM_OUTPUT_ENCODING_ERROR)));
     }
 
     // Normalize once at the API boundary so downstream services only receive
     // absolute URLs in a canonical host/scheme form.
     let Some(url) = normalize_output_url(&payload.url) else {
-        return Err(bad_request(OUTPUT_URL_PARSE_ERROR));
+        return Err(Box::new(bad_request(OUTPUT_URL_PARSE_ERROR)));
     };
-    let monitoring_url =
-        normalize_monitoring_url(payload.monitoring_url.as_deref()).map_err(bad_request)?;
+    let monitoring_url = normalize_monitoring_url(payload.monitoring_url.as_deref())
+        .map_err(|error| Box::new(bad_request(error)))?;
 
     Ok(ValidatedOutputPayload {
         output_config,
@@ -379,7 +383,7 @@ pub async fn outputs_create_handler(
 
     let validated = match validate_output_payload(&payload) {
         Ok(validated) => validated,
-        Err(response) => return Ok(response),
+        Err(response) => return Ok(*response),
     };
 
     let id = format!("output_{}", to_hex(&rand::random::<[u8; 8]>()));
@@ -418,7 +422,7 @@ pub async fn outputs_update_handler(
 
     let validated = match validate_output_payload(&payload) {
         Ok(validated) => validated,
-        Err(response) => return Ok(response),
+        Err(response) => return Ok(*response),
     };
     let existing = state
         .output_service

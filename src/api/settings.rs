@@ -48,6 +48,8 @@ struct NormalizedConfigPatch {
     srt_ingest_json: Option<String>,
 }
 
+type ValidationResponse = Box<Response>;
+
 fn dashboard_password_change_recommended(meta: Option<String>) -> bool {
     meta.as_deref() == Some("pending")
 }
@@ -130,21 +132,23 @@ async fn jobs_response_json(
 // persistence layer only sees canonical settings values.
 fn validate_config_patch_payload(
     payload: &ConfigPatchPayload,
-) -> Result<NormalizedConfigPatch, Response> {
+) -> Result<NormalizedConfigPatch, ValidationResponse> {
     if let Some(name) = payload.server_name.as_deref()
         && name.trim().is_empty()
     {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "serverName must be a non-empty string",
-        )
-            .into_response());
+        return Err(Box::new(
+            (
+                StatusCode::BAD_REQUEST,
+                "serverName must be a non-empty string",
+            )
+                .into_response(),
+        ));
     }
 
     let ingest_security = match payload.ingest_security.clone() {
         Some(mut sec) => {
             if let Err(error) = sec.validate() {
-                return Err((StatusCode::BAD_REQUEST, error).into_response());
+                return Err(Box::new((StatusCode::BAD_REQUEST, error).into_response()));
             }
             sec.normalize();
             Some(sec)
@@ -155,11 +159,11 @@ fn validate_config_patch_payload(
     let srt_ingest_json = match payload.srt_ingest.clone() {
         Some(mut srt_ingest) => {
             if let Err(error) = srt_ingest.validate() {
-                return Err((StatusCode::BAD_REQUEST, error).into_response());
+                return Err(Box::new((StatusCode::BAD_REQUEST, error).into_response()));
             }
             match serde_json::to_string(&srt_ingest) {
                 Ok(value) => Some(value),
-                Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+                Err(_) => return Err(Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response())),
             }
         }
         None => None,
@@ -168,11 +172,13 @@ fn validate_config_patch_payload(
     if let Some(profiles) = payload.transcode_profiles.as_ref() {
         for (name, profile) in profiles {
             if let Err(err) = profile.validate() {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!("Invalid profile '{}': {}", name, err),
-                )
-                    .into_response());
+                return Err(Box::new(
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("Invalid profile '{}': {}", name, err),
+                    )
+                        .into_response(),
+                ));
             }
         }
     }
@@ -269,7 +275,7 @@ pub async fn config_patch_handler(
 
     let normalized = match validate_config_patch_payload(&payload) {
         Ok(normalized) => normalized,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     if let Some(ref name) = payload.server_name

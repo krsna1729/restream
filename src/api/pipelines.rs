@@ -124,11 +124,11 @@ fn validate_pipeline_payload(payload: &PipelinePayload) -> Option<Response> {
 /// containing serialization failures at the transport boundary.
 fn serialize_srt_ingest_policy(
     policy: Option<&SrtPipelineIngestConfig>,
-) -> Result<Option<String>, Response> {
+) -> Result<Option<String>, Box<Response>> {
     match policy {
         Some(policy) => serialize_pipeline_srt_ingest_policy(policy)
             .map(Some)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+            .map_err(|_| Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response())),
         None => Ok(None),
     }
 }
@@ -237,7 +237,7 @@ pub async fn pipelines_post_handler(
         .and_then(|source| source.as_deref());
     let srt_ingest_policy = match serialize_srt_ingest_policy(payload.srt_ingest_policy.as_ref()) {
         Ok(policy) => policy,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     // Auto-generated stream keys retry on collisions so callers do not need to
@@ -344,7 +344,7 @@ pub async fn pipelines_update_handler(
     let srt_ingest_policy = match serialize_srt_ingest_policy(payload.srt_ingest_policy.as_ref()) {
         Ok(Some(value)) => Some(value),
         Ok(None) => existing_srt_ingest_policy,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     if let Ok(active_pipelines) = state.pipeline_service.list_pipelines().await

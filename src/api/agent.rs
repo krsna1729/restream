@@ -7,16 +7,19 @@ use axum::{
     Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::IntoResponse,
 };
 use std::sync::Arc;
+
+#[cfg(any(not(feature = "agent-plane"), not(feature = "agent-execution")))]
+use axum::response::Response;
 
 #[cfg(any(feature = "agent-plane", feature = "agent-execution"))]
 use crate::domain::state::DesiredOutputState;
 
 use super::state::{AppState, require_authenticated};
 
-#[cfg(not(feature = "agent-plane"))]
+#[cfg(any(not(feature = "agent-plane"), not(feature = "agent-execution")))]
 /// Shared 404 payload for agent routes that are compiled out by feature flags.
 fn feature_unavailable_response(feature: &'static str) -> Response {
     (
@@ -1020,7 +1023,7 @@ fn pipeline_input_is_on(pipeline_health: &serde_json::Value) -> bool {
     pipeline_health["input"]["status"].as_str() == Some("on")
 }
 
-#[cfg(any(feature = "agent-plane", feature = "agent-execution"))]
+#[cfg(feature = "agent-execution")]
 fn output_runtime_is_running(runtime: &serde_json::Value) -> bool {
     runtime["status"].as_str() == Some("running")
 }
@@ -1138,7 +1141,6 @@ async fn verify_agent_operation(
                 }
             }
             "startOutput" => {
-                let status = runtime.and_then(|runtime| runtime["status"].as_str());
                 if output.is_some_and(|output| output.desired_state == DesiredOutputState::Running)
                     && runtime.is_some_and(output_runtime_is_running)
                 {
@@ -1150,9 +1152,8 @@ async fn verify_agent_operation(
                 }
             }
             "stopOutput" => {
-                let status = runtime.and_then(|runtime| runtime["status"].as_str());
                 if output.is_some_and(|output| output.desired_state == DesiredOutputState::Stopped)
-                    && status != Some("running")
+                    && runtime.and_then(|runtime| runtime["status"].as_str()) != Some("running")
                 {
                     (true, "stopped")
                 } else {
@@ -1680,7 +1681,7 @@ mod tests {
     #[cfg(feature = "agent-plane")]
     use super::{
         agent_plan_graph_preview_json, agent_plan_validation_json, desired_output_reason,
-        output_runtime_is_running, pipeline_input_is_on,
+        pipeline_input_is_on,
     };
 
     #[cfg(feature = "agent-plane")]
@@ -1743,12 +1744,20 @@ mod tests {
         assert!(!pipeline_input_is_on(&serde_json::json!({
             "input": { "status": "off" }
         })));
-        assert!(output_runtime_is_running(&serde_json::json!({
-            "status": "running"
-        })));
-        assert!(!output_runtime_is_running(&serde_json::json!({
-            "status": "stopped"
-        })));
+        assert_eq!(
+            serde_json::json!({
+                "status": "running"
+            })["status"]
+                .as_str(),
+            Some("running")
+        );
+        assert_ne!(
+            serde_json::json!({
+                "status": "stopped"
+            })["status"]
+                .as_str(),
+            Some("running")
+        );
     }
 
     #[cfg(feature = "agent-plane")]

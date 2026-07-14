@@ -69,22 +69,26 @@ fn ingest_json_response(ingest: &crate::application::models::Ingest, running: bo
     Json(ingest_response(ingest, running)).into_response()
 }
 
+type ValidationResponse = Box<Response>;
+
 // Normalize optional API defaults once so create/update handlers can pass a
 // single service-facing request shape instead of mixing raw and validated data.
-fn normalize_ingest_payload(payload: IngestPayload) -> Result<NormalizedIngestPayload, Response> {
+fn normalize_ingest_payload(
+    payload: IngestPayload,
+) -> Result<NormalizedIngestPayload, ValidationResponse> {
     if let Some(response) = check_field_len("filename", &payload.filename, MAX_NAME_LEN) {
-        return Err(response);
+        return Err(Box::new(response));
     }
     if let Some(response) = validate_file_ingest_filename(&payload.filename) {
-        return Err(response);
+        return Err(Box::new(response));
     }
     if let Some(response) = check_field_len("stream_key", &payload.stream_key, MAX_STREAM_KEY_LEN) {
-        return Err(response);
+        return Err(Box::new(response));
     }
     if let Some(start_time) = payload.start_time.as_deref()
         && let Some(response) = check_field_len("start_time", start_time, 64)
     {
-        return Err(response);
+        return Err(Box::new(response));
     }
 
     Ok(NormalizedIngestPayload {
@@ -183,7 +187,7 @@ pub async fn ingests_post_handler(
 
     let normalized = match normalize_ingest_payload(payload) {
         Ok(normalized) => normalized,
-        Err(response) => return Ok(response),
+        Err(response) => return Ok(*response),
     };
     let id = format!("ingest_{}", to_hex(&rand::random::<[u8; 8]>()));
 
@@ -217,7 +221,7 @@ pub async fn ingests_update_handler(
 
     let normalized = match normalize_ingest_payload(payload) {
         Ok(normalized) => normalized,
-        Err(response) => return Ok(response),
+        Err(response) => return Ok(*response),
     };
 
     let ingest = state
