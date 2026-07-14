@@ -1579,7 +1579,7 @@ async fn epoll_waiter_parks_until_wait_is_requested() {
 /// property that prevents the busy-spin.
 #[tokio::test]
 async fn epoll_waiter_coordination() {
-    use rand::Rng;
+    use rand::RngExt;
     use rand::SeedableRng;
     use std::sync::atomic::AtomicU32;
 
@@ -1600,10 +1600,10 @@ async fn epoll_waiter_coordination() {
     let producer = tokio::task::spawn_blocking(move || {
         while w_signal.wait_for_request() {
             // Jitter: 1-9µs typical, occasionally 1ms (simulating idle).
-            let delay = if rng.gen_range(0..100) == 0 {
+            let delay = if rng.random_range(0..100) == 0 {
                 1_000
             } else {
-                rng.gen_range(1..10)
+                rng.random_range(1..10)
             };
             std::thread::sleep(std::time::Duration::from_micros(delay));
 
