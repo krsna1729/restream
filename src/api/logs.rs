@@ -47,6 +47,8 @@ pub struct LogsStreamQuery {
 const DEFAULT_LOG_PAGE_LIMIT: u32 = 200;
 const MAX_STREAM_BACKFILL_PAGE_SIZE: i64 = 200;
 
+// Historical log listing stays close to the transport layer because the query
+// shape maps directly onto the persisted log-store filter contract.
 fn build_logs_filters(query: LogsQuery) -> AppLogFilters {
     AppLogFilters {
         after_id: query.after_id,
@@ -62,6 +64,14 @@ fn build_logs_filters(query: LogsQuery) -> AppLogFilters {
         limit: query.limit.map(|limit| limit as i64),
         order: query.order,
     }
+}
+
+fn should_include_restream_stream(
+    pipeline_id: Option<&str>,
+    output_id: Option<&str>,
+    include_restream: bool,
+) -> bool {
+    include_restream && pipeline_id.is_some() && output_id.is_none()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,9 +90,11 @@ impl LogsStreamFilter {
     // Stream queries normalize transport-only options once so the backfill and
     // live broadcast paths stay on the same filtering contract.
     fn from_query(query: LogsStreamQuery) -> Self {
-        let include_restream = query.include_restream.unwrap_or(false)
-            && query.pipeline_id.is_some()
-            && query.output_id.is_none();
+        let include_restream = should_include_restream_stream(
+            query.pipeline_id.as_deref(),
+            query.output_id.as_deref(),
+            query.include_restream.unwrap_or(false),
+        );
 
         Self {
             min_level: query.level.unwrap_or_else(|| "info".to_string()),
@@ -128,6 +140,8 @@ impl LogsStreamFilter {
     }
 }
 
+// Scope names describe which runtime owner a log line belongs to, independent
+// of the extra pipeline/output matching layered on by the stream filter.
 pub fn log_stream_scope_matches(
     scope: Option<&str>,
     pipeline_id: Option<&str>,
@@ -199,6 +213,8 @@ pub fn log_broadcast_matches_stream_filters(
     log_stream_prefix_matches(prefix, &entry.message)
 }
 
+// SSE frames keep the persisted row id so reconnect backfill can resume from
+// the last delivered event rather than replaying the full stream.
 fn log_row_sse_frame(row: &crate::logging::AppLogRow) -> String {
     let data = serde_json::to_string(row).unwrap_or_default();
     format!("id: {}\nevent: log\ndata: {}\n\n", row.id, data)
@@ -213,6 +229,8 @@ fn log_level_passes(min_level: &str, level: &str) -> bool {
     }
 }
 
+/// Lists persisted log rows using the HTTP query as a thin transport-to-filter
+/// mapping over the log service.
 pub async fn logs_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -243,6 +261,8 @@ pub async fn logs_handler(
     .into_response()
 }
 
+/// Streams log events over SSE, optionally backfilling from the caller's last
+/// seen event id before switching to live broadcast delivery.
 pub async fn logs_stream_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -288,7 +308,7 @@ pub async fn logs_stream_handler(
                         return;
                     }
                 }
-                if page_len < 200 {
+                if page_len < MAX_STREAM_BACKFILL_PAGE_SIZE as usize {
                     break;
                 }
             }
@@ -342,7 +362,7 @@ pub async fn logs_stream_handler(
 mod tests {
     use super::{
         LogsQuery, LogsStreamFilter, LogsStreamQuery, MAX_STREAM_BACKFILL_PAGE_SIZE,
-        build_logs_filters, log_level_passes, log_row_sse_frame,
+        build_logs_filters, log_level_passes, log_row_sse_frame, should_include_restream_stream,
     };
 
     #[test]
@@ -389,6 +409,18 @@ mod tests {
         });
 
         assert!(filter.include_restream);
+    }
+
+    #[test]
+    fn include_restream_requires_pipeline_without_output() {
+        assert!(should_include_restream_stream(Some("pipe-1"), None, true));
+        assert!(!should_include_restream_stream(None, None, true));
+        assert!(!should_include_restream_stream(
+            Some("pipe-1"),
+            Some("out-1"),
+            true
+        ));
+        assert!(!should_include_restream_stream(Some("pipe-1"), None, false));
     }
 
     #[test]
