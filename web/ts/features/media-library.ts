@@ -21,6 +21,8 @@ let lastRecordingsSignature = "";
 let lastSourcesSignature = "";
 let mediaShellMounted = false;
 let nativePlaybackProbe: HTMLVideoElement | null | undefined;
+let mediaSearchQuery = "";
+let lastMediaFiles: MediaFile[] = [];
 
 function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -48,7 +50,30 @@ function mediaKind(file: MediaFile): MediaKind {
 }
 
 function sectionEmpty(label: string): string {
-  return `<div class="border-base-content/10 bg-base-100/70 rounded-lg border px-3 py-4 text-sm opacity-70">No ${escapeHtml(label)}.</div>`;
+  return `<div class="dashboard-empty">No ${escapeHtml(label)}.</div>`;
+}
+
+function normalizeSearchText(value: string | null | undefined): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+export function mediaFileMatchesSearch(
+  file: MediaFile,
+  query: string,
+): boolean {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return true;
+  const haystack = [
+    file.name,
+    file.sourceName,
+    file.convertedName,
+    file.playName,
+    file.kind,
+    file.conversionStatus,
+  ]
+    .map((value) => normalizeSearchText(value))
+    .join(" ");
+  return haystack.includes(normalizedQuery);
 }
 
 function mediaContentTypeForName(
@@ -146,10 +171,10 @@ function mediaSectionShell(
   listId: string,
   summaryId: string,
 ): string {
-  return `<section class="border-base-content/10 bg-base-200 rounded-lg border">
-        <div class="border-base-content/10 flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
-            <h2 class="text-base font-semibold">${escapeHtml(title)}</h2>
-            <span class="text-base-content/60 text-sm" id="${summaryId}">--</span>
+  return `<section class="dashboard-section">
+        <div class="dashboard-section-header">
+            <h2 class="dashboard-section-title">${escapeHtml(title)}</h2>
+            <span class="dashboard-muted" id="${summaryId}">--</span>
         </div>
         <div class="space-y-2 p-3" id="${listId}"></div>
     </section>`;
@@ -163,10 +188,10 @@ function mediaDiskSummaryHtml(): string {
   const percent = Number.isFinite(disk.usedPercent as number)
     ? `${(disk.usedPercent as number).toFixed(0)}%`
     : "--";
-  return `<section class="border-base-content/10 bg-base-200 rounded-lg border p-4">
-        <div class="text-base-content/60 text-xs font-semibold uppercase">Media Disk</div>
+  return `<section class="dashboard-stat-card">
+        <div class="dashboard-kicker">Media Disk</div>
         <div class="mt-2 text-2xl font-semibold tabular-nums">${escapeHtml(percent)}</div>
-        <div class="text-base-content/60 mt-1 text-sm">${escapeHtml(used)} / ${escapeHtml(total)}</div>
+        <div class="dashboard-muted mt-1">${escapeHtml(used)} / ${escapeHtml(total)}</div>
     </section>`;
 }
 
@@ -175,25 +200,29 @@ function mountMediaShell(container: HTMLElement): void {
     return;
   container.innerHTML = `<div class="space-y-4" id="media-library-root">
         <div class="grid gap-3 md:grid-cols-3">
-            <section class="border-base-content/10 bg-base-200 rounded-lg border p-4">
-                <div class="text-base-content/60 text-xs font-semibold uppercase">Recordings</div>
+            <section class="dashboard-stat-card">
+                <div class="dashboard-kicker">Recordings</div>
                 <div class="mt-2 text-2xl font-semibold tabular-nums" id="media-recording-count">--</div>
-                <div class="text-base-content/60 mt-1 text-sm" id="media-recording-size">--</div>
+                <div class="dashboard-muted mt-1" id="media-recording-size">--</div>
             </section>
-            <section class="border-base-content/10 bg-base-200 rounded-lg border p-4">
-                <div class="text-base-content/60 text-xs font-semibold uppercase">Source Files</div>
+            <section class="dashboard-stat-card">
+                <div class="dashboard-kicker">Source Files</div>
                 <div class="mt-2 text-2xl font-semibold tabular-nums" id="media-source-count">--</div>
-                <div class="text-base-content/60 mt-1 text-sm" id="media-source-size">--</div>
+                <div class="dashboard-muted mt-1" id="media-source-size">--</div>
             </section>
             <div id="media-disk-summary">${mediaDiskSummaryHtml()}</div>
         </div>
-        <section class="border-base-content/10 bg-base-200/80 rounded-lg border">
-            <div class="border-base-content/10 flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+        <section class="dashboard-section">
+            <div class="dashboard-section-header">
                 <div>
-                    <h1 class="text-lg font-semibold">Media Library</h1>
-                    <p class="text-base-content/60 text-sm">Recordings and file-ingest sources from the configured media directory.</p>
+                    <h1 class="dashboard-title">Media Library</h1>
+                    <p class="dashboard-subtitle">Recordings and file-ingest sources from the configured media directory.</p>
                 </div>
-                <div>
+                <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                    <label class="input input-sm input-bordered flex min-w-56 max-w-80 flex-1 items-center gap-2">
+                        <span class="text-base-content/50 text-xs font-semibold uppercase">Search</span>
+                        <input id="media-library-search" class="grow" type="search" autocomplete="off" placeholder="filename, kind, status" aria-label="Search media library" value="${escapeHtml(mediaSearchQuery)}">
+                    </label>
                     <input class="hidden js-upload-media-input" type="file" accept=".ts,.mkv,.mp4,.mov">
                     <button type="button" class="btn btn-sm btn-primary js-upload-media">Upload media</button>
                 </div>
@@ -243,6 +272,17 @@ export function refreshMediaLibraryMetricsOnly(): void {
 }
 
 function attachMediaActions(container: HTMLElement): void {
+  const searchInput = container.querySelector<HTMLInputElement>(
+    "#media-library-search",
+  );
+  if (searchInput && searchInput.dataset.bound !== "1") {
+    searchInput.dataset.bound = "1";
+    searchInput.addEventListener("input", () => {
+      mediaSearchQuery = searchInput.value;
+      renderMediaLibraryLists(lastMediaFiles, true);
+    });
+  }
+
   const uploadButton = container.querySelector<HTMLButtonElement>(".js-upload-media");
   const uploadInput = container.querySelector<HTMLInputElement>(".js-upload-media-input");
   if (uploadButton && uploadInput && uploadButton.dataset.bound !== "1") {
@@ -308,14 +348,22 @@ function updateSection(
   listId: string,
   summaryId: string,
   files: MediaFile[],
+  totalFiles: MediaFile[],
   emptyLabel: string,
   previousSignature: string,
 ): string {
-  const signature = fileListSignature(files);
+  const signature = JSON.stringify({
+    files: fileListSignature(files),
+    query: normalizeSearchText(mediaSearchQuery),
+  });
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  const isFiltered = normalizeSearchText(mediaSearchQuery) !== "";
+  const totalCount = totalFiles.length;
   setText(
     summaryId,
-    `${files.length} file${files.length === 1 ? "" : "s"} / ${formatFileSize(totalBytes)}`,
+    isFiltered
+      ? `${files.length} of ${totalCount} file${totalCount === 1 ? "" : "s"} / ${formatFileSize(totalBytes)}`
+      : `${files.length} file${files.length === 1 ? "" : "s"} / ${formatFileSize(totalBytes)}`,
   );
   if (signature !== previousSignature) {
     setHtmlIfChanged(
@@ -326,6 +374,42 @@ function updateSection(
     );
   }
   return signature;
+}
+
+function renderMediaLibraryLists(files: MediaFile[], force: boolean): void {
+  const recordings = files.filter((file) => mediaKind(file) === "recording");
+  const sources = files.filter((file) => mediaKind(file) !== "recording");
+  const filteredRecordings = recordings.filter((file) =>
+    mediaFileMatchesSearch(file, mediaSearchQuery),
+  );
+  const filteredSources = sources.filter((file) =>
+    mediaFileMatchesSearch(file, mediaSearchQuery),
+  );
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  const recordingBytes = recordings.reduce((sum, file) => sum + file.size, 0);
+  setText("media-recording-count", recordings.length);
+  setText("media-recording-size", formatFileSize(recordingBytes));
+  setText("media-source-count", sources.length);
+  setText("media-source-size", formatFileSize(totalBytes - recordingBytes));
+  const filteredEmptyLabel = normalizeSearchText(mediaSearchQuery)
+    ? `matches for "${mediaSearchQuery}"`
+    : "";
+  lastRecordingsSignature = updateSection(
+    "media-recordings-list",
+    "media-recordings-summary",
+    filteredRecordings,
+    recordings,
+    filteredEmptyLabel || "recordings yet",
+    force ? "" : lastRecordingsSignature,
+  );
+  lastSourcesSignature = updateSection(
+    "media-sources-list",
+    "media-sources-summary",
+    filteredSources,
+    sources,
+    filteredEmptyLabel || "source files",
+    force ? "" : lastSourcesSignature,
+  );
 }
 
 export async function renderMediaLibraryMode({
@@ -344,36 +428,17 @@ export async function renderMediaLibraryMode({
       const bTime = new Date(b.modifiedAt).getTime() || 0;
       return bTime - aTime || a.name.localeCompare(b.name);
     });
-    const recordings = files.filter((file) => mediaKind(file) === "recording");
-    const sources = files.filter((file) => mediaKind(file) !== "recording");
-    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-    const recordingBytes = recordings.reduce((sum, file) => sum + file.size, 0);
     const diskHtml = mediaDiskSummaryHtml();
     const signature = JSON.stringify({
       files: fileListSignature(files),
       mediaDisk: diskHtml,
+      search: normalizeSearchText(mediaSearchQuery),
     });
     if (!force && signature === lastMediaSignature) return;
 
-    setText("media-recording-count", recordings.length);
-    setText("media-recording-size", formatFileSize(recordingBytes));
-    setText("media-source-count", sources.length);
-    setText("media-source-size", formatFileSize(totalBytes - recordingBytes));
+    lastMediaFiles = files;
     setHtmlIfChanged("media-disk-summary", diskHtml);
-    lastRecordingsSignature = updateSection(
-      "media-recordings-list",
-      "media-recordings-summary",
-      recordings,
-      "recordings yet",
-      force ? "" : lastRecordingsSignature,
-    );
-    lastSourcesSignature = updateSection(
-      "media-sources-list",
-      "media-sources-summary",
-      sources,
-      "source files",
-      force ? "" : lastSourcesSignature,
-    );
+    renderMediaLibraryLists(files, force);
     attachMediaActions(container);
     lastMediaSignature = signature;
   })();

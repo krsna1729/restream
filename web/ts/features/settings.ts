@@ -90,37 +90,37 @@ function settingsSectionFor(childId: string): HTMLElement | null {
 function styleSettingsSection(section: HTMLElement | null, id: string): void {
   if (!section) return;
   section.id = id;
-  section.className =
-    "border-base-content/10 bg-base-200 space-y-5 rounded-lg border p-5 shadow-none";
-  section.querySelector("h2")?.classList.add("text-base", "font-semibold");
+  section.className = "dashboard-section space-y-5 p-5";
+  section.querySelector("h2")?.classList.add("dashboard-section-title");
+}
+
+function settingsNavHtml(id = ""): string {
+  return `<nav${id ? ` id="${id}"` : ""} class="dashboard-nav-strip w-full" aria-label="Settings sections">
+      <div class="flex flex-wrap gap-2">
+          <a class="btn btn-sm btn-ghost" href="#server-settings-section">Server</a>
+          <a class="btn btn-sm btn-ghost" href="#recording-settings-section">Recording</a>
+          <a class="btn btn-sm btn-ghost" href="#srt-settings-section">SRT</a>
+          <a class="btn btn-sm btn-ghost" href="#backend-policy-section">Backend</a>
+          <a class="btn btn-sm btn-ghost" href="#transcode-profiles-section">Profiles</a>
+      </div>
+  </nav>`;
 }
 
 function ensureSettingsNav(container: Element): void {
   if (document.getElementById("settings-admin-nav")) return;
   const title = container.querySelector("h1");
-  const nav = document.createElement("nav");
-  nav.id = "settings-admin-nav";
-  nav.className = "border-base-content/10 bg-base-200 rounded-lg border p-2";
-  nav.setAttribute("aria-label", "Admin sections");
-  nav.innerHTML = `
-        <div class="flex flex-wrap gap-2">
-            <a class="btn btn-sm btn-ghost" href="#server-settings-section">Server</a>
-            <a class="btn btn-sm btn-ghost" href="#recording-settings-section">Recording</a>
-            <a class="btn btn-sm btn-ghost" href="#srt-settings-section">SRT</a>
-            <a class="btn btn-sm btn-ghost" href="#backend-policy-section">Backend</a>
-            <a class="btn btn-sm btn-ghost" href="#transcode-profiles-section">Profiles</a>
-        </div>`;
-  title?.insertAdjacentElement("afterend", nav);
+  const header = title?.closest(".flex");
+  header?.insertAdjacentHTML("afterend", settingsNavHtml("settings-admin-nav"));
 }
 
 function applySettingsChrome(): void {
   const container = document.querySelector(".flex-1.overflow-y-auto > div");
   if (container instanceof HTMLElement) {
-    container.className = "mx-auto max-w-5xl space-y-5";
+    container.className = "dashboard-page-shell";
     const title = container.querySelector("h1");
     if (title) {
       title.textContent = "Admin";
-      title.className = "text-lg font-semibold";
+      title.className = "dashboard-title";
     }
     ensureSettingsNav(container);
   }
@@ -153,24 +153,18 @@ export function registerSettingsGlobals(): void {
 export function renderSettingsPanel(container: HTMLElement): void {
   registerSettingsGlobals();
   container.innerHTML = `
-        <div class="mx-auto max-w-5xl space-y-5">
+        <div class="dashboard-page-shell">
             <div class="flex flex-wrap items-end justify-between gap-3">
                 <div>
-                    <h1 class="text-lg font-semibold">Settings</h1>
-                    <p class="text-base-content/60 mt-1 text-sm">Server, security, and encoding configuration.</p>
+                    <h1 class="dashboard-title">Settings</h1>
+                    <p class="dashboard-subtitle">Server, security, and encoding configuration.</p>
                 </div>
-                <nav class="border-base-content/10 bg-base-200 rounded-lg border p-1" aria-label="Settings sections">
-                    <a class="btn btn-sm btn-ghost" href="#server-settings-section">Server</a>
-                    <a class="btn btn-sm btn-ghost" href="#recording-settings-section">Recording</a>
-                    <a class="btn btn-sm btn-ghost" href="#srt-settings-section">SRT</a>
-                    <a class="btn btn-sm btn-ghost" href="#backend-policy-section">Backend</a>
-                    <a class="btn btn-sm btn-ghost" href="#transcode-profiles-section">Profiles</a>
-                </nav>
             </div>
+            ${settingsNavHtml()}
 
-            <section id="server-settings-section" class="border-base-content/10 bg-base-200 space-y-5 rounded-lg border p-5">
+            <section id="server-settings-section" class="dashboard-section space-y-5 p-5">
                 <div>
-                    <h2 class="text-base font-semibold">Server</h2>
+                    <h2 class="dashboard-section-title">Server</h2>
                 </div>
 
                 <div class="space-y-4">

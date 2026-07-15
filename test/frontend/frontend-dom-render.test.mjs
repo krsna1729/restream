@@ -117,6 +117,7 @@ function appendInspectDom(document) {
   appendRoot(document, "button", "inspect-open-pipeline-btn");
   appendRoot(document, "div", "inspect-pipeline-summary");
   appendRoot(document, "div", "inspect-diagnostics-summary");
+  appendRoot(document, "div", "inspect-resource-details");
   appendRoot(document, "button", "inspect-refresh-graph-btn");
   appendRoot(document, "button", "inspect-open-diagnostics-btn");
   appendRoot(document, "div", "inspect-graph-status");
@@ -684,6 +685,31 @@ runCheck(
 );
 
 runCheck(
+  "media library search matches filename, converted file, and status",
+  async () => {
+    const mediaLibrary = await loadCompiledFrontendModule(
+      "features/media-library.js",
+    );
+    const file = {
+      name: "festival-recording.ts",
+      kind: "recording",
+      sourceName: "festival-recording.ts",
+      convertedName: "festival-recording.mp4",
+      playName: "festival-recording.mp4",
+      conversionStatus: "ready",
+      size: 1200,
+      modifiedAt: "2026-07-15T00:00:00Z",
+    };
+
+    assert.equal(mediaLibrary.mediaFileMatchesSearch(file, ""), true);
+    assert.equal(mediaLibrary.mediaFileMatchesSearch(file, "festival"), true);
+    assert.equal(mediaLibrary.mediaFileMatchesSearch(file, "mp4"), true);
+    assert.equal(mediaLibrary.mediaFileMatchesSearch(file, "ready"), true);
+    assert.equal(mediaLibrary.mediaFileMatchesSearch(file, "source"), false);
+  },
+);
+
+runCheck(
   "renderPipelineInfoColumn keeps the active file-source panel ahead of stale async loads",
   async () => {
     const { document, window } = installFakeDom();
@@ -979,7 +1005,7 @@ runCheck(
         },
         ingestUrls: {
           rtmp: "rtmp://example.com/live/stream-key",
-          srt: "srt://example.com:10080?streamid=publish:live/stream-key",
+          srt: "srt://example.com:10080?streamid=publish:stream-key",
         },
       }),
     ];
@@ -1017,6 +1043,50 @@ runCheck(
     assert.equal(
       document.getElementById("input-output-count").textContent,
       "1",
+    );
+  },
+);
+
+runCheck(
+  "renderPipelineInfoColumn restores expanded long audio-track lists",
+  async () => {
+    const { document, window } = installFakeDom();
+    window.localStorage.setItem(
+      "restream.audioTrackExpansion.v1",
+      JSON.stringify(["pipe-1"]),
+    );
+    appendRoot(document, "div", "pipe-info-col");
+    appendRoot(document, "div", "pipe-name");
+    appendRoot(document, "div", "input-stats");
+    appendRoot(document, "div", "input-audio-tracks");
+
+    const pipelineView = await loadCompiledFrontendModule(
+      "features/pipeline-view.js",
+    );
+    const { state } = await loadCompiledFrontendModule("core/state.js");
+    state.pipelines = [
+      makePipeline({
+        input: {
+          ...makePipeline().input,
+          status: "on",
+          audioTracks: Array.from({ length: 10 }, (_, index) => ({
+            index,
+            pid: 257 + index,
+            codec: "aac",
+            channels: 2,
+            sample_rate: 48_000,
+            language: "und",
+            profile: "LC",
+          })),
+        },
+      }),
+    ];
+
+    pipelineView.renderPipelineInfoColumn("pipe-1");
+
+    assert.match(
+      document.getElementById("input-audio-tracks").innerHTML,
+      /data-audio-track-expansion-key="pipe-1" open/,
     );
   },
 );

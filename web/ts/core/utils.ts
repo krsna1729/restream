@@ -542,7 +542,7 @@ function parseSrtFields(rawUrl: string, defaultHost = "localhost"): SrtFields {
     return {
       host: defaultHost,
       port: "6000",
-      streamId: `publish:live/${token}`,
+      streamId: `publish:${token}`,
       passphrase: "",
       pbkeylen: "16",
       extraQuery: "",
@@ -556,7 +556,7 @@ function parseSrtFields(rawUrl: string, defaultHost = "localhost"): SrtFields {
   });
   let streamId = parsed.searchParams.get("streamid") || "";
   if (!streamId && !isSrt)
-    streamId = `publish:live/${getDefaultOutputToken(rawUrl)}`;
+    streamId = `publish:${getDefaultOutputToken(rawUrl)}`;
   return {
     host: parsed.hostname || defaultHost,
     port: isSrt ? parsed.port || "6000" : "6000",
@@ -575,7 +575,7 @@ function buildDefaultCustomOutputUrl(
   const token = getDefaultOutputToken(rawSeed);
   if (protocol === "hls") return `http://${hostname}/hls/${token}/out.m3u8`;
   if (protocol === "srt")
-    return `srt://${hostname}:6000?streamid=publish:live/${token}`;
+    return `srt://${hostname}:6000?streamid=publish:${token}`;
   return `rtmp://${hostname}:1935/live/${token}`;
 }
 

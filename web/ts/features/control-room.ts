@@ -1176,6 +1176,7 @@ function syncCardMedia(
         className: `${CONTROL_ROOM_PLAYER_HEIGHT_CLASS} w-full bg-black object-contain`,
         loadingLabel: "Loading...",
         idleLabel: "Paused",
+        autoStart: false,
         showOverlayButton: false,
         controls: false,
       });

@@ -88,6 +88,7 @@ const NODE_H = 80;
 const METRICS_H = 50;
 const COL_GAP = 80;
 const ROW_GAP = 30;
+const MIN_CANVAS_W = 1680;
 const REPEATED_LEAF_GROUP_MIN = 4;
 let focusedAggregateGroupKey: string | null = null;
 
@@ -122,6 +123,36 @@ function nodeColor(type: string, active: boolean): string {
     default:
       return "#9ca3af";
   }
+}
+
+function nodeHealthTone(node: GraphNode): {
+  color: string;
+  dot: string;
+  label: "healthy" | "warning" | "error" | "idle";
+} {
+  const status = String(node.details?.status || "").toLowerCase();
+  const healthStatus = String(node.details?.healthStatus || "").toLowerCase();
+  const flapping = node.details?.flapping === true;
+  const overflowCount = finiteNumber(node.details?.overflowCount);
+  if (
+    status === "failed" ||
+    status === "error" ||
+    status === "stopped" ||
+    (!node.active && !status)
+  ) {
+    return { color: "#ef4444", dot: "#ef4444", label: "error" };
+  }
+  if (
+    healthStatus === "warning" ||
+    status === "stalled" ||
+    status === "retrying" ||
+    flapping ||
+    overflowCount > 0
+  ) {
+    return { color: "#f59e0b", dot: "#f59e0b", label: "warning" };
+  }
+  if (!node.active) return { color: "#6b7280", dot: "#6b7280", label: "idle" };
+  return { color: nodeColor(node.type, true), dot: "#22c55e", label: "healthy" };
 }
 
 export function renderGraphInto(container: HTMLElement, data: GraphData): void {
@@ -192,7 +223,10 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
     ...[...columns.values()].map((c) => c.length),
     1,
   );
-  const svgW = 40 + (maxCol + 1) * (NODE_W + COL_GAP);
+  const svgW = Math.max(
+    MIN_CANVAS_W,
+    40 + (maxCol + 1) * (NODE_W + COL_GAP),
+  );
   const svgH = 40 + maxNodesInCol * (totalNodeH + ROW_GAP);
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" class="h-full w-full min-w-[900px]">`;
@@ -220,7 +254,8 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
     const pos = positions.get(node.id);
     if (!pos) continue;
     const color = nodeColor(node.type, node.active);
-    const opacity = node.active ? "1" : "0.5";
+    const healthTone = nodeHealthTone(node);
+    const opacity = node.active || healthTone.label === "warning" ? "1" : "0.5";
     const aggregateKey =
       node.details?.aggregate === true
         ? String(node.details.aggregateKey || "")
@@ -228,7 +263,7 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
 
     // Node box
     svg += `<g opacity="${opacity}"${aggregateKey ? ` data-graph-aggregate-key="${escapeXml(aggregateKey)}" style="cursor:pointer"` : ""}>`;
-    svg += `<rect x="${pos.x}" y="${pos.y}" width="${NODE_W}" height="${totalNodeH}" rx="8" fill="#1f2937" stroke="${color}" stroke-width="2"/>`;
+    svg += `<rect x="${pos.x}" y="${pos.y}" width="${NODE_W}" height="${totalNodeH}" rx="8" fill="#1f2937" stroke="${healthTone.color}" stroke-width="2"/>`;
 
     // Type badge
     svg += `<rect x="${pos.x}" y="${pos.y}" width="${NODE_W}" height="22" rx="8" fill="${color}" opacity="0.15"/>`;
@@ -239,7 +274,7 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
     svg += `<text x="${pos.x + 10}" y="${pos.y + 40}" fill="#e5e7eb" font-size="13" font-weight="500">${escapeXml(truncate(node.label, 28))}</text>`;
 
     // Status dot
-    const dotColor = node.active ? "#22c55e" : "#ef4444";
+    const dotColor = healthTone.dot;
     svg += `<circle cx="${pos.x + NODE_W - 14}" cy="${pos.y + 40}" r="5" fill="${dotColor}"/>`;
 
     const detailLines: string[] = [];
@@ -263,13 +298,18 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
       node.type === "ingest" &&
       node.details?.bytesReceived !== undefined
     ) {
-      const bitrate = Number(node.details.bitrateKbps);
-      const bitrateLabel = Number.isFinite(bitrate)
-        ? ` | ${bitrate.toFixed(0)} kbps`
-        : "";
+      detailLines.push(`in: ${formatKbps(node.details.bitrateKbps)}`);
       detailLines.push(
-        `received: ${formatBytes(node.details.bytesReceived as number)}${bitrateLabel}`,
+        `received: ${formatBytes(node.details.bytesReceived as number)}`,
       );
+      if (node.details.lastProgressAgeMs !== undefined) {
+        detailLines.push(`progress: ${formatAgeMs(node.details.lastProgressAgeMs)}`);
+      }
+      if (node.details.srtRecvBufferPercent !== undefined) {
+        detailLines.push(
+          `srt recv: ${Number(node.details.srtRecvBufferPercent).toFixed(0)}%`,
+        );
+      }
     } else if (node.details?.aggregate === true) {
       const count = finiteNumber(node.details.count);
       const activeCount = finiteNumber(node.details.activeCount);
@@ -318,6 +358,13 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
         detailLines.push(`capacity wait: ${formatDurationMs(waitMs)}`);
       }
     }
+    const healthReason =
+      typeof node.details?.healthReason === "string"
+        ? node.details.healthReason
+        : "";
+    if (healthReason) {
+      detailLines.unshift(`warn: ${truncate(healthReason, 30)}`);
+    }
     appendBranchDetails(detailLines, node);
 
     // Metrics
@@ -331,11 +378,23 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
       const packetsPerSec = finiteNumber(m.packetsPerSec);
       const avgUsPerPacket = finiteNumber(m.avgUsPerPacket);
       const uptimeSecs = finiteNumber(m.uptimeSecs ?? m.uptimeSec);
+      const bytesInPerSec =
+        node.details?.bytesReceivedPerSec !== undefined
+          ? finiteNumber(node.details.bytesReceivedPerSec)
+          : uptimeSecs > 0
+            ? finiteNumber(m.bytesIn) / uptimeSecs
+            : 0;
+      const bytesOutPerSec =
+        uptimeSecs > 0 ? finiteNumber(m.bytesOut) / uptimeSecs : 0;
       const my = pos.y + NODE_H - 10;
-      svg += `<text x="${pos.x + 10}" y="${my + 10}" fill="#9ca3af" font-size="10">in: ${formatRate(packetsPerSec)} pkt | ${formatBytes(finiteNumber(m.bytesIn))}</text>`;
+      const inMetricLabel =
+        node.type === "ingest"
+          ? `in: ${formatBytes(bytesInPerSec)}/s`
+          : `in: ${formatRate(packetsPerSec)} pkt | ${formatBytes(bytesInPerSec)}/s`;
+      svg += `<text x="${pos.x + 10}" y="${my + 10}" fill="#9ca3af" font-size="10">${inMetricLabel}</text>`;
       const outLabel =
         finiteNumber(m.bytesOut) > 0
-          ? `out: ${formatBytes(finiteNumber(m.bytesOut))}`
+          ? `out: ${formatBytes(bytesOutPerSec)}/s`
           : node.type === "ingest"
             ? "fan-out: source buffer"
             : "out: n/a";
@@ -356,7 +415,7 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
   }
 
   svg += `</svg>`;
-  container.innerHTML = `<div class="flex h-full min-h-[420px] flex-col gap-2">${graphToolbarHtml(data, sourceData)}<div class="min-h-0 flex-1 overflow-auto">${svg}</div></div>`;
+  container.innerHTML = `<div class="flex h-full min-h-[420px] flex-col gap-2">${graphToolbarHtml(data, sourceData)}<div id="processing-graph-canvas" class="min-h-0 flex-1 overflow-auto" data-scroll-preserve="processing-graph-canvas">${svg}</div></div>`;
   bindGraphInteractions(container, sourceData);
 }
 
@@ -365,14 +424,17 @@ function graphToolbarHtml(data: GraphData, sourceData: GraphData): string {
     (node) => node.details?.aggregate === true,
   ).length;
   const focus = focusedAggregateDetails(sourceData);
-  if (aggregateCount === 0 && !focus) return "";
   const toolbar = `<div class="border-base-content/10 bg-base-200/80 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs">
-    <span class="text-base-content/70">${aggregateCount ? `${aggregateCount} grouped branch${aggregateCount === 1 ? "" : "es"}` : "Expanded grouped branches"}</span>
-    ${
-      focus
-        ? '<button type="button" class="btn btn-xs btn-outline" data-graph-clear-aggregate-focus>Clear focus</button>'
-        : '<span class="text-base-content/50">Click a grouped node to inspect its members.</span>'
-    }
+    <span class="text-base-content/70">${aggregateCount ? `${aggregateCount} grouped branch${aggregateCount === 1 ? "" : "es"}` : "Processing graph SVG"}</span>
+    <div class="flex flex-wrap items-center gap-2">
+      ${
+        focus
+          ? '<button type="button" class="btn btn-xs btn-outline" data-graph-clear-aggregate-focus>Clear focus</button>'
+          : aggregateCount
+            ? '<span class="text-base-content/50">Click a grouped node to inspect its members.</span>'
+            : ""
+      }
+    </div>
   </div>`;
   return `${toolbar}${focus ? aggregateFocusHtml(focus) : ""}`;
 }

@@ -216,7 +216,7 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
   );
   assert.equal(
     utils.extractCandidateStreamToken(
-      "srt://example.com:9000?streamid=publish:live/main-feed",
+      "srt://example.com:9000?streamid=publish:main-feed",
     ),
     "main-feed",
   );
@@ -226,12 +226,12 @@ test("core utils cover URL, masking, formatting, clipboard, and selection helper
   );
   assert.deepEqual(
     utils.parseSrtFields(
-      "srt://example.com:10080?streamid=publish:live/feed&passphrase=supersecret1&pbkeylen=24&latency=200",
+      "srt://example.com:10080?streamid=publish:feed&passphrase=supersecret1&pbkeylen=24&latency=200",
     ),
     {
       host: "example.com",
       port: "10080",
-      streamId: "publish:live/feed",
+      streamId: "publish:feed",
       passphrase: "supersecret1",
       pbkeylen: "24",
       extraQuery: "latency=200",
@@ -436,7 +436,7 @@ test("ingest detail rendering and publisher quality helpers surface operator-fac
   );
   const parsedSrt = ingestDetails.parseProtocolAwareIngestUrl(
     "srt",
-    "srt://example.com:10080?streamid=publish:live/feed&latency=200&mode=caller&passphrase=secret&pbkeylen=16&maxbw=1000000&foo=bar",
+    "srt://example.com:10080?streamid=publish:feed&latency=200&mode=caller&passphrase=secret&pbkeylen=16&maxbw=1000000&foo=bar",
   );
 
   assert.equal(parsedRtmp.serverUrl, "rtmps://example.com:443/live");

@@ -3,6 +3,84 @@
   themes: dim;
 }
 
+@layer base {
+  body {
+    font-family:
+      "Aptos", "Segoe UI Variable", "Segoe UI", "IBM Plex Sans",
+      "Helvetica Neue", Arial, sans-serif;
+    font-size: 0.9375rem;
+    letter-spacing: 0.005em;
+  }
+
+  code,
+  kbd,
+  pre,
+  samp,
+  .font-mono {
+    font-family:
+      "Cascadia Mono", "Cascadia Code", "JetBrains Mono", "SFMono-Regular",
+      Consolas, "Liberation Mono", monospace;
+  }
+}
+
+@layer components {
+  .dashboard-page-shell {
+    @apply mx-auto w-full max-w-7xl space-y-4 px-4 py-4;
+  }
+
+  .dashboard-section {
+    @apply border-base-content/10 bg-base-200/85 rounded-xl border shadow-none;
+  }
+
+  .dashboard-section-header {
+    @apply border-base-content/10 flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3;
+  }
+
+  .dashboard-title {
+    @apply text-base-content text-lg font-semibold leading-tight tracking-wide;
+  }
+
+  .dashboard-section-title {
+    @apply text-base-content text-base font-semibold leading-tight tracking-wide;
+  }
+
+  .dashboard-subtitle {
+    @apply text-base-content/60 mt-1 text-sm leading-5;
+  }
+
+  .dashboard-card {
+    @apply border-base-content/10 bg-base-100/80 rounded-lg border;
+  }
+
+  .dashboard-stat-card {
+    @apply border-base-content/10 bg-base-200 min-h-30 overflow-hidden rounded-xl border p-4 shadow-none;
+  }
+
+  .dashboard-stat-card-compact {
+    @apply bg-base-100/60 rounded-lg p-3;
+  }
+
+  .dashboard-kicker {
+    @apply text-base-content/60 text-[0.68rem] font-semibold tracking-wide uppercase;
+  }
+
+  .dashboard-muted {
+    @apply text-base-content/60 text-sm leading-5;
+  }
+
+  .dashboard-empty {
+    @apply border-base-content/10 bg-base-100/70 rounded-lg border px-3 py-4 text-sm text-base-content/70;
+  }
+
+  .dashboard-nav-strip {
+    @apply border-base-content/10 bg-base-200/85 rounded-xl border p-1;
+  }
+
+  .dashboard-table-panel {
+    @apply border-base-content/10 bg-base-200/85 overflow-hidden rounded-xl border shadow-none;
+  }
+}
+
 #dashboard-grid {
   grid-template-columns: minmax(0, 1fr);
 }

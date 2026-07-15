@@ -93,7 +93,7 @@ test("pipeline edits reuse returned pipeline payloads instead of refetching dash
             label: "Stream 1",
             ingestUrls: {
               rtmp: "rtmp://stream.example.com:1935/live/stream-key",
-              srt: "srt://stream.example.com:10080?streamid=publish:live/stream-key",
+              srt: "srt://stream.example.com:10080?streamid=publish:stream-key",
             },
           },
         ]),
@@ -172,7 +172,7 @@ test("pipeline edits reuse returned pipeline payloads instead of refetching dash
             srtIngestPolicy: { mode: "inherit", passphrase: null, pbkeylen: null },
             ingestUrls: {
               rtmp: "rtmp://stream.example.com:1935/live/stream-key",
-              srt: "srt://stream.example.com:10080?streamid=publish:live/stream-key",
+              srt: "srt://stream.example.com:10080?streamid=publish:stream-key",
             },
             fileIngest: {
               configured: true,
@@ -312,7 +312,7 @@ test("pipeline edit modal defers media file lookups until file mode is selected"
             label: "Stream 1",
             ingestUrls: {
               rtmp: "rtmp://stream.example.com:1935/live/stream-key",
-              srt: "srt://stream.example.com:10080?streamid=publish:live/stream-key",
+              srt: "srt://stream.example.com:10080?streamid=publish:stream-key",
             },
           },
         ]),
@@ -512,7 +512,7 @@ test("recording patches local state immediately, while file-ingest falls back to
               },
               ingestUrls: {
                 rtmp: "rtmp://example.com/live/stream-key",
-                srt: "srt://example.com:10080?streamid=publish:live/stream-key",
+                srt: "srt://example.com:10080?streamid=publish:stream-key",
               },
             },
           ],
