@@ -125,35 +125,16 @@ RUN scripts/build/bench-harness.sh
 
 # ── Stage 4: distroless runtime ──────────────────────────────────────────────
 #
-# Runtime requirements:
-#   /.restream/data     SQLite database persistence (including WAL/SHM sidecars)
-#   /.restream/logs     rotated JSON process logs
-#   /.restream/media    uploaded media and recordings
-#   /.restream/runtime  internal embedded-FFmpeg cache
+# Runtime state lives under `/.restream`. Docker creates that writable parent
+# as the runtime user; Restream creates its data/logs/media/runtime children at
+# startup.
 #
 # Example:
 #   docker run -d \
 #     -v restream-state:/.restream \
 #     -p 3030:3030 -p 1935:1935 -p 10080:10080/udp \
 #     restream:distroless
-FROM busybox:1.36 AS runtime-state-dirs
-
-RUN mkdir -p \
-        /rootfs/.restream/runtime \
-        /rootfs/.restream/data \
-        /rootfs/.restream/media \
-        /rootfs/.restream/logs \
-    && chown -R 1000:1000 /rootfs/.restream \
-    && chmod 0755 /rootfs/.restream \
-    && chmod 0700 \
-        /rootfs/.restream/runtime \
-        /rootfs/.restream/data \
-        /rootfs/.restream/media \
-        /rootfs/.restream/logs
-
 FROM gcr.io/distroless/cc-debian13:nonroot AS runtime-base
-
-COPY --from=runtime-state-dirs /rootfs/ /
 
 ARG RESTREAM_BUILD_GIT_COMMIT
 ARG RESTREAM_BUILD_TIMESTAMP
@@ -166,6 +147,9 @@ EXPOSE 3030 1935 10080/udp
 
 USER 1000:1000
 
+# `WORKDIR` creates the directory using the active USER, giving the app a
+# writable parent for its relative `.restream/...` defaults.
+WORKDIR /.restream
 WORKDIR /
 
 ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
@@ -197,7 +181,6 @@ RUN apt-get update \
 
 COPY --from=runtime-tree /workspace/target/release/restream /restream
 COPY distribution/ /usr/share/doc/restream/distribution/
-COPY --from=runtime-state-dirs /rootfs/ /
 
 ARG RESTREAM_BUILD_GIT_COMMIT
 ARG RESTREAM_BUILD_TIMESTAMP
@@ -208,6 +191,7 @@ LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
 
 EXPOSE 3030 1935 10080/udp
 USER 1000:1000
+WORKDIR /.restream
 WORKDIR /
 ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
 ENTRYPOINT ["/restream"]
