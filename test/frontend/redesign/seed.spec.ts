@@ -35,6 +35,7 @@ test("seed: empty Overview is deterministic and canonical @desktop", async ({
   await expect(
     page.locator("#pipeline-output-overview-legacy"),
   ).not.toHaveAttribute("hidden");
+  await expect(page.locator("#outs-col > h2")).not.toHaveAttribute("hidden");
   expect(
     await page.evaluate(() =>
       performance
@@ -246,6 +247,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(outputOverview).toContainText("Retrying");
   await expect(outputOverview).toContainText("Retrying Output");
   await expect(page.locator("#pipeline-output-overview-legacy")).toBeHidden();
+  await expect(page.locator("#outs-col > h2")).toBeHidden();
   await expect(page.locator("#outputs-list")).toBeHidden();
   await expect(page.locator("#add-out-btn")).toBeHidden();
   await outputOverview

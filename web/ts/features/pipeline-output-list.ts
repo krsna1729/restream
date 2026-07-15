@@ -59,6 +59,10 @@ export function configurePipelineOutputOverviewPresentation(options: {
     "pipeline-output-overview-legacy",
   );
   if (legacyOverview) legacyOverview.hidden = !legacyOutputOverviewRenderEnabled;
+  const outputsHeading = document.querySelector<HTMLElement>("#outs-col > h2");
+  if (outputsHeading) {
+    outputsHeading.hidden = !legacyOutputOverviewRenderEnabled;
+  }
   const legacyAddAction = document.getElementById("add-out-btn");
   if (legacyAddAction) {
     legacyAddAction.hidden = options.legacyAddActionEnabled === false;

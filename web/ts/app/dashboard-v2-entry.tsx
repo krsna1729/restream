@@ -30,6 +30,14 @@ const toneClasses: Readonly<Record<OverviewTone, string>> = {
   neutral: "border-base-content/10 bg-base-100/80 text-base-content/75",
 };
 
+const toneTextClasses: Readonly<Record<OverviewTone, string>> = {
+  success: "text-success",
+  warning: "text-warning",
+  error: "text-error",
+  info: "text-info",
+  neutral: "text-base-content/75",
+};
+
 const metricToneClasses: Readonly<Record<OverviewMetric["key"], string>> = {
   inputs: "border-l-success text-success",
   outputs: "border-l-secondary text-secondary",
@@ -615,7 +623,7 @@ function DashboardV2PipelineInputStatus({
   return (
     <section
       aria-labelledby="dashboard-v2-input-status-title"
-      className="border-base-content/10 bg-base-100 mb-3 rounded-lg border p-3 text-left"
+      className="mb-3 text-left"
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
@@ -631,8 +639,8 @@ function DashboardV2PipelineInputStatus({
         </div>
         <StatusBadge status={model.status} />
       </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-3">
-        <div className="border-base-content/10 rounded-md border p-2">
+      <div className="border-base-content/10 divide-base-content/10 mt-3 grid border-y sm:grid-cols-3 sm:divide-x">
+        <div className="border-base-content/10 px-1 py-2.5 sm:px-3">
           <div className="text-base-content/55 text-[0.7rem] font-semibold uppercase">
             Publisher
           </div>
@@ -649,7 +657,7 @@ function DashboardV2PipelineInputStatus({
             {model.publisherDetail}
           </p>
         </div>
-        <div className="border-base-content/10 rounded-md border p-2">
+        <div className="border-base-content/10 border-t px-1 py-2.5 sm:border-t-0 sm:px-3">
           <div className="text-base-content/55 text-[0.7rem] font-semibold uppercase">
             Browser preview
           </div>
@@ -660,7 +668,7 @@ function DashboardV2PipelineInputStatus({
             {model.previewDetail}
           </p>
         </div>
-        <div className="border-base-content/10 rounded-md border p-2">
+        <div className="border-base-content/10 border-t px-1 py-2.5 sm:border-t-0 sm:px-3">
           <div className="text-base-content/55 text-[0.7rem] font-semibold uppercase">
             Media
           </div>
@@ -691,10 +699,10 @@ function DashboardV2PipelineInputStatus({
           <h4 className="text-base-content/60 text-[0.7rem] font-semibold uppercase tracking-wide">
             {group.label}
           </h4>
-          <dl className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {group.metrics.map((metric) => (
+          <dl className="border-base-content/10 mt-1 grid grid-cols-2 overflow-hidden rounded-md border sm:grid-cols-4">
+            {group.metrics.map((metric, index) => (
               <div
-                className="border-base-content/10 bg-base-200/45 rounded-md border px-3 py-2"
+                className={`${index % 2 === 1 ? "border-base-content/10 border-l" : ""} ${index > 1 ? "border-base-content/10 border-t sm:border-t-0" : ""} ${index > 0 ? "sm:border-base-content/10 sm:border-l" : ""} px-3 py-2`}
                 key={metric.key}
               >
                 <dt className="text-base-content/55 text-[0.7rem]">
@@ -713,10 +721,10 @@ function DashboardV2PipelineInputStatus({
           Audio
         </h4>
         {model.audioTracks.length ? (
-          <div className="mt-1 space-y-2">
+          <div className="border-base-content/10 divide-base-content/10 mt-1 divide-y border-y">
             {model.audioTracks.map((track) => (
               <div
-                className="border-base-content/10 grid gap-2 rounded-md border p-2 sm:grid-cols-[minmax(0,1.2fr)_repeat(4,minmax(0,.7fr))]"
+                className="border-base-content/10 grid gap-2 px-1 py-2.5 sm:grid-cols-[minmax(0,1.2fr)_repeat(4,minmax(0,.7fr))] sm:px-3"
                 key={track.key}
               >
                 <div className="min-w-0">
@@ -807,7 +815,7 @@ function DashboardV2PipelineInputStatus({
         )}
       </div>
       {model.liveSource ? (
-        <div className="border-base-content/10 mt-3 rounded-md border p-3">
+        <div className="border-base-content/10 mt-4 border-t pt-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <div className="text-base-content/55 text-[0.7rem] font-semibold uppercase">
@@ -870,7 +878,7 @@ function DashboardV2PipelineInputStatus({
         </div>
       ) : null}
       {model.fileSource ? (
-        <div className="border-base-content/10 mt-3 rounded-md border p-3">
+        <div className="border-base-content/10 mt-4 border-t pt-3">
           <div className="text-base-content/55 text-[0.7rem] font-semibold uppercase">
             Source file
           </div>
@@ -916,7 +924,7 @@ function DashboardV2PipelineOutputOverview({
   return (
     <section
       aria-labelledby="dashboard-v2-output-overview-title"
-      className="border-base-content/10 bg-base-100 mb-3 rounded-lg border p-3"
+      className="mb-3"
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
@@ -939,35 +947,34 @@ function DashboardV2PipelineOutputOverview({
         </button>
       </div>
       {model.counts.length ? (
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <dl className="border-base-content/10 mt-3 flex flex-wrap gap-x-5 gap-y-2 border-y py-2.5">
           {model.counts.map((count) => (
-            <div
-              className={`rounded-md border px-3 py-2 ${toneClasses[count.tone]}`}
-              key={count.key}
-            >
-              <div className="text-[0.65rem] font-semibold uppercase opacity-75">
+            <div className="flex items-baseline gap-2" key={count.key}>
+              <dt className="text-base-content/60 text-[0.65rem] font-semibold uppercase">
                 {count.label}
-              </div>
-              <div className="mt-1 text-xl font-semibold tabular-nums">
+              </dt>
+              <dd
+                className={`${toneTextClasses[count.tone]} text-lg font-semibold tabular-nums`}
+              >
                 {count.count}
-              </div>
+              </dd>
             </div>
           ))}
-        </div>
+        </dl>
       ) : (
         <p className="text-base-content/55 mt-3 text-sm">
           No outputs configured.
         </p>
       )}
       {model.attention.length ? (
-        <div className="border-warning/25 bg-warning/8 mt-3 rounded-md border p-2">
+        <div className="border-warning/30 mt-3 border-l-2 pl-3">
           <h4 className="text-warning text-xs font-semibold uppercase">
             Needs attention
           </h4>
           <div className="mt-2 space-y-2">
             {model.attention.map((output) => (
               <div
-                className="border-base-content/10 bg-base-100/80 rounded-md border px-3 py-2"
+                className="border-base-content/10 border-t py-2 first:border-t-0"
                 key={output.id}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -995,7 +1002,7 @@ function DashboardV2PipelineOutputOverview({
           </h4>
           {model.cards.map((output) => (
             <article
-              className="border-base-content/10 bg-base-100 rounded-lg border p-3"
+              className="border-base-content/10 border-t py-3"
               key={output.id}
             >
               <div className="flex flex-wrap items-start justify-between gap-3">
