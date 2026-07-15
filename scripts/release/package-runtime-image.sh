@@ -30,39 +30,21 @@ cleanup() {
 }
 trap cleanup EXIT
 
-context="$tmp/context"
-rootfs="$context/rootfs"
-mkdir -p "$context" "$rootfs"
+payload="$tmp/release-payload"
+mkdir -p "$payload"
 
-scripts/build/runtime-rootfs.sh "$BINARY" "$rootfs"
-cp "$BINARY" "$context/restream"
-cp -a distribution "$context/distribution"
-
-cat >"$context/Dockerfile" <<'EOF'
-FROM scratch
-COPY rootfs/ /
-COPY --chown=1000:1000 rootfs/.restream /.restream
-COPY restream /restream
-COPY distribution/ /usr/share/doc/restream/distribution/
-ARG RESTREAM_BUILD_GIT_COMMIT
-ARG RESTREAM_BUILD_TIMESTAMP
-LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
-    org.opencontainers.image.revision="${RESTREAM_BUILD_GIT_COMMIT}" \
-    org.opencontainers.image.created="${RESTREAM_BUILD_TIMESTAMP}" \
-    org.opencontainers.image.licenses="MIT AND GPL-2.0-or-later AND MPL-2.0 AND Apache-2.0"
-EXPOSE 3030 1935 10080/udp
-USER 1000:1000
-ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
-ENTRYPOINT ["/restream"]
-EOF
+cp "$BINARY" "$payload/restream"
 
 build_commit="$(git rev-parse HEAD)"
 build_timestamp="$(git show -s --format=%cI HEAD)"
 docker_build_args=(
+    --file Dockerfile
+    --target runtime-artifact
+    --build-context "release_payload=$payload"
     --build-arg "RESTREAM_BUILD_GIT_COMMIT=$build_commit"
     --build-arg "RESTREAM_BUILD_TIMESTAMP=$build_timestamp"
     -t "$IMAGE"
-    "$context"
+    .
 )
 if [[ "${RESTREAM_DOCKER_GHA_CACHE:-0}" == "1" ]]; then
     docker buildx build \

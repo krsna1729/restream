@@ -91,7 +91,7 @@ ENV RESTREAM_BUILD_GIT_COMMIT=${RESTREAM_BUILD_GIT_COMMIT} \
     RESTREAM_BUILD_TIMESTAMP=${RESTREAM_BUILD_TIMESTAMP} \
     RESTREAM_SKIP_SBOM=1
 
-COPY scripts/build/app-native.sh scripts/build/bench-harness.sh scripts/build/emit-sbom.sh scripts/build/runtime-rootfs.sh scripts/build/
+COPY scripts/build/app-native.sh scripts/build/bench-harness.sh scripts/build/emit-sbom.sh scripts/build/
 
 # Warm the release dependency graph without copying the real application code.
 # The dummy main compiles the full dependency set into .local/build/static/cargo-target
@@ -115,9 +115,31 @@ COPY --from=frontend-build /workspace/public public
 COPY --from=native-deps /workspace/public/bin/ffmpeg public/bin/ffmpeg
 RUN RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 
-# The rootfs closure is built by the same canonical script that developers can
-# invoke when packaging a scratch image outside Docker.
-RUN bash scripts/build/runtime-rootfs.sh /workspace/target/release/restream /runtime
+RUN set -eux; \
+    restream_home="/runtime/.restream"; \
+    install -d -m 0755 -o 0 -g 0 \
+        "$restream_home" \
+        /runtime/etc/ssl/certs \
+        /runtime/usr/share/zoneinfo; \
+    install -d -m 0700 -o 1000 -g 1000 \
+        "$restream_home/runtime" \
+        "$restream_home/data" \
+        "$restream_home/media" \
+        "$restream_home/logs"; \
+    cp -a /usr/share/zoneinfo/. /runtime/usr/share/zoneinfo/; \
+    cp -a /etc/localtime /runtime/etc/localtime; \
+    cp /etc/ssl/certs/ca-certificates.crt /runtime/etc/ssl/certs/ca-certificates.crt; \
+    cp /etc/nsswitch.conf /runtime/etc/nsswitch.conf; \
+    cp /etc/protocols /runtime/etc/protocols; \
+    cp /etc/services /runtime/etc/services; \
+    cp -L /etc/resolv.conf /runtime/etc/resolv.conf; \
+    printf 'restream:x:1000:1000:restream:/nonexistent:/sbin/nologin\n' > /runtime/etc/passwd; \
+    printf 'restream:x:1000:\n' > /runtime/etc/group; \
+    ldd /workspace/target/release/restream \
+        | awk '$3 ~ /^\// { print $3 } $1 ~ /^\// { print $1 }' \
+        | sort -u \
+        | while IFS= read -r library; do cp --parents -L "$library" /runtime; done; \
+    test -e /runtime/lib64/ld-linux-x86-64.so.2
 
 # The harness image is an explicit target, so this extra bench build is paid
 # only by `--target harness`, never by the production scratch image. It must
@@ -142,8 +164,68 @@ RUN scripts/build/bench-harness.sh
 #     restream:scratch
 FROM scratch AS runtime-scratch
 
+# Stage-to-stage COPY preserves the rootfs ownership set above.
 COPY --from=runtime-tree /runtime/ /
 COPY --from=runtime-tree /workspace/target/release/restream /restream
+COPY distribution/ /usr/share/doc/restream/distribution/
+
+ARG RESTREAM_BUILD_GIT_COMMIT
+ARG RESTREAM_BUILD_TIMESTAMP
+LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
+    org.opencontainers.image.revision="${RESTREAM_BUILD_GIT_COMMIT}" \
+    org.opencontainers.image.created="${RESTREAM_BUILD_TIMESTAMP}" \
+    org.opencontainers.image.licenses="MIT AND GPL-2.0-or-later AND MPL-2.0 AND Apache-2.0"
+
+EXPOSE 3030 1935 10080/udp
+
+USER 1000:1000
+
+ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
+
+ENTRYPOINT ["/restream"]
+
+# Release packaging uses the same final image recipe without rebuilding Rust:
+# scripts/release/package-runtime-image.sh supplies an already-built restream
+# binary as the `release_payload` build context.
+FROM ubuntu:24.04 AS runtime-artifact-rootfs
+
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /workspace
+COPY --from=release_payload /restream /workspace/restream
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates netbase tzdata; \
+    rm -rf /var/lib/apt/lists/*; \
+    restream_home="/runtime/.restream"; \
+    install -d -m 0755 -o 0 -g 0 \
+        "$restream_home" \
+        /runtime/etc/ssl/certs \
+        /runtime/usr/share/zoneinfo; \
+    install -d -m 0700 -o 1000 -g 1000 \
+        "$restream_home/runtime" \
+        "$restream_home/data" \
+        "$restream_home/media" \
+        "$restream_home/logs"; \
+    cp -a /usr/share/zoneinfo/. /runtime/usr/share/zoneinfo/; \
+    cp -a /etc/localtime /runtime/etc/localtime; \
+    cp /etc/ssl/certs/ca-certificates.crt /runtime/etc/ssl/certs/ca-certificates.crt; \
+    cp /etc/nsswitch.conf /runtime/etc/nsswitch.conf; \
+    cp /etc/protocols /runtime/etc/protocols; \
+    cp /etc/services /runtime/etc/services; \
+    cp -L /etc/resolv.conf /runtime/etc/resolv.conf; \
+    printf 'restream:x:1000:1000:restream:/nonexistent:/sbin/nologin\n' > /runtime/etc/passwd; \
+    printf 'restream:x:1000:\n' > /runtime/etc/group; \
+    ldd /workspace/restream \
+        | awk '$3 ~ /^\// { print $3 } $1 ~ /^\// { print $1 }' \
+        | sort -u \
+        | while IFS= read -r library; do cp --parents -L "$library" /runtime; done; \
+    test -e /runtime/lib64/ld-linux-x86-64.so.2
+
+FROM scratch AS runtime-artifact
+
+# Stage-to-stage COPY preserves the rootfs ownership set above.
+COPY --from=runtime-artifact-rootfs /runtime/ /
+COPY --from=release_payload /restream /restream
 COPY distribution/ /usr/share/doc/restream/distribution/
 
 ARG RESTREAM_BUILD_GIT_COMMIT
