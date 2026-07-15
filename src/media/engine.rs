@@ -368,6 +368,34 @@ impl MediaEngine {
         "running".to_string()
     }
 
+    pub(crate) fn egress_effective_status_best_effort(
+        egress: &ActiveEgress,
+        has_ingest: bool,
+    ) -> String {
+        if !has_ingest {
+            return "stopped".to_string();
+        }
+
+        if egress.status == EgressStatus::Failed {
+            return "failed".to_string();
+        }
+        if egress.status != EgressStatus::Running {
+            return egress.status.to_string();
+        }
+
+        let last_progress_ms = egress.last_progress_ms.load(Ordering::Relaxed);
+        let now_ms = Self::now_epoch_ms();
+        let no_progress_too_long = last_progress_ms == 0
+            && egress.start_instant.elapsed().as_millis() as u64 >= EGRESS_PROGRESS_STALE_MS;
+        let stale_progress = last_progress_ms > 0
+            && now_ms.saturating_sub(last_progress_ms) >= EGRESS_PROGRESS_STALE_MS;
+        if no_progress_too_long || stale_progress {
+            return "stalled".to_string();
+        }
+
+        "running".to_string()
+    }
+
     pub(crate) fn sample_egress_bitrate_kbps(egress: &ActiveEgress) -> Option<f64> {
         let bytes_sent = egress.bytes_sent.load(Ordering::Relaxed);
         let prev = egress.prev_bytes_sent.load(Ordering::Relaxed);

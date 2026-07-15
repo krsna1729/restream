@@ -146,6 +146,23 @@ async fn pipeline_health_snapshot(state: &AppState, pipeline_id: &str) -> serde_
         .await
 }
 
+async fn pipeline_health_summary_snapshot(
+    state: &AppState,
+    pipeline_id: &str,
+) -> serde_json::Value {
+    let pipeline_id = pipeline_id.to_string();
+    let pipeline_ids = std::slice::from_ref(&pipeline_id);
+    let recording_enabled = recording_enabled_map(state, pipeline_ids).await;
+
+    crate::api_runtime_views::health_summary_snapshot(
+        &state.engine,
+        pipeline_ids,
+        &recording_enabled,
+        0,
+    )
+    .await
+}
+
 /// Pulls the shared generation timestamp from runtime health snapshots so
 /// pipeline endpoints report one consistent clock value.
 fn snapshot_generated_at(snapshot: &serde_json::Value) -> String {
@@ -641,7 +658,7 @@ pub async fn v1_pipeline_summary_handler(
         return Ok((StatusCode::NOT_FOUND, "Pipeline not found").into_response());
     }
 
-    let snapshot = pipeline_health_snapshot(&state, &pipeline_id).await;
+    let snapshot = pipeline_health_summary_snapshot(&state, &pipeline_id).await;
     let generated_at = snapshot_generated_at(&snapshot);
 
     let pip = &snapshot["pipelines"][&pipeline_id];

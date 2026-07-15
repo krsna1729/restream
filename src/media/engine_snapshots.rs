@@ -103,24 +103,24 @@ impl MediaEngine {
                 output_id: output_id.clone(),
                 pipeline_id: egress.pipeline_id.clone(),
                 protocol: egress.protocol.clone(),
-                status: egress.status.to_string(),
+                status: MediaEngine::egress_effective_status_best_effort(egress, true),
                 phase: egress
                     .phase
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .to_string(),
+                    .try_lock()
+                    .map(|phase| phase.to_string())
+                    .unwrap_or_else(|_| "busy".to_string()),
                 target_addr: egress
                     .target_addr
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone(),
+                    .try_lock()
+                    .ok()
+                    .and_then(|target_addr| target_addr.clone()),
                 bytes_sent: egress.bytes_sent.load(Ordering::Relaxed),
                 last_progress_ms: egress.last_progress_ms.load(Ordering::Relaxed),
                 last_error: egress
                     .last_error
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone(),
+                    .try_lock()
+                    .ok()
+                    .and_then(|last_error| last_error.clone()),
             })
             .collect()
     }
