@@ -90,6 +90,9 @@ impl StageOutputNormalizer {
 
         self.metrics.record_out(packet.payload.len() as u64);
         self.out_ring.push(packet);
+        if let Some(lifecycle) = &self.lifecycle {
+            lifecycle.record_producing();
+        }
     }
 
     /// Normalize and push a batch of packets.
@@ -185,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn normalizer_records_first_output_once() {
+    fn normalizer_records_first_output_and_marks_stage_producing() {
         let ring = Arc::new(RingBuffer::new(8));
         let lifecycle = Arc::new(StageLifecycle::new(StagePhase::BackendSpawned {
             backend: StageBackendKind::InternalFfmpeg,
@@ -197,7 +200,7 @@ mod tests {
         normalizer.push(video_packet(10));
 
         let first_snapshot = lifecycle.snapshot();
-        assert_eq!(first_snapshot.phase, StagePhase::FirstOutput);
+        assert_eq!(first_snapshot.phase, StagePhase::Producing);
         let first_output_at = first_snapshot
             .first_output_at
             .expect("first packet should record first_output_at");
@@ -205,7 +208,7 @@ mod tests {
         normalizer.push(video_packet(20));
 
         let second_snapshot = lifecycle.snapshot();
-        assert_eq!(second_snapshot.phase, StagePhase::FirstOutput);
+        assert_eq!(second_snapshot.phase, StagePhase::Producing);
         assert_eq!(second_snapshot.first_output_at, Some(first_output_at));
     }
 
