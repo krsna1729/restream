@@ -375,6 +375,8 @@ async fn egress_cleaned_up_after_unregister() {
     let token = engine
         .register_egress("out-1", "pipe-1", "rtmp://127.0.0.1:1935/live/key")
         .await;
+    engine.update_egress_phase("out-1", EP::Sending).await;
+    engine.record_egress_progress("out-1", 2048).await;
 
     assert!(
         crate::api_runtime_views::output_status(&engine, "out-1")
@@ -390,6 +392,15 @@ async fn egress_cleaned_up_after_unregister() {
             .is_some(),
         "output_status must preserve the last classified egress state after unregister"
     );
+    let status = crate::api_runtime_views::output_status(&engine, "out-1")
+        .await
+        .unwrap();
+    assert_eq!(status["status"], "stopped");
+    assert_eq!(status["rawStatus"], "stopped");
+    assert_eq!(status["phase"], "stopped");
+    assert_eq!(status["bytesOut"], 2048);
+    assert_eq!(status["totalSize"], 2048);
+    assert!(status["endedAt"].is_string());
 }
 
 #[tokio::test]
@@ -446,6 +457,28 @@ async fn health_snapshot_keeps_recent_egress_status_visible_after_unregister() {
     assert_eq!(output["phase"], "failed");
     assert_eq!(output["failurePhase"], "connect");
     assert_eq!(output["lastError"], "connection failed");
+    assert!(output["endedAt"].is_string());
+}
+
+#[tokio::test]
+async fn health_snapshot_marks_cleanly_unregistered_egress_stopped() {
+    let engine = MediaEngine::new();
+    let pipeline_id = "pipe-1".to_string();
+    engine.get_or_create_pipeline(&pipeline_id).await;
+    engine
+        .register_egress("out-1", &pipeline_id, "rtmp://127.0.0.1/live/key")
+        .await;
+    engine.update_egress_phase("out-1", EP::Sending).await;
+    engine.record_egress_progress("out-1", 4096).await;
+
+    engine.unregister_egress("out-1").await;
+
+    let snapshot = test_health_snapshot(&engine, &[pipeline_id], &HashMap::new()).await;
+    let output = &snapshot["pipelines"]["pipe-1"]["outputs"]["out-1"];
+    assert_eq!(output["status"], "stopped");
+    assert_eq!(output["rawStatus"], "stopped");
+    assert_eq!(output["phase"], "stopped");
+    assert_eq!(output["totalSize"], 4096);
     assert!(output["endedAt"].is_string());
 }
 
@@ -603,7 +636,7 @@ async fn build_recent_egress_outcome_resets_flap_streak_outside_window() {
     let next = {
         let egresses = engine.egresses.active.read().await;
         let active = egresses.get("out-2").expect("active egress should exist");
-        MediaEngine::build_recent_egress_outcome(Some(&expired), active, true)
+        MediaEngine::build_recent_egress_outcome(Some(&expired), active, true, false)
     };
 
     assert_eq!(next.failure_count, 1);
