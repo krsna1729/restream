@@ -20,6 +20,10 @@ fi
 restream_home="$rootfs/.restream"
 mkdir -p \
     "$restream_home" \
+    "$restream_home/runtime" \
+    "$restream_home/data" \
+    "$restream_home/media" \
+    "$restream_home/logs" \
     "$rootfs/etc/ssl/certs" \
     "$rootfs/usr/share/zoneinfo"
 
