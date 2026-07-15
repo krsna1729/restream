@@ -461,7 +461,10 @@ pub async fn start_hls_fmp4_segmenter(
                                             &store,
                                             next_segment_index,
                                             segment_duration_secs(segment_start_pts_ms, packet.pts),
-                                            Some(packet.dts),
+                                            Some(relative_to_hls_zero_ms(
+                                                packet.dts,
+                                                global_zero_ms,
+                                            )),
                                         ) {
                                             warn!(pipeline_id = %pipeline_id, err = %err, "failed to flush video fmp4 segment");
                                         }
@@ -612,6 +615,10 @@ async fn resolve_hls_preview_metadata(
     }
 }
 
+fn relative_to_hls_zero_ms(timestamp_ms: i64, zero_ms: i64) -> i64 {
+    timestamp_ms.saturating_sub(zero_ms)
+}
+
 struct BufferedSample {
     pts: i64,
     dts: i64,
@@ -731,7 +738,7 @@ impl VideoRenditionState {
         store: &Fmp4HlsStore,
         index: u64,
         duration_secs: f64,
-        next_segment_first_dts_ms: Option<i64>,
+        next_segment_first_relative_dts_ms: Option<i64>,
     ) -> Result<(), String> {
         if self.samples.is_empty() {
             self.current_segment_start_ms = None;
@@ -741,7 +748,8 @@ impl VideoRenditionState {
         let Some(sample_entry) = self.sample_entry.clone() else {
             return Err("missing avc1 sample entry".to_string());
         };
-        let next_dts = next_segment_first_dts_ms.map(|dts_ms| rescale_ms(dts_ms, VIDEO_TIMESCALE));
+        let next_dts =
+            next_segment_first_relative_dts_ms.map(|dts_ms| rescale_ms(dts_ms, VIDEO_TIMESCALE));
         let samples = build_mux_samples(
             &self.samples,
             TrackKind::Video,
@@ -1348,6 +1356,17 @@ mod tests {
         assert_eq!(parse_fmp4_segment_name("seg42.m4s"), Some(42));
         assert_eq!(parse_fmp4_segment_name("seg42.ts"), None);
         assert_eq!(parse_fmp4_segment_name("init.mp4"), None);
+    }
+
+    #[test]
+    fn hls_boundary_timestamps_are_relative_to_preview_zero() {
+        let zero_ms = 486_000_000;
+        let next_segment_boundary_ms = zero_ms + 2_000;
+
+        let relative_boundary_ms = relative_to_hls_zero_ms(next_segment_boundary_ms, zero_ms);
+
+        assert_eq!(relative_boundary_ms, 2_000);
+        assert_eq!(rescale_ms(relative_boundary_ms, VIDEO_TIMESCALE), 180_000);
     }
 
     #[test]
