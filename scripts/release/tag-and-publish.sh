@@ -12,9 +12,9 @@ usage() {
     cat <<'EOF'
 Usage: scripts/release/tag-and-publish.sh <vX.Y.Z> <successful-dry-run-id>
 
-The dry-run must be a completed successful Release workflow run whose head SHA
-matches the current checkout. Pushing the tag triggers the publishing workflow:
-GitHub Release assets plus GHCR <tag> and latest images.
+The dry-run must be a completed successful Release certification workflow run
+whose head SHA matches the current checkout. Pushing the tag triggers the
+publishing workflow: GitHub Release assets plus GHCR <tag> and latest images.
 EOF
 }
 
@@ -41,8 +41,8 @@ workflow="$(jq -r '.workflowName' <<<"$run_json")"
 event="$(jq -r '.event' <<<"$run_json")"
 url="$(jq -r '.url' <<<"$run_json")"
 
-if [[ "$workflow" != "Release" ]]; then
-    echo "tag-and-publish: run $RUN_ID is workflow '$workflow', expected Release" >&2
+if [[ "$workflow" != "Release certification" ]]; then
+    echo "tag-and-publish: run $RUN_ID is workflow '$workflow', expected Release certification" >&2
     exit 1
 fi
 if [[ "$event" != "workflow_dispatch" ]]; then
@@ -53,7 +53,7 @@ if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
     echo "tag-and-publish: dry-run is not green: status=$status conclusion=$conclusion url=$url" >&2
     exit 1
 fi
-for required_job in "Package and release evidence" "Certify release dry-run"; do
+for required_job in "Release package and evidence" "Release dry-run certification"; do
     job_conclusion="$(jq -r --arg name "$required_job" '[.jobs[] | select(.name == $name) | .conclusion][0] // "missing"' <<<"$run_json")"
     if [[ "$job_conclusion" != "success" ]]; then
         echo "tag-and-publish: required release job '$required_job' was '$job_conclusion', expected success: $url" >&2
