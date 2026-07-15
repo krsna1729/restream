@@ -10,6 +10,18 @@ import {
 } from "../support/helpers/fake-dom.mjs";
 import { resolveFrontendModulesDir } from "../support/helpers/frontend-module-loader.mjs";
 
+function makeStorage() {
+  const data = new Map();
+  return {
+    getItem(key) {
+      return data.has(key) ? data.get(key) : null;
+    },
+    setItem(key, value) {
+      data.set(key, String(value));
+    },
+  };
+}
+
 test("compiled dashboard bootstrap remains idempotent", async () => {
   const { document, window } = installFakeDom();
   window.location.href = "http://localhost/?mode=pipeline";
@@ -28,16 +40,81 @@ test("compiled dashboard bootstrap remains idempotent", async () => {
   assert.equal(window.setDashboardMode, firstSetDashboardMode);
 });
 
-test("dashboard v2 loader only enables the exact opt-in query", async () => {
+test("dashboard v2 loader resolves URL overrides and saved preference", async () => {
   installFakeDom();
   const loader = await loadCompiledFrontendModule("app/dashboard-v2-loader.js");
+  const storage = makeStorage();
 
-  assert.equal(loader.dashboardV2ExperimentEnabled("?mode=overview"), false);
   assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview&ui=v2"),
+    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
+    false,
+  );
+  assert.equal(
+    loader.dashboardV2ExperimentEnabled("?mode=overview&ui=v2", storage),
     true,
   );
-  assert.equal(loader.dashboardV2ExperimentEnabled("?ui=V2"), false);
+  assert.equal(
+    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
+    true,
+  );
+  assert.equal(
+    loader.dashboardV2ExperimentEnabled("?mode=overview&ui=v1", storage),
+    false,
+  );
+  assert.equal(loader.dashboardV2ExperimentEnabled("?ui=V2", storage), false);
+});
+
+test("dashboard UI version toggle persists changes and updates the URL", async () => {
+  const { document, window } = installFakeDom();
+  const loader = await loadCompiledFrontendModule("app/dashboard-v2-loader.js");
+  const storage = makeStorage();
+  const toggle = document.createElement("input");
+  toggle.id = "dashboard-ui-v2-toggle";
+  toggle.type = "checkbox";
+  document.body.appendChild(toggle);
+
+  window.location.href = "http://localhost/?mode=overview";
+  let replacedUrl = "";
+  let reloads = 0;
+  const history = {
+    replaceState(_state, _title, url) {
+      replacedUrl = String(url);
+    },
+  };
+
+  loader.initDashboardUiVersionToggle({
+    document,
+    history,
+    location: window.location,
+    reload: () => {
+      reloads += 1;
+    },
+    search: "?mode=overview",
+    storage,
+  });
+
+  assert.equal(toggle.checked, false);
+  toggle.checked = true;
+  toggle.dispatchEvent({ type: "change" });
+
+  assert.equal(reloads, 1);
+  assert.equal(replacedUrl, "http://localhost/?mode=overview&ui=v2");
+  assert.equal(
+    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
+    true,
+  );
+
+  window.location.href = replacedUrl;
+  replacedUrl = "";
+  toggle.checked = false;
+  toggle.dispatchEvent({ type: "change" });
+
+  assert.equal(reloads, 2);
+  assert.equal(replacedUrl, "http://localhost/?mode=overview");
+  assert.equal(
+    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
+    false,
+  );
 });
 
 test("compiled dashboard keeps the opt-in React seam in a bounded bundle", async () => {
