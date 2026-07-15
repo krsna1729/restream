@@ -52,28 +52,18 @@ struct RenditionSegment {
     data: Bytes,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct RenditionPlaylistState {
     init_segment: Option<Bytes>,
     segments: VecDeque<RenditionSegment>,
-    target_duration: f64,
-}
-
-impl Default for RenditionPlaylistState {
-    fn default() -> Self {
-        Self {
-            init_segment: None,
-            segments: VecDeque::new(),
-            target_duration: 6.0,
-        }
-    }
+    target_duration: Option<f64>,
 }
 
 impl RenditionPlaylistState {
     fn clear(&mut self) {
         self.init_segment = None;
         self.segments.clear();
-        self.target_duration = 6.0;
+        self.target_duration = None;
     }
 
     fn put_init_segment(&mut self, data: Bytes) {
@@ -87,9 +77,10 @@ impl RenditionPlaylistState {
     }
 
     fn push_segment(&mut self, config: HlsConfig, index: u64, duration: f64, data: Bytes) {
-        if duration > self.target_duration {
-            self.target_duration = duration.ceil();
-        }
+        self.target_duration = Some(
+            self.target_duration
+                .map_or(duration.ceil(), |current| current.max(duration.ceil())),
+        );
         self.segments.push_back(RenditionSegment {
             index,
             duration,
@@ -114,7 +105,7 @@ impl RenditionPlaylistState {
             .get(advertised_start)
             .map(|segment| segment.index)
             .unwrap_or(0);
-        let target_duration = self.target_duration.ceil() as u64;
+        let target_duration = self.target_duration.unwrap_or(1.0).ceil() as u64;
         let mut playlist = format!(
             "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:{target_duration}\n#EXT-X-MEDIA-SEQUENCE:{first_seq}\n#EXT-X-MAP:URI=\"{}\"\n",
             init_uri()
@@ -1322,8 +1313,25 @@ mod tests {
 
         let playlist = store.get_primary_playlist().expect("playlist");
         assert!(playlist.contains("#EXT-X-MAP:URI=\"video/init.mp4\""));
+        assert!(playlist.contains("#EXT-X-TARGETDURATION:4"));
         assert!(playlist.contains("#EXTINF:2.250,\nseg0.m4s"));
         assert!(playlist.contains("#EXTINF:3.500,\nseg1.m4s"));
+    }
+
+    #[test]
+    fn target_duration_starts_from_media_and_never_decreases() {
+        let store = Fmp4HlsStore::with_config(HlsConfig {
+            max_segments: 1,
+            ..HlsConfig::default()
+        });
+        store.put_video_init_segment(Bytes::from_static(b"init"));
+        store.push_video_segment(0, 3.5, Bytes::from_static(b"long"));
+        store.push_video_segment(1, 1.0, Bytes::from_static(b"short"));
+
+        let playlist = store.get_primary_playlist().expect("playlist");
+        assert!(playlist.contains("#EXT-X-TARGETDURATION:4"));
+        assert!(!playlist.contains("seg0.m4s"));
+        assert!(playlist.contains("#EXTINF:1.000,\nseg1.m4s"));
     }
 
     #[test]

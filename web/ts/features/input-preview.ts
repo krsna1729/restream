@@ -2,6 +2,7 @@ import { formatChannelCount, formatCodecName } from "../core/utils.js";
 import type { AudioTrack, PipelineView } from "../types.js";
 import { withBasePath } from "../core/base-path.js";
 import { getAudioTrackLabel } from "./audio-track-labels.js";
+import { buildPreviewHlsConfig } from "./hls-playback-config.js";
 
 const INPUT_PREVIEW_VIDEO_SELECTOR = '[data-role="input-preview-video"]';
 const HLS_READY_RETRY_MS = 1000;
@@ -518,9 +519,7 @@ export function renderInputPreview(
       resetPreviewLoadState();
       return;
     }
-    const hls = new HlsConstructor({
-      startLevel: -1,
-    });
+    const hls = new HlsConstructor(buildPreviewHlsConfig());
     hlsInstances.set(video, hls);
 
     hls.loadSource(previewSrc);

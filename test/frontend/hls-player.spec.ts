@@ -1,4 +1,4 @@
-import { test, expect, type Page, request } from '@playwright/test';
+import { test, expect, type Locator, type Page, request } from '@playwright/test';
 import { spawn, type ChildProcess } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -49,6 +49,27 @@ async function waitFor<T>(
         return lastValue;
     }
     throw new Error('waitFor called without any attempts');
+}
+
+async function expectPreviewPlayback(video: Locator): Promise<void> {
+    await expect.poll(
+        async () => video.evaluate((element) => {
+            const videoElement = element as HTMLVideoElement;
+            return {
+                advanced: videoElement.currentTime > 0,
+                paused: videoElement.paused,
+                playable: videoElement.readyState >= 2,
+            };
+        }),
+        {
+            message: 'expected HLS preview media to advance beyond metadata loading',
+            timeout: 30000,
+        },
+    ).toEqual({
+        advanced: true,
+        paused: false,
+        playable: true,
+    });
 }
 
 test.describe('HLS Player — pure helpers', () => {
@@ -234,7 +255,6 @@ test.describe('HLS Player — pure helpers', () => {
         expect(result.unicode).toBe('/hls/pipeline-%C3%B1/master.m3u8');
     });
 });
-
 test.describe('HLS Player — DOM rendering', () => {
     test.beforeEach(async ({ page }) => {
         await login(page);
@@ -747,6 +767,7 @@ test.describe.serial('HLS Player — live playback', () => {
             'data-preview-src',
             new RegExp(`/hls/${livePipelineId}/master.m3u8`),
         );
+        await expectPreviewPlayback(video);
 
         const mountedVideo = await video.elementHandle();
         await pipelineSelector
@@ -776,26 +797,7 @@ test.describe.serial('HLS Player — live playback', () => {
 
         const video = page.locator('video[data-role="input-preview-video"]');
         await expect(video).toBeAttached();
-
-        try {
-            await video.evaluate(async (el) => {
-                const videoEl = el as HTMLVideoElement;
-                if (videoEl.readyState >= 2) return true;
-                await new Promise<void>((resolve) => {
-                    videoEl.addEventListener('loadeddata', () => resolve(), { once: true });
-                    setTimeout(() => resolve(), 15000);
-                });
-                return videoEl.readyState >= 2;
-            }, { timeout: 20000 });
-        } catch {
-            // fallback: check that the video has a src set and is loading
-        }
-
-        const currentSrc = await video.evaluate((element) => {
-            const videoEl = element as HTMLVideoElement;
-            return videoEl.currentSrc || videoEl.src || videoEl.dataset.previewSrc || null;
-        });
-        expect(currentSrc).toBeTruthy();
+        await expectPreviewPlayback(video);
     });
 
     test('HLS playlist advances media sequence while streaming', async ({ page }) => {
@@ -933,6 +935,7 @@ test.describe.serial('HLS Player — live playback', () => {
 
         const managedVideo = page.locator('video[data-role="managed-hls-video"]');
         await expect(managedVideo).toBeAttached({ timeout: 10000 });
+        await expectPreviewPlayback(managedVideo);
     });
 });
 
