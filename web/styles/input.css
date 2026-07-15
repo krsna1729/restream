@@ -45,7 +45,7 @@
   }
 
   .dashboard-subtitle {
-    @apply text-base-content/60 mt-1 text-sm leading-5;
+    @apply text-base-content/70 mt-1 text-sm leading-5;
   }
 
   .dashboard-card {
@@ -61,11 +61,11 @@
   }
 
   .dashboard-kicker {
-    @apply text-base-content/60 text-[0.68rem] font-semibold tracking-wide uppercase;
+    @apply text-base-content/70 text-[0.68rem] font-semibold tracking-wide uppercase;
   }
 
   .dashboard-muted {
-    @apply text-base-content/60 text-sm leading-5;
+    @apply text-base-content/70 text-sm leading-5;
   }
 
   .dashboard-empty {
