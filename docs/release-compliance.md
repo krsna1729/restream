@@ -23,7 +23,7 @@ A release must:
 - scan Rust dependencies and the SBOM under the repository's current policy;
 - prove the downloadable host binary starts outside the source tree and serves
   its embedded frontend;
-- prove the scratch runtime artifact starts with its required runtime closure;
+- prove the container runtime artifact starts with its required runtime setup;
 - include the Restream license, required third-party notices and license texts,
   and source-availability information;
 - preserve diagnostic tracing unless an explicit observability review approves

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish the already-certified scratch image. The workflow deliberately calls
+# Publish the already-certified runtime image. The workflow deliberately calls
 # this only after release-evidence.sh has completed the full live-harness gate.
 set -euo pipefail
 

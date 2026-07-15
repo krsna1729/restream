@@ -5,13 +5,13 @@
 #
 #   1. native-deps  → OS packages, pinned Rust toolchain, static C/C++ prefix
 #   2. rust-build   → Cargo dependency warm-up, then the real application build
-#   3. runtime tree  → the shipped binaries plus their exact glibc closure
-#   4. runtime       → a pure-scratch production image
+#   3. runtime tree  → the shipped binaries
+#   4. runtime       → a distroless production image
 #   5. harness       → a minimal Ubuntu image for live protocol validation
 #
 # The native/static artifacts come from scripts/build/native-deps.sh, the Rust
-# toolchain bootstrap comes from scripts/dev/bootstrap.sh, and the final static
-# binary build comes from scripts/build/app-native.sh.
+# toolchain bootstrap comes from scripts/dev/bootstrap.sh, and the native
+# application build comes from scripts/build/app-native.sh.
 
 # ── Stage 1: native-deps ─────────────────────────────────────────────────────
 #
@@ -91,7 +91,7 @@ ENV RESTREAM_BUILD_GIT_COMMIT=${RESTREAM_BUILD_GIT_COMMIT} \
     RESTREAM_BUILD_TIMESTAMP=${RESTREAM_BUILD_TIMESTAMP} \
     RESTREAM_SKIP_SBOM=1
 
-COPY scripts/build/app-native.sh scripts/build/bench-harness.sh scripts/build/emit-sbom.sh scripts/build/runtime-rootfs.sh scripts/build/
+COPY scripts/build/app-native.sh scripts/build/bench-harness.sh scripts/build/emit-sbom.sh scripts/build/
 
 # Warm the release dependency graph without copying the real application code.
 # The dummy main compiles the full dependency set into .local/build/static/cargo-target
@@ -115,36 +115,26 @@ COPY --from=frontend-build /workspace/public public
 COPY --from=native-deps /workspace/public/bin/ffmpeg public/bin/ffmpeg
 RUN RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 
-# The rootfs closure is built by the same canonical script that developers can
-# invoke when packaging a scratch image outside Docker.
-RUN bash scripts/build/runtime-rootfs.sh /workspace/target/release/restream /runtime
-
 # The harness image is an explicit target, so this extra bench build is paid
-# only by `--target harness`, never by the production scratch image. It must
+# only by `--target harness`, never by the production runtime image. It must
 # derive from `runtime-tree`, which has the real source and generated frontend
 # assets rather than the dummy dependency-warmup crate.
 FROM runtime-tree AS harness-build
 
 RUN scripts/build/bench-harness.sh
 
-# ── Stage 4: pure-scratch runtime ────────────────────────────────────────────
+# ── Stage 4: distroless runtime ──────────────────────────────────────────────
 #
-# Runtime requirements:
-#   /.restream/data     SQLite database persistence (including WAL/SHM sidecars)
-#   /.restream/logs     rotated JSON process logs
-#   /.restream/media    uploaded media and recordings
-#   /.restream/runtime  internal embedded-FFmpeg cache; the runtime needs no `/tmp` directory
+# Runtime state lives under `/.restream`. Docker creates that writable parent
+# as the runtime user; Restream creates its data/logs/media/runtime children at
+# startup.
 #
 # Example:
 #   docker run -d \
 #     -v restream-state:/.restream \
 #     -p 3030:3030 -p 1935:1935 -p 10080:10080/udp \
-#     restream:scratch
-FROM scratch AS runtime-scratch
-
-COPY --from=runtime-tree /runtime/ /
-COPY --from=runtime-tree /workspace/target/release/restream /restream
-COPY distribution/ /usr/share/doc/restream/distribution/
+#     restream:distroless
+FROM gcr.io/distroless/cc-debian13:nonroot AS runtime-base
 
 ARG RESTREAM_BUILD_GIT_COMMIT
 ARG RESTREAM_BUILD_TIMESTAMP
@@ -156,17 +146,39 @@ LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
 EXPOSE 3030 1935 10080/udp
 
 USER 1000:1000
+
+# `WORKDIR` creates the directory using the active USER, giving the app a
+# writable parent for its relative `.restream/...` defaults.
+WORKDIR /.restream
+WORKDIR /
 
 ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
 
 ENTRYPOINT ["/restream"]
 
+FROM runtime-base AS runtime-distroless
+
+COPY --from=runtime-tree /workspace/target/release/restream /restream
+COPY distribution/ /usr/share/doc/restream/distribution/
+
+# Release packaging uses the same final image recipe without rebuilding Rust:
+# scripts/release/package-runtime-image.sh supplies an already-built restream
+# binary as the `release_payload` build context.
+FROM runtime-base AS runtime-artifact
+
+COPY --from=release_payload /restream /restream
+COPY distribution/ /usr/share/doc/restream/distribution/
+
 # Keep the old distro runtime available only as an escape hatch for operators
 # with an unusual NSS/DNS integration. The default production target below is
-# the verified scratch runtime above.
+# the verified distroless runtime above.
 FROM ubuntu:24.04 AS runtime-ubuntu
 
-COPY --from=runtime-tree /runtime/ /
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates netbase tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=runtime-tree /workspace/target/release/restream /restream
 COPY distribution/ /usr/share/doc/restream/distribution/
 
@@ -179,6 +191,8 @@ LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
 
 EXPOSE 3030 1935 10080/udp
 USER 1000:1000
+WORKDIR /.restream
+WORKDIR /
 ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
 ENTRYPOINT ["/restream"]
 
@@ -227,7 +241,7 @@ ENV PATH="/workspace/target/bench:${PATH}" \
 # modes remain ordinary arguments, including `--no-netns` for host networking.
 ENTRYPOINT ["/workspace/target/bench/test_harness"]
 
-# Keep the production scratch runtime as Docker's implicit final target. The
+# Keep the production distroless runtime as Docker's implicit final target. The
 # harness remains an explicit `--target harness` validation image; otherwise a
 # plain `docker build .` would silently ship the Ubuntu test environment.
-FROM runtime-scratch AS runtime
+FROM runtime-distroless AS runtime

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and prove the supported scratch runtime without a mount. This is the
+# Build and prove the supported container runtime without a mount. This is the
 # canonical container-release smoke used locally and by release automation.
 set -euo pipefail
 
@@ -15,9 +15,9 @@ usage() {
 Usage: scripts/check/container-smoke.sh [--image NAME] [--archive PATH] [--load-archive PATH]
 
 Builds Docker's default `runtime` target, or loads an existing image archive,
-proves it is a scratch image that starts with no mounts, and verifies that it
-does not contain /tmp. When --archive is supplied, writes a reproducible
-gzip-compressed OCI/Docker image archive suitable for a GitHub Release asset.
+proves it starts as the expected non-root user with no mounts, and verifies
+the HTTP health endpoint. When --archive is supplied, writes a reproducible
+gzip-compressed Docker image archive suitable for a GitHub Release asset.
 EOF
 }
 
@@ -47,7 +47,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-for command in docker curl tar; do
+for command in docker curl; do
     command -v "$command" >/dev/null || {
         echo "container-smoke: required command not found: $command" >&2
         exit 1
@@ -93,6 +93,12 @@ if [[ "$user" != "1000:1000" ]]; then
     exit 1
 fi
 
+workdir="$(docker image inspect --format '{{.Config.WorkingDir}}' "$IMAGE")"
+if [[ "$workdir" != "/" ]]; then
+    echo "container-smoke: expected runtime workdir /, got ${workdir:-empty}" >&2
+    exit 1
+fi
+
 docker run -d --name "$name" \
     -e RESTREAM_INITIAL_ADMIN_PASSWORD=release-smoke-password \
     -p 127.0.0.1::3030 \
@@ -116,11 +122,6 @@ for _ in $(seq 1 20); do
     sleep 1
 done
 curl --fail --silent --show-error "http://127.0.0.1:${port}/healthz" >/dev/null
-
-if docker export "$name" | tar -tf - | grep -qE '^tmp/?$'; then
-    echo "container-smoke: scratch runtime unexpectedly contains /tmp" >&2
-    exit 1
-fi
 
 if [[ -n "$ARCHIVE" ]]; then
     mkdir -p "$(dirname "$ARCHIVE")"

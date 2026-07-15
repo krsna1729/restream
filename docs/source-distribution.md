@@ -57,7 +57,7 @@ own their internal steps and flags.
 
 Release artifacts include the checked-in `distribution/` material. It carries
 the Restream license, native-component index, and applicable license texts. The
-same source is copied into scratch images and host bundles; packaging scripts
+same source is copied into container images and host bundles; packaging scripts
 must not maintain a second notice set.
 
 The GPL-enabled native build links x264 and x265 and may make FFmpeg GPL.

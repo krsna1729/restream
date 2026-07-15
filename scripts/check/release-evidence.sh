@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Canonical release gate. Keep CI orchestration thin: this script owns the
-# evidence required before a scratch-runtime artifact is published.
+# evidence required before a runtime image artifact is published.
 set -euo pipefail
 
 ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
