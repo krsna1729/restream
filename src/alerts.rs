@@ -73,6 +73,8 @@ pub struct Alert {
 /// 256 slots ≈ one full ring at standard frame rates (ring capacity is 512).
 const LAG_SLOTS_WARN: u64 = 256;
 const CAPACITY_WAIT_WARN_MS: u64 = 5_000;
+const SRT_RECV_BUFFER_WARN_PCT: f64 = 80.0;
+const SRT_RECV_BUFFER_CRITICAL_PCT: f64 = 95.0;
 
 // ─── Derivation ──────────────────────────────────────────────────────────────
 
@@ -203,6 +205,47 @@ pub fn derive_alerts(snapshot: &serde_json::Value) -> Vec<Alert> {
                     evidence: vec!["input.status = off".into()],
                     recommended_action:
                         "Start the publisher or check the stream key and connection.".into(),
+                    generated_at: generated_at.clone(),
+                    first_seen: None,
+                    last_seen: None,
+                });
+            }
+
+            let srt_recv_buffer = input
+                .get("publisher")
+                .and_then(|publisher| publisher.get("quality"))
+                .and_then(srt_recv_buffer_occupancy);
+            if let Some((recv_bytes, total_bytes, pct)) = srt_recv_buffer
+                && pct >= SRT_RECV_BUFFER_WARN_PCT
+            {
+                let critical = pct >= SRT_RECV_BUFFER_CRITICAL_PCT;
+                alerts.push(Alert {
+                    id: format!("pipeline:{}:input:srt_recv_buffer_saturated", pipeline_id),
+                    severity: if critical {
+                        Severity::Critical
+                    } else {
+                        Severity::Warning
+                    },
+                    scope: Scope::Pipeline,
+                    pipeline_id: Some(pipeline_id.clone()),
+                    stage_id: None,
+                    output_id: None,
+                    title: if critical {
+                        "SRT publisher ingest is not being drained".into()
+                    } else {
+                        "SRT publisher ingest receive buffer is filling".into()
+                    },
+                    cause: "The SRT application receive buffer is full or nearly full. The publisher can still be connected while Restream is not draining ingest data, so downstream outputs will stall.".into(),
+                    evidence: vec![
+                        format!(
+                            "srtRecvBufBytes = {} / {} ({:.0}%)",
+                            recv_bytes, total_bytes, pct
+                        ),
+                        "kernel UDP queue may still be empty because packets have already entered libsrt".into(),
+                    ],
+                    recommended_action:
+                        "Treat this as an input/ingest issue first: restart the affected publisher or Restream, then inspect SRT ingest readiness if it recurs."
+                            .into(),
                     generated_at: generated_at.clone(),
                     first_seen: None,
                     last_seen: None,
@@ -591,6 +634,16 @@ fn blocked_output_action(phase: &str) -> &'static str {
     }
 }
 
+fn srt_recv_buffer_occupancy(quality: &serde_json::Value) -> Option<(u64, u64, f64)> {
+    let recv = quality.get("srtRecvBufBytes")?.as_i64()?.max(0) as u64;
+    let avail = quality.get("srtRecvBufAvailBytes")?.as_i64()?.max(0) as u64;
+    let total = recv.saturating_add(avail);
+    if total == 0 {
+        return None;
+    }
+    Some((recv, total, recv as f64 / total as f64 * 100.0))
+}
+
 fn sorted(mut alerts: Vec<Alert>) -> Vec<Alert> {
     alerts.sort_by(|a, b| {
         a.severity
@@ -724,6 +777,7 @@ mod tests {
             key,
             backend,
             phase,
+            backend_pid: None,
             bytes_in,
             bytes_out,
             packets_in: bytes_in.min(1),
@@ -1270,6 +1324,44 @@ mod tests {
         tracker.track(&mut alerts2);
         assert_eq!(alerts2[0].first_seen.as_ref().unwrap(), &first);
         assert_ne!(alerts2[0].last_seen.as_ref().unwrap(), &first);
+    }
+
+    #[test]
+    fn saturated_srt_receive_buffer_yields_input_causal_alert() {
+        let snap = json!({
+            "generatedAt": "2026-06-25T00:00:00Z",
+            "srtListener": { "udpDrops": 0 },
+            "pipelines": {
+                "pipe-srt": {
+                    "input": {
+                        "status": "on",
+                        "readerMetrics": [],
+                        "publisher": {
+                            "protocol": "srt",
+                            "quality": {
+                                "srtRecvBufBytes": 8_218_796,
+                                "srtRecvBufAvailBytes": 1_500
+                            }
+                        }
+                    },
+                    "outputs": {
+                        "out-a": { "status": "stalled" }
+                    }
+                }
+            }
+        });
+
+        let alerts = derive_alerts(&snap);
+        let alert = alerts
+            .iter()
+            .find(|alert| alert.id == "pipeline:pipe-srt:input:srt_recv_buffer_saturated")
+            .expect("saturated ingest buffer should produce a causal input alert");
+
+        assert_eq!(alert.severity, Severity::Critical);
+        assert_eq!(alert.scope, Scope::Pipeline);
+        assert!(alert.title.contains("SRT publisher ingest"));
+        assert!(alert.cause.contains("not draining ingest data"));
+        assert!(alert.evidence.iter().any(|line| line.contains("100%")));
     }
 
     #[test]

@@ -211,11 +211,11 @@ function overviewActivitySection(): string {
           OVERVIEW_ACTIVITY_LIMIT,
         )}</div>`;
 
-  return `<section class="border-base-content/10 bg-base-200/80 rounded-lg border">
-        <div class="border-base-content/10 flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+  return `<section class="dashboard-section">
+        <div class="dashboard-section-header">
             <div>
-                <h2 class="text-base font-semibold">Restream Activity</h2>
-                <p class="text-base-content/60 mt-1 text-sm">Recent restream-wide event bursts, grouped for operator-friendly review.</p>
+                <h2 class="dashboard-section-title">Restream Activity</h2>
+                <p class="dashboard-subtitle">Recent restream-wide event bursts, grouped for operator-friendly review.</p>
             </div>
             <button type="button" class="btn btn-sm btn-outline" id="overview-open-status-btn">Open Status</button>
         </div>
@@ -239,6 +239,15 @@ function formatBytes(bytes: number | null | undefined): string {
   if (value < 1024 * 1024 * 1024)
     return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
   return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
+}
+
+function formatAgeMs(ms: number | null | undefined): string {
+  if (!Number.isFinite(ms as number) || (ms as number) < 0) return "--";
+  const seconds = Math.round((ms as number) / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
 function formatPercent(value: number | null | undefined): string {
@@ -557,7 +566,7 @@ function overviewAttentionSection(): string {
   const body = issues.length
     ? issues
         .map(
-          ({ pipe, health, detail }) => `<article class="border-base-content/10 bg-base-100 rounded-lg border p-3">
+          ({ pipe, health, detail }) => `<article class="dashboard-card p-3">
             <div class="flex min-w-0 items-start justify-between gap-3">
               <div class="min-w-0">
                 <h3 class="truncate font-semibold">${escapeHtml(pipe.name)}</h3>
@@ -572,13 +581,13 @@ function overviewAttentionSection(): string {
           </article>`,
         )
         .join("")
-    : `<div class="border-base-content/10 bg-base-100 rounded-lg border p-4 text-sm text-base-content/70">No active incident-level issues. Runtime detail stays available under Status and Pipeline Inspect.</div>`;
+    : `<div class="dashboard-empty">No active incident-level issues. Runtime detail stays available under Status and Pipeline Inspect.</div>`;
 
-  return `<section class="border-base-content/10 bg-base-200/80 mb-4 rounded-lg border">
-    <div class="border-base-content/10 flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+  return `<section class="dashboard-section mb-4">
+    <div class="dashboard-section-header">
       <div>
-        <h2 class="text-base font-semibold">Needs attention</h2>
-        <p class="text-base-content/60 mt-1 text-sm">Fleet incidents are folded into Overview, then handled from the affected pipeline.</p>
+        <h2 class="dashboard-section-title">Needs attention</h2>
+        <p class="dashboard-subtitle">Fleet incidents are folded into Overview, then handled from the affected pipeline.</p>
       </div>
       <button type="button" class="btn btn-sm btn-outline" id="overview-open-status-detail-btn">Runtime detail</button>
     </div>
@@ -589,6 +598,10 @@ function overviewAttentionSection(): string {
 function inputOverviewPill(pipe: PipelineView): string {
   const protocol = pipe.input.publisher?.protocol?.toUpperCase();
   const rate = formatBitrate(pipe.stats.inputBitrateKbps);
+  const staleInput =
+    pipe.input.status === "on" &&
+    Number.isFinite(pipe.input.lastProgressAgeMs as number) &&
+    (pipe.input.lastProgressAgeMs as number) >= 10_000;
   if (pipe.input.status === "on" && !pipe.input.probeReady) {
     const pendingMs = pipe.input.probePendingMs;
     const detail =
@@ -596,6 +609,19 @@ function inputOverviewPill(pipe: PipelineView): string {
         ? `${protocol || "publisher"} / ${(Number(pendingMs) / 1000).toFixed(1)}s`
         : protocol || "publisher";
     return statusPill("Input probing", "warning", detail);
+  }
+  if (staleInput) {
+    return statusPill(
+      "Input stalled",
+      "warning",
+      [
+        protocol || "publisher",
+        `${formatBytes(pipe.input.bytesReceived)} received`,
+        `stale ${formatAgeMs(pipe.input.lastProgressAgeMs)}`,
+      ]
+        .filter(Boolean)
+        .join(" / "),
+    );
   }
   if (pipe.input.status === "on") {
     if (pipe.input.flapping) {
@@ -748,11 +774,11 @@ function renderOverview(): void {
             ${overviewMetric("Throughput Out", formatBitrate(counts.outputKbps), `${counts.recording} active recording${counts.recording === 1 ? "" : "s"}`, "outputKbps")}
         </div>
         ${overviewAttentionSection()}
-        <section class="border-base-content/10 bg-base-200/80 rounded-lg border">
-            <div class="border-base-content/10 flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+        <section class="dashboard-table-panel">
+            <div class="dashboard-section-header">
                 <div>
-                    <h1 class="text-lg font-semibold">Operator Overview</h1>
-                    <p class="text-base-content/60 text-sm">Primary state follows the upstream cause before downstream symptoms.</p>
+                    <h1 class="dashboard-title">Operator Overview</h1>
+                    <p class="dashboard-subtitle">Primary state follows the upstream cause before downstream symptoms.</p>
                 </div>
                 <button type="button" class="btn btn-sm btn-outline" id="overview-add-pipeline-btn">Add Pipeline</button>
             </div>
@@ -813,13 +839,13 @@ function overviewMetric(
   historyKey: OverviewMetricKey,
 ): string {
   const tone = overviewMetricTone(historyKey);
-  return `<section class="${tone.borderClass} border-base-content/10 bg-base-200 min-h-30 overflow-hidden rounded-lg border border-t-2 p-4">
-        <div class="text-base-content/60 text-xs font-semibold uppercase">${escapeHtml(label)}</div>
+  return `<section class="${tone.borderClass} dashboard-stat-card border-t-2">
+        <div class="dashboard-kicker">${escapeHtml(label)}</div>
         <div class="mt-2 grid grid-cols-[minmax(0,max-content)_minmax(5rem,1fr)] items-end gap-3">
             <div class="min-w-0">${overviewMetricHero(value)}</div>
             <div class="min-w-0">${overviewSparkline(historyKey)}</div>
         </div>
-        <div class="text-base-content/60 mt-1 text-sm">${escapeHtml(note)}</div>
+        <div class="dashboard-muted mt-1">${escapeHtml(note)}</div>
     </section>`;
 }
 
@@ -854,16 +880,16 @@ function renderStatusMode(): void {
   if (!container) return;
   if (!statusMounted || !container.querySelector("#status-versions")) {
     container.innerHTML = `
-            <div class="mx-auto max-w-5xl space-y-5">
+            <div class="dashboard-page-shell">
                 <div class="flex flex-wrap items-end justify-between gap-3">
                     <div>
-                        <h1 class="text-lg font-semibold">Status</h1>
-                        <p class="text-base-content/60 mt-1 text-sm">Runtime build, native libraries, and system details.</p>
+                        <h1 class="dashboard-title">Status</h1>
+                        <p class="dashboard-subtitle">Runtime build, native libraries, and system details.</p>
                     </div>
                     <button type="button" class="btn btn-sm btn-outline" id="refresh-status-btn">Refresh</button>
                 </div>
-                <section class="border-base-content/10 bg-base-200 rounded-lg border p-5">
-                    <h2 class="mb-4 text-base font-semibold">Runtime</h2>
+                <section class="dashboard-section p-5">
+                    <h2 class="dashboard-section-title mb-4">Runtime</h2>
                     <div id="status-versions" class="space-y-5">
                         <p class="text-sm opacity-60">Loading...</p>
                     </div>

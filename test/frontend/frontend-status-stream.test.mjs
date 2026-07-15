@@ -113,6 +113,13 @@ test("status mode reuses restream log SSE, pauses it while hidden, and resumes f
     streams[0].url,
     "/api/v1/logs/stream?scope=restream&last_event_id=91",
   );
+  assert.match(container.innerHTML, /aria-label="Status sections"/);
+  assert.match(container.innerHTML, /href="#status-build-section"/);
+  assert.match(container.innerHTML, /href="#status-system-section"/);
+  assert.match(container.innerHTML, /href="#status-native-section"/);
+  assert.match(container.innerHTML, /href="#status-log-section"/);
+  assert.match(container.innerHTML, /id="status-build-section"/);
+  assert.match(container.innerHTML, /id="status-log-section"/);
   assert.match(container.innerHTML, /dashboard api server listening/);
 
   streams[0].emit("log", {

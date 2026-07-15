@@ -207,6 +207,7 @@ export interface InputHealth {
   bytesSent?: number;
   readers?: number;
   bitrateKbps?: number | null;
+  lastProgressAgeMs?: number | null;
   publishStartedAt?: string;
   probeReady?: boolean;
   probeStatus?: string;
@@ -375,6 +376,7 @@ export interface InputView {
   bytesSent: number;
   readers: number;
   bitrateKbps: number | null;
+  lastProgressAgeMs: number | null;
   publisher: Publisher | null;
   unexpectedReadersCount: number;
   lastSessionProtocol: string | null;

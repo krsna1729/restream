@@ -6,9 +6,14 @@
 
 use crate::media::engine::MediaEngine;
 use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 const DEFAULT_TOP_N: usize = 25;
 const MAX_TOP_N: usize = 200;
+
+static CHILD_PROCESS_CPU_SAMPLES: OnceLock<Mutex<HashMap<u32, ChildProcessCpuSample>>> =
+    OnceLock::new();
 
 #[derive(Clone, Debug, Default)]
 pub struct ProcessResourceSnapshot {
@@ -22,6 +27,18 @@ pub struct ProcessResourceSnapshot {
     pub external_ffmpeg_count: u64,
     pub process_thread_count: u64,
     pub fd_count: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ChildProcessCpuSample {
+    total_ticks: u64,
+    process_ticks: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ChildProcessResource {
+    cpu_percent: Option<f64>,
+    memory_bytes: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,6 +90,66 @@ fn memory(attributed_bytes: u64, confidence: &str, source: &str) -> Value {
         "confidence": confidence,
         "source": source,
     })
+}
+
+fn proc_rss_bytes(pid: u32) -> Option<u64> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let rss_kib = status.lines().find_map(|line| {
+        let value = line.strip_prefix("VmRSS:")?.trim();
+        value
+            .split_whitespace()
+            .next()
+            .and_then(|number| number.parse::<u64>().ok())
+    })?;
+    Some(rss_kib.saturating_mul(1024))
+}
+
+fn child_process_resources(
+    pids: impl IntoIterator<Item = u32>,
+) -> HashMap<u32, ChildProcessResource> {
+    let pids = pids.into_iter().collect::<Vec<_>>();
+    if pids.is_empty() {
+        return HashMap::new();
+    }
+    let total_ticks = crate::api::telemetry::proc_total_ticks();
+    let core_count = std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get())
+        .unwrap_or(1);
+    let sample_store = CHILD_PROCESS_CPU_SAMPLES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut previous = match sample_store.lock() {
+        Ok(lock) => lock,
+        Err(_) => return HashMap::new(),
+    };
+    let mut resources = HashMap::new();
+    for pid in pids {
+        let process_ticks = crate::api::telemetry::proc_process_ticks(pid);
+        let cpu_percent = total_ticks.zip(process_ticks).and_then(|(total, ticks)| {
+            let sample = ChildProcessCpuSample {
+                total_ticks: total,
+                process_ticks: ticks,
+            };
+            let cpu = previous.get(&pid).and_then(|prev| {
+                let total_delta = sample.total_ticks.saturating_sub(prev.total_ticks);
+                if total_delta == 0 {
+                    return None;
+                }
+                let process_delta = sample.process_ticks.saturating_sub(prev.process_ticks);
+                let scale = core_count.max(1) as f64 * 100.0 / total_delta as f64;
+                Some(process_delta as f64 * scale)
+            });
+            previous.insert(pid, sample);
+            cpu
+        });
+        let memory_bytes = proc_rss_bytes(pid);
+        resources.insert(
+            pid,
+            ChildProcessResource {
+                cpu_percent,
+                memory_bytes,
+            },
+        );
+    }
+    resources
 }
 
 fn node_memory_bytes(node: &Value) -> u64 {
@@ -261,6 +338,14 @@ fn stage_memory_bytes(stage: &Value) -> u64 {
         .unwrap_or(0)
 }
 
+fn stage_backend_pid(stage: &Value) -> Option<u32> {
+    stage
+        .get("lifecycle")
+        .and_then(|lifecycle| lifecycle.get("backendPid"))
+        .and_then(Value::as_u64)
+        .and_then(|pid| u32::try_from(pid).ok())
+}
+
 fn queue_hotspots(len: u64, capacity: u64, blocked_writes: u64) -> Vec<&'static str> {
     let mut hotspots = Vec::new();
     if capacity > 0 && len.saturating_mul(100) >= capacity.saturating_mul(75) {
@@ -272,7 +357,7 @@ fn queue_hotspots(len: u64, capacity: u64, blocked_writes: u64) -> Vec<&'static 
     hotspots
 }
 
-fn stage_node(stage: &Value) -> Value {
+fn stage_node(stage: &Value, child_resources: &HashMap<u32, ChildProcessResource>) -> Value {
     let stage_key = stage
         .get("stageKey")
         .and_then(Value::as_str)
@@ -281,7 +366,24 @@ fn stage_node(stage: &Value) -> Value {
         .get("kind")
         .and_then(Value::as_str)
         .unwrap_or(stage_key);
-    let attributed = stage_memory_bytes(stage);
+    let backend_pid = stage_backend_pid(stage);
+    let child_resource = backend_pid.and_then(|pid| child_resources.get(&pid).copied());
+    let attributed = child_resource
+        .and_then(|resource| resource.memory_bytes)
+        .unwrap_or_else(|| stage_memory_bytes(stage));
+    let memory_confidence = if child_resource
+        .and_then(|resource| resource.memory_bytes)
+        .is_some()
+    {
+        "measured"
+    } else {
+        "derived"
+    };
+    let memory_source = if memory_confidence == "measured" {
+        "child_process_rss"
+    } else {
+        "stage_payload_stats"
+    };
     let mut hotspots = Vec::new();
     let metrics = stage.get("metrics").cloned().unwrap_or_else(|| json!({}));
     if metrics
@@ -292,20 +394,33 @@ fn stage_node(stage: &Value) -> Value {
     {
         hotspots.push("processing");
     }
-    json!({
+    if child_resource
+        .and_then(|resource| resource.cpu_percent)
+        .is_some_and(|cpu| cpu >= 75.0)
+    {
+        hotspots.push("cpu");
+    }
+    let mut node = json!({
         "id": stage_key,
         "kind": "stage",
         "label": kind,
         "pipelineId": stage.get("pipelineId").cloned().unwrap_or(Value::Null),
         "execution": execution_for_stage(stage),
-        "memory": memory(attributed, "derived", "stage_payload_stats"),
+        "memory": memory(attributed, memory_confidence, memory_source),
         "threads": {
             "appOwned": if execution_for_stage(stage) == "os_thread" { 1 } else { 0 },
             "childProcess": if execution_for_stage(stage) == "child_process" { 1 } else { 0 },
         },
         "metrics": metrics,
         "hotspots": hotspots,
-    })
+    });
+    if let Some(pid) = backend_pid {
+        node["backendPid"] = json!(pid);
+    }
+    if let Some(cpu_percent) = child_resource.and_then(|resource| resource.cpu_percent) {
+        node["cpuPercent"] = json!(cpu_percent);
+    }
+    node
 }
 
 fn egress_node(egress: &Value, avio_queues: &[Value]) -> Value {
@@ -435,6 +550,7 @@ pub(crate) async fn resource_map(
         });
 
     let mut nodes = Vec::new();
+    let child_resources = child_process_resources(stages.iter().filter_map(stage_backend_pid));
     nodes.push(json!({
         "id": "runtime:restream",
         "kind": "runtime_process",
@@ -473,7 +589,11 @@ pub(crate) async fn resource_map(
         nodes.push(source_ring_node(&ring));
     }
 
-    nodes.extend(stages.iter().map(stage_node));
+    nodes.extend(
+        stages
+            .iter()
+            .map(|stage| stage_node(stage, &child_resources)),
+    );
     nodes.extend(
         egresses
             .iter()
@@ -564,4 +684,53 @@ pub(crate) async fn resource_map(
             "estimated": ["tokio_task_overhead", "libsrt_internal_buffers"]
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stage_node_reports_child_process_resources_when_pid_is_known() {
+        let stage = json!({
+            "stageKey": "pipe-1:transcoder:720p",
+            "kind": "video:720p:codec:hevc",
+            "pipelineId": "pipe-1",
+            "lifecycle": {
+                "backend": "externalFfmpeg",
+                "backendPid": 4242
+            },
+            "payloadStats": {
+                "payloadBytes": 1024
+            },
+            "metrics": {
+                "processingUs": 0
+            }
+        });
+        let child_resources = HashMap::from([(
+            4242,
+            ChildProcessResource {
+                cpu_percent: Some(12.5),
+                memory_bytes: Some(64 * 1024 * 1024),
+            },
+        )]);
+
+        let node = stage_node(&stage, &child_resources);
+
+        assert_eq!(node.get("backendPid").and_then(Value::as_u64), Some(4242));
+        assert_eq!(node.get("cpuPercent").and_then(Value::as_f64), Some(12.5));
+        assert_eq!(
+            node.pointer("/memory/attributedBytes")
+                .and_then(Value::as_u64),
+            Some(64 * 1024 * 1024)
+        );
+        assert_eq!(
+            node.pointer("/memory/confidence").and_then(Value::as_str),
+            Some("measured")
+        );
+        assert_eq!(
+            node.pointer("/memory/source").and_then(Value::as_str),
+            Some("child_process_rss")
+        );
+    }
 }

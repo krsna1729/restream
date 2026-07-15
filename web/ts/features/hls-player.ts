@@ -1,9 +1,10 @@
 import { withBasePath } from "../core/base-path.js";
 
 const MANAGED_HLS_VIDEO_SELECTOR = '[data-role="managed-hls-video"]';
-const HLS_READY_RETRY_MS = 1000;
-const HLS_MANIFEST_TIMEOUT_MS = 8000;
-const HLS_PLAYBACK_STALL_TIMEOUT_MS = 12000;
+const HLS_READY_RETRY_MS = 500;
+const HLS_MANIFEST_TIMEOUT_MS = 15000;
+const HLS_PLAYBACK_STALL_TIMEOUT_MS = 20000;
+const HLS_INITIAL_PLAYBACK_RETRY_LIMIT = 8;
 
 const hlsInstances = new WeakMap<HTMLVideoElement, Hls>();
 const playerControllers = new WeakMap<HTMLElement, AbortController>();
@@ -16,6 +17,7 @@ interface ManagedHlsOptions {
   idleLabel?: string;
   controls?: boolean;
   showOverlayButton?: boolean;
+  autoStart?: boolean;
   onStatusChange?: (status: ManagedHlsStatusUpdate) => void;
 }
 
@@ -184,6 +186,8 @@ export function renderManagedHlsPlayer(
 
   let previewStarted = false;
   let stallTimer: number | null = null;
+  let retryTimer: number | null = null;
+  let initialPlaybackRetries = 0;
   const showOverlayButton = options.showOverlayButton !== false;
   const notifyStatus = (status: ManagedHlsStatusUpdate): void => {
     options.onStatusChange?.(status);
@@ -244,6 +248,13 @@ export function renderManagedHlsPlayer(
     }
   }
 
+  function clearRetryTimer(): void {
+    if (retryTimer !== null) {
+      window.clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  }
+
   function armStallTimer(message: string): void {
     clearStallTimer();
     stallTimer = window.setTimeout(() => {
@@ -266,6 +277,7 @@ export function renderManagedHlsPlayer(
 
   function setInteractiveOverlay(label: string, buttonText: string): void {
     clearStallTimer();
+    clearRetryTimer();
     setOverlayVisible(true);
     setOverlayLabel(label);
     notifyStatus({ level: "idle", message: label });
@@ -278,6 +290,7 @@ export function renderManagedHlsPlayer(
 
   function setErrorOverlay(label: string): void {
     clearStallTimer();
+    clearRetryTimer();
     setOverlayVisible(true);
     setOverlayLabel(label);
     notifyStatus({ level: "error", message: label });
@@ -316,6 +329,7 @@ export function renderManagedHlsPlayer(
     if (video.dataset.previewDisposed === "true") return;
     previewStarted = false;
     clearStallTimer();
+    clearRetryTimer();
     destroyHls(video);
     video.removeAttribute("src");
     video.load();
@@ -324,6 +338,36 @@ export function renderManagedHlsPlayer(
       options.idleLabel || "Click to play",
       options.playLabel || "Play",
     );
+  };
+
+  const retryPreviewLoad = (label: string): void => {
+    if (video.dataset.previewDisposed === "true") return;
+    if (initialPlaybackRetries >= HLS_INITIAL_PLAYBACK_RETRY_LIMIT) {
+      video.dataset.previewLoaded = "false";
+      setErrorOverlay(label);
+      return;
+    }
+    initialPlaybackRetries += 1;
+    previewStarted = false;
+    clearStallTimer();
+    clearRetryTimer();
+    destroyHls(video);
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    video.dataset.previewLoaded = "false";
+    setOverlayVisible(true);
+    setOverlayLabel(label);
+    notifyStatus({ level: "loading", message: label });
+    setOverlayButtonState({
+      buttonText: label,
+      buttonDisabled: true,
+      tone: "neutral",
+    });
+    retryTimer = window.setTimeout(() => {
+      retryTimer = null;
+      void primePreviewSource();
+    }, HLS_READY_RETRY_MS);
   };
 
   function setupHlsJsPlayback(): void {
@@ -354,6 +398,10 @@ export function renderManagedHlsPlayer(
       };
       if (video.dataset.previewDisposed === "true") return;
       if (!data.fatal) return;
+      if (!previewStarted) {
+        retryPreviewLoad("Waiting for HLS segments...");
+        return;
+      }
       const reason = /manifest/i.test(data.details || "")
         ? "Playlist could not be loaded."
         : /level|frag|buffer/i.test(data.details || "")
@@ -380,6 +428,7 @@ export function renderManagedHlsPlayer(
   const primePreviewSource = async (): Promise<void> => {
     if (video.dataset.previewLoaded === "true") return;
     video.dataset.previewLoaded = "true";
+    clearRetryTimer();
     setOverlayVisible(true);
     setOverlayLabel(options.loadingLabel || "Loading...");
     notifyStatus({
@@ -412,7 +461,7 @@ export function renderManagedHlsPlayer(
     if (!manifestReady.ready) {
       video.dataset.previewLoaded = "false";
       if (manifestReady.errorMessage) {
-        setErrorOverlay(manifestReady.errorMessage);
+        retryPreviewLoad(manifestReady.errorMessage);
       }
       return;
     }
@@ -431,7 +480,9 @@ export function renderManagedHlsPlayer(
     () => {
       if (video.dataset.previewDisposed === "true") return;
       previewStarted = true;
+      initialPlaybackRetries = 0;
       clearStallTimer();
+      clearRetryTimer();
       setOverlayVisible(false);
       notifyStatus({ level: "playing", message: null });
     },
@@ -440,7 +491,9 @@ export function renderManagedHlsPlayer(
   video.addEventListener("playing", () => {
     if (video.dataset.previewDisposed === "true") return;
     previewStarted = true;
+    initialPlaybackRetries = 0;
     clearStallTimer();
+    clearRetryTimer();
     setOverlayVisible(false);
     notifyStatus({ level: "playing", message: null });
   });
@@ -451,14 +504,22 @@ export function renderManagedHlsPlayer(
   });
   video.addEventListener("error", () => {
     if (video.dataset.previewDisposed === "true") return;
+    if (!previewStarted) {
+      retryPreviewLoad("Waiting for HLS playback...");
+      return;
+    }
     setErrorOverlay("Playback failed.");
   });
   loadBtn.addEventListener("click", () => {
+    initialPlaybackRetries = 0;
     void primePreviewSource();
   });
 
   managedControllers.set(playerElem, {
     play: () => {
+      if (video.dataset.previewLoaded !== "true") {
+        initialPlaybackRetries = 0;
+      }
       void primePreviewSource().then(() => {
         attemptPlayback();
       });
@@ -477,5 +538,12 @@ export function renderManagedHlsPlayer(
   shell.appendChild(overlay);
   playerElem.appendChild(shell);
   playerElem.dataset.previewSrc = previewSrc;
-  void primePreviewSource();
+  if (options.autoStart !== false) {
+    void primePreviewSource();
+  } else {
+    setInteractiveOverlay(
+      options.idleLabel || "Click to play",
+      options.playLabel || "Play",
+    );
+  }
 }

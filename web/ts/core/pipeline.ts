@@ -96,6 +96,12 @@ function parsePipelinesInfo(
     const inputKbps = Number.isFinite(rawInputKbps as number)
       ? Number((rawInputKbps as number).toFixed(1))
       : null;
+    const rawInputProgressAgeMs = inputHealth?.lastProgressAgeMs;
+    const inputLastProgressAgeMs = Number.isFinite(
+      rawInputProgressAgeMs as number,
+    )
+      ? Number(rawInputProgressAgeMs)
+      : null;
 
     if (inputVideo) inputVideo.bw = inputKbps;
 
@@ -171,6 +177,7 @@ function parsePipelinesInfo(
         bytesSent: healthByPipeline[p.id]?.input?.bytesSent || 0,
         readers: healthByPipeline[p.id]?.input?.readers || 0,
         bitrateKbps: inputKbps,
+        lastProgressAgeMs: inputLastProgressAgeMs,
         publisher: inputPublisher ?? null,
         unexpectedReadersCount,
         lastSessionProtocol:
@@ -252,6 +259,7 @@ function parsePipelinesInfo(
           audio: null,
           audioTracks: [],
           bitrateKbps: null,
+          lastProgressAgeMs: null,
           bytesReceived: 0,
           bytesSent: 0,
           readers: 0,

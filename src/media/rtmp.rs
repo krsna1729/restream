@@ -64,6 +64,7 @@ struct RtmpIngestHandle {
     ring: Arc<RingBuffer>,
     bytes_received: Arc<AtomicU64>,
     ingest_metrics: Arc<StageMetrics>,
+    last_progress_ms: Arc<AtomicU64>,
 }
 
 /// RTMP Ingest Server
@@ -622,9 +623,13 @@ async fn handle_session_results(
                             return Err("Pipeline already has an active publisher");
                         };
                         let ring = engine.get_or_create_pipeline(&pipeline.id).await;
-                        let Some((bytes_received, ingest_metrics)) = engine
+                        let Some((bytes_received, ingest_metrics, last_progress_ms)) = engine
                             .with_active_ingest(&pipeline.id, |ingest| {
-                                (ingest.bytes_received.clone(), ingest.metrics.clone())
+                                (
+                                    ingest.bytes_received.clone(),
+                                    ingest.metrics.clone(),
+                                    ingest.last_progress_ms.clone(),
+                                )
                             })
                             .await
                         else {
@@ -639,6 +644,7 @@ async fn handle_session_results(
                             ring,
                             bytes_received,
                             ingest_metrics,
+                            last_progress_ms,
                         });
                         set_tcp_socket_buffers(socket, engine.config.rtmp_stream_buffer_bytes);
 
@@ -681,6 +687,9 @@ async fn handle_session_results(
                                 .bytes_received
                                 .fetch_add(data.len() as u64, Ordering::Relaxed);
                             active.ingest_metrics.record_in(data.len() as u64);
+                            active
+                                .last_progress_ms
+                                .store(MediaEngine::now_epoch_ms(), Ordering::Relaxed);
 
                             let packet_kind = classify_flv_video_packet(&data);
                             let is_keyframe =
@@ -752,6 +761,9 @@ async fn handle_session_results(
                                 .bytes_received
                                 .fetch_add(data.len() as u64, Ordering::Relaxed);
                             active.ingest_metrics.record_in(data.len() as u64);
+                            active
+                                .last_progress_ms
+                                .store(MediaEngine::now_epoch_ms(), Ordering::Relaxed);
 
                             // Cache audio sequence header for play subscribers
                             if data.len() >= 2 && (data[0] >> 4) == 10 && data[1] == 0 {

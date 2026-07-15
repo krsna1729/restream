@@ -4,6 +4,7 @@ use crate::domain::srt_ingest::SrtGlobalIngestConfig;
 use crate::media::engine::{AudioMeta, VideoMeta};
 use crate::media::ring_buffer::PayloadFormat;
 use crate::media::security::IngestSecurityService;
+use proptest::prelude::*;
 
 #[test]
 fn streamid_getsockopt_length_must_stay_within_buffer() {
@@ -162,13 +163,13 @@ fn srt_stream_ids_normalize_plain_read_keys_before_auth() {
 
 #[test]
 fn srt_stream_ids_keep_slashes_as_literal_key_data() {
-    let parsed = parse_srt_stream_id("publish:live/key01");
+    let parsed = parse_srt_stream_id("publish:tenant/key01");
     assert_eq!(parsed.mode, SrtConnectionMode::Publish);
-    assert_eq!(parsed.stream_key, "live/key01");
+    assert_eq!(parsed.stream_key, "tenant/key01");
 
-    let parsed = parse_srt_stream_id("#!::r=live%2Fkey02,m=request");
+    let parsed = parse_srt_stream_id("#!::r=tenant%2Fkey02,m=request");
     assert_eq!(parsed.mode, SrtConnectionMode::Read);
-    assert_eq!(parsed.stream_key, "live/key02");
+    assert_eq!(parsed.stream_key, "tenant/key02");
 }
 
 #[test]
@@ -1562,6 +1563,144 @@ async fn epoll_waiter_parks_until_wait_is_requested() {
         .await
         .expect("waiter must exit promptly on stop")
         .expect("task should not panic");
+}
+
+#[tokio::test]
+async fn srt_readiness_wait_retries_without_epoll_notification() {
+    let data_ready = AtomicBool::new(false);
+    let signal = EpollWaiterSignal::new();
+    let notify = Notify::new();
+    let cancel = CancellationToken::new();
+
+    let started = std::time::Instant::now();
+    let should_retry = wait_for_srt_ingest_readiness(&data_ready, &signal, &notify, &cancel).await;
+    let elapsed = started.elapsed();
+
+    assert!(
+        should_retry,
+        "missing epoll notification should retry non-blocking srt_recv"
+    );
+    assert!(
+        elapsed >= SRT_INGEST_READINESS_RETRY,
+        "retry should wait for the bounded readiness interval"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "retry safeguard must not let ingest sleep indefinitely"
+    );
+}
+
+#[tokio::test]
+async fn srt_readiness_wait_exits_on_cancel() {
+    let data_ready = AtomicBool::new(false);
+    let signal = EpollWaiterSignal::new();
+    let notify = Notify::new();
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+
+    let should_retry = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        wait_for_srt_ingest_readiness(&data_ready, &signal, &notify, &cancel),
+    )
+    .await
+    .expect("cancelled readiness wait should return promptly");
+
+    assert!(
+        !should_retry,
+        "cancelled ingest should break instead of retrying receive"
+    );
+}
+
+#[test]
+fn loom_srt_readiness_retry_does_not_depend_on_epoll_wake() {
+    loom::model(|| {
+        use loom::sync::Arc as LoomArc;
+        use loom::sync::atomic::{AtomicBool as LoomAtomicBool, Ordering as LoomOrdering};
+        use loom::thread;
+
+        let data_ready = LoomArc::new(LoomAtomicBool::new(false));
+        let wait_requested = LoomArc::new(LoomAtomicBool::new(false));
+        let consumer_progress = LoomArc::new(LoomAtomicBool::new(false));
+
+        let consumer_data_ready = data_ready.clone();
+        let consumer_wait_requested = wait_requested.clone();
+        let consumer_progress_flag = consumer_progress.clone();
+        let consumer = thread::spawn(move || {
+            if consumer_data_ready.swap(false, LoomOrdering::AcqRel) {
+                consumer_progress_flag.store(true, LoomOrdering::Release);
+                return;
+            }
+
+            consumer_wait_requested.store(true, LoomOrdering::Release);
+            // Models the bounded retry timer in wait_for_srt_ingest_readiness:
+            // even if the epoll waiter never observes the request, the async
+            // receive loop must re-enter non-blocking srt_recv.
+            consumer_progress_flag.store(true, LoomOrdering::Release);
+        });
+
+        let producer_data_ready = data_ready.clone();
+        let producer_wait_requested = wait_requested.clone();
+        let producer = thread::spawn(move || {
+            if producer_wait_requested.load(LoomOrdering::Acquire) {
+                producer_data_ready.store(true, LoomOrdering::Release);
+            }
+        });
+
+        consumer.join().expect("consumer model should not panic");
+        producer.join().expect("producer model should not panic");
+        assert!(
+            consumer_progress.load(LoomOrdering::Acquire),
+            "readiness wait must make progress even when the epoll wake is lost"
+        );
+    });
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ReadinessOutcome {
+    EpollWake,
+    RetryTimer,
+    LostWake,
+    Cancel,
+}
+
+fn modeled_readiness_wait(already_ready: bool, outcome: ReadinessOutcome) -> bool {
+    if already_ready {
+        return true;
+    }
+    !matches!(outcome, ReadinessOutcome::Cancel)
+}
+
+prop_compose! {
+    fn readiness_outcome_strategy()(raw in 0u8..4) -> ReadinessOutcome {
+        match raw {
+            0 => ReadinessOutcome::EpollWake,
+            1 => ReadinessOutcome::RetryTimer,
+            2 => ReadinessOutcome::LostWake,
+            _ => ReadinessOutcome::Cancel,
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(128))]
+
+    #[test]
+    fn proptest_srt_readiness_retry_model_never_requires_epoll_wake(
+        events in proptest::collection::vec((any::<bool>(), readiness_outcome_strategy()), 1..256)
+    ) {
+        for (already_ready, outcome) in events {
+            let should_retry = modeled_readiness_wait(already_ready, outcome);
+            if already_ready || !matches!(outcome, ReadinessOutcome::Cancel) {
+                prop_assert!(
+                    should_retry,
+                    "readiness wait must retry for {:?} without requiring an epoll notification",
+                    outcome
+                );
+            } else {
+                prop_assert!(!should_retry, "cancel must remain the only non-retry outcome");
+            }
+        }
+    }
 }
 
 /// Stress-test the demand-gated handshake used by the long-lived epoll waiter

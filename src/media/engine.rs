@@ -49,6 +49,7 @@ pub struct ActiveIngest {
     pub protocol: String, // "rtmp" | "srt" | "file"
     pub bytes_received: Arc<AtomicU64>,
     pub metrics: Arc<StageMetrics>,
+    pub last_progress_ms: Arc<AtomicU64>,
     pub remote_addr: Option<String>,
     pub video: Option<VideoMeta>,
     pub selected_video_track_index: Option<u32>,
@@ -60,6 +61,9 @@ pub struct ActiveIngest {
     /// Cached FLV sequence headers for RTMP play subscribers (video config + audio config)
     pub video_sequence_header: std::sync::Mutex<Option<bytes::Bytes>>,
     pub audio_sequence_header: std::sync::Mutex<Option<bytes::Bytes>>,
+    pub prev_bytes_received: AtomicU64,
+    pub prev_sample_time: std::sync::Mutex<Instant>,
+    pub bitrate_kbps: std::sync::Mutex<Option<f64>>,
 }
 
 #[derive(Clone, Debug)]
@@ -385,6 +389,44 @@ impl MediaEngine {
             Some(rate)
         } else {
             *egress
+                .bitrate_kbps
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+        }
+    }
+
+    pub(crate) fn sample_ingest_bitrate_kbps(ingest: &ActiveIngest) -> Option<f64> {
+        let bytes_received = ingest.bytes_received.load(Ordering::Relaxed);
+        let prev = ingest.prev_bytes_received.load(Ordering::Relaxed);
+        let mut prev_time = ingest
+            .prev_sample_time
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let elapsed = prev_time.elapsed().as_secs_f64();
+
+        if elapsed > 0.5 && bytes_received > prev {
+            let delta = bytes_received - prev;
+            let rate = (delta as f64 * 8.0) / (elapsed * 1000.0);
+            ingest
+                .prev_bytes_received
+                .store(bytes_received, Ordering::Relaxed);
+            ingest
+                .last_progress_ms
+                .store(Self::now_epoch_ms(), Ordering::Relaxed);
+            *prev_time = Instant::now();
+            *ingest
+                .bitrate_kbps
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(rate);
+            Some(rate)
+        } else if elapsed > 1.0 && bytes_received == prev {
+            *ingest
+                .bitrate_kbps
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(0.0);
+            Some(0.0)
+        } else {
+            *ingest
                 .bitrate_kbps
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -1026,15 +1068,17 @@ impl MediaEngine {
         tokens.insert(pipeline_id.to_string(), token.clone());
 
         let mut ingests = self.ingests.active.write().await;
+        let now = Instant::now();
         ingests.insert(
             pipeline_id.to_string(),
             ActiveIngest {
                 attempt_id,
                 stream_key: stream_key.to_string(),
-                start_time: Instant::now(),
+                start_time: now,
                 protocol: protocol.to_string(),
                 bytes_received: Arc::new(AtomicU64::new(0)),
                 metrics: Arc::new(StageMetrics::new()),
+                last_progress_ms: Arc::new(AtomicU64::new(0)),
                 remote_addr: None,
                 video: None,
                 selected_video_track_index: None,
@@ -1045,6 +1089,9 @@ impl MediaEngine {
                 keyframe_times: Arc::new(std::sync::Mutex::new(Vec::new())),
                 video_sequence_header: std::sync::Mutex::new(None),
                 audio_sequence_header: std::sync::Mutex::new(None),
+                prev_bytes_received: AtomicU64::new(0),
+                prev_sample_time: std::sync::Mutex::new(now),
+                bitrate_kbps: std::sync::Mutex::new(None),
             },
         );
 
@@ -1708,6 +1755,9 @@ impl MediaEngine {
         let ingests = self.ingests.active.read().await;
         if let Some(ingest) = ingests.get(pipeline_id) {
             ingest.bytes_received.fetch_add(bytes, Ordering::Relaxed);
+            ingest
+                .last_progress_ms
+                .store(Self::now_epoch_ms(), Ordering::Relaxed);
         }
     }
 

@@ -301,6 +301,7 @@ impl MediaEngine {
             key: key.clone(),
             backend: lifecycle.backend,
             phase: lifecycle.phase.clone(),
+            backend_pid: lifecycle.backend_pid,
             bytes_in: metrics.bytes_in.load(Ordering::Relaxed),
             bytes_out: metrics.bytes_out.load(Ordering::Relaxed),
             packets_in: metrics.packets_in.load(Ordering::Relaxed),

@@ -368,8 +368,10 @@ pub(crate) fn active_pipeline_input_json(
 ) -> serde_json::Value {
     let elapsed_secs = ingest.start_time.elapsed().as_secs_f64();
     let bytes_received = ingest.bytes_received.load(Ordering::Relaxed);
-    let bitrate_kbps = if elapsed_secs > 1.0 {
-        Some((bytes_received as f64 * 8.0) / (elapsed_secs * 1000.0))
+    let bitrate_kbps = MediaEngine::sample_ingest_bitrate_kbps(ingest);
+    let last_progress_ms = ingest.last_progress_ms.load(Ordering::Relaxed);
+    let last_progress_age_ms = if last_progress_ms > 0 {
+        Some(MediaEngine::now_epoch_ms().saturating_sub(last_progress_ms))
     } else {
         None
     };
@@ -407,6 +409,7 @@ pub(crate) fn active_pipeline_input_json(
         "readers": readers_count,
         "readerMetrics": reader_metrics,
         "bitrateKbps": bitrate_kbps,
+        "lastProgressAgeMs": last_progress_age_ms,
         "video": ingest.video,
         "videoTrackSelection": video_track_selection,
         "audio": ingest.audio,
@@ -839,15 +842,38 @@ pub(crate) fn processing_graph_edge(
 }
 
 pub(crate) fn processing_graph_ingest_details(ingest: &ActiveIngest) -> serde_json::Value {
-    let elapsed_secs = ingest.start_time.elapsed().as_secs_f64();
     let bytes_received = ingest.bytes_received.load(Ordering::Relaxed);
-    let bitrate_kbps = if elapsed_secs > 1.0 {
-        Some(((bytes_received as f64 * 8.0) / (elapsed_secs * 1000.0) * 10.0).round() / 10.0)
+    let bitrate_kbps = MediaEngine::sample_ingest_bitrate_kbps(ingest);
+    let last_progress_ms = ingest.last_progress_ms.load(Ordering::Relaxed);
+    let last_progress_age_ms = if last_progress_ms > 0 {
+        Some(MediaEngine::now_epoch_ms().saturating_sub(last_progress_ms))
     } else {
         None
     };
+    let srt_recv_buffer = srt_recv_buffer_occupancy(&ingest.quality);
 
-    serde_json::json!({
+    let mut health_status = None;
+    let mut health_reason = None;
+    if let Some((recv, total, pct)) = srt_recv_buffer
+        && pct >= 95.0
+    {
+        health_status = Some("warning");
+        health_reason = Some(format!(
+            "SRT receive buffer {:.0}% full ({} / {})",
+            pct,
+            human_bytes(recv),
+            human_bytes(total)
+        ));
+    }
+    if health_status.is_none() && last_progress_age_ms.is_some_and(|age| age >= 10_000) {
+        health_status = Some("warning");
+        health_reason = Some(format!(
+            "input has not received bytes for {}",
+            human_duration_ms(last_progress_age_ms.unwrap_or(0))
+        ));
+    }
+
+    let mut details = serde_json::json!({
         "protocol": ingest.protocol,
         "remoteAddr": ingest.remote_addr,
         "video": ingest.video,
@@ -855,7 +881,53 @@ pub(crate) fn processing_graph_ingest_details(ingest: &ActiveIngest) -> serde_js
         "audio": ingest.audio,
         "bytesReceived": bytes_received,
         "bitrateKbps": bitrate_kbps,
-    })
+        "bytesReceivedPerSec": bitrate_kbps.map(|kbps| (kbps * 1000.0 / 8.0).round() as u64),
+        "lastProgressAgeMs": last_progress_age_ms,
+    });
+    if let Some((recv, total, pct)) = srt_recv_buffer {
+        details["srtRecvBufferBytes"] = serde_json::json!(recv);
+        details["srtRecvBufferTotalBytes"] = serde_json::json!(total);
+        details["srtRecvBufferPercent"] = serde_json::json!((pct * 10.0).round() / 10.0);
+    }
+    if let Some(status) = health_status {
+        details["healthStatus"] = serde_json::json!(status);
+    }
+    if let Some(reason) = health_reason {
+        details["healthReason"] = serde_json::json!(reason);
+    }
+    details
+}
+
+fn srt_recv_buffer_occupancy(
+    quality: &crate::media::engine::PublisherQuality,
+) -> Option<(u64, u64, f64)> {
+    let recv = quality.srt_recv_buf_bytes?.max(0) as u64;
+    let avail = quality.srt_recv_buf_avail_bytes?.max(0) as u64;
+    let total = recv.saturating_add(avail);
+    if total == 0 {
+        return None;
+    }
+    Some((recv, total, recv as f64 / total as f64 * 100.0))
+}
+
+fn human_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    if bytes < 1024 * 1024 {
+        return format!("{:.1} KiB", bytes as f64 / 1024.0);
+    }
+    format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+}
+
+fn human_duration_ms(ms: u64) -> String {
+    if ms < 1000 {
+        return format!("{ms} ms");
+    }
+    if ms < 60_000 {
+        return format!("{:.1} s", ms as f64 / 1000.0);
+    }
+    format!("{:.1} min", ms as f64 / 60_000.0)
 }
 
 pub(crate) fn processing_graph_demux_details(ingest: &ActiveIngest) -> serde_json::Value {
@@ -1148,6 +1220,7 @@ mod tests {
             protocol: "rtmp".to_string(),
             bytes_received: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             metrics: std::sync::Arc::new(StageMetrics::new()),
+            last_progress_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             remote_addr: Some("127.0.0.1:1935".to_string()),
             video: None,
             selected_video_track_index: None,
@@ -1158,6 +1231,9 @@ mod tests {
             keyframe_times: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             video_sequence_header: std::sync::Mutex::new(None),
             audio_sequence_header: std::sync::Mutex::new(None),
+            prev_bytes_received: std::sync::atomic::AtomicU64::new(0),
+            prev_sample_time: std::sync::Mutex::new(std::time::Instant::now()),
+            bitrate_kbps: std::sync::Mutex::new(None),
         };
         let recent = RecentIngestOutcome {
             protocol: "rtmp".to_string(),
@@ -1183,6 +1259,92 @@ mod tests {
     }
 
     #[test]
+    fn active_pipeline_input_reports_zero_rate_when_total_bytes_stop_advancing() {
+        let now_ms = MediaEngine::now_epoch_ms();
+        let ingest = ActiveIngest {
+            attempt_id: 1,
+            stream_key: "stream".to_string(),
+            start_time: std::time::Instant::now() - std::time::Duration::from_secs(10),
+            protocol: "srt".to_string(),
+            bytes_received: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(4096)),
+            metrics: std::sync::Arc::new(StageMetrics::new()),
+            last_progress_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
+                now_ms.saturating_sub(5_000),
+            )),
+            remote_addr: Some("127.0.0.1:9000".to_string()),
+            video: None,
+            selected_video_track_index: None,
+            video_track_count: 0,
+            audio: None,
+            audio_tracks: std::sync::Mutex::new(std::sync::Arc::new(Vec::new())),
+            quality: crate::media::engine::PublisherQuality::default(),
+            keyframe_times: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            video_sequence_header: std::sync::Mutex::new(None),
+            audio_sequence_header: std::sync::Mutex::new(None),
+            prev_bytes_received: std::sync::atomic::AtomicU64::new(4096),
+            prev_sample_time: std::sync::Mutex::new(
+                std::time::Instant::now() - std::time::Duration::from_secs(2),
+            ),
+            bitrate_kbps: std::sync::Mutex::new(Some(1300.0)),
+        };
+
+        let value = active_pipeline_input_json(&ingest, None, 0, 0, Vec::new());
+
+        assert_eq!(value["bytesReceived"], 4096);
+        assert_eq!(value["bitrateKbps"], 0.0);
+        assert!(value["lastProgressAgeMs"].as_u64().unwrap_or(0) >= 5_000);
+    }
+
+    #[test]
+    fn processing_graph_ingest_details_warn_when_srt_recv_buffer_is_saturated() {
+        let now_ms = MediaEngine::now_epoch_ms();
+        let ingest = ActiveIngest {
+            attempt_id: 1,
+            stream_key: "stream".to_string(),
+            start_time: std::time::Instant::now() - std::time::Duration::from_secs(10),
+            protocol: "srt".to_string(),
+            bytes_received: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(4096)),
+            metrics: std::sync::Arc::new(StageMetrics::new()),
+            last_progress_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
+                now_ms.saturating_sub(30_000),
+            )),
+            remote_addr: Some("127.0.0.1:9000".to_string()),
+            video: None,
+            selected_video_track_index: None,
+            video_track_count: 0,
+            audio: None,
+            audio_tracks: std::sync::Mutex::new(std::sync::Arc::new(Vec::new())),
+            quality: crate::media::engine::PublisherQuality {
+                srt_recv_buf_bytes: Some(8_218_796),
+                srt_recv_buf_avail_bytes: Some(1_500),
+                ..Default::default()
+            },
+            keyframe_times: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            video_sequence_header: std::sync::Mutex::new(None),
+            audio_sequence_header: std::sync::Mutex::new(None),
+            prev_bytes_received: std::sync::atomic::AtomicU64::new(4096),
+            prev_sample_time: std::sync::Mutex::new(
+                std::time::Instant::now() - std::time::Duration::from_secs(2),
+            ),
+            bitrate_kbps: std::sync::Mutex::new(Some(1300.0)),
+        };
+
+        let value = processing_graph_ingest_details(&ingest);
+
+        assert_eq!(value["bytesReceived"], 4096);
+        assert_eq!(value["bitrateKbps"], 0.0);
+        assert_eq!(value["bytesReceivedPerSec"], 0);
+        assert_eq!(value["healthStatus"], "warning");
+        assert!(
+            value["healthReason"]
+                .as_str()
+                .unwrap_or("")
+                .contains("SRT receive buffer")
+        );
+        assert!(value["srtRecvBufferPercent"].as_f64().unwrap_or(0.0) >= 99.0);
+    }
+
+    #[test]
     fn active_pipeline_input_surfaces_single_video_selection_policy() {
         let ingest = ActiveIngest {
             attempt_id: 1,
@@ -1191,6 +1353,7 @@ mod tests {
             protocol: "srt".to_string(),
             bytes_received: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             metrics: std::sync::Arc::new(StageMetrics::new()),
+            last_progress_ms: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             remote_addr: Some("127.0.0.1:9000".to_string()),
             video: Some(crate::media::engine::VideoMeta {
                 codec: "h264".to_string(),
@@ -1204,6 +1367,9 @@ mod tests {
             keyframe_times: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             video_sequence_header: std::sync::Mutex::new(None),
             audio_sequence_header: std::sync::Mutex::new(None),
+            prev_bytes_received: std::sync::atomic::AtomicU64::new(0),
+            prev_sample_time: std::sync::Mutex::new(std::time::Instant::now()),
+            bitrate_kbps: std::sync::Mutex::new(None),
         };
 
         let value = active_pipeline_input_json(&ingest, None, 0, 0, Vec::new());

@@ -14,7 +14,7 @@ function indicatorDescriptor(state: RestreamProcessIndicatorState): {
   switch (state) {
     case "running":
       return {
-        badgeClass: "badge-success",
+        badgeClass: "restream-process-badge-running",
         dotClass: "status-success",
         label: "Running",
         title: "Rust restream process is running and serving telemetry.",

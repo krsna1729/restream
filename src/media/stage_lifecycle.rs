@@ -13,6 +13,7 @@ pub use crate::domain::state::{StageBackendKind, StagePhase};
 pub struct StageLifecycleSnapshot {
     pub phase: StagePhase,
     pub backend: StageBackendKind,
+    pub backend_pid: Option<u32>,
     pub phase_started_at: Option<Instant>,
     pub first_input_at: Option<Instant>,
     pub first_output_at: Option<Instant>,
@@ -23,6 +24,7 @@ pub struct StageLifecycleSnapshot {
 struct StageLifecycleInner {
     phase: StagePhase,
     backend: StageBackendKind,
+    backend_pid: Option<u32>,
     phase_started_at: Option<Instant>,
     first_input_at: Option<Instant>,
     first_output_at: Option<Instant>,
@@ -69,10 +71,12 @@ pub struct StageLifecycle {
 
 impl StageLifecycle {
     pub fn new(initial: StagePhase) -> Self {
+        let backend_pid = backend_pid_from_phase(&initial);
         Self {
             inner: Arc::new(Mutex::new(StageLifecycleInner {
                 phase: initial,
                 backend: StageBackendKind::ExternalFfmpeg,
+                backend_pid,
                 phase_started_at: Some(Instant::now()),
                 first_input_at: None,
                 first_output_at: None,
@@ -82,10 +86,12 @@ impl StageLifecycle {
     }
 
     pub fn new_with_backend(initial: StagePhase, backend: StageBackendKind) -> Self {
+        let backend_pid = backend_pid_from_phase(&initial);
         Self {
             inner: Arc::new(Mutex::new(StageLifecycleInner {
                 phase: initial,
                 backend,
+                backend_pid,
                 phase_started_at: Some(Instant::now()),
                 first_input_at: None,
                 first_output_at: None,
@@ -98,6 +104,9 @@ impl StageLifecycle {
         let mut inner = self.inner.lock().expect("stage lifecycle lock poisoned");
         if let Some(backend) = backend_kind_from_phase(&phase) {
             inner.backend = backend;
+        }
+        if let Some(pid) = backend_pid_from_phase(&phase) {
+            inner.backend_pid = Some(pid);
         }
         if inner.first_input_at.is_some()
             && matches!(
@@ -168,6 +177,7 @@ impl StageLifecycle {
         StageLifecycleSnapshot {
             phase: inner.phase.clone(),
             backend: inner.backend,
+            backend_pid: inner.backend_pid,
             phase_started_at: inner.phase_started_at,
             first_input_at: inner.first_input_at,
             first_output_at: inner.first_output_at,
@@ -197,6 +207,13 @@ fn backend_kind_from_phase(phase: &StagePhase) -> Option<StageBackendKind> {
         | StagePhase::CapacityAcquired { backend }
         | StagePhase::StartingBackend { backend }
         | StagePhase::BackendSpawned { backend, .. } => Some(*backend),
+        _ => None,
+    }
+}
+
+fn backend_pid_from_phase(phase: &StagePhase) -> Option<u32> {
+    match phase {
+        StagePhase::BackendSpawned { pid, .. } => *pid,
         _ => None,
     }
 }
@@ -262,6 +279,21 @@ mod tests {
         let snapshot = lc.snapshot();
         assert_eq!(snapshot.phase, StagePhase::FirstInput);
         assert!(snapshot.first_input_at.is_some());
+    }
+
+    #[test]
+    fn backend_pid_survives_runtime_phase_progression() {
+        let lc = StageLifecycle::new(StagePhase::BackendSpawned {
+            backend: StageBackendKind::ExternalFfmpeg,
+            pid: Some(42),
+        });
+
+        lc.record_first_input();
+        lc.record_first_output();
+
+        let snapshot = lc.snapshot();
+        assert_eq!(snapshot.phase, StagePhase::FirstOutput);
+        assert_eq!(snapshot.backend_pid, Some(42));
     }
 
     #[test]

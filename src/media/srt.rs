@@ -191,6 +191,7 @@ const SRT_ECONNLOST: c_int = 2001;
 const SRT_ENOCONN: c_int = 2002;
 const SRT_EASYNCRCV: c_int = 6002;
 const SRT_ETIMEOUT: c_int = 6003;
+const SRT_INGEST_READINESS_RETRY: Duration = Duration::from_millis(250);
 
 #[repr(C)]
 pub struct SrtSockOptConfig {
@@ -976,6 +977,27 @@ impl EpollWaiterSignal {
     }
 }
 
+async fn wait_for_srt_ingest_readiness(
+    data_ready: &AtomicBool,
+    epoll_signal: &EpollWaiterSignal,
+    notify: &Notify,
+    cancel_token: &CancellationToken,
+) -> bool {
+    if data_ready.swap(false, Ordering::Acquire) {
+        return true;
+    }
+
+    epoll_signal.request_wait();
+    tokio::select! {
+        _ = notify.notified() => true,
+        // Safeguard against a lost/missed libsrt epoll wake: periodically retry
+        // the non-blocking receive path so ingest cannot sleep forever while
+        // libsrt's application receive buffer is filling.
+        _ = tokio::time::sleep(SRT_INGEST_READINESS_RETRY) => true,
+        _ = cancel_token.cancelled() => false,
+    }
+}
+
 pub struct SrtServer {
     pipeline_access: Arc<dyn PipelineAccessAuthenticator>,
     engine: Arc<MediaEngine>,
@@ -1353,10 +1375,14 @@ impl SrtServer {
             }
         }
 
-        let Some((bytes_received, ingest_metrics)) = self
+        let Some((bytes_received, ingest_metrics, last_progress_ms)) = self
             .engine
             .with_active_ingest(&pipeline.id, |ingest| {
-                (ingest.bytes_received.clone(), ingest.metrics.clone())
+                (
+                    ingest.bytes_received.clone(),
+                    ingest.metrics.clone(),
+                    ingest.last_progress_ms.clone(),
+                )
             })
             .await
         else {
@@ -1586,12 +1612,15 @@ impl SrtServer {
                 let (error_code, error_message) = last_srt_error();
                 match classify_srt_receive_error(error_code) {
                     SrtReceiveErrorAction::WaitForReadiness => {
-                        if !data_ready.swap(false, Ordering::Acquire) {
-                            epoll_signal.request_wait();
-                            tokio::select! {
-                                _ = notify.notified() => {}
-                                _ = registration.cancel_token.cancelled() => break,
-                            }
+                        if !wait_for_srt_ingest_readiness(
+                            &data_ready,
+                            &epoll_signal,
+                            &notify,
+                            &registration.cancel_token,
+                        )
+                        .await
+                        {
+                            break;
                         }
                     }
                     SrtReceiveErrorAction::Disconnect => {
@@ -1680,6 +1709,7 @@ impl SrtServer {
 
             bytes_received.fetch_add(n as u64, Ordering::Relaxed);
             ingest_metrics.record_in(n as u64);
+            last_progress_ms.store(MediaEngine::now_epoch_ms(), Ordering::Relaxed);
 
             if last_stats_sample.elapsed() >= std::time::Duration::from_secs(1) {
                 let mut stats: SrtTraceBStats = unsafe { std::mem::zeroed() };

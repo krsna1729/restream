@@ -46,6 +46,7 @@ const ingestUiState = {
 
 const audioLabelEditKeys = new Set<string>();
 const audioLabelDrafts = new Map<string, string>();
+const expandedAudioTrackLists = new Set<string>();
 let pendingAudioLabelFocusKey: string | null = null;
 const sourceFileMetadataCache = new Map<string, MediaFile | null>();
 const sourceFileAnalysisCache = new Map<string, MediaFileAnalysis | null>();
@@ -54,6 +55,38 @@ const sourceFileAnalysisLoadPromises = new Map<string, Promise<void>>();
 const pendingRecordingIntents = new Map<string, "starting" | "stopping">();
 const pendingFileIngestIntents = new Map<string, "starting" | "stopping">();
 let lastRenderedPipelineInfoId: string | null = null;
+const AUDIO_TRACK_EXPANSION_STORAGE_KEY = "restream.audioTrackExpansion.v1";
+
+function loadAudioTrackExpansionState(): void {
+  expandedAudioTrackLists.clear();
+  try {
+    const raw = window.localStorage.getItem(AUDIO_TRACK_EXPANSION_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return;
+    for (const key of parsed) {
+      if (typeof key === "string" && key.trim()) {
+        expandedAudioTrackLists.add(key);
+      }
+    }
+  } catch {
+    // Expansion persistence is a convenience; rendering should never depend on it.
+  }
+}
+
+function persistAudioTrackExpansionState(): void {
+  try {
+    window.localStorage.setItem(
+      AUDIO_TRACK_EXPANSION_STORAGE_KEY,
+      JSON.stringify([...expandedAudioTrackLists]),
+    );
+  } catch {
+    // Ignore storage failures so the dashboard remains usable.
+  }
+}
+
+function audioTrackExpansionKey(pipelineId: string): string {
+  return pipelineId;
+}
 
 function recordingIntentKey(pipeId: string): string {
   return pipeId;
@@ -291,6 +324,18 @@ function renderAudioTracksTable(
 ): void {
   const audioTracksContainer = document.getElementById("input-audio-tracks");
   if (!audioTracksContainer) return;
+  loadAudioTrackExpansionState();
+  const expansionKey = audioTrackExpansionKey(pipelineId);
+  const existingDetails = audioTracksContainer.querySelector<HTMLDetailsElement>(
+    "details[data-audio-track-expansion-key]",
+  );
+  if (existingDetails) {
+    if (existingDetails.open) {
+      expandedAudioTrackLists.add(expansionKey);
+    } else {
+      expandedAudioTrackLists.delete(expansionKey);
+    }
+  }
 
   const activeInput =
     document.activeElement instanceof HTMLInputElement &&
@@ -305,6 +350,8 @@ function renderAudioTracksTable(
   }
 
   if (tracks.length === 0) {
+    expandedAudioTrackLists.delete(expansionKey);
+    persistAudioTrackExpansionState();
     audioTracksContainer.innerHTML =
       '<div class="stats border-base-content/10 bg-base-100 w-full border"><div class="stat p-3"><div class="stat-title">Audio</div><div class="stat-value text-sm">No tracks</div></div></div>';
     return;
@@ -386,11 +433,12 @@ function renderAudioTracksTable(
     .slice(visibleLimit)
     .map((track, offset) => renderTrack(track, visibleLimit + offset))
     .join("");
+  const extraTracksOpen = expandedAudioTrackLists.has(expansionKey);
 
   audioTracksContainer.innerHTML = `${visibleTracks}
     ${
       extraTracks
-        ? `<details class="border-base-content/10 bg-base-100 rounded-lg border p-2">
+        ? `<details class="border-base-content/10 bg-base-100 rounded-lg border p-2" data-audio-track-expansion-key="${escapeHtml(expansionKey)}"${extraTracksOpen ? " open" : ""}>
             <summary class="cursor-pointer px-2 py-1 text-sm font-semibold">
               ${tracks.length - visibleLimit} more audio tracks
             </summary>
@@ -398,6 +446,22 @@ function renderAudioTracksTable(
           </details>`
         : ""
     }`;
+
+  audioTracksContainer
+    .querySelectorAll<HTMLDetailsElement>(
+      "details[data-audio-track-expansion-key]",
+    )
+    .forEach((details) => {
+      details.addEventListener("toggle", () => {
+        const key = details.dataset.audioTrackExpansionKey || expansionKey;
+        if (details.open) {
+          expandedAudioTrackLists.add(key);
+        } else {
+          expandedAudioTrackLists.delete(key);
+        }
+        persistAudioTrackExpansionState();
+      });
+    });
 
   audioTracksContainer
     .querySelectorAll<HTMLButtonElement>("button[data-audio-label-action]")

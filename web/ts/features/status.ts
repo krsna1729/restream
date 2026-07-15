@@ -91,6 +91,15 @@ interface StatusData {
 
 const STATUS_PROCESS_LOG_LIMIT = 80;
 const STATUS_ACTIVITY_LIMIT = 12;
+const STATUS_SECTION_NAV = [
+  { id: "status-build-section", label: "Build" },
+  { id: "status-system-section", label: "System" },
+  { id: "status-toolchain-section", label: "Toolchain" },
+  { id: "status-native-section", label: "Libraries" },
+  { id: "status-sbom-section", label: "SBOM" },
+  { id: "status-activity-section", label: "Activity" },
+  { id: "status-log-section", label: "Logs" },
+] as const;
 let statusDataSnapshot: StatusData | null = null;
 let statusProcessLogs: AppLogRow[] = [];
 const statusStream = createManagedLogStream();
@@ -216,9 +225,9 @@ function formatUptime(value: unknown): string {
   return parts.join(" ");
 }
 
-function section(title: string, rows: string): string {
-  return `<section>
-        <h3 class="mb-2 text-sm font-semibold uppercase tracking-wide opacity-70">${escapeHtml(title)}</h3>
+function section(id: string, title: string, rows: string): string {
+  return `<section id="${escapeHtml(id)}" class="scroll-mt-24">
+        <h3 class="dashboard-kicker mb-2">${escapeHtml(title)}</h3>
         <div class="overflow-x-auto">
             <table class="w-full min-w-[36rem] table-fixed text-sm">
                 <colgroup>
@@ -229,6 +238,15 @@ function section(title: string, rows: string): string {
             </table>
         </div>
     </section>`;
+}
+
+function statusQuickNavHtml(): string {
+  return `<nav class="dashboard-nav-strip" aria-label="Status sections">
+      ${STATUS_SECTION_NAV.map(
+        (item) =>
+          `<a class="btn btn-sm btn-ghost" href="#${escapeHtml(item.id)}">${escapeHtml(item.label)}</a>`,
+      ).join("")}
+    </nav>`;
 }
 
 function formatLogTime(ts: string | null | undefined): string {
@@ -306,16 +324,16 @@ function renderRestreamActivity(logs: AppLogRow[]): string {
     .filter(isNotableRestreamActivity)
     .slice(0, STATUS_ACTIVITY_LIMIT);
   if (items.length === 0) {
-    return `<section class="border-base-content/10 bg-base-200 rounded-lg border p-5">
-            <h2 class="mb-3 text-base font-semibold">Recent Activity</h2>
-            <p class="text-base-content/60 text-sm">No unscoped restream activity has been recorded yet.</p>
+    return `<section id="status-activity-section" class="dashboard-section scroll-mt-24 p-5">
+            <h2 class="dashboard-section-title mb-3">Recent Activity</h2>
+            <p class="dashboard-muted">No unscoped restream activity has been recorded yet.</p>
         </section>`;
   }
 
   const rows = items
     .map((log) => {
       const event = classifyRestreamActivity(log);
-      return `<div class="bg-base-100 rounded-lg p-3">
+      return `<div class="dashboard-card p-3">
                 <div class="flex items-center justify-between gap-3">
                     <span class="badge badge-sm ${event.badgeClass}">${escapeHtml(event.label)}</span>
                     <span class="text-xs opacity-70">${escapeHtml(formatLogTime(log.ts))}</span>
@@ -326,10 +344,10 @@ function renderRestreamActivity(logs: AppLogRow[]): string {
     })
     .join("");
 
-  return `<section class="border-base-content/10 bg-base-200 rounded-lg border p-5">
+  return `<section id="status-activity-section" class="dashboard-section scroll-mt-24 p-5">
         <div class="mb-3">
-            <h2 class="text-base font-semibold">Recent Activity</h2>
-            <p class="text-base-content/60 mt-1 text-sm">Restream-wide events that are not tied to a specific pipeline or output.</p>
+            <h2 class="dashboard-section-title">Recent Activity</h2>
+            <p class="dashboard-subtitle">Restream-wide events that are not tied to a specific pipeline or output.</p>
         </div>
         <div class="space-y-2">${rows}</div>
     </section>`;
@@ -337,9 +355,9 @@ function renderRestreamActivity(logs: AppLogRow[]): string {
 
 function renderProcessLog(logs: AppLogRow[]): string {
   if (!Array.isArray(logs) || logs.length === 0) {
-    return `<section class="border-base-content/10 bg-base-200 rounded-lg border p-5">
-            <h2 class="mb-3 text-base font-semibold">Process Log</h2>
-            <p class="text-base-content/60 text-sm">No unscoped process log entries are available yet.</p>
+    return `<section id="status-log-section" class="dashboard-section scroll-mt-24 p-5">
+            <h2 class="dashboard-section-title mb-3">Process Log</h2>
+            <p class="dashboard-muted">No unscoped process log entries are available yet.</p>
         </section>`;
   }
 
@@ -348,7 +366,7 @@ function renderProcessLog(logs: AppLogRow[]): string {
     .map(
       (
         log,
-      ) => `<div class="border-base-content/10 bg-base-100 rounded-lg border p-3">
+      ) => `<div class="dashboard-card p-3">
                 <div class="mb-2 flex flex-wrap items-center gap-2 text-[11px]">
                     <span class="badge badge-sm ${
                       String(log.level || "").toUpperCase() === "ERROR"
@@ -365,10 +383,10 @@ function renderProcessLog(logs: AppLogRow[]): string {
     )
     .join("");
 
-  return `<section class="border-base-content/10 bg-base-200 rounded-lg border p-5">
+  return `<section id="status-log-section" class="dashboard-section scroll-mt-24 p-5">
         <div class="mb-3">
-            <h2 class="text-base font-semibold">Process Log</h2>
-            <p class="text-base-content/60 mt-1 text-sm">Latest restream process logs outside pipeline and output scope.</p>
+            <h2 class="dashboard-section-title">Process Log</h2>
+            <p class="dashboard-subtitle">Latest restream process logs outside pipeline and output scope.</p>
         </div>
         <div class="max-h-[32rem] space-y-2 overflow-y-auto pr-1">${rows}</div>
     </section>`;
@@ -497,7 +515,9 @@ function renderStatusSnapshot(): void {
   const sbomEndpoint = getEngineSbomEndpoint(data);
 
   container.innerHTML = [
+    statusQuickNavHtml(),
     section(
+      "status-build-section",
       "Application Build",
       [
         row("Version", data.restream?.version),
@@ -506,6 +526,7 @@ function renderStatusSnapshot(): void {
       ].join(""),
     ),
     section(
+      "status-system-section",
       "System",
       [
         row("Platform", data.os?.platform),
@@ -521,6 +542,7 @@ function renderStatusSnapshot(): void {
       ].join(""),
     ),
     section(
+      "status-toolchain-section",
       "Toolchain",
       [
         row("Rust", data.toolchain?.rustc),
@@ -530,6 +552,7 @@ function renderStatusSnapshot(): void {
       ].join(""),
     ),
     section(
+      "status-native-section",
       "Native Libraries",
       [
         row("FFmpeg", ffmpeg?.version),
@@ -551,6 +574,7 @@ function renderStatusSnapshot(): void {
       ].join(""),
     ),
     section(
+      "status-sbom-section",
       "SBOM",
       [
         row("Endpoint", sbomEndpoint),

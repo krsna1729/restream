@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   appendRoot,
+  flushAsyncWork,
   installFakeDom,
   loadCompiledFrontendModule,
 } from "./dashboard-contract/helpers.mjs";
@@ -133,6 +134,7 @@ test("inspector treats URL pipeline selection as authoritative across views", as
     ["button", "inspect-open-pipeline-btn"],
     ["div", "inspect-pipeline-summary"],
     ["div", "inspect-diagnostics-summary"],
+    ["div", "inspect-resource-details"],
     ["button", "inspect-refresh-graph-btn"],
     ["button", "inspect-open-diagnostics-btn"],
     ["div", "inspect-graph-status"],
@@ -224,6 +226,89 @@ test("inspector treats URL pipeline selection as authoritative across views", as
   );
 });
 
+test("inspector keeps explicit runtime scope even if workspace refresh restores a pipeline id", async () => {
+  const { document, window } = installFakeDom();
+  window.location.href =
+    "http://localhost/?mode=pipeline&view=inspect&p=pipe-a";
+  window.history.replaceState = (_state, _title, url) => {
+    window.location.href = String(url);
+  };
+  for (const [tag, id] of [
+    ["select", "inspect-pipeline-select"],
+    ["button", "inspect-open-pipeline-btn"],
+    ["div", "inspect-pipeline-summary"],
+    ["div", "inspect-diagnostics-summary"],
+    ["div", "inspect-resource-details"],
+    ["button", "inspect-refresh-graph-btn"],
+    ["button", "inspect-open-diagnostics-btn"],
+    ["div", "inspect-graph-status"],
+    ["div", "inspect-graph-container"],
+  ]) {
+    appendRoot(document, tag, id);
+  }
+  const inspector = await loadCompiledFrontendModule(
+    "features/pipeline-inspector.js",
+  );
+  const { state } = await loadCompiledFrontendModule("core/state.js");
+  state.pipelines = [
+    {
+      id: "pipe-a",
+      name: "Pipeline A",
+      input: { status: "on", audioTracks: [], readers: 0 },
+      outs: [],
+      stats: {},
+      hlsPreview: { active: false, segments: 0 },
+    },
+  ];
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/resource-map")) {
+      return new Response(
+        JSON.stringify({
+          scope: { kind: "runtime" },
+          summary: {},
+          nodes: [],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(JSON.stringify({ pipelineId: "pipe-a", nodes: [], edges: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  inspector.renderPipelineInspector();
+  assert.match(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /Pipeline A/,
+  );
+
+  const select = document.getElementById("inspect-pipeline-select");
+  select.value = "__runtime";
+  select.onchange();
+  assert.equal(new URL(window.location.href).searchParams.get("p"), null);
+  assert.match(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /Whole Runtime/,
+  );
+
+  window.location.href = "http://localhost/?mode=pipeline&view=inspect&p=pipe-a";
+  inspector.renderPipelineInspector();
+  assert.equal(select.value, "__runtime");
+  assert.match(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /Whole Runtime/,
+    "explicit runtime scope must not be overridden by a restored p parameter",
+  );
+
+  select.value = "pipe-a";
+  select.onchange();
+  assert.match(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /Pipeline A/,
+  );
+});
+
 test("inspector preserves absent and invalid workspace selections", async () => {
   const { document, window } = installFakeDom();
   for (const [tag, id] of [
@@ -231,6 +316,7 @@ test("inspector preserves absent and invalid workspace selections", async () => 
     ["button", "inspect-open-pipeline-btn"],
     ["div", "inspect-pipeline-summary"],
     ["div", "inspect-diagnostics-summary"],
+    ["div", "inspect-resource-details"],
     ["button", "inspect-refresh-graph-btn"],
     ["button", "inspect-open-diagnostics-btn"],
     ["div", "inspect-graph-status"],
@@ -273,7 +359,7 @@ test("inspector preserves absent and invalid workspace selections", async () => 
   }
 });
 
-test("inspector renders runtime resource graph with accuracy labels", async () => {
+test("inspector renders runtime resource overview with accuracy labels", async () => {
   const { document, window } = installFakeDom();
   window.location.href = "http://localhost/?mode=pipeline&view=inspect";
   for (const [tag, id] of [
@@ -281,6 +367,7 @@ test("inspector renders runtime resource graph with accuracy labels", async () =
     ["button", "inspect-open-pipeline-btn"],
     ["div", "inspect-pipeline-summary"],
     ["div", "inspect-diagnostics-summary"],
+    ["div", "inspect-resource-details"],
     ["button", "inspect-refresh-graph-btn"],
     ["button", "inspect-open-diagnostics-btn"],
     ["div", "inspect-graph-status"],
@@ -333,21 +420,163 @@ test("inspector renders runtime resource graph with accuracy labels", async () =
             threads: { childProcess: 1 },
             hotspots: ["transcoding"],
           },
+          {
+            id: "group:stage:child_process",
+            kind: "resource_group",
+            label: "child_process stages (1)",
+            execution: "child_process",
+            cpuPercent: 5,
+            memory: {
+              attributedBytes: 52428800,
+              confidence: "measured",
+            },
+            threads: { childProcess: 1 },
+            hotspots: ["transcoding"],
+          },
+          {
+            id: "group:source_ring",
+            kind: "resource_group",
+            label: "Source rings (1)",
+            execution: "shared",
+            cpuPercent: 0,
+            memory: {
+              attributedBytes: 4096,
+              confidence: "derived",
+            },
+            threads: {},
+          },
+          {
+            id: "group:egress:srt:os_thread",
+            kind: "resource_group",
+            label: "SRT outputs (2)",
+            execution: "os_thread",
+            cpuPercent: 0,
+            memory: {
+              attributedBytes: 0,
+              confidence: "derived",
+            },
+            threads: { appOwned: 2 },
+          },
+          {
+            id: "group:egress:rtmp:tokio_task",
+            kind: "resource_group",
+            label: "RTMP outputs (1)",
+            execution: "tokio_task",
+            cpuPercent: 0,
+            memory: {
+              attributedBytes: 0,
+              confidence: "derived",
+            },
+            threads: {},
+          },
+          {
+            id: "group:stage:tokio_task",
+            kind: "resource_group",
+            label: "tokio_task stages (1)",
+            execution: "tokio_task",
+            cpuPercent: 0,
+            memory: {
+              attributedBytes: 0,
+              confidence: "derived",
+            },
+            threads: {},
+          },
+          {
+            id: "pipe-a:video:720p",
+            kind: "stage",
+            label: "video:720p",
+            pipelineId: "pipe-a",
+            execution: "child_process",
+            cpuPercent: 12.5,
+            memory: {
+              attributedBytes: 64 * 1024 * 1024,
+              confidence: "measured",
+            },
+            threads: { childProcess: 1 },
+          },
+          {
+            id: "out-a",
+            kind: "egress",
+            label: "srt output",
+            pipelineId: "pipe-a",
+            execution: "os_thread",
+            cpuPercent: 1,
+            memory: {
+              attributedBytes: 0,
+              confidence: "derived",
+            },
+            threads: { appOwned: 1 },
+          },
+          {
+            id: "pipe-a:source-ring",
+            kind: "source_ring",
+            label: "Source ring",
+            pipelineId: "pipe-a",
+            execution: "shared",
+            cpuPercent: 0,
+            memory: {
+              attributedBytes: 4096,
+              confidence: "derived",
+            },
+            threads: {},
+          },
         ],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
 
   inspector.renderPipelineInspector();
+  await flushAsyncWork();
   await inspector.refreshPipelineInspectorGraph();
 
   const graphHtml = document.getElementById(
     "inspect-graph-container",
   ).innerHTML;
-  assert.match(graphHtml, /Runtime Resource Graph/);
+  assert.match(graphHtml, /Whole Runtime/);
+  assert.match(graphHtml, /Process, FFmpeg, thread, and shared-resource attribution/);
   assert.match(graphHtml, /Measured/);
   assert.match(graphHtml, /Derived/);
-  assert.match(graphHtml, /runtime-resource-graph/);
+  assert.match(graphHtml, /Stage Breakdown/);
+  assert.match(graphHtml, /processing stage/);
+  assert.match(graphHtml, /output worker/);
+  assert.match(graphHtml, /source ring/);
+  assert.match(graphHtml, /video:720p/);
+  assert.match(graphHtml, /Pipeline pipe-a/);
+  assert.match(graphHtml, /FFmpeg workers/);
+  assert.match(graphHtml, /12\.5%/);
+  assert.doesNotMatch(graphHtml, /runtime-resource-graph/);
+  assert.match(graphHtml, /<div class="space-y-3 p-3">/);
+  assert.doesNotMatch(graphHtml, /Runtime Resource Overview/);
+  assert.doesNotMatch(graphHtml, /Runtime Attribution/);
+  assert.doesNotMatch(
+    graphHtml,
+    /xl:grid-cols-\[minmax\(0,1fr\)_minmax\(18rem,24rem\)\]/,
+  );
+  assert.match(graphHtml, /grid gap-2 border-base-content\/10 border-t pt-3 sm:grid-cols-2 xl:grid-cols-3/);
+  assert.match(graphHtml, /<th>CPU<\/th>/);
+  assert.match(graphHtml, /table table-xs/);
+  assert.equal(
+    graphHtml.match(/child_process stages \(1\)/g)?.length,
+    1,
+    "runtime overview should keep the child-process aggregate in the table only",
+  );
+  assert.doesNotMatch(
+    graphHtml,
+    />External FFmpeg</,
+    "runtime overview should not duplicate the same child-process bucket",
+  );
+  assert.match(graphHtml, /SRT outputs \(2\)/);
+  assert.match(graphHtml, /RTMP outputs \(1\)/);
+  assert.equal(
+    graphHtml.match(/tokio_task stages \(1\)/g)?.length,
+    1,
+    "runtime overview should keep stage aggregates in the table",
+  );
+  assert.match(graphHtml, /SRT Senders/);
+  assert.doesNotMatch(graphHtml, /xl:col-span-2/);
+
+  assert.match(graphHtml, /id="runtime-resource-table-scroll"/);
+  assert.match(graphHtml, /data-scroll-preserve="runtime-resource-table"/);
 });
 
 test("inspector keeps processing graph for large-output pipelines", async () => {
@@ -359,6 +588,7 @@ test("inspector keeps processing graph for large-output pipelines", async () => 
     ["button", "inspect-open-pipeline-btn"],
     ["div", "inspect-pipeline-summary"],
     ["div", "inspect-diagnostics-summary"],
+    ["div", "inspect-resource-details"],
     ["button", "inspect-refresh-graph-btn"],
     ["button", "inspect-open-diagnostics-btn"],
     ["div", "inspect-graph-status"],
@@ -369,6 +599,45 @@ test("inspector keeps processing graph for large-output pipelines", async () => 
   const requests = [];
   globalThis.fetch = async (url) => {
     requests.push(String(url));
+    if (String(url).includes("/summary")) {
+      return new Response(
+        JSON.stringify({
+          pipelineId: "pipe-large",
+          outputs: { total: 51, running: 51 },
+          graph: { hasGraph: true, nodes: 52, activeNodes: 52 },
+          alerts: [
+            {
+              id: "pipe-large:out-7:blocked",
+              severity: "warning",
+              scope: "output",
+              pipelineId: "pipe-large",
+              outputId: "out-7",
+              stageId: "pipe-large:video:720p",
+              title: "Output 'out-7' is blocked by upstream stage",
+              cause:
+                "The output is waiting on stage 'pipe-large:video:720p' in phase 'firstOutput'.",
+              evidence: ["blockedBy.stage = pipe-large:video:720p"],
+              recommendedAction:
+                "Inspect the upstream stage lifecycle and dependency chain for the blocked output.",
+              generatedAt: "2026-07-15T00:00:00Z",
+            },
+            ...Array.from({ length: 3 }, (_, index) => ({
+              id: `pipe-large:stage-${index}:lag`,
+              severity: "warning",
+              scope: "stage",
+              pipelineId: "pipe-large",
+              stageId: `pipe-large:stage-${index}`,
+              title: `Stage 'pipe-large:stage-${index}' is lagging`,
+              cause: `Stage ${index} is reading slower than the producer.`,
+              evidence: [`lagSlots = ${300 + index}`],
+              recommendedAction: "Check downstream throughput.",
+              generatedAt: "2026-07-15T00:00:00Z",
+            })),
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
     if (String(url).includes("/graph")) {
       return new Response(
         JSON.stringify({
@@ -421,7 +690,53 @@ test("inspector keeps processing graph for large-output pipelines", async () => 
           externalFfmpegCount: 2,
           retainedPayloadBytes: 4096,
         },
-        nodes: [],
+        nodes: [
+          {
+            id: "pipe-large:video:720p",
+            kind: "stage",
+            label: "video:720p",
+            pipelineId: "pipe-large",
+            execution: "child_process",
+            cpuPercent: 12.34,
+            memory: {
+              attributedBytes: 64 * 1024 * 1024,
+              confidence: "measured",
+            },
+          },
+          {
+            id: "pipe-other:video:720p",
+            kind: "stage",
+            label: "other video:720p",
+            pipelineId: "pipe-other",
+            execution: "child_process",
+            cpuPercent: 99.9,
+            memory: {
+              attributedBytes: 512 * 1024 * 1024,
+              confidence: "measured",
+            },
+          },
+          {
+            id: "out-5",
+            kind: "egress",
+            label: "srt output",
+            pipelineId: "pipe-large",
+            execution: "os_thread",
+          },
+          {
+            id: "out-6",
+            kind: "egress",
+            label: "srt output",
+            pipelineId: "pipe-large",
+            execution: "os_thread",
+          },
+          {
+            id: "out-srt-other",
+            kind: "egress",
+            label: "srt output",
+            pipelineId: "pipe-other",
+            execution: "os_thread",
+          },
+        ],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
@@ -467,7 +782,7 @@ test("inspector keeps processing graph for large-output pipelines", async () => 
   assert.equal(
     requests.some((url) =>
       url.includes(
-        "/api/v1/engine/resource-map?pipeline_id=pipe-large&view=grouped&top_n=25",
+        "/api/v1/engine/resource-map?pipeline_id=pipe-large&view=detail&top_n=50",
       ),
     ),
     true,
@@ -480,6 +795,238 @@ test("inspector keeps processing graph for large-output pipelines", async () => 
     document.getElementById("inspect-graph-container").innerHTML,
     /RTMP egress x51/,
   );
+  assert.doesNotMatch(
+    document.getElementById("inspect-graph-container").innerHTML,
+    /id="inspect-processing-graph"/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("inspect-graph-container").innerHTML,
+    /Processing Graph/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("inspect-graph-container").innerHTML,
+    /SRT Senders/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /SRT Senders/,
+  );
+  assert.match(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /Output 7/,
+  );
+  assert.match(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /Output 7 is blocked by upstream stage/,
+  );
+  assert.match(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /video:720p/,
+  );
+  assert.match(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /max-h-64 space-y-2 overflow-y-auto/,
+  );
+  assert.match(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /stage-2/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /\+1 more alert/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /out-7/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /pipe-large:video:720p/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("inspect-pipeline-summary").innerHTML,
+    /2 \/ 10 runtime \(max 512\)/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("inspect-graph-container").innerHTML,
+    /FFmpeg workers/,
+  );
+  const resourceDetails = document.getElementById("inspect-resource-details");
+  assert.match(
+    resourceDetails.innerHTML,
+    /Process Metrics/,
+  );
+  assert.match(
+    resourceDetails.innerHTML,
+    /Pipeline Attribution/,
+  );
+  assert.match(
+    resourceDetails.innerHTML,
+    /SRT Senders/,
+  );
+  assert.doesNotMatch(
+    resourceDetails.innerHTML,
+    /2 \/ 10 runtime/,
+  );
+  assert.match(
+    resourceDetails.innerHTML,
+    /2 \/ 10/,
+  );
+  assert.doesNotMatch(
+    resourceDetails.innerHTML,
+    /This pipeline \/ total active/,
+  );
+  assert.match(
+    resourceDetails.innerHTML,
+    /max 512/,
+  );
+  assert.match(
+    resourceDetails.innerHTML,
+    /FFmpeg workers/,
+  );
+  assert.match(
+    resourceDetails.innerHTML,
+    /table table-sm/,
+  );
+  assert.match(
+    resourceDetails.innerHTML,
+    /video:720p/,
+  );
+  assert.match(
+    resourceDetails.innerHTML,
+    /12\.3%/,
+  );
+  assert.match(
+    resourceDetails.innerHTML,
+    /64\.0 MiB/,
+  );
+  assert.doesNotMatch(
+    resourceDetails.innerHTML,
+    /other video:720p/,
+  );
+  assert.doesNotMatch(
+    resourceDetails.innerHTML,
+    /512\.0 MiB/,
+  );
+  assert.doesNotMatch(
+    resourceDetails.innerHTML,
+    /Accounted 1 stage worker for 2 measured/,
+  );
+
+  assert.match(
+    document.getElementById("inspect-graph-container").innerHTML,
+    /id="processing-graph-canvas"/,
+  );
+  assert.match(
+    document.getElementById("inspect-graph-container").innerHTML,
+    /data-scroll-preserve="processing-graph-canvas"/,
+  );
+});
+
+test("inspector keeps the previous graph visible during background refresh", async () => {
+  const { document, window } = installFakeDom();
+  window.location.href =
+    "http://localhost/?mode=pipeline&view=inspect&p=pipe-live";
+  for (const [tag, id] of [
+    ["select", "inspect-pipeline-select"],
+    ["button", "inspect-open-pipeline-btn"],
+    ["div", "inspect-pipeline-summary"],
+    ["div", "inspect-diagnostics-summary"],
+    ["div", "inspect-resource-details"],
+    ["button", "inspect-refresh-graph-btn"],
+    ["button", "inspect-open-diagnostics-btn"],
+    ["div", "inspect-graph-status"],
+    ["div", "inspect-graph-container"],
+  ]) {
+    appendRoot(document, tag, id);
+  }
+
+  const inspector = await loadCompiledFrontendModule(
+    "features/pipeline-inspector.js",
+  );
+  const { state } = await loadCompiledFrontendModule("core/state.js");
+  state.pipelines = [
+    {
+      id: "pipe-live",
+      name: "Live Pipeline",
+      input: {
+        status: "on",
+        probeReady: true,
+        probeStatus: "ready",
+        readers: 0,
+        audioTracks: [],
+        publisher: { protocol: "srt" },
+      },
+      outs: [],
+      stats: { inputBitrateKbps: 1, outputBitrateKbps: 1 },
+      hlsPreview: { active: false, segments: 0 },
+    },
+  ];
+
+  let holdSecondGraphRequest;
+  let graphRequestCount = 0;
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    if (href.includes("/graph")) {
+      graphRequestCount += 1;
+      if (graphRequestCount === 2) {
+        await new Promise((resolve) => {
+          holdSecondGraphRequest = resolve;
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          pipelineId: "pipe-live",
+          nodes: [
+            {
+              id: "source",
+              type: "ring_buffer",
+              label: "Source Buffer",
+              active: true,
+            },
+          ],
+          edges: [],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (href.includes("/resource-map")) {
+      return new Response(
+        JSON.stringify({
+          scope: { kind: "pipeline" },
+          summary: {},
+          nodes: [],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response("{}", { status: 200 });
+  };
+
+  await inspector.refreshPipelineInspectorGraph();
+  const graphContainer = document.getElementById("inspect-graph-container");
+  const graphStatus = document.getElementById("inspect-graph-status");
+  assert.match(graphContainer.innerHTML, /Source Buffer/);
+  assert.equal(
+    graphStatus.textContent,
+    "Live Pipeline / processing graph / 0 outputs / input live",
+  );
+
+  const refresh = inspector.refreshPipelineInspectorGraph();
+  await Promise.resolve();
+  assert.match(
+    graphContainer.innerHTML,
+    /Source Buffer/,
+    "refresh should leave the previous graph mounted while the new graph loads",
+  );
+  assert.doesNotMatch(graphContainer.innerHTML, /Loading graph/);
+  assert.equal(
+    graphStatus.textContent,
+    "Live Pipeline / processing graph / 0 outputs / input live",
+    "background refresh should not replace the graph summary with loading text",
+  );
+  holdSecondGraphRequest();
+  await refresh;
 });
 
 test("processing graph collapses repeated egress leaves by count", async () => {
@@ -542,6 +1089,8 @@ test("processing graph collapses repeated egress leaves by count", async () => {
 
   const html = container.innerHTML;
   assert.match(html, /Click a grouped node to inspect its members/);
+  assert.doesNotMatch(html, /data-graph-copy-svg/);
+  assert.doesNotMatch(html, /Copy SVG/);
   assert.match(html, /data-graph-aggregate-key/);
   assert.match(html, /click to expand/);
   assert.match(html, /RTMP egress x5/);
@@ -551,6 +1100,53 @@ test("processing graph collapses repeated egress leaves by count", async () => {
   assert.match(html, /5\/5 running/);
   assert.match(html, /SRT sender: Backup/);
   assert.doesNotMatch(html, /RTMP sender: Output 0/);
+});
+
+test("processing graph keeps small graphs on the standard canvas scale", async () => {
+  const { document } = installFakeDom();
+  const graph = await loadCompiledFrontendModule("features/graph.js");
+  const container = appendRoot(document, "div", "graph-target");
+  graph.renderGraphInto(container, {
+    pipelineId: "runtime",
+    nodes: [
+      {
+        id: "runtime:restream",
+        type: "packetizer",
+        label: "restream",
+        active: true,
+      },
+      {
+        id: "runtime:external-ffmpeg",
+        type: "transcoder",
+        label: "External FFmpeg",
+        active: true,
+        details: {
+          phase: "firstOutput",
+          healthStatus: "warning",
+          healthReason: "source reader overflowed 1 time(s)",
+          overflowCount: 1,
+        },
+      },
+    ],
+    edges: [
+      {
+        from: "runtime:restream",
+        to: "runtime:external-ffmpeg",
+        label: "runtime",
+      },
+    ],
+  });
+
+  assert.match(
+    container.innerHTML,
+    /viewBox="0 0 1680 /,
+    "small graphs should not zoom nodes larger than pipeline graphs",
+  );
+  assert.match(container.innerHTML, /Processing graph SVG/);
+  assert.doesNotMatch(container.innerHTML, /data-graph-copy-svg/);
+  assert.doesNotMatch(container.innerHTML, /Copy SVG/);
+  assert.match(container.innerHTML, /stroke="#f59e0b"/);
+  assert.match(container.innerHTML, /warn: source reader overflowed/);
 });
 
 test("processing graph collapses repeated non-egress leaf stages at the branch point", async () => {

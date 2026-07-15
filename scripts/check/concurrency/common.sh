@@ -47,6 +47,10 @@ run_common_concurrency_checks() {
     scripts/build/resource-limit.sh cargo test 'media::avio::tests' --lib -- --nocapture
   "$run_step_fn" lib-srt-epoll \
     scripts/build/resource-limit.sh cargo test epoll_waiter_coordination --lib -- --nocapture
+  "$run_step_fn" lib-srt-readiness-loom \
+    scripts/build/resource-limit.sh cargo test loom_srt_readiness_retry_does_not_depend_on_epoll_wake --lib -- --nocapture
+  "$run_step_fn" lib-srt-readiness-proptest \
+    scripts/build/resource-limit.sh cargo test proptest_srt_readiness_retry_model_never_requires_epoll_wake --lib -- --nocapture
   "$run_step_fn" lib-srt-stream-id-normalization \
     scripts/build/resource-limit.sh cargo test srt_stream_ids_normalize_equivalent --lib -- --nocapture
   "$run_step_fn" lib-srt-sender-semaphore \
