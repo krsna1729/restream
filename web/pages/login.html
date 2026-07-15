@@ -11,7 +11,7 @@
   <body
     class="bg-base-100 text-base-content flex h-screen flex-col items-center justify-center"
   >
-    <div class="card bg-base-300 w-full max-w-sm shadow-xl">
+    <main class="card bg-base-300 w-full max-w-sm shadow-xl">
       <div class="card-body gap-4">
         <div class="flex items-center gap-3">
           <img src="logo.png" class="h-8 w-8" alt="" />
@@ -21,9 +21,11 @@
           <fieldset class="fieldset">
             <legend class="fieldset-legend">Username</legend>
             <input
+              id="username-input"
               type="text"
-              class="input w-full opacity-60"
+              class="input w-full opacity-80"
               value="admin"
+              aria-label="Username"
               readonly
             />
           </fieldset>
@@ -36,6 +38,7 @@
                 class="input w-full pr-10"
                 placeholder="Enter password"
                 autocomplete="current-password"
+                aria-label="Password"
               />
               <button
                 type="button"
@@ -90,7 +93,7 @@
           </button>
         </form>
       </div>
-    </div>
+    </main>
     <script src="login.js"></script>
   </body>
 </html>

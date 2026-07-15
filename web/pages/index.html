@@ -135,8 +135,9 @@
       </div>
     </header>
 
-    <div
+    <section
       id="workspace-mode-bar"
+      aria-label="Workspace navigation"
       class="border-base-content/10 bg-base-100 shrink-0 border-y px-4 py-2"
     >
       <div class="flex flex-wrap items-center gap-2">
@@ -209,10 +210,11 @@
           id="workspace-mode-summary"
         ></div>
       </div>
-    </div>
+    </section>
 
-    <div
+    <section
       id="pipeline-workspace-view-bar"
+      aria-label="Pipeline navigation"
       class="border-base-content/10 bg-base-100 hidden shrink-0 border-b px-4 py-2"
     >
       <nav
@@ -257,7 +259,7 @@
           Monitor
         </button>
       </nav>
-    </div>
+    </section>
 
     <div
       id="top-banner-stack"
@@ -1058,6 +1060,7 @@
         class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
       >
         <div class="mx-auto flex w-full flex-col gap-4">
+          <h1 class="dashboard-title">Pipeline inspect</h1>
           <div
             class="border-base-content/10 bg-base-200 flex flex-wrap items-center gap-2 rounded-lg border p-3"
           >
@@ -1213,10 +1216,10 @@
                 id="pipeline-header-legacy-identity"
                 class="min-w-0 flex-1 max-sm:w-full max-sm:flex-none"
               >
-                <h2
+                <h1
                   class="whitespace-normal text-lg font-semibold leading-tight"
                   id="pipe-name"
-                ></h2>
+                ></h1>
               </div>
               <div class="flex shrink-0 items-center gap-2 max-sm:w-full max-sm:flex-wrap">
                 <button

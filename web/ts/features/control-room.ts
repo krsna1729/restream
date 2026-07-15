@@ -529,7 +529,7 @@ function ensureShell(container: HTMLElement): void {
             <section class="border-base-content/10 from-base-200 via-base-200 to-base-100 rounded-2xl border bg-gradient-to-br p-4 shadow-sm">
                 <div class="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                        <h2 class="text-lg font-semibold">Control Room</h2>
+                        <h1 class="text-lg font-semibold">Control Room</h1>
                     </div>
                     <div class="flex flex-wrap items-center gap-2">
                         <button type="button" class="btn btn-sm btn-outline" data-action="control-room-toggle-playback-all">Play All</button>

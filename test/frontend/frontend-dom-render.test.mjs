@@ -176,6 +176,8 @@ runCheck("renderSettingsPanel emits delegated actions without inline handlers", 
   assert.doesNotMatch(container.innerHTML, /\son[a-z]+\s*=/i);
   assert.match(container.innerHTML, /data-settings-action="save-server-name"/);
   assert.match(container.innerHTML, /data-settings-action="reset-rate-limits"/);
+  assert.match(container.innerHTML, /aria-label="Current password"/);
+  assert.match(container.innerHTML, /aria-label="Global SRT ingest mode"/);
 });
 
 runCheck(

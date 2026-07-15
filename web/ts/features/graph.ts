@@ -415,7 +415,7 @@ export function renderGraphInto(container: HTMLElement, data: GraphData): void {
   }
 
   svg += `</svg>`;
-  container.innerHTML = `<div class="flex h-full min-h-[420px] flex-col gap-2">${graphToolbarHtml(data, sourceData)}<div id="processing-graph-canvas" class="min-h-0 flex-1 overflow-auto" data-scroll-preserve="processing-graph-canvas">${svg}</div></div>`;
+  container.innerHTML = `<div class="flex h-full min-h-[420px] flex-col gap-2">${graphToolbarHtml(data, sourceData)}<div id="processing-graph-canvas" class="min-h-0 flex-1 overflow-auto" data-scroll-preserve="processing-graph-canvas" role="region" aria-label="Processing graph" tabindex="0">${svg}</div></div>`;
   bindGraphInteractions(container, sourceData);
 }
 

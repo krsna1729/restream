@@ -527,12 +527,12 @@ function DashboardV2PipelineHeader({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h2
+            <h1
               className="whitespace-normal text-lg font-semibold leading-tight"
               id="dashboard-v2-pipeline-title"
             >
               {model.name}
-            </h2>
+            </h1>
             <StatusBadge status={model.health} />
           </div>
           <div className="text-base-content/60 mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums">
@@ -627,12 +627,12 @@ function DashboardV2PipelineInputStatus({
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3
+          <h2
             className="text-base-content/70 text-xs font-semibold uppercase tracking-wide"
             id="dashboard-v2-input-status-title"
           >
             Input and preview
-          </h3>
+          </h2>
           <p className="text-base-content/55 mt-1 text-xs tabular-nums">
             {model.uptimeLabel}
           </p>
@@ -680,9 +680,9 @@ function DashboardV2PipelineInputStatus({
       </div>
       {model.previewEnabled ? (
         <div className="mt-3">
-          <h4 className="text-base-content/60 mb-1 text-[0.7rem] font-semibold uppercase tracking-wide">
+          <h3 className="text-base-content/60 mb-1 text-[0.7rem] font-semibold uppercase tracking-wide">
             Preview player
-          </h4>
+          </h3>
           <div
             data-role="dashboard-v2-input-preview"
             ref={previewContainerRef}

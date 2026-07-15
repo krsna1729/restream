@@ -79,7 +79,7 @@ function renderHostSettings(settings: HostSettingRow[] | undefined): string {
   if (!rows.length) {
     return `<p class="text-base-content/60 mt-3 text-sm">No host settings reported.</p>`;
   }
-  return `<div class="mt-3 overflow-x-auto">
+  return `<div class="mt-3 overflow-x-auto" role="region" aria-label="Host settings table" tabindex="0">
     <table class="table table-sm">
       <thead><tr><th>Setting</th><th>Current</th><th>Required</th><th>Status</th><th>Info</th></tr></thead>
       <tbody>${rows

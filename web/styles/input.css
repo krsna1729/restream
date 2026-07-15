@@ -81,6 +81,24 @@
   }
 }
 
+/* The dim theme's 50/60% secondary text falls below WCAG AA on the dashboard
+   surfaces. Keep the existing semantic utility names while enforcing one
+   readable secondary-text floor across legacy and React presentations. */
+@layer utilities {
+  .text-base-content\/50,
+  .text-base-content\/55,
+  .text-base-content\/60,
+  .stat-title,
+  .stat-desc,
+  .table thead {
+    color: color-mix(
+      in oklab,
+      var(--color-base-content) 72%,
+      transparent
+    );
+  }
+}
+
 #dashboard-grid {
   grid-template-columns: minmax(0, 1fr);
 }

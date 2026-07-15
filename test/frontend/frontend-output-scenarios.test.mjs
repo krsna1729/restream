@@ -156,6 +156,8 @@ runDomScenarioMatrix({
         ).parentNode;
 
         assert.match(dot.className, /status-primary/);
+        assert.equal(dot.getAttribute("aria-hidden"), "true");
+        assert.equal(dot.getAttribute("aria-label"), null);
         assert.equal(toggle.textContent, "Stop");
         assert.equal(metricValue(metrics, "up"), "0:00:15");
         assert.equal(metricValue(metrics, "enc"), "source");

@@ -376,7 +376,7 @@ function createOutputCard(pipeId: string, outputId: string): HTMLElement {
   statusWrap.className = "pt-1";
   const statusDot = document.createElement("div");
   statusDot.dataset.role = "status-dot";
-  statusDot.setAttribute("aria-label", "status");
+  statusDot.setAttribute("aria-hidden", "true");
   statusWrap.appendChild(statusDot);
 
   const content = document.createElement("div");
@@ -551,7 +551,7 @@ function renderOutputSummary(pipe: PipelineView): void {
     .filter(Boolean)
     .map(
       (entry) => `<div class="${entry?.className} rounded-lg border px-3 py-2">
-        <div class="text-[0.65rem] font-semibold uppercase opacity-70">${escapeHtml(entry?.label || "")}</div>
+        <div class="text-[0.65rem] font-semibold uppercase opacity-90">${escapeHtml(entry?.label || "")}</div>
         <div class="mt-1 text-xl font-semibold tabular-nums">${entry?.count ?? 0}</div>
       </div>`,
     )
