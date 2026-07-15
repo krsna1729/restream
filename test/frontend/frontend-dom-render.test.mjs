@@ -396,6 +396,48 @@ runCheck(
 );
 
 runCheck(
+  "React output presentation replaces legacy cards and preserves expansion state",
+  async () => {
+    const { document } = installFakeDom();
+    appendRoot(document, "div", "outs-col");
+    const outputsList = appendRoot(document, "div", "outputs-list");
+    const toolbar = appendRoot(document, "div", "outputs-list-toolbar");
+    const outputList = await loadCompiledFrontendModule(
+      "features/pipeline-output-list.js",
+    );
+    const { state } = await loadCompiledFrontendModule("core/state.js");
+    state.pipelines = [
+      makePipeline({
+        outs: Array.from({ length: 10 }, (_, index) =>
+          makeOutput({ id: `out-${index}`, name: `Output ${index}` }),
+        ),
+      }),
+    ];
+    let presented = null;
+
+    outputList.configurePipelineOutputOverviewPresentation({
+      legacyCardsEnabled: false,
+      legacyRenderEnabled: false,
+      onPresentation: (model) => {
+        presented = model;
+      },
+    });
+    outputList.renderOutsColumn("pipe-1");
+
+    assert.equal(outputsList.hidden, true);
+    assert.equal(toolbar.hidden, true);
+    assert.equal(outputsList.children.length, 0);
+    assert.equal(presented.cards.length, 8);
+    assert.equal(presented.expanded, false);
+
+    outputList.togglePipelineOutputList("pipe-1");
+    assert.equal(presented.cards.length, 10);
+    assert.equal(presented.expanded, true);
+    assert.equal(presented.listCaption, "Showing all 10 outputs");
+  },
+);
+
+runCheck(
   "restream process indicator reacts to lifecycle logs and health recovery",
   async () => {
     const { document } = installFakeDom();

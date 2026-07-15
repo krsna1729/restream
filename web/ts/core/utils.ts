@@ -1,19 +1,5 @@
 import { state } from "./state.js";
-
-function msToHHMMSS(ms: number | null): string | null {
-  if (ms === null) return null;
-
-  const totalSecs = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSecs / 3600);
-  const mins = Math.floor((totalSecs % 3600) / 60);
-  const secs = totalSecs % 60;
-
-  return [
-    hours,
-    mins.toString().padStart(2, "0"),
-    secs.toString().padStart(2, "0"),
-  ].join(":");
-}
+import { maskSecret, msToHHMMSS, sanitizeLogMessage } from "./display.js";
 
 function setInnerText(id: string, text: string | number): void {
   const elem = document.getElementById(id);
@@ -29,25 +15,6 @@ function escapeHtml(str: unknown): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-const MASK_VISIBLE_PREFIX_CHARS = 20;
-const MASK_VISIBLE_SUFFIX_CHARS = 5;
-
-function maskSecret(value: unknown): string {
-  const s = String(value ?? "");
-  if (!s) return "";
-  if (s.length <= MASK_VISIBLE_PREFIX_CHARS + MASK_VISIBLE_SUFFIX_CHARS)
-    return s;
-  return `${s.slice(0, MASK_VISIBLE_PREFIX_CHARS)}***${s.slice(-MASK_VISIBLE_SUFFIX_CHARS)}`;
-}
-
-function sanitizeLogMessage(msg: unknown, redacted = true): string {
-  if (!redacted) return String(msg);
-  return String(msg).replace(
-    /((?:https?|rtmps?|srt):\/\/[^\s'"<>()]+)/gi,
-    (full, url) => maskSecret(url || full),
-  );
 }
 
 function escapeRedactedHtml(value: unknown, redacted = true): string {

@@ -700,6 +700,68 @@ test.describe.serial('HLS Player — live playback', () => {
         }
     });
 
+    test('ui=v2 mounts the complete HLS player in React and loads preview media', async ({ page }) => {
+        const standbyPipelineName = `PlaywrightHlsStandby_${Date.now()}`;
+        const standbyResponse = await page.request.post('/api/v1/pipelines', {
+            data: {
+                name: standbyPipelineName,
+                streamKey: `pw_hls_standby_${Date.now()}`,
+            },
+        });
+        expect(standbyResponse.ok()).toBe(true);
+        const standbyPipelineId = (await standbyResponse.json()).pipeline.id;
+        await page.goto('/?mode=pipeline&ui=v2');
+
+        const pipelineSelector = page.locator('#dashboard-v2-pipeline-selector-root');
+        await pipelineSelector
+            .getByRole('button', { name: new RegExp(livePipelineName) })
+            .click();
+
+        const inputStatus = page.locator('#dashboard-v2-pipeline-input-status-root');
+        const previewPlayer = inputStatus.locator(
+            '[data-role="dashboard-v2-input-preview"]',
+        );
+        await expect(previewPlayer).toBeVisible();
+        await expect(page.locator('#video-player')).toBeHidden();
+
+        const video = previewPlayer.locator(
+            'video[data-role="input-preview-video"]',
+        );
+        await expect(video).toBeAttached();
+        await previewPlayer
+            .getByRole('button', { name: 'Play preview' })
+            .click();
+
+        if (await page.evaluate(() => !!window.Hls)) {
+            await expect(video).toHaveAttribute('src', /blob:/, {
+                timeout: 15000,
+            });
+        } else {
+            await expect(video).toHaveAttribute(
+                'src',
+                new RegExp(`/hls/${livePipelineId}/master.m3u8`),
+                { timeout: 15000 },
+            );
+        }
+        await expect(video).toHaveAttribute(
+            'data-preview-src',
+            new RegExp(`/hls/${livePipelineId}/master.m3u8`),
+        );
+
+        const mountedVideo = await video.elementHandle();
+        await pipelineSelector
+            .getByRole('button', { name: new RegExp(standbyPipelineName) })
+            .click();
+        await expect(previewPlayer).toHaveCount(0);
+        expect(
+            await mountedVideo?.evaluate(
+                (element) => element.dataset.previewDisposed,
+            ),
+        ).toBe('true');
+
+        await page.request.delete(`/api/v1/pipelines/${standbyPipelineId}`);
+    });
+
     test('video starts playback after clicking Play preview', async ({ page }) => {
         await openPipelineWorkspace(page);
         const pipelineItem = page.locator('#pipelines li', {

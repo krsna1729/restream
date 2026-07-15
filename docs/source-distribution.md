@@ -16,6 +16,8 @@ selected runtime frontend outputs, but not large native or Rust build trees.
 - Authored frontend sources under `web/`, `package-lock.json`, `tsconfig.json`,
   and the generated browser assets required for runtime embedding. Vendored
   HLS assets include `hls.min.js` and its distributable `hls.min.js.map`.
+- The opt-in component-island build contract in `tsconfig.v2.json` and
+  `vite.v2.config.ts`.
 - Native build scripts, immutable source pins, patches, and configuration under
   `scripts/build/` and `scripts/native/`.
 - License and distribution inputs under `distribution/`.
@@ -65,3 +67,14 @@ Binary and container releases therefore need source availability for the exact
 commit and all applicable notices. Immutable native pins live in
 `scripts/build/native/native-inputs.lock`; bundle contents and evidence are
 owned by the release scripts described in [Release compliance](release-compliance.md).
+
+Regenerate frontend runtime assets with:
+
+```sh
+npm ci
+npm run build:frontend
+```
+
+The checked-in frontend bundles must remain reproducible from `web/ts/`,
+`package-lock.json`, `tsconfig.json`, `tsconfig.v2.json`, and
+`vite.v2.config.ts`.

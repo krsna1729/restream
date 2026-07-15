@@ -32,21 +32,28 @@ test("overview activity uses a restream-scoped log stream after the initial snap
     const href = String(url);
     requests.push(href);
     if (href === "/api/v1/logs?scope=restream&limit=24&order=desc") {
+      const activityRequestCount = requests.filter(
+        (request) =>
+          request === "/api/v1/logs?scope=restream&limit=24&order=desc",
+      ).length;
       return new Response(
         JSON.stringify({
-          logs: [
-            {
-              id: 41,
-              ts: "2026-06-30T00:00:00Z",
-              level: "INFO",
-              target: "restream::server",
-              message: "dashboard api server listening",
-              fields: "{}",
-              pipelineId: null,
-              outputId: null,
-              eventType: "restream.http.ready",
-            },
-          ],
+          logs:
+            activityRequestCount === 1
+              ? [
+                  {
+                    id: 41,
+                    ts: "2026-06-30T00:00:00Z",
+                    level: "INFO",
+                    target: "restream::server",
+                    message: "dashboard api server listening",
+                    fields: "{}",
+                    pipelineId: null,
+                    outputId: null,
+                    eventType: "restream.http.ready",
+                  },
+                ]
+              : [],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
@@ -98,6 +105,14 @@ test("overview activity uses a restream-scoped log stream after the initial snap
     "/api/v1/logs?scope=restream&limit=24&order=desc",
   ]);
   assert.equal(streams.length, 1);
+  const overview = document.getElementById("overview-mode-content");
+  const settledOverviewWrites = overview.stats.innerHTMLWrites;
+  modes.renderDashboardModes();
+  assert.equal(
+    overview.stats.innerHTMLWrites,
+    settledOverviewWrites,
+    "an unchanged runtime refresh must keep the Overview subtree mounted",
+  );
 
   const overviewActivityStream = streams.find(
     (stream) =>
@@ -122,7 +137,6 @@ test("overview activity uses a restream-scoped log stream after the initial snap
 
   await flushAsyncWork();
 
-  const overview = document.getElementById("overview-mode-content");
   assert.ok(overview instanceof FakeElement);
   assert.match(overview.innerHTML, /Server Task Exit/);
 
@@ -167,5 +181,15 @@ test("overview activity uses a restream-scoped log stream after the initial snap
     "/api/v1/logs?scope=restream&limit=24&order=desc",
     "/api/v1/logs?scope=restream&limit=24&order=desc",
   ]);
+  modes.syncOverviewActivityStream();
+  await flushAsyncWork();
+  assert.deepEqual(
+    requests,
+    [
+      "/api/v1/logs?scope=restream&limit=24&order=desc",
+      "/api/v1/logs?scope=restream&limit=24&order=desc",
+    ],
+    "an empty successful snapshot must remain fresh until the stale interval",
+  );
   Date.now = originalDateNow;
 });
