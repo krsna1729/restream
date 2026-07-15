@@ -59,7 +59,7 @@ working directory for SQLite state, media, logs, and disposable runtime files.
 See [Configuration](configuration.md) for path overrides, listeners,
 authentication bootstrap, and deployment settings.
 
-The portable distribution contracts are the released Linux archive and scratch
+The portable distribution contracts are the released Linux archive and runtime
 container. `scripts/build/app-static.sh` is an engineering build path, not a
 single-file release contract.
 

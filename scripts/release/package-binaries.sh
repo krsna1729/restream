@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Package release executables into small role-specific archives. The host binary
 # tarballs intentionally contain only the requested executable payloads and
-# compliance material; the scratch OCI archive remains the portable runtime
-# closure.
+# compliance material; the OCI archive remains the portable container runtime.
 set -euo pipefail
 
 ROOT="${RESTREAM_REPO_ROOT:-$(git rev-parse --show-toplevel)}"
@@ -24,7 +23,7 @@ scripts/release/prepare-build-tree.sh
 
 # `restream-mcp` is feature-gated. Build the supported executable set through
 # the native script so release packaging reuses the same static-link environment
-# and linkage checks as the scratch image.
+# and linkage checks as the runtime image.
 release_sbom="$OUT_DIR/restream-$VERSION.sbom.cdx.json"
 RESTREAM_SBOM_PATH="$release_sbom" \
 RESTREAM_BUILD_PROFILE=release \

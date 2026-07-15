@@ -17,7 +17,7 @@ Runs local release due diligence:
   1. format, frontend, API contract, test hygiene, fixture discipline
   2. full live harness suite unless --skip-harness is supplied
   3. package every supported Linux binary
-  4. release evidence, packaged-frontend smoke, scratch container smoke
+  4. release evidence, packaged-frontend smoke, container runtime smoke
 
 The evidence step requires cargo-audit, cargo-deny, grype, trivy, and Docker.
 EOF

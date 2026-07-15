@@ -5,13 +5,13 @@
 #
 #   1. native-deps  → OS packages, pinned Rust toolchain, static C/C++ prefix
 #   2. rust-build   → Cargo dependency warm-up, then the real application build
-#   3. runtime tree  → the shipped binaries plus their exact glibc closure
-#   4. runtime       → a pure-scratch production image
+#   3. runtime tree  → the shipped binaries
+#   4. runtime       → a distroless production image
 #   5. harness       → a minimal Ubuntu image for live protocol validation
 #
 # The native/static artifacts come from scripts/build/native-deps.sh, the Rust
-# toolchain bootstrap comes from scripts/dev/bootstrap.sh, and the final static
-# binary build comes from scripts/build/app-native.sh.
+# toolchain bootstrap comes from scripts/dev/bootstrap.sh, and the native
+# application build comes from scripts/build/app-native.sh.
 
 # ── Stage 1: native-deps ─────────────────────────────────────────────────────
 #
@@ -115,59 +115,45 @@ COPY --from=frontend-build /workspace/public public
 COPY --from=native-deps /workspace/public/bin/ffmpeg public/bin/ffmpeg
 RUN RESTREAM_BUILD_PROFILE=release scripts/build/resource-limit.sh ./scripts/build/app-native.sh
 
-RUN set -eux; \
-    restream_home="/runtime/.restream"; \
-    install -d -m 0755 -o 0 -g 0 \
-        "$restream_home" \
-        /runtime/etc/ssl/certs \
-        /runtime/usr/share/zoneinfo; \
-    install -d -m 0700 -o 1000 -g 1000 \
-        "$restream_home/runtime" \
-        "$restream_home/data" \
-        "$restream_home/media" \
-        "$restream_home/logs"; \
-    cp -a /usr/share/zoneinfo/. /runtime/usr/share/zoneinfo/; \
-    cp -a /etc/localtime /runtime/etc/localtime; \
-    cp /etc/ssl/certs/ca-certificates.crt /runtime/etc/ssl/certs/ca-certificates.crt; \
-    cp /etc/nsswitch.conf /runtime/etc/nsswitch.conf; \
-    cp /etc/protocols /runtime/etc/protocols; \
-    cp /etc/services /runtime/etc/services; \
-    cp -L /etc/resolv.conf /runtime/etc/resolv.conf; \
-    printf 'restream:x:1000:1000:restream:/nonexistent:/sbin/nologin\n' > /runtime/etc/passwd; \
-    printf 'restream:x:1000:\n' > /runtime/etc/group; \
-    ldd /workspace/target/release/restream \
-        | awk '$3 ~ /^\// { print $3 } $1 ~ /^\// { print $1 }' \
-        | sort -u \
-        | while IFS= read -r library; do cp --parents -L "$library" /runtime; done; \
-    test -e /runtime/lib64/ld-linux-x86-64.so.2
-
 # The harness image is an explicit target, so this extra bench build is paid
-# only by `--target harness`, never by the production scratch image. It must
+# only by `--target harness`, never by the production runtime image. It must
 # derive from `runtime-tree`, which has the real source and generated frontend
 # assets rather than the dummy dependency-warmup crate.
 FROM runtime-tree AS harness-build
 
 RUN scripts/build/bench-harness.sh
 
-# ── Stage 4: pure-scratch runtime ────────────────────────────────────────────
+# ── Stage 4: distroless runtime ──────────────────────────────────────────────
 #
 # Runtime requirements:
 #   /.restream/data     SQLite database persistence (including WAL/SHM sidecars)
 #   /.restream/logs     rotated JSON process logs
 #   /.restream/media    uploaded media and recordings
-#   /.restream/runtime  internal embedded-FFmpeg cache; the runtime needs no `/tmp` directory
+#   /.restream/runtime  internal embedded-FFmpeg cache
 #
 # Example:
 #   docker run -d \
 #     -v restream-state:/.restream \
 #     -p 3030:3030 -p 1935:1935 -p 10080:10080/udp \
-#     restream:scratch
-FROM scratch AS runtime-scratch
+#     restream:distroless
+FROM busybox:1.36 AS runtime-state-dirs
 
-# Stage-to-stage COPY preserves the rootfs ownership set above.
-COPY --from=runtime-tree /runtime/ /
-COPY --from=runtime-tree /workspace/target/release/restream /restream
-COPY distribution/ /usr/share/doc/restream/distribution/
+RUN mkdir -p \
+        /rootfs/.restream/runtime \
+        /rootfs/.restream/data \
+        /rootfs/.restream/media \
+        /rootfs/.restream/logs \
+    && chown -R 1000:1000 /rootfs/.restream \
+    && chmod 0755 /rootfs/.restream \
+    && chmod 0700 \
+        /rootfs/.restream/runtime \
+        /rootfs/.restream/data \
+        /rootfs/.restream/media \
+        /rootfs/.restream/logs
+
+FROM gcr.io/distroless/cc-debian13:nonroot AS runtime-base
+
+COPY --from=runtime-state-dirs /rootfs/ /
 
 ARG RESTREAM_BUILD_GIT_COMMIT
 ARG RESTREAM_BUILD_TIMESTAMP
@@ -180,77 +166,38 @@ EXPOSE 3030 1935 10080/udp
 
 USER 1000:1000
 
+WORKDIR /
+
 ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
 
 ENTRYPOINT ["/restream"]
+
+FROM runtime-base AS runtime-distroless
+
+COPY --from=runtime-tree /workspace/target/release/restream /restream
+COPY distribution/ /usr/share/doc/restream/distribution/
 
 # Release packaging uses the same final image recipe without rebuilding Rust:
 # scripts/release/package-runtime-image.sh supplies an already-built restream
 # binary as the `release_payload` build context.
-FROM ubuntu:24.04 AS runtime-artifact-rootfs
+FROM runtime-base AS runtime-artifact
 
-ENV DEBIAN_FRONTEND=noninteractive
-WORKDIR /workspace
-COPY --from=release_payload /restream /workspace/restream
-RUN set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates netbase tzdata; \
-    rm -rf /var/lib/apt/lists/*; \
-    restream_home="/runtime/.restream"; \
-    install -d -m 0755 -o 0 -g 0 \
-        "$restream_home" \
-        /runtime/etc/ssl/certs \
-        /runtime/usr/share/zoneinfo; \
-    install -d -m 0700 -o 1000 -g 1000 \
-        "$restream_home/runtime" \
-        "$restream_home/data" \
-        "$restream_home/media" \
-        "$restream_home/logs"; \
-    cp -a /usr/share/zoneinfo/. /runtime/usr/share/zoneinfo/; \
-    cp -a /etc/localtime /runtime/etc/localtime; \
-    cp /etc/ssl/certs/ca-certificates.crt /runtime/etc/ssl/certs/ca-certificates.crt; \
-    cp /etc/nsswitch.conf /runtime/etc/nsswitch.conf; \
-    cp /etc/protocols /runtime/etc/protocols; \
-    cp /etc/services /runtime/etc/services; \
-    cp -L /etc/resolv.conf /runtime/etc/resolv.conf; \
-    printf 'restream:x:1000:1000:restream:/nonexistent:/sbin/nologin\n' > /runtime/etc/passwd; \
-    printf 'restream:x:1000:\n' > /runtime/etc/group; \
-    ldd /workspace/restream \
-        | awk '$3 ~ /^\// { print $3 } $1 ~ /^\// { print $1 }' \
-        | sort -u \
-        | while IFS= read -r library; do cp --parents -L "$library" /runtime; done; \
-    test -e /runtime/lib64/ld-linux-x86-64.so.2
-
-FROM scratch AS runtime-artifact
-
-# Stage-to-stage COPY preserves the rootfs ownership set above.
-COPY --from=runtime-artifact-rootfs /runtime/ /
 COPY --from=release_payload /restream /restream
 COPY distribution/ /usr/share/doc/restream/distribution/
 
-ARG RESTREAM_BUILD_GIT_COMMIT
-ARG RESTREAM_BUILD_TIMESTAMP
-LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
-    org.opencontainers.image.revision="${RESTREAM_BUILD_GIT_COMMIT}" \
-    org.opencontainers.image.created="${RESTREAM_BUILD_TIMESTAMP}" \
-    org.opencontainers.image.licenses="MIT AND GPL-2.0-or-later AND MPL-2.0 AND Apache-2.0"
-
-EXPOSE 3030 1935 10080/udp
-
-USER 1000:1000
-
-ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
-
-ENTRYPOINT ["/restream"]
-
 # Keep the old distro runtime available only as an escape hatch for operators
 # with an unusual NSS/DNS integration. The default production target below is
-# the verified scratch runtime above.
+# the verified distroless runtime above.
 FROM ubuntu:24.04 AS runtime-ubuntu
 
-COPY --from=runtime-tree /runtime/ /
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates netbase tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=runtime-tree /workspace/target/release/restream /restream
 COPY distribution/ /usr/share/doc/restream/distribution/
+COPY --from=runtime-state-dirs /rootfs/ /
 
 ARG RESTREAM_BUILD_GIT_COMMIT
 ARG RESTREAM_BUILD_TIMESTAMP
@@ -261,6 +208,7 @@ LABEL org.opencontainers.image.source="https://github.com/krsna1729/restream" \
 
 EXPOSE 3030 1935 10080/udp
 USER 1000:1000
+WORKDIR /
 ENV RESTREAM_HTTP_BIND_ADDR=0.0.0.0
 ENTRYPOINT ["/restream"]
 
@@ -309,7 +257,7 @@ ENV PATH="/workspace/target/bench:${PATH}" \
 # modes remain ordinary arguments, including `--no-netns` for host networking.
 ENTRYPOINT ["/workspace/target/bench/test_harness"]
 
-# Keep the production scratch runtime as Docker's implicit final target. The
+# Keep the production distroless runtime as Docker's implicit final target. The
 # harness remains an explicit `--target harness` validation image; otherwise a
 # plain `docker build .` would silently ship the Ubuntu test environment.
-FROM runtime-scratch AS runtime
+FROM runtime-distroless AS runtime

@@ -13,7 +13,7 @@ useful context without making them read the whole system on day one.
 - [Develop from source](#develop-from-source)
 - [Daily loop](#daily-loop)
 - [Codebase map](#codebase-map)
-- [Scratch runtime and live-harness containers](#scratch-runtime-and-live-harness-containers)
+- [Runtime and live-harness containers](#runtime-and-live-harness-containers)
 - [Read next](#read-next)
 - [Expectations](#expectations)
 
@@ -111,13 +111,13 @@ diagnostic all-files report.
 - `tests/`: Rust integration tests
 - `scripts/build/`, `scripts/check/`, `scripts/dev/`, `scripts/harness/`: builds, gates, setup, and live validation
 
-## Scratch runtime and live-harness containers
+## Runtime and live-harness containers
 
 The Dockerfile rebuilds native dependencies and frontend output from the same
 committed scripts used locally in a clean build container, then produces a
-pure `scratch` runtime. It copies the generated binary's small glibc/C++ loader
-closure, certificates, timezone/NSS files, and the writable runtime paths; the
-media stack and embedded FFmpeg remain static.
+distroless runtime image with the generated binary, release metadata, and the
+owned runtime paths. The media stack and embedded FFmpeg remain linked from the
+repo-managed static native prefix.
 
 ```sh
 docker build \
@@ -135,7 +135,7 @@ docker run --rm \
 The provenance arguments are required because `.git/` is intentionally absent
 from the Docker context. They are embedded in both the binary and OCI labels;
 the build fails instead of publishing placeholder provenance when either is
-missing. License and source information is available inside the scratch image
+missing. License and source information is available inside the runtime image
 at `/usr/share/doc/restream/distribution/`.
 
 Bare Restream and the container use the same owned layout under `.restream/`:
@@ -163,7 +163,7 @@ Use `--network host` for harness modes that open loopback publishers and sinks;
 the harness binary is the target's entry point, so modes and harness flags are
 passed directly. The normal production image needs only its documented TCP/UDP
 ports. The `runtime-ubuntu` target remains available as a compatibility
-fallback, but the default image is `runtime`/scratch.
+fallback, but the default image is `runtime`/distroless.
 
 ## Read next
 

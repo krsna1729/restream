@@ -154,7 +154,7 @@ jobs:
           # Publish reads the same dist/ layout produced during package-build
           # and rehydrated during evidence verification.
           path: dist
-      - name: Publish release scratch image
+      - name: Publish release runtime image
         env:
           GH_TOKEN: ${{ github.token }}
           RESTREAM_REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
