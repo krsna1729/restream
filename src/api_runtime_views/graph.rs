@@ -60,6 +60,15 @@ pub(crate) async fn processing_graph(
     ));
 
     let rb_node_id = format!("{pipeline_id}_source_rb");
+    let source_reader_snapshots = pipelines
+        .get(pipeline_id)
+        .map(|ring| ring.reader_snapshots())
+        .unwrap_or_default();
+    let reader_overflows_by_stage: HashMap<String, usize> = source_reader_snapshots
+        .iter()
+        .filter(|reader| reader.overflow_count > 0)
+        .map(|reader| (reader.name.clone(), reader.overflow_count))
+        .collect();
     let rb_info = pipelines.get(pipeline_id).map(|ring| {
         let (fill, cap) = ring.fill_and_capacity();
         let reader_stats: Vec<serde_json::Value> = ring
@@ -158,18 +167,34 @@ pub(crate) async fn processing_graph(
             let stage_id = kind.graph_node_id(pipeline_id);
             let queue_stats = runtime.input_queue.as_ref().map(|queue| queue.stats());
             let pipe_stats = runtime.pipe_metrics.as_ref().map(|pipe| pipe.snapshot());
-            nodes.push(api_view_models::processing_graph_stage_node(
+            let mut node = api_view_models::processing_graph_stage_node(
                 stage_id.clone(),
                 kind.graph_type(),
                 kind.graph_label(),
-                stage_key_str,
+                stage_key_str.as_str(),
                 lifecycle_snapshots.get(key),
                 !runtime.cancel.is_cancelled(),
                 Some(runtime.metrics.snapshot()),
                 queue_stats.map(|stats| serde_json::json!(stats)),
                 pipe_stats,
                 api_view_models::ring_payload_stats_json(ring),
-            ));
+            );
+            if let Some(overflow_count) = reader_overflows_by_stage.get(&stage_key_str)
+                && let Some(details) = node
+                    .get_mut("details")
+                    .and_then(serde_json::Value::as_object_mut)
+            {
+                details.insert("healthStatus".to_string(), serde_json::json!("warning"));
+                details.insert(
+                    "healthReason".to_string(),
+                    serde_json::json!(format!("source reader overflowed {overflow_count} time(s)")),
+                );
+                details.insert(
+                    "overflowCount".to_string(),
+                    serde_json::json!(overflow_count),
+                );
+            }
+            nodes.push(node);
 
             if let Some(upstream) = kind.upstream() {
                 let (from, label) = if matches!(upstream, StageKind::Source) {

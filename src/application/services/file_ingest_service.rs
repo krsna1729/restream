@@ -423,12 +423,13 @@ impl FileIngestService {
         cancel: CancellationToken,
         timestamps: &mut crate::media::file_ingest::ContinuousTimestampState,
     ) -> Result<(), String> {
-        let (bytes_received, ingest_metrics, cached_keyframe_times) = {
+        let (bytes_received, ingest_metrics, last_progress_ms, cached_keyframe_times) = {
             engine
                 .with_active_ingest(&pipeline.id, |ingest| {
                     (
                         ingest.bytes_received.clone(),
                         ingest.metrics.clone(),
+                        ingest.last_progress_ms.clone(),
                         ingest.keyframe_times.clone(),
                     )
                 })
@@ -506,6 +507,10 @@ impl FileIngestService {
 
             bytes_received.fetch_add(read as u64, std::sync::atomic::Ordering::Relaxed);
             ingest_metrics.record_in(read as u64);
+            last_progress_ms.store(
+                crate::media::engine::MediaEngine::now_epoch_ms(),
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
 
         Ok(())

@@ -14,11 +14,11 @@
     "srt": {
       "ffmpegFormat": "mpegts",
       "mapAllStreams": true,
-      "publishUrl": "srt://127.0.0.1:${ports.restreamSrt}?streamid=publish:live/${streamKey}&pkt_size=1316",
-      "publishUrlLiveLatency": "srt://127.0.0.1:${ports.restreamSrt}?streamid=publish:live/${streamKey}&latency=200000",
-      "egressPublishUrl": "srt://127.0.0.1:${ports.mtxSrt}?streamid=publish:live/${outputName}",
-      "egressReadUrl": "srt://127.0.0.1:${ports.mtxSrt}?streamid=read:live/${outputName}&timeout=30000000",
-      "deadSinkUrl": "srt://127.0.0.1:${deadSinkPort}?streamid=publish:live/retry-limit&pkt_size=1316",
+      "publishUrl": "srt://127.0.0.1:${ports.restreamSrt}?streamid=publish:${streamKey}&pkt_size=1316",
+      "publishUrlLiveLatency": "srt://127.0.0.1:${ports.restreamSrt}?streamid=publish:${streamKey}&latency=200000",
+      "egressPublishUrl": "srt://127.0.0.1:${ports.mtxSrt}?streamid=publish:${outputName}",
+      "egressReadUrl": "srt://127.0.0.1:${ports.mtxSrt}?streamid=read:${outputName}&timeout=30000000",
+      "deadSinkUrl": "srt://127.0.0.1:${deadSinkPort}?streamid=publish:retry-limit&pkt_size=1316",
       "signalSinkPublishUrl": "srt://127.0.0.1:${port}?pkt_size=1316&latency=200000",
       "signalSinkListenUrl": "srt://127.0.0.1:${port}?mode=listener&transtype=live&timeout=30000000&latency=200000"
     },

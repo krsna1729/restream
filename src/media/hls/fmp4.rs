@@ -40,6 +40,10 @@ use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
 
 const VIDEO_TIMESCALE: u32 = 90_000;
+// Keep a small cushion behind the advertised live window so a browser that
+// fetches the oldest listed segment during a playlist refresh does not race
+// immediate eviction.
+const PLAYLIST_RETENTION_GRACE_SEGMENTS: usize = 6;
 
 #[derive(Clone)]
 struct RenditionSegment {
@@ -76,6 +80,12 @@ impl RenditionPlaylistState {
         self.init_segment = Some(data);
     }
 
+    fn retained_segment_limit(config: HlsConfig) -> usize {
+        config
+            .max_segments
+            .saturating_add(PLAYLIST_RETENTION_GRACE_SEGMENTS)
+    }
+
     fn push_segment(&mut self, config: HlsConfig, index: u64, duration: f64, data: Bytes) {
         if duration > self.target_duration {
             self.target_duration = duration.ceil();
@@ -85,12 +95,12 @@ impl RenditionPlaylistState {
             duration,
             data,
         });
-        while self.segments.len() > config.max_segments {
+        while self.segments.len() > Self::retained_segment_limit(config) {
             let _ = self.segments.pop_front();
         }
     }
 
-    fn playlist<F, G>(&self, init_uri: F, mut segment_uri: G) -> Option<String>
+    fn playlist<F, G>(&self, config: HlsConfig, init_uri: F, mut segment_uri: G) -> Option<String>
     where
         F: FnOnce() -> String,
         G: FnMut(u64) -> String,
@@ -98,9 +108,10 @@ impl RenditionPlaylistState {
         if self.segments.is_empty() {
             return None;
         }
+        let advertised_start = self.segments.len().saturating_sub(config.max_segments);
         let first_seq = self
             .segments
-            .front()
+            .get(advertised_start)
             .map(|segment| segment.index)
             .unwrap_or(0);
         let target_duration = self.target_duration.ceil() as u64;
@@ -108,7 +119,7 @@ impl RenditionPlaylistState {
             "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:{target_duration}\n#EXT-X-MEDIA-SEQUENCE:{first_seq}\n#EXT-X-MAP:URI=\"{}\"\n",
             init_uri()
         );
-        for segment in &self.segments {
+        for segment in self.segments.iter().skip(advertised_start) {
             playlist.push_str(&format!(
                 "#EXTINF:{:.3},\n{}\n",
                 segment.duration,
@@ -248,12 +259,14 @@ impl Fmp4HlsStore {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if !inner.video.segments.is_empty() {
             return inner.video.playlist(
+                self.config,
                 || "video/init.mp4".to_string(),
                 |index| format!("seg{index}.m4s"),
             );
         }
         let first_track = inner.audio_tracks.first()?;
         inner.audio.get(&first_track.track_index)?.playlist(
+            self.config,
             || format!("audio/{}/init.mp4", first_track.track_index),
             |index| format!("audio/{}/seg{index}.m4s", first_track.track_index),
         )
@@ -261,17 +274,20 @@ impl Fmp4HlsStore {
 
     pub fn get_video_playlist(&self) -> Option<String> {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner
-            .video
-            .playlist(|| "init.mp4".to_string(), |index| format!("seg{index}.m4s"))
+        inner.video.playlist(
+            self.config,
+            || "init.mp4".to_string(),
+            |index| format!("seg{index}.m4s"),
+        )
     }
 
     pub fn get_audio_playlist(&self, track_index: u32) -> Option<String> {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner
-            .audio
-            .get(&track_index)?
-            .playlist(|| "init.mp4".to_string(), |index| format!("seg{index}.m4s"))
+        inner.audio.get(&track_index)?.playlist(
+            self.config,
+            || "init.mp4".to_string(),
+            |index| format!("seg{index}.m4s"),
+        )
     }
 
     pub fn get_video_init_segment(&self) -> Option<Bytes> {
@@ -1355,6 +1371,33 @@ mod tests {
     }
 
     #[test]
+    fn playlist_advertises_window_but_retains_grace_segments() {
+        let store = Fmp4HlsStore::with_config(HlsConfig {
+            max_segments: 3,
+            ..HlsConfig::default()
+        });
+        store.put_video_init_segment(Bytes::from_static(b"init"));
+
+        for index in 0..9u64 {
+            store.push_video_segment(index, 1.0, Bytes::from(index.to_string()));
+        }
+
+        let playlist = store.get_video_playlist().expect("playlist");
+        assert!(playlist.contains("#EXT-X-MEDIA-SEQUENCE:6"));
+        assert!(!playlist.contains("\nseg5.m4s\n"));
+        assert!(playlist.contains("\nseg6.m4s\n"));
+        assert!(playlist.contains("\nseg8.m4s\n"));
+        assert_eq!(playlist.matches(".m4s").count(), 3);
+        assert!(store.get_video_segment(0).is_some());
+        assert!(store.get_video_segment(6).is_some());
+
+        store.push_video_segment(9, 1.0, Bytes::from_static(b"9"));
+
+        assert!(store.get_video_segment(0).is_none());
+        assert!(store.get_video_segment(6).is_some());
+    }
+
+    #[test]
     fn high_profile_sequence_header_supports_init_segment_generation() {
         let sample_entry = build_h264_sample_entry_from_flv_sequence_header(
             &high_profile_sequence_header(),
@@ -1502,13 +1545,16 @@ mod tests {
                 store.push_video_segment(index as u64, duration as f64, Bytes::from(index.to_string()));
             }
 
-            let expected = durations.len().min(max_segments);
-            prop_assert_eq!(store.segment_count(), expected);
+            let expected_retained =
+                durations.len().min(max_segments + PLAYLIST_RETENTION_GRACE_SEGMENTS);
+            prop_assert_eq!(store.segment_count(), expected_retained);
 
             let playlist = store.get_primary_playlist().expect("playlist must exist");
-            let expected_first = durations.len().saturating_sub(expected) as u64;
+            let expected_advertised = durations.len().min(max_segments);
+            let expected_first = durations.len().saturating_sub(expected_advertised) as u64;
             let expected_seq_line = format!("#EXT-X-MEDIA-SEQUENCE:{expected_first}");
             prop_assert!(playlist.contains(&expected_seq_line));
+            prop_assert_eq!(playlist.matches(".m4s").count(), expected_advertised);
             let expected_last = durations.len() as u64 - 1;
             let expected_segment_name = format!("seg{expected_last}.m4s");
             prop_assert!(playlist.contains(&expected_segment_name));

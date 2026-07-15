@@ -17,7 +17,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 type KeyframeTimes = Arc<std::sync::Mutex<Vec<i64>>>;
-type IngestRuntime = (Arc<AtomicU64>, Arc<StageMetrics>, KeyframeTimes);
+type IngestRuntime = (
+    Arc<AtomicU64>,
+    Arc<StageMetrics>,
+    Arc<AtomicU64>,
+    KeyframeTimes,
+);
 
 #[derive(Default)]
 struct LoopTimestampState {
@@ -302,7 +307,7 @@ fn run_internal_file_ingest_loop(
     ring_buffer: Arc<RingBuffer>,
     cancel: CancellationToken,
 ) -> Result<(), String> {
-    let (bytes_received, ingest_metrics, cached_keyframe_times) =
+    let (bytes_received, ingest_metrics, last_progress_ms, cached_keyframe_times) =
         load_ingest_runtime(&engine, &runtime_handle, pipeline_id)?;
     let mut timestamps = LoopTimestampState::default();
 
@@ -322,6 +327,7 @@ fn run_internal_file_ingest_loop(
             &cancel,
             &bytes_received,
             &ingest_metrics,
+            &last_progress_ms,
             &cached_keyframe_times,
             &mut timestamps,
         )?;
@@ -359,6 +365,7 @@ fn load_ingest_runtime(
         Ok((
             ingest.bytes_received.clone(),
             ingest.metrics.clone(),
+            ingest.last_progress_ms.clone(),
             ingest.keyframe_times.clone(),
         ))
     })
@@ -563,6 +570,7 @@ fn run_internal_file_ingest_once(
     cancel: &CancellationToken,
     bytes_received: &Arc<AtomicU64>,
     ingest_metrics: &Arc<StageMetrics>,
+    last_progress_ms: &Arc<AtomicU64>,
     cached_keyframe_times: &KeyframeTimes,
     timestamps: &mut LoopTimestampState,
 ) -> Result<(), String> {
@@ -630,6 +638,7 @@ fn run_internal_file_ingest_once(
         ring_buffer,
         bytes_received,
         ingest_metrics,
+        last_progress_ms,
         cached_keyframe_times,
         timestamps,
         &mut startup_gate,
@@ -687,6 +696,7 @@ fn run_internal_file_ingest_once(
             ring_buffer,
             bytes_received,
             ingest_metrics,
+            last_progress_ms,
             cached_keyframe_times,
             timestamps,
             &mut startup_gate,
@@ -706,6 +716,7 @@ fn run_internal_file_ingest_once(
         ring_buffer,
         bytes_received,
         ingest_metrics,
+        last_progress_ms,
         cached_keyframe_times,
         timestamps,
         &mut startup_gate,
@@ -785,6 +796,7 @@ fn drain_remuxed_ts(
     ring_buffer: &Arc<RingBuffer>,
     bytes_received: &Arc<AtomicU64>,
     ingest_metrics: &Arc<StageMetrics>,
+    last_progress_ms: &Arc<AtomicU64>,
     cached_keyframe_times: &KeyframeTimes,
     timestamps: &mut LoopTimestampState,
     startup_gate: &mut LoopStartupGate,
@@ -810,6 +822,7 @@ fn drain_remuxed_ts(
         maybe_publish_probe(engine, runtime_handle, pipeline_id, demuxer, probe_sent);
         bytes_received.fetch_add(read as u64, Ordering::Relaxed);
         ingest_metrics.record_in(read as u64);
+        last_progress_ms.store(MediaEngine::now_epoch_ms(), Ordering::Relaxed);
     }
 }
 

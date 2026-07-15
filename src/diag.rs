@@ -13,6 +13,10 @@ use sysinfo::{Disks, Networks, System};
 use crate::media::engine::MediaEngine;
 use crate::media::file_analysis::MediaFileAnalysis;
 
+const DIAG_OUTPUT_PROGRESS_STALE_MS: i64 = 10_000;
+const DIAG_SRT_BUFFER_WARNING_PCT: f64 = 80.0;
+const DIAG_SRT_BUFFER_CRITICAL_PCT: f64 = 95.0;
+
 #[derive(Debug, Clone)]
 pub struct FileDiagnosticsContext {
     pub ingest_id: String,
@@ -328,11 +332,16 @@ async fn check_active_outputs(
                 .clone()
                 .unwrap_or_else(|| "unresolved".to_string());
             let last_progress_ms = egress.last_progress_ms;
-            let last_progress = if last_progress_ms > 0 {
+            let progress_age_ms = if last_progress_ms > 0 {
                 let age = chrono::Utc::now()
                     .timestamp_millis()
                     .max(0)
                     .saturating_sub(last_progress_ms as i64);
+                Some(age)
+            } else {
+                None
+            };
+            let last_progress = if let Some(age) = progress_age_ms {
                 format!("{}ms ago", age)
             } else {
                 "never".to_string()
@@ -352,6 +361,27 @@ async fn check_active_outputs(
                 issues.push(format!(
                     "Output {} has failed in phase {}.",
                     output_id, egress.phase
+                ));
+            }
+            if egress.status == "stalled"
+                || progress_age_ms.is_some_and(|age| age >= DIAG_OUTPUT_PROGRESS_STALE_MS)
+            {
+                let detail = progress_age_ms
+                    .map(|age| format!("last progress was {age}ms ago"))
+                    .unwrap_or_else(|| "no progress has been recorded".to_string());
+                issues.push(format!(
+                    "Output {output_id} is not making progress ({detail}) while its runtime phase is {}.",
+                    egress.phase
+                ));
+            } else if last_progress_ms == 0
+                && matches!(
+                    egress.phase.as_str(),
+                    "sending" | "publishing" | "uploading" | "waitingUpstream"
+                )
+            {
+                issues.push(format!(
+                    "Output {output_id} has entered {} but has never recorded media progress.",
+                    egress.phase
                 ));
             }
         }
@@ -571,6 +601,21 @@ async fn check_publisher_transport(
                     total / 1024,
                     pct
                 ));
+                if pct >= DIAG_SRT_BUFFER_CRITICAL_PCT {
+                    issues.push(format!(
+                        "SRT application receive buffer is {:.0}% full ({}KB / {}KB). Restream is not draining publisher data; downstream outputs will starve even if the kernel UDP queue looks empty.",
+                        pct,
+                        rcv / 1024,
+                        total / 1024
+                    ));
+                } else if pct >= DIAG_SRT_BUFFER_WARNING_PCT {
+                    issues.push(format!(
+                        "SRT application receive buffer is {:.0}% full ({}KB / {}KB). Ingest is close to stalling.",
+                        pct,
+                        rcv / 1024,
+                        total / 1024
+                    ));
+                }
             }
             if let Some(flight) = q.srt_flight_size_pkts {
                 lines.push(format!("Packets in flight: {}", flight));
