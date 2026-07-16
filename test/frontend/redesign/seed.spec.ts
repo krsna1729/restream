@@ -45,6 +45,48 @@ async function getCdpLayoutWidthDelta(page: Page): Promise<number> {
   return metrics.contentSize.width - metrics.cssLayoutViewport.clientWidth;
 }
 
+async function installPushStateCounter(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const originalPushState = window.history.pushState.bind(window.history);
+    const redesignWindow = window as Window & {
+      __redesignPushStateCount?: number;
+    };
+    Object.defineProperty(window, "__redesignPushStateCount", {
+      configurable: true,
+      value: 0,
+      writable: true,
+    });
+    window.history.pushState = ((...args: Parameters<History["pushState"]>) => {
+      redesignWindow.__redesignPushStateCount =
+        (redesignWindow.__redesignPushStateCount ?? 0) + 1;
+      return originalPushState(...args);
+    }) as History["pushState"];
+  });
+}
+
+async function resetPushStateCounter(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    (
+      window as Window & { __redesignPushStateCount?: number }
+    ).__redesignPushStateCount = 0;
+  });
+}
+
+async function expectPushStateCount(
+  page: Page,
+  expected: number,
+): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { __redesignPushStateCount?: number })
+            .__redesignPushStateCount,
+      ),
+    )
+    .toBe(expected);
+}
+
 async function tabUntilFocused(
   page: Page,
   locator: Locator,
@@ -367,28 +409,9 @@ test("seed: ui=v2 skip link reaches main content before dense chrome @desktop", 
 test("seed: ui=v2 overview Operate is one predictable history step @desktop", async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    const originalPushState = window.history.pushState.bind(window.history);
-    const redesignWindow = window as Window & {
-      __redesignPushStateCount?: number;
-    };
-    Object.defineProperty(window, "__redesignPushStateCount", {
-      configurable: true,
-      value: 0,
-      writable: true,
-    });
-    window.history.pushState = ((...args: Parameters<History["pushState"]>) => {
-      redesignWindow.__redesignPushStateCount =
-        (redesignWindow.__redesignPushStateCount ?? 0) + 1;
-      return originalPushState(...args);
-    }) as History["pushState"];
-  });
+  await installPushStateCounter(page);
   await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2");
-  await page.evaluate(() => {
-    (
-      window as Window & { __redesignPushStateCount?: number }
-    ).__redesignPushStateCount = 0;
-  });
+  await resetPushStateCounter(page);
 
   await page
     .locator("#dashboard-v2-overview")
@@ -404,15 +427,7 @@ test("seed: ui=v2 overview Operate is one predictable history step @desktop", as
       name: "Retrying Destination",
     }),
   ).toBeVisible();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as Window & { __redesignPushStateCount?: number })
-            .__redesignPushStateCount,
-      ),
-    )
-    .toBe(1);
+  await expectPushStateCount(page, 1);
 
   await page.goBack();
   await expect(page).toHaveURL(/\?mode=overview&ui=v2$/);
@@ -427,28 +442,9 @@ test("seed: ui=v2 overview Operate is one predictable history step @desktop", as
 test("seed: ui=v2 overview Inspect is one predictable history step @desktop", async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    const originalPushState = window.history.pushState.bind(window.history);
-    const redesignWindow = window as Window & {
-      __redesignPushStateCount?: number;
-    };
-    Object.defineProperty(window, "__redesignPushStateCount", {
-      configurable: true,
-      value: 0,
-      writable: true,
-    });
-    window.history.pushState = ((...args: Parameters<History["pushState"]>) => {
-      redesignWindow.__redesignPushStateCount =
-        (redesignWindow.__redesignPushStateCount ?? 0) + 1;
-      return originalPushState(...args);
-    }) as History["pushState"];
-  });
+  await installPushStateCounter(page);
   await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2");
-  await page.evaluate(() => {
-    (
-      window as Window & { __redesignPushStateCount?: number }
-    ).__redesignPushStateCount = 0;
-  });
+  await resetPushStateCounter(page);
 
   await page
     .locator("#dashboard-v2-overview")
@@ -468,15 +464,7 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   await expect(page.locator("#inspect-pipeline-select")).toHaveValue(
     "pipe-retrying",
   );
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as Window & { __redesignPushStateCount?: number })
-            .__redesignPushStateCount,
-      ),
-    )
-    .toBe(1);
+  await expectPushStateCount(page, 1);
 
   await page.goBack();
   await expect(page).toHaveURL(/\?mode=overview&ui=v2$/);
@@ -486,6 +474,62 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
       .getByRole("heading", { name: "Fleet overview" }),
   ).toBeVisible();
   expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
+});
+
+test("seed: ui=v2 pipeline workspace tabs preserve one selected context @desktop", async ({
+  page,
+}) => {
+  await installPushStateCounter(page);
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+    { expectOverviewReady: false },
+  );
+  await resetPushStateCounter(page);
+
+  const operateTab = page.locator("#pipeline-workspace-tab-operate");
+  const inspectTab = page.locator("#pipeline-workspace-tab-inspect");
+  const monitorTab = page.locator("#pipeline-workspace-tab-monitor");
+
+  await expect(operateTab).toHaveAttribute("aria-selected", "true");
+  await operateTab.click();
+  await expectPushStateCount(page, 0);
+  await expect(page).toHaveURL(/view=operate/);
+  await expect(page).toHaveURL(/p=pipe-retrying/);
+
+  await inspectTab.click();
+  await expectPushStateCount(page, 1);
+  await expect(page).toHaveURL(/view=inspect/);
+  await expect(page).toHaveURL(/p=pipe-retrying/);
+  await expect(inspectTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#inspect-mode-panel")).toBeVisible();
+  await expect(page.locator("#inspect-pipeline-select")).toHaveValue(
+    "pipe-retrying",
+  );
+
+  await monitorTab.click();
+  await expectPushStateCount(page, 2);
+  await expect(page).toHaveURL(/view=monitor/);
+  await expect(page).toHaveURL(/p=pipe-retrying/);
+  await expect(monitorTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#control-mode-panel")).toBeVisible();
+  await expect(page.locator("#control-room-pipeline-select")).toHaveValue(
+    "pipe-retrying",
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
+
+  await monitorTab.click();
+  await expectPushStateCount(page, 2);
+
+  await page.goBack();
+  await expect(page).toHaveURL(/view=inspect/);
+  await expect(page).toHaveURL(/p=pipe-retrying/);
+  await expect(inspectTab).toHaveAttribute("aria-selected", "true");
+  await page.goBack();
+  await expect(page).toHaveURL(/view=operate/);
+  await expect(page).toHaveURL(/p=pipe-retrying/);
+  await expect(operateTab).toHaveAttribute("aria-selected", "true");
 });
 
 test("seed: ui=v2 Operate stays inside the viewport across breakpoints", async ({

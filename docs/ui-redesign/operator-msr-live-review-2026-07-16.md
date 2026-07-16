@@ -88,6 +88,11 @@ and Inspect actions each push one canonical `mode=pipeline&view=...&p=...` URL,
 render the selected pipeline destination immediately, and let a single browser
 Back return to clean v2 Overview.
 
+Pipeline workspace navigation is also context-stable: seeded Playwright/CDP
+coverage proves an operator can move Operate → Inspect → Monitor while retaining
+the same selected pipeline, and that clicking the already-active workspace tab
+does not add a duplicate browser-history entry.
+
 The seeded v2 Operate path also has a CDP layout proof across the configured
 desktop, tablet, and mobile browser projects. The stress fixture uses the
 recovered sink-flap pipeline with 30 audio tracks and verifies that both DOM

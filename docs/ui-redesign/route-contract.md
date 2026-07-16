@@ -45,6 +45,9 @@ and `p` while preserving unrelated query parameters.
   `?mode=pipeline&view=operate&p=<pipeline-id>` and its Inspect action moves
   directly to `?mode=pipeline&view=inspect&p=<pipeline-id>` instead of pushing
   an intermediate Overview URL with `p=`.
+- Re-selecting the already-active dashboard or pipeline workspace tab is a
+  no-op for browser history. This keeps Back focused on real operator movement
+  rather than duplicate copies of the same URL.
 - A selected pipeline is reconciled by stable ID, name, or persisted hint when
   configuration refreshes replace runtime IDs.
 - Invalid or absent pipeline selections remain safely representable.

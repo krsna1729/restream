@@ -754,9 +754,15 @@ function applyMode(
   syncDashboardPolling();
 }
 
+function pushDashboardUrl(url: URL): boolean {
+  if (url.href === window.location.href) return false;
+  window.history.pushState({}, "", url);
+  return true;
+}
+
 function setModeUrl(mode: DashboardMode): void {
   const url = dashboardModeUrl(window.location.href, mode);
-  window.history.pushState({}, "", url);
+  pushDashboardUrl(url);
 }
 
 export function setDashboardMode(mode: string): void {
@@ -781,7 +787,7 @@ export function setPipelineWorkspaceView(
   pipelineId?: string | null,
 ): void {
   const url = pipelineWorkspaceUrl(window.location.href, view, pipelineId);
-  window.history.pushState({}, "", url);
+  pushDashboardUrl(url);
   refreshActiveMode();
 }
 
