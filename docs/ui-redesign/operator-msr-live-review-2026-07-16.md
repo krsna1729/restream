@@ -122,8 +122,8 @@ the visible and accessibility-tree summary.
 Status now also has one local search surface across Recent Activity and Process
 Log. The route summary remains the unfiltered process truth, while the search
 result summary is announced as status text for hit and no-hit states. Seeded
-Playwright/CDP coverage proves operators can narrow by target/message without
-losing the authoritative route counts.
+Playwright/CDP coverage proves operators can narrow by target/message, recover
+with a local Clear search action, and keep the authoritative route counts.
 
 Incidents now gets the same cognitive-load reduction before its alert and
 event feeds: the legacy-owned route announces critical, warning, recent-event,

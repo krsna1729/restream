@@ -788,8 +788,21 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   await expect(
     status.getByText("No process log entries match this search."),
   ).toBeVisible();
+  const clearSearch = status.getByRole("button", { name: "Clear search" });
+  await expect(clearSearch).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     '0 activities · 0 process logs match "missing"',
+  );
+
+  await clearSearch.click();
+  await expect(search).toHaveValue("");
+  await expect(searchSummary).toHaveText("1 activity · 1 process log visible");
+  await expect(clearSearch).toBeHidden();
+  await expect(
+    status.getByText("Synthetic output entered retry backoff"),
+  ).toHaveCount(2);
+  expect(await getCdpStatusTexts(page)).toContain(
+    "1 activity · 1 process log visible",
   );
   expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
 });

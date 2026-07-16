@@ -542,6 +542,15 @@ function bindActions(status: StatusData, sbomEndpoint: string): void {
     nextSearch?.setSelectionRange(cursor, cursor);
   });
   document
+    .getElementById("status-clear-search-btn")
+    ?.addEventListener("click", () => {
+      statusLogSearchQuery = "";
+      renderStatusSnapshot();
+      (
+        document.getElementById("status-log-search") as HTMLInputElement | null
+      )?.focus();
+    });
+  document
     .getElementById("download-status-btn")
     ?.addEventListener("click", () => {
       downloadJson(`restream-status-${timestampForFilename()}.json`, status);
@@ -605,6 +614,7 @@ function renderStatusSnapshot(): void {
                 <span class="label-text text-base-content/70">Search process logs and activity</span>
                 <input id="status-log-search" class="input input-sm input-bordered mt-1" type="search" value="${escapeHtml(statusLogSearchQuery)}" placeholder="level, target, event, message…" autocomplete="off" />
             </label>
+            <button id="status-clear-search-btn" type="button" class="btn btn-sm btn-outline ${search ? "" : "hidden"}">Clear search</button>
             <p id="status-log-search-results-summary" class="dashboard-muted pb-1 text-sm" role="status" aria-live="polite">${escapeHtml(searchSummaryText)}</p>
         </div>`,
     statusQuickNavHtml(),
