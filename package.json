@@ -2,26 +2,34 @@
   "type": "module",
   "scripts": {
     "prepare:frontend-assets": "node ./scripts/dev/frontend/prepare-assets.mjs",
-    "build:frontend": "npm run prepare:frontend-assets && npx tsc -p tsconfig.json && npx tailwindcss -i web/styles/input.css -o public/output.css",
+    "build:frontend": "npm run prepare:frontend-assets && npx tsc -p tsconfig.json && npm run build:frontend:v2 && npx tailwindcss -i web/styles/input.css -o public/output.css",
+    "build:frontend:v2": "npx tsc -p tsconfig.v2.json && vite build --config vite.v2.config.ts",
     "build:css": "npx tailwindcss -i web/styles/input.css -o public/output.css",
     "check:api-contract": "./scripts/check/api-contract.sh",
-    "format:check": "npx tsc -p tsconfig.json --noEmit",
+    "format:check": "npx tsc -p tsconfig.json --noEmit && npx tsc -p tsconfig.v2.json",
     "test:frontend": "./scripts/dev/frontend/node-tests.sh && npm run test:frontend:js-smoke",
     "test:frontend:coverage": "./scripts/dev/frontend/node-tests.sh --coverage && npm run test:frontend:js-smoke",
     "test:frontend:coverage:all": "./scripts/dev/frontend/node-tests.sh --coverage-all && npm run test:frontend:js-smoke",
     "test:frontend:js-smoke": "npm run build:frontend && FRONTEND_MODULES_DIR=public/js node --experimental-default-type=module --test test/frontend/frontend-api-contract.test.mjs test/frontend/frontend-dashboard-contract.test.mjs test/frontend/frontend-diagnostics.test.mjs test/frontend/frontend-incidents.test.mjs test/frontend/frontend-engineer-telemetry.test.mjs test/frontend/frontend-ops-navigation.test.mjs test/frontend/frontend-pipeline-workspace.test.mjs test/frontend/frontend-history-stream.test.mjs test/frontend/frontend-log-stream.test.mjs test/frontend/frontend-overview-activity-stream.test.mjs test/frontend/frontend-publisher-health-contract.test.mjs test/frontend/frontend-status-stream.test.mjs test/frontend/frontend-build-smoke.test.mjs test/frontend/frontend-dom-invariants.test.mjs",
     "test:frontend:browser-dom": "npm run build:frontend && node ./scripts/dev/frontend/browser-dom-tests.mjs",
+    "test:frontend:redesign-baseline": "./scripts/harness/frontend-e2e.sh --config test/frontend/redesign/playwright.visual.config.ts",
     "bench:frontend-dom": "npm run build:frontend && FRONTEND_JS_DIR=public/js node test/frontend/frontend-dom-render-bench.mjs",
     "test:e2e": "./scripts/harness/frontend-e2e.sh"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "@playwright/test": "^1.61.1",
     "@tailwindcss/cli": "^4.3.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "daisyui": "^5.6.18",
     "tailwindcss": "^4.3.2",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vite": "^8.1.4"
   },
   "dependencies": {
-    "hls.js": "^1.6.16"
+    "hls.js": "^1.6.16",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   }
 }

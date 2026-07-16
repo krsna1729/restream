@@ -85,14 +85,24 @@ async function mountPreviewPipe(
       audioTrack = 0;
 
       constructor() {
-        (
-          window as typeof window & { __previewTestHls?: FakeHls }
-        ).__previewTestHls = this;
+        const testWindow = window as typeof window & {
+          __previewTestHls?: FakeHls;
+          __previewTestHlsConstructed?: number;
+        };
+        testWindow.__previewTestHls = this;
+        testWindow.__previewTestHlsConstructed =
+          (testWindow.__previewTestHlsConstructed || 0) + 1;
       }
 
       loadSource(_src: string) {}
       attachMedia(_video: HTMLVideoElement) {}
-      destroy() {}
+      destroy() {
+        const testWindow = window as typeof window & {
+          __previewTestHlsDestroyed?: number;
+        };
+        testWindow.__previewTestHlsDestroyed =
+          (testWindow.__previewTestHlsDestroyed || 0) + 1;
+      }
 
       on(event: string, handler: (event: string, data?: unknown) => void) {
         (this.handlers[event] ||= []).push(handler);
@@ -281,6 +291,54 @@ test.describe("Frontend Browser DOM", () => {
       return testWindow.__previewTestHls?.audioTrack ?? null;
     });
     expect(selectedTrack).toBe(1);
+  });
+
+  test("preview retries a fatal HLS error before playback starts", async ({
+    page,
+  }) => {
+    await mountPreviewPipe(page);
+    await page
+      .locator("#video-player button", { hasText: "Play preview" })
+      .click();
+    await page.waitForFunction(
+      () =>
+        (
+          window as typeof window & {
+            __previewTestHlsConstructed?: number;
+          }
+        ).__previewTestHlsConstructed === 1,
+    );
+
+    await page.evaluate(() => {
+      const testWindow = window as typeof window & {
+        Hls: { Events: Record<string, string> };
+        __previewTestHls?: {
+          emit: (event: string, data?: unknown) => void;
+        };
+      };
+      testWindow.__previewTestHls?.emit(testWindow.Hls.Events.ERROR, {
+        fatal: true,
+      });
+    });
+
+    await page.waitForFunction(
+      () =>
+        (
+          window as typeof window & {
+            __previewTestHlsConstructed?: number;
+          }
+        ).__previewTestHlsConstructed === 2,
+    );
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __previewTestHlsDestroyed?: number;
+            }
+          ).__previewTestHlsDestroyed,
+      ),
+    ).toBe(1);
   });
 
   test("preview audio picker surfaces all high-index tracks and switches to the last one", async ({

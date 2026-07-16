@@ -39,6 +39,16 @@ import {
   pipelineViewDependencies,
   setPipelineViewDependencies,
 } from "./pipeline-dependencies.js";
+import {
+  buildPipelineOperateHeaderModel,
+  buildPipelineOperateInputStatusModel,
+} from "./pipeline-operate-view-model.js";
+import type {
+  PipelineOperateAudioTrackModel,
+  PipelineOperateFileSourceModel,
+  PipelineOperateHeaderModel,
+  PipelineOperateInputStatusModel,
+} from "./pipeline-operate-view-model.js";
 
 const ingestUiState = {
   selectedProtocol: "rtmp",
@@ -88,6 +98,73 @@ function audioTrackExpansionKey(pipelineId: string): string {
   return pipelineId;
 }
 
+let legacyPipelineHeaderRenderEnabled = true;
+let legacyPipelineLifecycleControlsEnabled = true;
+let pipelineHeaderPresentationHook:
+  ((model: PipelineOperateHeaderModel | null) => void) | null = null;
+let legacyPipelineInputStatusRenderEnabled = true;
+let legacyPipelineAudioTracksRenderEnabled = true;
+let legacyPipelinePreviewRenderEnabled = true;
+let pipelineInputStatusPresentationHook:
+  ((model: PipelineOperateInputStatusModel | null) => void) | null = null;
+
+export function configurePipelineHeaderPresentation(options: {
+  legacyLifecycleControlsEnabled?: boolean;
+  legacyRenderEnabled: boolean;
+  onPresentation?: (model: PipelineOperateHeaderModel | null) => void;
+}): void {
+  legacyPipelineHeaderRenderEnabled = options.legacyRenderEnabled;
+  legacyPipelineLifecycleControlsEnabled =
+    options.legacyLifecycleControlsEnabled !== false;
+  pipelineHeaderPresentationHook = options.onPresentation || null;
+  for (const id of [
+    "pipeline-header-legacy-identity",
+    "graph-pipe-btn",
+    "diagnose-pipe-btn",
+    "edit-pipe-action-item",
+  ]) {
+    const element = document.getElementById(id);
+    if (element) element.hidden = !legacyPipelineHeaderRenderEnabled;
+  }
+  for (const id of ["record-pipe-btn", "file-ingest-pipe-btn"]) {
+    const element = document.getElementById(id);
+    if (element) element.hidden = !legacyPipelineLifecycleControlsEnabled;
+  }
+}
+
+export function configurePipelineInputStatusPresentation(options: {
+  legacyRenderEnabled: boolean;
+  onPresentation?: (model: PipelineOperateInputStatusModel | null) => void;
+}): void {
+  legacyPipelineInputStatusRenderEnabled = options.legacyRenderEnabled;
+  legacyPipelineAudioTracksRenderEnabled = options.legacyRenderEnabled;
+  legacyPipelinePreviewRenderEnabled = options.legacyRenderEnabled;
+  pipelineInputStatusPresentationHook = options.onPresentation || null;
+  const publisherMeta = document.getElementById("publisher-meta");
+  if (publisherMeta)
+    publisherMeta.hidden = !legacyPipelineInputStatusRenderEnabled;
+  for (const id of [
+    "pipeline-input-legacy-traffic-heading",
+    "pipeline-input-legacy-traffic",
+    "pipeline-input-legacy-video-heading",
+    "pipeline-input-legacy-video",
+    "pipeline-input-legacy-audio-heading",
+    "input-audio-tracks",
+    "video-player",
+  ]) {
+    const element = document.getElementById(id);
+    if (element) element.hidden = !legacyPipelineInputStatusRenderEnabled;
+  }
+  for (const id of [
+    "stream-key-section",
+    "ingest-url-section",
+    "file-source-section",
+  ]) {
+    const element = document.getElementById(id);
+    if (element) element.hidden = !legacyPipelineInputStatusRenderEnabled;
+  }
+}
+
 function recordingIntentKey(pipeId: string): string {
   return pipeId;
 }
@@ -130,6 +207,103 @@ function setPendingFileIngestIntent(
   } else {
     pendingFileIngestIntents.set(key, intent);
   }
+}
+
+export async function togglePipelineRecording(pipeId: string): Promise<void> {
+  const pipe = state.pipelines.find((candidate) => candidate.id === pipeId);
+  if (!pipe || getPendingRecordingIntent(pipeId)) return;
+  const recordingEnabled = pipe.recording.enabled;
+  setPendingRecordingIntent(
+    pipeId,
+    recordingEnabled ? "stopping" : "starting",
+  );
+  renderPipelineInfoColumn(pipeId);
+  try {
+    const res = recordingEnabled
+      ? await stopRecording(pipeId)
+      : await startRecording(pipeId);
+    if (res !== null) {
+      pipelineViewDependencies.updateDashboardPipelineRecordingState?.(
+        pipeId,
+        res,
+      );
+    }
+  } finally {
+    setPendingRecordingIntent(pipeId, null);
+    renderPipelineInfoColumn(pipeId);
+  }
+}
+
+export async function togglePipelineFileIngest(pipeId: string): Promise<void> {
+  const pipe = state.pipelines.find((candidate) => candidate.id === pipeId);
+  const fileIngest = pipe?.fileIngest || null;
+  const configured = Boolean(
+    pipe &&
+      (pipe.inputSource || "").startsWith("file:") &&
+      fileIngest?.configured &&
+      fileIngest.id,
+  );
+  if (
+    !pipe ||
+    !configured ||
+    !fileIngest?.id ||
+    getPendingFileIngestIntent(pipeId)
+  ) {
+    return;
+  }
+  const running = Boolean(fileIngest.running);
+  setPendingFileIngestIntent(pipeId, running ? "stopping" : "starting");
+  renderPipelineInfoColumn(pipeId);
+  try {
+    const res = running
+      ? await stopIngest(fileIngest.id)
+      : await startIngest(fileIngest.id);
+    if (res !== null) {
+      pipelineViewDependencies.updateDashboardPipelineFileIngestState?.(
+        pipeId,
+        {
+          configured: true,
+          id: res.id,
+          filename: res.filename,
+          streamKey: res.streamKey,
+          loop: res.loop,
+          startTime: res.startTime,
+          liveOptimized: res.liveOptimized,
+          targetGopSeconds: res.targetGopSeconds,
+          running: res.running,
+        },
+      );
+      void pipelineViewDependencies.awaitDashboardRuntimeMutationConvergence?.();
+    }
+  } finally {
+    setPendingFileIngestIntent(pipeId, null);
+    renderPipelineInfoColumn(pipeId);
+  }
+}
+
+export function selectPipelineIngestProtocol(
+  pipeId: string,
+  protocol: "rtmp" | "srt",
+): void {
+  const pipeline = state.pipelines.find(({ id }) => id === pipeId);
+  if (!pipeline?.ingestUrls[protocol]) return;
+  ingestUiState.selectedProtocol = protocol;
+  renderPipelineInfoColumn(pipeId);
+}
+
+export async function copyPipelineStreamKey(pipeId: string): Promise<void> {
+  const streamKey = state.pipelines.find(({ id }) => id === pipeId)?.key;
+  if (streamKey && (await copyText(streamKey))) showCopiedNotification();
+}
+
+export async function copyPipelineIngestUrl(
+  pipeId: string,
+  protocol: "rtmp" | "srt",
+): Promise<void> {
+  const url = state.pipelines.find(({ id }) => id === pipeId)?.ingestUrls[
+    protocol
+  ];
+  if (url && (await copyText(url))) showCopiedNotification();
 }
 
 function getFileSourceName(pipe: PipelineView): string | null {
@@ -316,6 +490,108 @@ function formatAudioTrackIdentity(track: AudioTrack, label: string): string {
     parts.push(track.language.trim().toUpperCase());
   }
   return parts.join(" / ") || "Metadata";
+}
+
+function buildAudioTrackModels(
+  pipelineId: string,
+  tracks: readonly AudioTrack[],
+): PipelineOperateAudioTrackModel[] {
+  return tracks.map((track, index) => {
+    const key = audioTrackKey(track, index);
+    const editKey = `${pipelineId}:${key}`;
+    const label = getAudioTrackLabel(pipelineId, track, index);
+    return {
+      key,
+      index,
+      label,
+      identity: formatAudioTrackIdentity(track, label),
+      codec: formatCodecName(track.codec) || track.codec || "--",
+      sampleRate: formatSampleRate(track.sample_rate),
+      channels:
+        track.channels !== null && track.channels !== undefined
+          ? formatChannelCount(track.channels)
+          : "--",
+      profile: track.profile || "--",
+      editing: audioLabelEditKeys.has(editKey),
+      draft:
+        audioLabelDrafts.get(editKey) ??
+        getAudioTrackStoredLabel(pipelineId, track, index),
+    };
+  });
+}
+
+function resolveAudioTrack(pipelineId: string, key: string) {
+  const pipeline = state.pipelines.find(({ id }) => id === pipelineId);
+  const index = pipeline?.input.audioTracks.findIndex(
+    (track, position) => audioTrackKey(track, position) === key,
+  );
+  if (!pipeline || index === undefined || index < 0) return null;
+  return { pipeline, track: pipeline.input.audioTracks[index], index };
+}
+
+export function editPipelineAudioTrack(pipelineId: string, key: string): void {
+  const resolved = resolveAudioTrack(pipelineId, key);
+  if (!resolved) return;
+  const editKey = `${pipelineId}:${key}`;
+  audioLabelEditKeys.add(editKey);
+  audioLabelDrafts.set(
+    editKey,
+    getAudioTrackStoredLabel(pipelineId, resolved.track, resolved.index),
+  );
+  renderPipelineInfoColumn(pipelineId);
+}
+
+export function updatePipelineAudioTrackDraft(
+  pipelineId: string,
+  key: string,
+  value: string,
+): void {
+  if (!resolveAudioTrack(pipelineId, key)) return;
+  audioLabelDrafts.set(`${pipelineId}:${key}`, value);
+}
+
+export function cancelPipelineAudioTrackEdit(
+  pipelineId: string,
+  key: string,
+): void {
+  const editKey = `${pipelineId}:${key}`;
+  audioLabelEditKeys.delete(editKey);
+  audioLabelDrafts.delete(editKey);
+  renderPipelineInfoColumn(pipelineId);
+}
+
+export function savePipelineAudioTrack(
+  pipelineId: string,
+  key: string,
+): void {
+  const resolved = resolveAudioTrack(pipelineId, key);
+  if (!resolved) return;
+  const editKey = `${pipelineId}:${key}`;
+  setAudioTrackStoredLabel(
+    pipelineId,
+    resolved.track,
+    resolved.index,
+    audioLabelDrafts.get(editKey) || "",
+  );
+  audioLabelEditKeys.delete(editKey);
+  audioLabelDrafts.delete(editKey);
+  renderPipelineInfoColumn(pipelineId);
+}
+
+export function mountPipelineInputPreview(
+  pipelineId: string,
+  container: HTMLElement,
+): void {
+  const pipeline = state.pipelines.find(({ id }) => id === pipelineId);
+  if (!pipeline || pipeline.input.status === "off") {
+    clearInputPreview(container);
+    return;
+  }
+  renderInputPreview(container, pipeline);
+}
+
+export function clearPipelineInputPreview(container: HTMLElement): void {
+  clearInputPreview(container);
 }
 
 function renderAudioTracksTable(
@@ -585,6 +861,8 @@ function renderVideoTrackDetails(
 export function renderPipelineInfoColumn(selectedPipe: string | null): void {
   lastRenderedPipelineInfoId = selectedPipe;
   if (!selectedPipe) {
+    pipelineHeaderPresentationHook?.(null);
+    pipelineInputStatusPresentationHook?.(null);
     document.getElementById("pipe-info-col")?.classList.add("hidden");
     return;
   }
@@ -593,9 +871,17 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
 
   const pipe = state.pipelines.find((p) => p.id === selectedPipe);
   if (!pipe) {
+    pipelineHeaderPresentationHook?.(null);
+    pipelineInputStatusPresentationHook?.(null);
     console.error("Pipeline not found:", selectedPipe);
     return;
   }
+  pipelineHeaderPresentationHook?.(
+    buildPipelineOperateHeaderModel(state.pipelines, selectedPipe, {
+      recordingIntent: getPendingRecordingIntent(pipe.id),
+      fileIngestIntent: getPendingFileIngestIntent(pipe.id),
+    }),
+  );
   const isFileSource = (pipe.inputSource || "").startsWith("file:");
   const fileSourceName = getFileSourceName(pipe);
 
@@ -644,28 +930,7 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
       : !canStart
         ? "Input must be on to start recording"
         : "";
-    recordBtn.onclick = async () => {
-      if (pending) return;
-      setPendingRecordingIntent(
-        pipe.id,
-        isRecordingEnabled ? "stopping" : "starting",
-      );
-      renderPipelineInfoColumn(pipe.id);
-      try {
-        const res = isRecordingEnabled
-          ? await stopRecording(pipe.id)
-          : await startRecording(pipe.id);
-        if (res !== null) {
-          pipelineViewDependencies.updateDashboardPipelineRecordingState?.(
-            pipe.id,
-            res,
-          );
-        }
-      } finally {
-        setPendingRecordingIntent(pipe.id, null);
-        renderPipelineInfoColumn(pipe.id);
-      }
-    };
+    recordBtn.onclick = () => togglePipelineRecording(pipe.id);
   }
 
   const fileIngestBtn = document.getElementById(
@@ -706,36 +971,7 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
       fileIngestBtn.title = fileIngest.filename
         ? `${running ? "Stop" : "Start"} file ingest for ${fileIngest.filename}`
         : "";
-      fileIngestBtn.onclick = async () => {
-        if (pending) return;
-        setPendingFileIngestIntent(pipe.id, running ? "stopping" : "starting");
-        renderPipelineInfoColumn(pipe.id);
-        const res = running
-          ? await stopIngest(fileIngest.id as string)
-          : await startIngest(fileIngest.id as string);
-        try {
-          if (res !== null) {
-            pipelineViewDependencies.updateDashboardPipelineFileIngestState?.(
-              pipe.id,
-              {
-                configured: true,
-                id: res.id,
-                filename: res.filename,
-                streamKey: res.streamKey,
-                loop: res.loop,
-                startTime: res.startTime,
-                liveOptimized: res.liveOptimized,
-                targetGopSeconds: res.targetGopSeconds,
-                running: res.running,
-              },
-            );
-            void pipelineViewDependencies.awaitDashboardRuntimeMutationConvergence?.();
-          }
-        } finally {
-          setPendingFileIngestIntent(pipe.id, null);
-          renderPipelineInfoColumn(pipe.id);
-        }
-      };
+      fileIngestBtn.onclick = () => togglePipelineFileIngest(pipe.id);
     }
   }
 
@@ -816,6 +1052,93 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
     scheduleSourceFileMetadataLoad(fileSourceName);
     scheduleSourceFileAnalysisLoad(fileSourceName);
   }
+  const targetGopSeconds = pipe.fileIngest?.targetGopSeconds || 2;
+  const sparseSource =
+    Number(cachedSourceAnalysis?.maxKeyframeIntervalSec ?? 0) >
+    targetGopSeconds;
+  const fileSourceModel: PipelineOperateFileSourceModel | null = isFileSource
+    ? {
+        filename: fileSourceName || "--",
+        details: [
+          {
+            key: "container",
+            label: "Container",
+            value: formatFileContainer(fileSourceName),
+          },
+          {
+            key: "size",
+            label: "Size",
+            value: formatFileSize(
+              cachedSourceFile?.sourceSize ?? cachedSourceFile?.size ?? null,
+            ),
+          },
+          {
+            key: "modified",
+            label: "Modified",
+            value: formatFileModifiedAt(cachedSourceFile?.modifiedAt || null),
+          },
+          {
+            key: "loop",
+            label: "Loop",
+            value: pipe.fileIngest?.configured
+              ? pipe.fileIngest.loop
+                ? "Enabled"
+                : "Disabled"
+              : "--",
+          },
+          {
+            key: "start",
+            label: "Start offset",
+            value: pipe.fileIngest?.configured
+              ? pipe.fileIngest.startTime || "00:00:00"
+              : "--",
+          },
+          {
+            key: "optimization",
+            label: "Live optimized",
+            value: pipe.fileIngest?.configured
+              ? pipe.fileIngest.liveOptimized
+                ? `Enabled (${targetGopSeconds}s GOP)`
+                : "Disabled"
+              : "--",
+          },
+          {
+            key: "codec",
+            label: "Video codec",
+            value: cachedSourceAnalysis?.videoCodec?.toUpperCase() || "--",
+          },
+          {
+            key: "fps",
+            label: "Frame rate",
+            value: formatSourceFps(cachedSourceAnalysis?.fps),
+          },
+          {
+            key: "duration",
+            label: "Duration",
+            value: formatSourceDuration(cachedSourceAnalysis?.durationSec),
+          },
+          {
+            key: "gop",
+            label: "GOP",
+            value: formatSourceGop(cachedSourceAnalysis),
+          },
+        ],
+        warning: sparseSource
+          ? pipe.fileIngest?.liveOptimized
+            ? `Sparse source GOP detected: max ${Number(cachedSourceAnalysis?.maxKeyframeIntervalSec).toFixed(1)}s. Live Optimized is targeting ${targetGopSeconds}s keyframes.`
+            : `Sparse source GOP detected: max ${Number(cachedSourceAnalysis?.maxKeyframeIntervalSec).toFixed(1)}s exceeds the ${targetGopSeconds}s live target.`
+          : null,
+      }
+    : null;
+  pipelineInputStatusPresentationHook?.(
+    buildPipelineOperateInputStatusModel(
+      state.pipelines,
+      selectedPipe,
+      ingestUiState.selectedProtocol as "rtmp" | "srt",
+      fileSourceModel,
+      buildAudioTrackModels(pipe.id, pipe.input.audioTracks || []),
+    ),
+  );
   setTextIfPresent(
     "file-source-container",
     formatFileContainer(fileSourceName || pipe.fileIngest?.filename || null),
@@ -869,11 +1192,7 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
   setTextIfPresent("file-source-gop", formatSourceGop(cachedSourceAnalysis));
   const fileSourceWarning = document.getElementById("file-source-gop-warning");
   if (fileSourceWarning) {
-    const targetGopSeconds = pipe.fileIngest?.targetGopSeconds || 2;
-    const sparse =
-      Number(cachedSourceAnalysis?.maxKeyframeIntervalSec ?? 0) >
-      targetGopSeconds;
-    if (isFileSource && sparse) {
+    if (isFileSource && sparseSource) {
       fileSourceWarning.textContent = pipe.fileIngest?.liveOptimized
         ? `Sparse source GOP detected: max ${Number(cachedSourceAnalysis?.maxKeyframeIntervalSec).toFixed(1)}s. Live Optimized is targeting ${targetGopSeconds}s keyframes.`
         : `Sparse source GOP detected: max ${Number(cachedSourceAnalysis?.maxKeyframeIntervalSec).toFixed(1)}s exceeds the ${targetGopSeconds}s live target.`;
@@ -1029,9 +1348,13 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
     inputStatsElem?.classList.add("hidden");
     clearInputPreview(playerElem);
   } else {
-    playerElem?.classList.remove("hidden");
+    playerElem?.classList.toggle("hidden", !legacyPipelinePreviewRenderEnabled);
     inputStatsElem?.classList.remove("hidden");
-    renderInputPreview(playerElem, pipe);
+    if (legacyPipelinePreviewRenderEnabled) {
+      renderInputPreview(playerElem, pipe);
+    } else {
+      clearInputPreview(playerElem);
+    }
 
     const video = pipe.input.video || {};
     const stats =
@@ -1055,7 +1378,9 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
     setTextContent("input-video-profile", video.profile || "--");
     renderVideoTrackDetails(video, pipe.input.videoTrackSelection);
 
-    renderAudioTracksTable(pipe.id, pipe.input.audioTracks || []);
+    if (legacyPipelineAudioTracksRenderEnabled) {
+      renderAudioTracksTable(pipe.id, pipe.input.audioTracks || []);
+    }
 
     setBitrateWithSubtleUnit("input-total-bw", stats.inputBitrateKbps);
     setBitrateWithSubtleUnit("output-total-bw", stats.outputBitrateKbps);
@@ -1080,6 +1405,7 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
     publisherMeta.className = "mt-1 mb-4 flex flex-wrap items-center gap-2";
     inputStatsElem?.parentNode?.insertBefore(publisherMeta, inputStatsElem);
   }
+  publisherMeta.hidden = !legacyPipelineInputStatusRenderEnabled;
 
   const publisher = pipe.input.publisher;
   const qualityAlerts = publisher ? getPublisherQualityAlerts(publisher) : [];

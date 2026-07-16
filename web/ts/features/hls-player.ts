@@ -1,4 +1,5 @@
 import { withBasePath } from "../core/base-path.js";
+import { buildPreviewHlsConfig } from "./hls-playback-config.js";
 
 const MANAGED_HLS_VIDEO_SELECTOR = '[data-role="managed-hls-video"]';
 const HLS_READY_RETRY_MS = 500;
@@ -376,9 +377,7 @@ export function renderManagedHlsPlayer(
       setErrorOverlay("HLS playback library is unavailable.");
       return;
     }
-    const hls = new HlsConstructor({
-      startLevel: -1,
-    });
+    const hls = new HlsConstructor(buildPreviewHlsConfig());
     hlsInstances.set(video, hls);
 
     hls.loadSource(previewSrc);

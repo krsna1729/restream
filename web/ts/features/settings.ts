@@ -206,15 +206,15 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     <div class="flex flex-wrap items-end gap-3">
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend">Current Password</legend>
-                            <input type="password" id="current-password-input" class="input input-sm w-44" autocomplete="current-password" />
+                            <input type="password" id="current-password-input" class="input input-sm w-44" autocomplete="current-password" aria-label="Current password" />
                         </fieldset>
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend">New Password</legend>
-                            <input type="password" id="new-password-input" class="input input-sm w-44" autocomplete="new-password" minlength="12" />
+                            <input type="password" id="new-password-input" class="input input-sm w-44" autocomplete="new-password" minlength="12" aria-label="New password" />
                         </fieldset>
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend">Confirm Password</legend>
-                            <input type="password" id="confirm-password-input" class="input input-sm w-44" autocomplete="new-password" minlength="12" />
+                            <input type="password" id="confirm-password-input" class="input input-sm w-44" autocomplete="new-password" minlength="12" aria-label="Confirm password" />
                         </fieldset>
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend invisible">_</legend>
@@ -233,19 +233,19 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     <div class="flex flex-wrap items-end gap-3">
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend">Failure Limit</legend>
-                            <input type="number" id="ingest-security-failure-limit" class="input input-sm w-28" min="1" step="1" />
+                            <input type="number" id="ingest-security-failure-limit" class="input input-sm w-28" min="1" step="1" aria-label="Ingest security failure limit" />
                         </fieldset>
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend">Failure Window (ms)</legend>
-                            <input type="number" id="ingest-security-failure-window-ms" class="input input-sm w-36" min="1" step="1" />
+                            <input type="number" id="ingest-security-failure-window-ms" class="input input-sm w-36" min="1" step="1" aria-label="Ingest security failure window in milliseconds" />
                         </fieldset>
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend">Ban Duration (ms)</legend>
-                            <input type="number" id="ingest-security-ban-ms" class="input input-sm w-36" min="1" step="1" />
+                            <input type="number" id="ingest-security-ban-ms" class="input input-sm w-36" min="1" step="1" aria-label="Ingest security ban duration in milliseconds" />
                         </fieldset>
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend">Tracked IP Limit</legend>
-                            <input type="number" id="ingest-security-tracked-ip-limit" class="input input-sm w-32" min="1" step="1" />
+                            <input type="number" id="ingest-security-tracked-ip-limit" class="input input-sm w-32" min="1" step="1" aria-label="Ingest security tracked IP limit" />
                         </fieldset>
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend invisible">_</legend>
@@ -265,7 +265,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                             <button class="btn btn-outline btn-sm" data-settings-action="reset-rate-limits">Reset All</button>
                         </div>
                     </div>
-                    <div class="overflow-x-auto rounded-lg border border-base-content/10">
+                    <div class="overflow-x-auto rounded-lg border border-base-content/10" role="region" aria-label="Authentication attempts" tabindex="0">
                         <table class="table table-sm">
                             <thead>
                                 <tr>
@@ -315,7 +315,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     <div class="flex flex-wrap items-end gap-3">
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend">Mode</legend>
-                            <select id="srt-ingest-mode-input" class="select select-sm w-40">
+                            <select id="srt-ingest-mode-input" class="select select-sm w-40" aria-label="Global SRT ingest mode">
                                 <option value="plaintext">Plaintext</option>
                                 <option value="encrypted">Encrypted</option>
                             </select>
@@ -326,7 +326,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         </fieldset>
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend">Key Length</legend>
-                            <select id="srt-ingest-pbkeylen-input" class="select select-sm w-28">
+                            <select id="srt-ingest-pbkeylen-input" class="select select-sm w-28" aria-label="Global SRT ingest key length">
                                 <option value="16">AES-128</option>
                                 <option value="24">AES-192</option>
                                 <option value="32">AES-256</option>
@@ -936,11 +936,11 @@ function renderProfileRow(name: string, profile: TranscodeProfile): string {
                 </fieldset>
                 <fieldset class="fieldset">
                     <legend class="fieldset-legend">Preset</legend>
-                <select class="select select-sm js-profile-preset">${presetOpts}</select>
+                <select class="select select-sm js-profile-preset" aria-label="${safeName} preset">${presetOpts}</select>
                 </fieldset>
                 <fieldset class="fieldset">
                     <legend class="fieldset-legend">Tune</legend>
-                <select class="select select-sm js-profile-tune">${tuneOpts}</select>
+                <select class="select select-sm js-profile-tune" aria-label="${safeName} tune">${tuneOpts}</select>
                 </fieldset>
                 ${deleteButton}
             </div>

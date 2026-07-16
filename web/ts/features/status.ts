@@ -228,7 +228,7 @@ function formatUptime(value: unknown): string {
 function section(id: string, title: string, rows: string): string {
   return `<section id="${escapeHtml(id)}" class="scroll-mt-24">
         <h3 class="dashboard-kicker mb-2">${escapeHtml(title)}</h3>
-        <div class="overflow-x-auto">
+        <div class="overflow-x-auto" role="region" aria-label="${escapeHtml(title)} details" tabindex="0">
             <table class="w-full min-w-[36rem] table-fixed text-sm">
                 <colgroup>
                     <col class="w-48 sm:w-56" />
@@ -388,7 +388,7 @@ function renderProcessLog(logs: AppLogRow[]): string {
             <h2 class="dashboard-section-title">Process Log</h2>
             <p class="dashboard-subtitle">Latest restream process logs outside pipeline and output scope.</p>
         </div>
-        <div class="max-h-[32rem] space-y-2 overflow-y-auto pr-1">${rows}</div>
+        <div class="max-h-[32rem] space-y-2 overflow-y-auto pr-1" role="region" aria-label="Process log entries" tabindex="0">${rows}</div>
     </section>`;
 }
 

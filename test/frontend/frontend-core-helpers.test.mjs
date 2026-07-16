@@ -24,6 +24,21 @@ function makeOutputStatus(overrides = {}) {
   };
 }
 
+test("preview HLS config stays close to the live edge with bounded catch-up", async () => {
+  const { buildPreviewHlsConfig } = await loadCompiledFrontendModule(
+    "features/hls-playback-config.js",
+  );
+
+  assert.deepEqual(buildPreviewHlsConfig(), {
+    startLevel: -1,
+    lowLatencyMode: true,
+    liveSyncDurationCount: 1,
+    liveMaxLatencyDurationCount: 2,
+    maxLiveSyncPlaybackRate: 1.5,
+    backBufferLength: 6,
+  });
+});
+
 test("audio caps load and detection logic normalizes payloads and URL inference", async () => {
   installFakeDom();
   globalThis.fetch = async (url) => {

@@ -16,6 +16,24 @@ import { renderPipelineInfoColumn, renderOutsColumn } from "./pipeline-view.js";
 import { renderHealthBanner, renderServerMetrics } from "./metrics.js";
 import { state } from "../core/state.js";
 import type { PipelineView } from "../types.js";
+import { buildPipelineOperateSelectorModel } from "./pipeline-operate-view-model.js";
+import type { PipelineOperateSelectorModel } from "./pipeline-operate-view-model.js";
+
+let legacyPipelineSelectorRenderEnabled = true;
+let pipelineSelectorPresentationHook:
+  ((model: PipelineOperateSelectorModel) => void) | null = null;
+
+export function configurePipelineSelectorPresentation(options: {
+  legacyRenderEnabled: boolean;
+  onPresentation?: (model: PipelineOperateSelectorModel) => void;
+}): void {
+  legacyPipelineSelectorRenderEnabled = options.legacyRenderEnabled;
+  pipelineSelectorPresentationHook = options.onPresentation || null;
+  const legacyContainer = document.getElementById("pipeline-selector-legacy");
+  if (legacyContainer) {
+    legacyContainer.hidden = !legacyPipelineSelectorRenderEnabled;
+  }
+}
 
 function setHtmlIfChanged(target: HTMLElement | null, html: string): boolean {
   if (!target || target.innerHTML === html) return false;
@@ -162,7 +180,10 @@ function renderPipelines(): void {
   gridElem.classList.toggle("has-selected-pipeline", Boolean(selectedPipe));
   gridElem.style.gridTemplateColumns = "";
 
-  renderPipelinesList(selectedPipe);
+  pipelineSelectorPresentationHook?.(
+    buildPipelineOperateSelectorModel(state.pipelines, selectedPipe),
+  );
+  if (legacyPipelineSelectorRenderEnabled) renderPipelinesList(selectedPipe);
   renderPipelineInfoColumn(selectedPipe);
   renderOutsColumn(selectedPipe);
   renderStatsColumn(selectedPipe);

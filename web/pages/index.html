@@ -135,8 +135,9 @@
       </div>
     </header>
 
-    <div
+    <section
       id="workspace-mode-bar"
+      aria-label="Workspace navigation"
       class="border-base-content/10 bg-base-100 shrink-0 border-y px-4 py-2"
     >
       <div class="flex flex-wrap items-center gap-2">
@@ -208,11 +209,25 @@
           class="text-base-content/60 min-w-0 truncate text-sm"
           id="workspace-mode-summary"
         ></div>
+        <label
+          class="border-base-content/15 bg-base-200/60 text-base-content/75 ml-auto inline-flex min-h-9 items-center gap-2 rounded-full border px-3 text-xs font-medium"
+          for="dashboard-ui-v2-toggle"
+          title="Remember this dashboard UI version in this browser"
+        >
+          <span>UI v2</span>
+          <input
+            id="dashboard-ui-v2-toggle"
+            type="checkbox"
+            class="toggle toggle-xs toggle-accent"
+            aria-label="Use dashboard UI v2"
+          />
+        </label>
       </div>
-    </div>
+    </section>
 
-    <div
+    <section
       id="pipeline-workspace-view-bar"
+      aria-label="Pipeline navigation"
       class="border-base-content/10 bg-base-100 hidden shrink-0 border-b px-4 py-2"
     >
       <nav
@@ -257,7 +272,7 @@
           Monitor
         </button>
       </nav>
-    </div>
+    </section>
 
     <div
       id="top-banner-stack"
@@ -1020,6 +1035,7 @@
         aria-labelledby="workspace-tab-overview"
         class="min-h-0 flex-1 overflow-auto px-4 py-3"
       >
+        <div id="dashboard-v2-root" class="mx-auto mb-4 max-w-7xl" hidden></div>
         <div id="overview-mode-content" class="mx-auto max-w-7xl"></div>
       </section>
 
@@ -1057,6 +1073,7 @@
         class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
       >
         <div class="mx-auto flex w-full flex-col gap-4">
+          <h1 class="dashboard-title">Pipeline inspect</h1>
           <div
             class="border-base-content/10 bg-base-200 flex flex-wrap items-center gap-2 rounded-lg border p-3"
           >
@@ -1173,23 +1190,27 @@
       >
         <!-- Left Column -->
         <div
+          id="pipeline-selector-shell"
           class="border-base-content/10 bg-base-200 w-full max-w-[18rem] overflow-y-auto rounded-lg border"
         >
-          <div
-            class="border-base-content/10 flex items-center justify-between gap-2 border-b px-4 py-3"
-          >
-            <h2 class="text-base-content/70 text-sm font-semibold uppercase">
-              Pipelines
-            </h2>
-            <button
-              class="btn btn-xs btn-accent btn-outline"
-              id="add-pipe-btn"
-              onclick="addPipeBtn()"
+          <div id="dashboard-v2-pipeline-selector-root" hidden></div>
+          <div id="pipeline-selector-legacy">
+            <div
+              class="border-base-content/10 flex items-center justify-between gap-2 border-b px-4 py-3"
             >
-              Add
-            </button>
+              <h2 class="text-base-content/70 text-sm font-semibold uppercase">
+                Pipelines
+              </h2>
+              <button
+                class="btn btn-xs btn-accent btn-outline"
+                id="add-pipe-btn"
+                onclick="addPipeBtn()"
+              >
+                Add
+              </button>
+            </div>
+            <ul class="menu w-full gap-1 p-2" id="pipelines"></ul>
           </div>
-          <ul class="menu w-full gap-1 p-2" id="pipelines"></ul>
         </div>
 
         <!-- Middle Column -->
@@ -1199,11 +1220,19 @@
         >
           <div>
             <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
-              <div class="min-w-0 flex-1 max-sm:w-full max-sm:flex-none">
-                <h2
+              <div
+                id="dashboard-v2-pipeline-header-root"
+                class="min-w-0 flex-1"
+                hidden
+              ></div>
+              <div
+                id="pipeline-header-legacy-identity"
+                class="min-w-0 flex-1 max-sm:w-full max-sm:flex-none"
+              >
+                <h1
                   class="whitespace-normal text-lg font-semibold leading-tight"
                   id="pipe-name"
-                ></h2>
+                ></h1>
               </div>
               <div class="flex shrink-0 items-center gap-2 max-sm:w-full max-sm:flex-wrap">
                 <button
@@ -1248,7 +1277,7 @@
                         History
                       </button>
                     </li>
-                    <li>
+                    <li id="edit-pipe-action-item">
                       <button
                         type="button"
                         id="edit-pipe-btn"
@@ -1273,15 +1302,23 @@
             </div>
             <span class="badge hidden" id="input-time"></span>
 
+            <div id="dashboard-v2-pipeline-input-status-root" hidden></div>
+
             <div class="mb-3 text-center" id="video-player">
               <!-- TODO: add player -->
             </div>
 
             <div id="input-stats">
-              <h2 class="text-base-content/70 text-sm font-semibold uppercase">
+              <h2
+                id="pipeline-input-legacy-traffic-heading"
+                class="text-base-content/70 text-sm font-semibold uppercase"
+              >
                 Stats
               </h2>
-              <div class="stats border-base-content/10 bg-base-100 mt-1 border">
+              <div
+                id="pipeline-input-legacy-traffic"
+                class="stats border-base-content/10 bg-base-100 mt-1 border"
+              >
                 <div class="stat p-3">
                   <div class="stat-title">Input Bitrate</div>
                   <div class="stat-value text-sm" id="input-total-bw"></div>
@@ -1304,11 +1341,15 @@
               </div>
 
               <h2
+                id="pipeline-input-legacy-video-heading"
                 class="text-base-content/70 mt-3 text-sm font-semibold uppercase"
               >
                 Video
               </h2>
-              <div class="stats border-base-content/10 bg-base-100 mt-1 border">
+              <div
+                id="pipeline-input-legacy-video"
+                class="stats border-base-content/10 bg-base-100 mt-1 border"
+              >
                 <div class="stat p-3">
                   <div class="stat-title">Codec</div>
                   <div class="stat-value text-sm" id="input-video-codec"></div>
@@ -1355,6 +1396,7 @@
               </div>
 
               <h2
+                id="pipeline-input-legacy-audio-heading"
                 class="text-base-content/70 mt-3 text-sm font-semibold uppercase"
               >
                 Audio
@@ -1560,8 +1602,11 @@
           <h2 class="text-base-content/70 mb-3 text-sm font-semibold uppercase">
             Outputs
           </h2>
-          <div id="outputs-summary" class="mb-3"></div>
-          <div id="outputs-focus-list" class="mb-3 space-y-2"></div>
+          <div id="dashboard-v2-pipeline-output-overview-root" hidden></div>
+          <div id="pipeline-output-overview-legacy">
+            <div id="outputs-summary" class="mb-3"></div>
+            <div id="outputs-focus-list" class="mb-3 space-y-2"></div>
+          </div>
           <div
             id="outputs-list-toolbar"
             class="mb-3 hidden items-center justify-between gap-2"

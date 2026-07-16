@@ -147,6 +147,7 @@ assert_contains "/login" "Restream Login"
 assert_contains "/output.css" "--color-base-100"
 assert_contains "/base-path.js" "__RESTREAM_BASE_PATH__"
 assert_contains "/js/app/dashboard-entry.js" "dashboard"
+assert_contains "/js/app/dashboard-v2-entry.js" "UI v2 seam active"
 assert_contains "/js/lib/hls.min.js" "Hls"
 assert_nonempty "/logo.png"
 

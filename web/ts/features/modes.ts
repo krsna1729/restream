@@ -13,13 +13,6 @@ import {
   setStatusStreamActive,
   syncStatusStreamVisibility,
 } from "./status.js";
-import {
-  isOutputFlapping,
-  isOutputIntentStopped,
-  isOutputRunning,
-  isOutputRetrying,
-  isOutputUnexpectedlyDown,
-} from "../core/output-status.js";
 import { selectPipeline } from "./render.js";
 import {
   buildRestreamActivityBursts,
@@ -33,7 +26,7 @@ import {
   syncDashboardPolling,
   syncDashboardRuntimeStream,
 } from "./dashboard.js";
-import type { AppLogRow, OutputView, PipelineView } from "../types.js";
+import type { AppLogRow } from "../types.js";
 import { renderIncidentsMode } from "./incidents.js";
 import { renderEngineerTelemetryMode } from "./engineer-telemetry.js";
 import {
@@ -52,20 +45,19 @@ import type {
   PipelineWorkspaceView,
 } from "../core/pipeline-workspace.js";
 import { syncPipelineWorkspaceShell } from "./pipeline-workspace-shell.js";
+import { buildOverviewViewModel } from "./overview-view-model.js";
+import type {
+  OverviewMetricKey,
+  OverviewPresentationInput,
+  OverviewViewModel,
+} from "./overview-view-model.js";
 
 const runtimeDashboardModes = new Set<DashboardMode>(["overview", "pipeline"]);
 let currentMode: DashboardMode | null = null;
 let settingsMounted = false;
 let statusMounted = false;
 type StatusTone = "success" | "warning" | "error" | "neutral" | "info";
-type OverviewMetricKey =
-  | "inputs"
-  | "outputs"
-  | "inputKbps"
-  | "outputKbps"
-  | "engineCpu"
-  | "engineMemory";
-type SummaryCounts = ReturnType<typeof summaryCounts>;
+type SummaryCounts = ReturnType<typeof buildOverviewViewModel>["counts"];
 
 const OVERVIEW_HISTORY_LIMIT = 28;
 const OVERVIEW_ACTIVITY_LIMIT = 6;
@@ -85,6 +77,38 @@ let overviewActivityFetchedAt = 0;
 let overviewActivityInFlight: Promise<void> | null = null;
 const overviewActivityStream = createManagedLogStream();
 let overviewActivityStreamActive = false;
+let legacyOverviewRenderEnabled = true;
+let overviewPresentationHook:
+  ((presentation: OverviewPresentationInput) => void) | null = null;
+
+export function configureOverviewPresentation(options: {
+  legacyRenderEnabled: boolean;
+  onPresentation?: (presentation: OverviewPresentationInput) => void;
+}): void {
+  legacyOverviewRenderEnabled = options.legacyRenderEnabled;
+  overviewPresentationHook = options.onPresentation || null;
+  const legacyContainer = document.getElementById("overview-mode-content");
+  if (legacyContainer) legacyContainer.hidden = !legacyOverviewRenderEnabled;
+}
+
+function currentOverviewPresentation(): OverviewPresentationInput {
+  const activityBursts = buildRestreamActivityBursts(
+    overviewActivityLogs,
+  ).slice(-OVERVIEW_ACTIVITY_LIMIT);
+  return {
+    activityBursts,
+    activityLoading:
+      overviewActivityInFlight !== null && activityBursts.length === 0,
+    metricHistory: {
+      inputs: [...overviewMetricHistory.inputs],
+      outputs: [...overviewMetricHistory.outputs],
+      inputKbps: [...overviewMetricHistory.inputKbps],
+      outputKbps: [...overviewMetricHistory.outputKbps],
+      engineCpu: [...overviewMetricHistory.engineCpu],
+      engineMemory: [...overviewMetricHistory.engineMemory],
+    },
+  };
+}
 
 function overviewActivityLogKey(log: AppLogRow): string {
   const id = Number(log?.id);
@@ -164,7 +188,7 @@ function refreshOverviewActivityIfStale(): void {
   }
   const shouldFetchSnapshot =
     !overviewActivityStreamActive &&
-    (overviewActivityLogs.length === 0 ||
+    (overviewActivityFetchedAt === 0 ||
       Date.now() - overviewActivityFetchedAt >= OVERVIEW_ACTIVITY_STALE_MS);
   if (!shouldFetchSnapshot) {
     ensureOverviewActivityStream();
@@ -181,7 +205,9 @@ function refreshOverviewActivityIfStale(): void {
       setOverviewActivityLogs(res.logs as AppLogRow[]);
     }
   })()
-    .catch(() => {})
+    .catch(() => {
+      overviewActivityFetchedAt = Date.now();
+    })
     .finally(() => {
       overviewActivityInFlight = null;
       ensureOverviewActivityStream();
@@ -203,9 +229,9 @@ function overviewActivitySection(): string {
   );
   const loading = overviewActivityInFlight !== null && bursts.length === 0;
   const body = loading
-    ? '<div class="text-base-content/60 text-sm">Loading recent restream activity...</div>'
+    ? '<div class="text-base-content/70 text-sm">Loading recent restream activity...</div>'
     : bursts.length === 0
-      ? '<div class="text-base-content/60 text-sm">No recent restream-wide activity yet.</div>'
+      ? '<div class="text-base-content/70 text-sm">No recent restream-wide activity yet.</div>'
       : `<div class="space-y-2">${renderRestreamActivityCards(
           overviewActivityLogs,
           OVERVIEW_ACTIVITY_LIMIT,
@@ -221,46 +247,6 @@ function overviewActivitySection(): string {
         </div>
         <div class="p-4">${body}</div>
     </section>`;
-}
-
-function formatBitrate(kbps: number | null | undefined): string {
-  if (!Number.isFinite(kbps as number) || (kbps as number) < 0) return "--";
-  const value = kbps as number;
-  return value >= 1000
-    ? `${(value / 1000).toFixed(1)} Mb/s`
-    : `${value.toFixed(0)} Kb/s`;
-}
-
-function formatBytes(bytes: number | null | undefined): string {
-  if (!Number.isFinite(bytes as number) || (bytes as number) <= 0) return "--";
-  const value = bytes as number;
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
-  if (value < 1024 * 1024 * 1024)
-    return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
-  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
-}
-
-function formatAgeMs(ms: number | null | undefined): string {
-  if (!Number.isFinite(ms as number) || (ms as number) < 0) return "--";
-  const seconds = Math.round((ms as number) / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
-}
-
-function formatPercent(value: number | null | undefined): string {
-  if (!Number.isFinite(value as number) || (value as number) < 0) return "--";
-  return `${(value as number).toFixed((value as number) >= 10 ? 0 : 1)}%`;
-}
-
-function hasMetricValue(value: number | null | undefined): boolean {
-  return Number.isFinite(value as number) && (value as number) >= 0;
-}
-
-function joinMetricDetails(parts: string[], fallback = "warming..."): string {
-  return parts.filter((part) => part.trim().length > 0).join(" / ") || fallback;
 }
 
 function pushOverviewMetric(
@@ -369,344 +355,96 @@ function statusPill(label: string, tone: StatusTone, detail?: string): string {
             : "border-base-content/10 bg-base-100/80 text-base-content/75";
   return `<span class="${toneClass} inline-flex min-h-8 max-w-full items-center gap-2 rounded-lg border px-2.5 py-1 text-xs font-semibold leading-tight">
         <span class="truncate">${escapeHtml(label)}</span>
-        ${detail ? `<span class="text-base-content/55 font-normal">${escapeHtml(detail)}</span>` : ""}
+        ${detail ? `<span class="text-base-content/75 font-normal">${escapeHtml(detail)}</span>` : ""}
     </span>`;
 }
 
-function pipelineHealthLabel(pipe: PipelineView): {
-  label: string;
-  cls: string;
-  tone: StatusTone;
-  detail?: string;
-} {
-  if (pipe.input.status === "error") {
-    return {
-      label: "Input error",
-      cls: badgeClassForTone("error"),
-      tone: "error",
-      detail: "publisher fault",
-    };
-  }
-  if (pipe.input.status === "warning") {
-    return {
-      label: pipe.input.flapping ? "Input flapping" : "Input warning",
-      cls: badgeClassForTone("warning"),
-      tone: "warning",
-      detail: pipe.input.flapping
-        ? `${Math.max(pipe.input.recentDisconnectCount, 2)} recent drops`
-        : "check ingest",
-    };
-  }
-  if (pipe.input.status !== "on") {
-    if (pipe.outs.some(isOutputUnexpectedlyDown)) {
-      return {
-        label: "Input down",
-        cls: badgeClassForTone("error"),
-        tone: "error",
-        detail: "outputs blocked",
-      };
-    }
-    return {
-      label: "Idle",
-      cls: badgeClassForTone("neutral"),
-      tone: "neutral",
-      detail: "waiting for input",
-    };
-  }
-  if (!pipe.input.probeReady) {
-    return {
-      label: "Input probing",
-      cls: badgeClassForTone("warning"),
-      tone: "warning",
-      detail: "waiting for stream metadata",
-    };
-  }
-  if (pipe.outs.some(isOutputUnexpectedlyDown)) {
-    return {
-      label: "Output down",
-      cls: badgeClassForTone("error"),
-      tone: "error",
-      detail: "input live",
-    };
-  }
-  if (pipe.outs.some(isOutputRetrying)) {
-    return {
-      label: "Output retrying",
-      cls: badgeClassForTone("warning"),
-      tone: "warning",
-      detail: "recovering",
-    };
-  }
-  if (pipe.outs.some(isOutputFlapping)) {
-    return {
-      label: "Output flapping",
-      cls: badgeClassForTone("warning"),
-      tone: "warning",
-      detail: "recent sink drops",
-    };
-  }
-  if (pipe.outs.some((out) => out.status === "warning")) {
-    return {
-      label: "Output warning",
-      cls: badgeClassForTone("warning"),
-      tone: "warning",
-      detail: "input live",
-    };
-  }
-  if (pipe.input.flapping) {
-    return {
-      label: "Input flapping",
-      cls: badgeClassForTone("warning"),
-      tone: "warning",
-      detail: `${Math.max(pipe.input.recentDisconnectCount, 2)} recent drops`,
-    };
-  }
-  return {
-    label: "Live",
-    cls: badgeClassForTone("success"),
-    tone: "success",
-    detail: "healthy",
-  };
-}
-
-function outputStateLabel(out: OutputView): { label: string; cls: string } {
-  if (isOutputIntentStopped(out))
-    return { label: "Stopped", cls: "badge-neutral" };
-  if (out.status === "failed") return { label: "Failed", cls: "badge-error" };
-  if (out.status === "stalled")
-    return { label: "Stalled", cls: "badge-warning" };
-  if (isOutputRetrying(out)) return { label: "Retrying", cls: "badge-warning" };
-  if (isOutputFlapping(out)) return { label: "Flapping", cls: "badge-warning" };
-  if (isOutputRunning(out)) return { label: "Running", cls: "badge-success" };
-  if (out.status === "warning")
-    return { label: "Warning", cls: "badge-warning" };
-  return { label: "Down", cls: "badge-error" };
-}
-
-function summaryCounts() {
-  const outputs = state.pipelines.flatMap((pipe) => pipe.outs);
-  return {
-    pipelines: state.pipelines.length,
-    liveInputs: state.pipelines.filter(
-      (pipe) =>
-        pipe.input.status === "on" &&
-        pipe.input.probeReady &&
-        !pipe.input.flapping,
-    ).length,
-    warningInputs: state.pipelines.filter(
-      (pipe) =>
-        pipe.input.status === "warning" ||
-        (pipe.input.status === "on" &&
-          (!pipe.input.probeReady || pipe.input.flapping)),
-    ).length,
-    runningOutputs: outputs.filter(isOutputRunning).length,
-    retryingOutputs: outputs.filter(isOutputRetrying).length,
-    flappingOutputs: outputs.filter(isOutputFlapping).length,
-    stoppedOutputs: outputs.filter(isOutputIntentStopped).length,
-    downOutputs: outputs.filter(isOutputUnexpectedlyDown).length,
-    recording: state.pipelines.filter((pipe) => pipe.recording.active).length,
-    inputKbps: state.pipelines.reduce(
-      (sum, pipe) => sum + (pipe.stats.inputBitrateKbps || 0),
-      0,
-    ),
-    outputKbps: state.pipelines.reduce(
-      (sum, pipe) => sum + (pipe.stats.outputBitrateKbps || 0),
-      0,
-    ),
-  };
-}
-
-function overviewAttentionSection(): string {
-  const issues = state.pipelines
-    .map((pipe) => {
-      const health = pipelineHealthLabel(pipe);
-      const down = pipe.outs.filter(isOutputUnexpectedlyDown).length;
-      const retrying = pipe.outs.filter(isOutputRetrying).length;
-      const flapping = pipe.outs.filter(isOutputFlapping).length;
-      const warnings = pipe.outs.filter(
-        (output) => output.status === "warning",
-      ).length;
-      const count = down + retrying + flapping + warnings;
-      const detailParts = [
-        down ? `${down} down` : "",
-        retrying ? `${retrying} retrying` : "",
-        flapping ? `${flapping} flapping` : "",
-        warnings ? `${warnings} warning` : "",
-        pipe.input.flapping
-          ? `${Math.max(pipe.input.recentDisconnectCount, 2)} input drops`
-          : "",
-      ].filter(Boolean);
-      const needsAttention =
-        health.tone === "error" ||
-        health.tone === "warning" ||
-        count > 0 ||
-        pipe.input.status === "error" ||
-        pipe.input.status === "warning";
-      if (!needsAttention) return null;
-      return {
-        pipe,
-        health,
-        count,
-        detail: detailParts.join(" / ") || health.detail || "check pipeline",
-      };
-    })
-    .filter((item): item is NonNullable<typeof item> => item !== null)
-    .sort((left, right) => {
-      const severity =
-        Number(right.health.tone === "error") -
-        Number(left.health.tone === "error");
-      return (
-        severity ||
-        right.count - left.count ||
-        left.pipe.name.localeCompare(right.pipe.name)
-      );
-    })
-    .slice(0, 4);
+function overviewAttentionSection(model: OverviewViewModel): string {
+  const issues = model.attention;
 
   const body = issues.length
     ? issues
         .map(
-          ({ pipe, health, detail }) => `<article class="dashboard-card p-3">
+          (
+            item,
+          ) => `<article class="dashboard-card p-3">
             <div class="flex min-w-0 items-start justify-between gap-3">
               <div class="min-w-0">
-                <h3 class="truncate font-semibold">${escapeHtml(pipe.name)}</h3>
-                <p class="text-base-content/60 mt-1 text-xs">${escapeHtml(detail)}</p>
+                <h3 class="truncate font-semibold">${escapeHtml(item.pipelineName)}</h3>
+                <p class="text-base-content/70 mt-1 text-xs">${escapeHtml(item.detail)}</p>
               </div>
-              <span class="badge ${health.cls} shrink-0">${escapeHtml(health.label)}</span>
+              <span class="badge ${badgeClassForTone(item.status.tone)} shrink-0">${escapeHtml(item.status.label)}</span>
             </div>
             <div class="mt-3 flex flex-wrap gap-2">
-              <button type="button" class="btn btn-xs btn-outline js-open-pipeline" data-pipeline-id="${escapeHtml(pipe.id)}">Operate</button>
-              <button type="button" class="btn btn-xs btn-outline js-inspect-pipeline" data-pipeline-id="${escapeHtml(pipe.id)}">Inspect</button>
+              <button type="button" class="btn btn-xs btn-outline js-open-pipeline" data-overview-focus="attention-operate" data-pipeline-id="${escapeHtml(item.pipelineId)}">Operate</button>
+              <button type="button" class="btn btn-xs btn-outline js-inspect-pipeline" data-overview-focus="attention-inspect" data-pipeline-id="${escapeHtml(item.pipelineId)}">Inspect</button>
             </div>
           </article>`,
         )
         .join("")
-    : `<div class="dashboard-empty">No active incident-level issues. Runtime detail stays available under Status and Pipeline Inspect.</div>`;
+    : `<div class="dashboard-empty">${
+        model.counts.pipelines === 0
+          ? "Add a pipeline to begin monitoring inputs and destinations."
+          : "No active incident-level issues. Runtime detail stays available under Status and Pipeline Inspect."
+      }</div>`;
+  const title = issues.length
+    ? `${issues.length} pipeline${issues.length === 1 ? "" : "s"} needs attention`
+    : model.counts.pipelines === 0
+      ? "Ready for the first pipeline"
+      : "Fleet is clear";
+  const tone = issues.length
+    ? "border-warning/35 bg-warning/5"
+    : "border-success/25 bg-success/5";
+  const priorityTone = issues.length ? "text-warning" : "text-success";
+  const issueGrid = issues.length > 1 ? "lg:grid-cols-2" : "";
 
-  return `<section class="dashboard-section mb-4">
-    <div class="dashboard-section-header">
+  return `<section id="overview-attention" aria-labelledby="overview-attention-title" class="${tone} rounded-lg border">
+    <div class="border-base-content/10 flex flex-wrap items-start justify-between gap-3 border-b px-4 py-4">
       <div>
-        <h2 class="dashboard-section-title">Needs attention</h2>
-        <p class="dashboard-subtitle">Fleet incidents are folded into Overview, then handled from the affected pipeline.</p>
+        <p class="${priorityTone} text-xs font-semibold uppercase tracking-wider">Current priority</p>
+        <h2 id="overview-attention-title" class="mt-1 text-xl font-semibold">${title}</h2>
+        <p class="text-base-content/80 mt-1 text-sm">Issues are ordered by upstream cause and severity.</p>
       </div>
       <button type="button" class="btn btn-sm btn-outline" id="overview-open-status-detail-btn">Runtime detail</button>
     </div>
-    <div class="grid gap-3 p-4 lg:grid-cols-2">${body}</div>
+    <div class="grid gap-3 p-4 ${issueGrid}">${body}</div>
   </section>`;
 }
 
-function inputOverviewPill(pipe: PipelineView): string {
-  const protocol = pipe.input.publisher?.protocol?.toUpperCase();
-  const rate = formatBitrate(pipe.stats.inputBitrateKbps);
-  const staleInput =
-    pipe.input.status === "on" &&
-    Number.isFinite(pipe.input.lastProgressAgeMs as number) &&
-    (pipe.input.lastProgressAgeMs as number) >= 10_000;
-  if (pipe.input.status === "on" && !pipe.input.probeReady) {
-    const pendingMs = pipe.input.probePendingMs;
-    const detail =
-      Number.isFinite(pendingMs as number) && (pendingMs as number) > 0
-        ? `${protocol || "publisher"} / ${(Number(pendingMs) / 1000).toFixed(1)}s`
-        : protocol || "publisher";
-    return statusPill("Input probing", "warning", detail);
-  }
-  if (staleInput) {
-    return statusPill(
-      "Input stalled",
-      "warning",
-      [
-        protocol || "publisher",
-        `${formatBytes(pipe.input.bytesReceived)} received`,
-        `stale ${formatAgeMs(pipe.input.lastProgressAgeMs)}`,
-      ]
-        .filter(Boolean)
-        .join(" / "),
-    );
-  }
-  if (pipe.input.status === "on") {
-    if (pipe.input.flapping) {
-      return statusPill(
-        "Input flapping",
-        "warning",
-        `${Math.max(pipe.input.recentDisconnectCount, 2)} recent drops${protocol ? ` / ${protocol}` : ""}`,
-      );
-    }
-    return statusPill(
-      "Live input",
-      "success",
-      [protocol, rate !== "--" ? rate : null].filter(Boolean).join(" / "),
-    );
-  }
-  if (pipe.input.status === "warning") {
-    return statusPill(
-      pipe.input.flapping ? "Input flapping" : "Input warning",
-      "warning",
-      pipe.input.flapping
-        ? `${Math.max(pipe.input.recentDisconnectCount, 2)} recent drops`
-        : protocol || "publisher attached",
-    );
-  }
-  if (pipe.input.status === "error") {
-    return statusPill("Input error", "error", protocol || "publisher fault");
-  }
-  return statusPill(
-    "No input",
-    "neutral",
-    pipe.inputSource ? "file/source idle" : "waiting",
-  );
+interface OverviewFocusBookmark {
+  id: string;
+  focusKey: string;
+  pipelineId: string;
 }
 
-function outputsOverviewPill(pipe: PipelineView): string {
-  const total = pipe.outs.length;
-  const running = pipe.outs.filter(isOutputRunning).length;
-  const retrying = pipe.outs.filter(isOutputRetrying).length;
-  const flapping = pipe.outs.filter(isOutputFlapping).length;
-  const stopped = pipe.outs.filter(isOutputIntentStopped).length;
-  const down = pipe.outs.filter(isOutputUnexpectedlyDown).length;
-  if (!total) return statusPill("No outputs", "neutral", "not configured");
-  if (pipe.input.status !== "on" && down > 0) {
-    return statusPill(
-      `${running}/${total} running`,
-      "neutral",
-      "blocked by input",
-    );
+function captureOverviewFocus(
+  container: HTMLElement,
+): OverviewFocusBookmark | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !container.contains(active)) {
+    return null;
   }
-  if (down > 0)
-    return statusPill(`${down} down`, "error", `${running}/${total} running`);
-  if (retrying > 0) {
-    return statusPill(
-      `${retrying} retrying`,
-      "warning",
-      `${running}/${total} running`,
-    );
-  }
-  if (flapping > 0) {
-    return statusPill(
-      `${flapping} flapping`,
-      "warning",
-      `${running}/${total} running`,
-    );
-  }
-  if (stopped === total)
-    return statusPill("Stopped", "neutral", `${total} configured`);
-  if (running === total)
-    return statusPill(`${running}/${total} running`, "success");
-  return statusPill(
-    `${running}/${total} running`,
-    "warning",
-    `${stopped} stopped`,
-  );
+  return {
+    id: active.id,
+    focusKey: active.dataset.overviewFocus || "",
+    pipelineId: active.dataset.pipelineId || "",
+  };
 }
 
-function recordingOverviewPill(pipe: PipelineView): string {
-  if (pipe.recording.active) return statusPill("Recording", "error", "active");
-  if (pipe.recording.enabled) return statusPill("Armed", "warning", "ready");
-  return statusPill("Off", "neutral");
-}
-
-function rateOverviewPill(kbps: number | null | undefined): string {
-  const value = formatBitrate(kbps);
-  return statusPill(value, value === "--" ? "neutral" : "info");
+function restoreOverviewFocus(
+  container: HTMLElement,
+  bookmark: OverviewFocusBookmark | null,
+): void {
+  if (!bookmark) return;
+  let target: HTMLElement | null = bookmark.id
+    ? document.getElementById(bookmark.id)
+    : null;
+  if (!target && bookmark.focusKey && bookmark.pipelineId) {
+    target = container.querySelector<HTMLElement>(
+      `[data-overview-focus="${CSS.escape(bookmark.focusKey)}"][data-pipeline-id="${CSS.escape(bookmark.pipelineId)}"]`,
+    );
+  }
+  target?.focus({ preventScroll: true });
 }
 
 function renderOverview(): void {
@@ -714,77 +452,71 @@ function renderOverview(): void {
   if (!container) return;
   refreshOverviewActivityIfStale();
 
-  const counts = summaryCounts();
+  const counts = buildOverviewViewModel(state.pipelines).counts;
   recordOverviewMetricSamples(counts);
-  const engine = state.metrics.engine || {};
-  const ffmpegCount = Number(engine.externalFfmpegCount || 0);
-  const ffmpegMemory = Number(engine.externalFfmpegMemoryBytes || 0);
-  const restreamMemory = Number(
-    engine.restreamMemoryBytes ?? engine.memoryBytes ?? 0,
+  const presentation = currentOverviewPresentation();
+  overviewPresentationHook?.(presentation);
+  if (!legacyOverviewRenderEnabled) return;
+  const model = buildOverviewViewModel(
+    state.pipelines,
+    state.metrics,
+    presentation,
   );
-  const engineMemory = Number(
-    engine.totalMemoryBytes || restreamMemory + ffmpegMemory,
-  );
-  const engineCpuDetail = joinMetricDetails([
-    hasMetricValue(engine.restreamCpuPercent)
-      ? `Restream ${formatPercent(engine.restreamCpuPercent)}`
-      : "",
-    ffmpegCount > 0 && hasMetricValue(engine.externalFfmpegCpuPercent)
-      ? `FFmpeg ${formatPercent(engine.externalFfmpegCpuPercent)} (${ffmpegCount})`
-      : "",
-  ]);
-  const engineMemoryDetail = joinMetricDetails(
-    [
-      hasMetricValue(restreamMemory) && restreamMemory > 0
-        ? `Restream ${formatBytes(restreamMemory)}`
-        : "",
-      ffmpegCount > 0 && hasMetricValue(ffmpegMemory) && ffmpegMemory > 0
-        ? `FFmpeg ${formatBytes(ffmpegMemory)}`
-        : "",
-    ],
-    "No engine memory sample",
-  );
-  const pipelineRows = [...state.pipelines]
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((pipe) => {
-      const health = pipelineHealthLabel(pipe);
-      return `<tr class="border-base-content/5 hover:bg-base-100/60 border-t">
+  const pipelineRows = model.pipelines
+    .map(
+      (
+        pipe,
+      ) => `<tr class="border-base-content/5 hover:bg-base-100/60 border-t">
                 <td class="min-w-56 py-3">
-                    <button type="button" class="group flex max-w-xs text-left js-open-pipeline" data-pipeline-id="${escapeHtml(pipe.id)}">
+                    <button type="button" class="group flex max-w-xs text-left js-open-pipeline" data-overview-focus="pipeline-row" data-pipeline-id="${escapeHtml(pipe.id)}">
                         <span class="group-hover:text-accent truncate font-semibold">${escapeHtml(pipe.name)}</span>
                     </button>
                 </td>
-                <td>${statusPill(health.label, health.tone, health.detail)}</td>
-                <td>${inputOverviewPill(pipe)}</td>
-                <td>${outputsOverviewPill(pipe)}</td>
-                <td>${rateOverviewPill(pipe.stats.inputBitrateKbps)}</td>
-                <td>${rateOverviewPill(pipe.stats.outputBitrateKbps)}</td>
-                <td>${recordingOverviewPill(pipe)}</td>
-            </tr>`;
-    })
+                <td>${statusPill(pipe.health.label, pipe.health.tone, pipe.health.detail)}</td>
+                <td>${statusPill(pipe.input.label, pipe.input.tone, pipe.input.detail)}</td>
+                <td>${statusPill(pipe.outputs.label, pipe.outputs.tone, pipe.outputs.detail)}</td>
+                <td>${statusPill(pipe.inputRate.label, pipe.inputRate.tone)}</td>
+                <td>${statusPill(pipe.outputRate.label, pipe.outputRate.tone)}</td>
+                <td>${statusPill(pipe.recording.label, pipe.recording.tone, pipe.recording.detail)}</td>
+            </tr>`,
+    )
     .join("");
 
-  container.innerHTML = `
-        <div class="mb-4 grid gap-3 md:grid-cols-3">
-            ${overviewMetric("Engine CPU", formatPercent(engine.cpuPercent), engineCpuDetail, "engineCpu")}
-            ${overviewMetric("Inputs Live", `${counts.liveInputs}/${counts.pipelines}`, counts.warningInputs ? `${counts.warningInputs} warning` : "All quiet", "inputs")}
-            ${overviewMetric("Throughput In", formatBitrate(counts.inputKbps), "Across active publishers", "inputKbps")}
-            ${overviewMetric("Engine Memory", formatBytes(engineMemory), engineMemoryDetail, "engineMemory")}
-            ${overviewMetric("Outputs Running", `${counts.runningOutputs}`, `${counts.retryingOutputs} retrying / ${counts.flappingOutputs} flapping / ${counts.downOutputs} down / ${counts.stoppedOutputs} stopped`, "outputs")}
-            ${overviewMetric("Throughput Out", formatBitrate(counts.outputKbps), `${counts.recording} active recording${counts.recording === 1 ? "" : "s"}`, "outputKbps")}
+  const markup = `
+      <div class="space-y-4">
+        <header class="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p class="text-accent text-xs font-semibold uppercase tracking-[0.18em]">Live operations</p>
+            <h1 class="mt-1 text-2xl font-semibold">Fleet overview</h1>
+            <p class="text-base-content/70 mt-1 text-sm">See what needs action before scanning throughput and system load.</p>
+          </div>
+          <button type="button" class="btn btn-sm btn-primary" id="overview-add-pipeline-btn">Add Pipeline</button>
+        </header>
+        <div class="grid items-start gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(22rem,0.8fr)]">
+          ${overviewAttentionSection(model)}
+          <aside id="overview-fleet-signals" aria-label="Fleet signals" class="border-base-content/10 bg-base-200/80 rounded-lg border p-3">
+            <div class="mb-3 flex items-center justify-between gap-3 px-1">
+              <div>
+                <h2 class="text-sm font-semibold">Fleet signals</h2>
+                <p class="text-base-content/70 mt-0.5 text-xs">Current snapshot and recent trend</p>
+              </div>
+              <span class="badge badge-outline">${counts.pipelines} pipeline${counts.pipelines === 1 ? "" : "s"}</span>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              ${model.metrics.map((metric) => overviewMetric(metric.label, metric.value, metric.note, metric.key)).join("")}
+            </div>
+          </aside>
         </div>
-        ${overviewAttentionSection()}
-        <section class="dashboard-table-panel">
+        <section id="overview-pipelines" aria-labelledby="overview-pipelines-title" class="dashboard-table-panel">
             <div class="dashboard-section-header">
                 <div>
-                    <h1 class="dashboard-title">Operator Overview</h1>
-                    <p class="dashboard-subtitle">Primary state follows the upstream cause before downstream symptoms.</p>
+                    <h2 id="overview-pipelines-title" class="dashboard-section-title">All pipelines</h2>
+                    <p class="dashboard-subtitle">Compare intent, runtime state, and data flow.</p>
                 </div>
-                <button type="button" class="btn btn-sm btn-outline" id="overview-add-pipeline-btn">Add Pipeline</button>
             </div>
             <div class="overflow-x-auto">
                 <table class="table table-sm">
-                    <thead class="text-base-content/55 bg-base-100/50 text-xs uppercase">
+                    <thead class="text-base-content/70 bg-base-100/50 text-xs uppercase">
                         <tr>
                             <th>Pipeline</th>
                             <th>State</th>
@@ -795,11 +527,16 @@ function renderOverview(): void {
                             <th>Recording</th>
                         </tr>
                     </thead>
-                    <tbody>${pipelineRows || '<tr><td colspan="7" class="text-base-content/60 px-4 py-6">No pipelines configured.</td></tr>'}</tbody>
+                    <tbody>${pipelineRows || '<tr><td colspan="7" class="text-base-content/70 px-4 py-6">No pipelines configured.</td></tr>'}</tbody>
                 </table>
             </div>
         </section>
-        ${overviewActivitySection()}`;
+        ${overviewActivitySection()}
+      </div>`;
+
+  if (container.innerHTML === markup) return;
+  const focusBookmark = captureOverviewFocus(container);
+  container.innerHTML = markup;
 
   container
     .querySelectorAll<HTMLElement>(".js-open-pipeline")
@@ -830,6 +567,7 @@ function renderOverview(): void {
   if (statusBtn) {
     statusBtn.onclick = () => setDashboardMode("status");
   }
+  restoreOverviewFocus(container, focusBookmark);
 }
 
 function overviewMetric(
@@ -841,28 +579,28 @@ function overviewMetric(
   const tone = overviewMetricTone(historyKey);
   return `<section class="${tone.borderClass} dashboard-stat-card border-t-2">
         <div class="dashboard-kicker">${escapeHtml(label)}</div>
-        <div class="mt-2 grid grid-cols-[minmax(0,max-content)_minmax(5rem,1fr)] items-end gap-3">
+        <div class="mt-1 grid grid-cols-[minmax(0,max-content)_minmax(2.5rem,1fr)] items-end gap-2">
             <div class="min-w-0">${overviewMetricHero(value)}</div>
             <div class="min-w-0">${overviewSparkline(historyKey)}</div>
         </div>
-        <div class="dashboard-muted mt-1">${escapeHtml(note)}</div>
+        <div class="dashboard-muted mt-1 truncate" title="${escapeHtml(note)}">${escapeHtml(note)}</div>
     </section>`;
 }
 
 function overviewMetricHero(value: string): string {
   const trimmed = value.trim();
   if (!trimmed || trimmed === "--") {
-    return '<span class="text-2xl font-semibold tabular-nums">--</span>';
+    return '<span class="text-xl font-semibold tabular-nums">--</span>';
   }
   const compactUnit = trimmed.match(/^(-?\d+(?:\.\d+)?)(%)$/);
   const spacedUnit = trimmed.match(/^(.+?)\s+([A-Za-z][A-Za-z/]+)$/);
   const match = compactUnit || spacedUnit;
   if (!match) {
-    return `<span class="text-2xl font-semibold tabular-nums">${escapeHtml(trimmed)}</span>`;
+    return `<span class="text-xl font-semibold tabular-nums">${escapeHtml(trimmed)}</span>`;
   }
   return `<span class="inline-flex min-w-0 items-baseline gap-1">
-        <span class="truncate text-2xl font-semibold tabular-nums">${escapeHtml(match[1])}</span>
-        <span class="text-base-content/55 shrink-0 text-sm font-semibold">${escapeHtml(match[2])}</span>
+        <span class="truncate text-xl font-semibold tabular-nums">${escapeHtml(match[1])}</span>
+        <span class="text-base-content/70 shrink-0 text-xs font-semibold">${escapeHtml(match[2])}</span>
     </span>`;
 }
 function renderSettingsMode(): void {
@@ -944,7 +682,7 @@ function applyMode(
 
   const summary = document.getElementById("workspace-mode-summary");
   if (summary) {
-    const counts = summaryCounts();
+    const counts = buildOverviewViewModel(state.pipelines).counts;
     summary.textContent =
       mode === "overview"
         ? `${counts.liveInputs} live inputs / ${counts.runningOutputs} running outputs${counts.retryingOutputs ? ` / ${counts.retryingOutputs} retrying` : ""}${counts.flappingOutputs ? ` / ${counts.flappingOutputs} flapping` : ""}`

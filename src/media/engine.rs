@@ -571,8 +571,9 @@ impl MediaEngine {
         previous: Option<&RecentEgressOutcome>,
         egress: &ActiveEgress,
         has_ingest: bool,
+        clean_stop: bool,
     ) -> RecentEgressOutcome {
-        let phase = *egress.phase.lock().unwrap_or_else(|e| e.into_inner());
+        let active_phase = *egress.phase.lock().unwrap_or_else(|e| e.into_inner());
         let last_error = egress
             .last_error
             .lock()
@@ -585,7 +586,24 @@ impl MediaEngine {
             .clone();
         let ended_at_ms = Self::now_epoch_ms();
         let had_error =
-            phase == EgressPhase::Failed || last_error.is_some() || failure_phase.is_some();
+            active_phase == EgressPhase::Failed || last_error.is_some() || failure_phase.is_some();
+        let status = if had_error {
+            EgressRuntimeStatus::Failed
+        } else if clean_stop {
+            EgressRuntimeStatus::Stopped
+        } else {
+            Self::recent_egress_status(egress, has_ingest)
+        };
+        let raw_status = if clean_stop && !had_error {
+            EgressStatus::Stopped
+        } else {
+            egress.status
+        };
+        let phase = if clean_stop && !had_error {
+            EgressPhase::Stopped
+        } else {
+            active_phase
+        };
         let (first_failure_at_ms, failure_count) = if had_error {
             previous
                 .filter(|previous| {
@@ -617,8 +635,8 @@ impl MediaEngine {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone(),
-            status: Self::recent_egress_status(egress, has_ingest),
-            raw_status: egress.status,
+            status,
+            raw_status,
             phase,
             started_at: egress.started_at.clone(),
             uptime_secs: egress.start_instant.elapsed().as_secs_f64(),
@@ -1397,7 +1415,7 @@ impl MediaEngine {
                 .try_read()
                 .map(|ingests| ingests.contains_key(egress.pipeline_id.as_str()))
                 .unwrap_or(false);
-            Self::build_recent_egress_outcome(previous_recent.as_ref(), egress, has_ingest)
+            Self::build_recent_egress_outcome(previous_recent.as_ref(), egress, has_ingest, true)
         });
         egresses.remove(output_id);
         drop(egresses);
@@ -1458,8 +1476,12 @@ impl MediaEngine {
             .try_read()
             .map(|ingests| ingests.contains_key(active.pipeline_id.as_str()))
             .unwrap_or(false);
-        let outcome =
-            Self::build_recent_egress_outcome(previous_recent.as_ref(), active, has_ingest);
+        let outcome = Self::build_recent_egress_outcome(
+            previous_recent.as_ref(),
+            active,
+            has_ingest,
+            registration.cancel_token.is_cancelled(),
+        );
         egresses.remove(output_id);
         drop(egresses);
 

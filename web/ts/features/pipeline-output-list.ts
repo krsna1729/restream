@@ -11,6 +11,11 @@ import {
   isOutputUnexpectedlyDown,
 } from "../core/output-status.js";
 import type { OutputView, PipelineView } from "../types.js";
+import {
+  buildPipelineOutputOverviewModel,
+  PIPELINE_OUTPUT_CARD_LIMIT,
+} from "./pipeline-operate-view-model.js";
+import type { PipelineOutputOverviewModel } from "./pipeline-operate-view-model.js";
 
 interface OutputCardRefs {
   statusDot: HTMLElement;
@@ -35,8 +40,47 @@ interface OutputMetricSpec {
 
 const outputCardRefs = new WeakMap<HTMLElement, OutputCardRefs>();
 const expandedOutputLists = new Set<string>();
-const OUTPUT_CARD_LIMIT = 8;
 const OUTPUT_FOCUS_LIMIT = 5;
+let legacyOutputOverviewRenderEnabled = true;
+let legacyOutputCardsRenderEnabled = true;
+let outputOverviewPresentationHook:
+  ((model: PipelineOutputOverviewModel | null) => void) | null = null;
+
+export function configurePipelineOutputOverviewPresentation(options: {
+  legacyAddActionEnabled?: boolean;
+  legacyCardsEnabled?: boolean;
+  legacyRenderEnabled: boolean;
+  onPresentation?: (model: PipelineOutputOverviewModel | null) => void;
+}): void {
+  legacyOutputOverviewRenderEnabled = options.legacyRenderEnabled;
+  legacyOutputCardsRenderEnabled = options.legacyCardsEnabled !== false;
+  outputOverviewPresentationHook = options.onPresentation || null;
+  const legacyOverview = document.getElementById(
+    "pipeline-output-overview-legacy",
+  );
+  if (legacyOverview) legacyOverview.hidden = !legacyOutputOverviewRenderEnabled;
+  const outputsHeading = document.querySelector<HTMLElement>("#outs-col > h2");
+  if (outputsHeading) {
+    outputsHeading.hidden = !legacyOutputOverviewRenderEnabled;
+  }
+  const legacyAddAction = document.getElementById("add-out-btn");
+  if (legacyAddAction) {
+    legacyAddAction.hidden = options.legacyAddActionEnabled === false;
+  }
+  const legacyCards = document.getElementById("outputs-list");
+  if (legacyCards) legacyCards.hidden = !legacyOutputCardsRenderEnabled;
+  const legacyToolbar = document.getElementById("outputs-list-toolbar");
+  if (legacyToolbar) legacyToolbar.hidden = !legacyOutputCardsRenderEnabled;
+}
+
+export function togglePipelineOutputList(pipeId: string): void {
+  if (expandedOutputLists.has(pipeId)) {
+    expandedOutputLists.delete(pipeId);
+  } else {
+    expandedOutputLists.add(pipeId);
+  }
+  renderOutsColumn(pipeId);
+}
 
 function setTextIfChanged(target: HTMLElement, text: string): void {
   if (target.textContent !== text) {
@@ -332,7 +376,7 @@ function createOutputCard(pipeId: string, outputId: string): HTMLElement {
   statusWrap.className = "pt-1";
   const statusDot = document.createElement("div");
   statusDot.dataset.role = "status-dot";
-  statusDot.setAttribute("aria-label", "status");
+  statusDot.setAttribute("aria-hidden", "true");
   statusWrap.appendChild(statusDot);
 
   const content = document.createElement("div");
@@ -507,7 +551,7 @@ function renderOutputSummary(pipe: PipelineView): void {
     .filter(Boolean)
     .map(
       (entry) => `<div class="${entry?.className} rounded-lg border px-3 py-2">
-        <div class="text-[0.65rem] font-semibold uppercase opacity-70">${escapeHtml(entry?.label || "")}</div>
+        <div class="text-[0.65rem] font-semibold uppercase opacity-90">${escapeHtml(entry?.label || "")}</div>
         <div class="mt-1 text-xl font-semibold tabular-nums">${entry?.count ?? 0}</div>
       </div>`,
     )
@@ -756,6 +800,7 @@ function ensureOutputsListHandler(outputsList: HTMLElement): void {
 
 export function renderOutsColumn(selectedPipe: string | null): void {
   if (!selectedPipe) {
+    outputOverviewPresentationHook?.(null);
     document.getElementById("outs-col")?.classList.add("hidden");
     return;
   }
@@ -764,23 +809,50 @@ export function renderOutsColumn(selectedPipe: string | null): void {
 
   const pipe = state.pipelines.find((p) => p.id === selectedPipe);
   if (!pipe) {
+    outputOverviewPresentationHook?.(null);
     console.error("Pipeline not found:", selectedPipe);
     return;
   }
+
+  outputOverviewPresentationHook?.(
+    buildPipelineOutputOverviewModel(
+      state.pipelines,
+      selectedPipe,
+      pipe.outs.map((output) => ({
+        outputId: output.id,
+        intent: getOutputControlIntent(pipe.id, output.id),
+        busy: Boolean(
+          pipelineViewDependencies.isOutputToggleBusy?.(pipe.id, output.id),
+        ),
+      })),
+      expandedOutputLists.has(pipe.id),
+    ),
+  );
 
   const outputsList = document.getElementById(
     "outputs-list",
   ) as HTMLElement | null;
   if (!outputsList) return;
+  if (!legacyOutputCardsRenderEnabled) {
+    outputsList.hidden = true;
+    if (outputsList.children.length) outputsList.replaceChildren();
+    const toolbar = document.getElementById("outputs-list-toolbar");
+    if (toolbar) toolbar.hidden = true;
+    return;
+  }
+  outputsList.hidden = false;
   outputsList.dataset.pipeId = pipe.id;
   ensureOutputsListHandler(outputsList);
-  renderOutputSummary(pipe);
-  renderOutputFocusList(pipe);
+  if (legacyOutputOverviewRenderEnabled) {
+    renderOutputSummary(pipe);
+    renderOutputFocusList(pipe);
+  }
 
   const expanded = expandedOutputLists.has(pipe.id);
-  const shouldLimit = pipe.outs.length > OUTPUT_CARD_LIMIT && !expanded;
+  const shouldLimit =
+    pipe.outs.length > PIPELINE_OUTPUT_CARD_LIMIT && !expanded;
   const renderedOutputs = shouldLimit
-    ? pipe.outs.slice(0, OUTPUT_CARD_LIMIT)
+    ? pipe.outs.slice(0, PIPELINE_OUTPUT_CARD_LIMIT)
     : pipe.outs;
 
   const toolbar = document.getElementById("outputs-list-toolbar");
@@ -788,8 +860,14 @@ export function renderOutsColumn(selectedPipe: string | null): void {
   const toggle = document.getElementById(
     "outputs-toggle-full-list",
   ) as HTMLButtonElement | null;
-  toolbar?.classList.toggle("hidden", pipe.outs.length <= OUTPUT_CARD_LIMIT);
-  toolbar?.classList.toggle("flex", pipe.outs.length > OUTPUT_CARD_LIMIT);
+  toolbar?.classList.toggle(
+    "hidden",
+    pipe.outs.length <= PIPELINE_OUTPUT_CARD_LIMIT,
+  );
+  toolbar?.classList.toggle(
+    "flex",
+    pipe.outs.length > PIPELINE_OUTPUT_CARD_LIMIT,
+  );
   if (caption) {
     caption.textContent = expanded
       ? `Showing all ${pipe.outs.length} outputs`
@@ -798,12 +876,7 @@ export function renderOutsColumn(selectedPipe: string | null): void {
   if (toggle) {
     toggle.textContent = expanded ? "Show less" : "Show all";
     toggle.onclick = () => {
-      if (expandedOutputLists.has(pipe.id)) {
-        expandedOutputLists.delete(pipe.id);
-      } else {
-        expandedOutputLists.add(pipe.id);
-      }
-      renderOutsColumn(pipe.id);
+      togglePipelineOutputList(pipe.id);
     };
   }
 

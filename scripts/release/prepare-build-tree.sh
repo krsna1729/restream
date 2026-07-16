@@ -82,6 +82,7 @@ frontend_assets_exist() {
         [[ -s public/login.html ]] &&
         [[ -s public/output.css ]] &&
         [[ -s public/js/app/dashboard-entry.js ]] &&
+        [[ -s public/js/app/dashboard-v2-entry.js ]] &&
         [[ -s public/js/lib/hls.min.js ]]
 }
 
@@ -90,6 +91,7 @@ frontend_assets_fresh() {
     local newest_input
     newest_input="$(
         find web scripts/dev/frontend package.json package-lock.json tsconfig.json \
+            tsconfig.v2.json vite.v2.config.ts \
             -type f -not -path '*/node_modules/*' -printf '%T@\n' 2>/dev/null |
             sort -nr |
             head -n1
@@ -133,6 +135,7 @@ for asset in \
     public/login.html \
     public/output.css \
     public/js/app/dashboard-entry.js \
+    public/js/app/dashboard-v2-entry.js \
     public/js/lib/hls.min.js \
     public/bin/ffmpeg; do
     [[ -s "$asset" ]] || {

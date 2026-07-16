@@ -1,0 +1,58 @@
+- tabpanel "Overview":
+  - paragraph: Live operations
+  - heading "Fleet overview" [level=1]
+  - paragraph: See what needs action before scanning throughput and system load.
+  - button "Add Pipeline"
+  - region "1 pipeline needs attention":
+    - paragraph: Current priority
+    - heading "1 pipeline needs attention" [level=2]
+    - paragraph: Issues are ordered by upstream cause and severity.
+    - button "Runtime detail"
+    - article:
+      - heading "Retrying Destination" [level=3]
+      - paragraph: 1 retrying
+      - text: Output retrying
+      - button "Operate"
+      - button "Inspect"
+  - complementary "Fleet signals":
+    - heading "Fleet signals" [level=2]
+    - paragraph: Current snapshot and recent trend
+    - text: /2 pipelines Inputs live 2\/2 All quiet Outputs running 1\/2 1 retrying Inbound 5\.6 Mb\/s Active publishers Outbound 2\.9 Mb\/s 0 recordings Engine CPU 7\.0 % Restream 5\.0% \/ FFmpeg 2\.0% \(1\) Engine memory \d+\.\d+ MiB Restream \d+\.\d+ MiB \/ FFmpeg \d+\.\d+ MiB/
+  - region "All pipelines":
+    - heading "All pipelines" [level=2]
+    - paragraph: Compare intent, runtime state, and data flow.
+    - table:
+      - rowgroup:
+        - row "Pipeline State Input Outputs Input Rate Output Rate Recording":
+          - columnheader "Pipeline"
+          - columnheader "State"
+          - columnheader "Input"
+          - columnheader "Outputs"
+          - columnheader "Input Rate"
+          - columnheader "Output Rate"
+          - columnheader "Recording"
+      - rowgroup:
+        - row "Healthy Program Live healthy Live input 3.2 Mb/s 1/1 running 3.2 Mb/s 2.9 Mb/s Off":
+          - cell "Healthy Program":
+            - button "Healthy Program"
+          - cell "Live healthy"
+          - cell "Live input 3.2 Mb/s"
+          - cell "1/1 running"
+          - cell "3.2 Mb/s"
+          - cell "2.9 Mb/s"
+          - cell "Off"
+        - row "Retrying Destination Output retrying recovering Live input 2.4 Mb/s 1 retrying 0/1 running 2.4 Mb/s -- Armed ready":
+          - cell "Retrying Destination":
+            - button "Retrying Destination"
+          - cell "Output retrying recovering"
+          - cell "Live input 2.4 Mb/s"
+          - cell "1 retrying 0/1 running"
+          - cell "2.4 Mb/s"
+          - cell "--"
+          - cell "Armed ready"
+  - heading "Restream Activity" [level=2]
+  - paragraph: Recent restream-wide event bursts, grouped for operator-friendly review.
+  - button "Open Status"
+  - text: Restream warning burst 1 event
+  - paragraph: Warnings or errors were recorded close together at restream scope.
+  - text: /\d+:\d+:\d+ AM Warning \d+:\d+:\d+ AM Synthetic output entered retry backoff/

@@ -45,7 +45,7 @@
   }
 
   .dashboard-subtitle {
-    @apply text-base-content/60 mt-1 text-sm leading-5;
+    @apply text-base-content/70 mt-1 text-sm leading-5;
   }
 
   .dashboard-card {
@@ -61,11 +61,11 @@
   }
 
   .dashboard-kicker {
-    @apply text-base-content/60 text-[0.68rem] font-semibold tracking-wide uppercase;
+    @apply text-base-content/70 text-[0.68rem] font-semibold tracking-wide uppercase;
   }
 
   .dashboard-muted {
-    @apply text-base-content/60 text-sm leading-5;
+    @apply text-base-content/70 text-sm leading-5;
   }
 
   .dashboard-empty {
@@ -78,6 +78,24 @@
 
   .dashboard-table-panel {
     @apply border-base-content/10 bg-base-200/85 overflow-hidden rounded-xl border shadow-none;
+  }
+}
+
+/* The dim theme's 50/60% secondary text falls below WCAG AA on the dashboard
+   surfaces. Keep the existing semantic utility names while enforcing one
+   readable secondary-text floor across legacy and React presentations. */
+@layer utilities {
+  .text-base-content\/50,
+  .text-base-content\/55,
+  .text-base-content\/60,
+  .stat-title,
+  .stat-desc,
+  .table thead {
+    color: color-mix(
+      in oklab,
+      var(--color-base-content) 72%,
+      transparent
+    );
   }
 }
 

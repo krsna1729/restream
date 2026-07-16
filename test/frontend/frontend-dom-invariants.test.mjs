@@ -36,6 +36,9 @@ test("static HTML keeps core DOM accessibility and layout invariants", async () 
     /<meta name="viewport" content="width=device-width, initial-scale=1" \/>/,
   );
   assert.match(loginHtml, /<form id="login-form"/);
+  assert.match(loginHtml, /<main class="card/);
+  assert.match(loginHtml, /id="username-input"[\s\S]*aria-label="Username"/);
+  assert.match(loginHtml, /id="password-input"[\s\S]*aria-label="Password"/);
   assert.doesNotMatch(loginHtml, /\son(?:click|keydown)=/);
   assert.doesNotMatch(loginHtml, /tabindex="-1"/);
   assert.match(loginHtml, /<script src="login\.js"><\/script>/);
@@ -43,6 +46,15 @@ test("static HTML keeps core DOM accessibility and layout invariants", async () 
   assert.match(indexHtml, /<header class="navbar/);
   assert.match(indexHtml, /<main id="dashboard-main"/);
   assert.match(indexHtml, /role="tablist" aria-label="Workspace mode"/);
+  assert.match(
+    indexHtml,
+    /<section[\s\S]*id="workspace-mode-bar"[\s\S]*aria-label="Workspace navigation"/,
+  );
+  assert.match(
+    indexHtml,
+    /<section[\s\S]*id="pipeline-workspace-view-bar"[\s\S]*aria-label="Pipeline navigation"/,
+  );
+  assert.match(indexHtml, /<h1[\s\S]*id="pipe-name"/);
   assert.match(
     indexHtml,
     /role="tab"[\s\S]*aria-controls="overview-mode-panel"/,
@@ -75,6 +87,7 @@ test("dashboard grid sizing lives in responsive CSS instead of inline scripts", 
     /#dashboard-grid\s*{\s*grid-template-columns: minmax\(0, 1fr\);/s,
   );
   assert.match(inputCss, /#dashboard-grid\.has-selected-pipeline/s);
+  assert.match(inputCss, /\.text-base-content\\\/50,[\s\S]*\.stat-title/s);
   assert.match(renderTs, /classList\.toggle\("has-selected-pipeline"/);
   assert.doesNotMatch(
     renderTs,

@@ -1,0 +1,147 @@
+version: 1
+purpose: framework-neutral operator UI redesign baseline
+fixture_policy:
+  secrets: use obvious fake values and .invalid hosts only
+  media: use test/fixtures/media-library/colorbar-timer-2v16a.mp4
+  screenshots: capture only deterministic synthetic states
+
+states:
+  - id: fleet.empty
+    surface: overview
+    fixture: empty
+    expected: No pipelines configured is visible with a reachable add action.
+    proof:
+      status: seeded
+      files:
+        - test/frontend/redesign/seed.spec.ts
+
+  - id: fleet.mixed-health
+    surface: overview
+    fixture: mixed-health
+    expected: Healthy and retrying pipelines remain distinguishable.
+    proof:
+      status: seeded
+      files:
+        - test/frontend/redesign/seed.spec.ts
+
+  - id: output.starting-stopping
+    surface: pipeline-operate
+    expected: Pending intent remains visible until lifecycle or fallback convergence.
+    proof:
+      status: existing
+      files:
+        - test/frontend/dashboard-contract/output-mutations.test.mjs
+        - test/frontend/frontend-output-scenarios.test.mjs
+
+  - id: output.retrying-unexpected-down
+    surface: pipeline-operate
+    expected: Retry, flapping, failed, and intentionally stopped states differ.
+    proof:
+      status: existing
+      files:
+        - test/frontend/frontend-output-scenarios.test.mjs
+        - test/frontend/frontend-core-helpers.test.mjs
+
+  - id: recording.lifecycle
+    surface: pipeline-operate
+    expected: Starting, active, and stopping preserve intent and runtime state.
+    proof:
+      status: partial
+      files:
+        - test/frontend/dashboard-contract/pipeline-mutations.test.mjs
+      gap: Browser-visible pending and failed recording states need a scenario proof.
+
+  - id: file-ingest.lifecycle
+    surface: pipeline-operate
+    expected: Starting, active, failed, and stopping states are operator-visible.
+    proof:
+      status: partial
+      files:
+        - test/frontend/dashboard-contract/pipeline-mutations.test.mjs
+        - test/frontend/frontend-pipeline-info-scenarios.test.mjs
+      gap: Browser-visible slow and failed start states need a scenario proof.
+
+  - id: runtime.sse-reconnect
+    surface: shared-runtime
+    expected: Reconnect resumes after the last event without duplicate activity.
+    proof:
+      status: existing
+      files:
+        - test/frontend/frontend-log-stream.test.mjs
+        - test/frontend/frontend-history-stream.test.mjs
+        - test/frontend/frontend-status-stream.test.mjs
+
+  - id: runtime.hidden-resume
+    surface: shared-runtime
+    expected: Hidden polling is slower and visibility resume forces reconciliation.
+    proof:
+      status: existing
+      files:
+        - test/frontend/dashboard-contract/runtime-polling.test.mjs
+        - test/frontend/frontend-overview-activity-stream.test.mjs
+
+  - id: runtime.stale-snapshot
+    surface: overview
+    expected: Stale async results cannot replace the current selection or scope.
+    proof:
+      status: existing
+      files:
+        - test/frontend/frontend-incidents.test.mjs
+        - test/frontend/frontend-engineer-telemetry.test.mjs
+
+  - id: hls.unavailable
+    surface: pipeline-operate
+    expected: Unsupported, unavailable, timeout, and playback failures differ.
+    proof:
+      status: existing
+      files:
+        - test/frontend/hls-player.spec.ts
+
+  - id: hls.audio-1-and-16
+    surface: pipeline-operate
+    expected: Single and sixteen-track inputs remain selectable and labeled.
+    proof:
+      status: existing
+      files:
+        - test/frontend/hls-player.spec.ts
+
+  - id: auth.expired
+    surface: shared-runtime
+    expected: A 401 returns the operator to the base-path-aware login flow.
+    proof:
+      status: partial
+      files:
+        - test/frontend/frontend-api-contract.test.mjs
+        - test/frontend/frontend-browser-dom.spec.ts
+      gap: Full dashboard expiry and return-to-location need an end-to-end proof.
+
+  - id: mutation.slow-failed
+    surface: pipeline-operate
+    expected: Slow and failed mutations retain context and prevent duplicate action.
+    proof:
+      status: partial
+      files:
+        - test/frontend/dashboard-contract/output-mutations.test.mjs
+      gap: Browser-visible timeout, error focus, and retry affordance need proof.
+
+  - id: viewport.mobile-tablet-desktop
+    surface: all
+    expected: Primary tasks remain usable without overflow at fixed viewports.
+    proof:
+      status: existing
+      files:
+        - test/frontend/redesign/visual-accessibility.spec.ts
+        - test/frontend/redesign/playwright.visual.config.ts
+        - test/frontend/redesign/snapshots/
+
+  - id: accessibility.keyboard-aria-contrast
+    surface: all
+    expected: Primary tasks work by keyboard with stable names, focus, and contrast.
+    proof:
+      status: partial
+      files:
+        - test/frontend/frontend-dom-invariants.test.mjs
+        - test/frontend/frontend-browser-dom.spec.ts
+        - test/frontend/redesign/visual-accessibility.spec.ts
+        - test/frontend/redesign/snapshots/
+      gap: Retain manual keyboard, focus, contrast, zoom, and assistive-technology review beyond the seeded Overview.

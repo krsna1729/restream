@@ -807,7 +807,7 @@ function resourceSummaryStripHtml(snapshot: ResourceMapSnapshot): string {
           }) => `<div class="dashboard-stat-card-compact p-2">
           <div class="flex items-center justify-between gap-2">
             <div class="text-base-content/60 text-[0.65rem] font-semibold uppercase">${escapeHtml(label)}</div>
-            <span class="text-base-content/50 text-right text-[0.65rem]">${escapeHtml(confidence)}${hint ? ` <span class="opacity-70">· ${escapeHtml(hint)}</span>` : ""}</span>
+            <span class="text-base-content/50 text-right text-[0.65rem]">${escapeHtml(confidence)}${hint ? ` <span>· ${escapeHtml(hint)}</span>` : ""}</span>
           </div>
           <div class="mt-0.5 text-sm font-medium tabular-nums">${escapeHtml(value)}</div>
           ${subtext ? `<div class="text-base-content/50 mt-0.5 text-xs">${escapeHtml(subtext)}</div>` : ""}
@@ -849,7 +849,7 @@ function resourceSummaryGroupHtml(
           ({ label, value, confidence, hint, subtext }) => `<div class="dashboard-stat-card-compact p-2">
             <div class="flex items-center justify-between gap-2">
               <div class="text-base-content/60 text-[0.65rem] font-semibold uppercase">${escapeHtml(label)}</div>
-              <span class="text-base-content/50 text-right text-[0.65rem]">${escapeHtml(confidence)}${hint ? ` <span class="opacity-70">· ${escapeHtml(hint)}</span>` : ""}</span>
+              <span class="text-base-content/50 text-right text-[0.65rem]">${escapeHtml(confidence)}${hint ? ` <span>· ${escapeHtml(hint)}</span>` : ""}</span>
             </div>
             <div class="mt-0.5 truncate text-sm font-medium tabular-nums">${escapeHtml(value)}</div>
             ${subtext ? `<div class="text-base-content/50 mt-0.5 text-xs">${escapeHtml(subtext)}</div>` : ""}
