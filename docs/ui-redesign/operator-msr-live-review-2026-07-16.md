@@ -78,6 +78,11 @@ action, presses Enter into Operate, then keyboard-selects another pipeline from
 the v2 selector. CDP assertions keep Overview and Operate node budgets bounded
 and verify stable accessible button names for output operations.
 
+The same seeded proof now starts at a visible-on-focus skip link. Pressing Enter
+lands focus on the active main tabpanel before the dense dashboard chrome, so
+keyboard operators can bypass the navbar, workspace tabs, and secondary
+pipeline navigation when they are already trying to work the current screen.
+
 ## Operator findings
 
 What is now strong enough for v2:

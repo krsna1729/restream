@@ -11,6 +11,13 @@
     <script type="module" src="js/app/dashboard-entry.js"></script>
   </head>
   <body class="bg-base-100 text-base-content flex h-screen flex-col">
+    <a
+      id="skip-to-dashboard-main"
+      href="#dashboard-main"
+      class="btn btn-sm btn-primary fixed left-3 top-3 z-50 -translate-y-20 opacity-0 shadow-lg transition focus:translate-y-0 focus:opacity-100"
+    >
+      Skip to main content
+    </a>
     <header class="navbar bg-base-100 min-h-16 shrink-0 flex-wrap gap-2">
       <!-- LEFT -->
       <div class="flex flex-1 items-center gap-3">
@@ -1028,7 +1035,7 @@
       <form method="dialog" class="modal-backdrop"><button>close</button></form>
     </dialog>
 
-    <main id="dashboard-main" class="contents">
+    <main id="dashboard-main" class="contents" tabindex="-1">
       <section
         id="overview-mode-panel"
         role="tabpanel"

@@ -278,7 +278,10 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
   await tabUntilFocused(page, addPipeline);
   await expect(addPipeline).toBeFocused();
 
-  const operate = overview.getByRole("button", {
+  const attentionCard = overview
+    .locator("article")
+    .filter({ hasText: "Retrying Destination" });
+  const operate = attentionCard.getByRole("button", {
     name: "Operate",
     exact: true,
   });
@@ -327,6 +330,31 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
       "Diagnose",
     ]),
   );
+});
+
+test("seed: ui=v2 skip link reaches main content before dense chrome @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2");
+
+  const skipLink = page.getByRole("link", { name: "Skip to main content" });
+  await page.keyboard.press("Tab");
+  await expect(skipLink).toBeFocused();
+  await expect(skipLink).toBeVisible();
+  expect(await getCdpNamesByRole(page, "link")).toContain(
+    "Skip to main content",
+  );
+
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/#dashboard-main$/);
+  await expect(page.locator("#overview-mode-panel")).toBeFocused();
+
+  await page.keyboard.press("Tab");
+  await expect(
+    page
+      .locator("#dashboard-v2-overview")
+      .getByRole("button", { name: "Add Pipeline", exact: true }),
+  ).toBeFocused();
 });
 
 test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", async ({

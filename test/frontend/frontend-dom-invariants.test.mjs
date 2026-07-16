@@ -44,7 +44,12 @@ test("static HTML keeps core DOM accessibility and layout invariants", async () 
   assert.match(loginHtml, /<script src="login\.js"><\/script>/);
   assert.match(loginJs, /addEventListener\("submit"/);
   assert.match(indexHtml, /<header class="navbar/);
+  assert.match(
+    indexHtml,
+    /id="skip-to-dashboard-main"[\s\S]*href="#dashboard-main"[\s\S]*Skip to main content/,
+  );
   assert.match(indexHtml, /<main id="dashboard-main"/);
+  assert.match(indexHtml, /<main id="dashboard-main"[\s\S]*tabindex="-1"/);
   assert.match(indexHtml, /role="tablist" aria-label="Workspace mode"/);
   assert.match(
     indexHtml,
