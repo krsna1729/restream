@@ -107,6 +107,9 @@ What changed from the live operator pass:
 - Long pipeline lists now get the same search/status feedback pattern as large
   output sets, so the operator can jump to a named or degraded pipeline without
   turning the left rail into a scroll hunt.
+- v2 input ownership now empties the hidden legacy audio table, matching the
+  already-empty legacy preview and output-card cleanup pattern so CDP/node
+  growth reflects only the active operator surface.
 
 Still not a full v2 redesign:
 

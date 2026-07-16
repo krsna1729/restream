@@ -599,8 +599,9 @@ table unchanged.
 
 Source tests preserve the optional view-model contract and the existing legacy
 label persistence coverage. The seeded browser flow proves the legacy input
-stats wrapper is fully hidden, rename autofocus works, Enter persists the new
-label, and Escape discards a later draft. The opt-in bundle moved from 293,532
+stats wrapper is fully hidden, the hidden legacy audio table is emptied under
+`ui=v2`, rename autofocus works, Enter persists the new label, and Escape
+discards a later draft. The opt-in bundle moved from 293,532
 bytes raw and 72,810 bytes gzip in Vite's report to 296,767 bytes raw and
 73,320 bytes gzip. It remains below the 75,000-byte gzip guardrail.
 

@@ -165,6 +165,12 @@ export function configurePipelineInputStatusPresentation(options: {
     const element = document.getElementById(id);
     if (element) element.hidden = !legacyPipelineInputStatusRenderEnabled;
   }
+  if (!legacyPipelineAudioTracksRenderEnabled) {
+    document.getElementById("input-audio-tracks")?.replaceChildren();
+  }
+  if (!legacyPipelinePreviewRenderEnabled) {
+    clearInputPreview(document.getElementById("video-player"));
+  }
 }
 
 function recordingIntentKey(pipeId: string): string {

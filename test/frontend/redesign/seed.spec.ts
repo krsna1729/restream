@@ -17,6 +17,17 @@ async function getCdpStatusTexts(page: Page): Promise<string[]> {
     );
 }
 
+async function getCdpNodeCount(page: Page): Promise<number> {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Performance.enable");
+  const performanceMetrics = await cdp.send("Performance.getMetrics");
+  await cdp.detach();
+  return (
+    performanceMetrics.metrics.find((metric) => metric.name === "Nodes")
+      ?.value ?? 0
+  );
+}
+
 test("seed: empty Overview is deterministic and canonical @desktop", async ({
   page,
 }) => {
@@ -438,10 +449,15 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     await outputOverview
       .getByRole("button", { name: "More actions for Retrying Output" })
       .click();
+    await expect(
+      outputOverview.getByRole("menu", {
+        name: "More actions for Retrying Output",
+      }),
+    ).toBeVisible();
   };
   await openRetryingOutputActions();
   await outputOverview
-    .getByRole("button", { name: "History Retrying Output" })
+    .getByRole("menuitem", { name: "History Retrying Output" })
     .click();
   await expect(page.locator("#output-history-modal")).toBeVisible();
   await expect(page.locator("#output-history-title")).toHaveText(
@@ -450,7 +466,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await page.locator("#output-history-modal").press("Escape");
   await openRetryingOutputActions();
   await outputOverview
-    .getByRole("button", { name: "Monitor Retrying Output" })
+    .getByRole("menuitem", { name: "Monitor Retrying Output" })
     .click();
   expect(
     await page.evaluate(
@@ -462,7 +478,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   ).toEqual(["https://monitor.example.invalid/retrying"]);
   await openRetryingOutputActions();
   await outputOverview
-    .getByRole("button", { name: "Edit Retrying Output" })
+    .getByRole("menuitem", { name: "Edit Retrying Output" })
     .click();
   await expect(page.locator("#edit-out-modal")).toBeVisible();
   await expect(page.locator("#out-modal-title")).toHaveText(
@@ -483,9 +499,16 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(startRetryingOutput).toBeEnabled();
   await openRetryingOutputActions();
   await expect(
-    outputOverview.getByRole("button", { name: "Delete Retrying Output" }),
+    outputOverview.getByRole("menuitem", { name: "Delete Retrying Output" }),
   ).toBeEnabled();
-  await openRetryingOutputActions();
+  await outputOverview
+    .getByRole("button", { name: "More actions for Retrying Output" })
+    .click();
+  await expect(
+    outputOverview.getByRole("menu", {
+      name: "More actions for Retrying Output",
+    }),
+  ).toBeHidden();
   await startRetryingOutput.click();
   await expect(
     outputOverview.getByRole("button", { name: "Starting Retrying Output" }),
@@ -496,12 +519,15 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await outputOverview
     .getByRole("button", { name: "Stop Retrying Output" })
     .click();
+  await expect(
+    outputOverview.getByRole("button", { name: "Start Retrying Output" }),
+  ).toBeEnabled();
   await openRetryingOutputActions();
   await expect(
-    outputOverview.getByRole("button", { name: "Delete Retrying Output" }),
+    outputOverview.getByRole("menuitem", { name: "Delete Retrying Output" }),
   ).toBeEnabled();
   await outputOverview
-    .getByRole("button", { name: "Delete Retrying Output" })
+    .getByRole("menuitem", { name: "Delete Retrying Output" })
     .click();
   await expect(page.locator("#app-confirm-dialog")).toBeVisible();
   await expect(page.locator("#app-confirm-dialog")).toContainText(
@@ -575,6 +601,19 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     page.locator("#pipeline-input-legacy-audio-heading"),
   ).toBeHidden();
   await expect(page.locator("#input-audio-tracks")).toBeHidden();
+  expect(
+    await page.locator("#input-audio-tracks").evaluate((node) => ({
+      childCount: node.childElementCount,
+      text: node.textContent?.trim() ?? "",
+    })),
+  ).toEqual({ childCount: 0, text: "" });
+  expect(
+    await page.locator("#video-player").evaluate((node) => ({
+      childCount: node.childElementCount,
+      text: node.textContent?.trim() ?? "",
+    })),
+  ).toEqual({ childCount: 0, text: "" });
+  expect(await getCdpNodeCount(page)).toBeLessThan(4_800);
   await expect(inputStatus.getByText("Audio", { exact: true })).toBeVisible();
   await expect(inputStatus.getByText("ENG", { exact: true })).toBeVisible();
   await inputStatus.getByRole("button", { name: "Rename ENG" }).click();
