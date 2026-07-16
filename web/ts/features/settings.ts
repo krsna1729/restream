@@ -344,6 +344,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                             <span class="label-text text-base-content/70">Search authentication attempts</span>
                             <input id="auth-attempts-search" class="input input-sm input-bordered mt-1" type="search" value="" placeholder="scope, IP, banned, tracking…" autocomplete="off" />
                         </label>
+                        <button id="auth-attempts-clear-search-btn" type="button" class="btn btn-sm btn-outline hidden">Clear search</button>
                         <p id="auth-attempts-search-summary" class="text-base-content/60 pb-1 text-sm" role="status" aria-live="polite">0 auth attempts visible</p>
                     </div>
                     <div class="overflow-x-auto rounded-lg border border-base-content/10" role="region" aria-label="Authentication attempts" tabindex="0">
@@ -489,6 +490,20 @@ function bindSettingsPanelActions(container: HTMLElement): void {
     nextSearch?.focus();
     nextSearch?.setSelectionRange(cursor, cursor);
   });
+  container
+    .querySelector<HTMLButtonElement>("#auth-attempts-clear-search-btn")
+    ?.addEventListener("click", () => {
+      rateLimitSearchQuery = "";
+      renderRateLimitAttempts(lastRateLimitAttempts);
+      const searchInput =
+        document.getElementById(
+          "auth-attempts-search",
+        ) as HTMLInputElement | null;
+      if (searchInput) {
+        searchInput.value = "";
+        searchInput.focus();
+      }
+    });
   container.onclick = (event) => {
     const button = (event.target as Element | null)?.closest(
       "[data-settings-action]",
@@ -708,6 +723,9 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
   const shownAttempts = attempts.filter(
     (attempt) => !search || rateLimitAttemptSearchText(attempt).includes(search),
   );
+  document
+    .getElementById("auth-attempts-clear-search-btn")
+    ?.classList.toggle("hidden", !search);
   if (shownAttempts.length === 0) {
     body.innerHTML = `<tr><td colspan="5" class="text-base-content/60">${search ? `No authentication attempts match "${escapeHtml(rateLimitSearchQuery.trim())}".` : "No attempts"}</td></tr>`;
     updateAuthAttemptsSearchSummary(shownAttempts.length, attempts.length);

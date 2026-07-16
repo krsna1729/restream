@@ -235,9 +235,18 @@ test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async 
   await expect(
     settings.getByText('No authentication attempts match "banned".'),
   ).toBeVisible();
+  const clearSearch = settings.getByRole("button", { name: "Clear search" });
+  await expect(clearSearch).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     '0/1 auth attempts match "banned"',
   );
+
+  await clearSearch.click();
+  await expect(authSearch).toHaveValue("");
+  await expect(authSearchSummary).toHaveText("1 auth attempt visible");
+  await expect(clearSearch).toBeHidden();
+  await expect(settings.getByRole("cell", { name: "Dashboard" })).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain("1 auth attempt visible");
   await expect(page.locator("#dashboard-v2-root")).toBeHidden();
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
