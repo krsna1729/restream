@@ -24,6 +24,17 @@ states:
       files:
         - test/frontend/redesign/seed.spec.ts
 
+  - id: chaos.recovery-truth
+    surface: pipeline-operate
+    fixture: chaos-recovery
+    expected: Reconnecting inputs, HLS retry timeouts, and recovered-but-flapping outputs stay distinguishable without opening raw logs.
+    proof:
+      status: seeded
+      source: .local/artifacts/latest/recovery/recovery.json from test_harness recovery on 2026-07-16
+      files:
+        - test/frontend/redesign/fixtures/operator-states.ts
+        - test/frontend/redesign/seed.spec.ts
+
   - id: output.starting-stopping
     surface: pipeline-operate
     expected: Pending intent remains visible until lifecycle or fallback convergence.

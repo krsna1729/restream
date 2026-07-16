@@ -134,6 +134,54 @@ test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async 
   expect(v2Requests.length).toBe(1);
 });
 
+test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "chaos-recovery",
+    "/?mode=pipeline&view=operate&p=pipe-grace&ui=v2",
+    { expectOverviewReady: false },
+  );
+
+  const pipelineSelector = page.locator("#dashboard-v2-pipeline-selector-root");
+  const pipelineHeader = page.locator("#dashboard-v2-pipeline-header-root");
+  const inputStatus = page.locator("#dashboard-v2-pipeline-input-status-root");
+  const outputOverview = page.locator(
+    "#dashboard-v2-pipeline-output-overview-root",
+  );
+
+  await expect(
+    pipelineSelector.getByRole("heading", { name: "Pipelines" }),
+  ).toBeVisible();
+  await expect(
+    pipelineHeader.getByRole("heading", { name: "Transient Publisher Drop" }),
+  ).toBeVisible();
+  await expect(inputStatus).toContainText("Reconnecting");
+  await expect(inputStatus).toContainText("Disconnect grace active");
+  await expect(outputOverview).toContainText("Grace-preserved Output");
+  await expect(outputOverview).toContainText("Running");
+
+  await page.goto(
+    "/?mode=pipeline&view=operate&p=pipe-hls-timeout&ui=v2",
+  );
+  await expect(
+    pipelineHeader.getByRole("heading", { name: "HLS Timeout Recovery" }),
+  ).toBeVisible();
+  await expect(outputOverview).toContainText("HLS PUT Sink");
+  await expect(outputOverview).toContainText("Retrying");
+  await expect(outputOverview).toContainText("Retry in 8s");
+
+  await page.goto("/?mode=pipeline&view=operate&p=pipe-flapping&ui=v2");
+  await expect(
+    pipelineHeader.getByRole("heading", { name: "Recovered Sink Flap" }),
+  ).toBeVisible();
+  await expect(inputStatus).toContainText("Live input");
+  await expect(outputOverview).toContainText("SRT Sink Flap");
+  await expect(outputOverview).toContainText("Flapping");
+  await expect(outputOverview).toContainText("4 recent failures");
+});
+
 test("seed: ui=v2 replaces Overview while delegating operator actions @desktop", async ({
   page,
 }) => {
