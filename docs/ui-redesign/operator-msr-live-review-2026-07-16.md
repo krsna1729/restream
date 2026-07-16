@@ -104,6 +104,11 @@ route exposes a live result-count summary, and seeded Playwright/CDP coverage
 proves search hits and misses are announced without relying on visual scanning
 of both Recordings and Source Files sections.
 
+Status now has the same lightweight operator checkpoint: the legacy-owned route
+announces the loaded build identity plus process-log and notable-activity
+counts before the dense status sections, with seeded Playwright/CDP coverage for
+the visible and accessibility-tree summary.
+
 The seeded v2 Operate path also has a CDP layout proof across the configured
 desktop, tablet, and mobile browser projects. The stress fixture uses the
 recovered sink-flap pipeline with 30 audio tracks and verifies that both DOM

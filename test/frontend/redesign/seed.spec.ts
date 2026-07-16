@@ -609,6 +609,24 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
 });
 
+test("seed: ui=v2 Status announces loaded build and activity summary @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=status&ui=v2", {
+    expectOverviewReady: false,
+  });
+
+  const status = page.locator("#status-mode-panel");
+  await expect(status.getByRole("heading", { name: "Status" })).toBeVisible();
+  await expect(status.locator("#status-route-summary")).toHaveText(
+    "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
+  );
+  expect(await getCdpStatusTexts(page)).toContain(
+    "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
+});
+
 test("seed: ui=v2 Operate stays inside the viewport across breakpoints", async ({
   page,
 }) => {

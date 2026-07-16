@@ -143,7 +143,7 @@ states:
     expected: A 401 returns the operator to the base-path-aware login flow.
     proof:
       status: seeded
-      source: Playwright seeded v2 flow proves a runtime 401 redirects to login with the full operator return path, and browser DOM coverage proves successful login returns to that preserved location.
+      source: Playwright seeded v2 flow proves a runtime 401 redirects to login with the full operator return path, browser DOM coverage proves successful login returns to that preserved location, and seeded Playwright/CDP proves the legacy-owned Status route announces its loaded build and process-activity summary as status text.
       files:
         - test/frontend/frontend-browser-dom.spec.ts
         - test/frontend/redesign/seed.spec.ts

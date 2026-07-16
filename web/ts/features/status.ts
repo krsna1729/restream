@@ -393,6 +393,24 @@ function renderProcessLog(logs: AppLogRow[]): string {
     </section>`;
 }
 
+function pluralize(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function statusSummaryText(data: StatusData, logs: AppLogRow[]): string {
+  const version = valueOrDash(data.restream?.version);
+  const commit = valueOrDash(data.restream?.commit);
+  const activityCount = logs.filter(isNotableRestreamActivity).length;
+  return [
+    version === "--" ? "Status loaded" : `Status loaded for ${version}`,
+    commit === "--" ? null : `commit ${commit}`,
+    pluralize(logs.length, "process log"),
+    pluralize(activityCount, "notable activity", "notable activities"),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function statusLogKey(log: AppLogRow | null | undefined): string {
   const id = Number(log?.id);
   if (Number.isFinite(id) && id > 0) return `id:${id}`;
@@ -516,6 +534,7 @@ function renderStatusSnapshot(): void {
   const sbomEndpoint = getEngineSbomEndpoint(data);
 
   container.innerHTML = [
+    `<p id="status-route-summary" class="dashboard-muted text-sm" role="status" aria-live="polite">${escapeHtml(statusSummaryText(data, processLogs))}</p>`,
     statusQuickNavHtml(),
     section(
       "status-build-section",
