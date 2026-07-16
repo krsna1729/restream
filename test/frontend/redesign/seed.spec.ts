@@ -850,12 +850,28 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   await expect(
     incidents.getByText('No alert matches for "healthy".'),
   ).toBeVisible();
+  const clearSearch = incidents.getByRole("button", { name: "Clear search" });
+  await expect(clearSearch).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     '0 alert groups · 0 events match "healthy"',
   );
 
-  await search.fill("");
+  await clearSearch.click();
+  await expect(search).toHaveValue("");
   await expect(searchSummary).toHaveText("1 alert group · 1 event visible");
+  await expect(clearSearch).toBeHidden();
+  await expect(
+    incidents.getByRole("heading", { name: "Retrying output" }),
+  ).toBeVisible();
+  await expect(
+    incidents.getByText('No alert matches for "healthy".'),
+  ).toHaveCount(0);
+  await expect(
+    incidents.getByText('No event matches for "healthy".'),
+  ).toHaveCount(0);
+  expect(await getCdpStatusTexts(page)).toContain(
+    "1 alert group · 1 event visible",
+  );
 
   await incidents
     .getByLabel("Filter incidents by pipeline")

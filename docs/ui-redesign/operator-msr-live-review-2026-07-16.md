@@ -135,7 +135,8 @@ Incidents also now has one local search surface across active alerts and recent
 lifecycle events. The search result summary is announced as status text, so an
 operator can narrow a noisy incident feed by destination, pipeline, cause, or
 event wording without visually scanning both columns. Seeded Playwright/CDP
-coverage proves hit and no-hit summaries are visible and announced.
+coverage proves hit and no-hit summaries are visible and announced, and that a
+local Clear search action restores both columns without changing incident scope.
 
 Telemetry now has an equivalent engineer-facing checkpoint: before the dense
 counter grids, the legacy-owned route announces loaded/stale state, engine

@@ -383,6 +383,7 @@ export function renderIncidentsHtml(
         <span class="label-text text-base-content/70">Search incidents and events</span>
         <input id="incidents-search" class="input input-sm input-bordered mt-1" type="search" value="${escapeHtml(searchQuery)}" placeholder="output, pipeline, cause, event…" autocomplete="off" />
       </label>
+      <button id="incidents-clear-search-btn" type="button" class="btn btn-sm btn-outline ${search ? "" : "hidden"}">Clear search</button>
       <p id="incidents-search-results-summary" class="text-base-content/60 pb-1 text-sm" role="status" aria-live="polite">${escapeHtml(searchSummaryText)}</p>
     </div>
     ${availability}
@@ -419,6 +420,15 @@ function bindIncidentControls(): void {
     nextSearch?.focus();
     nextSearch?.setSelectionRange(cursor, cursor);
   });
+  document
+    .getElementById("incidents-clear-search-btn")
+    ?.addEventListener("click", () => {
+      incidentSearchQuery = "";
+      paintIncidents();
+      (
+        document.getElementById("incidents-search") as HTMLInputElement | null
+      )?.focus();
+    });
   document
     .getElementById("incidents-refresh-btn")
     ?.addEventListener("click", () => {
