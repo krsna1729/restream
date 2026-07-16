@@ -36,3 +36,8 @@ Manifests own:
 `test/harness/modes.json` is the canonical command surface. New entries should
 be `kind: suite`, `kind: scenario`, or an explicit special-workflow runner; do
 not add deprecated manifest kinds.
+
+`msr.dashboard` is the local overnight runner for the browser-assisted MSR soak.
+It keeps an MSR-like hero pipeline live, seeds baseline fan-out, starts a
+couple of sidecar pipelines, and then hands the dashboard to a dedicated
+Playwright/CDP spec that churns outputs and times diagnostics.
