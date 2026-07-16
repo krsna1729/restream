@@ -364,6 +364,12 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     v2Overview.getByRole("heading", { name: "Restream Activity" }),
   ).toBeVisible();
   await expect(page.locator("#overview-mode-content")).toBeHidden();
+  expect(
+    await page.locator("#overview-mode-content").evaluate((node) => ({
+      childCount: node.childElementCount,
+      text: node.textContent?.trim() ?? "",
+    })),
+  ).toEqual({ childCount: 0, text: "" });
 
   await v2Overview
     .getByRole("button", { name: "Add Pipeline", exact: true })

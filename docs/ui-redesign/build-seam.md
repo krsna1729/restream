@@ -153,16 +153,19 @@ modes.ts polling, SSE, activity grouping, and metric history
 React owns no timers, requests, global state, URLs, or mutations. The existing
 app translates action identifiers into its established navigation and editor
 flows. `modes.ts` skips legacy Overview markup only for the explicit flag while
-continuing to own refresh and lifecycle behavior. This removes double
-rendering without creating a second runtime.
+continuing to own refresh and lifecycle behavior. Under `ui=v2`, the hidden
+legacy Overview container is emptied so the active React Overview is the only
+fleet-summary subtree. This removes double rendering without creating a second
+runtime.
 
 The full slice measures 272,694 raw bytes and 70,080 gzip bytes in Vite's
 production report, below the existing 75,000-byte gzip guardrail. The compiled
 flag loader is 953 raw bytes (373 bytes with deterministic gzip); the default
 entry remains 367 raw bytes (197 bytes with deterministic gzip). Seeded browser
 coverage proves that the legacy Overview is hidden only under `ui=v2`, the
-mixed-health states and activity render, Add Pipeline opens the existing
-editor, and Operate uses the established pipeline route.
+mixed-health states and activity render, hidden legacy Overview content is
+empty, Add Pipeline opens the existing editor, and Operate uses the established
+pipeline route.
 
 The architecture decision is now positive but narrow: React is justified for
 new or migrated presentation slices when it consumes a typed model and

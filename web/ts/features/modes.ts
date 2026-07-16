@@ -99,6 +99,9 @@ export function configureOverviewPresentation(options: {
   overviewPresentationHook = options.onPresentation || null;
   const legacyContainer = document.getElementById("overview-mode-content");
   if (legacyContainer) legacyContainer.hidden = !legacyOverviewRenderEnabled;
+  if (!legacyOverviewRenderEnabled) {
+    legacyContainer?.replaceChildren();
+  }
 }
 
 function currentOverviewPresentation(): OverviewPresentationInput {

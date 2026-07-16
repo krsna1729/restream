@@ -112,6 +112,8 @@ What changed from the live operator pass:
   growth reflects only the active operator surface.
 - v2 selector ownership now empties the hidden legacy pipeline rows as well,
   so the active rail is the only pipeline navigation subtree under Operate.
+- v2 Overview ownership now empties the hidden legacy Overview container, so
+  the fleet-summary route does not carry duplicate inactive summary markup.
 
 Still not a full v2 redesign:
 
