@@ -41,6 +41,7 @@ import {
   resolveDashboardLocation,
 } from "../core/pipeline-workspace.js";
 import type {
+  DashboardLocation,
   DashboardMode,
   PipelineWorkspaceView,
 } from "../core/pipeline-workspace.js";
@@ -80,6 +81,15 @@ let overviewActivityStreamActive = false;
 let legacyOverviewRenderEnabled = true;
 let overviewPresentationHook:
   ((presentation: OverviewPresentationInput) => void) | null = null;
+let dashboardModePresentationSync:
+  | ((location: DashboardLocation) => void)
+  | null = null;
+
+export function configureDashboardModePresentationSync(
+  callback: ((location: DashboardLocation) => void) | null,
+): void {
+  dashboardModePresentationSync = callback;
+}
 
 export function configureOverviewPresentation(options: {
   legacyRenderEnabled: boolean;
@@ -780,6 +790,7 @@ export function openInspectGraph(pipeId: string): void {
 
 export function renderDashboardModes(): void {
   const location = canonicalizeDashboardLocation();
+  dashboardModePresentationSync?.(location);
   if (location.mode === "overview") renderOverview();
   if (location.mode === "pipeline" && location.pipelineView === "inspect") {
     renderPipelineInspector();

@@ -73,6 +73,175 @@ test("seed: mixed-health Overview exposes upstream and output state @desktop", a
   );
 });
 
+test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async ({
+  page,
+}) => {
+  const v2Requests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("dashboard-v2-entry.js")) {
+      v2Requests.push(request.url());
+    }
+  });
+
+  await openSeededDashboard(page, "mixed-health", "/?mode=settings&ui=v2", {
+    expectOverviewReady: false,
+  });
+  await expect(page).toHaveURL(/\?mode=settings&ui=v2$/);
+  await expect(
+    page.locator("#settings-mode-content").getByRole("heading", {
+      name: "Settings",
+    }),
+  ).toBeVisible();
+  await expect(page.locator("#dashboard-v2-root")).toBeHidden();
+  await expect(
+    page.locator("#dashboard-v2-pipeline-selector-root"),
+  ).toBeHidden();
+  expect(v2Requests).toEqual([]);
+
+  await page.goto("/?mode=status&ui=v2");
+  await expect(
+    page.locator("#status-mode-content").getByRole("heading", {
+      name: "Status",
+    }),
+  ).toBeVisible();
+  await expect(page.locator("#status-versions")).toContainText("seeded");
+  await expect(page.locator("#dashboard-v2-root")).toBeHidden();
+  await expect(
+    page.locator("#dashboard-v2-pipeline-selector-root"),
+  ).toBeHidden();
+  expect(v2Requests).toEqual([]);
+
+  await page.goto("/?mode=pipeline&view=inspect&p=pipe-healthy&ui=v2");
+  await expect(page.locator("#inspect-mode-panel")).toBeVisible();
+  await expect(
+    page.locator("#dashboard-v2-pipeline-selector-root"),
+  ).toBeHidden();
+  expect(v2Requests).toEqual([]);
+
+  await page.goto("/?mode=pipeline&view=monitor&p=pipe-healthy&ui=v2");
+  await expect(page.locator("#control-mode-panel")).toBeVisible();
+  await expect(
+    page.locator("#dashboard-v2-pipeline-selector-root"),
+  ).toBeHidden();
+  expect(v2Requests).toEqual([]);
+
+  await page.goto("/?mode=pipeline&view=operate&ui=v2");
+  await expect(
+    page
+      .locator("#dashboard-v2-pipeline-selector-root")
+      .getByRole("heading", { name: "Pipelines" }),
+  ).toBeVisible();
+  expect(v2Requests.length).toBe(1);
+});
+
+test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "chaos-recovery",
+    "/?mode=pipeline&view=operate&p=pipe-grace&ui=v2",
+    { expectOverviewReady: false },
+  );
+
+  const pipelineSelector = page.locator("#dashboard-v2-pipeline-selector-root");
+  const pipelineHeader = page.locator("#dashboard-v2-pipeline-header-root");
+  const inputStatus = page.locator("#dashboard-v2-pipeline-input-status-root");
+  const outputOverview = page.locator(
+    "#dashboard-v2-pipeline-output-overview-root",
+  );
+
+  await expect(
+    pipelineSelector.getByRole("heading", { name: "Pipelines" }),
+  ).toBeVisible();
+  await expect(
+    pipelineHeader.getByRole("heading", { name: "Transient Publisher Drop" }),
+  ).toBeVisible();
+  await expect(inputStatus).toContainText("Reconnecting");
+  await expect(inputStatus).toContainText("Disconnect grace active");
+  await expect(outputOverview).toContainText("Grace-preserved Output");
+  await expect(outputOverview).toContainText("Running");
+
+  await page.goto(
+    "/?mode=pipeline&view=operate&p=pipe-hls-timeout&ui=v2",
+  );
+  await expect(
+    pipelineHeader.getByRole("heading", { name: "HLS Timeout Recovery" }),
+  ).toBeVisible();
+  await expect(outputOverview).toContainText("HLS PUT Sink");
+  await expect(outputOverview).toContainText("Retrying");
+  await expect(outputOverview).toContainText("Retry in 8s");
+
+  await page.goto("/?mode=pipeline&view=operate&p=pipe-flapping&ui=v2");
+  await expect(
+    pipelineHeader.getByRole("heading", { name: "Recovered Sink Flap" }),
+  ).toBeVisible();
+  await expect(inputStatus).toContainText("Live input");
+  await expect(inputStatus).toContainText("30 audio tracks");
+  await expect(inputStatus.getByText("Track 6")).toBeVisible();
+  await expect(inputStatus.getByText("Track 7")).toHaveCount(0);
+  await expect(
+    inputStatus.getByRole("button", { name: "Show all 30" }),
+  ).toBeVisible();
+  await inputStatus.getByRole("button", { name: "Show all 30" }).click();
+  await expect(inputStatus.getByText("Track 30")).toBeVisible();
+  await expect(
+    inputStatus.getByRole("button", { name: "Show fewer" }),
+  ).toBeVisible();
+  await expect(outputOverview).toContainText("SRT Sink Flap");
+  await expect(outputOverview).toContainText("Flapping");
+  await expect(outputOverview).toContainText("4 recent failures");
+
+  await page.goto("/?mode=pipeline&view=operate&p=pipe-stall&ui=v2");
+  await expect(
+    pipelineHeader.getByRole("heading", { name: "Stalled Sink Isolation" }),
+  ).toBeVisible();
+  await expect(outputOverview).toContainText("RTMP stalled sink");
+  await expect(outputOverview).toContainText("Stalled");
+  await expect(outputOverview).toContainText("No progress for 10s");
+  await expect(outputOverview).toContainText("5/6 active");
+  const outputSearch = outputOverview.getByLabel("Search output destinations");
+  await outputSearch.fill("stalled");
+  await expect(outputOverview.getByText("1/6 shown")).toBeVisible();
+  await expect(
+    outputOverview.getByRole("heading", { name: "RTMP stalled sink" }),
+  ).toBeVisible();
+  await expect(
+    outputOverview.getByRole("heading", { name: "Healthy sibling 01" }),
+  ).not.toBeVisible();
+  await outputSearch.fill("");
+  await outputOverview.getByRole("button", { name: "Attention" }).click();
+  await expect(
+    outputOverview.getByRole("heading", { name: "RTMP stalled sink" }),
+  ).toBeVisible();
+  await expect(
+    outputOverview.getByRole("heading", { name: "Healthy sibling 01" }),
+  ).not.toBeVisible();
+
+  await page.goto(
+    "/?mode=pipeline&view=operate&p=pipe-retry-budget&ui=v2",
+  );
+  await expect(
+    pipelineHeader.getByRole("heading", { name: "Retry Budget Exhausted" }),
+  ).toBeVisible();
+  await expect(outputOverview).toContainText("0/2 active");
+  await expect(outputOverview.getByText("Error2")).toBeVisible();
+  await expect(outputOverview).toContainText("RTMP dead sink");
+  await expect(outputOverview).toContainText("Connection refused");
+  await expect(outputOverview).toContainText("SRT dead sink");
+  await expect(outputOverview).toContainText("connection failed");
+  await expect(outputOverview).not.toContainText("2 Flapping");
+  await expect(
+    outputOverview.getByRole("heading", { name: "Needs attention" }),
+  ).toBeVisible();
+  await expect(
+    outputOverview.getByRole("heading", { name: "RTMP dead sink" }),
+  ).toBeVisible();
+  await expect(
+    outputOverview.getByRole("heading", { name: "SRT dead sink" }),
+  ).toBeVisible();
+});
+
 test("seed: ui=v2 replaces Overview while delegating operator actions @desktop", async ({
   page,
 }) => {
@@ -250,6 +419,12 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(page.locator("#outs-col > h2")).toBeHidden();
   await expect(page.locator("#outputs-list")).toBeHidden();
   await expect(page.locator("#add-out-btn")).toBeHidden();
+  const openRetryingOutputActions = async () => {
+    await outputOverview
+      .getByRole("button", { name: "More actions for Retrying Output" })
+      .click();
+  };
+  await openRetryingOutputActions();
   await outputOverview
     .getByRole("button", { name: "History Retrying Output" })
     .click();
@@ -258,6 +433,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     "History: Retrying Output",
   );
   await page.locator("#output-history-modal").press("Escape");
+  await openRetryingOutputActions();
   await outputOverview
     .getByRole("button", { name: "Monitor Retrying Output" })
     .click();
@@ -269,6 +445,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
         ).__redesignOpenedUrls,
     ),
   ).toEqual(["https://monitor.example.invalid/retrying"]);
+  await openRetryingOutputActions();
   await outputOverview
     .getByRole("button", { name: "Edit Retrying Output" })
     .click();
@@ -289,9 +466,11 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     name: "Start Retrying Output",
   });
   await expect(startRetryingOutput).toBeEnabled();
+  await openRetryingOutputActions();
   await expect(
     outputOverview.getByRole("button", { name: "Delete Retrying Output" }),
   ).toBeEnabled();
+  await openRetryingOutputActions();
   await startRetryingOutput.click();
   await expect(
     outputOverview.getByRole("button", { name: "Starting Retrying Output" }),
@@ -302,6 +481,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await outputOverview
     .getByRole("button", { name: "Stop Retrying Output" })
     .click();
+  await openRetryingOutputActions();
   await expect(
     outputOverview.getByRole("button", { name: "Delete Retrying Output" }),
   ).toBeEnabled();
@@ -509,7 +689,14 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
     const measure = async (mutate: boolean) => {
       const mutations = { attributes: 0, characterData: 0, childList: 0 };
       const observer = new MutationObserver((records) => {
-        for (const record of records) mutations[record.type] += 1;
+        for (const record of records) {
+          const target =
+            record.target instanceof Element
+              ? record.target
+              : record.target.parentElement;
+          if (!target?.closest("article")) continue;
+          mutations[record.type] += 1;
+        }
       });
       observer.observe(root, {
         attributes: true,
@@ -553,4 +740,186 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
   });
   expect(result.live.characterData).toBeGreaterThan(0);
   expect(result.live.childList).toBe(0);
+});
+
+test("ui=v2 output destinations support search and state filters @desktop", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.setContent(`
+    <div id="dashboard-v2-root"></div>
+    <div id="dashboard-v2-pipeline-selector-root"></div>
+    <div id="dashboard-v2-pipeline-header-root"></div>
+    <div id="dashboard-v2-pipeline-input-status-root"></div>
+    <div id="dashboard-v2-pipeline-output-overview-root"></div>
+  `);
+
+  await page.evaluate(async () => {
+    const importModule = new Function(
+      "path",
+      "return import(path)",
+    ) as (path: string) => Promise<{
+      renderDashboardV2PipelineOutputOverview: (
+        model: Record<string, unknown>,
+        actions: Record<string, unknown>,
+      ) => void;
+    }>;
+    const { renderDashboardV2PipelineOutputOverview } = await importModule(
+      "/js/app/dashboard-v2-entry.js",
+    );
+    const actions = {
+      addOutput: () => {},
+      deleteOutput: async () => {},
+      editOutput: () => {},
+      monitorOutput: () => {},
+      openOutputHistory: () => {},
+      toggleOutput: async () => {},
+      toggleOutputList: () => {},
+    };
+    renderDashboardV2PipelineOutputOverview(
+      {
+        pipelineId: "pipe-filter",
+        activeLabel: "1/5 active",
+        aggregateRate: "1.5 Mb/s",
+        counts: [
+          { key: "running", label: "Running", tone: "success", count: 1 },
+          { key: "retrying", label: "Retrying", tone: "warning", count: 1 },
+          { key: "stopped", label: "Stopped", tone: "neutral", count: 1 },
+        ],
+        attention: [],
+        cards: [
+          {
+            id: "primary",
+            name: "YouTube primary",
+            urlLabel: "rtmp://example.invalid/live/youtube",
+            status: {
+              label: "Running",
+              tone: "success",
+              detail: "Delivering media",
+            },
+            encodingLabel: "source",
+            rateLabel: "1.5 Mb/s",
+            uptimeLabel: "0:07:00",
+            controlLabel: "Stop",
+            controlDisabled: false,
+            monitorAvailable: false,
+            deleteDisabled: true,
+          },
+          {
+            id: "backup",
+            name: "Facebook backup",
+            urlLabel: "rtmp://example.invalid/live/facebook",
+            status: {
+              label: "Retrying",
+              tone: "warning",
+              detail: "Retry in 6s",
+            },
+            encodingLabel: "720p",
+            rateLabel: "--",
+            uptimeLabel: null,
+            controlLabel: "Stop",
+            controlDisabled: false,
+            monitorAvailable: true,
+            deleteDisabled: true,
+          },
+          {
+            id: "archive",
+            name: "Archive",
+            urlLabel: "rtmp://example.invalid/live/archive",
+            status: {
+              label: "Stopped",
+              tone: "neutral",
+              detail: "Stopped by operator",
+            },
+            encodingLabel: "source",
+            rateLabel: "--",
+            uptimeLabel: null,
+            controlLabel: "Start",
+            controlDisabled: false,
+            monitorAvailable: false,
+            deleteDisabled: false,
+          },
+          {
+            id: "led-wall",
+            name: "LED wall",
+            urlLabel: "srt://example.invalid/live/led-wall",
+            status: {
+              label: "Stopped",
+              tone: "neutral",
+              detail: "Stopped by operator",
+            },
+            encodingLabel: "source",
+            rateLabel: "--",
+            uptimeLabel: null,
+            controlLabel: "Start",
+            controlDisabled: false,
+            monitorAvailable: false,
+            deleteDisabled: false,
+          },
+          {
+            id: "hls-preview",
+            name: "Internal HLS preview",
+            urlLabel: "hls://preview",
+            status: {
+              label: "Stopped",
+              tone: "neutral",
+              detail: "Stopped by operator",
+            },
+            encodingLabel: "source",
+            rateLabel: "--",
+            uptimeLabel: null,
+            controlLabel: "Start",
+            controlDisabled: false,
+            monitorAvailable: false,
+            deleteDisabled: false,
+          },
+        ],
+        listCaption: null,
+        expanded: false,
+        canExpand: false,
+      },
+      actions,
+    );
+  });
+
+  const root = page.locator("#dashboard-v2-pipeline-output-overview-root");
+  await expect(
+    root.getByRole("heading", { name: "YouTube primary" }),
+  ).toBeVisible();
+  await expect(
+    root.getByRole("heading", { name: "Facebook backup" }),
+  ).toBeVisible();
+  await expect(root.getByRole("heading", { name: "Archive" })).toBeVisible();
+
+  await root.getByLabel("Search output destinations").fill("facebook");
+  await expect(
+    root.getByRole("heading", { name: "Facebook backup" }),
+  ).toBeVisible();
+  await expect(
+    root.getByRole("heading", { name: "YouTube primary" }),
+  ).not.toBeVisible();
+  await expect(root.getByText("1/5 shown")).toBeVisible();
+
+  await root.getByRole("button", { name: "Stopped" }).click();
+  await expect(root.getByText("No outputs match.")).toBeVisible();
+
+  await root.getByRole("button", { name: "Clear filters" }).click();
+  await expect(
+    root.getByRole("heading", { name: "YouTube primary" }),
+  ).toBeVisible();
+  await expect(
+    root.getByRole("heading", { name: "Facebook backup" }),
+  ).toBeVisible();
+  await expect(root.getByRole("heading", { name: "Archive" })).toBeVisible();
+
+  await root.getByRole("button", { name: "Attention" }).click();
+  await expect(
+    root.getByRole("heading", { name: "Facebook backup" }),
+  ).toBeVisible();
+  await expect(
+    root.getByRole("heading", { name: "YouTube primary" }),
+  ).not.toBeVisible();
+  await expect(
+    root.getByRole("heading", { name: "Archive" }),
+  ).not.toBeVisible();
 });

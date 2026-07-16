@@ -15,7 +15,8 @@ mixed.live.rtmp.h264.a1
 mixed.live.srt.h264.a1
 mixed.live.srt.h264.a2
 mixed.live.srt.h265.a1
-mixed.live.srt.h265.a2
+mixed.live.srt.h265.a2.bf0
+mixed.live.srt.h265.a2.bf2
 mixed.file.h264.a1
 mixed.file.h264.a2
 mixed.file.h265.a1
@@ -60,8 +61,11 @@ restream_release_shard_timeout() {
         mixed.live.rtmp.h264.a1|mixed.live.srt.h264.a1|mixed.file.h264.a1|fault.resilience|ramp-family)
             echo 30m
             ;;
-        mixed.live.srt.h264.a2|mixed.live.srt.h265.a1|mixed.live.srt.h265.a2|mixed.file.h264.a2|mixed.file.h265.a1|mixed.file.h265.a2|srt-crypto-matrix|resource-sweep.*)
+        mixed.live.srt.h264.a2|mixed.live.srt.h265.a1|mixed.file.h264.a2|mixed.file.h265.a1|mixed.file.h265.a2|srt-crypto-matrix|resource-sweep.*)
             echo 50m
+            ;;
+        mixed.live.srt.h265.a2.bf0|mixed.live.srt.h265.a2.bf2)
+            echo 30m
             ;;
         bitrate-sweep.*)
             echo 60m
@@ -96,8 +100,10 @@ restream_release_shard_plan() {
             printf 'mode\tmixed.live.srt.h265.a1.bf0\n'
             printf 'mode\tmixed.live.srt.h265.a1.bf2\n'
             ;;
-        mixed.live.srt.h265.a2)
+        mixed.live.srt.h265.a2.bf0)
             printf 'mode\tmixed.live.srt.h265.a2.bf0\n'
+            ;;
+        mixed.live.srt.h265.a2.bf2)
             printf 'mode\tmixed.live.srt.h265.a2.bf2\n'
             ;;
         mixed.file.h264.a1)

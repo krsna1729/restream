@@ -109,6 +109,9 @@ interface DashboardV2Module {
 }
 
 let dashboardV2Module: DashboardV2Module | null = null;
+let dashboardV2ModulePromise: Promise<void> | null = null;
+let dashboardV2OverviewActive = false;
+let dashboardV2PipelineActive = false;
 let latestOverviewModel: OverviewViewModel | null = null;
 let overviewActions: DashboardV2OverviewActions | null = null;
 let latestPipelineSelectorModel: PipelineOperateSelectorModel | null = null;
@@ -124,6 +127,52 @@ let latestPipelineOutputOverviewModel:
 let pipelineOutputOverviewActions:
   | DashboardV2PipelineOutputOverviewActions
   | null = null;
+
+const DASHBOARD_V2_CONTAINER_IDS = [
+  "dashboard-v2-root",
+  "dashboard-v2-pipeline-selector-root",
+  "dashboard-v2-pipeline-header-root",
+  "dashboard-v2-pipeline-input-status-root",
+  "dashboard-v2-pipeline-output-overview-root",
+] as const;
+
+function setContainerHidden(id: string, hidden: boolean): void {
+  const element = document.getElementById(id);
+  if (element) element.hidden = hidden;
+}
+
+function hideDashboardV2Overview(): void {
+  setContainerHidden("dashboard-v2-root", true);
+}
+
+function hideDashboardV2Pipeline(): void {
+  for (const id of DASHBOARD_V2_CONTAINER_IDS.slice(1)) {
+    setContainerHidden(id, true);
+  }
+}
+
+function ensureDashboardV2Module(): void {
+  if (
+    dashboardV2Module ||
+    dashboardV2ModulePromise ||
+    !dashboardV2ExperimentEnabled()
+  ) {
+    return;
+  }
+  dashboardV2ModulePromise = import(DASHBOARD_V2_BUNDLE)
+    .then((module) => {
+      dashboardV2Module = module as DashboardV2Module;
+      renderLatestOverview();
+      renderLatestPipelineSelector();
+      renderLatestPipelineHeader();
+      renderLatestPipelineInputStatus();
+      renderLatestPipelineOutputOverview();
+    })
+    .catch((error: unknown) => {
+      dashboardV2ModulePromise = null;
+      console.error("Unable to start the dashboard v2 experiment", error);
+    });
+}
 
 function normalizedDashboardUiVersion(
   value: string | null,
@@ -240,6 +289,11 @@ export function initDashboardUiVersionToggle(
 }
 
 function renderLatestOverview(): void {
+  if (!dashboardV2OverviewActive) {
+    hideDashboardV2Overview();
+    return;
+  }
+  ensureDashboardV2Module();
   if (!dashboardV2Module || !latestOverviewModel || !overviewActions) return;
   dashboardV2Module.renderDashboardV2Overview(
     latestOverviewModel,
@@ -248,6 +302,11 @@ function renderLatestOverview(): void {
 }
 
 function renderLatestPipelineSelector(): void {
+  if (!dashboardV2PipelineActive) {
+    hideDashboardV2Pipeline();
+    return;
+  }
+  ensureDashboardV2Module();
   if (
     !dashboardV2Module ||
     !latestPipelineSelectorModel ||
@@ -262,6 +321,11 @@ function renderLatestPipelineSelector(): void {
 }
 
 function renderLatestPipelineHeader(): void {
+  if (!dashboardV2PipelineActive) {
+    hideDashboardV2Pipeline();
+    return;
+  }
+  ensureDashboardV2Module();
   if (
     !dashboardV2Module ||
     latestPipelineHeaderModel === undefined ||
@@ -276,6 +340,11 @@ function renderLatestPipelineHeader(): void {
 }
 
 function renderLatestPipelineInputStatus(): void {
+  if (!dashboardV2PipelineActive) {
+    hideDashboardV2Pipeline();
+    return;
+  }
+  ensureDashboardV2Module();
   if (
     !dashboardV2Module ||
     latestPipelineInputStatusModel === undefined ||
@@ -289,6 +358,11 @@ function renderLatestPipelineInputStatus(): void {
 }
 
 function renderLatestPipelineOutputOverview(): void {
+  if (!dashboardV2PipelineActive) {
+    hideDashboardV2Pipeline();
+    return;
+  }
+  ensureDashboardV2Module();
   if (
     !dashboardV2Module ||
     latestPipelineOutputOverviewModel === undefined ||
@@ -310,13 +384,30 @@ export function dashboardV2ExperimentEnabled(
 
 export async function startDashboardV2Experiment(): Promise<boolean> {
   if (!dashboardV2ExperimentEnabled()) return false;
-  dashboardV2Module = (await import(DASHBOARD_V2_BUNDLE)) as DashboardV2Module;
-  renderLatestOverview();
-  renderLatestPipelineSelector();
-  renderLatestPipelineHeader();
-  renderLatestPipelineInputStatus();
-  renderLatestPipelineOutputOverview();
   return true;
+}
+
+export function setDashboardV2PresentationScope(options: {
+  readonly overviewActive: boolean;
+  readonly pipelineActive: boolean;
+}): void {
+  const nextOverviewActive =
+    dashboardV2ExperimentEnabled() && options.overviewActive;
+  const nextPipelineActive =
+    dashboardV2ExperimentEnabled() && options.pipelineActive;
+  const overviewChanged = dashboardV2OverviewActive !== nextOverviewActive;
+  const pipelineChanged = dashboardV2PipelineActive !== nextPipelineActive;
+  dashboardV2OverviewActive = nextOverviewActive;
+  dashboardV2PipelineActive = nextPipelineActive;
+  if (!dashboardV2OverviewActive) hideDashboardV2Overview();
+  if (!dashboardV2PipelineActive) hideDashboardV2Pipeline();
+  if (overviewChanged && dashboardV2OverviewActive) renderLatestOverview();
+  if (pipelineChanged && dashboardV2PipelineActive) {
+    renderLatestPipelineSelector();
+    renderLatestPipelineHeader();
+    renderLatestPipelineInputStatus();
+    renderLatestPipelineOutputOverview();
+  }
 }
 
 export function setDashboardV2OverviewActions(

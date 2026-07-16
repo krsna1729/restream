@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 
@@ -19,6 +19,7 @@ import type {
   PipelineOperateHeaderModel,
   PipelineOperateInputStatusModel,
   PipelineOperateSelectorModel,
+  PipelineOutputCardModel,
   PipelineOutputOverviewModel,
 } from "../features/pipeline-operate-view-model.js";
 
@@ -37,6 +38,8 @@ const toneTextClasses: Readonly<Record<OverviewTone, string>> = {
   info: "text-info",
   neutral: "text-base-content/75",
 };
+
+const INPUT_AUDIO_TRACK_PREVIEW_LIMIT = 6;
 
 const metricToneClasses: Readonly<Record<OverviewMetric["key"], string>> = {
   inputs: "border-l-success text-success",
@@ -67,8 +70,10 @@ function Panel({
 }
 
 function StatusBadge({
+  showDetail = true,
   status,
 }: {
+  showDetail?: boolean;
   status: OverviewStatus;
 }): React.JSX.Element {
   return (
@@ -76,13 +81,66 @@ function StatusBadge({
       className={`${toneClasses[status.tone]} inline-flex min-h-8 max-w-full items-center gap-2 rounded-lg border px-2.5 py-1 text-xs font-semibold leading-tight`}
     >
       <span className="truncate">{status.label}</span>
-      {status.detail ? (
+      {showDetail && status.detail ? (
         <span className="text-base-content/75 font-normal">
           {status.detail}
         </span>
       ) : null}
     </span>
   );
+}
+
+function outputStatusDetail(status: OverviewStatus): string {
+  const detail = status.detail?.trim() ?? "";
+  if (
+    !detail ||
+    detail === status.label ||
+    detail === "Delivering media" ||
+    detail === "Stopped by operator"
+  ) {
+    return "";
+  }
+  return detail;
+}
+
+type OutputFilter = "all" | "attention" | "running" | "stopped";
+
+const outputFilters: readonly {
+  readonly id: OutputFilter;
+  readonly label: string;
+}[] = [
+  { id: "all", label: "All" },
+  { id: "attention", label: "Attention" },
+  { id: "running", label: "Running" },
+  { id: "stopped", label: "Stopped" },
+];
+
+function outputMatchesFilter(
+  output: PipelineOutputCardModel,
+  filter: OutputFilter,
+): boolean {
+  if (filter === "all") return true;
+  if (filter === "attention")
+    return output.status.tone === "warning" || output.status.tone === "error";
+  if (filter === "running") return output.status.tone === "success";
+  return output.status.label === "Stopped";
+}
+
+function outputMatchesSearch(
+  output: PipelineOutputCardModel,
+  normalizedQuery: string,
+): boolean {
+  if (!normalizedQuery) return true;
+  return [
+    output.name,
+    output.urlLabel,
+    output.encodingLabel,
+    output.status.label,
+    output.status.detail ?? "",
+  ]
+    .join(" ")
+    .toLowerCase()
+    .includes(normalizedQuery);
 }
 
 function Sparkline({
@@ -473,12 +531,12 @@ function DashboardV2PipelineSelector({
         </button>
       </div>
       {model.pipelines.length ? (
-        <ul className="menu w-full gap-1 p-2">
+        <ul className="max-h-52 w-full space-y-1 overflow-x-hidden overflow-y-auto p-2 md:max-h-none">
           {model.pipelines.map((pipeline) => (
-            <li key={pipeline.id}>
+            <li className="min-w-0" key={pipeline.id}>
               <button
                 aria-current={pipeline.selected ? "page" : undefined}
-                className={`${pipeline.selected ? "bg-base-100 border-base-content/10" : "border-transparent"} hover:bg-base-100 flex w-full items-start gap-3 rounded-lg border px-3 py-2 text-left`}
+                className={`${pipeline.selected ? "bg-base-100 border-base-content/10" : "border-transparent"} hover:bg-base-100 flex w-full min-w-0 items-start gap-3 rounded-lg border px-3 py-2 text-left`}
                 onClick={() => actions.selectPipeline(pipeline.id)}
                 type="button"
               >
@@ -607,6 +665,12 @@ function DashboardV2PipelineInputStatus({
   model: PipelineOperateInputStatusModel;
 }): React.JSX.Element {
   const previewContainerRef = useRef<HTMLDivElement>(null);
+  const [audioExpanded, setAudioExpanded] = useState(false);
+  const audioTrackOverflow =
+    model.audioTracks.length > INPUT_AUDIO_TRACK_PREVIEW_LIMIT;
+  const visibleAudioTracks = audioExpanded
+    ? model.audioTracks
+    : model.audioTracks.slice(0, INPUT_AUDIO_TRACK_PREVIEW_LIMIT);
 
   useEffect(() => {
     const container = previewContainerRef.current;
@@ -619,6 +683,10 @@ function DashboardV2PipelineInputStatus({
     model.previewEnabled,
     model.previewKeyAssigned,
   ]);
+
+  useEffect(() => {
+    setAudioExpanded(false);
+  }, [model.id]);
 
   return (
     <section
@@ -696,9 +764,9 @@ function DashboardV2PipelineInputStatus({
       ) : null}
       {model.metricGroups.map((group) => (
         <div className="mt-3" key={group.key}>
-          <h4 className="text-base-content/60 text-[0.7rem] font-semibold uppercase tracking-wide">
+          <h3 className="text-base-content/60 text-[0.7rem] font-semibold uppercase tracking-wide">
             {group.label}
-          </h4>
+          </h3>
           <dl className="border-base-content/10 mt-1 grid grid-cols-2 overflow-hidden rounded-md border sm:grid-cols-4">
             {group.metrics.map((metric, index) => (
               <div
@@ -717,12 +785,12 @@ function DashboardV2PipelineInputStatus({
         </div>
       ))}
       <div className="mt-3">
-        <h4 className="text-base-content/60 text-[0.7rem] font-semibold uppercase tracking-wide">
+        <h3 className="text-base-content/60 text-[0.7rem] font-semibold uppercase tracking-wide">
           Audio
-        </h4>
+        </h3>
         {model.audioTracks.length ? (
           <div className="border-base-content/10 divide-base-content/10 mt-1 divide-y border-y">
-            {model.audioTracks.map((track) => (
+            {visibleAudioTracks.map((track) => (
               <div
                 className="border-base-content/10 grid gap-2 px-1 py-2.5 sm:grid-cols-[minmax(0,1.2fr)_repeat(4,minmax(0,.7fr))] sm:px-3"
                 key={track.key}
@@ -809,6 +877,23 @@ function DashboardV2PipelineInputStatus({
                 ))}
               </div>
             ))}
+            {audioTrackOverflow ? (
+              <div className="flex items-center justify-between gap-2 px-1 py-2.5 sm:px-3">
+                <p className="text-base-content/55 text-xs">
+                  Showing {visibleAudioTracks.length} of{" "}
+                  {model.audioTracks.length} audio tracks
+                </p>
+                <button
+                  className="btn btn-xs btn-outline"
+                  onClick={() => setAudioExpanded((expanded) => !expanded)}
+                  type="button"
+                >
+                  {audioExpanded
+                    ? "Show fewer"
+                    : `Show all ${model.audioTracks.length}`}
+                </button>
+              </div>
+            ) : null}
           </div>
         ) : (
           <p className="text-base-content/55 mt-1 text-sm">No tracks</p>
@@ -921,6 +1006,18 @@ function DashboardV2PipelineOutputOverview({
   actions: DashboardV2PipelineOutputOverviewActions;
   model: PipelineOutputOverviewModel;
 }): React.JSX.Element {
+  const [openActionsFor, setOpenActionsFor] = useState<string | null>(null);
+  const [outputFilter, setOutputFilter] = useState<OutputFilter>("all");
+  const [outputQuery, setOutputQuery] = useState("");
+  const normalizedOutputQuery = outputQuery.trim().toLowerCase();
+  const filteredCards = model.cards.filter(
+    (output) =>
+      outputMatchesFilter(output, outputFilter) &&
+      outputMatchesSearch(output, normalizedOutputQuery),
+  );
+  const filtersActive = outputFilter !== "all" || normalizedOutputQuery !== "";
+  const showOutputTools = model.cards.length > 4 || filtersActive;
+
   return (
     <section
       aria-labelledby="dashboard-v2-output-overview-title"
@@ -981,7 +1078,7 @@ function DashboardV2PipelineOutputOverview({
                   <span className="min-w-0 truncate text-sm font-semibold">
                     {output.name}
                   </span>
-                  <StatusBadge status={output.status} />
+                  <StatusBadge showDetail={false} status={output.status} />
                 </div>
                 <p className="text-base-content/55 mt-1 text-xs tabular-nums">
                   {output.encodingLabel} · {output.rateLabel}
@@ -997,34 +1094,88 @@ function DashboardV2PipelineOutputOverview({
       ) : null}
       {model.cards.length ? (
         <div className="mt-3 space-y-2">
-          <h4 className="text-base-content/70 text-xs font-semibold uppercase">
-            Output destinations
-          </h4>
-          {model.cards.map((output) => (
-            <article
-              className="border-base-content/10 border-t py-3"
-              key={output.id}
-            >
-              <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-base-content/70 text-xs font-semibold uppercase">
+                Output destinations
+              </h4>
+              {filtersActive ? (
+                <span className="text-base-content/55 text-xs tabular-nums">
+                  {filteredCards.length}/{model.cards.length} shown
+                </span>
+              ) : null}
+            </div>
+            {showOutputTools ? (
+              <>
+                <label className="input input-bordered input-sm flex min-h-10 items-center gap-2">
+                  <span className="text-base-content/55 text-xs font-semibold uppercase">
+                    Find
+                  </span>
+                  <input
+                    aria-label="Search output destinations"
+                    className="min-w-0 grow"
+                    onChange={(event) =>
+                      setOutputQuery(event.currentTarget.value)
+                    }
+                    placeholder="name, URL, state"
+                    type="search"
+                    value={outputQuery}
+                  />
+                </label>
+                <div
+                  aria-label="Filter output destinations by state"
+                  className="flex flex-wrap gap-1"
+                  role="group"
+                >
+                  {outputFilters.map((filter) => (
+                    <button
+                      aria-pressed={outputFilter === filter.id}
+                      className={`btn btn-xs ${
+                        outputFilter === filter.id
+                          ? "btn-accent"
+                          : "btn-outline btn-ghost"
+                      }`}
+                      key={filter.id}
+                      onClick={() => setOutputFilter(filter.id)}
+                      type="button"
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </div>
+          {filteredCards.length ? (
+            filteredCards.map((output) => {
+              const detail = outputStatusDetail(output.status);
+              return (
+                <article
+                  className="border-base-content/10 border-t py-2.5"
+                  key={output.id}
+                >
+              <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h5 className="min-w-0 truncate text-sm font-semibold">
                       {output.name}
                     </h5>
-                    <StatusBadge status={output.status} />
+                    <StatusBadge showDetail={false} status={output.status} />
                   </div>
-                  <code className="text-base-content/55 mt-1 block truncate text-xs">
-                    {output.urlLabel}
-                  </code>
-                  <p className="text-base-content/60 mt-2 text-xs tabular-nums">
+                  <p className="text-base-content/60 mt-1 text-xs tabular-nums">
                     {output.encodingLabel} · {output.rateLabel}
                     {output.uptimeLabel
                       ? ` · ${output.uptimeLabel} uptime`
                       : ""}
                   </p>
-                  <p className="text-base-content/55 mt-1 text-xs">
-                    {output.status.detail}
-                  </p>
+                  <code className="text-base-content/50 mt-1 block truncate text-xs">
+                    {output.urlLabel}
+                  </code>
+                  {detail ? (
+                    <p className="text-base-content/55 mt-1 text-xs">
+                      {detail}
+                    </p>
+                  ) : null}
                 </div>
                 <button
                   aria-label={`${output.controlLabel.replace("...", "")} ${output.name}`}
@@ -1038,57 +1189,101 @@ function DashboardV2PipelineOutputOverview({
                   {output.controlLabel}
                 </button>
               </div>
-              <div className="mt-3 flex flex-wrap items-center gap-1">
+              <div className="relative mt-2 flex justify-end">
                 <button
-                  aria-label={`History ${output.name}`}
+                  aria-expanded={openActionsFor === output.id}
+                  aria-label={`More actions for ${output.name}`}
                   className="btn btn-xs btn-ghost"
                   onClick={() =>
-                    actions.openOutputHistory(
-                      model.pipelineId,
-                      output.id,
-                      output.name,
+                    setOpenActionsFor((current) =>
+                      current === output.id ? null : output.id,
                     )
                   }
                   type="button"
                 >
-                  History
+                  More
                 </button>
-                {output.monitorAvailable ? (
-                  <button
-                    aria-label={`Monitor ${output.name}`}
-                    className="btn btn-xs btn-ghost"
-                    onClick={() =>
-                      actions.monitorOutput(model.pipelineId, output.id)
-                    }
-                    type="button"
+                {openActionsFor === output.id ? (
+                  <div
+                    aria-label={`More actions for ${output.name}`}
+                    className="bg-base-100 border-base-content/10 absolute right-0 top-7 z-20 w-36 rounded-lg border p-1 shadow-xl"
+                    role="menu"
                   >
-                    Monitor
-                  </button>
+                    <button
+                      aria-label={`History ${output.name}`}
+                      className="btn btn-xs btn-ghost w-full justify-start"
+                      onClick={() => {
+                        setOpenActionsFor(null);
+                        actions.openOutputHistory(
+                          model.pipelineId,
+                          output.id,
+                          output.name,
+                        );
+                      }}
+                      type="button"
+                    >
+                      History
+                    </button>
+                    {output.monitorAvailable ? (
+                      <button
+                        aria-label={`Monitor ${output.name}`}
+                        className="btn btn-xs btn-ghost w-full justify-start"
+                        onClick={() => {
+                          setOpenActionsFor(null);
+                          actions.monitorOutput(model.pipelineId, output.id);
+                        }}
+                        type="button"
+                      >
+                        Monitor
+                      </button>
+                    ) : null}
+                    <button
+                      aria-label={`Edit ${output.name}`}
+                      className="btn btn-xs btn-ghost w-full justify-start"
+                      onClick={() => {
+                        setOpenActionsFor(null);
+                        actions.editOutput(model.pipelineId, output.id);
+                      }}
+                      type="button"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      aria-label={`Delete ${output.name}`}
+                      className="btn btn-xs btn-ghost text-error w-full justify-start"
+                      disabled={output.deleteDisabled}
+                      onClick={() => {
+                        setOpenActionsFor(null);
+                        void actions.deleteOutput(model.pipelineId, output.id);
+                      }}
+                      type="button"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 ) : null}
-                <button
-                  aria-label={`Edit ${output.name}`}
-                  className="btn btn-xs btn-ghost"
-                  onClick={() =>
-                    actions.editOutput(model.pipelineId, output.id)
-                  }
-                  type="button"
-                >
-                  Edit
-                </button>
-                <button
-                  aria-label={`Delete ${output.name}`}
-                  className="btn btn-xs btn-ghost text-error"
-                  disabled={output.deleteDisabled}
-                  onClick={() =>
-                    void actions.deleteOutput(model.pipelineId, output.id)
-                  }
-                  type="button"
-                >
-                  Delete
-                </button>
               </div>
             </article>
-          ))}
+            );
+          })
+          ) : (
+            <div className="border-base-content/10 rounded-lg border border-dashed px-3 py-4">
+              <p className="text-sm font-semibold">No outputs match.</p>
+              <p className="text-base-content/60 mt-1 text-xs">
+                Try clearing the search or switching back to All outputs.
+              </p>
+              <button
+                className="btn btn-xs btn-ghost mt-3"
+                onClick={() => {
+                  setOutputFilter("all");
+                  setOutputQuery("");
+                }}
+                type="button"
+              >
+                Clear filters
+              </button>
+            </div>
+          )}
           {model.canExpand ? (
             <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
               <p className="text-base-content/55 text-xs">

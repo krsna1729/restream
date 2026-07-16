@@ -266,17 +266,6 @@ function outputPresentationStatus(
       score: 0,
     };
   }
-  if (isOutputUnexpectedlyDown(output)) {
-    return {
-      key: "down",
-      status: {
-        label: "Down",
-        tone: "error",
-        detail: output.lastError || "Expected output is not running",
-      },
-      score: 100,
-    };
-  }
   if (isOutputRetrying(output)) {
     return {
       key: "retrying",
@@ -286,17 +275,6 @@ function outputPresentationStatus(
         detail: retryDetail(output),
       },
       score: 80,
-    };
-  }
-  if (isOutputFlapping(output)) {
-    return {
-      key: "flapping",
-      status: {
-        label: "Flapping",
-        tone: "warning",
-        detail: `${Math.max(output.recentFailureCount, 2)} recent failures`,
-      },
-      score: 70,
     };
   }
   if (
@@ -314,6 +292,17 @@ function outputPresentationStatus(
       score: 90,
     };
   }
+  if (isOutputFlapping(output)) {
+    return {
+      key: "flapping",
+      status: {
+        label: "Flapping",
+        tone: "warning",
+        detail: `${Math.max(output.recentFailureCount, 2)} recent failures`,
+      },
+      score: 70,
+    };
+  }
   if (output.status === "stalled" || output.status === "warning") {
     return {
       key: "warning",
@@ -326,6 +315,17 @@ function outputPresentationStatus(
             : output.phase || "Output needs attention",
       },
       score: 60,
+    };
+  }
+  if (isOutputUnexpectedlyDown(output)) {
+    return {
+      key: "down",
+      status: {
+        label: "Down",
+        tone: "error",
+        detail: output.lastError || "Expected output is not running",
+      },
+      score: 100,
     };
   }
   if (isOutputRunning(output)) {

@@ -175,6 +175,8 @@ export function pipelineOverviewHealth(pipe: PipelineView): OverviewStatus {
       tone: "warning",
       detail: `no progress for ${formatAgeMs(pipe.input.lastProgressAgeMs)}`,
     };
+  if (pipe.outs.some((out) => out.status === "stalled"))
+    return { label: "Output stalled", tone: "warning", detail: "no progress" };
   if (pipe.outs.some(isOutputUnexpectedlyDown))
     return { label: "Output down", tone: "error", detail: "input live" };
   if (pipe.outs.some(isOutputRetrying))

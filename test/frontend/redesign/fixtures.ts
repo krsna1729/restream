@@ -8,6 +8,7 @@ import {
 export interface SeededDashboardOptions {
   pipelineControlDelayMs?: number;
   outputControlDelayMs?: number;
+  expectOverviewReady?: boolean;
   settingsResponse?: (settings: Record<string, unknown>) => unknown;
   runtimeResponse?: (
     runtime: Record<string, unknown>,
@@ -95,6 +96,7 @@ export async function openSeededDashboard(
   href = "/?mode=overview",
   options: SeededDashboardOptions = {},
 ): Promise<void> {
+  const requested = new URL(href, "http://seed.local");
   const fixture = operatorStates[stateName];
   const settings =
     options.settingsResponse?.(structuredClone(fixture.settings)) ??
@@ -107,12 +109,16 @@ export async function openSeededDashboard(
   >();
   await login(page);
 
-  await page.addInitScript(() => {
+  await page.addInitScript((uiVersion: string | null) => {
+    window.localStorage.setItem(
+      "restream.dashboardUiVersion.v1",
+      uiVersion === "v2" ? "v2" : "v1",
+    );
     Object.defineProperty(window, "EventSource", {
       configurable: true,
       value: undefined,
     });
-  });
+  }, requested.searchParams.get("ui"));
 
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -207,6 +213,34 @@ export async function openSeededDashboard(
       });
       return;
     }
+    const pipelineSummaryMatch = url.pathname.match(
+      /^\/api\/v1\/pipelines\/([^/]+)\/summary$/,
+    );
+    if (pipelineSummaryMatch) {
+      const [, encodedPipelineId] = pipelineSummaryMatch;
+      const pipelineId = decodeURIComponent(encodedPipelineId);
+      await fulfillJson(route, {
+        pipelineId,
+        input: { status: "on" },
+        outputs: { total: 1, running: 1 },
+        graph: { hasGraph: true, nodes: 3, activeNodes: 3 },
+        alerts: [],
+      });
+      return;
+    }
+    const pipelineGraphMatch = url.pathname.match(
+      /^\/api\/v1\/pipelines\/([^/]+)\/graph$/,
+    );
+    if (pipelineGraphMatch) {
+      const [, encodedPipelineId] = pipelineGraphMatch;
+      const pipelineId = decodeURIComponent(encodedPipelineId);
+      await fulfillJson(route, {
+        pipelineId,
+        nodes: [],
+        edges: [],
+      });
+      return;
+    }
     switch (url.pathname) {
       case "/api/v1/logs/stream":
         await route.fulfill({
@@ -235,6 +269,21 @@ export async function openSeededDashboard(
         return;
       case "/api/v1/logs":
         await fulfillJson(route, { logs: fixture.logs });
+        return;
+      case "/api/v1/engine":
+        await fulfillJson(route, {
+          restream: {
+            version: "seeded",
+            commit: "seeded",
+            nativeBuildId: "seeded",
+          },
+        });
+        return;
+      case "/api/v1/security/rate-limits":
+        await fulfillJson(route, { attempts: [] });
+        return;
+      case "/api/v1/engine/resource-map":
+        await fulfillJson(route, { resources: [] });
         return;
       case "/api/v1/stream-keys":
         await fulfillJson(route, []);
@@ -266,10 +315,30 @@ export async function openSeededDashboard(
   });
 
   await page.goto(href);
+  if (options.expectOverviewReady === false) {
+    const mode = requested.searchParams.get("mode") ?? "overview";
+    const workspaceMode =
+      mode === "inspect" || mode === "control" ? "pipeline" : mode;
+    await expect(
+      page.locator(`[data-dashboard-mode="${workspaceMode}"]`),
+    ).toHaveAttribute("aria-selected", "true");
+    if (workspaceMode === "pipeline") {
+      const view =
+        mode === "inspect"
+          ? "inspect"
+          : mode === "control"
+            ? "monitor"
+            : (requested.searchParams.get("view") ?? "operate");
+      await expect(
+        page.locator(`[data-pipeline-workspace-view="${view}"]`),
+      ).toHaveAttribute("aria-selected", "true");
+    }
+    return;
+  }
   const overview = href.includes("ui=v2")
     ? page.locator("#dashboard-v2-overview")
     : page.locator("#overview-mode-content");
   await expect(
     overview.getByRole("heading", { name: "Fleet overview" }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15_000 });
 }
