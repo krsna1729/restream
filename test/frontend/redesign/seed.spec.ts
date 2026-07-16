@@ -1,6 +1,21 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { openSeededDashboard } from "./fixtures";
+
+async function getCdpStatusTexts(page: Page): Promise<string[]> {
+  const cdp = await page.context().newCDPSession(page);
+  const axTree = await cdp.send("Accessibility.getFullAXTree");
+  await cdp.detach();
+  const axNodeById = new Map(axTree.nodes.map((node) => [node.nodeId, node]));
+  return axTree.nodes
+    .filter((node) => node.role?.value === "status")
+    .map((node) =>
+      (node.childIds ?? [])
+        .map((childId) => axNodeById.get(childId)?.name?.value)
+        .filter(Boolean)
+        .join(""),
+    );
+}
 
 test("seed: empty Overview is deterministic and canonical @desktop", async ({
   page,
@@ -740,6 +755,116 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
   });
   expect(result.live.characterData).toBeGreaterThan(0);
   expect(result.live.childList).toBe(0);
+});
+
+test("ui=v2 pipeline selector supports search under long lists @desktop", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.setContent(`
+    <div id="dashboard-v2-root"></div>
+    <div id="dashboard-v2-pipeline-selector-root"></div>
+    <div id="dashboard-v2-pipeline-header-root"></div>
+    <div id="dashboard-v2-pipeline-input-status-root"></div>
+    <div id="dashboard-v2-pipeline-output-overview-root"></div>
+  `);
+
+  await page.evaluate(async () => {
+    const importModule = new Function(
+      "path",
+      "return import(path)",
+    ) as (path: string) => Promise<{
+      renderDashboardV2PipelineSelector: (
+        model: Record<string, unknown>,
+        actions: Record<string, unknown>,
+      ) => void;
+    }>;
+    const { renderDashboardV2PipelineSelector } = await importModule(
+      "/js/app/dashboard-v2-entry.js",
+    );
+    renderDashboardV2PipelineSelector(
+      {
+        selectedPipelineId: "pipe-ritual-backup",
+        pipelines: [
+          {
+            id: "pipe-main",
+            name: "Main Program",
+            statusTone: "success",
+            statusLabel: "Live",
+            runningOutputs: 8,
+            totalOutputs: 8,
+            inputRate: "12.2 Mb/s",
+            outputRate: "96.0 Mb/s",
+            selected: false,
+          },
+          {
+            id: "pipe-ritual-backup",
+            name: "Ritual backup",
+            statusTone: "warning",
+            statusLabel: "Retrying",
+            runningOutputs: 5,
+            totalOutputs: 6,
+            inputRate: "10.8 Mb/s",
+            outputRate: "54.0 Mb/s",
+            selected: true,
+          },
+          ...Array.from({ length: 8 }, (_, index) => ({
+            id: `pipe-side-${index}`,
+            name: `Side Hall ${index + 1}`,
+            statusTone: "neutral",
+            statusLabel: "Idle",
+            runningOutputs: 0,
+            totalOutputs: 2,
+            inputRate: "--",
+            outputRate: "--",
+            selected: false,
+          })),
+        ],
+      },
+      {
+        addPipeline: () => {},
+        selectPipeline: () => {},
+      },
+    );
+  });
+
+  const selector = page.locator("#dashboard-v2-pipeline-selector-root");
+  await expect(selector.getByLabel("Search pipelines")).toBeVisible();
+  await selector.getByLabel("Search pipelines").fill("backup");
+  await expect(
+    selector.getByRole("button", { name: /Ritual backup/ }),
+  ).toBeVisible();
+  await expect(
+    selector.getByRole("button", { name: /Ritual backup/ }),
+  ).toHaveAttribute("aria-current", "page");
+  await expect(
+    selector.getByRole("button", { name: /Main Program/ }),
+  ).not.toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/10 pipelines shown · "backup"',
+  );
+
+  await selector.getByLabel("Search pipelines").fill("nowhere");
+  await expect(selector.getByText("No pipelines match.")).toBeVisible();
+  await expect(
+    selector.getByText(
+      'No pipelines match "nowhere". Clear search to return to all pipelines.',
+    ),
+  ).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toEqual(
+    expect.arrayContaining([
+      '0/10 pipelines shown · "nowhere"',
+      'No pipelines match "nowhere". Clear search to return to all pipelines.',
+    ]),
+  );
+
+  await selector.getByRole("button", { name: "Clear search" }).click();
+  await expect(
+    selector.getByRole("button", { name: /Main Program/ }),
+  ).toBeVisible();
+  await expect(
+    selector.getByRole("button", { name: /Ritual backup/ }),
+  ).toBeVisible();
 });
 
 test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", async ({

@@ -104,6 +104,9 @@ What changed from the live operator pass:
 - Failed output start/stop mutations now stay visible on the affected v2 output
   card, so the operator can retry the exact destination without losing context
   after the global error alert fades.
+- Long pipeline lists now get the same search/status feedback pattern as large
+  output sets, so the operator can jump to a named or degraded pipeline without
+  turning the left rail into a scroll hunt.
 
 Still not a full v2 redesign:
 

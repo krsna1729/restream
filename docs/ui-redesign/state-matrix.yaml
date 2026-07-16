@@ -38,10 +38,10 @@ states:
   - id: msr.live-pressure
     surface: overview-and-pipeline-operate
     fixture: live-msr
-    expected: 120 live outputs, 30 audio tracks, and the MSR output list remain navigable through bounded defaults, search/filter, and progressive disclosure.
+    expected: 120 live outputs, 30 audio tracks, long pipeline lists, and the MSR output list remain navigable through bounded defaults, search/filter, and progressive disclosure.
     proof:
       status: live
-      source: .local/artifacts/latest/msr.json and .local/artifacts/ui-v2-live-msr/crawl-results.json from test_harness msr on 2026-07-16; seeded Playwright/CDP proves output filter result counts and no-result guidance are announced as status text
+      source: .local/artifacts/latest/msr.json and .local/artifacts/ui-v2-live-msr/crawl-results.json from test_harness msr on 2026-07-16; seeded Playwright/CDP proves output and pipeline filter result counts plus no-result guidance are announced as status text
       files:
         - docs/ui-redesign/operator-msr-live-review-2026-07-16.md
         - test/frontend/redesign/seed.spec.ts
