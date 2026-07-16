@@ -98,6 +98,9 @@ What changed from the live operator pass:
 - Failed recording mutations now keep contextual status in the v2 pipeline
   header after the existing API alert fires, so the operator can see which
   lifecycle action failed and retry without scanning away from the control.
+- File-ingest failures use the same local header pattern, preserving the
+  existing API alert while keeping the failed action and retry affordance
+  adjacent to `Start File` / `Stop File`.
 
 Still not a full v2 redesign:
 

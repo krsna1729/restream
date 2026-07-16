@@ -865,6 +865,68 @@ test("ui=v2 keeps failed recording mutation context in the pipeline header @desk
   await cdp.detach();
 });
 
+test("ui=v2 keeps failed file-ingest mutation context in the pipeline header @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+    {
+      expectOverviewReady: false,
+      failFileIngestControl: "file source disappeared before ingest start",
+      pipelineControlDelayMs: 250,
+      settingsResponse: (settings) => ({
+        ...settings,
+        pipelines: (
+          settings.pipelines as Array<Record<string, unknown>>
+        ).map((pipeline) =>
+          pipeline.id === "pipe-retrying"
+            ? {
+                ...pipeline,
+                inputSource: "file:synthetic-source.mp4",
+                fileIngest: {
+                  configured: true,
+                  id: "ingest-retrying",
+                  filename: "synthetic-source.mp4",
+                  loop: true,
+                  running: false,
+                },
+              }
+            : pipeline,
+        ),
+      }),
+    },
+  );
+
+  const header = page.locator("#dashboard-v2-pipeline-header-root");
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Performance.enable");
+
+  await header.getByRole("button", { name: "Start File" }).click();
+  await expect(
+    header.getByRole("button", { name: "Starting File..." }),
+  ).toBeDisabled();
+  await expect(
+    header.getByRole("status").filter({
+      hasText: "File ingest request failed",
+    }),
+  ).toBeVisible();
+  await expect(header).toContainText("Start file ingest did not complete");
+  await expect(
+    header.getByRole("button", { name: "Start File" }),
+  ).toBeEnabled();
+  await expect(page.locator("#error-alert")).toContainText(
+    "file source disappeared before ingest start",
+  );
+
+  const metrics = await cdp.send("Performance.getMetrics");
+  const nodes =
+    metrics.metrics.find((metric) => metric.name === "Nodes")?.value ?? 0;
+  expect(nodes).toBeLessThan(7_000);
+  await cdp.detach();
+});
+
 test("ui=v2 output destinations support search and state filters @desktop", async ({
   page,
 }) => {

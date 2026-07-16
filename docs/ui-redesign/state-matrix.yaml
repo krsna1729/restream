@@ -78,11 +78,12 @@ states:
     surface: pipeline-operate
     expected: Starting, active, failed, and stopping states are operator-visible.
     proof:
-      status: partial
+      status: seeded
+      source: Playwright seeded v2 flow covers slow pending controls, failed file-ingest context, retry-ready controls, and CDP node budget
       files:
         - test/frontend/dashboard-contract/pipeline-mutations.test.mjs
         - test/frontend/frontend-pipeline-info-scenarios.test.mjs
-      gap: Browser-visible slow and failed start states need a scenario proof.
+        - test/frontend/redesign/seed.spec.ts
 
   - id: runtime.sse-reconnect
     surface: shared-runtime
@@ -155,7 +156,7 @@ states:
       files:
         - test/frontend/dashboard-contract/output-mutations.test.mjs
         - test/frontend/redesign/seed.spec.ts
-      gap: Browser-visible output timeout/error focus and file-ingest failure affordance still need proof.
+      gap: Browser-visible output timeout/error focus still needs proof.
 
   - id: viewport.mobile-tablet-desktop
     surface: all
