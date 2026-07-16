@@ -1214,6 +1214,10 @@ function DashboardV2PipelineOutputOverview({
       : `No ${activeFilterLabel.toLowerCase()} output destinations match${
           normalizedOutputQuery ? ` "${outputQuery.trim()}"` : ""
         }.`;
+  const clearOutputFilters = (): void => {
+    setOutputFilter("all");
+    setOutputQuery("");
+  };
   const closeActionsMenu = (outputId: string, restoreFocus = false): void => {
     setOpenActionsFor(null);
     if (restoreFocus) {
@@ -1332,25 +1336,38 @@ function DashboardV2PipelineOutputOverview({
                   />
                 </label>
                 <div
-                  aria-label="Filter output destinations by state"
-                  className="flex flex-wrap gap-1"
-                  role="group"
+                  className="flex flex-wrap items-center justify-between gap-2"
                 >
-                  {outputFilters.map((filter) => (
+                  <div
+                    aria-label="Filter output destinations by state"
+                    className="flex flex-wrap gap-1"
+                    role="group"
+                  >
+                    {outputFilters.map((filter) => (
+                      <button
+                        aria-pressed={outputFilter === filter.id}
+                        className={`btn btn-xs ${
+                          outputFilter === filter.id
+                            ? "btn-accent"
+                            : "btn-outline btn-ghost"
+                        }`}
+                        key={filter.id}
+                        onClick={() => setOutputFilter(filter.id)}
+                        type="button"
+                      >
+                        {filter.label}
+                      </button>
+                    ))}
+                  </div>
+                  {filtersActive ? (
                     <button
-                      aria-pressed={outputFilter === filter.id}
-                      className={`btn btn-xs ${
-                        outputFilter === filter.id
-                          ? "btn-accent"
-                          : "btn-outline btn-ghost"
-                      }`}
-                      key={filter.id}
-                      onClick={() => setOutputFilter(filter.id)}
+                      className="btn btn-xs btn-ghost"
+                      onClick={clearOutputFilters}
                       type="button"
                     >
-                      {filter.label}
+                      Clear output filters
                     </button>
-                  ))}
+                  ) : null}
                 </div>
               </>
             ) : null}
@@ -1513,10 +1530,7 @@ function DashboardV2PipelineOutputOverview({
               </p>
               <button
                 className="btn btn-xs btn-ghost mt-3"
-                onClick={() => {
-                  setOutputFilter("all");
-                  setOutputQuery("");
-                }}
+                onClick={clearOutputFilters}
                 type="button"
               >
                 Clear filters

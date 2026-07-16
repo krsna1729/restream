@@ -78,6 +78,12 @@ action, presses Enter into Operate, then keyboard-selects another pipeline from
 the v2 selector. CDP assertions keep Overview and Operate node budgets bounded
 and verify stable accessible button names for output operations.
 
+Operate output search/filter recovery is now available before the operator
+hits an empty list: when a query or state filter is active, a local Clear output
+filters action restores the full destination list. Seeded Playwright/CDP
+coverage proves both hit-state recovery and no-hit recovery announce the right
+status text.
+
 The same seeded proof now starts at a visible-on-focus skip link. Pressing Enter
 lands focus on the active main tabpanel before the dense dashboard chrome, so
 keyboard operators can bypass the navbar, workspace tabs, and secondary

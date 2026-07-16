@@ -2361,7 +2361,25 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
     root.getByRole("heading", { name: "YouTube primary" }),
   ).not.toBeVisible();
   await expect(root.getByText("1/5 shown")).toBeVisible();
+  const clearActiveFilters = root.getByRole("button", {
+    name: "Clear output filters",
+  });
+  await expect(clearActiveFilters).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/5 shown · All · "facebook"',
+  );
 
+  await clearActiveFilters.click();
+  await expect(root.getByLabel("Search output destinations")).toHaveValue("");
+  await expect(
+    root.getByRole("heading", { name: "YouTube primary" }),
+  ).toBeVisible();
+  await expect(
+    root.getByRole("heading", { name: "Facebook backup" }),
+  ).toBeVisible();
+  await expect(clearActiveFilters).toBeHidden();
+
+  await root.getByLabel("Search output destinations").fill("facebook");
   await root.getByRole("button", { name: "Stopped" }).click();
   await expect(root.getByText("No outputs match.")).toBeVisible();
   await expect(
