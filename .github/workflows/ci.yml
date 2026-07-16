@@ -288,9 +288,9 @@ jobs:
       artifact_retention_days: 3
       upload_artifacts_mode: failure_or_cancelled
       timeout_minutes: 30
-      max_parallel: 5
+      max_parallel: 6
       shards_json: >-
-        ["smoke","mixed.live.rtmp.h264.a1","mixed.live.srt.h264.a1","mixed.live.srt.h265.a1","mixed.live.srt.h265.a2"]
+        ["smoke","mixed.live.rtmp.h264.a1","mixed.live.srt.h264.a1","mixed.live.srt.h265.a1","mixed.live.srt.h265.a2.bf0","mixed.live.srt.h265.a2.bf2"]
     secrets:
       gh_token: ${{ github.token }}
 
