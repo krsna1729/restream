@@ -134,6 +134,7 @@ const controlRoomMediaControllers = new WeakMap<
   HTMLElement,
   ControlRoomMediaController
 >();
+const controlRoomLoadedEmbedCards = new Set<string>();
 let pendingMonitoringInputFocusOutputId: string | null = null;
 let youtubeIframeApiPromise: Promise<YouTubeApiNamespace> | null = null;
 let controlRoomPlaybackIntent: "play" | "pause" = "play";
@@ -650,6 +651,13 @@ function ensureShell(container: HTMLElement): void {
       if (url) openMonitorUrl(url, title);
       return;
     }
+    if (action === "control-room-load-preview") {
+      const cardId = button.closest<HTMLElement>("article")?.dataset.cardId;
+      if (!cardId) return;
+      controlRoomLoadedEmbedCards.add(cardId);
+      renderControlRoom();
+      return;
+    }
     if (action === "control-room-toggle-fullscreen") {
       const target = getMediaControllerForAction(button);
       if (!target) return;
@@ -774,6 +782,13 @@ function clearCardPlayerShell(
 
 function setTileMessage(shell: HTMLElement, message: string): void {
   shell.innerHTML = `<div class="text-base-content/70 flex ${CONTROL_ROOM_PLAYER_HEIGHT_CLASS} items-center justify-center px-4 py-5 text-center text-sm leading-6">${escapeHtml(message)}</div>`;
+}
+
+function setLazyEmbedMessage(shell: HTMLElement, message: string): void {
+  shell.innerHTML = `<div class="text-base-content/70 flex ${CONTROL_ROOM_PLAYER_HEIGHT_CLASS} flex-col items-center justify-center gap-3 px-4 py-5 text-center text-sm leading-6">
+        <span>${escapeHtml(message)}</span>
+        <button type="button" class="btn btn-xs btn-accent btn-outline" data-action="control-room-load-preview">Load preview</button>
+    </div>`;
 }
 
 function isHlsMonitoringUrl(url: string): boolean {
@@ -1164,22 +1179,32 @@ function syncCardMedia(
   mediaUrl: string | null,
   emptyMessage: string,
 ): void {
-  const desiredKey = mediaUrl || `message:${emptyMessage}`;
-  if (shell.dataset.mediaKey === desiredKey) return;
-  clearCardPlayerShell(shell, { resetMediaKey: false });
-  shell.dataset.mediaKey = desiredKey;
-
   if (!mediaUrl) {
+    const desiredKey = `message:${emptyMessage}`;
+    if (shell.dataset.mediaKey === desiredKey) return;
+    clearCardPlayerShell(shell, { resetMediaKey: false });
+    shell.dataset.mediaKey = desiredKey;
     setTileMessage(shell, emptyMessage);
     return;
   }
 
   const embedKind = detectMonitoringEmbedKind(mediaUrl);
+  const isLazyGenericEmbed =
+    embedKind === "iframe" && !controlRoomLoadedEmbedCards.has(cardId);
+  const desiredKey = isLazyGenericEmbed ? `lazy:${mediaUrl}` : mediaUrl;
+  if (shell.dataset.mediaKey === desiredKey) return;
+  clearCardPlayerShell(shell, { resetMediaKey: false });
+  shell.dataset.mediaKey = desiredKey;
+
   if (embedKind === "unsupported") {
     setTileMessage(
       shell,
       "This URL is saved, but this card can only preview browser-playable sources today.",
     );
+    return;
+  }
+  if (isLazyGenericEmbed) {
+    setLazyEmbedMessage(shell, "Preview is not loaded yet.");
     return;
   }
 

@@ -147,6 +147,10 @@ gaps: seeded Playwright/CDP coverage proves a search miss is announced as
 then proves the local Clear search action restores the monitoring wall without
 resetting the whole room. That prevents the control room from implying a
 configured monitor disappeared just because the operator narrowed the list.
+Generic web monitor embeds are now lazy by default: the card exposes an
+explicit `Load preview` action before mounting the iframe, while direct
+Open/Copy actions remain available. That keeps the initial Monitor checkpoint
+lighter and makes cross-origin preview loading intentional.
 
 Media search now follows the same feedback contract: the legacy-owned Media
 route exposes one live result-count summary that also splits matches by
@@ -297,6 +301,9 @@ What changed from the live operator pass:
 - Shared auth expiry now preserves the full operator return path, including
   `ui=v2`, so a re-login can return to the interrupted v2 workflow instead of
   dumping the operator at the default Overview.
+- Monitor now avoids eager generic iframe mounts for web preview URLs, reducing
+  initial route weight and making cross-origin preview loading an explicit
+  operator action.
 
 Still not a full v2 redesign:
 

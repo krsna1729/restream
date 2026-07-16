@@ -981,6 +981,30 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
 });
 
+test("seed: ui=v2 Monitor lazily loads generic web previews @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "chaos-recovery",
+    "/?mode=pipeline&view=monitor&p=pipe-flapping&ui=v2",
+    { expectOverviewReady: false },
+  );
+
+  const monitor = page.locator("#control-mode-panel");
+  await expect(monitor.locator("#control-room-route-summary")).toHaveText(
+    "Monitoring Recovered Sink Flap · 1 output · 1 monitor · 0 missing URLs",
+  );
+  await expect(
+    monitor.getByRole("button", { name: "Load preview" }),
+  ).toBeVisible();
+  await expect(monitor.locator("iframe")).toHaveCount(0);
+  expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
+
+  await monitor.getByRole("button", { name: "Load preview" }).click();
+  await expect(monitor.locator("iframe")).toHaveCount(1);
+});
+
 test("seed: ui=v2 Media search announces filtered result counts @desktop", async ({
   page,
 }) => {
