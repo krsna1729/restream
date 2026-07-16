@@ -78,6 +78,8 @@ test("telemetry renders zero/null ring values, escapes labels, and distinguishes
   assert.match(html, /Transcoder buffers[\s\S]*>0</);
   assert.doesNotMatch(html, /reader <x>|video <bad>|Pipe <bad>/);
   assert.match(html, /View video &lt;bad&gt; telemetry details/);
+  assert.match(html, /1 counter · raw values in Stage detail/);
+  assert.doesNotMatch(html, /packetsIn[\s\S]*0/);
   assert.match(html, /Kernel receive buffer ceiling/);
   assert.match(html, /25 MiB/);
   assert.match(

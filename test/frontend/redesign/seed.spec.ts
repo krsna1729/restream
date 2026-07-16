@@ -771,6 +771,18 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
     "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Retrying Destination",
   );
   await expect(telemetry.getByText("retrying-output-reader")).toBeVisible();
+  await expect(
+    telemetry.getByText("1 counter · raw values in Stage detail").first(),
+  ).toBeVisible();
+  await expect(telemetry.locator("#stage-telemetry-detail")).not.toContainText(
+    "packetsOut",
+  );
+  await telemetry
+    .getByRole("button", { name: "View video telemetry details" })
+    .click();
+  await expect(telemetry.locator("#stage-telemetry-detail")).toContainText(
+    "packetsOut",
+  );
   expect(await getCdpStatusTexts(page)).toContain(
     "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Retrying Destination",
   );

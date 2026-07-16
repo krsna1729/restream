@@ -278,6 +278,25 @@ function seededPipelineTelemetry(pipelineId: string): Record<string, unknown> {
   };
 }
 
+function seededStageTelemetry(stageKey: string): Record<string, unknown> {
+  const [pipelineId = "pipe-healthy", kind = "video"] = stageKey.split(":");
+  const isRetrying = pipelineId === "pipe-retrying";
+  return {
+    generatedAt: "2026-07-14T06:30:00Z",
+    stageKey,
+    pipelineId,
+    kind,
+    active: true,
+    metrics: {
+      packetsOut: isRetrying ? 500 : 1180,
+      queueDepth: isRetrying ? 2 : 0,
+    },
+    pipeMetrics: {
+      packetsIn: isRetrying ? 500 : 1180,
+    },
+  };
+}
+
 async function fulfillJson(route: Route, body: unknown): Promise<void> {
   await route.fulfill({
     status: 200,
@@ -476,6 +495,17 @@ export async function openSeededDashboard(
       await fulfillJson(
         route,
         seededPipelineTelemetry(decodeURIComponent(encodedPipelineId)),
+      );
+      return;
+    }
+    const stageTelemetryMatch = url.pathname.match(
+      /^\/api\/v1\/stages\/([^/]+)\/telemetry$/,
+    );
+    if (stageTelemetryMatch) {
+      const [, encodedStageKey] = stageTelemetryMatch;
+      await fulfillJson(
+        route,
+        seededStageTelemetry(decodeURIComponent(encodedStageKey)),
       );
       return;
     }

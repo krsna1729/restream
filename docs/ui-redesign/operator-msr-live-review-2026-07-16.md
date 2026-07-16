@@ -128,6 +128,12 @@ ingest count, scoped stage/egress/reader counts, and the active pipeline scope.
 Seeded Playwright/CDP coverage proves that summary updates on pipeline switch
 and is exposed as status text.
 
+Telemetry stage cards now behave as a scan layer instead of a raw counter dump:
+each card shows stage state plus counter count, then sends the operator to the
+Stage detail panel for raw values. Seeded Playwright/CDP coverage proves the
+raw `packetsOut` counter is absent from the initial stage grid and appears only
+after the operator activates the stage Details control.
+
 Settings now gets the same guardrail for its dense admin form: the legacy-owned
 route announces server scope, section count, configured profile count, and
 current authentication-attempt count. Seeded Playwright/CDP coverage proves the
