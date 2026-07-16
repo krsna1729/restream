@@ -1066,6 +1066,19 @@ function DashboardV2PipelineOutputOverview({
   );
   const filtersActive = outputFilter !== "all" || normalizedOutputQuery !== "";
   const showOutputTools = model.cards.length > 4 || filtersActive;
+  const activeFilterLabel =
+    outputFilters.find((filter) => filter.id === outputFilter)?.label ?? "All";
+  const outputResultSummary = filtersActive
+    ? `${filteredCards.length}/${model.cards.length} shown · ${activeFilterLabel}${
+        normalizedOutputQuery ? ` · "${outputQuery.trim()}"` : ""
+      }`
+    : null;
+  const outputEmptyDetail =
+    outputFilter === "all"
+      ? `No output destinations match "${outputQuery.trim()}".`
+      : `No ${activeFilterLabel.toLowerCase()} output destinations match${
+          normalizedOutputQuery ? ` "${outputQuery.trim()}"` : ""
+        }.`;
   const closeActionsMenu = (outputId: string, restoreFocus = false): void => {
     setOpenActionsFor(null);
     if (restoreFocus) {
@@ -1157,8 +1170,12 @@ function DashboardV2PipelineOutputOverview({
                 Output destinations
               </h4>
               {filtersActive ? (
-                <span className="text-base-content/55 text-xs tabular-nums">
-                  {filteredCards.length}/{model.cards.length} shown
+                <span
+                  aria-live="polite"
+                  className="text-base-content/55 text-xs tabular-nums"
+                  role="status"
+                >
+                  {outputResultSummary}
                 </span>
               ) : null}
             </div>
@@ -1352,8 +1369,13 @@ function DashboardV2PipelineOutputOverview({
           ) : (
             <div className="border-base-content/10 rounded-lg border border-dashed px-3 py-4">
               <p className="text-sm font-semibold">No outputs match.</p>
-              <p className="text-base-content/60 mt-1 text-xs">
-                Try clearing the search or switching back to All outputs.
+              <p
+                aria-live="polite"
+                className="text-base-content/60 mt-1 text-xs"
+                role="status"
+              >
+                {outputEmptyDetail} Clear filters to return to all
+                destinations.
               </p>
               <button
                 className="btn btn-xs btn-ghost mt-3"

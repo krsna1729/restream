@@ -1183,6 +1183,28 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
 
   await root.getByRole("button", { name: "Stopped" }).click();
   await expect(root.getByText("No outputs match.")).toBeVisible();
+  await expect(
+    root.getByText(
+      'No stopped output destinations match "facebook". Clear filters to return to all destinations.',
+    ),
+  ).toBeVisible();
+
+  const cdp = await page.context().newCDPSession(page);
+  const axTree = await cdp.send("Accessibility.getFullAXTree");
+  const axNodeById = new Map(axTree.nodes.map((node) => [node.nodeId, node]));
+  const statusTexts = axTree.nodes
+    .filter((node) => node.role?.value === "status")
+    .map((node) =>
+      (node.childIds ?? [])
+        .map((childId) => axNodeById.get(childId)?.name?.value)
+        .filter(Boolean)
+        .join(""),
+    );
+  expect(statusTexts).toContain('0/5 shown · Stopped · "facebook"');
+  expect(statusTexts).toContain(
+    'No stopped output destinations match "facebook". Clear filters to return to all destinations.',
+  );
+  await cdp.detach();
 
   await root.getByRole("button", { name: "Clear filters" }).click();
   await expect(
