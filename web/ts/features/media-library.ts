@@ -227,6 +227,7 @@ function mountMediaShell(container: HTMLElement): void {
                     <button type="button" class="btn btn-sm btn-primary js-upload-media">Upload media</button>
                 </div>
             </div>
+            <p id="media-library-results-summary" class="dashboard-muted px-4 pt-3 text-xs" role="status" aria-live="polite">--</p>
             <div class="space-y-4 p-4">
                 ${mediaSectionShell("Recordings", "media-recordings-list", "media-recordings-summary")}
                 ${mediaSectionShell("Source Files", "media-sources-list", "media-sources-summary")}
@@ -387,10 +388,18 @@ function renderMediaLibraryLists(files: MediaFile[], force: boolean): void {
   );
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
   const recordingBytes = recordings.reduce((sum, file) => sum + file.size, 0);
+  const filteredTotal = filteredRecordings.length + filteredSources.length;
+  const query = mediaSearchQuery.trim();
   setText("media-recording-count", recordings.length);
   setText("media-recording-size", formatFileSize(recordingBytes));
   setText("media-source-count", sources.length);
   setText("media-source-size", formatFileSize(totalBytes - recordingBytes));
+  setText(
+    "media-library-results-summary",
+    query
+      ? `${filteredTotal}/${files.length} media file${files.length === 1 ? "" : "s"} shown · "${query}"`
+      : `${files.length} media file${files.length === 1 ? "" : "s"} total`,
+  );
   const filteredEmptyLabel = normalizeSearchText(mediaSearchQuery)
     ? `matches for "${mediaSearchQuery}"`
     : "";

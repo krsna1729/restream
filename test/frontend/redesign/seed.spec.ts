@@ -578,6 +578,37 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
 });
 
+test("seed: ui=v2 Media search announces filtered result counts @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=media&ui=v2", {
+    expectOverviewReady: false,
+  });
+
+  const media = page.locator("#media-mode-panel");
+  const search = media.getByLabel("Search media library");
+  const summary = media.locator("#media-library-results-summary");
+  await expect(
+    media.getByRole("heading", { name: "Media Library" }),
+  ).toBeVisible();
+  await expect(summary).toHaveText("1 media file total");
+
+  await search.fill("synthetic");
+  await expect(summary).toHaveText('1/1 media file shown · "synthetic"');
+  await expect(media.getByText("synthetic-source.mp4")).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/1 media file shown · "synthetic"',
+  );
+
+  await search.fill("missing");
+  await expect(summary).toHaveText('0/1 media file shown · "missing"');
+  await expect(media.getByText('No matches for "missing".')).toHaveCount(2);
+  expect(await getCdpStatusTexts(page)).toContain(
+    '0/1 media file shown · "missing"',
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
+});
+
 test("seed: ui=v2 Operate stays inside the viewport across breakpoints", async ({
   page,
 }) => {

@@ -99,6 +99,11 @@ seeded Playwright/CDP coverage proves a search miss is announced as
 That prevents the control room from implying a configured monitor disappeared
 just because the operator narrowed the list.
 
+Media search now follows the same feedback contract: the legacy-owned Media
+route exposes a live result-count summary, and seeded Playwright/CDP coverage
+proves search hits and misses are announced without relying on visual scanning
+of both Recordings and Source Files sections.
+
 The seeded v2 Operate path also has a CDP layout proof across the configured
 desktop, tablet, and mobile browser projects. The stress fixture uses the
 recovered sink-flap pipeline with 30 audio tracks and verifies that both DOM
