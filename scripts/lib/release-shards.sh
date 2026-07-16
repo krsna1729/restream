@@ -9,38 +9,41 @@ RESTREAM_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$RESTREAM_LIB_DIR/common.sh"
 
 restream_release_shard_list() {
+    # Keep the longer successful-duration shards first so GitHub-hosted runner
+    # slots fill with the critical path early. This order is based on passed
+    # historical runs, not on one-off stuck/cancelled outliers.
     cat <<'EOF'
-smoke
-mixed.live.rtmp.h264.a1.bf0
-mixed.live.rtmp.h264.a1.bf2
-mixed.live.srt.h264.a1.bf0
-mixed.live.srt.h264.a1.bf2
-mixed.live.srt.h264.a2.bf0
-mixed.live.srt.h264.a2.bf2
-mixed.live.srt.h265.a1.bf0
-mixed.live.srt.h265.a1.bf2
+mixed.file.h265.a2.bf2
+mixed.file.h265.a2.bf0
 mixed.live.srt.h265.a2.bf0
 mixed.live.srt.h265.a2.bf2
-mixed.file.h264.a1.bf0
-mixed.file.h264.a1.bf2
+mixed.live.srt.h264.a2.bf2
+mixed.live.srt.h264.a2.bf0
 mixed.file.h264.a2.bf0
 mixed.file.h264.a2.bf2
+srt-crypto-matrix
+ramp-family
 mixed.file.h265.a1.bf0
 mixed.file.h265.a1.bf2
-mixed.file.h265.a2.bf0
-mixed.file.h265.a2.bf2
+mixed.live.srt.h265.a1.bf0
+mixed.live.srt.h265.a1.bf2
+mixed.file.h264.a1.bf2
+mixed.file.h264.a1.bf0
+mixed.live.rtmp.h264.a1.bf0
+mixed.live.rtmp.h264.a1.bf2
 bitrate-sweep.h264-rtmp
-bitrate-sweep.h264-srt
 bitrate-sweep.h265-srt
+bitrate-sweep.h264-srt
 bitrate-sweep.mixed-h264-a2
 bitrate-sweep.mixed-h265-a2
+branch-matrix
+fault.resilience
 resource-sweep.source
 resource-sweep.transcode
 resource-sweep.hevc
-ramp-family
-srt-crypto-matrix
-branch-matrix
-fault.resilience
+smoke
+mixed.live.srt.h264.a1.bf0
+mixed.live.srt.h264.a1.bf2
 EOF
 }
 

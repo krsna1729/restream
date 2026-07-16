@@ -290,7 +290,7 @@ jobs:
       timeout_minutes: 30
       max_parallel: 9
       shards_json: >-
-        ["smoke","mixed.live.rtmp.h264.a1.bf0","mixed.live.rtmp.h264.a1.bf2","mixed.live.srt.h264.a1.bf0","mixed.live.srt.h264.a1.bf2","mixed.live.srt.h265.a1.bf0","mixed.live.srt.h265.a1.bf2","mixed.live.srt.h265.a2.bf0","mixed.live.srt.h265.a2.bf2"]
+        ["mixed.live.srt.h265.a2.bf0","mixed.live.srt.h265.a2.bf2","mixed.live.srt.h265.a1.bf0","mixed.live.srt.h265.a1.bf2","mixed.live.rtmp.h264.a1.bf0","mixed.live.rtmp.h264.a1.bf2","smoke","mixed.live.srt.h264.a1.bf0","mixed.live.srt.h264.a1.bf2"]
     secrets:
       gh_token: ${{ github.token }}
 
