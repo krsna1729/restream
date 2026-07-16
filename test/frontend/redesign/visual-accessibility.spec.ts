@@ -46,6 +46,16 @@ async function reachFromOverviewTab(
   );
 }
 
+async function getCdpNamesByRole(page: Page, role: string): Promise<string[]> {
+  const cdp = await page.context().newCDPSession(page);
+  const axTree = await cdp.send("Accessibility.getFullAXTree");
+  await cdp.detach();
+  return axTree.nodes
+    .filter((node) => node.role?.value === role)
+    .map((node) => node.name?.value)
+    .filter((name): name is string => Boolean(name));
+}
+
 for (const stateName of viewportStates) {
   test(`visual: ${stateName} Overview matches the pinned viewport`, async ({
     page,
@@ -149,4 +159,44 @@ test.describe("desktop accessibility contract @desktop", () => {
       expect(blocking).toEqual([]);
     });
   }
+});
+
+test("axe/cdp: ui=v2 Operate preserves contrast and semantic landmarks", async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(FIXED_TIME);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await openSeededDashboard(
+    page,
+    "chaos-recovery",
+    "/?mode=pipeline&view=operate&p=pipe-flapping&ui=v2",
+    { expectOverviewReady: false },
+  );
+
+  await expect(
+    page.locator("#dashboard-v2-pipeline-header-root").getByRole("heading", {
+      name: "Recovered Sink Flap",
+    }),
+  ).toBeVisible();
+  const results = await new AxeBuilder({ page })
+    .include("#dashboard-grid")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  const blocking = results.violations.filter(
+    (violation) =>
+      violation.impact === "serious" || violation.impact === "critical",
+  );
+  expect(blocking).toEqual([]);
+
+  expect(await getCdpNamesByRole(page, "heading")).toEqual(
+    expect.arrayContaining([
+      "PIPELINES",
+      "Recovered Sink Flap",
+      "INPUT AND PREVIEW",
+      "OUTPUT OVERVIEW",
+    ]),
+  );
+  expect(await getCdpNamesByRole(page, "button")).toEqual(
+    expect.arrayContaining(["Graph", "Diagnose", "Show all 30"]),
+  );
 });

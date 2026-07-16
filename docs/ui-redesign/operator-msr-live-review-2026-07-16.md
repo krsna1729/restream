@@ -93,6 +93,11 @@ desktop, tablet, and mobile browser projects. The stress fixture uses the
 recovered sink-flap pipeline with 30 audio tracks and verifies that both DOM
 scroll width and CDP layout content width stay within the viewport.
 
+The same v2 Operate stress path now runs axe across desktop, tablet, and mobile
+with WCAG 2.0/2.1 A/AA tags. It has no serious or critical findings, and CDP
+accessibility-tree assertions verify that the primary headings and actions stay
+semantically named.
+
 ## Operator findings
 
 What is now strong enough for v2:
