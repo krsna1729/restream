@@ -627,6 +627,40 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
 });
 
+test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=incidents&ui=v2", {
+    expectOverviewReady: false,
+  });
+
+  const incidents = page.locator("#incidents-mode-panel");
+  const summary = incidents.locator("#incidents-route-summary");
+  await expect(
+    incidents.getByRole("heading", { name: "Incidents" }),
+  ).toBeVisible();
+  await expect(summary).toHaveText(
+    "0 critical · 1 warning · 1 recent event · fleet",
+  );
+  expect(await getCdpStatusTexts(page)).toContain(
+    "0 critical · 1 warning · 1 recent event · fleet",
+  );
+
+  await incidents
+    .getByLabel("Filter incidents by pipeline")
+    .selectOption("pipe-healthy");
+  await expect(summary).toHaveText(
+    "0 critical · 0 warning · 0 recent events · Healthy Program",
+  );
+  await expect(
+    incidents.getByText("No active alerts for this pipeline."),
+  ).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    "0 critical · 0 warning · 0 recent events · Healthy Program",
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
+});
+
 test("seed: ui=v2 Operate stays inside the viewport across breakpoints", async ({
   page,
 }) => {

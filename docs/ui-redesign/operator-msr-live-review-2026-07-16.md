@@ -109,6 +109,12 @@ announces the loaded build identity plus process-log and notable-activity
 counts before the dense status sections, with seeded Playwright/CDP coverage for
 the visible and accessibility-tree summary.
 
+Incidents now gets the same cognitive-load reduction before its alert and
+event feeds: the legacy-owned route announces critical, warning, recent-event,
+and active scope counts as a live status line. Seeded Playwright/CDP coverage
+proves both fleet-wide and pipeline-scoped summaries update visibly and in the
+accessibility tree.
+
 The seeded v2 Operate path also has a CDP layout proof across the configured
 desktop, tablet, and mobile browser projects. The stress fixture uses the
 recovered sink-flap pipeline with 30 audio tracks and verifies that both DOM

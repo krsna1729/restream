@@ -78,6 +78,93 @@ function applyControlledOutputStates(
   return next;
 }
 
+function seededOverview(stateName: OperatorStateName): Record<string, unknown> {
+  const fixture = operatorStates[stateName];
+  const pipelines = Array.isArray(fixture.settings.pipelines)
+    ? (fixture.settings.pipelines as Array<Record<string, unknown>>)
+    : [];
+  const outputs = Array.isArray(fixture.settings.outputs)
+    ? (fixture.settings.outputs as Array<Record<string, unknown>>)
+    : [];
+  const runtimePipelines = (fixture.runtime.health as Record<string, unknown>)
+    ?.pipelines as Record<string, { outputs?: Record<string, unknown> }> | undefined;
+  const failedOutputs = outputs.filter((output) => {
+    const runtimeOutput =
+      runtimePipelines?.[String(output.pipelineId)]?.outputs?.[
+        String(output.id)
+      ] as Record<string, unknown> | undefined;
+    const status = String(runtimeOutput?.status || "").toLowerCase();
+    return status === "failed" || status === "error";
+  }).length;
+  const retryingOutputs = outputs.filter((output) => {
+    const runtimeOutput =
+      runtimePipelines?.[String(output.pipelineId)]?.outputs?.[
+        String(output.id)
+      ] as Record<string, unknown> | undefined;
+    return Boolean(runtimeOutput?.retrying);
+  }).length;
+  return {
+    generatedAt: "2026-07-14T06:30:00Z",
+    totalPipelines: pipelines.length,
+    activePipelines: pipelines.length,
+    degradedPipelines: retryingOutputs || failedOutputs ? 1 : 0,
+    failedOutputs,
+    alertCount: { critical: failedOutputs, warning: retryingOutputs },
+    srtListener: null,
+  };
+}
+
+function seededAlerts(stateName: OperatorStateName): Record<string, unknown> {
+  const alerts =
+    stateName === "mixed-health"
+      ? [
+          {
+            id: "seed-alert-retrying-output",
+            severity: "warning",
+            scope: "output",
+            pipelineId: "pipe-retrying",
+            outputId: "out-retrying",
+            title: "Retrying output",
+            cause: "Synthetic destination refused the connection",
+            evidence: ["Retrying Output entered retry backoff"],
+            recommendedAction:
+              "Inspect the destination endpoint and retry budget before restarting the output.",
+            generatedAt: "2026-07-14T06:29:54Z",
+            firstSeen: "2026-07-14T06:29:54Z",
+            lastSeen: "2026-07-14T06:29:54Z",
+          },
+        ]
+      : [];
+  return { generatedAt: "2026-07-14T06:30:00Z", alerts };
+}
+
+function seededLifecycleEvents(
+  stateName: OperatorStateName,
+  pipelineId: string | null,
+): Record<string, unknown> {
+  const events =
+    stateName === "mixed-health"
+      ? [
+          {
+            seq: 101,
+            timestamp: "2026-07-14T06:29:54Z",
+            kind: "egress.retrying",
+            pipelineId: "pipe-retrying",
+            outputId: "out-retrying",
+            error: "Synthetic destination refused the connection",
+          },
+        ]
+      : [];
+  const filtered = pipelineId
+    ? events.filter((event) => event.pipelineId === pipelineId)
+    : events;
+  return {
+    generatedAt: "2026-07-14T06:30:00Z",
+    count: filtered.length,
+    events: filtered,
+  };
+}
+
 async function fulfillJson(route: Route, body: unknown): Promise<void> {
   await route.fulfill({
     status: 200,
@@ -269,6 +356,18 @@ export async function openSeededDashboard(
       return;
     }
     switch (url.pathname) {
+      case "/api/v1/overview":
+        await fulfillJson(route, seededOverview(stateName));
+        return;
+      case "/api/v1/alerts":
+        await fulfillJson(route, seededAlerts(stateName));
+        return;
+      case "/api/v1/events":
+        await fulfillJson(
+          route,
+          seededLifecycleEvents(stateName, url.searchParams.get("pipeline_id")),
+        );
+        return;
       case "/api/v1/logs/stream":
         await route.fulfill({
           status: 200,
@@ -346,6 +445,9 @@ export async function openSeededDashboard(
     const mode = requested.searchParams.get("mode") ?? "overview";
     const workspaceMode =
       mode === "inspect" || mode === "control" ? "pipeline" : mode;
+    if (workspaceMode === "incidents") {
+      return;
+    }
     await expect(
       page.locator(`[data-dashboard-mode="${workspaceMode}"]`),
     ).toHaveAttribute("aria-selected", "true");

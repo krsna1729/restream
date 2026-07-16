@@ -259,6 +259,25 @@ function renderEvent(event: LifecycleEvent): string {
   </li>`;
 }
 
+function pluralize(
+  count: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function incidentScopeLabel(
+  pipelines: IncidentPipelineOption[],
+  pipelineId: string,
+): string {
+  if (!pipelineId) return "fleet";
+  return (
+    pipelines.find((pipeline) => pipeline.id === pipelineId)?.name ||
+    pipelineId
+  );
+}
+
 export function renderIncidentsHtml(
   data: IncidentSnapshot,
   pipelines: IncidentPipelineOption[],
@@ -295,12 +314,17 @@ export function renderIncidentsHtml(
     : data.unavailable
       ? `<div class="alert alert-warning"><span>Some incident data is temporarily unavailable. Last known data remains visible.</span></div>`
       : "";
+  const scopeLabel = incidentScopeLabel(pipelines, pipelineId);
+  const summaryText = data.loaded
+    ? `${critical} critical · ${warning} warning · ${pluralize(events.length, "recent event")} · ${scopeLabel}`
+    : `Loading incident snapshots · ${scopeLabel}`;
 
   return `<div class="mx-auto max-w-7xl space-y-4">
     <header class="flex flex-wrap items-end justify-between gap-3">
       <div><h1 class="text-lg font-semibold">Incidents</h1><p class="text-base-content/60 mt-1 text-sm">Current alerts and recent lifecycle evidence from authoritative snapshots.</p></div>
       <div class="flex items-center gap-2"><select id="incidents-pipeline-filter" class="select select-sm" aria-label="Filter incidents by pipeline">${options}</select><button id="incidents-refresh-btn" type="button" class="btn btn-sm btn-outline">Refresh</button></div>
     </header>
+    <p id="incidents-route-summary" class="text-base-content/60 text-sm" role="status" aria-live="polite">${escapeHtml(summaryText)}</p>
     ${availability}
     <section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Incident rollup">
       <div class="stat bg-base-200 rounded-lg"><div class="stat-title">Critical</div><div class="stat-value text-error text-2xl">${data.alerts ? critical : "—"}</div></div>
