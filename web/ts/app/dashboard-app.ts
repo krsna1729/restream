@@ -52,6 +52,7 @@ import {
 import { setPipelineInspectorDependencies } from "../features/pipeline-inspector.js";
 import {
   configurePipelineSelectorPresentation,
+  renderPipelines,
   selectPipeline,
 } from "../features/render.js";
 import { getUrlParam } from "../core/utils.js";
@@ -150,8 +151,8 @@ export function initDashboardApp(): void {
       addPipeline: () => void window.addPipeBtn(),
       inspectPipeline: openInspectGraph,
       openPipeline: (pipelineId) => {
-        selectPipeline(pipelineId);
-        setDashboardMode("pipeline");
+        setPipelineWorkspaceView("operate", pipelineId);
+        renderPipelines();
       },
       openStatus: () => setDashboardMode("status"),
     });

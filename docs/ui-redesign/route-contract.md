@@ -40,9 +40,14 @@ and `p` while preserving unrelated query parameters.
 
 - Initial resolution uses `replaceState` only when canonicalization is needed.
 - Operator navigation uses `pushState` and remains compatible with `popstate`.
+- One user navigation intent creates one history step. For example, v2
+  Overview's Operate action moves directly to
+  `?mode=pipeline&view=operate&p=<pipeline-id>` instead of pushing an
+  intermediate Overview URL with `p=`.
 - A selected pipeline is reconciled by stable ID, name, or persisted hint when
   configuration refreshes replace runtime IDs.
 - Invalid or absent pipeline selections remain safely representable.
 - Base-path deployment must preserve every query contract above.
 
-Existing proof: `test/frontend/frontend-pipeline-workspace.test.mjs`.
+Existing proof: `test/frontend/frontend-pipeline-workspace.test.mjs` and
+`test/frontend/redesign/seed.spec.ts`.

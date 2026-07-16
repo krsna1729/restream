@@ -83,6 +83,11 @@ lands focus on the active main tabpanel before the dense dashboard chrome, so
 keyboard operators can bypass the navbar, workspace tabs, and secondary
 pipeline navigation when they are already trying to work the current screen.
 
+Overview-to-Operate navigation is now atomic in v2: the attention-card Operate
+action pushes one canonical `mode=pipeline&view=operate&p=...` URL, renders the
+selected pipeline immediately, and lets a single browser Back return to clean
+v2 Overview.
+
 ## Operator findings
 
 What is now strong enough for v2:
