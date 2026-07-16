@@ -106,6 +106,7 @@ let statusProcessLogs: AppLogRow[] = [];
 const statusStream = createManagedLogStream();
 let statusStreamActive = false;
 let statusStreamLastEventId: number | null = null;
+let statusLogSearchQuery = "";
 
 function syncProcessIndicatorFromLogs(logs: AppLogRow[]): void {
   for (const log of logs) {
@@ -320,14 +321,50 @@ function isNotableRestreamActivity(log: AppLogRow): boolean {
   );
 }
 
-function renderRestreamActivity(logs: AppLogRow[]): string {
+function normalizeStatusSearch(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function statusLogSearchText(log: AppLogRow): string {
+  return [
+    log.id,
+    log.ts,
+    log.level,
+    log.target,
+    log.message,
+    log.eventType,
+    log.eventClass,
+  ]
+    .filter((value) => value !== null && value !== undefined && value !== "")
+    .join(" ")
+    .toLowerCase();
+}
+
+function logMatchesSearch(log: AppLogRow, search: string): boolean {
+  return !search || statusLogSearchText(log).includes(search);
+}
+
+function statusLogSearchSummaryText(
+  activityCount: number,
+  logCount: number,
+  query: string,
+): string {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return `${pluralize(activityCount, "activity", "activities")} · ${pluralize(logCount, "process log")} visible`;
+  }
+  return `${pluralize(activityCount, "activity", "activities")} · ${pluralize(logCount, "process log")} match "${trimmed}"`;
+}
+
+function renderRestreamActivity(logs: AppLogRow[], search: string): string {
   const items = logs
     .filter(isNotableRestreamActivity)
+    .filter((log) => logMatchesSearch(log, search))
     .slice(0, STATUS_ACTIVITY_LIMIT);
   if (items.length === 0) {
     return `<section id="status-activity-section" class="dashboard-section scroll-mt-24 p-5">
             <h2 class="dashboard-section-title mb-3">Recent Activity</h2>
-            <p class="dashboard-muted">No unscoped restream activity has been recorded yet.</p>
+            <p class="dashboard-muted">${search ? "No activity matches this search." : "No unscoped restream activity has been recorded yet."}</p>
         </section>`;
   }
 
@@ -354,15 +391,18 @@ function renderRestreamActivity(logs: AppLogRow[]): string {
     </section>`;
 }
 
-function renderProcessLog(logs: AppLogRow[]): string {
-  if (!Array.isArray(logs) || logs.length === 0) {
+function renderProcessLog(logs: AppLogRow[], search: string): string {
+  const items = Array.isArray(logs)
+    ? logs.filter((log) => logMatchesSearch(log, search))
+    : [];
+  if (!items.length) {
     return `<section id="status-log-section" class="dashboard-section scroll-mt-24 p-5">
             <h2 class="dashboard-section-title mb-3">Process Log</h2>
-            <p class="dashboard-muted">No unscoped process log entries are available yet.</p>
+            <p class="dashboard-muted">${search ? "No process log entries match this search." : "No unscoped process log entries are available yet."}</p>
         </section>`;
   }
 
-  const rows = logs
+  const rows = items
     .slice(0, STATUS_PROCESS_LOG_LIMIT)
     .map(
       (
@@ -488,6 +528,19 @@ async function copyJson(data: unknown): Promise<void> {
 }
 
 function bindActions(status: StatusData, sbomEndpoint: string): void {
+  const search = document.getElementById(
+    "status-log-search",
+  ) as HTMLInputElement | null;
+  search?.addEventListener("input", () => {
+    const cursor = search.selectionStart ?? search.value.length;
+    statusLogSearchQuery = search.value;
+    renderStatusSnapshot();
+    const nextSearch = document.getElementById(
+      "status-log-search",
+    ) as HTMLInputElement | null;
+    nextSearch?.focus();
+    nextSearch?.setSelectionRange(cursor, cursor);
+  });
   document
     .getElementById("download-status-btn")
     ?.addEventListener("click", () => {
@@ -532,9 +585,28 @@ function renderStatusSnapshot(): void {
   const mbedtls = data.nativeLibraries?.mbedtls;
   const sqlite = data.nativeLibraries?.sqlite;
   const sbomEndpoint = getEngineSbomEndpoint(data);
+  const search = normalizeStatusSearch(statusLogSearchQuery);
+  const visibleProcessLogs = processLogs.filter((log) =>
+    logMatchesSearch(log, search),
+  );
+  const visibleActivityLogs = processLogs
+    .filter(isNotableRestreamActivity)
+    .filter((log) => logMatchesSearch(log, search));
+  const searchSummaryText = statusLogSearchSummaryText(
+    visibleActivityLogs.length,
+    visibleProcessLogs.length,
+    statusLogSearchQuery,
+  );
 
   container.innerHTML = [
     `<p id="status-route-summary" class="dashboard-muted text-sm" role="status" aria-live="polite">${escapeHtml(statusSummaryText(data, processLogs))}</p>`,
+    `<div class="flex flex-wrap items-end gap-3">
+            <label class="form-control w-full max-w-md">
+                <span class="label-text text-base-content/70">Search process logs and activity</span>
+                <input id="status-log-search" class="input input-sm input-bordered mt-1" type="search" value="${escapeHtml(statusLogSearchQuery)}" placeholder="level, target, event, message…" autocomplete="off" />
+            </label>
+            <p id="status-log-search-results-summary" class="dashboard-muted pb-1 text-sm" role="status" aria-live="polite">${escapeHtml(searchSummaryText)}</p>
+        </div>`,
     statusQuickNavHtml(),
     section(
       "status-build-section",
@@ -605,8 +677,8 @@ function renderStatusSnapshot(): void {
         row("Licenses Included", data.sbom?.licensesIncluded),
       ].join(""),
     ),
-    renderRestreamActivity(processLogs),
-    renderProcessLog(processLogs),
+    renderRestreamActivity(processLogs, search),
+    renderProcessLog(processLogs, search),
     `<div class="flex flex-wrap gap-2">
             <button type="button" class="btn btn-sm btn-outline" id="download-status-btn">Download Status</button>
             <button type="button" class="btn btn-sm btn-outline" id="copy-status-btn">Copy Status</button>

@@ -120,6 +120,8 @@ test("status mode reuses restream log SSE, pauses it while hidden, and resumes f
   assert.match(container.innerHTML, /href="#status-log-section"/);
   assert.match(container.innerHTML, /id="status-build-section"/);
   assert.match(container.innerHTML, /id="status-log-section"/);
+  assert.match(container.innerHTML, /Search process logs and activity/);
+  assert.match(container.innerHTML, /1 activity · 1 process log visible/);
   assert.match(container.innerHTML, /dashboard api server listening/);
 
   streams[0].emit("log", {
@@ -136,6 +138,7 @@ test("status mode reuses restream log SSE, pauses it while hidden, and resumes f
   await flushAsyncWork();
 
   assert.match(container.innerHTML, /task exited unexpectedly/);
+  assert.match(container.innerHTML, /2 activities · 2 process logs visible/);
 
   document.hidden = true;
   status.syncStatusStreamVisibility();

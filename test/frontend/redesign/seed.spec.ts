@@ -708,6 +708,35 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   expect(await getCdpStatusTexts(page)).toContain(
     "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
   );
+  const search = status.getByLabel("Search process logs and activity");
+  const searchSummary = status.locator("#status-log-search-results-summary");
+  await expect(searchSummary).toHaveText("1 activity · 1 process log visible");
+
+  await search.fill("synthetic");
+  await expect(status.locator("#status-route-summary")).toHaveText(
+    "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
+  );
+  await expect(searchSummary).toHaveText(
+    '1 activity · 1 process log match "synthetic"',
+  );
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1 activity · 1 process log match "synthetic"',
+  );
+
+  await search.fill("missing");
+  await expect(status.locator("#status-route-summary")).toHaveText(
+    "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
+  );
+  await expect(searchSummary).toHaveText(
+    '0 activities · 0 process logs match "missing"',
+  );
+  await expect(status.getByText("No activity matches this search.")).toBeVisible();
+  await expect(
+    status.getByText("No process log entries match this search."),
+  ).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '0 activities · 0 process logs match "missing"',
+  );
   expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
 });
 
