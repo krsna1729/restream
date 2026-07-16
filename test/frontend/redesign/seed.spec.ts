@@ -206,6 +206,29 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
   await expect(
     outputOverview.getByRole("heading", { name: "Healthy sibling 01" }),
   ).not.toBeVisible();
+
+  await page.goto(
+    "/?mode=pipeline&view=operate&p=pipe-retry-budget&ui=v2",
+  );
+  await expect(
+    pipelineHeader.getByRole("heading", { name: "Retry Budget Exhausted" }),
+  ).toBeVisible();
+  await expect(outputOverview).toContainText("0/2 active");
+  await expect(outputOverview.getByText("Error2")).toBeVisible();
+  await expect(outputOverview).toContainText("RTMP dead sink");
+  await expect(outputOverview).toContainText("Connection refused");
+  await expect(outputOverview).toContainText("SRT dead sink");
+  await expect(outputOverview).toContainText("connection failed");
+  await expect(outputOverview).not.toContainText("2 Flapping");
+  await expect(
+    outputOverview.getByRole("heading", { name: "Needs attention" }),
+  ).toBeVisible();
+  await expect(
+    outputOverview.getByRole("heading", { name: "RTMP dead sink" }),
+  ).toBeVisible();
+  await expect(
+    outputOverview.getByRole("heading", { name: "SRT dead sink" }),
+  ).toBeVisible();
 });
 
 test("seed: ui=v2 replaces Overview while delegating operator actions @desktop", async ({

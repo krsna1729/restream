@@ -277,17 +277,6 @@ function outputPresentationStatus(
       score: 80,
     };
   }
-  if (isOutputFlapping(output)) {
-    return {
-      key: "flapping",
-      status: {
-        label: "Flapping",
-        tone: "warning",
-        detail: `${Math.max(output.recentFailureCount, 2)} recent failures`,
-      },
-      score: 70,
-    };
-  }
   if (
     output.lastError ||
     output.status === "failed" ||
@@ -301,6 +290,17 @@ function outputPresentationStatus(
         detail: output.lastError || output.failurePhase || "Output failed",
       },
       score: 90,
+    };
+  }
+  if (isOutputFlapping(output)) {
+    return {
+      key: "flapping",
+      status: {
+        label: "Flapping",
+        tone: "warning",
+        detail: `${Math.max(output.recentFailureCount, 2)} recent failures`,
+      },
+      score: 70,
     };
   }
   if (output.status === "stalled" || output.status === "warning") {

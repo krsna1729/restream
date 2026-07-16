@@ -164,6 +164,22 @@ test("overview carries master's stalled-input refinement into both renderers", a
   assert.equal(model.attention[0].detail, "input stale 12s");
 });
 
+test("overview keeps stalled outputs distinct from down outputs", async () => {
+  const { buildOverviewViewModel } = await loadCompiledFrontendModule(
+    "features/overview-view-model.js",
+  );
+  const model = buildOverviewViewModel([
+    pipeline({
+      id: "stalled-output",
+      outputs: [{ status: "stalled", desiredState: "started" }],
+    }),
+  ]);
+
+  assert.equal(model.attention[0].status.label, "Output stalled");
+  assert.equal(model.attention[0].status.tone, "warning");
+  assert.equal(model.attention[0].status.detail, "no progress");
+});
+
 test("overview view model carries engine history and semantic activity", async () => {
   const { buildOverviewViewModel } = await loadCompiledFrontendModule(
     "features/overview-view-model.js",

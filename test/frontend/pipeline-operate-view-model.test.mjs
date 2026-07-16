@@ -568,6 +568,50 @@ test("pipeline output overview keeps stalled outputs distinct from down outputs"
   assert.equal(model.cards[0].status.detail, "No progress for 10s");
 });
 
+test("pipeline output overview treats failed flapping outputs as terminal errors", async () => {
+  const { buildPipelineOutputOverviewModel } = await loadCompiledFrontendModule(
+    "features/pipeline-operate-view-model.js",
+  );
+  const model = buildPipelineOutputOverviewModel(
+    [
+      pipeline({
+        id: "budget",
+        outputs: [
+          output({
+            id: "failed",
+            name: "Retry budget exhausted",
+            status: "failed",
+            rawStatus: "running",
+            phase: "failed",
+            failurePhase: "connect",
+            flapping: true,
+            recentFailureCount: 3,
+            lastError: "connection failed",
+          }),
+          output({
+            id: "recovered",
+            name: "Recovered but unstable",
+            status: "running",
+            flapping: true,
+            recentFailureCount: 4,
+          }),
+        ],
+      }),
+    ],
+    "budget",
+  );
+
+  assert.deepEqual(model.counts, [
+    { key: "error", label: "Error", tone: "error", count: 1 },
+    { key: "flapping", label: "Flapping", tone: "warning", count: 1 },
+  ]);
+  assert.deepEqual(model.attention.map((item) => item.status), [
+    { label: "Error", tone: "error", detail: "connection failed" },
+    { label: "Flapping", tone: "warning", detail: "4 recent failures" },
+  ]);
+  assert.equal(model.cards[0].status.label, "Error");
+});
+
 test("pipeline output overview preserves the eight-card expansion boundary", async () => {
   const { buildPipelineOutputOverviewModel } = await loadCompiledFrontendModule(
     "features/pipeline-operate-view-model.js",

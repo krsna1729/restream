@@ -96,6 +96,7 @@ export async function openSeededDashboard(
   href = "/?mode=overview",
   options: SeededDashboardOptions = {},
 ): Promise<void> {
+  const requested = new URL(href, "http://seed.local");
   const fixture = operatorStates[stateName];
   const settings =
     options.settingsResponse?.(structuredClone(fixture.settings)) ??
@@ -108,12 +109,16 @@ export async function openSeededDashboard(
   >();
   await login(page);
 
-  await page.addInitScript(() => {
+  await page.addInitScript((uiVersion: string | null) => {
+    window.localStorage.setItem(
+      "restream.dashboardUiVersion.v1",
+      uiVersion === "v2" ? "v2" : "v1",
+    );
     Object.defineProperty(window, "EventSource", {
       configurable: true,
       value: undefined,
     });
-  });
+  }, requested.searchParams.get("ui"));
 
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -311,7 +316,6 @@ export async function openSeededDashboard(
 
   await page.goto(href);
   if (options.expectOverviewReady === false) {
-    const requested = new URL(href, "http://seed.local");
     const mode = requested.searchParams.get("mode") ?? "overview";
     const workspaceMode =
       mode === "inspect" || mode === "control" ? "pipeline" : mode;
