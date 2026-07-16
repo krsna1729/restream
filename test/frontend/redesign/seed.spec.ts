@@ -470,6 +470,12 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   await expect(page.locator("#inspect-pipeline-select")).toHaveValue(
     "pipe-retrying",
   );
+  await expect(page.locator("#inspect-route-summary")).toHaveText(
+    "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
+  );
+  expect(await getCdpStatusTexts(page)).toContain(
+    "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
+  );
   await expectPushStateCount(page, 1);
 
   await page.goBack();

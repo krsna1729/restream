@@ -93,6 +93,11 @@ coverage proves an operator can move Operate → Inspect → Monitor while retai
 the same selected pipeline, and that clicking the already-active workspace tab
 does not add a duplicate browser-history entry.
 
+Pipeline Inspect now announces the current inspection scope before its dense
+graph and resource sections: selected pipeline, input state, output count, and
+attention count. Seeded Playwright/CDP coverage proves the Overview → Inspect
+flow lands on that summary and exposes it as status text.
+
 Monitor search feedback now separates filtered matches from configuration gaps:
 seeded Playwright/CDP coverage proves a search miss is announced as
 `0/N monitored match` while preserving the true missing-monitoring-URL count.

@@ -250,9 +250,53 @@ function protocolValue(value: string | null | undefined): string {
   return normalized.length <= 5 ? normalized.toUpperCase() : titleCaseValue(normalized);
 }
 
+function pluralize(
+  count: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function inspectInputLabel(pipe: PipelineView): string {
+  if (pipe.input.status === "on") return "input live";
+  if (pipe.input.status === "warning") return "input warning";
+  if (pipe.input.status === "error") return "input error";
+  return "input idle";
+}
+
+function inspectAttentionCount(pipe: PipelineView): number {
+  return pipe.outs.filter(
+    (output) =>
+      isOutputUnexpectedlyDown(output) ||
+      isOutputRetrying(output) ||
+      isOutputFlapping(output),
+  ).length;
+}
+
+function inspectSummaryText(
+  pipe: PipelineView | null,
+  invalidPipelineSelection = false,
+): string {
+  if (invalidPipelineSelection) return "Inspecting missing pipeline selection";
+  if (!pipe)
+    return `Inspecting whole runtime · ${pluralize(state.pipelines.length, "pipeline")}`;
+  return `Inspecting ${pipe.name} · ${inspectInputLabel(pipe)} · ${pluralize(pipe.outs.length, "output")} · ${pluralize(inspectAttentionCount(pipe), "attention item")}`;
+}
+
+function updateInspectRouteSummary(
+  pipe: PipelineView | null,
+  invalidPipelineSelection = false,
+): void {
+  const summary = document.getElementById("inspect-route-summary");
+  if (!summary) return;
+  summary.textContent = inspectSummaryText(pipe, invalidPipelineSelection);
+}
+
 export function renderPipelineInspector(): void {
   const pipe = selectedPipeline();
   const invalidPipelineSelection = hasInvalidPipelineSelection();
+  updateInspectRouteSummary(pipe, invalidPipelineSelection);
   const stateKey = graphStateKey(pipe);
   const select = document.getElementById(
     "inspect-pipeline-select",
