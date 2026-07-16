@@ -83,6 +83,12 @@ operator narrows a long pipeline list, not only after a no-hit. Seeded
 Playwright/CDP coverage proves hit-state and no-hit recovery on both search
 surfaces while keeping the result-count status text intact.
 
+Overview Restream Activity now follows the same noise-management contract for
+chaos/MSR bursts: once there are enough grouped events to scan, the panel gets a
+local search with announced result counts, hit-state recovery, and no-hit Clear
+activity search recovery. This keeps the activity list useful without turning
+the top-level Overview into another dense log wall.
+
 Operate output search/filter recovery is now available before the operator
 hits an empty list: when a query or state filter is active, a local Clear output
 filters action restores the full destination list. Seeded Playwright/CDP
@@ -245,6 +251,9 @@ What changed from the live operator pass:
 - v2 Overview now adds pipeline-name search only once the fleet is large enough
   to become a scan burden, with CDP-visible status text for result counts and
   no-result recovery.
+- v2 Overview Restream Activity now adds burst search only once the feed is long
+  enough to justify the extra control, with CDP-visible result counts and local
+  Clear activity search recovery.
 - Shared auth expiry now preserves the full operator return path, including
   `ui=v2`, so a re-login can return to the interrupted v2 workflow instead of
   dumping the operator at the default Overview.

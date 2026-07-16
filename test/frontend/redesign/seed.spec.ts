@@ -1653,7 +1653,35 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
         attention: [],
         pipelines: rows,
         metrics: [],
-        activity: [],
+        activity: [
+          {
+            headline: "Output retry burst",
+            summary: "Ritual backup retried CDN destination twice.",
+            details: ["warning", "Ritual backup", "cdn-primary"],
+            eventCount: 2,
+            startedAt: "2026-07-17T07:00:00Z",
+            endedAt: "2026-07-17T07:01:00Z",
+            tone: "warning",
+          },
+          {
+            headline: "Input restored",
+            summary: "Main Program SRT ingest recovered without operator action.",
+            details: ["success", "Main Program", "srt"],
+            eventCount: 3,
+            startedAt: "2026-07-17T07:04:00Z",
+            endedAt: "2026-07-17T07:05:00Z",
+            tone: "success",
+          },
+          {
+            headline: "Telemetry sample delayed",
+            summary: "Engine metrics arrived late while the harness was busy.",
+            details: ["neutral", "metrics", "engine"],
+            eventCount: 1,
+            startedAt: "2026-07-17T07:06:00Z",
+            endedAt: "2026-07-17T07:07:00Z",
+            tone: "neutral",
+          },
+        ],
         activityLoading: false,
       },
       {
@@ -1712,6 +1740,36 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
   await expect(
     overview.getByRole("button", { name: "Ritual backup" }),
   ).toBeVisible();
+
+  await expect(overview.getByLabel("Search restream activity")).toBeVisible();
+  await overview.getByLabel("Search restream activity").fill("restored");
+  await expect(overview.getByText("Input restored")).toBeVisible();
+  await expect(overview.getByText("Output retry burst")).not.toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/3 bursts shown · "restored"',
+  );
+  const clearActivitySearch = overview.getByRole("button", {
+    name: "Clear activity search",
+  });
+  await expect(clearActivitySearch).toBeVisible();
+  await clearActivitySearch.click();
+  await expect(overview.getByLabel("Search restream activity")).toHaveValue("");
+  await expect(overview.getByText("Output retry burst")).toBeVisible();
+
+  await overview.getByLabel("Search restream activity").fill("missing");
+  await expect(overview.getByText("No activity matches.")).toBeVisible();
+  await expect(
+    overview.getByText(
+      'No restream activity matches "missing". Clear activity search to show all.',
+    ),
+  ).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toEqual(
+    expect.arrayContaining([
+      '0/3 bursts shown · "missing"',
+      'No restream activity matches "missing". Clear activity search to show all.',
+    ]),
+  );
+
   expect(await getCdpNodeCount(page)).toBeLessThan(1_500);
 });
 

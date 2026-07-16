@@ -235,6 +235,25 @@ function DashboardV2Overview({
     : model.pipelines;
   const showPipelineTableSearch =
     model.pipelines.length > 8 || normalizedPipelineTableQuery !== "";
+  const [activityQuery, setActivityQuery] = useState("");
+  const normalizedActivityQuery = activityQuery.trim().toLowerCase();
+  const clearActivitySearch = (): void => setActivityQuery("");
+  const filteredActivity = normalizedActivityQuery
+    ? model.activity.filter((item) =>
+        [
+          item.headline,
+          item.summary,
+          item.details.join(" "),
+          item.tone,
+          `${item.eventCount} event${item.eventCount === 1 ? "" : "s"}`,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedActivityQuery),
+      )
+    : model.activity;
+  const showActivitySearch =
+    model.activity.length > 2 || normalizedActivityQuery !== "";
   return (
     <div className="space-y-4" id="dashboard-v2-overview">
       <header className="flex flex-wrap items-end justify-between gap-3 px-1">
@@ -505,7 +524,7 @@ function DashboardV2Overview({
       </Panel>
 
       <Panel labelledBy="dashboard-v2-activity-title">
-        <div className="dashboard-section-header">
+        <div className="dashboard-section-header items-start">
           <div>
             <h2
               className="dashboard-section-title"
@@ -518,13 +537,56 @@ function DashboardV2Overview({
               review.
             </p>
           </div>
-          <button
-            className="btn btn-sm btn-outline"
-            onClick={actions.openStatus}
-            type="button"
-          >
-            Open Status
-          </button>
+          <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
+            <button
+              className="btn btn-sm btn-outline"
+              onClick={actions.openStatus}
+              type="button"
+            >
+              Open Status
+            </button>
+            {showActivitySearch ? (
+              <div className="w-full max-w-sm space-y-2 sm:w-80">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="input input-bordered input-sm flex min-h-10 min-w-0 flex-1 items-center gap-2">
+                    <span className="text-base-content/55 text-xs font-semibold uppercase">
+                      Find
+                    </span>
+                    <input
+                      aria-label="Search restream activity"
+                      className="min-w-0 grow"
+                      onChange={(event) =>
+                        setActivityQuery(event.currentTarget.value)
+                      }
+                      placeholder="event, status, detail"
+                      type="search"
+                      value={activityQuery}
+                    />
+                  </label>
+                  {normalizedActivityQuery ? (
+                    <button
+                      className="btn btn-xs btn-ghost"
+                      onClick={clearActivitySearch}
+                      type="button"
+                    >
+                      Clear activity search
+                    </button>
+                  ) : null}
+                </div>
+                {normalizedActivityQuery ? (
+                  <p
+                    aria-live="polite"
+                    className="text-base-content/55 px-1 text-xs tabular-nums"
+                    id="dashboard-v2-activity-search-summary"
+                    role="status"
+                  >
+                    {filteredActivity.length}/{model.activity.length} bursts
+                    shown · "{activityQuery.trim()}"
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </div>
         <div className="space-y-2 p-4">
           {model.activityLoading ? (
@@ -532,7 +594,8 @@ function DashboardV2Overview({
               Loading recent restream activity...
             </p>
           ) : model.activity.length ? (
-            model.activity.map((item, index) => (
+            filteredActivity.length ? (
+              filteredActivity.map((item, index) => (
               <article
                 className="dashboard-card p-3"
                 key={`${item.startedAt || "activity"}-${index}`}
@@ -559,7 +622,20 @@ function DashboardV2Overview({
                   </span>
                 </div>
               </article>
-            ))
+              ))
+            ) : (
+              <div className="dashboard-empty">
+                <p className="font-semibold">No activity matches.</p>
+                <p
+                  aria-live="polite"
+                  className="text-base-content/60 mt-1 text-sm"
+                  role="status"
+                >
+                  No restream activity matches "{activityQuery.trim()}". Clear
+                  activity search to show all.
+                </p>
+              </div>
+            )
           ) : (
             <p className="text-base-content/70 text-sm">
               No recent restream-wide activity yet.
