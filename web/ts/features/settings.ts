@@ -19,6 +19,9 @@ import { showErrorAlert } from "../core/utils.js";
 import { state } from "../core/state.js";
 import { withBasePath } from "../core/base-path.js";
 
+const SETTINGS_SECTION_COUNT = 5;
+let lastRateLimitAttemptCount = 0;
+
 // ── Load ──────────────────────────────────────────────
 
 function needsFullSettingsConfig(): boolean {
@@ -106,6 +109,32 @@ function settingsNavHtml(id = ""): string {
   </nav>`;
 }
 
+function pluralize(
+  count: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function countConfiguredProfiles(): number {
+  const list = document.getElementById("transcode-profiles-list");
+  if (!list) return Object.keys(effectiveTranscodeProfiles()).length;
+  const rendered = list.querySelectorAll("[data-profile-name]").length;
+  return rendered || Object.keys(effectiveTranscodeProfiles()).length;
+}
+
+function settingsSummaryText(): string {
+  const serverName = state.config?.serverName || "server";
+  return `${serverName} settings · ${pluralize(SETTINGS_SECTION_COUNT, "section")} · ${pluralize(countConfiguredProfiles(), "profile")} · ${pluralize(lastRateLimitAttemptCount, "auth attempt")}`;
+}
+
+function updateSettingsSummary(): void {
+  const summary = document.getElementById("settings-route-summary");
+  if (!summary) return;
+  summary.textContent = settingsSummaryText();
+}
+
 function ensureSettingsNav(container: Element): void {
   if (document.getElementById("settings-admin-nav")) return;
   const title = container.querySelector("h1");
@@ -160,6 +189,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     <p class="dashboard-subtitle">Server, security, and encoding configuration.</p>
                 </div>
             </div>
+            <p id="settings-route-summary" class="text-base-content/60 text-sm" role="status" aria-live="polite"></p>
             ${settingsNavHtml()}
 
             <section id="server-settings-section" class="dashboard-section space-y-5 p-5">
@@ -459,6 +489,7 @@ export async function saveServerName(): Promise<void> {
   const result = await patchConfig({ serverName: name });
   if (result) {
     state.config = { ...state.config, serverName: result.serverName };
+    updateSettingsSummary();
     showSavedFeedback("server-name-saved");
   }
 }
@@ -607,8 +638,10 @@ function formatBanStatus(attempt: RateLimitAttempt): string {
 function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
   const body = document.getElementById("rate-limit-attempts-body");
   if (!body) return;
+  lastRateLimitAttemptCount = attempts.length;
   if (attempts.length === 0) {
     body.innerHTML = `<tr><td colspan="5" class="text-base-content/60">No attempts</td></tr>`;
+    updateSettingsSummary();
     return;
   }
   body.innerHTML = attempts
@@ -629,6 +662,7 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
         </tr>`;
     })
     .join("");
+  updateSettingsSummary();
 }
 
 export async function refreshRateLimitState(): Promise<void> {
@@ -978,12 +1012,16 @@ export function loadTranscodeProfiles(): void {
   list.innerHTML = entries
     .map(([name, p]) => renderProfileRow(name, p))
     .join("");
+  updateSettingsSummary();
   list
     .querySelectorAll<HTMLButtonElement>(".js-profile-delete")
     .forEach((btn) => {
       btn.addEventListener("click", () => {
         const row = btn.closest("[data-profile-name]");
-        if (row) row.remove();
+        if (row) {
+          row.remove();
+          updateSettingsSummary();
+        }
       });
     });
 }
@@ -1020,9 +1058,13 @@ export function addTranscodeProfile(): void {
   const row = div.firstElementChild as HTMLElement | null;
   if (row) {
     list.appendChild(row);
+    updateSettingsSummary();
     row
       .querySelector<HTMLButtonElement>(".js-profile-delete")
-      ?.addEventListener("click", () => row.remove());
+      ?.addEventListener("click", () => {
+        row.remove();
+        updateSettingsSummary();
+      });
   }
 }
 

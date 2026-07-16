@@ -121,6 +121,11 @@ ingest count, scoped stage/egress/reader counts, and the active pipeline scope.
 Seeded Playwright/CDP coverage proves that summary updates on pipeline switch
 and is exposed as status text.
 
+Settings now gets the same guardrail for its dense admin form: the legacy-owned
+route announces server scope, section count, configured profile count, and
+current authentication-attempt count. Seeded Playwright/CDP coverage proves the
+summary is exposed as status text while the route stays outside the React seam.
+
 The seeded v2 Operate path also has a CDP layout proof across the configured
 desktop, tablet, and mobile browser projects. The stress fixture uses the
 recovered sink-flap pipeline with 30 audio tracks and verifies that both DOM

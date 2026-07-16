@@ -171,13 +171,33 @@ runCheck("renderSettingsPanel emits delegated actions without inline handlers", 
   const container = appendRoot(document, "div", "settings-mode-content");
 
   const settings = await loadCompiledFrontendModule("features/settings.js");
+  const { state } = await loadCompiledFrontendModule("core/state.js");
+  state.config = {
+    serverName: "Synthetic Restream",
+    transcodeProfiles: {
+      mobile: {
+        preset: "veryfast",
+        tune: "zerolatency",
+        crf: 26,
+        gop: 60,
+        bframes: 0,
+        bitrate: 0,
+        maxBitrate: 0,
+        width: 854,
+        height: 480,
+      },
+    },
+  };
   settings.renderSettingsPanel(container);
+  settings.loadTranscodeProfiles();
 
   assert.doesNotMatch(container.innerHTML, /\son[a-z]+\s*=/i);
   assert.match(container.innerHTML, /data-settings-action="save-server-name"/);
   assert.match(container.innerHTML, /data-settings-action="reset-rate-limits"/);
   assert.match(container.innerHTML, /aria-label="Current password"/);
   assert.match(container.innerHTML, /aria-label="Global SRT ingest mode"/);
+  assert.match(container.innerHTML, /id="settings-route-summary"/);
+  assert.match(container.innerHTML, /role="status"/);
 });
 
 runCheck(

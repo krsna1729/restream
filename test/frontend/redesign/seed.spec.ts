@@ -203,6 +203,12 @@ test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async 
       name: "Settings",
     }),
   ).toBeVisible();
+  await expect(page.locator("#settings-route-summary")).toHaveText(
+    "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+  );
+  expect(await getCdpStatusTexts(page)).toContain(
+    "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+  );
   await expect(page.locator("#dashboard-v2-root")).toBeHidden();
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),

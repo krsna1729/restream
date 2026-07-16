@@ -548,7 +548,19 @@ export async function openSeededDashboard(
         await fulfillJson(route, seededEngineTelemetry(stateName));
         return;
       case "/api/v1/security/rate-limits":
-        await fulfillJson(route, { attempts: [] });
+        await fulfillJson(route, {
+          attempts:
+            stateName === "mixed-health"
+              ? [
+                  {
+                    scope: "dashboard-login",
+                    ip: "203.0.113.10",
+                    failureCount: 2,
+                    banned: false,
+                  },
+                ]
+              : [],
+        });
         return;
       case "/api/v1/engine/resource-map":
         await fulfillJson(route, { resources: [] });
