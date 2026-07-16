@@ -300,7 +300,7 @@ test("seed: ui=v2 legacy-owned routes keep operator checkpoints visible and anno
       href: "/?mode=media&ui=v2",
       locator: "#media-library-results-summary",
       nodeBudget: 10_000,
-      text: "1 media file total",
+      text: "1 media file total · 0 recordings · 1 source file",
     },
     {
       href: "/?mode=settings&ui=v2",
@@ -704,20 +704,26 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   await expect(
     media.getByRole("heading", { name: "Media Library" }),
   ).toBeVisible();
-  await expect(summary).toHaveText("1 media file total");
+  await expect(summary).toHaveText(
+    "1 media file total · 0 recordings · 1 source file",
+  );
 
   await search.fill("synthetic");
-  await expect(summary).toHaveText('1/1 media file shown · "synthetic"');
+  await expect(summary).toHaveText(
+    '1/1 media file shown · 0 recordings · 1 source file matched · "synthetic"',
+  );
   await expect(media.getByText("synthetic-source.mp4")).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
-    '1/1 media file shown · "synthetic"',
+    '1/1 media file shown · 0 recordings · 1 source file matched · "synthetic"',
   );
 
   await search.fill("missing");
-  await expect(summary).toHaveText('0/1 media file shown · "missing"');
+  await expect(summary).toHaveText(
+    '0/1 media files shown · 0 recordings · 0 source files matched · "missing"',
+  );
   await expect(media.getByText('No matches for "missing".')).toHaveCount(2);
   expect(await getCdpStatusTexts(page)).toContain(
-    '0/1 media file shown · "missing"',
+    '0/1 media files shown · 0 recordings · 0 source files matched · "missing"',
   );
   expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
 });

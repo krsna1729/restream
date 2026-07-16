@@ -53,6 +53,10 @@ function sectionEmpty(label: string): string {
   return `<div class="dashboard-empty">No ${escapeHtml(label)}.</div>`;
 }
 
+function fileCountLabel(count: number, singular: string): string {
+  return `${count} ${singular}${count === 1 ? "" : "s"}`;
+}
+
 function normalizeSearchText(value: string | null | undefined): string {
   return String(value || "").trim().toLowerCase();
 }
@@ -394,11 +398,12 @@ function renderMediaLibraryLists(files: MediaFile[], force: boolean): void {
   setText("media-recording-size", formatFileSize(recordingBytes));
   setText("media-source-count", sources.length);
   setText("media-source-size", formatFileSize(totalBytes - recordingBytes));
+  const sectionSplit = `${fileCountLabel(filteredRecordings.length, "recording")} · ${fileCountLabel(filteredSources.length, "source file")}`;
   setText(
     "media-library-results-summary",
     query
-      ? `${filteredTotal}/${files.length} media file${files.length === 1 ? "" : "s"} shown · "${query}"`
-      : `${files.length} media file${files.length === 1 ? "" : "s"} total`,
+      ? `${filteredTotal}/${files.length} media file${filteredTotal === 1 ? "" : "s"} shown · ${sectionSplit} matched · "${query}"`
+      : `${fileCountLabel(files.length, "media file")} total · ${sectionSplit}`,
   );
   const filteredEmptyLabel = normalizeSearchText(mediaSearchQuery)
     ? `matches for "${mediaSearchQuery}"`

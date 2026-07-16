@@ -107,9 +107,9 @@ That prevents the control room from implying a configured monitor disappeared
 just because the operator narrowed the list.
 
 Media search now follows the same feedback contract: the legacy-owned Media
-route exposes a live result-count summary, and seeded Playwright/CDP coverage
-proves search hits and misses are announced without relying on visual scanning
-of both Recordings and Source Files sections.
+route exposes one live result-count summary that also splits matches by
+Recordings and Source Files. Seeded Playwright/CDP coverage proves search hits
+and misses are announced without relying on visual scanning of both sections.
 
 Status now has the same lightweight operator checkpoint: the legacy-owned route
 announces the loaded build identity plus process-log and notable-activity
