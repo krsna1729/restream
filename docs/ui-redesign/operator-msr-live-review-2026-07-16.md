@@ -78,6 +78,12 @@ action, presses Enter into Operate, then keyboard-selects another pipeline from
 the v2 selector. CDP assertions keep Overview and Operate node budgets bounded
 and verify stable accessible button names for output operations.
 
+The shared workspace summary now also announces the current ownership state:
+`UI v2 owned` for Overview and Pipeline Operate, `Legacy checkpoint` for
+Inspect and Monitor, and `Legacy-owned checkpoint` for the remaining top-level
+legacy routes. Seeded Playwright/CDP coverage proves that cue is visible and
+exposed as status text while moving across the route journey.
+
 Overview and the v2 pipeline selector now expose Clear search as soon as an
 operator narrows a long pipeline list, not only after a no-hit. Seeded
 Playwright/CDP coverage proves hit-state and no-hit recovery on both search
@@ -214,6 +220,9 @@ semantically named.
 What is now strong enough for v2:
 
 - Overview and Pipeline / Operate carry the v2 seam cleanly.
+- The shell now names whether the current route is v2-owned or a legacy
+  checkpoint, reducing the “which UI am I in?” ambiguity during the staged
+  rollout.
 - Large output sets are bounded by default instead of dumping every output card.
 - Output search/filter is necessary and useful under MSR-scale output counts.
 - Chaos-derived states are now covered by seeded fixtures:

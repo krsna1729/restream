@@ -696,7 +696,7 @@ function applyMode(
   const summary = document.getElementById("workspace-mode-summary");
   if (summary) {
     const counts = buildOverviewViewModel(state.pipelines).counts;
-    summary.textContent =
+    const taskSummary =
       mode === "overview"
         ? `${counts.liveInputs} live inputs / ${counts.runningOutputs} running outputs${counts.retryingOutputs ? ` / ${counts.retryingOutputs} retrying` : ""}${counts.flappingOutputs ? ` / ${counts.flappingOutputs} flapping` : ""}`
         : mode === "pipeline"
@@ -714,6 +714,13 @@ function applyMode(
                 : mode === "settings"
                   ? "Server configuration"
                   : "Runtime status";
+    const ownership =
+      mode === "overview" || (mode === "pipeline" && pipelineView === "operate")
+        ? "UI v2 owned"
+        : mode === "pipeline"
+          ? "Legacy checkpoint"
+          : "Legacy-owned checkpoint";
+    summary.textContent = `${ownership} · ${taskSummary}`;
   }
   if (
     previousMode !== null &&

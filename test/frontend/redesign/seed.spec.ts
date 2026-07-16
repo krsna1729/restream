@@ -354,6 +354,46 @@ test("seed: ui=v2 legacy-owned routes keep operator checkpoints visible and anno
   }
 });
 
+test("seed: ui=v2 shell announces ownership while moving across routes @desktop", async ({
+  page,
+}) => {
+  const routes = [
+    {
+      href: "/?mode=overview&ui=v2",
+      text: "UI v2 owned · 2 live inputs / 1 running outputs / 1 retrying",
+    },
+    {
+      href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+      text: "UI v2 owned · Pipeline workflow",
+    },
+    {
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      text: "Legacy checkpoint · Pipeline graph and diagnostics",
+    },
+    {
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      text: "Legacy checkpoint · Pipeline monitoring wall",
+    },
+    {
+      href: "/?mode=status&ui=v2",
+      text: "Legacy-owned checkpoint · Runtime status",
+    },
+  ] as const;
+
+  await openSeededDashboard(page, "mixed-health", routes[0].href);
+
+  for (const route of routes) {
+    if (page.url() !== new URL(route.href, page.url()).href) {
+      await page.goto(route.href);
+    }
+    await expect(page.locator("#workspace-mode-summary")).toHaveText(
+      route.text,
+    );
+    expect(await getCdpStatusTexts(page)).toContain(route.text);
+  }
+  expect(await getCdpNodeCount(page)).toBeLessThan(16_000);
+});
+
 test("seed: ui=v2 auth expiry preserves operator return location @desktop", async ({
   page,
 }) => {
