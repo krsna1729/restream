@@ -42,6 +42,7 @@ import {
 } from "../features/publisher-health.js";
 import {
   configureOverviewPresentation,
+  configureDashboardModePresentationSync,
   initDashboardModes,
   openInspectGraph,
   renderDashboardModes,
@@ -59,6 +60,7 @@ import {
   setControlRoomWorkspaceDependencies,
 } from "../features/control-room.js";
 import { state } from "../core/state.js";
+import type { DashboardLocation } from "../core/pipeline-workspace.js";
 import { buildOverviewViewModel } from "../features/overview-view-model.js";
 import {
   configurePipelineOutputOverviewPresentation,
@@ -67,6 +69,7 @@ import {
 } from "../features/pipeline-output-list.js";
 import {
   dashboardV2ExperimentEnabled,
+  setDashboardV2PresentationScope,
   setDashboardV2OverviewActions,
   setDashboardV2PipelineHeaderActions,
   setDashboardV2PipelineInputStatusActions,
@@ -81,19 +84,68 @@ import {
 
 let dashboardAppInitialized = false;
 
+function syncDashboardV2Presentation(location: DashboardLocation): void {
+  const dashboardV2Enabled = dashboardV2ExperimentEnabled();
+  const overviewV2Active = dashboardV2Enabled && location.mode === "overview";
+  const pipelineV2Active =
+    dashboardV2Enabled &&
+    location.mode === "pipeline" &&
+    location.pipelineView === "operate";
+
+  setDashboardV2PresentationScope({
+    overviewActive: overviewV2Active,
+    pipelineActive: pipelineV2Active,
+  });
+
+  configureOverviewPresentation({
+    legacyRenderEnabled: !overviewV2Active,
+    onPresentation: overviewV2Active
+      ? (presentation) => {
+          updateDashboardV2Overview(
+            buildOverviewViewModel(
+              state.pipelines,
+              state.metrics,
+              presentation,
+            ),
+          );
+        }
+      : undefined,
+  });
+  configurePipelineSelectorPresentation({
+    legacyRenderEnabled: !pipelineV2Active,
+    onPresentation: pipelineV2Active
+      ? updateDashboardV2PipelineSelector
+      : undefined,
+  });
+  configurePipelineHeaderPresentation({
+    legacyLifecycleControlsEnabled: !pipelineV2Active,
+    legacyRenderEnabled: !pipelineV2Active,
+    onPresentation: pipelineV2Active
+      ? updateDashboardV2PipelineHeader
+      : undefined,
+  });
+  configurePipelineInputStatusPresentation({
+    legacyRenderEnabled: !pipelineV2Active,
+    onPresentation: pipelineV2Active
+      ? updateDashboardV2PipelineInputStatus
+      : undefined,
+  });
+  configurePipelineOutputOverviewPresentation({
+    legacyAddActionEnabled: !pipelineV2Active,
+    legacyCardsEnabled: !pipelineV2Active,
+    legacyRenderEnabled: !pipelineV2Active,
+    onPresentation: pipelineV2Active
+      ? updateDashboardV2PipelineOutputOverview
+      : undefined,
+  });
+}
+
 export function initDashboardApp(): void {
   if (dashboardAppInitialized) return;
   dashboardAppInitialized = true;
   const dashboardV2Enabled = dashboardV2ExperimentEnabled();
   if (dashboardV2Enabled) {
-    configureOverviewPresentation({
-      legacyRenderEnabled: false,
-      onPresentation: (presentation) => {
-        updateDashboardV2Overview(
-          buildOverviewViewModel(state.pipelines, state.metrics, presentation),
-        );
-      },
-    });
+    configureDashboardModePresentationSync(syncDashboardV2Presentation);
     setDashboardV2OverviewActions({
       addPipeline: () => void window.addPipeBtn(),
       inspectPipeline: openInspectGraph,
@@ -103,18 +155,9 @@ export function initDashboardApp(): void {
       },
       openStatus: () => setDashboardMode("status"),
     });
-    configurePipelineSelectorPresentation({
-      legacyRenderEnabled: false,
-      onPresentation: updateDashboardV2PipelineSelector,
-    });
     setDashboardV2PipelineSelectorActions({
       addPipeline: () => void window.addPipeBtn(),
       selectPipeline,
-    });
-    configurePipelineHeaderPresentation({
-      legacyLifecycleControlsEnabled: false,
-      legacyRenderEnabled: false,
-      onPresentation: updateDashboardV2PipelineHeader,
     });
     setDashboardV2PipelineHeaderActions({
       diagnosePipeline: openDiagnosticsModal,
@@ -126,10 +169,6 @@ export function initDashboardApp(): void {
       toggleFileIngest: togglePipelineFileIngest,
       toggleRecording: togglePipelineRecording,
     });
-    configurePipelineInputStatusPresentation({
-      legacyRenderEnabled: false,
-      onPresentation: updateDashboardV2PipelineInputStatus,
-    });
     setDashboardV2PipelineInputStatusActions({
       cancelAudioTrackEdit: cancelPipelineAudioTrackEdit,
       clearPreview: clearPipelineInputPreview,
@@ -140,12 +179,6 @@ export function initDashboardApp(): void {
       saveAudioTrack: savePipelineAudioTrack,
       selectProtocol: selectPipelineIngestProtocol,
       updateAudioTrackDraft: updatePipelineAudioTrackDraft,
-    });
-    configurePipelineOutputOverviewPresentation({
-      legacyAddActionEnabled: false,
-      legacyCardsEnabled: false,
-      legacyRenderEnabled: false,
-      onPresentation: updateDashboardV2PipelineOutputOverview,
     });
     setDashboardV2PipelineOutputOverviewActions({
       addOutput: (pipelineId) => {
@@ -186,6 +219,8 @@ export function initDashboardApp(): void {
       },
       toggleOutputList: togglePipelineOutputList,
     });
+  } else {
+    configureDashboardModePresentationSync(null);
   }
 
   setDashboardHooks({
