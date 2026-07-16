@@ -114,6 +114,9 @@ What changed from the live operator pass:
   so the active rail is the only pipeline navigation subtree under Operate.
 - v2 Overview ownership now empties the hidden legacy Overview container, so
   the fleet-summary route does not carry duplicate inactive summary markup.
+- v2 Overview now adds pipeline-name search only once the fleet is large enough
+  to become a scan burden, with CDP-visible status text for result counts and
+  no-result recovery.
 
 Still not a full v2 redesign:
 

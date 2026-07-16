@@ -225,6 +225,15 @@ function DashboardV2Overview({
   model: OverviewViewModel;
 }): React.JSX.Element {
   const hasAttention = model.attention.length > 0;
+  const [pipelineTableQuery, setPipelineTableQuery] = useState("");
+  const normalizedPipelineTableQuery = pipelineTableQuery.trim().toLowerCase();
+  const filteredPipelineRows = normalizedPipelineTableQuery
+    ? model.pipelines.filter((pipeline) =>
+        pipeline.name.toLowerCase().includes(normalizedPipelineTableQuery),
+      )
+    : model.pipelines;
+  const showPipelineTableSearch =
+    model.pipelines.length > 8 || normalizedPipelineTableQuery !== "";
   return (
     <div className="space-y-4" id="dashboard-v2-overview">
       <header className="flex flex-wrap items-end justify-between gap-3 px-1">
@@ -359,18 +368,47 @@ function DashboardV2Overview({
       </div>
 
       <Panel labelledBy="dashboard-v2-pipelines-title">
-        <div className="dashboard-section-header">
+        <div className="dashboard-section-header items-start">
           <div>
-          <h2
-            className="dashboard-section-title"
-            id="dashboard-v2-pipelines-title"
-          >
-            All pipelines
-          </h2>
-          <p className="dashboard-subtitle">
-            Compare intent, runtime state, and data flow.
-          </p>
+            <h2
+              className="dashboard-section-title"
+              id="dashboard-v2-pipelines-title"
+            >
+              All pipelines
+            </h2>
+            <p className="dashboard-subtitle">
+              Compare intent, runtime state, and data flow.
+            </p>
           </div>
+          {showPipelineTableSearch ? (
+            <div className="w-full max-w-sm space-y-2 sm:w-80">
+              <label className="input input-bordered input-sm flex min-h-10 items-center gap-2">
+                <span className="text-base-content/55 text-xs font-semibold uppercase">
+                  Find
+                </span>
+                <input
+                  aria-label="Search overview pipelines"
+                  className="min-w-0 grow"
+                  onChange={(event) =>
+                    setPipelineTableQuery(event.currentTarget.value)
+                  }
+                  placeholder="pipeline name"
+                  type="search"
+                  value={pipelineTableQuery}
+                />
+              </label>
+              {normalizedPipelineTableQuery ? (
+                <p
+                  aria-live="polite"
+                  className="text-base-content/55 px-1 text-xs tabular-nums"
+                  role="status"
+                >
+                  {filteredPipelineRows.length}/{model.pipelines.length}{" "}
+                  pipelines shown · "{pipelineTableQuery.trim()}"
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="overflow-x-auto">
           <table className="table table-sm">
@@ -387,7 +425,8 @@ function DashboardV2Overview({
             </thead>
             <tbody>
               {model.pipelines.length ? (
-                model.pipelines.map((pipeline) => (
+                filteredPipelineRows.length ? (
+                  filteredPipelineRows.map((pipeline) => (
                   <tr
                     className="border-base-content/5 hover:bg-base-100/60 border-t"
                     key={pipeline.id}
@@ -422,7 +461,32 @@ function DashboardV2Overview({
                       <StatusBadge status={pipeline.recording} />
                     </td>
                   </tr>
-                ))
+                  ))
+                ) : (
+                  <tr>
+                    <td className="px-4 py-6" colSpan={7}>
+                      <div className="max-w-xl">
+                        <p className="font-semibold">No pipelines match.</p>
+                        <p
+                          aria-live="polite"
+                          className="text-base-content/60 mt-1 text-sm"
+                          role="status"
+                        >
+                          No overview pipelines match "
+                          {pipelineTableQuery.trim()}". Clear search to show
+                          all.
+                        </p>
+                        <button
+                          className="btn btn-xs btn-ghost mt-3"
+                          onClick={() => setPipelineTableQuery("")}
+                          type="button"
+                        >
+                          Clear search
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
               ) : (
                 <tr>
                   <td className="text-base-content/70 px-4 py-6" colSpan={7}>
@@ -1445,8 +1509,7 @@ function DashboardV2PipelineOutputOverview({
                 className="text-base-content/60 mt-1 text-xs"
                 role="status"
               >
-                {outputEmptyDetail} Clear filters to return to all
-                destinations.
+                {outputEmptyDetail} Clear filters to show all.
               </p>
               <button
                 className="btn btn-xs btn-ghost mt-3"

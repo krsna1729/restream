@@ -672,6 +672,141 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(page.locator("#edit-pipe-modal")).toBeVisible();
 });
 
+test("ui=v2 overview pipeline table supports large-fleet search @desktop", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.setContent(`
+    <div id="dashboard-v2-root"></div>
+    <div id="dashboard-v2-pipeline-selector-root"></div>
+    <div id="dashboard-v2-pipeline-header-root"></div>
+    <div id="dashboard-v2-pipeline-input-status-root"></div>
+    <div id="dashboard-v2-pipeline-output-overview-root"></div>
+  `);
+
+  await page.evaluate(async () => {
+    const importModule = new Function(
+      "path",
+      "return import(path)",
+    ) as (path: string) => Promise<{
+      renderDashboardV2Overview: (
+        model: Record<string, unknown>,
+        actions: Record<string, unknown>,
+      ) => void;
+    }>;
+    const { renderDashboardV2Overview } = await importModule(
+      "/js/app/dashboard-v2-entry.js",
+    );
+    const neutral = { label: "--", tone: "neutral" };
+    const rows = [
+      {
+        id: "pipe-main",
+        name: "Main Program",
+        health: { label: "Live", tone: "success", detail: "healthy" },
+        input: { label: "Live", tone: "success", detail: "SRT ingest" },
+        outputs: { label: "8/8 running", tone: "success" },
+        inputRate: { label: "12.2 Mb/s", tone: "info" },
+        outputRate: { label: "96.0 Mb/s", tone: "info" },
+        recording: { label: "Off", tone: "neutral" },
+      },
+      {
+        id: "pipe-ritual-backup",
+        name: "Ritual backup",
+        health: {
+          label: "Output retrying",
+          tone: "warning",
+          detail: "recovering",
+        },
+        input: { label: "Live", tone: "success", detail: "RTMP ingest" },
+        outputs: {
+          label: "5/6 running",
+          tone: "warning",
+          detail: "1 retrying",
+        },
+        inputRate: { label: "10.8 Mb/s", tone: "info" },
+        outputRate: { label: "54.0 Mb/s", tone: "info" },
+        recording: { label: "Armed", tone: "warning", detail: "ready" },
+      },
+      ...Array.from({ length: 8 }, (_, index) => ({
+        id: `pipe-side-${index}`,
+        name: `Side Hall ${index + 1}`,
+        health: { label: "Idle", tone: "neutral", detail: "waiting" },
+        input: neutral,
+        outputs: { label: "0/2 running", tone: "neutral" },
+        inputRate: neutral,
+        outputRate: neutral,
+        recording: { label: "Off", tone: "neutral" },
+      })),
+    ];
+    renderDashboardV2Overview(
+      {
+        counts: {
+          pipelines: rows.length,
+          liveInputs: 2,
+          warningInputs: 1,
+          outputs: 30,
+          runningOutputs: 13,
+          retryingOutputs: 1,
+          flappingOutputs: 0,
+          stoppedOutputs: 16,
+          downOutputs: 0,
+          recording: 0,
+          inputKbps: 23_000,
+          outputKbps: 150_000,
+        },
+        attentionPipelines: 1,
+        attention: [],
+        pipelines: rows,
+        metrics: [],
+        activity: [],
+        activityLoading: false,
+      },
+      {
+        addPipeline: () => {},
+        inspectPipeline: () => {},
+        openPipeline: () => {},
+        openStatus: () => {},
+      },
+    );
+  });
+
+  const overview = page.locator("#dashboard-v2-overview");
+  await expect(overview.getByLabel("Search overview pipelines")).toBeVisible();
+  await overview.getByLabel("Search overview pipelines").fill("ritual");
+  await expect(
+    overview.getByRole("button", { name: "Ritual backup" }),
+  ).toBeVisible();
+  await expect(
+    overview.getByRole("button", { name: "Main Program" }),
+  ).not.toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/10 pipelines shown · "ritual"',
+  );
+
+  await overview.getByLabel("Search overview pipelines").fill("nowhere");
+  await expect(overview.getByText("No pipelines match.")).toBeVisible();
+  await expect(
+    overview.getByText(
+      'No overview pipelines match "nowhere". Clear search to show all.',
+    ),
+  ).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toEqual(
+    expect.arrayContaining([
+      '0/10 pipelines shown · "nowhere"',
+      'No overview pipelines match "nowhere". Clear search to show all.',
+    ]),
+  );
+
+  await overview.getByRole("button", { name: "Clear search" }).click();
+  await expect(
+    overview.getByRole("button", { name: "Main Program" }),
+  ).toBeVisible();
+  await expect(
+    overview.getByRole("button", { name: "Ritual backup" }),
+  ).toBeVisible();
+  expect(await getCdpNodeCount(page)).toBeLessThan(1_500);
+});
+
 test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async ({
   page,
 }) => {
@@ -1361,7 +1496,7 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
   await expect(root.getByText("No outputs match.")).toBeVisible();
   await expect(
     root.getByText(
-      'No stopped output destinations match "facebook". Clear filters to return to all destinations.',
+      'No stopped output destinations match "facebook". Clear filters to show all.',
     ),
   ).toBeVisible();
 
@@ -1378,7 +1513,7 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
     );
   expect(statusTexts).toContain('0/5 shown · Stopped · "facebook"');
   expect(statusTexts).toContain(
-    'No stopped output destinations match "facebook". Clear filters to return to all destinations.',
+    'No stopped output destinations match "facebook". Clear filters to show all.',
   );
   await cdp.detach();
 

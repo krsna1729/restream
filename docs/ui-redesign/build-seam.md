@@ -22,6 +22,7 @@
 - [File-source details](#file-source-details)
 - [Audio track editor](#audio-track-editor)
 - [HLS preview host](#hls-preview-host)
+- [Overview large-fleet search](#overview-large-fleet-search)
 
 ## Objective
 
@@ -645,3 +646,26 @@ This completes the selected-pipeline Operate migration for the opt-in React
 surface. The legacy dashboard remains the default, and the experiment still
 shares the existing state, polling, controller, API, and media-lifecycle
 owners rather than introducing a second application runtime.
+
+## Overview large-fleet search
+
+The v2 Overview table now shows a pipeline-name search when the fleet is large
+enough to become a scan burden. This keeps small fleets quiet while giving MSR
+or other multi-pipeline runs the same narrowing affordance already added to the
+Operate rail and output destinations. The no-result state is explicit and
+announced through status text, so keyboard and assistive-technology users do
+not land on an empty table without explanation.
+
+The implementation intentionally limits the Overview search to pipeline names.
+The richer state/rate filters remain in Pipeline / Operate, where the operator
+is already diagnosing a selected pipeline. This keeps the fleet summary as a
+low-cognitive-load entry point instead of turning it into another dense
+filtering console.
+
+Clean `HEAD` before this slice measured 307,212 raw bytes and 74,994 bytes with
+deterministic gzip for `dashboard-v2-entry.js`, leaving only six bytes below the
+old 75,000-byte seam budget. The search slice plus shorter output empty-state
+copy measures 309,349 raw bytes and 75,237 bytes with deterministic gzip, so the
+explicit smoke guard is now 76,000 bytes. The guard remains narrow and should
+force the next material UI slice either to pay down bundle weight or to make a
+deliberate code-splitting decision.
