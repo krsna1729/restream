@@ -519,6 +519,55 @@ test("pipeline output overview projects rollup and prioritized attention", async
   assert.equal(buildPipelineOutputOverviewModel([], "removed"), null);
 });
 
+test("pipeline output overview keeps stalled outputs distinct from down outputs", async () => {
+  const { buildPipelineOutputOverviewModel } = await loadCompiledFrontendModule(
+    "features/pipeline-operate-view-model.js",
+  );
+  const model = buildPipelineOutputOverviewModel(
+    [
+      pipeline({
+        id: "stall",
+        outputs: [
+          output({
+            id: "stalled",
+            name: "Stalled sink",
+            status: "stalled",
+            rawStatus: "running",
+            lastProgressAgeMs: 10_165,
+            bitrateKbps: 6432,
+          }),
+          output({
+            id: "down",
+            name: "Missing sink",
+            status: "off",
+            bitrateKbps: null,
+          }),
+        ],
+      }),
+    ],
+    "stall",
+  );
+
+  assert.deepEqual(model.counts, [
+    { key: "down", label: "Down", tone: "error", count: 1 },
+    { key: "warning", label: "Warning", tone: "warning", count: 1 },
+  ]);
+  assert.deepEqual(model.attention.map((item) => item.status), [
+    {
+      label: "Down",
+      tone: "error",
+      detail: "Expected output is not running",
+    },
+    {
+      label: "Stalled",
+      tone: "warning",
+      detail: "No progress for 10s",
+    },
+  ]);
+  assert.equal(model.cards[0].status.label, "Stalled");
+  assert.equal(model.cards[0].status.detail, "No progress for 10s");
+});
+
 test("pipeline output overview preserves the eight-card expansion boundary", async () => {
   const { buildPipelineOutputOverviewModel } = await loadCompiledFrontendModule(
     "features/pipeline-operate-view-model.js",

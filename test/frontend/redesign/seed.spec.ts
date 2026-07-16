@@ -180,6 +180,32 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
   await expect(outputOverview).toContainText("SRT Sink Flap");
   await expect(outputOverview).toContainText("Flapping");
   await expect(outputOverview).toContainText("4 recent failures");
+
+  await page.goto("/?mode=pipeline&view=operate&p=pipe-stall&ui=v2");
+  await expect(
+    pipelineHeader.getByRole("heading", { name: "Stalled Sink Isolation" }),
+  ).toBeVisible();
+  await expect(outputOverview).toContainText("RTMP stalled sink");
+  await expect(outputOverview).toContainText("Stalled");
+  await expect(outputOverview).toContainText("No progress for 10s");
+  await expect(outputOverview).toContainText("5/6 active");
+  const outputSearch = outputOverview.getByLabel("Search output destinations");
+  await outputSearch.fill("stalled");
+  await expect(outputOverview.getByText("1/6 shown")).toBeVisible();
+  await expect(
+    outputOverview.getByRole("heading", { name: "RTMP stalled sink" }),
+  ).toBeVisible();
+  await expect(
+    outputOverview.getByRole("heading", { name: "Healthy sibling 01" }),
+  ).not.toBeVisible();
+  await outputSearch.fill("");
+  await outputOverview.getByRole("button", { name: "Attention" }).click();
+  await expect(
+    outputOverview.getByRole("heading", { name: "RTMP stalled sink" }),
+  ).toBeVisible();
+  await expect(
+    outputOverview.getByRole("heading", { name: "Healthy sibling 01" }),
+  ).not.toBeVisible();
 });
 
 test("seed: ui=v2 replaces Overview while delegating operator actions @desktop", async ({

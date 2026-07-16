@@ -310,7 +310,27 @@ export async function openSeededDashboard(
   });
 
   await page.goto(href);
-  if (options.expectOverviewReady === false) return;
+  if (options.expectOverviewReady === false) {
+    const requested = new URL(href, "http://seed.local");
+    const mode = requested.searchParams.get("mode") ?? "overview";
+    const workspaceMode =
+      mode === "inspect" || mode === "control" ? "pipeline" : mode;
+    await expect(
+      page.locator(`[data-dashboard-mode="${workspaceMode}"]`),
+    ).toHaveAttribute("aria-selected", "true");
+    if (workspaceMode === "pipeline") {
+      const view =
+        mode === "inspect"
+          ? "inspect"
+          : mode === "control"
+            ? "monitor"
+            : (requested.searchParams.get("view") ?? "operate");
+      await expect(
+        page.locator(`[data-pipeline-workspace-view="${view}"]`),
+      ).toHaveAttribute("aria-selected", "true");
+    }
+    return;
+  }
   const overview = href.includes("ui=v2")
     ? page.locator("#dashboard-v2-overview")
     : page.locator("#overview-mode-content");

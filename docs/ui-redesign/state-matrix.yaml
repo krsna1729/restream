@@ -27,10 +27,10 @@ states:
   - id: chaos.recovery-truth
     surface: pipeline-operate
     fixture: chaos-recovery
-    expected: Reconnecting inputs, HLS retry timeouts, and recovered-but-flapping outputs stay distinguishable without opening raw logs.
+    expected: Reconnecting inputs, HLS retry timeouts, recovered-but-flapping outputs, and stalled sinks among healthy siblings stay distinguishable without opening raw logs.
     proof:
       status: seeded
-      source: .local/artifacts/latest/recovery/recovery.json from test_harness recovery on 2026-07-16
+      source: .local/artifacts/latest/recovery/recovery.json and .local/artifacts/latest/fault.output-stall/fault.output-stall.json from test_harness on 2026-07-16
       files:
         - test/frontend/redesign/fixtures/operator-states.ts
         - test/frontend/redesign/seed.spec.ts
