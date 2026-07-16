@@ -117,6 +117,9 @@ What changed from the live operator pass:
 - v2 Overview now adds pipeline-name search only once the fleet is large enough
   to become a scan burden, with CDP-visible status text for result counts and
   no-result recovery.
+- Shared auth expiry now preserves the full operator return path, including
+  `ui=v2`, so a re-login can return to the interrupted v2 workflow instead of
+  dumping the operator at the default Overview.
 
 Still not a full v2 redesign:
 

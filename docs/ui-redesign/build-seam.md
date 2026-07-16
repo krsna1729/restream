@@ -61,7 +61,9 @@ Measurements were taken from the same worktree before and after the seam.
 
 The default route does not request the React bundle. Its measured bootstrap
 delta is 309 gzip bytes across the entry and loader, plus one small module
-request. The opt-in bundle has a 75,000-byte gzip guardrail.
+request. The opt-in bundle started with a 75,000-byte gzip guardrail; after the
+large-fleet Overview search slice, the current smoke guard is 76,000 bytes with
+the measured rationale recorded below.
 
 The synthetic DOM-operation benchmark remained unchanged for 125 outputs over
 100 refreshes:

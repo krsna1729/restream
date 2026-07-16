@@ -142,11 +142,11 @@ states:
     surface: shared-runtime
     expected: A 401 returns the operator to the base-path-aware login flow.
     proof:
-      status: partial
+      status: seeded
+      source: Playwright seeded v2 flow proves a runtime 401 redirects to login with the full operator return path, and browser DOM coverage proves successful login returns to that preserved location.
       files:
-        - test/frontend/frontend-api-contract.test.mjs
         - test/frontend/frontend-browser-dom.spec.ts
-      gap: Full dashboard expiry and return-to-location need an end-to-end proof.
+        - test/frontend/redesign/seed.spec.ts
 
   - id: mutation.slow-failed
     surface: pipeline-operate

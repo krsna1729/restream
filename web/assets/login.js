@@ -12,6 +12,24 @@
     "",
   );
   const withBasePath = (path) => `${basePath}${path}`;
+  const fallbackReturnPath = () => withBasePath("/");
+  const safeReturnPath = (value) => {
+    if (!value || !value.startsWith("/")) return fallbackReturnPath();
+    try {
+      const url = new URL(value, window.location.origin);
+      const basePrefix = `${basePath}/`;
+      const allowedBase =
+        !basePath ||
+        url.pathname === basePath ||
+        url.pathname.startsWith(basePrefix);
+      if (url.origin !== window.location.origin || !allowedBase) {
+        return fallbackReturnPath();
+      }
+      return `${url.pathname}${url.search}${url.hash}`;
+    } catch {
+      return fallbackReturnPath();
+    }
+  };
 
   toggleBtn?.addEventListener("click", () => {
     if (!(input instanceof HTMLInputElement)) return;
@@ -43,7 +61,10 @@
         body: JSON.stringify({ password: input.value }),
       });
       if (res.ok) {
-        window.location.href = withBasePath("/");
+        const returnPath = new URLSearchParams(window.location.search).get(
+          "return",
+        );
+        window.location.href = safeReturnPath(returnPath);
         return;
       }
       const data = await res.json();

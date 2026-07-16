@@ -5,6 +5,7 @@ import {
 } from "../core/api.js";
 import { createManagedLogStream } from "../core/log-stream.js";
 import { withBasePath } from "../core/base-path.js";
+import { redirectToLogin } from "../core/auth-redirect.js";
 import {
   copyText,
   escapeHtml,
@@ -449,7 +450,7 @@ async function fetchJson(endpoint: string): Promise<unknown | null> {
   try {
     const response = await fetch(withBasePath(endpoint));
     if (response.status === 401) {
-      window.location.href = withBasePath("/login");
+      redirectToLogin();
       return null;
     }
     if (!response.ok) {

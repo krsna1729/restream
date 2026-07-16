@@ -224,6 +224,46 @@ test.describe("Frontend Browser DOM", () => {
     ]);
   });
 
+  test("login returns to the preserved dashboard location after auth expiry", async ({
+    page,
+  }) => {
+    const returnPath = "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2";
+    await page.goto(`/login.html?return=${encodeURIComponent(returnPath)}`);
+    const requests: unknown[] = [];
+    await page.exposeFunction("recordLoginReturnRequest", (request: unknown) => {
+      requests.push(request);
+    });
+    await page.evaluate(() => {
+      window.fetch = async (url, init) => {
+        await (
+          window as typeof window & {
+            recordLoginReturnRequest: (request: unknown) => Promise<void>;
+          }
+        ).recordLoginReturnRequest({
+          url: String(url),
+          method: init?.method,
+          body: init?.body,
+        });
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      };
+    });
+
+    await page.locator("#password-input").fill("secret-password");
+    await page.locator("#login-btn").click();
+    await page.waitForURL(`**${returnPath}`);
+
+    expect(requests).toEqual([
+      {
+        url: "/api/v1/auth/login",
+        method: "POST",
+        body: JSON.stringify({ password: "secret-password" }),
+      },
+    ]);
+  });
+
   test("preview audio picker opens and switches tracks without the full app server", async ({
     page,
   }) => {

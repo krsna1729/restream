@@ -1,6 +1,7 @@
 import { formatChannelCount, formatCodecName } from "../core/utils.js";
 import type { AudioTrack, PipelineView } from "../types.js";
 import { withBasePath } from "../core/base-path.js";
+import { redirectToLogin } from "../core/auth-redirect.js";
 import { getAudioTrackLabel } from "./audio-track-labels.js";
 import { buildPreviewHlsConfig } from "./hls-playback-config.js";
 
@@ -132,7 +133,7 @@ async function waitForHlsManifest(
     try {
       const response = await fetch(previewSrc, { cache: "no-store" });
       if (response.status === 401) {
-        window.location.href = withBasePath("/login");
+        redirectToLogin();
         return false;
       }
       if (response.ok) {

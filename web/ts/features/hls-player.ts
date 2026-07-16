@@ -1,4 +1,5 @@
 import { withBasePath } from "../core/base-path.js";
+import { redirectToLogin } from "../core/auth-redirect.js";
 import { buildPreviewHlsConfig } from "./hls-playback-config.js";
 
 const MANAGED_HLS_VIDEO_SELECTOR = '[data-role="managed-hls-video"]';
@@ -96,7 +97,7 @@ async function waitForHlsManifest(
     try {
       const response = await fetch(previewSrc, { cache: "no-store" });
       if (response.status === 401) {
-        window.location.href = withBasePath("/login");
+        redirectToLogin();
         return {
           ready: false,
           errorMessage: "Login expired. Sign in again.",

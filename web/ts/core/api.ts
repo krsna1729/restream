@@ -1,5 +1,6 @@
 import { showLoading, hideLoading, showErrorAlert } from "./utils.js";
 import { withBasePath } from "./base-path.js";
+import { redirectToLogin } from "./auth-redirect.js";
 import type {
   ConfigOutput,
   ConfigPipeline,
@@ -114,7 +115,7 @@ async function apiRequest<T = unknown>(
   }
 
   if (response.status === 401) {
-    window.location.href = withBasePath("/login");
+    redirectToLogin();
     return null;
   }
 

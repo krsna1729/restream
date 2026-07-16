@@ -160,6 +160,69 @@ test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async 
   expect(v2Requests.length).toBe(1);
 });
 
+test("seed: ui=v2 auth expiry preserves operator return location @desktop", async ({
+  page,
+}) => {
+  const target =
+    "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2#outputs";
+  await openSeededDashboard(page, "mixed-health", target, {
+    expectOverviewReady: false,
+  });
+  await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
+  const navigations: string[] = [];
+  const loginRedirects: string[] = [];
+  let expiredRuntimeRequests = 0;
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame()) navigations.push(frame.url());
+  });
+  await page.route("**/login?return=**", async (route) => {
+    loginRedirects.push(route.request().url());
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: '<!doctype html><form id="login-form"></form>',
+    });
+  });
+  await page.unroute("**/api/v1/**");
+  await page.route("**/api/v1/dashboard/runtime**", async (route) => {
+    expiredRuntimeRequests += 1;
+    await route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "login expired" }),
+    });
+  });
+
+  await page.evaluate(async () => {
+    const importModule = new Function(
+      "path",
+      "return import(path)",
+    ) as (path: string) => Promise<{
+      getDashboardRuntimeSnapshot: (options: Record<string, unknown>) => void;
+    }>;
+    const { getDashboardRuntimeSnapshot } = await importModule(
+      "/js/core/api.js",
+    );
+    await getDashboardRuntimeSnapshot({
+      healthView: "summary",
+      metricsView: "summary",
+    });
+  });
+  expect(expiredRuntimeRequests).toBeGreaterThan(0);
+
+  const observedLoginRedirect = () =>
+    loginRedirects[0] ??
+    navigations.find((url) => url.includes("/login?return="));
+  await expect
+    .poll(
+      observedLoginRedirect,
+    )
+    .toBeTruthy();
+  const redirected = new URL(observedLoginRedirect() as string);
+  expect(redirected.pathname).toBe("/login");
+  expect(redirected.searchParams.get("return")).toBe(target);
+});
+
 test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", async ({
   page,
 }) => {
