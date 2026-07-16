@@ -85,7 +85,7 @@ jobs:
       timeout_minutes: 70
       max_parallel: 20
       shards_json: >-
-        ["smoke","mixed.live.rtmp.h264.a1","mixed.live.srt.h264.a1","mixed.live.srt.h264.a2","mixed.live.srt.h265.a1","mixed.live.srt.h265.a2.bf0","mixed.live.srt.h265.a2.bf2","mixed.file.h264.a1","mixed.file.h264.a2","mixed.file.h265.a1","mixed.file.h265.a2","bitrate-sweep.h264-rtmp","bitrate-sweep.h264-srt","bitrate-sweep.h265-srt","bitrate-sweep.mixed-h264-a2","bitrate-sweep.mixed-h265-a2","resource-sweep.source","resource-sweep.transcode","resource-sweep.hevc","ramp-family","srt-crypto-matrix","branch-matrix","fault.resilience"]
+        ["smoke","mixed.live.rtmp.h264.a1.bf0","mixed.live.rtmp.h264.a1.bf2","mixed.live.srt.h264.a1.bf0","mixed.live.srt.h264.a1.bf2","mixed.live.srt.h264.a2.bf0","mixed.live.srt.h264.a2.bf2","mixed.live.srt.h265.a1.bf0","mixed.live.srt.h265.a1.bf2","mixed.live.srt.h265.a2.bf0","mixed.live.srt.h265.a2.bf2","mixed.file.h264.a1.bf0","mixed.file.h264.a1.bf2","mixed.file.h264.a2.bf0","mixed.file.h264.a2.bf2","mixed.file.h265.a1.bf0","mixed.file.h265.a1.bf2","mixed.file.h265.a2.bf0","mixed.file.h265.a2.bf2","bitrate-sweep.h264-rtmp","bitrate-sweep.h264-srt","bitrate-sweep.h265-srt","bitrate-sweep.mixed-h264-a2","bitrate-sweep.mixed-h265-a2","resource-sweep.source","resource-sweep.transcode","resource-sweep.hevc","ramp-family","srt-crypto-matrix","branch-matrix","fault.resilience"]
     secrets:
       gh_token: ${{ github.token }}
 

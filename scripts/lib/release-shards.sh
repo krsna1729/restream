@@ -11,16 +11,24 @@ source "$RESTREAM_LIB_DIR/common.sh"
 restream_release_shard_list() {
     cat <<'EOF'
 smoke
-mixed.live.rtmp.h264.a1
-mixed.live.srt.h264.a1
-mixed.live.srt.h264.a2
-mixed.live.srt.h265.a1
+mixed.live.rtmp.h264.a1.bf0
+mixed.live.rtmp.h264.a1.bf2
+mixed.live.srt.h264.a1.bf0
+mixed.live.srt.h264.a1.bf2
+mixed.live.srt.h264.a2.bf0
+mixed.live.srt.h264.a2.bf2
+mixed.live.srt.h265.a1.bf0
+mixed.live.srt.h265.a1.bf2
 mixed.live.srt.h265.a2.bf0
 mixed.live.srt.h265.a2.bf2
-mixed.file.h264.a1
-mixed.file.h264.a2
-mixed.file.h265.a1
-mixed.file.h265.a2
+mixed.file.h264.a1.bf0
+mixed.file.h264.a1.bf2
+mixed.file.h264.a2.bf0
+mixed.file.h264.a2.bf2
+mixed.file.h265.a1.bf0
+mixed.file.h265.a1.bf2
+mixed.file.h265.a2.bf0
+mixed.file.h265.a2.bf2
 bitrate-sweep.h264-rtmp
 bitrate-sweep.h264-srt
 bitrate-sweep.h265-srt
@@ -44,10 +52,9 @@ restream_release_shard_exists() {
 restream_release_shard_timeout() {
     local shard=$1
     # Keep these grouped by observed local shard cost, not by intuition about
-    # scenario names. A previous release dry-run put mixed.live.srt.h265.a1 in
-    # the same 10m bucket as tiny smoke checks; hosted-runner contention then
-    # produced a setup/harness timeout before useful evidence was visible. Use
-    # at least 4x the latest local release timings, rounded into stable buckets:
+    # scenario names. Hosted-runner contention can consume setup/cleanup time
+    # before useful evidence is visible, so use stable timeout buckets with
+    # enough room above the latest local release timings:
     #   - smoke/correctness: <= ~1.5m locally -> 10m
     #   - small mixed shards: <= ~6m locally -> 30m
     #   - medium mixed/measurement shards: <= ~12.5m locally -> 50m
@@ -58,14 +65,11 @@ restream_release_shard_timeout() {
         smoke|branch-matrix)
             echo 10m
             ;;
-        mixed.live.rtmp.h264.a1|mixed.live.srt.h264.a1|mixed.file.h264.a1|fault.resilience|ramp-family)
+        mixed.*.bf0|mixed.*.bf2|fault.resilience|ramp-family)
             echo 30m
             ;;
-        mixed.live.srt.h264.a2|mixed.live.srt.h265.a1|mixed.file.h264.a2|mixed.file.h265.a1|mixed.file.h265.a2|srt-crypto-matrix|resource-sweep.*)
+        srt-crypto-matrix|resource-sweep.*)
             echo 50m
-            ;;
-        mixed.live.srt.h265.a2.bf0|mixed.live.srt.h265.a2.bf2)
-            echo 30m
             ;;
         bitrate-sweep.*)
             echo 60m
@@ -84,43 +88,11 @@ restream_release_shard_plan() {
             printf 'mode\tfile.live-edge\n'
             printf 'mode\tsrt.policy\n'
             ;;
-        mixed.live.rtmp.h264.a1)
-            printf 'mode\tmixed.live.rtmp.h264.a1.bf0\n'
-            printf 'mode\tmixed.live.rtmp.h264.a1.bf2\n'
+        mixed.live.*.bf0|mixed.live.*.bf2)
+            printf 'mode\t%s\n' "$shard"
             ;;
-        mixed.live.srt.h264.a1)
-            printf 'mode\tmixed.live.srt.h264.a1.bf0\n'
-            printf 'mode\tmixed.live.srt.h264.a1.bf2\n'
-            ;;
-        mixed.live.srt.h264.a2)
-            printf 'mode\tmixed.live.srt.h264.a2.bf0\n'
-            printf 'mode\tmixed.live.srt.h264.a2.bf2\n'
-            ;;
-        mixed.live.srt.h265.a1)
-            printf 'mode\tmixed.live.srt.h265.a1.bf0\n'
-            printf 'mode\tmixed.live.srt.h265.a1.bf2\n'
-            ;;
-        mixed.live.srt.h265.a2.bf0)
-            printf 'mode\tmixed.live.srt.h265.a2.bf0\n'
-            ;;
-        mixed.live.srt.h265.a2.bf2)
-            printf 'mode\tmixed.live.srt.h265.a2.bf2\n'
-            ;;
-        mixed.file.h264.a1)
-            printf 'mode\tmixed.asset.file.h264.a1.bf0\n'
-            printf 'mode\tmixed.asset.file.h264.a1.bf2\n'
-            ;;
-        mixed.file.h264.a2)
-            printf 'mode\tmixed.asset.file.h264.a2.bf0\n'
-            printf 'mode\tmixed.asset.file.h264.a2.bf2\n'
-            ;;
-        mixed.file.h265.a1)
-            printf 'mode\tmixed.asset.file.h265.a1.bf0\n'
-            printf 'mode\tmixed.asset.file.h265.a1.bf2\n'
-            ;;
-        mixed.file.h265.a2)
-            printf 'mode\tmixed.asset.file.h265.a2.bf0\n'
-            printf 'mode\tmixed.asset.file.h265.a2.bf2\n'
+        mixed.file.*.bf0|mixed.file.*.bf2)
+            printf 'mode\tmixed.asset.file.%s\n' "${shard#mixed.file.}"
             ;;
         bitrate-sweep.h264-rtmp)
             printf 'bitrate\th264-rtmp\n'
