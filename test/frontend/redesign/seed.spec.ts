@@ -974,6 +974,55 @@ test("ui=v2 keeps failed output mutation context on the output card @desktop", a
   await cdp.detach();
 });
 
+test("ui=v2 output action menus are keyboard-dismissable @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=operate&p=pipe-healthy&ui=v2",
+    { expectOverviewReady: false },
+  );
+
+  const outputOverview = page.locator(
+    "#dashboard-v2-pipeline-output-overview-root",
+  );
+  const more = outputOverview.getByRole("button", {
+    name: "More actions for Healthy Output",
+  });
+  await more.focus();
+  await page.keyboard.press("Enter");
+  const menu = outputOverview.getByRole("menu", {
+    name: "More actions for Healthy Output",
+  });
+  await expect(menu).toBeVisible();
+  await expect(more).toHaveAttribute("aria-expanded", "true");
+
+  const cdp = await page.context().newCDPSession(page);
+  const axTree = await cdp.send("Accessibility.getFullAXTree");
+  const menuRoles = axTree.nodes
+    .filter((node) => node.name?.value === "More actions for Healthy Output")
+    .map((node) => node.role?.value);
+  expect(menuRoles).toContain("menu");
+  expect(
+    axTree.nodes.some(
+      (node) =>
+        node.role?.value === "menuitem" &&
+        node.name?.value === "History Healthy Output",
+    ),
+  ).toBe(true);
+  await cdp.detach();
+
+  await page.keyboard.press("Tab");
+  await expect(
+    outputOverview.getByRole("menuitem", { name: "History Healthy Output" }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+  await expect(more).toBeFocused();
+  await expect(more).toHaveAttribute("aria-expanded", "false");
+});
+
 test("ui=v2 output destinations support search and state filters @desktop", async ({
   page,
 }) => {
