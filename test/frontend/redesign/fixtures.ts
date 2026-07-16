@@ -6,6 +6,7 @@ import {
 } from "./fixtures/operator-states";
 
 export interface SeededDashboardOptions {
+  failOutputControl?: string;
   failRecordingControl?: string;
   failFileIngestControl?: string;
   pipelineControlDelayMs?: number;
@@ -215,6 +216,14 @@ export async function openSeededDashboard(
         await new Promise((resolve) =>
           setTimeout(resolve, options.outputControlDelayMs),
         );
+      }
+      if (options.failOutputControl) {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: options.failOutputControl }),
+        });
+        return;
       }
       controlledOutputs.set(`${pipelineId}:${outputId}`, {
         desiredState: action === "start" ? "started" : "stopped",

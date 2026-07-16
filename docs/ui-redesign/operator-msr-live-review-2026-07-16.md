@@ -101,6 +101,9 @@ What changed from the live operator pass:
 - File-ingest failures use the same local header pattern, preserving the
   existing API alert while keeping the failed action and retry affordance
   adjacent to `Start File` / `Stop File`.
+- Failed output start/stop mutations now stay visible on the affected v2 output
+  card, so the operator can retry the exact destination without losing context
+  after the global error alert fades.
 
 Still not a full v2 redesign:
 

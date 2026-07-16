@@ -927,6 +927,53 @@ test("ui=v2 keeps failed file-ingest mutation context in the pipeline header @de
   await cdp.detach();
 });
 
+test("ui=v2 keeps failed output mutation context on the output card @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=operate&p=pipe-healthy&ui=v2",
+    {
+      expectOverviewReady: false,
+      failOutputControl: "destination refused stop command",
+      outputControlDelayMs: 250,
+    },
+  );
+
+  const outputOverview = page.locator(
+    "#dashboard-v2-pipeline-output-overview-root",
+  );
+  const card = outputOverview
+    .locator("article")
+    .filter({ hasText: "Healthy Output" });
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Performance.enable");
+
+  await card.getByRole("button", { name: "Stop Healthy Output" }).click();
+  await expect(
+    card.getByRole("button", { name: "Stopping Healthy Output" }),
+  ).toBeDisabled();
+  await expect(
+    card.getByRole("status").filter({
+      hasText: "Output request failed",
+    }),
+  ).toBeVisible();
+  await expect(card).toContainText("Stop output did not complete");
+  await expect(
+    card.getByRole("button", { name: "Stop Healthy Output" }),
+  ).toBeEnabled();
+  await expect(page.locator("#error-alert")).toContainText(
+    "destination refused stop command",
+  );
+
+  const metrics = await cdp.send("Performance.getMetrics");
+  const nodes =
+    metrics.metrics.find((metric) => metric.name === "Nodes")?.value ?? 0;
+  expect(nodes).toBeLessThan(7_000);
+  await cdp.detach();
+});
+
 test("ui=v2 output destinations support search and state filters @desktop", async ({
   page,
 }) => {

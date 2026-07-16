@@ -1224,6 +1224,14 @@ function DashboardV2PipelineOutputOverview({
                       {detail}
                     </p>
                   ) : null}
+                  {output.controlError ? (
+                    <p
+                      className="text-error mt-1 text-xs font-medium"
+                      role="status"
+                    >
+                      Output request failed · {output.controlError}
+                    </p>
+                  ) : null}
                 </div>
                 <button
                   aria-label={`${output.controlLabel.replace("...", "")} ${output.name}`}

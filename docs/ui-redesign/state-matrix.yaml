@@ -152,11 +152,11 @@ states:
     surface: pipeline-operate
     expected: Slow and failed mutations retain context and prevent duplicate action.
     proof:
-      status: partial
+      status: seeded
+      source: Playwright seeded v2 flows cover recording, file-ingest, and output pending/failure context with CDP node budgets
       files:
         - test/frontend/dashboard-contract/output-mutations.test.mjs
         - test/frontend/redesign/seed.spec.ts
-      gap: Browser-visible output timeout/error focus still needs proof.
 
   - id: viewport.mobile-tablet-desktop
     surface: all

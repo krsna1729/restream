@@ -163,6 +163,7 @@ export interface PipelineOutputControlSnapshot {
   readonly outputId: string;
   readonly intent: "starting" | "stopping" | null;
   readonly busy: boolean;
+  readonly error?: string | null;
 }
 
 export interface PipelineOutputCardModel {
@@ -175,6 +176,7 @@ export interface PipelineOutputCardModel {
   readonly uptimeLabel: string | null;
   readonly controlLabel: string;
   readonly controlDisabled: boolean;
+  readonly controlError: string | null;
   readonly monitorAvailable: boolean;
   readonly deleteDisabled: boolean;
 }
@@ -771,6 +773,7 @@ export function buildPipelineOutputOverviewModel(
               ? "Start"
               : "Stop",
       controlDisabled: Boolean(control?.busy || control?.intent),
+      controlError: control?.error || null,
       monitorAvailable: Boolean(output.monitoringUrl),
       deleteDisabled: !stopped,
     };

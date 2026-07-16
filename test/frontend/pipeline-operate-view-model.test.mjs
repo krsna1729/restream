@@ -495,6 +495,7 @@ test("pipeline output overview projects rollup and prioritized attention", async
         uptimeLabel: "0:07:00",
         controlLabel: "Stop",
         controlDisabled: false,
+        controlError: null,
         monitorAvailable: false,
         deleteDisabled: true,
       },
@@ -512,6 +513,7 @@ test("pipeline output overview projects rollup and prioritized attention", async
         uptimeLabel: null,
         controlLabel: "Stop",
         controlDisabled: false,
+        controlError: null,
         monitorAvailable: true,
         deleteDisabled: true,
       },
@@ -529,6 +531,7 @@ test("pipeline output overview projects rollup and prioritized attention", async
         uptimeLabel: null,
         controlLabel: "Start",
         controlDisabled: false,
+        controlError: null,
         monitorAvailable: false,
         deleteDisabled: false,
       },
@@ -555,6 +558,27 @@ test("pipeline output overview projects rollup and prioritized attention", async
   );
   assert.equal(stopping.cards[0].controlLabel, "Stopping...");
   assert.equal(stopping.cards[0].controlDisabled, true);
+  const failedControl = buildPipelineOutputOverviewModel(
+    [
+      pipeline({
+        id: "live",
+        outputs: [output({ id: "retrying" })],
+      }),
+    ],
+    "live",
+    [
+      {
+        outputId: "retrying",
+        intent: null,
+        busy: false,
+        error: "Stop output did not complete.",
+      },
+    ],
+  );
+  assert.equal(
+    failedControl.cards[0].controlError,
+    "Stop output did not complete.",
+  );
   assert.equal(buildPipelineOutputOverviewModel([], "removed"), null);
 });
 
