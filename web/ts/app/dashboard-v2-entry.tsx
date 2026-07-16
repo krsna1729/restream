@@ -227,6 +227,7 @@ function DashboardV2Overview({
   const hasAttention = model.attention.length > 0;
   const [pipelineTableQuery, setPipelineTableQuery] = useState("");
   const normalizedPipelineTableQuery = pipelineTableQuery.trim().toLowerCase();
+  const clearPipelineTableSearch = (): void => setPipelineTableQuery("");
   const filteredPipelineRows = normalizedPipelineTableQuery
     ? model.pipelines.filter((pipeline) =>
         pipeline.name.toLowerCase().includes(normalizedPipelineTableQuery),
@@ -382,21 +383,32 @@ function DashboardV2Overview({
           </div>
           {showPipelineTableSearch ? (
             <div className="w-full max-w-sm space-y-2 sm:w-80">
-              <label className="input input-bordered input-sm flex min-h-10 items-center gap-2">
-                <span className="text-base-content/55 text-xs font-semibold uppercase">
-                  Find
-                </span>
-                <input
-                  aria-label="Search overview pipelines"
-                  className="min-w-0 grow"
-                  onChange={(event) =>
-                    setPipelineTableQuery(event.currentTarget.value)
-                  }
-                  placeholder="pipeline name"
-                  type="search"
-                  value={pipelineTableQuery}
-                />
-              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="input input-bordered input-sm flex min-h-10 min-w-0 flex-1 items-center gap-2">
+                  <span className="text-base-content/55 text-xs font-semibold uppercase">
+                    Find
+                  </span>
+                  <input
+                    aria-label="Search overview pipelines"
+                    className="min-w-0 grow"
+                    onChange={(event) =>
+                      setPipelineTableQuery(event.currentTarget.value)
+                    }
+                    placeholder="pipeline name"
+                    type="search"
+                    value={pipelineTableQuery}
+                  />
+                </label>
+                {normalizedPipelineTableQuery ? (
+                  <button
+                    className="btn btn-xs btn-ghost"
+                    onClick={clearPipelineTableSearch}
+                    type="button"
+                  >
+                    Clear search
+                  </button>
+                ) : null}
+              </div>
               {normalizedPipelineTableQuery ? (
                 <p
                   aria-live="polite"
@@ -476,13 +488,6 @@ function DashboardV2Overview({
                           {pipelineTableQuery.trim()}". Clear search to show
                           all.
                         </p>
-                        <button
-                          className="btn btn-xs btn-ghost mt-3"
-                          onClick={() => setPipelineTableQuery("")}
-                          type="button"
-                        >
-                          Clear search
-                        </button>
                       </div>
                     </td>
                   </tr>
@@ -575,6 +580,7 @@ function DashboardV2PipelineSelector({
 }): React.JSX.Element {
   const [pipelineQuery, setPipelineQuery] = useState("");
   const normalizedPipelineQuery = pipelineQuery.trim().toLowerCase();
+  const clearPipelineSearch = (): void => setPipelineQuery("");
   const filteredPipelines = normalizedPipelineQuery
     ? model.pipelines.filter((pipeline) =>
         [
@@ -618,21 +624,32 @@ function DashboardV2PipelineSelector({
         <div>
           {showPipelineSearch ? (
             <div className="border-base-content/10 space-y-2 border-b p-2">
-              <label className="input input-bordered input-sm flex min-h-10 items-center gap-2">
-                <span className="text-base-content/55 text-xs font-semibold uppercase">
-                  Find
-                </span>
-                <input
-                  aria-label="Search pipelines"
-                  className="min-w-0 grow"
-                  onChange={(event) =>
-                    setPipelineQuery(event.currentTarget.value)
-                  }
-                  placeholder="name, state, rate"
-                  type="search"
-                  value={pipelineQuery}
-                />
-              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="input input-bordered input-sm flex min-h-10 min-w-0 flex-1 items-center gap-2">
+                  <span className="text-base-content/55 text-xs font-semibold uppercase">
+                    Find
+                  </span>
+                  <input
+                    aria-label="Search pipelines"
+                    className="min-w-0 grow"
+                    onChange={(event) =>
+                      setPipelineQuery(event.currentTarget.value)
+                    }
+                    placeholder="name, state, rate"
+                    type="search"
+                    value={pipelineQuery}
+                  />
+                </label>
+                {normalizedPipelineQuery ? (
+                  <button
+                    className="btn btn-xs btn-ghost"
+                    onClick={clearPipelineSearch}
+                    type="button"
+                  >
+                    Clear search
+                  </button>
+                ) : null}
+              </div>
               {normalizedPipelineQuery ? (
                 <p
                   aria-live="polite"
@@ -687,13 +704,6 @@ function DashboardV2PipelineSelector({
                 No pipelines match "{pipelineQuery.trim()}". Clear search to
                 return to all pipelines.
               </p>
-              <button
-                className="btn btn-xs btn-ghost mt-3"
-                onClick={() => setPipelineQuery("")}
-                type="button"
-              >
-                Clear search
-              </button>
             </div>
           )}
         </div>

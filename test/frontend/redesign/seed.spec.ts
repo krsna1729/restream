@@ -1649,9 +1649,22 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
   await expect(
     overview.getByRole("button", { name: "Main Program" }),
   ).not.toBeVisible();
+  const overviewClearSearch = overview.getByRole("button", {
+    name: "Clear search",
+  });
+  await expect(overviewClearSearch).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     '1/10 pipelines shown · "ritual"',
   );
+
+  await overviewClearSearch.click();
+  await expect(overview.getByLabel("Search overview pipelines")).toHaveValue(
+    "",
+  );
+  await expect(
+    overview.getByRole("button", { name: "Main Program" }),
+  ).toBeVisible();
+  await expect(overviewClearSearch).toBeHidden();
 
   await overview.getByLabel("Search overview pipelines").fill("nowhere");
   await expect(overview.getByText("No pipelines match.")).toBeVisible();
@@ -1667,7 +1680,7 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
     ]),
   );
 
-  await overview.getByRole("button", { name: "Clear search" }).click();
+  await overviewClearSearch.click();
   await expect(
     overview.getByRole("button", { name: "Main Program" }),
   ).toBeVisible();
@@ -1896,9 +1909,20 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
   await expect(
     selector.getByRole("button", { name: /Main Program/ }),
   ).not.toBeVisible();
+  const selectorClearSearch = selector.getByRole("button", {
+    name: "Clear search",
+  });
+  await expect(selectorClearSearch).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     '1/10 pipelines shown · "backup"',
   );
+
+  await selectorClearSearch.click();
+  await expect(selector.getByLabel("Search pipelines")).toHaveValue("");
+  await expect(
+    selector.getByRole("button", { name: /Main Program/ }),
+  ).toBeVisible();
+  await expect(selectorClearSearch).toBeHidden();
 
   await selector.getByLabel("Search pipelines").fill("nowhere");
   await expect(selector.getByText("No pipelines match.")).toBeVisible();
@@ -1914,7 +1938,7 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
     ]),
   );
 
-  await selector.getByRole("button", { name: "Clear search" }).click();
+  await selectorClearSearch.click();
   await expect(
     selector.getByRole("button", { name: /Main Program/ }),
   ).toBeVisible();

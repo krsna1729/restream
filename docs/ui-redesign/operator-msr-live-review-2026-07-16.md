@@ -78,6 +78,11 @@ action, presses Enter into Operate, then keyboard-selects another pipeline from
 the v2 selector. CDP assertions keep Overview and Operate node budgets bounded
 and verify stable accessible button names for output operations.
 
+Overview and the v2 pipeline selector now expose Clear search as soon as an
+operator narrows a long pipeline list, not only after a no-hit. Seeded
+Playwright/CDP coverage proves hit-state and no-hit recovery on both search
+surfaces while keeping the result-count status text intact.
+
 Operate output search/filter recovery is now available before the operator
 hits an empty list: when a query or state filter is active, a local Clear output
 filters action restores the full destination list. Seeded Playwright/CDP
