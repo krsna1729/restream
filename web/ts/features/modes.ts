@@ -57,6 +57,10 @@ const runtimeDashboardModes = new Set<DashboardMode>(["overview", "pipeline"]);
 let currentMode: DashboardMode | null = null;
 let settingsMounted = false;
 let statusMounted = false;
+type NavigationFocus = "preserve" | "panel";
+interface NavigationOptions {
+  focus?: NavigationFocus;
+}
 type StatusTone = "success" | "warning" | "error" | "neutral" | "info";
 type SummaryCounts = ReturnType<typeof buildOverviewViewModel>["counts"];
 
@@ -557,7 +561,7 @@ function renderOverview(): void {
       button.onclick = () => {
         if (!button.dataset.pipelineId) return;
         selectPipeline(button.dataset.pipelineId);
-        setDashboardMode("pipeline");
+        setDashboardMode("pipeline", { focus: "panel" });
       };
     });
   container
@@ -565,7 +569,7 @@ function renderOverview(): void {
     .forEach((button) => {
       button.onclick = () => {
         if (!button.dataset.pipelineId) return;
-        openInspectGraph(button.dataset.pipelineId);
+        openInspectGraph(button.dataset.pipelineId, { focus: "panel" });
       };
     });
   const addBtn = document.getElementById("overview-add-pipeline-btn");
@@ -574,11 +578,12 @@ function renderOverview(): void {
     "overview-open-status-detail-btn",
   );
   if (statusDetailBtn) {
-    statusDetailBtn.onclick = () => setDashboardMode("status");
+    statusDetailBtn.onclick = () =>
+      setDashboardMode("status", { focus: "panel" });
   }
   const statusBtn = document.getElementById("overview-open-status-btn");
   if (statusBtn) {
-    statusBtn.onclick = () => setDashboardMode("status");
+    statusBtn.onclick = () => setDashboardMode("status", { focus: "panel" });
   }
   restoreOverviewFocus(container, focusBookmark);
 }
@@ -654,8 +659,9 @@ function renderStatusMode(): void {
   }
 }
 
-function refreshActiveMode(): void {
+function refreshActiveMode(options: NavigationOptions = {}): void {
   renderDashboardModes();
+  if (options.focus === "panel") focusActivePanel();
 }
 
 function scrollTabIntoView(tab: HTMLButtonElement | null): void {
@@ -664,6 +670,20 @@ function scrollTabIntoView(tab: HTMLButtonElement | null): void {
     block: "nearest",
     inline: "nearest",
   });
+}
+
+function activeDashboardPanel(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    '#dashboard-main [role="tabpanel"]:not(.hidden)',
+  );
+}
+
+function focusActivePanel(): void {
+  const panel = activeDashboardPanel();
+  if (!panel) return;
+  panel.tabIndex = -1;
+  panel.focus({ preventScroll: true });
+  panel.scrollIntoView({ block: "start" });
 }
 
 function applyMode(
@@ -820,9 +840,16 @@ function activateTabFromKeyboard(
   target.click();
 }
 
-export function setDashboardMode(mode: string): void {
+export function setDashboardMode(
+  mode: string,
+  options: NavigationOptions = {},
+): void {
   if (mode === "inspect" || mode === "control") {
-    setPipelineWorkspaceView(mode === "inspect" ? "inspect" : "monitor");
+    setPipelineWorkspaceView(
+      mode === "inspect" ? "inspect" : "monitor",
+      undefined,
+      options,
+    );
     return;
   }
   const candidate = new URL(window.location.href);
@@ -832,23 +859,28 @@ export function setDashboardMode(mode: string): void {
   setModeUrl(nextMode);
   if (currentMode === nextMode) {
     applyMode(nextMode, "operate");
+    if (options.focus === "panel") focusActivePanel();
     return;
   }
-  refreshActiveMode();
+  refreshActiveMode(options);
 }
 
 export function setPipelineWorkspaceView(
   view: PipelineWorkspaceView,
   pipelineId?: string | null,
+  options: NavigationOptions = {},
 ): void {
   const url = pipelineWorkspaceUrl(window.location.href, view, pipelineId);
   pushDashboardUrl(url);
-  refreshActiveMode();
+  refreshActiveMode(options);
 }
 
-export function openInspectGraph(pipeId: string): void {
+export function openInspectGraph(
+  pipeId: string,
+  options: NavigationOptions = {},
+): void {
   resetPipelineInspectorSelection(pipeId);
-  setPipelineWorkspaceView("inspect", pipeId);
+  setPipelineWorkspaceView("inspect", pipeId, options);
 }
 
 export function renderDashboardModes(): void {
@@ -885,7 +917,7 @@ export function initDashboardModes(): void {
           "[data-pipeline-workspace-view]",
         );
     });
-  window.addEventListener("popstate", refreshActiveMode);
+  window.addEventListener("popstate", () => refreshActiveMode());
   document.addEventListener("visibilitychange", () => {
     syncOverviewActivityStream();
     syncStatusStreamVisibility();

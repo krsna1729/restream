@@ -149,12 +149,13 @@ export function initDashboardApp(): void {
     configureDashboardModePresentationSync(syncDashboardV2Presentation);
     setDashboardV2OverviewActions({
       addPipeline: () => void window.addPipeBtn(),
-      inspectPipeline: openInspectGraph,
+      inspectPipeline: (pipelineId) =>
+        openInspectGraph(pipelineId, { focus: "panel" }),
       openPipeline: (pipelineId) => {
-        setPipelineWorkspaceView("operate", pipelineId);
+        setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
         renderPipelines();
       },
-      openStatus: () => setDashboardMode("status"),
+      openStatus: () => setDashboardMode("status", { focus: "panel" }),
     });
     setDashboardV2PipelineSelectorActions({
       addPipeline: () => void window.addPipeBtn(),
@@ -166,7 +167,8 @@ export function initDashboardApp(): void {
         selectPipeline(pipelineId);
         void editPipeBtn();
       },
-      inspectPipeline: openInspectGraph,
+      inspectPipeline: (pipelineId) =>
+        openInspectGraph(pipelineId, { focus: "panel" }),
       toggleFileIngest: togglePipelineFileIngest,
       toggleRecording: togglePipelineRecording,
     });
@@ -254,7 +256,7 @@ export function initDashboardApp(): void {
     selectPipeline,
     openOperateView: (pipelineId) => {
       selectPipeline(pipelineId);
-      setPipelineWorkspaceView("operate", pipelineId);
+      setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
     },
   });
 
@@ -263,7 +265,7 @@ export function initDashboardApp(): void {
     selectPipeline,
     openMonitorView: (pipelineId) => {
       if (pipelineId !== null) selectPipeline(pipelineId);
-      setPipelineWorkspaceView("monitor", pipelineId);
+      setPipelineWorkspaceView("monitor", pipelineId, { focus: "panel" });
     },
   });
 

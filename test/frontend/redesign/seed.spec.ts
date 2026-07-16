@@ -652,6 +652,7 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
   await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
   await expect(page).toHaveURL(/p=pipe-retrying/);
   await expect(page.locator("#dashboard-grid")).toBeVisible();
+  await expect(page.locator("#dashboard-grid")).toBeFocused();
 
   const selector = page.locator("#dashboard-v2-pipeline-selector-root");
   const header = page.locator("#dashboard-v2-pipeline-header-root");
@@ -691,6 +692,15 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
       "Diagnose",
     ]),
   );
+
+  await header.getByRole("button", { name: "Graph" }).click();
+  await expect(page).toHaveURL(/view=inspect/);
+  await expect(page.locator("#inspect-mode-panel")).toBeVisible();
+  await expect(page.locator("#inspect-mode-panel")).toBeFocused();
+  await expect(page.locator("#inspect-route-summary")).toHaveText(
+    "Inspecting Healthy Program · input live · 1 output · 0 attention items",
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(12_000);
 });
 
 test("seed: ui=v2 skip link reaches main content before dense chrome @desktop", async ({
