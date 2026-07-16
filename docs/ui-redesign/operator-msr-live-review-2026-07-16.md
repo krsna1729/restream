@@ -72,6 +72,12 @@ Summary:
 | Incidents | legacy | 28,494 | Not redesigned in v2. |
 | Telemetry | legacy | 32,479 | Not redesigned in v2. |
 
+The seeded browser proof now also exercises the owned v2 path by keyboard:
+Overview tabs to `Add Pipeline`, tabs to an attention pipeline `Operate`
+action, presses Enter into Operate, then keyboard-selects another pipeline from
+the v2 selector. CDP assertions keep Overview and Operate node budgets bounded
+and verify stable accessible button names for output operations.
+
 ## Operator findings
 
 What is now strong enough for v2:

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { openSeededDashboard } from "./fixtures";
 
@@ -17,6 +17,16 @@ async function getCdpStatusTexts(page: Page): Promise<string[]> {
     );
 }
 
+async function getCdpNamesByRole(page: Page, role: string): Promise<string[]> {
+  const cdp = await page.context().newCDPSession(page);
+  const axTree = await cdp.send("Accessibility.getFullAXTree");
+  await cdp.detach();
+  return axTree.nodes
+    .filter((node) => node.role?.value === role)
+    .map((node) => node.name?.value)
+    .filter((name): name is string => Boolean(name));
+}
+
 async function getCdpNodeCount(page: Page): Promise<number> {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Performance.enable");
@@ -26,6 +36,32 @@ async function getCdpNodeCount(page: Page): Promise<number> {
     performanceMetrics.metrics.find((metric) => metric.name === "Nodes")
       ?.value ?? 0
   );
+}
+
+async function tabUntilFocused(
+  page: Page,
+  locator: Locator,
+  maxTabs = 24,
+): Promise<void> {
+  const focusPath: string[] = [];
+  for (let attempt = 0; attempt < maxTabs; attempt += 1) {
+    if (await locator.evaluate((node) => node === document.activeElement)) {
+      return;
+    }
+    await page.keyboard.press("Tab");
+    focusPath.push(
+      await page.evaluate(() => {
+        const element = document.activeElement as HTMLElement | null;
+        return (
+          element?.getAttribute("aria-label") ||
+          element?.textContent?.trim().replace(/\s+/g, " ").slice(0, 60) ||
+          element?.id ||
+          "unknown"
+        );
+      }),
+    );
+  }
+  throw new Error(`Focus path missed target: ${focusPath.join(" -> ")}`);
 }
 
 test("seed: empty Overview is deterministic and canonical @desktop", async ({
@@ -221,6 +257,76 @@ test("seed: ui=v2 auth expiry preserves operator return location @desktop", asyn
   const redirected = new URL(observedLoginRedirect() as string);
   expect(redirected.pathname).toBe("/login");
   expect(redirected.searchParams.get("return")).toBe(target);
+});
+
+test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2");
+
+  const overview = page.locator("#dashboard-v2-overview");
+  await expect(
+    overview.getByRole("heading", { name: "Fleet overview" }),
+  ).toBeVisible();
+  expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
+
+  await page.locator("#workspace-tab-overview").focus();
+  const addPipeline = overview.getByRole("button", {
+    name: "Add Pipeline",
+    exact: true,
+  });
+  await tabUntilFocused(page, addPipeline);
+  await expect(addPipeline).toBeFocused();
+
+  const operate = overview.getByRole("button", {
+    name: "Operate",
+    exact: true,
+  });
+  await tabUntilFocused(page, operate);
+  await expect(operate).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
+  await expect(page).toHaveURL(/p=pipe-retrying/);
+  await expect(page.locator("#dashboard-grid")).toBeVisible();
+
+  const selector = page.locator("#dashboard-v2-pipeline-selector-root");
+  const header = page.locator("#dashboard-v2-pipeline-header-root");
+  const input = page.locator("#dashboard-v2-pipeline-input-status-root");
+  const outputs = page.locator("#dashboard-v2-pipeline-output-overview-root");
+  await expect(selector).toBeVisible();
+  await expect(
+    selector.getByRole("heading", { name: "Pipelines" }),
+  ).toBeVisible();
+  await expect(
+    header.getByRole("heading", { name: "Retrying Destination" }),
+  ).toBeVisible();
+  await expect(
+    input.getByRole("heading", { name: "Input and preview" }),
+  ).toBeVisible();
+  await expect(
+    outputs.getByRole("heading", { name: "Output overview" }),
+  ).toBeVisible();
+  expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
+
+  await selector.getByRole("button", { name: /Healthy Program/ }).focus();
+  await selector
+    .getByRole("button", { name: /Healthy Program/ })
+    .press("Enter");
+  await expect(page).toHaveURL(/p=pipe-healthy/);
+  await expect(
+    header.getByRole("heading", { name: "Healthy Program" }),
+  ).toBeVisible();
+  await expect(
+    outputs.getByRole("button", { name: "Stop Healthy Output" }),
+  ).toBeVisible();
+  expect(await getCdpNamesByRole(page, "button")).toEqual(
+    expect.arrayContaining([
+      "Stop Healthy Output",
+      "More actions for Healthy Output",
+      "Graph",
+      "Diagnose",
+    ]),
+  );
 });
 
 test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", async ({
