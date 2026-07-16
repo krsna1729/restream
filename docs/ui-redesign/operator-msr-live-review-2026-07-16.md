@@ -151,6 +151,12 @@ route announces server scope, section count, configured profile count, and
 current authentication-attempt count. Seeded Playwright/CDP coverage proves the
 summary is exposed as status text while the route stays outside the React seam.
 
+Settings now also has a local authentication-attempt search surface. The route
+summary remains the unfiltered settings truth, while the auth-attempt search
+summary announces hit and no-hit counts as status text. Seeded Playwright/CDP
+coverage proves operators can narrow by scope/IP/status without losing the
+authoritative settings counts.
+
 The seeded browser proof also includes a route-checkpoint matrix across the
 legacy-owned screens: Inspect, Monitor, Media, Settings, Status, Incidents, and
 Telemetry. That matrix walks the screens as an operator journey and proves each

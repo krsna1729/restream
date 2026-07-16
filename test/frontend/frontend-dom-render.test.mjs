@@ -197,6 +197,8 @@ runCheck("renderSettingsPanel emits delegated actions without inline handlers", 
   assert.match(container.innerHTML, /aria-label="Current password"/);
   assert.match(container.innerHTML, /aria-label="Global SRT ingest mode"/);
   assert.match(container.innerHTML, /id="settings-route-summary"/);
+  assert.match(container.innerHTML, /Search authentication attempts/);
+  assert.match(container.innerHTML, /id="auth-attempts-search-summary"/);
   assert.match(container.innerHTML, /role="status"/);
 });
 

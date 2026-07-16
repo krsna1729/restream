@@ -21,6 +21,8 @@ import { withBasePath } from "../core/base-path.js";
 
 const SETTINGS_SECTION_COUNT = 5;
 let lastRateLimitAttemptCount = 0;
+let lastRateLimitAttempts: RateLimitAttempt[] = [];
+let rateLimitSearchQuery = "";
 
 // ── Load ──────────────────────────────────────────────
 
@@ -133,6 +135,48 @@ function updateSettingsSummary(): void {
   const summary = document.getElementById("settings-route-summary");
   if (!summary) return;
   summary.textContent = settingsSummaryText();
+}
+
+function normalizeSettingsSearch(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function rateLimitAttemptSearchText(attempt: RateLimitAttempt): string {
+  return [
+    attempt.scope,
+    formatRateLimitScope(attempt.scope),
+    attempt.ip,
+    attempt.failureCount,
+    formatBanStatus(attempt),
+  ]
+    .filter((value) => value !== null && value !== undefined && value !== "")
+    .join(" ")
+    .toLowerCase();
+}
+
+function authAttemptsSearchSummaryText(
+  shownCount: number,
+  totalCount: number,
+  query: string,
+): string {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return `${pluralize(totalCount, "auth attempt")} visible`;
+  }
+  return `${shownCount}/${totalCount} auth attempts match "${trimmed}"`;
+}
+
+function updateAuthAttemptsSearchSummary(
+  shownCount: number,
+  totalCount: number,
+): void {
+  const summary = document.getElementById("auth-attempts-search-summary");
+  if (!summary) return;
+  summary.textContent = authAttemptsSearchSummaryText(
+    shownCount,
+    totalCount,
+    rateLimitSearchQuery,
+  );
 }
 
 function ensureSettingsNav(container: Element): void {
@@ -295,6 +339,13 @@ export function renderSettingsPanel(container: HTMLElement): void {
                             <button class="btn btn-outline btn-sm" data-settings-action="reset-rate-limits">Reset All</button>
                         </div>
                     </div>
+                    <div class="flex flex-wrap items-end gap-3">
+                        <label class="form-control w-full max-w-md">
+                            <span class="label-text text-base-content/70">Search authentication attempts</span>
+                            <input id="auth-attempts-search" class="input input-sm input-bordered mt-1" type="search" value="" placeholder="scope, IP, banned, tracking…" autocomplete="off" />
+                        </label>
+                        <p id="auth-attempts-search-summary" class="text-base-content/60 pb-1 text-sm" role="status" aria-live="polite">0 auth attempts visible</p>
+                    </div>
                     <div class="overflow-x-auto rounded-lg border border-base-content/10" role="region" aria-label="Authentication attempts" tabindex="0">
                         <table class="table table-sm">
                             <thead>
@@ -425,6 +476,19 @@ export function renderSettingsPanel(container: HTMLElement): void {
 }
 
 function bindSettingsPanelActions(container: HTMLElement): void {
+  const authSearch = container.querySelector<HTMLInputElement>(
+    "#auth-attempts-search",
+  );
+  authSearch?.addEventListener("input", () => {
+    const cursor = authSearch.selectionStart ?? authSearch.value.length;
+    rateLimitSearchQuery = authSearch.value;
+    renderRateLimitAttempts(lastRateLimitAttempts);
+    const nextSearch = document.getElementById(
+      "auth-attempts-search",
+    ) as HTMLInputElement | null;
+    nextSearch?.focus();
+    nextSearch?.setSelectionRange(cursor, cursor);
+  });
   container.onclick = (event) => {
     const button = (event.target as Element | null)?.closest(
       "[data-settings-action]",
@@ -639,12 +703,18 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
   const body = document.getElementById("rate-limit-attempts-body");
   if (!body) return;
   lastRateLimitAttemptCount = attempts.length;
-  if (attempts.length === 0) {
-    body.innerHTML = `<tr><td colspan="5" class="text-base-content/60">No attempts</td></tr>`;
+  lastRateLimitAttempts = attempts;
+  const search = normalizeSettingsSearch(rateLimitSearchQuery);
+  const shownAttempts = attempts.filter(
+    (attempt) => !search || rateLimitAttemptSearchText(attempt).includes(search),
+  );
+  if (shownAttempts.length === 0) {
+    body.innerHTML = `<tr><td colspan="5" class="text-base-content/60">${search ? `No authentication attempts match "${escapeHtml(rateLimitSearchQuery.trim())}".` : "No attempts"}</td></tr>`;
+    updateAuthAttemptsSearchSummary(shownAttempts.length, attempts.length);
     updateSettingsSummary();
     return;
   }
-  body.innerHTML = attempts
+  body.innerHTML = shownAttempts
     .map((attempt) => {
       return `
         <tr>
@@ -662,6 +732,7 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
         </tr>`;
     })
     .join("");
+  updateAuthAttemptsSearchSummary(shownAttempts.length, attempts.length);
   updateSettingsSummary();
 }
 

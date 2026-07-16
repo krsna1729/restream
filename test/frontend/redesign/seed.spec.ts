@@ -209,6 +209,35 @@ test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async 
   expect(await getCdpStatusTexts(page)).toContain(
     "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
   );
+  const settings = page.locator("#settings-mode-content");
+  const authSearch = settings.getByLabel("Search authentication attempts");
+  const authSearchSummary = settings.locator("#auth-attempts-search-summary");
+  await expect(authSearchSummary).toHaveText("1 auth attempt visible");
+
+  await authSearch.fill("dashboard");
+  await expect(page.locator("#settings-route-summary")).toHaveText(
+    "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+  );
+  await expect(authSearchSummary).toHaveText(
+    '1/1 auth attempts match "dashboard"',
+  );
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/1 auth attempts match "dashboard"',
+  );
+
+  await authSearch.fill("banned");
+  await expect(page.locator("#settings-route-summary")).toHaveText(
+    "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+  );
+  await expect(authSearchSummary).toHaveText(
+    '0/1 auth attempts match "banned"',
+  );
+  await expect(
+    settings.getByText('No authentication attempts match "banned".'),
+  ).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '0/1 auth attempts match "banned"',
+  );
   await expect(page.locator("#dashboard-v2-root")).toBeHidden();
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
