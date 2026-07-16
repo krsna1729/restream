@@ -89,6 +89,11 @@ strip instead of being route-only surfaces. They remain legacy-owned
 checkpoints, but operators can reach alert triage and engineering counters from
 the same shell navigation as Overview, Pipeline, Media, Settings, and Status.
 
+The workspace and Pipeline sub-tab bars now support Arrow, Home, and End
+keyboard navigation with activation. Seeded Playwright/CDP coverage walks
+Overview → Pipeline → Incidents → Telemetry → Status and Pipeline Operate →
+Inspect → Monitor without requiring repeated Tab presses.
+
 Overview and the v2 pipeline selector now expose Clear search as soon as an
 operator narrows a long pipeline list, not only after a no-hit. Seeded
 Playwright/CDP coverage proves hit-state and no-hit recovery on both search
@@ -231,6 +236,9 @@ What is now strong enough for v2:
 - Incidents and Telemetry are promoted into the primary workspace navigation,
   so the operator can discover alert triage and engineering counters without
   knowing hidden route URLs.
+- Workspace and Pipeline tabs now support expected Arrow/Home/End keyboard
+  movement, which matters more now that the primary shell has more first-class
+  destinations.
 - Large output sets are bounded by default instead of dumping every output card.
 - Output search/filter is necessary and useful under MSR-scale output counts.
 - Chaos-derived states are now covered by seeded fixtures:

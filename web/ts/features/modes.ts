@@ -772,6 +772,42 @@ function setModeUrl(mode: DashboardMode): void {
   pushDashboardUrl(url);
 }
 
+function tablistNavigationTarget(
+  button: HTMLButtonElement,
+  selector: string,
+  key: string,
+): HTMLButtonElement | null {
+  const tablist = button.closest('[role="tablist"]');
+  if (!tablist) return null;
+  const tabs = Array.from(
+    tablist.querySelectorAll<HTMLButtonElement>(selector),
+  ).filter((tab) => !tab.disabled && tab.offsetParent !== null);
+  if (tabs.length === 0) return null;
+  const index = tabs.indexOf(button);
+  if (key === "Home") return tabs[0];
+  if (key === "End") return tabs[tabs.length - 1];
+  if (index < 0) return null;
+  if (key === "ArrowRight" || key === "ArrowDown") {
+    return tabs[(index + 1) % tabs.length];
+  }
+  if (key === "ArrowLeft" || key === "ArrowUp") {
+    return tabs[(index - 1 + tabs.length) % tabs.length];
+  }
+  return null;
+}
+
+function activateTabFromKeyboard(
+  event: KeyboardEvent,
+  button: HTMLButtonElement,
+  selector: string,
+): void {
+  const target = tablistNavigationTarget(button, selector, event.key);
+  if (!target) return;
+  event.preventDefault();
+  target.focus();
+  target.click();
+}
+
 export function setDashboardMode(mode: string): void {
   if (mode === "inspect" || mode === "control") {
     setPipelineWorkspaceView(mode === "inspect" ? "inspect" : "monitor");
@@ -819,6 +855,8 @@ export function initDashboardModes(): void {
     .forEach((button) => {
       button.onclick = () =>
         setDashboardMode(button.dataset.dashboardMode || "overview");
+      button.onkeydown = (event) =>
+        activateTabFromKeyboard(event, button, "[data-dashboard-mode]");
     });
   document
     .querySelectorAll<HTMLButtonElement>("[data-pipeline-workspace-view]")
@@ -827,6 +865,12 @@ export function initDashboardModes(): void {
         setPipelineWorkspaceView(
           (button.dataset.pipelineWorkspaceView ||
             "operate") as PipelineWorkspaceView,
+        );
+      button.onkeydown = (event) =>
+        activateTabFromKeyboard(
+          event,
+          button,
+          "[data-pipeline-workspace-view]",
         );
     });
   window.addEventListener("popstate", refreshActiveMode);

@@ -422,6 +422,84 @@ test("seed: ui=v2 shell announces ownership while moving across routes @desktop"
   expect(await getCdpNodeCount(page)).toBeLessThan(21_000);
 });
 
+test("seed: ui=v2 shell tablists support arrow key navigation @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2");
+
+  await page.locator("#workspace-tab-overview").focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/mode=pipeline/);
+  await expect(page.locator("#workspace-tab-pipeline")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 owned · Pipeline workflow",
+  );
+
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/mode=incidents/);
+  await expect(page.locator("#workspace-tab-incidents")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#incidents-route-summary")).toHaveText(
+    "0 critical · 1 warning · 1 recent event · fleet",
+  );
+
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/mode=telemetry/);
+  await expect(page.locator("#workspace-tab-telemetry")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "Legacy-owned checkpoint · Engine and pipeline counters",
+  );
+
+  await page.keyboard.press("End");
+  await expect(page).toHaveURL(/mode=status/);
+  await expect(page.locator("#workspace-tab-status")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.keyboard.press("Home");
+  await expect(page).toHaveURL(/mode=overview/);
+  await expect(page.locator("#workspace-tab-overview")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  await page.goto("/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2");
+  const operateTab = page.locator("#pipeline-workspace-tab-operate");
+  const inspectTab = page.locator("#pipeline-workspace-tab-inspect");
+  const monitorTab = page.locator("#pipeline-workspace-tab-monitor");
+  await operateTab.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/view=inspect/);
+  await expect(inspectTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#inspect-route-summary")).toHaveText(
+    "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
+  );
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/view=monitor/);
+  await expect(monitorTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#control-room-route-summary")).toHaveText(
+    "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+  );
+  await page.keyboard.press("ArrowLeft");
+  await expect(page).toHaveURL(/view=inspect/);
+  await expect(inspectTab).toHaveAttribute("aria-selected", "true");
+  expect(await getCdpStatusTexts(page)).toEqual(
+    expect.arrayContaining([
+      "Legacy checkpoint · Pipeline graph and diagnostics",
+      "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
+    ]),
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(12_000);
+});
+
 test("seed: ui=v2 auth expiry preserves operator return location @desktop", async ({
   page,
 }) => {
