@@ -80,6 +80,10 @@ test("telemetry renders zero/null ring values, escapes labels, and distinguishes
   assert.match(html, /View video &lt;bad&gt; telemetry details/);
   assert.match(html, /Kernel receive buffer ceiling/);
   assert.match(html, /25 MiB/);
+  assert.match(
+    html,
+    /Telemetry loaded · 0 ingests · 1 stage · 0 egresses · 1 reader · Pipe &lt;bad&gt;/,
+  );
 
   const retained = renderEngineerTelemetryHtml(
     {

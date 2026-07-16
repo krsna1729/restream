@@ -123,6 +123,46 @@ function renderStage(pipelineId: string, stage: TelemetryStage): string {
   </article>`;
 }
 
+function pluralize(
+  count: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function telemetryScopeLabel(
+  pipelines: TelemetryPipelineOption[],
+  pipelineId: string,
+): string {
+  if (!pipelineId) return "fleet";
+  return (
+    pipelines.find((pipeline) => pipeline.id === pipelineId)?.name ||
+    pipelineId
+  );
+}
+
+function telemetrySummaryText(
+  engine: EngineTelemetrySnapshot | null,
+  pipeline: PipelineTelemetrySnapshot | null,
+  pipelines: TelemetryPipelineOption[],
+  pipelineId: string,
+  status: {
+    loaded?: boolean;
+    unavailable?: boolean;
+    stageUnavailable?: boolean;
+  },
+): string {
+  const scope = telemetryScopeLabel(pipelines, pipelineId);
+  if (!status.loaded) return `Loading telemetry snapshots · ${scope}`;
+  const ingests = engine?.ingests.length ?? 0;
+  const stages = pipeline?.stages.length ?? engine?.stages.length ?? 0;
+  const egresses = pipeline?.egresses.length ?? engine?.egresses.length ?? 0;
+  const readers = pipeline?.sourceRing?.readers.length ?? 0;
+  const state = status.unavailable ? "stale" : "loaded";
+  return `Telemetry ${state} · ${pluralize(ingests, "ingest")} · ${pluralize(stages, "stage")} · ${pluralize(egresses, "egress", "egresses")} · ${pluralize(readers, "reader")} · ${scope}`;
+}
+
 export function renderEngineerTelemetryHtml(
   engine: EngineTelemetrySnapshot | null,
   pipeline: PipelineTelemetrySnapshot | null,
@@ -151,8 +191,16 @@ export function renderEngineerTelemetryHtml(
     : status.unavailable
       ? `<div class="alert alert-warning"><span>Telemetry is temporarily unavailable. Last known counters remain visible.</span></div>`
       : "";
+  const summaryText = telemetrySummaryText(
+    engine,
+    pipeline,
+    pipelines,
+    pipelineId,
+    status,
+  );
   return `<div class="mx-auto max-w-7xl space-y-4">
     <header class="flex flex-wrap items-end justify-between gap-3"><div><h1 class="text-lg font-semibold">Engineer telemetry</h1><p class="text-base-content/60 mt-1 text-sm">Point-in-time engine, ring, reader, stage, and egress counters.</p></div><div class="flex items-center gap-2"><select id="telemetry-pipeline-select" class="select select-sm" aria-label="Telemetry pipeline">${options || `<option value="">No pipelines</option>`}</select><button id="telemetry-refresh-btn" type="button" class="btn btn-sm btn-outline">Refresh</button></div></header>
+    <p id="telemetry-route-summary" class="text-base-content/60 text-sm" role="status" aria-live="polite">${escapeHtml(summaryText)}</p>
     ${availability}
     <section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Engine telemetry summary">
       <div class="stat bg-base-200 rounded-lg"><div class="stat-title">Active ingests</div><div class="stat-value text-2xl">${engine?.ingests.length ?? "—"}</div></div>

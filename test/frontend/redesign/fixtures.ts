@@ -165,6 +165,119 @@ function seededLifecycleEvents(
   };
 }
 
+function seededEngineTelemetry(
+  stateName: OperatorStateName,
+): Record<string, unknown> {
+  const fixture = operatorStates[stateName];
+  const outputs = Array.isArray(fixture.settings.outputs)
+    ? (fixture.settings.outputs as Array<Record<string, unknown>>)
+    : [];
+  return {
+    generatedAt: "2026-07-14T06:30:00Z",
+    ingests: [
+      {
+        pipelineId: "pipe-healthy",
+        protocol: "rtmp",
+        uptimeSecs: 720,
+        bytesReceived: 4_194_304,
+        metrics: { packetsIn: 1200 },
+      },
+      {
+        pipelineId: "pipe-retrying",
+        protocol: "srt",
+        uptimeSecs: 540,
+        bytesReceived: 2_097_152,
+        metrics: { packetsIn: 740 },
+      },
+    ],
+    stages: [
+      {
+        pipelineId: "pipe-healthy",
+        kind: "video",
+        active: true,
+        metrics: { packetsOut: 1180 },
+      },
+      {
+        pipelineId: "pipe-healthy",
+        kind: "audio",
+        active: true,
+        metrics: { packetsOut: 1180 },
+      },
+      {
+        pipelineId: "pipe-retrying",
+        kind: "mux",
+        active: true,
+        metrics: { packetsOut: 510 },
+      },
+    ],
+    egresses: outputs.map((output) => ({
+      pipelineId: output.pipelineId,
+      outputId: output.id,
+      status: output.pipelineId === "pipe-retrying" ? "retrying" : "running",
+      bytesOut: output.pipelineId === "pipe-retrying" ? 65_536 : 1_048_576,
+    })),
+    activeTranscoderBuffers: 2,
+  };
+}
+
+function seededPipelineTelemetry(pipelineId: string): Record<string, unknown> {
+  const isRetrying = pipelineId === "pipe-retrying";
+  return {
+    generatedAt: "2026-07-14T06:30:00Z",
+    pipelineId,
+    ingest: {
+      pipelineId,
+      protocol: isRetrying ? "srt" : "rtmp",
+      uptimeSecs: isRetrying ? 540 : 720,
+      bytesReceived: isRetrying ? 2_097_152 : 4_194_304,
+      metrics: { packetsIn: isRetrying ? 740 : 1200 },
+    },
+    sourceRing: {
+      fill: isRetrying ? 6 : 3,
+      capacity: 12,
+      fillPercent: isRetrying ? 50 : 25,
+      estimatedPktRatePerSec: isRetrying ? 24 : 30,
+      bufferDepthSecs: isRetrying ? 1.5 : 1,
+      payloadStats: {},
+      readers: [
+        {
+          name: isRetrying ? "retrying-output-reader" : "healthy-output-reader",
+          lagSlots: isRetrying ? 2 : 0,
+          overflowCount: 0,
+          packetAgeMs: isRetrying ? 80 : 30,
+        },
+      ],
+    },
+    stages: [
+      {
+        stageKey: `${pipelineId}:video`,
+        pipelineId,
+        kind: "video",
+        active: true,
+        metrics: { packetsOut: isRetrying ? 500 : 1180 },
+      },
+      {
+        stageKey: `${pipelineId}:audio`,
+        pipelineId,
+        kind: "audio",
+        active: true,
+        metrics: { packetsOut: isRetrying ? 500 : 1180 },
+      },
+    ],
+    egresses: [
+      {
+        pipelineId,
+        outputId: isRetrying ? "out-retrying" : "out-healthy",
+        status: isRetrying ? "retrying" : "running",
+        bytesOut: isRetrying ? 65_536 : 1_048_576,
+        lastError: isRetrying
+          ? "Synthetic destination refused the connection"
+          : null,
+      },
+    ],
+  };
+}
+
 async function fulfillJson(route: Route, body: unknown): Promise<void> {
   await route.fulfill({
     status: 200,
@@ -355,6 +468,17 @@ export async function openSeededDashboard(
       });
       return;
     }
+    const pipelineTelemetryMatch = url.pathname.match(
+      /^\/api\/v1\/pipelines\/([^/]+)\/telemetry$/,
+    );
+    if (pipelineTelemetryMatch) {
+      const [, encodedPipelineId] = pipelineTelemetryMatch;
+      await fulfillJson(
+        route,
+        seededPipelineTelemetry(decodeURIComponent(encodedPipelineId)),
+      );
+      return;
+    }
     switch (url.pathname) {
       case "/api/v1/overview":
         await fulfillJson(route, seededOverview(stateName));
@@ -405,6 +529,24 @@ export async function openSeededDashboard(
           },
         });
         return;
+      case "/api/v1/engine/health":
+        await fulfillJson(route, {
+          status: "ready",
+          hostSettings: [
+            {
+              key: "runtime.nofile",
+              label: "Open file descriptors",
+              current: 65536,
+              required: 65536,
+              unit: "fds",
+              status: "ok",
+            },
+          ],
+        });
+        return;
+      case "/api/v1/engine/telemetry":
+        await fulfillJson(route, seededEngineTelemetry(stateName));
+        return;
       case "/api/v1/security/rate-limits":
         await fulfillJson(route, { attempts: [] });
         return;
@@ -445,7 +587,7 @@ export async function openSeededDashboard(
     const mode = requested.searchParams.get("mode") ?? "overview";
     const workspaceMode =
       mode === "inspect" || mode === "control" ? "pipeline" : mode;
-    if (workspaceMode === "incidents") {
+    if (workspaceMode === "incidents" || workspaceMode === "telemetry") {
       return;
     }
     await expect(

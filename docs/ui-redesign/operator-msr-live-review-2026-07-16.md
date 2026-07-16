@@ -115,6 +115,12 @@ and active scope counts as a live status line. Seeded Playwright/CDP coverage
 proves both fleet-wide and pipeline-scoped summaries update visibly and in the
 accessibility tree.
 
+Telemetry now has an equivalent engineer-facing checkpoint: before the dense
+counter grids, the legacy-owned route announces loaded/stale state, engine
+ingest count, scoped stage/egress/reader counts, and the active pipeline scope.
+Seeded Playwright/CDP coverage proves that summary updates on pipeline switch
+and is exposed as status text.
+
 The seeded v2 Operate path also has a CDP layout proof across the configured
 desktop, tablet, and mobile browser projects. The stress fixture uses the
 recovered sink-flap pipeline with 30 audio tracks and verifies that both DOM

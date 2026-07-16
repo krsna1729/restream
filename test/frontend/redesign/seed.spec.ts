@@ -661,6 +661,38 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
 });
 
+test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=telemetry&ui=v2", {
+    expectOverviewReady: false,
+  });
+
+  const telemetry = page.locator("#telemetry-mode-panel");
+  const summary = telemetry.locator("#telemetry-route-summary");
+  await expect(
+    telemetry.getByRole("heading", { name: "Engineer telemetry" }),
+  ).toBeVisible();
+  await expect(summary).toHaveText(
+    "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Healthy Program",
+  );
+  expect(await getCdpStatusTexts(page)).toContain(
+    "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Healthy Program",
+  );
+
+  await telemetry
+    .getByLabel("Telemetry pipeline")
+    .selectOption("pipe-retrying");
+  await expect(summary).toHaveText(
+    "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Retrying Destination",
+  );
+  await expect(telemetry.getByText("retrying-output-reader")).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Retrying Destination",
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
+});
+
 test("seed: ui=v2 Operate stays inside the viewport across breakpoints", async ({
   page,
 }) => {
