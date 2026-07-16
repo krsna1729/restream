@@ -40,6 +40,7 @@ let summaryRequestSeq = 0;
 let summaryInFlight: Promise<void> | null = null;
 const pipelineSummaryCache = new Map<string, PipelineSummarySnapshot>();
 const pipelineResourceMapCache = new Map<string, ResourceMapSnapshot>();
+let inspectOutputSearchQuery = "";
 
 const RUNTIME_SCOPE_VALUE = "__runtime";
 const RESOURCE_MAP_TOP_N = 25;
@@ -250,6 +251,10 @@ function protocolValue(value: string | null | undefined): string {
   return normalized.length <= 5 ? normalized.toUpperCase() : titleCaseValue(normalized);
 }
 
+function normalizeInspectSearch(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 function pluralize(
   count: number,
   singular: string,
@@ -411,6 +416,7 @@ export function resetPipelineInspectorSelection(
   pipelineId: string | null,
 ): void {
   forceRuntimeScope = pipelineId === null;
+  inspectOutputSearchQuery = "";
   runtimeScopeMaskedPipelineId =
     pipelineId === null ? getUrlParam("p") || graphPipelineId : null;
   graphRequestSeq++;
@@ -482,7 +488,25 @@ function renderSummary(
     ["Alerts", apiSummary ? String(alerts.length) : "Loading"],
   ];
   const outputPreviewLimit = 12;
-  const outputs = pipe.outs
+  const normalizedOutputSearch = normalizeInspectSearch(inspectOutputSearchQuery);
+  const filteredOutputs = normalizedOutputSearch
+    ? pipe.outs.filter((out) =>
+        [
+          out.name,
+          out.url,
+          out.status,
+          out.desiredState,
+          outputStateLabel(out).label,
+          outputViewEncodingLabel(out),
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedOutputSearch),
+      )
+    : pipe.outs;
+  const showOutputSearch =
+    pipe.outs.length > 4 || normalizedOutputSearch !== "";
+  const outputs = filteredOutputs
     .slice(0, outputPreviewLimit)
     .map((out) => {
       const stateLabel = outputStateLabel(out);
@@ -496,7 +520,10 @@ function renderSummary(
             </div>`;
     })
     .join("");
-  const remainingOutputs = Math.max(0, pipe.outs.length - outputPreviewLimit);
+  const remainingOutputs = Math.max(
+    0,
+    filteredOutputs.length - outputPreviewLimit,
+  );
 
   container.innerHTML = `<div>
         <div class="mb-3 flex min-w-0 items-center justify-between gap-3">
@@ -515,16 +542,66 @@ function renderSummary(
         </dl>
         ${alertSummaryHtml(apiSummary ? alerts : null, pipe)}
         <div class="mt-3">
-            <div class="mb-1 flex items-center justify-between gap-2">
-                <div class="text-base-content/60 text-[0.68rem] font-semibold uppercase tracking-wide">Outputs</div>
-                <div class="text-base-content/50 text-sm tabular-nums">${escapeHtml(outputCountLabel)}</div>
+            <div class="mb-2 flex flex-wrap items-end justify-between gap-2">
+                <div>
+                    <div class="text-base-content/60 text-[0.68rem] font-semibold uppercase tracking-wide">Outputs</div>
+                    <div class="text-base-content/50 text-xs tabular-nums">${escapeHtml(outputCountLabel)}</div>
+                </div>
+                ${
+                  showOutputSearch
+                    ? `<div class="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2 sm:flex-none">
+                        <label class="input input-bordered input-sm flex min-h-10 min-w-0 max-w-xs flex-1 items-center gap-2 sm:w-72">
+                          <span class="text-base-content/55 text-xs font-semibold uppercase">Find</span>
+                          <input id="inspect-output-search" class="min-w-0 grow" type="search" aria-label="Search inspect outputs" placeholder="output, state, URL" value="${escapeHtml(inspectOutputSearchQuery)}">
+                        </label>
+                        <button id="inspect-output-clear-search-btn" type="button" class="btn btn-xs btn-ghost ${normalizedOutputSearch ? "" : "hidden"}">Clear output search</button>
+                      </div>`
+                    : ""
+                }
             </div>
-            <div class="border-base-content/10 bg-base-100/40 rounded-md border px-2">
-                ${outputs || '<div class="dashboard-muted py-2">No outputs configured.</div>'}
-                ${remainingOutputs ? `<div class="text-base-content/60 border-base-content/10 border-t py-2 text-xs">+${remainingOutputs} more outputs in Operate</div>` : ""}
+            ${
+              normalizedOutputSearch
+                ? `<p id="inspect-output-search-summary" class="text-base-content/55 mb-2 text-xs tabular-nums" role="status" aria-live="polite">${escapeHtml(String(filteredOutputs.length))}/${escapeHtml(String(pipe.outs.length))} inspect outputs match · "${escapeHtml(inspectOutputSearchQuery.trim())}"</p>`
+                : ""
+            }
+            <div id="inspect-output-preview-list" class="border-base-content/10 bg-base-100/40 rounded-md border px-2" aria-label="Inspect output preview">
+                ${
+                  outputs ||
+                  (normalizedOutputSearch
+                    ? `<div class="dashboard-muted py-2" role="status" aria-live="polite">No inspect outputs match "${escapeHtml(inspectOutputSearchQuery.trim())}". Clear output search to show all.</div>`
+                    : '<div class="dashboard-muted py-2">No outputs configured.</div>')
+                }
+                ${remainingOutputs ? `<div class="text-base-content/60 border-base-content/10 border-t py-2 text-xs">+${remainingOutputs} more matching outputs in Operate</div>` : ""}
             </div>
         </div>
     </div>`;
+  bindInspectOutputSearch(pipe);
+}
+
+function bindInspectOutputSearch(pipe: PipelineView): void {
+  const input = document.getElementById(
+    "inspect-output-search",
+  ) as HTMLInputElement | null;
+  if (input) {
+    input.oninput = () => {
+      inspectOutputSearchQuery = input.value;
+      renderSummary(pipe);
+      const nextInput = document.getElementById(
+        "inspect-output-search",
+      ) as HTMLInputElement | null;
+      nextInput?.focus();
+    };
+  }
+  document
+    .getElementById("inspect-output-clear-search-btn")
+    ?.addEventListener("click", () => {
+      inspectOutputSearchQuery = "";
+      renderSummary(pipe);
+      const nextInput = document.getElementById(
+        "inspect-output-search",
+      ) as HTMLInputElement | null;
+      nextInput?.focus();
+    });
 }
 
 function alertSummaryHtml(

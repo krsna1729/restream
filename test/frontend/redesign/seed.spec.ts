@@ -597,6 +597,55 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
 });
 
+test("seed: ui=v2 Inspect output search narrows noisy sibling outputs @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "chaos-recovery",
+    "/?mode=pipeline&view=inspect&p=pipe-stall&ui=v2",
+    { expectOverviewReady: false },
+  );
+
+  const inspect = page.locator("#inspect-mode-panel");
+  await expect(page.locator("#inspect-route-summary")).toHaveText(
+    "Inspecting Stalled Sink Isolation · input live · 6 outputs · 1 attention item",
+  );
+  await expect(inspect.getByLabel("Search inspect outputs")).toBeVisible();
+  const outputPreview = inspect.getByLabel("Inspect output preview");
+  await expect(outputPreview.getByText("RTMP stalled sink")).toBeVisible();
+  await expect(outputPreview.getByText("Healthy sibling 05")).toBeVisible();
+
+  await inspect.getByLabel("Search inspect outputs").fill("sibling 05");
+  await expect(outputPreview.getByText("Healthy sibling 05")).toBeVisible();
+  await expect(outputPreview.getByText("RTMP stalled sink")).not.toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/6 inspect outputs match · "sibling 05"',
+  );
+
+  const clearOutputSearch = inspect.getByRole("button", {
+    name: "Clear output search",
+  });
+  await expect(clearOutputSearch).toBeVisible();
+  await clearOutputSearch.click();
+  await expect(inspect.getByLabel("Search inspect outputs")).toHaveValue("");
+  await expect(outputPreview.getByText("RTMP stalled sink")).toBeVisible();
+
+  await inspect.getByLabel("Search inspect outputs").fill("not-there");
+  await expect(
+    outputPreview.getByText(
+      'No inspect outputs match "not-there". Clear output search to show all.',
+    ),
+  ).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toEqual(
+    expect.arrayContaining([
+      '0/6 inspect outputs match · "not-there"',
+      'No inspect outputs match "not-there". Clear output search to show all.',
+    ]),
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
+});
+
 test("seed: ui=v2 pipeline workspace tabs preserve one selected context @desktop", async ({
   page,
 }) => {

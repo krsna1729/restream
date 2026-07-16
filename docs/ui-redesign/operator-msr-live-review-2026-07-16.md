@@ -117,6 +117,12 @@ line: probe readiness, fault-candidate count, and suggested next step. Seeded
 Playwright/CDP coverage proves the Overview → Inspect flow lands on both
 summaries and exposes them as status text.
 
+Pipeline Inspect now also gives the output preview a local search/count/clear
+loop once the selected pipeline has enough outputs to become scan-heavy. The
+stalled-sink chaos fixture proves an operator can isolate one healthy sibling
+or a no-hit without leaving Inspect for Operate, while CDP status text keeps
+the result count announced.
+
 Monitor now announces its pipeline scope before the monitoring wall: selected
 pipeline, output count, configured monitor count, and missing monitoring URL
 count. Search feedback still separates filtered matches from configuration
@@ -241,6 +247,9 @@ What changed from the live operator pass:
 - Long pipeline lists now get the same search/status feedback pattern as large
   output sets, so the operator can jump to a named or degraded pipeline without
   turning the left rail into a scroll hunt.
+- Pipeline Inspect now adds local output-preview search for sibling-heavy
+  pipelines, so a stalled output can be compared against a named healthy sibling
+  without switching context to Operate.
 - v2 input ownership now empties the hidden legacy audio table, matching the
   already-empty legacy preview and output-card cleanup pattern so CDP/node
   growth reflects only the active operator surface.
