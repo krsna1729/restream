@@ -750,8 +750,21 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
     '0/1 media files shown · 0 recordings · 0 source files matched · "missing"',
   );
   await expect(media.getByText('No matches for "missing".')).toHaveCount(2);
+  const clearSearch = media.getByRole("button", { name: "Clear search" });
+  await expect(clearSearch).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     '0/1 media files shown · 0 recordings · 0 source files matched · "missing"',
+  );
+
+  await clearSearch.click();
+  await expect(search).toHaveValue("");
+  await expect(summary).toHaveText(
+    "1 media file total · 0 recordings · 1 source file",
+  );
+  await expect(clearSearch).toBeHidden();
+  await expect(media.getByText("synthetic-source.mp4")).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    "1 media file total · 0 recordings · 1 source file",
   );
   expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
 });

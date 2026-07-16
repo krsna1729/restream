@@ -227,6 +227,7 @@ function mountMediaShell(container: HTMLElement): void {
                         <span class="text-base-content/50 text-xs font-semibold uppercase">Search</span>
                         <input id="media-library-search" class="grow" type="search" autocomplete="off" placeholder="filename, kind, status" aria-label="Search media library" value="${escapeHtml(mediaSearchQuery)}">
                     </label>
+                    <button id="media-library-clear-search-btn" type="button" class="btn btn-sm btn-outline hidden">Clear search</button>
                     <input class="hidden js-upload-media-input" type="file" accept=".ts,.mkv,.mp4,.mov">
                     <button type="button" class="btn btn-sm btn-primary js-upload-media">Upload media</button>
                 </div>
@@ -285,6 +286,23 @@ function attachMediaActions(container: HTMLElement): void {
     searchInput.addEventListener("input", () => {
       mediaSearchQuery = searchInput.value;
       renderMediaLibraryLists(lastMediaFiles, true);
+    });
+  }
+  const clearSearchButton = container.querySelector<HTMLButtonElement>(
+    "#media-library-clear-search-btn",
+  );
+  if (clearSearchButton && clearSearchButton.dataset.bound !== "1") {
+    clearSearchButton.dataset.bound = "1";
+    clearSearchButton.addEventListener("click", () => {
+      mediaSearchQuery = "";
+      renderMediaLibraryLists(lastMediaFiles, true);
+      const nextSearchInput = container.querySelector<HTMLInputElement>(
+        "#media-library-search",
+      );
+      if (nextSearchInput) {
+        nextSearchInput.value = "";
+        nextSearchInput.focus();
+      }
     });
   }
 
@@ -394,6 +412,9 @@ function renderMediaLibraryLists(files: MediaFile[], force: boolean): void {
   const recordingBytes = recordings.reduce((sum, file) => sum + file.size, 0);
   const filteredTotal = filteredRecordings.length + filteredSources.length;
   const query = mediaSearchQuery.trim();
+  document
+    .getElementById("media-library-clear-search-btn")
+    ?.classList.toggle("hidden", normalizeSearchText(mediaSearchQuery) === "");
   setText("media-recording-count", recordings.length);
   setText("media-recording-size", formatFileSize(recordingBytes));
   setText("media-source-count", sources.length);
