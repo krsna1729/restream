@@ -84,6 +84,11 @@ Inspect and Monitor, and `Legacy-owned checkpoint` for the remaining top-level
 legacy routes. Seeded Playwright/CDP coverage proves that cue is visible and
 exposed as status text while moving across the route journey.
 
+Incidents and Telemetry are now discoverable from the primary workspace tab
+strip instead of being route-only surfaces. They remain legacy-owned
+checkpoints, but operators can reach alert triage and engineering counters from
+the same shell navigation as Overview, Pipeline, Media, Settings, and Status.
+
 Overview and the v2 pipeline selector now expose Clear search as soon as an
 operator narrows a long pipeline list, not only after a no-hit. Seeded
 Playwright/CDP coverage proves hit-state and no-hit recovery on both search
@@ -223,6 +228,9 @@ What is now strong enough for v2:
 - The shell now names whether the current route is v2-owned or a legacy
   checkpoint, reducing the “which UI am I in?” ambiguity during the staged
   rollout.
+- Incidents and Telemetry are promoted into the primary workspace navigation,
+  so the operator can discover alert triage and engineering counters without
+  knowing hidden route URLs.
 - Large output sets are bounded by default instead of dumping every output card.
 - Output search/filter is necessary and useful under MSR-scale output counts.
 - Chaos-derived states are now covered by seeded fixtures:

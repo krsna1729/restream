@@ -375,6 +375,14 @@ test("seed: ui=v2 shell announces ownership while moving across routes @desktop"
       text: "Legacy checkpoint · Pipeline monitoring wall",
     },
     {
+      href: "/?mode=incidents&ui=v2",
+      text: "Legacy-owned checkpoint · Alerts, evidence, and lifecycle events",
+    },
+    {
+      href: "/?mode=telemetry&ui=v2",
+      text: "Legacy-owned checkpoint · Engine and pipeline counters",
+    },
+    {
       href: "/?mode=status&ui=v2",
       text: "Legacy-owned checkpoint · Runtime status",
     },
@@ -391,7 +399,27 @@ test("seed: ui=v2 shell announces ownership while moving across routes @desktop"
     );
     expect(await getCdpStatusTexts(page)).toContain(route.text);
   }
-  expect(await getCdpNodeCount(page)).toBeLessThan(16_000);
+
+  await page.locator("#workspace-tab-incidents").click();
+  await expect(page).toHaveURL(/mode=incidents/);
+  await expect(page.locator("#workspace-tab-incidents")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#incidents-route-summary")).toHaveText(
+    "0 critical · 1 warning · 1 recent event · fleet",
+  );
+
+  await page.locator("#workspace-tab-telemetry").click();
+  await expect(page).toHaveURL(/mode=telemetry/);
+  await expect(page.locator("#workspace-tab-telemetry")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#telemetry-route-summary")).toHaveText(
+    "Telemetry loaded · 2 ingests · 3 stages · 2 egresses · 0 readers · fleet",
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(21_000);
 });
 
 test("seed: ui=v2 auth expiry preserves operator return location @desktop", async ({
