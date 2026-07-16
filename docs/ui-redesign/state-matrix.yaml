@@ -173,7 +173,7 @@ states:
     expected: Primary tasks work by keyboard with stable names, focus, and contrast.
     proof:
       status: partial
-      source: Playwright/CDP proves v2 Overview and Operate primary routes stay keyboard-reachable, expose a skip link into the active main tabpanel before dense chrome, keep bounded node counts, use one canonical history step from Overview Operate to selected Pipeline Operate, keep v2 Operate inside the viewport across desktop/tablet/mobile breakpoints, expose named controls and landmarks in the accessibility tree, pass serious/critical axe checks on v2 Operate, and keep output action menus menu/menuitem-accessible with Escape focus restoration
+      source: Playwright/CDP proves v2 Overview and Operate primary routes stay keyboard-reachable, expose a skip link into the active main tabpanel before dense chrome, keep bounded node counts, use one canonical history step from Overview into selected Pipeline Operate or Inspect, keep v2 Operate inside the viewport across desktop/tablet/mobile breakpoints, expose named controls and landmarks in the accessibility tree, pass serious/critical axe checks on v2 Operate, and keep output action menus menu/menuitem-accessible with Escape focus restoration
       files:
         - test/frontend/frontend-dom-invariants.test.mjs
         - test/frontend/frontend-browser-dom.spec.ts

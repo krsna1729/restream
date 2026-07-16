@@ -786,7 +786,6 @@ export function setPipelineWorkspaceView(
 }
 
 export function openInspectGraph(pipeId: string): void {
-  selectPipeline(pipeId);
   resetPipelineInspectorSelection(pipeId);
   setPipelineWorkspaceView("inspect", pipeId);
 }

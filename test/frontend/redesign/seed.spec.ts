@@ -424,6 +424,70 @@ test("seed: ui=v2 overview Operate is one predictable history step @desktop", as
   expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
 });
 
+test("seed: ui=v2 overview Inspect is one predictable history step @desktop", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const originalPushState = window.history.pushState.bind(window.history);
+    const redesignWindow = window as Window & {
+      __redesignPushStateCount?: number;
+    };
+    Object.defineProperty(window, "__redesignPushStateCount", {
+      configurable: true,
+      value: 0,
+      writable: true,
+    });
+    window.history.pushState = ((...args: Parameters<History["pushState"]>) => {
+      redesignWindow.__redesignPushStateCount =
+        (redesignWindow.__redesignPushStateCount ?? 0) + 1;
+      return originalPushState(...args);
+    }) as History["pushState"];
+  });
+  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2");
+  await page.evaluate(() => {
+    (
+      window as Window & { __redesignPushStateCount?: number }
+    ).__redesignPushStateCount = 0;
+  });
+
+  await page
+    .locator("#dashboard-v2-overview")
+    .locator("article")
+    .filter({ hasText: "Retrying Destination" })
+    .getByRole("button", { name: "Inspect", exact: true })
+    .click();
+  await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
+  await expect(page).toHaveURL(/view=inspect/);
+  await expect(page).toHaveURL(/p=pipe-retrying/);
+  await expect(page.locator("#inspect-mode-panel")).toBeVisible();
+  await expect(
+    page.locator("#inspect-mode-panel").getByRole("heading", {
+      name: "Pipeline inspect",
+    }),
+  ).toBeVisible();
+  await expect(page.locator("#inspect-pipeline-select")).toHaveValue(
+    "pipe-retrying",
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { __redesignPushStateCount?: number })
+            .__redesignPushStateCount,
+      ),
+    )
+    .toBe(1);
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\?mode=overview&ui=v2$/);
+  await expect(
+    page
+      .locator("#dashboard-v2-overview")
+      .getByRole("heading", { name: "Fleet overview" }),
+  ).toBeVisible();
+  expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
+});
+
 test("seed: ui=v2 Operate stays inside the viewport across breakpoints", async ({
   page,
 }) => {

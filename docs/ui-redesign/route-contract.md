@@ -42,8 +42,9 @@ and `p` while preserving unrelated query parameters.
 - Operator navigation uses `pushState` and remains compatible with `popstate`.
 - One user navigation intent creates one history step. For example, v2
   Overview's Operate action moves directly to
-  `?mode=pipeline&view=operate&p=<pipeline-id>` instead of pushing an
-  intermediate Overview URL with `p=`.
+  `?mode=pipeline&view=operate&p=<pipeline-id>` and its Inspect action moves
+  directly to `?mode=pipeline&view=inspect&p=<pipeline-id>` instead of pushing
+  an intermediate Overview URL with `p=`.
 - A selected pipeline is reconciled by stable ID, name, or persisted hint when
   configuration refreshes replace runtime IDs.
 - Invalid or absent pipeline selections remain safely representable.
