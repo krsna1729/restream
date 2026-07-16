@@ -742,6 +742,86 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
   expect(result.live.childList).toBe(0);
 });
 
+test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.setContent(`
+    <div id="dashboard-v2-root"></div>
+    <div id="dashboard-v2-pipeline-selector-root"></div>
+    <div id="dashboard-v2-pipeline-header-root"></div>
+    <div id="dashboard-v2-pipeline-input-status-root"></div>
+    <div id="dashboard-v2-pipeline-output-overview-root"></div>
+  `);
+
+  await page.evaluate(async () => {
+    const importModule = new Function(
+      "path",
+      "return import(path)",
+    ) as (path: string) => Promise<{
+      renderDashboardV2PipelineHeader: (
+        model: Record<string, unknown> | null,
+        actions: Record<string, unknown>,
+        placeholder?: Record<string, unknown> | null,
+      ) => void;
+    }>;
+    const { renderDashboardV2PipelineHeader } = await importModule(
+      "/js/app/dashboard-v2-entry.js",
+    );
+    const actions = {
+      diagnosePipeline: () => {},
+      editPipeline: () => {},
+      inspectPipeline: () => {},
+      toggleFileIngest: async () => {},
+      toggleRecording: async () => {},
+    };
+    renderDashboardV2PipelineHeader(null, actions, {
+      title: "Loading pipeline details",
+      message:
+        "The selected pipeline is catching up with the latest runtime snapshot.",
+    });
+  });
+
+  const header = page.locator("#dashboard-v2-pipeline-header-root");
+  await expect(header).toBeVisible();
+  await expect(
+    header.getByRole("heading", { name: "Loading pipeline details" }),
+  ).toBeVisible();
+  await expect(header).toContainText("catching up");
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Performance.enable");
+  const performanceMetrics = await cdp.send("Performance.getMetrics");
+  const nodeMetric = performanceMetrics.metrics.find(
+    (metric) => metric.name === "Nodes",
+  );
+  expect(nodeMetric?.value ?? 0).toBeLessThan(1_000);
+  await cdp.detach();
+
+  await page.evaluate(async () => {
+    const importModule = new Function(
+      "path",
+      "return import(path)",
+    ) as (path: string) => Promise<{
+      renderDashboardV2PipelineHeader: (
+        model: Record<string, unknown> | null,
+        actions: Record<string, unknown>,
+        placeholder?: Record<string, unknown> | null,
+      ) => void;
+    }>;
+    const { renderDashboardV2PipelineHeader } = await importModule(
+      "/js/app/dashboard-v2-entry.js",
+    );
+    renderDashboardV2PipelineHeader(null, {
+      diagnosePipeline: () => {},
+      editPipeline: () => {},
+      inspectPipeline: () => {},
+      toggleFileIngest: async () => {},
+      toggleRecording: async () => {},
+    });
+  });
+  await expect(header).toBeHidden();
+});
+
 test("ui=v2 output destinations support search and state filters @desktop", async ({
   page,
 }) => {

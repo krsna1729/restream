@@ -91,6 +91,10 @@ What changed from the live operator pass:
 - A 30-audio-track MSR input made the input card too tall. v2 now shows the
   first six audio tracks by default and exposes an explicit `Show all 30`
   progressive-disclosure affordance.
+- The first focused pipeline view could briefly look incomplete while the
+  selected-pipeline runtime refresh converged. v2 now renders one lightweight
+  details placeholder in the header slot so the operator sees that the selected
+  pipeline is catching up instead of seeing a silent partial shell.
 
 Still not a full v2 redesign:
 
@@ -99,10 +103,6 @@ Still not a full v2 redesign:
 - Legacy-owned routes keep substantial hidden DOM mounted across navigation.
   This is visible in CDP node growth and should be treated as a future
   performance/accessibility cleanup, not as solved by the v2 seam.
-- The first focused pipeline view can briefly show a shell/partial runtime
-  state before the selected-pipeline runtime refresh converges. It converges,
-  but the operator experience would benefit from a clearer loading/stale-data
-  indicator.
 
 ## Done-state interpretation
 

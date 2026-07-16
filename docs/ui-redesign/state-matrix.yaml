@@ -111,6 +111,15 @@ states:
         - test/frontend/frontend-incidents.test.mjs
         - test/frontend/frontend-engineer-telemetry.test.mjs
 
+  - id: runtime.selected-pipeline-convergence
+    surface: pipeline-operate
+    expected: When the focused pipeline runtime details have not converged yet, v2 shows an explicit lightweight placeholder instead of a silent partial shell.
+    proof:
+      status: seeded
+      source: Playwright render proof with CDP Performance.getMetrics node budget
+      files:
+        - test/frontend/redesign/seed.spec.ts
+
   - id: hls.unavailable
     surface: pipeline-operate
     expected: Unsupported, unavailable, timeout, and playback failures differ.

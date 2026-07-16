@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 
 import type {
+  DashboardV2PipelineDetailsPlaceholder,
   DashboardV2OverviewActions,
   DashboardV2PipelineHeaderActions,
   DashboardV2PipelineInputStatusActions,
@@ -651,6 +652,37 @@ function DashboardV2PipelineHeader({
           >
             Edit
           </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function DashboardV2PipelineDetailsPlaceholderCard({
+  model,
+}: {
+  model: DashboardV2PipelineDetailsPlaceholder;
+}): React.JSX.Element {
+  return (
+    <section
+      aria-labelledby="dashboard-v2-pipeline-details-placeholder-title"
+      className="dashboard-section border-info/25 bg-info/5"
+    >
+      <div className="flex items-start gap-3 py-2">
+        <span
+          aria-hidden="true"
+          className="border-info/30 bg-info/10 mt-1 inline-flex h-3 w-3 shrink-0 rounded-full border"
+        />
+        <div>
+          <h1
+            className="text-base-content text-lg font-semibold leading-tight"
+            id="dashboard-v2-pipeline-details-placeholder-title"
+          >
+            {model.title}
+          </h1>
+          <p className="text-base-content/65 mt-1 max-w-2xl text-sm">
+            {model.message}
+          </p>
         </div>
       </div>
     </section>
@@ -1366,12 +1398,15 @@ export function renderDashboardV2PipelineSelector(
 export function renderDashboardV2PipelineHeader(
   model: PipelineOperateHeaderModel | null,
   actions: DashboardV2PipelineHeaderActions,
+  placeholder: DashboardV2PipelineDetailsPlaceholder | null = null,
 ): void {
   headerRoot ??= createRoot(headerContainer);
-  headerContainer.hidden = model === null;
+  headerContainer.hidden = model === null && placeholder === null;
   headerRoot.render(
     model ? (
       <DashboardV2PipelineHeader actions={actions} model={model} />
+    ) : placeholder ? (
+      <DashboardV2PipelineDetailsPlaceholderCard model={placeholder} />
     ) : null,
   );
 }

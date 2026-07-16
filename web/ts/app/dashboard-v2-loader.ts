@@ -46,6 +46,11 @@ export interface DashboardV2PipelineHeaderActions {
   readonly toggleRecording: (pipelineId: string) => Promise<void>;
 }
 
+export interface DashboardV2PipelineDetailsPlaceholder {
+  readonly title: string;
+  readonly message: string;
+}
+
 export interface DashboardV2PipelineInputStatusActions {
   readonly cancelAudioTrackEdit: (pipelineId: string, key: string) => void;
   readonly clearPreview: (container: HTMLElement) => void;
@@ -97,6 +102,7 @@ interface DashboardV2Module {
   renderDashboardV2PipelineHeader(
     model: PipelineOperateHeaderModel | null,
     actions: DashboardV2PipelineHeaderActions,
+    placeholder?: DashboardV2PipelineDetailsPlaceholder | null,
   ): void;
   renderDashboardV2PipelineInputStatus(
     model: PipelineOperateInputStatusModel | null,
@@ -333,10 +339,35 @@ function renderLatestPipelineHeader(): void {
   ) {
     return;
   }
+  const placeholder =
+    latestPipelineHeaderModel === null ? pipelineDetailsPlaceholder() : null;
   dashboardV2Module.renderDashboardV2PipelineHeader(
     latestPipelineHeaderModel,
     pipelineHeaderActions,
+    placeholder,
   );
+}
+
+function pipelineDetailsPlaceholder(): DashboardV2PipelineDetailsPlaceholder {
+  const selector = latestPipelineSelectorModel;
+  if (!selector || selector.pipelines.length === 0) {
+    return {
+      title: "No pipelines configured",
+      message: "Create a pipeline to start configuring ingest and outputs.",
+    };
+  }
+  if (selector.selectedPipelineId === null) {
+    return {
+      title: "Select a pipeline",
+      message:
+        "Pipeline details, ingest preview, outputs, and controls appear here.",
+    };
+  }
+  return {
+    title: "Loading pipeline details",
+    message:
+      "The selected pipeline is catching up with the latest runtime snapshot.",
+  };
 }
 
 function renderLatestPipelineInputStatus(): void {
