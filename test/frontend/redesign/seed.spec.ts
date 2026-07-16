@@ -556,10 +556,17 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
 
   const monitor = page.locator("#control-mode-panel");
   const search = monitor.locator("#control-room-search-input");
-  const summary = monitor.getByRole("status");
+  const routeSummary = monitor.locator("#control-room-route-summary");
+  const summary = monitor.locator("#control-room-summary");
   await expect(
     monitor.getByRole("heading", { name: "Control Room" }),
   ).toBeVisible();
+  await expect(routeSummary).toHaveText(
+    "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+  );
+  expect(await getCdpStatusTexts(page)).toContain(
+    "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+  );
   await expect(summary).toHaveText(
     "1/1 monitored · 0 missing monitoring URLs",
   );

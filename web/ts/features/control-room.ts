@@ -530,6 +530,7 @@ function ensureShell(container: HTMLElement): void {
                 <div class="flex flex-wrap items-center justify-between gap-3">
                     <div>
                         <h1 class="text-lg font-semibold">Control Room</h1>
+                        <p id="control-room-route-summary" class="text-base-content/60 mt-1 text-sm" role="status" aria-live="polite"></p>
                     </div>
                     <div class="flex flex-wrap items-center gap-2">
                         <button type="button" class="btn btn-sm btn-outline" data-action="control-room-toggle-playback-all">Play All</button>
@@ -1588,6 +1589,37 @@ function filterMonitoringOutputs(
   );
 }
 
+function pluralize(
+  count: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function controlRoomScopeSummaryText(
+  selectedPipeline: PipelineView | null,
+): string {
+  if (!selectedPipeline) return "Monitoring wall · no pipeline selected";
+  const totalOutputs = selectedPipeline.outs.length;
+  const monitoringOutputs = listMonitoringOutputsForPipeline(
+    selectedPipeline.id,
+  );
+  const missingMonitoring = totalOutputs - monitoringOutputs.length;
+  return `Monitoring ${selectedPipeline.name} · ${pluralize(totalOutputs, "output")} · ${pluralize(monitoringOutputs.length, "monitor")} · ${pluralize(missingMonitoring, "missing URL")}`;
+}
+
+function renderControlRoomScopeSummary(
+  container: HTMLElement,
+  selectedPipeline: PipelineView | null,
+): void {
+  const summary = container.querySelector<HTMLElement>(
+    "#control-room-route-summary",
+  );
+  if (!summary) return;
+  summary.textContent = controlRoomScopeSummaryText(selectedPipeline);
+}
+
 function renderSummaryAndPagination(
   container: HTMLElement,
   selectedPipeline: PipelineView | null,
@@ -1652,6 +1684,7 @@ function renderControlRoom(): void {
     pipelines.find((pipe) => pipe.id === controlRoomState.pipelineId) || null;
 
   renderPipelineSelect(container, pipelines);
+  renderControlRoomScopeSummary(container, selectedPipeline);
 
   // Sync search input value
   const searchInput = container.querySelector<HTMLInputElement>(

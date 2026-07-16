@@ -98,8 +98,10 @@ graph and resource sections: selected pipeline, input state, output count, and
 attention count. Seeded Playwright/CDP coverage proves the Overview → Inspect
 flow lands on that summary and exposes it as status text.
 
-Monitor search feedback now separates filtered matches from configuration gaps:
-seeded Playwright/CDP coverage proves a search miss is announced as
+Monitor now announces its pipeline scope before the monitoring wall: selected
+pipeline, output count, configured monitor count, and missing monitoring URL
+count. Search feedback still separates filtered matches from configuration
+gaps: seeded Playwright/CDP coverage proves a search miss is announced as
 `0/N monitored match` while preserving the true missing-monitoring-URL count.
 That prevents the control room from implying a configured monitor disappeared
 just because the operator narrowed the list.
