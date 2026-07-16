@@ -251,6 +251,71 @@ test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async 
   expect(v2Requests.length).toBe(1);
 });
 
+test("seed: ui=v2 legacy-owned routes keep operator checkpoints visible and announced @desktop", async ({
+  page,
+}) => {
+  const checkpoints = [
+    {
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      locator: "#inspect-route-summary",
+      nodeBudget: 6_000,
+      text: "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
+    },
+    {
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      locator: "#control-room-route-summary",
+      nodeBudget: 8_000,
+      text: "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+    },
+    {
+      href: "/?mode=media&ui=v2",
+      locator: "#media-library-results-summary",
+      nodeBudget: 10_000,
+      text: "1 media file total",
+    },
+    {
+      href: "/?mode=settings&ui=v2",
+      locator: "#settings-route-summary",
+      nodeBudget: 13_500,
+      text: "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+    },
+    {
+      href: "/?mode=status&ui=v2",
+      locator: "#status-route-summary",
+      nodeBudget: 16_000,
+      text: "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
+    },
+    {
+      href: "/?mode=incidents&ui=v2",
+      locator: "#incidents-route-summary",
+      nodeBudget: 18_000,
+      text: "0 critical · 1 warning · 1 recent event · fleet",
+    },
+    {
+      href: "/?mode=telemetry&ui=v2",
+      locator: "#telemetry-route-summary",
+      nodeBudget: 21_000,
+      text: "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Healthy Program",
+    },
+  ] as const;
+
+  await openSeededDashboard(page, "mixed-health", checkpoints[0].href, {
+    expectOverviewReady: false,
+  });
+
+  for (const checkpoint of checkpoints) {
+    if (page.url() !== new URL(checkpoint.href, page.url()).href) {
+      await page.goto(checkpoint.href);
+    }
+    const summary = page.locator(checkpoint.locator);
+    await expect(summary).toHaveText(checkpoint.text);
+    expect(await getCdpStatusTexts(page)).toContain(checkpoint.text);
+    expect(await getCdpNodeCount(page), checkpoint.href).toBeLessThan(
+      checkpoint.nodeBudget,
+    );
+  }
+});
+
 test("seed: ui=v2 auth expiry preserves operator return location @desktop", async ({
   page,
 }) => {

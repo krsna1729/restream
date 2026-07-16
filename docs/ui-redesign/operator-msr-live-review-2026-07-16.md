@@ -133,6 +133,15 @@ route announces server scope, section count, configured profile count, and
 current authentication-attempt count. Seeded Playwright/CDP coverage proves the
 summary is exposed as status text while the route stays outside the React seam.
 
+The seeded browser proof also includes a route-checkpoint matrix across the
+legacy-owned screens: Inspect, Monitor, Media, Settings, Status, Incidents, and
+Telemetry. That matrix walks the screens as an operator journey and proves each
+one exposes a visible checkpoint, matching CDP accessibility `status` text, and
+a route-specific node budget. In the seeded route journey, those budgets are
+currently 6k / 8k / 10k / 13.5k / 16k / 18k / 21k nodes respectively. This
+does not make those screens full v2 yet, but it gives the redesign loop a
+stable regression tripwire before deeper ownership passes.
+
 The seeded v2 Operate path also has a CDP layout proof across the configured
 desktop, tablet, and mobile browser projects. The stress fixture uses the
 recovered sink-flap pipeline with 30 audio tracks and verifies that both DOM
@@ -195,7 +204,8 @@ What changed from the live operator pass:
 Still not a full v2 redesign:
 
 - Inspect, Monitor, Media, Settings, Status, Incidents, and Telemetry are still
-  intentionally legacy-owned.
+  intentionally legacy-owned, now with lightweight route checkpoints rather
+  than full v2 layouts.
 - Legacy-owned routes keep substantial hidden DOM mounted across navigation.
   This is visible in CDP node growth and should be treated as a future
   performance/accessibility cleanup, not as solved by the v2 seam.
