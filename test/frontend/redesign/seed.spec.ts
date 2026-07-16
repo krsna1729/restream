@@ -567,8 +567,14 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   await expect(page.locator("#inspect-route-summary")).toHaveText(
     "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
   );
+  await expect(page.locator("#inspect-focus-summary")).toHaveText(
+    "Inspection focus · 1 blocker before active probes · 1 fault candidate · Inspect recent errors and retry backoff before forcing a restart.",
+  );
   expect(await getCdpStatusTexts(page)).toContain(
     "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
+  );
+  expect(await getCdpStatusTexts(page)).toContain(
+    "Inspection focus · 1 blocker before active probes · 1 fault candidate · Inspect recent errors and retry backoff before forcing a restart.",
   );
   await expectPushStateCount(page, 1);
 

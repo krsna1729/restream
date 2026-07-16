@@ -116,6 +116,7 @@ function appendInspectDom(document) {
   appendRoot(document, "select", "inspect-pipeline-select");
   appendRoot(document, "button", "inspect-open-pipeline-btn");
   appendRoot(document, "div", "inspect-pipeline-summary");
+  appendRoot(document, "p", "inspect-focus-summary");
   appendRoot(document, "div", "inspect-diagnostics-summary");
   appendRoot(document, "div", "inspect-resource-details");
   appendRoot(document, "button", "inspect-refresh-graph-btn");
@@ -1200,6 +1201,10 @@ runCheck("inspect summary keeps retry badges non-wrapping", async () => {
   assert.match(summaryHtml, /Output retrying/);
   assert.match(summaryHtml, /shrink-0/);
   assert.match(summaryHtml, /whitespace-nowrap/);
+  assert.equal(
+    document.getElementById("inspect-focus-summary").textContent,
+    "Inspection focus · 1 blocker before active probes · 1 fault candidate · Inspect recent errors and retry backoff before forcing a restart.",
+  );
   assert.equal(fetchCalls.length >= 1, true);
 });
 

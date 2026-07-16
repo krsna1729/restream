@@ -602,7 +602,12 @@ function refreshPipelineSummary(pipelineId: string): void {
 function renderDiagnostics(pipe: PipelineView | null): void {
   const container = document.getElementById("inspect-diagnostics-summary");
   if (!container) return;
+  const focusSummary = document.getElementById("inspect-focus-summary");
   if (!pipe) {
+    if (focusSummary) {
+      focusSummary.textContent =
+        "Inspection focus · select a pipeline to inspect diagnostics.";
+    }
     container.innerHTML =
       '<div class="text-base-content/60 text-sm">Select a pipeline to inspect diagnostics.</div>';
     return;
@@ -621,6 +626,17 @@ function renderDiagnostics(pipe: PipelineView | null): void {
     ...retryingOutputs,
     ...flappingOutputs,
   ];
+  const suggestedNextStep =
+    pipe.input.status === "on"
+      ? retryingOutputs.length
+        ? "Inspect recent errors and retry backoff before forcing a restart."
+        : flappingOutputs.length
+          ? "Inspect recent sink failures before forcing a restart."
+          : "Run diagnostics, then inspect graph edges with zero packet output."
+      : "Start or reconnect the publisher before probing.";
+  if (focusSummary) {
+    focusSummary.textContent = `Inspection focus · ${blockers.length ? `${pluralize(blockers.length, "blocker")} before active probes` : "ready for active probes"} · ${pluralize(faultCandidates.length, "fault candidate")} · ${suggestedNextStep}`;
+  }
 
   container.innerHTML = `<div class="grid gap-3 md:grid-cols-3">
         <div class="dashboard-stat-card-compact">
@@ -633,7 +649,7 @@ function renderDiagnostics(pipe: PipelineView | null): void {
         </div>
         <div class="dashboard-stat-card-compact">
             <div class="dashboard-kicker">Suggested Next Step</div>
-            <div class="mt-2 text-sm">${pipe.input.status === "on" ? (retryingOutputs.length ? "Inspect recent errors and retry backoff before forcing a restart." : flappingOutputs.length ? "Inspect recent sink failures before forcing a restart." : "Run diagnostics, then inspect graph edges with zero packet output.") : "Start or reconnect the publisher before probing."}</div>
+            <div class="mt-2 text-sm">${suggestedNextStep}</div>
         </div>
     </div>`;
 }

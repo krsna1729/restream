@@ -95,8 +95,10 @@ does not add a duplicate browser-history entry.
 
 Pipeline Inspect now announces the current inspection scope before its dense
 graph and resource sections: selected pipeline, input state, output count, and
-attention count. Seeded Playwright/CDP coverage proves the Overview → Inspect
-flow lands on that summary and exposes it as status text.
+attention count. It also promotes the diagnostics focus into one live status
+line: probe readiness, fault-candidate count, and suggested next step. Seeded
+Playwright/CDP coverage proves the Overview → Inspect flow lands on both
+summaries and exposes them as status text.
 
 Monitor now announces its pipeline scope before the monitoring wall: selected
 pipeline, output count, configured monitor count, and missing monitoring URL
