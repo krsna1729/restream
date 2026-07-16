@@ -882,18 +882,33 @@ function setCardWarning(shell: HTMLElement, message: string | null): void {
   const warning = article?.querySelector<HTMLElement>(
     '[data-role="control-room-card-warning"]',
   );
-  if (!warning) return;
   if (!message) {
-    warning.removeAttribute("title");
-    warning.setAttribute("aria-label", "");
-    warning.classList.add("hidden");
-    warning.classList.remove("inline-flex");
+    warning?.remove();
     return;
   }
-  warning.setAttribute("title", message);
-  warning.setAttribute("aria-label", message);
-  warning.classList.remove("hidden");
-  warning.classList.add("inline-flex");
+  const status = article?.querySelector<HTMLElement>(
+    '[data-role="control-room-card-status"]',
+  );
+  const statusCluster = article?.querySelector<HTMLElement>(
+    '[data-role="control-room-card-status-cluster"]',
+  );
+  const target =
+    warning ||
+    (() => {
+      const badge = document.createElement("div");
+      badge.className =
+        "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-amber-500/35 bg-amber-500/12 text-xs font-bold text-amber-700 dark:text-amber-300";
+      badge.dataset.role = "control-room-card-warning";
+      badge.textContent = "!";
+      if (status) {
+        status.before(badge);
+      } else {
+        statusCluster?.appendChild(badge);
+      }
+      return badge;
+    })();
+  target.setAttribute("title", message);
+  target.setAttribute("aria-label", message);
 }
 
 function getYouTubeMonitoringWarning(
@@ -1405,9 +1420,7 @@ function ensureCardElements(grid: HTMLElement, cardCount: number): void {
     const article = document.createElement("article");
     article.className = `${CONTROL_ROOM_CARD_BASE_CLASS} border-base-content/10 bg-base-100`;
     article.innerHTML = `
-            <div class="min-w-0">
-                <div class="min-w-0" data-role="control-room-title"></div>
-            </div>
+            <div class="min-w-0" data-role="control-room-title"></div>
             <div class="mt-2 min-h-[1.75rem] min-w-0" data-role="control-room-details"></div>
             <div class="border-base-content/10 bg-base-200/70 mt-3 min-w-0 overflow-hidden rounded-[1rem] border p-1" data-role="control-room-player-shell"></div>`;
     grid.appendChild(article);
@@ -1442,21 +1455,12 @@ function syncCard(
 
   article.className = `${CONTROL_ROOM_CARD_BASE_CLASS} ${getCardStatusToneClasses(descriptor.statusLabel)}`;
   const statusLabel = descriptor.statusLabel
-    ? `<div class="${getStatusLabelClasses(descriptor.statusLabel)} shrink-0 text-[10px] font-medium uppercase tracking-[0.14em]">${escapeHtml(descriptor.statusLabel)}</div>`
+    ? `<div class="${getStatusLabelClasses(descriptor.statusLabel)} shrink-0 text-[10px] font-medium uppercase tracking-[0.14em]" data-role="control-room-card-status">${escapeHtml(descriptor.statusLabel)}</div>`
     : "";
   title.innerHTML = `
         <div class="flex items-start justify-between gap-2">
             <div class="min-w-0 truncate text-sm font-semibold tracking-[0.01em]">${escapeHtml(descriptor.title)}</div>
-            <div class="flex shrink-0 items-center gap-1.5">
-                <div
-                    class="hidden h-5 w-5 shrink-0 items-center justify-center rounded-full border border-amber-500/35 bg-amber-500/12 text-amber-700 dark:text-amber-300"
-                    data-role="control-room-card-warning"
-                    aria-label=""
-                    title="">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                        <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.72-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.981-1.742 2.981H4.42c-1.53 0-2.492-1.647-1.743-2.98l5.58-9.921ZM11 7a1 1 0 1 0-2 0v3a1 1 0 1 0 2 0V7Zm-1 7a1.25 1.25 0 1 0 0-2.5A1.25 1.25 0 0 0 10 14Z" clip-rule="evenodd" />
-                    </svg>
-                </div>
+            <div class="flex shrink-0 items-center gap-1.5" data-role="control-room-card-status-cluster">
                 ${statusLabel}
             </div>
         </div>`;

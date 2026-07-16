@@ -42,6 +42,7 @@ let telemetryLoaded = false;
 let telemetryUnavailable = false;
 let stageUnavailable = false;
 let viewOptions: TelemetryViewOptions | null = null;
+let telemetrySearchQuery = "";
 
 function formatNumber(value: unknown): string {
   return typeof value === "number" && Number.isFinite(value)
@@ -125,6 +126,73 @@ function renderStage(pipelineId: string, stage: TelemetryStage): string {
   </article>`;
 }
 
+function normalizeTelemetrySearch(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function metricKeys(metrics: TelemetryMetrics | undefined): string {
+  return Object.keys(metrics || {}).join(" ");
+}
+
+function readerSearchText(reader: { name: string }): string {
+  return reader.name.toLowerCase();
+}
+
+function egressSearchText(egress: {
+  outputId: string;
+  status?: string;
+  phase?: string;
+  protocol?: string;
+  targetUrl?: string;
+  targetAddr?: string | null;
+  lastError?: string | null;
+  failurePhase?: string | null;
+}): string {
+  return [
+    egress.outputId,
+    egress.status,
+    egress.phase,
+    egress.protocol,
+    egress.targetUrl,
+    egress.targetAddr,
+    egress.lastError,
+    egress.failurePhase,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function stageSearchText(pipelineId: string, stage: TelemetryStage): string {
+  return [
+    stage.kind,
+    stageKey(pipelineId, stage),
+    stage.active === false ? "inactive" : "active",
+    metricKeys(stage.metrics),
+    metricKeys(stage.pipeMetrics),
+    metricKeys(stage.payloadStats),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function telemetrySearchSummaryText(
+  filteredReaders: number,
+  totalReaders: number,
+  filteredStages: number,
+  totalStages: number,
+  filteredEgresses: number,
+  totalEgresses: number,
+  search: string,
+): string {
+  const visible = `${pluralize(filteredReaders, "reader")} · ${pluralize(filteredStages, "stage")} · ${pluralize(filteredEgresses, "egress", "egresses")} visible`;
+  if (!search) return visible;
+  const total = totalReaders + totalStages + totalEgresses;
+  const shown = filteredReaders + filteredStages + filteredEgresses;
+  return `${shown}/${total} telemetry items match "${search}" · ${pluralize(filteredReaders, "reader")} · ${pluralize(filteredStages, "stage")} · ${pluralize(filteredEgresses, "egress", "egresses")}`;
+}
+
 function pluralize(
   count: number,
   singular: string,
@@ -177,6 +245,7 @@ export function renderEngineerTelemetryHtml(
     unavailable?: boolean;
     stageUnavailable?: boolean;
   } = {},
+  searchQuery = "",
 ): string {
   const options = pipelines
     .map(
@@ -188,6 +257,29 @@ export function renderEngineerTelemetryHtml(
   const readers = ring?.readers || [];
   const stages = pipeline?.stages || [];
   const egresses = pipeline?.egresses || [];
+  const normalizedSearch = normalizeTelemetrySearch(searchQuery);
+  const filteredReaders = readers.filter(
+    (reader) =>
+      !normalizedSearch || readerSearchText(reader).includes(normalizedSearch),
+  );
+  const filteredStages = stages.filter(
+    (item) =>
+      !normalizedSearch ||
+      stageSearchText(pipelineId, item).includes(normalizedSearch),
+  );
+  const filteredEgresses = egresses.filter(
+    (egress) =>
+      !normalizedSearch || egressSearchText(egress).includes(normalizedSearch),
+  );
+  const searchSummaryText = telemetrySearchSummaryText(
+    filteredReaders.length,
+    readers.length,
+    filteredStages.length,
+    stages.length,
+    filteredEgresses.length,
+    egresses.length,
+    searchQuery.trim(),
+  );
   const availability = !status.loaded
     ? `<div class="alert"><span>Loading telemetry snapshots…</span></div>`
     : status.unavailable
@@ -203,6 +295,16 @@ export function renderEngineerTelemetryHtml(
   return `<div class="mx-auto max-w-7xl space-y-4">
     <header class="flex flex-wrap items-end justify-between gap-3"><div><h1 class="text-lg font-semibold">Engineer telemetry</h1><p class="text-base-content/60 mt-1 text-sm">Point-in-time engine, ring, reader, stage, and egress counters.</p></div><div class="flex items-center gap-2"><select id="telemetry-pipeline-select" class="select select-sm" aria-label="Telemetry pipeline">${options || `<option value="">No pipelines</option>`}</select><button id="telemetry-refresh-btn" type="button" class="btn btn-sm btn-outline">Refresh</button></div></header>
     <p id="telemetry-route-summary" class="text-base-content/60 text-sm" role="status" aria-live="polite">${escapeHtml(summaryText)}</p>
+    <section class="border-base-content/10 bg-base-200 rounded-lg border p-3" aria-label="Telemetry filter">
+      <div class="flex flex-wrap items-end gap-3">
+        <label class="min-w-60 flex-1 text-sm">
+          <span class="text-base-content/70 mb-1 block text-xs font-semibold uppercase">Search telemetry items</span>
+          <input id="telemetry-search" class="input input-sm input-bordered w-full" type="search" value="${escapeHtml(searchQuery)}" placeholder="reader, stage, egress, counter…" autocomplete="off" />
+        </label>
+        <button id="telemetry-clear-search-btn" type="button" class="btn btn-sm btn-outline ${normalizedSearch ? "" : "hidden"}">Clear search</button>
+      </div>
+      <p id="telemetry-search-results-summary" class="text-base-content/60 mt-2 text-sm" role="status" aria-live="polite">${escapeHtml(searchSummaryText)}</p>
+    </section>
     ${availability}
     <section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Engine telemetry summary">
       <div class="stat bg-base-200 rounded-lg"><div class="stat-title">Active ingests</div><div class="stat-value text-2xl">${engine?.ingests.length ?? "—"}</div></div>
@@ -219,10 +321,10 @@ export function renderEngineerTelemetryHtml(
         ? `<div class="grid gap-4 xl:grid-cols-[minmax(20rem,.75fr)_minmax(0,1.25fr)]">
       <div class="space-y-4">
         <section class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Source ring</h2>${ring ? `<div class="mt-3 grid grid-cols-2 gap-3 text-sm"><div><span class="text-base-content/60">Fill</span><div class="font-mono">${formatNumber(ring.fill)} / ${formatNumber(ring.capacity)} (${formatNumber(ring.fillPercent)}%)</div></div><div><span class="text-base-content/60">Depth</span><div class="font-mono">${formatNumber(ring.bufferDepthSecs)} s</div></div></div>` : `<p class="text-base-content/60 mt-3 text-sm">No active source ring.</p>`}</section>
-        <section class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Readers</h2><div class="mt-3 space-y-2">${readers.length ? readers.map((reader) => `<div class="bg-base-100 rounded-md p-3 text-sm"><div class="font-medium">${escapeHtml(reader.name)}</div><div class="text-base-content/60 mt-1 text-xs">Lag ${formatNumber(reader.lagSlots)} slots · ${formatNumber(reader.overflowCount)} overflows · packet age ${formatNumber(reader.packetAgeMs)} ms</div></div>`).join("") : `<p class="text-base-content/60 text-sm">No active readers.</p>`}</div></section>
-        <section class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Egresses</h2><div class="mt-3 space-y-2">${egresses.length ? egresses.map((egress) => `<div class="bg-base-100 rounded-md p-3 text-sm"><div class="flex justify-between gap-2"><span class="font-medium">${escapeHtml(egress.outputId)}</span><span class="badge badge-sm">${escapeHtml(egress.status || egress.phase || "unknown")}</span></div><div class="text-base-content/60 mt-1 text-xs">${formatBytes(egress.bytesOut)} sent${egress.lastError ? ` · ${escapeHtml(egress.lastError)}` : ""}</div></div>`).join("") : `<p class="text-base-content/60 text-sm">No active egresses.</p>`}</div></section>
+        <section class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Readers</h2><div class="mt-3 space-y-2">${filteredReaders.length ? filteredReaders.map((reader) => `<div class="bg-base-100 rounded-md p-3 text-sm"><div class="font-medium">${escapeHtml(reader.name)}</div><div class="text-base-content/60 mt-1 text-xs">Lag ${formatNumber(reader.lagSlots)} slots · ${formatNumber(reader.overflowCount)} overflows · packet age ${formatNumber(reader.packetAgeMs)} ms</div></div>`).join("") : `<p class="text-base-content/60 text-sm">${normalizedSearch ? `No readers match "${escapeHtml(searchQuery.trim())}".` : "No active readers."}</p>`}</div></section>
+        <section class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Egresses</h2><div class="mt-3 space-y-2">${filteredEgresses.length ? filteredEgresses.map((egress) => `<div class="bg-base-100 rounded-md p-3 text-sm"><div class="flex justify-between gap-2"><span class="font-medium">${escapeHtml(egress.outputId)}</span><span class="badge badge-sm">${escapeHtml(egress.status || egress.phase || "unknown")}</span></div><div class="text-base-content/60 mt-1 text-xs">${formatBytes(egress.bytesOut)} sent${egress.lastError ? ` · ${escapeHtml(egress.lastError)}` : ""}</div></div>`).join("") : `<p class="text-base-content/60 text-sm">${normalizedSearch ? `No egresses match "${escapeHtml(searchQuery.trim())}".` : "No active egresses."}</p>`}</div></section>
       </div>
-      <div class="space-y-4"><section><h2 class="mb-3 font-semibold">Processing stages</h2><div class="grid gap-3 md:grid-cols-2">${stages.length ? stages.map((item) => renderStage(pipelineId, item)).join("") : `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">No active stages.</div>`}</div></section>
+      <div class="space-y-4"><section><h2 class="mb-3 font-semibold">Processing stages</h2><div class="grid gap-3 md:grid-cols-2">${filteredStages.length ? filteredStages.map((item) => renderStage(pipelineId, item)).join("") : `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">${normalizedSearch ? `No stages match "${escapeHtml(searchQuery.trim())}".` : "No active stages."}</div>`}</div></section>
       <section id="stage-telemetry-detail" class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Stage detail</h2>${status.stageUnavailable ? `<p class="text-warning mt-2 text-sm">Fresh stage detail is unavailable; the stage may have stopped. Last known counters remain visible when available.</p>` : ""}${stage ? `<div class="mt-1 text-xs text-base-content/60">${escapeHtml(stage.stageKey)}</div><div class="mt-3 grid gap-4 md:grid-cols-2"><div><h3 class="mb-2 text-sm font-medium">Throughput</h3>${metricRows(stage.metrics)}</div><div><h3 class="mb-2 text-sm font-medium">Pipe</h3>${metricRows(stage.pipeMetrics)}</div></div>` : status.stageUnavailable ? "" : `<p class="text-base-content/60 mt-3 text-sm">Select a stage to fetch its current detail.</p>`}</section></div>
     </div>`
         : pipelineId
@@ -247,6 +349,7 @@ function paintTelemetry(): void {
       unavailable: telemetryUnavailable,
       stageUnavailable,
     },
+    telemetrySearchQuery,
   );
   const select = document.getElementById(
     "telemetry-pipeline-select",
@@ -257,6 +360,29 @@ function paintTelemetry(): void {
   document
     .getElementById("telemetry-refresh-btn")
     ?.addEventListener("click", () => void refreshEngineerTelemetry(true));
+  const search = document.getElementById(
+    "telemetry-search",
+  ) as HTMLInputElement | null;
+  search?.addEventListener("input", () => {
+    const cursor = search.selectionStart ?? search.value.length;
+    telemetrySearchQuery = search.value;
+    paintTelemetry();
+    const nextSearch = document.getElementById(
+      "telemetry-search",
+    ) as HTMLInputElement | null;
+    nextSearch?.focus();
+    nextSearch?.setSelectionRange(cursor, cursor);
+  });
+  document
+    .getElementById("telemetry-clear-search-btn")
+    ?.addEventListener("click", () => {
+      telemetrySearchQuery = "";
+      paintTelemetry();
+      const nextSearch = document.getElementById(
+        "telemetry-search",
+      ) as HTMLInputElement | null;
+      nextSearch?.focus();
+    });
   document
     .querySelectorAll<HTMLElement>("[data-stage-telemetry-key]")
     .forEach((button) => {

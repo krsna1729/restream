@@ -151,6 +151,11 @@ Stage detail panel for raw values. Seeded Playwright/CDP coverage proves the
 raw `packetsOut` counter is absent from the initial stage grid and appears only
 after the operator activates the stage Details control.
 
+Telemetry also now has a local filter across readers, processing stages, and
+egresses. The filter summary is announced as status text, so operators can
+narrow dense MSR telemetry by reader, stage, output, or counter name, recover
+with Clear search, and keep the route-level telemetry scope unchanged.
+
 Settings now gets the same guardrail for its dense admin form: the legacy-owned
 route announces server scope, section count, configured profile count, and
 current authentication-attempt count. Seeded Playwright/CDP coverage proves the
