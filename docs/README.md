@@ -73,6 +73,9 @@ active documentation set.
   unit/live tier boundary. Use [testing.md](testing.md) for current commands.
 - [Mahashivratri scenario](mahashivratri-hero-scenario.md) — durable scale
   workload definition.
+- [Dashboard v2 live MSR operator review](ui-redesign/operator-msr-live-review-2026-07-16.md)
+  — dated browser/CDP evidence for the v2 Overview and Pipeline / Operate
+  readiness boundary.
 - [Regression artifact index](regression-artifacts.md) — durable replay map for
   historical failures.
 
@@ -138,6 +141,7 @@ above remain the better way to learn the system.
 - [Mahashivratri hero scenario](mahashivratri-hero-scenario.md)
 - [Testing decision record](testing-strategy.md)
 - [UI redesign baseline](ui-redesign/brief.md)
+- [UI redesign live MSR operator review](ui-redesign/operator-msr-live-review-2026-07-16.md)
 - [UI redesign operator task model](ui-redesign/operator-task-model.md)
 - [UI redesign state matrix](ui-redesign/state-matrix.yaml)
 - [UI redesign route contract](ui-redesign/route-contract.md)

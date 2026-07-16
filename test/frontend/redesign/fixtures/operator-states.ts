@@ -8,6 +8,49 @@ interface OperatorStateFixture {
 
 const generatedAt = "2026-07-14T06:30:00Z";
 
+const msrAudioTrackLanguages = [
+  "eng",
+  "tam",
+  "hin",
+  "tel",
+  "kan",
+  "mar",
+  "nep",
+  "ben",
+  "mal",
+  "guj",
+  "ori",
+  "ita",
+  "spa",
+  "fra",
+  "deu",
+  "rus",
+  "por",
+  "ara",
+  "zho",
+  "zho",
+  "ind",
+  "jpn",
+  "kor",
+  "urd",
+  "tur",
+  "vie",
+  "tha",
+  "pan",
+  "nld",
+  "pol",
+] as const;
+
+const msrAudioTracks = msrAudioTrackLanguages.map((language, index) => ({
+  trackIndex: index,
+  codec: "aac",
+  channels: index === 29 ? 6 : 2,
+  sampleRate: 48_000,
+  language,
+  pid: 257 + index,
+  profile: "LC",
+}));
+
 const baseMetrics = {
   generatedAt,
   cpu: { usagePercent: 18, cores: 8, load1: 0.7 },
@@ -398,12 +441,7 @@ export const operatorStates: Record<OperatorStateName, OperatorStateFixture> = {
               readers: 1,
               video: { codec: "h264", width: 1920, height: 1080 },
               audioTracks: [
-                {
-                  trackIndex: 0,
-                  codec: "aac",
-                  channels: 1,
-                  sampleRate: 48_000,
-                },
+                ...msrAudioTracks,
               ],
               publisher: {
                 protocol: "srt",

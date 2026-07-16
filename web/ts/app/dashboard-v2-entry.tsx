@@ -39,6 +39,8 @@ const toneTextClasses: Readonly<Record<OverviewTone, string>> = {
   neutral: "text-base-content/75",
 };
 
+const INPUT_AUDIO_TRACK_PREVIEW_LIMIT = 6;
+
 const metricToneClasses: Readonly<Record<OverviewMetric["key"], string>> = {
   inputs: "border-l-success text-success",
   outputs: "border-l-secondary text-secondary",
@@ -663,6 +665,12 @@ function DashboardV2PipelineInputStatus({
   model: PipelineOperateInputStatusModel;
 }): React.JSX.Element {
   const previewContainerRef = useRef<HTMLDivElement>(null);
+  const [audioExpanded, setAudioExpanded] = useState(false);
+  const audioTrackOverflow =
+    model.audioTracks.length > INPUT_AUDIO_TRACK_PREVIEW_LIMIT;
+  const visibleAudioTracks = audioExpanded
+    ? model.audioTracks
+    : model.audioTracks.slice(0, INPUT_AUDIO_TRACK_PREVIEW_LIMIT);
 
   useEffect(() => {
     const container = previewContainerRef.current;
@@ -675,6 +683,10 @@ function DashboardV2PipelineInputStatus({
     model.previewEnabled,
     model.previewKeyAssigned,
   ]);
+
+  useEffect(() => {
+    setAudioExpanded(false);
+  }, [model.id]);
 
   return (
     <section
@@ -778,7 +790,7 @@ function DashboardV2PipelineInputStatus({
         </h3>
         {model.audioTracks.length ? (
           <div className="border-base-content/10 divide-base-content/10 mt-1 divide-y border-y">
-            {model.audioTracks.map((track) => (
+            {visibleAudioTracks.map((track) => (
               <div
                 className="border-base-content/10 grid gap-2 px-1 py-2.5 sm:grid-cols-[minmax(0,1.2fr)_repeat(4,minmax(0,.7fr))] sm:px-3"
                 key={track.key}
@@ -865,6 +877,23 @@ function DashboardV2PipelineInputStatus({
                 ))}
               </div>
             ))}
+            {audioTrackOverflow ? (
+              <div className="flex items-center justify-between gap-2 px-1 py-2.5 sm:px-3">
+                <p className="text-base-content/55 text-xs">
+                  Showing {visibleAudioTracks.length} of{" "}
+                  {model.audioTracks.length} audio tracks
+                </p>
+                <button
+                  className="btn btn-xs btn-outline"
+                  onClick={() => setAudioExpanded((expanded) => !expanded)}
+                  type="button"
+                >
+                  {audioExpanded
+                    ? "Show fewer"
+                    : `Show all ${model.audioTracks.length}`}
+                </button>
+              </div>
+            ) : null}
           </div>
         ) : (
           <p className="text-base-content/55 mt-1 text-sm">No tracks</p>

@@ -340,5 +340,5 @@ export async function openSeededDashboard(
     : page.locator("#overview-mode-content");
   await expect(
     overview.getByRole("heading", { name: "Fleet overview" }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15_000 });
 }

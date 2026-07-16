@@ -177,6 +177,17 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
     pipelineHeader.getByRole("heading", { name: "Recovered Sink Flap" }),
   ).toBeVisible();
   await expect(inputStatus).toContainText("Live input");
+  await expect(inputStatus).toContainText("30 audio tracks");
+  await expect(inputStatus.getByText("Track 6")).toBeVisible();
+  await expect(inputStatus.getByText("Track 7")).toHaveCount(0);
+  await expect(
+    inputStatus.getByRole("button", { name: "Show all 30" }),
+  ).toBeVisible();
+  await inputStatus.getByRole("button", { name: "Show all 30" }).click();
+  await expect(inputStatus.getByText("Track 30")).toBeVisible();
+  await expect(
+    inputStatus.getByRole("button", { name: "Show fewer" }),
+  ).toBeVisible();
   await expect(outputOverview).toContainText("SRT Sink Flap");
   await expect(outputOverview).toContainText("Flapping");
   await expect(outputOverview).toContainText("4 recent failures");
