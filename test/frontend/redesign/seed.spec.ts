@@ -689,10 +689,23 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
       'No monitoring outputs match "nowhere". Clear search to show all monitoring cards.',
     ),
   ).toBeVisible();
+  const clearSearch = monitor.getByRole("button", { name: "Clear search" });
+  await expect(clearSearch).toBeVisible();
   expect(await getCdpStatusTexts(page)).toEqual(
     expect.arrayContaining([
       '0/1 monitored match · 0 missing monitoring URLs · "nowhere"',
     ]),
+  );
+
+  await clearSearch.click();
+  await expect(search).toHaveValue("");
+  await expect(summary).toHaveText(
+    "1/1 monitored · 0 missing monitoring URLs",
+  );
+  await expect(clearSearch).toBeHidden();
+  await expect(monitor.getByText("Retrying Output")).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    "1/1 monitored · 0 missing monitoring URLs",
   );
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
 });

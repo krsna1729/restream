@@ -547,6 +547,7 @@ function ensureShell(container: HTMLElement): void {
                         <span class="text-base-content/70 mb-1 block text-xs font-semibold uppercase">Search Outputs</span>
                         <input type="text" id="control-room-search-input" placeholder="Search outputs..." class="input input-sm input-bordered w-full" />
                     </label>
+                    <button type="button" id="control-room-clear-search-btn" class="btn btn-sm btn-outline hidden" data-action="control-room-clear-search">Clear search</button>
                     <div class="flex items-center gap-2">
                         <button type="button" class="btn btn-sm btn-outline" data-action="control-room-prev-page">Prev</button>
                         <span id="control-room-page-label" class="text-base-content/70 min-w-[6rem] text-center text-sm">Page 1 / 1</span>
@@ -596,6 +597,16 @@ function ensureShell(container: HTMLElement): void {
       normalizeState();
       persistState();
       renderControlRoom();
+      return;
+    }
+    if (action === "control-room-clear-search") {
+      controlRoomState.searchQuery = "";
+      controlRoomState.page = 0;
+      persistState();
+      renderControlRoom();
+      container
+        .querySelector<HTMLInputElement>("#control-room-search-input")
+        ?.focus();
       return;
     }
     if (action === "control-room-toggle-playback-all") {
@@ -1693,6 +1704,12 @@ function renderControlRoom(): void {
   if (searchInput && searchInput.value !== controlRoomState.searchQuery) {
     searchInput.value = controlRoomState.searchQuery;
   }
+  container
+    .querySelector<HTMLButtonElement>("#control-room-clear-search-btn")
+    ?.classList.toggle(
+      "hidden",
+      controlRoomState.searchQuery.trim() === "",
+    );
 
   renderSummaryAndPagination(container, selectedPipeline);
 

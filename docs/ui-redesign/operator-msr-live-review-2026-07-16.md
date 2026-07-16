@@ -104,9 +104,10 @@ Monitor now announces its pipeline scope before the monitoring wall: selected
 pipeline, output count, configured monitor count, and missing monitoring URL
 count. Search feedback still separates filtered matches from configuration
 gaps: seeded Playwright/CDP coverage proves a search miss is announced as
-`0/N monitored match` while preserving the true missing-monitoring-URL count.
-That prevents the control room from implying a configured monitor disappeared
-just because the operator narrowed the list.
+`0/N monitored match` while preserving the true missing-monitoring-URL count,
+then proves the local Clear search action restores the monitoring wall without
+resetting the whole room. That prevents the control room from implying a
+configured monitor disappeared just because the operator narrowed the list.
 
 Media search now follows the same feedback contract: the legacy-owned Media
 route exposes one live result-count summary that also splits matches by
