@@ -88,6 +88,11 @@ action pushes one canonical `mode=pipeline&view=operate&p=...` URL, renders the
 selected pipeline immediately, and lets a single browser Back return to clean
 v2 Overview.
 
+The seeded v2 Operate path also has a CDP layout proof across the configured
+desktop, tablet, and mobile browser projects. The stress fixture uses the
+recovered sink-flap pipeline with 30 audio tracks and verifies that both DOM
+scroll width and CDP layout content width stay within the viewport.
+
 ## Operator findings
 
 What is now strong enough for v2:

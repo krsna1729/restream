@@ -38,6 +38,13 @@ async function getCdpNodeCount(page: Page): Promise<number> {
   );
 }
 
+async function getCdpLayoutWidthDelta(page: Page): Promise<number> {
+  const cdp = await page.context().newCDPSession(page);
+  const metrics = await cdp.send("Page.getLayoutMetrics");
+  await cdp.detach();
+  return metrics.contentSize.width - metrics.cssLayoutViewport.clientWidth;
+}
+
 async function tabUntilFocused(
   page: Page,
   locator: Locator,
@@ -415,6 +422,46 @@ test("seed: ui=v2 overview Operate is one predictable history step @desktop", as
       .getByRole("heading", { name: "Fleet overview" }),
   ).toBeVisible();
   expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
+});
+
+test("seed: ui=v2 Operate stays inside the viewport across breakpoints", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "chaos-recovery",
+    "/?mode=pipeline&view=operate&p=pipe-flapping&ui=v2",
+    { expectOverviewReady: false },
+  );
+
+  await expect(
+    page.locator("#dashboard-v2-pipeline-selector-root").getByRole("heading", {
+      name: "Pipelines",
+    }),
+  ).toBeVisible();
+  await expect(
+    page.locator("#dashboard-v2-pipeline-header-root").getByRole("heading", {
+      name: "Recovered Sink Flap",
+    }),
+  ).toBeVisible();
+  await expect(
+    page
+      .locator("#dashboard-v2-pipeline-input-status-root")
+      .getByRole("heading", { name: "Input and preview" }),
+  ).toBeVisible();
+  await expect(
+    page
+      .locator("#dashboard-v2-pipeline-output-overview-root")
+      .getByRole("heading", { name: "Output overview" }),
+  ).toBeVisible();
+
+  const pageOverflow = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  );
+  expect(pageOverflow).toBeLessThanOrEqual(1);
+  expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
 });
 
 test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", async ({
