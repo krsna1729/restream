@@ -1076,6 +1076,31 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
   await expect(inputStatus).toContainText("30 audio tracks");
   await expect(inputStatus.getByText("Track 6")).toBeVisible();
   await expect(inputStatus.getByText("Track 7")).toHaveCount(0);
+  const audioSearch = inputStatus.getByLabel("Search audio tracks");
+  const audioSearchClear = inputStatus.getByRole("button", {
+    name: "Clear search",
+  });
+  await expect(audioSearch).toBeVisible();
+  await audioSearch.fill("track 30");
+  await expect(inputStatus.getByText("Track 30")).toBeVisible();
+  await expect(inputStatus.getByText("Track 6")).toHaveCount(0);
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/30 audio tracks match "track 30"',
+  );
+  await audioSearch.fill("missing audio");
+  await expect(
+    inputStatus.getByText(
+      'No audio tracks match "missing audio". Clear search to show all.',
+    ),
+  ).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '0/30 audio tracks match "missing audio"',
+  );
+  await audioSearchClear.click();
+  await expect(audioSearch).toHaveValue("");
+  await expect(inputStatus.getByText("Track 6")).toBeVisible();
+  await expect(inputStatus.getByText("Track 30")).toHaveCount(0);
+  await expect(audioSearchClear).toBeHidden();
   await expect(
     inputStatus.getByRole("button", { name: "Show all 30" }),
   ).toBeVisible();

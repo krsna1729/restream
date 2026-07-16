@@ -859,11 +859,35 @@ function DashboardV2PipelineInputStatus({
 }): React.JSX.Element {
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const [audioExpanded, setAudioExpanded] = useState(false);
+  const [audioQuery, setAudioQuery] = useState("");
+  const normalizedAudioQuery = audioQuery.trim().toLowerCase();
   const audioTrackOverflow =
     model.audioTracks.length > INPUT_AUDIO_TRACK_PREVIEW_LIMIT;
-  const visibleAudioTracks = audioExpanded
-    ? model.audioTracks
-    : model.audioTracks.slice(0, INPUT_AUDIO_TRACK_PREVIEW_LIMIT);
+  const filteredAudioTracks = normalizedAudioQuery
+    ? model.audioTracks.filter((track) =>
+        [
+          `track ${track.index + 1}`,
+          track.label,
+          track.identity,
+          track.codec,
+          track.sampleRate,
+          track.channels,
+          track.profile,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedAudioQuery),
+      )
+    : model.audioTracks;
+  const visibleAudioTracks = normalizedAudioQuery
+    ? filteredAudioTracks
+    : audioExpanded
+      ? model.audioTracks
+      : model.audioTracks.slice(0, INPUT_AUDIO_TRACK_PREVIEW_LIMIT);
+  const showAudioSearch = audioTrackOverflow || normalizedAudioQuery !== "";
+  const audioSummaryText = normalizedAudioQuery
+    ? `${filteredAudioTracks.length}/${model.audioTracks.length} audio tracks match "${audioQuery.trim()}"`
+    : `Showing ${visibleAudioTracks.length} of ${model.audioTracks.length} audio tracks`;
 
   useEffect(() => {
     const container = previewContainerRef.current;
@@ -879,6 +903,7 @@ function DashboardV2PipelineInputStatus({
 
   useEffect(() => {
     setAudioExpanded(false);
+    setAudioQuery("");
   }, [model.id]);
 
   return (
@@ -978,12 +1003,41 @@ function DashboardV2PipelineInputStatus({
         </div>
       ))}
       <div className="mt-3">
-        <h3 className="text-base-content/60 text-[0.7rem] font-semibold uppercase tracking-wide">
-          Audio
-        </h3>
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <h3 className="text-base-content/60 text-[0.7rem] font-semibold uppercase tracking-wide">
+            Audio
+          </h3>
+          {showAudioSearch ? (
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <label className="input input-bordered input-xs flex min-h-8 min-w-48 items-center gap-2">
+                <span className="text-base-content/55 text-[0.65rem] font-semibold uppercase">
+                  Find
+                </span>
+                <input
+                  aria-label="Search audio tracks"
+                  className="min-w-0 grow"
+                  onChange={(event) => setAudioQuery(event.currentTarget.value)}
+                  placeholder="track, codec, language"
+                  type="search"
+                  value={audioQuery}
+                />
+              </label>
+              {normalizedAudioQuery ? (
+                <button
+                  className="btn btn-xs btn-ghost"
+                  onClick={() => setAudioQuery("")}
+                  type="button"
+                >
+                  Clear search
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
         {model.audioTracks.length ? (
           <div className="border-base-content/10 divide-base-content/10 mt-1 divide-y border-y">
-            {visibleAudioTracks.map((track) => (
+            {visibleAudioTracks.length ? (
+              visibleAudioTracks.map((track) => (
               <div
                 className="border-base-content/10 grid gap-2 px-1 py-2.5 sm:grid-cols-[minmax(0,1.2fr)_repeat(4,minmax(0,.7fr))] sm:px-3"
                 key={track.key}
@@ -1069,22 +1123,33 @@ function DashboardV2PipelineInputStatus({
                   </div>
                 ))}
               </div>
-            ))}
-            {audioTrackOverflow ? (
+              ))
+            ) : (
+              <div className="px-1 py-3 text-sm text-base-content/60 sm:px-3">
+                No audio tracks match "{audioQuery.trim()}". Clear search to
+                show all.
+              </div>
+            )}
+            {audioTrackOverflow || normalizedAudioQuery ? (
               <div className="flex items-center justify-between gap-2 px-1 py-2.5 sm:px-3">
-                <p className="text-base-content/55 text-xs">
-                  Showing {visibleAudioTracks.length} of{" "}
-                  {model.audioTracks.length} audio tracks
-                </p>
-                <button
-                  className="btn btn-xs btn-outline"
-                  onClick={() => setAudioExpanded((expanded) => !expanded)}
-                  type="button"
+                <p
+                  aria-live="polite"
+                  className="text-base-content/55 text-xs"
+                  role="status"
                 >
-                  {audioExpanded
-                    ? "Show fewer"
-                    : `Show all ${model.audioTracks.length}`}
-                </button>
+                  {audioSummaryText}
+                </p>
+                {normalizedAudioQuery ? null : (
+                  <button
+                    className="btn btn-xs btn-outline"
+                    onClick={() => setAudioExpanded((expanded) => !expanded)}
+                    type="button"
+                  >
+                    {audioExpanded
+                      ? "Show fewer"
+                      : `Show all ${model.audioTracks.length}`}
+                  </button>
+                )}
               </div>
             ) : null}
           </div>

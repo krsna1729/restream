@@ -215,7 +215,10 @@ What changed from the live operator pass:
 
 - A 30-audio-track MSR input made the input card too tall. v2 now shows the
   first six audio tracks by default and exposes an explicit `Show all 30`
-  progressive-disclosure affordance.
+  progressive-disclosure affordance. The audio section also now has a local
+  track search for overflowed inputs, with status-text match counts and Clear
+  search recovery, so an operator can jump to Track 30 without expanding every
+  row first.
 - The first focused pipeline view could briefly look incomplete while the
   selected-pipeline runtime refresh converged. v2 now renders one lightweight
   details placeholder in the header slot so the operator sees that the selected
