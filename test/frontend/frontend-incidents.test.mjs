@@ -75,6 +75,64 @@ test("incidents escape evidence, sort critical first, and distinguish loading/er
   assert.doesNotMatch(html, /<script>|<unsafe>|<boom>|Pipe <one>/);
   assert.match(html, /temporarily unavailable/);
   assert.match(html, /fleet/);
+  const filtered = renderIncidentsHtml(
+    {
+      ...base,
+      loaded: true,
+      alerts: {
+        generatedAt: "now",
+        alerts: [
+          {
+            id: "warn",
+            severity: "warning",
+            scope: "pipeline",
+            pipelineId: "p1",
+            title: "Retrying output",
+            cause: "Synthetic destination refused the connection",
+            evidence: ["retry backoff"],
+            recommendedAction: "inspect destination",
+            generatedAt: "now",
+          },
+          {
+            id: "quiet",
+            severity: "warning",
+            scope: "pipeline",
+            pipelineId: "p1",
+            title: "Quiet output",
+            cause: "nothing interesting",
+            evidence: [],
+            recommendedAction: "wait",
+            generatedAt: "now",
+          },
+        ],
+      },
+      events: {
+        generatedAt: "now",
+        count: 2,
+        events: [
+          {
+            seq: 2,
+            timestamp: "2026-01-01T00:00:00Z",
+            kind: "egress.retrying",
+            pipelineId: "p1",
+            error: "Synthetic destination refused the connection",
+          },
+          {
+            seq: 1,
+            timestamp: "2026-01-01T00:00:00Z",
+            kind: "pipeline.healthy",
+            pipelineId: "p1",
+          },
+        ],
+      },
+    },
+    [{ id: "p1", name: "Pipe <one>" }],
+    "p1",
+    "destination",
+  );
+  assert.match(filtered, /1 alert group · 1 event match &quot;destination&quot;/);
+  assert.match(filtered, /Retrying output/);
+  assert.doesNotMatch(filtered, /Quiet output|pipeline\.healthy/);
 
   const empty = renderIncidentsHtml(
     {

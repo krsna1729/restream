@@ -122,6 +122,12 @@ and active scope counts as a live status line. Seeded Playwright/CDP coverage
 proves both fleet-wide and pipeline-scoped summaries update visibly and in the
 accessibility tree.
 
+Incidents also now has one local search surface across active alerts and recent
+lifecycle events. The search result summary is announced as status text, so an
+operator can narrow a noisy incident feed by destination, pipeline, cause, or
+event wording without visually scanning both columns. Seeded Playwright/CDP
+coverage proves hit and no-hit summaries are visible and announced.
+
 Telemetry now has an equivalent engineer-facing checkpoint: before the dense
 counter grids, the legacy-owned route announces loaded/stale state, engine
 ingest count, scoped stage/egress/reader counts, and the active pipeline scope.

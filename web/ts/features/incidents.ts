@@ -48,6 +48,7 @@ let snapshot: IncidentSnapshot = {
   unavailable: false,
 };
 let viewOptions: IncidentsViewOptions | null = null;
+let incidentSearchQuery = "";
 
 function formatTime(value: string | undefined): string {
   const millis = Date.parse(value || "");
@@ -168,6 +169,43 @@ function eventSummary(event: LifecycleEvent): string {
   return event.kind;
 }
 
+function normalizeSearch(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function alertSearchText(alert: OperatorAlert): string {
+  return [
+    alert.id,
+    alert.severity,
+    alert.scope,
+    alert.pipelineId,
+    alert.stageId,
+    alert.outputId,
+    alert.title,
+    alert.cause,
+    alert.recommendedAction,
+    ...(alert.evidence || []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function eventSearchText(event: LifecycleEvent): string {
+  return [
+    eventSummary(event),
+    event.kind,
+    event.pipelineId,
+    event.outputId,
+    event.protocol,
+    event.encoding,
+    event.error,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
 function renderAlert(alert: OperatorAlert): string {
   const evidence = (alert.evidence || [])
     .map((item) => `<li>${escapeHtml(item)}</li>`)
@@ -282,9 +320,11 @@ export function renderIncidentsHtml(
   data: IncidentSnapshot,
   pipelines: IncidentPipelineOption[],
   pipelineId: string,
+  searchQuery = "",
 ): string {
+  const search = normalizeSearch(searchQuery);
   const allAlerts = data.alerts?.alerts || [];
-  const alerts = allAlerts
+  const scopedAlerts = allAlerts
     .filter((alert) => alertMatchesPipeline(alert, pipelineId))
     .sort((left, right) => {
       const severity =
@@ -292,15 +332,23 @@ export function renderIncidentsHtml(
         Number(left.severity === "critical");
       return severity || left.title.localeCompare(right.title);
     });
+  const alerts = scopedAlerts.filter(
+    (alert) => !search || alertSearchText(alert).includes(search),
+  );
   const alertGroups = groupAlerts(alerts);
-  const critical = alerts.filter(
+  const critical = scopedAlerts.filter(
     (alert) => alert.severity === "critical",
   ).length;
-  const warning = alerts.filter((alert) => alert.severity === "warning").length;
-  const events = [...(data.events?.events || [])]
+  const warning = scopedAlerts.filter(
+    (alert) => alert.severity === "warning",
+  ).length;
+  const scopedEvents = [...(data.events?.events || [])]
     .filter((event) => !pipelineId || event.pipelineId === pipelineId)
     .sort((a, b) => b.seq - a.seq)
     .slice(0, 30);
+  const events = scopedEvents.filter(
+    (event) => !search || eventSearchText(event).includes(search),
+  );
   const options = [
     `<option value="">All pipelines</option>`,
     ...pipelines.map(
@@ -316,8 +364,13 @@ export function renderIncidentsHtml(
       : "";
   const scopeLabel = incidentScopeLabel(pipelines, pipelineId);
   const summaryText = data.loaded
-    ? `${critical} critical · ${warning} warning · ${pluralize(events.length, "recent event")} · ${scopeLabel}`
+    ? `${critical} critical · ${warning} warning · ${pluralize(scopedEvents.length, "recent event")} · ${scopeLabel}`
     : `Loading incident snapshots · ${scopeLabel}`;
+  const searchSummaryText = data.loaded
+    ? search
+      ? `${pluralize(alertGroups.length, "alert group")} · ${pluralize(events.length, "event")} match "${searchQuery.trim()}"`
+      : `${pluralize(alertGroups.length, "alert group")} · ${pluralize(events.length, "event")} visible`
+    : `Loading incident matches · ${scopeLabel}`;
 
   return `<div class="mx-auto max-w-7xl space-y-4">
     <header class="flex flex-wrap items-end justify-between gap-3">
@@ -325,6 +378,13 @@ export function renderIncidentsHtml(
       <div class="flex items-center gap-2"><select id="incidents-pipeline-filter" class="select select-sm" aria-label="Filter incidents by pipeline">${options}</select><button id="incidents-refresh-btn" type="button" class="btn btn-sm btn-outline">Refresh</button></div>
     </header>
     <p id="incidents-route-summary" class="text-base-content/60 text-sm" role="status" aria-live="polite">${escapeHtml(summaryText)}</p>
+    <div class="flex flex-wrap items-end gap-3">
+      <label class="form-control w-full max-w-md">
+        <span class="label-text text-base-content/70">Search incidents and events</span>
+        <input id="incidents-search" class="input input-sm input-bordered mt-1" type="search" value="${escapeHtml(searchQuery)}" placeholder="output, pipeline, cause, event…" autocomplete="off" />
+      </label>
+      <p id="incidents-search-results-summary" class="text-base-content/60 pb-1 text-sm" role="status" aria-live="polite">${escapeHtml(searchSummaryText)}</p>
+    </div>
     ${availability}
     <section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Incident rollup">
       <div class="stat bg-base-200 rounded-lg"><div class="stat-title">Critical</div><div class="stat-value text-error text-2xl">${data.alerts ? critical : "—"}</div></div>
@@ -333,8 +393,8 @@ export function renderIncidentsHtml(
       <div class="stat bg-base-200 rounded-lg"><div class="stat-title">Failed outputs (fleet)</div><div class="stat-value text-2xl">${overview?.failedOutputs ?? "—"}</div></div>
     </section>
     <div class="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,.65fr)]">
-      <section><h2 class="mb-3 font-semibold">Active alerts</h2><div class="space-y-3">${data.loaded && data.alerts && !alerts.length ? `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">No active alerts${pipelineId ? " for this pipeline" : ""}.</div>` : alertGroups.map(renderAlertGroup).join("")}</div></section>
-      <section class="border-base-content/10 bg-base-200 self-start rounded-lg border p-4"><h2 class="font-semibold">Recent lifecycle events</h2><ul class="mt-2">${data.loaded && data.events && !events.length ? `<li class="py-6 text-center text-sm text-base-content/60">No recent lifecycle events.</li>` : events.map(renderEvent).join("")}</ul></section>
+      <section><h2 class="mb-3 font-semibold">Active alerts</h2><div class="space-y-3">${data.loaded && data.alerts && !alertGroups.length ? `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">${search ? `No alert matches for "${escapeHtml(searchQuery.trim())}".` : `No active alerts${pipelineId ? " for this pipeline" : ""}.`}</div>` : alertGroups.map(renderAlertGroup).join("")}</div></section>
+      <section class="border-base-content/10 bg-base-200 self-start rounded-lg border p-4"><h2 class="font-semibold">Recent lifecycle events</h2><ul class="mt-2">${data.loaded && data.events && !events.length ? `<li class="py-6 text-center text-sm text-base-content/60">${search ? `No event matches for "${escapeHtml(searchQuery.trim())}".` : "No recent lifecycle events."}</li>` : events.map(renderEvent).join("")}</ul></section>
     </div>
   </div>`;
 }
@@ -345,6 +405,19 @@ function bindIncidentControls(): void {
   ) as HTMLSelectElement | null;
   filter?.addEventListener("change", () => {
     selectIncidentPipeline(filter.value);
+  });
+  const search = document.getElementById(
+    "incidents-search",
+  ) as HTMLInputElement | null;
+  search?.addEventListener("input", () => {
+    const cursor = search.selectionStart ?? search.value.length;
+    incidentSearchQuery = search.value;
+    paintIncidents();
+    const nextSearch = document.getElementById(
+      "incidents-search",
+    ) as HTMLInputElement | null;
+    nextSearch?.focus();
+    nextSearch?.setSelectionRange(cursor, cursor);
   });
   document
     .getElementById("incidents-refresh-btn")
@@ -378,6 +451,7 @@ function paintIncidents(): void {
     snapshot,
     viewOptions.pipelines,
     selectedPipelineId,
+    incidentSearchQuery,
   );
   bindIncidentControls();
 }
