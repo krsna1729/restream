@@ -192,6 +192,7 @@ test("pipeline header model derives identity, status, and action availability", 
       outlined: true,
     },
     fileIngestControl: null,
+    lifecycleMessages: [],
   });
 
   const recording = buildPipelineOperateHeaderModel(
@@ -236,6 +237,44 @@ test("pipeline header model derives identity, status, and action availability", 
     danger: false,
     outlined: false,
   });
+  assert.deepEqual(recording.lifecycleMessages, []);
+
+  const failedLifecycle = buildPipelineOperateHeaderModel(
+    [
+      pipeline({
+        id: "file",
+        inputStatus: "off",
+        inputSource: "file:clip.mp4",
+        fileIngest: {
+          configured: true,
+          id: "ingest-1",
+          filename: "clip.mp4",
+          running: false,
+        },
+      }),
+    ],
+    "file",
+    {
+      recordingIntent: null,
+      fileIngestIntent: null,
+      recordingError: "Start recording did not complete.",
+      fileIngestError: "Start file ingest did not complete.",
+    },
+  );
+  assert.deepEqual(failedLifecycle.lifecycleMessages, [
+    {
+      id: "recording",
+      label: "Recording request failed",
+      detail: "Start recording did not complete.",
+      tone: "error",
+    },
+    {
+      id: "file-ingest",
+      label: "File ingest request failed",
+      detail: "Start file ingest did not complete.",
+      tone: "error",
+    },
+  ]);
   assert.equal(buildPipelineOperateHeaderModel([], "removed"), null);
 });
 

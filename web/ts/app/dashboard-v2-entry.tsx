@@ -654,6 +654,22 @@ function DashboardV2PipelineHeader({
           </button>
         </div>
       </div>
+      {model.lifecycleMessages.length ? (
+        <div aria-live="polite" className="space-y-2">
+          {model.lifecycleMessages.map((message) => (
+            <div
+              className={`${toneClasses[message.tone]} rounded-lg border px-3 py-2 text-sm`}
+              key={message.id}
+              role="status"
+            >
+              <div className="font-semibold">{message.label}</div>
+              <div className="mt-0.5 text-xs font-normal text-base-content/75">
+                {message.detail}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }

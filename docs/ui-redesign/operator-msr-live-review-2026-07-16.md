@@ -95,6 +95,9 @@ What changed from the live operator pass:
   selected-pipeline runtime refresh converged. v2 now renders one lightweight
   details placeholder in the header slot so the operator sees that the selected
   pipeline is catching up instead of seeing a silent partial shell.
+- Failed recording mutations now keep contextual status in the v2 pipeline
+  header after the existing API alert fires, so the operator can see which
+  lifecycle action failed and retry without scanning away from the control.
 
 Still not a full v2 redesign:
 

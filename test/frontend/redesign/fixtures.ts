@@ -6,6 +6,8 @@ import {
 } from "./fixtures/operator-states";
 
 export interface SeededDashboardOptions {
+  failRecordingControl?: string;
+  failFileIngestControl?: string;
   pipelineControlDelayMs?: number;
   outputControlDelayMs?: number;
   expectOverviewReady?: boolean;
@@ -126,13 +128,21 @@ export async function openSeededDashboard(
       /^\/api\/v1\/pipelines\/([^/]+)\/recording\/(start|stop)$/,
     );
     if (route.request().method() === "POST" && recordingControlMatch) {
-      const [, encodedPipelineId, action] = recordingControlMatch;
-      const pipelineId = decodeURIComponent(encodedPipelineId);
       if (options.pipelineControlDelayMs) {
         await new Promise((resolve) =>
           setTimeout(resolve, options.pipelineControlDelayMs),
         );
       }
+      if (options.failRecordingControl) {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: options.failRecordingControl }),
+        });
+        return;
+      }
+      const [, encodedPipelineId, action] = recordingControlMatch;
+      const pipelineId = decodeURIComponent(encodedPipelineId);
       const recording =
         action === "start"
           ? { enabled: true, active: true }
@@ -145,6 +155,19 @@ export async function openSeededDashboard(
       /^\/api\/v1\/ingests\/([^/]+)\/(start|stop)$/,
     );
     if (route.request().method() === "POST" && fileIngestControlMatch) {
+      if (options.pipelineControlDelayMs) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, options.pipelineControlDelayMs),
+        );
+      }
+      if (options.failFileIngestControl) {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: options.failFileIngestControl }),
+        });
+        return;
+      }
       const [, encodedIngestId, action] = fileIngestControlMatch;
       const ingestId = decodeURIComponent(encodedIngestId);
       const pipelines = Array.isArray(
@@ -159,11 +182,6 @@ export async function openSeededDashboard(
         .find((candidate) => candidate?.id === ingestId);
       if (!fileIngest) {
         throw new Error(`Unknown seeded file-ingest target: ${url.pathname}`);
-      }
-      if (options.pipelineControlDelayMs) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, options.pipelineControlDelayMs),
-        );
       }
       await fulfillJson(route, {
         ...fileIngest,

@@ -55,6 +55,7 @@ export interface PipelineOperateHeaderModel {
   readonly editDisabledReason?: string;
   readonly recordingControl: PipelineOperateLifecycleControlModel;
   readonly fileIngestControl: PipelineOperateLifecycleControlModel | null;
+  readonly lifecycleMessages: readonly PipelineOperateLifecycleMessage[];
 }
 
 export interface PipelineOperateLifecycleControlModel {
@@ -65,9 +66,18 @@ export interface PipelineOperateLifecycleControlModel {
   readonly outlined: boolean;
 }
 
+export interface PipelineOperateLifecycleMessage {
+  readonly id: "recording" | "file-ingest";
+  readonly label: string;
+  readonly detail: string;
+  readonly tone: OverviewTone;
+}
+
 export interface PipelineOperateLifecycleControlSnapshot {
   readonly recordingIntent: "starting" | "stopping" | null;
   readonly fileIngestIntent: "starting" | "stopping" | null;
+  readonly recordingError?: string | null;
+  readonly fileIngestError?: string | null;
 }
 
 export interface PipelineOperateInputStatusModel {
@@ -412,6 +422,23 @@ export function buildPipelineOperateHeaderModel(
   );
   const fileIngestRunning = Boolean(fileIngest?.running);
   const fileIngestPending = controls.fileIngestIntent !== null;
+  const lifecycleMessages: PipelineOperateLifecycleMessage[] = [];
+  if (controls.recordingError) {
+    lifecycleMessages.push({
+      id: "recording",
+      label: "Recording request failed",
+      detail: controls.recordingError,
+      tone: "error",
+    });
+  }
+  if (controls.fileIngestError) {
+    lifecycleMessages.push({
+      id: "file-ingest",
+      label: "File ingest request failed",
+      detail: controls.fileIngestError,
+      tone: "error",
+    });
+  }
   return {
     id: pipeline.id,
     name: pipeline.name,
@@ -471,6 +498,7 @@ export function buildPipelineOperateHeaderModel(
             controls.fileIngestIntent !== "starting" && !fileIngestRunning,
         }
       : null,
+    lifecycleMessages,
   };
 }
 

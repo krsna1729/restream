@@ -68,10 +68,11 @@ states:
     surface: pipeline-operate
     expected: Starting, active, and stopping preserve intent and runtime state.
     proof:
-      status: partial
+      status: seeded
+      source: Playwright seeded v2 flow covers slow pending controls, failed recording context, retry-ready controls, and CDP node budget
       files:
         - test/frontend/dashboard-contract/pipeline-mutations.test.mjs
-      gap: Browser-visible pending and failed recording states need a scenario proof.
+        - test/frontend/redesign/seed.spec.ts
 
   - id: file-ingest.lifecycle
     surface: pipeline-operate
@@ -153,7 +154,8 @@ states:
       status: partial
       files:
         - test/frontend/dashboard-contract/output-mutations.test.mjs
-      gap: Browser-visible timeout, error focus, and retry affordance need proof.
+        - test/frontend/redesign/seed.spec.ts
+      gap: Browser-visible output timeout/error focus and file-ingest failure affordance still need proof.
 
   - id: viewport.mobile-tablet-desktop
     surface: all

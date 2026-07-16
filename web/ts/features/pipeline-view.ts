@@ -64,6 +64,8 @@ let sourceFileMetadataLoadPromise: Promise<void> | null = null;
 const sourceFileAnalysisLoadPromises = new Map<string, Promise<void>>();
 const pendingRecordingIntents = new Map<string, "starting" | "stopping">();
 const pendingFileIngestIntents = new Map<string, "starting" | "stopping">();
+const recordingLifecycleErrors = new Map<string, string>();
+const fileIngestLifecycleErrors = new Map<string, string>();
 let lastRenderedPipelineInfoId: string | null = null;
 const AUDIO_TRACK_EXPANSION_STORAGE_KEY = "restream.audioTrackExpansion.v1";
 
@@ -187,6 +189,21 @@ function setPendingRecordingIntent(
   }
 }
 
+function getRecordingLifecycleError(pipeId: string): string | null {
+  return recordingLifecycleErrors.get(pipeId) || null;
+}
+
+function setRecordingLifecycleError(
+  pipeId: string,
+  message: string | null,
+): void {
+  if (message) {
+    recordingLifecycleErrors.set(pipeId, message);
+  } else {
+    recordingLifecycleErrors.delete(pipeId);
+  }
+}
+
 function fileIngestIntentKey(pipeId: string): string {
   return pipeId;
 }
@@ -209,10 +226,26 @@ function setPendingFileIngestIntent(
   }
 }
 
+function getFileIngestLifecycleError(pipeId: string): string | null {
+  return fileIngestLifecycleErrors.get(pipeId) || null;
+}
+
+function setFileIngestLifecycleError(
+  pipeId: string,
+  message: string | null,
+): void {
+  if (message) {
+    fileIngestLifecycleErrors.set(pipeId, message);
+  } else {
+    fileIngestLifecycleErrors.delete(pipeId);
+  }
+}
+
 export async function togglePipelineRecording(pipeId: string): Promise<void> {
   const pipe = state.pipelines.find((candidate) => candidate.id === pipeId);
   if (!pipe || getPendingRecordingIntent(pipeId)) return;
   const recordingEnabled = pipe.recording.enabled;
+  setRecordingLifecycleError(pipeId, null);
   setPendingRecordingIntent(
     pipeId,
     recordingEnabled ? "stopping" : "starting",
@@ -226,6 +259,13 @@ export async function togglePipelineRecording(pipeId: string): Promise<void> {
       pipelineViewDependencies.updateDashboardPipelineRecordingState?.(
         pipeId,
         res,
+      );
+    } else {
+      setRecordingLifecycleError(
+        pipeId,
+        recordingEnabled
+          ? "Stop recording did not complete. Check the error banner and retry when ready."
+          : "Start recording did not complete. Check the error banner and retry when ready.",
       );
     }
   } finally {
@@ -252,6 +292,7 @@ export async function togglePipelineFileIngest(pipeId: string): Promise<void> {
     return;
   }
   const running = Boolean(fileIngest.running);
+  setFileIngestLifecycleError(pipeId, null);
   setPendingFileIngestIntent(pipeId, running ? "stopping" : "starting");
   renderPipelineInfoColumn(pipeId);
   try {
@@ -274,6 +315,13 @@ export async function togglePipelineFileIngest(pipeId: string): Promise<void> {
         },
       );
       void pipelineViewDependencies.awaitDashboardRuntimeMutationConvergence?.();
+    } else {
+      setFileIngestLifecycleError(
+        pipeId,
+        running
+          ? "Stop file ingest did not complete. Check the error banner and retry when ready."
+          : "Start file ingest did not complete. Check the error banner and retry when ready.",
+      );
     }
   } finally {
     setPendingFileIngestIntent(pipeId, null);
@@ -880,6 +928,8 @@ export function renderPipelineInfoColumn(selectedPipe: string | null): void {
     buildPipelineOperateHeaderModel(state.pipelines, selectedPipe, {
       recordingIntent: getPendingRecordingIntent(pipe.id),
       fileIngestIntent: getPendingFileIngestIntent(pipe.id),
+      recordingError: getRecordingLifecycleError(pipe.id),
+      fileIngestError: getFileIngestLifecycleError(pipe.id),
     }),
   );
   const isFileSource = (pipe.inputSource || "").startsWith("file:");

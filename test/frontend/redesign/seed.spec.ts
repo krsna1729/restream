@@ -822,6 +822,49 @@ test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", a
   await expect(header).toBeHidden();
 });
 
+test("ui=v2 keeps failed recording mutation context in the pipeline header @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=operate&p=pipe-healthy&ui=v2",
+    {
+      expectOverviewReady: false,
+      failRecordingControl: "recording target disk is full",
+      pipelineControlDelayMs: 250,
+    },
+  );
+
+  const header = page.locator("#dashboard-v2-pipeline-header-root");
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Performance.enable");
+  await cdp.send("Performance.getMetrics");
+
+  await header.getByRole("button", { name: "Record" }).click();
+  await expect(
+    header.getByRole("button", { name: "Starting..." }),
+  ).toBeDisabled();
+  await expect(
+    header.getByRole("status").filter({
+      hasText: "Recording request failed",
+    }),
+  ).toBeVisible();
+  await expect(header).toContainText("Start recording did not complete");
+  await expect(
+    header.getByRole("button", { name: "Record" }),
+  ).toBeEnabled();
+  await expect(page.locator("#error-alert")).toContainText(
+    "recording target disk is full",
+  );
+
+  const afterMetrics = await cdp.send("Performance.getMetrics");
+  const afterNodes =
+    afterMetrics.metrics.find((metric) => metric.name === "Nodes")?.value ?? 0;
+  expect(afterNodes).toBeLessThan(7_000);
+  await cdp.detach();
+});
+
 test("ui=v2 output destinations support search and state filters @desktop", async ({
   page,
 }) => {
