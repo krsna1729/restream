@@ -532,6 +532,52 @@ test("seed: ui=v2 pipeline workspace tabs preserve one selected context @desktop
   await expect(operateTab).toHaveAttribute("aria-selected", "true");
 });
 
+test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+    { expectOverviewReady: false },
+  );
+
+  const monitor = page.locator("#control-mode-panel");
+  const search = monitor.locator("#control-room-search-input");
+  const summary = monitor.getByRole("status");
+  await expect(
+    monitor.getByRole("heading", { name: "Control Room" }),
+  ).toBeVisible();
+  await expect(summary).toHaveText(
+    "1/1 monitored · 0 missing monitoring URLs",
+  );
+
+  await search.fill("retrying");
+  await expect(summary).toHaveText(
+    '1/1 monitored match · 0 missing monitoring URLs · "retrying"',
+  );
+  await expect(monitor.getByText("Retrying Output")).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/1 monitored match · 0 missing monitoring URLs · "retrying"',
+  );
+
+  await search.fill("nowhere");
+  await expect(summary).toHaveText(
+    '0/1 monitored match · 0 missing monitoring URLs · "nowhere"',
+  );
+  await expect(
+    monitor.getByText(
+      'No monitoring outputs match "nowhere". Clear search to show all monitoring cards.',
+    ),
+  ).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toEqual(
+    expect.arrayContaining([
+      '0/1 monitored match · 0 missing monitoring URLs · "nowhere"',
+    ]),
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
+});
+
 test("seed: ui=v2 Operate stays inside the viewport across breakpoints", async ({
   page,
 }) => {

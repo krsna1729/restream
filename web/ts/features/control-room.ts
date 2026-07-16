@@ -496,22 +496,22 @@ function buildCardDescriptors(
   const descriptors: ControlRoomCardDescriptor[] = [
     buildLocalCard(selectedPipeline),
   ];
-  let outputs = listMonitoringOutputsForPipeline(selectedPipeline.id);
-  if (controlRoomState.searchQuery) {
-    const q = controlRoomState.searchQuery.toLowerCase().trim();
-    outputs = outputs.filter(
-      (out) =>
-        out.outputName.toLowerCase().includes(q) ||
-        (out.monitoringUrl || "").toLowerCase().includes(q),
-    );
-  }
+  const allMonitoringOutputs = listMonitoringOutputsForPipeline(
+    selectedPipeline.id,
+  );
+  const outputs = filterMonitoringOutputs(
+    allMonitoringOutputs,
+    controlRoomState.searchQuery,
+  );
   const start = controlRoomState.page * OUTPUTS_PER_PAGE;
   const pageOutputs = outputs.slice(start, start + OUTPUTS_PER_PAGE);
 
   if (pageOutputs.length === 0) {
     descriptors.push(
       buildEmptyCard(
-        "This pipeline does not have any matching monitoring URLs yet.",
+        allMonitoringOutputs.length === 0
+          ? "This pipeline does not have any monitoring URLs yet."
+          : `No monitoring outputs match "${controlRoomState.searchQuery.trim()}". Clear search to show all monitoring cards.`,
       ),
     );
     return descriptors;
@@ -552,7 +552,7 @@ function ensureShell(container: HTMLElement): void {
                         <button type="button" class="btn btn-sm btn-outline" data-action="control-room-next-page">Next</button>
                     </div>
                 </div>
-                <div class="text-base-content/60 mt-2 text-xs" id="control-room-summary"></div>
+                <div class="text-base-content/60 mt-2 text-xs" id="control-room-summary" role="status" aria-live="polite"></div>
             </section>
             <div id="control-room-grid" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"></div>
         </div>`;
@@ -1575,6 +1575,19 @@ function renderPipelineSelect(
   select.disabled = pipelines.length === 0;
 }
 
+function filterMonitoringOutputs(
+  outputs: ControlRoomOutputOption[],
+  searchQuery: string,
+): ControlRoomOutputOption[] {
+  const q = searchQuery.toLowerCase().trim();
+  if (!q) return outputs;
+  return outputs.filter(
+    (out) =>
+      out.outputName.toLowerCase().includes(q) ||
+      (out.monitoringUrl || "").toLowerCase().includes(q),
+  );
+}
+
 function renderSummaryAndPagination(
   container: HTMLElement,
   selectedPipeline: PipelineView | null,
@@ -1602,16 +1615,14 @@ function renderSummaryAndPagination(
   }
 
   const totalOutputs = selectedPipeline.outs.length;
-  let monitoringOutputs = listMonitoringOutputsForPipeline(selectedPipeline.id);
-  if (controlRoomState.searchQuery) {
-    const q = controlRoomState.searchQuery.toLowerCase().trim();
-    monitoringOutputs = monitoringOutputs.filter(
-      (out) =>
-        out.outputName.toLowerCase().includes(q) ||
-        (out.monitoringUrl || "").toLowerCase().includes(q),
-    );
-  }
-  const missingMonitoring = totalOutputs - monitoringOutputs.length;
+  const allMonitoringOutputs = listMonitoringOutputsForPipeline(
+    selectedPipeline.id,
+  );
+  const monitoringOutputs = filterMonitoringOutputs(
+    allMonitoringOutputs,
+    controlRoomState.searchQuery,
+  );
+  const missingMonitoring = totalOutputs - allMonitoringOutputs.length;
   const totalPages = Math.max(
     1,
     Math.ceil(monitoringOutputs.length / OUTPUTS_PER_PAGE),
@@ -1621,7 +1632,10 @@ function renderSummaryAndPagination(
   nextButton.disabled = controlRoomState.page >= totalPages - 1;
   prevButton.classList.toggle("btn-disabled", prevButton.disabled);
   nextButton.classList.toggle("btn-disabled", nextButton.disabled);
-  summary.textContent = `${monitoringOutputs.length}/${totalOutputs} monitored · ${missingMonitoring} missing`;
+  const query = controlRoomState.searchQuery.trim();
+  summary.textContent = query
+    ? `${monitoringOutputs.length}/${allMonitoringOutputs.length} monitored match · ${missingMonitoring} missing monitoring URLs · "${query}"`
+    : `${allMonitoringOutputs.length}/${totalOutputs} monitored · ${missingMonitoring} missing monitoring URLs`;
 }
 
 function renderControlRoom(): void {

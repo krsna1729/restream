@@ -93,6 +93,12 @@ coverage proves an operator can move Operate → Inspect → Monitor while retai
 the same selected pipeline, and that clicking the already-active workspace tab
 does not add a duplicate browser-history entry.
 
+Monitor search feedback now separates filtered matches from configuration gaps:
+seeded Playwright/CDP coverage proves a search miss is announced as
+`0/N monitored match` while preserving the true missing-monitoring-URL count.
+That prevents the control room from implying a configured monitor disappeared
+just because the operator narrowed the list.
+
 The seeded v2 Operate path also has a CDP layout proof across the configured
 desktop, tablet, and mobile browser projects. The stress fixture uses the
 recovered sink-flap pipeline with 30 audio tracks and verifies that both DOM
