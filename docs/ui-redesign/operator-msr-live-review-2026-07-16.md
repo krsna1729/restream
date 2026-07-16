@@ -239,6 +239,9 @@ What is now strong enough for v2:
 - Workspace and Pipeline tabs now support expected Arrow/Home/End keyboard
   movement, which matters more now that the primary shell has more first-class
   destinations.
+- Active Workspace and Pipeline tabs now scroll back into view on narrow rails
+  during direct route loads and keyboard movement, keeping later checkpoints
+  like Telemetry and Status discoverable without page-wide horizontal overflow.
 - Large output sets are bounded by default instead of dumping every output card.
 - Output search/filter is necessary and useful under MSR-scale output counts.
 - Chaos-derived states are now covered by seeded fixtures:

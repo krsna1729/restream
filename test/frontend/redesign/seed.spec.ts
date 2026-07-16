@@ -45,6 +45,27 @@ async function getCdpLayoutWidthDelta(page: Page): Promise<number> {
   return metrics.contentSize.width - metrics.cssLayoutViewport.clientWidth;
 }
 
+async function expectTabVisibleInRail(
+  page: Page,
+  tabSelector: string,
+): Promise<void> {
+  await expect
+    .poll(async () =>
+      page.evaluate((selector) => {
+        const tab = document.querySelector<HTMLElement>(selector);
+        const rail = tab?.closest<HTMLElement>(".dashboard-scrollbar");
+        if (!tab || !rail) return false;
+        const tabRect = tab.getBoundingClientRect();
+        const railRect = rail.getBoundingClientRect();
+        return (
+          tabRect.left >= railRect.left - 1 &&
+          tabRect.right <= railRect.right + 1
+        );
+      }, tabSelector),
+    )
+    .toBe(true);
+}
+
 async function installPushStateCounter(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const originalPushState = window.history.pushState.bind(window.history);
@@ -498,6 +519,42 @@ test("seed: ui=v2 shell tablists support arrow key navigation @desktop", async (
     ]),
   );
   expect(await getCdpNodeCount(page)).toBeLessThan(12_000);
+});
+
+test("seed: ui=v2 shell keeps active tabs visible in narrow rails @desktop", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openSeededDashboard(page, "mixed-health", "/?mode=telemetry&ui=v2", {
+    expectOverviewReady: false,
+  });
+
+  await expect(page.locator("#workspace-tab-telemetry")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expectTabVisibleInRail(page, "#workspace-tab-telemetry");
+  expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
+
+  await page.goto("/?mode=status&ui=v2");
+  await expect(page.locator("#workspace-tab-status")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expectTabVisibleInRail(page, "#workspace-tab-status");
+  expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
+
+  await page.goto("/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2");
+  await expect(page.locator("#pipeline-workspace-tab-monitor")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expectTabVisibleInRail(page, "#pipeline-workspace-tab-monitor");
+  await expect(page.locator("#control-room-route-summary")).toHaveText(
+    "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(12_000);
+  expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
 });
 
 test("seed: ui=v2 auth expiry preserves operator return location @desktop", async ({

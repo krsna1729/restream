@@ -3,6 +3,14 @@ import type {
   PipelineWorkspaceView,
 } from "../core/pipeline-workspace.js";
 
+function scrollPipelineTabIntoView(tab: HTMLButtonElement | null): void {
+  if (!tab || typeof tab.scrollIntoView !== "function") return;
+  tab.scrollIntoView({
+    block: "nearest",
+    inline: "nearest",
+  });
+}
+
 export function syncPipelineWorkspaceShell(
   mode: DashboardMode,
   view: PipelineWorkspaceView,
@@ -12,6 +20,7 @@ export function syncPipelineWorkspaceShell(
     .getElementById("pipeline-workspace-view-bar")
     ?.classList.toggle("hidden", !active);
 
+  let activeViewButton: HTMLButtonElement | null = null;
   document
     .querySelectorAll<HTMLButtonElement>("[data-pipeline-workspace-view]")
     .forEach((button) => {
@@ -20,7 +29,9 @@ export function syncPipelineWorkspaceShell(
       button.classList.toggle("btn-outline", !selected);
       button.setAttribute("aria-selected", selected ? "true" : "false");
       button.tabIndex = selected ? 0 : -1;
+      if (selected) activeViewButton = button;
     });
+  scrollPipelineTabIntoView(activeViewButton);
 
   const panels: Record<PipelineWorkspaceView, HTMLElement | null> = {
     operate: document.getElementById("dashboard-grid"),

@@ -658,6 +658,14 @@ function refreshActiveMode(): void {
   renderDashboardModes();
 }
 
+function scrollTabIntoView(tab: HTMLButtonElement | null): void {
+  if (!tab || typeof tab.scrollIntoView !== "function") return;
+  tab.scrollIntoView({
+    block: "nearest",
+    inline: "nearest",
+  });
+}
+
 function applyMode(
   mode: DashboardMode,
   pipelineView: PipelineWorkspaceView,
@@ -683,6 +691,7 @@ function applyMode(
   }
   syncPipelineWorkspaceShell(mode, pipelineView);
 
+  let activeModeButton: HTMLButtonElement | null = null;
   document
     .querySelectorAll<HTMLButtonElement>("[data-dashboard-mode]")
     .forEach((button) => {
@@ -691,7 +700,9 @@ function applyMode(
       button.classList.toggle("btn-outline", !active);
       button.setAttribute("aria-selected", active ? "true" : "false");
       button.tabIndex = active ? 0 : -1;
+      if (active) activeModeButton = button;
     });
+  scrollTabIntoView(activeModeButton);
 
   const summary = document.getElementById("workspace-mode-summary");
   if (summary) {
@@ -805,6 +816,7 @@ function activateTabFromKeyboard(
   if (!target) return;
   event.preventDefault();
   target.focus();
+  scrollTabIntoView(target);
   target.click();
 }
 
