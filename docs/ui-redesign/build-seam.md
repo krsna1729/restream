@@ -191,11 +191,14 @@ render.ts selection reconciliation and dashboard refresh
 ```
 
 This removes the legacy selector rewrite only for the experiment without
-creating a second URL owner or data subscription. The default route keeps its
-legacy selector and does not load the v2 bundle. Source tests cover ordering,
+creating a second URL owner or data subscription. Under `ui=v2`, the hidden
+legacy selector row list is emptied so CDP/node growth reflects the active v2
+rail rather than stale duplicate navigation. The default route keeps its legacy
+selector and does not load the v2 bundle. Source tests cover ordering,
 health/rates, valid selection, and stale selection removal. The seeded browser
 flow proves accessible current selection, canonical `p=` navigation, unchanged
-legacy detail rendering, and delegation to the existing Add Pipeline editor.
+legacy detail rendering, empty hidden legacy selector rows, and delegation to
+the existing Add Pipeline editor.
 
 The opt-in bundle moved from 272,694 bytes raw and 70,080 bytes gzip in Vite's
 report to 275,599 bytes raw and 70,560 bytes gzip. The 480-byte gzip increase

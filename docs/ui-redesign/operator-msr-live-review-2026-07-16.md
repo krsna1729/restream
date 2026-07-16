@@ -110,6 +110,8 @@ What changed from the live operator pass:
 - v2 input ownership now empties the hidden legacy audio table, matching the
   already-empty legacy preview and output-card cleanup pattern so CDP/node
   growth reflects only the active operator surface.
+- v2 selector ownership now empties the hidden legacy pipeline rows as well,
+  so the active rail is the only pipeline navigation subtree under Operate.
 
 Still not a full v2 redesign:
 

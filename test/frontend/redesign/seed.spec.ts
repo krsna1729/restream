@@ -381,6 +381,12 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     pipelineSelector.getByRole("heading", { name: "Pipelines" }),
   ).toBeVisible();
   await expect(page.locator("#pipeline-selector-legacy")).toBeHidden();
+  expect(
+    await page.locator("#pipelines").evaluate((node) => ({
+      childCount: node.childElementCount,
+      text: node.textContent?.trim() ?? "",
+    })),
+  ).toEqual({ childCount: 0, text: "" });
   await expect(
     pipelineSelector.getByRole("button", {
       name: /Retrying Destination/,

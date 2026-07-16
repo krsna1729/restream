@@ -33,6 +33,9 @@ export function configurePipelineSelectorPresentation(options: {
   if (legacyContainer) {
     legacyContainer.hidden = !legacyPipelineSelectorRenderEnabled;
   }
+  if (!legacyPipelineSelectorRenderEnabled) {
+    document.getElementById("pipelines")?.replaceChildren();
+  }
 }
 
 function setHtmlIfChanged(target: HTMLElement | null, html: string): boolean {
