@@ -529,6 +529,19 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   await expect(
     settings.getByRole("button", { name: "Reset All" }),
   ).toBeHidden();
+  await expect(settings.getByRole("button", { name: "Logout" })).toBeHidden();
+  const showAccountActions = settings.getByRole("button", {
+    name: "Show account actions",
+  });
+  await expect(showAccountActions).toHaveAttribute("aria-expanded", "false");
+  await showAccountActions.click();
+  await expect(settings.getByRole("button", { name: "Logout" })).toBeVisible();
+  const hideAccountActions = settings.getByRole("button", {
+    name: "Hide account actions",
+  });
+  await expect(hideAccountActions).toHaveAttribute("aria-expanded", "true");
+  await hideAccountActions.click();
+  await expect(settings.getByRole("button", { name: "Logout" })).toBeHidden();
   const showAll = settings.getByRole("button", { name: "Show all 12" });
   await expect(showAll).toHaveAttribute("aria-expanded", "false");
   expect(await getCdpStatusTexts(page)).toContain("8 auth attempts shown of 12");

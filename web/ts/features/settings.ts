@@ -27,6 +27,7 @@ let lastRateLimitAttempts: RateLimitAttempt[] = [];
 let rateLimitSearchQuery = "";
 let authAttemptsExpanded = false;
 let authResetActionsExpanded = false;
+let settingsAccountActionsExpanded = false;
 let settingsCheckpointCallback:
   | ((model: SettingsCheckpointModel | null) => void)
   | null = null;
@@ -330,6 +331,30 @@ function updateAuthAttemptsSearchSummary(
   );
 }
 
+function syncSettingsAccountActions(container: ParentNode = document): void {
+  const toggle = container.querySelector<HTMLButtonElement>(
+    "#settings-account-actions-toggle",
+  );
+  const logoutButton = container.querySelector<HTMLButtonElement>(
+    "#settings-logout-btn",
+  );
+  const v2 = settingsV2Active();
+  toggle?.classList.toggle("hidden", !v2);
+  toggle?.setAttribute(
+    "aria-expanded",
+    settingsAccountActionsExpanded ? "true" : "false",
+  );
+  if (toggle) {
+    toggle.textContent = settingsAccountActionsExpanded
+      ? "Hide account actions"
+      : "Show account actions";
+  }
+  logoutButton?.classList.toggle(
+    "hidden",
+    v2 && !settingsAccountActionsExpanded,
+  );
+}
+
 function ensureSettingsNav(container: Element): void {
   if (document.getElementById("settings-admin-nav")) return;
   const title = container.querySelector("h1");
@@ -621,12 +646,14 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     </div>
                 </div>
 
-                <div class="flex justify-end">
-                    <button class="btn btn-error btn-outline btn-sm" data-settings-action="logout">Logout</button>
+                <div class="flex flex-wrap justify-end gap-2">
+                    <button id="settings-account-actions-toggle" type="button" class="btn btn-outline btn-sm hidden" aria-expanded="false">Show account actions</button>
+                    <button id="settings-logout-btn" class="btn btn-error btn-outline btn-sm" data-settings-action="logout">Logout</button>
                 </div>
             </section>
         </div>`;
   applySettingsV2Disclosure(container);
+  syncSettingsAccountActions(container);
   bindSettingsPanelActions(container);
 }
 
@@ -674,6 +701,13 @@ function bindSettingsPanelActions(container: HTMLElement): void {
       authResetActionsExpanded = !authResetActionsExpanded;
       renderRateLimitAttempts(lastRateLimitAttempts);
       document.getElementById("auth-reset-actions-toggle")?.focus();
+    });
+  container
+    .querySelector<HTMLButtonElement>("#settings-account-actions-toggle")
+    ?.addEventListener("click", () => {
+      settingsAccountActionsExpanded = !settingsAccountActionsExpanded;
+      syncSettingsAccountActions(container);
+      document.getElementById("settings-account-actions-toggle")?.focus();
     });
   container.onclick = (event) => {
     const button = (event.target as Element | null)?.closest(

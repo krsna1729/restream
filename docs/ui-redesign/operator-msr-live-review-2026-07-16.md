@@ -273,6 +273,9 @@ Authentication reset actions now follow the same v2 maintenance-action rule:
 `Refresh` remains visible, while `Reset All` and per-row `Reset` buttons mount
 only after `Show reset actions`. That keeps the default security surface focused
 on blocked/tracked attempts and makes destructive recovery actions deliberate.
+Account/session actions follow that same rule as well: `Logout` remains
+available under `Show account actions`, but no longer sits in the first settings
+scan layer beside configuration and security state.
 Under `ui=v2`, Settings also now treats low-frequency advanced configuration
 groups as disclosure sections. Recording retention, global SRT ingest policy,
 backend policy, and transcode profiles show compact summaries first; the actual
@@ -405,8 +408,8 @@ What changed from the live operator pass:
 - Settings now opens on the operational security surface and tucks advanced
   Recording, SRT, Backend, and Profile forms behind explicit disclosure rows,
   reducing the initial form wall without hiding the path to edits. Security
-  reset actions are also tucked behind an explicit disclosure, leaving Refresh
-  visible for routine inspection.
+  reset actions and account/logout actions are also tucked behind explicit
+  disclosures, leaving Refresh visible for routine inspection.
 - Shared auth expiry now preserves the full operator return path, including
   `ui=v2`, so a re-login can return to the interrupted v2 workflow instead of
   dumping the operator at the default Overview.
