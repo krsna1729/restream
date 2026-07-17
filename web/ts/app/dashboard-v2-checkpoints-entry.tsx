@@ -98,7 +98,7 @@ function DashboardV2CheckpointCard({
         <div className="flex shrink-0 flex-wrap gap-2">
           {actions.map(([label, onClick, disabled, title]) => (
             <button
-              className="btn btn-xs btn-accent btn-outline"
+              className="btn btn-sm btn-accent btn-outline min-h-10"
               disabled={disabled}
               key={label}
               onClick={onClick}

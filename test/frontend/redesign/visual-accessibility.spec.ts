@@ -250,36 +250,43 @@ test("cdp: ui=v2 route heading outlines stay operator-clean @desktop", async ({
     },
     {
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-pipeline-inspect-root",
       readySelector: "#inspect-route-summary",
       topHeading: "Pipeline inspect",
     },
     {
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-control-room-root",
       readySelector: "#control-room-route-summary",
       topHeading: "Control Room",
     },
     {
       href: "/?mode=media&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-media-root",
       readySelector: "#media-library-results-summary",
       topHeading: "Media Library",
     },
     {
       href: "/?mode=settings&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-settings-root",
       readySelector: "#settings-route-summary",
       topHeading: "Settings",
     },
     {
       href: "/?mode=status&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-status-root",
       readySelector: "#status-route-summary",
       topHeading: "Status",
     },
     {
       href: "/?mode=incidents&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-incidents-root",
       readySelector: "#incidents-route-summary",
       topHeading: "Incidents",
     },
     {
       href: "/?mode=telemetry&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-telemetry-root",
       readySelector: "#telemetry-route-summary",
       topHeading: "Engineer telemetry",
     },
@@ -315,5 +322,36 @@ test("cdp: ui=v2 route heading outlines stay operator-clean @desktop", async ({
         document.documentElement.clientWidth,
     );
     expect(pageOverflow, route.href).toBeLessThanOrEqual(1);
+    if ("checkpointActionRoot" in route) {
+      await page
+        .locator(route.checkpointActionRoot)
+        .waitFor({ state: "visible" });
+      const actionButtons = await page
+        .locator(`${route.checkpointActionRoot} button`)
+        .evaluateAll((buttons) =>
+          buttons.map((button) => {
+            const rect = button.getBoundingClientRect();
+            return {
+              height: Math.round(rect.height),
+              label:
+                button.getAttribute("aria-label") ||
+                button.textContent?.replace(/\s+/g, " ").trim() ||
+                "(unnamed)",
+              width: Math.round(rect.width),
+            };
+          }),
+        );
+      expect(actionButtons, route.href).not.toEqual([]);
+      for (const button of actionButtons) {
+        expect(
+          button.height,
+          `${route.href} ${button.label}`,
+        ).toBeGreaterThanOrEqual(36);
+        expect(
+          button.width,
+          `${route.href} ${button.label}`,
+        ).toBeGreaterThanOrEqual(44);
+      }
+    }
   }
 });
