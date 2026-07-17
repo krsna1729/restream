@@ -68,7 +68,7 @@ Summary:
 | Pipeline / Monitor | legacy | 17,052 | Usable, but a separate redesign pass is still needed. |
 | Media | legacy | 18,990 | Not redesigned in v2. |
 | Settings | legacy | 22,123 | Not redesigned in v2. |
-| Status | legacy | 25,700 | Not redesigned in v2. |
+| Status | v2 checkpoint + legacy details | 25,700 | First-glance process/build state is v2; dense status sections remain legacy. |
 | Incidents | v2 checkpoint + legacy feed | 28,494 | First-glance incident state is v2; dense alert/event feed remains legacy. |
 | Telemetry | v2 checkpoint + legacy counters | 32,479 | First-glance telemetry state is v2; dense counter grids remain legacy. |
 
@@ -80,7 +80,7 @@ and verify stable accessible button names for output operations.
 
 The shared workspace summary now also announces the current ownership state:
 `UI v2 owned` for Overview and Pipeline Operate, `UI v2 checkpoint` for
-Pipeline Inspect, Pipeline Monitor, Incidents, and Telemetry, and `Legacy-owned
+Pipeline Inspect, Pipeline Monitor, Incidents, Telemetry, and Status, and `Legacy-owned
 checkpoint` for the remaining top-level legacy routes. Seeded Playwright/CDP
 coverage proves that cue is visible and exposed as status text while moving
 across the route journey.
@@ -172,10 +172,12 @@ with explicit `Show all` affordances. Search still matches the full fetched
 library, so the first view stays a scan layer while full file audit remains one
 click away per section.
 
-Status now has the same lightweight operator checkpoint: the legacy-owned route
-announces the loaded build identity plus process-log and notable-activity
-counts before the dense status sections, with seeded Playwright/CDP coverage for
-the visible and accessibility-tree summary.
+Status now has the same lightweight operator checkpoint: the v2 strip announces
+loaded/warning/error state, build identity, process-log count, notable-activity
+count, active log-search result, SBOM component count, and uptime before the
+dense status sections. Seeded Playwright/CDP coverage proves the checkpoint
+updates for hit/no-hit search states while the legacy route summary remains
+visible and exposed in the accessibility tree.
 
 Status now also has one local search surface across Recent Activity and Process
 Log. The route summary remains the unfiltered process truth, while the search
@@ -346,10 +348,10 @@ What changed from the live operator pass:
 Still not a full v2 redesign:
 
 - Inspect graph/resource details, the Monitor wall, the Incidents feed, the
-  Telemetry counter grids, Media, Settings, and Status are still intentionally
-  legacy-owned, now with lightweight route checkpoints where useful rather than
-  full v2 layouts. Inspect, Monitor, Incidents, and Telemetry each have only
-  their first v2-owned decision checkpoint.
+  Telemetry counter grids, Status detail sections, Media, and Settings are still
+  intentionally legacy-owned, now with lightweight route checkpoints where useful
+  rather than full v2 layouts. Inspect, Monitor, Incidents, Telemetry, and
+  Status each have only their first v2-owned decision checkpoint.
 - Legacy-owned routes keep substantial hidden DOM mounted across navigation.
   This is visible in CDP node growth and should be treated as a future
   performance/accessibility cleanup, not as solved by the v2 seam.
@@ -363,5 +365,5 @@ The remaining evolution should be sequenced as separate ownership passes:
 1. Complete Pipeline / Inspect v2 beyond the checkpoint strip.
 2. Complete Pipeline / Monitor v2 beyond the checkpoint strip.
 3. Incidents feed v2 and Telemetry counter-grid v2.
-4. Media, Settings, and Status polish.
+4. Media, Settings, and Status detail-section polish.
 5. Hidden DOM / route unmount cleanup across legacy panels.

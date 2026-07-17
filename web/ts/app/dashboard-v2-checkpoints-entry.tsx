@@ -4,11 +4,13 @@ import type { Root } from "react-dom/client";
 import type { ControlRoomCheckpointModel } from "../features/control-room-view-model.js";
 import type { IncidentsCheckpointModel } from "../features/incidents-view-model.js";
 import type { PipelineInspectCheckpointModel } from "../features/pipeline-inspect-view-model.js";
+import type { StatusCheckpointModel } from "../features/status-view-model.js";
 import type { TelemetryCheckpointModel } from "../features/telemetry-view-model.js";
 import type {
   DashboardV2ControlRoomActions,
   DashboardV2IncidentsActions,
   DashboardV2PipelineInspectActions,
+  DashboardV2StatusActions,
   DashboardV2TelemetryActions,
 } from "./dashboard-v2-loader.js";
 
@@ -299,6 +301,42 @@ function DashboardV2TelemetryCheckpoint({
   );
 }
 
+function DashboardV2StatusCheckpoint({
+  actions,
+  model,
+}: {
+  actions: DashboardV2StatusActions;
+  model: StatusCheckpointModel;
+}): React.JSX.Element {
+  return (
+    <DashboardV2CheckpointCard
+      actions={[
+        [
+          "Telemetry",
+          actions.openTelemetry,
+          !model.canOpenTelemetry,
+        ],
+      ]}
+      className="border-neutral/25 bg-base-200/50 mb-4"
+      focusLabel={model.focusLabel}
+      focusTitle="Status focus"
+      headingId="dashboard-v2-status-title"
+      metrics={model.metrics}
+      nextStep={model.nextStep}
+      primaryCards={[
+        ["Build", model.buildLabel],
+        ["Process logs", model.logLabel],
+        ["Activity", model.activityLabel],
+        ["Search", model.searchLabel],
+      ]}
+      statusLabel={model.statusLabel}
+      statusTone={model.statusTone}
+      summary={model.summary}
+      title={model.title}
+    />
+  );
+}
+
 const pipelineInspectContainer = document.getElementById(
   "dashboard-v2-pipeline-inspect-root",
 );
@@ -334,6 +372,13 @@ if (!telemetryContainer) {
 }
 const telemetryRootContainer: HTMLElement = telemetryContainer;
 let telemetryRoot: Root | null = null;
+
+const statusContainer = document.getElementById("dashboard-v2-status-root");
+if (!statusContainer) {
+  throw new Error("Dashboard v2 status root is missing");
+}
+const statusRootContainer: HTMLElement = statusContainer;
+let statusRoot: Root | null = null;
 
 export function renderDashboardV2PipelineInspectCheckpoint(
   model: PipelineInspectCheckpointModel | null,
@@ -371,6 +416,17 @@ export function renderDashboardV2TelemetryCheckpoint(
     model ? (
       <DashboardV2TelemetryCheckpoint actions={actions} model={model} />
     ) : null,
+  );
+}
+
+export function renderDashboardV2StatusCheckpoint(
+  model: StatusCheckpointModel | null,
+  actions: DashboardV2StatusActions,
+): void {
+  statusRoot ??= createRoot(statusRootContainer);
+  statusRootContainer.hidden = model === null;
+  statusRoot.render(
+    model ? <DashboardV2StatusCheckpoint actions={actions} model={model} /> : null,
   );
 }
 

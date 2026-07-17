@@ -27,6 +27,7 @@
 - [Pipeline Monitor checkpoint](#pipeline-monitor-checkpoint)
 - [Incidents checkpoint](#incidents-checkpoint)
 - [Telemetry checkpoint](#telemetry-checkpoint)
+- [Status checkpoint](#status-checkpoint)
 - [Shared checkpoint card](#shared-checkpoint-card)
 - [Checkpoint bundle split](#checkpoint-bundle-split)
 
@@ -736,8 +737,8 @@ reacts to hit/no-hit incident search states, and scoped pipeline filtering keeps
 the checkpoint and legacy route summary aligned.
 
 The opt-in checkpoint bundle is deliberately separate from the full
-Overview/Operate bundle. In the Telemetry checkpoint build, Vite reports
-`dashboard-v2-checkpoints-entry.js` at 7.36 kB raw / 1.90 kB gzip,
+Overview/Operate bundle. In the Status checkpoint build, Vite reports
+`dashboard-v2-checkpoints-entry.js` at 8.30 kB raw / 2.02 kB gzip,
 `dashboard-v2-entry.js` at 55.63 kB raw / 9.86 kB gzip, and the shared React
 runtime chunk at 258.47 kB raw / 66.98 kB gzip. The smoke guard measures these
 bundles independently so additional non-Operate checkpoints do not force the
@@ -761,16 +762,35 @@ Seeded Playwright/CDP coverage proves the Telemetry checkpoint appears under
 reacts to pipeline switching and hit/no-hit telemetry search states, and dense
 egress list filtering keeps the checkpoint and legacy route summary aligned.
 
+## Status checkpoint
+
+Status now uses the checkpoint seam before the dense build, system, SBOM, and
+process-log sections. The v2 strip summarizes loaded/warning/error state, build
+identity, process-log count, notable activity count, active search result, SBOM
+component count, and uptime. Its single follow-on action jumps back to
+Telemetry, completing the process-health plus counter-evidence loop.
+
+The existing status sections, log search input, process-log bounds, and
+download/copy actions remain legacy-owned. The checkpoint reads the existing
+status snapshot and log-search state, then renders a compact operator
+orientation layer above the legacy page.
+
+Seeded Playwright/CDP coverage proves the Status checkpoint appears under
+`ui=v2`, the route ownership cue changes to `UI v2 checkpoint`, the checkpoint
+reacts to hit/no-hit status-log search states, and dense process-log filtering
+keeps the checkpoint and legacy route summary aligned.
+
 ## Shared checkpoint card
 
-The Inspect, Monitor, Incidents, and Telemetry checkpoint strips now render through one shared React
+The Inspect, Monitor, Incidents, Telemetry, and Status checkpoint strips now render through one shared React
 checkpoint component. This keeps the first-glance pattern consistent across
 checkpoint routes: title, status badge, action cluster, four scan metrics,
 optional compact metrics, and a focus/next-step block. Inspect and Monitor still
 adapt their own pure view models at the boundary, and Incidents adapts the
 existing legacy incident snapshot/search state. Telemetry adapts the existing
-legacy counter snapshots/search state. The shared component does not fetch,
-subscribe, mutate, or own route state.
+legacy counter snapshots/search state. Status adapts the existing legacy
+status/log snapshot. The shared component does not fetch, subscribe, mutate, or
+own route state.
 
 The refactor is behavior-preserving but removes the duplicated checkpoint
 markup before adding more surfaces. The bundle now measures 319,332 raw bytes
@@ -786,8 +806,8 @@ The v2 build now emits stable route-oriented entrypoints instead of one growing
 React island:
 
 - `dashboard-v2-entry.js` owns Overview and Pipeline / Operate.
-- `dashboard-v2-checkpoints-entry.js` owns Pipeline / Inspect and Pipeline /
-  Monitor checkpoint strips.
+- `dashboard-v2-checkpoints-entry.js` owns Pipeline / Inspect, Pipeline /
+  Monitor, Incidents, Telemetry, and Status checkpoint strips.
 - `dashboard-v2-jsx-runtime.js` is the shared React runtime chunk used by both
   entrypoints.
 

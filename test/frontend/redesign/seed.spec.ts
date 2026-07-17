@@ -288,6 +288,11 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
 
   await page.goto("/?mode=status&ui=v2");
   await expect(
+    page.locator("#dashboard-v2-status-root").getByRole("heading", {
+      name: "Status",
+    }),
+  ).toBeVisible();
+  await expect(
     page.locator("#status-mode-content").getByRole("heading", {
       name: "Status",
     }),
@@ -297,7 +302,16 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
-  expect(v2Requests).toEqual([]);
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Runtime status",
+  );
+  expect(
+    v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
+  ).toBe(true);
+  expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
+    false,
+  );
+  const requestsAfterStatus = v2Requests.length;
 
   await page.goto("/?mode=pipeline&view=inspect&p=pipe-healthy&ui=v2");
   await expect(page.locator("#inspect-mode-panel")).toBeVisible();
@@ -318,6 +332,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
     false,
   );
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterStatus);
   const requestsAfterInspect = v2Requests.length;
 
   await page.goto("/?mode=pipeline&view=monitor&p=pipe-healthy&ui=v2");
@@ -531,7 +546,7 @@ test("seed: ui=v2 shell announces ownership while moving across routes @desktop"
     },
     {
       href: "/?mode=status&ui=v2",
-      text: "Legacy-owned checkpoint · Runtime status",
+      text: "UI v2 checkpoint · Runtime status",
     },
   ] as const;
 
@@ -1340,10 +1355,21 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   });
 
   const status = page.locator("#status-mode-panel");
-  await expect(status.getByRole("heading", { name: "Status" })).toBeVisible();
+  const checkpoint = status.locator("#dashboard-v2-status-root");
+  await expect(checkpoint.getByRole("heading", { name: "Status" })).toBeVisible();
+  await expect(
+    status.locator("#status-mode-content").getByRole("heading", {
+      name: "Status",
+    }),
+  ).toBeVisible();
   await expect(status.locator("#status-route-summary")).toHaveText(
     "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
   );
+  await expect(checkpoint.getByText("seeded · seeded", { exact: true })).toBeVisible();
+  await expect(checkpoint.getByText("1 process log", { exact: true })).toBeVisible();
+  await expect(
+    checkpoint.getByText("1 notable activity", { exact: true }),
+  ).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
   );
@@ -1358,6 +1384,9 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   await expect(searchSummary).toHaveText(
     '1 activity · 1 process log match "synthetic"',
   );
+  await expect(
+    checkpoint.getByText('1 activity · 1 process log match "synthetic"'),
+  ).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     '1 activity · 1 process log match "synthetic"',
   );
@@ -1369,6 +1398,9 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   await expect(searchSummary).toHaveText(
     '0 activities · 0 process logs match "missing"',
   );
+  await expect(
+    checkpoint.getByText('0 activities · 0 process logs match "missing"'),
+  ).toBeVisible();
   await expect(status.getByText("No activity matches this search.")).toBeVisible();
   await expect(
     status.getByText("No process log entries match this search."),
@@ -1382,6 +1414,9 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   await clearSearch.click();
   await expect(search).toHaveValue("");
   await expect(searchSummary).toHaveText("1 activity · 1 process log visible");
+  await expect(
+    checkpoint.getByText("1 activity · 1 process log visible"),
+  ).toBeVisible();
   await expect(clearSearch).toBeHidden();
   await expect(
     status.getByText("Synthetic output entered retry backoff"),
@@ -1416,12 +1451,20 @@ test("seed: ui=v2 Status bounds dense process logs until requested @desktop", as
   });
 
   const status = page.locator("#status-mode-panel");
+  const checkpoint = status.locator("#dashboard-v2-status-root");
   await expect(status.locator("#status-route-summary")).toHaveText(
     "Status loaded for seeded · commit seeded · 35 process logs · 5 notable activities",
   );
+  await expect(checkpoint.getByText("35 process logs", { exact: true })).toBeVisible();
+  await expect(
+    checkpoint.getByText("5 notable activities", { exact: true }),
+  ).toBeVisible();
   await expect(status.locator("#status-log-search-results-summary")).toHaveText(
     "5 activities · 35 process logs visible",
   );
+  await expect(
+    checkpoint.getByText("5 activities · 35 process logs visible"),
+  ).toBeVisible();
   const logs = status.getByLabel("Process log entries");
   await expect(status.getByText("20 process logs shown of 35")).toBeVisible();
   await expect(logs.getByText("routine status log 20")).toBeVisible();
@@ -1442,6 +1485,9 @@ test("seed: ui=v2 Status bounds dense process logs until requested @desktop", as
   await expect(status.locator("#status-log-search-results-summary")).toHaveText(
     '0 activities · 1 process log match "log 35"',
   );
+  await expect(
+    checkpoint.getByText('0 activities · 1 process log match "log 35"'),
+  ).toBeVisible();
   await expect(logs.getByText("routine status log 35")).toBeVisible();
   await expect(
     status.getByRole("button", { name: /Show (all|fewer)/ }),
@@ -2422,6 +2468,7 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
     <div id="dashboard-v2-control-room-root"></div>
     <div id="dashboard-v2-incidents-root"></div>
     <div id="dashboard-v2-telemetry-root"></div>
+    <div id="dashboard-v2-status-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -2632,6 +2679,7 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
     <div id="dashboard-v2-control-room-root"></div>
     <div id="dashboard-v2-incidents-root"></div>
     <div id="dashboard-v2-telemetry-root"></div>
+    <div id="dashboard-v2-status-root"></div>
   `);
 
   const result = await page.evaluate(async () => {
@@ -2772,6 +2820,7 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
     <div id="dashboard-v2-control-room-root"></div>
     <div id="dashboard-v2-incidents-root"></div>
     <div id="dashboard-v2-telemetry-root"></div>
+    <div id="dashboard-v2-status-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -2897,6 +2946,7 @@ test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", a
     <div id="dashboard-v2-control-room-root"></div>
     <div id="dashboard-v2-incidents-root"></div>
     <div id="dashboard-v2-telemetry-root"></div>
+    <div id="dashboard-v2-status-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -3182,6 +3232,7 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
     <div id="dashboard-v2-control-room-root"></div>
     <div id="dashboard-v2-incidents-root"></div>
     <div id="dashboard-v2-telemetry-root"></div>
+    <div id="dashboard-v2-status-root"></div>
   `);
 
   await page.evaluate(async () => {

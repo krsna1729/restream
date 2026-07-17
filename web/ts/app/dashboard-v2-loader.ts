@@ -2,6 +2,7 @@ import type { ControlRoomCheckpointModel } from "../features/control-room-view-m
 import type { IncidentsCheckpointModel } from "../features/incidents-view-model.js";
 import type { OverviewViewModel } from "../features/overview-view-model.js";
 import type { PipelineInspectCheckpointModel } from "../features/pipeline-inspect-view-model.js";
+import type { StatusCheckpointModel } from "../features/status-view-model.js";
 import type { TelemetryCheckpointModel } from "../features/telemetry-view-model.js";
 import type {
   PipelineOperateHeaderModel,
@@ -112,6 +113,10 @@ export interface DashboardV2TelemetryActions {
   readonly openStatus: () => void;
 }
 
+export interface DashboardV2StatusActions {
+  readonly openTelemetry: () => void;
+}
+
 interface DashboardV2Module {
   renderDashboardV2Overview(
     model: OverviewViewModel,
@@ -153,6 +158,10 @@ interface DashboardV2CheckpointsModule {
     model: TelemetryCheckpointModel | null,
     actions: DashboardV2TelemetryActions,
   ): void;
+  renderDashboardV2StatusCheckpoint(
+    model: StatusCheckpointModel | null,
+    actions: DashboardV2StatusActions,
+  ): void;
 }
 
 let dashboardV2Module: DashboardV2Module | null = null;
@@ -165,6 +174,7 @@ let dashboardV2PipelineInspectActive = false;
 let dashboardV2ControlRoomActive = false;
 let dashboardV2IncidentsActive = false;
 let dashboardV2TelemetryActive = false;
+let dashboardV2StatusActive = false;
 let latestOverviewModel: OverviewViewModel | null = null;
 let overviewActions: DashboardV2OverviewActions | null = null;
 let latestPipelineSelectorModel: PipelineOperateSelectorModel | null = null;
@@ -188,6 +198,8 @@ let latestIncidentsModel: IncidentsCheckpointModel | null | undefined;
 let incidentsActions: DashboardV2IncidentsActions | null = null;
 let latestTelemetryModel: TelemetryCheckpointModel | null | undefined;
 let telemetryActions: DashboardV2TelemetryActions | null = null;
+let latestStatusModel: StatusCheckpointModel | null | undefined;
+let statusActions: DashboardV2StatusActions | null = null;
 
 const DASHBOARD_V2_CONTAINER_IDS = [
   "dashboard-v2-root",
@@ -199,6 +211,7 @@ const DASHBOARD_V2_CONTAINER_IDS = [
   "dashboard-v2-control-room-root",
   "dashboard-v2-incidents-root",
   "dashboard-v2-telemetry-root",
+  "dashboard-v2-status-root",
 ] as const;
 
 function setContainerHidden(id: string, hidden: boolean): void {
@@ -230,6 +243,10 @@ function hideDashboardV2Incidents(): void {
 
 function hideDashboardV2Telemetry(): void {
   setContainerHidden("dashboard-v2-telemetry-root", true);
+}
+
+function hideDashboardV2Status(): void {
+  setContainerHidden("dashboard-v2-status-root", true);
 }
 
 function ensureDashboardV2Module(): void {
@@ -270,6 +287,7 @@ function ensureDashboardV2CheckpointsModule(): void {
       renderLatestControlRoom();
       renderLatestIncidents();
       renderLatestTelemetry();
+      renderLatestStatus();
     })
     .catch((error: unknown) => {
       dashboardV2CheckpointsModulePromise = null;
@@ -575,6 +593,24 @@ function renderLatestTelemetry(): void {
   );
 }
 
+function renderLatestStatus(): void {
+  if (!dashboardV2StatusActive) {
+    hideDashboardV2Status();
+    return;
+  }
+  ensureDashboardV2CheckpointsModule();
+  if (
+    !dashboardV2CheckpointsModule ||
+    latestStatusModel === undefined ||
+    !statusActions
+  )
+    return;
+  dashboardV2CheckpointsModule.renderDashboardV2StatusCheckpoint(
+    latestStatusModel,
+    statusActions,
+  );
+}
+
 export function dashboardV2ExperimentEnabled(
   search = dashboardSearch(),
   storage: DashboardUiVersionStorage | null = dashboardStorage(),
@@ -594,6 +630,7 @@ export function setDashboardV2PresentationScope(options: {
   readonly controlRoomActive?: boolean;
   readonly incidentsActive?: boolean;
   readonly telemetryActive?: boolean;
+  readonly statusActive?: boolean;
 }): void {
   const nextOverviewActive =
     dashboardV2ExperimentEnabled() && options.overviewActive;
@@ -607,6 +644,8 @@ export function setDashboardV2PresentationScope(options: {
     dashboardV2ExperimentEnabled() && Boolean(options.incidentsActive);
   const nextTelemetryActive =
     dashboardV2ExperimentEnabled() && Boolean(options.telemetryActive);
+  const nextStatusActive =
+    dashboardV2ExperimentEnabled() && Boolean(options.statusActive);
   const overviewChanged = dashboardV2OverviewActive !== nextOverviewActive;
   const pipelineChanged = dashboardV2PipelineActive !== nextPipelineActive;
   const pipelineInspectChanged =
@@ -615,18 +654,21 @@ export function setDashboardV2PresentationScope(options: {
     dashboardV2ControlRoomActive !== nextControlRoomActive;
   const incidentsChanged = dashboardV2IncidentsActive !== nextIncidentsActive;
   const telemetryChanged = dashboardV2TelemetryActive !== nextTelemetryActive;
+  const statusChanged = dashboardV2StatusActive !== nextStatusActive;
   dashboardV2OverviewActive = nextOverviewActive;
   dashboardV2PipelineActive = nextPipelineActive;
   dashboardV2PipelineInspectActive = nextPipelineInspectActive;
   dashboardV2ControlRoomActive = nextControlRoomActive;
   dashboardV2IncidentsActive = nextIncidentsActive;
   dashboardV2TelemetryActive = nextTelemetryActive;
+  dashboardV2StatusActive = nextStatusActive;
   if (!dashboardV2OverviewActive) hideDashboardV2Overview();
   if (!dashboardV2PipelineActive) hideDashboardV2Pipeline();
   if (!dashboardV2PipelineInspectActive) hideDashboardV2PipelineInspect();
   if (!dashboardV2ControlRoomActive) hideDashboardV2ControlRoom();
   if (!dashboardV2IncidentsActive) hideDashboardV2Incidents();
   if (!dashboardV2TelemetryActive) hideDashboardV2Telemetry();
+  if (!dashboardV2StatusActive) hideDashboardV2Status();
   if (overviewChanged && dashboardV2OverviewActive) renderLatestOverview();
   if (pipelineChanged && dashboardV2PipelineActive) {
     renderLatestPipelineSelector();
@@ -645,6 +687,9 @@ export function setDashboardV2PresentationScope(options: {
   }
   if (telemetryChanged && dashboardV2TelemetryActive) {
     renderLatestTelemetry();
+  }
+  if (statusChanged && dashboardV2StatusActive) {
+    renderLatestStatus();
   }
 }
 
@@ -770,4 +815,18 @@ export function updateDashboardV2TelemetryCheckpoint(
 ): void {
   latestTelemetryModel = model;
   renderLatestTelemetry();
+}
+
+export function setDashboardV2StatusActions(
+  actions: DashboardV2StatusActions,
+): void {
+  statusActions = actions;
+  renderLatestStatus();
+}
+
+export function updateDashboardV2StatusCheckpoint(
+  model: StatusCheckpointModel | null,
+): void {
+  latestStatusModel = model;
+  renderLatestStatus();
 }

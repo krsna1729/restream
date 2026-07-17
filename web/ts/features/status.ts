@@ -16,6 +16,7 @@ import {
 import { handleDashboardRuntimeLifecycleLog } from "./dashboard.js";
 import { updateRestreamProcessIndicatorFromLog } from "./restream-process-indicator.js";
 import type { AppLogRow } from "../types.js";
+import type { StatusCheckpointModel } from "./status-view-model.js";
 
 interface StatusData {
   restream: {
@@ -109,6 +110,17 @@ let statusStreamActive = false;
 let statusStreamLastEventId: number | null = null;
 let statusLogSearchQuery = "";
 let statusProcessLogExpanded = false;
+let statusCheckpointCallback:
+  | ((model: StatusCheckpointModel | null) => void)
+  | null = null;
+
+export function configureStatusCheckpointPresentation(options: {
+  readonly onPresentation?: (model: StatusCheckpointModel | null) => void;
+}): void {
+  statusCheckpointCallback = options.onPresentation ?? null;
+  if (!statusCheckpointCallback) return;
+  statusCheckpointCallback(buildStatusCheckpointModel());
+}
 
 function syncProcessIndicatorFromLogs(logs: AppLogRow[]): void {
   for (const log of logs) {
@@ -470,6 +482,90 @@ function statusSummaryText(data: StatusData, logs: AppLogRow[]): string {
     .join(" · ");
 }
 
+function statusCheckpointTone(
+  data: StatusData | null,
+  logs: AppLogRow[],
+): StatusCheckpointModel["statusTone"] {
+  if (!data) return "neutral";
+  if (logs.some((log) => String(log.level || "").toUpperCase() === "ERROR")) {
+    return "error";
+  }
+  if (logs.some((log) => String(log.level || "").toUpperCase() === "WARN")) {
+    return "warning";
+  }
+  return "success";
+}
+
+function buildStatusCheckpointModel(): StatusCheckpointModel {
+  const data = statusDataSnapshot;
+  const logs = Array.isArray(statusProcessLogs) ? statusProcessLogs : [];
+  const search = normalizeStatusSearch(statusLogSearchQuery);
+  const visibleProcessLogs = logs.filter((log) => logMatchesSearch(log, search));
+  const visibleActivityLogs = logs
+    .filter(isNotableRestreamActivity)
+    .filter((log) => logMatchesSearch(log, search));
+  const activityCount = logs.filter(isNotableRestreamActivity).length;
+  const summary = data
+    ? statusSummaryText(data, logs)
+    : "Loading runtime status";
+  const statusLabel = data
+    ? statusCheckpointTone(data, logs) === "error"
+      ? "Errors"
+      : statusCheckpointTone(data, logs) === "warning"
+        ? "Warnings"
+        : "Loaded"
+    : "Loading";
+  const searchLabel = data
+    ? statusLogSearchSummaryText(
+        visibleActivityLogs.length,
+        visibleProcessLogs.length,
+        statusLogSearchQuery,
+      )
+    : "Loading matches";
+  const focusLabel = !data
+    ? "Runtime status is loading. Build, system, and process-log details will appear below once ready."
+    : search && visibleActivityLogs.length + visibleProcessLogs.length === 0
+      ? "No process activity matches this search. Clear the filter to return to the full status view."
+      : statusCheckpointTone(data, logs) === "error"
+        ? "Errors are present in the process log. Start with the latest error entry below, then compare Telemetry."
+        : statusCheckpointTone(data, logs) === "warning"
+          ? "Warnings are present in the process log. Review recent activity before changing runtime configuration."
+          : "Runtime status is loaded. Use the detailed build, system, and process-log sections below for audit depth.";
+  const nextStep = !data
+    ? "Wait for status to load or refresh manually."
+    : statusCheckpointTone(data, logs) === "success"
+      ? "Search logs when investigating a specific target or open Telemetry for counters."
+      : "Open Telemetry to compare process health with live counters.";
+
+  return {
+    activityLabel: data
+      ? pluralize(activityCount, "notable activity", "notable activities")
+      : "Loading activity",
+    buildLabel: data
+      ? `${valueOrDash(data.restream?.version)} · ${valueOrDash(data.restream?.commit)}`
+      : "Loading build",
+    canOpenTelemetry: true,
+    focusLabel,
+    logLabel: data ? pluralize(logs.length, "process log") : "Loading logs",
+    metrics: [
+      {
+        label: "SBOM components",
+        value: String(data?.sbom?.componentCount ?? "—"),
+      },
+      {
+        label: "Uptime",
+        value: data ? formatUptime(data.os?.uptime) : "—",
+      },
+    ],
+    nextStep,
+    searchLabel,
+    statusLabel,
+    statusTone: statusCheckpointTone(data, logs),
+    summary,
+    title: "Status",
+  };
+}
+
 function statusLogKey(log: AppLogRow | null | undefined): string {
   const id = Number(log?.id);
   if (Number.isFinite(id) && id > 0) return `id:${id}`;
@@ -611,6 +707,7 @@ function statusStreamingEnabled(): boolean {
 function renderStatusSnapshot(): void {
   const container = document.getElementById("status-versions");
   if (!container || !statusDataSnapshot) return;
+  statusCheckpointCallback?.(buildStatusCheckpointModel());
 
   const data = statusDataSnapshot;
   const processLogs = statusProcessLogs;
