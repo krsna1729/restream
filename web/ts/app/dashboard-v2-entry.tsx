@@ -274,7 +274,7 @@ function DashboardV2Overview({
         </div>
         <button
           aria-label="Add a new pipeline"
-          className="btn btn-sm btn-primary"
+          className="btn btn-sm btn-primary dashboard-sturdy-control"
           onClick={actions.addPipeline}
           type="button"
         >
@@ -314,7 +314,7 @@ function DashboardV2Overview({
             </div>
             <button
               aria-label="Open restream runtime detail"
-              className="btn btn-sm btn-outline"
+              className="btn btn-sm btn-outline dashboard-sturdy-control"
               onClick={actions.openStatus}
               type="button"
             >
@@ -344,7 +344,7 @@ function DashboardV2Overview({
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       aria-label={`Operate ${item.pipelineName}`}
-                      className="btn btn-xs btn-outline"
+                      className="btn btn-xs btn-outline dashboard-sturdy-control"
                       onClick={() => actions.openPipeline(item.pipelineId)}
                       type="button"
                     >
@@ -352,7 +352,7 @@ function DashboardV2Overview({
                     </button>
                     <button
                       aria-label={`Inspect ${item.pipelineName}`}
-                      className="btn btn-xs btn-outline"
+                      className="btn btn-xs btn-outline dashboard-sturdy-control"
                       onClick={() => actions.inspectPipeline(item.pipelineId)}
                       type="button"
                     >
@@ -551,7 +551,7 @@ function DashboardV2Overview({
           <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
             <button
               aria-label="Open restream status"
-              className="btn btn-sm btn-outline"
+              className="btn btn-sm btn-outline dashboard-sturdy-control"
               onClick={actions.openStatus}
               type="button"
             >
@@ -703,7 +703,7 @@ function DashboardV2PipelineSelector({
         </div>
         <button
           aria-label="Add a new pipeline from the pipeline selector"
-          className="btn btn-xs btn-accent btn-outline"
+          className="btn btn-xs btn-accent btn-outline dashboard-sturdy-control"
           onClick={actions.addPipeline}
           type="button"
         >
@@ -874,7 +874,7 @@ function DashboardV2PipelineHeader({
           </button>
           <button
             aria-label={`Inspect graph for ${model.name}`}
-            className="btn btn-xs btn-accent btn-outline"
+            className="btn btn-xs btn-accent btn-outline dashboard-sturdy-control"
             onClick={() => actions.inspectPipeline(model.id)}
             type="button"
           >
@@ -882,7 +882,7 @@ function DashboardV2PipelineHeader({
           </button>
           <button
             aria-label={`Diagnose ${model.name}`}
-            className="btn btn-xs btn-accent btn-outline"
+            className="btn btn-xs btn-accent btn-outline dashboard-sturdy-control"
             disabled={!model.canDiagnose}
             onClick={() => actions.diagnosePipeline(model.id)}
             title={model.diagnoseDisabledReason || ""}

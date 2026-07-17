@@ -371,3 +371,106 @@ test("cdp: ui=v2 route heading outlines stay operator-clean @desktop", async ({
     }
   }
 });
+
+test("cdp: ui=v2 wayfinding and next-step controls keep sturdy targets @desktop", async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(FIXED_TIME);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const routes = [
+    {
+      href: "/?mode=overview&ui=v2",
+      readySelector: "#dashboard-v2-overview",
+    },
+    {
+      href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+      readySelector: "#dashboard-v2-pipeline-header-root",
+    },
+    {
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      readySelector: "#inspect-route-summary",
+    },
+    {
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      readySelector: "#control-room-route-summary",
+    },
+    {
+      href: "/?mode=media&ui=v2",
+      readySelector: "#media-library-results-summary",
+    },
+    {
+      href: "/?mode=settings&ui=v2",
+      readySelector: "#settings-route-summary",
+    },
+    {
+      href: "/?mode=status&ui=v2",
+      readySelector: "#status-route-summary",
+    },
+    {
+      href: "/?mode=incidents&ui=v2",
+      readySelector: "#incidents-route-summary",
+    },
+    {
+      href: "/?mode=telemetry&ui=v2",
+      readySelector: "#telemetry-route-summary",
+    },
+  ] as const;
+
+  await openSeededDashboard(page, "mixed-health", routes[0].href, {
+    expectOverviewReady: false,
+  });
+
+  for (const route of routes) {
+    if (page.url() !== new URL(route.href, page.url()).href) {
+      await page.goto(route.href);
+    }
+    await page.locator(route.readySelector).waitFor({ state: "visible" });
+    const undersizedControls = await page.evaluate(() => {
+      const selector = [
+        "#skip-to-dashboard-main",
+        "#workspace-mode-bar [role='tab']",
+        "#pipeline-workspace-view-bar:not(.hidden) [role='tab']",
+        "label[for='dashboard-ui-v2-toggle']",
+        "button[aria-label^='Add a new pipeline']",
+        "button[aria-label^='Open restream']",
+        "button[aria-label^='Operate ']",
+        "button[aria-label^='Inspect ']",
+        "button[aria-label^='Diagnose ']",
+        "button[aria-label^='Monitor ']",
+      ].join(",");
+      return Array.from(document.querySelectorAll<HTMLElement>(selector))
+        .filter((element) => {
+          if (element.closest("[hidden], [aria-hidden='true']")) return false;
+          const style = window.getComputedStyle(element);
+          if (
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            style.pointerEvents === "none"
+          )
+            return false;
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        })
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            height: Math.round(rect.height),
+            label:
+              element.getAttribute("aria-label") ||
+              element.textContent?.replace(/\s+/g, " ").trim().slice(0, 80) ||
+              element.getAttribute("placeholder") ||
+              element.id ||
+              element.tagName.toLowerCase(),
+            tag: element.tagName.toLowerCase(),
+            width: Math.round(rect.width),
+          };
+        })
+        .filter(
+          (control) =>
+            control.height < 36 ||
+            control.width < 44,
+        );
+    });
+    expect(undersizedControls, route.href).toEqual([]);
+  }
+});
