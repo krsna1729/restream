@@ -245,7 +245,7 @@ function formatUptime(value: unknown): string {
 
 function section(id: string, title: string, rows: string): string {
   return `<section id="${escapeHtml(id)}" class="scroll-mt-24">
-        <h3 class="dashboard-kicker mb-2">${escapeHtml(title)}</h3>
+        <div class="dashboard-kicker mb-2">${escapeHtml(title)}</div>
         <div class="overflow-x-auto" role="region" aria-label="${escapeHtml(title)} details" tabindex="0">
             <table class="w-full min-w-[36rem] table-fixed text-sm">
                 <colgroup>
@@ -286,7 +286,7 @@ function advancedSection(
   return `<section id="${escapeHtml(id)}" class="scroll-mt-24">
         <div class="border-base-content/10 bg-base-100/60 rounded-lg border px-3 py-2">
             <div class="flex flex-wrap items-center justify-between gap-2">
-                <h3 class="dashboard-kicker">${escapeHtml(title)}</h3>
+                <div class="dashboard-kicker">${escapeHtml(title)}</div>
                 <button type="button" class="btn btn-xs btn-outline" data-status-advanced-section="${escapeHtml(id)}" aria-expanded="false">Show ${escapeHtml(title)} details</button>
             </div>
             <p class="dashboard-muted mt-1 text-sm">${escapeHtml(summary)}</p>
@@ -307,7 +307,7 @@ function statusExportActionsHtml(): string {
         <section class="border-base-content/10 bg-base-100 rounded-2xl border p-4 shadow-sm" aria-label="Status export actions">
             <div class="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                    <h2 class="text-sm font-semibold">Export actions</h2>
+                    <div class="text-sm font-semibold">Export actions</div>
                     <p class="dashboard-muted mt-1 text-sm">Download or copy runtime/SBOM evidence only when preparing an audit bundle.</p>
                 </div>
                 <button type="button" class="btn btn-sm btn-outline" id="status-export-actions-toggle" aria-expanded="${statusExportActionsExpanded ? "true" : "false"}">

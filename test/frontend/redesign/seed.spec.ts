@@ -1999,6 +1999,20 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
     status.getByRole("button", { name: "Download Status" }),
   ).toBeVisible();
   await expect(status.getByRole("button", { name: "Copy SBOM" })).toBeVisible();
+  const headingNames = await getCdpNamesByRole(page, "heading");
+  expect(headingNames).toEqual(
+    expect.arrayContaining(["Status", "Recent Activity", "Process Log"]),
+  );
+  expect(headingNames).not.toEqual(
+    expect.arrayContaining([
+      "Application Build",
+      "System",
+      "Toolchain",
+      "Native Libraries",
+      "SBOM",
+      "Export actions",
+    ]),
+  );
   const hideExportActions = status.getByRole("button", {
     name: "Hide export actions",
   });
