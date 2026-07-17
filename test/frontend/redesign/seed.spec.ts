@@ -1752,8 +1752,8 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   const initialMonitorButtonNames = await getCdpNamesByRole(page, "button");
   expect(initialMonitorButtonNames).toEqual(
     expect.arrayContaining([
-      "Pause All monitor previews",
-      "Unmute All monitor previews",
+      "Pause all monitor previews",
+      "Unmute all monitor previews",
       "Reset monitor wall",
       "Previous monitor page",
       "Next monitor page",
@@ -1877,7 +1877,7 @@ test("seed: ui=v2 Monitor search understands operator status terms @desktop", as
   const buttonNames = await getCdpNamesByRole(page, "button");
   expect(buttonNames).toEqual(
     expect.arrayContaining([
-      "Pause All monitor previews",
+      "Pause all monitor previews",
       "Reset monitor wall",
       "Show monitor actions for RTMP dead sink",
       "Show monitor actions for SRT dead sink",

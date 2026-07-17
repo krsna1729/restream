@@ -338,10 +338,12 @@ function syncGlobalMuteButton(scope: ParentNode = document): void {
       muteToggleButton.disabled,
     );
     const label = controlRoomMuteIntent === "mute" ? "Unmute All" : "Mute All";
+    const actionLabel =
+      controlRoomMuteIntent === "mute" ? "Unmute all" : "Mute all";
     muteToggleButton.textContent = label;
     muteToggleButton.setAttribute(
       "aria-label",
-      `${label} monitor previews`,
+      `${actionLabel} monitor previews`,
     );
   }
 }
@@ -367,10 +369,14 @@ function syncGlobalPlaybackButton(scope: ParentNode = document): void {
       controlRoomPlaybackIntent === "play" || anyPlaying
         ? "Pause All"
         : "Play All";
+    const actionLabel =
+      controlRoomPlaybackIntent === "play" || anyPlaying
+        ? "Pause all"
+        : "Play all";
     playbackToggleButton.textContent = label;
     playbackToggleButton.setAttribute(
       "aria-label",
-      `${label} monitor previews`,
+      `${actionLabel} monitor previews`,
     );
   }
 }
