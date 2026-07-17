@@ -33,6 +33,8 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-17 22:40 Q-001 DONE [codex]](#2026-07-17-2240-q-001-done-codex)
 - [2026-07-17 22:44 Q-017 STARTED [codex]](#2026-07-17-2244-q-017-started-codex)
 - [2026-07-17 22:49 Q-017 DONE [codex]](#2026-07-17-2249-q-017-done-codex)
+- [2026-07-17 22:55 Q-002 STARTED [codex]](#2026-07-17-2255-q-002-started-codex)
+- [2026-07-17 23:18 Q-002 DONE [codex]](#2026-07-17-2318-q-002-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -482,3 +484,42 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   React DOM, React type declarations, and `npm ls --all` rather than treating a
   three-file legacy subset as proof that a copied cache satisfies the current
   dependency manifest.
+
+## 2026-07-17 22:55 Q-002 STARTED [codex]
+- What: inventory every media parse/demux boundary against deterministic
+  malformed-input fault coverage before adding new adversarial proofs.
+- Gates: none (read-only discovery).
+- Commit: none.
+- Follow-ups: pending inventory evidence.
+
+## 2026-07-17 23:18 Q-002 DONE [codex]
+- What: mapped externally influenced parse/demux entry points in `src/media/`
+  against the five required fault classes. `C` means a focused meaningful
+  regression exists, `G` means only a generic/no-panic check exists, `Q-nnn`
+  is the filed proof gap, and `N/A` means the owner has no such state.
+- Gates: read-only inventory; `node scripts/check/docs.mjs` passed.
+- Commit: this commit.
+- Follow-ups: Q-018 through Q-022.
+- Notes: URL, StreamID, JSON-policy, start-time, and HLS segment-name parsers
+  are included so "every parse entry point" is explicit, even where the media
+  byte fault categories do not apply. FFmpeg/serde/URL-crate parsers behind
+  process or library APIs are not reclassified as local byte parsers.
+
+| Entry point / owner | Truncated header | Oversized declared length | Invalid tag/type | Non-monotonic timestamps | Mid-stream parameter change | Disposition |
+|---|---|---|---|---|---|---|
+| `TsDemuxer::feed` / `feed_slice` / `find_ts_sync` | C: partial chunks | C: corrupt remainder cap | C: false sync scan | N/A | N/A | Covered; generic `demux_corrupt_input_no_panic` is retained only as a multi-shape smoke beside the focused cap/sync tests |
+| `TsDemuxer::process_ts_packet` PES/adaptation parsing | G: corrupt packet smoke | Q-021: PES/adaptation bounds | G: bad start code ignored | G: valid-fixture/round-trip monotonic checks | N/A | Q-021 |
+| `TsDemuxer::parse_pat` | G: corrupt packet smoke | G: section is slice-bounded | G: wrong table ID ignored | N/A | N/A | Consolidate with Q-018 structural PSI proof rather than add a PAT-only no-panic test |
+| `TsDemuxer::parse_pmt` / `parse_stream_descriptors` | G: corrupt packet smoke | Q-018: program/ES descriptor spans | C: unsupported stream types excluded by `StreamKind` mapping | N/A | C: version rebuild, duplicate idempotence, in-flight PES preservation | Q-018 |
+| `mpegts_probe::probe_video` / `parse_h264_sps` / `parse_h265_sps` | G: only sub-two-byte H.265 | Q-019: exhausted/overlong Exp-Golomb fields | C: NAL scanners reject missing/wrong types | N/A | N/A: probe freezes only after complete metadata | Q-019 |
+| `mpegts_probe::probe_audio` | C: short/invalid ADTS yields incomplete metadata | N/A: fixed seven-byte header | C: wrong sync rejected | N/A | N/A | Covered by probe completeness and ADTS tests |
+| `codec::parse_avcc_config` / `avcc_to_annexb_into` | C: short config and trailing NAL | Q-020: maximum SPS/PPS declarations | C: non-VCL/partial parameter sets rejected | N/A | C: inline parameter sets refresh cache without duplication | Q-020 for the remaining shared AVCC contract |
+| `rtmp::flv::{parse_flv_video_meta, flv_avcc_config_annexb_parameter_sets, parse_sps_video_info, classify_flv_video_packet, flv_video_composition_time_ms}` | C: empty, one-byte, short AVCC/SPS | Q-020: shared AVCC declaration matrix | C: unknown codec/type fails closed | C: signed 24-bit composition and per-media monotonic guard | C: refreshed sequence header and cache tests | Covered except shared Q-020; randomized SPS no-panic test is backed by deterministic dimension overflow tests |
+| `rtmp::flv::parse_flv_audio_meta` | C: empty and one-byte ASC | N/A: fixed ASC fields | C: AAC data vs sequence header and non-AAC codecs | N/A | N/A | Covered |
+| `feeder::parse_video_sequence_header` / startup state | C via `parse_avcc_config` | Q-020 via shared AVCC contract | C: unknown audio and non-keyframe startup suppressed | C: `DtsEnforcer`/fixture decode proof | C: late H.264/H.265 parameter-set seeding | Covered except shared Q-020 |
+| `hls::fmp4::{parse_avcc_box, parse_h264_sps_avcc_fields}` | Q-020 | Q-020 | C: invalid SPS profile fields return `None` through fallible bit reader | C: sample duration/CTO bounds and property test | N/A: init entry is rebuilt from the selected sequence header | Q-020 |
+| `srt_stream_id::{percent_decode, parse_srt_stream_id}` | C: incomplete `%XX` passthrough | N/A | C: common caller shapes and normalization | N/A | N/A | Covered |
+| `srt::url::parse_srt_egress_url` / `rtmp::egress_transport::parse_rtmp_url` | C: missing RTMP path; empty optional SRT query fields | N/A | C: RTMP scheme/IPv4/IPv6 and SRT option parsing | N/A | N/A | Covered at parser plus egress validation boundary |
+| `srt::config::parse_pipeline_srt_ingest_policy` | C through serde failure and policy fallback tests | N/A | C: malformed/encrypted policy fails closed | N/A | N/A | Covered |
+| `file_ingest::parse_start_time_ms` | C: empty/syntax/negative | Q-022: finite/range overflow | C: invalid components rejected | N/A | N/A | Q-022 |
+| `hls::fmp4::parse_fmp4_segment_name` | C: wrong prefix/suffix | C: `u64` parse rejects overflow | C: non-segment names rejected | N/A | N/A | Covered; round-trip property test retained |

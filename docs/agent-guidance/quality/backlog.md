@@ -91,6 +91,84 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   dependency tree and full frontend suite pass; 2026-07-17 by codex; Filed:
   2026-07-17 during Q-001)
 
+### Q-018 [resilience] [sonnet] Reject malformed PMT sections before state mutation
+- Goal: `TsDemuxer::parse_pmt` must validate the complete PMT section,
+  program-info span, and every ES descriptor span before changing
+  `pmt_version`, the stream map, or in-flight PES accumulators; a malformed
+  newer PMT followed by a valid PMT with the same version must leave the old
+  state intact and then accept the valid update.
+- Files: `src/media/mpegts.rs`,
+  `src/media/mpegts_tests/tables_and_sync.rs`.
+- Gates: break-it-first focused regression; `scripts/build/resource-limit.sh
+  cargo test media::mpegts::tests::tables_and_sync --lib`; relevant
+  `high_performance_data_path` MPEG-TS demux benchmark before/after; `cargo fmt
+  --all --check`; standard clippy and test gates.
+- Context: Q-002 found that version and stream state are committed before
+  `program_info_length` and `ES_info_length` are known to fit the section. An
+  oversized declared length can clear a working stream map and make the later
+  valid retransmission look like a duplicate.
+- Status: open (Filed: 2026-07-17 by Q-002)
+
+### Q-019 [resilience] [sonnet] Make MPEG-TS SPS probing fail closed on exhausted bits
+- Goal: `mpegts_probe::parse_h264_sps` and
+  `mpegts_probe::parse_h265_sps` must stop on truncated or overlong
+  Exp-Golomb fields without panicking, wrapping dimensions, allocating from
+  untrusted counts, or publishing partial metadata; deterministic crafted
+  vectors must exercise the bit-exhaustion and crop-underflow boundaries.
+- Files: `src/media/mpegts_probe.rs`, `src/media/mpegts_tests.rs`.
+- Gates: break-it-first focused regressions; `scripts/build/resource-limit.sh
+  cargo test media::mpegts::tests --lib`; relevant
+  `high_performance_data_path` MPEG-TS demux benchmark before/after; `cargo fmt
+  --all --check`; standard clippy and test gates.
+- Context: Q-002 found only a two-byte H.265 smoke case. The MPEG-TS probe bit
+  reader substitutes zero after exhaustion and permits a 32-zero
+  Exp-Golomb prefix, leaving shift overflow, arithmetic underflow, and
+  attacker-controlled loop-count assumptions unproved.
+- Status: open (Filed: 2026-07-17 by Q-002)
+
+### Q-020 [resilience] [sonnet] Prove AVCC declared-length rejection consistently
+- Goal: `codec::parse_avcc_config`,
+  `rtmp::flv::flv_avcc_config_annexb_parameter_sets`, and
+  `hls::fmp4::parse_avcc_box` must reject truncated SPS/PPS count and length
+  fields, including maximum declared lengths with tiny backing buffers,
+  without returning partial parameter-set state; consolidate duplicate
+  fixtures where the same AVCC record can serve all three owners.
+- Files: `src/media/codec.rs`, `src/media/rtmp/tests.rs`,
+  `src/media/hls/fmp4.rs`.
+- Gates: break-it-first focused regressions; scoped codec/RTMP/HLS tests;
+  `cargo fmt --all --check`; standard clippy and test gates.
+- Context: Q-002 found basic truncation coverage in codec and RTMP parsing but
+  no direct malformed-input proof for the fMP4 AVCC parser and inconsistent
+  partial-result contracts across the three consumers.
+- Status: open (Filed: 2026-07-17 by Q-002)
+
+### Q-021 [resilience] [sonnet] Prove MPEG-TS packet and PES resource bounds
+- Goal: `TsDemuxer::process_ts_packet` must ignore oversized adaptation
+  fields and invalid PES header spans without corrupting current state, and
+  the `MAX_PES_BUFFER` limit must remain effective under repeated
+  continuation packets while a later valid PES still demuxes.
+- Files: `src/media/mpegts.rs`, `src/media/mpegts_tests.rs`.
+- Gates: break-it-first focused regressions; `scripts/build/resource-limit.sh
+  cargo test media::mpegts::tests --lib`; relevant MPEG-TS demux/resync
+  benchmark before/after if production code changes; `cargo fmt --all
+  --check`; standard clippy and test gates.
+- Context: Q-002 found a bounded corrupt-sync remainder regression but no
+  direct proof for the separate 512 KiB PES accumulator or malformed
+  adaptation/PES header recovery boundaries.
+- Status: open (Filed: 2026-07-17 by Q-002)
+
+### Q-022 [resilience] [sonnet] Reject non-finite and overflowing file start times
+- Goal: `file_ingest::parse_start_time_ms` must reject `NaN`, infinities,
+  float-to-millisecond overflow, and integer overflow in colon-delimited
+  hours/minutes instead of coercing them to zero or saturated timestamps.
+- Files: `src/media/file_ingest.rs`.
+- Gates: break-it-first focused regression; `scripts/build/resource-limit.sh
+  cargo test media::file_ingest::tests --lib`; `cargo fmt --all --check`;
+  standard clippy and test gates.
+- Context: Q-002 found ordinary negative/syntax rejection but no finite/range
+  validation before floating-point casts and integer time arithmetic.
+- Status: open (Filed: 2026-07-17 by Q-002)
+
 ### Q-002 [resilience] [haiku] Inventory crafted-bytes fault-injection coverage
 - Goal: a table (in the journal + filed items) of every demux/parse entry
   point in `src/media/` vs the malformed-input cases it has tests for
@@ -102,7 +180,9 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: `docs/testing-strategy.md` designates crafted-bytes unit tests as
   the home of fault injection after the in-memory edge subsystem was dropped.
   "No failure path may crash the engine" needs per-parser proof.
-- Status: open (Filed: 2026-07-03 by bootstrap)
+- Status: done (Mapped every media binary parser/demux owner plus adjacent
+  string parsers; filed Q-018 through Q-022 for the non-duplicative gaps;
+  2026-07-17 by codex; Filed: 2026-07-03 by bootstrap)
 
 ### Q-003 [performance] [sonnet] Seed the benchmark baseline ledger
 - Goal: medians for `ring_buffer`, `avio_throughput`, and
