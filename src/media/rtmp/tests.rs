@@ -720,6 +720,35 @@ fn flv_avcc_config_annexb_parameter_sets_rejects_non_h264() {
 }
 
 #[test]
+fn flv_avcc_config_annexb_parameter_sets_rejects_sps_ok_pps_truncated() {
+    // SPS parses fully, numPPS = 1, but the PPS length/body never arrives.
+    // A partial SPS-only extraction would be worse than none (the decoder
+    // still can't decode without a PPS), so this must yield None.
+    #[rustfmt::skip]
+    let data: &[u8] = &[
+        0x17, 0x00, 0x00, 0x00, 0x00, // FLV header + AVC seq header + comp time
+        0x01, 0x64, 0x00, 0x1F, 0xFF, 0xE1, // AVCC header, numSPS=1
+        0x00, 0x04, // SPS length = 4
+        0x67, 0x64, 0x00, 0x1F, // SPS NAL
+        0x01, // numPPS = 1, then buffer ends
+    ];
+    assert!(flv_avcc_config_annexb_parameter_sets(data).is_none());
+}
+
+#[test]
+fn flv_avcc_config_annexb_parameter_sets_rejects_max_declared_length_tiny_buffer() {
+    // SPS declares a 0xFFFF-byte length but only 2 bytes actually follow.
+    #[rustfmt::skip]
+    let data: &[u8] = &[
+        0x17, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x64, 0x00, 0x1F, 0xFF, 0xE1, // AVCC header, numSPS=1
+        0xFF, 0xFF, // SPS length = 65535
+        0xAA, 0xBB, // only 2 bytes present
+    ];
+    assert!(flv_avcc_config_annexb_parameter_sets(data).is_none());
+}
+
+#[test]
 fn parse_flv_video_non_sequence_header() {
     // Keyframe + AVC, but packet type 1 (NALU, not sequence header)
     let data: &[u8] = &[0x17, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x65];

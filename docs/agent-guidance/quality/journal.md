@@ -39,6 +39,8 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-17 23:30 Q-018 DONE [codex]](#2026-07-17-2330-q-018-done-codex)
 - [2026-07-17 23:34 Q-019 STARTED [codex]](#2026-07-17-2334-q-019-started-codex)
 - [2026-07-18 00:10 Q-019 DONE [codex]](#2026-07-18-0010-q-019-done-codex)
+- [2026-07-18 00:15 Q-020 STARTED [codex]](#2026-07-18-0015-q-020-started-codex)
+- [2026-07-18 00:45 Q-020 DONE [codex]](#2026-07-18-0045-q-020-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -610,3 +612,56 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   Host bench noise makes single before/after comparisons unreliable here —
   future benchmark-gated items on this host should take at least two samples
   per side before concluding a regression.
+
+## 2026-07-18 00:15 Q-020 STARTED [codex]
+- What: audit the three independent AVCC (`AVCDecoderConfigurationRecord`)
+  parsers — `codec::parse_avcc_config`, `rtmp::flv::
+  flv_avcc_config_annexb_parameter_sets`, `hls::fmp4::parse_avcc_box` — for
+  fail-closed behavior on truncated input and maximal declared SPS/PPS
+  lengths against tiny backing buffers, and add adversarial regression
+  coverage.
+- Gates: pending scoped avcc/codec/rtmp/hls::fmp4 tests, format, clippy, and
+  full test gates.
+- Commit: none.
+- Follow-ups: none yet.
+
+## 2026-07-18 00:45 Q-020 DONE [codex]
+- What: `codec::parse_avcc_config` was the one parser of the three that did
+  not fail closed: on truncation partway through parsing (missing PPS-count
+  byte after a valid SPS, or a truncated PPS length/body) it returned
+  whatever Annex-B prefix it had already accumulated — e.g. an SPS-only
+  result — instead of rejecting the input outright. That partial result is
+  cached as `sps_pps_cache` and later prepended verbatim to keyframes, so a
+  truncated config would silently produce an incomplete-but-plausible cached
+  parameter set instead of an obvious failure. Rewrote it around a new
+  private `parse_avcc_sps_pps(data: &[u8]) -> Option<Vec<u8>>` that uses
+  `.get()?`-bounds-checked accessors throughout (the same style already used
+  by the other two parsers); the public `parse_avcc_config` wrapper now
+  falls back to an empty parameter-set vec via `.unwrap_or_default()` on any
+  parse failure instead of returning a partial prefix. `rtmp::flv::
+  flv_avcc_config_annexb_parameter_sets` and `hls::fmp4::parse_avcc_box`
+  were already `Option`/`?`-based and already failed closed on truncation
+  and on oversized declared lengths (bounds-checked `.get(pos..pos+len)?`
+  never pre-allocates the declared length before validating it fits), so no
+  behavior change was needed there — only test coverage. Also replaced a
+  weak existing test, `parse_avcc_config_zero_sps_pps`, which used a 7-byte
+  fixture that was silently caught by an unrelated `data.len() < 8`
+  early-return guard rather than exercising the zero-count loop body itself;
+  widened it to 8 bytes so it exercises real loop logic.
+- Gates: added adversarial regression tests to all three parsers: SPS parses
+  successfully but the PPS-count byte is missing; SPS parses successfully
+  but the PPS length/body is truncated; and a maximal declared SPS length
+  (`0xFFFF`) paired with a tiny backing buffer. Scoped `cargo test --lib
+  avcc` passed 26/26 across all three parsers' tests, `cargo test --lib
+  codec::` passed 52/52, `cargo test --lib rtmp` passed 90/90, `cargo test
+  --lib hls::fmp4` passed 17/17. `cargo fmt --all --check` and `cargo
+  clippy --all-targets` (warnings denied) were clean. Full `cargo test`
+  passed with no failures, panics, or warnings.
+- Commit: this commit.
+- Follow-ups: none.
+- Notes: AVCC parsing runs only when a sequence header/config record
+  arrives, not per-packet on the steady-state hot path, so no benchmark gate
+  applies. The three parsers remain intentionally separate (different
+  framing — FLV-prefixed vs. bare AVCC bytes — and different module
+  boundaries) rather than consolidated into a shared helper, per AGENTS.md's
+  "add abstractions only when they remove real complexity."

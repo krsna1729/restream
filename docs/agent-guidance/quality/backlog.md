@@ -146,7 +146,12 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: Q-002 found basic truncation coverage in codec and RTMP parsing but
   no direct malformed-input proof for the fMP4 AVCC parser and inconsistent
   partial-result contracts across the three consumers.
-- Status: open (Filed: 2026-07-17 by Q-002)
+- Status: done (`codec::parse_avcc_config` rewritten around an
+  `Option`-returning `.get()?`-bounds-checked helper so truncation never
+  yields a partial SPS-only/PPS-only prefix; the other two parsers were
+  already fail-closed and gained adversarial regression tests for missing
+  PPS-count byte, truncated PPS length/body, and maximal declared SPS length
+  against a tiny buffer; 2026-07-18 by codex; Filed: 2026-07-17 by Q-002)
 
 ### Q-021 [resilience] [sonnet] Prove MPEG-TS packet and PES resource bounds
 - Goal: `TsDemuxer::process_ts_packet` must ignore oversized adaptation

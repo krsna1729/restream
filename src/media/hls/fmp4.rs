@@ -1450,6 +1450,41 @@ mod tests {
     }
 
     #[test]
+    fn avcc_box_rejects_sps_ok_but_missing_pps_count_byte() {
+        // Truncate right after the valid SPS, before the mandatory numPPS
+        // byte. A partial SPS-only sample entry would be worse than none
+        // (playback can't decode without a PPS), so this must fail closed.
+        let mut header = high_profile_sequence_header();
+        header.truncate(38);
+        assert!(
+            build_h264_sample_entry_from_flv_sequence_header(&header, &test_video_meta()).is_none()
+        );
+    }
+
+    #[test]
+    fn avcc_box_rejects_sps_ok_but_pps_length_truncated() {
+        // numPPS = 1 is present but the PPS length/body never arrives.
+        let mut header = high_profile_sequence_header();
+        header.truncate(39);
+        assert!(
+            build_h264_sample_entry_from_flv_sequence_header(&header, &test_video_meta()).is_none()
+        );
+    }
+
+    #[test]
+    fn avcc_box_rejects_max_declared_sps_length_with_tiny_buffer() {
+        // Overwrite the declared SPS length (bytes 11..13) with 0xFFFF but
+        // keep only the original short buffer trailing it.
+        let mut header = high_profile_sequence_header();
+        header[11] = 0xFF;
+        header[12] = 0xFF;
+        header.truncate(15);
+        assert!(
+            build_h264_sample_entry_from_flv_sequence_header(&header, &test_video_meta()).is_none()
+        );
+    }
+
+    #[test]
     fn packet_derived_h264_sample_entries_preserve_known_dimensions() {
         let packet = MediaPacket {
             media_type: MediaType::Video,
