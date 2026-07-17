@@ -2396,6 +2396,8 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   await expect(
     status.getByRole("button", { name: "Show toolchain details" }),
   ).toBeVisible();
+  await expect(status.locator("#status-build-section table")).toHaveCount(0);
+  await expect(status.locator("#status-system-section table")).toHaveCount(0);
   await expect(status.locator("#status-toolchain-section table")).toHaveCount(0);
   await status.getByRole("button", { name: "Show toolchain details" }).click();
   await expect(status.locator("#status-toolchain-section table")).toHaveCount(1);
@@ -2464,6 +2466,8 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   expect(statusButtonNames).toEqual(
     expect.arrayContaining([
       "Refresh status data",
+      "Show application build details",
+      "Show system details",
       "Show toolchain details",
       "Show native library details",
       "Show SBOM details",
@@ -2556,6 +2560,14 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
     "1 activity · 1 process log visible",
   );
   expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
+  await status
+    .getByRole("button", { name: "Show application build details" })
+    .click();
+  await expect(status.locator("#status-build-section table")).toHaveCount(1);
+  await status
+    .getByRole("button", { name: "Hide application build details" })
+    .click();
+  await expect(status.locator("#status-build-section table")).toHaveCount(0);
   const statusSectionJump = status.getByLabel("Jump to status section");
   await statusSectionJump.selectOption("status-native-section");
   await expect(

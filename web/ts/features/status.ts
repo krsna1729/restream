@@ -935,18 +935,20 @@ function renderStatusSnapshot(): void {
             <p id="status-log-search-results-summary" class="dashboard-muted pb-1 text-sm" role="status" aria-live="polite">${escapeHtml(searchSummaryText)}</p>
         </div>`,
     statusQuickNavHtml(),
-    section(
+    advancedSection(
       "status-build-section",
       "Application Build",
+      `${valueOrDash(data.restream?.version)} · commit ${valueOrDash(data.restream?.commit)}`,
       [
         row("Version", data.restream?.version),
         row("Commit", data.restream?.commit),
         row("Native Build ID", data.restream?.nativeBuildId),
       ].join(""),
     ),
-    section(
+    advancedSection(
       "status-system-section",
       "System",
+      `${valueOrDash(data.os?.platform)} ${valueOrDash(data.os?.arch)} · uptime ${formatUptime(data.os?.uptime)}`,
       [
         row("Platform", data.os?.platform),
         row("Architecture", data.os?.arch),
