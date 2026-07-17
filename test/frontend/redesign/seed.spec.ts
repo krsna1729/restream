@@ -3443,9 +3443,15 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
     await frame();
     await frame();
     const boundedCards = root.querySelectorAll("article").length;
+    const collapsedButtons = Array.from(root.querySelectorAll("button"));
+    const collapsedToggleLabel =
+      collapsedButtons.at(-1)?.textContent?.trim() || "";
     renderDashboardV2PipelineOutputOverview(model(cards, true), actions);
     await frame();
     const expandedCards = root.querySelectorAll("article").length;
+    const expandedButtons = Array.from(root.querySelectorAll("button"));
+    const expandedToggleLabel =
+      expandedButtons.at(-1)?.textContent?.trim() || "";
 
     const measure = async (mutate: boolean) => {
       const mutations = { attributes: 0, characterData: 0, childList: 0 };
@@ -3485,7 +3491,9 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
 
     return {
       boundedCards,
+      collapsedToggleLabel,
       expandedCards,
+      expandedToggleLabel,
       stable: await measure(false),
       live: await measure(true),
     };
@@ -3493,7 +3501,9 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
 
   console.log(`react-output-card-benchmark=${JSON.stringify(result)}`);
   expect(result.boundedCards).toBe(8);
+  expect(result.collapsedToggleLabel).toBe("Show all");
   expect(result.expandedCards).toBe(125);
+  expect(result.expandedToggleLabel).toBe("Show fewer");
   expect(result.stable).toMatchObject({
     attributes: 0,
     characterData: 0,

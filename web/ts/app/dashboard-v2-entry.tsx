@@ -1698,7 +1698,7 @@ function DashboardV2PipelineOutputOverview({
                 onClick={() => actions.toggleOutputList(model.pipelineId)}
                 type="button"
               >
-                {model.expanded ? "Show less" : "Show all"}
+                {model.expanded ? "Show fewer" : "Show all"}
               </button>
             </div>
           ) : null}

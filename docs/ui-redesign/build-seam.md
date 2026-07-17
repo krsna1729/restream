@@ -457,7 +457,8 @@ design.
 
 The opt-in pipeline workspace now replaces the legacy output-card list with
 React cards. The pure operate model projects at most eight cards by default and
-retains the existing Show all/Show less contract. Expansion state remains in
+retains the v2 `Show all`/`Show fewer` progressive-disclosure contract.
+Expansion state remains in
 the output-list feature, so changing presentation technology did not create a
 second source of list state.
 
