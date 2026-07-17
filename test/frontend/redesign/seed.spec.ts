@@ -2096,7 +2096,7 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   ).toHaveCount(0);
   await expect(
     sourceRow.getByRole("button", {
-      name: "Show actions for synthetic-source.mp4",
+      name: "Show media actions for synthetic-source.mp4",
     }),
   ).toHaveAttribute("aria-expanded", "false");
   const initialMediaButtonNames = await getCdpNamesByRole(page, "button");
@@ -2106,16 +2106,19 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   );
   expect(initialMediaButtonNames).not.toContain("Upload media");
   expect(initialMediaButtonNames).not.toContain(
+    "Show actions for synthetic-source.mp4",
+  );
+  expect(initialMediaButtonNames).not.toContain(
     "Play synthetic-source.mp4 unavailable",
   );
   await expect(sourceRow.getByRole("button", { name: "Rename" })).toHaveCount(0);
   await expect(sourceRow.getByRole("button", { name: "Delete" })).toHaveCount(0);
   await sourceRow
-    .getByRole("button", { name: "Show actions for synthetic-source.mp4" })
+    .getByRole("button", { name: "Show media actions for synthetic-source.mp4" })
     .click();
   await expect(
     sourceRow.getByRole("button", {
-      name: "Hide actions for synthetic-source.mp4",
+      name: "Hide media actions for synthetic-source.mp4",
     }),
   ).toHaveAttribute("aria-expanded", "true");
   await expect(
@@ -2140,7 +2143,7 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   expect(expandedMediaButtonNames).not.toContain("Delete");
   expect(expandedMediaLinkNames).not.toContain("Download");
   await sourceRow
-    .getByRole("button", { name: "Hide actions for synthetic-source.mp4" })
+    .getByRole("button", { name: "Hide media actions for synthetic-source.mp4" })
     .click();
   await expect(
     sourceRow.getByRole("link", { name: "Download synthetic-source.mp4" }),

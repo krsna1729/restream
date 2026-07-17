@@ -147,7 +147,7 @@ function mediaRowSecondaryActions(
   if (!mediaV2Active()) return `${downloadActions}${buttons}`;
   const expanded = mediaActionRowsExpanded.has(file.name);
   return `<div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
-        <button class="btn btn-xs btn-outline js-media-row-actions" type="button" data-filename="${safeName}" aria-expanded="${expanded ? "true" : "false"}" aria-label="${expanded ? "Hide" : "Show"} actions for ${safeName}">${expanded ? "Hide actions" : "More actions"}</button>
+        <button class="btn btn-xs btn-outline js-media-row-actions" type="button" data-filename="${safeName}" aria-expanded="${expanded ? "true" : "false"}" aria-label="${expanded ? "Hide" : "Show"} media actions for ${safeName}">${expanded ? "Hide actions" : "More actions"}</button>
         ${expanded ? `${downloadActions}${buttons}` : ""}
     </div>`;
 }
