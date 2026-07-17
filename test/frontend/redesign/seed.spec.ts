@@ -1474,6 +1474,17 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   await expect(
     checkpoint.getByText("1 notable activity", { exact: true }),
   ).toBeVisible();
+  await expect(
+    status.getByRole("button", { name: "Show Toolchain details" }),
+  ).toBeVisible();
+  await expect(status.locator("#status-toolchain-section table")).toHaveCount(0);
+  await status.getByRole("button", { name: "Show Toolchain details" }).click();
+  await expect(status.locator("#status-toolchain-section table")).toHaveCount(1);
+  await expect(status.locator("#status-toolchain-section")).toContainText(
+    "Target",
+  );
+  await status.getByRole("button", { name: "Hide Toolchain details" }).click();
+  await expect(status.locator("#status-toolchain-section table")).toHaveCount(0);
   expect(await getCdpStatusTexts(page)).toContain(
     "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
   );

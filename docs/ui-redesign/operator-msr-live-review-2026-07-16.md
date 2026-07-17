@@ -256,6 +256,11 @@ Status process logs are now bounded by default with an explicit `Show all`
 affordance. The route still fetches the same recent history and search still
 matches the full fetched set, but the first view is a scan layer rather than an
 80-card wall of logs.
+Status advanced diagnostic sections now follow the same rule under `ui=v2`:
+Toolchain, Native Libraries, and SBOM render compact summaries first and mount
+their row tables only when the operator asks for details. Build, System,
+Activity, and Logs remain immediate because they answer the common "is the
+service healthy right now?" question.
 
 The seeded browser proof also includes a route-checkpoint matrix across the
 checkpoint screens: Inspect, Monitor, Media, Settings, Status, Incidents, and
@@ -361,7 +366,7 @@ What changed from the live operator pass:
 Still not a full v2 redesign:
 
 - Inspect graph/resource details, the Monitor wall, the Incidents feed, the
-  Telemetry counter grids, Status detail sections, Media library details, and Settings form details are still
+  Telemetry counter grids, some Status detail sections, Media library details, and Settings form details are still
   intentionally legacy-owned, now with lightweight route checkpoints where useful
   rather than full v2 layouts. Inspect, Monitor, Media, Settings, Incidents,
   Telemetry, and Status each have only their first v2-owned decision checkpoint.

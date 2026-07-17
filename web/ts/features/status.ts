@@ -110,6 +110,7 @@ let statusStreamActive = false;
 let statusStreamLastEventId: number | null = null;
 let statusLogSearchQuery = "";
 let statusProcessLogExpanded = false;
+const statusAdvancedSectionsExpanded = new Set<string>();
 let statusCheckpointCallback:
   | ((model: StatusCheckpointModel | null) => void)
   | null = null;
@@ -252,6 +253,42 @@ function section(id: string, title: string, rows: string): string {
                 </colgroup>
                 <tbody>${rows}</tbody>
             </table>
+        </div>
+    </section>`;
+}
+
+function statusV2Active(): boolean {
+  const toggle = document.getElementById("dashboard-ui-v2-toggle");
+  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
+  try {
+    return new URLSearchParams(window.location.search).get("ui") === "v2";
+  } catch (_err) {
+    return false;
+  }
+}
+
+function advancedSection(
+  id: string,
+  title: string,
+  summary: string,
+  rows: string,
+): string {
+  const expanded = !statusV2Active() || statusAdvancedSectionsExpanded.has(id);
+  if (expanded) {
+    return `${section(id, title, rows)}
+      ${
+        statusV2Active()
+          ? `<button type="button" class="btn btn-xs btn-outline mt-2" data-status-advanced-section="${escapeHtml(id)}" aria-expanded="true">Hide ${escapeHtml(title)} details</button>`
+          : ""
+      }`;
+  }
+  return `<section id="${escapeHtml(id)}" class="scroll-mt-24">
+        <div class="border-base-content/10 bg-base-100/60 rounded-lg border px-3 py-2">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <h3 class="dashboard-kicker">${escapeHtml(title)}</h3>
+                <button type="button" class="btn btn-xs btn-outline" data-status-advanced-section="${escapeHtml(id)}" aria-expanded="false">Show ${escapeHtml(title)} details</button>
+            </div>
+            <p class="dashboard-muted mt-1 text-sm">${escapeHtml(summary)}</p>
         </div>
     </section>`;
 }
@@ -672,6 +709,27 @@ function bindActions(status: StatusData, sbomEndpoint: string): void {
     renderStatusSnapshot();
   });
   document
+    .querySelectorAll<HTMLButtonElement>("[data-status-advanced-section]")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        const id = button.dataset.statusAdvancedSection;
+        if (!id) return;
+        if (statusAdvancedSectionsExpanded.has(id)) {
+          statusAdvancedSectionsExpanded.delete(id);
+        } else {
+          statusAdvancedSectionsExpanded.add(id);
+        }
+        renderStatusSnapshot();
+        Array.from(
+          document.querySelectorAll<HTMLButtonElement>(
+            "[data-status-advanced-section]",
+          ),
+        )
+          .find((nextButton) => nextButton.dataset.statusAdvancedSection === id)
+          ?.focus();
+      });
+    });
+  document
     .getElementById("download-status-btn")
     ?.addEventListener("click", () => {
       downloadJson(`restream-status-${timestampForFilename()}.json`, status);
@@ -728,6 +786,38 @@ function renderStatusSnapshot(): void {
     visibleProcessLogs.length,
     statusLogSearchQuery,
   );
+  const toolchainRows = [
+    row("Rust", data.toolchain?.rustc),
+    row("Target", data.toolchain?.target),
+    row("LLVM", data.toolchain?.llvm),
+    row("GCC Runtime", data.toolchain?.gccRuntime),
+  ].join("");
+  const nativeRows = [
+    row("FFmpeg", ffmpeg?.version),
+    row("FFmpeg License", ffmpeg?.license),
+    row("FFmpeg x86 Assembly", ffmpeg?.x86Assembly),
+    versionRows("libsrt", srt?.version, srt?.buildVersion),
+    row("libsrt License", srt?.license),
+    row("SRT Bonding Available", srt?.bondingAvailable),
+    versionRows("Mbed TLS", mbedtls?.version, mbedtls?.buildVersion),
+    row("Mbed TLS License", mbedtls?.license),
+    row("SQLite Version", sqlite?.version),
+    row("SQLite License", sqlite?.license),
+    row("x264 Version", data.nativeLibraries?.x264?.version),
+    row("x264 License", data.nativeLibraries?.x264?.license),
+    row("x264 Version Source", data.nativeLibraries?.x264?.versionSource),
+    row("x265 Version", data.nativeLibraries?.x265?.version),
+    row("x265 License", data.nativeLibraries?.x265?.license),
+    row("x265 Version Source", data.nativeLibraries?.x265?.versionSource),
+  ].join("");
+  const sbomRows = [
+    row("Endpoint", sbomEndpoint),
+    row("Components", data.sbom?.componentCount),
+    row("Rust Components", data.sbom?.rustComponentCount),
+    row("Native Components", data.sbom?.nativeComponentCount),
+    row("Native Component Names", formatList(data.sbom?.nativeComponents)),
+    row("Licenses Included", data.sbom?.licensesIncluded),
+  ].join("");
 
   container.innerHTML = [
     `<p id="status-route-summary" class="dashboard-muted text-sm" role="status" aria-live="polite">${escapeHtml(statusSummaryText(data, processLogs))}</p>`,
@@ -765,49 +855,23 @@ function renderStatusSnapshot(): void {
         row("Acceleration Features", formatFlags(data.os?.cpu?.flags)),
       ].join(""),
     ),
-    section(
+    advancedSection(
       "status-toolchain-section",
       "Toolchain",
-      [
-        row("Rust", data.toolchain?.rustc),
-        row("Target", data.toolchain?.target),
-        row("LLVM", data.toolchain?.llvm),
-        row("GCC Runtime", data.toolchain?.gccRuntime),
-      ].join(""),
+      `Rust ${valueOrDash(data.toolchain?.rustc)} · target ${valueOrDash(data.toolchain?.target)}`,
+      toolchainRows,
     ),
-    section(
+    advancedSection(
       "status-native-section",
       "Native Libraries",
-      [
-        row("FFmpeg", ffmpeg?.version),
-        row("FFmpeg License", ffmpeg?.license),
-        row("FFmpeg x86 Assembly", ffmpeg?.x86Assembly),
-        versionRows("libsrt", srt?.version, srt?.buildVersion),
-        row("libsrt License", srt?.license),
-        row("SRT Bonding Available", srt?.bondingAvailable),
-        versionRows("Mbed TLS", mbedtls?.version, mbedtls?.buildVersion),
-        row("Mbed TLS License", mbedtls?.license),
-        row("SQLite Version", sqlite?.version),
-        row("SQLite License", sqlite?.license),
-        row("x264 Version", data.nativeLibraries?.x264?.version),
-        row("x264 License", data.nativeLibraries?.x264?.license),
-        row("x264 Version Source", data.nativeLibraries?.x264?.versionSource),
-        row("x265 Version", data.nativeLibraries?.x265?.version),
-        row("x265 License", data.nativeLibraries?.x265?.license),
-        row("x265 Version Source", data.nativeLibraries?.x265?.versionSource),
-      ].join(""),
+      `FFmpeg ${valueOrDash(ffmpeg?.version)} · libsrt ${valueOrDash(srt?.version)} · SQLite ${valueOrDash(sqlite?.version)}`,
+      nativeRows,
     ),
-    section(
+    advancedSection(
       "status-sbom-section",
       "SBOM",
-      [
-        row("Endpoint", sbomEndpoint),
-        row("Components", data.sbom?.componentCount),
-        row("Rust Components", data.sbom?.rustComponentCount),
-        row("Native Components", data.sbom?.nativeComponentCount),
-        row("Native Component Names", formatList(data.sbom?.nativeComponents)),
-        row("Licenses Included", data.sbom?.licensesIncluded),
-      ].join(""),
+      `${valueOrDash(data.sbom?.componentCount)} components · ${valueOrDash(data.sbom?.nativeComponentCount)} native · licenses ${valueOrDash(data.sbom?.licensesIncluded)}`,
+      sbomRows,
     ),
     renderRestreamActivity(processLogs, search),
     renderProcessLog(processLogs, search),
