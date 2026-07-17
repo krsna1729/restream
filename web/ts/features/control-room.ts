@@ -1969,6 +1969,7 @@ function renderControlRoom(): void {
       clearSearchButton.type = "button";
       clearSearchButton.className = "btn btn-sm btn-outline";
       clearSearchButton.dataset.action = "control-room-clear-search";
+      clearSearchButton.setAttribute("aria-label", "Clear monitor search");
       clearSearchButton.textContent = "Clear search";
       searchInput?.closest("label")?.after(clearSearchButton);
     }

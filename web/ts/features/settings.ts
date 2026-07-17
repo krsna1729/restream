@@ -511,8 +511,8 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <div class="text-sm font-medium">Authentication Attempts</div>
                         <div class="flex items-center gap-2">
-                            <button class="btn btn-ghost btn-sm" data-settings-action="refresh-rate-limits">Refresh</button>
-                            <button id="auth-reset-actions-toggle" type="button" class="btn btn-outline btn-sm hidden" aria-expanded="false">Show reset actions</button>
+                            <button class="btn btn-ghost btn-sm" data-settings-action="refresh-rate-limits" aria-label="Refresh authentication attempts">Refresh</button>
+                            <button id="auth-reset-actions-toggle" type="button" class="btn btn-outline btn-sm hidden" aria-label="Show authentication reset actions" aria-expanded="false">Show reset actions</button>
                             <button id="auth-reset-all-btn" class="btn btn-outline btn-sm" data-settings-action="reset-rate-limits" aria-label="Reset all authentication attempts">Reset All</button>
                         </div>
                     </div>
@@ -521,8 +521,8 @@ export function renderSettingsPanel(container: HTMLElement): void {
                             <span class="label-text text-base-content/70">Search authentication attempts</span>
                             <input id="auth-attempts-search" class="input input-sm input-bordered mt-1" type="search" value="" placeholder="scope, IP, banned, tracking…" autocomplete="off" />
                         </label>
-                        <button id="auth-attempts-clear-search-btn" type="button" class="btn btn-sm btn-outline hidden">Clear search</button>
-                        <button id="auth-attempts-toggle" type="button" class="btn btn-sm btn-outline hidden" aria-expanded="false">Show all</button>
+                        <button id="auth-attempts-clear-search-btn" type="button" class="btn btn-sm btn-outline hidden" aria-label="Clear authentication attempt search">Clear search</button>
+                        <button id="auth-attempts-toggle" type="button" class="btn btn-sm btn-outline hidden" aria-label="Show all authentication attempts" aria-expanded="false">Show all</button>
                         <p id="auth-attempts-search-summary" class="text-base-content/60 pb-1 text-sm" role="status" aria-live="polite">0 auth attempts visible</p>
                     </div>
                     <div class="overflow-x-auto rounded-lg border border-base-content/10" role="region" aria-label="Authentication attempts" tabindex="0">
@@ -952,6 +952,12 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
     resetActionsToggle.textContent = authResetActionsExpanded
       ? "Hide reset actions"
       : "Show reset actions";
+    resetActionsToggle.setAttribute(
+      "aria-label",
+      authResetActionsExpanded
+        ? "Hide authentication reset actions"
+        : "Show authentication reset actions",
+    );
   }
   resetAllButton?.classList.toggle("hidden", !resetActionsVisible);
   resetHeading?.classList.toggle("hidden", !resetActionsVisible);
@@ -970,6 +976,12 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
     toggle.textContent = authAttemptsExpanded
       ? "Show fewer"
       : `Show all ${shownAttempts.length}`;
+    toggle.setAttribute(
+      "aria-label",
+      authAttemptsExpanded
+        ? "Show fewer authentication attempts"
+        : `Show all ${shownAttempts.length} authentication attempts`,
+    );
   }
   if (visibleAttempts.length === 0) {
     body.innerHTML = `<tr><td colspan="${resetActionsVisible ? "5" : "4"}" class="text-base-content/60">${search ? `No authentication attempts match "${escapeHtml(rateLimitSearchQuery.trim())}". Clear search to return to the full security log.` : "No attempts"}</td></tr>`;

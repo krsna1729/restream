@@ -340,8 +340,15 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
       'No authentication attempts match "banned". Clear search to return to the full security log.',
     ),
   ).toBeVisible();
-  const clearSearch = settings.getByRole("button", { name: "Clear search" });
+  const clearSearch = settings.getByRole("button", {
+    name: "Clear authentication attempt search",
+  });
   await expect(clearSearch).toBeVisible();
+  const filteredSettingsButtonNames = await getCdpNamesByRole(page, "button");
+  expect(filteredSettingsButtonNames).toContain(
+    "Clear authentication attempt search",
+  );
+  expect(filteredSettingsButtonNames).not.toContain("Clear search");
   expect(await getCdpStatusTexts(page)).toContain(
     '0/1 auth attempts match "banned"',
   );
@@ -543,9 +550,11 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
       "Save ingest host",
       "Save dashboard password",
       "Save ingest security settings",
+      "Refresh authentication attempts",
     ]),
   );
   expect(buttonNames).not.toContain("Save");
+  expect(buttonNames).not.toContain("Refresh");
   expect(buttonNames).not.toContain("Reset");
   await expect(
     settings.getByRole("cell", { name: "203.0.113.10" }),
@@ -560,7 +569,7 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
     settings.getByRole("button", { name: "Reset", exact: true }),
   ).toHaveCount(0);
   const showResetActions = settings.getByRole("button", {
-    name: "Show reset actions",
+    name: "Show authentication reset actions",
   });
   await expect(showResetActions).toHaveAttribute("aria-expanded", "false");
   await showResetActions.click();
@@ -578,7 +587,7 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
       .first(),
   ).toBeVisible();
   const hideResetActions = settings.getByRole("button", {
-    name: "Hide reset actions",
+    name: "Hide authentication reset actions",
   });
   await expect(hideResetActions).toHaveAttribute("aria-expanded", "true");
   await hideResetActions.click();
@@ -598,8 +607,15 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   await expect(hideAccountActions).toHaveAttribute("aria-expanded", "true");
   await hideAccountActions.click();
   await expect(settings.getByRole("button", { name: "Logout" })).toBeHidden();
-  const showAll = settings.getByRole("button", { name: "Show all 12" });
+  const showAll = settings.getByRole("button", {
+    name: "Show all 12 authentication attempts",
+  });
   await expect(showAll).toHaveAttribute("aria-expanded", "false");
+  const denseSettingsButtonNames = await getCdpNamesByRole(page, "button");
+  expect(denseSettingsButtonNames).toContain(
+    "Show all 12 authentication attempts",
+  );
+  expect(denseSettingsButtonNames).not.toContain("Show all 12");
   expect(await getCdpStatusTexts(page)).toContain("8 auth attempts shown of 12");
   expect(await getCdpNodeCount(page)).toBeLessThan(13_500);
 
@@ -1596,8 +1612,13 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   await expect(
     checkpoint.getByText('0/1 match "nowhere"', { exact: true }),
   ).toBeVisible();
-  const clearSearch = monitor.getByRole("button", { name: "Clear search" });
+  const clearSearch = monitor.getByRole("button", {
+    name: "Clear monitor search",
+  });
   await expect(clearSearch).toBeVisible();
+  const filteredMonitorButtonNames = await getCdpNamesByRole(page, "button");
+  expect(filteredMonitorButtonNames).toContain("Clear monitor search");
+  expect(filteredMonitorButtonNames).not.toContain("Clear search");
   expect(await getCdpStatusTexts(page)).toEqual(
     expect.arrayContaining([
       '0/1 monitored match · 0 missing monitoring URLs · "nowhere"',
