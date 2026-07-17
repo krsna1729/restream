@@ -83,6 +83,8 @@ frontend_assets_exist() {
         [[ -s public/output.css ]] &&
         [[ -s public/js/app/dashboard-entry.js ]] &&
         [[ -s public/js/app/dashboard-v2-entry.js ]] &&
+        [[ -s public/js/app/dashboard-v2-checkpoints-entry.js ]] &&
+        [[ -s public/js/app/dashboard-v2-jsx-runtime.js ]] &&
         [[ -s public/js/lib/hls.min.js ]]
 }
 
@@ -136,6 +138,8 @@ for asset in \
     public/output.css \
     public/js/app/dashboard-entry.js \
     public/js/app/dashboard-v2-entry.js \
+    public/js/app/dashboard-v2-checkpoints-entry.js \
+    public/js/app/dashboard-v2-jsx-runtime.js \
     public/js/lib/hls.min.js \
     public/bin/ffmpeg; do
     [[ -s "$asset" ]] || {

@@ -4,5 +4,8 @@
     "jsx": "react-jsx",
     "noEmit": true
   },
-  "include": ["web/ts/app/dashboard-v2-entry.tsx"]
+  "include": [
+    "web/ts/app/dashboard-v2-entry.tsx",
+    "web/ts/app/dashboard-v2-checkpoints-entry.tsx"
+  ]
 }

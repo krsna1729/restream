@@ -218,7 +218,11 @@ test("seed: ui=v2 keeps legacy routes scoped while pipeline checkpoints own v2 s
 }) => {
   const v2Requests: string[] = [];
   page.on("request", (request) => {
-    if (request.url().includes("dashboard-v2-entry.js")) {
+    if (
+      /dashboard-v2-(entry|checkpoints-entry|jsx-runtime)\.js/.test(
+        request.url(),
+      )
+    ) {
       v2Requests.push(request.url());
     }
   });
@@ -308,7 +312,12 @@ test("seed: ui=v2 keeps legacy routes scoped while pipeline checkpoints own v2 s
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
     "UI v2 checkpoint · Pipeline graph and diagnostics",
   );
-  expect(v2Requests.length).toBeGreaterThanOrEqual(1);
+  expect(
+    v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
+  ).toBe(true);
+  expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
+    false,
+  );
   const requestsAfterInspect = v2Requests.length;
 
   await page.goto("/?mode=pipeline&view=monitor&p=pipe-healthy&ui=v2");
@@ -335,6 +344,9 @@ test("seed: ui=v2 keeps legacy routes scoped while pipeline checkpoints own v2 s
       .getByRole("heading", { name: "Pipelines" }),
   ).toBeVisible();
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterMonitor);
+  expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
+    true,
+  );
 });
 
 test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop", async ({

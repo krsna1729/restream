@@ -9,6 +9,7 @@ import type {
 } from "../features/pipeline-operate-view-model.js";
 
 const DASHBOARD_V2_BUNDLE = "./dashboard-v2-entry.js";
+const DASHBOARD_V2_CHECKPOINTS_BUNDLE = "./dashboard-v2-checkpoints-entry.js";
 const DASHBOARD_UI_VERSION_STORAGE_KEY = "restream.dashboardUiVersion.v1";
 const DASHBOARD_UI_VERSION_TOGGLE_ID = "dashboard-ui-v2-toggle";
 
@@ -123,6 +124,9 @@ interface DashboardV2Module {
     model: PipelineOutputOverviewModel | null,
     actions: DashboardV2PipelineOutputOverviewActions,
   ): void;
+}
+
+interface DashboardV2CheckpointsModule {
   renderDashboardV2PipelineInspectCheckpoint(
     model: PipelineInspectCheckpointModel | null,
     actions: DashboardV2PipelineInspectActions,
@@ -135,6 +139,8 @@ interface DashboardV2Module {
 
 let dashboardV2Module: DashboardV2Module | null = null;
 let dashboardV2ModulePromise: Promise<void> | null = null;
+let dashboardV2CheckpointsModule: DashboardV2CheckpointsModule | null = null;
+let dashboardV2CheckpointsModulePromise: Promise<void> | null = null;
 let dashboardV2OverviewActive = false;
 let dashboardV2PipelineActive = false;
 let dashboardV2PipelineInspectActive = false;
@@ -208,12 +214,30 @@ function ensureDashboardV2Module(): void {
       renderLatestPipelineHeader();
       renderLatestPipelineInputStatus();
       renderLatestPipelineOutputOverview();
-      renderLatestPipelineInspect();
-      renderLatestControlRoom();
     })
     .catch((error: unknown) => {
       dashboardV2ModulePromise = null;
       console.error("Unable to start the dashboard v2 experiment", error);
+    });
+}
+
+function ensureDashboardV2CheckpointsModule(): void {
+  if (
+    dashboardV2CheckpointsModule ||
+    dashboardV2CheckpointsModulePromise ||
+    !dashboardV2ExperimentEnabled()
+  ) {
+    return;
+  }
+  dashboardV2CheckpointsModulePromise = import(DASHBOARD_V2_CHECKPOINTS_BUNDLE)
+    .then((module) => {
+      dashboardV2CheckpointsModule = module as DashboardV2CheckpointsModule;
+      renderLatestPipelineInspect();
+      renderLatestControlRoom();
+    })
+    .catch((error: unknown) => {
+      dashboardV2CheckpointsModulePromise = null;
+      console.error("Unable to start the dashboard v2 checkpoints", error);
     });
 }
 
@@ -448,14 +472,14 @@ function renderLatestPipelineInspect(): void {
     hideDashboardV2PipelineInspect();
     return;
   }
-  ensureDashboardV2Module();
+  ensureDashboardV2CheckpointsModule();
   if (
-    !dashboardV2Module ||
+    !dashboardV2CheckpointsModule ||
     latestPipelineInspectModel === undefined ||
     !pipelineInspectActions
   )
     return;
-  dashboardV2Module.renderDashboardV2PipelineInspectCheckpoint(
+  dashboardV2CheckpointsModule.renderDashboardV2PipelineInspectCheckpoint(
     latestPipelineInspectModel,
     pipelineInspectActions,
   );
@@ -466,14 +490,14 @@ function renderLatestControlRoom(): void {
     hideDashboardV2ControlRoom();
     return;
   }
-  ensureDashboardV2Module();
+  ensureDashboardV2CheckpointsModule();
   if (
-    !dashboardV2Module ||
+    !dashboardV2CheckpointsModule ||
     latestControlRoomModel === undefined ||
     !controlRoomActions
   )
     return;
-  dashboardV2Module.renderDashboardV2ControlRoomCheckpoint(
+  dashboardV2CheckpointsModule.renderDashboardV2ControlRoomCheckpoint(
     latestControlRoomModel,
     controlRoomActions,
   );

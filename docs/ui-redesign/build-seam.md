@@ -26,6 +26,7 @@
 - [Pipeline Inspect checkpoint](#pipeline-inspect-checkpoint)
 - [Pipeline Monitor checkpoint](#pipeline-monitor-checkpoint)
 - [Shared checkpoint card](#shared-checkpoint-card)
+- [Checkpoint bundle split](#checkpoint-bundle-split)
 
 ## Objective
 
@@ -38,7 +39,9 @@ cadence, or stable release asset names.
 - The legacy dashboard remains the default and continues to boot from
   `public/js/app/dashboard-entry.js`.
 - `?mode=overview&ui=v2` preserves the canonical Overview location and loads
-  `public/js/app/dashboard-v2-entry.js` dynamically.
+  `public/js/app/dashboard-v2-entry.js` dynamically. Checkpoint-only pipeline
+  routes load `public/js/app/dashboard-v2-checkpoints-entry.js`; both share the
+  stable `public/js/app/dashboard-v2-jsx-runtime.js` chunk.
 - The experimental React root receives a typed, read-only Overview model. It
   does not fetch data, read shared state, own URL state, subscribe to lifecycle
   events, or own mutations. Under the explicit flag it replaces the Overview
@@ -737,3 +740,30 @@ with the Monitor checkpoint slice, while gzip remains under the 77,000-byte
 smoke guard with 265 bytes of headroom. The next material v2 route should still
 pay down more weight or split checkpoint surfaces before adding another large
 component block.
+
+## Checkpoint bundle split
+
+The v2 build now emits stable route-oriented entrypoints instead of one growing
+React island:
+
+- `dashboard-v2-entry.js` owns Overview and Pipeline / Operate.
+- `dashboard-v2-checkpoints-entry.js` owns Pipeline / Inspect and Pipeline /
+  Monitor checkpoint strips.
+- `dashboard-v2-jsx-runtime.js` is the shared React runtime chunk used by both
+  entrypoints.
+
+The dashboard loader imports the checkpoint bundle only when a checkpoint route
+is active, so Overview and Operate no longer pay for Inspect/Monitor checkpoint
+markup. The release build-tree and artifact smoke checks now require all three
+stable files.
+
+Measured deterministic gzip after the split:
+
+| Route payload | Files | Gzip |
+|---|---|---:|
+| Overview / Operate | `dashboard-v2-entry.js` + `dashboard-v2-jsx-runtime.js` | 76,187 B |
+| Inspect / Monitor checkpoint | `dashboard-v2-checkpoints-entry.js` + `dashboard-v2-jsx-runtime.js` | 67,978 B |
+
+This restores meaningful headroom for checkpoint-route evolution without hiding
+React's shared runtime cost. The smoke test now enforces per-route budgets
+instead of a single monolithic bundle ceiling.
