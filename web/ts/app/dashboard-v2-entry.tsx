@@ -473,6 +473,7 @@ function DashboardV2Overview({
                   >
                     <td className="min-w-56 py-3">
                       <button
+                        aria-label={`Open pipeline ${pipeline.name}`}
                         className="group flex max-w-xs text-left"
                         onClick={() => actions.openPipeline(pipeline.id)}
                         type="button"

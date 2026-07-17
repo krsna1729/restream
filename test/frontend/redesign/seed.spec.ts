@@ -3437,7 +3437,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(v2Overview).toContainText("Outputs running1/2");
   await expect(
     v2Overview.getByRole("button", {
-      name: "Retrying Destination",
+      name: "Open pipeline Retrying Destination",
       exact: true,
     }),
   ).toBeVisible();
@@ -3974,10 +3974,10 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
   await expect(overview.getByLabel("Search overview pipelines")).toBeVisible();
   await overview.getByLabel("Search overview pipelines").fill("ritual");
   await expect(
-    overview.getByRole("button", { name: "Ritual backup" }),
+    overview.getByRole("button", { name: "Open pipeline Ritual backup" }),
   ).toBeVisible();
   await expect(
-    overview.getByRole("button", { name: "Main Program" }),
+    overview.getByRole("button", { name: "Open pipeline Main Program" }),
   ).not.toBeVisible();
   const overviewClearSearch = overview.getByRole("button", {
     name: "Clear overview pipeline search",
@@ -3987,6 +3987,8 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
   expect(filteredOverviewButtonNames).toContain(
     "Clear overview pipeline search",
   );
+  expect(filteredOverviewButtonNames).toContain("Open pipeline Ritual backup");
+  expect(filteredOverviewButtonNames).not.toContain("Ritual backup");
   expect(filteredOverviewButtonNames).not.toContain("Clear search");
   expect(await getCdpStatusTexts(page)).toContain(
     '1/10 pipelines shown · "ritual"',
@@ -3997,7 +3999,7 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
     "",
   );
   await expect(
-    overview.getByRole("button", { name: "Main Program" }),
+    overview.getByRole("button", { name: "Open pipeline Main Program" }),
   ).toBeVisible();
   await expect(overviewClearSearch).toBeHidden();
 
@@ -4017,10 +4019,10 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
 
   await overviewClearSearch.click();
   await expect(
-    overview.getByRole("button", { name: "Main Program" }),
+    overview.getByRole("button", { name: "Open pipeline Main Program" }),
   ).toBeVisible();
   await expect(
-    overview.getByRole("button", { name: "Ritual backup" }),
+    overview.getByRole("button", { name: "Open pipeline Ritual backup" }),
   ).toBeVisible();
 
   await expect(overview.getByLabel("Search restream activity")).toBeVisible();
