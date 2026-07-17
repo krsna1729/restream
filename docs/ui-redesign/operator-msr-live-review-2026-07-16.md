@@ -284,6 +284,10 @@ backend policy, and transcode profiles show compact summaries first; the actual
 forms stay available on demand. The security/auth-attempt surface stays open
 because it answers the common operator question: "is anything blocked right
 now?"
+Within transcode profiles, each row now keeps the scan layer to name, preset,
+and tune first; numeric encoder tuning mounts visually only after `Show tuning`.
+That preserves the editable form for save semantics while removing a grid of
+low-frequency boxes from the default Settings read.
 Under `ui=v2`, leaving dense checkpoint routes now also unmounts their legacy
 detail DOM so later checkpoint routes do not inherit hidden route weight. Media
 resets its list render cache on that unmount path, so returning to the route

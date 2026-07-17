@@ -1250,6 +1250,7 @@ const TUNE_OPTIONS = [
   "ssim",
 ];
 const BUILT_IN_PROFILE_ORDER = ["h264", "720p", "1080p"];
+const profileTuningRowsExpanded = new Set<string>();
 const BUILT_IN_TRANSCODE_PROFILES: TranscodeProfiles = {
   h264: {
     preset: "ultrafast",
@@ -1304,6 +1305,11 @@ function renderProfileRow(name: string, profile: TranscodeProfile): string {
   ).join("");
   const safeName = escapeHtml(name);
   const isBuiltIn = BUILT_IN_PROFILE_ORDER.includes(name);
+  const v2 = settingsV2Active();
+  const tuningExpanded = !v2 || profileTuningRowsExpanded.has(name);
+  const tuningToggle = v2
+    ? `<button type="button" class="btn btn-sm btn-outline js-profile-tuning-toggle" data-name="${safeName}" aria-expanded="${tuningExpanded ? "true" : "false"}">${tuningExpanded ? "Hide tuning" : "Show tuning"}</button>`
+    : "";
   const deleteButton = isBuiltIn
     ? '<button class="btn btn-sm btn-ghost" disabled>Built-in</button>'
     : `<button class="btn btn-sm btn-error btn-outline js-profile-delete" data-name="${safeName}">Delete</button>`;
@@ -1322,9 +1328,10 @@ function renderProfileRow(name: string, profile: TranscodeProfile): string {
                     <legend class="fieldset-legend">Tune</legend>
                 <select class="select select-sm js-profile-tune" aria-label="${safeName} tune">${tuneOpts}</select>
                 </fieldset>
+                ${tuningToggle}
                 ${deleteButton}
             </div>
-            <div class="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <div class="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4 ${tuningExpanded ? "" : "hidden"}" data-profile-tuning="${safeName}">
                 <label class="flex items-center gap-2">CRF <input type="number" class="input input-xs w-full js-profile-crf" value="${profile.crf}" min="0" max="51" /></label>
                 <label class="flex items-center gap-2">GOP <input type="number" class="input input-xs w-full js-profile-gop" value="${profile.gop}" min="1" /></label>
                 <label class="flex items-center gap-2">B-frames <input type="number" class="input input-xs w-full js-profile-bframes" value="${profile.bframes}" min="0" /></label>
@@ -1334,6 +1341,28 @@ function renderProfileRow(name: string, profile: TranscodeProfile): string {
                 <label class="flex items-center gap-2">Height <input type="number" class="input input-xs w-full js-profile-height" value="${profile.height}" placeholder="0=src" /></label>
             </div>
         </div>`;
+}
+
+function bindProfileTuningToggles(root: ParentNode): void {
+  root
+    .querySelectorAll<HTMLButtonElement>(".js-profile-tuning-toggle")
+    .forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const row = btn.closest<HTMLElement>("[data-profile-name]");
+        const name = row?.dataset.profileName || btn.dataset.name || "";
+        const tuning = row?.querySelector<HTMLElement>("[data-profile-tuning]");
+        if (!row || !tuning || !name) return;
+        const expanded = !profileTuningRowsExpanded.has(name);
+        if (expanded) {
+          profileTuningRowsExpanded.add(name);
+        } else {
+          profileTuningRowsExpanded.delete(name);
+        }
+        tuning.classList.toggle("hidden", !expanded);
+        btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+        btn.textContent = expanded ? "Hide tuning" : "Show tuning";
+      });
+    });
 }
 
 export function loadTranscodeProfiles(): void {
@@ -1359,6 +1388,7 @@ export function loadTranscodeProfiles(): void {
     .map(([name, p]) => renderProfileRow(name, p))
     .join("");
   updateSettingsSummary();
+  bindProfileTuningToggles(list);
   list
     .querySelectorAll<HTMLButtonElement>(".js-profile-delete")
     .forEach((btn) => {
@@ -1389,6 +1419,9 @@ export function addTranscodeProfile(): void {
     nextName = `new_profile_${suffix}`;
     suffix += 1;
   }
+  if (settingsV2Active()) {
+    profileTuningRowsExpanded.add(nextName);
+  }
   const div = document.createElement("div");
   div.innerHTML = renderProfileRow(nextName, {
     preset: "ultrafast",
@@ -1405,6 +1438,7 @@ export function addTranscodeProfile(): void {
   if (row) {
     list.appendChild(row);
     updateSettingsSummary();
+    bindProfileTuningToggles(row);
     row
       .querySelector<HTMLButtonElement>(".js-profile-delete")
       ?.addEventListener("click", () => {

@@ -264,6 +264,22 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     "",
   );
   await expect(settings.getByLabel("Global SRT ingest mode")).toBeVisible();
+  await settings.locator("#transcode-profiles-section summary").click();
+  await expect(settings.locator("#transcode-profiles-section")).toHaveAttribute(
+    "open",
+    "",
+  );
+  const h264Profile = settings.locator('[data-profile-name="h264"]');
+  await expect(h264Profile.getByLabel("h264 preset")).toBeVisible();
+  await expect(h264Profile.locator(".js-profile-crf")).toBeHidden();
+  const showTuning = h264Profile.getByRole("button", { name: "Show tuning" });
+  await expect(showTuning).toHaveAttribute("aria-expanded", "false");
+  await showTuning.click();
+  await expect(h264Profile.locator(".js-profile-crf")).toBeVisible();
+  const hideTuning = h264Profile.getByRole("button", { name: "Hide tuning" });
+  await expect(hideTuning).toHaveAttribute("aria-expanded", "true");
+  await hideTuning.click();
+  await expect(h264Profile.locator(".js-profile-crf")).toBeHidden();
 
   await authSearch.fill("dashboard");
   await expect(page.locator("#settings-route-summary")).toHaveText(
