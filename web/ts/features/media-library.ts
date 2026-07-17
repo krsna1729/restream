@@ -13,6 +13,7 @@ import {
   showErrorAlert,
 } from "../core/utils.js";
 import { state } from "../core/state.js";
+import type { MediaCheckpointModel } from "./media-view-model.js";
 
 type MediaKind = "recording" | "source";
 let mediaRefreshInFlight: Promise<void> | null = null;
@@ -25,6 +26,9 @@ let mediaSearchQuery = "";
 let lastMediaFiles: MediaFile[] = [];
 let mediaRecordingsExpanded = false;
 let mediaSourcesExpanded = false;
+let mediaCheckpointCallback:
+  | ((model: MediaCheckpointModel | null) => void)
+  | null = null;
 
 const MEDIA_SECTION_VISIBLE_LIMIT = 8;
 
@@ -207,6 +211,72 @@ function mediaDiskSummaryHtml(): string {
     </section>`;
 }
 
+function mediaDiskLabel(): string {
+  const disk = state.metrics.mediaDisk;
+  if (!disk) return "Storage --";
+  const used = formatFileSize(disk.usedBytes ?? 0);
+  const total = formatFileSize(disk.totalBytes ?? 0);
+  const percent = Number.isFinite(disk.usedPercent as number)
+    ? `${(disk.usedPercent as number).toFixed(0)}%`
+    : "--";
+  return `${percent} · ${used} / ${total}`;
+}
+
+function buildMediaCheckpointModel(files: MediaFile[]): MediaCheckpointModel {
+  const recordings = files.filter((file) => mediaKind(file) === "recording");
+  const sources = files.filter((file) => mediaKind(file) !== "recording");
+  const filteredRecordings = recordings.filter((file) =>
+    mediaFileMatchesSearch(file, mediaSearchQuery),
+  );
+  const filteredSources = sources.filter((file) =>
+    mediaFileMatchesSearch(file, mediaSearchQuery),
+  );
+  const filteredTotal = filteredRecordings.length + filteredSources.length;
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  const query = mediaSearchQuery.trim();
+  const searchLabel = query
+    ? `${filteredTotal}/${files.length} visible`
+    : `${files.length} visible`;
+  return {
+    canOpenOverview: true,
+    focusLabel: query
+      ? `${filteredTotal} media file${filteredTotal === 1 ? "" : "s"} match "${query}". Clear search to return to the full recording/source split.`
+      : files.length
+        ? "Use search when the library grows; dense recording and source lists stay bounded until you ask for more."
+        : "The media directory is empty. Upload a source file or enable recording from a pipeline.",
+    metrics: [
+      { label: "Total size", value: formatFileSize(totalBytes) },
+      { label: "Disk", value: mediaDiskLabel() },
+    ],
+    nextStep: files.length
+      ? "Open a source, download a recording, or jump back to Overview to wire media into live pipelines."
+      : "Upload media or start a pipeline recording.",
+    recordingLabel: fileCountLabel(recordings.length, "recording"),
+    searchLabel,
+    sourceLabel: fileCountLabel(sources.length, "source file"),
+    statusLabel: query ? "Filtered" : files.length ? "Loaded" : "Empty",
+    statusTone: query ? "warning" : files.length ? "success" : "neutral",
+    storageLabel: mediaDiskLabel(),
+    summary: query
+      ? `${filteredTotal}/${files.length} media file${filteredTotal === 1 ? "" : "s"} shown · ${fileCountLabel(filteredRecordings.length, "recording")} · ${fileCountLabel(filteredSources.length, "source file")} matched · "${query}"`
+      : `${fileCountLabel(files.length, "media file")} total · ${fileCountLabel(recordings.length, "recording")} · ${fileCountLabel(sources.length, "source file")}`,
+    title: "Media",
+  };
+}
+
+function publishMediaCheckpoint(files: MediaFile[]): void {
+  mediaCheckpointCallback?.(buildMediaCheckpointModel(files));
+}
+
+export function configureMediaCheckpointPresentation(options: {
+  onPresentation?: (model: MediaCheckpointModel | null) => void;
+}): void {
+  mediaCheckpointCallback = options.onPresentation || null;
+  if (mediaCheckpointCallback) {
+    mediaCheckpointCallback(buildMediaCheckpointModel(lastMediaFiles));
+  }
+}
+
 function mountMediaShell(container: HTMLElement): void {
   if (mediaShellMounted && document.getElementById("media-library-root"))
     return;
@@ -283,6 +353,7 @@ export function refreshMediaLibraryMetricsOnly(): void {
   if (!mediaShellMounted || !document.getElementById("media-library-root"))
     return;
   setHtmlIfChanged("media-disk-summary", mediaDiskSummaryHtml());
+  publishMediaCheckpoint(lastMediaFiles);
 }
 
 function attachMediaActions(container: HTMLElement): void {
@@ -498,6 +569,7 @@ function renderMediaLibraryLists(files: MediaFile[], force: boolean): void {
   );
   const root = document.getElementById("media-library-root");
   if (root) attachMediaActions(root);
+  publishMediaCheckpoint(files);
 }
 
 export async function renderMediaLibraryMode({

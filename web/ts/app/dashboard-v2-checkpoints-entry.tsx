@@ -3,12 +3,14 @@ import type { Root } from "react-dom/client";
 
 import type { ControlRoomCheckpointModel } from "../features/control-room-view-model.js";
 import type { IncidentsCheckpointModel } from "../features/incidents-view-model.js";
+import type { MediaCheckpointModel } from "../features/media-view-model.js";
 import type { PipelineInspectCheckpointModel } from "../features/pipeline-inspect-view-model.js";
 import type { StatusCheckpointModel } from "../features/status-view-model.js";
 import type { TelemetryCheckpointModel } from "../features/telemetry-view-model.js";
 import type {
   DashboardV2ControlRoomActions,
   DashboardV2IncidentsActions,
+  DashboardV2MediaActions,
   DashboardV2PipelineInspectActions,
   DashboardV2StatusActions,
   DashboardV2TelemetryActions,
@@ -337,6 +339,42 @@ function DashboardV2StatusCheckpoint({
   );
 }
 
+function DashboardV2MediaCheckpoint({
+  actions,
+  model,
+}: {
+  actions: DashboardV2MediaActions;
+  model: MediaCheckpointModel;
+}): React.JSX.Element {
+  return (
+    <DashboardV2CheckpointCard
+      actions={[
+        [
+          "Overview",
+          actions.openOverview,
+          !model.canOpenOverview,
+        ],
+      ]}
+      className="border-primary/25 bg-primary/5 mb-4"
+      focusLabel={model.focusLabel}
+      focusTitle="Media focus"
+      headingId="dashboard-v2-media-title"
+      metrics={model.metrics}
+      nextStep={model.nextStep}
+      primaryCards={[
+        ["Recordings", model.recordingLabel],
+        ["Source files", model.sourceLabel],
+        ["Search", model.searchLabel],
+        ["Storage", model.storageLabel],
+      ]}
+      statusLabel={model.statusLabel}
+      statusTone={model.statusTone}
+      summary={model.summary}
+      title={model.title}
+    />
+  );
+}
+
 const pipelineInspectContainer = document.getElementById(
   "dashboard-v2-pipeline-inspect-root",
 );
@@ -379,6 +417,13 @@ if (!statusContainer) {
 }
 const statusRootContainer: HTMLElement = statusContainer;
 let statusRoot: Root | null = null;
+
+const mediaContainer = document.getElementById("dashboard-v2-media-root");
+if (!mediaContainer) {
+  throw new Error("Dashboard v2 media root is missing");
+}
+const mediaRootContainer: HTMLElement = mediaContainer;
+let mediaRoot: Root | null = null;
 
 export function renderDashboardV2PipelineInspectCheckpoint(
   model: PipelineInspectCheckpointModel | null,
@@ -427,6 +472,17 @@ export function renderDashboardV2StatusCheckpoint(
   statusRootContainer.hidden = model === null;
   statusRoot.render(
     model ? <DashboardV2StatusCheckpoint actions={actions} model={model} /> : null,
+  );
+}
+
+export function renderDashboardV2MediaCheckpoint(
+  model: MediaCheckpointModel | null,
+  actions: DashboardV2MediaActions,
+): void {
+  mediaRoot ??= createRoot(mediaRootContainer);
+  mediaRootContainer.hidden = model === null;
+  mediaRoot.render(
+    model ? <DashboardV2MediaCheckpoint actions={actions} model={model} /> : null,
   );
 }
 

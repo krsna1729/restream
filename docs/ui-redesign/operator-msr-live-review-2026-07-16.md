@@ -66,7 +66,7 @@ Summary:
 | Pipeline / Operate | v2 | 6,260 | Bounded output list works under 120 outputs with search/filter and first-8 default. |
 | Pipeline / Inspect | legacy | 13,863 | Usable, but still visually/DOM-heavy compared with v2. |
 | Pipeline / Monitor | legacy | 17,052 | Usable, but a separate redesign pass is still needed. |
-| Media | legacy | 18,990 | Not redesigned in v2. |
+| Media | v2 checkpoint + legacy library | 18,990 | First-glance recording/source and search state is v2; dense media actions remain legacy. |
 | Settings | legacy | 22,123 | Not redesigned in v2. |
 | Status | v2 checkpoint + legacy details | 25,700 | First-glance process/build state is v2; dense status sections remain legacy. |
 | Incidents | v2 checkpoint + legacy feed | 28,494 | First-glance incident state is v2; dense alert/event feed remains legacy. |
@@ -80,8 +80,8 @@ and verify stable accessible button names for output operations.
 
 The shared workspace summary now also announces the current ownership state:
 `UI v2 owned` for Overview and Pipeline Operate, `UI v2 checkpoint` for
-Pipeline Inspect, Pipeline Monitor, Incidents, Telemetry, and Status, and `Legacy-owned
-checkpoint` for the remaining top-level legacy routes. Seeded Playwright/CDP
+Pipeline Inspect, Pipeline Monitor, Media, Incidents, Telemetry, and Status,
+and `Legacy-owned checkpoint` for the remaining top-level legacy routes. Seeded Playwright/CDP
 coverage proves that cue is visible and exposed as status text while moving
 across the route journey.
 
@@ -162,8 +162,14 @@ missing URLs, active search narrowing, lazy web-preview count, and next operator
 step. Playback, edit/save, player lifecycle, and external preview loading remain
 legacy-owned underneath it.
 
-Media search now follows the same feedback contract: the legacy-owned Media
-route exposes one live result-count summary that also splits matches by
+Media now has the same lightweight operator checkpoint above the legacy library.
+The v2 strip answers the first operator question before the dense rows: how many
+recordings, how many source files, whether search is narrowing the library, and
+whether storage telemetry is visible. Upload, rename, delete, playback, and
+download remain legacy-owned below it.
+
+Media search now follows the same feedback contract: the checkpoint and legacy
+Media route expose one live result-count summary that also splits matches by
 Recordings and Source Files. Seeded Playwright/CDP coverage proves search hits
 and misses are announced without relying on visual scanning of both sections,
 then proves the local Clear search action restores the full library.
@@ -245,7 +251,7 @@ matches the full fetched set, but the first view is a scan layer rather than an
 80-card wall of logs.
 
 The seeded browser proof also includes a route-checkpoint matrix across the
-legacy-owned screens: Inspect, Monitor, Media, Settings, Status, Incidents, and
+checkpoint screens: Inspect, Monitor, Media, Settings, Status, Incidents, and
 Telemetry. That matrix walks the screens as an operator journey and proves each
 one exposes a visible checkpoint, matching CDP accessibility `status` text, and
 a route-specific node budget. Inspect and Monitor now use v2-owned checkpoint
@@ -348,10 +354,10 @@ What changed from the live operator pass:
 Still not a full v2 redesign:
 
 - Inspect graph/resource details, the Monitor wall, the Incidents feed, the
-  Telemetry counter grids, Status detail sections, Media, and Settings are still
+  Telemetry counter grids, Status detail sections, Media library details, and Settings are still
   intentionally legacy-owned, now with lightweight route checkpoints where useful
-  rather than full v2 layouts. Inspect, Monitor, Incidents, Telemetry, and
-  Status each have only their first v2-owned decision checkpoint.
+  rather than full v2 layouts. Inspect, Monitor, Media, Incidents, Telemetry,
+  and Status each have only their first v2-owned decision checkpoint.
 - Legacy-owned routes keep substantial hidden DOM mounted across navigation.
   This is visible in CDP node growth and should be treated as a future
   performance/accessibility cleanup, not as solved by the v2 seam.
@@ -365,5 +371,5 @@ The remaining evolution should be sequenced as separate ownership passes:
 1. Complete Pipeline / Inspect v2 beyond the checkpoint strip.
 2. Complete Pipeline / Monitor v2 beyond the checkpoint strip.
 3. Incidents feed v2 and Telemetry counter-grid v2.
-4. Media, Settings, and Status detail-section polish.
+4. Media library, Settings, and Status detail-section polish.
 5. Hidden DOM / route unmount cleanup across legacy panels.

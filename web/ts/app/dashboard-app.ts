@@ -65,6 +65,7 @@ import {
   setControlRoomWorkspaceDependencies,
 } from "../features/control-room.js";
 import { configureIncidentsCheckpointPresentation } from "../features/incidents.js";
+import { configureMediaCheckpointPresentation } from "../features/media-library.js";
 import { configureTelemetryCheckpointPresentation } from "../features/engineer-telemetry.js";
 import { configureStatusCheckpointPresentation } from "../features/status.js";
 import { state } from "../core/state.js";
@@ -81,6 +82,7 @@ import {
   setDashboardV2OverviewActions,
   setDashboardV2ControlRoomActions,
   setDashboardV2IncidentsActions,
+  setDashboardV2MediaActions,
   setDashboardV2PipelineHeaderActions,
   setDashboardV2PipelineInspectActions,
   setDashboardV2PipelineInputStatusActions,
@@ -91,6 +93,7 @@ import {
   updateDashboardV2Overview,
   updateDashboardV2ControlRoomCheckpoint,
   updateDashboardV2IncidentsCheckpoint,
+  updateDashboardV2MediaCheckpoint,
   updateDashboardV2PipelineHeader,
   updateDashboardV2PipelineInspectCheckpoint,
   updateDashboardV2PipelineInputStatus,
@@ -120,6 +123,7 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
   const incidentsV2Active = dashboardV2Enabled && location.mode === "incidents";
   const telemetryV2Active = dashboardV2Enabled && location.mode === "telemetry";
   const statusV2Active = dashboardV2Enabled && location.mode === "status";
+  const mediaV2Active = dashboardV2Enabled && location.mode === "media";
 
   setDashboardV2PresentationScope({
     overviewActive: overviewV2Active,
@@ -129,6 +133,7 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
     incidentsActive: incidentsV2Active,
     telemetryActive: telemetryV2Active,
     statusActive: statusV2Active,
+    mediaActive: mediaV2Active,
   });
 
   configureOverviewPresentation({
@@ -195,6 +200,9 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
   configureStatusCheckpointPresentation({
     onPresentation: statusV2Active ? updateDashboardV2StatusCheckpoint : undefined,
   });
+  configureMediaCheckpointPresentation({
+    onPresentation: mediaV2Active ? updateDashboardV2MediaCheckpoint : undefined,
+  });
 }
 
 export function initDashboardApp(): void {
@@ -249,6 +257,9 @@ export function initDashboardApp(): void {
     });
     setDashboardV2StatusActions({
       openTelemetry: () => setDashboardMode("telemetry", { focus: "panel" }),
+    });
+    setDashboardV2MediaActions({
+      openOverview: () => setDashboardMode("overview", { focus: "panel" }),
     });
     setDashboardV2PipelineInputStatusActions({
       cancelAudioTrackEdit: cancelPipelineAudioTrackEdit,

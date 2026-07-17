@@ -1,5 +1,6 @@
 import type { ControlRoomCheckpointModel } from "../features/control-room-view-model.js";
 import type { IncidentsCheckpointModel } from "../features/incidents-view-model.js";
+import type { MediaCheckpointModel } from "../features/media-view-model.js";
 import type { OverviewViewModel } from "../features/overview-view-model.js";
 import type { PipelineInspectCheckpointModel } from "../features/pipeline-inspect-view-model.js";
 import type { StatusCheckpointModel } from "../features/status-view-model.js";
@@ -117,6 +118,10 @@ export interface DashboardV2StatusActions {
   readonly openTelemetry: () => void;
 }
 
+export interface DashboardV2MediaActions {
+  readonly openOverview: () => void;
+}
+
 interface DashboardV2Module {
   renderDashboardV2Overview(
     model: OverviewViewModel,
@@ -162,6 +167,10 @@ interface DashboardV2CheckpointsModule {
     model: StatusCheckpointModel | null,
     actions: DashboardV2StatusActions,
   ): void;
+  renderDashboardV2MediaCheckpoint(
+    model: MediaCheckpointModel | null,
+    actions: DashboardV2MediaActions,
+  ): void;
 }
 
 let dashboardV2Module: DashboardV2Module | null = null;
@@ -175,6 +184,7 @@ let dashboardV2ControlRoomActive = false;
 let dashboardV2IncidentsActive = false;
 let dashboardV2TelemetryActive = false;
 let dashboardV2StatusActive = false;
+let dashboardV2MediaActive = false;
 let latestOverviewModel: OverviewViewModel | null = null;
 let overviewActions: DashboardV2OverviewActions | null = null;
 let latestPipelineSelectorModel: PipelineOperateSelectorModel | null = null;
@@ -200,6 +210,8 @@ let latestTelemetryModel: TelemetryCheckpointModel | null | undefined;
 let telemetryActions: DashboardV2TelemetryActions | null = null;
 let latestStatusModel: StatusCheckpointModel | null | undefined;
 let statusActions: DashboardV2StatusActions | null = null;
+let latestMediaModel: MediaCheckpointModel | null | undefined;
+let mediaActions: DashboardV2MediaActions | null = null;
 
 const DASHBOARD_V2_CONTAINER_IDS = [
   "dashboard-v2-root",
@@ -212,6 +224,7 @@ const DASHBOARD_V2_CONTAINER_IDS = [
   "dashboard-v2-incidents-root",
   "dashboard-v2-telemetry-root",
   "dashboard-v2-status-root",
+  "dashboard-v2-media-root",
 ] as const;
 
 function setContainerHidden(id: string, hidden: boolean): void {
@@ -247,6 +260,10 @@ function hideDashboardV2Telemetry(): void {
 
 function hideDashboardV2Status(): void {
   setContainerHidden("dashboard-v2-status-root", true);
+}
+
+function hideDashboardV2Media(): void {
+  setContainerHidden("dashboard-v2-media-root", true);
 }
 
 function ensureDashboardV2Module(): void {
@@ -288,6 +305,7 @@ function ensureDashboardV2CheckpointsModule(): void {
       renderLatestIncidents();
       renderLatestTelemetry();
       renderLatestStatus();
+      renderLatestMedia();
     })
     .catch((error: unknown) => {
       dashboardV2CheckpointsModulePromise = null;
@@ -611,6 +629,24 @@ function renderLatestStatus(): void {
   );
 }
 
+function renderLatestMedia(): void {
+  if (!dashboardV2MediaActive) {
+    hideDashboardV2Media();
+    return;
+  }
+  ensureDashboardV2CheckpointsModule();
+  if (
+    !dashboardV2CheckpointsModule ||
+    latestMediaModel === undefined ||
+    !mediaActions
+  )
+    return;
+  dashboardV2CheckpointsModule.renderDashboardV2MediaCheckpoint(
+    latestMediaModel,
+    mediaActions,
+  );
+}
+
 export function dashboardV2ExperimentEnabled(
   search = dashboardSearch(),
   storage: DashboardUiVersionStorage | null = dashboardStorage(),
@@ -631,6 +667,7 @@ export function setDashboardV2PresentationScope(options: {
   readonly incidentsActive?: boolean;
   readonly telemetryActive?: boolean;
   readonly statusActive?: boolean;
+  readonly mediaActive?: boolean;
 }): void {
   const nextOverviewActive =
     dashboardV2ExperimentEnabled() && options.overviewActive;
@@ -646,6 +683,8 @@ export function setDashboardV2PresentationScope(options: {
     dashboardV2ExperimentEnabled() && Boolean(options.telemetryActive);
   const nextStatusActive =
     dashboardV2ExperimentEnabled() && Boolean(options.statusActive);
+  const nextMediaActive =
+    dashboardV2ExperimentEnabled() && Boolean(options.mediaActive);
   const overviewChanged = dashboardV2OverviewActive !== nextOverviewActive;
   const pipelineChanged = dashboardV2PipelineActive !== nextPipelineActive;
   const pipelineInspectChanged =
@@ -655,6 +694,7 @@ export function setDashboardV2PresentationScope(options: {
   const incidentsChanged = dashboardV2IncidentsActive !== nextIncidentsActive;
   const telemetryChanged = dashboardV2TelemetryActive !== nextTelemetryActive;
   const statusChanged = dashboardV2StatusActive !== nextStatusActive;
+  const mediaChanged = dashboardV2MediaActive !== nextMediaActive;
   dashboardV2OverviewActive = nextOverviewActive;
   dashboardV2PipelineActive = nextPipelineActive;
   dashboardV2PipelineInspectActive = nextPipelineInspectActive;
@@ -662,6 +702,7 @@ export function setDashboardV2PresentationScope(options: {
   dashboardV2IncidentsActive = nextIncidentsActive;
   dashboardV2TelemetryActive = nextTelemetryActive;
   dashboardV2StatusActive = nextStatusActive;
+  dashboardV2MediaActive = nextMediaActive;
   if (!dashboardV2OverviewActive) hideDashboardV2Overview();
   if (!dashboardV2PipelineActive) hideDashboardV2Pipeline();
   if (!dashboardV2PipelineInspectActive) hideDashboardV2PipelineInspect();
@@ -669,6 +710,7 @@ export function setDashboardV2PresentationScope(options: {
   if (!dashboardV2IncidentsActive) hideDashboardV2Incidents();
   if (!dashboardV2TelemetryActive) hideDashboardV2Telemetry();
   if (!dashboardV2StatusActive) hideDashboardV2Status();
+  if (!dashboardV2MediaActive) hideDashboardV2Media();
   if (overviewChanged && dashboardV2OverviewActive) renderLatestOverview();
   if (pipelineChanged && dashboardV2PipelineActive) {
     renderLatestPipelineSelector();
@@ -690,6 +732,9 @@ export function setDashboardV2PresentationScope(options: {
   }
   if (statusChanged && dashboardV2StatusActive) {
     renderLatestStatus();
+  }
+  if (mediaChanged && dashboardV2MediaActive) {
+    renderLatestMedia();
   }
 }
 
@@ -829,4 +874,16 @@ export function updateDashboardV2StatusCheckpoint(
 ): void {
   latestStatusModel = model;
   renderLatestStatus();
+}
+
+export function setDashboardV2MediaActions(actions: DashboardV2MediaActions): void {
+  mediaActions = actions;
+  renderLatestMedia();
+}
+
+export function updateDashboardV2MediaCheckpoint(
+  model: MediaCheckpointModel | null,
+): void {
+  latestMediaModel = model;
+  renderLatestMedia();
 }

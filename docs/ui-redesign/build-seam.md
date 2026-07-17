@@ -28,6 +28,7 @@
 - [Incidents checkpoint](#incidents-checkpoint)
 - [Telemetry checkpoint](#telemetry-checkpoint)
 - [Status checkpoint](#status-checkpoint)
+- [Media checkpoint](#media-checkpoint)
 - [Shared checkpoint card](#shared-checkpoint-card)
 - [Checkpoint bundle split](#checkpoint-bundle-split)
 
@@ -737,8 +738,8 @@ reacts to hit/no-hit incident search states, and scoped pipeline filtering keeps
 the checkpoint and legacy route summary aligned.
 
 The opt-in checkpoint bundle is deliberately separate from the full
-Overview/Operate bundle. In the Status checkpoint build, Vite reports
-`dashboard-v2-checkpoints-entry.js` at 8.30 kB raw / 2.02 kB gzip,
+Overview/Operate bundle. In the Media checkpoint build, Vite reports
+`dashboard-v2-checkpoints-entry.js` at 9.24 kB raw / 2.15 kB gzip,
 `dashboard-v2-entry.js` at 55.63 kB raw / 9.86 kB gzip, and the shared React
 runtime chunk at 258.47 kB raw / 66.98 kB gzip. The smoke guard measures these
 bundles independently so additional non-Operate checkpoints do not force the
@@ -780,24 +781,44 @@ Seeded Playwright/CDP coverage proves the Status checkpoint appears under
 reacts to hit/no-hit status-log search states, and dense process-log filtering
 keeps the checkpoint and legacy route summary aligned.
 
+## Media checkpoint
+
+Media now uses the checkpoint seam before the dense recording/source-file
+library. The checkpoint summarizes recordings, source files, active search
+scope, storage visibility, and the next operator step while leaving upload,
+rename, delete, playback, download, and bounded library sections legacy-owned.
+
+This is intentionally not a second media browser. It gives the operator a calm
+answer to "what is in this library and am I filtered?" before they enter the
+detailed rows. Search updates the checkpoint summary from the existing legacy
+media-library state, so the React strip owns presentation only and does not
+fetch files or duplicate file actions.
+
+Seeded Playwright/CDP coverage proves the Media checkpoint appears under
+`ui=v2`, the route ownership cue changes to `UI v2 checkpoint`, the checkpoint
+bundle loads without the full Overview/Operate bundle, search hit/no-hit counts
+stay aligned with the legacy library summary, and dense media lists remain
+bounded until the operator chooses `Show all`.
+
 ## Shared checkpoint card
 
-The Inspect, Monitor, Incidents, Telemetry, and Status checkpoint strips now render through one shared React
-checkpoint component. This keeps the first-glance pattern consistent across
-checkpoint routes: title, status badge, action cluster, four scan metrics,
-optional compact metrics, and a focus/next-step block. Inspect and Monitor still
-adapt their own pure view models at the boundary, and Incidents adapts the
-existing legacy incident snapshot/search state. Telemetry adapts the existing
-legacy counter snapshots/search state. Status adapts the existing legacy
-status/log snapshot. The shared component does not fetch, subscribe, mutate, or
-own route state.
+The Inspect, Monitor, Incidents, Telemetry, Status, and Media checkpoint strips
+now render through one shared React checkpoint component. This keeps the
+first-glance pattern consistent across checkpoint routes: title, status badge,
+action cluster, four scan metrics, optional compact metrics, and a
+focus/next-step block. Inspect and Monitor still adapt their own pure view
+models at the boundary, Incidents adapts the existing legacy incident
+snapshot/search state, Telemetry adapts the existing legacy counter
+snapshots/search state, Status adapts the existing legacy status/log snapshot,
+and Media adapts the existing legacy recording/source-library state. The shared
+component does not fetch, subscribe, mutate, or own route state.
 
-The refactor is behavior-preserving but removes the duplicated checkpoint
-markup before adding more surfaces. The bundle now measures 319,332 raw bytes
-and 76,735 bytes with deterministic gzip. Raw size drops by 2,481 bytes compared
-with the Monitor checkpoint slice, while gzip remains under the 77,000-byte
-smoke guard with 265 bytes of headroom. The next material v2 route should still
-pay down more weight or split checkpoint surfaces before adding another large
+The refactor is behavior-preserving and keeps additional checkpoint routes out
+of the heavier Overview/Operate route payload. After the Media checkpoint, the
+checkpoint entry measures 9,249 raw bytes / 2,156 deterministic gzip bytes; with
+the shared runtime it is a 68,488-byte gzip route payload, still under the
+69,000-byte checkpoint-route budget. The next material v2 route should still pay
+down more weight or split checkpoint surfaces before adding another large
 component block.
 
 ## Checkpoint bundle split
@@ -807,7 +828,7 @@ React island:
 
 - `dashboard-v2-entry.js` owns Overview and Pipeline / Operate.
 - `dashboard-v2-checkpoints-entry.js` owns Pipeline / Inspect, Pipeline /
-  Monitor, Incidents, Telemetry, and Status checkpoint strips.
+  Monitor, Incidents, Telemetry, Status, and Media checkpoint strips.
 - `dashboard-v2-jsx-runtime.js` is the shared React runtime chunk used by both
   entrypoints.
 
@@ -821,7 +842,7 @@ Measured deterministic gzip after the split:
 | Route payload | Files | Gzip |
 |---|---|---:|
 | Overview / Operate | `dashboard-v2-entry.js` + `dashboard-v2-jsx-runtime.js` | 76,187 B |
-| Inspect / Monitor checkpoint | `dashboard-v2-checkpoints-entry.js` + `dashboard-v2-jsx-runtime.js` | 67,978 B |
+| Checkpoint routes | `dashboard-v2-checkpoints-entry.js` + `dashboard-v2-jsx-runtime.js` | 68,488 B |
 
 This restores meaningful headroom for checkpoint-route evolution without hiding
 React's shared runtime cost. The smoke test now enforces per-route budgets

@@ -286,12 +286,36 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   ).toBeHidden();
   expect(v2Requests).toEqual([]);
 
+  await page.goto("/?mode=media&ui=v2");
+  await expect(page.locator("#media-mode-panel")).toBeVisible();
+  await expect(
+    page.locator("#dashboard-v2-media-root").getByRole("heading", {
+      name: "Media",
+    }),
+  ).toBeVisible();
+  await expect(
+    page.locator("#media-mode-content").getByRole("heading", {
+      name: "Media Library",
+    }),
+  ).toBeVisible();
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Recordings and source files",
+  );
+  expect(
+    v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
+  ).toBe(true);
+  expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
+    false,
+  );
+  const requestsAfterMedia = v2Requests.length;
+
   await page.goto("/?mode=status&ui=v2");
   await expect(
     page.locator("#dashboard-v2-status-root").getByRole("heading", {
       name: "Status",
     }),
   ).toBeVisible();
+  await expect(page.locator("#dashboard-v2-media-root")).toBeHidden();
   await expect(
     page.locator("#status-mode-content").getByRole("heading", {
       name: "Status",
@@ -311,6 +335,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
     false,
   );
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterMedia);
   const requestsAfterStatus = v2Requests.length;
 
   await page.goto("/?mode=pipeline&view=inspect&p=pipe-healthy&ui=v2");
@@ -1226,19 +1251,30 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   });
 
   const media = page.locator("#media-mode-panel");
+  const checkpoint = media.locator("#dashboard-v2-media-root");
   const search = media.getByLabel("Search media library");
   const summary = media.locator("#media-library-results-summary");
+  await expect(checkpoint.getByRole("heading", { name: "Media" })).toBeVisible();
   await expect(
     media.getByRole("heading", { name: "Media Library" }),
   ).toBeVisible();
   await expect(summary).toHaveText(
     "1 media file total · 0 recordings · 1 source file",
   );
+  await expect(
+    checkpoint.getByText("1 media file total · 0 recordings · 1 source file"),
+  ).toBeVisible();
+  await expect(checkpoint.getByText("1 source file", { exact: true })).toBeVisible();
 
   await search.fill("synthetic");
   await expect(summary).toHaveText(
     '1/1 media file shown · 0 recordings · 1 source file matched · "synthetic"',
   );
+  await expect(
+    checkpoint.getByText(
+      '1/1 media file shown · 0 recordings · 1 source file matched · "synthetic"',
+    ),
+  ).toBeVisible();
   await expect(media.getByText("synthetic-source.mp4")).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     '1/1 media file shown · 0 recordings · 1 source file matched · "synthetic"',
@@ -1248,6 +1284,11 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   await expect(summary).toHaveText(
     '0/1 media files shown · 0 recordings · 0 source files matched · "missing"',
   );
+  await expect(
+    checkpoint.getByText(
+      '0/1 media files shown · 0 recordings · 0 source files matched · "missing"',
+    ),
+  ).toBeVisible();
   await expect(media.getByText('No matches for "missing".')).toHaveCount(2);
   const clearSearch = media.getByRole("button", { name: "Clear search" });
   await expect(clearSearch).toBeVisible();
@@ -1260,6 +1301,9 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   await expect(summary).toHaveText(
     "1 media file total · 0 recordings · 1 source file",
   );
+  await expect(
+    checkpoint.getByText("1 media file total · 0 recordings · 1 source file"),
+  ).toBeVisible();
   await expect(clearSearch).toBeHidden();
   await expect(media.getByText("synthetic-source.mp4")).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
@@ -1297,10 +1341,16 @@ test("seed: ui=v2 Media bounds dense libraries until requested @desktop", async 
   });
 
   const media = page.locator("#media-mode-panel");
+  const checkpoint = media.locator("#dashboard-v2-media-root");
   const summary = media.locator("#media-library-results-summary");
   await expect(summary).toHaveText(
     "26 media files total · 12 recordings · 14 source files",
   );
+  await expect(
+    checkpoint.getByText("26 media files total · 12 recordings · 14 source files"),
+  ).toBeVisible();
+  await expect(checkpoint.getByText("12 recordings", { exact: true })).toBeVisible();
+  await expect(checkpoint.getByText("14 source files", { exact: true })).toBeVisible();
   await expect(media.locator("#media-recordings-summary")).toHaveText(
     /8 shown of 12 files/,
   );
@@ -1337,6 +1387,11 @@ test("seed: ui=v2 Media bounds dense libraries until requested @desktop", async 
   await expect(summary).toHaveText(
     '1/26 media file shown · 0 recordings · 1 source file matched · "dense-source-14"',
   );
+  await expect(
+    checkpoint.getByText(
+      '1/26 media file shown · 0 recordings · 1 source file matched · "dense-source-14"',
+    ),
+  ).toBeVisible();
   await expect(media.getByText("dense-source-14.mp4")).toBeVisible();
   await expect(
     media.getByRole("button", { name: /Show (all|fewer)/ }),
@@ -2469,6 +2524,7 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
     <div id="dashboard-v2-incidents-root"></div>
     <div id="dashboard-v2-telemetry-root"></div>
     <div id="dashboard-v2-status-root"></div>
+    <div id="dashboard-v2-media-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -2680,6 +2736,7 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
     <div id="dashboard-v2-incidents-root"></div>
     <div id="dashboard-v2-telemetry-root"></div>
     <div id="dashboard-v2-status-root"></div>
+    <div id="dashboard-v2-media-root"></div>
   `);
 
   const result = await page.evaluate(async () => {
@@ -2821,6 +2878,7 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
     <div id="dashboard-v2-incidents-root"></div>
     <div id="dashboard-v2-telemetry-root"></div>
     <div id="dashboard-v2-status-root"></div>
+    <div id="dashboard-v2-media-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -2947,6 +3005,7 @@ test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", a
     <div id="dashboard-v2-incidents-root"></div>
     <div id="dashboard-v2-telemetry-root"></div>
     <div id="dashboard-v2-status-root"></div>
+    <div id="dashboard-v2-media-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -3233,6 +3292,7 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
     <div id="dashboard-v2-incidents-root"></div>
     <div id="dashboard-v2-telemetry-root"></div>
     <div id="dashboard-v2-status-root"></div>
+    <div id="dashboard-v2-media-root"></div>
   `);
 
   await page.evaluate(async () => {

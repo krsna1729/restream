@@ -752,7 +752,8 @@ function applyMode(
               (pipelineView === "inspect" || pipelineView === "monitor")) ||
             mode === "incidents" ||
             mode === "telemetry" ||
-            mode === "status"
+            mode === "status" ||
+            mode === "media"
           ? "UI v2 checkpoint"
         : mode === "pipeline"
           ? "Legacy checkpoint"
