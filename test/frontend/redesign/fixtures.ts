@@ -13,6 +13,10 @@ export interface SeededDashboardOptions {
   outputControlDelayMs?: number;
   expectOverviewReady?: boolean;
   settingsResponse?: (settings: Record<string, unknown>) => unknown;
+  pipelineTelemetryResponse?: (
+    pipelineId: string,
+    telemetry: Record<string, unknown>,
+  ) => unknown;
   runtimeResponse?: (
     runtime: Record<string, unknown>,
     requestCount: number,
@@ -492,9 +496,12 @@ export async function openSeededDashboard(
     );
     if (pipelineTelemetryMatch) {
       const [, encodedPipelineId] = pipelineTelemetryMatch;
+      const pipelineId = decodeURIComponent(encodedPipelineId);
+      const telemetry = seededPipelineTelemetry(pipelineId);
       await fulfillJson(
         route,
-        seededPipelineTelemetry(decodeURIComponent(encodedPipelineId)),
+        options.pipelineTelemetryResponse?.(pipelineId, telemetry) ??
+          telemetry,
       );
       return;
     }

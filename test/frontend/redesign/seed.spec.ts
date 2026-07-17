@@ -1322,6 +1322,66 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
 });
 
+test("seed: ui=v2 Telemetry bounds dense egress lists until requested @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=telemetry&ui=v2", {
+    expectOverviewReady: false,
+    pipelineTelemetryResponse: (pipelineId, telemetry) => {
+      if (pipelineId !== "pipe-retrying") return telemetry;
+      return {
+        ...telemetry,
+        egresses: Array.from({ length: 12 }, (_, index) => ({
+          pipelineId,
+          outputId: `out-dense-${String(index + 1).padStart(2, "0")}`,
+          status: "running",
+          bytesOut: 65_536 + index,
+        })),
+      };
+    },
+  });
+
+  const telemetry = page.locator("#telemetry-mode-panel");
+  await telemetry
+    .getByLabel("Telemetry pipeline")
+    .selectOption("pipe-retrying");
+  await expect(telemetry.locator("#telemetry-route-summary")).toHaveText(
+    "Telemetry loaded · 2 ingests · 2 stages · 12 egresses · 1 reader · Retrying Destination",
+  );
+  await expect(telemetry.locator("#telemetry-search-results-summary")).toHaveText(
+    "1 reader · 2 stages · 12 egresses visible",
+  );
+
+  const egresses = telemetry.getByLabel("Telemetry egresses");
+  await expect(egresses.getByText("8 egresses shown of 12")).toBeVisible();
+  await expect(egresses.getByText("out-dense-08")).toBeVisible();
+  await expect(egresses.getByText("out-dense-09")).toHaveCount(0);
+  const showAll = egresses.getByRole("button", { name: "Show all 12" });
+  await expect(showAll).toHaveAttribute("aria-expanded", "false");
+  expect(await getCdpNodeCount(page)).toBeLessThan(8_500);
+
+  await showAll.click();
+  await expect(egresses.locator("#telemetry-egress-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(egresses.getByText("out-dense-12")).toBeVisible();
+
+  const search = telemetry.getByLabel("Search telemetry items");
+  await search.fill("out-dense-12");
+  await expect(telemetry.locator("#telemetry-search-results-summary")).toHaveText(
+    '1/15 telemetry items match "out-dense-12" · 0 readers · 0 stages · 1 egress',
+  );
+  await expect(egresses.getByText("out-dense-12")).toBeVisible();
+  await expect(
+    egresses.getByRole("button", { name: /Show (all|fewer)/ }),
+  ).toHaveCount(0);
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/15 telemetry items match "out-dense-12" · 0 readers · 0 stages · 1 egress',
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(8_500);
+});
+
 test("seed: ui=v2 Operate stays inside the viewport across breakpoints", async ({
   page,
 }) => {

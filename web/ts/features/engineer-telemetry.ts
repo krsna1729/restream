@@ -25,6 +25,7 @@ interface TelemetryViewOptions {
 }
 
 const TELEMETRY_REFRESH_MS = 5_000;
+const TELEMETRY_EGRESS_CARD_LIMIT = 8;
 let selectedPipelineId = "";
 let selectedStageKey = "";
 let lastFetchedAt = 0;
@@ -43,6 +44,7 @@ let telemetryUnavailable = false;
 let stageUnavailable = false;
 let viewOptions: TelemetryViewOptions | null = null;
 let telemetrySearchQuery = "";
+let telemetryEgressExpanded = false;
 
 function formatNumber(value: unknown): string {
   return typeof value === "number" && Number.isFinite(value)
@@ -271,6 +273,18 @@ export function renderEngineerTelemetryHtml(
     (egress) =>
       !normalizedSearch || egressSearchText(egress).includes(normalizedSearch),
   );
+  const egressesAreBounded =
+    !normalizedSearch &&
+    filteredEgresses.length > TELEMETRY_EGRESS_CARD_LIMIT &&
+    !telemetryEgressExpanded;
+  const visibleEgresses = egressesAreBounded
+    ? filteredEgresses.slice(0, TELEMETRY_EGRESS_CARD_LIMIT)
+    : filteredEgresses;
+  const showEgressToggle =
+    !normalizedSearch && filteredEgresses.length > TELEMETRY_EGRESS_CARD_LIMIT;
+  const egressCaption = showEgressToggle
+    ? `${pluralize(visibleEgresses.length, "egress", "egresses")} shown of ${filteredEgresses.length}. Search to narrow the list, or show all when comparing destinations.`
+    : "";
   const searchSummaryText = telemetrySearchSummaryText(
     filteredReaders.length,
     readers.length,
@@ -322,7 +336,20 @@ export function renderEngineerTelemetryHtml(
       <div class="space-y-4">
         <section class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Source ring</h2>${ring ? `<div class="mt-3 grid grid-cols-2 gap-3 text-sm"><div><span class="text-base-content/60">Fill</span><div class="font-mono">${formatNumber(ring.fill)} / ${formatNumber(ring.capacity)} (${formatNumber(ring.fillPercent)}%)</div></div><div><span class="text-base-content/60">Depth</span><div class="font-mono">${formatNumber(ring.bufferDepthSecs)} s</div></div></div>` : `<p class="text-base-content/60 mt-3 text-sm">No active source ring.</p>`}</section>
         <section class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Readers</h2><div class="mt-3 space-y-2">${filteredReaders.length ? filteredReaders.map((reader) => `<div class="bg-base-100 rounded-md p-3 text-sm"><div class="font-medium">${escapeHtml(reader.name)}</div><div class="text-base-content/60 mt-1 text-xs">Lag ${formatNumber(reader.lagSlots)} slots · ${formatNumber(reader.overflowCount)} overflows · packet age ${formatNumber(reader.packetAgeMs)} ms</div></div>`).join("") : `<p class="text-base-content/60 text-sm">${normalizedSearch ? `No readers match "${escapeHtml(searchQuery.trim())}".` : "No active readers."}</p>`}</div></section>
-        <section class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Egresses</h2><div class="mt-3 space-y-2">${filteredEgresses.length ? filteredEgresses.map((egress) => `<div class="bg-base-100 rounded-md p-3 text-sm"><div class="flex justify-between gap-2"><span class="font-medium">${escapeHtml(egress.outputId)}</span><span class="badge badge-sm">${escapeHtml(egress.status || egress.phase || "unknown")}</span></div><div class="text-base-content/60 mt-1 text-xs">${formatBytes(egress.bytesOut)} sent${egress.lastError ? ` · ${escapeHtml(egress.lastError)}` : ""}</div></div>`).join("") : `<p class="text-base-content/60 text-sm">${normalizedSearch ? `No egresses match "${escapeHtml(searchQuery.trim())}".` : "No active egresses."}</p>`}</div></section>
+        <section class="border-base-content/10 bg-base-200 rounded-lg border p-4" aria-label="Telemetry egresses">
+          <div class="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h2 class="font-semibold">Egresses</h2>
+              ${egressCaption ? `<p class="text-base-content/60 mt-1 text-xs">${escapeHtml(egressCaption)}</p>` : ""}
+            </div>
+            ${
+              showEgressToggle
+                ? `<button id="telemetry-egress-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="${telemetryEgressExpanded ? "true" : "false"}">${telemetryEgressExpanded ? "Show fewer" : `Show all ${filteredEgresses.length}`}</button>`
+                : ""
+            }
+          </div>
+          <div class="mt-3 space-y-2">${visibleEgresses.length ? visibleEgresses.map((egress) => `<div class="bg-base-100 rounded-md p-3 text-sm"><div class="flex justify-between gap-2"><span class="font-medium">${escapeHtml(egress.outputId)}</span><span class="badge badge-sm">${escapeHtml(egress.status || egress.phase || "unknown")}</span></div><div class="text-base-content/60 mt-1 text-xs">${formatBytes(egress.bytesOut)} sent${egress.lastError ? ` · ${escapeHtml(egress.lastError)}` : ""}</div></div>`).join("") : `<p class="text-base-content/60 text-sm">${normalizedSearch ? `No egresses match "${escapeHtml(searchQuery.trim())}".` : "No active egresses."}</p>`}</div>
+        </section>
       </div>
       <div class="space-y-4"><section><h2 class="mb-3 font-semibold">Processing stages</h2><div class="grid gap-3 md:grid-cols-2">${filteredStages.length ? filteredStages.map((item) => renderStage(pipelineId, item)).join("") : `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">${normalizedSearch ? `No stages match "${escapeHtml(searchQuery.trim())}".` : "No active stages."}</div>`}</div></section>
       <section id="stage-telemetry-detail" class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Stage detail</h2>${status.stageUnavailable ? `<p class="text-warning mt-2 text-sm">Fresh stage detail is unavailable; the stage may have stopped. Last known counters remain visible when available.</p>` : ""}${stage ? `<div class="mt-1 text-xs text-base-content/60">${escapeHtml(stage.stageKey)}</div><div class="mt-3 grid gap-4 md:grid-cols-2"><div><h3 class="mb-2 text-sm font-medium">Throughput</h3>${metricRows(stage.metrics)}</div><div><h3 class="mb-2 text-sm font-medium">Pipe</h3>${metricRows(stage.pipeMetrics)}</div></div>` : status.stageUnavailable ? "" : `<p class="text-base-content/60 mt-3 text-sm">Select a stage to fetch its current detail.</p>`}</section></div>
@@ -366,6 +393,7 @@ function paintTelemetry(): void {
   search?.addEventListener("input", () => {
     const cursor = search.selectionStart ?? search.value.length;
     telemetrySearchQuery = search.value;
+    telemetryEgressExpanded = false;
     paintTelemetry();
     const nextSearch = document.getElementById(
       "telemetry-search",
@@ -377,11 +405,18 @@ function paintTelemetry(): void {
     .getElementById("telemetry-clear-search-btn")
     ?.addEventListener("click", () => {
       telemetrySearchQuery = "";
+      telemetryEgressExpanded = false;
       paintTelemetry();
       const nextSearch = document.getElementById(
         "telemetry-search",
       ) as HTMLInputElement | null;
       nextSearch?.focus();
+    });
+  document
+    .getElementById("telemetry-egress-toggle")
+    ?.addEventListener("click", () => {
+      telemetryEgressExpanded = !telemetryEgressExpanded;
+      paintTelemetry();
     });
   document
     .querySelectorAll<HTMLElement>("[data-stage-telemetry-key]")
@@ -464,6 +499,7 @@ export function selectTelemetryPipeline(pipelineId: string): void {
   if (pipelineId === selectedPipelineId) return;
   selectedPipelineId = pipelineId;
   selectedStageKey = "";
+  telemetryEgressExpanded = false;
   stageSnapshot = null;
   stageUnavailable = false;
   pipelineSnapshot = null;
