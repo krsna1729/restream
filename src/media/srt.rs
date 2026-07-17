@@ -1928,6 +1928,8 @@ mod srt_url;
 #[path = "srt_tests.rs"]
 mod tests;
 pub use srt_config::{parse_pipeline_srt_ingest_policy, serialize_pipeline_srt_ingest_policy};
+#[cfg(test)]
+use srt_crypto::srt_crypto_from_url;
 use srt_crypto::{apply_srt_crypto_socket, srt_crypto_from_resolved};
 #[cfg(test)]
 use srt_egress::estimate_ts_accum_capacity;

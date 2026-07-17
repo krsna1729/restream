@@ -47,6 +47,8 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 01:55 Q-022 DONE [codex]](#2026-07-18-0155-q-022-done-codex)
 - [2026-07-18 02:00 Q-014 STARTED [codex]](#2026-07-18-0200-q-014-started-codex)
 - [2026-07-18 02:20 Q-014 DONE [codex]](#2026-07-18-0220-q-014-done-codex)
+- [2026-07-18 02:35 Q-015 STARTED [codex]](#2026-07-18-0235-q-015-started-codex)
+- [2026-07-18 03:20 Q-015 DONE [codex]](#2026-07-18-0320-q-015-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -867,3 +869,77 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   that actively misdescribed the architecture (useful for the next agent
   who might otherwise have "fixed" `compile_operation` instead of noticing
   it was never called).
+
+## 2026-07-18 02:35 Q-015 STARTED [codex]
+- What: deterministic mutation-proven coverage for `src/media/srt/crypto.rs`
+  (plaintext vs. encrypted resolution, URL default key length, every
+  supported key length, interior-NUL passphrases, and FFI option failures
+  through the existing error surface), per the backlog goal.
+- Gates: pending `cargo test srt_crypto --lib`, `cargo fmt --all --check`,
+  clippy, concurrency contract gate (srt_egress.rs is lifecycle-adjacent to
+  srt.rs), full `cargo test`.
+- Commit: none.
+- Follow-ups: none yet.
+
+## 2026-07-18 03:20 Q-015 DONE [codex]
+- What: added unit coverage for `srt_crypto_from_resolved`,
+  `srt_crypto_from_url` (empty-passphrase, default/explicit pbkeylen,
+  unvalidated pass-through), and interior-NUL passphrase rejection in
+  `apply_srt_crypto_socket`, plus FFI-boundary tests against the real linked
+  libsrt for every supported `SRTO_PBKEYLEN` value (16/24/32) and rejection
+  of an out-of-range value, run against a real socket via `srt_setsockopt`.
+  Bug found while writing the config-object variant of the FFI boundary
+  test: `srt_create_config`/`srt_config_add` (libsrt's per-member bonding
+  config mechanism) unconditionally rejects `SRTO_PASSPHRASE`,
+  `SRTO_PBKEYLEN`, and `SRTO_STREAMID` (see `SRT_SocketOptionObject::add` in
+  vendored `socketconfig.cpp`, which has no case for any of the three and
+  falls through to `return false`), and `srt_config_add`'s failure path
+  never calls `CUDT::APIError`, so `check_srt_option_result` misreported the
+  failure as `"failed to set SRTO_PASSPHRASE: Success (0)"` instead of the
+  real cause.
+  Fix (production code, real bug, not just a test gap): bonded SRT egress
+  (`src/media/srt_egress.rs`, `use_bonding` branch) was smuggling passphrase
+  and StreamID through this per-member config object, so any bonded egress
+  target configured with a passphrase or a non-empty StreamID always failed
+  to connect. Rewrote the branch to apply crypto via
+  `apply_srt_crypto_socket` and StreamID via `srt_setsockopt` directly on
+  the group socket (both group-wide settings in libsrt bonding) before
+  `srt_connect_group`, matching the pattern the non-bonded path already
+  used correctly. Removed the now-dead `srt_prepare_endpoint`
+  member-config-assignment and its `srt_delete_config` cleanup path.
+  Retired `apply_srt_crypto_config` (`src/media/srt/crypto.rs`) entirely —
+  it has no production caller left, and it can never succeed for
+  passphrase/pbkeylen given the libsrt limitation above, so keeping it
+  around as a usable-looking API would be actively misleading. Kept the raw
+  `srt_create_config`/`srt_config_add`/`srt_delete_config` FFI declarations
+  in `srt.rs` since they remain valid for the per-member options libsrt
+  *does* allow (e.g. `SRTO_RCVBUF`/`SRTO_SNDBUF`/`SRTO_CONNTIMEO`), even
+  though nothing currently calls them.
+  Replaced a weak test,
+  `bonded_egress_member_config_is_created_for_crypto_without_streamid`,
+  which asserted literal source-text substrings of the old (now-rewritten)
+  bonded branch — it would have silently kept "passing" against any
+  refactor that preserved the exact strings regardless of real behavior,
+  and broke outright against this rewrite. In its place: two permanent FFI
+  regression tests grounded in real libsrt calls,
+  `linked_libsrt_group_socket_accepts_crypto_via_setsockopt` and
+  `linked_libsrt_group_socket_accepts_streamid_via_setsockopt`, proving the
+  exact mechanism the fixed production code now relies on; and
+  `linked_libsrt_member_config_rejects_passphrase_and_streamid`, a tripwire
+  documenting the libsrt limitation directly (via `srt_config_add`) so a
+  future libsrt upgrade that starts accepting these options — or a future
+  regression that reintroduces the broken per-member-config pattern — has a
+  test that reacts either way.
+- Gates: `cargo test --lib media::srt` passed 91/91 (0 failed). `cargo fmt
+  --all --check` clean. `cargo clippy --lib --tests` (warnings denied)
+  clean. `scripts/check/concurrency/contract.sh` passed. Full `cargo test`
+  passed with no failures (unit + integration + doctests). No hot-path
+  benchmark applies — the changed code is the connect-setup path (runs once
+  per egress connection, off the packet hot path), not a per-packet loop.
+- Commit: this commit.
+- Follow-ups: none. Q-016 (RTMP session fault transitions) is next per the
+  backlog's proof-tier ordering.
+- Notes: started as a proof-coverage item and surfaced a real 100%
+  connection-failure bug for bonded SRT egress with a passphrase or
+  non-empty StreamID configured — worth flagging prominently for anyone
+  grading this item, since the original framing undersold what was found.

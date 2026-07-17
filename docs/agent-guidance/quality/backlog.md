@@ -66,7 +66,15 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: Q-001 measured 13/80 covered lines (16.25%) in the crypto adapter.
   Current higher-layer validation is strong, but the last conversion and FFI
   boundary remains mostly unexecuted.
-- Status: open (Filed: 2026-07-17 by Q-001)
+- Status: done (2026-07-18 by codex). Coverage landed as planned, and it
+  surfaced a real production bug: bonded SRT egress always failed to
+  connect when a passphrase or non-empty StreamID was configured, because
+  libsrt's per-member bonding config (`srt_config_add`) silently rejects
+  `SRTO_PASSPHRASE`/`SRTO_PBKEYLEN`/`SRTO_STREAMID`. Fixed by applying
+  those as group-wide socket options via `srt_setsockopt` before
+  `srt_connect_group`, matching the already-correct non-bonded path. See
+  journal for full root cause and the FFI regression tests that pin both
+  the fix and the underlying libsrt limitation.
 
 ### Q-016 [proof] [sonnet] Prove RTMP session fault transitions
 - Goal: the smallest deterministic component proof for malformed or truncated
