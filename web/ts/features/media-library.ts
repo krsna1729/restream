@@ -23,6 +23,10 @@ let mediaShellMounted = false;
 let nativePlaybackProbe: HTMLVideoElement | null | undefined;
 let mediaSearchQuery = "";
 let lastMediaFiles: MediaFile[] = [];
+let mediaRecordingsExpanded = false;
+let mediaSourcesExpanded = false;
+
+const MEDIA_SECTION_VISIBLE_LIMIT = 8;
 
 function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -174,11 +178,15 @@ function mediaSectionShell(
   title: string,
   listId: string,
   summaryId: string,
+  toggleId: string,
 ): string {
   return `<section class="dashboard-section">
         <div class="dashboard-section-header">
             <h2 class="dashboard-section-title">${escapeHtml(title)}</h2>
-            <span class="dashboard-muted" id="${summaryId}">--</span>
+            <div class="flex flex-wrap items-center justify-end gap-2">
+                <span class="dashboard-muted" id="${summaryId}">--</span>
+                <button id="${toggleId}" type="button" class="btn btn-xs btn-outline hidden" aria-expanded="false">Show all</button>
+            </div>
         </div>
         <div class="space-y-2 p-3" id="${listId}"></div>
     </section>`;
@@ -234,8 +242,8 @@ function mountMediaShell(container: HTMLElement): void {
             </div>
             <p id="media-library-results-summary" class="dashboard-muted px-4 pt-3 text-xs" role="status" aria-live="polite">--</p>
             <div class="space-y-4 p-4">
-                ${mediaSectionShell("Recordings", "media-recordings-list", "media-recordings-summary")}
-                ${mediaSectionShell("Source Files", "media-sources-list", "media-sources-summary")}
+                ${mediaSectionShell("Recordings", "media-recordings-list", "media-recordings-summary", "media-recordings-toggle")}
+                ${mediaSectionShell("Source Files", "media-sources-list", "media-sources-summary", "media-sources-toggle")}
             </div>
         </section>
     </div>`;
@@ -285,6 +293,8 @@ function attachMediaActions(container: HTMLElement): void {
     searchInput.dataset.bound = "1";
     searchInput.addEventListener("input", () => {
       mediaSearchQuery = searchInput.value;
+      mediaRecordingsExpanded = false;
+      mediaSourcesExpanded = false;
       renderMediaLibraryLists(lastMediaFiles, true);
     });
   }
@@ -295,6 +305,8 @@ function attachMediaActions(container: HTMLElement): void {
     clearSearchButton.dataset.bound = "1";
     clearSearchButton.addEventListener("click", () => {
       mediaSearchQuery = "";
+      mediaRecordingsExpanded = false;
+      mediaSourcesExpanded = false;
       renderMediaLibraryLists(lastMediaFiles, true);
       const nextSearchInput = container.querySelector<HTMLInputElement>(
         "#media-library-search",
@@ -303,6 +315,26 @@ function attachMediaActions(container: HTMLElement): void {
         nextSearchInput.value = "";
         nextSearchInput.focus();
       }
+    });
+  }
+  const recordingsToggle = container.querySelector<HTMLButtonElement>(
+    "#media-recordings-toggle",
+  );
+  if (recordingsToggle && recordingsToggle.dataset.bound !== "1") {
+    recordingsToggle.dataset.bound = "1";
+    recordingsToggle.addEventListener("click", () => {
+      mediaRecordingsExpanded = !mediaRecordingsExpanded;
+      renderMediaLibraryLists(lastMediaFiles, true);
+    });
+  }
+  const sourcesToggle = container.querySelector<HTMLButtonElement>(
+    "#media-sources-toggle",
+  );
+  if (sourcesToggle && sourcesToggle.dataset.bound !== "1") {
+    sourcesToggle.dataset.bound = "1";
+    sourcesToggle.addEventListener("click", () => {
+      mediaSourcesExpanded = !mediaSourcesExpanded;
+      renderMediaLibraryLists(lastMediaFiles, true);
     });
   }
 
@@ -370,29 +402,44 @@ function attachMediaActions(container: HTMLElement): void {
 function updateSection(
   listId: string,
   summaryId: string,
+  toggleId: string,
   files: MediaFile[],
   totalFiles: MediaFile[],
   emptyLabel: string,
   previousSignature: string,
+  expanded: boolean,
 ): string {
+  const isFiltered = normalizeSearchText(mediaSearchQuery) !== "";
+  const showToggle = !isFiltered && files.length > MEDIA_SECTION_VISIBLE_LIMIT;
+  const visibleFiles =
+    showToggle && !expanded ? files.slice(0, MEDIA_SECTION_VISIBLE_LIMIT) : files;
   const signature = JSON.stringify({
-    files: fileListSignature(files),
+    files: fileListSignature(visibleFiles),
     query: normalizeSearchText(mediaSearchQuery),
+    totalCount: files.length,
+    expanded,
   });
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-  const isFiltered = normalizeSearchText(mediaSearchQuery) !== "";
   const totalCount = totalFiles.length;
   setText(
     summaryId,
-    isFiltered
-      ? `${files.length} of ${totalCount} file${totalCount === 1 ? "" : "s"} / ${formatFileSize(totalBytes)}`
-      : `${files.length} file${files.length === 1 ? "" : "s"} / ${formatFileSize(totalBytes)}`,
+    showToggle
+      ? `${visibleFiles.length} shown of ${files.length} files / ${formatFileSize(totalBytes)}`
+      : isFiltered
+        ? `${files.length} of ${totalCount} file${totalCount === 1 ? "" : "s"} / ${formatFileSize(totalBytes)}`
+        : `${files.length} file${files.length === 1 ? "" : "s"} / ${formatFileSize(totalBytes)}`,
   );
+  const toggle = document.getElementById(toggleId) as HTMLButtonElement | null;
+  if (toggle) {
+    toggle.classList.toggle("hidden", !showToggle);
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    toggle.textContent = expanded ? "Show fewer" : `Show all ${files.length}`;
+  }
   if (signature !== previousSignature) {
     setHtmlIfChanged(
       listId,
-      files.length
-        ? files.map(mediaFileRow).join("")
+      visibleFiles.length
+        ? visibleFiles.map(mediaFileRow).join("")
         : sectionEmpty(emptyLabel),
     );
   }
@@ -432,19 +479,25 @@ function renderMediaLibraryLists(files: MediaFile[], force: boolean): void {
   lastRecordingsSignature = updateSection(
     "media-recordings-list",
     "media-recordings-summary",
+    "media-recordings-toggle",
     filteredRecordings,
     recordings,
     filteredEmptyLabel || "recordings yet",
     force ? "" : lastRecordingsSignature,
+    mediaRecordingsExpanded,
   );
   lastSourcesSignature = updateSection(
     "media-sources-list",
     "media-sources-summary",
+    "media-sources-toggle",
     filteredSources,
     sources,
     filteredEmptyLabel || "source files",
     force ? "" : lastSourcesSignature,
+    mediaSourcesExpanded,
   );
+  const root = document.getElementById("media-library-root");
+  if (root) attachMediaActions(root);
 }
 
 export async function renderMediaLibraryMode({

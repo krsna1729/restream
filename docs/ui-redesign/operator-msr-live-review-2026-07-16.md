@@ -157,6 +157,10 @@ route exposes one live result-count summary that also splits matches by
 Recordings and Source Files. Seeded Playwright/CDP coverage proves search hits
 and misses are announced without relying on visual scanning of both sections,
 then proves the local Clear search action restores the full library.
+Dense media libraries now also use bounded Recordings and Source Files lists
+with explicit `Show all` affordances. Search still matches the full fetched
+library, so the first view stays a scan layer while full file audit remains one
+click away per section.
 
 Status now has the same lightweight operator checkpoint: the legacy-owned route
 announces the loaded build identity plus process-log and notable-activity

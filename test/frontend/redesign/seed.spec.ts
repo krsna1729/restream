@@ -1101,6 +1101,85 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
 });
 
+test("seed: ui=v2 Media bounds dense libraries until requested @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=media&ui=v2", {
+    expectOverviewReady: false,
+    mediaResponse: () => ({
+      files: [
+        ...Array.from({ length: 12 }, (_, index) => ({
+          name: `dense-recording-${String(index + 1).padStart(2, "0")}.ts`,
+          kind: "recording",
+          size: 512_000 + index,
+          modifiedAt: `2026-07-${String(20 - index).padStart(2, "0")}T00:00:00Z`,
+          conversionStatus: index === 11 ? "ready" : "pending",
+          convertedName:
+            index === 11 ? "dense-recording-12.mp4" : undefined,
+          playName: index === 11 ? "dense-recording-12.mp4" : undefined,
+        })),
+        ...Array.from({ length: 14 }, (_, index) => ({
+          name: `dense-source-${String(index + 1).padStart(2, "0")}.mp4`,
+          kind: "source",
+          size: 1_024_000 + index,
+          modifiedAt: `2026-06-${String(20 - index).padStart(2, "0")}T00:00:00Z`,
+          ingestCount: index === 13 ? 2 : 0,
+        })),
+      ],
+    }),
+  });
+
+  const media = page.locator("#media-mode-panel");
+  const summary = media.locator("#media-library-results-summary");
+  await expect(summary).toHaveText(
+    "26 media files total · 12 recordings · 14 source files",
+  );
+  await expect(media.locator("#media-recordings-summary")).toHaveText(
+    /8 shown of 12 files/,
+  );
+  await expect(media.locator("#media-sources-summary")).toHaveText(
+    /8 shown of 14 files/,
+  );
+  await expect(media.getByText("dense-recording-01.ts")).toBeVisible();
+  await expect(media.getByText("dense-recording-09.ts")).toHaveCount(0);
+  await expect(media.getByText("dense-source-01.mp4")).toBeVisible();
+  await expect(media.getByText("dense-source-09.mp4")).toHaveCount(0);
+  const showAllRecordings = media.getByRole("button", {
+    name: "Show all 12",
+  });
+  const showAllSources = media.getByRole("button", { name: "Show all 14" });
+  await expect(showAllRecordings).toHaveAttribute("aria-expanded", "false");
+  await expect(showAllSources).toHaveAttribute("aria-expanded", "false");
+  expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
+
+  await showAllRecordings.click();
+  await expect(media.locator("#media-recordings-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(media.getByText("dense-recording-12.ts")).toBeVisible();
+  await showAllSources.click();
+  await expect(media.locator("#media-sources-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(media.getByText("dense-source-14.mp4")).toBeVisible();
+
+  const search = media.getByLabel("Search media library");
+  await search.fill("dense-source-14");
+  await expect(summary).toHaveText(
+    '1/26 media file shown · 0 recordings · 1 source file matched · "dense-source-14"',
+  );
+  await expect(media.getByText("dense-source-14.mp4")).toBeVisible();
+  await expect(
+    media.getByRole("button", { name: /Show (all|fewer)/ }),
+  ).toHaveCount(0);
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/26 media file shown · 0 recordings · 1 source file matched · "dense-source-14"',
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
+});
+
 test("seed: ui=v2 Status announces loaded build and activity summary @desktop", async ({
   page,
 }) => {

@@ -15,6 +15,7 @@ export interface SeededDashboardOptions {
   settingsResponse?: (settings: Record<string, unknown>) => unknown;
   alertsResponse?: (alerts: Record<string, unknown>) => unknown;
   eventsResponse?: (events: Record<string, unknown>) => unknown;
+  mediaResponse?: (media: Record<string, unknown>) => unknown;
   pipelineTelemetryResponse?: (
     pipelineId: string,
     telemetry: Record<string, unknown>,
@@ -618,16 +619,19 @@ export async function openSeededDashboard(
         await fulfillJson(route, []);
         return;
       case "/api/v1/media":
-        await fulfillJson(route, {
-          files: [
-            {
-              name: "synthetic-source.mp4",
-              kind: "upload",
-              size: 1_048_576,
-              modifiedAt: "2026-07-14T00:00:00Z",
-            },
-          ],
-        });
+        {
+          const media = {
+            files: [
+              {
+                name: "synthetic-source.mp4",
+                kind: "upload",
+                size: 1_048_576,
+                modifiedAt: "2026-07-14T00:00:00Z",
+              },
+            ],
+          };
+          await fulfillJson(route, options.mediaResponse?.(media) ?? media);
+        }
         return;
       case "/api/v1/media/synthetic-source.mp4/analysis":
         await fulfillJson(route, {
