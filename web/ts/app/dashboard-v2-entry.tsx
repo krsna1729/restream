@@ -930,6 +930,125 @@ function DashboardV2PipelineDetailsPlaceholderCard({
   );
 }
 
+interface DashboardV2CheckpointMetric {
+  readonly label: string;
+  readonly value: string;
+}
+
+type DashboardV2CheckpointAction = readonly [
+  label: string,
+  onClick: () => void,
+  disabled?: boolean,
+  title?: string,
+];
+
+interface DashboardV2CheckpointCardProps {
+  readonly actions: readonly DashboardV2CheckpointAction[];
+  readonly className?: string;
+  readonly focusLabel: string;
+  readonly focusTitle: string;
+  readonly headingId: string;
+  readonly metrics: readonly DashboardV2CheckpointMetric[];
+  readonly nextStep: string;
+  readonly primaryCards: readonly (readonly [string, string])[];
+  readonly statusLabel: string;
+  readonly statusTone: string;
+  readonly summary: string;
+  readonly title: string;
+}
+
+function DashboardV2CheckpointCard({
+  actions,
+  className = "",
+  focusLabel,
+  focusTitle,
+  headingId,
+  metrics,
+  nextStep,
+  primaryCards,
+  statusLabel,
+  statusTone,
+  summary,
+  title,
+}: DashboardV2CheckpointCardProps): React.JSX.Element {
+  return (
+    <section
+      aria-labelledby={headingId}
+      className={`dashboard-section ${className}`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2
+              className="text-base-content text-lg font-semibold leading-tight"
+              id={headingId}
+            >
+              {title}
+            </h2>
+            <span className={`badge badge-sm ${toneBadgeClass(statusTone)}`}>
+              {statusLabel}
+            </span>
+          </div>
+          <p
+            className="text-base-content/65 mt-1 max-w-4xl text-sm"
+            role="status"
+            aria-live="polite"
+          >
+            {summary}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {actions.map(([label, onClick, disabled, title]) => (
+            <button
+              className="btn btn-xs btn-accent btn-outline"
+              disabled={disabled}
+              key={label}
+              onClick={onClick}
+              title={title}
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        {primaryCards.map(([label, value]) => (
+          <div
+            className="border-base-content/10 bg-base-100/60 rounded-lg border px-3 py-2"
+            key={label}
+          >
+            <div className="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">
+              {label}
+            </div>
+            <div className="mt-0.5 truncate text-sm font-medium tabular-nums">
+              {value}
+            </div>
+          </div>
+        ))}
+      </div>
+      {metrics.length ? (
+        <div className="text-base-content/60 mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums">
+          {metrics.map((metric) => (
+            <span key={metric.label}>
+              {metric.label}: {metric.value}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="border-base-content/10 bg-base-100/50 mt-3 rounded-lg border px-3 py-2">
+        <div className="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">
+          {focusTitle}
+        </div>
+        <p className="text-base-content/70 mt-1 text-sm">{focusLabel}</p>
+        <p className="text-base-content/60 mt-1 text-xs">
+          Next: {nextStep}
+        </p>
+      </div>
+    </section>
+  );
+}
+
 function DashboardV2PipelineInspectCheckpoint({
   actions,
   model,
@@ -939,104 +1058,41 @@ function DashboardV2PipelineInspectCheckpoint({
 }): React.JSX.Element {
   const canActOnPipeline = model.pipelineId !== null;
   return (
-    <section
-      aria-labelledby="dashboard-v2-pipeline-inspect-title"
-      className="dashboard-section border-info/25 bg-info/5"
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2
-              className="text-base-content text-lg font-semibold leading-tight"
-              id="dashboard-v2-pipeline-inspect-title"
-            >
-              {model.title}
-            </h2>
-            <span
-              className={`badge badge-sm ${
-                model.statusTone === "success"
-                  ? "badge-success"
-                  : model.statusTone === "warning"
-                    ? "badge-warning"
-                    : model.statusTone === "error"
-                      ? "badge-error"
-                      : "badge-ghost"
-              }`}
-            >
-              {model.statusLabel}
-            </span>
-          </div>
-          <p
-            className="text-base-content/65 mt-1 max-w-4xl text-sm"
-            role="status"
-            aria-live="polite"
-          >
-            {model.summary}
-          </p>
-        </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
-          <button
-            className="btn btn-xs btn-accent btn-outline"
-            disabled={!model.canOpenPipeline || !canActOnPipeline}
-            onClick={() => {
-              if (model.pipelineId) actions.openPipeline(model.pipelineId);
-            }}
-            type="button"
-          >
-            Operate
-          </button>
-          <button
-            className="btn btn-xs btn-accent btn-outline"
-            disabled={!model.canRunDiagnostics || !canActOnPipeline}
-            onClick={() => {
-              if (model.pipelineId) actions.runDiagnostics(model.pipelineId);
-            }}
-            title={model.diagnosticsDisabledReason}
-            type="button"
-          >
-            Diagnostics
-          </button>
-        </div>
-      </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        {[
-          { label: "Input", value: model.inputLabel },
-          { label: "Outputs", value: model.outputLabel },
-          { label: "Attention", value: model.attentionLabel },
-          { label: "Graph", value: model.graphLabel },
-        ].map((item) => (
-          <div
-            className="border-base-content/10 bg-base-100/60 rounded-lg border px-3 py-2"
-            key={item.label}
-          >
-            <div className="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">
-              {item.label}
-            </div>
-            <div className="mt-0.5 truncate text-sm font-medium tabular-nums">
-              {item.value}
-            </div>
-          </div>
-        ))}
-      </div>
-      {model.metrics.length ? (
-        <div className="text-base-content/60 mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums">
-          {model.metrics.map((metric) => (
-            <span key={metric.label}>
-              {metric.label}: {metric.value}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      <div className="border-base-content/10 bg-base-100/50 mt-3 rounded-lg border px-3 py-2">
-        <div className="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">
-          Inspection focus
-        </div>
-        <p className="text-base-content/70 mt-1 text-sm">{model.focusLabel}</p>
-        <p className="text-base-content/60 mt-1 text-xs">
-          Next: {model.nextStep}
-        </p>
-      </div>
-    </section>
+    <DashboardV2CheckpointCard
+      actions={[
+        [
+          "Operate",
+          () => {
+            if (model.pipelineId) actions.openPipeline(model.pipelineId);
+          },
+          !model.canOpenPipeline || !canActOnPipeline,
+        ],
+        [
+          "Diagnostics",
+          () => {
+            if (model.pipelineId) actions.runDiagnostics(model.pipelineId);
+          },
+          !model.canRunDiagnostics || !canActOnPipeline,
+          model.diagnosticsDisabledReason,
+        ],
+      ]}
+      className="border-info/25 bg-info/5"
+      focusLabel={model.focusLabel}
+      focusTitle="Inspection focus"
+      headingId="dashboard-v2-pipeline-inspect-title"
+      metrics={model.metrics}
+      nextStep={model.nextStep}
+      primaryCards={[
+        ["Input", model.inputLabel],
+        ["Outputs", model.outputLabel],
+        ["Attention", model.attentionLabel],
+        ["Graph", model.graphLabel],
+      ]}
+      statusLabel={model.statusLabel}
+      statusTone={model.statusTone}
+      summary={model.summary}
+      title={model.title}
+    />
   );
 }
 
@@ -1049,81 +1105,33 @@ function DashboardV2ControlRoomCheckpoint({
 }): React.JSX.Element {
   const canActOnPipeline = model.pipelineId !== null;
   return (
-    <section
-      aria-labelledby="dashboard-v2-control-room-title"
-      className="dashboard-section border-accent/25 bg-accent/5 mb-4"
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2
-              className="text-base-content text-lg font-semibold leading-tight"
-              id="dashboard-v2-control-room-title"
-            >
-              {model.title}
-            </h2>
-            <span className={`badge badge-sm ${toneBadgeClass(model.statusTone)}`}>
-              {model.statusLabel}
-            </span>
-          </div>
-          <p
-            className="text-base-content/65 mt-1 max-w-4xl text-sm"
-            role="status"
-            aria-live="polite"
-          >
-            {model.summary}
-          </p>
-        </div>
-        <button
-          className="btn btn-xs btn-accent btn-outline"
-          disabled={!model.canOpenPipeline || !canActOnPipeline}
-          onClick={() => {
+    <DashboardV2CheckpointCard
+      actions={[
+        [
+          "Operate",
+          () => {
             if (model.pipelineId) actions.openPipeline(model.pipelineId);
-          }}
-          type="button"
-        >
-          Operate
-        </button>
-      </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        {[
-          { label: "Monitor coverage", value: model.monitoredLabel },
-          { label: "Missing URLs", value: model.missingLabel },
-          { label: "Search", value: model.searchLabel },
-          { label: "Preview loading", value: model.previewLabel },
-        ].map((item) => (
-          <div
-            className="border-base-content/10 bg-base-100/60 rounded-lg border px-3 py-2"
-            key={item.label}
-          >
-            <div className="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">
-              {item.label}
-            </div>
-            <div className="mt-0.5 truncate text-sm font-medium tabular-nums">
-              {item.value}
-            </div>
-          </div>
-        ))}
-      </div>
-      {model.metrics.length ? (
-        <div className="text-base-content/60 mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums">
-          {model.metrics.map((metric) => (
-            <span key={metric.label}>
-              {metric.label}: {metric.value}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      <div className="border-base-content/10 bg-base-100/50 mt-3 rounded-lg border px-3 py-2">
-        <div className="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">
-          Monitor focus
-        </div>
-        <p className="text-base-content/70 mt-1 text-sm">{model.focusLabel}</p>
-        <p className="text-base-content/60 mt-1 text-xs">
-          Next: {model.nextStep}
-        </p>
-      </div>
-    </section>
+          },
+          !model.canOpenPipeline || !canActOnPipeline,
+        ],
+      ]}
+      className="border-accent/25 bg-accent/5 mb-4"
+      focusLabel={model.focusLabel}
+      focusTitle="Monitor focus"
+      headingId="dashboard-v2-control-room-title"
+      metrics={model.metrics}
+      nextStep={model.nextStep}
+      primaryCards={[
+        ["Monitor coverage", model.monitoredLabel],
+        ["Missing URLs", model.missingLabel],
+        ["Search", model.searchLabel],
+        ["Preview loading", model.previewLabel],
+      ]}
+      statusLabel={model.statusLabel}
+      statusTone={model.statusTone}
+      summary={model.summary}
+      title={model.title}
+    />
   );
 }
 

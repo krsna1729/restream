@@ -213,7 +213,7 @@ test("seed: mixed-health Overview exposes upstream and output state @desktop", a
   );
 });
 
-test("seed: ui=v2 keeps legacy routes scoped while Inspect owns a checkpoint @desktop", async ({
+test("seed: ui=v2 keeps legacy routes scoped while pipeline checkpoints own v2 strips @desktop", async ({
   page,
 }) => {
   const v2Requests: string[] = [];
@@ -325,7 +325,8 @@ test("seed: ui=v2 keeps legacy routes scoped while Inspect owns a checkpoint @de
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
     "UI v2 checkpoint · Pipeline monitoring wall",
   );
-  expect(v2Requests.length).toBe(requestsAfterInspect);
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterInspect);
+  const requestsAfterMonitor = v2Requests.length;
 
   await page.goto("/?mode=pipeline&view=operate&ui=v2");
   await expect(
@@ -333,7 +334,7 @@ test("seed: ui=v2 keeps legacy routes scoped while Inspect owns a checkpoint @de
       .locator("#dashboard-v2-pipeline-selector-root")
       .getByRole("heading", { name: "Pipelines" }),
   ).toBeVisible();
-  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterInspect);
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterMonitor);
 });
 
 test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop", async ({

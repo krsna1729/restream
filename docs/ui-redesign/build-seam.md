@@ -25,6 +25,7 @@
 - [Overview large-fleet search](#overview-large-fleet-search)
 - [Pipeline Inspect checkpoint](#pipeline-inspect-checkpoint)
 - [Pipeline Monitor checkpoint](#pipeline-monitor-checkpoint)
+- [Shared checkpoint card](#shared-checkpoint-card)
 
 ## Objective
 
@@ -719,3 +720,20 @@ The opt-in bundle now measures 321,813 raw bytes and 76,668 bytes with
 deterministic gzip. It still fits under the 77,000-byte smoke guard, but leaves
 only 332 bytes of headroom; the next material checkpoint should either pay down
 repeated scan-card markup or split non-Operate checkpoint surfaces deliberately.
+
+## Shared checkpoint card
+
+The Inspect and Monitor checkpoint strips now render through one shared React
+checkpoint component. This keeps the first-glance pattern consistent across
+pipeline sub-routes: title, status badge, action cluster, four scan metrics,
+optional compact metrics, and a focus/next-step block. Inspect and Monitor still
+adapt their own pure view models at the boundary; the shared component does not
+fetch, subscribe, mutate, or own route state.
+
+The refactor is behavior-preserving but removes the duplicated checkpoint
+markup before adding more surfaces. The bundle now measures 319,332 raw bytes
+and 76,735 bytes with deterministic gzip. Raw size drops by 2,481 bytes compared
+with the Monitor checkpoint slice, while gzip remains under the 77,000-byte
+smoke guard with 265 bytes of headroom. The next material v2 route should still
+pay down more weight or split checkpoint surfaces before adding another large
+component block.
