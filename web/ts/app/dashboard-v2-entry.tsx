@@ -426,6 +426,7 @@ function DashboardV2Overview({
                 </label>
                 {normalizedPipelineTableQuery ? (
                   <button
+                    aria-label="Clear overview pipeline search"
                     className="btn btn-xs btn-ghost"
                     onClick={clearPipelineTableSearch}
                     type="button"
@@ -724,6 +725,7 @@ function DashboardV2PipelineSelector({
                 </label>
                 {normalizedPipelineQuery ? (
                   <button
+                    aria-label="Clear pipeline selector search"
                     className="btn btn-xs btn-ghost"
                     onClick={clearPipelineSearch}
                     type="button"
@@ -1106,6 +1108,7 @@ function DashboardV2PipelineInputStatus({
               </label>
               {normalizedAudioQuery ? (
                 <button
+                  aria-label="Clear audio track search"
                   className="btn btn-xs btn-ghost"
                   onClick={() => setAudioQuery("")}
                   type="button"
@@ -1223,6 +1226,11 @@ function DashboardV2PipelineInputStatus({
                 </p>
                 {normalizedAudioQuery ? null : (
                   <button
+                    aria-label={
+                      audioExpanded
+                        ? "Show fewer audio tracks"
+                        : `Show all ${model.audioTracks.length} audio tracks`
+                    }
                     className="btn btn-xs btn-outline"
                     onClick={() => setAudioExpanded((expanded) => !expanded)}
                     type="button"

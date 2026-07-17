@@ -2953,7 +2953,7 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
   await expect(inputStatus.getByText("Track 7")).toHaveCount(0);
   const audioSearch = inputStatus.getByLabel("Search audio tracks");
   const audioSearchClear = inputStatus.getByRole("button", {
-    name: "Clear search",
+    name: "Clear audio track search",
   });
   await expect(audioSearch).toBeVisible();
   await audioSearch.fill("track 30");
@@ -2971,6 +2971,9 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
   expect(await getCdpStatusTexts(page)).toContain(
     '0/30 audio tracks match "missing audio"',
   );
+  const filteredAudioButtonNames = await getCdpNamesByRole(page, "button");
+  expect(filteredAudioButtonNames).toContain("Clear audio track search");
+  expect(filteredAudioButtonNames).not.toContain("Clear search");
   await audioSearchClear.click();
   await expect(audioSearch).toHaveValue("");
   await expect(inputStatus.getByText("Track 6")).toBeVisible();
@@ -2979,12 +2982,17 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
   );
   await expect(audioSearchClear).toBeHidden();
   await expect(
-    inputStatus.getByRole("button", { name: "Show all 30" }),
+    inputStatus.getByRole("button", { name: "Show all 30 audio tracks" }),
   ).toBeVisible();
-  await inputStatus.getByRole("button", { name: "Show all 30" }).click();
+  const collapsedAudioButtonNames = await getCdpNamesByRole(page, "button");
+  expect(collapsedAudioButtonNames).toContain("Show all 30 audio tracks");
+  expect(collapsedAudioButtonNames).not.toContain("Show all 30");
+  await inputStatus
+    .getByRole("button", { name: "Show all 30 audio tracks" })
+    .click();
   await expect(inputStatus.getByText("Track 30", { exact: true })).toBeVisible();
   await expect(
-    inputStatus.getByRole("button", { name: "Show fewer" }),
+    inputStatus.getByRole("button", { name: "Show fewer audio tracks" }),
   ).toBeVisible();
   await expect(outputOverview).toContainText("SRT Sink Flap");
   await expect(outputOverview).toContainText("Flapping");
@@ -3607,9 +3615,14 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
     overview.getByRole("button", { name: "Main Program" }),
   ).not.toBeVisible();
   const overviewClearSearch = overview.getByRole("button", {
-    name: "Clear search",
+    name: "Clear overview pipeline search",
   });
   await expect(overviewClearSearch).toBeVisible();
+  const filteredOverviewButtonNames = await getCdpNamesByRole(page, "button");
+  expect(filteredOverviewButtonNames).toContain(
+    "Clear overview pipeline search",
+  );
+  expect(filteredOverviewButtonNames).not.toContain("Clear search");
   expect(await getCdpStatusTexts(page)).toContain(
     '1/10 pipelines shown · "ritual"',
   );
@@ -3921,9 +3934,14 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
     selector.getByRole("button", { name: /Main Program/ }),
   ).not.toBeVisible();
   const selectorClearSearch = selector.getByRole("button", {
-    name: "Clear search",
+    name: "Clear pipeline selector search",
   });
   await expect(selectorClearSearch).toBeVisible();
+  const filteredSelectorButtonNames = await getCdpNamesByRole(page, "button");
+  expect(filteredSelectorButtonNames).toContain(
+    "Clear pipeline selector search",
+  );
+  expect(filteredSelectorButtonNames).not.toContain("Clear search");
   expect(await getCdpStatusTexts(page)).toContain(
     '1/10 pipelines shown · "backup"',
   );
