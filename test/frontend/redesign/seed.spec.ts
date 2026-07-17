@@ -337,13 +337,27 @@ test("seed: ui=v2 keeps legacy routes scoped while pipeline checkpoints own v2 s
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterInspect);
   const requestsAfterMonitor = v2Requests.length;
 
+  await page.goto("/?mode=incidents&ui=v2");
+  await expect(page.locator("#incidents-mode-panel")).toBeVisible();
+  await expect(page.locator("#dashboard-v2-control-room-root")).toBeHidden();
+  await expect(
+    page
+      .locator("#dashboard-v2-incidents-root")
+      .getByRole("heading", { name: "Incidents" }),
+  ).toBeVisible();
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Alerts, evidence, and lifecycle events",
+  );
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterMonitor);
+  const requestsAfterIncidents = v2Requests.length;
+
   await page.goto("/?mode=pipeline&view=operate&ui=v2");
   await expect(
     page
       .locator("#dashboard-v2-pipeline-selector-root")
       .getByRole("heading", { name: "Pipelines" }),
   ).toBeVisible();
-  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterMonitor);
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterIncidents);
   expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
     true,
   );
@@ -495,7 +509,7 @@ test("seed: ui=v2 shell announces ownership while moving across routes @desktop"
     },
     {
       href: "/?mode=incidents&ui=v2",
-      text: "Legacy-owned checkpoint · Alerts, evidence, and lifecycle events",
+      text: "UI v2 checkpoint · Alerts, evidence, and lifecycle events",
     },
     {
       href: "/?mode=telemetry&ui=v2",
@@ -1432,13 +1446,28 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   });
 
   const incidents = page.locator("#incidents-mode-panel");
+  const checkpoint = incidents.locator("#dashboard-v2-incidents-root");
   const summary = incidents.locator("#incidents-route-summary");
   await expect(
-    incidents.getByRole("heading", { name: "Incidents" }),
+    checkpoint.getByRole("heading", { name: "Incidents" }),
+  ).toBeVisible();
+  await expect(
+    incidents
+      .locator("#incidents-mode-content")
+      .getByRole("heading", { name: "Incidents" }),
   ).toBeVisible();
   await expect(summary).toHaveText(
     "0 critical · 1 warning · 1 recent event · fleet",
   );
+  await expect(
+    checkpoint.getByText("0 critical · 1 warning", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    checkpoint.getByText("1 recent event", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    checkpoint.getByText("1 alert group · 1 event visible"),
+  ).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     "0 critical · 1 warning · 1 recent event · fleet",
   );
@@ -1453,6 +1482,9 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   await expect(searchSummary).toHaveText(
     '1 alert group · 1 event match "destination"',
   );
+  await expect(
+    checkpoint.getByText('1 alert group · 1 event match "destination"'),
+  ).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     '1 alert group · 1 event match "destination"',
   );
@@ -1465,6 +1497,9 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
     '0 alert groups · 0 events match "healthy"',
   );
   await expect(
+    checkpoint.getByText('0 alert groups · 0 events match "healthy"'),
+  ).toBeVisible();
+  await expect(
     incidents.getByText('No alert matches for "healthy".'),
   ).toBeVisible();
   const clearSearch = incidents.getByRole("button", { name: "Clear search" });
@@ -1476,6 +1511,9 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   await clearSearch.click();
   await expect(search).toHaveValue("");
   await expect(searchSummary).toHaveText("1 alert group · 1 event visible");
+  await expect(
+    checkpoint.getByText("1 alert group · 1 event visible"),
+  ).toBeVisible();
   await expect(clearSearch).toBeHidden();
   await expect(
     incidents.getByRole("heading", { name: "Retrying output" }),
@@ -1496,6 +1534,10 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   await expect(summary).toHaveText(
     "0 critical · 0 warning · 0 recent events · Healthy Program",
   );
+  await expect(
+    checkpoint.getByText("0 critical · 0 warning", { exact: true }),
+  ).toBeVisible();
+  await expect(checkpoint.getByText("Healthy Program", { exact: true })).toBeVisible();
   await expect(
     incidents.getByText("No active alerts for this pipeline."),
   ).toBeVisible();
@@ -1542,10 +1584,15 @@ test("seed: ui=v2 Incidents bounds dense alert and event lists until requested @
   });
 
   const incidents = page.locator("#incidents-mode-panel");
+  const checkpoint = incidents.locator("#dashboard-v2-incidents-root");
   const summary = incidents.locator("#incidents-route-summary");
   await expect(summary).toHaveText(
     "3 critical · 11 warning · 20 recent events · fleet",
   );
+  await expect(checkpoint.getByText("3 critical", { exact: true })).toBeVisible();
+  await expect(
+    checkpoint.getByText("14 alert groups · 20 events visible"),
+  ).toBeVisible();
   await expect(incidents.locator("#incidents-search-results-summary")).toHaveText(
     "14 alert groups · 20 events visible",
   );
@@ -2324,6 +2371,7 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
     <div id="dashboard-v2-pipeline-output-overview-root"></div>
     <div id="dashboard-v2-pipeline-inspect-root"></div>
     <div id="dashboard-v2-control-room-root"></div>
+    <div id="dashboard-v2-incidents-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -2532,6 +2580,7 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
     <div id="dashboard-v2-pipeline-output-overview-root"></div>
     <div id="dashboard-v2-pipeline-inspect-root"></div>
     <div id="dashboard-v2-control-room-root"></div>
+    <div id="dashboard-v2-incidents-root"></div>
   `);
 
   const result = await page.evaluate(async () => {
@@ -2670,6 +2719,7 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
     <div id="dashboard-v2-pipeline-output-overview-root"></div>
     <div id="dashboard-v2-pipeline-inspect-root"></div>
     <div id="dashboard-v2-control-room-root"></div>
+    <div id="dashboard-v2-incidents-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -2793,6 +2843,7 @@ test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", a
     <div id="dashboard-v2-pipeline-output-overview-root"></div>
     <div id="dashboard-v2-pipeline-inspect-root"></div>
     <div id="dashboard-v2-control-room-root"></div>
+    <div id="dashboard-v2-incidents-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -3076,6 +3127,7 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
     <div id="dashboard-v2-pipeline-output-overview-root"></div>
     <div id="dashboard-v2-pipeline-inspect-root"></div>
     <div id="dashboard-v2-control-room-root"></div>
+    <div id="dashboard-v2-incidents-root"></div>
   `);
 
   await page.evaluate(async () => {

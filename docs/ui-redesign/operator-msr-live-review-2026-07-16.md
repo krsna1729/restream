@@ -69,7 +69,7 @@ Summary:
 | Media | legacy | 18,990 | Not redesigned in v2. |
 | Settings | legacy | 22,123 | Not redesigned in v2. |
 | Status | legacy | 25,700 | Not redesigned in v2. |
-| Incidents | legacy | 28,494 | Not redesigned in v2. |
+| Incidents | v2 checkpoint + legacy feed | 28,494 | First-glance incident state is v2; dense alert/event feed remains legacy. |
 | Telemetry | legacy | 32,479 | Not redesigned in v2. |
 
 The seeded browser proof now also exercises the owned v2 path by keyboard:
@@ -80,8 +80,8 @@ and verify stable accessible button names for output operations.
 
 The shared workspace summary now also announces the current ownership state:
 `UI v2 owned` for Overview and Pipeline Operate, `UI v2 checkpoint` for
-Pipeline Inspect and Pipeline Monitor, and `Legacy-owned checkpoint` for the
-remaining top-level legacy routes. Seeded Playwright/CDP
+Pipeline Inspect, Pipeline Monitor, and Incidents, and `Legacy-owned
+checkpoint` for the remaining top-level legacy routes. Seeded Playwright/CDP
 coverage proves that cue is visible and exposed as status text while moving
 across the route journey.
 
@@ -184,9 +184,11 @@ Playwright/CDP coverage proves operators can narrow by target/message, recover
 with a local Clear search action, and keep the authoritative route counts.
 
 Incidents now gets the same cognitive-load reduction before its alert and
-event feeds: the legacy-owned route announces critical, warning, recent-event,
-and active scope counts as a live status line. Seeded Playwright/CDP coverage
-proves both fleet-wide and pipeline-scoped summaries update visibly and in the
+event feeds: the v2 checkpoint summarizes critical/warning state, recent-event
+volume, active scope, and the current incident search result before the legacy
+feed. The legacy route still announces critical, warning, recent-event, and
+active scope counts as a live status line. Seeded Playwright/CDP coverage proves
+both fleet-wide and pipeline-scoped summaries update visibly and in the
 accessibility tree.
 
 Incidents also now has one local search surface across active alerts and recent
@@ -342,10 +344,11 @@ What changed from the live operator pass:
 
 Still not a full v2 redesign:
 
-- Inspect graph/resource details, the Monitor wall, Media, Settings, Status,
-  Incidents, and Telemetry are still intentionally legacy-owned, now with
-  lightweight route checkpoints rather than full v2 layouts. Inspect and Monitor
-  each have only their first v2-owned decision checkpoint.
+- Inspect graph/resource details, the Monitor wall, the Incidents feed, Media,
+  Settings, Status, and Telemetry are still intentionally legacy-owned, now with
+  lightweight route checkpoints where useful rather than full v2 layouts.
+  Inspect, Monitor, and Incidents each have only their first v2-owned decision
+  checkpoint.
 - Legacy-owned routes keep substantial hidden DOM mounted across navigation.
   This is visible in CDP node growth and should be treated as a future
   performance/accessibility cleanup, not as solved by the v2 seam.
@@ -358,6 +361,6 @@ The remaining evolution should be sequenced as separate ownership passes:
 
 1. Complete Pipeline / Inspect v2 beyond the checkpoint strip.
 2. Complete Pipeline / Monitor v2 beyond the checkpoint strip.
-3. Incidents and Telemetry v2.
+3. Incidents feed v2 and Telemetry v2.
 4. Media, Settings, and Status polish.
 5. Hidden DOM / route unmount cleanup across legacy panels.

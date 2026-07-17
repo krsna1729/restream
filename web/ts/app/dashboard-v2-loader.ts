@@ -1,4 +1,5 @@
 import type { ControlRoomCheckpointModel } from "../features/control-room-view-model.js";
+import type { IncidentsCheckpointModel } from "../features/incidents-view-model.js";
 import type { OverviewViewModel } from "../features/overview-view-model.js";
 import type { PipelineInspectCheckpointModel } from "../features/pipeline-inspect-view-model.js";
 import type {
@@ -102,6 +103,10 @@ export interface DashboardV2ControlRoomActions {
   readonly openPipeline: (pipelineId: string) => void;
 }
 
+export interface DashboardV2IncidentsActions {
+  readonly openTelemetry: () => void;
+}
+
 interface DashboardV2Module {
   renderDashboardV2Overview(
     model: OverviewViewModel,
@@ -135,6 +140,10 @@ interface DashboardV2CheckpointsModule {
     model: ControlRoomCheckpointModel | null,
     actions: DashboardV2ControlRoomActions,
   ): void;
+  renderDashboardV2IncidentsCheckpoint(
+    model: IncidentsCheckpointModel | null,
+    actions: DashboardV2IncidentsActions,
+  ): void;
 }
 
 let dashboardV2Module: DashboardV2Module | null = null;
@@ -145,6 +154,7 @@ let dashboardV2OverviewActive = false;
 let dashboardV2PipelineActive = false;
 let dashboardV2PipelineInspectActive = false;
 let dashboardV2ControlRoomActive = false;
+let dashboardV2IncidentsActive = false;
 let latestOverviewModel: OverviewViewModel | null = null;
 let overviewActions: DashboardV2OverviewActions | null = null;
 let latestPipelineSelectorModel: PipelineOperateSelectorModel | null = null;
@@ -164,6 +174,8 @@ let latestPipelineInspectModel: PipelineInspectCheckpointModel | null | undefine
 let pipelineInspectActions: DashboardV2PipelineInspectActions | null = null;
 let latestControlRoomModel: ControlRoomCheckpointModel | null | undefined;
 let controlRoomActions: DashboardV2ControlRoomActions | null = null;
+let latestIncidentsModel: IncidentsCheckpointModel | null | undefined;
+let incidentsActions: DashboardV2IncidentsActions | null = null;
 
 const DASHBOARD_V2_CONTAINER_IDS = [
   "dashboard-v2-root",
@@ -173,6 +185,7 @@ const DASHBOARD_V2_CONTAINER_IDS = [
   "dashboard-v2-pipeline-output-overview-root",
   "dashboard-v2-pipeline-inspect-root",
   "dashboard-v2-control-room-root",
+  "dashboard-v2-incidents-root",
 ] as const;
 
 function setContainerHidden(id: string, hidden: boolean): void {
@@ -196,6 +209,10 @@ function hideDashboardV2PipelineInspect(): void {
 
 function hideDashboardV2ControlRoom(): void {
   setContainerHidden("dashboard-v2-control-room-root", true);
+}
+
+function hideDashboardV2Incidents(): void {
+  setContainerHidden("dashboard-v2-incidents-root", true);
 }
 
 function ensureDashboardV2Module(): void {
@@ -234,6 +251,7 @@ function ensureDashboardV2CheckpointsModule(): void {
       dashboardV2CheckpointsModule = module as DashboardV2CheckpointsModule;
       renderLatestPipelineInspect();
       renderLatestControlRoom();
+      renderLatestIncidents();
     })
     .catch((error: unknown) => {
       dashboardV2CheckpointsModulePromise = null;
@@ -503,6 +521,24 @@ function renderLatestControlRoom(): void {
   );
 }
 
+function renderLatestIncidents(): void {
+  if (!dashboardV2IncidentsActive) {
+    hideDashboardV2Incidents();
+    return;
+  }
+  ensureDashboardV2CheckpointsModule();
+  if (
+    !dashboardV2CheckpointsModule ||
+    latestIncidentsModel === undefined ||
+    !incidentsActions
+  )
+    return;
+  dashboardV2CheckpointsModule.renderDashboardV2IncidentsCheckpoint(
+    latestIncidentsModel,
+    incidentsActions,
+  );
+}
+
 export function dashboardV2ExperimentEnabled(
   search = dashboardSearch(),
   storage: DashboardUiVersionStorage | null = dashboardStorage(),
@@ -520,6 +556,7 @@ export function setDashboardV2PresentationScope(options: {
   readonly pipelineActive: boolean;
   readonly pipelineInspectActive?: boolean;
   readonly controlRoomActive?: boolean;
+  readonly incidentsActive?: boolean;
 }): void {
   const nextOverviewActive =
     dashboardV2ExperimentEnabled() && options.overviewActive;
@@ -529,20 +566,25 @@ export function setDashboardV2PresentationScope(options: {
     dashboardV2ExperimentEnabled() && Boolean(options.pipelineInspectActive);
   const nextControlRoomActive =
     dashboardV2ExperimentEnabled() && Boolean(options.controlRoomActive);
+  const nextIncidentsActive =
+    dashboardV2ExperimentEnabled() && Boolean(options.incidentsActive);
   const overviewChanged = dashboardV2OverviewActive !== nextOverviewActive;
   const pipelineChanged = dashboardV2PipelineActive !== nextPipelineActive;
   const pipelineInspectChanged =
     dashboardV2PipelineInspectActive !== nextPipelineInspectActive;
   const controlRoomChanged =
     dashboardV2ControlRoomActive !== nextControlRoomActive;
+  const incidentsChanged = dashboardV2IncidentsActive !== nextIncidentsActive;
   dashboardV2OverviewActive = nextOverviewActive;
   dashboardV2PipelineActive = nextPipelineActive;
   dashboardV2PipelineInspectActive = nextPipelineInspectActive;
   dashboardV2ControlRoomActive = nextControlRoomActive;
+  dashboardV2IncidentsActive = nextIncidentsActive;
   if (!dashboardV2OverviewActive) hideDashboardV2Overview();
   if (!dashboardV2PipelineActive) hideDashboardV2Pipeline();
   if (!dashboardV2PipelineInspectActive) hideDashboardV2PipelineInspect();
   if (!dashboardV2ControlRoomActive) hideDashboardV2ControlRoom();
+  if (!dashboardV2IncidentsActive) hideDashboardV2Incidents();
   if (overviewChanged && dashboardV2OverviewActive) renderLatestOverview();
   if (pipelineChanged && dashboardV2PipelineActive) {
     renderLatestPipelineSelector();
@@ -555,6 +597,9 @@ export function setDashboardV2PresentationScope(options: {
   }
   if (controlRoomChanged && dashboardV2ControlRoomActive) {
     renderLatestControlRoom();
+  }
+  if (incidentsChanged && dashboardV2IncidentsActive) {
+    renderLatestIncidents();
   }
 }
 
@@ -652,4 +697,18 @@ export function updateDashboardV2ControlRoomCheckpoint(
 ): void {
   latestControlRoomModel = model;
   renderLatestControlRoom();
+}
+
+export function setDashboardV2IncidentsActions(
+  actions: DashboardV2IncidentsActions,
+): void {
+  incidentsActions = actions;
+  renderLatestIncidents();
+}
+
+export function updateDashboardV2IncidentsCheckpoint(
+  model: IncidentsCheckpointModel | null,
+): void {
+  latestIncidentsModel = model;
+  renderLatestIncidents();
 }

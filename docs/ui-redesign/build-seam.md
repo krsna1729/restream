@@ -25,6 +25,7 @@
 - [Overview large-fleet search](#overview-large-fleet-search)
 - [Pipeline Inspect checkpoint](#pipeline-inspect-checkpoint)
 - [Pipeline Monitor checkpoint](#pipeline-monitor-checkpoint)
+- [Incidents checkpoint](#incidents-checkpoint)
 - [Shared checkpoint card](#shared-checkpoint-card)
 - [Checkpoint bundle split](#checkpoint-bundle-split)
 
@@ -719,18 +720,36 @@ the checkpoint match count without relabeling filtered outputs as missing
 configuration, and generic web monitors are counted as lazy previews before the
 iframe is mounted.
 
-The opt-in bundle now measures 321,813 raw bytes and 76,668 bytes with
-deterministic gzip. It still fits under the 77,000-byte smoke guard, but leaves
-only 332 bytes of headroom; the next material checkpoint should either pay down
-repeated scan-card markup or split non-Operate checkpoint surfaces deliberately.
+## Incidents checkpoint
+
+Incidents now follows the same checkpoint seam without taking over the dense
+alert/event feed. The v2 strip summarizes current alert state, recent lifecycle
+event volume, active scope, and the shared incident search state before the
+legacy feed renders below it. The single v2 action jumps to Telemetry, matching
+the normal incident-investigation flow without adding a second search/filter
+surface.
+
+Seeded Playwright/CDP coverage proves the Incidents checkpoint appears under
+`ui=v2`, the route ownership cue changes to `UI v2 checkpoint`, the checkpoint
+reacts to hit/no-hit incident search states, and scoped pipeline filtering keeps
+the checkpoint and legacy route summary aligned.
+
+The opt-in checkpoint bundle is deliberately separate from the full
+Overview/Operate bundle. In the Incidents checkpoint build, Vite reports
+`dashboard-v2-checkpoints-entry.js` at 6.40 kB raw / 1.78 kB gzip,
+`dashboard-v2-entry.js` at 55.63 kB raw / 9.86 kB gzip, and the shared React
+runtime chunk at 258.47 kB raw / 66.98 kB gzip. The smoke guard measures these
+bundles independently so additional non-Operate checkpoints do not force the
+main v2 UI path to load earlier than needed.
 
 ## Shared checkpoint card
 
-The Inspect and Monitor checkpoint strips now render through one shared React
+The Inspect, Monitor, and Incidents checkpoint strips now render through one shared React
 checkpoint component. This keeps the first-glance pattern consistent across
-pipeline sub-routes: title, status badge, action cluster, four scan metrics,
+checkpoint routes: title, status badge, action cluster, four scan metrics,
 optional compact metrics, and a focus/next-step block. Inspect and Monitor still
-adapt their own pure view models at the boundary; the shared component does not
+adapt their own pure view models at the boundary, and Incidents adapts the
+existing legacy incident snapshot/search state. The shared component does not
 fetch, subscribe, mutate, or own route state.
 
 The refactor is behavior-preserving but removes the duplicated checkpoint

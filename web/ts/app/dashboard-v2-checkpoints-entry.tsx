@@ -2,9 +2,11 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 
 import type { ControlRoomCheckpointModel } from "../features/control-room-view-model.js";
+import type { IncidentsCheckpointModel } from "../features/incidents-view-model.js";
 import type { PipelineInspectCheckpointModel } from "../features/pipeline-inspect-view-model.js";
 import type {
   DashboardV2ControlRoomActions,
+  DashboardV2IncidentsActions,
   DashboardV2PipelineInspectActions,
 } from "./dashboard-v2-loader.js";
 
@@ -223,6 +225,42 @@ function DashboardV2ControlRoomCheckpoint({
   );
 }
 
+function DashboardV2IncidentsCheckpoint({
+  actions,
+  model,
+}: {
+  actions: DashboardV2IncidentsActions;
+  model: IncidentsCheckpointModel;
+}): React.JSX.Element {
+  return (
+    <DashboardV2CheckpointCard
+      actions={[
+        [
+          "Telemetry",
+          actions.openTelemetry,
+          !model.canOpenTelemetry,
+        ],
+      ]}
+      className="border-error/25 bg-error/5 mb-4"
+      focusLabel={model.focusLabel}
+      focusTitle="Incident focus"
+      headingId="dashboard-v2-incidents-title"
+      metrics={model.metrics}
+      nextStep={model.nextStep}
+      primaryCards={[
+        ["Alert state", model.alertLabel],
+        ["Events", model.eventLabel],
+        ["Scope", model.scopeLabel],
+        ["Search", model.searchLabel],
+      ]}
+      statusLabel={model.statusLabel}
+      statusTone={model.statusTone}
+      summary={model.summary}
+      title={model.title}
+    />
+  );
+}
+
 const pipelineInspectContainer = document.getElementById(
   "dashboard-v2-pipeline-inspect-root",
 );
@@ -241,6 +279,15 @@ if (!controlRoomContainer) {
 const controlRoomRootContainer: HTMLElement = controlRoomContainer;
 let controlRoomRoot: Root | null = null;
 
+const incidentsContainer = document.getElementById(
+  "dashboard-v2-incidents-root",
+);
+if (!incidentsContainer) {
+  throw new Error("Dashboard v2 incidents root is missing");
+}
+const incidentsRootContainer: HTMLElement = incidentsContainer;
+let incidentsRoot: Root | null = null;
+
 export function renderDashboardV2PipelineInspectCheckpoint(
   model: PipelineInspectCheckpointModel | null,
   actions: DashboardV2PipelineInspectActions,
@@ -250,6 +297,19 @@ export function renderDashboardV2PipelineInspectCheckpoint(
   inspectRoot.render(
     model ? (
       <DashboardV2PipelineInspectCheckpoint actions={actions} model={model} />
+    ) : null,
+  );
+}
+
+export function renderDashboardV2IncidentsCheckpoint(
+  model: IncidentsCheckpointModel | null,
+  actions: DashboardV2IncidentsActions,
+): void {
+  incidentsRoot ??= createRoot(incidentsRootContainer);
+  incidentsRootContainer.hidden = model === null;
+  incidentsRoot.render(
+    model ? (
+      <DashboardV2IncidentsCheckpoint actions={actions} model={model} />
     ) : null,
   );
 }

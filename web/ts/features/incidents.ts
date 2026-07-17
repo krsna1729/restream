@@ -11,6 +11,7 @@ import type {
   OperatorAlert,
   OverviewSnapshot,
 } from "../core/api.js";
+import type { IncidentsCheckpointModel } from "./incidents-view-model.js";
 
 export interface IncidentPipelineOption {
   id: string;
@@ -53,6 +54,27 @@ let viewOptions: IncidentsViewOptions | null = null;
 let incidentSearchQuery = "";
 let incidentAlertGroupsExpanded = false;
 let incidentEventsExpanded = false;
+let incidentsCheckpointCallback:
+  | ((model: IncidentsCheckpointModel | null) => void)
+  | null = null;
+
+export function configureIncidentsCheckpointPresentation(options: {
+  readonly onPresentation?: (model: IncidentsCheckpointModel | null) => void;
+}): void {
+  incidentsCheckpointCallback = options.onPresentation ?? null;
+  if (!incidentsCheckpointCallback || !viewOptions?.active) {
+    incidentsCheckpointCallback?.(null);
+    return;
+  }
+  incidentsCheckpointCallback(
+    buildIncidentsCheckpointModel(
+      snapshot,
+      viewOptions.pipelines,
+      selectedPipelineId,
+      incidentSearchQuery,
+    ),
+  );
+}
 
 function formatTime(value: string | undefined): string {
   const millis = Date.parse(value || "");
@@ -320,6 +342,117 @@ function incidentScopeLabel(
   );
 }
 
+function incidentScopeCardLabel(scopeLabel: string): string {
+  return scopeLabel === "fleet" ? "Fleet" : scopeLabel;
+}
+
+function incidentStatusTone(
+  data: IncidentSnapshot,
+  critical: number,
+  warning: number,
+): IncidentsCheckpointModel["statusTone"] {
+  if (!data.loaded) return "neutral";
+  if (critical > 0) return "error";
+  if (warning > 0 || data.unavailable) return "warning";
+  return "success";
+}
+
+function buildIncidentsCheckpointModel(
+  data: IncidentSnapshot,
+  pipelines: IncidentPipelineOption[],
+  pipelineId: string,
+  searchQuery = "",
+): IncidentsCheckpointModel {
+  const search = normalizeSearch(searchQuery);
+  const allAlerts = data.alerts?.alerts || [];
+  const scopedAlerts = allAlerts.filter((alert) =>
+    alertMatchesPipeline(alert, pipelineId),
+  );
+  const alerts = scopedAlerts.filter(
+    (alert) => !search || alertSearchText(alert).includes(search),
+  );
+  const alertGroups = groupAlerts(alerts);
+  const critical = scopedAlerts.filter(
+    (alert) => alert.severity === "critical",
+  ).length;
+  const warning = scopedAlerts.filter(
+    (alert) => alert.severity === "warning",
+  ).length;
+  const scopedEvents = [...(data.events?.events || [])]
+    .filter((event) => !pipelineId || event.pipelineId === pipelineId)
+    .sort((a, b) => b.seq - a.seq)
+    .slice(0, 30);
+  const events = scopedEvents.filter(
+    (event) => !search || eventSearchText(event).includes(search),
+  );
+  const scopeLabel = incidentScopeLabel(pipelines, pipelineId);
+  const summary = data.loaded
+    ? `${critical} critical · ${warning} warning · ${pluralize(scopedEvents.length, "recent event")} · ${scopeLabel}`
+    : `Loading incident snapshots · ${scopeLabel}`;
+  const searchLabel = data.loaded
+    ? search
+      ? `${pluralize(alertGroups.length, "alert group")} · ${pluralize(events.length, "event")} match "${searchQuery.trim()}"`
+      : `${pluralize(alertGroups.length, "alert group")} · ${pluralize(events.length, "event")} visible`
+    : "Loading matches";
+  const statusLabel = !data.loaded
+    ? "Loading"
+    : critical > 0
+      ? `${critical} critical`
+      : warning > 0
+        ? `${warning} warning`
+        : data.unavailable
+          ? "Partial"
+          : "Clear";
+  const alertLabel = data.loaded
+    ? `${critical} critical · ${warning} warning`
+    : "Loading alerts";
+  const eventLabel = data.loaded
+    ? pluralize(scopedEvents.length, "recent event")
+    : "Loading events";
+  const focusLabel = !data.loaded
+    ? "Incident snapshots are loading. Keep the feed below as the source of truth once data arrives."
+    : critical > 0
+      ? "Critical alerts are active. Start with the highest-severity group below and confirm blast radius."
+      : warning > 0
+        ? "Warnings are active. Check the matching alert group, then use lifecycle evidence to confirm recovery."
+        : search && alertGroups.length + events.length === 0
+          ? "No matching incident evidence for this search. Clear the search to return to the full feed."
+          : data.unavailable
+            ? "Some incident data is stale or unavailable. Verify telemetry before changing outputs."
+            : "No active alerts in this scope. Use lifecycle events below for recent context.";
+  const nextStep = !data.loaded
+    ? "Wait for the snapshot or refresh manually."
+    : critical + warning > 0
+      ? "Open the affected pipeline from the alert group, then compare telemetry."
+      : search
+        ? "Clear search or switch scope if you are hunting a different output."
+        : "Keep monitoring or jump to Telemetry for counter-level evidence.";
+
+  return {
+    alertLabel,
+    canOpenTelemetry: true,
+    eventLabel,
+    focusLabel,
+    metrics: [
+      {
+        label: "Degraded pipelines",
+        value: String(data.overview?.degradedPipelines ?? "—"),
+      },
+      {
+        label: "Failed outputs",
+        value: String(data.overview?.failedOutputs ?? "—"),
+      },
+    ],
+    nextStep,
+    scopeLabel: incidentScopeCardLabel(scopeLabel),
+    searchLabel,
+    statusLabel,
+    statusTone: incidentStatusTone(data, critical, warning),
+    summary,
+    title: "Incidents",
+  };
+}
+
 export function renderIncidentsHtml(
   data: IncidentSnapshot,
   pipelines: IncidentPipelineOption[],
@@ -522,6 +655,14 @@ export function selectIncidentPipeline(pipelineId: string): void {
 function paintIncidents(): void {
   const root = document.getElementById("incidents-mode-content");
   if (!root || !viewOptions) return;
+  incidentsCheckpointCallback?.(
+    buildIncidentsCheckpointModel(
+      snapshot,
+      viewOptions.pipelines,
+      selectedPipelineId,
+      incidentSearchQuery,
+    ),
+  );
   root.innerHTML = renderIncidentsHtml(
     snapshot,
     viewOptions.pipelines,
@@ -578,7 +719,10 @@ export function renderIncidentsMode(options: IncidentsViewOptions): void {
   ) {
     selectedPipelineId = "";
   }
-  if (!options.active) return;
+  if (!options.active) {
+    incidentsCheckpointCallback?.(null);
+    return;
+  }
   paintIncidents();
   void refreshIncidents();
 }

@@ -64,6 +64,7 @@ import {
   openOutputMonitoringUrl,
   setControlRoomWorkspaceDependencies,
 } from "../features/control-room.js";
+import { configureIncidentsCheckpointPresentation } from "../features/incidents.js";
 import { state } from "../core/state.js";
 import type { DashboardLocation } from "../core/pipeline-workspace.js";
 import { buildOverviewViewModel } from "../features/overview-view-model.js";
@@ -77,6 +78,7 @@ import {
   setDashboardV2PresentationScope,
   setDashboardV2OverviewActions,
   setDashboardV2ControlRoomActions,
+  setDashboardV2IncidentsActions,
   setDashboardV2PipelineHeaderActions,
   setDashboardV2PipelineInspectActions,
   setDashboardV2PipelineInputStatusActions,
@@ -84,6 +86,7 @@ import {
   setDashboardV2PipelineSelectorActions,
   updateDashboardV2Overview,
   updateDashboardV2ControlRoomCheckpoint,
+  updateDashboardV2IncidentsCheckpoint,
   updateDashboardV2PipelineHeader,
   updateDashboardV2PipelineInspectCheckpoint,
   updateDashboardV2PipelineInputStatus,
@@ -108,12 +111,14 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
     dashboardV2Enabled &&
     location.mode === "pipeline" &&
     location.pipelineView === "monitor";
+  const incidentsV2Active = dashboardV2Enabled && location.mode === "incidents";
 
   setDashboardV2PresentationScope({
     overviewActive: overviewV2Active,
     pipelineActive: pipelineV2Active,
     pipelineInspectActive: pipelineInspectV2Active,
     controlRoomActive: controlRoomV2Active,
+    incidentsActive: incidentsV2Active,
   });
 
   configureOverviewPresentation({
@@ -167,6 +172,11 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
       ? updateDashboardV2ControlRoomCheckpoint
       : undefined,
   });
+  configureIncidentsCheckpointPresentation({
+    onPresentation: incidentsV2Active
+      ? updateDashboardV2IncidentsCheckpoint
+      : undefined,
+  });
 }
 
 export function initDashboardApp(): void {
@@ -212,6 +222,9 @@ export function initDashboardApp(): void {
         selectPipeline(pipelineId);
         setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
       },
+    });
+    setDashboardV2IncidentsActions({
+      openTelemetry: () => setDashboardMode("telemetry", { focus: "panel" }),
     });
     setDashboardV2PipelineInputStatusActions({
       cancelAudioTrackEdit: cancelPipelineAudioTrackEdit,
