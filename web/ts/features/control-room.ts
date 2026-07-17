@@ -18,79 +18,20 @@ import { upsertDashboardOutputConfig } from "./dashboard.js";
 import type { OutputView, PipelineView } from "../types.js";
 import { normalizeOutputConfig } from "../core/output-config.js";
 import type { ControlRoomCheckpointModel } from "./control-room-view-model.js";
-
-interface ControlRoomState {
-  pipelineId: string | null;
-  page: number;
-  searchQuery: string;
-}
-
-interface ControlRoomWorkspaceDependencies {
-  selectedPipelineId: () => string | null;
-  selectPipeline: (pipelineId: string | null) => void;
-  openMonitorView: (pipelineId: string | null) => void;
-}
-
-interface ControlRoomOutputOption {
-  outputId: string;
-  pipelineId: string;
-  pipelineName: string;
-  outputName: string;
-  monitoringUrl: string | null;
-  status: string;
-  flapping: boolean;
-}
-
-interface ControlRoomCardDescriptor {
-  id: string;
-  title: string;
-  mediaUrl: string | null;
-  loadOnDemand: boolean;
-  emptyMessage: string;
-  openUrl: string | null;
-  copyUrl: string | null;
-  editable: boolean;
-  outputId: string | null;
-  pipelineId: string | null;
-  monitoringUrl: string | null;
-  statusLabel?: string | null;
-}
-
-type MonitoringEmbedKind =
-  "hls" | "video" | "youtube" | "iframe" | "unsupported";
-
-interface YouTubePlayerApi {
-  mute(): void;
-  unMute(): void;
-  isMuted(): boolean;
-  playVideo(): void;
-  pauseVideo(): void;
-  getPlayerState?(): number;
-  getVideoData?(): {
-    title?: string;
-    isLive?: boolean;
-    isPlayable?: boolean;
-    errorCode?: string | null;
-  };
-  getDuration?(): number;
-  destroy(): void;
-}
-
-interface YouTubeApiNamespace {
-  Player: new (
-    elementId: string,
-    options: Record<string, unknown>,
-  ) => YouTubePlayerApi;
-}
-
-interface ControlRoomMediaController {
-  destroy(): void;
-  play?(): void;
-  pause?(): void;
-  isPlaying?(): boolean;
-  isMuted?(): boolean;
-  setMuted?(muted: boolean): void;
-}
+import {
+  buildControlRoomCheckpointModel,
+  controlRoomScopeSummaryText,
+} from "./control-room-checkpoint.js";
+import type {
+  ControlRoomCardDescriptor,
+  ControlRoomMediaController,
+  ControlRoomOutputOption,
+  ControlRoomState,
+  ControlRoomWorkspaceDependencies,
+  MonitoringEmbedKind,
+  YouTubeApiNamespace,
+  YouTubePlayerApi,
+} from "./control-room-types.js";
 
 declare global {
   interface Window {
@@ -143,8 +84,7 @@ let youtubeIframeApiPromise: Promise<YouTubeApiNamespace> | null = null;
 let controlRoomPlaybackIntent: "play" | "pause" = "play";
 let controlRoomMuteIntent: "mute" | "unmute" = "mute";
 let controlRoomCheckpointCallback:
-  | ((model: ControlRoomCheckpointModel | null) => void)
-  | null = null;
+  ((model: ControlRoomCheckpointModel | null) => void) | null = null;
 const controlRoomNameCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: "base",
@@ -1747,7 +1687,9 @@ function getOutputMonitorStatusLabel(output: ControlRoomOutputOption): string {
             : "Stopped";
 }
 
-function getMonitoringOutputSearchText(output: ControlRoomOutputOption): string {
+function getMonitoringOutputSearchText(
+  output: ControlRoomOutputOption,
+): string {
   const normalizedStatus = (output.status || "").trim().toLowerCase();
   const statusLabel = getOutputMonitorStatusLabel(output).toLowerCase();
   const statusAliases = new Set<string>();
@@ -1771,124 +1713,29 @@ function getMonitoringOutputSearchText(output: ControlRoomOutputOption): string 
     .toLowerCase();
 }
 
-function pluralize(
-  count: number,
-  singular: string,
-  plural = `${singular}s`,
-): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function controlRoomScopeSummaryText(
+function renderControlRoomCheckpointPresentation(
   selectedPipeline: PipelineView | null,
-): string {
-  if (!selectedPipeline) return "Monitoring wall · no pipeline selected";
-  const totalOutputs = selectedPipeline.outs.length;
-  const monitoringOutputs = listMonitoringOutputsForPipeline(
-    selectedPipeline.id,
-  );
-  const missingMonitoring = totalOutputs - monitoringOutputs.length;
-  return `Monitoring ${selectedPipeline.name} · ${pluralize(totalOutputs, "output")} · ${pluralize(monitoringOutputs.length, "monitor")} · ${pluralize(missingMonitoring, "missing URL")}`;
-}
-
-function buildControlRoomCheckpointModel(
-  selectedPipeline: PipelineView | null,
-): ControlRoomCheckpointModel {
-  if (!selectedPipeline) {
-    return {
-      pipelineId: null,
-      title: "Monitoring wall",
-      summary: "No pipeline is selected.",
-      statusLabel: "No selection",
-      statusTone: "neutral",
-      monitoredLabel: "0 monitored",
-      missingLabel: "No pipeline",
-      searchLabel: "No active search",
-      previewLabel: "No previews",
-      focusLabel: "Select a pipeline to see local preview and output monitors.",
-      nextStep: "Choose a pipeline from the monitor selector.",
-      canOpenPipeline: false,
-      metrics: [],
-    };
-  }
-
-  const totalOutputs = selectedPipeline.outs.length;
-  const allMonitoringOutputs = listMonitoringOutputsForPipeline(
-    selectedPipeline.id,
-  );
-  const monitoringOutputs = filterMonitoringOutputs(
+): void {
+  const allMonitoringOutputs = selectedPipeline
+    ? listMonitoringOutputsForPipeline(selectedPipeline.id)
+    : [];
+  const filteredMonitoringOutputs = filterMonitoringOutputs(
     allMonitoringOutputs,
     controlRoomState.searchQuery,
   );
-  const missingMonitoring = totalOutputs - allMonitoringOutputs.length;
-  const query = controlRoomState.searchQuery.trim();
-  const lazyWebPreviews = allMonitoringOutputs.filter(
+  const lazyWebPreviewCount = allMonitoringOutputs.filter(
     (output) =>
       output.monitoringUrl &&
       detectMonitoringEmbedKind(output.monitoringUrl) === "iframe",
   ).length;
-  const downMonitors = allMonitoringOutputs.filter((output) =>
-    ["failed", "off", "stopped"].includes(
-      (output.status || "").trim().toLowerCase(),
-    ),
-  ).length;
-  const statusTone =
-    allMonitoringOutputs.length === 0 || downMonitors > 0
-      ? "warning"
-      : missingMonitoring > 0
-        ? "neutral"
-        : "success";
-  const statusLabel =
-    allMonitoringOutputs.length === 0
-      ? "Needs URLs"
-      : downMonitors > 0
-        ? `${pluralize(downMonitors, "monitor")} down`
-        : missingMonitoring > 0
-          ? "Partially covered"
-          : "Covered";
-  const nextStep = query
-    ? monitoringOutputs.length
-      ? "Clear search when you are done with the narrowed monitor set."
-      : "Clear search or add a matching monitoring URL."
-    : missingMonitoring > 0
-      ? "Add missing monitoring URLs before treating the wall as complete."
-      : lazyWebPreviews > 0
-        ? "Load web previews only when the operator needs them."
-        : "Use the monitor wall for live output confirmation.";
-
-  return {
-    pipelineId: selectedPipeline.id,
-    title: selectedPipeline.name,
-    summary: controlRoomScopeSummaryText(selectedPipeline),
-    statusLabel,
-    statusTone,
-    monitoredLabel: `${allMonitoringOutputs.length}/${totalOutputs} monitored`,
-    missingLabel: pluralize(missingMonitoring, "missing URL"),
-    searchLabel: query
-      ? `${monitoringOutputs.length}/${allMonitoringOutputs.length} match "${query}"`
-      : "No active search",
-    previewLabel: lazyWebPreviews
-      ? `${pluralize(lazyWebPreviews, "lazy web preview")}`
-      : "No lazy web previews",
-    focusLabel: query
-      ? `${pluralize(monitoringOutputs.length, "visible monitor")} after search · ${pluralize(missingMonitoring, "missing URL")}`
-      : `${pluralize(allMonitoringOutputs.length, "configured monitor")} · ${pluralize(missingMonitoring, "missing URL")} · ${pluralize(lazyWebPreviews, "lazy web preview")}`,
-    nextStep,
-    canOpenPipeline: true,
-    metrics: [
-      { label: "Outputs", value: String(totalOutputs) },
-      { label: "Configured", value: String(allMonitoringOutputs.length) },
-      { label: "Visible", value: String(monitoringOutputs.length) },
-      { label: "Lazy", value: String(lazyWebPreviews) },
-    ],
-  };
-}
-
-function renderControlRoomCheckpointPresentation(
-  selectedPipeline: PipelineView | null,
-): void {
   controlRoomCheckpointCallback?.(
-    buildControlRoomCheckpointModel(selectedPipeline),
+    buildControlRoomCheckpointModel({
+      allMonitoringOutputs,
+      filteredMonitoringOutputCount: filteredMonitoringOutputs.length,
+      lazyWebPreviewCount,
+      searchQuery: controlRoomState.searchQuery,
+      selectedPipeline,
+    }),
   );
 }
 
@@ -1900,7 +1747,12 @@ function renderControlRoomScopeSummary(
     "#control-room-route-summary",
   );
   if (!summary) return;
-  summary.textContent = controlRoomScopeSummaryText(selectedPipeline);
+  summary.textContent = controlRoomScopeSummaryText(
+    selectedPipeline,
+    selectedPipeline
+      ? listMonitoringOutputsForPipeline(selectedPipeline.id).length
+      : 0,
+  );
 }
 
 function renderSummaryAndPagination(
