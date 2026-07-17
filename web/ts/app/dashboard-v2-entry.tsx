@@ -144,6 +144,12 @@ function outputMatchesSearch(
     .includes(normalizedQuery);
 }
 
+function outputExpansionLabel(model: PipelineOutputOverviewModel): string {
+  if (model.expanded) return "Show fewer";
+  const count = model.listCaption?.match(/\bof\s+(\d+)\s+outputs\b/)?.[1];
+  return count ? `Show all ${count}` : "Show all";
+}
+
 function Sparkline({
   metric,
 }: {
@@ -1698,7 +1704,7 @@ function DashboardV2PipelineOutputOverview({
                 onClick={() => actions.toggleOutputList(model.pipelineId)}
                 type="button"
               >
-                {model.expanded ? "Show fewer" : "Show all"}
+                {outputExpansionLabel(model)}
               </button>
             </div>
           ) : null}

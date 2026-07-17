@@ -3501,7 +3501,7 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
 
   console.log(`react-output-card-benchmark=${JSON.stringify(result)}`);
   expect(result.boundedCards).toBe(8);
-  expect(result.collapsedToggleLabel).toBe("Show all");
+  expect(result.collapsedToggleLabel).toBe("Show all 125");
   expect(result.expandedCards).toBe(125);
   expect(result.expandedToggleLabel).toBe("Show fewer");
   expect(result.stable).toMatchObject({
