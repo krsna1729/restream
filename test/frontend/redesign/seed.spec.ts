@@ -2391,11 +2391,13 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   const statusButtonNames = await getCdpNamesByRole(page, "button");
   expect(statusButtonNames).toEqual(
     expect.arrayContaining([
+      "Refresh status data",
       "Hide status export actions",
       "Download Status",
       "Copy SBOM",
     ]),
   );
+  expect(statusButtonNames).not.toContain("Refresh");
   expect(statusButtonNames).not.toContain("Hide export actions");
   await hideExportActions.click();
   await expect(

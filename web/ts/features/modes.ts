@@ -646,7 +646,7 @@ function renderStatusMode(): void {
                         <h1 class="dashboard-title">Status</h1>
                         <p class="dashboard-subtitle">Runtime build, native libraries, and system details.</p>
                     </div>
-                    <button type="button" class="btn btn-sm btn-outline" id="refresh-status-btn">Refresh</button>
+                    <button type="button" class="btn btn-sm btn-outline" id="refresh-status-btn" aria-label="Refresh status data">Refresh</button>
                 </div>
                 <section class="dashboard-section p-5">
                     <h2 class="dashboard-section-title mb-4">Runtime</h2>
