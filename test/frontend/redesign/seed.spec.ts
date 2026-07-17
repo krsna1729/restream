@@ -1232,12 +1232,9 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
   ).toBeVisible();
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
 
-  await selector
-    .getByRole("button", { name: "Select pipeline Healthy Program" })
-    .focus();
-  await selector
-    .getByRole("button", { name: "Select pipeline Healthy Program" })
-    .press("Enter");
+  const pipelineSelect = selector.getByLabel("Select pipeline");
+  await expect(pipelineSelect).toBeVisible();
+  await pipelineSelect.selectOption("pipe-healthy");
   await expect(page).toHaveURL(/p=pipe-healthy/);
   await expect(
     header.getByRole("heading", { name: "Healthy Program" }),
@@ -1247,12 +1244,16 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
   ).toBeVisible();
   expect(await getCdpNamesByRole(page, "button")).toEqual(
     expect.arrayContaining([
-      "Select pipeline Healthy Program",
-      "Select pipeline Retrying Destination",
       "Stop Healthy Output",
       "More output actions for Healthy Output",
       "Inspect graph for Healthy Program",
       "Diagnose Healthy Program",
+    ]),
+  );
+  expect(await getCdpNamesByRole(page, "button")).not.toEqual(
+    expect.arrayContaining([
+      "Select pipeline Healthy Program",
+      "Select pipeline Retrying Destination",
     ]),
   );
   expect(await getCdpNamesByRole(page, "button")).not.toContain(

@@ -685,6 +685,12 @@ function DashboardV2PipelineSelector({
     : model.pipelines;
   const showPipelineSearch =
     model.pipelines.length > 6 || normalizedPipelineQuery !== "";
+  const selectedPipeline =
+    model.pipelines.find((pipeline) => pipeline.selected) ?? model.pipelines[0];
+  const compactPipelineSelector =
+    model.pipelines.length > 0 &&
+    model.pipelines.length <= 3 &&
+    !normalizedPipelineQuery;
 
   return (
     <section aria-labelledby="dashboard-v2-pipelines-selector-title">
@@ -752,7 +758,29 @@ function DashboardV2PipelineSelector({
               ) : null}
             </div>
           ) : null}
-          {filteredPipelines.length ? (
+          {compactPipelineSelector ? (
+            <div className="space-y-2 p-2">
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-base-content/55 text-xs font-semibold uppercase tracking-wide">
+                  Active pipeline
+                </span>
+                <select
+                  aria-label="Select pipeline"
+                  className="select select-sm w-full"
+                  onChange={(event) =>
+                    actions.selectPipeline(event.currentTarget.value)
+                  }
+                  value={selectedPipeline?.id ?? ""}
+                >
+                  {model.pipelines.map((pipeline) => (
+                    <option key={pipeline.id} value={pipeline.id}>
+                      {pipeline.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : filteredPipelines.length ? (
             <ul className="max-h-52 w-full space-y-1 overflow-x-hidden overflow-y-auto p-2 md:max-h-none">
               {filteredPipelines.map((pipeline) => {
                 const safePipelineId = pipeline.id.replace(
