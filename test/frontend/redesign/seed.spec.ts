@@ -1660,6 +1660,12 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   await expect(
     monitor.getByRole("heading", { name: "Control Room" }),
   ).toBeVisible();
+  await expect(
+    monitor.getByRole("heading", { name: "Monitor controls" }),
+  ).toBeVisible();
+  await expect(
+    monitor.getByRole("heading", { name: "Monitor previews" }),
+  ).toBeVisible();
   await expect(routeSummary).toHaveText(
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );
@@ -1687,6 +1693,16 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   expect(initialMonitorButtonNames).not.toContain("Play All");
   expect(initialMonitorButtonNames).not.toContain("Pause All");
   expect(initialMonitorButtonNames).not.toContain("Reset");
+  const initialMonitorHeadingNames = await getCdpNamesByRole(page, "heading");
+  expect(initialMonitorHeadingNames).toEqual(
+    expect.arrayContaining([
+      "Control Room",
+      "Monitor controls",
+      "Monitor previews",
+      "Local HLS",
+      "Retrying Output",
+    ]),
+  );
 
   await search.fill("retrying");
   await expect(summary).toHaveText(

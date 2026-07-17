@@ -553,7 +553,11 @@ function ensureShell(container: HTMLElement): void {
                         <button type="button" id="control-room-reset-btn" class="btn btn-sm btn-outline" aria-label="Reset monitor wall">Reset</button>
                     </div>
                 </div>
-                <div class="mt-3 flex flex-wrap items-end gap-3">
+                <div class="mt-4 border-t border-base-content/10 pt-3">
+                    <h2 id="control-room-controls-title" class="text-sm font-semibold tracking-[0.01em]">Monitor controls</h2>
+                    <p class="text-base-content/60 mt-1 text-xs">Choose a pipeline, narrow the wall, and control all visible previews.</p>
+                </div>
+                <div class="mt-3 flex flex-wrap items-end gap-3" aria-labelledby="control-room-controls-title">
                     <label class="min-w-[18rem] flex-1 text-sm">
                         <span class="text-base-content/70 mb-1 block text-xs font-semibold uppercase">Pipeline</span>
                         <select id="control-room-pipeline-select" class="select select-sm w-full"></select>
@@ -570,7 +574,15 @@ function ensureShell(container: HTMLElement): void {
                 </div>
                 <div class="text-base-content/60 mt-2 text-xs" id="control-room-summary" role="status" aria-live="polite"></div>
             </section>
-            <div id="control-room-grid" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"></div>
+            <section aria-labelledby="control-room-previews-title" class="space-y-3">
+                <div class="flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                        <h2 id="control-room-previews-title" class="text-sm font-semibold tracking-[0.01em]">Monitor previews</h2>
+                        <p class="text-base-content/60 mt-1 text-xs">Local HLS first, followed by configured output monitors.</p>
+                    </div>
+                </div>
+                <div id="control-room-grid" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"></div>
+            </section>
         </div>`;
 
   container.addEventListener("change", (event) => {
@@ -1538,7 +1550,7 @@ function syncCard(
     : "";
   title.innerHTML = `
         <div class="flex items-start justify-between gap-2">
-            <div class="min-w-0 truncate text-sm font-semibold tracking-[0.01em]">${escapeHtml(descriptor.title)}</div>
+            <h3 class="min-w-0 truncate text-sm font-semibold tracking-[0.01em]">${escapeHtml(descriptor.title)}</h3>
             <div class="flex shrink-0 items-center gap-1.5" data-role="control-room-card-status-cluster">
                 ${statusLabel}
             </div>
