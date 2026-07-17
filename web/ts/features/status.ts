@@ -110,6 +110,7 @@ let statusStreamActive = false;
 let statusStreamLastEventId: number | null = null;
 let statusLogSearchQuery = "";
 let statusProcessLogExpanded = false;
+let statusExportActionsExpanded = false;
 const statusAdvancedSectionsExpanded = new Set<string>();
 let statusCheckpointCallback:
   | ((model: StatusCheckpointModel | null) => void)
@@ -291,6 +292,30 @@ function advancedSection(
             <p class="dashboard-muted mt-1 text-sm">${escapeHtml(summary)}</p>
         </div>
     </section>`;
+}
+
+function statusExportActionsHtml(): string {
+  const actions = `
+            <div class="flex flex-wrap gap-2">
+                <button type="button" class="btn btn-sm btn-outline" id="download-status-btn">Download Status</button>
+                <button type="button" class="btn btn-sm btn-outline" id="copy-status-btn">Copy Status</button>
+                <button type="button" class="btn btn-sm btn-outline" id="download-sbom-btn">Download SBOM</button>
+                <button type="button" class="btn btn-sm btn-outline" id="copy-sbom-btn">Copy SBOM</button>
+            </div>`;
+  if (!statusV2Active()) return actions;
+  return `
+        <section class="border-base-content/10 bg-base-100 rounded-2xl border p-4 shadow-sm" aria-label="Status export actions">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <h2 class="text-sm font-semibold">Export actions</h2>
+                    <p class="dashboard-muted mt-1 text-sm">Download or copy runtime/SBOM evidence only when preparing an audit bundle.</p>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline" id="status-export-actions-toggle" aria-expanded="${statusExportActionsExpanded ? "true" : "false"}">
+                    ${statusExportActionsExpanded ? "Hide export actions" : "Show export actions"}
+                </button>
+            </div>
+            ${statusExportActionsExpanded ? `<div class="mt-3">${actions}</div>` : ""}
+        </section>`;
 }
 
 function statusQuickNavHtml(): string {
@@ -709,6 +734,13 @@ function bindActions(status: StatusData, sbomEndpoint: string): void {
     renderStatusSnapshot();
   });
   document
+    .getElementById("status-export-actions-toggle")
+    ?.addEventListener("click", () => {
+      statusExportActionsExpanded = !statusExportActionsExpanded;
+      renderStatusSnapshot();
+      document.getElementById("status-export-actions-toggle")?.focus();
+    });
+  document
     .querySelectorAll<HTMLButtonElement>("[data-status-advanced-section]")
     .forEach((button) => {
       button.addEventListener("click", () => {
@@ -875,12 +907,7 @@ function renderStatusSnapshot(): void {
     ),
     renderRestreamActivity(processLogs, search),
     renderProcessLog(processLogs, search),
-    `<div class="flex flex-wrap gap-2">
-            <button type="button" class="btn btn-sm btn-outline" id="download-status-btn">Download Status</button>
-            <button type="button" class="btn btn-sm btn-outline" id="copy-status-btn">Copy Status</button>
-            <button type="button" class="btn btn-sm btn-outline" id="download-sbom-btn">Download SBOM</button>
-            <button type="button" class="btn btn-sm btn-outline" id="copy-sbom-btn">Copy SBOM</button>
-        </div>`,
+    statusExportActionsHtml(),
   ].join("");
   bindActions(data, sbomEndpoint);
 }

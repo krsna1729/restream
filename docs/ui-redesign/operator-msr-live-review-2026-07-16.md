@@ -289,6 +289,11 @@ Toolchain, Native Libraries, and SBOM render compact summaries first and mount
 their row tables only when the operator asks for details. Build, System,
 Activity, and Logs remain immediate because they answer the common "is the
 service healthy right now?" question.
+Status export/SBOM actions now also follow that audit-only pattern under
+`ui=v2`: the route shows a compact Export actions row first, then mounts
+Download/Copy Status and SBOM actions only after `Show export actions`. That
+keeps the default Status readout focused on build, system, activity, and log
+state while preserving the release/audit evidence workflow.
 
 The seeded browser proof also includes a route-checkpoint matrix across the
 checkpoint screens: Inspect, Monitor, Media, Settings, Status, Incidents, and

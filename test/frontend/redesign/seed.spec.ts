@@ -1700,6 +1700,27 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   );
   await status.getByRole("button", { name: "Hide Toolchain details" }).click();
   await expect(status.locator("#status-toolchain-section table")).toHaveCount(0);
+  await expect(
+    status.getByRole("button", { name: "Download Status" }),
+  ).toBeHidden();
+  const exportActions = status.getByRole("button", {
+    name: "Show export actions",
+  });
+  await expect(exportActions).toBeVisible();
+  await expect(exportActions).toHaveAttribute("aria-expanded", "false");
+  await exportActions.click();
+  await expect(
+    status.getByRole("button", { name: "Download Status" }),
+  ).toBeVisible();
+  await expect(status.getByRole("button", { name: "Copy SBOM" })).toBeVisible();
+  const hideExportActions = status.getByRole("button", {
+    name: "Hide export actions",
+  });
+  await expect(hideExportActions).toHaveAttribute("aria-expanded", "true");
+  await hideExportActions.click();
+  await expect(
+    status.getByRole("button", { name: "Download Status" }),
+  ).toBeHidden();
   expect(await getCdpStatusTexts(page)).toContain(
     "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
   );
