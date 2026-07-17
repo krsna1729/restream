@@ -335,9 +335,9 @@ function mountMediaShell(container: HTMLElement): void {
                         <span class="text-base-content/50 text-xs font-semibold uppercase">Search</span>
                         <input id="media-library-search" class="grow" type="search" autocomplete="off" placeholder="filename, kind, status" aria-label="Search media library" value="${escapeHtml(mediaSearchQuery)}">
                     </label>
-                    <button id="media-library-clear-search-btn" type="button" class="btn btn-sm btn-outline hidden">Clear search</button>
+                    <button id="media-library-clear-search-btn" type="button" class="btn btn-sm btn-outline hidden" aria-label="Clear media library search">Clear search</button>
                     <input class="hidden js-upload-media-input" type="file" accept=".ts,.mkv,.mp4,.mov">
-                    <button type="button" class="btn btn-sm btn-primary js-upload-media">Upload media</button>
+                    <button type="button" class="btn btn-sm btn-primary js-upload-media" aria-label="Upload media file">Upload media</button>
                 </div>
             </div>
             <p id="media-library-results-summary" class="dashboard-muted px-4 pt-3 text-xs" role="status" aria-live="polite">--</p>
@@ -535,6 +535,7 @@ function updateSection(
   emptyLabel: string,
   previousSignature: string,
   expanded: boolean,
+  sectionLabel: string,
 ): string {
   const isFiltered = normalizeSearchText(mediaSearchQuery) !== "";
   const showToggle = !isFiltered && files.length > MEDIA_SECTION_VISIBLE_LIMIT;
@@ -564,6 +565,12 @@ function updateSection(
     toggle.classList.toggle("hidden", !showToggle);
     toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
     toggle.textContent = expanded ? "Show fewer" : `Show all ${files.length}`;
+    toggle.setAttribute(
+      "aria-label",
+      expanded
+        ? `Show fewer ${sectionLabel}`
+        : `Show all ${files.length} ${sectionLabel}`,
+    );
   }
   if (signature !== previousSignature) {
     setHtmlIfChanged(
@@ -617,6 +624,7 @@ function renderMediaLibraryLists(files: MediaFile[], force: boolean): void {
     isFiltered ? filteredSectionEmptyLabel("recordings") : "recordings yet",
     force ? "" : lastRecordingsSignature,
     mediaRecordingsExpanded,
+    "recordings",
   );
   lastSourcesSignature = updateSection(
     "media-sources-list",
@@ -627,6 +635,7 @@ function renderMediaLibraryLists(files: MediaFile[], force: boolean): void {
     isFiltered ? filteredSectionEmptyLabel("source files") : "source files",
     force ? "" : lastSourcesSignature,
     mediaSourcesExpanded,
+    "source files",
   );
   const root = document.getElementById("media-library-root");
   if (root) attachMediaActions(root);

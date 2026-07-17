@@ -1878,6 +1878,9 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
       name: "Show actions for synthetic-source.mp4",
     }),
   ).toHaveAttribute("aria-expanded", "false");
+  const initialMediaButtonNames = await getCdpNamesByRole(page, "button");
+  expect(initialMediaButtonNames).toContain("Upload media file");
+  expect(initialMediaButtonNames).not.toContain("Upload media");
   await expect(sourceRow.getByRole("button", { name: "Rename" })).toHaveCount(0);
   await expect(sourceRow.getByRole("button", { name: "Delete" })).toHaveCount(0);
   await sourceRow
@@ -1952,8 +1955,13 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
       'No source files match "missing". Clear search to return to the full recording/source split.',
     ),
   ).toBeVisible();
-  const clearSearch = media.getByRole("button", { name: "Clear search" });
+  const clearSearch = media.getByRole("button", {
+    name: "Clear media library search",
+  });
   await expect(clearSearch).toBeVisible();
+  const filteredMediaButtonNames = await getCdpNamesByRole(page, "button");
+  expect(filteredMediaButtonNames).toContain("Clear media library search");
+  expect(filteredMediaButtonNames).not.toContain("Clear search");
   expect(await getCdpStatusTexts(page)).toContain(
     '0/1 media files shown · 0 recordings · 0 source files matched · "missing"',
   );
@@ -2024,11 +2032,24 @@ test("seed: ui=v2 Media bounds dense libraries until requested @desktop", async 
   await expect(media.getByText("dense-source-01.mp4")).toBeVisible();
   await expect(media.getByText("dense-source-09.mp4")).toHaveCount(0);
   const showAllRecordings = media.getByRole("button", {
-    name: "Show all 12",
+    name: "Show all 12 recordings",
   });
-  const showAllSources = media.getByRole("button", { name: "Show all 14" });
+  const showAllSources = media.getByRole("button", {
+    name: "Show all 14 source files",
+  });
   await expect(showAllRecordings).toHaveAttribute("aria-expanded", "false");
   await expect(showAllSources).toHaveAttribute("aria-expanded", "false");
+  const denseMediaButtonNames = await getCdpNamesByRole(page, "button");
+  expect(denseMediaButtonNames).toEqual(
+    expect.arrayContaining([
+      "Upload media file",
+      "Show all 12 recordings",
+      "Show all 14 source files",
+    ]),
+  );
+  expect(denseMediaButtonNames).not.toContain("Upload media");
+  expect(denseMediaButtonNames).not.toContain("Show all 12");
+  expect(denseMediaButtonNames).not.toContain("Show all 14");
   expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
 
   await showAllRecordings.click();
@@ -2183,8 +2204,13 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
       'No process log entries match "missing". Clear search to return to the full status view.',
     ),
   ).toBeVisible();
-  const clearSearch = status.getByRole("button", { name: "Clear search" });
+  const clearSearch = status.getByRole("button", {
+    name: "Clear status search",
+  });
   await expect(clearSearch).toBeVisible();
+  const filteredStatusButtonNames = await getCdpNamesByRole(page, "button");
+  expect(filteredStatusButtonNames).toContain("Clear status search");
+  expect(filteredStatusButtonNames).not.toContain("Clear search");
   expect(await getCdpStatusTexts(page)).toContain(
     '0 activities · 0 process logs match "missing"',
   );
