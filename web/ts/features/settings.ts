@@ -422,7 +422,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         <label for="settings-server-name" class="text-sm font-medium">Server Name</label>
                         <div class="flex flex-wrap items-center gap-2">
                             <input type="text" id="settings-server-name" class="input input-sm min-w-0 flex-1" placeholder="Name" />
-                            <button class="btn btn-accent btn-sm" data-settings-action="save-server-name">Save</button>
+                            <button class="btn btn-accent btn-sm" data-settings-action="save-server-name" aria-label="Save server name">Save</button>
                             <span id="server-name-saved" class="text-success hidden text-sm">Saved</span>
                         </div>
                     </div>
@@ -435,7 +435,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                                 id="settings-ingest-host"
                                 class="input input-sm min-w-0 flex-1"
                                 placeholder="e.g. 192.168.1.10 (blank = localhost)" />
-                            <button class="btn btn-accent btn-sm" data-settings-action="save-ingest-host">Save</button>
+                            <button class="btn btn-accent btn-sm" data-settings-action="save-ingest-host" aria-label="Save ingest host">Save</button>
                             <span id="ingest-host-saved" class="text-success hidden text-sm">Saved</span>
                         </div>
                     </div>
@@ -469,7 +469,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend invisible">_</legend>
                             <div class="flex items-center gap-3">
-                                <button class="btn btn-accent btn-sm" data-settings-action="save-dashboard-password">Save</button>
+                                <button class="btn btn-accent btn-sm" data-settings-action="save-dashboard-password" aria-label="Save dashboard password">Save</button>
                                 <span id="dashboard-password-saved" class="text-success hidden text-sm">Saved</span>
                             </div>
                         </fieldset>
@@ -500,7 +500,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend invisible">_</legend>
                             <div class="flex items-center gap-3">
-                                <button class="btn btn-accent btn-sm" data-settings-action="save-ingest-security">Save</button>
+                                <button class="btn btn-accent btn-sm" data-settings-action="save-ingest-security" aria-label="Save ingest security settings">Save</button>
                                 <span id="ingest-security-saved" class="text-success hidden text-sm">Saved</span>
                             </div>
                         </fieldset>
@@ -513,7 +513,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         <div class="flex items-center gap-2">
                             <button class="btn btn-ghost btn-sm" data-settings-action="refresh-rate-limits">Refresh</button>
                             <button id="auth-reset-actions-toggle" type="button" class="btn btn-outline btn-sm hidden" aria-expanded="false">Show reset actions</button>
-                            <button id="auth-reset-all-btn" class="btn btn-outline btn-sm" data-settings-action="reset-rate-limits">Reset All</button>
+                            <button id="auth-reset-all-btn" class="btn btn-outline btn-sm" data-settings-action="reset-rate-limits" aria-label="Reset all authentication attempts">Reset All</button>
                         </div>
                     </div>
                     <div class="flex flex-wrap items-end gap-3">
@@ -560,7 +560,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend invisible">_</legend>
                             <div class="flex items-center gap-3">
-                                <button class="btn btn-accent btn-sm" data-settings-action="save-recording-settings">Save</button>
+                                <button class="btn btn-accent btn-sm" data-settings-action="save-recording-settings" aria-label="Save recording settings">Save</button>
                                 <span id="recording-settings-saved" class="text-success hidden text-sm">Saved</span>
                             </div>
                         </fieldset>
@@ -595,7 +595,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         <fieldset class="fieldset">
                             <legend class="fieldset-legend invisible">_</legend>
                             <div class="flex items-center gap-3">
-                                <button class="btn btn-accent btn-sm" data-settings-action="save-srt-ingest">Save</button>
+                                <button class="btn btn-accent btn-sm" data-settings-action="save-srt-ingest" aria-label="Save global SRT ingest settings">Save</button>
                                 <span id="srt-ingest-saved" class="text-success hidden text-sm">Saved</span>
                             </div>
                         </fieldset>
@@ -626,7 +626,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         </label>
                     </div>
                     <div class="flex items-center gap-3">
-                        <button class="btn btn-accent btn-sm" data-settings-action="save-backend-policy">Save</button>
+                        <button class="btn btn-accent btn-sm" data-settings-action="save-backend-policy" aria-label="Save transcoding backend policy">Save</button>
                         <span id="backend-policy-saved" class="text-success hidden text-sm">Saved</span>
                     </div>
                 </div>
@@ -996,7 +996,8 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
                     class="btn btn-ghost btn-xs"
                     data-settings-action="reset-rate-limits"
                     data-scope="${escapeHtml(attempt.scope)}"
-                    data-ip="${escapeHtml(attempt.ip)}">Reset</button>
+                    data-ip="${escapeHtml(attempt.ip)}"
+                    aria-label="Reset authentication attempt for ${escapeHtml(formatRateLimitScope(attempt.scope))} ${escapeHtml(attempt.ip)}">Reset</button>
                 </td>`
               : ""
           }
@@ -1308,11 +1309,11 @@ function renderProfileRow(name: string, profile: TranscodeProfile): string {
   const v2 = settingsV2Active();
   const tuningExpanded = !v2 || profileTuningRowsExpanded.has(name);
   const tuningToggle = v2
-    ? `<button type="button" class="btn btn-sm btn-outline js-profile-tuning-toggle" data-name="${safeName}" aria-expanded="${tuningExpanded ? "true" : "false"}">${tuningExpanded ? "Hide tuning" : "Show tuning"}</button>`
+    ? `<button type="button" class="btn btn-sm btn-outline js-profile-tuning-toggle" data-name="${safeName}" aria-label="${tuningExpanded ? "Hide" : "Show"} tuning for ${safeName}" aria-expanded="${tuningExpanded ? "true" : "false"}">${tuningExpanded ? "Hide tuning" : "Show tuning"}</button>`
     : "";
   const deleteButton = isBuiltIn
     ? '<button class="btn btn-sm btn-ghost" disabled>Built-in</button>'
-    : `<button class="btn btn-sm btn-error btn-outline js-profile-delete" data-name="${safeName}">Delete</button>`;
+    : `<button class="btn btn-sm btn-error btn-outline js-profile-delete" data-name="${safeName}" aria-label="Delete transcode profile ${safeName}">Delete</button>`;
   return `
         <div class="border-base-content/10 bg-base-100 space-y-3 rounded-lg border px-3 py-3" data-profile-name="${safeName}" data-profile-crf="${profile.crf}" data-profile-gop="${profile.gop}" data-profile-bframes="${profile.bframes}" data-profile-bitrate="${profile.bitrate}" data-profile-max-bitrate="${profile.maxBitrate}" data-profile-width="${profile.width}" data-profile-height="${profile.height}">
             <div class="flex flex-wrap items-end gap-2">
@@ -1402,6 +1403,10 @@ function bindProfileTuningToggles(root: ParentNode): void {
           tuning.innerHTML = "";
         }
         btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+        btn.setAttribute(
+          "aria-label",
+          `${expanded ? "Hide" : "Show"} tuning for ${name}`,
+        );
         btn.textContent = expanded ? "Hide tuning" : "Show tuning";
       });
     });

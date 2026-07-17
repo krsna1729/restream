@@ -255,6 +255,16 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   await expect(
     settings.getByText("Default encryption policy for SRT publishers."),
   ).toBeVisible();
+  const initialButtonNames = await getCdpNamesByRole(page, "button");
+  expect(initialButtonNames).toEqual(
+    expect.arrayContaining([
+      "Save server name",
+      "Save ingest host",
+      "Save dashboard password",
+      "Save ingest security settings",
+    ]),
+  );
+  expect(initialButtonNames).not.toContain("Save");
   await expect(settings.getByLabel("Global SRT ingest mode")).toBeHidden();
   await settings.locator("#srt-settings-section summary").click();
   await expect(settings.locator("#srt-settings-section")).toHaveAttribute(
@@ -271,12 +281,16 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   await expect(h264Profile.getByLabel("h264 preset")).toBeVisible();
   await expect(h264Profile.locator(".js-profile-crf")).toHaveCount(0);
   const collapsedProfileNodes = await getCdpNodeCount(page);
-  const showTuning = h264Profile.getByRole("button", { name: "Show tuning" });
+  const showTuning = h264Profile.getByRole("button", {
+    name: "Show tuning for h264",
+  });
   await expect(showTuning).toHaveAttribute("aria-expanded", "false");
   await showTuning.click();
   await expect(h264Profile.locator(".js-profile-crf")).toBeVisible();
   expect(await getCdpNodeCount(page)).toBeGreaterThan(collapsedProfileNodes);
-  const hideTuning = h264Profile.getByRole("button", { name: "Hide tuning" });
+  const hideTuning = h264Profile.getByRole("button", {
+    name: "Hide tuning for h264",
+  });
   await expect(hideTuning).toHaveAttribute("aria-expanded", "true");
   await hideTuning.click();
   await expect(h264Profile.locator(".js-profile-crf")).toHaveCount(0);
@@ -522,6 +536,17 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   ).toBeVisible();
   await expect(checkpoint.getByText("Security: 3 banned attempts")).toBeVisible();
   await expect(authSearchSummary).toHaveText("8 auth attempts shown of 12");
+  const buttonNames = await getCdpNamesByRole(page, "button");
+  expect(buttonNames).toEqual(
+    expect.arrayContaining([
+      "Save server name",
+      "Save ingest host",
+      "Save dashboard password",
+      "Save ingest security settings",
+    ]),
+  );
+  expect(buttonNames).not.toContain("Save");
+  expect(buttonNames).not.toContain("Reset");
   await expect(
     settings.getByRole("cell", { name: "203.0.113.10" }),
   ).toBeVisible();
@@ -529,7 +554,7 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
     settings.getByRole("cell", { name: "203.0.113.18" }),
   ).toHaveCount(0);
   await expect(
-    settings.getByRole("button", { name: "Reset All" }),
+    settings.getByRole("button", { name: "Reset all authentication attempts" }),
   ).toBeHidden();
   await expect(
     settings.getByRole("button", { name: "Reset", exact: true }),
@@ -540,10 +565,17 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   await expect(showResetActions).toHaveAttribute("aria-expanded", "false");
   await showResetActions.click();
   await expect(
-    settings.getByRole("button", { name: "Reset All" }),
+    settings.getByRole("button", { name: "Reset all authentication attempts" }),
   ).toBeVisible();
+  const resetButtonNames = await getCdpNamesByRole(page, "button");
+  expect(resetButtonNames).toContain("Reset all authentication attempts");
+  expect(resetButtonNames).not.toContain("Reset");
   await expect(
-    settings.getByRole("button", { name: "Reset", exact: true }).first(),
+    settings
+      .getByRole("button", {
+        name: "Reset authentication attempt for Dashboard 203.0.113.10",
+      })
+      .first(),
   ).toBeVisible();
   const hideResetActions = settings.getByRole("button", {
     name: "Hide reset actions",
@@ -551,7 +583,7 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   await expect(hideResetActions).toHaveAttribute("aria-expanded", "true");
   await hideResetActions.click();
   await expect(
-    settings.getByRole("button", { name: "Reset All" }),
+    settings.getByRole("button", { name: "Reset all authentication attempts" }),
   ).toBeHidden();
   await expect(settings.getByRole("button", { name: "Logout" })).toBeHidden();
   const showAccountActions = settings.getByRole("button", {
