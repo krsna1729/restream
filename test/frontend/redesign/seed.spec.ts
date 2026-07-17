@@ -1238,19 +1238,36 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   await expect(resourceDetails.getByText("Process Metrics")).toBeVisible();
   await expect(resourceDetails.getByText("Pipeline Attribution")).toBeVisible();
   await expect(
-    resourceDetails.getByRole("button", { name: "Show resource details" }),
+    resourceDetails.getByRole("button", {
+      name: "Show resource details for Retrying Destination",
+    }),
   ).toHaveAttribute("aria-expanded", "false");
   await expect(resourceDetails.getByText("FFmpeg workers")).toHaveCount(0);
+  const collapsedInspectButtonNames = await getCdpNamesByRole(page, "button");
+  expect(collapsedInspectButtonNames).toEqual(
+    expect.arrayContaining([
+      "Stop graph auto refresh",
+      "Show resource details for Retrying Destination",
+    ]),
+  );
+  expect(collapsedInspectButtonNames).not.toContain("Stop Refresh");
+  expect(collapsedInspectButtonNames).not.toContain("Show resource details");
   await resourceDetails
-    .getByRole("button", { name: "Show resource details" })
+    .getByRole("button", {
+      name: "Show resource details for Retrying Destination",
+    })
     .click();
   await expect(
-    resourceDetails.getByRole("button", { name: "Hide resource details" }),
+    resourceDetails.getByRole("button", {
+      name: "Hide resource details for Retrying Destination",
+    }),
   ).toHaveAttribute("aria-expanded", "true");
   await expect(resourceDetails.getByText("FFmpeg workers")).toBeVisible();
   await expect(resourceDetails.getByText("video:720p")).toBeVisible();
   await resourceDetails
-    .getByRole("button", { name: "Hide resource details" })
+    .getByRole("button", {
+      name: "Hide resource details for Retrying Destination",
+    })
     .click();
   await expect(resourceDetails.getByText("FFmpeg workers")).toHaveCount(0);
   await expectPushStateCount(page, 1);

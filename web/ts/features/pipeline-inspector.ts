@@ -565,6 +565,10 @@ export function renderPipelineInspector(): void {
   ) as HTMLButtonElement | null;
   if (refreshBtn) {
     refreshBtn.textContent = graphAutoRefresh ? "Stop Refresh" : "Auto Refresh";
+    refreshBtn.setAttribute(
+      "aria-label",
+      graphAutoRefresh ? "Stop graph auto refresh" : "Start graph auto refresh",
+    );
     refreshBtn.classList.toggle("btn-accent", graphAutoRefresh);
     refreshBtn.classList.toggle("btn-outline", !graphAutoRefresh);
     refreshBtn.setAttribute(
@@ -927,6 +931,7 @@ function renderInspectorResourceDetails(
     return;
   }
   const detailHtml = resourceDetailPanelHtml(resourceMap, pipe);
+  const resourceDetailsLabel = `${inspectResourceDetailsExpanded ? "Hide" : "Show"} resource details for ${pipe.name}`;
   const resourceDetailPanel = !pipelineInspectV2Active()
     ? detailHtml
     : `<section class="border-base-content/10 bg-base-100/35 rounded-lg border p-3">
@@ -935,7 +940,7 @@ function renderInspectorResourceDetails(
             <div class="text-sm font-semibold">Resource detail tables</div>
             <div class="text-base-content/55 text-xs">Worker tables, truncation limits, and attribution accuracy.</div>
           </div>
-          <button id="inspect-resource-details-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="${inspectResourceDetailsExpanded ? "true" : "false"}">${inspectResourceDetailsExpanded ? "Hide resource details" : "Show resource details"}</button>
+          <button id="inspect-resource-details-toggle" type="button" class="btn btn-xs btn-outline" aria-label="${escapeHtml(resourceDetailsLabel)}" aria-expanded="${inspectResourceDetailsExpanded ? "true" : "false"}">${inspectResourceDetailsExpanded ? "Hide resource details" : "Show resource details"}</button>
         </div>
         ${inspectResourceDetailsExpanded ? `<div class="mt-3">${detailHtml}</div>` : ""}
       </section>`;
