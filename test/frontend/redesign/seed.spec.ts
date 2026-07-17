@@ -2068,7 +2068,7 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
     status.getByRole("button", { name: "Download Status" }),
   ).toBeHidden();
   const exportActions = status.getByRole("button", {
-    name: "Show export actions",
+    name: "Show status export actions",
   });
   await expect(exportActions).toBeVisible();
   await expect(exportActions).toHaveAttribute("aria-expanded", "false");
@@ -2092,9 +2092,18 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
     ]),
   );
   const hideExportActions = status.getByRole("button", {
-    name: "Hide export actions",
+    name: "Hide status export actions",
   });
   await expect(hideExportActions).toHaveAttribute("aria-expanded", "true");
+  const statusButtonNames = await getCdpNamesByRole(page, "button");
+  expect(statusButtonNames).toEqual(
+    expect.arrayContaining([
+      "Hide status export actions",
+      "Download Status",
+      "Copy SBOM",
+    ]),
+  );
+  expect(statusButtonNames).not.toContain("Hide export actions");
   await hideExportActions.click();
   await expect(
     status.getByRole("button", { name: "Download Status" }),
@@ -2204,8 +2213,13 @@ test("seed: ui=v2 Status bounds dense process logs until requested @desktop", as
   await expect(status.getByText("20 process logs shown of 35")).toBeVisible();
   await expect(logs.getByText("routine status log 20")).toBeVisible();
   await expect(logs.getByText("routine status log 21")).toHaveCount(0);
-  const showAll = status.getByRole("button", { name: "Show all 35" });
+  const showAll = status.getByRole("button", {
+    name: "Show all 35 process logs",
+  });
   await expect(showAll).toHaveAttribute("aria-expanded", "false");
+  const denseStatusButtonNames = await getCdpNamesByRole(page, "button");
+  expect(denseStatusButtonNames).toContain("Show all 35 process logs");
+  expect(denseStatusButtonNames).not.toContain("Show all 35");
   expect(await getCdpNodeCount(page)).toBeLessThan(10_000);
 
   await showAll.click();

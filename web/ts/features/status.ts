@@ -310,7 +310,7 @@ function statusExportActionsHtml(): string {
                     <div class="text-sm font-semibold">Export actions</div>
                     <p class="dashboard-muted mt-1 text-sm">Download or copy runtime/SBOM evidence only when preparing an audit bundle.</p>
                 </div>
-                <button type="button" class="btn btn-sm btn-outline" id="status-export-actions-toggle" aria-expanded="${statusExportActionsExpanded ? "true" : "false"}">
+                <button type="button" class="btn btn-sm btn-outline" id="status-export-actions-toggle" aria-label="${statusExportActionsExpanded ? "Hide status export actions" : "Show status export actions"}" aria-expanded="${statusExportActionsExpanded ? "true" : "false"}">
                     ${statusExportActionsExpanded ? "Hide export actions" : "Show export actions"}
                 </button>
             </div>
@@ -533,7 +533,7 @@ function renderProcessLog(
             </div>
             ${
               showToggle
-                ? `<button id="status-log-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="${statusProcessLogExpanded ? "true" : "false"}">${statusProcessLogExpanded ? "Show fewer" : `Show all ${items.length}`}</button>`
+                ? `<button id="status-log-toggle" type="button" class="btn btn-xs btn-outline" aria-label="${statusProcessLogExpanded ? "Show fewer process logs" : `Show all ${items.length} process logs`}" aria-expanded="${statusProcessLogExpanded ? "true" : "false"}">${statusProcessLogExpanded ? "Show fewer" : `Show all ${items.length}`}</button>`
                 : ""
             }
         </div>
