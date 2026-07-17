@@ -213,7 +213,7 @@ test("seed: mixed-health Overview exposes upstream and output state @desktop", a
   );
 });
 
-test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async ({
+test("seed: ui=v2 keeps legacy routes scoped while Inspect owns a checkpoint @desktop", async ({
   page,
 }) => {
   const v2Requests: string[] = [];
@@ -300,14 +300,24 @@ test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async 
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
-  expect(v2Requests).toEqual([]);
+  await expect(
+    page
+      .locator("#dashboard-v2-pipeline-inspect-root")
+      .getByRole("heading", { name: "Healthy Program" }),
+  ).toBeVisible();
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Pipeline graph and diagnostics",
+  );
+  expect(v2Requests.length).toBeGreaterThanOrEqual(1);
+  const requestsAfterInspect = v2Requests.length;
 
   await page.goto("/?mode=pipeline&view=monitor&p=pipe-healthy&ui=v2");
   await expect(page.locator("#control-mode-panel")).toBeVisible();
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
-  expect(v2Requests).toEqual([]);
+  await expect(page.locator("#dashboard-v2-pipeline-inspect-root")).toBeHidden();
+  expect(v2Requests.length).toBe(requestsAfterInspect);
 
   await page.goto("/?mode=pipeline&view=operate&ui=v2");
   await expect(
@@ -315,7 +325,7 @@ test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async 
       .locator("#dashboard-v2-pipeline-selector-root")
       .getByRole("heading", { name: "Pipelines" }),
   ).toBeVisible();
-  expect(v2Requests.length).toBe(1);
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterInspect);
 });
 
 test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop", async ({
@@ -456,7 +466,7 @@ test("seed: ui=v2 shell announces ownership while moving across routes @desktop"
     },
     {
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
-      text: "Legacy checkpoint · Pipeline graph and diagnostics",
+      text: "UI v2 checkpoint · Pipeline graph and diagnostics",
     },
     {
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
@@ -581,7 +591,7 @@ test("seed: ui=v2 shell tablists support arrow key navigation @desktop", async (
   await expect(inspectTab).toHaveAttribute("aria-selected", "true");
   expect(await getCdpStatusTexts(page)).toEqual(
     expect.arrayContaining([
-      "Legacy checkpoint · Pipeline graph and diagnostics",
+      "UI v2 checkpoint · Pipeline graph and diagnostics",
       "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
     ]),
   );
@@ -894,6 +904,20 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   await expect(page.locator("#inspect-route-summary")).toHaveText(
     "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
   );
+  const inspectCheckpoint = page.locator("#dashboard-v2-pipeline-inspect-root");
+  await expect(
+    inspectCheckpoint.getByRole("heading", { name: "Retrying Destination" }),
+  ).toBeVisible();
+  await expect(inspectCheckpoint.getByText("Output retrying")).toBeVisible();
+  await expect(
+    inspectCheckpoint.getByText("1 fault candidate", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    inspectCheckpoint.getByRole("button", { name: "Operate" }),
+  ).toBeEnabled();
+  await expect(
+    inspectCheckpoint.getByRole("button", { name: "Diagnostics" }),
+  ).toBeEnabled();
   await expect(page.locator("#inspect-focus-summary")).toHaveText(
     "Inspection focus · 1 blocker before active probes · 1 fault candidate · Inspect recent errors and retry backoff before forcing a restart.",
   );

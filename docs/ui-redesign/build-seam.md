@@ -23,6 +23,7 @@
 - [Audio track editor](#audio-track-editor)
 - [HLS preview host](#hls-preview-host)
 - [Overview large-fleet search](#overview-large-fleet-search)
+- [Pipeline Inspect checkpoint](#pipeline-inspect-checkpoint)
 
 ## Objective
 
@@ -671,3 +672,24 @@ copy measures 309,349 raw bytes and 75,237 bytes with deterministic gzip, so the
 explicit smoke guard is now 76,000 bytes. The guard remains narrow and should
 force the next material UI slice either to pay down bundle weight or to make a
 deliberate code-splitting decision.
+
+## Pipeline Inspect checkpoint
+
+Pipeline Inspect now has a first v2-owned checkpoint strip above the legacy
+graph/resource panels. The checkpoint summarizes pipeline health, input/output
+scope, graph readiness, attention count, and the suggested diagnostic next step,
+while the existing graph explorer, resource attribution, diagnostics modal, and
+output-preview search remain legacy-owned underneath it.
+
+This is intentionally a partial ownership step rather than a full Inspect
+rewrite. It moves the operator's first decision point into the React seam
+without duplicating graph rendering or resource-map logic. The seeded
+Playwright/CDP proof covers Overview → Inspect navigation, visible checkpoint
+content, Operate/Diagnostics actions, route ownership text, and the existing
+Inspect output-search path.
+
+The opt-in bundle moved from the 76,000-byte smoke guard to 318,120 raw bytes
+and 76,405 bytes with deterministic gzip after this checkpoint. The explicit
+smoke guard is now 77,000 bytes. Further Inspect/Monitor ownership should either
+pay down repeated checkpoint markup or introduce a deliberate split for
+non-Operate v2 surfaces.

@@ -49,7 +49,10 @@ import {
   setDashboardMode,
   setPipelineWorkspaceView,
 } from "../features/modes.js";
-import { setPipelineInspectorDependencies } from "../features/pipeline-inspector.js";
+import {
+  configurePipelineInspectCheckpointPresentation,
+  setPipelineInspectorDependencies,
+} from "../features/pipeline-inspector.js";
 import {
   configurePipelineSelectorPresentation,
   renderPipelines,
@@ -73,11 +76,13 @@ import {
   setDashboardV2PresentationScope,
   setDashboardV2OverviewActions,
   setDashboardV2PipelineHeaderActions,
+  setDashboardV2PipelineInspectActions,
   setDashboardV2PipelineInputStatusActions,
   setDashboardV2PipelineOutputOverviewActions,
   setDashboardV2PipelineSelectorActions,
   updateDashboardV2Overview,
   updateDashboardV2PipelineHeader,
+  updateDashboardV2PipelineInspectCheckpoint,
   updateDashboardV2PipelineInputStatus,
   updateDashboardV2PipelineOutputOverview,
   updateDashboardV2PipelineSelector,
@@ -92,10 +97,15 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
     dashboardV2Enabled &&
     location.mode === "pipeline" &&
     location.pipelineView === "operate";
+  const pipelineInspectV2Active =
+    dashboardV2Enabled &&
+    location.mode === "pipeline" &&
+    location.pipelineView === "inspect";
 
   setDashboardV2PresentationScope({
     overviewActive: overviewV2Active,
     pipelineActive: pipelineV2Active,
+    pipelineInspectActive: pipelineInspectV2Active,
   });
 
   configureOverviewPresentation({
@@ -139,6 +149,11 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
       ? updateDashboardV2PipelineOutputOverview
       : undefined,
   });
+  configurePipelineInspectCheckpointPresentation({
+    onPresentation: pipelineInspectV2Active
+      ? updateDashboardV2PipelineInspectCheckpoint
+      : undefined,
+  });
 }
 
 export function initDashboardApp(): void {
@@ -171,6 +186,13 @@ export function initDashboardApp(): void {
         openInspectGraph(pipelineId, { focus: "panel" }),
       toggleFileIngest: togglePipelineFileIngest,
       toggleRecording: togglePipelineRecording,
+    });
+    setDashboardV2PipelineInspectActions({
+      openPipeline: (pipelineId) => {
+        selectPipeline(pipelineId);
+        setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
+      },
+      runDiagnostics: openDiagnosticsModal,
     });
     setDashboardV2PipelineInputStatusActions({
       cancelAudioTrackEdit: cancelPipelineAudioTrackEdit,

@@ -1,4 +1,5 @@
 import type { OverviewViewModel } from "../features/overview-view-model.js";
+import type { PipelineInspectCheckpointModel } from "../features/pipeline-inspect-view-model.js";
 import type {
   PipelineOperateHeaderModel,
   PipelineOperateInputStatusModel,
@@ -90,6 +91,11 @@ export interface DashboardV2PipelineOutputOverviewActions {
   readonly toggleOutputList: (pipelineId: string) => void;
 }
 
+export interface DashboardV2PipelineInspectActions {
+  readonly openPipeline: (pipelineId: string) => void;
+  readonly runDiagnostics: (pipelineId: string) => void;
+}
+
 interface DashboardV2Module {
   renderDashboardV2Overview(
     model: OverviewViewModel,
@@ -112,12 +118,17 @@ interface DashboardV2Module {
     model: PipelineOutputOverviewModel | null,
     actions: DashboardV2PipelineOutputOverviewActions,
   ): void;
+  renderDashboardV2PipelineInspectCheckpoint(
+    model: PipelineInspectCheckpointModel | null,
+    actions: DashboardV2PipelineInspectActions,
+  ): void;
 }
 
 let dashboardV2Module: DashboardV2Module | null = null;
 let dashboardV2ModulePromise: Promise<void> | null = null;
 let dashboardV2OverviewActive = false;
 let dashboardV2PipelineActive = false;
+let dashboardV2PipelineInspectActive = false;
 let latestOverviewModel: OverviewViewModel | null = null;
 let overviewActions: DashboardV2OverviewActions | null = null;
 let latestPipelineSelectorModel: PipelineOperateSelectorModel | null = null;
@@ -133,6 +144,8 @@ let latestPipelineOutputOverviewModel:
 let pipelineOutputOverviewActions:
   | DashboardV2PipelineOutputOverviewActions
   | null = null;
+let latestPipelineInspectModel: PipelineInspectCheckpointModel | null | undefined;
+let pipelineInspectActions: DashboardV2PipelineInspectActions | null = null;
 
 const DASHBOARD_V2_CONTAINER_IDS = [
   "dashboard-v2-root",
@@ -140,6 +153,7 @@ const DASHBOARD_V2_CONTAINER_IDS = [
   "dashboard-v2-pipeline-header-root",
   "dashboard-v2-pipeline-input-status-root",
   "dashboard-v2-pipeline-output-overview-root",
+  "dashboard-v2-pipeline-inspect-root",
 ] as const;
 
 function setContainerHidden(id: string, hidden: boolean): void {
@@ -152,9 +166,13 @@ function hideDashboardV2Overview(): void {
 }
 
 function hideDashboardV2Pipeline(): void {
-  for (const id of DASHBOARD_V2_CONTAINER_IDS.slice(1)) {
+  for (const id of DASHBOARD_V2_CONTAINER_IDS.slice(1, 5)) {
     setContainerHidden(id, true);
   }
+}
+
+function hideDashboardV2PipelineInspect(): void {
+  setContainerHidden("dashboard-v2-pipeline-inspect-root", true);
 }
 
 function ensureDashboardV2Module(): void {
@@ -173,6 +191,7 @@ function ensureDashboardV2Module(): void {
       renderLatestPipelineHeader();
       renderLatestPipelineInputStatus();
       renderLatestPipelineOutputOverview();
+      renderLatestPipelineInspect();
     })
     .catch((error: unknown) => {
       dashboardV2ModulePromise = null;
@@ -406,6 +425,24 @@ function renderLatestPipelineOutputOverview(): void {
   );
 }
 
+function renderLatestPipelineInspect(): void {
+  if (!dashboardV2PipelineInspectActive) {
+    hideDashboardV2PipelineInspect();
+    return;
+  }
+  ensureDashboardV2Module();
+  if (
+    !dashboardV2Module ||
+    latestPipelineInspectModel === undefined ||
+    !pipelineInspectActions
+  )
+    return;
+  dashboardV2Module.renderDashboardV2PipelineInspectCheckpoint(
+    latestPipelineInspectModel,
+    pipelineInspectActions,
+  );
+}
+
 export function dashboardV2ExperimentEnabled(
   search = dashboardSearch(),
   storage: DashboardUiVersionStorage | null = dashboardStorage(),
@@ -421,23 +458,33 @@ export async function startDashboardV2Experiment(): Promise<boolean> {
 export function setDashboardV2PresentationScope(options: {
   readonly overviewActive: boolean;
   readonly pipelineActive: boolean;
+  readonly pipelineInspectActive?: boolean;
 }): void {
   const nextOverviewActive =
     dashboardV2ExperimentEnabled() && options.overviewActive;
   const nextPipelineActive =
     dashboardV2ExperimentEnabled() && options.pipelineActive;
+  const nextPipelineInspectActive =
+    dashboardV2ExperimentEnabled() && Boolean(options.pipelineInspectActive);
   const overviewChanged = dashboardV2OverviewActive !== nextOverviewActive;
   const pipelineChanged = dashboardV2PipelineActive !== nextPipelineActive;
+  const pipelineInspectChanged =
+    dashboardV2PipelineInspectActive !== nextPipelineInspectActive;
   dashboardV2OverviewActive = nextOverviewActive;
   dashboardV2PipelineActive = nextPipelineActive;
+  dashboardV2PipelineInspectActive = nextPipelineInspectActive;
   if (!dashboardV2OverviewActive) hideDashboardV2Overview();
   if (!dashboardV2PipelineActive) hideDashboardV2Pipeline();
+  if (!dashboardV2PipelineInspectActive) hideDashboardV2PipelineInspect();
   if (overviewChanged && dashboardV2OverviewActive) renderLatestOverview();
   if (pipelineChanged && dashboardV2PipelineActive) {
     renderLatestPipelineSelector();
     renderLatestPipelineHeader();
     renderLatestPipelineInputStatus();
     renderLatestPipelineOutputOverview();
+  }
+  if (pipelineInspectChanged && dashboardV2PipelineInspectActive) {
+    renderLatestPipelineInspect();
   }
 }
 
@@ -507,4 +554,18 @@ export function updateDashboardV2PipelineOutputOverview(
 ): void {
   latestPipelineOutputOverviewModel = model;
   renderLatestPipelineOutputOverview();
+}
+
+export function setDashboardV2PipelineInspectActions(
+  actions: DashboardV2PipelineInspectActions,
+): void {
+  pipelineInspectActions = actions;
+  renderLatestPipelineInspect();
+}
+
+export function updateDashboardV2PipelineInspectCheckpoint(
+  model: PipelineInspectCheckpointModel | null,
+): void {
+  latestPipelineInspectModel = model;
+  renderLatestPipelineInspect();
 }

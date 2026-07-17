@@ -127,7 +127,7 @@ test("compiled dashboard keeps the opt-in React seam in a bounded bundle", async
   assert.equal(defaultEntry.includes("dashboard-v2-overview"), false);
   assert.equal(v2Entry.includes("dashboard-v2-overview"), true);
   assert.ok(
-    gzipSync(v2Entry).byteLength <= 76_000,
+    gzipSync(v2Entry).byteLength <= 77_000,
     "the opt-in component seam must stay within its recorded gzip budget",
   );
 });

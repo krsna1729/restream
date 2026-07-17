@@ -18,6 +18,7 @@ import {
   isOutputRetrying,
   isOutputUnexpectedlyDown,
 } from "../core/output-status.js";
+import type { PipelineInspectCheckpointModel } from "./pipeline-inspect-view-model.js";
 
 interface PipelineInspectorDependencies {
   selectPipeline: (pipelineId: string) => void;
@@ -41,9 +42,20 @@ let summaryInFlight: Promise<void> | null = null;
 const pipelineSummaryCache = new Map<string, PipelineSummarySnapshot>();
 const pipelineResourceMapCache = new Map<string, ResourceMapSnapshot>();
 let inspectOutputSearchQuery = "";
+let inspectPresentationCallback:
+  | ((model: PipelineInspectCheckpointModel | null) => void)
+  | null = null;
 
 const RUNTIME_SCOPE_VALUE = "__runtime";
 const RESOURCE_MAP_TOP_N = 25;
+
+export function configurePipelineInspectCheckpointPresentation(options: {
+  readonly onPresentation?: (
+    model: PipelineInspectCheckpointModel | null,
+  ) => void;
+}): void {
+  inspectPresentationCallback = options.onPresentation ?? null;
+}
 
 type ScrollSnapshot = {
   windowX: number;
@@ -289,6 +301,147 @@ function inspectSummaryText(
   return `Inspecting ${pipe.name} · ${inspectInputLabel(pipe)} · ${pluralize(pipe.outs.length, "output")} · ${pluralize(inspectAttentionCount(pipe), "attention item")}`;
 }
 
+function inspectFaultCandidates(pipe: PipelineView): OutputView[] {
+  return pipe.outs.filter(
+    (output) =>
+      isOutputUnexpectedlyDown(output) ||
+      isOutputRetrying(output) ||
+      isOutputFlapping(output),
+  );
+}
+
+function inspectProbeBlockers(pipe: PipelineView): string[] {
+  const blockers: string[] = [];
+  if (pipe.input.status !== "on")
+    blockers.push("Input must be online for active probes.");
+  if (!pipe.input.publisher?.protocol)
+    blockers.push("Publisher protocol is not known yet.");
+  return blockers;
+}
+
+function inspectSuggestedNextStep(pipe: PipelineView): string {
+  const retryingOutputs = pipe.outs.filter(isOutputRetrying);
+  const flappingOutputs = pipe.outs.filter(isOutputFlapping);
+  return pipe.input.status === "on"
+    ? retryingOutputs.length
+      ? "Inspect recent errors and retry backoff before forcing a restart."
+      : flappingOutputs.length
+        ? "Inspect recent sink failures before forcing a restart."
+        : "Run diagnostics, then inspect graph edges with zero packet output."
+    : "Start or reconnect the publisher before probing.";
+}
+
+function buildInspectCheckpointModel(
+  pipe: PipelineView | null,
+  invalidPipelineSelection = false,
+): PipelineInspectCheckpointModel | null {
+  if (invalidPipelineSelection) {
+    return {
+      pipelineId: null,
+      title: "Missing pipeline",
+      summary: "The selected pipeline is no longer available.",
+      statusLabel: "Missing",
+      statusTone: "error",
+      inputLabel: "No pipeline selected",
+      outputLabel: "0 outputs",
+      attentionLabel: "0 attention items",
+      graphLabel: "No graph",
+      focusLabel: "Select another pipeline to inspect diagnostics.",
+      nextStep: "Choose a valid pipeline from the selector.",
+      canOpenPipeline: false,
+      canRunDiagnostics: false,
+      diagnosticsDisabledReason: "Select a valid pipeline first.",
+      metrics: [],
+    };
+  }
+  if (!pipe) {
+    return {
+      pipelineId: null,
+      title: "Whole runtime",
+      summary: inspectSummaryText(null),
+      statusLabel: "Runtime",
+      statusTone: "neutral",
+      inputLabel: pluralize(state.pipelines.length, "pipeline"),
+      outputLabel: "Runtime resource map",
+      attentionLabel: "Select a pipeline for diagnostics",
+      graphLabel: graphInFlight ? "Loading resources" : "Runtime resources",
+      focusLabel: "Inspection focus · select a pipeline to inspect diagnostics.",
+      nextStep: "Select a pipeline to inspect graph edges and active probes.",
+      canOpenPipeline: false,
+      canRunDiagnostics: false,
+      diagnosticsDisabledReason: "Select a pipeline first.",
+      metrics: [
+        { label: "Pipelines", value: String(state.pipelines.length) },
+        {
+          label: "Graph",
+          value: graphInFlight ? "Loading" : "Runtime",
+        },
+      ],
+    };
+  }
+
+  const apiSummary = pipelineSummaryCache.get(pipe.id) || null;
+  const health = pipelineHealthLabel(pipe);
+  const graph = apiSummary?.graph;
+  const graphLabel = graph?.hasGraph
+    ? `${graph.activeNodes ?? 0}/${graph.nodes ?? 0} active`
+    : apiSummary
+      ? "not active"
+      : "loading";
+  const outputCountLabel =
+    Number.isFinite(apiSummary?.outputs?.running as number) &&
+    Number.isFinite(apiSummary?.outputs?.total as number)
+      ? `${apiSummary?.outputs?.running}/${apiSummary?.outputs?.total}`
+      : `${pipe.outs.filter(isOutputRunning).length}/${pipe.outs.length}`;
+  const blockers = inspectProbeBlockers(pipe);
+  const faultCandidates = inspectFaultCandidates(pipe);
+  const statusTone =
+    pipe.input.status === "error" || faultCandidates.some(isOutputUnexpectedlyDown)
+      ? "error"
+      : blockers.length || faultCandidates.length
+        ? "warning"
+        : health.label === "Healthy"
+          ? "success"
+          : "neutral";
+  const nextStep = inspectSuggestedNextStep(pipe);
+
+  return {
+    pipelineId: pipe.id,
+    title: pipe.name,
+    summary: inspectSummaryText(pipe),
+    statusLabel: health.label,
+    statusTone,
+    inputLabel: inspectInputLabel(pipe),
+    outputLabel: `${outputCountLabel} outputs running`,
+    attentionLabel: pluralize(faultCandidates.length, "fault candidate"),
+    graphLabel,
+    focusLabel: `Inspection focus · ${
+      blockers.length
+        ? `${pluralize(blockers.length, "blocker")} before active probes`
+        : "ready for active probes"
+    } · ${pluralize(faultCandidates.length, "fault candidate")} · ${nextStep}`,
+    nextStep,
+    canOpenPipeline: true,
+    canRunDiagnostics: pipe.input.status === "on",
+    diagnosticsDisabledReason:
+      pipe.input.status === "on" ? "" : "Input must be online for diagnostics.",
+    metrics: [
+      { label: "Input", value: titleCaseValue(pipe.input.status) },
+      {
+        label: "Publisher",
+        value: protocolValue(pipe.input.publisher?.protocol),
+      },
+      { label: "Graph", value: titleCaseValue(graphLabel) },
+      { label: "In", value: formatBitrate(pipe.stats.inputBitrateKbps) },
+      { label: "Out", value: formatBitrate(pipe.stats.outputBitrateKbps) },
+      {
+        label: "Alerts",
+        value: apiSummary ? String(apiSummary.alerts?.length ?? 0) : "Loading",
+      },
+    ],
+  };
+}
+
 function updateInspectRouteSummary(
   pipe: PipelineView | null,
   invalidPipelineSelection = false,
@@ -298,10 +451,20 @@ function updateInspectRouteSummary(
   summary.textContent = inspectSummaryText(pipe, invalidPipelineSelection);
 }
 
+function renderInspectCheckpointPresentation(
+  pipe: PipelineView | null,
+  invalidPipelineSelection = false,
+): void {
+  inspectPresentationCallback?.(
+    buildInspectCheckpointModel(pipe, invalidPipelineSelection),
+  );
+}
+
 export function renderPipelineInspector(): void {
   const pipe = selectedPipeline();
   const invalidPipelineSelection = hasInvalidPipelineSelection();
   updateInspectRouteSummary(pipe, invalidPipelineSelection);
+  renderInspectCheckpointPresentation(pipe, invalidPipelineSelection);
   const stateKey = graphStateKey(pipe);
   const select = document.getElementById(
     "inspect-pipeline-select",
@@ -668,7 +831,10 @@ function refreshPipelineSummary(pipelineId: string): void {
       if (!summary || requestSeq !== summaryRequestSeq) return;
       pipelineSummaryCache.set(pipelineId, summary);
       const pipe = selectedPipeline();
-      if (pipe?.id === pipelineId) renderSummary(pipe);
+      if (pipe?.id === pipelineId) {
+        renderSummary(pipe);
+        renderInspectCheckpointPresentation(pipe);
+      }
     })
     .catch(() => {})
     .finally(() => {
@@ -690,27 +856,9 @@ function renderDiagnostics(pipe: PipelineView | null): void {
     return;
   }
 
-  const blockers: string[] = [];
-  if (pipe.input.status !== "on")
-    blockers.push("Input must be online for active probes.");
-  if (!pipe.input.publisher?.protocol)
-    blockers.push("Publisher protocol is not known yet.");
-  const downOutputs = pipe.outs.filter(isOutputUnexpectedlyDown);
-  const retryingOutputs = pipe.outs.filter(isOutputRetrying);
-  const flappingOutputs = pipe.outs.filter(isOutputFlapping);
-  const faultCandidates = [
-    ...downOutputs,
-    ...retryingOutputs,
-    ...flappingOutputs,
-  ];
-  const suggestedNextStep =
-    pipe.input.status === "on"
-      ? retryingOutputs.length
-        ? "Inspect recent errors and retry backoff before forcing a restart."
-        : flappingOutputs.length
-          ? "Inspect recent sink failures before forcing a restart."
-          : "Run diagnostics, then inspect graph edges with zero packet output."
-      : "Start or reconnect the publisher before probing.";
+  const blockers = inspectProbeBlockers(pipe);
+  const faultCandidates = inspectFaultCandidates(pipe);
+  const suggestedNextStep = inspectSuggestedNextStep(pipe);
   if (focusSummary) {
     focusSummary.textContent = `Inspection focus · ${blockers.length ? `${pluralize(blockers.length, "blocker")} before active probes` : "ready for active probes"} · ${pluralize(faultCandidates.length, "fault candidate")} · ${suggestedNextStep}`;
   }
@@ -856,6 +1004,7 @@ export async function refreshPipelineInspectorGraph(): Promise<void> {
       if (currentPipe?.id === requestPipelineId) {
         withPreservedScroll(container, () => renderSummary(currentPipe));
         renderInspectorResourceDetails(currentPipe, resourceMap);
+        renderInspectCheckpointPresentation(currentPipe);
       }
     }
     graphRenderedStateKey = requestStateKey;

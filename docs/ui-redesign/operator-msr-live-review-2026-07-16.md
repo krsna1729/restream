@@ -79,10 +79,11 @@ the v2 selector. CDP assertions keep Overview and Operate node budgets bounded
 and verify stable accessible button names for output operations.
 
 The shared workspace summary now also announces the current ownership state:
-`UI v2 owned` for Overview and Pipeline Operate, `Legacy checkpoint` for
-Inspect and Monitor, and `Legacy-owned checkpoint` for the remaining top-level
-legacy routes. Seeded Playwright/CDP coverage proves that cue is visible and
-exposed as status text while moving across the route journey.
+`UI v2 owned` for Overview and Pipeline Operate, `UI v2 checkpoint` for
+Pipeline Inspect, `Legacy checkpoint` for Monitor, and `Legacy-owned
+checkpoint` for the remaining top-level legacy routes. Seeded Playwright/CDP
+coverage proves that cue is visible and exposed as status text while moving
+across the route journey.
 
 Incidents and Telemetry are now discoverable from the primary workspace tab
 strip instead of being route-only surfaces. They remain legacy-owned
@@ -132,6 +133,10 @@ attention count. It also promotes the diagnostics focus into one live status
 line: probe readiness, fault-candidate count, and suggested next step. Seeded
 Playwright/CDP coverage proves the Overview → Inspect flow lands on both
 summaries and exposes them as status text.
+Inspect now has its first v2-owned checkpoint as well: a React scan strip that
+summarizes selected pipeline health, graph readiness, output attention, and the
+next diagnostic step before the legacy graph/resource panels. The existing graph
+explorer and output-preview search remain legacy-owned underneath that strip.
 
 Pipeline Inspect now also gives the output preview a local search/count/clear
 loop once the selected pipeline has enough outputs to become scan-heavy. The
@@ -330,9 +335,10 @@ What changed from the live operator pass:
 
 Still not a full v2 redesign:
 
-- Inspect, Monitor, Media, Settings, Status, Incidents, and Telemetry are still
-  intentionally legacy-owned, now with lightweight route checkpoints rather
-  than full v2 layouts.
+- Inspect graph/resource details, Monitor, Media, Settings, Status, Incidents,
+  and Telemetry are still intentionally legacy-owned, now with lightweight route
+  checkpoints rather than full v2 layouts. Inspect has only its first v2-owned
+  decision checkpoint.
 - Legacy-owned routes keep substantial hidden DOM mounted across navigation.
   This is visible in CDP node growth and should be treated as a future
   performance/accessibility cleanup, not as solved by the v2 seam.
@@ -343,7 +349,7 @@ For an rc3 merge candidate, v2 is ready as a bounded, opt-in replacement for
 Overview and Pipeline / Operate. It is not yet a complete dashboard-wide v2.
 The remaining evolution should be sequenced as separate ownership passes:
 
-1. Pipeline / Inspect v2.
+1. Complete Pipeline / Inspect v2 beyond the checkpoint strip.
 2. Pipeline / Monitor v2.
 3. Incidents and Telemetry v2.
 4. Media, Settings, and Status polish.

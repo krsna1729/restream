@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 
 import type {
+  DashboardV2PipelineInspectActions,
   DashboardV2PipelineDetailsPlaceholder,
   DashboardV2OverviewActions,
   DashboardV2PipelineHeaderActions,
@@ -16,6 +17,7 @@ import type {
   OverviewTone,
   OverviewViewModel,
 } from "../features/overview-view-model.js";
+import type { PipelineInspectCheckpointModel } from "../features/pipeline-inspect-view-model.js";
 import type {
   PipelineOperateHeaderModel,
   PipelineOperateInputStatusModel,
@@ -926,6 +928,116 @@ function DashboardV2PipelineDetailsPlaceholderCard({
   );
 }
 
+function DashboardV2PipelineInspectCheckpoint({
+  actions,
+  model,
+}: {
+  actions: DashboardV2PipelineInspectActions;
+  model: PipelineInspectCheckpointModel;
+}): React.JSX.Element {
+  const canActOnPipeline = model.pipelineId !== null;
+  return (
+    <section
+      aria-labelledby="dashboard-v2-pipeline-inspect-title"
+      className="dashboard-section border-info/25 bg-info/5"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2
+              className="text-base-content text-lg font-semibold leading-tight"
+              id="dashboard-v2-pipeline-inspect-title"
+            >
+              {model.title}
+            </h2>
+            <span
+              className={`badge badge-sm ${
+                model.statusTone === "success"
+                  ? "badge-success"
+                  : model.statusTone === "warning"
+                    ? "badge-warning"
+                    : model.statusTone === "error"
+                      ? "badge-error"
+                      : "badge-ghost"
+              }`}
+            >
+              {model.statusLabel}
+            </span>
+          </div>
+          <p
+            className="text-base-content/65 mt-1 max-w-4xl text-sm"
+            role="status"
+            aria-live="polite"
+          >
+            {model.summary}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <button
+            className="btn btn-xs btn-accent btn-outline"
+            disabled={!model.canOpenPipeline || !canActOnPipeline}
+            onClick={() => {
+              if (model.pipelineId) actions.openPipeline(model.pipelineId);
+            }}
+            type="button"
+          >
+            Operate
+          </button>
+          <button
+            className="btn btn-xs btn-accent btn-outline"
+            disabled={!model.canRunDiagnostics || !canActOnPipeline}
+            onClick={() => {
+              if (model.pipelineId) actions.runDiagnostics(model.pipelineId);
+            }}
+            title={model.diagnosticsDisabledReason}
+            type="button"
+          >
+            Diagnostics
+          </button>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          { label: "Input", value: model.inputLabel },
+          { label: "Outputs", value: model.outputLabel },
+          { label: "Attention", value: model.attentionLabel },
+          { label: "Graph", value: model.graphLabel },
+        ].map((item) => (
+          <div
+            className="border-base-content/10 bg-base-100/60 rounded-lg border px-3 py-2"
+            key={item.label}
+          >
+            <div className="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">
+              {item.label}
+            </div>
+            <div className="mt-0.5 truncate text-sm font-medium tabular-nums">
+              {item.value}
+            </div>
+          </div>
+        ))}
+      </div>
+      {model.metrics.length ? (
+        <div className="text-base-content/60 mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums">
+          {model.metrics.map((metric) => (
+            <span key={metric.label}>
+              {metric.label}: {metric.value}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="border-base-content/10 bg-base-100/50 mt-3 rounded-lg border px-3 py-2">
+        <div className="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">
+          Inspection focus
+        </div>
+        <p className="text-base-content/70 mt-1 text-sm">{model.focusLabel}</p>
+        <p className="text-base-content/60 mt-1 text-xs">
+          Next: {model.nextStep}
+        </p>
+      </div>
+    </section>
+  );
+}
+
 function DashboardV2PipelineInputStatus({
   actions,
   model,
@@ -1746,6 +1858,14 @@ if (!pipelineOutputOverviewContainer) {
 }
 const outputOverviewContainer: HTMLElement = pipelineOutputOverviewContainer;
 let outputOverviewRoot: Root | null = null;
+const pipelineInspectContainer = document.getElementById(
+  "dashboard-v2-pipeline-inspect-root",
+);
+if (!pipelineInspectContainer) {
+  throw new Error("Dashboard v2 pipeline inspect root is missing");
+}
+const inspectContainer: HTMLElement = pipelineInspectContainer;
+let inspectRoot: Root | null = null;
 
 export function renderDashboardV2Overview(
   model: OverviewViewModel,
@@ -1805,6 +1925,19 @@ export function renderDashboardV2PipelineOutputOverview(
   outputOverviewRoot.render(
     model ? (
       <DashboardV2PipelineOutputOverview actions={actions} model={model} />
+    ) : null,
+  );
+}
+
+export function renderDashboardV2PipelineInspectCheckpoint(
+  model: PipelineInspectCheckpointModel | null,
+  actions: DashboardV2PipelineInspectActions,
+): void {
+  inspectRoot ??= createRoot(inspectContainer);
+  inspectContainer.hidden = model === null;
+  inspectRoot.render(
+    model ? (
+      <DashboardV2PipelineInspectCheckpoint actions={actions} model={model} />
     ) : null,
   );
 }
