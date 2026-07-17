@@ -2602,17 +2602,21 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
       name: "Show alert details for Retrying output",
     }),
   ).toHaveAttribute("aria-expanded", "false");
+  await expect(
+    retryingAlert.getByRole("button", { name: "Open Retrying Destination" }),
+  ).toBeVisible();
   const initialIncidentButtonNames = await getCdpNamesByRole(page, "button");
   expect(initialIncidentButtonNames).toEqual(
     expect.arrayContaining([
       "Refresh incident data",
       "Show alert details for Retrying output",
-      "Open pipeline pipe-retrying",
+      "Open Retrying Destination",
     ]),
   );
   expect(initialIncidentButtonNames).not.toContain("Refresh");
   expect(initialIncidentButtonNames).not.toContain("Show alert details");
   expect(initialIncidentButtonNames).not.toContain("Open pipeline");
+  expect(initialIncidentButtonNames).not.toContain("Open pipeline pipe-retrying");
   await retryingAlert
     .getByRole("button", { name: "Show alert details for Retrying output" })
     .click();
@@ -2789,6 +2793,9 @@ test("seed: ui=v2 Incidents bounds dense alert and event lists until requested @
   });
   await expect(showAllAlerts).toHaveAttribute("aria-expanded", "false");
   await expect(showAllEvents).toHaveAttribute("aria-expanded", "false");
+  await expect(
+    incidents.getByRole("button", { name: "Open Retrying Destination" }).first(),
+  ).toBeVisible();
   const denseIncidentButtonNames = await getCdpNamesByRole(page, "button");
   expect(denseIncidentButtonNames).toEqual(
     expect.arrayContaining([
@@ -2796,7 +2803,7 @@ test("seed: ui=v2 Incidents bounds dense alert and event lists until requested @
       "Show all 14 incident alert groups",
       "Show all 20 incident lifecycle events",
       "Show alert details for Dense alert 14",
-      "Open pipeline pipe-retrying",
+      "Open Retrying Destination",
     ]),
   );
   expect(denseIncidentButtonNames).not.toContain("Refresh");
@@ -2804,6 +2811,7 @@ test("seed: ui=v2 Incidents bounds dense alert and event lists until requested @
   expect(denseIncidentButtonNames).not.toContain("Show all 20");
   expect(denseIncidentButtonNames).not.toContain("Show alert details");
   expect(denseIncidentButtonNames).not.toContain("Open pipeline");
+  expect(denseIncidentButtonNames).not.toContain("Open pipeline pipe-retrying");
   expect(await getCdpNodeCount(page)).toBeLessThan(11_000);
 
   await showAllAlerts.click();

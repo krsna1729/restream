@@ -1,8 +1,10 @@
 import {
   getAggregateAlerts,
+  getConfig,
   getLifecycleEvents,
   getOverview,
 } from "../core/api.js";
+import { state } from "../core/state.js";
 import { escapeHtml } from "../core/utils.js";
 import type {
   AlertsSnapshot,
@@ -11,6 +13,7 @@ import type {
   OperatorAlert,
   OverviewSnapshot,
 } from "../core/api.js";
+import type { ConfigData } from "../types.js";
 import type { IncidentsCheckpointModel } from "./incidents-view-model.js";
 
 export interface IncidentPipelineOption {
@@ -98,6 +101,15 @@ function severityTone(severity: OperatorAlert["severity"]): string {
 function incidentNoResultText(kind: string, query: string): string {
   const trimmed = query.trim();
   return `No ${kind} match "${trimmed}". Clear search to return to the full incident feed.`;
+}
+
+function incidentPipelineOptionsFromConfig(
+  config: ConfigData | null,
+): IncidentPipelineOption[] {
+  return (config?.pipelines || []).map((pipeline) => ({
+    id: pipeline.id,
+    name: pipeline.name || pipeline.id,
+  }));
 }
 
 interface AlertGroup {
@@ -252,6 +264,9 @@ function renderAlert(alert: OperatorAlert): string {
   const detailKey = `alert:${alert.id}`;
   const detailExpanded = !incidentsV2Active() || incidentAlertDetailsExpanded.has(detailKey);
   const detailLabel = `${detailExpanded ? "Hide" : "Show"} alert details for ${alert.title}`;
+  const pipelineActionLabel = alert.pipelineId
+    ? incidentPipelineActionLabel(alert.pipelineId)
+    : "";
   const evidence = (alert.evidence || [])
     .map((item) => `<li>${escapeHtml(item)}</li>`)
     .join("");
@@ -277,7 +292,7 @@ function renderAlert(alert: OperatorAlert): string {
     }
     <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/60">
       <span>Last seen ${escapeHtml(formatTime(alert.lastSeen || alert.generatedAt))}</span>
-      ${alert.pipelineId ? `<button type="button" class="btn btn-xs btn-outline" data-open-incident-pipeline="${escapeHtml(alert.pipelineId)}" aria-label="Open pipeline ${escapeHtml(alert.pipelineId)}">Open pipeline</button>` : ""}
+      ${alert.pipelineId ? `<button type="button" class="btn btn-xs btn-outline" data-open-incident-pipeline="${escapeHtml(alert.pipelineId)}" aria-label="${escapeHtml(pipelineActionLabel)}">Open pipeline</button>` : ""}
     </div>
   </article>`;
 }
@@ -286,6 +301,9 @@ function renderAlertGroup(group: AlertGroup): string {
   if (group.alerts.length === 1) return renderAlert(group.alerts[0]);
   const detailKey = `group:${group.id}`;
   const detailExpanded = !incidentsV2Active() || incidentAlertDetailsExpanded.has(detailKey);
+  const pipelineActionLabel = group.pipelineId
+    ? incidentPipelineActionLabel(group.pipelineId)
+    : "";
   const stageCount = group.stageIds.length;
   const title =
     stageCount > 1 && group.title.includes("stage")
@@ -355,7 +373,7 @@ function renderAlertGroup(group: AlertGroup): string {
     }
     <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/60">
       <span>Last seen ${escapeHtml(formatTime(group.lastSeen))}</span>
-      ${group.pipelineId ? `<button type="button" class="btn btn-xs btn-outline" data-open-incident-pipeline="${escapeHtml(group.pipelineId)}" aria-label="Open pipeline ${escapeHtml(group.pipelineId)}">Open pipeline</button>` : ""}
+      ${group.pipelineId ? `<button type="button" class="btn btn-xs btn-outline" data-open-incident-pipeline="${escapeHtml(group.pipelineId)}" aria-label="${escapeHtml(pipelineActionLabel)}">Open pipeline</button>` : ""}
     </div>
   </article>`;
 }
@@ -384,6 +402,20 @@ function incidentScopeLabel(
     pipelines.find((pipeline) => pipeline.id === pipelineId)?.name ||
     pipelineId
   );
+}
+
+function incidentPipelineActionLabel(pipelineId: string): string {
+  const pipelines =
+    viewOptions?.pipelines.length
+      ? viewOptions.pipelines
+      : state.pipelines.map((pipeline) => ({
+          id: pipeline.id,
+          name: pipeline.name || pipeline.id,
+        }));
+  const scopeLabel = incidentScopeLabel(pipelines, pipelineId);
+  return scopeLabel === pipelineId
+    ? "Open affected pipeline"
+    : `Open ${scopeLabel}`;
 }
 
 function incidentScopeCardLabel(scopeLabel: string): string {
@@ -741,20 +773,28 @@ export async function refreshIncidents(force = false): Promise<void> {
   if (existing?.sequence === requestSequence) return existing.promise;
   const sequence = ++requestSequence;
   const pipelineAtRequest = selectedPipelineId;
+  const needsPipelineNames = !viewOptions.pipelines.length;
   const request = (async () => {
-    const [overview, alerts, events] = await Promise.all([
+    const [overview, alerts, events, config] = await Promise.all([
       getOverview(),
       getAggregateAlerts(),
       getLifecycleEvents({
         pipelineId: pipelineAtRequest || null,
         limit: INCIDENT_EVENT_LIMIT,
       }),
+      needsPipelineNames
+        ? getConfig({ view: "dashboard" })
+        : Promise.resolve(null),
     ]);
     if (
       sequence !== requestSequence ||
       pipelineAtRequest !== selectedPipelineId
     )
       return;
+    const configPipelines = incidentPipelineOptionsFromConfig(config);
+    if (configPipelines.length && viewOptions) {
+      viewOptions = { ...viewOptions, pipelines: configPipelines };
+    }
     snapshot = {
       overview: overview ?? snapshot.overview,
       alerts: alerts ?? snapshot.alerts,
