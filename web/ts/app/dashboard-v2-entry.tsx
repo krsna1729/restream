@@ -1391,12 +1391,12 @@ function DashboardV2PipelineOutputOverview({
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3
+          <h2
             className="text-base-content/70 text-xs font-semibold uppercase tracking-wide"
             id="dashboard-v2-output-overview-title"
           >
             Output overview
-          </h3>
+          </h2>
           <p className="text-base-content/55 mt-1 text-xs tabular-nums">
             {model.activeLabel} · {model.aggregateRate} aggregate
           </p>
@@ -1431,9 +1431,9 @@ function DashboardV2PipelineOutputOverview({
       )}
       {model.attention.length ? (
         <div className="border-warning/30 mt-3 border-l-2 pl-3">
-          <h4 className="text-warning text-xs font-semibold uppercase">
+          <h3 className="text-warning text-xs font-semibold uppercase">
             Needs attention
-          </h4>
+          </h3>
           <div className="mt-2 space-y-2">
             {model.attention.map((output) => (
               <div
@@ -1462,9 +1462,9 @@ function DashboardV2PipelineOutputOverview({
         <div className="mt-3 space-y-2">
           <div className="space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h4 className="text-base-content/70 text-xs font-semibold uppercase">
+              <h3 className="text-base-content/70 text-xs font-semibold uppercase">
                 Output destinations
-              </h4>
+              </h3>
               {filtersActive ? (
                 <span
                   aria-live="polite"
@@ -1540,9 +1540,9 @@ function DashboardV2PipelineOutputOverview({
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h5 className="min-w-0 truncate text-sm font-semibold">
+                    <h4 className="min-w-0 truncate text-sm font-semibold">
                       {output.name}
-                    </h5>
+                    </h4>
                     <StatusBadge showDetail={false} status={output.status} />
                   </div>
                   <p className="text-base-content/60 mt-1 text-xs tabular-nums">

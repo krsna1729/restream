@@ -56,6 +56,26 @@ async function getCdpNamesByRole(page: Page, role: string): Promise<string[]> {
     .filter((name): name is string => Boolean(name));
 }
 
+async function getCdpHeadingLevels(
+  page: Page,
+): Promise<{ name: string; level: number }[]> {
+  const cdp = await page.context().newCDPSession(page);
+  const axTree = await cdp.send("Accessibility.getFullAXTree");
+  await cdp.detach();
+  return axTree.nodes
+    .filter((node) => node.role?.value === "heading")
+    .map((node) => {
+      const level =
+        node.properties?.find((property) => property.name === "level")?.value
+          ?.value ?? 0;
+      return {
+        level: typeof level === "number" ? level : Number(level),
+        name: node.name?.value ?? "",
+      };
+    })
+    .filter(({ name }) => Boolean(name));
+}
+
 for (const stateName of viewportStates) {
   test(`visual: ${stateName} Overview matches the pinned viewport`, async ({
     page,
@@ -198,5 +218,15 @@ test("axe/cdp: ui=v2 Operate preserves contrast and semantic landmarks", async (
   );
   expect(await getCdpNamesByRole(page, "button")).toEqual(
     expect.arrayContaining(["Graph", "Diagnose", "Show all 30"]),
+  );
+  expect(await getCdpHeadingLevels(page)).toEqual(
+    expect.arrayContaining([
+      { name: "Recovered Sink Flap", level: 1 },
+      { name: "INPUT AND PREVIEW", level: 2 },
+      { name: "OUTPUT OVERVIEW", level: 2 },
+      { name: "PREVIEW PLAYER", level: 3 },
+      { name: "AUDIO", level: 3 },
+      { name: "OUTPUT DESTINATIONS", level: 3 },
+    ]),
   );
 });
