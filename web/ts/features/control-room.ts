@@ -45,6 +45,7 @@ interface ControlRoomCardDescriptor {
   id: string;
   title: string;
   mediaUrl: string | null;
+  loadOnDemand: boolean;
   emptyMessage: string;
   openUrl: string | null;
   copyUrl: string | null;
@@ -373,6 +374,7 @@ function buildLocalCard(pipe: PipelineView): ControlRoomCardDescriptor {
     id: `local:${pipe.id}`,
     title: "Local HLS",
     mediaUrl: inputLive ? localPreviewUrl : null,
+    loadOnDemand: false,
     emptyMessage:
       pipe.input.status === "on"
         ? pipe.input.flapping
@@ -427,6 +429,7 @@ function buildOutputCard(
     id: `output:${output.outputId}`,
     title: output.outputName,
     mediaUrl: previewable ? monitoringUrl : null,
+    loadOnDemand: true,
     emptyMessage: monitoringUrl
       ? previewable
         ? "Waiting for the monitor feed."
@@ -447,6 +450,7 @@ function buildEmptyCard(message: string): ControlRoomCardDescriptor {
     id: `empty:${message}`,
     title: "No Monitor",
     mediaUrl: null,
+    loadOnDemand: false,
     emptyMessage: message,
     openUrl: null,
     copyUrl: null,
@@ -1187,6 +1191,7 @@ function syncCardMedia(
   cardId: string,
   shell: HTMLElement,
   mediaUrl: string | null,
+  loadOnDemand: boolean,
   emptyMessage: string,
 ): void {
   if (!mediaUrl) {
@@ -1199,9 +1204,9 @@ function syncCardMedia(
   }
 
   const embedKind = detectMonitoringEmbedKind(mediaUrl);
-  const isLazyGenericEmbed =
-    embedKind === "iframe" && !controlRoomLoadedEmbedCards.has(cardId);
-  const desiredKey = isLazyGenericEmbed ? `lazy:${mediaUrl}` : mediaUrl;
+  const isWaitingForPreview =
+    loadOnDemand && !controlRoomLoadedEmbedCards.has(cardId);
+  const desiredKey = isWaitingForPreview ? `lazy:${mediaUrl}` : mediaUrl;
   if (shell.dataset.mediaKey === desiredKey) return;
   clearCardPlayerShell(shell, { resetMediaKey: false });
   shell.dataset.mediaKey = desiredKey;
@@ -1213,7 +1218,7 @@ function syncCardMedia(
     );
     return;
   }
-  if (isLazyGenericEmbed) {
+  if (isWaitingForPreview) {
     setLazyEmbedMessage(shell, "Preview is not loaded yet.");
     return;
   }
@@ -1601,6 +1606,7 @@ function syncCard(
     descriptor.id,
     playerShell,
     descriptor.mediaUrl,
+    descriptor.loadOnDemand,
     descriptor.emptyMessage,
   );
 }

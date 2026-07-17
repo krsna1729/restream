@@ -1334,6 +1334,70 @@ test("seed: ui=v2 Monitor lazily loads generic web previews @desktop", async ({
   await expect(monitor.locator("iframe")).toHaveCount(1);
 });
 
+test("seed: ui=v2 Monitor lazily loads HLS output previews @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+    {
+      expectOverviewReady: false,
+      settingsResponse: (settings) => ({
+        ...settings,
+        outputs: (settings.outputs as Array<Record<string, unknown>>).map(
+          (output) =>
+            output.id === "out-retrying"
+              ? {
+                  ...output,
+                  monitoringUrl:
+                    "http://127.0.0.1:11888/live/out-retrying/index.m3u8",
+                }
+              : output,
+        ),
+      }),
+      runtimeResponse: (runtime) => {
+        const next = structuredClone(runtime);
+        const output = (
+          next.health as Record<string, Record<string, unknown>>
+        ).pipelines?.["pipe-retrying"] as
+          | { outputs?: Record<string, Record<string, unknown>> }
+          | undefined;
+        if (output?.outputs?.["out-retrying"]) {
+          Object.assign(output.outputs["out-retrying"], {
+            status: "running",
+            retrying: false,
+            flapping: false,
+            bitrateKbps: 900,
+          });
+        }
+        return next;
+      },
+    },
+  );
+
+  const monitor = page.locator("#control-mode-panel");
+  await expect(monitor.locator("#control-room-route-summary")).toHaveText(
+    "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+  );
+  await expect(
+    monitor.getByRole("button", { name: "Load preview" }),
+  ).toBeVisible();
+  const outputCard = monitor.locator("article").filter({
+    hasText: "Retrying Output",
+  });
+  await expect(
+    outputCard.locator('[data-role="managed-hls-video"]'),
+  ).toHaveCount(0);
+  await expect(outputCard.locator("video")).toHaveCount(0);
+  expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
+
+  await outputCard.getByRole("button", { name: "Load preview" }).click();
+  await expect(
+    outputCard.locator('[data-role="managed-hls-video"]'),
+  ).toHaveCount(1);
+});
+
 test("seed: ui=v2 Media search announces filtered result counts @desktop", async ({
   page,
 }) => {

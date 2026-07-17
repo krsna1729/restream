@@ -377,9 +377,11 @@ What changed from the live operator pass:
 - Shared auth expiry now preserves the full operator return path, including
   `ui=v2`, so a re-login can return to the interrupted v2 workflow instead of
   dumping the operator at the default Overview.
-- Monitor now avoids eager generic iframe mounts for web preview URLs, reducing
-  initial route weight and making cross-origin preview loading an explicit
-  operator action.
+- Monitor now avoids eager output-preview mounts. Generic web previews and
+  output HLS previews both start as explicit `Load preview` affordances, while
+  the local pipeline HLS preview remains immediately available. This keeps the
+  wall scan-first and avoids spending browser/media work on outputs the operator
+  is not inspecting yet.
 
 Still not a full v2 redesign:
 
