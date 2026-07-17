@@ -415,7 +415,7 @@ function incidentPipelineActionLabel(pipelineId: string): string {
   const scopeLabel = incidentScopeLabel(pipelines, pipelineId);
   return scopeLabel === pipelineId
     ? "Open affected pipeline"
-    : `Open ${scopeLabel}`;
+    : `Open pipeline ${scopeLabel}`;
 }
 
 function incidentScopeCardLabel(scopeLabel: string): string {
