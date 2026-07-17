@@ -26,6 +26,7 @@ let mediaSearchQuery = "";
 let lastMediaFiles: MediaFile[] = [];
 let mediaRecordingsExpanded = false;
 let mediaSourcesExpanded = false;
+const mediaActionRowsExpanded = new Set<string>();
 let mediaCheckpointCallback:
   | ((model: MediaCheckpointModel | null) => void)
   | null = null;
@@ -120,6 +121,31 @@ function isNativelyPlayable(file: MediaFile): boolean {
   return probe.canPlayType(contentType).trim() !== "";
 }
 
+function mediaV2Active(): boolean {
+  const toggle = document.getElementById("dashboard-ui-v2-toggle");
+  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
+  try {
+    return new URLSearchParams(window.location.search).get("ui") === "v2";
+  } catch (_err) {
+    return false;
+  }
+}
+
+function mediaRowSecondaryActions(
+  file: MediaFile,
+  safeName: string,
+  deleteDisabled: string,
+): string {
+  const buttons = `<button class="btn btn-xs btn-outline shrink-0 js-rename-media" data-filename="${safeName}">Rename</button>
+        <button class="btn btn-xs btn-error btn-outline shrink-0 js-delete-media" data-filename="${safeName}" ${deleteDisabled}>Delete</button>`;
+  if (!mediaV2Active()) return buttons;
+  const expanded = mediaActionRowsExpanded.has(file.name);
+  return `<div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
+        <button class="btn btn-xs btn-outline js-media-row-actions" type="button" data-filename="${safeName}" aria-expanded="${expanded ? "true" : "false"}" aria-label="${expanded ? "Hide" : "Show"} actions for ${safeName}">${expanded ? "Hide actions" : "More actions"}</button>
+        ${expanded ? buttons : ""}
+    </div>`;
+}
+
 function mediaFileRow(file: MediaFile): string {
   const safeName = escapeHtml(file.name);
   const sourceName = file.sourceName || file.name;
@@ -173,8 +199,7 @@ function mediaFileRow(file: MediaFile): string {
         </div>
         ${playAction}
         ${downloadActions}
-        <button class="btn btn-xs btn-outline shrink-0 js-rename-media" data-filename="${safeName}">Rename</button>
-        <button class="btn btn-xs btn-error btn-outline shrink-0 js-delete-media" data-filename="${safeName}" ${deleteDisabled}>Delete</button>
+        ${mediaRowSecondaryActions(file, safeName, deleteDisabled)}
     </div>`;
 }
 
@@ -361,6 +386,7 @@ export function resetMediaLibraryShellState(): void {
   lastMediaSignature = "";
   lastRecordingsSignature = "";
   lastSourcesSignature = "";
+  mediaActionRowsExpanded.clear();
 }
 
 function attachMediaActions(container: HTMLElement): void {
@@ -373,6 +399,7 @@ function attachMediaActions(container: HTMLElement): void {
       mediaSearchQuery = searchInput.value;
       mediaRecordingsExpanded = false;
       mediaSourcesExpanded = false;
+      mediaActionRowsExpanded.clear();
       renderMediaLibraryLists(lastMediaFiles, true);
     });
   }
@@ -385,6 +412,7 @@ function attachMediaActions(container: HTMLElement): void {
       mediaSearchQuery = "";
       mediaRecordingsExpanded = false;
       mediaSourcesExpanded = false;
+      mediaActionRowsExpanded.clear();
       renderMediaLibraryLists(lastMediaFiles, true);
       const nextSearchInput = container.querySelector<HTMLInputElement>(
         "#media-library-search",
@@ -415,6 +443,22 @@ function attachMediaActions(container: HTMLElement): void {
       renderMediaLibraryLists(lastMediaFiles, true);
     });
   }
+  container
+    .querySelectorAll<HTMLButtonElement>(".js-media-row-actions")
+    .forEach((btn) => {
+      if (btn.dataset.bound === "1") return;
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", () => {
+        const filename = btn.dataset.filename;
+        if (!filename) return;
+        if (mediaActionRowsExpanded.has(filename)) {
+          mediaActionRowsExpanded.delete(filename);
+        } else {
+          mediaActionRowsExpanded.add(filename);
+        }
+        renderMediaLibraryLists(lastMediaFiles, true);
+      });
+    });
 
   const uploadButton = container.querySelector<HTMLButtonElement>(".js-upload-media");
   const uploadInput = container.querySelector<HTMLInputElement>(".js-upload-media-input");
@@ -496,6 +540,9 @@ function updateSection(
     query: normalizeSearchText(mediaSearchQuery),
     totalCount: files.length,
     expanded,
+    actionRows: visibleFiles
+      .filter((file) => mediaActionRowsExpanded.has(file.name))
+      .map((file) => file.name),
   });
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
   const totalCount = totalFiles.length;
@@ -525,6 +572,10 @@ function updateSection(
 }
 
 function renderMediaLibraryLists(files: MediaFile[], force: boolean): void {
+  const knownFiles = new Set(files.map((file) => file.name));
+  for (const filename of mediaActionRowsExpanded) {
+    if (!knownFiles.has(filename)) mediaActionRowsExpanded.delete(filename);
+  }
   const recordings = files.filter((file) => mediaKind(file) === "recording");
   const sources = files.filter((file) => mediaKind(file) !== "recording");
   const filteredRecordings = recordings.filter((file) =>
