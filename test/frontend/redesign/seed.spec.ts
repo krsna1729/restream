@@ -260,11 +260,12 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     expect.arrayContaining([
       "Save server name",
       "Save ingest host",
-      "Save dashboard password",
-      "Save ingest security settings",
     ]),
   );
+  expect(initialButtonNames).not.toContain("Save dashboard password");
+  expect(initialButtonNames).not.toContain("Save ingest security settings");
   expect(initialButtonNames).not.toContain("Save");
+  await expect(authSearch).toBeHidden();
   await expect(settings.getByLabel("Global SRT ingest mode")).toBeHidden();
   await settings.locator("#srt-settings-section summary").click();
   await expect(settings.locator("#srt-settings-section")).toHaveAttribute(
@@ -317,6 +318,8 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     .toBe(23);
   expect(savedProfilePatch?.transcodeProfiles?.h264?.gop).toBe(60);
 
+  await settings.locator("#auth-attempts-section > summary").click();
+  await expect(authSearch).toBeVisible();
   await authSearch.fill("dashboard");
   await expect(page.locator("#settings-route-summary")).toHaveText(
     "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
@@ -532,6 +535,43 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   const checkpoint = page.locator("#dashboard-v2-settings-root");
   const authSearch = settings.getByLabel("Search authentication attempts");
   const authSearchSummary = settings.locator("#auth-attempts-search-summary");
+  const visibleSettingsControlCount = () =>
+    page.evaluate(() =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>(
+          "#settings-mode-content button,#settings-mode-content a[href],#settings-mode-content input,#settings-mode-content select,#settings-mode-content summary,[role='button']",
+        ),
+      ).filter((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          element.checkVisibility({ checkVisibilityCSS: true }) &&
+          style.display !== "none" &&
+          style.visibility !== "hidden"
+        );
+      }).length,
+    );
+  const visibleServerControlCount = () =>
+    page.evaluate(() =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>(
+          "#server-settings-section button,#server-settings-section a[href],#server-settings-section input,#server-settings-section select,#server-settings-section summary,[role='button']",
+        ),
+      ).filter((element) => {
+        if (element.closest("[data-settings-v2-disclosure]")) return false;
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          element.checkVisibility({ checkVisibilityCSS: true }) &&
+          style.display !== "none" &&
+          style.visibility !== "hidden"
+        );
+      }).length,
+    );
   await expect(checkpoint.locator("#dashboard-v2-settings-title")).toBeVisible();
   await expect(page.locator("#settings-route-summary")).toHaveText(
     "Synthetic Restream settings · 5 sections · 3 profiles · 12 auth attempts",
@@ -542,20 +582,25 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
     ),
   ).toBeVisible();
   await expect(checkpoint.getByText("Security: 3 banned attempts")).toBeVisible();
-  await expect(authSearchSummary).toHaveText("8 auth attempts shown of 12");
+  expect(await visibleSettingsControlCount()).toBeLessThanOrEqual(17);
+  expect(await visibleServerControlCount()).toBeLessThanOrEqual(5);
   const buttonNames = await getCdpNamesByRole(page, "button");
   expect(buttonNames).toEqual(
     expect.arrayContaining([
       "Save server name",
       "Save ingest host",
-      "Save dashboard password",
-      "Save ingest security settings",
-      "Refresh authentication attempts",
     ]),
   );
+  expect(buttonNames).not.toContain("Save dashboard password");
+  expect(buttonNames).not.toContain("Save ingest security settings");
+  expect(buttonNames).not.toContain("Refresh authentication attempts");
   expect(buttonNames).not.toContain("Save");
   expect(buttonNames).not.toContain("Refresh");
   expect(buttonNames).not.toContain("Reset");
+  await expect(authSearch).toBeHidden();
+  await settings.locator("#auth-attempts-section > summary").click();
+  await expect(authSearch).toBeVisible();
+  await expect(authSearchSummary).toHaveText("8 auth attempts shown of 12");
   await expect(
     settings.getByRole("cell", { name: "203.0.113.10" }),
   ).toBeVisible();

@@ -144,6 +144,21 @@ function applySettingsV2Disclosure(container: HTMLElement): void {
       summary: "Retention policy for completed MPEG-TS to MP4 conversions.",
     },
     {
+      id: "dashboard-password-section",
+      title: "Dashboard Password",
+      summary: "Change the dashboard login password.",
+    },
+    {
+      id: "ingest-security-section",
+      title: "Ingest Security",
+      summary: "Failure thresholds, ban window, and tracked IP limits.",
+    },
+    {
+      id: "auth-attempts-section",
+      title: "Authentication Attempts",
+      summary: "Recent login and publish failures with optional reset actions.",
+    },
+    {
       id: "srt-settings-section",
       title: "Global SRT Ingest",
       summary: "Default encryption policy for SRT publishers.",
@@ -451,7 +466,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     <button class="btn btn-sm" data-settings-action="dismiss-dashboard-password-prompt">Skip</button>
                 </div>
 
-                <div class="space-y-2">
+                <div id="dashboard-password-section" class="space-y-2">
                     <div class="text-sm font-medium">Dashboard Password</div>
                     <div class="flex flex-wrap items-end gap-3">
                         <fieldset class="fieldset">
@@ -478,7 +493,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
 
                 <div class="divider my-0"></div>
 
-                <div class="space-y-2">
+                <div id="ingest-security-section" class="space-y-2">
                     <div class="text-sm font-medium">Ingest Security</div>
                     <div class="flex flex-wrap items-end gap-3">
                         <fieldset class="fieldset">
@@ -507,7 +522,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     </div>
                 </div>
 
-                <div class="space-y-2">
+                <div id="auth-attempts-section" class="space-y-2">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <div class="text-sm font-medium">Authentication Attempts</div>
                         <div class="flex items-center gap-2">
