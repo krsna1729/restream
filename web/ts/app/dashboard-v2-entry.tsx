@@ -1745,7 +1745,7 @@ function DashboardV2PipelineOutputOverview({
                 {outputEmptyDetail} Clear filters to show all.
               </p>
               <button
-                aria-label="Clear output destination filters"
+                aria-label="Clear no-result output destination filters"
                 className="btn btn-xs btn-ghost mt-3"
                 onClick={clearOutputFilters}
                 type="button"

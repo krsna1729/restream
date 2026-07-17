@@ -4629,6 +4629,14 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
     .map((node) => String(node.name?.value ?? ""))
     .filter(Boolean);
   expect(outputButtonNames).toContain("Clear output destination filters");
+  expect(outputButtonNames).toContain(
+    "Clear no-result output destination filters",
+  );
+  expect(
+    outputButtonNames.filter(
+      (name) => name === "Clear output destination filters",
+    ),
+  ).toHaveLength(1);
   expect(outputButtonNames).not.toContain("Clear output filters");
   await cdp.detach();
 
