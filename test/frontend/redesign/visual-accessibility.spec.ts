@@ -231,3 +231,89 @@ test("axe/cdp: ui=v2 Operate preserves contrast and semantic landmarks", async (
     ]),
   );
 });
+
+test("cdp: ui=v2 route heading outlines stay operator-clean @desktop", async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(FIXED_TIME);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const routes = [
+    {
+      href: "/?mode=overview&ui=v2",
+      readySelector: "#dashboard-v2-overview",
+      topHeading: "Fleet overview",
+    },
+    {
+      href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+      readySelector: "#dashboard-v2-pipeline-header-root",
+      topHeading: "Retrying Destination",
+    },
+    {
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      readySelector: "#inspect-route-summary",
+      topHeading: "Pipeline inspect",
+    },
+    {
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      readySelector: "#control-room-route-summary",
+      topHeading: "Control Room",
+    },
+    {
+      href: "/?mode=media&ui=v2",
+      readySelector: "#media-library-results-summary",
+      topHeading: "Media Library",
+    },
+    {
+      href: "/?mode=settings&ui=v2",
+      readySelector: "#settings-route-summary",
+      topHeading: "Settings",
+    },
+    {
+      href: "/?mode=status&ui=v2",
+      readySelector: "#status-route-summary",
+      topHeading: "Status",
+    },
+    {
+      href: "/?mode=incidents&ui=v2",
+      readySelector: "#incidents-route-summary",
+      topHeading: "Incidents",
+    },
+    {
+      href: "/?mode=telemetry&ui=v2",
+      readySelector: "#telemetry-route-summary",
+      topHeading: "Engineer telemetry",
+    },
+  ] as const;
+
+  await openSeededDashboard(page, "mixed-health", routes[0].href, {
+    expectOverviewReady: false,
+  });
+
+  for (const route of routes) {
+    if (page.url() !== new URL(route.href, page.url()).href) {
+      await page.goto(route.href);
+    }
+    await page.locator(route.readySelector).waitFor({ state: "visible" });
+    const headings = await getCdpHeadingLevels(page);
+    expect(headings, route.href).not.toEqual([]);
+    expect(headings[0], route.href).toEqual({
+      level: 1,
+      name: route.topHeading,
+    });
+    const duplicateHeadingNames = headings
+      .map((heading) => heading.name)
+      .filter((name, index, names) => names.indexOf(name) !== index);
+    expect(duplicateHeadingNames, route.href).toEqual([]);
+    for (let index = 1; index < headings.length; index += 1) {
+      expect(headings[index].level, route.href).toBeLessThanOrEqual(
+        headings[index - 1].level + 1,
+      );
+    }
+    const pageOverflow = await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    );
+    expect(pageOverflow, route.href).toBeLessThanOrEqual(1);
+  }
+});

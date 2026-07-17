@@ -237,9 +237,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     }),
   ).toBeVisible();
   await expect(
-    page.locator("#dashboard-v2-settings-root").getByRole("heading", {
-      name: "Settings",
-    }),
+    page.locator("#dashboard-v2-settings-title"),
   ).toBeVisible();
   await expect(page.locator("#settings-route-summary")).toHaveText(
     "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
@@ -360,9 +358,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     .evaluate((node) => node.childElementCount);
   expect(hiddenSettingsChildCount).toBe(0);
   await expect(
-    page.locator("#dashboard-v2-media-root").getByRole("heading", {
-      name: "Media",
-    }),
+    page.locator("#dashboard-v2-media-title"),
   ).toBeVisible();
   await expect(
     page.locator("#media-mode-content").getByRole("heading", {
@@ -383,9 +379,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
 
   await page.goto("/?mode=status&ui=v2");
   await expect(
-    page.locator("#dashboard-v2-status-root").getByRole("heading", {
-      name: "Status",
-    }),
+    page.locator("#dashboard-v2-status-title"),
   ).toBeVisible();
   await expect(page.locator("#dashboard-v2-media-root")).toBeHidden();
   const hiddenMediaChildCount = await page
@@ -424,9 +418,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
 
   await page.goto("/?mode=status&ui=v2");
   await expect(
-    page.locator("#dashboard-v2-status-root").getByRole("heading", {
-      name: "Status",
-    }),
+    page.locator("#dashboard-v2-status-title"),
   ).toBeVisible();
   const requestsAfterStatus = v2Requests.length;
 
@@ -436,9 +428,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
   await expect(
-    page
-      .locator("#dashboard-v2-pipeline-inspect-root")
-      .getByRole("heading", { name: "Healthy Program" }),
+    page.locator("#dashboard-v2-pipeline-inspect-title"),
   ).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
     "UI v2 checkpoint · Pipeline graph and diagnostics",
@@ -459,9 +449,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   ).toBeHidden();
   await expect(page.locator("#dashboard-v2-pipeline-inspect-root")).toBeHidden();
   await expect(
-    page
-      .locator("#dashboard-v2-control-room-root")
-      .getByRole("heading", { name: "Healthy Program" }),
+    page.locator("#dashboard-v2-control-room-title"),
   ).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
     "UI v2 checkpoint · Pipeline monitoring wall",
@@ -473,9 +461,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   await expect(page.locator("#incidents-mode-panel")).toBeVisible();
   await expect(page.locator("#dashboard-v2-control-room-root")).toBeHidden();
   await expect(
-    page
-      .locator("#dashboard-v2-incidents-root")
-      .getByRole("heading", { name: "Incidents" }),
+    page.locator("#dashboard-v2-incidents-title"),
   ).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
     "UI v2 checkpoint · Alerts, evidence, and lifecycle events",
@@ -487,9 +473,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   await expect(page.locator("#telemetry-mode-panel")).toBeVisible();
   await expect(page.locator("#dashboard-v2-incidents-root")).toBeHidden();
   await expect(
-    page
-      .locator("#dashboard-v2-telemetry-root")
-      .getByRole("heading", { name: "Engineer telemetry" }),
+    page.locator("#dashboard-v2-telemetry-title"),
   ).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
     "UI v2 checkpoint · Engine and pipeline counters",
@@ -527,7 +511,7 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   const checkpoint = page.locator("#dashboard-v2-settings-root");
   const authSearch = settings.getByLabel("Search authentication attempts");
   const authSearchSummary = settings.locator("#auth-attempts-search-summary");
-  await expect(checkpoint.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(checkpoint.locator("#dashboard-v2-settings-title")).toBeVisible();
   await expect(page.locator("#settings-route-summary")).toHaveText(
     "Synthetic Restream settings · 5 sections · 3 profiles · 12 auth attempts",
   );
@@ -1197,7 +1181,7 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   );
   const inspectCheckpoint = page.locator("#dashboard-v2-pipeline-inspect-root");
   await expect(
-    inspectCheckpoint.getByRole("heading", { name: "Retrying Destination" }),
+    inspectCheckpoint.locator("#dashboard-v2-pipeline-inspect-title"),
   ).toBeVisible();
   await expect(inspectCheckpoint.getByText("Output retrying")).toBeVisible();
   await expect(
@@ -1449,7 +1433,7 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );
   await expect(
-    checkpoint.getByRole("heading", { name: "Retrying Destination" }),
+    checkpoint.locator("#dashboard-v2-control-room-title"),
   ).toBeVisible();
   await expect(checkpoint.getByText("1/1 monitored")).toBeVisible();
   await expect(checkpoint.getByText("No active search")).toBeVisible();
@@ -1595,7 +1579,7 @@ test("seed: ui=v2 Monitor lazily loads generic web previews @desktop", async ({
     "Monitoring Recovered Sink Flap · 1 output · 1 monitor · 0 missing URLs",
   );
   await expect(
-    checkpoint.getByRole("heading", { name: "Recovered Sink Flap" }),
+    checkpoint.locator("#dashboard-v2-control-room-title"),
   ).toBeVisible();
   await expect(
     checkpoint.getByText("1 lazy web preview", { exact: true }).first(),
@@ -1717,7 +1701,7 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   const checkpoint = media.locator("#dashboard-v2-media-root");
   const search = media.getByLabel("Search media library");
   const summary = media.locator("#media-library-results-summary");
-  await expect(checkpoint.getByRole("heading", { name: "Media" })).toBeVisible();
+  await expect(checkpoint.locator("#dashboard-v2-media-title")).toBeVisible();
   await expect(
     media.getByRole("heading", { name: "Media Library" }),
   ).toBeVisible();
@@ -1908,7 +1892,7 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
 
   const status = page.locator("#status-mode-panel");
   const checkpoint = status.locator("#dashboard-v2-status-root");
-  await expect(checkpoint.getByRole("heading", { name: "Status" })).toBeVisible();
+  await expect(checkpoint.locator("#dashboard-v2-status-title")).toBeVisible();
   await expect(
     status.locator("#status-mode-content").getByRole("heading", {
       name: "Status",
@@ -2099,7 +2083,7 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   const checkpoint = incidents.locator("#dashboard-v2-incidents-root");
   const summary = incidents.locator("#incidents-route-summary");
   await expect(
-    checkpoint.getByRole("heading", { name: "Incidents" }),
+    checkpoint.locator("#dashboard-v2-incidents-title"),
   ).toBeVisible();
   await expect(
     incidents
@@ -2345,7 +2329,7 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   const checkpoint = telemetry.locator("#dashboard-v2-telemetry-root");
   const summary = telemetry.locator("#telemetry-route-summary");
   await expect(
-    checkpoint.getByRole("heading", { name: "Engineer telemetry" }),
+    checkpoint.locator("#dashboard-v2-telemetry-title"),
   ).toBeVisible();
   await expect(
     telemetry
@@ -2654,7 +2638,7 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
   });
   await expect(audioSearch).toBeVisible();
   await audioSearch.fill("track 30");
-  await expect(inputStatus.getByText("Track 30")).toBeVisible();
+  await expect(inputStatus.getByText("Track 30", { exact: true })).toBeVisible();
   await expect(inputStatus.getByText("Track 6")).toHaveCount(0);
   expect(await getCdpStatusTexts(page)).toContain(
     '1/30 audio tracks match "track 30"',
@@ -2671,13 +2655,15 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
   await audioSearchClear.click();
   await expect(audioSearch).toHaveValue("");
   await expect(inputStatus.getByText("Track 6")).toBeVisible();
-  await expect(inputStatus.getByText("Track 30")).toHaveCount(0);
+  await expect(inputStatus.getByText("Track 30", { exact: true })).toHaveCount(
+    0,
+  );
   await expect(audioSearchClear).toBeHidden();
   await expect(
     inputStatus.getByRole("button", { name: "Show all 30" }),
   ).toBeVisible();
   await inputStatus.getByRole("button", { name: "Show all 30" }).click();
-  await expect(inputStatus.getByText("Track 30")).toBeVisible();
+  await expect(inputStatus.getByText("Track 30", { exact: true })).toBeVisible();
   await expect(
     inputStatus.getByRole("button", { name: "Show fewer" }),
   ).toBeVisible();
