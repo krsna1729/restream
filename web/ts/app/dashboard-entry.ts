@@ -9,6 +9,19 @@ function initSkipToMainContent(): void {
   const skipLink = document.getElementById("skip-to-dashboard-main");
   const main = document.getElementById("dashboard-main");
   if (!(skipLink instanceof HTMLAnchorElement) || !main) return;
+  document.addEventListener("keydown", (event) => {
+    if (
+      event.key !== "Tab" ||
+      event.shiftKey ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      document.activeElement !== document.body
+    )
+      return;
+    event.preventDefault();
+    skipLink.focus();
+  });
   skipLink.addEventListener("click", (event) => {
     event.preventDefault();
     const target =

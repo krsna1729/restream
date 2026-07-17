@@ -78,6 +78,18 @@ test("static HTML keeps core DOM accessibility and layout invariants", async () 
   assert.doesNotMatch(hlsBundle, /sourceMappingURL=hls\.min\.js\.map/);
 });
 
+test("dashboard bootstrap keeps the skip link first in keyboard flow", async () => {
+  const dashboardEntryTs = await readFile(
+    new URL("../../web/ts/app/dashboard-entry.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(dashboardEntryTs, /document\.addEventListener\("keydown"/);
+  assert.match(dashboardEntryTs, /event\.key !== "Tab"/);
+  assert.match(dashboardEntryTs, /document\.activeElement !== document\.body/);
+  assert.match(dashboardEntryTs, /skipLink\.focus\(\)/);
+});
+
 test("dashboard grid sizing lives in responsive CSS instead of inline scripts", async () => {
   const [inputCss, renderTs] = await Promise.all([
     readFile(new URL("../../web/styles/input.css", import.meta.url), "utf8"),
