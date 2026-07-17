@@ -4450,9 +4450,21 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
   ).not.toBeVisible();
   await expect(root.getByText("1/5 shown")).toBeVisible();
   const clearActiveFilters = root.getByRole("button", {
-    name: "Clear output filters",
+    name: "Clear output destination filters",
   });
   await expect(clearActiveFilters).toBeVisible();
+  let outputButtonNames = await getCdpNamesByRole(page, "button");
+  expect(outputButtonNames).toEqual(
+    expect.arrayContaining([
+      "Show all output destinations",
+      "Show running output destinations",
+      "Show stopped output destinations",
+      "Clear output destination filters",
+    ]),
+  );
+  expect(outputButtonNames).not.toContain("All");
+  expect(outputButtonNames).not.toContain("Stopped");
+  expect(outputButtonNames).not.toContain("Clear output filters");
   expect(await getCdpStatusTexts(page)).toContain(
     '1/5 shown · All · "facebook"',
   );
@@ -4468,7 +4480,9 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
   await expect(clearActiveFilters).toBeHidden();
 
   await root.getByLabel("Search output destinations").fill("facebook");
-  await root.getByRole("button", { name: "Stopped" }).click();
+  await root
+    .getByRole("button", { name: "Show stopped output destinations" })
+    .click();
   await expect(root.getByText("No outputs match.")).toBeVisible();
   await expect(
     root.getByText(
@@ -4491,9 +4505,17 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
   expect(statusTexts).toContain(
     'No stopped output destinations match "facebook". Clear filters to show all.',
   );
+  outputButtonNames = axTree.nodes
+    .filter((node) => node.role?.value === "button")
+    .map((node) => String(node.name?.value ?? ""))
+    .filter(Boolean);
+  expect(outputButtonNames).toContain("Clear output destination filters");
+  expect(outputButtonNames).not.toContain("Clear output filters");
   await cdp.detach();
 
-  await root.getByRole("button", { name: "Clear filters" }).click();
+  await root
+    .getByRole("button", { name: "Clear output destination filters" })
+    .click();
   await expect(
     root.getByRole("heading", { name: "YouTube primary" }),
   ).toBeVisible();
@@ -4502,7 +4524,9 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
   ).toBeVisible();
   await expect(root.getByRole("heading", { name: "Archive" })).toBeVisible();
 
-  await root.getByRole("button", { name: "Attention" }).click();
+  await root
+    .getByRole("button", { name: "Show attention output destinations" })
+    .click();
   await expect(
     root.getByRole("heading", { name: "Facebook backup" }),
   ).toBeVisible();

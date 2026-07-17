@@ -1510,6 +1510,11 @@ function DashboardV2PipelineOutputOverview({
                   >
                     {outputFilters.map((filter) => (
                       <button
+                        aria-label={
+                          filter.id === "all"
+                            ? "Show all output destinations"
+                            : `Show ${filter.label.toLowerCase()} output destinations`
+                        }
                         aria-pressed={outputFilter === filter.id}
                         className={`btn btn-sm min-h-9 min-w-11 ${
                           outputFilter === filter.id
@@ -1526,6 +1531,7 @@ function DashboardV2PipelineOutputOverview({
                   </div>
                   {filtersActive ? (
                     <button
+                      aria-label="Clear output destination filters"
                       className="btn btn-sm btn-ghost min-h-9"
                       onClick={clearOutputFilters}
                       type="button"
