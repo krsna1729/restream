@@ -142,8 +142,8 @@ function mediaRowSecondaryActions(
   deleteDisabled: string,
   downloadActions: string,
 ): string {
-  const buttons = `<button class="btn btn-xs btn-outline shrink-0 js-rename-media" data-filename="${safeName}">Rename</button>
-        <button class="btn btn-xs btn-error btn-outline shrink-0 js-delete-media" data-filename="${safeName}" ${deleteDisabled}>Delete</button>`;
+  const buttons = `<button class="btn btn-xs btn-outline shrink-0 js-rename-media" data-filename="${safeName}" aria-label="Rename ${safeName}">Rename</button>
+        <button class="btn btn-xs btn-error btn-outline shrink-0 js-delete-media" data-filename="${safeName}" aria-label="Delete ${safeName}" ${deleteDisabled}>Delete</button>`;
   if (!mediaV2Active()) return `${downloadActions}${buttons}`;
   const expanded = mediaActionRowsExpanded.has(file.name);
   return `<div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
@@ -172,8 +172,8 @@ function mediaFileRow(file: MediaFile): string {
   const canPlay = isNativelyPlayable(file);
   const playAction =
     canPlay && playUrl
-      ? `<a href="${playUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-accent btn-outline shrink-0">Play</a>`
-      : '<button type="button" class="btn btn-xs btn-accent btn-outline shrink-0" disabled title="This file is not ready for native Chrome playback yet">Play</button>';
+      ? `<a href="${playUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-accent btn-outline shrink-0" aria-label="Play ${safeName}">Play</a>`
+      : `<button type="button" class="btn btn-xs btn-accent btn-outline shrink-0" disabled aria-label="Play ${safeName} unavailable" title="This file is not ready for native Chrome playback yet">Play</button>`;
   const conversionStatusBadge =
     file.conversionStatus === "converting"
       ? '<span class="badge badge-sm badge-warning">Converting</span>'
@@ -183,9 +183,9 @@ function mediaFileRow(file: MediaFile): string {
           ? `<span class="badge badge-sm badge-error" title="${escapeHtml(file.conversionError || "Conversion failed")}">Conversion Failed</span>`
           : "";
   const downloadActions = convertedUrl
-    ? `<a href="${convertedUrl}" download="${escapeHtml(convertedName || "")}" class="btn btn-xs btn-accent btn-outline shrink-0">Download MP4</a>
-        <a href="${sourceUrl}" download="${escapeHtml(sourceName)}" class="btn btn-xs btn-outline shrink-0">Download TS</a>`
-    : `<a href="${sourceUrl}" download="${escapeHtml(sourceName)}" class="btn btn-xs btn-accent btn-outline shrink-0">Download</a>`;
+    ? `<a href="${convertedUrl}" download="${escapeHtml(convertedName || "")}" class="btn btn-xs btn-accent btn-outline shrink-0" aria-label="Download MP4 for ${safeName}">Download MP4</a>
+        <a href="${sourceUrl}" download="${escapeHtml(sourceName)}" class="btn btn-xs btn-outline shrink-0" aria-label="Download TS for ${safeName}">Download TS</a>`
+    : `<a href="${sourceUrl}" download="${escapeHtml(sourceName)}" class="btn btn-xs btn-accent btn-outline shrink-0" aria-label="Download ${safeName}">Download</a>`;
   const sizeLabel =
     convertedUrl && file.convertedSize
       ? `${formatFileSize(file.sourceSize ?? file.size)} TS / ${formatFileSize(file.convertedSize)} MP4`
