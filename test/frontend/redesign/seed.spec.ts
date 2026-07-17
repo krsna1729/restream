@@ -1700,6 +1700,10 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   await expect(
     monitor.getByRole("heading", { name: "Monitor previews" }),
   ).toBeVisible();
+  await expect(
+    monitor.getByRole("combobox", { name: "Monitor pipeline" }),
+  ).toBeVisible();
+  await expect(monitor.getByLabel("Search monitor outputs")).toBeVisible();
   await expect(routeSummary).toHaveText(
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );
@@ -1727,6 +1731,18 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   expect(initialMonitorButtonNames).not.toContain("Play All");
   expect(initialMonitorButtonNames).not.toContain("Pause All");
   expect(initialMonitorButtonNames).not.toContain("Reset");
+  expect(await getCdpNamesByRole(page, "combobox")).toContain(
+    "Monitor pipeline",
+  );
+  expect(await getCdpNamesByRole(page, "combobox")).not.toContain(
+    "Healthy ProgramRetrying Destination",
+  );
+  expect(await getCdpNamesByRole(page, "textbox")).toContain(
+    "Search monitor outputs",
+  );
+  expect(await getCdpNamesByRole(page, "textbox")).not.toContain(
+    "Search outputs...",
+  );
   const initialMonitorHeadingNames = await getCdpNamesByRole(page, "heading");
   expect(initialMonitorHeadingNames).toEqual(
     expect.arrayContaining([
