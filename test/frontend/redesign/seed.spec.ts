@@ -1408,6 +1408,75 @@ test("seed: ui=v2 pipeline workspace tabs preserve one selected context @desktop
   await expect(operateTab).toHaveAttribute("aria-selected", "true");
 });
 
+test("seed: ui=v2 top-level Pipeline tab restores last workspace context @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+    { expectOverviewReady: false },
+  );
+
+  await expect(page.locator("#pipeline-workspace-tab-monitor")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#control-room-pipeline-select")).toHaveValue(
+    "pipe-retrying",
+  );
+  await expect(page.locator("#control-room-route-summary")).toHaveText(
+    "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+  );
+
+  await page.locator("#workspace-tab-incidents").click();
+  await expect(page).toHaveURL(/mode=incidents/);
+  await expect(page.locator("#workspace-tab-incidents")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#incidents-route-summary")).toHaveText(
+    "0 critical · 1 warning · 1 recent event · fleet",
+  );
+
+  await page.locator("#workspace-tab-pipeline").click();
+  await expect(page).toHaveURL(/mode=pipeline/);
+  await expect(page).toHaveURL(/view=monitor/);
+  await expect(page).toHaveURL(/p=pipe-retrying/);
+  await expect(page.locator("#workspace-tab-pipeline")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#pipeline-workspace-tab-monitor")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#control-room-pipeline-select")).toHaveValue(
+    "pipe-retrying",
+  );
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Pipeline monitoring wall",
+  );
+  expect(await getCdpStatusTexts(page)).toContain(
+    "UI v2 checkpoint · Pipeline monitoring wall",
+  );
+
+  await page.goBack();
+  await expect(page).toHaveURL(/mode=incidents/);
+  await expect(page.locator("#workspace-tab-incidents")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.goBack();
+  await expect(page).toHaveURL(/mode=pipeline/);
+  await expect(page).toHaveURL(/view=monitor/);
+  await expect(page).toHaveURL(/p=pipe-retrying/);
+  await expect(page.locator("#pipeline-workspace-tab-monitor")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
 test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @desktop", async ({
   page,
 }) => {

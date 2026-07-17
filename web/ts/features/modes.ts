@@ -60,6 +60,7 @@ let settingsMounted = false;
 let statusMounted = false;
 let inspectPanelShellHtml: string | null = null;
 let controlPanelShellHtml: string | null = null;
+let lastPipelineWorkspaceHref: string | null = null;
 type NavigationFocus = "preserve" | "panel";
 interface NavigationOptions {
   focus?: NavigationFocus;
@@ -699,6 +700,26 @@ function dashboardV2ShellActive(): boolean {
   }
 }
 
+function rememberPipelineWorkspaceLocation(href = window.location.href): void {
+  try {
+    const location = resolveDashboardLocation(href);
+    if (location.mode !== "pipeline") return;
+    lastPipelineWorkspaceHref = location.url.href;
+  } catch (_err) {
+    lastPipelineWorkspaceHref = null;
+  }
+}
+
+function restoredPipelineWorkspaceUrl(): URL | null {
+  if (!dashboardV2ShellActive() || !lastPipelineWorkspaceHref) return null;
+  const currentUrl = new URL(window.location.href);
+  if (currentUrl.searchParams.has("p")) return null;
+  const restoredUrl = new URL(lastPipelineWorkspaceHref);
+  const currentUi = currentUrl.searchParams.get("ui");
+  if (currentUi) restoredUrl.searchParams.set("ui", currentUi);
+  return restoredUrl;
+}
+
 function snapshotPanelShell(panelId: string): string | null {
   const panel = document.getElementById(panelId);
   return panel ? panel.innerHTML : null;
@@ -955,13 +976,29 @@ export function setDashboardMode(
     );
     return;
   }
+  const currentLocation = resolveDashboardLocation(window.location.href);
+  if (currentLocation.mode === "pipeline") {
+    rememberPipelineWorkspaceLocation(currentLocation.url.href);
+  }
   const candidate = new URL(window.location.href);
   candidate.searchParams.set("mode", mode);
   candidate.searchParams.delete("view");
   const nextMode = resolveDashboardLocation(candidate.href).mode;
-  setModeUrl(nextMode);
+  if (nextMode === "pipeline" && currentLocation.mode === "pipeline") {
+    applyMode(nextMode, currentLocation.pipelineView);
+    if (options.focus === "panel") focusActivePanel();
+    return;
+  }
+  const restoredPipelineUrl =
+    nextMode === "pipeline" ? restoredPipelineWorkspaceUrl() : null;
+  if (restoredPipelineUrl) {
+    pushDashboardUrl(restoredPipelineUrl);
+  } else {
+    setModeUrl(nextMode);
+  }
   if (currentMode === nextMode) {
-    applyMode(nextMode, "operate");
+    const location = resolveDashboardLocation(window.location.href);
+    applyMode(nextMode, location.pipelineView);
     if (options.focus === "panel") focusActivePanel();
     return;
   }
@@ -975,6 +1012,7 @@ export function setPipelineWorkspaceView(
 ): void {
   const url = pipelineWorkspaceUrl(window.location.href, view, pipelineId);
   pushDashboardUrl(url);
+  rememberPipelineWorkspaceLocation(url.href);
   refreshActiveMode(options);
 }
 
@@ -988,6 +1026,9 @@ export function openInspectGraph(
 
 export function renderDashboardModes(): void {
   const location = canonicalizeDashboardLocation();
+  if (location.mode === "pipeline") {
+    rememberPipelineWorkspaceLocation(location.url.href);
+  }
   dashboardModePresentationSync?.(location);
   if (location.mode === "overview") renderOverview();
   if (location.mode === "pipeline" && location.pipelineView === "inspect") {
