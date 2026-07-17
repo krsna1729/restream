@@ -83,9 +83,7 @@ function StatusBadge({
     >
       <span className="truncate">{status.label}</span>
       {showDetail && status.detail ? (
-        <span className="text-base-content/75 font-normal">
-          {status.detail}
-        </span>
+        <span className="text-base-content font-normal">{status.detail}</span>
       ) : null}
     </span>
   );

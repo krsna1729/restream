@@ -474,3 +474,122 @@ test("cdp: ui=v2 wayfinding and next-step controls keep sturdy targets @desktop"
     expect(undersizedControls, route.href).toEqual([]);
   }
 });
+
+test("axe/cdp: ui=v2 routes expose named controls without serious accessibility findings @desktop", async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(FIXED_TIME);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const routes = [
+    {
+      href: "/?mode=overview&ui=v2",
+      readySelector: "#dashboard-v2-overview",
+    },
+    {
+      href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+      readySelector: "#dashboard-v2-pipeline-header-root",
+    },
+    {
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      readySelector: "#inspect-route-summary",
+    },
+    {
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      readySelector: "#control-room-route-summary",
+    },
+    {
+      href: "/?mode=media&ui=v2",
+      readySelector: "#media-library-results-summary",
+    },
+    {
+      href: "/?mode=settings&ui=v2",
+      readySelector: "#settings-route-summary",
+    },
+    {
+      href: "/?mode=status&ui=v2",
+      readySelector: "#status-route-summary",
+    },
+    {
+      href: "/?mode=incidents&ui=v2",
+      readySelector: "#incidents-route-summary",
+    },
+    {
+      href: "/?mode=telemetry&ui=v2",
+      readySelector: "#telemetry-route-summary",
+    },
+  ] as const;
+
+  await openSeededDashboard(page, "mixed-health", routes[0].href, {
+    expectOverviewReady: false,
+  });
+
+  for (const route of routes) {
+    if (page.url() !== new URL(route.href, page.url()).href) {
+      await page.goto(route.href);
+    }
+    await page.locator(route.readySelector).waitFor({ state: "visible" });
+
+    const results = await new AxeBuilder({ page })
+      .include("#dashboard-main")
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    const blocking = results.violations.filter(
+      (violation) =>
+        violation.impact === "serious" || violation.impact === "critical",
+    );
+    expect(blocking, route.href).toEqual([]);
+
+    const unnamedControls = await page.evaluate(() => {
+      const selector = [
+        "button",
+        "a[href]",
+        "input",
+        "select",
+        "summary",
+        '[role="button"]',
+        '[role="tab"]',
+        '[role="menuitem"]',
+      ].join(",");
+      return Array.from(document.querySelectorAll<HTMLElement>(selector))
+        .filter((element) => {
+          if (element.closest("[hidden], [aria-hidden='true']")) return false;
+          const style = window.getComputedStyle(element);
+          if (
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            style.pointerEvents === "none"
+          )
+            return false;
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        })
+        .map((element) => {
+          const formLabels =
+            element instanceof HTMLInputElement ||
+            element instanceof HTMLSelectElement ||
+            element instanceof HTMLTextAreaElement
+              ? Array.from(element.labels ?? [])
+                  .map((label) => label.textContent?.replace(/\s+/g, " ").trim())
+                  .filter(Boolean)
+                  .join(" ")
+              : "";
+          const label =
+            element.getAttribute("aria-label") ||
+            element.getAttribute("aria-labelledby") ||
+            element.getAttribute("title") ||
+            element.textContent?.replace(/\s+/g, " ").trim() ||
+            formLabels ||
+            element.getAttribute("placeholder") ||
+            "";
+          return {
+            id: element.id || null,
+            tag: element.tagName.toLowerCase(),
+            type: element.getAttribute("type"),
+            label,
+          };
+        })
+        .filter((control) => !control.label);
+    });
+    expect(unnamedControls, route.href).toEqual([]);
+  }
+});

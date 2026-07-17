@@ -89,7 +89,7 @@ function DashboardV2CheckpointCard({
             </span>
           </div>
           <p
-            className="text-base-content/65 mt-1 max-w-4xl text-sm"
+            className="text-base-content/75 mt-1 max-w-4xl text-sm"
             role="status"
             aria-live="polite"
           >
@@ -118,7 +118,7 @@ function DashboardV2CheckpointCard({
             className="border-base-content/10 bg-base-100/60 rounded-lg border px-3 py-2"
             key={label}
           >
-            <div className="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">
+            <div className="text-base-content/70 text-[0.68rem] font-semibold uppercase tracking-wide">
               {label}
             </div>
             <div className="mt-0.5 truncate text-sm font-medium tabular-nums">
@@ -128,7 +128,7 @@ function DashboardV2CheckpointCard({
         ))}
       </div>
       {metrics.length ? (
-        <div className="text-base-content/60 mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums">
+        <div className="text-base-content/75 mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums">
           {metrics.map((metric) => (
             <span key={metric.label}>
               {metric.label}: {metric.value}
@@ -137,11 +137,11 @@ function DashboardV2CheckpointCard({
         </div>
       ) : null}
       <div className="border-base-content/10 bg-base-100/50 mt-3 rounded-lg border px-3 py-2">
-        <div className="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">
+        <div className="text-base-content/70 text-[0.68rem] font-semibold uppercase tracking-wide">
           {focusTitle}
         </div>
         <p className="text-base-content/70 mt-1 text-sm">{focusLabel}</p>
-        <p className="text-base-content/60 mt-1 text-xs">
+        <p className="text-base-content/75 mt-1 text-xs">
           Next: {nextStep}
         </p>
       </div>
