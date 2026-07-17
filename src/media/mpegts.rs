@@ -167,6 +167,34 @@ fn parse_stream_descriptors(data: &[u8]) -> StreamDescriptors {
     descriptors
 }
 
+fn pmt_stream_loop_bounds(data: &[u8], end: usize) -> Option<(usize, usize)> {
+    let stream_loop_end = end.checked_sub(4)?; // trailing CRC32
+    if end > data.len() || stream_loop_end < 12 {
+        return None;
+    }
+
+    let program_info_len = ((data[10] as usize & 0x0F) << 8) | data[11] as usize;
+    let stream_loop_start = 12usize.checked_add(program_info_len)?;
+    if stream_loop_start > stream_loop_end {
+        return None;
+    }
+
+    let mut pos = stream_loop_start;
+    while pos < stream_loop_end {
+        let descriptor_start = pos.checked_add(5)?;
+        if descriptor_start > stream_loop_end {
+            return None;
+        }
+        let es_info_len = ((data[pos + 3] as usize & 0x0F) << 8) | data[pos + 4] as usize;
+        pos = descriptor_start.checked_add(es_info_len)?;
+        if pos > stream_loop_end {
+            return None;
+        }
+    }
+
+    Some((stream_loop_start, stream_loop_end))
+}
+
 /// Streaming MPEG-TS demuxer. Feed it chunks of TS data and drain packets.
 pub struct TsDemuxer {
     streams: Vec<StreamInfo>,
@@ -512,11 +540,11 @@ impl TsDemuxer {
         let data = &self.pmt_buf;
         let end = self.pmt_expected.min(data.len());
 
-        if data.len() < 12 {
+        let Some((mut pos, stream_loop_end)) = pmt_stream_loop_bounds(data, end) else {
             self.pmt_buf.clear();
             self.pmt_expected = 0;
             return;
-        }
+        };
 
         // Check PMT version_number (ISO 13818-1 table syntax: byte 5 bits 5–1).
         // Skip retransmissions of the same version; reset stream state on change.
@@ -542,20 +570,15 @@ impl TsDemuxer {
         self.video_track_count = 0;
         self.probe_payloads.clear();
 
-        let program_info_len = ((data[10] as usize & 0x0F) << 8) | data[11] as usize;
-        let mut pos = 12 + program_info_len;
-
         let mut has_video = false;
-        while pos + 5 <= end.saturating_sub(4) {
+        while pos < stream_loop_end {
             let stream_type = data[pos];
             let es_pid = ((data[pos + 1] as u16 & 0x1F) << 8) | data[pos + 2] as u16;
             let es_info_len = ((data[pos + 3] as usize & 0x0F) << 8) | data[pos + 4] as usize;
             let desc_start = pos + 5;
-            let desc_end = desc_start
-                .saturating_add(es_info_len)
-                .min(end.saturating_sub(4));
+            let desc_end = desc_start + es_info_len;
             let descriptors = parse_stream_descriptors(&data[desc_start..desc_end]);
-            pos += 5 + es_info_len;
+            pos = desc_end;
 
             if let Some(kind) = StreamKind::from_stream_type(stream_type) {
                 let track_index = match kind.media_type() {

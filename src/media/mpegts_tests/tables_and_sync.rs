@@ -132,6 +132,55 @@ fn pmt_version_change_rebuilds_stream_map() {
     assert_eq!(demuxer.streams[1].kind, StreamKind::AacAdts);
 }
 
+#[test]
+fn malformed_pmt_does_not_consume_version_or_replace_stream_map() {
+    let valid_v1 = make_pmt_ts_pkt(1, &[(0x1B, 0x100u16), (0x0F, 0x101u16)]);
+    let mut oversized_program_info = valid_v1.clone();
+    oversized_program_info[15] = 0xFF;
+    oversized_program_info[16] = 0xFF;
+    let mut oversized_es_info = valid_v1.clone();
+    oversized_es_info[20] = 0xFF;
+    oversized_es_info[21] = 0xFF;
+
+    for (case, malformed) in [
+        ("program_info_length", oversized_program_info),
+        ("ES_info_length", oversized_es_info),
+    ] {
+        let mut initial = Vec::new();
+        initial.extend_from_slice(&make_pat_ts_pkt());
+        initial.extend_from_slice(&make_pmt_ts_pkt(0, &[(0x1B, 0x100u16)]));
+
+        let mut demuxer = TsDemuxer::new();
+        demuxer.feed(&initial);
+        assert_eq!(demuxer.pmt_version, 0);
+        assert_eq!(demuxer.streams.len(), 1);
+        assert_eq!(demuxer.streams[0].pid, 0x100);
+
+        demuxer.feed(&malformed);
+
+        assert_eq!(
+            demuxer.pmt_version, 0,
+            "{case} overflow must not consume the malformed PMT version"
+        );
+        assert_eq!(
+            demuxer.streams.len(),
+            1,
+            "{case} overflow must not replace the working stream map"
+        );
+        assert_eq!(demuxer.streams[0].pid, 0x100);
+
+        demuxer.feed(&valid_v1);
+
+        assert_eq!(demuxer.pmt_version, 1);
+        assert_eq!(
+            demuxer.streams.len(),
+            2,
+            "a valid retransmission after {case} overflow must still be accepted"
+        );
+        assert_eq!(demuxer.streams[1].pid, 0x101);
+    }
+}
+
 // --- Regression: issue #12 — PCR negative guard ---
 
 #[test]

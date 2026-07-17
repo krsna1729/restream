@@ -107,7 +107,9 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   `program_info_length` and `ES_info_length` are known to fit the section. An
   oversized declared length can clear a working stream map and make the later
   valid retransmission look like a duplicate.
-- Status: open (Filed: 2026-07-17 by Q-002)
+- Status: done (Malformed program-info and ES-descriptor spans are rejected
+  before version/stream mutation; valid same-version retransmissions recover;
+  2026-07-17 by codex; Filed: 2026-07-17 by Q-002)
 
 ### Q-019 [resilience] [sonnet] Make MPEG-TS SPS probing fail closed on exhausted bits
 - Goal: `mpegts_probe::parse_h264_sps` and

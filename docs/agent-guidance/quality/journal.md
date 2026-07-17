@@ -35,6 +35,8 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-17 22:49 Q-017 DONE [codex]](#2026-07-17-2249-q-017-done-codex)
 - [2026-07-17 22:55 Q-002 STARTED [codex]](#2026-07-17-2255-q-002-started-codex)
 - [2026-07-17 23:18 Q-002 DONE [codex]](#2026-07-17-2318-q-002-done-codex)
+- [2026-07-17 23:23 Q-018 STARTED [codex]](#2026-07-17-2323-q-018-started-codex)
+- [2026-07-17 23:30 Q-018 DONE [codex]](#2026-07-17-2330-q-018-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -523,3 +525,30 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 | `srt::config::parse_pipeline_srt_ingest_policy` | C through serde failure and policy fallback tests | N/A | C: malformed/encrypted policy fails closed | N/A | N/A | Covered |
 | `file_ingest::parse_start_time_ms` | C: empty/syntax/negative | Q-022: finite/range overflow | C: invalid components rejected | N/A | N/A | Q-022 |
 | `hls::fmp4::parse_fmp4_segment_name` | C: wrong prefix/suffix | C: `u64` parse rejects overflow | C: non-segment names rejected | N/A | N/A | Covered; round-trip property test retained |
+
+## 2026-07-17 23:23 Q-018 STARTED [codex]
+- What: prove that malformed newer PMT sections cannot consume a version or
+  replace a working MPEG-TS stream map before a valid retransmission arrives.
+- Gates: pending break-it-first regression, scoped MPEG-TS test, before/after
+  demux benchmark, format, clippy, and full test gates.
+- Commit: none.
+- Follow-ups: none yet.
+
+## 2026-07-17 23:30 Q-018 DONE [codex]
+- What: validated the complete PMT stream-loop layout before reading its
+  version or mutating stream/PES state. One consolidated regression injects
+  both a 4,095-byte `program_info_length` and a 4,095-byte `ES_info_length`
+  into tiny PMTs, proves the working version/map survive, and proves the valid
+  same-version retransmission is accepted.
+- Gates: break-it-first regression failed with `pmt_version` advancing from 0
+  to 1; focused PMT suite passed 23 tests; scoped MPEG-TS suite passed 65
+  tests; `cargo fmt --all --check`, clippy with warnings denied, and the full
+  Rust test/doctest suite passed. The before/after
+  `data_path/mpegts_demux_drain` medians were 865.32/889.08 microseconds and
+  783.71/747.28 microseconds for take/reuse respectively; Criterion found no
+  regression (one unchanged comparison, one improvement, with noted host
+  variance/outliers).
+- Commit: this commit.
+- Follow-ups: none.
+- Notes: this remains off the per-packet steady-state path; structural
+  validation runs only when a complete PMT section arrives.
