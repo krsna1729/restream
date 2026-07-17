@@ -2503,6 +2503,15 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   await expect(
     telemetry.getByRole("button", { name: "View video telemetry details" }),
   ).toBeVisible();
+  const headingNames = await getCdpNamesByRole(page, "heading");
+  expect(headingNames).toEqual(
+    expect.arrayContaining([
+      "Engineer telemetry",
+      "Processing stages",
+      "Stage detail",
+    ]),
+  );
+  expect(headingNames).not.toEqual(expect.arrayContaining(["video", "audio"]));
   expect(await getCdpStatusTexts(page)).toContain(
     '1/4 telemetry items match "video" · 0 readers · 1 stage · 0 egresses',
   );

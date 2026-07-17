@@ -186,7 +186,7 @@ function renderStage(pipelineId: string, stage: TelemetryStage): string {
   const counterCount = Object.keys(stage.metrics || {}).length;
   const state = stage.active === false ? "inactive" : "active";
   return `<article class="border-base-content/10 bg-base-100 rounded-lg border p-3">
-    <div class="flex items-center justify-between gap-2"><div><h3 class="text-sm font-semibold">${escapeHtml(stage.kind)}</h3><p class="text-base-content/50 text-xs">${escapeHtml(state)}</p></div><button class="btn btn-xs btn-outline" type="button" aria-label="View ${escapeHtml(stage.kind)} telemetry details" data-stage-telemetry-key="${escapeHtml(key)}">Details</button></div>
+    <div class="flex items-center justify-between gap-2"><div><div class="text-sm font-semibold">${escapeHtml(stage.kind)}</div><p class="text-base-content/50 text-xs">${escapeHtml(state)}</p></div><button class="btn btn-xs btn-outline" type="button" aria-label="View ${escapeHtml(stage.kind)} telemetry details" data-stage-telemetry-key="${escapeHtml(key)}">Details</button></div>
     <p class="text-base-content/60 mt-3 text-xs">${escapeHtml(pluralize(counterCount, "counter"))} · raw values in Stage detail</p>
   </article>`;
 }
