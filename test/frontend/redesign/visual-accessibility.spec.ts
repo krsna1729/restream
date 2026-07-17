@@ -512,7 +512,7 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
     },
     {
       href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
-      maxVisibleControls: 34,
+      maxVisibleControls: 33,
       readySelector: "#dashboard-v2-pipeline-header-root",
     },
     {

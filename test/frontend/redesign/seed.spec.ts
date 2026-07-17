@@ -3701,10 +3701,12 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   expect(healthyHeaderButtonNames).not.toEqual(
     expect.arrayContaining(["Record", "Graph", "Diagnose", "Edit"]),
   );
+  expect(healthyHeaderButtonNames).not.toContain("Pipeline actions");
   await expect(page.locator("#pipeline-header-legacy-identity")).toBeHidden();
   await expect(page.locator("#graph-pipe-btn")).toBeHidden();
   await expect(page.locator("#diagnose-pipe-btn")).toBeHidden();
   await expect(page.locator("#edit-pipe-action-item")).toBeHidden();
+  await expect(page.locator("#pipeline-header-legacy-actions")).toBeHidden();
   await expect(page.locator("#record-pipe-btn")).toBeHidden();
   const inputStatus = page.locator("#dashboard-v2-pipeline-input-status-root");
   await expect(inputStatus).toBeVisible();

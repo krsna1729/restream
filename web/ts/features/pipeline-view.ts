@@ -124,6 +124,7 @@ export function configurePipelineHeaderPresentation(options: {
     "graph-pipe-btn",
     "diagnose-pipe-btn",
     "edit-pipe-action-item",
+    "pipeline-header-legacy-actions",
   ]) {
     const element = document.getElementById(id);
     if (element) element.hidden = !legacyPipelineHeaderRenderEnabled;
