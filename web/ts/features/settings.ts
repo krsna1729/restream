@@ -26,6 +26,7 @@ let lastRateLimitAttemptCount = 0;
 let lastRateLimitAttempts: RateLimitAttempt[] = [];
 let rateLimitSearchQuery = "";
 let authAttemptsExpanded = false;
+let authResetActionsExpanded = false;
 let settingsCheckpointCallback:
   | ((model: SettingsCheckpointModel | null) => void)
   | null = null;
@@ -486,7 +487,8 @@ export function renderSettingsPanel(container: HTMLElement): void {
                         <div class="text-sm font-medium">Authentication Attempts</div>
                         <div class="flex items-center gap-2">
                             <button class="btn btn-ghost btn-sm" data-settings-action="refresh-rate-limits">Refresh</button>
-                            <button class="btn btn-outline btn-sm" data-settings-action="reset-rate-limits">Reset All</button>
+                            <button id="auth-reset-actions-toggle" type="button" class="btn btn-outline btn-sm hidden" aria-expanded="false">Show reset actions</button>
+                            <button id="auth-reset-all-btn" class="btn btn-outline btn-sm" data-settings-action="reset-rate-limits">Reset All</button>
                         </div>
                     </div>
                     <div class="flex flex-wrap items-end gap-3">
@@ -506,7 +508,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                                     <th>IP</th>
                                     <th>Failures</th>
                                     <th>Status</th>
-                                    <th class="text-right">Reset</th>
+                                    <th id="auth-attempts-reset-heading" class="text-right">Reset</th>
                                 </tr>
                             </thead>
                             <tbody id="rate-limit-attempts-body">
@@ -636,6 +638,7 @@ function bindSettingsPanelActions(container: HTMLElement): void {
     const cursor = authSearch.selectionStart ?? authSearch.value.length;
     rateLimitSearchQuery = authSearch.value;
     authAttemptsExpanded = false;
+    authResetActionsExpanded = false;
     renderRateLimitAttempts(lastRateLimitAttempts);
     const nextSearch = document.getElementById(
       "auth-attempts-search",
@@ -648,6 +651,7 @@ function bindSettingsPanelActions(container: HTMLElement): void {
     ?.addEventListener("click", () => {
       rateLimitSearchQuery = "";
       authAttemptsExpanded = false;
+      authResetActionsExpanded = false;
       renderRateLimitAttempts(lastRateLimitAttempts);
       const searchInput =
         document.getElementById(
@@ -663,6 +667,13 @@ function bindSettingsPanelActions(container: HTMLElement): void {
     ?.addEventListener("click", () => {
       authAttemptsExpanded = !authAttemptsExpanded;
       renderRateLimitAttempts(lastRateLimitAttempts);
+    });
+  container
+    .querySelector<HTMLButtonElement>("#auth-reset-actions-toggle")
+    ?.addEventListener("click", () => {
+      authResetActionsExpanded = !authResetActionsExpanded;
+      renderRateLimitAttempts(lastRateLimitAttempts);
+      document.getElementById("auth-reset-actions-toggle")?.focus();
     });
   container.onclick = (event) => {
     const button = (event.target as Element | null)?.closest(
@@ -888,6 +899,28 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
     showToggle && !authAttemptsExpanded
       ? shownAttempts.slice(0, AUTH_ATTEMPT_VISIBLE_LIMIT)
       : shownAttempts;
+  const resetActionsVisible = !settingsV2Active() || authResetActionsExpanded;
+  const resetActionsToggle = document.getElementById(
+    "auth-reset-actions-toggle",
+  ) as HTMLButtonElement | null;
+  const resetAllButton = document.getElementById(
+    "auth-reset-all-btn",
+  ) as HTMLButtonElement | null;
+  const resetHeading = document.getElementById(
+    "auth-attempts-reset-heading",
+  ) as HTMLTableCellElement | null;
+  resetActionsToggle?.classList.toggle("hidden", !settingsV2Active());
+  resetActionsToggle?.setAttribute(
+    "aria-expanded",
+    authResetActionsExpanded ? "true" : "false",
+  );
+  if (resetActionsToggle) {
+    resetActionsToggle.textContent = authResetActionsExpanded
+      ? "Hide reset actions"
+      : "Show reset actions";
+  }
+  resetAllButton?.classList.toggle("hidden", !resetActionsVisible);
+  resetHeading?.classList.toggle("hidden", !resetActionsVisible);
   document
     .getElementById("auth-attempts-clear-search-btn")
     ?.classList.toggle("hidden", !search);
@@ -905,7 +938,7 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
       : `Show all ${shownAttempts.length}`;
   }
   if (visibleAttempts.length === 0) {
-    body.innerHTML = `<tr><td colspan="5" class="text-base-content/60">${search ? `No authentication attempts match "${escapeHtml(rateLimitSearchQuery.trim())}".` : "No attempts"}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="${resetActionsVisible ? "5" : "4"}" class="text-base-content/60">${search ? `No authentication attempts match "${escapeHtml(rateLimitSearchQuery.trim())}".` : "No attempts"}</td></tr>`;
     updateAuthAttemptsSearchSummary(
       shownAttempts.length,
       attempts.length,
@@ -922,13 +955,17 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
           <td><code>${escapeHtml(attempt.ip)}</code></td>
           <td>${attempt.failureCount}</td>
           <td>${escapeHtml(formatBanStatus(attempt))}</td>
-          <td class="text-right">
-            <button
-              class="btn btn-ghost btn-xs"
-              data-settings-action="reset-rate-limits"
-              data-scope="${escapeHtml(attempt.scope)}"
-              data-ip="${escapeHtml(attempt.ip)}">Reset</button>
-          </td>
+          ${
+            resetActionsVisible
+              ? `<td class="text-right">
+                  <button
+                    class="btn btn-ghost btn-xs"
+                    data-settings-action="reset-rate-limits"
+                    data-scope="${escapeHtml(attempt.scope)}"
+                    data-ip="${escapeHtml(attempt.ip)}">Reset</button>
+                </td>`
+              : ""
+          }
         </tr>`;
     })
     .join("");

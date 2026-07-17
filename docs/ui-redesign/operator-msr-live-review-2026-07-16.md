@@ -257,8 +257,8 @@ Settings now has the same lightweight operator checkpoint above the legacy admin
 form. The v2 strip answers the first operator question before the dense
 controls: which config surface is loaded, how many profiles exist, how many
 auth attempts are tracked, whether auth search is filtering, and whether any
-attempts are currently banned. Save/reset/logout/password/profile mutations
-remain legacy-owned below it.
+attempts are currently banned. Save/logout/password/profile mutations remain
+legacy-owned below it.
 
 Settings now also has a local authentication-attempt search surface. The route
 summary and v2 checkpoint remain the unfiltered settings truth, while the
@@ -269,6 +269,10 @@ counts.
 Dense authentication-attempt rows are now bounded by default with an explicit
 `Show all` affordance. Search still matches the full fetched security state,
 so an operator can scan the first few attempts before choosing full audit mode.
+Authentication reset actions now follow the same v2 maintenance-action rule:
+`Refresh` remains visible, while `Reset All` and per-row `Reset` buttons mount
+only after `Show reset actions`. That keeps the default security surface focused
+on blocked/tracked attempts and makes destructive recovery actions deliberate.
 Under `ui=v2`, Settings also now treats low-frequency advanced configuration
 groups as disclosure sections. Recording retention, global SRT ingest policy,
 backend policy, and transcode profiles show compact summaries first; the actual
@@ -400,7 +404,9 @@ What changed from the live operator pass:
   operator workspace.
 - Settings now opens on the operational security surface and tucks advanced
   Recording, SRT, Backend, and Profile forms behind explicit disclosure rows,
-  reducing the initial form wall without hiding the path to edits.
+  reducing the initial form wall without hiding the path to edits. Security
+  reset actions are also tucked behind an explicit disclosure, leaving Refresh
+  visible for routine inspection.
 - Shared auth expiry now preserves the full operator return path, including
   `ui=v2`, so a re-login can return to the interrupted v2 workflow instead of
   dumping the operator at the default Overview.

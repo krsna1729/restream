@@ -504,6 +504,31 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   await expect(
     settings.getByRole("cell", { name: "203.0.113.18" }),
   ).toHaveCount(0);
+  await expect(
+    settings.getByRole("button", { name: "Reset All" }),
+  ).toBeHidden();
+  await expect(
+    settings.getByRole("button", { name: "Reset", exact: true }),
+  ).toHaveCount(0);
+  const showResetActions = settings.getByRole("button", {
+    name: "Show reset actions",
+  });
+  await expect(showResetActions).toHaveAttribute("aria-expanded", "false");
+  await showResetActions.click();
+  await expect(
+    settings.getByRole("button", { name: "Reset All" }),
+  ).toBeVisible();
+  await expect(
+    settings.getByRole("button", { name: "Reset", exact: true }).first(),
+  ).toBeVisible();
+  const hideResetActions = settings.getByRole("button", {
+    name: "Hide reset actions",
+  });
+  await expect(hideResetActions).toHaveAttribute("aria-expanded", "true");
+  await hideResetActions.click();
+  await expect(
+    settings.getByRole("button", { name: "Reset All" }),
+  ).toBeHidden();
   const showAll = settings.getByRole("button", { name: "Show all 12" });
   await expect(showAll).toHaveAttribute("aria-expanded", "false");
   expect(await getCdpStatusTexts(page)).toContain("8 auth attempts shown of 12");
