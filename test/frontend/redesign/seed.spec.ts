@@ -2408,17 +2408,7 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
       "Export actions",
     ]),
   );
-  expect(await getCdpNamesByRole(page, "link")).toEqual(
-    expect.arrayContaining([
-      "Jump to build status",
-      "Jump to system status",
-      "Jump to toolchain details",
-      "Jump to native library details",
-      "Jump to SBOM details",
-      "Jump to recent activity",
-      "Jump to process logs",
-    ]),
-  );
+  await expect(status.getByLabel("Jump to status section")).toBeVisible();
   expect(await getCdpNamesByRole(page, "link")).not.toEqual(
     expect.arrayContaining([
       "Build",
@@ -2428,6 +2418,17 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
       "SBOM",
       "Activity",
       "Logs",
+    ]),
+  );
+  expect(await getCdpNamesByRole(page, "link")).not.toEqual(
+    expect.arrayContaining([
+      "Jump to build status",
+      "Jump to system status",
+      "Jump to toolchain details",
+      "Jump to native library details",
+      "Jump to SBOM details",
+      "Jump to recent activity",
+      "Jump to process logs",
     ]),
   );
   const hideExportActions = status.getByRole("button", {
@@ -2530,6 +2531,12 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
     "1 activity · 1 process log visible",
   );
   expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
+  const statusSectionJump = status.getByLabel("Jump to status section");
+  await statusSectionJump.selectOption("status-native-section");
+  await expect(
+    status.getByRole("button", { name: "Hide native library details" }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/#status-native-section$/);
 });
 
 test("seed: ui=v2 Status bounds dense process logs until requested @desktop", async ({

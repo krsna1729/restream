@@ -98,37 +98,30 @@ const STATUS_SECTION_NAV = [
   {
     id: "status-build-section",
     label: "Build",
-    ariaLabel: "Jump to build status",
   },
   {
     id: "status-system-section",
     label: "System",
-    ariaLabel: "Jump to system status",
   },
   {
     id: "status-toolchain-section",
     label: "Toolchain",
-    ariaLabel: "Jump to toolchain details",
   },
   {
     id: "status-native-section",
     label: "Libraries",
-    ariaLabel: "Jump to native library details",
   },
   {
     id: "status-sbom-section",
     label: "SBOM",
-    ariaLabel: "Jump to SBOM details",
   },
   {
     id: "status-activity-section",
     label: "Activity",
-    ariaLabel: "Jump to recent activity",
   },
   {
     id: "status-log-section",
     label: "Logs",
-    ariaLabel: "Jump to process logs",
   },
 ] as const;
 let statusDataSnapshot: StatusData | null = null;
@@ -363,10 +356,16 @@ function statusExportActionsHtml(): string {
 
 function statusQuickNavHtml(): string {
   return `<nav class="dashboard-nav-strip" aria-label="Status sections">
-      ${STATUS_SECTION_NAV.map(
-        (item) =>
-          `<a class="btn btn-sm btn-ghost" href="#${escapeHtml(item.id)}" aria-label="${escapeHtml(item.ariaLabel)}">${escapeHtml(item.label)}</a>`,
-      ).join("")}
+      <label class="flex w-full max-w-xs flex-col gap-1 text-sm">
+          <span class="text-base-content/60 text-xs font-medium uppercase tracking-[0.12em]">Jump to section</span>
+          <select id="status-section-jump" class="select select-sm w-full" aria-label="Jump to status section">
+              <option value="">Choose a status section…</option>
+              ${STATUS_SECTION_NAV.map(
+                (item) =>
+                  `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`,
+              ).join("")}
+          </select>
+      </label>
     </nav>`;
 }
 
@@ -763,6 +762,22 @@ async function copyJson(data: unknown): Promise<void> {
 }
 
 function bindActions(status: StatusData, sbomEndpoint: string): void {
+  document
+    .getElementById("status-section-jump")
+    ?.addEventListener("change", (event) => {
+      const select = event.currentTarget as HTMLSelectElement;
+      const targetId = select.value;
+      if (!targetId) return;
+      let target = document.getElementById(targetId);
+      if (!target) return;
+      const collapsedDetail = target.querySelector<HTMLButtonElement>(
+        "[data-status-advanced-section][aria-expanded='false']",
+      );
+      collapsedDetail?.click();
+      target = document.getElementById(targetId) ?? target;
+      target.scrollIntoView({ block: "start" });
+      history.replaceState(null, "", `#${targetId}`);
+    });
   const search = document.getElementById(
     "status-log-search",
   ) as HTMLInputElement | null;
