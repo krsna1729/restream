@@ -20,9 +20,11 @@ import { state } from "../core/state.js";
 import { withBasePath } from "../core/base-path.js";
 
 const SETTINGS_SECTION_COUNT = 5;
+const AUTH_ATTEMPT_VISIBLE_LIMIT = 8;
 let lastRateLimitAttemptCount = 0;
 let lastRateLimitAttempts: RateLimitAttempt[] = [];
 let rateLimitSearchQuery = "";
+let authAttemptsExpanded = false;
 
 // ── Load ──────────────────────────────────────────────
 
@@ -158,9 +160,13 @@ function authAttemptsSearchSummaryText(
   shownCount: number,
   totalCount: number,
   query: string,
+  visibleCount = shownCount,
 ): string {
   const trimmed = query.trim();
   if (!trimmed) {
+    if (shownCount > AUTH_ATTEMPT_VISIBLE_LIMIT) {
+      return `${pluralize(visibleCount, "auth attempt")} shown of ${shownCount}`;
+    }
     return `${pluralize(totalCount, "auth attempt")} visible`;
   }
   return `${shownCount}/${totalCount} auth attempts match "${trimmed}"`;
@@ -169,6 +175,7 @@ function authAttemptsSearchSummaryText(
 function updateAuthAttemptsSearchSummary(
   shownCount: number,
   totalCount: number,
+  visibleCount = shownCount,
 ): void {
   const summary = document.getElementById("auth-attempts-search-summary");
   if (!summary) return;
@@ -176,6 +183,7 @@ function updateAuthAttemptsSearchSummary(
     shownCount,
     totalCount,
     rateLimitSearchQuery,
+    visibleCount,
   );
 }
 
@@ -345,6 +353,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                             <input id="auth-attempts-search" class="input input-sm input-bordered mt-1" type="search" value="" placeholder="scope, IP, banned, tracking…" autocomplete="off" />
                         </label>
                         <button id="auth-attempts-clear-search-btn" type="button" class="btn btn-sm btn-outline hidden">Clear search</button>
+                        <button id="auth-attempts-toggle" type="button" class="btn btn-sm btn-outline hidden" aria-expanded="false">Show all</button>
                         <p id="auth-attempts-search-summary" class="text-base-content/60 pb-1 text-sm" role="status" aria-live="polite">0 auth attempts visible</p>
                     </div>
                     <div class="overflow-x-auto rounded-lg border border-base-content/10" role="region" aria-label="Authentication attempts" tabindex="0">
@@ -483,6 +492,7 @@ function bindSettingsPanelActions(container: HTMLElement): void {
   authSearch?.addEventListener("input", () => {
     const cursor = authSearch.selectionStart ?? authSearch.value.length;
     rateLimitSearchQuery = authSearch.value;
+    authAttemptsExpanded = false;
     renderRateLimitAttempts(lastRateLimitAttempts);
     const nextSearch = document.getElementById(
       "auth-attempts-search",
@@ -494,6 +504,7 @@ function bindSettingsPanelActions(container: HTMLElement): void {
     .querySelector<HTMLButtonElement>("#auth-attempts-clear-search-btn")
     ?.addEventListener("click", () => {
       rateLimitSearchQuery = "";
+      authAttemptsExpanded = false;
       renderRateLimitAttempts(lastRateLimitAttempts);
       const searchInput =
         document.getElementById(
@@ -503,6 +514,12 @@ function bindSettingsPanelActions(container: HTMLElement): void {
         searchInput.value = "";
         searchInput.focus();
       }
+    });
+  container
+    .querySelector<HTMLButtonElement>("#auth-attempts-toggle")
+    ?.addEventListener("click", () => {
+      authAttemptsExpanded = !authAttemptsExpanded;
+      renderRateLimitAttempts(lastRateLimitAttempts);
     });
   container.onclick = (event) => {
     const button = (event.target as Element | null)?.closest(
@@ -723,16 +740,38 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
   const shownAttempts = attempts.filter(
     (attempt) => !search || rateLimitAttemptSearchText(attempt).includes(search),
   );
+  const showToggle = !search && shownAttempts.length > AUTH_ATTEMPT_VISIBLE_LIMIT;
+  const visibleAttempts =
+    showToggle && !authAttemptsExpanded
+      ? shownAttempts.slice(0, AUTH_ATTEMPT_VISIBLE_LIMIT)
+      : shownAttempts;
   document
     .getElementById("auth-attempts-clear-search-btn")
     ?.classList.toggle("hidden", !search);
-  if (shownAttempts.length === 0) {
+  const toggle = document.getElementById(
+    "auth-attempts-toggle",
+  ) as HTMLButtonElement | null;
+  if (toggle) {
+    toggle.classList.toggle("hidden", !showToggle);
+    toggle.setAttribute(
+      "aria-expanded",
+      authAttemptsExpanded ? "true" : "false",
+    );
+    toggle.textContent = authAttemptsExpanded
+      ? "Show fewer"
+      : `Show all ${shownAttempts.length}`;
+  }
+  if (visibleAttempts.length === 0) {
     body.innerHTML = `<tr><td colspan="5" class="text-base-content/60">${search ? `No authentication attempts match "${escapeHtml(rateLimitSearchQuery.trim())}".` : "No attempts"}</td></tr>`;
-    updateAuthAttemptsSearchSummary(shownAttempts.length, attempts.length);
+    updateAuthAttemptsSearchSummary(
+      shownAttempts.length,
+      attempts.length,
+      visibleAttempts.length,
+    );
     updateSettingsSummary();
     return;
   }
-  body.innerHTML = shownAttempts
+  body.innerHTML = visibleAttempts
     .map((attempt) => {
       return `
         <tr>
@@ -750,7 +789,11 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
         </tr>`;
     })
     .join("");
-  updateAuthAttemptsSearchSummary(shownAttempts.length, attempts.length);
+  updateAuthAttemptsSearchSummary(
+    shownAttempts.length,
+    attempts.length,
+    visibleAttempts.length,
+  );
   updateSettingsSummary();
 }
 

@@ -16,6 +16,7 @@ export interface SeededDashboardOptions {
   alertsResponse?: (alerts: Record<string, unknown>) => unknown;
   eventsResponse?: (events: Record<string, unknown>) => unknown;
   mediaResponse?: (media: Record<string, unknown>) => unknown;
+  rateLimitResponse?: (rateLimits: Record<string, unknown>) => unknown;
   pipelineTelemetryResponse?: (
     pipelineId: string,
     telemetry: Record<string, unknown>,
@@ -598,19 +599,25 @@ export async function openSeededDashboard(
         await fulfillJson(route, seededEngineTelemetry(stateName));
         return;
       case "/api/v1/security/rate-limits":
-        await fulfillJson(route, {
-          attempts:
-            stateName === "mixed-health"
-              ? [
-                  {
-                    scope: "dashboard-login",
-                    ip: "203.0.113.10",
-                    failureCount: 2,
-                    banned: false,
-                  },
-                ]
-              : [],
-        });
+        {
+          const rateLimits = {
+            attempts:
+              stateName === "mixed-health"
+                ? [
+                    {
+                      scope: "dashboard-login",
+                      ip: "203.0.113.10",
+                      failureCount: 2,
+                      banned: false,
+                    },
+                  ]
+                : [],
+          };
+          await fulfillJson(
+            route,
+            options.rateLimitResponse?.(rateLimits) ?? rateLimits,
+          );
+        }
         return;
       case "/api/v1/engine/resource-map":
         await fulfillJson(route, { resources: [] });

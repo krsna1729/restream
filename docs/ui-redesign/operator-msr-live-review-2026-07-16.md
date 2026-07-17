@@ -220,6 +220,9 @@ summary remains the unfiltered settings truth, while the auth-attempt search
 summary announces hit and no-hit counts as status text. Seeded Playwright/CDP
 coverage proves operators can narrow by scope/IP/status, recover with a local
 Clear search action, and keep the authoritative settings counts.
+Dense authentication-attempt rows are now bounded by default with an explicit
+`Show all` affordance. Search still matches the full fetched security state,
+so an operator can scan the first few attempts before choosing full audit mode.
 
 Status process logs are now bounded by default with an explicit `Show all`
 affordance. The route still fetches the same recent history and search still

@@ -318,6 +318,65 @@ test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async 
   expect(v2Requests.length).toBe(1);
 });
 
+test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=settings&ui=v2", {
+    expectOverviewReady: false,
+    rateLimitResponse: () => ({
+      attempts: Array.from({ length: 12 }, (_, index) => ({
+        scope: index % 3 === 0 ? "dashboard-login" : "srt-publish",
+        ip: `203.0.113.${10 + index}`,
+        failureCount: index + 1,
+        banned: index % 4 === 0,
+        banRemainingMs: index % 4 === 0 ? 42_000 : undefined,
+      })),
+    }),
+  });
+
+  const settings = page.locator("#settings-mode-content");
+  const authSearch = settings.getByLabel("Search authentication attempts");
+  const authSearchSummary = settings.locator("#auth-attempts-search-summary");
+  await expect(page.locator("#settings-route-summary")).toHaveText(
+    "Synthetic Restream settings · 5 sections · 3 profiles · 12 auth attempts",
+  );
+  await expect(authSearchSummary).toHaveText("8 auth attempts shown of 12");
+  await expect(
+    settings.getByRole("cell", { name: "203.0.113.10" }),
+  ).toBeVisible();
+  await expect(
+    settings.getByRole("cell", { name: "203.0.113.18" }),
+  ).toHaveCount(0);
+  const showAll = settings.getByRole("button", { name: "Show all 12" });
+  await expect(showAll).toHaveAttribute("aria-expanded", "false");
+  expect(await getCdpStatusTexts(page)).toContain("8 auth attempts shown of 12");
+  expect(await getCdpNodeCount(page)).toBeLessThan(13_500);
+
+  await showAll.click();
+  await expect(settings.locator("#auth-attempts-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    settings.getByRole("cell", { name: "203.0.113.21" }),
+  ).toBeVisible();
+
+  await authSearch.fill("203.0.113.21");
+  await expect(authSearchSummary).toHaveText(
+    '1/12 auth attempts match "203.0.113.21"',
+  );
+  await expect(
+    settings.getByRole("cell", { name: "203.0.113.21" }),
+  ).toBeVisible();
+  await expect(
+    settings.getByRole("button", { name: /Show (all|fewer)/ }),
+  ).toHaveCount(0);
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/12 auth attempts match "203.0.113.21"',
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(13_500);
+});
+
 test("seed: ui=v2 legacy-owned routes keep operator checkpoints visible and announced @desktop", async ({
   page,
 }) => {
