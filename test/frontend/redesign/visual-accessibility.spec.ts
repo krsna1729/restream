@@ -653,6 +653,13 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
     ).toBeLessThanOrEqual(route.maxVisibleControls);
     const unnamedControls = controls.filter((control) => !control.label);
     expect(unnamedControls, route.href).toEqual([]);
+    const genericActionControls = controls.filter((control) =>
+      /^(More|Show|Hide) actions for\b/.test(control.label),
+    );
+    expect(
+      genericActionControls,
+      `${route.href} controls should name their action domain`,
+    ).toEqual([]);
     const visibleDashboardElements = await page.evaluate(() =>
       Array.from(
         document.querySelectorAll<HTMLElement>("#dashboard-main *"),
