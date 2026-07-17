@@ -1091,12 +1091,17 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
     expect.arrayContaining([
       "Stop Healthy Output",
       "More actions for Healthy Output",
-      "Graph",
-      "Diagnose",
+      "Inspect graph for Healthy Program",
+      "Diagnose Healthy Program",
     ]),
   );
+  expect(await getCdpNamesByRole(page, "button")).not.toEqual(
+    expect.arrayContaining(["Graph", "Diagnose"]),
+  );
 
-  await header.getByRole("button", { name: "Graph" }).click();
+  await header
+    .getByRole("button", { name: "Inspect graph for Healthy Program" })
+    .click();
   await expect(page).toHaveURL(/view=inspect/);
   await expect(page.locator("#inspect-mode-panel")).toBeVisible();
   await expect(page.locator("#inspect-mode-panel")).toBeFocused();
@@ -3235,35 +3240,65 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(page.locator("#file-source-section")).toBeHidden();
   await expect(page.locator("#record-pipe-btn")).toBeHidden();
   await expect(page.locator("#file-ingest-pipe-btn")).toBeHidden();
-  const startFile = pipelineHeader.getByRole("button", { name: "Start File" });
+  const startFile = pipelineHeader.getByRole("button", {
+    name: "Start file ingest for Retrying Destination",
+  });
   await startFile.click();
   await expect(
-    pipelineHeader.getByRole("button", { name: "Starting File..." }),
+    pipelineHeader.getByRole("button", {
+      name: "Starting file ingest for Retrying Destination",
+    }),
   ).toBeDisabled();
   await expect(
-    pipelineHeader.getByRole("button", { name: "Stop File" }),
+    pipelineHeader.getByRole("button", {
+      name: "Stop file ingest for Retrying Destination",
+    }),
   ).toBeEnabled();
-  await pipelineHeader.getByRole("button", { name: "Stop File" }).click();
+  await pipelineHeader
+    .getByRole("button", {
+      name: "Stop file ingest for Retrying Destination",
+    })
+    .click();
   await expect(
-    pipelineHeader.getByRole("button", { name: "Stopping File..." }),
+    pipelineHeader.getByRole("button", {
+      name: "Stopping file ingest for Retrying Destination",
+    }),
   ).toBeDisabled();
   await expect(startFile).toBeEnabled();
-  await pipelineHeader.getByRole("button", { name: "Stop Rec" }).click();
+  await pipelineHeader
+    .getByRole("button", {
+      name: "Stop recording for Retrying Destination",
+    })
+    .click();
   await expect(
-    pipelineHeader.getByRole("button", { name: "Stopping..." }),
+    pipelineHeader.getByRole("button", {
+      name: "Stopping recording for Retrying Destination",
+    }),
   ).toBeDisabled();
   await expect(
-    pipelineHeader.getByRole("button", { name: "Record" }),
+    pipelineHeader.getByRole("button", {
+      name: "Start recording for Retrying Destination",
+    }),
   ).toBeEnabled();
-  await pipelineHeader.getByRole("button", { name: "Record" }).click();
+  await pipelineHeader
+    .getByRole("button", {
+      name: "Start recording for Retrying Destination",
+    })
+    .click();
   await expect(
-    pipelineHeader.getByRole("button", { name: "Starting..." }),
+    pipelineHeader.getByRole("button", {
+      name: "Starting recording for Retrying Destination",
+    }),
   ).toBeDisabled();
   await expect(
-    pipelineHeader.getByRole("button", { name: "Stop Rec" }),
+    pipelineHeader.getByRole("button", {
+      name: "Stop recording for Retrying Destination",
+    }),
   ).toBeEnabled();
   await expect(
-    pipelineHeader.getByRole("button", { name: "Edit" }),
+    pipelineHeader.getByRole("button", {
+      name: "Edit pipeline Retrying Destination",
+    }),
   ).toBeDisabled();
   const outputOverview = page.locator(
     "#dashboard-v2-pipeline-output-overview-root",
@@ -3391,11 +3426,25 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(pipelineHeader).toContainText("RTMP");
   await expect(pipelineHeader).toContainText("Live");
   await expect(
-    pipelineHeader.getByRole("button", { name: "Graph" }),
+    pipelineHeader.getByRole("button", {
+      name: "Inspect graph for Healthy Program",
+    }),
   ).toBeEnabled();
   await expect(
-    pipelineHeader.getByRole("button", { name: "Diagnose" }),
+    pipelineHeader.getByRole("button", { name: "Diagnose Healthy Program" }),
   ).toBeEnabled();
+  const healthyHeaderButtonNames = await getCdpNamesByRole(page, "button");
+  expect(healthyHeaderButtonNames).toEqual(
+    expect.arrayContaining([
+      "Start recording for Healthy Program",
+      "Inspect graph for Healthy Program",
+      "Diagnose Healthy Program",
+      "Edit pipeline Healthy Program",
+    ]),
+  );
+  expect(healthyHeaderButtonNames).not.toEqual(
+    expect.arrayContaining(["Record", "Graph", "Diagnose", "Edit"]),
+  );
   await expect(page.locator("#pipeline-header-legacy-identity")).toBeHidden();
   await expect(page.locator("#graph-pipe-btn")).toBeHidden();
   await expect(page.locator("#diagnose-pipe-btn")).toBeHidden();
@@ -3484,7 +3533,9 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(outputOverview).toContainText("Running");
   await expect(outputOverview).toContainText("No outputs need attention");
 
-  await pipelineHeader.getByRole("button", { name: "Edit" }).click();
+  await pipelineHeader
+    .getByRole("button", { name: "Edit pipeline Healthy Program" })
+    .click();
   await expect(page.locator("#edit-pipe-modal")).toBeVisible();
   await expect(page.locator("#pipe-modal-title")).toHaveText("Edit Pipeline");
   await page.locator("#edit-pipe-modal").press("Escape");
@@ -4103,9 +4154,13 @@ test("ui=v2 keeps failed recording mutation context in the pipeline header @desk
   await cdp.send("Performance.enable");
   await cdp.send("Performance.getMetrics");
 
-  await header.getByRole("button", { name: "Record" }).click();
+  await header
+    .getByRole("button", { name: "Start recording for Healthy Program" })
+    .click();
   await expect(
-    header.getByRole("button", { name: "Starting..." }),
+    header.getByRole("button", {
+      name: "Starting recording for Healthy Program",
+    }),
   ).toBeDisabled();
   await expect(
     header.getByRole("status").filter({
@@ -4114,7 +4169,9 @@ test("ui=v2 keeps failed recording mutation context in the pipeline header @desk
   ).toBeVisible();
   await expect(header).toContainText("Start recording did not complete");
   await expect(
-    header.getByRole("button", { name: "Record" }),
+    header.getByRole("button", {
+      name: "Start recording for Healthy Program",
+    }),
   ).toBeEnabled();
   await expect(page.locator("#error-alert")).toContainText(
     "recording target disk is full",
@@ -4165,9 +4222,15 @@ test("ui=v2 keeps failed file-ingest mutation context in the pipeline header @de
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Performance.enable");
 
-  await header.getByRole("button", { name: "Start File" }).click();
+  await header
+    .getByRole("button", {
+      name: "Start file ingest for Retrying Destination",
+    })
+    .click();
   await expect(
-    header.getByRole("button", { name: "Starting File..." }),
+    header.getByRole("button", {
+      name: "Starting file ingest for Retrying Destination",
+    }),
   ).toBeDisabled();
   await expect(
     header.getByRole("status").filter({
@@ -4176,7 +4239,9 @@ test("ui=v2 keeps failed file-ingest mutation context in the pipeline header @de
   ).toBeVisible();
   await expect(header).toContainText("Start file ingest did not complete");
   await expect(
-    header.getByRole("button", { name: "Start File" }),
+    header.getByRole("button", {
+      name: "Start file ingest for Retrying Destination",
+    }),
   ).toBeEnabled();
   await expect(page.locator("#error-alert")).toContainText(
     "file source disappeared before ingest start",

@@ -807,6 +807,13 @@ function DashboardV2PipelineHeader({
   actions: DashboardV2PipelineHeaderActions;
   model: PipelineOperateHeaderModel;
 }): React.JSX.Element {
+  const fileIngestActionLabel = model.fileIngestControl
+    ? formatPipelineHeaderFileIngestActionLabel(model.fileIngestControl.label)
+    : "";
+  const recordingActionLabel = formatPipelineHeaderRecordingActionLabel(
+    model.recordingControl.label,
+  );
+
   return (
     <section
       aria-labelledby="dashboard-v2-pipeline-title"
@@ -834,6 +841,7 @@ function DashboardV2PipelineHeader({
         <div className="flex shrink-0 flex-wrap gap-2">
           {model.fileIngestControl ? (
             <button
+              aria-label={`${fileIngestActionLabel} for ${model.name}`}
               className={`btn btn-xs ${
                 model.fileIngestControl.danger ? "btn-error" : "btn-accent"
               } ${model.fileIngestControl.outlined ? "btn-outline" : ""}`}
@@ -846,6 +854,7 @@ function DashboardV2PipelineHeader({
             </button>
           ) : null}
           <button
+            aria-label={`${recordingActionLabel} for ${model.name}`}
             className={`btn btn-xs ${
               model.recordingControl.danger ? "btn-error" : "btn-accent"
             } ${model.recordingControl.outlined ? "btn-outline" : ""}`}
@@ -857,6 +866,7 @@ function DashboardV2PipelineHeader({
             {model.recordingControl.label}
           </button>
           <button
+            aria-label={`Inspect graph for ${model.name}`}
             className="btn btn-xs btn-accent btn-outline"
             onClick={() => actions.inspectPipeline(model.id)}
             type="button"
@@ -864,6 +874,7 @@ function DashboardV2PipelineHeader({
             Graph
           </button>
           <button
+            aria-label={`Diagnose ${model.name}`}
             className="btn btn-xs btn-accent btn-outline"
             disabled={!model.canDiagnose}
             onClick={() => actions.diagnosePipeline(model.id)}
@@ -873,6 +884,7 @@ function DashboardV2PipelineHeader({
             Diagnose
           </button>
           <button
+            aria-label={`Edit pipeline ${model.name}`}
             className="btn btn-xs btn-outline"
             disabled={!model.canEdit}
             onClick={() => actions.editPipeline(model.id)}
@@ -900,6 +912,27 @@ function DashboardV2PipelineHeader({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function normalizePendingActionLabel(label: string): string {
+  return label.replace(/\.\.\.$/, "").trim();
+}
+
+function formatPipelineHeaderFileIngestActionLabel(label: string): string {
+  return normalizePendingActionLabel(label).replace(/\s+File$/, " file ingest");
+}
+
+function formatPipelineHeaderRecordingActionLabel(label: string): string {
+  const normalized = normalizePendingActionLabel(label);
+
+  if (normalized === "Record") {
+    return "Start recording";
+  }
+
+  return normalized.replace(/\s+Rec$/, " recording").replace(
+    /^(Starting|Stopping)$/,
+    "$1 recording",
   );
 }
 
