@@ -512,7 +512,18 @@ export function renderEngineerTelemetryHtml(
         </section>
       </div>
       <div class="space-y-4"><section><h2 class="mb-3 font-semibold">Processing stages</h2><div class="grid gap-3 md:grid-cols-2">${filteredStages.length ? filteredStages.map((item) => renderStage(pipelineId, item)).join("") : `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">${normalizedSearch ? `No stages match "${escapeHtml(searchQuery.trim())}".` : "No active stages."}</div>`}</div></section>
-      <section id="stage-telemetry-detail" class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Stage detail</h2>${status.stageUnavailable ? `<p class="text-warning mt-2 text-sm">Fresh stage detail is unavailable; the stage may have stopped. Last known counters remain visible when available.</p>` : ""}${stage ? `<div class="mt-1 text-xs text-base-content/60">${escapeHtml(stage.stageKey)}</div><div class="mt-3 grid gap-4 md:grid-cols-2"><div><h3 class="mb-2 text-sm font-medium">Throughput</h3>${metricRows(stage.metrics)}</div><div><h3 class="mb-2 text-sm font-medium">Pipe</h3>${metricRows(stage.pipeMetrics)}</div></div>` : status.stageUnavailable ? "" : `<p class="text-base-content/60 mt-3 text-sm">Select a stage to fetch its current detail.</p>`}</section></div>
+      <section id="stage-telemetry-detail" class="border-base-content/10 bg-base-200 rounded-lg border p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="font-semibold">Stage detail</h2>
+          ${
+            stage && telemetryV2Active()
+              ? `<button id="telemetry-stage-detail-hide" type="button" class="btn btn-xs btn-outline">Hide stage details</button>`
+              : ""
+          }
+        </div>
+        ${status.stageUnavailable ? `<p class="text-warning mt-2 text-sm">Fresh stage detail is unavailable; the stage may have stopped. Last known counters remain visible when available.</p>` : ""}
+        ${stage ? `<div class="mt-1 text-xs text-base-content/60">${escapeHtml(stage.stageKey)}</div><div class="mt-3 grid gap-4 md:grid-cols-2"><div><h3 class="mb-2 text-sm font-medium">Throughput</h3>${metricRows(stage.metrics)}</div><div><h3 class="mb-2 text-sm font-medium">Pipe</h3>${metricRows(stage.pipeMetrics)}</div></div>` : status.stageUnavailable ? "" : `<p class="text-base-content/60 mt-3 text-sm">Select a stage to fetch its current detail.</p>`}
+      </section></div>
     </div>`
         : pipelineId
           ? `<div class="border-base-content/10 bg-base-200 rounded-lg border p-8 text-center text-sm">${status.loaded ? "Pipeline telemetry is unavailable." : "Loading pipeline telemetry…"}</div>`
@@ -583,6 +594,14 @@ function paintTelemetry(): void {
     .getElementById("telemetry-host-settings-toggle")
     ?.addEventListener("click", () => {
       telemetryHostSettingsExpanded = !telemetryHostSettingsExpanded;
+      paintTelemetry();
+    });
+  document
+    .getElementById("telemetry-stage-detail-hide")
+    ?.addEventListener("click", () => {
+      selectedStageKey = "";
+      stageSnapshot = null;
+      stageUnavailable = false;
       paintTelemetry();
     });
   document

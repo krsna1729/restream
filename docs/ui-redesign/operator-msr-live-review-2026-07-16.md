@@ -237,7 +237,9 @@ Telemetry stage cards now behave as a scan layer instead of a raw counter dump:
 each card shows stage state plus counter count, then sends the operator to the
 Stage detail panel for raw values. Seeded Playwright/CDP coverage proves the
 raw `packetsOut` counter is absent from the initial stage grid and appears only
-after the operator activates the stage Details control.
+after the operator activates the stage Details control. v2 also lets the
+operator hide the selected stage detail again, returning the page to the
+counter-scan state after inspection.
 
 Telemetry also now has a local filter across readers, processing stages, and
 egresses. The filter summary is announced as status text, so operators can

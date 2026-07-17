@@ -2236,6 +2236,18 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   await expect(telemetry.locator("#stage-telemetry-detail")).toContainText(
     "packetsOut",
   );
+  await expect(
+    telemetry.getByRole("button", { name: "Hide stage details" }),
+  ).toBeVisible();
+  await telemetry.getByRole("button", { name: "Hide stage details" }).click();
+  await expect(telemetry.locator("#stage-telemetry-detail")).not.toContainText(
+    "packetsOut",
+  );
+  await expect(
+    telemetry.locator("#stage-telemetry-detail").getByText(
+      "Select a stage to fetch its current detail.",
+    ),
+  ).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Retrying Destination",
   );
