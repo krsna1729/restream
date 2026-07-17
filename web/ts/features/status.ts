@@ -95,13 +95,41 @@ const STATUS_PROCESS_LOG_LIMIT = 80;
 const STATUS_PROCESS_LOG_VISIBLE_LIMIT = 20;
 const STATUS_ACTIVITY_LIMIT = 12;
 const STATUS_SECTION_NAV = [
-  { id: "status-build-section", label: "Build" },
-  { id: "status-system-section", label: "System" },
-  { id: "status-toolchain-section", label: "Toolchain" },
-  { id: "status-native-section", label: "Libraries" },
-  { id: "status-sbom-section", label: "SBOM" },
-  { id: "status-activity-section", label: "Activity" },
-  { id: "status-log-section", label: "Logs" },
+  {
+    id: "status-build-section",
+    label: "Build",
+    ariaLabel: "Jump to build status",
+  },
+  {
+    id: "status-system-section",
+    label: "System",
+    ariaLabel: "Jump to system status",
+  },
+  {
+    id: "status-toolchain-section",
+    label: "Toolchain",
+    ariaLabel: "Jump to toolchain details",
+  },
+  {
+    id: "status-native-section",
+    label: "Libraries",
+    ariaLabel: "Jump to native library details",
+  },
+  {
+    id: "status-sbom-section",
+    label: "SBOM",
+    ariaLabel: "Jump to SBOM details",
+  },
+  {
+    id: "status-activity-section",
+    label: "Activity",
+    ariaLabel: "Jump to recent activity",
+  },
+  {
+    id: "status-log-section",
+    label: "Logs",
+    ariaLabel: "Jump to process logs",
+  },
 ] as const;
 let statusDataSnapshot: StatusData | null = null;
 let statusProcessLogs: AppLogRow[] = [];
@@ -322,7 +350,7 @@ function statusQuickNavHtml(): string {
   return `<nav class="dashboard-nav-strip" aria-label="Status sections">
       ${STATUS_SECTION_NAV.map(
         (item) =>
-          `<a class="btn btn-sm btn-ghost" href="#${escapeHtml(item.id)}">${escapeHtml(item.label)}</a>`,
+          `<a class="btn btn-sm btn-ghost" href="#${escapeHtml(item.id)}" aria-label="${escapeHtml(item.ariaLabel)}">${escapeHtml(item.label)}</a>`,
       ).join("")}
     </nav>`;
 }

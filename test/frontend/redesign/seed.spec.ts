@@ -2317,6 +2317,28 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
       "Export actions",
     ]),
   );
+  expect(await getCdpNamesByRole(page, "link")).toEqual(
+    expect.arrayContaining([
+      "Jump to build status",
+      "Jump to system status",
+      "Jump to toolchain details",
+      "Jump to native library details",
+      "Jump to SBOM details",
+      "Jump to recent activity",
+      "Jump to process logs",
+    ]),
+  );
+  expect(await getCdpNamesByRole(page, "link")).not.toEqual(
+    expect.arrayContaining([
+      "Build",
+      "System",
+      "Toolchain",
+      "Libraries",
+      "SBOM",
+      "Activity",
+      "Logs",
+    ]),
+  );
   const hideExportActions = status.getByRole("button", {
     name: "Hide status export actions",
   });
