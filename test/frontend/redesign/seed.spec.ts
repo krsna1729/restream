@@ -1435,6 +1435,82 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
 });
 
+test("seed: ui=v2 Monitor search understands operator status terms @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "chaos-recovery",
+    "/?mode=pipeline&view=monitor&p=pipe-retry-budget&ui=v2",
+    {
+      expectOverviewReady: false,
+      settingsResponse: (settings) => ({
+        ...settings,
+        outputs: (settings.outputs as Array<Record<string, unknown>>).map(
+          (output) =>
+            output.pipelineId === "pipe-retry-budget"
+              ? {
+                  ...output,
+                  monitoringUrl: `https://monitor.example.invalid/${String(output.id)}`,
+                }
+              : output,
+        ),
+      }),
+    },
+  );
+
+  const monitor = page.locator("#control-mode-panel");
+  const checkpoint = page.locator("#dashboard-v2-control-room-root");
+  const search = monitor.locator("#control-room-search-input");
+  const summary = monitor.locator("#control-room-summary");
+  await expect(monitor.locator("#control-room-route-summary")).toHaveText(
+    "Monitoring Retry Budget Exhausted · 2 outputs · 2 monitors · 0 missing URLs",
+  );
+  await expect(checkpoint.getByText("2 monitors down")).toBeVisible();
+  await expect(summary).toHaveText(
+    "2/2 monitored · 0 missing monitoring URLs",
+  );
+
+  await search.fill("down");
+  await expect(summary).toHaveText(
+    '2/2 monitored match · 0 missing monitoring URLs · "down"',
+  );
+  await expect(
+    monitor.getByText("RTMP dead sink", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    monitor.getByText("SRT dead sink", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    checkpoint.getByText('2/2 match "down"', { exact: true }),
+  ).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '2/2 monitored match · 0 missing monitoring URLs · "down"',
+  );
+
+  await search.fill("flapping");
+  await expect(summary).toHaveText(
+    '2/2 monitored match · 0 missing monitoring URLs · "flapping"',
+  );
+  await expect(
+    checkpoint.getByText('2/2 match "flapping"', { exact: true }),
+  ).toBeVisible();
+
+  await search.fill("running");
+  await expect(summary).toHaveText(
+    '0/2 monitored match · 0 missing monitoring URLs · "running"',
+  );
+  await expect(
+    monitor.getByText(
+      'No monitoring outputs match "running". Clear search to show all monitoring cards.',
+    ),
+  ).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '0/2 monitored match · 0 missing monitoring URLs · "running"',
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
+});
+
 test("seed: ui=v2 Monitor lazily loads generic web previews @desktop", async ({
   page,
 }) => {

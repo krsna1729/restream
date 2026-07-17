@@ -232,15 +232,10 @@ function normalizeState(): void {
     return;
   }
 
-  let outputs = listMonitoringOutputsForPipeline(selectedPipelineId);
-  if (controlRoomState.searchQuery) {
-    const q = controlRoomState.searchQuery.toLowerCase().trim();
-    outputs = outputs.filter(
-      (out) =>
-        out.outputName.toLowerCase().includes(q) ||
-        (out.monitoringUrl || "").toLowerCase().includes(q),
-    );
-  }
+  const outputs = filterMonitoringOutputs(
+    listMonitoringOutputsForPipeline(selectedPipelineId),
+    controlRoomState.searchQuery,
+  );
   const pageCount = Math.max(1, Math.ceil(outputs.length / OUTPUTS_PER_PAGE));
   controlRoomState.page = Math.min(
     Math.max(0, controlRoomState.page),
@@ -420,22 +415,7 @@ function buildOutputCard(
 ): ControlRoomCardDescriptor {
   const monitoringUrl = output.monitoringUrl || null;
   const previewable = isPreviewableOutputStatus(output.status);
-  const normalizedStatus = (output.status || "off").trim().toLowerCase();
-  const statusLabel =
-    output.flapping &&
-    (normalizedStatus === "running" ||
-      normalizedStatus === "on" ||
-      normalizedStatus === "warning")
-      ? "Flapping"
-      : normalizedStatus === "running" || normalizedStatus === "on"
-        ? "Live"
-        : normalizedStatus === "retrying"
-          ? "Recovering"
-          : normalizedStatus === "warning"
-            ? "Unstable"
-            : normalizedStatus === "failed"
-              ? "Down"
-              : "Stopped";
+  const statusLabel = getOutputMonitorStatusLabel(output);
   return {
     id: `output:${output.outputId}`,
     title: output.outputName,
@@ -1692,11 +1672,51 @@ function filterMonitoringOutputs(
 ): ControlRoomOutputOption[] {
   const q = searchQuery.toLowerCase().trim();
   if (!q) return outputs;
-  return outputs.filter(
-    (out) =>
-      out.outputName.toLowerCase().includes(q) ||
-      (out.monitoringUrl || "").toLowerCase().includes(q),
+  return outputs.filter((out) =>
+    getMonitoringOutputSearchText(out).includes(q),
   );
+}
+
+function getOutputMonitorStatusLabel(output: ControlRoomOutputOption): string {
+  const normalizedStatus = (output.status || "off").trim().toLowerCase();
+  return output.flapping &&
+    (normalizedStatus === "running" ||
+      normalizedStatus === "on" ||
+      normalizedStatus === "warning")
+    ? "Flapping"
+    : normalizedStatus === "running" || normalizedStatus === "on"
+      ? "Live"
+      : normalizedStatus === "retrying"
+        ? "Recovering"
+        : normalizedStatus === "warning"
+          ? "Unstable"
+          : normalizedStatus === "failed"
+            ? "Down"
+            : "Stopped";
+}
+
+function getMonitoringOutputSearchText(output: ControlRoomOutputOption): string {
+  const normalizedStatus = (output.status || "").trim().toLowerCase();
+  const statusLabel = getOutputMonitorStatusLabel(output).toLowerCase();
+  const statusAliases = new Set<string>();
+  if (normalizedStatus) statusAliases.add(normalizedStatus);
+  if (statusLabel) statusAliases.add(statusLabel);
+  if (output.flapping) statusAliases.add("flapping");
+  if (statusLabel === "live") statusAliases.add("running");
+  if (statusLabel === "down") statusAliases.add("failed");
+  if (statusLabel === "recovering") statusAliases.add("retrying");
+  if (statusLabel === "stopped") {
+    statusAliases.add("off");
+    statusAliases.add("offline");
+  }
+  return [
+    output.outputName,
+    output.monitoringUrl || "",
+    output.pipelineName,
+    ...statusAliases,
+  ]
+    .join(" ")
+    .toLowerCase();
 }
 
 function pluralize(
