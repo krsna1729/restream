@@ -218,7 +218,11 @@ test("axe/cdp: ui=v2 Operate preserves contrast and semantic landmarks", async (
   );
   expect(headingNames).not.toContain("PIPELINES");
   expect(await getCdpNamesByRole(page, "button")).toEqual(
-    expect.arrayContaining(["Graph", "Diagnose", "Show all 30"]),
+    expect.arrayContaining([
+      "Inspect graph for Recovered Sink Flap",
+      "Diagnose Recovered Sink Flap",
+      "Show all 30 audio tracks",
+    ]),
   );
   expect(await getCdpHeadingLevels(page)).toEqual(
     expect.arrayContaining([

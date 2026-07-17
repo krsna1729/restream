@@ -273,6 +273,7 @@ function DashboardV2Overview({
           </p>
         </div>
         <button
+          aria-label="Add a new pipeline"
           className="btn btn-sm btn-primary"
           onClick={actions.addPipeline}
           type="button"
@@ -312,6 +313,7 @@ function DashboardV2Overview({
               </p>
             </div>
             <button
+              aria-label="Open restream runtime detail"
               className="btn btn-sm btn-outline"
               onClick={actions.openStatus}
               type="button"
@@ -341,6 +343,7 @@ function DashboardV2Overview({
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
+                      aria-label={`Operate ${item.pipelineName}`}
                       className="btn btn-xs btn-outline"
                       onClick={() => actions.openPipeline(item.pipelineId)}
                       type="button"
@@ -348,6 +351,7 @@ function DashboardV2Overview({
                       Operate
                     </button>
                     <button
+                      aria-label={`Inspect ${item.pipelineName}`}
                       className="btn btn-xs btn-outline"
                       onClick={() => actions.inspectPipeline(item.pipelineId)}
                       type="button"

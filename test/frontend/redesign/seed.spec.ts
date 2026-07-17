@@ -1038,7 +1038,7 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
 
   await page.locator("#workspace-tab-overview").focus();
   const addPipeline = overview.getByRole("button", {
-    name: "Add Pipeline",
+    name: "Add a new pipeline",
     exact: true,
   });
   await tabUntilFocused(page, addPipeline);
@@ -1048,7 +1048,7 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
     .locator("article")
     .filter({ hasText: "Retrying Destination" });
   const operate = attentionCard.getByRole("button", {
-    name: "Operate",
+    name: "Operate Retrying Destination",
     exact: true,
   });
   await tabUntilFocused(page, operate);
@@ -1132,7 +1132,7 @@ test("seed: ui=v2 skip link reaches main content before dense chrome @desktop", 
   await expect(
     page
       .locator("#dashboard-v2-overview")
-      .getByRole("button", { name: "Add Pipeline", exact: true }),
+      .getByRole("button", { name: "Add a new pipeline", exact: true }),
   ).toBeFocused();
 });
 
@@ -1147,7 +1147,7 @@ test("seed: ui=v2 overview Operate is one predictable history step @desktop", as
     .locator("#dashboard-v2-overview")
     .locator("article")
     .filter({ hasText: "Retrying Destination" })
-    .getByRole("button", { name: "Operate", exact: true })
+    .getByRole("button", { name: "Operate Retrying Destination", exact: true })
     .click();
   await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
   await expect(page).toHaveURL(/view=operate/);
@@ -1215,7 +1215,7 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
     .locator("#dashboard-v2-overview")
     .locator("article")
     .filter({ hasText: "Retrying Destination" })
-    .getByRole("button", { name: "Inspect", exact: true })
+    .getByRole("button", { name: "Inspect Retrying Destination", exact: true })
     .click();
   await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
   await expect(page).toHaveURL(/view=inspect/);
@@ -3200,12 +3200,12 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   ).toEqual({ childCount: 0, text: "" });
 
   await v2Overview
-    .getByRole("button", { name: "Add Pipeline", exact: true })
+    .getByRole("button", { name: "Add a new pipeline", exact: true })
     .click();
   await expect(page.locator("#edit-pipe-modal")).toBeVisible();
   await page.locator("#edit-pipe-modal").press("Escape");
   await v2Overview
-    .getByRole("button", { name: "Operate", exact: true })
+    .getByRole("button", { name: "Operate Retrying Destination", exact: true })
     .click();
   await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
   await expect(page.locator("#dashboard-grid")).toBeVisible();
