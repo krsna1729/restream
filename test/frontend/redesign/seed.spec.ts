@@ -324,7 +324,9 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     '0/1 auth attempts match "banned"',
   );
   await expect(
-    settings.getByText('No authentication attempts match "banned".'),
+    settings.getByText(
+      'No authentication attempts match "banned". Clear search to return to the full security log.',
+    ),
   ).toBeVisible();
   const clearSearch = settings.getByRole("button", { name: "Clear search" });
   await expect(clearSearch).toBeVisible();

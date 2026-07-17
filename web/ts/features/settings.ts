@@ -972,7 +972,7 @@ function renderRateLimitAttempts(attempts: RateLimitAttempt[]): void {
       : `Show all ${shownAttempts.length}`;
   }
   if (visibleAttempts.length === 0) {
-    body.innerHTML = `<tr><td colspan="${resetActionsVisible ? "5" : "4"}" class="text-base-content/60">${search ? `No authentication attempts match "${escapeHtml(rateLimitSearchQuery.trim())}".` : "No attempts"}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="${resetActionsVisible ? "5" : "4"}" class="text-base-content/60">${search ? `No authentication attempts match "${escapeHtml(rateLimitSearchQuery.trim())}". Clear search to return to the full security log.` : "No attempts"}</td></tr>`;
     updateAuthAttemptsSearchSummary(
       shownAttempts.length,
       attempts.length,
