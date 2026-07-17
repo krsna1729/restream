@@ -591,6 +591,13 @@ export function renderPipelineInspector(): void {
   ) as HTMLButtonElement | null;
   if (diagnosticsBtn) {
     diagnosticsBtn.disabled = !pipe || pipe.input.status !== "on";
+    diagnosticsBtn.textContent = "Run Diagnostics";
+    diagnosticsBtn.setAttribute(
+      "aria-label",
+      pipe
+        ? `Run diagnostics for ${pipe.name}`
+        : "Run diagnostics for selected pipeline",
+    );
     diagnosticsBtn.onclick = () => {
       if (pipe) openDiagnosticsModal(pipe.id);
     };

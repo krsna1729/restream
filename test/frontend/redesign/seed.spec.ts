@@ -1377,7 +1377,9 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   ).toBeVisible();
   const inspectButtonNames = await getCdpNamesByRole(page, "button");
   expect(inspectButtonNames).toContain("Operate Retrying Destination");
+  expect(inspectButtonNames).toContain("Run diagnostics for Retrying Destination");
   expect(inspectButtonNames).not.toContain("Open");
+  expect(inspectButtonNames).not.toContain("Run Diagnostics");
   const inspectCheckpoint = page.locator("#dashboard-v2-pipeline-inspect-root");
   await expect(
     inspectCheckpoint.locator("#dashboard-v2-pipeline-inspect-title"),
