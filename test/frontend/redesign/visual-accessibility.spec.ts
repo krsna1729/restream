@@ -532,10 +532,7 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
     },
     {
       href: "/?mode=settings&ui=v2",
-      // Settings is still the densest legacy-owned v2 surface; keep a current
-      // ceiling so new controls cannot creep in unnoticed while the dedicated
-      // progressive-disclosure pass remains pending.
-      maxVisibleControls: 70,
+      maxVisibleControls: 30,
       readySelector: "#settings-route-summary",
     },
     {
@@ -589,6 +586,11 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
       return Array.from(document.querySelectorAll<HTMLElement>(selector))
         .filter((element) => {
           if (element.closest("[hidden], [aria-hidden='true']")) return false;
+          const visible =
+            "checkVisibility" in element
+              ? element.checkVisibility({ checkVisibilityCSS: true })
+              : true;
+          if (!visible) return false;
           const style = window.getComputedStyle(element);
           if (
             style.display === "none" ||
