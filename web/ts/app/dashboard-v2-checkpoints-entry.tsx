@@ -78,12 +78,13 @@ function DashboardV2CheckpointCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <div
+            <h1
+              aria-label={`${title} checkpoint`}
               className="text-base-content text-lg font-semibold leading-tight"
               id={headingId}
             >
               {title}
-            </div>
+            </h1>
             <span className={`badge badge-sm ${toneBadgeClass(statusTone)}`}>
               {statusLabel}
             </span>

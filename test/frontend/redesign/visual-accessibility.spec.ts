@@ -255,42 +255,49 @@ test("cdp: ui=v2 route heading outlines stay operator-clean @desktop", async ({
     {
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
       checkpointActionRoot: "#dashboard-v2-pipeline-inspect-root",
+      checkpointHeading: "Retrying Destination checkpoint",
       readySelector: "#inspect-route-summary",
       topHeading: "Pipeline inspect",
     },
     {
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
       checkpointActionRoot: "#dashboard-v2-control-room-root",
+      checkpointHeading: "Retrying Destination checkpoint",
       readySelector: "#control-room-route-summary",
       topHeading: "Control Room",
     },
     {
       href: "/?mode=media&ui=v2",
       checkpointActionRoot: "#dashboard-v2-media-root",
+      checkpointHeading: "Media checkpoint",
       readySelector: "#media-library-results-summary",
       topHeading: "Media Library",
     },
     {
       href: "/?mode=settings&ui=v2",
       checkpointActionRoot: "#dashboard-v2-settings-root",
+      checkpointHeading: "Settings checkpoint",
       readySelector: "#settings-route-summary",
       topHeading: "Settings",
     },
     {
       href: "/?mode=status&ui=v2",
       checkpointActionRoot: "#dashboard-v2-status-root",
+      checkpointHeading: "Status checkpoint",
       readySelector: "#status-route-summary",
       topHeading: "Status",
     },
     {
       href: "/?mode=incidents&ui=v2",
       checkpointActionRoot: "#dashboard-v2-incidents-root",
+      checkpointHeading: "Incidents checkpoint",
       readySelector: "#incidents-route-summary",
       topHeading: "Incidents",
     },
     {
       href: "/?mode=telemetry&ui=v2",
       checkpointActionRoot: "#dashboard-v2-telemetry-root",
+      checkpointHeading: "Engineer telemetry checkpoint",
       readySelector: "#telemetry-route-summary",
       topHeading: "Engineer telemetry",
     },
@@ -305,11 +312,26 @@ test("cdp: ui=v2 route heading outlines stay operator-clean @desktop", async ({
       await page.goto(route.href);
     }
     await page.locator(route.readySelector).waitFor({ state: "visible" });
+    if ("checkpointActionRoot" in route) {
+      await page
+        .locator(route.checkpointActionRoot)
+        .waitFor({ state: "visible" });
+    }
     const headings = await getCdpHeadingLevels(page);
     expect(headings, route.href).not.toEqual([]);
+    const expectedFirstHeadings =
+      "checkpointHeading" in route
+        ? [route.topHeading, route.checkpointHeading]
+        : [route.topHeading];
     expect(headings[0], route.href).toEqual({
       level: 1,
-      name: route.topHeading,
+      name: expect.stringMatching(
+        new RegExp(
+          `^(${expectedFirstHeadings
+            .map((heading) => heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .join("|")})$`,
+        ),
+      ),
     });
     const duplicateHeadingNames = headings
       .map((heading) => heading.name)
@@ -327,9 +349,11 @@ test("cdp: ui=v2 route heading outlines stay operator-clean @desktop", async ({
     );
     expect(pageOverflow, route.href).toBeLessThanOrEqual(1);
     if ("checkpointActionRoot" in route) {
-      await page
-        .locator(route.checkpointActionRoot)
-        .waitFor({ state: "visible" });
+      expect(headings, route.href).toEqual(
+        expect.arrayContaining([
+          { level: 1, name: route.checkpointHeading },
+        ]),
+      );
       const actionButtons = await page
         .locator(`${route.checkpointActionRoot} button`)
         .evaluateAll((buttons) =>
