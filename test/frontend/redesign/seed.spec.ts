@@ -1591,6 +1591,14 @@ test("seed: ui=v2 Monitor search understands operator status terms @desktop", as
   await expect(summary).toHaveText(
     "2/2 monitored · 0 missing monitoring URLs",
   );
+  const buttonNames = await getCdpNamesByRole(page, "button");
+  expect(buttonNames).toEqual(
+    expect.arrayContaining([
+      "Show monitor actions for RTMP dead sink",
+      "Show monitor actions for SRT dead sink",
+    ]),
+  );
+  expect(buttonNames).not.toContain("Show monitor actions");
 
   await search.fill("down");
   await expect(summary).toHaveText(
@@ -1654,44 +1662,56 @@ test("seed: ui=v2 Monitor lazily loads generic web previews @desktop", async ({
     checkpoint.getByText("1 lazy web preview", { exact: true }).first(),
   ).toBeVisible();
   await expect(
-    monitor.getByRole("button", { name: "Load preview" }),
+    monitor.getByRole("button", { name: "Load preview for SRT Sink Flap" }),
   ).toBeVisible();
   const outputCard = monitor.locator("article").filter({
     hasText: "SRT Sink Flap",
   });
   await expect(
-    outputCard.getByRole("button", { name: "Edit" }),
+    outputCard.getByRole("button", {
+      name: "Edit monitoring URL for SRT Sink Flap",
+    }),
   ).toBeHidden();
   await expect(
-    outputCard.getByRole("button", { name: "Copy" }),
+    outputCard.getByRole("button", {
+      name: "Copy monitoring URL for SRT Sink Flap",
+    }),
   ).toBeHidden();
   const showActions = outputCard.getByRole("button", {
-    name: "Show monitor actions",
+    name: "Show monitor actions for SRT Sink Flap",
   });
   await expect(showActions).toBeVisible();
   await expect(showActions).toHaveAttribute("aria-expanded", "false");
   await showActions.click();
   await expect(
-    outputCard.getByRole("button", { name: "Edit" }),
+    outputCard.getByRole("button", {
+      name: "Edit monitoring URL for SRT Sink Flap",
+    }),
   ).toBeVisible();
   await expect(
-    outputCard.getByRole("button", { name: "Copy" }),
+    outputCard.getByRole("button", {
+      name: "Copy monitoring URL for SRT Sink Flap",
+    }),
   ).toBeVisible();
   await expect(
-    outputCard.getByRole("button", { name: "Open" }),
+    outputCard.getByRole("button", { name: "Open monitor for SRT Sink Flap" }),
   ).toBeVisible();
   const hideActions = outputCard.getByRole("button", {
-    name: "Hide monitor actions",
+    name: "Hide monitor actions for SRT Sink Flap",
   });
   await expect(hideActions).toHaveAttribute("aria-expanded", "true");
   await hideActions.click();
   await expect(
-    outputCard.getByRole("button", { name: "Edit" }),
+    outputCard.getByRole("button", {
+      name: "Edit monitoring URL for SRT Sink Flap",
+    }),
   ).toBeHidden();
   await expect(monitor.locator("iframe")).toHaveCount(0);
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
 
-  await monitor.getByRole("button", { name: "Load preview" }).click();
+  await monitor
+    .getByRole("button", { name: "Load preview for SRT Sink Flap" })
+    .click();
   await expect(monitor.locator("iframe")).toHaveCount(1);
 });
 
@@ -1742,7 +1762,7 @@ test("seed: ui=v2 Monitor lazily loads HLS output previews @desktop", async ({
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );
   await expect(
-    monitor.getByRole("button", { name: "Load preview" }),
+    monitor.getByRole("button", { name: "Load preview for Retrying Output" }),
   ).toBeVisible();
   const outputCard = monitor.locator("article").filter({
     hasText: "Retrying Output",
@@ -1753,7 +1773,9 @@ test("seed: ui=v2 Monitor lazily loads HLS output previews @desktop", async ({
   await expect(outputCard.locator("video")).toHaveCount(0);
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
 
-  await outputCard.getByRole("button", { name: "Load preview" }).click();
+  await outputCard
+    .getByRole("button", { name: "Load preview for Retrying Output" })
+    .click();
   await expect(
     outputCard.locator('[data-role="managed-hls-video"]'),
   ).toHaveCount(1);

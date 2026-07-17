@@ -807,9 +807,10 @@ function setTileMessage(shell: HTMLElement, message: string): void {
 }
 
 function setLazyEmbedMessage(shell: HTMLElement, message: string): void {
+  const actionLabel = monitorPreviewActionLabel(shell, "Load preview");
   shell.innerHTML = `<div class="text-base-content/70 flex ${CONTROL_ROOM_PLAYER_HEIGHT_CLASS} flex-col items-center justify-center gap-3 px-4 py-5 text-center text-sm leading-6">
         <span>${escapeHtml(message)}</span>
-        <button type="button" class="btn btn-xs btn-accent btn-outline" data-action="control-room-load-preview">Load preview</button>
+        <button type="button" class="btn btn-xs btn-accent btn-outline" data-action="control-room-load-preview" aria-label="${escapeHtml(actionLabel)}">Load preview</button>
     </div>`;
 }
 
@@ -1065,7 +1066,22 @@ function addMonitorButton(
   button.dataset.action = action;
   button.textContent = label;
   controls.appendChild(button);
+  button.setAttribute("aria-label", monitorPreviewActionLabel(button, label));
   return button;
+}
+
+function controlRoomCardTitle(element: Element): string {
+  return (
+    element.closest<HTMLElement>("article")?.dataset.cardTitle?.trim() || ""
+  );
+}
+
+function monitorPreviewActionLabel(element: Element, label: string): string {
+  const title = controlRoomCardTitle(element);
+  if (!title) return label;
+  return label.toLowerCase().includes("preview")
+    ? `${label} for ${title}`
+    : `${label} preview for ${title}`;
 }
 
 async function requestMonitorFullscreen(shell: HTMLElement): Promise<void> {
@@ -1084,14 +1100,18 @@ async function requestMonitorFullscreen(shell: HTMLElement): Promise<void> {
 }
 
 function setMuteButtonLabel(button: HTMLButtonElement, muted: boolean): void {
-  button.textContent = muted ? "Unmute" : "Mute";
+  const label = muted ? "Unmute" : "Mute";
+  button.textContent = label;
+  button.setAttribute("aria-label", monitorPreviewActionLabel(button, label));
 }
 
 function setPlaybackButtonLabel(
   button: HTMLButtonElement,
   playing: boolean,
 ): void {
-  button.textContent = playing ? "Pause" : "Play";
+  const label = playing ? "Pause" : "Play";
+  button.textContent = label;
+  button.setAttribute("aria-label", monitorPreviewActionLabel(button, label));
 }
 
 function syncCardPlaybackButtons(scope: ParentNode = document): void {
@@ -1490,6 +1510,7 @@ function syncCard(
     );
   }
   article.dataset.cardId = descriptor.id;
+  article.dataset.cardTitle = descriptor.title;
 
   const title = article.querySelector<HTMLElement>(
     '[data-role="control-room-title"]',
@@ -1580,6 +1601,7 @@ function syncCard(
                     type="button"
                     class="btn btn-xs btn-outline"
                     data-action="control-room-edit-url"
+                    aria-label="Edit monitoring URL for ${escapeHtml(descriptor.title)}"
                     data-output-id="${escapeHtml(descriptor.outputId || "")}">
                     Edit
                 </button>`
@@ -1593,6 +1615,7 @@ function syncCard(
                     type="button"
                     class="btn btn-xs btn-outline"
                     data-action="control-room-copy-url"
+                    aria-label="Copy monitoring URL for ${escapeHtml(descriptor.title)}"
                     data-url="${escapeHtml(descriptor.copyUrl || "")}"${copyDisabled}>
                     Copy
                 </button>
@@ -1600,6 +1623,7 @@ function syncCard(
                     type="button"
                     class="btn btn-xs btn-outline"
                     data-action="control-room-open-url"
+                    aria-label="Open monitor for ${escapeHtml(descriptor.title)}"
                     data-url="${escapeHtml(descriptor.openUrl || "")}"${openDisabled}>
                     Open
                 </button>
@@ -1611,6 +1635,7 @@ function syncCard(
                     type="button"
                     class="btn btn-xs btn-outline"
                     data-action="control-room-toggle-card-actions"
+                    aria-label="${cardActionsExpanded ? "Hide" : "Show"} monitor actions for ${escapeHtml(descriptor.title)}"
                     aria-expanded="${cardActionsExpanded ? "true" : "false"}">
                     ${cardActionsExpanded ? "Hide monitor actions" : "Show monitor actions"}
                 </button>
