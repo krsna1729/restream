@@ -17,6 +17,7 @@ export interface SeededDashboardOptions {
     pipelineId: string,
     telemetry: Record<string, unknown>,
   ) => unknown;
+  logsResponse?: (logs: Record<string, unknown>[]) => unknown;
   runtimeResponse?: (
     runtime: Record<string, unknown>,
     requestCount: number,
@@ -555,7 +556,10 @@ export async function openSeededDashboard(
         await fulfillJson(route, { caps: {}, platformLabels: {} });
         return;
       case "/api/v1/logs":
-        await fulfillJson(route, { logs: fixture.logs });
+        await fulfillJson(
+          route,
+          options.logsResponse?.(fixture.logs) ?? { logs: fixture.logs },
+        );
         return;
       case "/api/v1/engine":
         await fulfillJson(route, {

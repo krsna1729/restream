@@ -1161,6 +1161,66 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
 });
 
+test("seed: ui=v2 Status bounds dense process logs until requested @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=status&ui=v2", {
+    expectOverviewReady: false,
+    logsResponse: () => ({
+      logs: Array.from({ length: 35 }, (_, index) => ({
+        id: 500 - index,
+        ts: `2026-07-14T06:${String(index).padStart(2, "0")}:00Z`,
+        level: index === 0 ? "INFO" : index % 7 === 0 ? "WARN" : "DEBUG",
+        target: index === 0 ? "restream::server" : "restream::worker",
+        message:
+          index === 0
+            ? "dashboard api server listening"
+            : `routine status log ${index + 1}`,
+        fields: "{}",
+        pipelineId: null,
+        outputId: null,
+        eventType: index === 0 ? "restream.http.ready" : null,
+      })),
+    }),
+  });
+
+  const status = page.locator("#status-mode-panel");
+  await expect(status.locator("#status-route-summary")).toHaveText(
+    "Status loaded for seeded · commit seeded · 35 process logs · 5 notable activities",
+  );
+  await expect(status.locator("#status-log-search-results-summary")).toHaveText(
+    "5 activities · 35 process logs visible",
+  );
+  const logs = status.getByLabel("Process log entries");
+  await expect(status.getByText("20 process logs shown of 35")).toBeVisible();
+  await expect(logs.getByText("routine status log 20")).toBeVisible();
+  await expect(logs.getByText("routine status log 21")).toHaveCount(0);
+  const showAll = status.getByRole("button", { name: "Show all 35" });
+  await expect(showAll).toHaveAttribute("aria-expanded", "false");
+  expect(await getCdpNodeCount(page)).toBeLessThan(10_000);
+
+  await showAll.click();
+  await expect(status.locator("#status-log-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(logs.getByText("routine status log 35")).toBeVisible();
+
+  const search = status.getByLabel("Search process logs and activity");
+  await search.fill("log 35");
+  await expect(status.locator("#status-log-search-results-summary")).toHaveText(
+    '0 activities · 1 process log match "log 35"',
+  );
+  await expect(logs.getByText("routine status log 35")).toBeVisible();
+  await expect(
+    status.getByRole("button", { name: /Show (all|fewer)/ }),
+  ).toHaveCount(0);
+  expect(await getCdpStatusTexts(page)).toContain(
+    '0 activities · 1 process log match "log 35"',
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(10_000);
+});
+
 test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", async ({
   page,
 }) => {

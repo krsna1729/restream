@@ -214,6 +214,11 @@ summary announces hit and no-hit counts as status text. Seeded Playwright/CDP
 coverage proves operators can narrow by scope/IP/status, recover with a local
 Clear search action, and keep the authoritative settings counts.
 
+Status process logs are now bounded by default with an explicit `Show all`
+affordance. The route still fetches the same recent history and search still
+matches the full fetched set, but the first view is a scan layer rather than an
+80-card wall of logs.
+
 The seeded browser proof also includes a route-checkpoint matrix across the
 legacy-owned screens: Inspect, Monitor, Media, Settings, Status, Incidents, and
 Telemetry. That matrix walks the screens as an operator journey and proves each

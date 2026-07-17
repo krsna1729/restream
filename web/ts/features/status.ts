@@ -91,6 +91,7 @@ interface StatusData {
 }
 
 const STATUS_PROCESS_LOG_LIMIT = 80;
+const STATUS_PROCESS_LOG_VISIBLE_LIMIT = 20;
 const STATUS_ACTIVITY_LIMIT = 12;
 const STATUS_SECTION_NAV = [
   { id: "status-build-section", label: "Build" },
@@ -107,6 +108,7 @@ const statusStream = createManagedLogStream();
 let statusStreamActive = false;
 let statusStreamLastEventId: number | null = null;
 let statusLogSearchQuery = "";
+let statusProcessLogExpanded = false;
 
 function syncProcessIndicatorFromLogs(logs: AppLogRow[]): void {
   for (const log of logs) {
@@ -402,8 +404,17 @@ function renderProcessLog(logs: AppLogRow[], search: string): string {
         </section>`;
   }
 
-  const rows = items
-    .slice(0, STATUS_PROCESS_LOG_LIMIT)
+  const showToggle =
+    !search && items.length > STATUS_PROCESS_LOG_VISIBLE_LIMIT;
+  const visibleItems =
+    showToggle && !statusProcessLogExpanded
+      ? items.slice(0, STATUS_PROCESS_LOG_VISIBLE_LIMIT)
+      : items;
+  const caption = showToggle
+    ? `${pluralize(visibleItems.length, "process log")} shown of ${items.length}. Search to isolate a target or show all when auditing the full process history.`
+    : "";
+
+  const rows = visibleItems
     .map(
       (
         log,
@@ -425,9 +436,17 @@ function renderProcessLog(logs: AppLogRow[], search: string): string {
     .join("");
 
   return `<section id="status-log-section" class="dashboard-section scroll-mt-24 p-5">
-        <div class="mb-3">
-            <h2 class="dashboard-section-title">Process Log</h2>
-            <p class="dashboard-subtitle">Latest restream process logs outside pipeline and output scope.</p>
+        <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div>
+                <h2 class="dashboard-section-title">Process Log</h2>
+                <p class="dashboard-subtitle">Latest restream process logs outside pipeline and output scope.</p>
+                ${caption ? `<p class="text-base-content/60 mt-1 text-xs">${escapeHtml(caption)}</p>` : ""}
+            </div>
+            ${
+              showToggle
+                ? `<button id="status-log-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="${statusProcessLogExpanded ? "true" : "false"}">${statusProcessLogExpanded ? "Show fewer" : `Show all ${items.length}`}</button>`
+                : ""
+            }
         </div>
         <div class="max-h-[32rem] space-y-2 overflow-y-auto pr-1" role="region" aria-label="Process log entries" tabindex="0">${rows}</div>
     </section>`;
@@ -534,6 +553,7 @@ function bindActions(status: StatusData, sbomEndpoint: string): void {
   search?.addEventListener("input", () => {
     const cursor = search.selectionStart ?? search.value.length;
     statusLogSearchQuery = search.value;
+    statusProcessLogExpanded = false;
     renderStatusSnapshot();
     const nextSearch = document.getElementById(
       "status-log-search",
@@ -545,11 +565,16 @@ function bindActions(status: StatusData, sbomEndpoint: string): void {
     .getElementById("status-clear-search-btn")
     ?.addEventListener("click", () => {
       statusLogSearchQuery = "";
+      statusProcessLogExpanded = false;
       renderStatusSnapshot();
       (
         document.getElementById("status-log-search") as HTMLInputElement | null
       )?.focus();
     });
+  document.getElementById("status-log-toggle")?.addEventListener("click", () => {
+    statusProcessLogExpanded = !statusProcessLogExpanded;
+    renderStatusSnapshot();
+  });
   document
     .getElementById("download-status-btn")
     ?.addEventListener("click", () => {
