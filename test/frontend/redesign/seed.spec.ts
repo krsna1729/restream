@@ -336,6 +336,10 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     }),
   ).toBeVisible();
   await expect(page.locator("#dashboard-v2-media-root")).toBeHidden();
+  const hiddenMediaChildCount = await page
+    .locator("#media-mode-content")
+    .evaluate((node) => node.childElementCount);
+  expect(hiddenMediaChildCount).toBe(0);
   await expect(
     page.locator("#status-mode-content").getByRole("heading", {
       name: "Status",
@@ -356,6 +360,22 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     false,
   );
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterMedia);
+
+  await page.goto("/?mode=media&ui=v2");
+  await expect(page.locator("#media-library-results-summary")).toHaveText(
+    "1 media file total · 0 recordings · 1 source file",
+  );
+  await expect(page.getByText("synthetic-source.mp4")).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    "1 media file total · 0 recordings · 1 source file",
+  );
+
+  await page.goto("/?mode=status&ui=v2");
+  await expect(
+    page.locator("#dashboard-v2-status-root").getByRole("heading", {
+      name: "Status",
+    }),
+  ).toBeVisible();
   const requestsAfterStatus = v2Requests.length;
 
   await page.goto("/?mode=pipeline&view=inspect&p=pipe-healthy&ui=v2");

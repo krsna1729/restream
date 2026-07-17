@@ -248,7 +248,9 @@ Dense authentication-attempt rows are now bounded by default with an explicit
 `Show all` affordance. Search still matches the full fetched security state,
 so an operator can scan the first few attempts before choosing full audit mode.
 Under `ui=v2`, leaving dense checkpoint routes now also unmounts their legacy
-detail DOM so later checkpoint routes do not inherit hidden route weight.
+detail DOM so later checkpoint routes do not inherit hidden route weight. Media
+resets its list render cache on that unmount path, so returning to the route
+repaints the library instead of preserving stale placeholder state.
 
 Status process logs are now bounded by default with an explicit `Show all`
 affordance. The route still fetches the same recent history and search still
@@ -366,7 +368,8 @@ Still not a full v2 redesign:
 - Legacy-owned route details still have substantial active DOM when visible.
   Under v2, dense checkpoint detail DOM is now unmounted on route exit, but
   active detail-section redesign remains a future performance/accessibility
-  cleanup.
+  cleanup. Seeded Playwright/CDP now also proves the Media route remounts with
+  populated rows after that cleanup.
 
 ## Done-state interpretation
 

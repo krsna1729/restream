@@ -356,6 +356,13 @@ export function refreshMediaLibraryMetricsOnly(): void {
   publishMediaCheckpoint(lastMediaFiles);
 }
 
+export function resetMediaLibraryShellState(): void {
+  mediaShellMounted = false;
+  lastMediaSignature = "";
+  lastRecordingsSignature = "";
+  lastSourcesSignature = "";
+}
+
 function attachMediaActions(container: HTMLElement): void {
   const searchInput = container.querySelector<HTMLInputElement>(
     "#media-library-search",

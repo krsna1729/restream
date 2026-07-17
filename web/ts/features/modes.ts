@@ -6,6 +6,7 @@ import { renderControlRoom } from "./control-room.js";
 import {
   refreshMediaLibraryMetricsOnly,
   renderMediaLibraryMode,
+  resetMediaLibraryShellState,
 } from "./media-library.js";
 import { loadSettings, renderSettingsPanel } from "./settings.js";
 import {
@@ -716,6 +717,7 @@ function unmountInactiveV2HeavyRoute(previousMode: DashboardMode | null): void {
   };
   const contentId = contentIdByMode[previousMode];
   if (contentId) document.getElementById(contentId)?.replaceChildren();
+  if (previousMode === "media") resetMediaLibraryShellState();
   if (previousMode === "settings") settingsMounted = false;
   if (previousMode === "status") statusMounted = false;
 }
