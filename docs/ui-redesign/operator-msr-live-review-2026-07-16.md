@@ -246,6 +246,10 @@ What is now strong enough for v2:
 - Active Workspace and Pipeline tabs now scroll back into view on narrow rails
   during direct route loads and keyboard movement, keeping later checkpoints
   like Telemetry and Status discoverable without page-wide horizontal overflow.
+- Seeded Playwright/CDP coverage now repeats the narrow-rail proof with
+  operator text zoom enabled on Telemetry and Monitor, so larger text does not
+  silently reintroduce page-wide horizontal overflow while the operator moves
+  through dense checkpoints.
 - Content-driven workspace jumps now move focus to the active destination panel:
   Overview `Operate` lands in Pipeline / Operate, and Pipeline `Graph` lands in
   Inspect, while tablist navigation still keeps focus on the selected tab.

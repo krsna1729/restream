@@ -45,6 +45,14 @@ async function getCdpLayoutWidthDelta(page: Page): Promise<number> {
   return metrics.contentSize.width - metrics.cssLayoutViewport.clientWidth;
 }
 
+async function getDocumentWidthOverflow(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  );
+}
+
 async function expectTabVisibleInRail(
   page: Page,
   tabSelector: string,
@@ -554,6 +562,44 @@ test("seed: ui=v2 shell keeps active tabs visible in narrow rails @desktop", asy
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );
   expect(await getCdpNodeCount(page)).toBeLessThan(12_000);
+  expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
+});
+
+test("seed: ui=v2 shell tolerates operator text zoom without horizontal overflow @desktop", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => {
+    document.documentElement.style.fontSize = "125%";
+  });
+
+  await openSeededDashboard(page, "mixed-health", "/?mode=telemetry&ui=v2", {
+    expectOverviewReady: false,
+  });
+
+  await expect(page.locator("#workspace-tab-telemetry")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expectTabVisibleInRail(page, "#workspace-tab-telemetry");
+  await expect(
+    page.locator("#telemetry-mode-panel").getByRole("heading", {
+      name: "Engineer telemetry",
+    }),
+  ).toBeVisible();
+  expect(await getDocumentWidthOverflow(page)).toBeLessThanOrEqual(1);
+  expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
+
+  await page.goto("/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2");
+  await expect(page.locator("#pipeline-workspace-tab-monitor")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expectTabVisibleInRail(page, "#pipeline-workspace-tab-monitor");
+  await expect(page.locator("#control-room-route-summary")).toHaveText(
+    "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+  );
+  expect(await getDocumentWidthOverflow(page)).toBeLessThanOrEqual(1);
   expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
 });
 
@@ -1307,11 +1353,7 @@ test("seed: ui=v2 Operate stays inside the viewport across breakpoints", async (
       .getByRole("heading", { name: "Output overview" }),
   ).toBeVisible();
 
-  const pageOverflow = await page.evaluate(
-    () =>
-      document.documentElement.scrollWidth -
-      document.documentElement.clientWidth,
-  );
+  const pageOverflow = await getDocumentWidthOverflow(page);
   expect(pageOverflow).toBeLessThanOrEqual(1);
   expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
 });
