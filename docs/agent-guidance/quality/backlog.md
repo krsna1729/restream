@@ -184,7 +184,12 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   standard clippy and test gates.
 - Context: Q-002 found ordinary negative/syntax rejection but no finite/range
   validation before floating-point casts and integer time arithmetic.
-- Status: open (Filed: 2026-07-17 by Q-002)
+- Status: done (found a live bug, not just a coverage gap: `"nan"` silently
+  became `0` and `"inf"` silently saturated to `i64::MAX` via Rust's
+  float-to-int cast, and `hours * 3600 + minutes * 60` could overflow `i64`
+  unchecked; fixed with a shared finite/range-checked `seconds_to_ms`
+  helper and `checked_mul`/`checked_add` scaling, plus six adversarial
+  regression tests; 2026-07-18 by codex; Filed: 2026-07-17 by Q-002)
 
 ### Q-002 [resilience] [haiku] Inventory crafted-bytes fault-injection coverage
 - Goal: a table (in the journal + filed items) of every demux/parse entry

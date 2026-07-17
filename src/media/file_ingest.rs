@@ -165,6 +165,14 @@ pub fn use_internal_file_ingest(config: &crate::AppConfig) -> bool {
     config.use_internal_file_ingest
 }
 
+fn seconds_to_ms(seconds: f64) -> Result<Option<i64>, String> {
+    let ms = seconds * 1000.0;
+    if !ms.is_finite() || ms > i64::MAX as f64 || ms < i64::MIN as f64 {
+        return Err("start_time is out of range".to_string());
+    }
+    Ok(Some(ms.round() as i64))
+}
+
 pub fn parse_start_time_ms(input: &str) -> Result<Option<i64>, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -172,10 +180,13 @@ pub fn parse_start_time_ms(input: &str) -> Result<Option<i64>, String> {
     }
 
     if let Ok(seconds) = trimmed.parse::<f64>() {
+        if !seconds.is_finite() {
+            return Err("start_time must be a finite number".to_string());
+        }
         if seconds < 0.0 {
             return Err("start_time must be non-negative".to_string());
         }
-        return Ok(Some((seconds * 1000.0).round() as i64));
+        return seconds_to_ms(seconds);
     }
 
     let parts: Vec<&str> = trimmed.split(':').collect();
@@ -186,6 +197,9 @@ pub fn parse_start_time_ms(input: &str) -> Result<Option<i64>, String> {
     let seconds = parts[parts.len() - 1]
         .parse::<f64>()
         .map_err(|_| "invalid seconds component in start_time".to_string())?;
+    if !seconds.is_finite() {
+        return Err("start_time must be a finite number".to_string());
+    }
     if seconds < 0.0 {
         return Err("start_time must be non-negative".to_string());
     }
@@ -209,8 +223,17 @@ pub fn parse_start_time_ms(input: &str) -> Result<Option<i64>, String> {
         0
     };
 
-    let total_ms = (((hours * 3600 + minutes * 60) as f64 + seconds) * 1000.0).round() as i64;
-    Ok(Some(total_ms))
+    let hours_secs = hours
+        .checked_mul(3600)
+        .ok_or_else(|| "start_time is out of range".to_string())?;
+    let minutes_secs = minutes
+        .checked_mul(60)
+        .ok_or_else(|| "start_time is out of range".to_string())?;
+    let total_secs_int = hours_secs
+        .checked_add(minutes_secs)
+        .ok_or_else(|| "start_time is out of range".to_string())?;
+
+    seconds_to_ms(total_secs_int as f64 + seconds)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -964,6 +987,36 @@ mod tests {
         assert!(parse_start_time_ms("-1").is_err());
         assert!(parse_start_time_ms("1:two").is_err());
         assert!(parse_start_time_ms("1:2:3:4").is_err());
+    }
+
+    #[test]
+    fn rejects_non_finite_plain_seconds() {
+        assert!(parse_start_time_ms("NaN").is_err());
+        assert!(parse_start_time_ms("nan").is_err());
+        assert!(parse_start_time_ms("inf").is_err());
+        assert!(parse_start_time_ms("infinity").is_err());
+        assert!(parse_start_time_ms("-inf").is_err());
+    }
+
+    #[test]
+    fn rejects_non_finite_colon_delimited_seconds_component() {
+        assert!(parse_start_time_ms("00:nan").is_err());
+        assert!(parse_start_time_ms("00:00:inf").is_err());
+    }
+
+    #[test]
+    fn rejects_float_to_millisecond_overflow() {
+        assert!(parse_start_time_ms("1e30").is_err());
+        assert!(parse_start_time_ms("00:00:1e30").is_err());
+    }
+
+    #[test]
+    fn rejects_colon_delimited_integer_overflow() {
+        // Individually parseable i64 components whose hours*3600 or
+        // minutes*60 scaling overflows i64 before any float arithmetic runs.
+        assert!(parse_start_time_ms("9223372036854775807:00:00").is_err());
+        assert!(parse_start_time_ms("00:9223372036854775807:00").is_err());
+        assert!(parse_start_time_ms("9223372036854775807:9223372036854775807:00").is_err());
     }
 
     #[test]

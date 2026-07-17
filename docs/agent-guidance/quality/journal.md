@@ -43,6 +43,8 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 00:45 Q-020 DONE [codex]](#2026-07-18-0045-q-020-done-codex)
 - [2026-07-18 00:50 Q-021 STARTED [codex]](#2026-07-18-0050-q-021-started-codex)
 - [2026-07-18 01:20 Q-021 DONE [codex]](#2026-07-18-0120-q-021-done-codex)
+- [2026-07-18 01:25 Q-022 STARTED [codex]](#2026-07-18-0125-q-022-started-codex)
+- [2026-07-18 01:55 Q-022 DONE [codex]](#2026-07-18-0155-q-022-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -742,3 +744,65 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   the backlog's remaining `[resilience]` items are converging on "prove
   existing safety" rather than "fix a live bug," which would argue for
   weighting future grooming toward other categories.
+
+## 2026-07-18 01:25 Q-022 STARTED [codex]
+- What: harden `file_ingest::parse_start_time_ms` (`src/media/file_ingest.rs`)
+  against `NaN`/infinity inputs, float-to-millisecond overflow, and integer
+  overflow in the colon-delimited hours/minutes scaling arithmetic.
+- Gates: pending scoped `cargo test media::file_ingest::tests --lib`,
+  format, clippy, full test gates.
+- Commit: none.
+- Follow-ups: none yet.
+
+## 2026-07-18 01:55 Q-022 DONE [codex]
+- What: unlike Q-020/Q-021, this trace found a real live bug, not just a
+  coverage gap. In `parse_start_time_ms`, the plain-seconds branch parsed
+  `trimmed` with `str::parse::<f64>()`, which happily accepts `"nan"`,
+  `"inf"`/`"infinity"`, and `"-inf"` (Rust's `f64` `FromStr` grammar).
+  `NaN < 0.0` is always `false`, so a `"nan"` input skipped the
+  non-negative check entirely, then `(seconds * 1000.0).round() as i64`
+  silently produced `0` (Rust's saturating float-to-int cast maps `NaN` to
+  `0`) instead of an error — exactly the "coercing to zero" failure mode
+  named in the backlog goal. `"inf"` passed the non-negative check (positive
+  infinity is not `< 0.0`) and silently saturated to `i64::MAX` instead of
+  erroring — the "saturated timestamps" failure mode. The same `seconds`
+  parse in the colon-delimited branch had the identical gap. Separately, the
+  colon-delimited branch computed `hours * 3600 + minutes * 60` as plain
+  `i64` arithmetic with no overflow guard: `hours`/`minutes` are only
+  bounds-checked for being non-negative and for fitting in `i64` at parse
+  time, so a value like `hours = i64::MAX` parses fine but `hours * 3600`
+  overflows — a debug-build panic (arithmetic overflow checks are on) or a
+  silently wrapped/garbage value in release.
+  Fix (production code, `src/media/file_ingest.rs`): added a
+  `seconds_to_ms(seconds: f64) -> Result<Option<i64>, String>` helper that
+  rejects non-finite or out-of-`i64`-range millisecond values instead of
+  casting through them; both parse branches now call `seconds.is_finite()`
+  before the existing non-negative check, and reuse `seconds_to_ms` for the
+  final scale/round/cast; the colon-delimited branch replaced raw `hours *
+  3600 + minutes * 60` with `checked_mul`/`checked_add`, erroring on
+  overflow instead of panicking or wrapping. Added six adversarial
+  regression tests to `src/media/file_ingest.rs`'s existing `mod tests`,
+  next to the pre-existing `rejects_invalid_start_time` test:
+  `rejects_non_finite_plain_seconds` (`"NaN"`, `"nan"`, `"inf"`,
+  `"infinity"`, `"-inf"`), `rejects_non_finite_colon_delimited_seconds_component`
+  (`"00:nan"`, `"00:00:inf"`), `rejects_float_to_millisecond_overflow`
+  (`"1e30"` in both plain and colon-delimited form), and
+  `rejects_colon_delimited_integer_overflow` (component values of
+  `i64::MAX` in the hours and/or minutes position, each individually
+  parseable but overflowing once scaled by 3600/60).
+- Gates: `cargo test media::file_ingest::tests --lib` passed 22/22 (16 pre-
+  existing + 6 new). `cargo fmt --all --check` and `cargo clippy
+  --all-targets` (warnings denied) were clean. Full `cargo test` passed with
+  no failures, panics, or warnings across all 18 test-result blocks
+  (binaries + doctests). No hot-path benchmark applies —
+  `parse_start_time_ms` runs once per file-ingest start, off the packet hot
+  path.
+- Commit: this commit.
+- Follow-ups: none.
+- Notes: the `seconds_to_ms` extraction was the smallest correct
+  abstraction available — both parse branches (plain-seconds and
+  colon-delimited) need identical finite/range validation on their final
+  millisecond value, and duplicating the three-way `is_finite`/`>
+  i64::MAX`/`< i64::MIN` check inline in both branches would have been the
+  kind of copy-paste AGENTS.md's "add abstractions only when they remove
+  real complexity" argues against.
