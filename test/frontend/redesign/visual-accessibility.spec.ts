@@ -509,54 +509,63 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
       href: "/?mode=overview&ui=v2",
       maxVisibleDashboardElements: 220,
       maxVisibleControls: 22,
+      maxVisibleTextChars: 1500,
       readySelector: "#dashboard-v2-overview",
     },
     {
       href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
       maxVisibleDashboardElements: 240,
       maxVisibleControls: 33,
+      maxVisibleTextChars: 1400,
       readySelector: "#dashboard-v2-pipeline-header-root",
     },
     {
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
       maxVisibleDashboardElements: 220,
       maxVisibleControls: 22,
+      maxVisibleTextChars: 2200,
       readySelector: "#inspect-route-summary",
     },
     {
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
       maxVisibleDashboardElements: 130,
       maxVisibleControls: 30,
+      maxVisibleTextChars: 1400,
       readySelector: "#control-room-route-summary",
     },
     {
       href: "/?mode=media&ui=v2",
       maxVisibleDashboardElements: 100,
       maxVisibleControls: 18,
+      maxVisibleTextChars: 1000,
       readySelector: "#media-library-results-summary",
     },
     {
       href: "/?mode=settings&ui=v2",
       maxVisibleDashboardElements: 140,
       maxVisibleControls: 30,
+      maxVisibleTextChars: 1600,
       readySelector: "#settings-route-summary",
     },
     {
       href: "/?mode=status&ui=v2",
       maxVisibleDashboardElements: 190,
       maxVisibleControls: 28,
+      maxVisibleTextChars: 1900,
       readySelector: "#status-route-summary",
     },
     {
       href: "/?mode=incidents&ui=v2",
       maxVisibleDashboardElements: 110,
       maxVisibleControls: 20,
+      maxVisibleTextChars: 1300,
       readySelector: "#incidents-route-summary",
     },
     {
       href: "/?mode=telemetry&ui=v2",
       maxVisibleDashboardElements: 160,
       maxVisibleControls: 18,
+      maxVisibleTextChars: 1600,
       readySelector: "#telemetry-route-summary",
     },
   ] as const;
@@ -669,5 +678,14 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
       visibleDashboardElements,
       `${route.href} visible dashboard elements`,
     ).toBeLessThanOrEqual(route.maxVisibleDashboardElements);
+    const visibleTextChars = await page.evaluate(
+      () =>
+        document.querySelector<HTMLElement>("#dashboard-main")?.innerText
+          .length ?? 0,
+    );
+    expect(
+      visibleTextChars,
+      `${route.href} visible operator text characters`,
+    ).toBeLessThanOrEqual(route.maxVisibleTextChars);
   }
 });
