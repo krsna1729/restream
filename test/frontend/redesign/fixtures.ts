@@ -16,6 +16,10 @@ export interface SeededDashboardOptions {
   alertsResponse?: (alerts: Record<string, unknown>) => unknown;
   eventsResponse?: (events: Record<string, unknown>) => unknown;
   mediaResponse?: (media: Record<string, unknown>) => unknown;
+  resourceMapResponse?: (
+    pipelineId: string | null,
+    resourceMap: Record<string, unknown>,
+  ) => unknown;
   rateLimitResponse?: (rateLimits: Record<string, unknown>) => unknown;
   pipelineTelemetryResponse?: (
     pipelineId: string,
@@ -620,7 +624,28 @@ export async function openSeededDashboard(
         }
         return;
       case "/api/v1/engine/resource-map":
-        await fulfillJson(route, { resources: [] });
+        {
+          const pipelineId = url.searchParams.get("pipeline_id");
+          const resourceMap = {
+            scope: pipelineId
+              ? { kind: "pipeline", pipelineId }
+              : { kind: "runtime" },
+            view: "detail",
+            limits: {
+              topN: Number(url.searchParams.get("top_n") || 0),
+              totalNodeCount: 0,
+              returnedNodeCount: 0,
+              truncatedNodeCount: 0,
+            },
+            summary: {},
+            nodes: [],
+          };
+          await fulfillJson(
+            route,
+            options.resourceMapResponse?.(pipelineId, resourceMap) ??
+              resourceMap,
+          );
+        }
         return;
       case "/api/v1/stream-keys":
         await fulfillJson(route, []);

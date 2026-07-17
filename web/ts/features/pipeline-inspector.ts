@@ -42,6 +42,7 @@ let summaryInFlight: Promise<void> | null = null;
 const pipelineSummaryCache = new Map<string, PipelineSummarySnapshot>();
 const pipelineResourceMapCache = new Map<string, ResourceMapSnapshot>();
 let inspectOutputSearchQuery = "";
+let inspectResourceDetailsExpanded = false;
 let inspectPresentationCallback:
   | ((model: PipelineInspectCheckpointModel | null) => void)
   | null = null;
@@ -261,6 +262,16 @@ function protocolValue(value: string | null | undefined): string {
   const normalized = String(value || "").trim();
   if (!normalized) return "--";
   return normalized.length <= 5 ? normalized.toUpperCase() : titleCaseValue(normalized);
+}
+
+function pipelineInspectV2Active(): boolean {
+  const toggle = document.getElementById("dashboard-ui-v2-toggle");
+  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
+  try {
+    return new URLSearchParams(window.location.search).get("ui") === "v2";
+  } catch (_err) {
+    return false;
+  }
 }
 
 function normalizeInspectSearch(value: string): string {
@@ -580,6 +591,7 @@ export function resetPipelineInspectorSelection(
 ): void {
   forceRuntimeScope = pipelineId === null;
   inspectOutputSearchQuery = "";
+  inspectResourceDetailsExpanded = false;
   runtimeScopeMaskedPipelineId =
     pipelineId === null ? getUrlParam("p") || graphPipelineId : null;
   graphRequestSeq++;
@@ -895,10 +907,29 @@ function renderInspectorResourceDetails(
       '<div class="text-base-content/60 text-sm">Resource details are loading.</div>';
     return;
   }
+  const detailHtml = resourceDetailPanelHtml(resourceMap, pipe);
+  const resourceDetailPanel = !pipelineInspectV2Active()
+    ? detailHtml
+    : `<section class="border-base-content/10 bg-base-100/35 rounded-lg border p-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div class="text-sm font-semibold">Resource detail tables</div>
+            <div class="text-base-content/55 text-xs">Worker tables, truncation limits, and attribution accuracy.</div>
+          </div>
+          <button id="inspect-resource-details-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="${inspectResourceDetailsExpanded ? "true" : "false"}">${inspectResourceDetailsExpanded ? "Hide resource details" : "Show resource details"}</button>
+        </div>
+        ${inspectResourceDetailsExpanded ? `<div class="mt-3">${detailHtml}</div>` : ""}
+      </section>`;
   container.innerHTML = `<div class="space-y-3">
     ${resourceSummaryGroupsHtml(resourceMap)}
-    ${resourceDetailPanelHtml(resourceMap, pipe)}
+    ${resourceDetailPanel}
   </div>`;
+  document
+    .getElementById("inspect-resource-details-toggle")
+    ?.addEventListener("click", () => {
+      inspectResourceDetailsExpanded = !inspectResourceDetailsExpanded;
+      renderInspectorResourceDetails(pipe, resourceMap);
+    });
 }
 
 export async function refreshPipelineInspectorGraph(): Promise<void> {

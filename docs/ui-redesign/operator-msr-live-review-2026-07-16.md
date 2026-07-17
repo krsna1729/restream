@@ -137,6 +137,11 @@ Inspect now has its first v2-owned checkpoint as well: a React scan strip that
 summarizes selected pipeline health, graph readiness, output attention, and the
 next diagnostic step before the legacy graph/resource panels. The existing graph
 explorer and output-preview search remain legacy-owned underneath that strip.
+Inspect resource details now also follow the v2 scan-first rule: process and
+pipeline-attribution summary cards stay visible, while raw FFmpeg worker tables,
+resource truncation notes, and attribution-accuracy details mount only after the
+operator opens `Show resource details`. This keeps Inspect useful for first-pass
+triage without starting every graph visit with dense worker tables.
 
 Pipeline Inspect now also gives the output preview a local search/count/clear
 loop once the selected pipeline has enough outputs to become scan-heavy. The

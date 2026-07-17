@@ -1060,7 +1060,42 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   page,
 }) => {
   await installPushStateCounter(page);
-  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2");
+  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2", {
+    resourceMapResponse: (pipelineId, resourceMap) => ({
+      ...resourceMap,
+      scope: { kind: "pipeline", pipelineId },
+      view: "detail",
+      limits: {
+        topN: 50,
+        totalNodeCount: 3,
+        returnedNodeCount: 3,
+        truncatedNodeCount: 0,
+      },
+      summary: {
+        cpuPercent: 11.25,
+        totalMemoryBytes: 96 * 1024 * 1024,
+        processThreadCount: 18,
+        srtSenderThreads: 2,
+        srtSenderThreadLimit: 512,
+        externalFfmpegCount: 1,
+        retainedPayloadBytes: 4096,
+      },
+      nodes: [
+        {
+          id: `${pipelineId}:video:720p`,
+          kind: "stage",
+          label: "video:720p",
+          pipelineId,
+          execution: "child_process",
+          cpuPercent: 12.5,
+          memory: {
+            attributedBytes: 64 * 1024 * 1024,
+            confidence: "measured",
+          },
+        },
+      ],
+    }),
+  });
   await resetPushStateCounter(page);
 
   await page
@@ -1107,6 +1142,25 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   expect(await getCdpStatusTexts(page)).toContain(
     "Inspection focus · 1 blocker before active probes · 1 fault candidate · Inspect recent errors and retry backoff before forcing a restart.",
   );
+  const resourceDetails = page.locator("#inspect-resource-details");
+  await expect(resourceDetails.getByText("Process Metrics")).toBeVisible();
+  await expect(resourceDetails.getByText("Pipeline Attribution")).toBeVisible();
+  await expect(
+    resourceDetails.getByRole("button", { name: "Show resource details" }),
+  ).toHaveAttribute("aria-expanded", "false");
+  await expect(resourceDetails.getByText("FFmpeg workers")).toHaveCount(0);
+  await resourceDetails
+    .getByRole("button", { name: "Show resource details" })
+    .click();
+  await expect(
+    resourceDetails.getByRole("button", { name: "Hide resource details" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  await expect(resourceDetails.getByText("FFmpeg workers")).toBeVisible();
+  await expect(resourceDetails.getByText("video:720p")).toBeVisible();
+  await resourceDetails
+    .getByRole("button", { name: "Hide resource details" })
+    .click();
+  await expect(resourceDetails.getByText("FFmpeg workers")).toHaveCount(0);
   await expectPushStateCount(page, 1);
 
   await page.goBack();
