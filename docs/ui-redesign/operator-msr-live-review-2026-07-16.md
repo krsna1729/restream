@@ -184,11 +184,11 @@ Dense media libraries now also use bounded Recordings and Source Files lists
 with explicit `Show all` affordances. Search still matches the full fetched
 library, so the first view stays a scan layer while full file audit remains one
 click away per section.
-Media rows now separate primary and secondary actions in v2: Play and Download
-stay visible because they are common inspection tasks, while Rename and Delete
-mount only after the operator opens `More actions` on that row. This keeps the
-library scan calmer and makes destructive actions intentional instead of
-visually competing with routine media access.
+Media rows now separate primary and secondary actions in v2: Play stays visible
+as the routine inspection task, while Download, Rename, and Delete mount only
+after the operator opens `More actions` on that row. This keeps the library
+scan calmer and keeps archive/destructive actions intentional instead of
+visually competing with playback.
 
 Status now has the same lightweight operator checkpoint: the v2 strip announces
 loaded/warning/error state, build identity, process-log count, notable-activity

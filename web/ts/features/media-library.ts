@@ -135,14 +135,15 @@ function mediaRowSecondaryActions(
   file: MediaFile,
   safeName: string,
   deleteDisabled: string,
+  downloadActions: string,
 ): string {
   const buttons = `<button class="btn btn-xs btn-outline shrink-0 js-rename-media" data-filename="${safeName}">Rename</button>
         <button class="btn btn-xs btn-error btn-outline shrink-0 js-delete-media" data-filename="${safeName}" ${deleteDisabled}>Delete</button>`;
-  if (!mediaV2Active()) return buttons;
+  if (!mediaV2Active()) return `${downloadActions}${buttons}`;
   const expanded = mediaActionRowsExpanded.has(file.name);
   return `<div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
         <button class="btn btn-xs btn-outline js-media-row-actions" type="button" data-filename="${safeName}" aria-expanded="${expanded ? "true" : "false"}" aria-label="${expanded ? "Hide" : "Show"} actions for ${safeName}">${expanded ? "Hide actions" : "More actions"}</button>
-        ${expanded ? buttons : ""}
+        ${expanded ? `${downloadActions}${buttons}` : ""}
     </div>`;
 }
 
@@ -198,8 +199,7 @@ function mediaFileRow(file: MediaFile): string {
             </div>
         </div>
         ${playAction}
-        ${downloadActions}
-        ${mediaRowSecondaryActions(file, safeName, deleteDisabled)}
+        ${mediaRowSecondaryActions(file, safeName, deleteDisabled, downloadActions)}
     </div>`;
 }
 

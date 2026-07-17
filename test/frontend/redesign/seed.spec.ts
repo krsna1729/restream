@@ -1545,7 +1545,7 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   ).toBeVisible();
   await expect(checkpoint.getByText("1 source file", { exact: true })).toBeVisible();
   const sourceRow = media.locator('[data-filename="synthetic-source.mp4"]');
-  await expect(sourceRow.getByRole("link", { name: "Download" })).toBeVisible();
+  await expect(sourceRow.getByRole("link", { name: "Download" })).toHaveCount(0);
   await expect(
     sourceRow.getByRole("button", {
       name: "Show actions for synthetic-source.mp4",
@@ -1561,11 +1561,13 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
       name: "Hide actions for synthetic-source.mp4",
     }),
   ).toHaveAttribute("aria-expanded", "true");
+  await expect(sourceRow.getByRole("link", { name: "Download" })).toBeVisible();
   await expect(sourceRow.getByRole("button", { name: "Rename" })).toBeVisible();
   await expect(sourceRow.getByRole("button", { name: "Delete" })).toBeVisible();
   await sourceRow
     .getByRole("button", { name: "Hide actions for synthetic-source.mp4" })
     .click();
+  await expect(sourceRow.getByRole("link", { name: "Download" })).toHaveCount(0);
   await expect(sourceRow.getByRole("button", { name: "Rename" })).toHaveCount(0);
 
   await search.fill("synthetic");
