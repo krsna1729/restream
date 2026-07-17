@@ -1978,9 +1978,15 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   await expect(
     checkpoint.getByText('0 activities · 0 process logs match "missing"'),
   ).toBeVisible();
-  await expect(status.getByText("No activity matches this search.")).toBeVisible();
   await expect(
-    status.getByText("No process log entries match this search."),
+    status.getByText(
+      'No activity entries match "missing". Clear search to return to the full status view.',
+    ),
+  ).toBeVisible();
+  await expect(
+    status.getByText(
+      'No process log entries match "missing". Clear search to return to the full status view.',
+    ),
   ).toBeVisible();
   const clearSearch = status.getByRole("button", { name: "Clear search" });
   await expect(clearSearch).toBeVisible();

@@ -432,7 +432,18 @@ function statusLogSearchSummaryText(
   return `${pluralize(activityCount, "activity", "activities")} · ${pluralize(logCount, "process log")} match "${trimmed}"`;
 }
 
-function renderRestreamActivity(logs: AppLogRow[], search: string): string {
+function statusNoResultText(kind: string, query: string): string {
+  const trimmed = query.trim();
+  return trimmed
+    ? `No ${kind} match "${trimmed}". Clear search to return to the full status view.`
+    : `No ${kind} available yet.`;
+}
+
+function renderRestreamActivity(
+  logs: AppLogRow[],
+  search: string,
+  query: string,
+): string {
   const items = logs
     .filter(isNotableRestreamActivity)
     .filter((log) => logMatchesSearch(log, search))
@@ -440,7 +451,7 @@ function renderRestreamActivity(logs: AppLogRow[], search: string): string {
   if (items.length === 0) {
     return `<section id="status-activity-section" class="dashboard-section scroll-mt-24 p-5">
             <h2 class="dashboard-section-title mb-3">Recent Activity</h2>
-            <p class="dashboard-muted">${search ? "No activity matches this search." : "No unscoped restream activity has been recorded yet."}</p>
+            <p class="dashboard-muted">${escapeHtml(search ? statusNoResultText("activity entries", query) : "No unscoped restream activity has been recorded yet.")}</p>
         </section>`;
   }
 
@@ -467,14 +478,18 @@ function renderRestreamActivity(logs: AppLogRow[], search: string): string {
     </section>`;
 }
 
-function renderProcessLog(logs: AppLogRow[], search: string): string {
+function renderProcessLog(
+  logs: AppLogRow[],
+  search: string,
+  query: string,
+): string {
   const items = Array.isArray(logs)
     ? logs.filter((log) => logMatchesSearch(log, search))
     : [];
   if (!items.length) {
     return `<section id="status-log-section" class="dashboard-section scroll-mt-24 p-5">
             <h2 class="dashboard-section-title mb-3">Process Log</h2>
-            <p class="dashboard-muted">${search ? "No process log entries match this search." : "No unscoped process log entries are available yet."}</p>
+            <p class="dashboard-muted">${escapeHtml(search ? statusNoResultText("process log entries", query) : "No unscoped process log entries are available yet.")}</p>
         </section>`;
   }
 
@@ -905,8 +920,8 @@ function renderStatusSnapshot(): void {
       `${valueOrDash(data.sbom?.componentCount)} components · ${valueOrDash(data.sbom?.nativeComponentCount)} native · licenses ${valueOrDash(data.sbom?.licensesIncluded)}`,
       sbomRows,
     ),
-    renderRestreamActivity(processLogs, search),
-    renderProcessLog(processLogs, search),
+    renderRestreamActivity(processLogs, search, statusLogSearchQuery),
+    renderProcessLog(processLogs, search, statusLogSearchQuery),
     statusExportActionsHtml(),
   ].join("");
   bindActions(data, sbomEndpoint);
