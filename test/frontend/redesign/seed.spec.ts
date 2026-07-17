@@ -2536,15 +2536,19 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
     hostSettings.getByText("1 host setting · health ready"),
   ).toBeVisible();
   await expect(
-    hostSettings.getByRole("button", { name: "Show host settings" }),
+    hostSettings.getByRole("button", { name: "Show telemetry host settings" }),
   ).toHaveAttribute("aria-expanded", "false");
   await expect(hostSettings.getByText("Open file descriptors")).toHaveCount(0);
-  await hostSettings.getByRole("button", { name: "Show host settings" }).click();
+  await hostSettings
+    .getByRole("button", { name: "Show telemetry host settings" })
+    .click();
   await expect(
-    hostSettings.getByRole("button", { name: "Hide host settings" }),
+    hostSettings.getByRole("button", { name: "Hide telemetry host settings" }),
   ).toHaveAttribute("aria-expanded", "true");
   await expect(hostSettings.getByText("Open file descriptors")).toBeVisible();
-  await hostSettings.getByRole("button", { name: "Hide host settings" }).click();
+  await hostSettings
+    .getByRole("button", { name: "Hide telemetry host settings" })
+    .click();
   await expect(hostSettings.getByText("Open file descriptors")).toHaveCount(0);
 
   await telemetry
@@ -2640,9 +2644,18 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
     "packetsOut",
   );
   await expect(
-    telemetry.getByRole("button", { name: "Hide stage details" }),
+    telemetry.getByRole("button", {
+      name: "Hide stage details for pipe-retrying:video",
+    }),
   ).toBeVisible();
-  await telemetry.getByRole("button", { name: "Hide stage details" }).click();
+  expect(await getCdpNamesByRole(page, "button")).toContain(
+    "Hide stage details for pipe-retrying:video",
+  );
+  await telemetry
+    .getByRole("button", {
+      name: "Hide stage details for pipe-retrying:video",
+    })
+    .click();
   await expect(telemetry.locator("#stage-telemetry-detail")).not.toContainText(
     "packetsOut",
   );
@@ -2703,14 +2716,26 @@ test("seed: ui=v2 Telemetry bounds dense stage and egress lists until requested 
   await expect(stages.getByText("8 stages shown of 12")).toBeVisible();
   await expect(stages.getByText("dense-stage-08")).toBeVisible();
   await expect(stages.getByText("dense-stage-09")).toHaveCount(0);
-  const showAllStages = stages.getByRole("button", { name: "Show all 12" });
+  const showAllStages = stages.getByRole("button", {
+    name: "Show all 12 telemetry stages",
+  });
   await expect(showAllStages).toHaveAttribute("aria-expanded", "false");
   const egresses = telemetry.getByLabel("Telemetry egresses");
   await expect(egresses.getByText("8 egresses shown of 12")).toBeVisible();
   await expect(egresses.getByText("out-dense-08")).toBeVisible();
   await expect(egresses.getByText("out-dense-09")).toHaveCount(0);
-  const showAll = egresses.getByRole("button", { name: "Show all 12" });
+  const showAll = egresses.getByRole("button", {
+    name: "Show all 12 telemetry egresses",
+  });
   await expect(showAll).toHaveAttribute("aria-expanded", "false");
+  const denseTelemetryButtonNames = await getCdpNamesByRole(page, "button");
+  expect(denseTelemetryButtonNames).toEqual(
+    expect.arrayContaining([
+      "Show all 12 telemetry stages",
+      "Show all 12 telemetry egresses",
+    ]),
+  );
+  expect(denseTelemetryButtonNames).not.toContain("Show all 12");
   expect(await getCdpNodeCount(page)).toBeLessThan(8_500);
 
   await showAllStages.click();

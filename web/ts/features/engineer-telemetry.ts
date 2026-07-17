@@ -144,7 +144,7 @@ function renderHostSettingsSection(health: HealthData | null): string {
         </div>
         ${
           telemetryV2Active()
-            ? `<button id="telemetry-host-settings-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="true">Hide host settings</button>`
+            ? `<button id="telemetry-host-settings-toggle" type="button" class="btn btn-xs btn-outline" aria-label="Hide telemetry host settings" aria-expanded="true">Hide host settings</button>`
             : `<span class="text-base-content/50 text-xs">${healthLabel}</span>`
         }
       </div>
@@ -157,7 +157,7 @@ function renderHostSettingsSection(health: HealthData | null): string {
           <h2 class="font-semibold">Host settings</h2>
           <p class="text-base-content/60 mt-1 text-xs">${escapeHtml(rowLabel)} · ${healthLabel}</p>
         </div>
-        <button id="telemetry-host-settings-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="false">Show host settings</button>
+        <button id="telemetry-host-settings-toggle" type="button" class="btn btn-xs btn-outline" aria-label="Show telemetry host settings" aria-expanded="false">Show host settings</button>
       </div>
       <p class="text-base-content/60 mt-3 text-sm">Kernel/runtime prerequisites are available when diagnosing host-level capacity or networking issues.</p>
     </section>`;
@@ -523,7 +523,7 @@ export function renderEngineerTelemetryHtml(
             </div>
             ${
               showEgressToggle
-                ? `<button id="telemetry-egress-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="${telemetryEgressExpanded ? "true" : "false"}">${telemetryEgressExpanded ? "Show fewer" : `Show all ${filteredEgresses.length}`}</button>`
+                ? `<button id="telemetry-egress-toggle" type="button" class="btn btn-xs btn-outline" aria-label="${telemetryEgressExpanded ? "Show fewer telemetry egresses" : `Show all ${filteredEgresses.length} telemetry egresses`}" aria-expanded="${telemetryEgressExpanded ? "true" : "false"}">${telemetryEgressExpanded ? "Show fewer" : `Show all ${filteredEgresses.length}`}</button>`
                 : ""
             }
           </div>
@@ -532,7 +532,7 @@ export function renderEngineerTelemetryHtml(
       </div>
       <div class="space-y-4"><section aria-label="Telemetry processing stages"><div class="mb-3 flex flex-wrap items-start justify-between gap-2"><div><h2 class="font-semibold">Processing stages</h2>${stageCaption ? `<p class="text-base-content/60 mt-1 text-xs">${escapeHtml(stageCaption)}</p>` : ""}</div>${
         showStagesToggle
-          ? `<button id="telemetry-stages-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="${telemetryStagesExpanded ? "true" : "false"}">${telemetryStagesExpanded ? "Show fewer" : `Show all ${filteredStages.length}`}</button>`
+          ? `<button id="telemetry-stages-toggle" type="button" class="btn btn-xs btn-outline" aria-label="${telemetryStagesExpanded ? "Show fewer telemetry stages" : `Show all ${filteredStages.length} telemetry stages`}" aria-expanded="${telemetryStagesExpanded ? "true" : "false"}">${telemetryStagesExpanded ? "Show fewer" : `Show all ${filteredStages.length}`}</button>`
           : ""
       }</div><div class="grid gap-3 md:grid-cols-2">${visibleStages.length ? visibleStages.map((item) => renderStage(pipelineId, item)).join("") : `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">${normalizedSearch ? escapeHtml(telemetryNoResultText("stages", searchQuery)) : "No active stages."}</div>`}</div></section>
       <section id="stage-telemetry-detail" class="border-base-content/10 bg-base-200 rounded-lg border p-4">
@@ -540,7 +540,7 @@ export function renderEngineerTelemetryHtml(
           <h2 class="font-semibold">Stage detail</h2>
           ${
             stage && telemetryV2Active()
-              ? `<button id="telemetry-stage-detail-hide" type="button" class="btn btn-xs btn-outline">Hide stage details</button>`
+              ? `<button id="telemetry-stage-detail-hide" type="button" class="btn btn-xs btn-outline" aria-label="Hide stage details for ${escapeHtml(stage.stageKey)}">Hide stage details</button>`
               : ""
           }
         </div>
