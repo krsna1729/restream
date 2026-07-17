@@ -597,7 +597,18 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   expect(buttonNames).not.toContain("Save");
   expect(buttonNames).not.toContain("Refresh");
   expect(buttonNames).not.toContain("Reset");
-  expect(await getCdpNamesByRole(page, "link")).toEqual(
+  const sectionJump = settings.getByLabel("Jump to settings section");
+  await expect(sectionJump).toBeVisible();
+  await sectionJump.selectOption("srt-settings-section");
+  await expect(settings.locator("#srt-settings-section")).toHaveAttribute(
+    "open",
+    "",
+  );
+  await expect(page).toHaveURL(/#srt-settings-section$/);
+  expect(await getCdpNamesByRole(page, "link")).not.toEqual(
+    expect.arrayContaining(["Server", "Recording", "SRT", "Backend", "Profiles"]),
+  );
+  expect(await getCdpNamesByRole(page, "link")).not.toEqual(
     expect.arrayContaining([
       "Jump to server settings",
       "Jump to recording settings",
@@ -605,9 +616,6 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
       "Jump to backend settings",
       "Jump to transcode profile settings",
     ]),
-  );
-  expect(await getCdpNamesByRole(page, "link")).not.toEqual(
-    expect.arrayContaining(["Server", "Recording", "SRT", "Backend", "Profiles"]),
   );
   expect(await getCdpNamesByRole(page, "heading")).toEqual(
     expect.arrayContaining([

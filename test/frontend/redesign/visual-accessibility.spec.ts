@@ -543,7 +543,7 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
     {
       href: "/?mode=settings&ui=v2",
       maxVisibleDashboardElements: 140,
-      maxVisibleControls: 30,
+      maxVisibleControls: 26,
       maxVisibleTextChars: 1600,
       readySelector: "#settings-route-summary",
     },

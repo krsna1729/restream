@@ -115,15 +115,36 @@ function styleSettingsSection(section: HTMLElement | null, id: string): void {
 }
 
 function settingsNavHtml(id = ""): string {
+  const selectId = id ? `${id}-section-jump` : "settings-section-jump";
   return `<nav${id ? ` id="${id}"` : ""} class="dashboard-nav-strip w-full" aria-label="Settings sections">
-      <div class="flex flex-wrap gap-2">
-          <a class="btn btn-sm btn-ghost" href="#server-settings-section" aria-label="Jump to server settings">Server</a>
-          <a class="btn btn-sm btn-ghost" href="#recording-settings-section" aria-label="Jump to recording settings">Recording</a>
-          <a class="btn btn-sm btn-ghost" href="#srt-settings-section" aria-label="Jump to SRT settings">SRT</a>
-          <a class="btn btn-sm btn-ghost" href="#backend-policy-section" aria-label="Jump to backend settings">Backend</a>
-          <a class="btn btn-sm btn-ghost" href="#transcode-profiles-section" aria-label="Jump to transcode profile settings">Profiles</a>
-      </div>
+      <label class="flex w-full max-w-xs flex-col gap-1 text-sm">
+          <span class="text-base-content/60 text-xs font-medium uppercase tracking-[0.12em]">Jump to section</span>
+          <select id="${selectId}" class="select select-sm w-full" data-settings-section-jump aria-label="Jump to settings section">
+              <option value="">Choose a settings section…</option>
+              <option value="server-settings-section">Server</option>
+              <option value="recording-settings-section">Recording</option>
+              <option value="srt-settings-section">SRT</option>
+              <option value="backend-policy-section">Backend</option>
+              <option value="transcode-profiles-section">Profiles</option>
+          </select>
+      </label>
   </nav>`;
+}
+
+function bindSettingsSectionJump(container: HTMLElement): void {
+  container
+    .querySelectorAll<HTMLSelectElement>("[data-settings-section-jump]")
+    .forEach((select) => {
+      select.addEventListener("change", () => {
+        const targetId = select.value;
+        if (!targetId) return;
+        const target = document.getElementById(targetId);
+        if (!target) return;
+        if (target instanceof HTMLDetailsElement) target.open = true;
+        target.scrollIntoView({ block: "start" });
+        history.replaceState(null, "", `#${targetId}`);
+      });
+    });
 }
 
 function settingsV2Active(): boolean {
@@ -678,6 +699,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
         </div>`;
   applySettingsV2Disclosure(container);
   syncSettingsAccountActions(container);
+  bindSettingsSectionJump(container);
   bindSettingsPanelActions(container);
 }
 
