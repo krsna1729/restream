@@ -31,6 +31,8 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-12 17:45 MSR FULL FINAL PASS [codex]](#2026-07-12-1745-msr-full-final-pass-codex)
 - [2026-07-17 22:23 Q-001 STARTED [codex]](#2026-07-17-2223-q-001-started-codex)
 - [2026-07-17 22:40 Q-001 DONE [codex]](#2026-07-17-2240-q-001-done-codex)
+- [2026-07-17 22:44 Q-017 STARTED [codex]](#2026-07-17-2244-q-017-started-codex)
+- [2026-07-17 22:49 Q-017 DONE [codex]](#2026-07-17-2249-q-017-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -456,3 +458,27 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 | `mpegts_probe.rs` | 420 / 576 | 72.92% | 89.29% | probe/reporting paths |
 - Aggregate workspace coverage: 43,181 / 68,175 lines (63.34%), 4,501 /
   6,928 functions (64.97%), and 59,936 / 97,231 regions (61.64%).
+
+## 2026-07-17 22:44 Q-017 STARTED [codex]
+- What: reproduce and permanently reject incomplete copied frontend dependency
+  caches before a worktree is reported ready.
+- Gates: pending.
+- Commit: none.
+- Follow-ups: none yet.
+
+## 2026-07-17 22:49 Q-017 DONE [codex]
+- What: strengthened worktree frontend readiness to validate the declared npm
+  tree and required build entrypoints, with a synthetic stale/corrupt cache
+  regression wired into CI.
+- Gates: break-it-first regression rejected the old helper because it accepted
+  the legacy cache; fixed regression passed; `bash -n` passed; current
+  worktree readiness passed; `npm run build:frontend` passed; `npm run
+  test:frontend` passed 128 source tests and 57 compiled-bundle smoke tests;
+  `scripts/check/source-audit.sh` and `scripts/check/test-hygiene.sh` passed,
+  with the latter running 1,397 Rust tests/doctests and finding no noisy output.
+- Commit: this commit.
+- Follow-ups: none.
+- Notes: readiness now checks Vite, TypeScript, Tailwind, HLS, React JSX,
+  React DOM, React type declarations, and `npm ls --all` rather than treating a
+  three-file legacy subset as proof that a copied cache satisfies the current
+  dependency manifest.

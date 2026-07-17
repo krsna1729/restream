@@ -87,7 +87,9 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   assets were absent. The repair then exposed a stale copied `node_modules`
   tree that the helper called ready despite missing React packages, causing the
   canonical frontend build to fail until `npm ci`.
-- Status: open (Filed: 2026-07-17 during Q-001)
+- Status: done (Synthetic stale and corrupted caches rejected; current
+  dependency tree and full frontend suite pass; 2026-07-17 by codex; Filed:
+  2026-07-17 during Q-001)
 
 ### Q-002 [resilience] [haiku] Inventory crafted-bytes fault-injection coverage
 - Goal: a table (in the journal + filed items) of every demux/parse entry

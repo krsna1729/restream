@@ -21,6 +21,7 @@ SHARE_STATIC=1
 COPY_STATIC=0
 TARGET_CACHE_MODE="subset"
 WITH_INCREMENTAL=0
+CHECK_FRONTEND_DEPS_PATH=""
 
 LOCAL_DEP_PREFIXES=(
     librestream
@@ -79,6 +80,8 @@ Options:
   --no-node-modules        skip node_modules/ seeding
   --no-share-static        skip .local/build/static sharing and public/bin seeding
   --copy-static            copy .local/build/static instead of sharing it
+  --check-frontend-deps <path>
+                           verify a prepared frontend dependency tree and exit
   --dry-run                print actions without mutating the repo
   -h, --help               show this help
 
@@ -229,9 +232,16 @@ sync_tree() {
 frontend_deps_ready() {
     local worktree_root="$1"
 
-    [[ -x "$worktree_root/node_modules/.bin/tsc" ]] &&
+    command -v npm >/dev/null 2>&1 &&
+        [[ -x "$worktree_root/node_modules/.bin/vite" ]] &&
+        [[ -x "$worktree_root/node_modules/.bin/tsc" ]] &&
         [[ -x "$worktree_root/node_modules/.bin/tailwindcss" ]] &&
-        [[ -f "$worktree_root/node_modules/hls.js/dist/hls.min.js" ]]
+        [[ -f "$worktree_root/node_modules/hls.js/dist/hls.min.js" ]] &&
+        [[ -f "$worktree_root/node_modules/react/jsx-runtime.js" ]] &&
+        [[ -f "$worktree_root/node_modules/react-dom/client.js" ]] &&
+        [[ -f "$worktree_root/node_modules/@types/react/index.d.ts" ]] &&
+        [[ -f "$worktree_root/node_modules/@types/react-dom/index.d.ts" ]] &&
+        npm --prefix "$worktree_root" ls --all --include=dev --omit=optional >/dev/null 2>&1
 }
 
 ensure_frontend_deps() {
@@ -615,6 +625,11 @@ while [[ $# -gt 0 ]]; do
             COPY_STATIC=1
             shift
             ;;
+        --check-frontend-deps)
+            [[ $# -ge 2 ]] || die "--check-frontend-deps requires a value"
+            CHECK_FRONTEND_DEPS_PATH="$2"
+            shift 2
+            ;;
         --dry-run)
             DRY_RUN=1
             shift
@@ -639,6 +654,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ -n "$CHECK_FRONTEND_DEPS_PATH" ]]; then
+    frontend_deps_ready "$CHECK_FRONTEND_DEPS_PATH"
+    exit
+fi
 
 [[ -n "$WORKTREE_ID" ]] || {
     usage >&2
