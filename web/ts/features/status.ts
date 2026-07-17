@@ -325,10 +325,10 @@ function advancedSection(
 function statusExportActionsHtml(): string {
   const actions = `
             <div class="flex flex-wrap gap-2">
-                <button type="button" class="btn btn-sm btn-outline" id="download-status-btn">Download Status</button>
-                <button type="button" class="btn btn-sm btn-outline" id="copy-status-btn">Copy Status</button>
-                <button type="button" class="btn btn-sm btn-outline" id="download-sbom-btn">Download SBOM</button>
-                <button type="button" class="btn btn-sm btn-outline" id="copy-sbom-btn">Copy SBOM</button>
+                <button type="button" class="btn btn-sm btn-outline" id="download-status-btn">Download status report</button>
+                <button type="button" class="btn btn-sm btn-outline" id="copy-status-btn">Copy status report</button>
+                <button type="button" class="btn btn-sm btn-outline" id="download-sbom-btn">Download SBOM file</button>
+                <button type="button" class="btn btn-sm btn-outline" id="copy-sbom-btn">Copy SBOM file</button>
             </div>`;
   if (!statusV2Active()) return actions;
   return `

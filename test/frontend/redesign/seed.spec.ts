@@ -2347,7 +2347,7 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   await status.getByRole("button", { name: "Hide Toolchain details" }).click();
   await expect(status.locator("#status-toolchain-section table")).toHaveCount(0);
   await expect(
-    status.getByRole("button", { name: "Download Status" }),
+    status.getByRole("button", { name: "Download status report" }),
   ).toBeHidden();
   const exportActions = status.getByRole("button", {
     name: "Show status export actions",
@@ -2356,9 +2356,11 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   await expect(exportActions).toHaveAttribute("aria-expanded", "false");
   await exportActions.click();
   await expect(
-    status.getByRole("button", { name: "Download Status" }),
+    status.getByRole("button", { name: "Download status report" }),
   ).toBeVisible();
-  await expect(status.getByRole("button", { name: "Copy SBOM" })).toBeVisible();
+  await expect(
+    status.getByRole("button", { name: "Copy SBOM file" }),
+  ).toBeVisible();
   const headingNames = await getCdpNamesByRole(page, "heading");
   expect(headingNames).toEqual(
     expect.arrayContaining(["Status", "Recent Activity", "Process Log"]),
@@ -2404,15 +2406,18 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
     expect.arrayContaining([
       "Refresh status data",
       "Hide status export actions",
-      "Download Status",
-      "Copy SBOM",
+      "Download status report",
+      "Copy SBOM file",
     ]),
+  );
+  expect(statusButtonNames).not.toEqual(
+    expect.arrayContaining(["Download Status", "Copy SBOM"]),
   );
   expect(statusButtonNames).not.toContain("Refresh");
   expect(statusButtonNames).not.toContain("Hide export actions");
   await hideExportActions.click();
   await expect(
-    status.getByRole("button", { name: "Download Status" }),
+    status.getByRole("button", { name: "Download status report" }),
   ).toBeHidden();
   expect(await getCdpStatusTexts(page)).toContain(
     "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
