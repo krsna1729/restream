@@ -1503,7 +1503,7 @@ function DashboardV2PipelineOutputOverview({
                     {outputFilters.map((filter) => (
                       <button
                         aria-pressed={outputFilter === filter.id}
-                        className={`btn btn-xs ${
+                        className={`btn btn-sm min-h-9 min-w-11 ${
                           outputFilter === filter.id
                             ? "btn-accent"
                             : "btn-outline btn-ghost"
@@ -1518,7 +1518,7 @@ function DashboardV2PipelineOutputOverview({
                   </div>
                   {filtersActive ? (
                     <button
-                      className="btn btn-xs btn-ghost"
+                      className="btn btn-sm btn-ghost min-h-9"
                       onClick={clearOutputFilters}
                       type="button"
                     >
@@ -1585,7 +1585,7 @@ function DashboardV2PipelineOutputOverview({
                   aria-haspopup="menu"
                   aria-expanded={openActionsFor === output.id}
                   aria-label={`More actions for ${output.name}`}
-                  className="btn btn-xs btn-ghost"
+                  className="btn btn-sm btn-ghost min-h-9 min-w-11"
                   onClick={() =>
                     setOpenActionsFor((current) =>
                       current === output.id ? null : output.id,
@@ -1616,7 +1616,7 @@ function DashboardV2PipelineOutputOverview({
                   >
                     <button
                       aria-label={`History ${output.name}`}
-                      className="btn btn-xs btn-ghost w-full justify-start"
+                      className="btn btn-sm btn-ghost min-h-9 w-full justify-start"
                       onClick={() => {
                         closeActionsMenu(output.id);
                         actions.openOutputHistory(
@@ -1633,7 +1633,7 @@ function DashboardV2PipelineOutputOverview({
                     {output.monitorAvailable ? (
                       <button
                         aria-label={`Monitor ${output.name}`}
-                        className="btn btn-xs btn-ghost w-full justify-start"
+                        className="btn btn-sm btn-ghost min-h-9 w-full justify-start"
                         onClick={() => {
                           closeActionsMenu(output.id);
                           actions.monitorOutput(model.pipelineId, output.id);
@@ -1646,7 +1646,7 @@ function DashboardV2PipelineOutputOverview({
                     ) : null}
                     <button
                       aria-label={`Edit ${output.name}`}
-                      className="btn btn-xs btn-ghost w-full justify-start"
+                      className="btn btn-sm btn-ghost min-h-9 w-full justify-start"
                       onClick={() => {
                         closeActionsMenu(output.id);
                         actions.editOutput(model.pipelineId, output.id);
@@ -1658,7 +1658,7 @@ function DashboardV2PipelineOutputOverview({
                     </button>
                     <button
                       aria-label={`Delete ${output.name}`}
-                      className="btn btn-xs btn-ghost text-error w-full justify-start"
+                      className="btn btn-sm btn-ghost text-error min-h-9 w-full justify-start"
                       disabled={output.deleteDisabled}
                       onClick={() => {
                         closeActionsMenu(output.id);

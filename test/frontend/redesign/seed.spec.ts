@@ -2680,6 +2680,28 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
   await expect(outputOverview).toContainText("No progress for 10s");
   await expect(outputOverview).toContainText("5/6 active");
   const outputSearch = outputOverview.getByLabel("Search output destinations");
+  const outputToolButtons = await outputOverview
+    .locator(
+      'button[aria-pressed], button[aria-label^="More actions for"], button:has-text("Clear output filters")',
+    )
+    .evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const rect = button.getBoundingClientRect();
+        return {
+          height: Math.round(rect.height),
+          label:
+            button.getAttribute("aria-label") ||
+            button.textContent?.replace(/\s+/g, " ").trim() ||
+            "(unnamed)",
+          width: Math.round(rect.width),
+        };
+      }),
+    );
+  expect(outputToolButtons.length).toBeGreaterThan(0);
+  for (const button of outputToolButtons) {
+    expect(button.height, button.label).toBeGreaterThanOrEqual(36);
+    expect(button.width, button.label).toBeGreaterThanOrEqual(44);
+  }
   await outputSearch.fill("stalled");
   await expect(outputOverview.getByText("1/6 shown")).toBeVisible();
   await expect(
