@@ -1370,6 +1370,14 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   await expect(page.locator("#inspect-route-summary")).toHaveText(
     "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
   );
+  await expect(
+    page
+      .locator("#inspect-mode-panel")
+      .getByRole("button", { name: "Operate Retrying Destination" }),
+  ).toBeVisible();
+  const inspectButtonNames = await getCdpNamesByRole(page, "button");
+  expect(inspectButtonNames).toContain("Operate Retrying Destination");
+  expect(inspectButtonNames).not.toContain("Open");
   const inspectCheckpoint = page.locator("#dashboard-v2-pipeline-inspect-root");
   await expect(
     inspectCheckpoint.locator("#dashboard-v2-pipeline-inspect-title"),

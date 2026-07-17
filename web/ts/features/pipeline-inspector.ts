@@ -542,6 +542,11 @@ export function renderPipelineInspector(): void {
   ) as HTMLButtonElement | null;
   if (openBtn) {
     openBtn.disabled = !pipe;
+    openBtn.textContent = "Operate";
+    openBtn.setAttribute(
+      "aria-label",
+      pipe ? `Operate ${pipe.name}` : "Operate selected pipeline",
+    );
     openBtn.onclick = () => {
       if (pipe) dependencies.openOperateView(pipe.id);
     };
