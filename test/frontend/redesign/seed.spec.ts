@@ -1954,6 +1954,21 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   expect(await getCdpStatusTexts(page)).toContain(
     "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Healthy Program",
   );
+  const hostSettings = telemetry.getByLabel("Host settings");
+  await expect(
+    hostSettings.getByText("1 host setting · health ready"),
+  ).toBeVisible();
+  await expect(
+    hostSettings.getByRole("button", { name: "Show host settings" }),
+  ).toHaveAttribute("aria-expanded", "false");
+  await expect(hostSettings.getByText("Open file descriptors")).toHaveCount(0);
+  await hostSettings.getByRole("button", { name: "Show host settings" }).click();
+  await expect(
+    hostSettings.getByRole("button", { name: "Hide host settings" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  await expect(hostSettings.getByText("Open file descriptors")).toBeVisible();
+  await hostSettings.getByRole("button", { name: "Hide host settings" }).click();
+  await expect(hostSettings.getByText("Open file descriptors")).toHaveCount(0);
 
   await telemetry
     .getByLabel("Telemetry pipeline")

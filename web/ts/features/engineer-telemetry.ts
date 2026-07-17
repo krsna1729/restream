@@ -46,6 +46,7 @@ let stageUnavailable = false;
 let viewOptions: TelemetryViewOptions | null = null;
 let telemetrySearchQuery = "";
 let telemetryEgressExpanded = false;
+let telemetryHostSettingsExpanded = false;
 let telemetryCheckpointCallback:
   | ((model: TelemetryCheckpointModel | null) => void)
   | null = null;
@@ -113,6 +114,51 @@ function renderHostSettings(settings: HostSettingRow[] | undefined): string {
         .join("")}</tbody>
     </table>
   </div>`;
+}
+
+function telemetryV2Active(): boolean {
+  const toggle = document.getElementById("dashboard-ui-v2-toggle");
+  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
+  try {
+    return new URLSearchParams(window.location.search).get("ui") === "v2";
+  } catch (_err) {
+    return false;
+  }
+}
+
+function renderHostSettingsSection(health: HealthData | null): string {
+  const rows = health?.hostSettings || [];
+  const healthLabel = health?.status
+    ? `health ${escapeHtml(health.status)}`
+    : "health unavailable";
+  const rowLabel = pluralize(rows.length, "host setting");
+  const expanded = !telemetryV2Active() || telemetryHostSettingsExpanded;
+  if (expanded) {
+    return `<section class="border-base-content/10 bg-base-200 rounded-lg border p-4" aria-label="Host settings">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 class="font-semibold">Host settings</h2>
+          <p class="text-base-content/60 mt-1 text-xs">${escapeHtml(rowLabel)} · ${healthLabel}</p>
+        </div>
+        ${
+          telemetryV2Active()
+            ? `<button id="telemetry-host-settings-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="true">Hide host settings</button>`
+            : `<span class="text-base-content/50 text-xs">${healthLabel}</span>`
+        }
+      </div>
+      ${renderHostSettings(health?.hostSettings)}
+    </section>`;
+  }
+  return `<section class="border-base-content/10 bg-base-200 rounded-lg border p-4" aria-label="Host settings">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 class="font-semibold">Host settings</h2>
+          <p class="text-base-content/60 mt-1 text-xs">${escapeHtml(rowLabel)} · ${healthLabel}</p>
+        </div>
+        <button id="telemetry-host-settings-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="false">Show host settings</button>
+      </div>
+      <p class="text-base-content/60 mt-3 text-sm">Kernel/runtime prerequisites are available when diagnosing host-level capacity or networking issues.</p>
+    </section>`;
 }
 
 function metricRows(metrics: TelemetryMetrics | undefined): string {
@@ -443,10 +489,7 @@ export function renderEngineerTelemetryHtml(
       <div class="stat bg-base-200 rounded-lg"><div class="stat-title">Egresses</div><div class="stat-value text-2xl">${engine?.egresses.length ?? "—"}</div></div>
       <div class="stat bg-base-200 rounded-lg"><div class="stat-title">Transcoder buffers</div><div class="stat-value text-2xl">${engine?.activeTranscoderBuffers ?? "—"}</div></div>
     </section>
-    <section class="border-base-content/10 bg-base-200 rounded-lg border p-4" aria-label="Host settings">
-      <div class="flex flex-wrap items-center justify-between gap-2"><h2 class="font-semibold">Host settings</h2><span class="text-base-content/50 text-xs">${health?.status ? `health ${escapeHtml(health.status)}` : "health unavailable"}</span></div>
-      ${renderHostSettings(health?.hostSettings)}
-    </section>
+    ${renderHostSettingsSection(health)}
     ${
       pipelineId && pipeline
         ? `<div class="grid gap-4 xl:grid-cols-[minmax(20rem,.75fr)_minmax(0,1.25fr)]">
@@ -534,6 +577,12 @@ function paintTelemetry(): void {
     .getElementById("telemetry-egress-toggle")
     ?.addEventListener("click", () => {
       telemetryEgressExpanded = !telemetryEgressExpanded;
+      paintTelemetry();
+    });
+  document
+    .getElementById("telemetry-host-settings-toggle")
+    ?.addEventListener("click", () => {
+      telemetryHostSettingsExpanded = !telemetryHostSettingsExpanded;
       paintTelemetry();
     });
   document

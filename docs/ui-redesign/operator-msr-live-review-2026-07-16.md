@@ -230,6 +230,11 @@ Dense telemetry egress lists are also bounded by default with an explicit
 `Show all` affordance. This keeps the checkpoint closer to the v2 Operate model:
 scan a few destinations first, search when isolating one destination, and only
 expand the full fan-out when comparison is intentional.
+Telemetry host settings now follow the same progressive-disclosure rule in v2:
+the first view shows health plus the host-setting count, while the raw
+kernel/runtime table is mounted only after the operator asks for it. That keeps
+capacity prerequisites available for deep diagnosis without making every
+Telemetry visit start with a low-frequency configuration table.
 
 Settings now has the same lightweight operator checkpoint above the legacy admin
 form. The v2 strip answers the first operator question before the dense
