@@ -54,6 +54,7 @@ let viewOptions: IncidentsViewOptions | null = null;
 let incidentSearchQuery = "";
 let incidentAlertGroupsExpanded = false;
 let incidentEventsExpanded = false;
+const incidentAlertDetailsExpanded = new Set<string>();
 let incidentsCheckpointCallback:
   | ((model: IncidentsCheckpointModel | null) => void)
   | null = null;
@@ -199,6 +200,16 @@ function normalizeSearch(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function incidentsV2Active(): boolean {
+  const toggle = document.getElementById("dashboard-ui-v2-toggle");
+  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
+  try {
+    return new URLSearchParams(window.location.search).get("ui") === "v2";
+  } catch (_err) {
+    return false;
+  }
+}
+
 function alertSearchText(alert: OperatorAlert): string {
   return [
     alert.id,
@@ -233,6 +244,8 @@ function eventSearchText(event: LifecycleEvent): string {
 }
 
 function renderAlert(alert: OperatorAlert): string {
+  const detailKey = `alert:${alert.id}`;
+  const detailExpanded = !incidentsV2Active() || incidentAlertDetailsExpanded.has(detailKey);
   const evidence = (alert.evidence || [])
     .map((item) => `<li>${escapeHtml(item)}</li>`)
     .join("");
@@ -245,8 +258,17 @@ function renderAlert(alert: OperatorAlert): string {
       <span class="badge ${severityTone(alert.severity)}">${escapeHtml(alert.severity)}</span>
     </div>
     <p class="mt-3 text-sm">${escapeHtml(alert.cause)}</p>
-    ${evidence ? `<details class="mt-3 text-sm"><summary class="cursor-pointer font-medium">Evidence</summary><ul class="mt-2 list-disc space-y-1 pl-5">${evidence}</ul></details>` : ""}
-    <div class="bg-base-200 mt-3 rounded-md p-3 text-sm"><span class="font-medium">Recommended action:</span> ${escapeHtml(alert.recommendedAction)}</div>
+    ${
+      incidentsV2Active()
+        ? `<button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>`
+        : ""
+    }
+    ${
+      detailExpanded
+        ? `${evidence ? `<details class="mt-3 text-sm"><summary class="cursor-pointer font-medium">Evidence</summary><ul class="mt-2 list-disc space-y-1 pl-5">${evidence}</ul></details>` : ""}
+    <div class="bg-base-200 mt-3 rounded-md p-3 text-sm"><span class="font-medium">Recommended action:</span> ${escapeHtml(alert.recommendedAction)}</div>`
+        : ""
+    }
     <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/60">
       <span>Last seen ${escapeHtml(formatTime(alert.lastSeen || alert.generatedAt))}</span>
       ${alert.pipelineId ? `<button type="button" class="btn btn-xs btn-outline" data-open-incident-pipeline="${escapeHtml(alert.pipelineId)}">Open pipeline</button>` : ""}
@@ -256,6 +278,8 @@ function renderAlert(alert: OperatorAlert): string {
 
 function renderAlertGroup(group: AlertGroup): string {
   if (group.alerts.length === 1) return renderAlert(group.alerts[0]);
+  const detailKey = `group:${group.id}`;
+  const detailExpanded = !incidentsV2Active() || incidentAlertDetailsExpanded.has(detailKey);
   const stageCount = group.stageIds.length;
   const title =
     stageCount > 1 && group.title.includes("stage")
@@ -303,12 +327,25 @@ function renderAlertGroup(group: AlertGroup): string {
       </div>`
           : ""
       }
-      <div class="bg-base-200 rounded-md p-3 text-sm">
+      ${
+        detailExpanded
+          ? `<div class="bg-base-200 rounded-md p-3 text-sm">
         <span class="font-medium">Recommended action:</span> ${escapeHtml(group.recommendedAction)}
-      </div>
+      </div>`
+          : ""
+      }
     </div>
-    ${sampleOutputs.length ? `<details class="mt-3 text-sm"><summary class="cursor-pointer font-medium">Affected outputs</summary><div class="mt-2 flex flex-wrap gap-1">${sampleOutputs.map((id) => `<code class="bg-base-200 rounded px-1.5 py-1 text-xs">${escapeHtml(id)}</code>`).join("")}${remainingOutputs ? `<span class="text-base-content/60 px-1.5 py-1 text-xs">+${remainingOutputs} more</span>` : ""}</div></details>` : ""}
-    ${evidence ? `<details class="mt-3 text-sm"><summary class="cursor-pointer font-medium">Evidence</summary><ul class="mt-2 list-disc space-y-1 pl-5">${evidence}</ul></details>` : ""}
+    ${
+      incidentsV2Active()
+        ? `<button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>`
+        : ""
+    }
+    ${
+      detailExpanded
+        ? `${sampleOutputs.length ? `<details class="mt-3 text-sm"><summary class="cursor-pointer font-medium">Affected outputs</summary><div class="mt-2 flex flex-wrap gap-1">${sampleOutputs.map((id) => `<code class="bg-base-200 rounded px-1.5 py-1 text-xs">${escapeHtml(id)}</code>`).join("")}${remainingOutputs ? `<span class="text-base-content/60 px-1.5 py-1 text-xs">+${remainingOutputs} more</span>` : ""}</div></details>` : ""}
+    ${evidence ? `<details class="mt-3 text-sm"><summary class="cursor-pointer font-medium">Evidence</summary><ul class="mt-2 list-disc space-y-1 pl-5">${evidence}</ul></details>` : ""}`
+        : ""
+    }
     <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/60">
       <span>Last seen ${escapeHtml(formatTime(group.lastSeen))}</span>
       ${group.pipelineId ? `<button type="button" class="btn btn-xs btn-outline" data-open-incident-pipeline="${escapeHtml(group.pipelineId)}">Open pipeline</button>` : ""}
@@ -595,6 +632,7 @@ function bindIncidentControls(): void {
     incidentSearchQuery = search.value;
     incidentAlertGroupsExpanded = false;
     incidentEventsExpanded = false;
+    incidentAlertDetailsExpanded.clear();
     paintIncidents();
     const nextSearch = document.getElementById(
       "incidents-search",
@@ -608,6 +646,7 @@ function bindIncidentControls(): void {
       incidentSearchQuery = "";
       incidentAlertGroupsExpanded = false;
       incidentEventsExpanded = false;
+      incidentAlertDetailsExpanded.clear();
       paintIncidents();
       (
         document.getElementById("incidents-search") as HTMLInputElement | null
@@ -631,6 +670,20 @@ function bindIncidentControls(): void {
       paintIncidents();
     });
   document
+    .querySelectorAll<HTMLElement>("[data-incident-alert-detail]")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        const key = button.dataset.incidentAlertDetail;
+        if (!key) return;
+        if (incidentAlertDetailsExpanded.has(key)) {
+          incidentAlertDetailsExpanded.delete(key);
+        } else {
+          incidentAlertDetailsExpanded.add(key);
+        }
+        paintIncidents();
+      });
+    });
+  document
     .querySelectorAll<HTMLElement>("[data-open-incident-pipeline]")
     .forEach((button) => {
       button.addEventListener("click", () => {
@@ -645,6 +698,7 @@ export function selectIncidentPipeline(pipelineId: string): void {
   selectedPipelineId = pipelineId;
   incidentAlertGroupsExpanded = false;
   incidentEventsExpanded = false;
+  incidentAlertDetailsExpanded.clear();
   // Lifecycle events are scope-specific. Do not paint the previous scope as a
   // successful empty result while the replacement snapshot is in flight.
   snapshot = { ...snapshot, events: null, loaded: false, unavailable: false };

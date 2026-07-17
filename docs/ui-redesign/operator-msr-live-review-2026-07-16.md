@@ -218,6 +218,11 @@ local Clear search action restores both columns without changing incident scope.
 Dense incident feeds now also use bounded alert and event lists with explicit
 `Show all` affordances. Search still matches the full fetched incident set, so
 the first view is triage-first while full audit mode stays one click away.
+Incident alert cards now keep the triage surface compact in v2: severity,
+cause, last-seen time, and `Open pipeline` stay visible, while evidence and
+recommended-action detail blocks mount only after the operator opens `Show alert
+details` on that alert. This makes the feed easier to scan under pressure
+without removing the action guidance.
 
 Telemetry now has an equivalent engineer-facing checkpoint: before the dense
 counter grids, the v2 strip summarizes loaded/stale state, scoped pipeline,

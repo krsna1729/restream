@@ -1832,6 +1832,33 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   const search = incidents.getByLabel("Search incidents and events");
   const searchSummary = incidents.locator("#incidents-search-results-summary");
   await expect(searchSummary).toHaveText("1 alert group · 1 event visible");
+  const retryingAlert = incidents
+    .locator("[data-alert-id='seed-alert-retrying-output']")
+    .first();
+  await expect(
+    retryingAlert.getByRole("heading", { name: "Retrying output" }),
+  ).toBeVisible();
+  await expect(
+    retryingAlert.getByText("Recommended action:"),
+  ).toHaveCount(0);
+  await expect(retryingAlert.getByText("Evidence")).toHaveCount(0);
+  await expect(
+    retryingAlert.getByRole("button", { name: "Show alert details" }),
+  ).toHaveAttribute("aria-expanded", "false");
+  await retryingAlert
+    .getByRole("button", { name: "Show alert details" })
+    .click();
+  await expect(
+    retryingAlert.getByRole("button", { name: "Hide alert details" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  await expect(retryingAlert.getByText("Recommended action:")).toBeVisible();
+  await expect(retryingAlert.getByText("Evidence")).toBeVisible();
+  await retryingAlert
+    .getByRole("button", { name: "Hide alert details" })
+    .click();
+  await expect(
+    retryingAlert.getByText("Recommended action:"),
+  ).toHaveCount(0);
 
   await search.fill("destination");
   await expect(summary).toHaveText(
