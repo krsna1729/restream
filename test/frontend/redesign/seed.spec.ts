@@ -622,9 +622,21 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
       "Transcode Profiles",
     ]),
   );
+  expect(await getCdpNamesByRole(page, "textbox")).toEqual(
+    expect.arrayContaining(["Server name", "Ingest host"]),
+  );
+  expect(await getCdpNamesByRole(page, "textbox")).not.toEqual(
+    expect.arrayContaining([
+      "Name",
+      "e.g. 192.168.1.10 (blank = localhost)",
+    ]),
+  );
   await expect(authSearch).toBeHidden();
   await settings.locator("#auth-attempts-section > summary").click();
   await expect(authSearch).toBeVisible();
+  expect(await getCdpNamesByRole(page, "searchbox")).toContain(
+    "Search authentication attempts",
+  );
   await expect(authSearchSummary).toHaveText("8 auth attempts shown of 12");
   await expect(
     settings.getByRole("cell", { name: "203.0.113.10" }),

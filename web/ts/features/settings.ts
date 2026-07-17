@@ -436,7 +436,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     <div class="max-w-2xl space-y-2">
                         <label for="settings-server-name" class="text-sm font-medium">Server Name</label>
                         <div class="flex flex-wrap items-center gap-2">
-                            <input type="text" id="settings-server-name" class="input input-sm min-w-0 flex-1" placeholder="Name" />
+                            <input type="text" id="settings-server-name" class="input input-sm min-w-0 flex-1" placeholder="Name" aria-label="Server name" />
                             <button class="btn btn-accent btn-sm" data-settings-action="save-server-name" aria-label="Save server name">Save</button>
                             <span id="server-name-saved" class="text-success hidden text-sm">Saved</span>
                         </div>
@@ -449,7 +449,8 @@ export function renderSettingsPanel(container: HTMLElement): void {
                                 type="text"
                                 id="settings-ingest-host"
                                 class="input input-sm min-w-0 flex-1"
-                                placeholder="e.g. 192.168.1.10 (blank = localhost)" />
+                                placeholder="e.g. 192.168.1.10 (blank = localhost)"
+                                aria-label="Ingest host" />
                             <button class="btn btn-accent btn-sm" data-settings-action="save-ingest-host" aria-label="Save ingest host">Save</button>
                             <span id="ingest-host-saved" class="text-success hidden text-sm">Saved</span>
                         </div>
@@ -534,7 +535,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                     <div class="flex flex-wrap items-end gap-3">
                         <label class="form-control w-full max-w-md">
                             <span class="label-text text-base-content/70">Search authentication attempts</span>
-                            <input id="auth-attempts-search" class="input input-sm input-bordered mt-1" type="search" value="" placeholder="scope, IP, banned, tracking…" autocomplete="off" />
+                            <input id="auth-attempts-search" class="input input-sm input-bordered mt-1" type="search" value="" placeholder="scope, IP, banned, tracking…" aria-label="Search authentication attempts" autocomplete="off" />
                         </label>
                         <button id="auth-attempts-clear-search-btn" type="button" class="btn btn-sm btn-outline hidden" aria-label="Clear authentication attempt search">Clear search</button>
                         <button id="auth-attempts-toggle" type="button" class="btn btn-sm btn-outline hidden" aria-label="Show all authentication attempts" aria-expanded="false">Show all</button>
