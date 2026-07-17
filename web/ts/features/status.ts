@@ -899,7 +899,7 @@ function renderStatusSnapshot(): void {
     `<div class="flex flex-wrap items-end gap-3">
             <label class="form-control w-full max-w-md">
                 <span class="label-text text-base-content/70">Search process logs and activity</span>
-                <input id="status-log-search" class="input input-sm input-bordered mt-1" type="search" value="${escapeHtml(statusLogSearchQuery)}" placeholder="level, target, event, message…" autocomplete="off" />
+                <input id="status-log-search" class="input input-sm input-bordered mt-1" type="search" value="${escapeHtml(statusLogSearchQuery)}" placeholder="level, target, event, message…" aria-label="Search process logs and activity" autocomplete="off" />
             </label>
             <button id="status-clear-search-btn" type="button" class="btn btn-sm btn-outline ${search ? "" : "hidden"}" aria-label="Clear status search">Clear search</button>
             <p id="status-log-search-results-summary" class="dashboard-muted pb-1 text-sm" role="status" aria-live="polite">${escapeHtml(searchSummaryText)}</p>

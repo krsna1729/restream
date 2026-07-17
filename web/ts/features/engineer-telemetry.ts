@@ -495,7 +495,7 @@ export function renderEngineerTelemetryHtml(
       <div class="flex flex-wrap items-end gap-3">
         <label class="min-w-60 flex-1 text-sm">
           <span class="text-base-content/70 mb-1 block text-xs font-semibold uppercase">Search telemetry items</span>
-          <input id="telemetry-search" class="input input-sm input-bordered w-full" type="search" value="${escapeHtml(searchQuery)}" placeholder="reader, stage, egress, counter…" autocomplete="off" />
+          <input id="telemetry-search" class="input input-sm input-bordered w-full" type="search" value="${escapeHtml(searchQuery)}" placeholder="reader, stage, egress, counter…" aria-label="Search telemetry items" autocomplete="off" />
         </label>
         <button id="telemetry-clear-search-btn" type="button" class="btn btn-sm btn-outline ${normalizedSearch ? "" : "hidden"}" aria-label="Clear telemetry search">Clear search</button>
       </div>

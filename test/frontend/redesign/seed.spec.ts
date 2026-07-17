@@ -2376,6 +2376,9 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
     "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
   );
   const search = status.getByLabel("Search process logs and activity");
+  expect(await getCdpNamesByRole(page, "searchbox")).toContain(
+    "Search process logs and activity",
+  );
   const searchSummary = status.locator("#status-log-search-results-summary");
   await expect(searchSummary).toHaveText("1 activity · 1 process log visible");
 
@@ -2550,6 +2553,9 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
     "0 critical · 1 warning · 1 recent event · fleet",
   );
   const search = incidents.getByLabel("Search incidents and events");
+  expect(await getCdpNamesByRole(page, "searchbox")).toContain(
+    "Search incidents and events",
+  );
   const searchSummary = incidents.locator("#incidents-search-results-summary");
   await expect(searchSummary).toHaveText("1 alert group · 1 event visible");
   const retryingAlert = incidents
@@ -2864,6 +2870,9 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
     checkpoint.getByText("Retrying Destination", { exact: true }),
   ).toBeVisible();
   const search = telemetry.getByLabel("Search telemetry items");
+  expect(await getCdpNamesByRole(page, "searchbox")).toContain(
+    "Search telemetry items",
+  );
   const searchSummary = telemetry.locator("#telemetry-search-results-summary");
   await expect(searchSummary).toHaveText(
     "1 reader · 2 stages · 1 egress visible",
