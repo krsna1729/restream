@@ -245,10 +245,11 @@ Telemetry also now has a local filter across readers, processing stages, and
 egresses. The filter summary is announced as status text, so operators can
 narrow dense MSR telemetry by reader, stage, output, or counter name, recover
 with Clear search, and keep the route-level telemetry scope unchanged.
-Dense telemetry egress lists are also bounded by default with an explicit
-`Show all` affordance. This keeps the checkpoint closer to the v2 Operate model:
-scan a few destinations first, search when isolating one destination, and only
-expand the full fan-out when comparison is intentional.
+Dense telemetry stage and egress lists are also bounded by default with explicit
+`Show all` affordances. This keeps the checkpoint closer to the v2 Operate
+model: scan a few processing branches/destinations first, search when isolating
+one stage or destination, and only expand the full fan-out when comparison is
+intentional.
 Telemetry host settings now follow the same progressive-disclosure rule in v2:
 the first view shows health plus the host-setting count, while the raw
 kernel/runtime table is mounted only after the operator asks for it. That keeps

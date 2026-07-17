@@ -27,6 +27,7 @@ interface TelemetryViewOptions {
 
 const TELEMETRY_REFRESH_MS = 5_000;
 const TELEMETRY_EGRESS_CARD_LIMIT = 8;
+const TELEMETRY_STAGE_CARD_LIMIT = 8;
 let selectedPipelineId = "";
 let selectedStageKey = "";
 let lastFetchedAt = 0;
@@ -46,6 +47,7 @@ let stageUnavailable = false;
 let viewOptions: TelemetryViewOptions | null = null;
 let telemetrySearchQuery = "";
 let telemetryEgressExpanded = false;
+let telemetryStagesExpanded = false;
 let telemetryHostSettingsExpanded = false;
 let telemetryCheckpointCallback:
   | ((model: TelemetryCheckpointModel | null) => void)
@@ -448,6 +450,18 @@ export function renderEngineerTelemetryHtml(
   const egressCaption = showEgressToggle
     ? `${pluralize(visibleEgresses.length, "egress", "egresses")} shown of ${filteredEgresses.length}. Search to narrow the list, or show all when comparing destinations.`
     : "";
+  const stagesAreBounded =
+    !normalizedSearch &&
+    filteredStages.length > TELEMETRY_STAGE_CARD_LIMIT &&
+    !telemetryStagesExpanded;
+  const visibleStages = stagesAreBounded
+    ? filteredStages.slice(0, TELEMETRY_STAGE_CARD_LIMIT)
+    : filteredStages;
+  const showStagesToggle =
+    !normalizedSearch && filteredStages.length > TELEMETRY_STAGE_CARD_LIMIT;
+  const stageCaption = showStagesToggle
+    ? `${pluralize(visibleStages.length, "stage")} shown of ${filteredStages.length}. Search to narrow the list, or show all when comparing processing branches.`
+    : "";
   const searchSummaryText = telemetrySearchSummaryText(
     filteredReaders.length,
     readers.length,
@@ -511,7 +525,11 @@ export function renderEngineerTelemetryHtml(
           <div class="mt-3 space-y-2">${visibleEgresses.length ? visibleEgresses.map((egress) => `<div class="bg-base-100 rounded-md p-3 text-sm"><div class="flex justify-between gap-2"><span class="font-medium">${escapeHtml(egress.outputId)}</span><span class="badge badge-sm">${escapeHtml(egress.status || egress.phase || "unknown")}</span></div><div class="text-base-content/60 mt-1 text-xs">${formatBytes(egress.bytesOut)} sent${egress.lastError ? ` · ${escapeHtml(egress.lastError)}` : ""}</div></div>`).join("") : `<p class="text-base-content/60 text-sm">${normalizedSearch ? `No egresses match "${escapeHtml(searchQuery.trim())}".` : "No active egresses."}</p>`}</div>
         </section>
       </div>
-      <div class="space-y-4"><section><h2 class="mb-3 font-semibold">Processing stages</h2><div class="grid gap-3 md:grid-cols-2">${filteredStages.length ? filteredStages.map((item) => renderStage(pipelineId, item)).join("") : `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">${normalizedSearch ? `No stages match "${escapeHtml(searchQuery.trim())}".` : "No active stages."}</div>`}</div></section>
+      <div class="space-y-4"><section aria-label="Telemetry processing stages"><div class="mb-3 flex flex-wrap items-start justify-between gap-2"><div><h2 class="font-semibold">Processing stages</h2>${stageCaption ? `<p class="text-base-content/60 mt-1 text-xs">${escapeHtml(stageCaption)}</p>` : ""}</div>${
+        showStagesToggle
+          ? `<button id="telemetry-stages-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="${telemetryStagesExpanded ? "true" : "false"}">${telemetryStagesExpanded ? "Show fewer" : `Show all ${filteredStages.length}`}</button>`
+          : ""
+      }</div><div class="grid gap-3 md:grid-cols-2">${visibleStages.length ? visibleStages.map((item) => renderStage(pipelineId, item)).join("") : `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">${normalizedSearch ? `No stages match "${escapeHtml(searchQuery.trim())}".` : "No active stages."}</div>`}</div></section>
       <section id="stage-telemetry-detail" class="border-base-content/10 bg-base-200 rounded-lg border p-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h2 class="font-semibold">Stage detail</h2>
@@ -566,6 +584,7 @@ function paintTelemetry(): void {
     const cursor = search.selectionStart ?? search.value.length;
     telemetrySearchQuery = search.value;
     telemetryEgressExpanded = false;
+    telemetryStagesExpanded = false;
     paintTelemetry();
     const nextSearch = document.getElementById(
       "telemetry-search",
@@ -578,6 +597,7 @@ function paintTelemetry(): void {
     ?.addEventListener("click", () => {
       telemetrySearchQuery = "";
       telemetryEgressExpanded = false;
+      telemetryStagesExpanded = false;
       paintTelemetry();
       const nextSearch = document.getElementById(
         "telemetry-search",
@@ -588,6 +608,12 @@ function paintTelemetry(): void {
     .getElementById("telemetry-egress-toggle")
     ?.addEventListener("click", () => {
       telemetryEgressExpanded = !telemetryEgressExpanded;
+      paintTelemetry();
+    });
+  document
+    .getElementById("telemetry-stages-toggle")
+    ?.addEventListener("click", () => {
+      telemetryStagesExpanded = !telemetryStagesExpanded;
       paintTelemetry();
     });
   document
@@ -686,6 +712,7 @@ export function selectTelemetryPipeline(pipelineId: string): void {
   selectedPipelineId = pipelineId;
   selectedStageKey = "";
   telemetryEgressExpanded = false;
+  telemetryStagesExpanded = false;
   stageSnapshot = null;
   stageUnavailable = false;
   pipelineSnapshot = null;
