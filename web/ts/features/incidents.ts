@@ -95,6 +95,11 @@ function severityTone(severity: OperatorAlert["severity"]): string {
   return severity === "critical" ? "badge-error" : "badge-warning";
 }
 
+function incidentNoResultText(kind: string, query: string): string {
+  const trimmed = query.trim();
+  return `No ${kind} match "${trimmed}". Clear search to return to the full incident feed.`;
+}
+
 interface AlertGroup {
   id: string;
   severity: OperatorAlert["severity"];
@@ -597,7 +602,7 @@ export function renderIncidentsHtml(
               : ""
           }
         </div>
-        <div class="space-y-3">${data.loaded && data.alerts && !alertGroups.length ? `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">${search ? `No alert matches for "${escapeHtml(searchQuery.trim())}".` : `No active alerts${pipelineId ? " for this pipeline" : ""}.`}</div>` : visibleAlertGroups.map(renderAlertGroup).join("")}</div>
+        <div class="space-y-3">${data.loaded && data.alerts && !alertGroups.length ? `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">${search ? escapeHtml(incidentNoResultText("alerts", searchQuery)) : `No active alerts${pipelineId ? " for this pipeline" : ""}.`}</div>` : visibleAlertGroups.map(renderAlertGroup).join("")}</div>
       </section>
       <section class="border-base-content/10 bg-base-200 self-start rounded-lg border p-4" aria-label="Incident lifecycle events">
         <div class="flex flex-wrap items-start justify-between gap-3">
@@ -611,7 +616,7 @@ export function renderIncidentsHtml(
               : ""
           }
         </div>
-        <ul class="mt-2">${data.loaded && data.events && !events.length ? `<li class="py-6 text-center text-sm text-base-content/60">${search ? `No event matches for "${escapeHtml(searchQuery.trim())}".` : "No recent lifecycle events."}</li>` : visibleEvents.map(renderEvent).join("")}</ul>
+        <ul class="mt-2">${data.loaded && data.events && !events.length ? `<li class="py-6 text-center text-sm text-base-content/60">${search ? escapeHtml(incidentNoResultText("events", searchQuery)) : "No recent lifecycle events."}</li>` : visibleEvents.map(renderEvent).join("")}</ul>
       </section>
     </div>
   </div>`;

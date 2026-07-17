@@ -2179,7 +2179,14 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
     checkpoint.getByText('0 alert groups · 0 events match "healthy"'),
   ).toBeVisible();
   await expect(
-    incidents.getByText('No alert matches for "healthy".'),
+    incidents.getByText(
+      'No alerts match "healthy". Clear search to return to the full incident feed.',
+    ),
+  ).toBeVisible();
+  await expect(
+    incidents.getByText(
+      'No events match "healthy". Clear search to return to the full incident feed.',
+    ),
   ).toBeVisible();
   const clearSearch = incidents.getByRole("button", { name: "Clear search" });
   await expect(clearSearch).toBeVisible();
@@ -2198,10 +2205,14 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
     incidents.getByRole("heading", { name: "Retrying output" }),
   ).toBeVisible();
   await expect(
-    incidents.getByText('No alert matches for "healthy".'),
+    incidents.getByText(
+      'No alerts match "healthy". Clear search to return to the full incident feed.',
+    ),
   ).toHaveCount(0);
   await expect(
-    incidents.getByText('No event matches for "healthy".'),
+    incidents.getByText(
+      'No events match "healthy". Clear search to return to the full incident feed.',
+    ),
   ).toHaveCount(0);
   expect(await getCdpStatusTexts(page)).toContain(
     "1 alert group · 1 event visible",
