@@ -507,46 +507,55 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
   const routes = [
     {
       href: "/?mode=overview&ui=v2",
+      maxDashboardElements: 1_100,
       maxVisibleControls: 22,
       readySelector: "#dashboard-v2-overview",
     },
     {
       href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+      maxDashboardElements: 1_600,
       maxVisibleControls: 33,
       readySelector: "#dashboard-v2-pipeline-header-root",
     },
     {
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      maxDashboardElements: 2_200,
       maxVisibleControls: 22,
       readySelector: "#inspect-route-summary",
     },
     {
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      maxDashboardElements: 2_700,
       maxVisibleControls: 30,
       readySelector: "#control-room-route-summary",
     },
     {
       href: "/?mode=media&ui=v2",
+      maxDashboardElements: 3_300,
       maxVisibleControls: 18,
       readySelector: "#media-library-results-summary",
     },
     {
       href: "/?mode=settings&ui=v2",
+      maxDashboardElements: 3_800,
       maxVisibleControls: 30,
       readySelector: "#settings-route-summary",
     },
     {
       href: "/?mode=status&ui=v2",
+      maxDashboardElements: 4_400,
       maxVisibleControls: 28,
       readySelector: "#status-route-summary",
     },
     {
       href: "/?mode=incidents&ui=v2",
+      maxDashboardElements: 4_900,
       maxVisibleControls: 20,
       readySelector: "#incidents-route-summary",
     },
     {
       href: "/?mode=telemetry&ui=v2",
+      maxDashboardElements: 5_400,
       maxVisibleControls: 18,
       readySelector: "#telemetry-route-summary",
     },
@@ -635,5 +644,12 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
     ).toBeLessThanOrEqual(route.maxVisibleControls);
     const unnamedControls = controls.filter((control) => !control.label);
     expect(unnamedControls, route.href).toEqual([]);
+    const dashboardElements = await page.evaluate(
+      () => document.querySelectorAll("#dashboard-main *").length,
+    );
+    expect(
+      dashboardElements,
+      `${route.href} rendered dashboard elements`,
+    ).toBeLessThanOrEqual(route.maxDashboardElements);
   }
 });
