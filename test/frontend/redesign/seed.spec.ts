@@ -2336,15 +2336,15 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
     checkpoint.getByText("1 notable activity", { exact: true }),
   ).toBeVisible();
   await expect(
-    status.getByRole("button", { name: "Show Toolchain details" }),
+    status.getByRole("button", { name: "Show toolchain details" }),
   ).toBeVisible();
   await expect(status.locator("#status-toolchain-section table")).toHaveCount(0);
-  await status.getByRole("button", { name: "Show Toolchain details" }).click();
+  await status.getByRole("button", { name: "Show toolchain details" }).click();
   await expect(status.locator("#status-toolchain-section table")).toHaveCount(1);
   await expect(status.locator("#status-toolchain-section")).toContainText(
     "Target",
   );
-  await status.getByRole("button", { name: "Hide Toolchain details" }).click();
+  await status.getByRole("button", { name: "Hide toolchain details" }).click();
   await expect(status.locator("#status-toolchain-section table")).toHaveCount(0);
   await expect(
     status.getByRole("button", { name: "Download status report" }),
@@ -2405,6 +2405,9 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   expect(statusButtonNames).toEqual(
     expect.arrayContaining([
       "Refresh status data",
+      "Show toolchain details",
+      "Show native library details",
+      "Show SBOM details",
       "Hide status export actions",
       "Download status report",
       "Copy SBOM file",
@@ -2412,6 +2415,12 @@ test("seed: ui=v2 Status announces loaded build and activity summary @desktop", 
   );
   expect(statusButtonNames).not.toEqual(
     expect.arrayContaining(["Download Status", "Copy SBOM"]),
+  );
+  expect(statusButtonNames).not.toEqual(
+    expect.arrayContaining([
+      "Show Toolchain details",
+      "Show Native Libraries details",
+    ]),
   );
   expect(statusButtonNames).not.toContain("Refresh");
   expect(statusButtonNames).not.toContain("Hide export actions");

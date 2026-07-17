@@ -286,6 +286,19 @@ function section(id: string, title: string, rows: string): string {
     </section>`;
 }
 
+function advancedSectionActionLabel(
+  action: "Show" | "Hide",
+  title: string,
+): string {
+  const detailName =
+    title === "Native Libraries"
+      ? "native library"
+      : title === "SBOM"
+        ? "SBOM"
+        : title.toLowerCase();
+  return `${action} ${detailName} details`;
+}
+
 function statusV2Active(): boolean {
   const toggle = document.getElementById("dashboard-ui-v2-toggle");
   if (toggle instanceof HTMLInputElement && toggle.checked) return true;
@@ -304,18 +317,20 @@ function advancedSection(
 ): string {
   const expanded = !statusV2Active() || statusAdvancedSectionsExpanded.has(id);
   if (expanded) {
+    const hideLabel = advancedSectionActionLabel("Hide", title);
     return `${section(id, title, rows)}
       ${
         statusV2Active()
-          ? `<button type="button" class="btn btn-xs btn-outline mt-2" data-status-advanced-section="${escapeHtml(id)}" aria-expanded="true">Hide ${escapeHtml(title)} details</button>`
+          ? `<button type="button" class="btn btn-xs btn-outline mt-2" data-status-advanced-section="${escapeHtml(id)}" aria-label="${escapeHtml(hideLabel)}" aria-expanded="true">Hide ${escapeHtml(title)} details</button>`
           : ""
       }`;
   }
+  const showLabel = advancedSectionActionLabel("Show", title);
   return `<section id="${escapeHtml(id)}" class="scroll-mt-24">
         <div class="border-base-content/10 bg-base-100/60 rounded-lg border px-3 py-2">
             <div class="flex flex-wrap items-center justify-between gap-2">
                 <div class="dashboard-kicker">${escapeHtml(title)}</div>
-                <button type="button" class="btn btn-xs btn-outline" data-status-advanced-section="${escapeHtml(id)}" aria-expanded="false">Show ${escapeHtml(title)} details</button>
+                <button type="button" class="btn btn-xs btn-outline" data-status-advanced-section="${escapeHtml(id)}" aria-label="${escapeHtml(showLabel)}" aria-expanded="false">Show ${escapeHtml(title)} details</button>
             </div>
             <p class="dashboard-muted mt-1 text-sm">${escapeHtml(summary)}</p>
         </div>
