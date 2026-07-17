@@ -257,31 +257,61 @@ function hideDashboardV2Pipeline(): void {
   }
 }
 
+function clearDashboardV2Checkpoint<TActions>(
+  actions: TActions | null,
+  render: (module: DashboardV2CheckpointsModule, actions: TActions) => void,
+): void {
+  if (dashboardV2CheckpointsModule && actions) {
+    render(dashboardV2CheckpointsModule, actions);
+  }
+}
+
 function hideDashboardV2PipelineInspect(): void {
+  clearDashboardV2Checkpoint(pipelineInspectActions, (module, actions) =>
+    module.renderDashboardV2PipelineInspectCheckpoint(null, actions),
+  );
   setContainerHidden("dashboard-v2-pipeline-inspect-root", true);
 }
 
 function hideDashboardV2ControlRoom(): void {
+  clearDashboardV2Checkpoint(controlRoomActions, (module, actions) =>
+    module.renderDashboardV2ControlRoomCheckpoint(null, actions),
+  );
   setContainerHidden("dashboard-v2-control-room-root", true);
 }
 
 function hideDashboardV2Incidents(): void {
+  clearDashboardV2Checkpoint(incidentsActions, (module, actions) =>
+    module.renderDashboardV2IncidentsCheckpoint(null, actions),
+  );
   setContainerHidden("dashboard-v2-incidents-root", true);
 }
 
 function hideDashboardV2Telemetry(): void {
+  clearDashboardV2Checkpoint(telemetryActions, (module, actions) =>
+    module.renderDashboardV2TelemetryCheckpoint(null, actions),
+  );
   setContainerHidden("dashboard-v2-telemetry-root", true);
 }
 
 function hideDashboardV2Status(): void {
+  clearDashboardV2Checkpoint(statusActions, (module, actions) =>
+    module.renderDashboardV2StatusCheckpoint(null, actions),
+  );
   setContainerHidden("dashboard-v2-status-root", true);
 }
 
 function hideDashboardV2Media(): void {
+  clearDashboardV2Checkpoint(mediaActions, (module, actions) =>
+    module.renderDashboardV2MediaCheckpoint(null, actions),
+  );
   setContainerHidden("dashboard-v2-media-root", true);
 }
 
 function hideDashboardV2Settings(): void {
+  clearDashboardV2Checkpoint(settingsActions, (module, actions) =>
+    module.renderDashboardV2SettingsCheckpoint(null, actions),
+  );
   setContainerHidden("dashboard-v2-settings-root", true);
 }
 
