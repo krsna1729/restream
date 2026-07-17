@@ -317,6 +317,14 @@ test("seed: ui=v2 keeps legacy routes scoped while Inspect owns a checkpoint @de
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
   await expect(page.locator("#dashboard-v2-pipeline-inspect-root")).toBeHidden();
+  await expect(
+    page
+      .locator("#dashboard-v2-control-room-root")
+      .getByRole("heading", { name: "Healthy Program" }),
+  ).toBeVisible();
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Pipeline monitoring wall",
+  );
   expect(v2Requests.length).toBe(requestsAfterInspect);
 
   await page.goto("/?mode=pipeline&view=operate&ui=v2");
@@ -400,13 +408,13 @@ test("seed: ui=v2 legacy-owned routes keep operator checkpoints visible and anno
     {
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
       locator: "#control-room-route-summary",
-      nodeBudget: 8_000,
+      nodeBudget: 8_500,
       text: "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
     },
     {
       href: "/?mode=media&ui=v2",
       locator: "#media-library-results-summary",
-      nodeBudget: 10_000,
+      nodeBudget: 10_500,
       text: "1 media file total · 0 recordings · 1 source file",
     },
     {
@@ -470,7 +478,7 @@ test("seed: ui=v2 shell announces ownership while moving across routes @desktop"
     },
     {
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
-      text: "Legacy checkpoint · Pipeline monitoring wall",
+      text: "UI v2 checkpoint · Pipeline monitoring wall",
     },
     {
       href: "/?mode=incidents&ui=v2",
@@ -1055,6 +1063,7 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   );
 
   const monitor = page.locator("#control-mode-panel");
+  const checkpoint = page.locator("#dashboard-v2-control-room-root");
   const search = monitor.locator("#control-room-search-input");
   const routeSummary = monitor.locator("#control-room-route-summary");
   const summary = monitor.locator("#control-room-summary");
@@ -1067,6 +1076,11 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   expect(await getCdpStatusTexts(page)).toContain(
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );
+  await expect(
+    checkpoint.getByRole("heading", { name: "Retrying Destination" }),
+  ).toBeVisible();
+  await expect(checkpoint.getByText("1/1 monitored")).toBeVisible();
+  await expect(checkpoint.getByText("No active search")).toBeVisible();
   await expect(summary).toHaveText(
     "1/1 monitored · 0 missing monitoring URLs",
   );
@@ -1076,6 +1090,9 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
     '1/1 monitored match · 0 missing monitoring URLs · "retrying"',
   );
   await expect(monitor.getByText("Retrying Output")).toBeVisible();
+  await expect(
+    checkpoint.getByText('1/1 match "retrying"', { exact: true }),
+  ).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     '1/1 monitored match · 0 missing monitoring URLs · "retrying"',
   );
@@ -1088,6 +1105,9 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
     monitor.getByText(
       'No monitoring outputs match "nowhere". Clear search to show all monitoring cards.',
     ),
+  ).toBeVisible();
+  await expect(
+    checkpoint.getByText('0/1 match "nowhere"', { exact: true }),
   ).toBeVisible();
   const clearSearch = monitor.getByRole("button", { name: "Clear search" });
   await expect(clearSearch).toBeVisible();
@@ -1102,6 +1122,7 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   await expect(summary).toHaveText(
     "1/1 monitored · 0 missing monitoring URLs",
   );
+  await expect(checkpoint.getByText("No active search")).toBeVisible();
   await expect(clearSearch).toBeHidden();
   await expect(monitor.getByText("Retrying Output")).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
@@ -1121,9 +1142,16 @@ test("seed: ui=v2 Monitor lazily loads generic web previews @desktop", async ({
   );
 
   const monitor = page.locator("#control-mode-panel");
+  const checkpoint = page.locator("#dashboard-v2-control-room-root");
   await expect(monitor.locator("#control-room-route-summary")).toHaveText(
     "Monitoring Recovered Sink Flap · 1 output · 1 monitor · 0 missing URLs",
   );
+  await expect(
+    checkpoint.getByRole("heading", { name: "Recovered Sink Flap" }),
+  ).toBeVisible();
+  await expect(
+    checkpoint.getByText("1 lazy web preview", { exact: true }).first(),
+  ).toBeVisible();
   await expect(
     monitor.getByRole("button", { name: "Load preview" }),
   ).toBeVisible();
@@ -2281,6 +2309,8 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
     <div id="dashboard-v2-pipeline-header-root"></div>
     <div id="dashboard-v2-pipeline-input-status-root"></div>
     <div id="dashboard-v2-pipeline-output-overview-root"></div>
+    <div id="dashboard-v2-pipeline-inspect-root"></div>
+    <div id="dashboard-v2-control-room-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -2487,6 +2517,8 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
     <div id="dashboard-v2-pipeline-header-root"></div>
     <div id="dashboard-v2-pipeline-input-status-root"></div>
     <div id="dashboard-v2-pipeline-output-overview-root"></div>
+    <div id="dashboard-v2-pipeline-inspect-root"></div>
+    <div id="dashboard-v2-control-room-root"></div>
   `);
 
   const result = await page.evaluate(async () => {
@@ -2623,6 +2655,8 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
     <div id="dashboard-v2-pipeline-header-root"></div>
     <div id="dashboard-v2-pipeline-input-status-root"></div>
     <div id="dashboard-v2-pipeline-output-overview-root"></div>
+    <div id="dashboard-v2-pipeline-inspect-root"></div>
+    <div id="dashboard-v2-control-room-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -2744,6 +2778,8 @@ test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", a
     <div id="dashboard-v2-pipeline-header-root"></div>
     <div id="dashboard-v2-pipeline-input-status-root"></div>
     <div id="dashboard-v2-pipeline-output-overview-root"></div>
+    <div id="dashboard-v2-pipeline-inspect-root"></div>
+    <div id="dashboard-v2-control-room-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -3025,6 +3061,8 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
     <div id="dashboard-v2-pipeline-header-root"></div>
     <div id="dashboard-v2-pipeline-input-status-root"></div>
     <div id="dashboard-v2-pipeline-output-overview-root"></div>
+    <div id="dashboard-v2-pipeline-inspect-root"></div>
+    <div id="dashboard-v2-control-room-root"></div>
   `);
 
   await page.evaluate(async () => {

@@ -1,3 +1,4 @@
+import type { ControlRoomCheckpointModel } from "../features/control-room-view-model.js";
 import type { OverviewViewModel } from "../features/overview-view-model.js";
 import type { PipelineInspectCheckpointModel } from "../features/pipeline-inspect-view-model.js";
 import type {
@@ -96,6 +97,10 @@ export interface DashboardV2PipelineInspectActions {
   readonly runDiagnostics: (pipelineId: string) => void;
 }
 
+export interface DashboardV2ControlRoomActions {
+  readonly openPipeline: (pipelineId: string) => void;
+}
+
 interface DashboardV2Module {
   renderDashboardV2Overview(
     model: OverviewViewModel,
@@ -122,6 +127,10 @@ interface DashboardV2Module {
     model: PipelineInspectCheckpointModel | null,
     actions: DashboardV2PipelineInspectActions,
   ): void;
+  renderDashboardV2ControlRoomCheckpoint(
+    model: ControlRoomCheckpointModel | null,
+    actions: DashboardV2ControlRoomActions,
+  ): void;
 }
 
 let dashboardV2Module: DashboardV2Module | null = null;
@@ -129,6 +138,7 @@ let dashboardV2ModulePromise: Promise<void> | null = null;
 let dashboardV2OverviewActive = false;
 let dashboardV2PipelineActive = false;
 let dashboardV2PipelineInspectActive = false;
+let dashboardV2ControlRoomActive = false;
 let latestOverviewModel: OverviewViewModel | null = null;
 let overviewActions: DashboardV2OverviewActions | null = null;
 let latestPipelineSelectorModel: PipelineOperateSelectorModel | null = null;
@@ -146,6 +156,8 @@ let pipelineOutputOverviewActions:
   | null = null;
 let latestPipelineInspectModel: PipelineInspectCheckpointModel | null | undefined;
 let pipelineInspectActions: DashboardV2PipelineInspectActions | null = null;
+let latestControlRoomModel: ControlRoomCheckpointModel | null | undefined;
+let controlRoomActions: DashboardV2ControlRoomActions | null = null;
 
 const DASHBOARD_V2_CONTAINER_IDS = [
   "dashboard-v2-root",
@@ -154,6 +166,7 @@ const DASHBOARD_V2_CONTAINER_IDS = [
   "dashboard-v2-pipeline-input-status-root",
   "dashboard-v2-pipeline-output-overview-root",
   "dashboard-v2-pipeline-inspect-root",
+  "dashboard-v2-control-room-root",
 ] as const;
 
 function setContainerHidden(id: string, hidden: boolean): void {
@@ -175,6 +188,10 @@ function hideDashboardV2PipelineInspect(): void {
   setContainerHidden("dashboard-v2-pipeline-inspect-root", true);
 }
 
+function hideDashboardV2ControlRoom(): void {
+  setContainerHidden("dashboard-v2-control-room-root", true);
+}
+
 function ensureDashboardV2Module(): void {
   if (
     dashboardV2Module ||
@@ -192,6 +209,7 @@ function ensureDashboardV2Module(): void {
       renderLatestPipelineInputStatus();
       renderLatestPipelineOutputOverview();
       renderLatestPipelineInspect();
+      renderLatestControlRoom();
     })
     .catch((error: unknown) => {
       dashboardV2ModulePromise = null;
@@ -443,6 +461,24 @@ function renderLatestPipelineInspect(): void {
   );
 }
 
+function renderLatestControlRoom(): void {
+  if (!dashboardV2ControlRoomActive) {
+    hideDashboardV2ControlRoom();
+    return;
+  }
+  ensureDashboardV2Module();
+  if (
+    !dashboardV2Module ||
+    latestControlRoomModel === undefined ||
+    !controlRoomActions
+  )
+    return;
+  dashboardV2Module.renderDashboardV2ControlRoomCheckpoint(
+    latestControlRoomModel,
+    controlRoomActions,
+  );
+}
+
 export function dashboardV2ExperimentEnabled(
   search = dashboardSearch(),
   storage: DashboardUiVersionStorage | null = dashboardStorage(),
@@ -459,6 +495,7 @@ export function setDashboardV2PresentationScope(options: {
   readonly overviewActive: boolean;
   readonly pipelineActive: boolean;
   readonly pipelineInspectActive?: boolean;
+  readonly controlRoomActive?: boolean;
 }): void {
   const nextOverviewActive =
     dashboardV2ExperimentEnabled() && options.overviewActive;
@@ -466,16 +503,22 @@ export function setDashboardV2PresentationScope(options: {
     dashboardV2ExperimentEnabled() && options.pipelineActive;
   const nextPipelineInspectActive =
     dashboardV2ExperimentEnabled() && Boolean(options.pipelineInspectActive);
+  const nextControlRoomActive =
+    dashboardV2ExperimentEnabled() && Boolean(options.controlRoomActive);
   const overviewChanged = dashboardV2OverviewActive !== nextOverviewActive;
   const pipelineChanged = dashboardV2PipelineActive !== nextPipelineActive;
   const pipelineInspectChanged =
     dashboardV2PipelineInspectActive !== nextPipelineInspectActive;
+  const controlRoomChanged =
+    dashboardV2ControlRoomActive !== nextControlRoomActive;
   dashboardV2OverviewActive = nextOverviewActive;
   dashboardV2PipelineActive = nextPipelineActive;
   dashboardV2PipelineInspectActive = nextPipelineInspectActive;
+  dashboardV2ControlRoomActive = nextControlRoomActive;
   if (!dashboardV2OverviewActive) hideDashboardV2Overview();
   if (!dashboardV2PipelineActive) hideDashboardV2Pipeline();
   if (!dashboardV2PipelineInspectActive) hideDashboardV2PipelineInspect();
+  if (!dashboardV2ControlRoomActive) hideDashboardV2ControlRoom();
   if (overviewChanged && dashboardV2OverviewActive) renderLatestOverview();
   if (pipelineChanged && dashboardV2PipelineActive) {
     renderLatestPipelineSelector();
@@ -485,6 +528,9 @@ export function setDashboardV2PresentationScope(options: {
   }
   if (pipelineInspectChanged && dashboardV2PipelineInspectActive) {
     renderLatestPipelineInspect();
+  }
+  if (controlRoomChanged && dashboardV2ControlRoomActive) {
+    renderLatestControlRoom();
   }
 }
 
@@ -568,4 +614,18 @@ export function updateDashboardV2PipelineInspectCheckpoint(
 ): void {
   latestPipelineInspectModel = model;
   renderLatestPipelineInspect();
+}
+
+export function setDashboardV2ControlRoomActions(
+  actions: DashboardV2ControlRoomActions,
+): void {
+  controlRoomActions = actions;
+  renderLatestControlRoom();
+}
+
+export function updateDashboardV2ControlRoomCheckpoint(
+  model: ControlRoomCheckpointModel | null,
+): void {
+  latestControlRoomModel = model;
+  renderLatestControlRoom();
 }

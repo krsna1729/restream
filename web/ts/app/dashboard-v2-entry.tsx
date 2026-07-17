@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 
+import type { ControlRoomCheckpointModel } from "../features/control-room-view-model.js";
 import type {
+  DashboardV2ControlRoomActions,
   DashboardV2PipelineInspectActions,
   DashboardV2PipelineDetailsPlaceholder,
   DashboardV2OverviewActions,
@@ -1038,6 +1040,93 @@ function DashboardV2PipelineInspectCheckpoint({
   );
 }
 
+function DashboardV2ControlRoomCheckpoint({
+  actions,
+  model,
+}: {
+  actions: DashboardV2ControlRoomActions;
+  model: ControlRoomCheckpointModel;
+}): React.JSX.Element {
+  const canActOnPipeline = model.pipelineId !== null;
+  return (
+    <section
+      aria-labelledby="dashboard-v2-control-room-title"
+      className="dashboard-section border-accent/25 bg-accent/5 mb-4"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2
+              className="text-base-content text-lg font-semibold leading-tight"
+              id="dashboard-v2-control-room-title"
+            >
+              {model.title}
+            </h2>
+            <span className={`badge badge-sm ${toneBadgeClass(model.statusTone)}`}>
+              {model.statusLabel}
+            </span>
+          </div>
+          <p
+            className="text-base-content/65 mt-1 max-w-4xl text-sm"
+            role="status"
+            aria-live="polite"
+          >
+            {model.summary}
+          </p>
+        </div>
+        <button
+          className="btn btn-xs btn-accent btn-outline"
+          disabled={!model.canOpenPipeline || !canActOnPipeline}
+          onClick={() => {
+            if (model.pipelineId) actions.openPipeline(model.pipelineId);
+          }}
+          type="button"
+        >
+          Operate
+        </button>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          { label: "Monitor coverage", value: model.monitoredLabel },
+          { label: "Missing URLs", value: model.missingLabel },
+          { label: "Search", value: model.searchLabel },
+          { label: "Preview loading", value: model.previewLabel },
+        ].map((item) => (
+          <div
+            className="border-base-content/10 bg-base-100/60 rounded-lg border px-3 py-2"
+            key={item.label}
+          >
+            <div className="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">
+              {item.label}
+            </div>
+            <div className="mt-0.5 truncate text-sm font-medium tabular-nums">
+              {item.value}
+            </div>
+          </div>
+        ))}
+      </div>
+      {model.metrics.length ? (
+        <div className="text-base-content/60 mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums">
+          {model.metrics.map((metric) => (
+            <span key={metric.label}>
+              {metric.label}: {metric.value}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="border-base-content/10 bg-base-100/50 mt-3 rounded-lg border px-3 py-2">
+        <div className="text-base-content/55 text-[0.68rem] font-semibold uppercase tracking-wide">
+          Monitor focus
+        </div>
+        <p className="text-base-content/70 mt-1 text-sm">{model.focusLabel}</p>
+        <p className="text-base-content/60 mt-1 text-xs">
+          Next: {model.nextStep}
+        </p>
+      </div>
+    </section>
+  );
+}
+
 function DashboardV2PipelineInputStatus({
   actions,
   model,
@@ -1866,6 +1955,24 @@ if (!pipelineInspectContainer) {
 }
 const inspectContainer: HTMLElement = pipelineInspectContainer;
 let inspectRoot: Root | null = null;
+const controlRoomContainer = document.getElementById(
+  "dashboard-v2-control-room-root",
+);
+if (!controlRoomContainer) {
+  throw new Error("Dashboard v2 control room root is missing");
+}
+const controlRoomRootContainer: HTMLElement = controlRoomContainer;
+let controlRoomRoot: Root | null = null;
+
+function toneBadgeClass(tone: string): string {
+  return tone === "success"
+    ? "badge-success"
+    : tone === "warning"
+      ? "badge-warning"
+      : tone === "error"
+        ? "badge-error"
+        : "badge-ghost";
+}
 
 export function renderDashboardV2Overview(
   model: OverviewViewModel,
@@ -1938,6 +2045,19 @@ export function renderDashboardV2PipelineInspectCheckpoint(
   inspectRoot.render(
     model ? (
       <DashboardV2PipelineInspectCheckpoint actions={actions} model={model} />
+    ) : null,
+  );
+}
+
+export function renderDashboardV2ControlRoomCheckpoint(
+  model: ControlRoomCheckpointModel | null,
+  actions: DashboardV2ControlRoomActions,
+): void {
+  controlRoomRoot ??= createRoot(controlRoomRootContainer);
+  controlRoomRootContainer.hidden = model === null;
+  controlRoomRoot.render(
+    model ? (
+      <DashboardV2ControlRoomCheckpoint actions={actions} model={model} />
     ) : null,
   );
 }

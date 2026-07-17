@@ -748,7 +748,8 @@ function applyMode(
     const ownership =
       mode === "overview" || (mode === "pipeline" && pipelineView === "operate")
         ? "UI v2 owned"
-        : mode === "pipeline" && pipelineView === "inspect"
+        : mode === "pipeline" &&
+            (pipelineView === "inspect" || pipelineView === "monitor")
           ? "UI v2 checkpoint"
         : mode === "pipeline"
           ? "Legacy checkpoint"

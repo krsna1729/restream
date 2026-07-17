@@ -17,6 +17,7 @@ import { buildInputPreviewUrl } from "./input-preview.js";
 import { upsertDashboardOutputConfig } from "./dashboard.js";
 import type { OutputView, PipelineView } from "../types.js";
 import { normalizeOutputConfig } from "../core/output-config.js";
+import type { ControlRoomCheckpointModel } from "./control-room-view-model.js";
 
 interface ControlRoomState {
   pipelineId: string | null;
@@ -139,11 +140,20 @@ let pendingMonitoringInputFocusOutputId: string | null = null;
 let youtubeIframeApiPromise: Promise<YouTubeApiNamespace> | null = null;
 let controlRoomPlaybackIntent: "play" | "pause" = "play";
 let controlRoomMuteIntent: "mute" | "unmute" = "mute";
+let controlRoomCheckpointCallback:
+  | ((model: ControlRoomCheckpointModel | null) => void)
+  | null = null;
 const controlRoomNameCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: "base",
 });
 const YOUTUBE_MONITORING_STATUS_TTL_MS = 60_000;
+
+export function configureControlRoomCheckpointPresentation(options: {
+  readonly onPresentation?: (model: ControlRoomCheckpointModel | null) => void;
+}): void {
+  controlRoomCheckpointCallback = options.onPresentation ?? null;
+}
 
 function listPipelines(): PipelineView[] {
   return [...state.pipelines].sort((a, b) =>
@@ -1648,6 +1658,107 @@ function controlRoomScopeSummaryText(
   return `Monitoring ${selectedPipeline.name} · ${pluralize(totalOutputs, "output")} · ${pluralize(monitoringOutputs.length, "monitor")} · ${pluralize(missingMonitoring, "missing URL")}`;
 }
 
+function buildControlRoomCheckpointModel(
+  selectedPipeline: PipelineView | null,
+): ControlRoomCheckpointModel {
+  if (!selectedPipeline) {
+    return {
+      pipelineId: null,
+      title: "Monitoring wall",
+      summary: "No pipeline is selected.",
+      statusLabel: "No selection",
+      statusTone: "neutral",
+      monitoredLabel: "0 monitored",
+      missingLabel: "No pipeline",
+      searchLabel: "No active search",
+      previewLabel: "No previews",
+      focusLabel: "Select a pipeline to see local preview and output monitors.",
+      nextStep: "Choose a pipeline from the monitor selector.",
+      canOpenPipeline: false,
+      metrics: [],
+    };
+  }
+
+  const totalOutputs = selectedPipeline.outs.length;
+  const allMonitoringOutputs = listMonitoringOutputsForPipeline(
+    selectedPipeline.id,
+  );
+  const monitoringOutputs = filterMonitoringOutputs(
+    allMonitoringOutputs,
+    controlRoomState.searchQuery,
+  );
+  const missingMonitoring = totalOutputs - allMonitoringOutputs.length;
+  const query = controlRoomState.searchQuery.trim();
+  const lazyWebPreviews = allMonitoringOutputs.filter(
+    (output) =>
+      output.monitoringUrl &&
+      detectMonitoringEmbedKind(output.monitoringUrl) === "iframe",
+  ).length;
+  const downMonitors = allMonitoringOutputs.filter((output) =>
+    ["failed", "off", "stopped"].includes(
+      (output.status || "").trim().toLowerCase(),
+    ),
+  ).length;
+  const statusTone =
+    allMonitoringOutputs.length === 0 || downMonitors > 0
+      ? "warning"
+      : missingMonitoring > 0
+        ? "neutral"
+        : "success";
+  const statusLabel =
+    allMonitoringOutputs.length === 0
+      ? "Needs URLs"
+      : downMonitors > 0
+        ? `${pluralize(downMonitors, "monitor")} down`
+        : missingMonitoring > 0
+          ? "Partially covered"
+          : "Covered";
+  const nextStep = query
+    ? monitoringOutputs.length
+      ? "Clear search when you are done with the narrowed monitor set."
+      : "Clear search or add a matching monitoring URL."
+    : missingMonitoring > 0
+      ? "Add missing monitoring URLs before treating the wall as complete."
+      : lazyWebPreviews > 0
+        ? "Load web previews only when the operator needs them."
+        : "Use the monitor wall for live output confirmation.";
+
+  return {
+    pipelineId: selectedPipeline.id,
+    title: selectedPipeline.name,
+    summary: controlRoomScopeSummaryText(selectedPipeline),
+    statusLabel,
+    statusTone,
+    monitoredLabel: `${allMonitoringOutputs.length}/${totalOutputs} monitored`,
+    missingLabel: pluralize(missingMonitoring, "missing URL"),
+    searchLabel: query
+      ? `${monitoringOutputs.length}/${allMonitoringOutputs.length} match "${query}"`
+      : "No active search",
+    previewLabel: lazyWebPreviews
+      ? `${pluralize(lazyWebPreviews, "lazy web preview")}`
+      : "No lazy web previews",
+    focusLabel: query
+      ? `${pluralize(monitoringOutputs.length, "visible monitor")} after search · ${pluralize(missingMonitoring, "missing URL")}`
+      : `${pluralize(allMonitoringOutputs.length, "configured monitor")} · ${pluralize(missingMonitoring, "missing URL")} · ${pluralize(lazyWebPreviews, "lazy web preview")}`,
+    nextStep,
+    canOpenPipeline: true,
+    metrics: [
+      { label: "Outputs", value: String(totalOutputs) },
+      { label: "Configured", value: String(allMonitoringOutputs.length) },
+      { label: "Visible", value: String(monitoringOutputs.length) },
+      { label: "Lazy", value: String(lazyWebPreviews) },
+    ],
+  };
+}
+
+function renderControlRoomCheckpointPresentation(
+  selectedPipeline: PipelineView | null,
+): void {
+  controlRoomCheckpointCallback?.(
+    buildControlRoomCheckpointModel(selectedPipeline),
+  );
+}
+
 function renderControlRoomScopeSummary(
   container: HTMLElement,
   selectedPipeline: PipelineView | null,
@@ -1724,6 +1835,7 @@ function renderControlRoom(): void {
 
   renderPipelineSelect(container, pipelines);
   renderControlRoomScopeSummary(container, selectedPipeline);
+  renderControlRoomCheckpointPresentation(selectedPipeline);
 
   // Sync search input value
   const searchInput = container.querySelector<HTMLInputElement>(

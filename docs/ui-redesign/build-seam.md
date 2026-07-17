@@ -24,6 +24,7 @@
 - [HLS preview host](#hls-preview-host)
 - [Overview large-fleet search](#overview-large-fleet-search)
 - [Pipeline Inspect checkpoint](#pipeline-inspect-checkpoint)
+- [Pipeline Monitor checkpoint](#pipeline-monitor-checkpoint)
 
 ## Objective
 
@@ -693,3 +694,28 @@ and 76,405 bytes with deterministic gzip after this checkpoint. The explicit
 smoke guard is now 77,000 bytes. Further Inspect/Monitor ownership should either
 pay down repeated checkpoint markup or introduce a deliberate split for
 non-Operate v2 surfaces.
+
+## Pipeline Monitor checkpoint
+
+Pipeline Monitor now has the same first-decision v2 seam as Inspect: a React
+checkpoint strip above the legacy monitoring wall. It summarizes selected
+pipeline monitor coverage, missing monitoring URLs, active search narrowing,
+lazy web-preview count, and the next operator step before the iframe/player grid
+appears.
+
+The full monitoring wall remains legacy-owned. Playback, mute/play-all controls,
+monitoring URL edits, save validation, direct Open/Copy actions, YouTube status
+checks, and lazy iframe mounting still live in `control-room.ts`. The v2 model is
+read-only and exists to make the wall's state legible before the operator starts
+loading external previews.
+
+Seeded Playwright/CDP coverage proves the Monitor checkpoint appears under
+`ui=v2`, the route ownership cue changes to `UI v2 checkpoint`, search updates
+the checkpoint match count without relabeling filtered outputs as missing
+configuration, and generic web monitors are counted as lazy previews before the
+iframe is mounted.
+
+The opt-in bundle now measures 321,813 raw bytes and 76,668 bytes with
+deterministic gzip. It still fits under the 77,000-byte smoke guard, but leaves
+only 332 bytes of headroom; the next material checkpoint should either pay down
+repeated scan-card markup or split non-Operate checkpoint surfaces deliberately.

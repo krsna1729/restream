@@ -80,8 +80,8 @@ and verify stable accessible button names for output operations.
 
 The shared workspace summary now also announces the current ownership state:
 `UI v2 owned` for Overview and Pipeline Operate, `UI v2 checkpoint` for
-Pipeline Inspect, `Legacy checkpoint` for Monitor, and `Legacy-owned
-checkpoint` for the remaining top-level legacy routes. Seeded Playwright/CDP
+Pipeline Inspect and Pipeline Monitor, and `Legacy-owned checkpoint` for the
+remaining top-level legacy routes. Seeded Playwright/CDP
 coverage proves that cue is visible and exposed as status text while moving
 across the route journey.
 
@@ -156,6 +156,11 @@ Generic web monitor embeds are now lazy by default: the card exposes an
 explicit `Load preview` action before mounting the iframe, while direct
 Open/Copy actions remain available. That keeps the initial Monitor checkpoint
 lighter and makes cross-origin preview loading intentional.
+Monitor now also has its first v2-owned checkpoint strip above the legacy wall.
+It turns that same control-room state into one scan layer: monitor coverage,
+missing URLs, active search narrowing, lazy web-preview count, and next operator
+step. Playback, edit/save, player lifecycle, and external preview loading remain
+legacy-owned underneath it.
 
 Media search now follows the same feedback contract: the legacy-owned Media
 route exposes one live result-count summary that also splits matches by
@@ -238,8 +243,10 @@ The seeded browser proof also includes a route-checkpoint matrix across the
 legacy-owned screens: Inspect, Monitor, Media, Settings, Status, Incidents, and
 Telemetry. That matrix walks the screens as an operator journey and proves each
 one exposes a visible checkpoint, matching CDP accessibility `status` text, and
-a route-specific node budget. In the seeded route journey, those budgets are
-currently 6k / 8k / 10k / 13.5k / 16k / 18k / 21k nodes respectively. This
+a route-specific node budget. Inspect and Monitor now use v2-owned checkpoint
+strips while the other dense surfaces remain legacy-owned. In the seeded route
+journey, those budgets are
+currently 6k / 8.5k / 10.5k / 13.5k / 16k / 18k / 21k nodes respectively. This
 does not make those screens full v2 yet, but it gives the redesign loop a
 stable regression tripwire before deeper ownership passes.
 
@@ -335,10 +342,10 @@ What changed from the live operator pass:
 
 Still not a full v2 redesign:
 
-- Inspect graph/resource details, Monitor, Media, Settings, Status, Incidents,
-  and Telemetry are still intentionally legacy-owned, now with lightweight route
-  checkpoints rather than full v2 layouts. Inspect has only its first v2-owned
-  decision checkpoint.
+- Inspect graph/resource details, the Monitor wall, Media, Settings, Status,
+  Incidents, and Telemetry are still intentionally legacy-owned, now with
+  lightweight route checkpoints rather than full v2 layouts. Inspect and Monitor
+  each have only their first v2-owned decision checkpoint.
 - Legacy-owned routes keep substantial hidden DOM mounted across navigation.
   This is visible in CDP node growth and should be treated as a future
   performance/accessibility cleanup, not as solved by the v2 seam.
@@ -350,7 +357,7 @@ Overview and Pipeline / Operate. It is not yet a complete dashboard-wide v2.
 The remaining evolution should be sequenced as separate ownership passes:
 
 1. Complete Pipeline / Inspect v2 beyond the checkpoint strip.
-2. Pipeline / Monitor v2.
+2. Complete Pipeline / Monitor v2 beyond the checkpoint strip.
 3. Incidents and Telemetry v2.
 4. Media, Settings, and Status polish.
 5. Hidden DOM / route unmount cleanup across legacy panels.
