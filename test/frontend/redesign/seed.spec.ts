@@ -1,6 +1,18 @@
 import { expect, test } from "@playwright/test";
 
 import { openSeededDashboard } from "./fixtures";
+import {
+  expectPushStateCount,
+  expectTabVisibleInRail,
+  getCdpLayoutWidthDelta,
+  getCdpNamesByRole,
+  getCdpNodeCount,
+  getCdpStatusTexts,
+  getDocumentWidthOverflow,
+  installPushStateCounter,
+  resetPushStateCounter,
+  tabUntilFocused,
+} from "./seed-helpers";
 
 test("seed: empty Overview is deterministic and canonical @desktop", async ({
   page,
@@ -73,12 +85,16 @@ test("seed: mixed-health Overview exposes upstream and output state @desktop", a
   );
 });
 
-test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async ({
+test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 strips @desktop", async ({
   page,
 }) => {
   const v2Requests: string[] = [];
   page.on("request", (request) => {
-    if (request.url().includes("dashboard-v2-entry.js")) {
+    if (
+      /dashboard-v2-(entry|checkpoints-entry|jsx-runtime)\.js/.test(
+        request.url(),
+      )
+    ) {
       v2Requests.push(request.url());
     }
   });
@@ -92,13 +108,171 @@ test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async 
       name: "Settings",
     }),
   ).toBeVisible();
+  await expect(page.locator("#dashboard-v2-settings-title")).toBeVisible();
+  await expect(page.locator("#settings-route-summary")).toHaveText(
+    "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+  );
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Server configuration",
+  );
+  expect(await getCdpStatusTexts(page)).toContain(
+    "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+  );
+  const settings = page.locator("#settings-mode-content");
+  const authSearch = settings.getByLabel("Search authentication attempts");
+  const authSearchSummary = settings.locator("#auth-attempts-search-summary");
+  await expect(authSearchSummary).toHaveText("1 auth attempt visible");
+  await expect(
+    settings.getByText("Default encryption policy for SRT publishers."),
+  ).toBeVisible();
+  const initialButtonNames = await getCdpNamesByRole(page, "button");
+  expect(initialButtonNames).toEqual(
+    expect.arrayContaining(["Save server name", "Save ingest host"]),
+  );
+  expect(initialButtonNames).not.toContain("Save dashboard password");
+  expect(initialButtonNames).not.toContain("Save ingest security settings");
+  expect(initialButtonNames).not.toContain("Save");
+  await expect(authSearch).toBeHidden();
+  await expect(settings.getByLabel("Global SRT ingest mode")).toBeHidden();
+  await settings.locator("#srt-settings-section summary").click();
+  await expect(settings.locator("#srt-settings-section")).toHaveAttribute(
+    "open",
+    "",
+  );
+  await expect(settings.getByLabel("Global SRT ingest mode")).toBeVisible();
+  await settings.locator("#transcode-profiles-section summary").click();
+  await expect(settings.locator("#transcode-profiles-section")).toHaveAttribute(
+    "open",
+    "",
+  );
+  const h264Profile = settings.locator('[data-profile-name="h264"]');
+  await expect(h264Profile.getByLabel("h264 preset")).toBeVisible();
+  await expect(h264Profile.locator(".js-profile-crf")).toHaveCount(0);
+  const collapsedProfileNodes = await getCdpNodeCount(page);
+  const showTuning = h264Profile.getByRole("button", {
+    name: "Show tuning for h264",
+  });
+  await expect(showTuning).toHaveAttribute("aria-expanded", "false");
+  await showTuning.click();
+  await expect(h264Profile.locator(".js-profile-crf")).toBeVisible();
+  expect(await getCdpNodeCount(page)).toBeGreaterThan(collapsedProfileNodes);
+  const hideTuning = h264Profile.getByRole("button", {
+    name: "Hide tuning for h264",
+  });
+  await expect(hideTuning).toHaveAttribute("aria-expanded", "true");
+  await hideTuning.click();
+  await expect(h264Profile.locator(".js-profile-crf")).toHaveCount(0);
+  let savedProfilePatch: {
+    transcodeProfiles?: Record<string, { crf?: number; gop?: number }>;
+  } | null = null;
+  await page.route("**/api/v1/settings", async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.fallback();
+      return;
+    }
+    savedProfilePatch = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        transcodeProfiles: savedProfilePatch?.transcodeProfiles ?? {},
+      }),
+    });
+  });
+  await settings.getByRole("button", { name: "Save Profiles" }).click();
+  await expect
+    .poll(() => savedProfilePatch?.transcodeProfiles?.h264?.crf)
+    .toBe(23);
+  expect(savedProfilePatch?.transcodeProfiles?.h264?.gop).toBe(60);
+
+  await settings.locator("#auth-attempts-section > summary").click();
+  await expect(authSearch).toBeVisible();
+  await authSearch.fill("dashboard");
+  await expect(page.locator("#settings-route-summary")).toHaveText(
+    "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+  );
+  await expect(authSearchSummary).toHaveText(
+    '1/1 auth attempts match "dashboard"',
+  );
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/1 auth attempts match "dashboard"',
+  );
+
+  await authSearch.fill("banned");
+  await expect(page.locator("#settings-route-summary")).toHaveText(
+    "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+  );
+  await expect(authSearchSummary).toHaveText(
+    '0/1 auth attempts match "banned"',
+  );
+  await expect(
+    settings.getByText(
+      'No authentication attempts match "banned". Clear search to return to the full security log.',
+    ),
+  ).toBeVisible();
+  const clearSearch = settings.getByRole("button", {
+    name: "Clear authentication attempt search",
+  });
+  await expect(clearSearch).toBeVisible();
+  const filteredSettingsButtonNames = await getCdpNamesByRole(page, "button");
+  expect(filteredSettingsButtonNames).toContain(
+    "Clear authentication attempt search",
+  );
+  expect(filteredSettingsButtonNames).not.toContain("Clear search");
+  expect(await getCdpStatusTexts(page)).toContain(
+    '0/1 auth attempts match "banned"',
+  );
+
+  await clearSearch.click();
+  await expect(authSearch).toHaveValue("");
+  await expect(authSearchSummary).toHaveText("1 auth attempt visible");
+  await expect(clearSearch).toBeHidden();
+  await expect(settings.getByRole("cell", { name: "Dashboard" })).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain("1 auth attempt visible");
   await expect(page.locator("#dashboard-v2-root")).toBeHidden();
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
-  expect(v2Requests).toEqual([]);
+  expect(
+    v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
+  ).toBe(true);
+  expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
+    false,
+  );
+  const requestsAfterSettings = v2Requests.length;
+
+  await page.goto("/?mode=media&ui=v2");
+  await expect(page.locator("#media-mode-panel")).toBeVisible();
+  await expect(page.locator("#dashboard-v2-settings-root")).toBeHidden();
+  const hiddenSettingsChildCount = await page
+    .locator("#settings-mode-content")
+    .evaluate((node) => node.childElementCount);
+  expect(hiddenSettingsChildCount).toBe(0);
+  await expect(page.locator("#dashboard-v2-media-title")).toBeVisible();
+  await expect(
+    page.locator("#media-mode-content").getByRole("heading", {
+      name: "Media Library",
+    }),
+  ).toBeVisible();
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Recordings and source files",
+  );
+  expect(
+    v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
+  ).toBe(true);
+  expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
+    false,
+  );
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterSettings);
+  const requestsAfterMedia = v2Requests.length;
 
   await page.goto("/?mode=status&ui=v2");
+  await expect(page.locator("#dashboard-v2-status-title")).toBeVisible();
+  await expect(page.locator("#dashboard-v2-media-root")).toBeHidden();
+  const hiddenMediaChildCount = await page
+    .locator("#media-mode-content")
+    .evaluate((node) => node.childElementCount);
+  expect(hiddenMediaChildCount).toBe(0);
   await expect(
     page.locator("#status-mode-content").getByRole("heading", {
       name: "Status",
@@ -109,817 +283,890 @@ test("seed: ui=v2 keeps legacy-owned routes off the React seam @desktop", async 
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
-  expect(v2Requests).toEqual([]);
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Runtime status",
+  );
+  expect(
+    v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
+  ).toBe(true);
+  expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
+    false,
+  );
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterMedia);
+
+  await page.goto("/?mode=media&ui=v2");
+  await expect(page.locator("#media-library-results-summary")).toHaveText(
+    "1 media file total · 0 recordings · 1 source file",
+  );
+  await expect(page.getByText("synthetic-source.mp4")).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    "1 media file total · 0 recordings · 1 source file",
+  );
+
+  await page.goto("/?mode=status&ui=v2");
+  await expect(page.locator("#dashboard-v2-status-title")).toBeVisible();
+  const requestsAfterStatus = v2Requests.length;
 
   await page.goto("/?mode=pipeline&view=inspect&p=pipe-healthy&ui=v2");
   await expect(page.locator("#inspect-mode-panel")).toBeVisible();
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
-  expect(v2Requests).toEqual([]);
+  await expect(
+    page.locator("#dashboard-v2-pipeline-inspect-title"),
+  ).toBeVisible();
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Pipeline graph and diagnostics",
+  );
+  expect(
+    v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
+  ).toBe(true);
+  expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
+    false,
+  );
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterStatus);
+  const requestsAfterInspect = v2Requests.length;
 
   await page.goto("/?mode=pipeline&view=monitor&p=pipe-healthy&ui=v2");
   await expect(page.locator("#control-mode-panel")).toBeVisible();
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
-  expect(v2Requests).toEqual([]);
+  await expect(
+    page.locator("#dashboard-v2-pipeline-inspect-root"),
+  ).toBeHidden();
+  await expect(page.locator("#dashboard-v2-control-room-title")).toBeVisible();
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Pipeline monitoring wall",
+  );
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterInspect);
+  const requestsAfterMonitor = v2Requests.length;
+
+  await page.goto("/?mode=incidents&ui=v2");
+  await expect(page.locator("#incidents-mode-panel")).toBeVisible();
+  await expect(page.locator("#dashboard-v2-control-room-root")).toBeHidden();
+  await expect(page.locator("#dashboard-v2-incidents-title")).toBeVisible();
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Alerts, evidence, and lifecycle events",
+  );
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterMonitor);
+  const requestsAfterIncidents = v2Requests.length;
+
+  await page.goto("/?mode=telemetry&ui=v2");
+  await expect(page.locator("#telemetry-mode-panel")).toBeVisible();
+  await expect(page.locator("#dashboard-v2-incidents-root")).toBeHidden();
+  await expect(page.locator("#dashboard-v2-telemetry-title")).toBeVisible();
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Engine and pipeline counters",
+  );
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterIncidents);
+  const requestsAfterTelemetry = v2Requests.length;
 
   await page.goto("/?mode=pipeline&view=operate&ui=v2");
   await expect(
-    page
-      .locator("#dashboard-v2-pipeline-selector-root")
-      .getByRole("heading", { name: "Pipelines" }),
+    page.locator("#dashboard-v2-pipeline-selector-root").getByText("Pipelines"),
   ).toBeVisible();
-  expect(v2Requests.length).toBe(1);
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterTelemetry);
+  expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
+    true,
+  );
 });
 
-test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", async ({
+test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop", async ({
   page,
 }) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=settings&ui=v2", {
+    expectOverviewReady: false,
+    rateLimitResponse: () => ({
+      attempts: Array.from({ length: 12 }, (_, index) => ({
+        scope: index % 3 === 0 ? "dashboard-login" : "srt-publish",
+        ip: `203.0.113.${10 + index}`,
+        failureCount: index + 1,
+        banned: index % 4 === 0,
+        banRemainingMs: index % 4 === 0 ? 42_000 : undefined,
+      })),
+    }),
+  });
+
+  const settings = page.locator("#settings-mode-content");
+  const checkpoint = page.locator("#dashboard-v2-settings-root");
+  const authSearch = settings.getByLabel("Search authentication attempts");
+  const authSearchSummary = settings.locator("#auth-attempts-search-summary");
+  const visibleSettingsControlCount = () =>
+    page.evaluate(
+      () =>
+        Array.from(
+          document.querySelectorAll<HTMLElement>(
+            "#settings-mode-content button,#settings-mode-content a[href],#settings-mode-content input,#settings-mode-content select,#settings-mode-content summary,[role='button']",
+          ),
+        ).filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            element.checkVisibility({ checkVisibilityCSS: true }) &&
+            style.display !== "none" &&
+            style.visibility !== "hidden"
+          );
+        }).length,
+    );
+  const visibleServerControlCount = () =>
+    page.evaluate(
+      () =>
+        Array.from(
+          document.querySelectorAll<HTMLElement>(
+            "#server-settings-section button,#server-settings-section a[href],#server-settings-section input,#server-settings-section select,#server-settings-section summary,[role='button']",
+          ),
+        ).filter((element) => {
+          if (element.closest("[data-settings-v2-disclosure]")) return false;
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            element.checkVisibility({ checkVisibilityCSS: true }) &&
+            style.display !== "none" &&
+            style.visibility !== "hidden"
+          );
+        }).length,
+    );
+  await expect(
+    checkpoint.locator("#dashboard-v2-settings-title"),
+  ).toBeVisible();
+  await expect(page.locator("#settings-route-summary")).toHaveText(
+    "Synthetic Restream settings · 5 sections · 3 profiles · 12 auth attempts",
+  );
+  await expect(
+    checkpoint.getByText(
+      "Synthetic Restream settings · 5 sections · 3 profiles · 12 auth attempts",
+    ),
+  ).toBeVisible();
+  await expect(
+    checkpoint.getByText("Security: 3 banned attempts"),
+  ).toBeVisible();
+  expect(await visibleSettingsControlCount()).toBeLessThanOrEqual(17);
+  expect(await visibleServerControlCount()).toBeLessThanOrEqual(5);
+  const buttonNames = await getCdpNamesByRole(page, "button");
+  expect(buttonNames).toEqual(
+    expect.arrayContaining(["Save server name", "Save ingest host"]),
+  );
+  expect(buttonNames).not.toContain("Save dashboard password");
+  expect(buttonNames).not.toContain("Save ingest security settings");
+  expect(buttonNames).not.toContain("Refresh authentication attempts");
+  expect(buttonNames).not.toContain("Save");
+  expect(buttonNames).not.toContain("Refresh");
+  expect(buttonNames).not.toContain("Reset");
+  const sectionJump = settings.getByLabel("Jump to settings section");
+  await expect(sectionJump).toBeVisible();
+  await sectionJump.selectOption("srt-settings-section");
+  await expect(settings.locator("#srt-settings-section")).toHaveAttribute(
+    "open",
+    "",
+  );
+  await expect(page).toHaveURL(/#srt-settings-section$/);
+  expect(await getCdpNamesByRole(page, "link")).not.toEqual(
+    expect.arrayContaining([
+      "Server",
+      "Recording",
+      "SRT",
+      "Backend",
+      "Profiles",
+    ]),
+  );
+  expect(await getCdpNamesByRole(page, "link")).not.toEqual(
+    expect.arrayContaining([
+      "Jump to server settings",
+      "Jump to recording settings",
+      "Jump to SRT settings",
+      "Jump to backend settings",
+      "Jump to transcode profile settings",
+    ]),
+  );
+  expect(await getCdpNamesByRole(page, "heading")).toEqual(
+    expect.arrayContaining([
+      "Settings",
+      "Server",
+      "Recording",
+      "Dashboard Password",
+      "Ingest Security",
+      "Authentication Attempts",
+      "Global SRT Ingest",
+      "Transcoding Backend",
+      "Transcode Profiles",
+    ]),
+  );
+  await expect(
+    settings.locator("[data-settings-v2-disclosure] > summary[aria-label]"),
+  ).toHaveCount(7);
+  await expect(
+    settings.locator('summary[aria-label="Dashboard password settings"]'),
+  ).toBeVisible();
+  await expect(
+    settings.locator('summary[aria-label="Authentication attempt settings"]'),
+  ).toBeVisible();
+  expect(await getCdpNamesByRole(page, "textbox")).toEqual(
+    expect.arrayContaining(["Server name", "Ingest host"]),
+  );
+  expect(await getCdpNamesByRole(page, "textbox")).not.toEqual(
+    expect.arrayContaining(["Name", "e.g. 192.168.1.10 (blank = localhost)"]),
+  );
+  await expect(authSearch).toBeHidden();
+  await settings.locator("#auth-attempts-section > summary").click();
+  await expect(authSearch).toBeVisible();
+  expect(await getCdpNamesByRole(page, "searchbox")).toContain(
+    "Search authentication attempts",
+  );
+  await expect(authSearchSummary).toHaveText("8 auth attempts shown of 12");
+  await expect(
+    settings.getByRole("cell", { name: "203.0.113.10" }),
+  ).toBeVisible();
+  await expect(
+    settings.getByRole("cell", { name: "203.0.113.18" }),
+  ).toHaveCount(0);
+  await expect(
+    settings.getByRole("button", { name: "Reset all authentication attempts" }),
+  ).toBeHidden();
+  await expect(
+    settings.getByRole("button", { name: "Reset", exact: true }),
+  ).toHaveCount(0);
+  const showResetActions = settings.getByRole("button", {
+    name: "Show authentication reset actions",
+  });
+  await expect(showResetActions).toHaveAttribute("aria-expanded", "false");
+  await showResetActions.click();
+  await expect(
+    settings.getByRole("button", { name: "Reset all authentication attempts" }),
+  ).toBeVisible();
+  const resetButtonNames = await getCdpNamesByRole(page, "button");
+  expect(resetButtonNames).toContain("Reset all authentication attempts");
+  expect(resetButtonNames).not.toContain("Reset");
+  await expect(
+    settings
+      .getByRole("button", {
+        name: "Reset authentication attempt for Dashboard 203.0.113.10",
+      })
+      .first(),
+  ).toBeVisible();
+  const hideResetActions = settings.getByRole("button", {
+    name: "Hide authentication reset actions",
+  });
+  await expect(hideResetActions).toHaveAttribute("aria-expanded", "true");
+  await hideResetActions.click();
+  await expect(
+    settings.getByRole("button", { name: "Reset all authentication attempts" }),
+  ).toBeHidden();
+  await expect(settings.getByRole("button", { name: "Logout" })).toBeHidden();
+  const showAccountActions = settings.getByRole("button", {
+    name: "Show account actions",
+  });
+  await expect(showAccountActions).toHaveAttribute("aria-expanded", "false");
+  await showAccountActions.click();
+  await expect(settings.getByRole("button", { name: "Logout" })).toBeVisible();
+  const hideAccountActions = settings.getByRole("button", {
+    name: "Hide account actions",
+  });
+  await expect(hideAccountActions).toHaveAttribute("aria-expanded", "true");
+  await hideAccountActions.click();
+  await expect(settings.getByRole("button", { name: "Logout" })).toBeHidden();
+  const showAll = settings.getByRole("button", {
+    name: "Show all 12 authentication attempts",
+  });
+  await expect(showAll).toHaveAttribute("aria-expanded", "false");
+  const denseSettingsButtonNames = await getCdpNamesByRole(page, "button");
+  expect(denseSettingsButtonNames).toContain(
+    "Show all 12 authentication attempts",
+  );
+  expect(denseSettingsButtonNames).not.toContain("Show all 12");
+  expect(await getCdpStatusTexts(page)).toContain(
+    "8 auth attempts shown of 12",
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(13_500);
+
+  await showAll.click();
+  await expect(settings.locator("#auth-attempts-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    settings.getByRole("cell", { name: "203.0.113.21" }),
+  ).toBeVisible();
+
+  await authSearch.fill("203.0.113.21");
+  await expect(authSearchSummary).toHaveText(
+    '1/12 auth attempts match "203.0.113.21"',
+  );
+  await expect(
+    checkpoint.getByText("1/12 matched", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    settings.getByRole("cell", { name: "203.0.113.21" }),
+  ).toBeVisible();
+  await expect(
+    settings.getByRole("button", { name: /Show (all|fewer)/ }),
+  ).toHaveCount(0);
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/12 auth attempts match "203.0.113.21"',
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(13_500);
+});
+
+test("seed: ui=v2 legacy-owned routes keep operator checkpoints visible and announced @desktop", async ({
+  page,
+}) => {
+  const checkpoints = [
+    {
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      locator: "#inspect-route-summary",
+      nodeBudget: 9_000,
+      rootId: "dashboard-v2-pipeline-inspect-root",
+      text: "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
+    },
+    {
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      locator: "#control-room-route-summary",
+      nodeBudget: 9_000,
+      rootId: "dashboard-v2-control-room-root",
+      text: "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+    },
+    {
+      href: "/?mode=media&ui=v2",
+      locator: "#media-library-results-summary",
+      nodeBudget: 11_000,
+      rootId: "dashboard-v2-media-root",
+      text: "1 media file total · 0 recordings · 1 source file",
+    },
+    {
+      href: "/?mode=settings&ui=v2",
+      locator: "#settings-route-summary",
+      nodeBudget: 13_500,
+      rootId: "dashboard-v2-settings-root",
+      text: "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+    },
+    {
+      href: "/?mode=status&ui=v2",
+      locator: "#status-route-summary",
+      nodeBudget: 16_000,
+      rootId: "dashboard-v2-status-root",
+      text: "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
+    },
+    {
+      href: "/?mode=incidents&ui=v2",
+      locator: "#incidents-route-summary",
+      nodeBudget: 18_000,
+      rootId: "dashboard-v2-incidents-root",
+      text: "0 critical · 1 warning · 1 recent event · fleet",
+    },
+    {
+      href: "/?mode=telemetry&ui=v2",
+      locator: "#telemetry-route-summary",
+      nodeBudget: 21_000,
+      rootId: "dashboard-v2-telemetry-root",
+      text: "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Healthy Program",
+    },
+  ] as const;
+
+  await openSeededDashboard(page, "mixed-health", checkpoints[0].href, {
+    expectOverviewReady: false,
+  });
+
+  for (const checkpoint of checkpoints) {
+    if (page.url() !== new URL(checkpoint.href, page.url()).href) {
+      await page.goto(checkpoint.href);
+    }
+    const summary = page.locator(checkpoint.locator);
+    await expect(summary).toHaveText(checkpoint.text);
+    expect(await getCdpStatusTexts(page)).toContain(checkpoint.text);
+    expect(await getCdpNodeCount(page), checkpoint.href).toBeLessThan(
+      checkpoint.nodeBudget,
+    );
+    for (const otherCheckpoint of checkpoints) {
+      const root = page.locator(`#${otherCheckpoint.rootId}`);
+      if (otherCheckpoint.rootId === checkpoint.rootId) {
+        await expect(root, checkpoint.href).toBeVisible();
+      } else {
+        await expect(root, checkpoint.href).toBeHidden();
+        await expect(
+          page.locator(`#${otherCheckpoint.rootId} > *`),
+          checkpoint.href,
+        ).toHaveCount(0);
+      }
+    }
+    if (!checkpoint.href.includes("mode=pipeline")) {
+      await expect(
+        page.locator(
+          "#inspect-mode-panel > :not(#dashboard-v2-pipeline-inspect-root)",
+        ),
+      ).toHaveCount(0);
+      await expect(
+        page.locator(
+          "#control-mode-panel > :not(#dashboard-v2-control-room-root)",
+        ),
+      ).toHaveCount(0);
+      await expect(page.locator("#inspect-mode-panel h1")).toHaveCount(0);
+      await expect(page.locator("#control-mode-panel h1")).toHaveCount(0);
+    }
+  }
+
+  await page.goto("/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2");
+  await expect(page.locator("#inspect-route-summary")).toHaveText(
+    "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
+  );
+  await expect(
+    page.locator("#inspect-mode-panel").getByRole("heading", {
+      name: "Pipeline inspect",
+    }),
+  ).toBeVisible();
+
+  await page.goto("/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2");
+  await expect(page.locator("#control-room-route-summary")).toHaveText(
+    "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+  );
+  await expect(
+    page.locator("#control-mode-panel").getByRole("heading", {
+      name: "Control Room",
+    }),
+  ).toBeVisible();
+});
+
+test("seed: ui=v2 unmounts inactive Operate surfaces outside Pipeline @desktop", async ({
+  page,
+}) => {
+  const operateRootChildCount = () =>
+    page.evaluate(() =>
+      [
+        "dashboard-v2-pipeline-selector-root",
+        "dashboard-v2-pipeline-header-root",
+        "dashboard-v2-pipeline-input-status-root",
+        "dashboard-v2-pipeline-output-overview-root",
+      ].reduce(
+        (sum, id) =>
+          sum + (document.getElementById(id)?.childElementCount ?? 0),
+        0,
+      ),
+    );
+
   await openSeededDashboard(
     page,
-    "chaos-recovery",
-    "/?mode=pipeline&view=operate&p=pipe-grace&ui=v2",
+    "mixed-health",
+    "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
     { expectOverviewReady: false },
   );
+  await expect(
+    page.locator("#dashboard-v2-pipeline-header-root"),
+  ).toBeVisible();
+  expect(await operateRootChildCount()).toBeGreaterThan(0);
 
-  const pipelineSelector = page.locator("#dashboard-v2-pipeline-selector-root");
-  const pipelineHeader = page.locator("#dashboard-v2-pipeline-header-root");
-  const inputStatus = page.locator("#dashboard-v2-pipeline-input-status-root");
-  const outputOverview = page.locator(
-    "#dashboard-v2-pipeline-output-overview-root",
+  await page.goto("/?mode=media&ui=v2");
+  await expect(page.locator("#media-library-results-summary")).toBeVisible();
+  await expect.poll(operateRootChildCount).toBe(0);
+  await expect(page.locator("#dashboard-main")).not.toContainText(
+    "Start file ingest for Retrying Destination",
   );
 
+  await page.goto("/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2");
   await expect(
-    pipelineSelector.getByRole("heading", { name: "Pipelines" }),
+    page.locator("#dashboard-v2-pipeline-header-root"),
   ).toBeVisible();
-  await expect(
-    pipelineHeader.getByRole("heading", { name: "Transient Publisher Drop" }),
-  ).toBeVisible();
-  await expect(inputStatus).toContainText("Reconnecting");
-  await expect(inputStatus).toContainText("Disconnect grace active");
-  await expect(outputOverview).toContainText("Grace-preserved Output");
-  await expect(outputOverview).toContainText("Running");
-
-  await page.goto(
-    "/?mode=pipeline&view=operate&p=pipe-hls-timeout&ui=v2",
-  );
-  await expect(
-    pipelineHeader.getByRole("heading", { name: "HLS Timeout Recovery" }),
-  ).toBeVisible();
-  await expect(outputOverview).toContainText("HLS PUT Sink");
-  await expect(outputOverview).toContainText("Retrying");
-  await expect(outputOverview).toContainText("Retry in 8s");
-
-  await page.goto("/?mode=pipeline&view=operate&p=pipe-flapping&ui=v2");
-  await expect(
-    pipelineHeader.getByRole("heading", { name: "Recovered Sink Flap" }),
-  ).toBeVisible();
-  await expect(inputStatus).toContainText("Live input");
-  await expect(inputStatus).toContainText("30 audio tracks");
-  await expect(inputStatus.getByText("Track 6")).toBeVisible();
-  await expect(inputStatus.getByText("Track 7")).toHaveCount(0);
-  await expect(
-    inputStatus.getByRole("button", { name: "Show all 30" }),
-  ).toBeVisible();
-  await inputStatus.getByRole("button", { name: "Show all 30" }).click();
-  await expect(inputStatus.getByText("Track 30")).toBeVisible();
-  await expect(
-    inputStatus.getByRole("button", { name: "Show fewer" }),
-  ).toBeVisible();
-  await expect(outputOverview).toContainText("SRT Sink Flap");
-  await expect(outputOverview).toContainText("Flapping");
-  await expect(outputOverview).toContainText("4 recent failures");
-
-  await page.goto("/?mode=pipeline&view=operate&p=pipe-stall&ui=v2");
-  await expect(
-    pipelineHeader.getByRole("heading", { name: "Stalled Sink Isolation" }),
-  ).toBeVisible();
-  await expect(outputOverview).toContainText("RTMP stalled sink");
-  await expect(outputOverview).toContainText("Stalled");
-  await expect(outputOverview).toContainText("No progress for 10s");
-  await expect(outputOverview).toContainText("5/6 active");
-  const outputSearch = outputOverview.getByLabel("Search output destinations");
-  await outputSearch.fill("stalled");
-  await expect(outputOverview.getByText("1/6 shown")).toBeVisible();
-  await expect(
-    outputOverview.getByRole("heading", { name: "RTMP stalled sink" }),
-  ).toBeVisible();
-  await expect(
-    outputOverview.getByRole("heading", { name: "Healthy sibling 01" }),
-  ).not.toBeVisible();
-  await outputSearch.fill("");
-  await outputOverview.getByRole("button", { name: "Attention" }).click();
-  await expect(
-    outputOverview.getByRole("heading", { name: "RTMP stalled sink" }),
-  ).toBeVisible();
-  await expect(
-    outputOverview.getByRole("heading", { name: "Healthy sibling 01" }),
-  ).not.toBeVisible();
-
-  await page.goto(
-    "/?mode=pipeline&view=operate&p=pipe-retry-budget&ui=v2",
-  );
-  await expect(
-    pipelineHeader.getByRole("heading", { name: "Retry Budget Exhausted" }),
-  ).toBeVisible();
-  await expect(outputOverview).toContainText("0/2 active");
-  await expect(outputOverview.getByText("Error2")).toBeVisible();
-  await expect(outputOverview).toContainText("RTMP dead sink");
-  await expect(outputOverview).toContainText("Connection refused");
-  await expect(outputOverview).toContainText("SRT dead sink");
-  await expect(outputOverview).toContainText("connection failed");
-  await expect(outputOverview).not.toContainText("2 Flapping");
-  await expect(
-    outputOverview.getByRole("heading", { name: "Needs attention" }),
-  ).toBeVisible();
-  await expect(
-    outputOverview.getByRole("heading", { name: "RTMP dead sink" }),
-  ).toBeVisible();
-  await expect(
-    outputOverview.getByRole("heading", { name: "SRT dead sink" }),
-  ).toBeVisible();
+  expect(await operateRootChildCount()).toBeGreaterThan(0);
 });
 
-test("seed: ui=v2 replaces Overview while delegating operator actions @desktop", async ({
+test("seed: ui=v2 shell announces ownership while moving across routes @desktop", async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    const openedUrls: string[] = [];
-    Object.defineProperty(window, "__redesignOpenedUrls", {
-      configurable: true,
-      value: openedUrls,
-    });
-    window.open = ((url?: string | URL) => {
-      openedUrls.push(String(url));
-      return null;
-    }) as typeof window.open;
-  });
-  const pageErrors: string[] = [];
-  const seamErrors: string[] = [];
-  page.on("pageerror", (error) => pageErrors.push(error.message));
-  page.on("console", (message) => {
-    if (
-      message.type() === "error" &&
-      message.text().includes("Unable to start the dashboard v2 experiment")
-    ) {
-      seamErrors.push(message.text());
+  const routes = [
+    {
+      href: "/?mode=overview&ui=v2",
+      text: "UI v2 owned · 2 live inputs / 1 running outputs / 1 retrying",
+    },
+    {
+      href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+      text: "UI v2 owned · Pipeline workflow",
+    },
+    {
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      text: "UI v2 checkpoint · Pipeline graph and diagnostics",
+    },
+    {
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      text: "UI v2 checkpoint · Pipeline monitoring wall",
+    },
+    {
+      href: "/?mode=incidents&ui=v2",
+      text: "UI v2 checkpoint · Alerts, evidence, and lifecycle events",
+    },
+    {
+      href: "/?mode=telemetry&ui=v2",
+      text: "UI v2 checkpoint · Engine and pipeline counters",
+    },
+    {
+      href: "/?mode=status&ui=v2",
+      text: "UI v2 checkpoint · Runtime status",
+    },
+  ] as const;
+
+  await openSeededDashboard(page, "mixed-health", routes[0].href);
+
+  for (const route of routes) {
+    if (page.url() !== new URL(route.href, page.url()).href) {
+      await page.goto(route.href);
     }
-  });
-  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2", {
-    outputControlDelayMs: 300,
-    pipelineControlDelayMs: 300,
-    settingsResponse: (settings) => ({
-      ...settings,
-      pipelines: (
-        settings.pipelines as Array<Record<string, unknown>>
-      ).map((pipeline) =>
-        pipeline.id === "pipe-healthy"
-          ? {
-              ...pipeline,
-              streamKey: "synthetic-healthy-stream-key-12345",
-              ingestUrls: {
-                rtmp:
-                  "rtmp://ingest.example.invalid/live/synthetic-healthy-stream-key-12345",
-                srt: "srt://ingest.example.invalid:9000?streamid=synthetic-healthy-stream-key-12345",
-              },
-            }
-          : pipeline.id === "pipe-retrying"
-          ? {
-              ...pipeline,
-              inputSource: "file:synthetic-source.mp4",
-              fileIngest: {
-                configured: true,
-                id: "ingest-retrying",
-                filename: "synthetic-source.mp4",
-                loop: true,
-                running: false,
-              },
-            }
-          : pipeline,
-      ),
-    }),
-  });
-
-  await expect(page).toHaveURL(/\?mode=overview&ui=v2$/);
-  await page.waitForTimeout(100);
-  expect(pageErrors).toEqual([]);
-  expect(seamErrors).toEqual([]);
-  expect(
-    await page.evaluate(() => ({
-      loaded: performance
-        .getEntriesByType("resource")
-        .some((entry) => entry.name.includes("dashboard-v2-entry.js")),
-      rootHidden: document.getElementById("dashboard-v2-root")?.hidden,
-      rootMarkup: document.getElementById("dashboard-v2-root")?.innerHTML,
-      search: window.location.search,
-    })),
-  ).toEqual({
-    loaded: true,
-    rootHidden: false,
-    rootMarkup: expect.stringContaining("dashboard-v2-overview"),
-    search: "?mode=overview&ui=v2",
-  });
-  const v2Overview = page.locator("#dashboard-v2-overview");
-  await expect(
-    v2Overview.getByRole("heading", { name: "Fleet overview" }),
-  ).toBeVisible();
-  await expect(v2Overview).toContainText("1 pipeline needs attention");
-  await expect(v2Overview).toContainText("Inputs live2/2");
-  await expect(v2Overview).toContainText("Outputs running1/2");
-  await expect(
-    v2Overview.getByRole("button", {
-      name: "Retrying Destination",
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(
-    v2Overview.getByRole("heading", { name: "Restream Activity" }),
-  ).toBeVisible();
-  await expect(page.locator("#overview-mode-content")).toBeHidden();
-
-  await v2Overview
-    .getByRole("button", { name: "Add Pipeline", exact: true })
-    .click();
-  await expect(page.locator("#edit-pipe-modal")).toBeVisible();
-  await page.locator("#edit-pipe-modal").press("Escape");
-  await v2Overview
-    .getByRole("button", { name: "Operate", exact: true })
-    .click();
-  await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
-  await expect(page.locator("#dashboard-grid")).toBeVisible();
-  const pipelineSelector = page.locator("#dashboard-v2-pipeline-selector-root");
-  await expect(pipelineSelector).toBeVisible();
-  await expect(
-    pipelineSelector.getByRole("heading", { name: "Pipelines" }),
-  ).toBeVisible();
-  await expect(page.locator("#pipeline-selector-legacy")).toBeHidden();
-  await expect(
-    pipelineSelector.getByRole("button", {
-      name: /Retrying Destination/,
-    }),
-  ).toHaveAttribute("aria-current", "page");
-  const pipelineHeader = page.locator("#dashboard-v2-pipeline-header-root");
-  await expect(
-    pipelineHeader.getByRole("heading", { name: "Retrying Destination" }),
-  ).toBeVisible();
-  await expect(pipelineHeader).toContainText("File · synthetic-source.mp4");
-  const fileInputStatus = page.locator(
-    "#dashboard-v2-pipeline-input-status-root",
-  );
-  await expect(fileInputStatus).toContainText("Source file");
-  await expect(fileInputStatus).toContainText("synthetic-source.mp4");
-  await expect(fileInputStatus).toContainText("MP4");
-  await expect(fileInputStatus).toContainText("1.0 MiB");
-  await expect(fileInputStatus).toContainText("Sparse source GOP detected");
-  await expect(page.locator("#file-source-section")).toBeHidden();
-  await expect(page.locator("#record-pipe-btn")).toBeHidden();
-  await expect(page.locator("#file-ingest-pipe-btn")).toBeHidden();
-  const startFile = pipelineHeader.getByRole("button", { name: "Start File" });
-  await startFile.click();
-  await expect(
-    pipelineHeader.getByRole("button", { name: "Starting File..." }),
-  ).toBeDisabled();
-  await expect(
-    pipelineHeader.getByRole("button", { name: "Stop File" }),
-  ).toBeEnabled();
-  await pipelineHeader.getByRole("button", { name: "Stop File" }).click();
-  await expect(
-    pipelineHeader.getByRole("button", { name: "Stopping File..." }),
-  ).toBeDisabled();
-  await expect(startFile).toBeEnabled();
-  await pipelineHeader.getByRole("button", { name: "Stop Rec" }).click();
-  await expect(
-    pipelineHeader.getByRole("button", { name: "Stopping..." }),
-  ).toBeDisabled();
-  await expect(
-    pipelineHeader.getByRole("button", { name: "Record" }),
-  ).toBeEnabled();
-  await pipelineHeader.getByRole("button", { name: "Record" }).click();
-  await expect(
-    pipelineHeader.getByRole("button", { name: "Starting..." }),
-  ).toBeDisabled();
-  await expect(
-    pipelineHeader.getByRole("button", { name: "Stop Rec" }),
-  ).toBeEnabled();
-  await expect(
-    pipelineHeader.getByRole("button", { name: "Edit" }),
-  ).toBeDisabled();
-  const outputOverview = page.locator(
-    "#dashboard-v2-pipeline-output-overview-root",
-  );
-  await expect(outputOverview).toBeVisible();
-  await expect(
-    outputOverview.getByRole("heading", { name: "Output overview" }),
-  ).toBeVisible();
-  await expect(outputOverview).toContainText("Retrying");
-  await expect(outputOverview).toContainText("Retrying Output");
-  await expect(page.locator("#pipeline-output-overview-legacy")).toBeHidden();
-  await expect(page.locator("#outs-col > h2")).toBeHidden();
-  await expect(page.locator("#outputs-list")).toBeHidden();
-  await expect(page.locator("#add-out-btn")).toBeHidden();
-  const openRetryingOutputActions = async () => {
-    await outputOverview
-      .getByRole("button", { name: "More actions for Retrying Output" })
-      .click();
-  };
-  await openRetryingOutputActions();
-  await outputOverview
-    .getByRole("button", { name: "History Retrying Output" })
-    .click();
-  await expect(page.locator("#output-history-modal")).toBeVisible();
-  await expect(page.locator("#output-history-title")).toHaveText(
-    "History: Retrying Output",
-  );
-  await page.locator("#output-history-modal").press("Escape");
-  await openRetryingOutputActions();
-  await outputOverview
-    .getByRole("button", { name: "Monitor Retrying Output" })
-    .click();
-  expect(
-    await page.evaluate(
-      () =>
-        (
-          window as Window & { __redesignOpenedUrls?: string[] }
-        ).__redesignOpenedUrls,
-    ),
-  ).toEqual(["https://monitor.example.invalid/retrying"]);
-  await openRetryingOutputActions();
-  await outputOverview
-    .getByRole("button", { name: "Edit Retrying Output" })
-    .click();
-  await expect(page.locator("#edit-out-modal")).toBeVisible();
-  await expect(page.locator("#out-modal-title")).toHaveText(
-    'Edit Output "Retrying Output"',
-  );
-  await page.locator("#edit-out-modal").press("Escape");
-  const stopRetryingOutput = outputOverview.getByRole("button", {
-    name: "Stop Retrying Output",
-  });
-  await stopRetryingOutput.click();
-  await expect(
-    outputOverview.getByRole("button", { name: "Stopping Retrying Output" }),
-  ).toBeDisabled();
-  await expect(outputOverview).toContainText("Stopped");
-  const startRetryingOutput = outputOverview.getByRole("button", {
-    name: "Start Retrying Output",
-  });
-  await expect(startRetryingOutput).toBeEnabled();
-  await openRetryingOutputActions();
-  await expect(
-    outputOverview.getByRole("button", { name: "Delete Retrying Output" }),
-  ).toBeEnabled();
-  await openRetryingOutputActions();
-  await startRetryingOutput.click();
-  await expect(
-    outputOverview.getByRole("button", { name: "Starting Retrying Output" }),
-  ).toBeDisabled();
-  await expect(
-    outputOverview.getByRole("button", { name: "Stop Retrying Output" }),
-  ).toBeEnabled();
-  await outputOverview
-    .getByRole("button", { name: "Stop Retrying Output" })
-    .click();
-  await openRetryingOutputActions();
-  await expect(
-    outputOverview.getByRole("button", { name: "Delete Retrying Output" }),
-  ).toBeEnabled();
-  await outputOverview
-    .getByRole("button", { name: "Delete Retrying Output" })
-    .click();
-  await expect(page.locator("#app-confirm-dialog")).toBeVisible();
-  await expect(page.locator("#app-confirm-dialog")).toContainText(
-    'Delete output "Retrying Output"?',
-  );
-  await page
-    .locator("#app-confirm-dialog")
-    .getByRole("button", { name: "Cancel" })
-    .click();
-  await outputOverview
-    .getByRole("button", { name: "Add Output", exact: true })
-    .click();
-  await expect(page.locator("#edit-out-modal")).toBeVisible();
-  await expect(page.locator("#out-modal-title")).toHaveText(
-    'Add Output for "Retrying Destination"',
-  );
-  await page.locator("#edit-out-modal").press("Escape");
-
-  await pipelineSelector
-    .getByRole("button", { name: /Healthy Program/ })
-    .click();
-  await expect(page).toHaveURL(/p=pipe-healthy/);
-  await expect(page.locator("#pipe-name")).toHaveText("Healthy Program");
-  await expect(pipelineHeader).toBeVisible();
-  await expect(
-    pipelineHeader.getByRole("heading", { name: "Healthy Program" }),
-  ).toBeVisible();
-  await expect(pipelineHeader).toContainText("RTMP");
-  await expect(pipelineHeader).toContainText("Live");
-  await expect(
-    pipelineHeader.getByRole("button", { name: "Graph" }),
-  ).toBeEnabled();
-  await expect(
-    pipelineHeader.getByRole("button", { name: "Diagnose" }),
-  ).toBeEnabled();
-  await expect(page.locator("#pipeline-header-legacy-identity")).toBeHidden();
-  await expect(page.locator("#graph-pipe-btn")).toBeHidden();
-  await expect(page.locator("#diagnose-pipe-btn")).toBeHidden();
-  await expect(page.locator("#edit-pipe-action-item")).toBeHidden();
-  await expect(page.locator("#record-pipe-btn")).toBeHidden();
-  const inputStatus = page.locator("#dashboard-v2-pipeline-input-status-root");
-  await expect(inputStatus).toBeVisible();
-  await expect(
-    inputStatus.getByRole("heading", { name: "Input and preview" }),
-  ).toBeVisible();
-  await expect(inputStatus).toContainText("Live input");
-  await expect(inputStatus).toContainText("Preview on demand");
-  await expect(inputStatus).toContainText("H264 · 1920×1080");
-  await expect(inputStatus).toContainText("1 audio track");
-  await expect(inputStatus.getByText("Traffic", { exact: true })).toBeVisible();
-  await expect(
-    inputStatus.getByText("Input bitrate", { exact: true }),
-  ).toBeVisible();
-  await expect(inputStatus.getByText("Video", { exact: true })).toBeVisible();
-  await expect(inputStatus).toContainText("1920×1080");
-  await expect(page.locator("#publisher-meta")).toBeHidden();
-  await expect(
-    page.locator("#pipeline-input-legacy-traffic"),
-  ).toBeHidden();
-  await expect(page.locator("#pipeline-input-legacy-video")).toBeHidden();
-  await expect(page.locator("#video-player")).toBeHidden();
-  const previewPlayer = inputStatus.locator(
-    '[data-role="dashboard-v2-input-preview"]',
-  );
-  await expect(previewPlayer).toBeVisible();
-  await expect(
-    previewPlayer.getByRole("button", { name: "Play preview" }),
-  ).toBeVisible();
-  await expect(page.locator("#input-stats")).toBeHidden();
-  await expect(
-    page.locator("#pipeline-input-legacy-audio-heading"),
-  ).toBeHidden();
-  await expect(page.locator("#input-audio-tracks")).toBeHidden();
-  await expect(inputStatus.getByText("Audio", { exact: true })).toBeVisible();
-  await expect(inputStatus.getByText("ENG", { exact: true })).toBeVisible();
-  await inputStatus.getByRole("button", { name: "Rename ENG" }).click();
-  const audioTrackName = inputStatus.getByRole("textbox", {
-    name: "Audio track name",
-  });
-  await expect(audioTrackName).toBeFocused();
-  await audioTrackName.fill("Program Audio");
-  await audioTrackName.press("Enter");
-  await expect(
-    inputStatus.getByText("Program Audio", { exact: true }),
-  ).toBeVisible();
-  await inputStatus
-    .getByRole("button", { name: "Rename Program Audio" })
-    .click();
-  await audioTrackName.fill("Discarded label");
-  await audioTrackName.press("Escape");
-  await expect(
-    inputStatus.getByText("Program Audio", { exact: true }),
-  ).toBeVisible();
-  await expect(inputStatus.getByText("Discarded label")).toHaveCount(0);
-  await expect(page.locator("#stream-key-section")).toBeHidden();
-  await expect(page.locator("#ingest-url-section")).toBeHidden();
-  await expect(inputStatus).toContainText("synthetic-healthy-st***12345");
-  await inputStatus
-    .getByRole("button", { name: "SRT", exact: true })
-    .click();
-  await expect(
-    inputStatus.getByRole("button", { name: "SRT", exact: true }),
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(inputStatus).toContainText("srt://ingest.example.invalid:9000");
-  await expect(
-    inputStatus.getByRole("button", { name: "Copy SRT ingest URL" }),
-  ).toBeVisible();
-  await expect(outputOverview).toContainText("Running");
-  await expect(outputOverview).toContainText("No outputs need attention");
-
-  await pipelineHeader.getByRole("button", { name: "Edit" }).click();
-  await expect(page.locator("#edit-pipe-modal")).toBeVisible();
-  await expect(page.locator("#pipe-modal-title")).toHaveText("Edit Pipeline");
-  await page.locator("#edit-pipe-modal").press("Escape");
-
-  await pipelineSelector.getByRole("button", { name: "Add" }).click();
-  await expect(page.locator("#edit-pipe-modal")).toBeVisible();
-});
-
-test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async ({
-  page,
-}) => {
-  await page.goto("/login");
-  await page.setContent(`
-    <div id="dashboard-v2-root"></div>
-    <div id="dashboard-v2-pipeline-selector-root"></div>
-    <div id="dashboard-v2-pipeline-header-root"></div>
-    <div id="dashboard-v2-pipeline-input-status-root"></div>
-    <div id="dashboard-v2-pipeline-output-overview-root"></div>
-  `);
-
-  const result = await page.evaluate(async () => {
-    const importModule = new Function(
-      "path",
-      "return import(path)",
-    ) as (path: string) => Promise<{
-      renderDashboardV2PipelineOutputOverview: (
-        model: Record<string, unknown>,
-        actions: Record<string, unknown>,
-      ) => void;
-    }>;
-    const { renderDashboardV2PipelineOutputOverview } = await importModule(
-      "/js/app/dashboard-v2-entry.js",
+    await expect(page.locator("#workspace-mode-summary")).toHaveText(
+      route.text,
     );
-    const actions = {
-      addOutput: () => {},
-      deleteOutput: async () => {},
-      editOutput: () => {},
-      monitorOutput: () => {},
-      openOutputHistory: () => {},
-      toggleOutput: async () => {},
-      toggleOutputList: () => {},
-    };
-    const cards = Array.from({ length: 125 }, (_, index) => ({
-      id: `out-${index}`,
-      name: `Output ${index}`,
-      urlLabel: `rtmp://example.invalid/live/output-${index}`,
-      status: {
-        label: "Running",
-        tone: "success",
-        detail: "Delivering media",
-      },
-      encodingLabel: "source",
-      rateLabel: "1.5 Mb/s",
-      uptimeLabel: "0:07:00",
-      controlLabel: "Stop",
-      controlDisabled: false,
-      monitorAvailable: false,
-      deleteDisabled: true,
-    }));
-    const frame = () =>
-      new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    const model = (nextCards: typeof cards, expanded: boolean) => ({
-      pipelineId: "pipe-bench",
-      activeLabel: "125/125 active",
-      aggregateRate: "187.5 Mb/s",
-      counts: [
-        { key: "running", label: "Running", tone: "success", count: 125 },
-      ],
-      attention: [],
-      cards: expanded ? nextCards : nextCards.slice(0, 8),
-      listCaption: expanded
-        ? "Showing all 125 outputs"
-        : "Showing first 8 of 125 outputs",
-      expanded,
-      canExpand: true,
-    });
-    const root = document.getElementById(
-      "dashboard-v2-pipeline-output-overview-root",
-    ) as HTMLElement;
+    expect(await getCdpStatusTexts(page)).toContain(route.text);
+  }
 
-    renderDashboardV2PipelineOutputOverview(model(cards, false), actions);
-    await frame();
-    await frame();
-    const boundedCards = root.querySelectorAll("article").length;
-    renderDashboardV2PipelineOutputOverview(model(cards, true), actions);
-    await frame();
-    const expandedCards = root.querySelectorAll("article").length;
+  await page.locator("#workspace-tab-incidents").click();
+  await expect(page).toHaveURL(/mode=incidents/);
+  await expect(page.locator("#workspace-tab-incidents")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#incidents-route-summary")).toHaveText(
+    "0 critical · 1 warning · 1 recent event · fleet",
+  );
 
-    const measure = async (mutate: boolean) => {
-      const mutations = { attributes: 0, characterData: 0, childList: 0 };
-      const observer = new MutationObserver((records) => {
-        for (const record of records) {
-          const target =
-            record.target instanceof Element
-              ? record.target
-              : record.target.parentElement;
-          if (!target?.closest("article")) continue;
-          mutations[record.type] += 1;
-        }
-      });
-      observer.observe(root, {
-        attributes: true,
-        characterData: true,
-        childList: true,
-        subtree: true,
-      });
-      let nextCards = cards;
-      const startedAt = performance.now();
-      for (let iteration = 0; iteration < 100; iteration += 1) {
-        nextCards = nextCards.map((card) => ({
-          ...card,
-          rateLabel: mutate ? `${1501 + iteration} Kb/s` : card.rateLabel,
-        }));
-        renderDashboardV2PipelineOutputOverview(
-          model(nextCards, true),
-          actions,
-        );
-        await frame();
-      }
-      const durationMs = performance.now() - startedAt;
-      observer.disconnect();
-      return { durationMs, ...mutations };
-    };
-
-    return {
-      boundedCards,
-      expandedCards,
-      stable: await measure(false),
-      live: await measure(true),
-    };
-  });
-
-  console.log(`react-output-card-benchmark=${JSON.stringify(result)}`);
-  expect(result.boundedCards).toBe(8);
-  expect(result.expandedCards).toBe(125);
-  expect(result.stable).toMatchObject({
-    attributes: 0,
-    characterData: 0,
-    childList: 0,
-  });
-  expect(result.live.characterData).toBeGreaterThan(0);
-  expect(result.live.childList).toBe(0);
+  await page.locator("#workspace-tab-telemetry").click();
+  await expect(page).toHaveURL(/mode=telemetry/);
+  await expect(page.locator("#workspace-tab-telemetry")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#telemetry-route-summary")).toHaveText(
+    "Telemetry loaded · 2 ingests · 3 stages · 2 egresses · 0 readers · fleet",
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(21_000);
 });
 
-test("ui=v2 output destinations support search and state filters @desktop", async ({
+test("seed: ui=v2 shell tablists support arrow key navigation @desktop", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.setContent(`
-    <div id="dashboard-v2-root"></div>
-    <div id="dashboard-v2-pipeline-selector-root"></div>
-    <div id="dashboard-v2-pipeline-header-root"></div>
-    <div id="dashboard-v2-pipeline-input-status-root"></div>
-    <div id="dashboard-v2-pipeline-output-overview-root"></div>
-  `);
+  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2");
+
+  await page.locator("#workspace-tab-overview").focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/mode=pipeline/);
+  await expect(page.locator("#workspace-tab-pipeline")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 owned · Pipeline workflow",
+  );
+
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/mode=incidents/);
+  await expect(page.locator("#workspace-tab-incidents")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#incidents-route-summary")).toHaveText(
+    "0 critical · 1 warning · 1 recent event · fleet",
+  );
+
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/mode=telemetry/);
+  await expect(page.locator("#workspace-tab-telemetry")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Engine and pipeline counters",
+  );
+
+  await page.keyboard.press("End");
+  await expect(page).toHaveURL(/mode=status/);
+  await expect(page.locator("#workspace-tab-status")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.keyboard.press("Home");
+  await expect(page).toHaveURL(/mode=overview/);
+  await expect(page.locator("#workspace-tab-overview")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+
+  await page.goto("/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2");
+  const operateTab = page.locator("#pipeline-workspace-tab-operate");
+  const inspectTab = page.locator("#pipeline-workspace-tab-inspect");
+  const monitorTab = page.locator("#pipeline-workspace-tab-monitor");
+  await operateTab.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/view=inspect/);
+  await expect(inspectTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#inspect-route-summary")).toHaveText(
+    "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
+  );
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/view=monitor/);
+  await expect(monitorTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#control-room-route-summary")).toHaveText(
+    "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+  );
+  await page.keyboard.press("ArrowLeft");
+  await expect(page).toHaveURL(/view=inspect/);
+  await expect(inspectTab).toHaveAttribute("aria-selected", "true");
+  expect(await getCdpStatusTexts(page)).toEqual(
+    expect.arrayContaining([
+      "UI v2 checkpoint · Pipeline graph and diagnostics",
+      "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
+    ]),
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(12_000);
+});
+
+test("seed: ui=v2 shell keeps active tabs visible in narrow rails @desktop", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openSeededDashboard(page, "mixed-health", "/?mode=telemetry&ui=v2", {
+    expectOverviewReady: false,
+  });
+
+  await expect(page.locator("#workspace-tab-telemetry")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expectTabVisibleInRail(page, "#workspace-tab-telemetry");
+  expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
+
+  await page.goto("/?mode=status&ui=v2");
+  await expect(page.locator("#workspace-tab-status")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expectTabVisibleInRail(page, "#workspace-tab-status");
+  expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
+
+  await page.goto("/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2");
+  await expect(page.locator("#pipeline-workspace-tab-monitor")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expectTabVisibleInRail(page, "#pipeline-workspace-tab-monitor");
+  await expect(page.locator("#control-room-route-summary")).toHaveText(
+    "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(12_000);
+  expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
+});
+
+test("seed: ui=v2 shell tolerates operator text zoom without horizontal overflow @desktop", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => {
+    document.documentElement.style.fontSize = "125%";
+  });
+
+  await openSeededDashboard(page, "mixed-health", "/?mode=telemetry&ui=v2", {
+    expectOverviewReady: false,
+  });
+
+  await expect(page.locator("#workspace-tab-telemetry")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expectTabVisibleInRail(page, "#workspace-tab-telemetry");
+  await expect(
+    page.locator("#telemetry-mode-panel").getByRole("heading", {
+      name: "Engineer telemetry",
+    }),
+  ).toBeVisible();
+  expect(await getDocumentWidthOverflow(page)).toBeLessThanOrEqual(1);
+  expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
+
+  await page.goto("/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2");
+  await expect(page.locator("#pipeline-workspace-tab-monitor")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expectTabVisibleInRail(page, "#pipeline-workspace-tab-monitor");
+  await expect(page.locator("#control-room-route-summary")).toHaveText(
+    "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+  );
+  expect(await getDocumentWidthOverflow(page)).toBeLessThanOrEqual(1);
+  expect(await getCdpLayoutWidthDelta(page)).toBeLessThanOrEqual(1);
+});
+
+test("seed: ui=v2 auth expiry preserves operator return location @desktop", async ({
+  page,
+}) => {
+  const target = "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2#outputs";
+  await openSeededDashboard(page, "mixed-health", target, {
+    expectOverviewReady: false,
+  });
+  await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
+  const navigations: string[] = [];
+  const loginRedirects: string[] = [];
+  let expiredRuntimeRequests = 0;
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame()) navigations.push(frame.url());
+  });
+  await page.route("**/login?return=**", async (route) => {
+    loginRedirects.push(route.request().url());
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: '<!doctype html><form id="login-form"></form>',
+    });
+  });
+  await page.unroute("**/api/v1/**");
+  await page.route("**/api/v1/dashboard/runtime**", async (route) => {
+    expiredRuntimeRequests += 1;
+    await route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "login expired" }),
+    });
+  });
 
   await page.evaluate(async () => {
-    const importModule = new Function(
-      "path",
-      "return import(path)",
-    ) as (path: string) => Promise<{
-      renderDashboardV2PipelineOutputOverview: (
-        model: Record<string, unknown>,
-        actions: Record<string, unknown>,
-      ) => void;
+    const importModule = new Function("path", "return import(path)") as (
+      path: string,
+    ) => Promise<{
+      getDashboardRuntimeSnapshot: (options: Record<string, unknown>) => void;
     }>;
-    const { renderDashboardV2PipelineOutputOverview } = await importModule(
-      "/js/app/dashboard-v2-entry.js",
-    );
-    const actions = {
-      addOutput: () => {},
-      deleteOutput: async () => {},
-      editOutput: () => {},
-      monitorOutput: () => {},
-      openOutputHistory: () => {},
-      toggleOutput: async () => {},
-      toggleOutputList: () => {},
-    };
-    renderDashboardV2PipelineOutputOverview(
-      {
-        pipelineId: "pipe-filter",
-        activeLabel: "1/5 active",
-        aggregateRate: "1.5 Mb/s",
-        counts: [
-          { key: "running", label: "Running", tone: "success", count: 1 },
-          { key: "retrying", label: "Retrying", tone: "warning", count: 1 },
-          { key: "stopped", label: "Stopped", tone: "neutral", count: 1 },
-        ],
-        attention: [],
-        cards: [
-          {
-            id: "primary",
-            name: "YouTube primary",
-            urlLabel: "rtmp://example.invalid/live/youtube",
-            status: {
-              label: "Running",
-              tone: "success",
-              detail: "Delivering media",
-            },
-            encodingLabel: "source",
-            rateLabel: "1.5 Mb/s",
-            uptimeLabel: "0:07:00",
-            controlLabel: "Stop",
-            controlDisabled: false,
-            monitorAvailable: false,
-            deleteDisabled: true,
-          },
-          {
-            id: "backup",
-            name: "Facebook backup",
-            urlLabel: "rtmp://example.invalid/live/facebook",
-            status: {
-              label: "Retrying",
-              tone: "warning",
-              detail: "Retry in 6s",
-            },
-            encodingLabel: "720p",
-            rateLabel: "--",
-            uptimeLabel: null,
-            controlLabel: "Stop",
-            controlDisabled: false,
-            monitorAvailable: true,
-            deleteDisabled: true,
-          },
-          {
-            id: "archive",
-            name: "Archive",
-            urlLabel: "rtmp://example.invalid/live/archive",
-            status: {
-              label: "Stopped",
-              tone: "neutral",
-              detail: "Stopped by operator",
-            },
-            encodingLabel: "source",
-            rateLabel: "--",
-            uptimeLabel: null,
-            controlLabel: "Start",
-            controlDisabled: false,
-            monitorAvailable: false,
-            deleteDisabled: false,
-          },
-          {
-            id: "led-wall",
-            name: "LED wall",
-            urlLabel: "srt://example.invalid/live/led-wall",
-            status: {
-              label: "Stopped",
-              tone: "neutral",
-              detail: "Stopped by operator",
-            },
-            encodingLabel: "source",
-            rateLabel: "--",
-            uptimeLabel: null,
-            controlLabel: "Start",
-            controlDisabled: false,
-            monitorAvailable: false,
-            deleteDisabled: false,
-          },
-          {
-            id: "hls-preview",
-            name: "Internal HLS preview",
-            urlLabel: "hls://preview",
-            status: {
-              label: "Stopped",
-              tone: "neutral",
-              detail: "Stopped by operator",
-            },
-            encodingLabel: "source",
-            rateLabel: "--",
-            uptimeLabel: null,
-            controlLabel: "Start",
-            controlDisabled: false,
-            monitorAvailable: false,
-            deleteDisabled: false,
-          },
-        ],
-        listCaption: null,
-        expanded: false,
-        canExpand: false,
-      },
-      actions,
-    );
+    const { getDashboardRuntimeSnapshot } =
+      await importModule("/js/core/api.js");
+    await getDashboardRuntimeSnapshot({
+      healthView: "summary",
+      metricsView: "summary",
+    });
   });
+  expect(expiredRuntimeRequests).toBeGreaterThan(0);
 
-  const root = page.locator("#dashboard-v2-pipeline-output-overview-root");
-  await expect(
-    root.getByRole("heading", { name: "YouTube primary" }),
-  ).toBeVisible();
-  await expect(
-    root.getByRole("heading", { name: "Facebook backup" }),
-  ).toBeVisible();
-  await expect(root.getByRole("heading", { name: "Archive" })).toBeVisible();
+  const observedLoginRedirect = () =>
+    loginRedirects[0] ??
+    navigations.find((url) => url.includes("/login?return="));
+  await expect.poll(observedLoginRedirect).toBeTruthy();
+  const redirected = new URL(observedLoginRedirect() as string);
+  expect(redirected.pathname).toBe("/login");
+  expect(redirected.searchParams.get("return")).toBe(target);
+});
 
-  await root.getByLabel("Search output destinations").fill("facebook");
-  await expect(
-    root.getByRole("heading", { name: "Facebook backup" }),
-  ).toBeVisible();
-  await expect(
-    root.getByRole("heading", { name: "YouTube primary" }),
-  ).not.toBeVisible();
-  await expect(root.getByText("1/5 shown")).toBeVisible();
+test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2");
 
-  await root.getByRole("button", { name: "Stopped" }).click();
-  await expect(root.getByText("No outputs match.")).toBeVisible();
+  const overview = page.locator("#dashboard-v2-overview");
+  await expect(
+    overview.getByRole("heading", { name: "Fleet overview" }),
+  ).toBeVisible();
+  expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
 
-  await root.getByRole("button", { name: "Clear filters" }).click();
-  await expect(
-    root.getByRole("heading", { name: "YouTube primary" }),
-  ).toBeVisible();
-  await expect(
-    root.getByRole("heading", { name: "Facebook backup" }),
-  ).toBeVisible();
-  await expect(root.getByRole("heading", { name: "Archive" })).toBeVisible();
+  await page.locator("#workspace-tab-overview").focus();
+  const addPipeline = overview.getByRole("button", {
+    name: "Add a new pipeline",
+    exact: true,
+  });
+  await tabUntilFocused(page, addPipeline);
+  await expect(addPipeline).toBeFocused();
 
-  await root.getByRole("button", { name: "Attention" }).click();
+  const attentionCard = overview
+    .locator("article")
+    .filter({ hasText: "Retrying Destination" });
+  const operate = attentionCard.getByRole("button", {
+    name: "Operate Retrying Destination",
+    exact: true,
+  });
+  await tabUntilFocused(page, operate);
+  await expect(operate).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/mode=pipeline.*ui=v2|ui=v2.*mode=pipeline/);
+  await expect(page).toHaveURL(/p=pipe-retrying/);
+  await expect(page.locator("#dashboard-grid")).toBeVisible();
+  await expect(page.locator("#dashboard-grid")).toBeFocused();
+
+  const selector = page.locator("#dashboard-v2-pipeline-selector-root");
+  const header = page.locator("#dashboard-v2-pipeline-header-root");
+  const input = page.locator("#dashboard-v2-pipeline-input-status-root");
+  const outputs = page.locator("#dashboard-v2-pipeline-output-overview-root");
+  await expect(selector).toBeVisible();
+  await expect(selector.getByText("Pipelines")).toBeVisible();
   await expect(
-    root.getByRole("heading", { name: "Facebook backup" }),
+    header.getByRole("heading", { name: "Retrying Destination" }),
   ).toBeVisible();
   await expect(
-    root.getByRole("heading", { name: "YouTube primary" }),
-  ).not.toBeVisible();
+    input.getByRole("heading", { name: "Input and preview" }),
+  ).toBeVisible();
   await expect(
-    root.getByRole("heading", { name: "Archive" }),
-  ).not.toBeVisible();
+    outputs.getByRole("heading", { name: "Output overview" }),
+  ).toBeVisible();
+  expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
+
+  const pipelineSelect = selector.getByLabel("Select pipeline");
+  await expect(pipelineSelect).toBeVisible();
+  await pipelineSelect.selectOption("pipe-healthy");
+  await expect(page).toHaveURL(/p=pipe-healthy/);
+  await expect(
+    header.getByRole("heading", { name: "Healthy Program" }),
+  ).toBeVisible();
+  await expect(
+    outputs.getByRole("button", { name: "Stop Healthy Output" }),
+  ).toBeVisible();
+  expect(await getCdpNamesByRole(page, "button")).toEqual(
+    expect.arrayContaining([
+      "Stop Healthy Output",
+      "More output actions for Healthy Output",
+      "Inspect graph for Healthy Program",
+      "Diagnose Healthy Program",
+    ]),
+  );
+  expect(await getCdpNamesByRole(page, "button")).not.toEqual(
+    expect.arrayContaining([
+      "Select pipeline Healthy Program",
+      "Select pipeline Retrying Destination",
+    ]),
+  );
+  expect(await getCdpNamesByRole(page, "button")).not.toContain(
+    "More actions for Healthy Output",
+  );
+  expect(await getCdpNamesByRole(page, "button")).not.toEqual(
+    expect.arrayContaining([
+      "Healthy ProgramLive · 1/1 outputs3.2 Mb/s in2.9 Mb/s out",
+      "Retrying DestinationOutput retrying · 0/1 outputs2.4 Mb/s in-- out",
+      "Graph",
+      "Diagnose",
+    ]),
+  );
+
+  await header
+    .getByRole("button", { name: "Inspect graph for Healthy Program" })
+    .click();
+  await expect(page).toHaveURL(/view=inspect/);
+  await expect(page.locator("#inspect-mode-panel")).toBeVisible();
+  await expect(page.locator("#inspect-mode-panel")).toBeFocused();
+  await expect(page.locator("#inspect-route-summary")).toHaveText(
+    "Inspecting Healthy Program · input live · 1 output · 0 attention items",
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(12_000);
+});
+
+test("seed: ui=v2 skip link reaches main content before dense chrome @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=overview&ui=v2");
+
+  const skipLink = page.getByRole("link", { name: "Skip to main content" });
+  await page.keyboard.press("Tab");
+  await expect(skipLink).toBeFocused();
+  await expect(skipLink).toBeVisible();
+  expect(await getCdpNamesByRole(page, "link")).toContain(
+    "Skip to main content",
+  );
+
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/#dashboard-main$/);
+  await expect(page.locator("#overview-mode-panel")).toBeFocused();
+
+  await page.keyboard.press("Tab");
+  await expect(
+    page
+      .locator("#dashboard-v2-overview")
+      .getByRole("button", { name: "Add a new pipeline", exact: true }),
+  ).toBeFocused();
 });

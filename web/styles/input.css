@@ -76,6 +76,17 @@
     @apply border-base-content/10 bg-base-200/85 rounded-xl border p-1;
   }
 
+  .dashboard-sturdy-control {
+    min-height: 2.25rem !important;
+    min-width: 2.75rem !important;
+  }
+
+  #skip-to-dashboard-main,
+  #workspace-mode-bar [role="tab"],
+  #pipeline-workspace-view-bar [role="tab"] {
+    min-height: 2.25rem !important;
+  }
+
   .dashboard-table-panel {
     @apply border-base-content/10 bg-base-200/85 overflow-hidden rounded-xl border shadow-none;
   }

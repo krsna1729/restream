@@ -46,6 +46,36 @@ async function reachFromOverviewTab(
   );
 }
 
+async function getCdpNamesByRole(page: Page, role: string): Promise<string[]> {
+  const cdp = await page.context().newCDPSession(page);
+  const axTree = await cdp.send("Accessibility.getFullAXTree");
+  await cdp.detach();
+  return axTree.nodes
+    .filter((node) => node.role?.value === role)
+    .map((node) => node.name?.value)
+    .filter((name): name is string => Boolean(name));
+}
+
+async function getCdpHeadingLevels(
+  page: Page,
+): Promise<{ name: string; level: number }[]> {
+  const cdp = await page.context().newCDPSession(page);
+  const axTree = await cdp.send("Accessibility.getFullAXTree");
+  await cdp.detach();
+  return axTree.nodes
+    .filter((node) => node.role?.value === "heading")
+    .map((node) => {
+      const level =
+        node.properties?.find((property) => property.name === "level")?.value
+          ?.value ?? 0;
+      return {
+        level: typeof level === "number" ? level : Number(level),
+        name: node.name?.value ?? "",
+      };
+    })
+    .filter(({ name }) => Boolean(name));
+}
+
 for (const stateName of viewportStates) {
   test(`visual: ${stateName} Overview matches the pinned viewport`, async ({
     page,
@@ -148,5 +178,521 @@ test.describe("desktop accessibility contract @desktop", () => {
       );
       expect(blocking).toEqual([]);
     });
+  }
+});
+
+test("axe/cdp: ui=v2 Operate preserves contrast and semantic landmarks", async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(FIXED_TIME);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await openSeededDashboard(
+    page,
+    "chaos-recovery",
+    "/?mode=pipeline&view=operate&p=pipe-flapping&ui=v2",
+    { expectOverviewReady: false },
+  );
+
+  await expect(
+    page.locator("#dashboard-v2-pipeline-header-root").getByRole("heading", {
+      name: "Recovered Sink Flap",
+    }),
+  ).toBeVisible();
+  const results = await new AxeBuilder({ page })
+    .include("#dashboard-grid")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  const blocking = results.violations.filter(
+    (violation) =>
+      violation.impact === "serious" || violation.impact === "critical",
+  );
+  expect(blocking).toEqual([]);
+
+  const headingNames = await getCdpNamesByRole(page, "heading");
+  expect(headingNames).toEqual(
+    expect.arrayContaining([
+      "Recovered Sink Flap",
+      "INPUT AND PREVIEW",
+      "OUTPUT OVERVIEW",
+    ]),
+  );
+  expect(headingNames).not.toContain("PIPELINES");
+  expect(await getCdpNamesByRole(page, "button")).toEqual(
+    expect.arrayContaining([
+      "Inspect graph for Recovered Sink Flap",
+      "Diagnose Recovered Sink Flap",
+      "Show all 30 audio tracks",
+    ]),
+  );
+  expect(await getCdpHeadingLevels(page)).toEqual(
+    expect.arrayContaining([
+      { name: "Recovered Sink Flap", level: 1 },
+      { name: "INPUT AND PREVIEW", level: 2 },
+      { name: "OUTPUT OVERVIEW", level: 2 },
+      { name: "PREVIEW PLAYER", level: 3 },
+      { name: "AUDIO", level: 3 },
+      { name: "OUTPUT DESTINATIONS", level: 3 },
+    ]),
+  );
+});
+
+test("cdp: ui=v2 route heading outlines stay operator-clean @desktop", async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(FIXED_TIME);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const routes = [
+    {
+      href: "/?mode=overview&ui=v2",
+      readySelector: "#dashboard-v2-overview",
+      topHeading: "Fleet overview",
+    },
+    {
+      href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+      readySelector: "#dashboard-v2-pipeline-header-root",
+      topHeading: "Retrying Destination",
+    },
+    {
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-pipeline-inspect-root",
+      checkpointHeading: "Retrying Destination checkpoint",
+      readySelector: "#inspect-route-summary",
+      topHeading: "Pipeline inspect",
+    },
+    {
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-control-room-root",
+      checkpointHeading: "Retrying Destination checkpoint",
+      readySelector: "#control-room-route-summary",
+      topHeading: "Control Room",
+    },
+    {
+      href: "/?mode=media&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-media-root",
+      checkpointHeading: "Media checkpoint",
+      readySelector: "#media-library-results-summary",
+      topHeading: "Media Library",
+    },
+    {
+      href: "/?mode=settings&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-settings-root",
+      checkpointHeading: "Settings checkpoint",
+      readySelector: "#settings-route-summary",
+      topHeading: "Settings",
+    },
+    {
+      href: "/?mode=status&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-status-root",
+      checkpointHeading: "Status checkpoint",
+      readySelector: "#status-route-summary",
+      topHeading: "Status",
+    },
+    {
+      href: "/?mode=incidents&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-incidents-root",
+      checkpointHeading: "Incidents checkpoint",
+      readySelector: "#incidents-route-summary",
+      topHeading: "Incidents",
+    },
+    {
+      href: "/?mode=telemetry&ui=v2",
+      checkpointActionRoot: "#dashboard-v2-telemetry-root",
+      checkpointHeading: "Engineer telemetry checkpoint",
+      readySelector: "#telemetry-route-summary",
+      topHeading: "Engineer telemetry",
+    },
+  ] as const;
+
+  await openSeededDashboard(page, "mixed-health", routes[0].href, {
+    expectOverviewReady: false,
+  });
+
+  for (const route of routes) {
+    if (page.url() !== new URL(route.href, page.url()).href) {
+      await page.goto(route.href);
+    }
+    await page.locator(route.readySelector).waitFor({ state: "visible" });
+    if ("checkpointActionRoot" in route) {
+      await page
+        .locator(route.checkpointActionRoot)
+        .waitFor({ state: "visible" });
+    }
+    const headings = await getCdpHeadingLevels(page);
+    expect(headings, route.href).not.toEqual([]);
+    const expectedFirstHeadings =
+      "checkpointHeading" in route
+        ? [route.topHeading, route.checkpointHeading]
+        : [route.topHeading];
+    expect(headings[0], route.href).toEqual({
+      level: 1,
+      name: expect.stringMatching(
+        new RegExp(
+          `^(${expectedFirstHeadings
+            .map((heading) => heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .join("|")})$`,
+        ),
+      ),
+    });
+    const duplicateHeadingNames = headings
+      .map((heading) => heading.name)
+      .filter((name, index, names) => names.indexOf(name) !== index);
+    expect(duplicateHeadingNames, route.href).toEqual([]);
+    for (let index = 1; index < headings.length; index += 1) {
+      expect(headings[index].level, route.href).toBeLessThanOrEqual(
+        headings[index - 1].level + 1,
+      );
+    }
+    const pageOverflow = await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    );
+    expect(pageOverflow, route.href).toBeLessThanOrEqual(1);
+    if ("checkpointActionRoot" in route) {
+      expect(headings, route.href).toEqual(
+        expect.arrayContaining([
+          { level: 1, name: route.checkpointHeading },
+        ]),
+      );
+      const actionButtons = await page
+        .locator(`${route.checkpointActionRoot} button`)
+        .evaluateAll((buttons) =>
+          buttons.map((button) => {
+            const rect = button.getBoundingClientRect();
+            return {
+              height: Math.round(rect.height),
+              label:
+                button.getAttribute("aria-label") ||
+                button.textContent?.replace(/\s+/g, " ").trim() ||
+                "(unnamed)",
+              width: Math.round(rect.width),
+            };
+          }),
+        );
+      expect(actionButtons, route.href).not.toEqual([]);
+      expect(
+        actionButtons.map((button) => button.label),
+        route.href,
+      ).not.toEqual(
+        expect.arrayContaining([
+          "Diagnostics",
+          "Operate",
+          "Overview",
+          "Status",
+          "Telemetry",
+        ]),
+      );
+      for (const button of actionButtons) {
+        expect(
+          button.height,
+          `${route.href} ${button.label}`,
+        ).toBeGreaterThanOrEqual(36);
+        expect(
+          button.width,
+          `${route.href} ${button.label}`,
+        ).toBeGreaterThanOrEqual(44);
+      }
+    }
+  }
+});
+
+test("cdp: ui=v2 wayfinding and next-step controls keep sturdy targets @desktop", async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(FIXED_TIME);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const routes = [
+    {
+      href: "/?mode=overview&ui=v2",
+      readySelector: "#dashboard-v2-overview",
+    },
+    {
+      href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+      readySelector: "#dashboard-v2-pipeline-header-root",
+    },
+    {
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      readySelector: "#inspect-route-summary",
+    },
+    {
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      readySelector: "#control-room-route-summary",
+    },
+    {
+      href: "/?mode=media&ui=v2",
+      readySelector: "#media-library-results-summary",
+    },
+    {
+      href: "/?mode=settings&ui=v2",
+      readySelector: "#settings-route-summary",
+    },
+    {
+      href: "/?mode=status&ui=v2",
+      readySelector: "#status-route-summary",
+    },
+    {
+      href: "/?mode=incidents&ui=v2",
+      readySelector: "#incidents-route-summary",
+    },
+    {
+      href: "/?mode=telemetry&ui=v2",
+      readySelector: "#telemetry-route-summary",
+    },
+  ] as const;
+
+  await openSeededDashboard(page, "mixed-health", routes[0].href, {
+    expectOverviewReady: false,
+  });
+
+  for (const route of routes) {
+    if (page.url() !== new URL(route.href, page.url()).href) {
+      await page.goto(route.href);
+    }
+    await page.locator(route.readySelector).waitFor({ state: "visible" });
+    const undersizedControls = await page.evaluate(() => {
+      const selector = [
+        "#skip-to-dashboard-main",
+        "#workspace-mode-bar [role='tab']",
+        "#pipeline-workspace-view-bar:not(.hidden) [role='tab']",
+        "label[for='dashboard-ui-v2-toggle']",
+        "button[aria-label^='Add a new pipeline']",
+        "button[aria-label^='Open restream']",
+        "button[aria-label^='Operate ']",
+        "button[aria-label^='Inspect ']",
+        "button[aria-label^='Diagnose ']",
+        "button[aria-label^='Monitor ']",
+      ].join(",");
+      return Array.from(document.querySelectorAll<HTMLElement>(selector))
+        .filter((element) => {
+          if (element.closest("[hidden], [aria-hidden='true']")) return false;
+          const style = window.getComputedStyle(element);
+          if (
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            style.pointerEvents === "none"
+          )
+            return false;
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        })
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            height: Math.round(rect.height),
+            label:
+              element.getAttribute("aria-label") ||
+              element.textContent?.replace(/\s+/g, " ").trim().slice(0, 80) ||
+              element.getAttribute("placeholder") ||
+              element.id ||
+              element.tagName.toLowerCase(),
+            tag: element.tagName.toLowerCase(),
+            width: Math.round(rect.width),
+          };
+        })
+        .filter(
+          (control) =>
+            control.height < 36 ||
+            control.width < 44,
+        );
+    });
+    expect(undersizedControls, route.href).toEqual([]);
+  }
+});
+
+test("axe/cdp: ui=v2 routes expose named controls without serious accessibility findings @desktop", async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(FIXED_TIME);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const routes = [
+    {
+      href: "/?mode=overview&ui=v2",
+      maxVisibleDashboardElements: 220,
+      maxVisibleControls: 22,
+      maxVisibleTextChars: 1500,
+      readySelector: "#dashboard-v2-overview",
+    },
+    {
+      href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+      maxVisibleDashboardElements: 180,
+      maxVisibleControls: 28,
+      maxVisibleTextChars: 1400,
+      readySelector: "#dashboard-v2-pipeline-header-root",
+    },
+    {
+      href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      maxVisibleDashboardElements: 180,
+      maxVisibleControls: 22,
+      maxVisibleTextChars: 1700,
+      readySelector: "#inspect-route-summary",
+    },
+    {
+      href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      maxVisibleDashboardElements: 130,
+      maxVisibleControls: 30,
+      maxVisibleTextChars: 1400,
+      readySelector: "#control-room-route-summary",
+    },
+    {
+      href: "/?mode=media&ui=v2",
+      maxVisibleDashboardElements: 100,
+      maxVisibleControls: 18,
+      maxVisibleTextChars: 1000,
+      readySelector: "#media-library-results-summary",
+    },
+    {
+      href: "/?mode=settings&ui=v2",
+      maxVisibleDashboardElements: 140,
+      maxVisibleControls: 26,
+      maxVisibleTextChars: 1600,
+      readySelector: "#settings-route-summary",
+    },
+    {
+      href: "/?mode=status&ui=v2",
+      maxVisibleDashboardElements: 130,
+      maxVisibleControls: 22,
+      maxVisibleTextChars: 1600,
+      readySelector: "#status-route-summary",
+    },
+    {
+      href: "/?mode=incidents&ui=v2",
+      maxVisibleDashboardElements: 110,
+      maxVisibleControls: 20,
+      maxVisibleTextChars: 1300,
+      readySelector: "#incidents-route-summary",
+    },
+    {
+      href: "/?mode=telemetry&ui=v2",
+      maxVisibleDashboardElements: 160,
+      maxVisibleControls: 18,
+      maxVisibleTextChars: 1600,
+      readySelector: "#telemetry-route-summary",
+    },
+  ] as const;
+
+  await openSeededDashboard(page, "mixed-health", routes[0].href, {
+    expectOverviewReady: false,
+  });
+
+  for (const route of routes) {
+    if (page.url() !== new URL(route.href, page.url()).href) {
+      await page.goto(route.href);
+    }
+    await page.locator(route.readySelector).waitFor({ state: "visible" });
+
+    const results = await new AxeBuilder({ page })
+      .include("#dashboard-main")
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    const blocking = results.violations.filter(
+      (violation) =>
+        violation.impact === "serious" || violation.impact === "critical",
+    );
+    expect(blocking, route.href).toEqual([]);
+
+    const controls = await page.evaluate(() => {
+      const selector = [
+        "button",
+        "a[href]",
+        "input",
+        "select",
+        "summary",
+        '[role="button"]',
+        '[role="tab"]',
+        '[role="menuitem"]',
+      ].join(",");
+      return Array.from(document.querySelectorAll<HTMLElement>(selector))
+        .filter((element) => {
+          if (element.closest("[hidden], [aria-hidden='true']")) return false;
+          const visible =
+            "checkVisibility" in element
+              ? element.checkVisibility({ checkVisibilityCSS: true })
+              : true;
+          if (!visible) return false;
+          const style = window.getComputedStyle(element);
+          if (
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            style.pointerEvents === "none"
+          )
+            return false;
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        })
+        .map((element) => {
+          const formLabels =
+            element instanceof HTMLInputElement ||
+            element instanceof HTMLSelectElement ||
+            element instanceof HTMLTextAreaElement
+              ? Array.from(element.labels ?? [])
+                  .map((label) => label.textContent?.replace(/\s+/g, " ").trim())
+                  .filter(Boolean)
+                  .join(" ")
+              : "";
+          const label =
+            element.getAttribute("aria-label") ||
+            element.getAttribute("aria-labelledby") ||
+            element.getAttribute("title") ||
+            element.textContent?.replace(/\s+/g, " ").trim() ||
+            formLabels ||
+            element.getAttribute("placeholder") ||
+            "";
+          return {
+            id: element.id || null,
+            label,
+            tag: element.tagName.toLowerCase(),
+            type: element.getAttribute("type"),
+          };
+        });
+    });
+    expect(
+      controls.length,
+      `${route.href} visible controls: ${controls
+        .map((control) => control.label || control.id || control.tag)
+        .join(", ")}`,
+    ).toBeLessThanOrEqual(route.maxVisibleControls);
+    const unnamedControls = controls.filter((control) => !control.label);
+    expect(unnamedControls, route.href).toEqual([]);
+    const genericActionControls = controls.filter((control) =>
+      /^(More|Show|Hide) actions for\b/.test(control.label),
+    );
+    expect(
+      genericActionControls,
+      `${route.href} controls should name their action domain`,
+    ).toEqual([]);
+    const visibleDashboardElements = await page.evaluate(() =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>("#dashboard-main *"),
+      ).filter((element) => {
+        if (element.closest("[hidden], [aria-hidden='true']")) return false;
+        const visible =
+          "checkVisibility" in element
+            ? element.checkVisibility({ checkVisibilityCSS: true })
+            : true;
+        if (!visible) return false;
+        const style = window.getComputedStyle(element);
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          style.pointerEvents === "none"
+        )
+          return false;
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      }).length,
+    );
+    expect(
+      visibleDashboardElements,
+      `${route.href} visible dashboard elements`,
+    ).toBeLessThanOrEqual(route.maxVisibleDashboardElements);
+    const visibleTextChars = await page.evaluate(
+      () =>
+        document.querySelector<HTMLElement>("#dashboard-main")?.innerText
+          .length ?? 0,
+    );
+    expect(
+      visibleTextChars,
+      `${route.href} visible operator text characters`,
+    ).toBeLessThanOrEqual(route.maxVisibleTextChars);
   }
 });

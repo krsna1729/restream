@@ -61,6 +61,7 @@ import {
 import {
   beginOutputControlIntent,
   finishOutputControlIntent,
+  setOutputControlError,
 } from "./output-control-state.js";
 import type {
   AudioTrack,
@@ -782,6 +783,12 @@ export async function startOutBtn(
       await awaitDashboardRuntimeMutationConvergence(() =>
         outputControlConverged(pipeId, outId, "starting"),
       );
+    } else {
+      setOutputControlError(
+        pipeId,
+        outId,
+        "Start output did not complete. Check the error banner and retry when ready.",
+      );
     }
   } finally {
     finishOutputControlIntent(pipeId, outId);
@@ -807,6 +814,12 @@ export async function stopOutBtn(
       }
       await awaitDashboardRuntimeMutationConvergence(() =>
         outputControlConverged(pipeId, outId, "stopping"),
+      );
+    } else {
+      setOutputControlError(
+        pipeId,
+        outId,
+        "Stop output did not complete. Check the error banner and retry when ready.",
       );
     }
   } finally {

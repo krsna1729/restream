@@ -192,6 +192,7 @@ test("pipeline header model derives identity, status, and action availability", 
       outlined: true,
     },
     fileIngestControl: null,
+    lifecycleMessages: [],
   });
 
   const recording = buildPipelineOperateHeaderModel(
@@ -236,6 +237,44 @@ test("pipeline header model derives identity, status, and action availability", 
     danger: false,
     outlined: false,
   });
+  assert.deepEqual(recording.lifecycleMessages, []);
+
+  const failedLifecycle = buildPipelineOperateHeaderModel(
+    [
+      pipeline({
+        id: "file",
+        inputStatus: "off",
+        inputSource: "file:clip.mp4",
+        fileIngest: {
+          configured: true,
+          id: "ingest-1",
+          filename: "clip.mp4",
+          running: false,
+        },
+      }),
+    ],
+    "file",
+    {
+      recordingIntent: null,
+      fileIngestIntent: null,
+      recordingError: "Start recording did not complete.",
+      fileIngestError: "Start file ingest did not complete.",
+    },
+  );
+  assert.deepEqual(failedLifecycle.lifecycleMessages, [
+    {
+      id: "recording",
+      label: "Recording request failed",
+      detail: "Start recording did not complete.",
+      tone: "error",
+    },
+    {
+      id: "file-ingest",
+      label: "File ingest request failed",
+      detail: "Start file ingest did not complete.",
+      tone: "error",
+    },
+  ]);
   assert.equal(buildPipelineOperateHeaderModel([], "removed"), null);
 });
 
@@ -289,6 +328,7 @@ test("pipeline input status model projects publisher, preview, and media state",
 
   assert.deepEqual(live, {
     id: "live",
+    name: "live",
     status: { label: "Live input", tone: "success", detail: "Receiving media" },
     uptimeLabel: "1:02:03 uptime",
     publisherLabel: "RTMP",
@@ -425,6 +465,7 @@ test("pipeline output overview projects rollup and prioritized attention", async
 
   assert.deepEqual(model, {
     pipelineId: "live",
+    pipelineName: "live",
     activeLabel: "1/3 active",
     aggregateRate: "1.5 Mb/s",
     counts: [
@@ -456,6 +497,7 @@ test("pipeline output overview projects rollup and prioritized attention", async
         uptimeLabel: "0:07:00",
         controlLabel: "Stop",
         controlDisabled: false,
+        controlError: null,
         monitorAvailable: false,
         deleteDisabled: true,
       },
@@ -473,6 +515,7 @@ test("pipeline output overview projects rollup and prioritized attention", async
         uptimeLabel: null,
         controlLabel: "Stop",
         controlDisabled: false,
+        controlError: null,
         monitorAvailable: true,
         deleteDisabled: true,
       },
@@ -490,6 +533,7 @@ test("pipeline output overview projects rollup and prioritized attention", async
         uptimeLabel: null,
         controlLabel: "Start",
         controlDisabled: false,
+        controlError: null,
         monitorAvailable: false,
         deleteDisabled: false,
       },
@@ -516,6 +560,27 @@ test("pipeline output overview projects rollup and prioritized attention", async
   );
   assert.equal(stopping.cards[0].controlLabel, "Stopping...");
   assert.equal(stopping.cards[0].controlDisabled, true);
+  const failedControl = buildPipelineOutputOverviewModel(
+    [
+      pipeline({
+        id: "live",
+        outputs: [output({ id: "retrying" })],
+      }),
+    ],
+    "live",
+    [
+      {
+        outputId: "retrying",
+        intent: null,
+        busy: false,
+        error: "Stop output did not complete.",
+      },
+    ],
+  );
+  assert.equal(
+    failedControl.cards[0].controlError,
+    "Stop output did not complete.",
+  );
   assert.equal(buildPipelineOutputOverviewModel([], "removed"), null);
 });
 

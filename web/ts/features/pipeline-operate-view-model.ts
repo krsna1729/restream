@@ -55,6 +55,7 @@ export interface PipelineOperateHeaderModel {
   readonly editDisabledReason?: string;
   readonly recordingControl: PipelineOperateLifecycleControlModel;
   readonly fileIngestControl: PipelineOperateLifecycleControlModel | null;
+  readonly lifecycleMessages: readonly PipelineOperateLifecycleMessage[];
 }
 
 export interface PipelineOperateLifecycleControlModel {
@@ -65,13 +66,23 @@ export interface PipelineOperateLifecycleControlModel {
   readonly outlined: boolean;
 }
 
+export interface PipelineOperateLifecycleMessage {
+  readonly id: "recording" | "file-ingest";
+  readonly label: string;
+  readonly detail: string;
+  readonly tone: OverviewTone;
+}
+
 export interface PipelineOperateLifecycleControlSnapshot {
   readonly recordingIntent: "starting" | "stopping" | null;
   readonly fileIngestIntent: "starting" | "stopping" | null;
+  readonly recordingError?: string | null;
+  readonly fileIngestError?: string | null;
 }
 
 export interface PipelineOperateInputStatusModel {
   readonly id: string;
+  readonly name: string;
   readonly status: OverviewStatus;
   readonly uptimeLabel: string;
   readonly publisherLabel: string;
@@ -153,6 +164,7 @@ export interface PipelineOutputControlSnapshot {
   readonly outputId: string;
   readonly intent: "starting" | "stopping" | null;
   readonly busy: boolean;
+  readonly error?: string | null;
 }
 
 export interface PipelineOutputCardModel {
@@ -165,12 +177,14 @@ export interface PipelineOutputCardModel {
   readonly uptimeLabel: string | null;
   readonly controlLabel: string;
   readonly controlDisabled: boolean;
+  readonly controlError: string | null;
   readonly monitorAvailable: boolean;
   readonly deleteDisabled: boolean;
 }
 
 export interface PipelineOutputOverviewModel {
   readonly pipelineId: string;
+  readonly pipelineName: string;
   readonly activeLabel: string;
   readonly aggregateRate: string;
   readonly counts: readonly PipelineOutputOverviewCount[];
@@ -412,6 +426,23 @@ export function buildPipelineOperateHeaderModel(
   );
   const fileIngestRunning = Boolean(fileIngest?.running);
   const fileIngestPending = controls.fileIngestIntent !== null;
+  const lifecycleMessages: PipelineOperateLifecycleMessage[] = [];
+  if (controls.recordingError) {
+    lifecycleMessages.push({
+      id: "recording",
+      label: "Recording request failed",
+      detail: controls.recordingError,
+      tone: "error",
+    });
+  }
+  if (controls.fileIngestError) {
+    lifecycleMessages.push({
+      id: "file-ingest",
+      label: "File ingest request failed",
+      detail: controls.fileIngestError,
+      tone: "error",
+    });
+  }
   return {
     id: pipeline.id,
     name: pipeline.name,
@@ -471,6 +502,7 @@ export function buildPipelineOperateHeaderModel(
             controls.fileIngestIntent !== "starting" && !fileIngestRunning,
         }
       : null,
+    lifecycleMessages,
   };
 }
 
@@ -587,6 +619,7 @@ export function buildPipelineOperateInputStatusModel(
 
   return {
     id: pipeline.id,
+    name: pipeline.name,
     status: inputStatus(pipeline),
     uptimeLabel: formatUptime(pipeline.input.time),
     publisherLabel,
@@ -743,6 +776,7 @@ export function buildPipelineOutputOverviewModel(
               ? "Start"
               : "Stop",
       controlDisabled: Boolean(control?.busy || control?.intent),
+      controlError: control?.error || null,
       monitorAvailable: Boolean(output.monitoringUrl),
       deleteDisabled: !stopped,
     };
@@ -751,6 +785,7 @@ export function buildPipelineOutputOverviewModel(
 
   return {
     pipelineId: pipeline.id,
+    pipelineName: pipeline.name,
     activeLabel: `${active}/${pipeline.outs.length} active`,
     aggregateRate: formatOverviewBitrate(aggregateKbps),
     counts,

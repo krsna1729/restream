@@ -49,16 +49,26 @@ import {
   setDashboardMode,
   setPipelineWorkspaceView,
 } from "../features/modes.js";
-import { setPipelineInspectorDependencies } from "../features/pipeline-inspector.js";
+import {
+  configurePipelineInspectCheckpointPresentation,
+  setPipelineInspectorDependencies,
+} from "../features/pipeline-inspector.js";
 import {
   configurePipelineSelectorPresentation,
+  renderPipelines,
   selectPipeline,
 } from "../features/render.js";
 import { getUrlParam } from "../core/utils.js";
 import {
+  configureControlRoomCheckpointPresentation,
   openOutputMonitoringUrl,
   setControlRoomWorkspaceDependencies,
 } from "../features/control-room.js";
+import { configureIncidentsCheckpointPresentation } from "../features/incidents.js";
+import { configureMediaCheckpointPresentation } from "../features/media-library.js";
+import { configureTelemetryCheckpointPresentation } from "../features/engineer-telemetry.js";
+import { configureSettingsCheckpointPresentation } from "../features/settings.js";
+import { configureStatusCheckpointPresentation } from "../features/status.js";
 import { state } from "../core/state.js";
 import type { DashboardLocation } from "../core/pipeline-workspace.js";
 import { buildOverviewViewModel } from "../features/overview-view-model.js";
@@ -71,15 +81,29 @@ import {
   dashboardV2ExperimentEnabled,
   setDashboardV2PresentationScope,
   setDashboardV2OverviewActions,
+  setDashboardV2ControlRoomActions,
+  setDashboardV2IncidentsActions,
+  setDashboardV2MediaActions,
   setDashboardV2PipelineHeaderActions,
+  setDashboardV2PipelineInspectActions,
   setDashboardV2PipelineInputStatusActions,
   setDashboardV2PipelineOutputOverviewActions,
   setDashboardV2PipelineSelectorActions,
+  setDashboardV2SettingsActions,
+  setDashboardV2StatusActions,
+  setDashboardV2TelemetryActions,
   updateDashboardV2Overview,
+  updateDashboardV2ControlRoomCheckpoint,
+  updateDashboardV2IncidentsCheckpoint,
+  updateDashboardV2MediaCheckpoint,
   updateDashboardV2PipelineHeader,
+  updateDashboardV2PipelineInspectCheckpoint,
   updateDashboardV2PipelineInputStatus,
   updateDashboardV2PipelineOutputOverview,
   updateDashboardV2PipelineSelector,
+  updateDashboardV2SettingsCheckpoint,
+  updateDashboardV2StatusCheckpoint,
+  updateDashboardV2TelemetryCheckpoint,
 } from "./dashboard-v2-loader.js";
 
 let dashboardAppInitialized = false;
@@ -91,10 +115,30 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
     dashboardV2Enabled &&
     location.mode === "pipeline" &&
     location.pipelineView === "operate";
+  const pipelineInspectV2Active =
+    dashboardV2Enabled &&
+    location.mode === "pipeline" &&
+    location.pipelineView === "inspect";
+  const controlRoomV2Active =
+    dashboardV2Enabled &&
+    location.mode === "pipeline" &&
+    location.pipelineView === "monitor";
+  const incidentsV2Active = dashboardV2Enabled && location.mode === "incidents";
+  const telemetryV2Active = dashboardV2Enabled && location.mode === "telemetry";
+  const statusV2Active = dashboardV2Enabled && location.mode === "status";
+  const mediaV2Active = dashboardV2Enabled && location.mode === "media";
+  const settingsV2Active = dashboardV2Enabled && location.mode === "settings";
 
   setDashboardV2PresentationScope({
     overviewActive: overviewV2Active,
     pipelineActive: pipelineV2Active,
+    pipelineInspectActive: pipelineInspectV2Active,
+    controlRoomActive: controlRoomV2Active,
+    incidentsActive: incidentsV2Active,
+    telemetryActive: telemetryV2Active,
+    statusActive: statusV2Active,
+    mediaActive: mediaV2Active,
+    settingsActive: settingsV2Active,
   });
 
   configureOverviewPresentation({
@@ -138,6 +182,37 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
       ? updateDashboardV2PipelineOutputOverview
       : undefined,
   });
+  configurePipelineInspectCheckpointPresentation({
+    onPresentation: pipelineInspectV2Active
+      ? updateDashboardV2PipelineInspectCheckpoint
+      : undefined,
+  });
+  configureControlRoomCheckpointPresentation({
+    onPresentation: controlRoomV2Active
+      ? updateDashboardV2ControlRoomCheckpoint
+      : undefined,
+  });
+  configureIncidentsCheckpointPresentation({
+    onPresentation: incidentsV2Active
+      ? updateDashboardV2IncidentsCheckpoint
+      : undefined,
+  });
+  configureTelemetryCheckpointPresentation({
+    onPresentation: telemetryV2Active
+      ? updateDashboardV2TelemetryCheckpoint
+      : undefined,
+  });
+  configureStatusCheckpointPresentation({
+    onPresentation: statusV2Active ? updateDashboardV2StatusCheckpoint : undefined,
+  });
+  configureMediaCheckpointPresentation({
+    onPresentation: mediaV2Active ? updateDashboardV2MediaCheckpoint : undefined,
+  });
+  configureSettingsCheckpointPresentation({
+    onPresentation: settingsV2Active
+      ? updateDashboardV2SettingsCheckpoint
+      : undefined,
+  });
 }
 
 export function initDashboardApp(): void {
@@ -148,12 +223,13 @@ export function initDashboardApp(): void {
     configureDashboardModePresentationSync(syncDashboardV2Presentation);
     setDashboardV2OverviewActions({
       addPipeline: () => void window.addPipeBtn(),
-      inspectPipeline: openInspectGraph,
+      inspectPipeline: (pipelineId) =>
+        openInspectGraph(pipelineId, { focus: "panel" }),
       openPipeline: (pipelineId) => {
-        selectPipeline(pipelineId);
-        setDashboardMode("pipeline");
+        setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
+        renderPipelines();
       },
-      openStatus: () => setDashboardMode("status"),
+      openStatus: () => setDashboardMode("status", { focus: "panel" }),
     });
     setDashboardV2PipelineSelectorActions({
       addPipeline: () => void window.addPipeBtn(),
@@ -165,9 +241,38 @@ export function initDashboardApp(): void {
         selectPipeline(pipelineId);
         void editPipeBtn();
       },
-      inspectPipeline: openInspectGraph,
+      inspectPipeline: (pipelineId) =>
+        openInspectGraph(pipelineId, { focus: "panel" }),
       toggleFileIngest: togglePipelineFileIngest,
       toggleRecording: togglePipelineRecording,
+    });
+    setDashboardV2PipelineInspectActions({
+      openPipeline: (pipelineId) => {
+        selectPipeline(pipelineId);
+        setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
+      },
+      runDiagnostics: openDiagnosticsModal,
+    });
+    setDashboardV2ControlRoomActions({
+      openPipeline: (pipelineId) => {
+        selectPipeline(pipelineId);
+        setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
+      },
+    });
+    setDashboardV2IncidentsActions({
+      openTelemetry: () => setDashboardMode("telemetry", { focus: "panel" }),
+    });
+    setDashboardV2TelemetryActions({
+      openStatus: () => setDashboardMode("status", { focus: "panel" }),
+    });
+    setDashboardV2StatusActions({
+      openTelemetry: () => setDashboardMode("telemetry", { focus: "panel" }),
+    });
+    setDashboardV2MediaActions({
+      openOverview: () => setDashboardMode("overview", { focus: "panel" }),
+    });
+    setDashboardV2SettingsActions({
+      openStatus: () => setDashboardMode("status", { focus: "panel" }),
     });
     setDashboardV2PipelineInputStatusActions({
       cancelAudioTrackEdit: cancelPipelineAudioTrackEdit,
@@ -253,7 +358,7 @@ export function initDashboardApp(): void {
     selectPipeline,
     openOperateView: (pipelineId) => {
       selectPipeline(pipelineId);
-      setPipelineWorkspaceView("operate", pipelineId);
+      setPipelineWorkspaceView("operate", pipelineId, { focus: "panel" });
     },
   });
 
@@ -262,7 +367,7 @@ export function initDashboardApp(): void {
     selectPipeline,
     openMonitorView: (pipelineId) => {
       if (pipelineId !== null) selectPipeline(pipelineId);
-      setPipelineWorkspaceView("monitor", pipelineId);
+      setPipelineWorkspaceView("monitor", pipelineId, { focus: "panel" });
     },
   });
 

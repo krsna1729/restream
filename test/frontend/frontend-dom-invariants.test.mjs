@@ -44,7 +44,12 @@ test("static HTML keeps core DOM accessibility and layout invariants", async () 
   assert.match(loginHtml, /<script src="login\.js"><\/script>/);
   assert.match(loginJs, /addEventListener\("submit"/);
   assert.match(indexHtml, /<header class="navbar/);
+  assert.match(
+    indexHtml,
+    /id="skip-to-dashboard-main"[\s\S]*href="#dashboard-main"[\s\S]*Skip to main content/,
+  );
   assert.match(indexHtml, /<main id="dashboard-main"/);
+  assert.match(indexHtml, /<main id="dashboard-main"[\s\S]*tabindex="-1"/);
   assert.match(indexHtml, /role="tablist" aria-label="Workspace mode"/);
   assert.match(
     indexHtml,
@@ -71,6 +76,18 @@ test("static HTML keeps core DOM accessibility and layout invariants", async () 
     /min-w-0 overflow-y-auto rounded-lg border p-4 xl:min-w-\[24rem\]/,
   );
   assert.doesNotMatch(hlsBundle, /sourceMappingURL=hls\.min\.js\.map/);
+});
+
+test("dashboard bootstrap keeps the skip link first in keyboard flow", async () => {
+  const dashboardEntryTs = await readFile(
+    new URL("../../web/ts/app/dashboard-entry.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(dashboardEntryTs, /document\.addEventListener\("keydown"/);
+  assert.match(dashboardEntryTs, /event\.key !== "Tab"/);
+  assert.match(dashboardEntryTs, /document\.activeElement !== document\.body/);
+  assert.match(dashboardEntryTs, /skipLink\.focus\(\)/);
 });
 
 test("dashboard grid sizing lives in responsive CSS instead of inline scripts", async () => {

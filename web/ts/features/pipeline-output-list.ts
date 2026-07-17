@@ -1,7 +1,10 @@
 import { escapeHtml, msToHHMMSS, sanitizeLogMessage } from "../core/utils.js";
 import { state } from "../core/state.js";
 import { outputViewEncodingLabel } from "../core/output-config.js";
-import { getOutputControlIntent } from "./output-control-state.js";
+import {
+  getOutputControlError,
+  getOutputControlIntent,
+} from "./output-control-state.js";
 import { pipelineViewDependencies } from "./pipeline-dependencies.js";
 import {
   isOutputFlapping,
@@ -821,6 +824,7 @@ export function renderOutsColumn(selectedPipe: string | null): void {
       pipe.outs.map((output) => ({
         outputId: output.id,
         intent: getOutputControlIntent(pipe.id, output.id),
+        error: getOutputControlError(pipe.id, output.id),
         busy: Boolean(
           pipelineViewDependencies.isOutputToggleBusy?.(pipe.id, output.id),
         ),

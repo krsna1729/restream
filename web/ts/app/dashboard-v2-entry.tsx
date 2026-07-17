@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 
 import type {
+  DashboardV2PipelineDetailsPlaceholder,
   DashboardV2OverviewActions,
   DashboardV2PipelineHeaderActions,
   DashboardV2PipelineInputStatusActions,
@@ -82,9 +83,7 @@ function StatusBadge({
     >
       <span className="truncate">{status.label}</span>
       {showDetail && status.detail ? (
-        <span className="text-base-content/75 font-normal">
-          {status.detail}
-        </span>
+        <span className="text-base-content font-normal">{status.detail}</span>
       ) : null}
     </span>
   );
@@ -141,6 +140,12 @@ function outputMatchesSearch(
     .join(" ")
     .toLowerCase()
     .includes(normalizedQuery);
+}
+
+function outputExpansionLabel(model: PipelineOutputOverviewModel): string {
+  if (model.expanded) return "Show fewer";
+  const count = model.listCaption?.match(/\bof\s+(\d+)\s+outputs\b/)?.[1];
+  return count ? `Show all ${count}` : "Show all";
 }
 
 function Sparkline({
@@ -224,6 +229,35 @@ function DashboardV2Overview({
   model: OverviewViewModel;
 }): React.JSX.Element {
   const hasAttention = model.attention.length > 0;
+  const [pipelineTableQuery, setPipelineTableQuery] = useState("");
+  const normalizedPipelineTableQuery = pipelineTableQuery.trim().toLowerCase();
+  const clearPipelineTableSearch = (): void => setPipelineTableQuery("");
+  const filteredPipelineRows = normalizedPipelineTableQuery
+    ? model.pipelines.filter((pipeline) =>
+        pipeline.name.toLowerCase().includes(normalizedPipelineTableQuery),
+      )
+    : model.pipelines;
+  const showPipelineTableSearch =
+    model.pipelines.length > 8 || normalizedPipelineTableQuery !== "";
+  const [activityQuery, setActivityQuery] = useState("");
+  const normalizedActivityQuery = activityQuery.trim().toLowerCase();
+  const clearActivitySearch = (): void => setActivityQuery("");
+  const filteredActivity = normalizedActivityQuery
+    ? model.activity.filter((item) =>
+        [
+          item.headline,
+          item.summary,
+          item.details.join(" "),
+          item.tone,
+          `${item.eventCount} event${item.eventCount === 1 ? "" : "s"}`,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedActivityQuery),
+      )
+    : model.activity;
+  const showActivitySearch =
+    model.activity.length > 2 || normalizedActivityQuery !== "";
   return (
     <div className="space-y-4" id="dashboard-v2-overview">
       <header className="flex flex-wrap items-end justify-between gap-3 px-1">
@@ -237,7 +271,8 @@ function DashboardV2Overview({
           </p>
         </div>
         <button
-          className="btn btn-sm btn-primary"
+          aria-label="Add a new pipeline"
+          className="btn btn-sm btn-primary dashboard-sturdy-control"
           onClick={actions.addPipeline}
           type="button"
         >
@@ -276,7 +311,8 @@ function DashboardV2Overview({
               </p>
             </div>
             <button
-              className="btn btn-sm btn-outline"
+              aria-label="Open restream runtime detail"
+              className="btn btn-sm btn-outline dashboard-sturdy-control"
               onClick={actions.openStatus}
               type="button"
             >
@@ -305,14 +341,16 @@ function DashboardV2Overview({
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
-                      className="btn btn-xs btn-outline"
+                      aria-label={`Operate ${item.pipelineName}`}
+                      className="btn btn-xs btn-outline dashboard-sturdy-control"
                       onClick={() => actions.openPipeline(item.pipelineId)}
                       type="button"
                     >
                       Operate
                     </button>
                     <button
-                      className="btn btn-xs btn-outline"
+                      aria-label={`Inspect ${item.pipelineName}`}
+                      className="btn btn-xs btn-outline dashboard-sturdy-control"
                       onClick={() => actions.inspectPipeline(item.pipelineId)}
                       type="button"
                     >
@@ -358,18 +396,59 @@ function DashboardV2Overview({
       </div>
 
       <Panel labelledBy="dashboard-v2-pipelines-title">
-        <div className="dashboard-section-header">
+        <div className="dashboard-section-header items-start">
           <div>
-          <h2
-            className="dashboard-section-title"
-            id="dashboard-v2-pipelines-title"
-          >
-            All pipelines
-          </h2>
-          <p className="dashboard-subtitle">
-            Compare intent, runtime state, and data flow.
-          </p>
+            <h2
+              className="dashboard-section-title"
+              id="dashboard-v2-pipelines-title"
+            >
+              All pipelines
+            </h2>
+            <p className="dashboard-subtitle">
+              Compare intent, runtime state, and data flow.
+            </p>
           </div>
+          {showPipelineTableSearch ? (
+            <div className="w-full max-w-sm space-y-2 sm:w-80">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="input input-bordered input-sm flex min-h-10 min-w-0 flex-1 items-center gap-2">
+                  <span className="text-base-content/55 text-xs font-semibold uppercase">
+                    Find
+                  </span>
+                  <input
+                    aria-label="Search overview pipelines"
+                    className="min-w-0 grow"
+                    onChange={(event) =>
+                      setPipelineTableQuery(event.currentTarget.value)
+                    }
+                    placeholder="pipeline name"
+                    type="search"
+                    value={pipelineTableQuery}
+                  />
+                </label>
+                {normalizedPipelineTableQuery ? (
+                  <button
+                    aria-label="Clear overview pipeline search"
+                    className="btn btn-xs btn-ghost"
+                    onClick={clearPipelineTableSearch}
+                    type="button"
+                  >
+                    Clear search
+                  </button>
+                ) : null}
+              </div>
+              {normalizedPipelineTableQuery ? (
+                <p
+                  aria-live="polite"
+                  className="text-base-content/55 px-1 text-xs tabular-nums"
+                  role="status"
+                >
+                  {filteredPipelineRows.length}/{model.pipelines.length}{" "}
+                  pipelines shown · "{pipelineTableQuery.trim()}"
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="overflow-x-auto">
           <table className="table table-sm">
@@ -386,13 +465,15 @@ function DashboardV2Overview({
             </thead>
             <tbody>
               {model.pipelines.length ? (
-                model.pipelines.map((pipeline) => (
+                filteredPipelineRows.length ? (
+                  filteredPipelineRows.map((pipeline) => (
                   <tr
                     className="border-base-content/5 hover:bg-base-100/60 border-t"
                     key={pipeline.id}
                   >
                     <td className="min-w-56 py-3">
                       <button
+                        aria-label={`Open pipeline ${pipeline.name}`}
                         className="group flex max-w-xs text-left"
                         onClick={() => actions.openPipeline(pipeline.id)}
                         type="button"
@@ -421,7 +502,25 @@ function DashboardV2Overview({
                       <StatusBadge status={pipeline.recording} />
                     </td>
                   </tr>
-                ))
+                  ))
+                ) : (
+                  <tr>
+                    <td className="px-4 py-6" colSpan={7}>
+                      <div className="max-w-xl">
+                        <p className="font-semibold">No pipelines match.</p>
+                        <p
+                          aria-live="polite"
+                          className="text-base-content/60 mt-1 text-sm"
+                          role="status"
+                        >
+                          No overview pipelines match "
+                          {pipelineTableQuery.trim()}". Clear search to show
+                          all.
+                        </p>
+                      </div>
+                    </td>
+                  </tr>
+                )
               ) : (
                 <tr>
                   <td className="text-base-content/70 px-4 py-6" colSpan={7}>
@@ -435,7 +534,7 @@ function DashboardV2Overview({
       </Panel>
 
       <Panel labelledBy="dashboard-v2-activity-title">
-        <div className="dashboard-section-header">
+        <div className="dashboard-section-header items-start">
           <div>
             <h2
               className="dashboard-section-title"
@@ -448,13 +547,58 @@ function DashboardV2Overview({
               review.
             </p>
           </div>
-          <button
-            className="btn btn-sm btn-outline"
-            onClick={actions.openStatus}
-            type="button"
-          >
-            Open Status
-          </button>
+          <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
+            <button
+              aria-label="Open restream status"
+              className="btn btn-sm btn-outline dashboard-sturdy-control"
+              onClick={actions.openStatus}
+              type="button"
+            >
+              Open Status
+            </button>
+            {showActivitySearch ? (
+              <div className="w-full max-w-sm space-y-2 sm:w-80">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="input input-bordered input-sm flex min-h-10 min-w-0 flex-1 items-center gap-2">
+                    <span className="text-base-content/55 text-xs font-semibold uppercase">
+                      Find
+                    </span>
+                    <input
+                      aria-label="Search restream activity"
+                      className="min-w-0 grow"
+                      onChange={(event) =>
+                        setActivityQuery(event.currentTarget.value)
+                      }
+                      placeholder="event, status, detail"
+                      type="search"
+                      value={activityQuery}
+                    />
+                  </label>
+                  {normalizedActivityQuery ? (
+                    <button
+                      aria-label="Clear restream activity search"
+                      className="btn btn-xs btn-ghost"
+                      onClick={clearActivitySearch}
+                      type="button"
+                    >
+                      Clear activity search
+                    </button>
+                  ) : null}
+                </div>
+                {normalizedActivityQuery ? (
+                  <p
+                    aria-live="polite"
+                    className="text-base-content/55 px-1 text-xs tabular-nums"
+                    id="dashboard-v2-activity-search-summary"
+                    role="status"
+                  >
+                    {filteredActivity.length}/{model.activity.length} bursts
+                    shown · "{activityQuery.trim()}"
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </div>
         <div className="space-y-2 p-4">
           {model.activityLoading ? (
@@ -462,7 +606,8 @@ function DashboardV2Overview({
               Loading recent restream activity...
             </p>
           ) : model.activity.length ? (
-            model.activity.map((item, index) => (
+            filteredActivity.length ? (
+              filteredActivity.map((item, index) => (
               <article
                 className="dashboard-card p-3"
                 key={`${item.startedAt || "activity"}-${index}`}
@@ -489,7 +634,20 @@ function DashboardV2Overview({
                   </span>
                 </div>
               </article>
-            ))
+              ))
+            ) : (
+              <div className="dashboard-empty">
+                <p className="font-semibold">No activity matches.</p>
+                <p
+                  aria-live="polite"
+                  className="text-base-content/60 mt-1 text-sm"
+                  role="status"
+                >
+                  No restream activity matches "{activityQuery.trim()}". Clear
+                  activity search to show all.
+                </p>
+              </div>
+            )
           ) : (
             <p className="text-base-content/70 text-sm">
               No recent restream-wide activity yet.
@@ -508,22 +666,49 @@ function DashboardV2PipelineSelector({
   actions: DashboardV2PipelineSelectorActions;
   model: PipelineOperateSelectorModel;
 }): React.JSX.Element {
+  const [pipelineQuery, setPipelineQuery] = useState("");
+  const normalizedPipelineQuery = pipelineQuery.trim().toLowerCase();
+  const clearPipelineSearch = (): void => setPipelineQuery("");
+  const filteredPipelines = normalizedPipelineQuery
+    ? model.pipelines.filter((pipeline) =>
+        [
+          pipeline.name,
+          pipeline.statusLabel,
+          pipeline.inputRate,
+          pipeline.outputRate,
+          `${pipeline.runningOutputs}/${pipeline.totalOutputs}`,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedPipelineQuery),
+      )
+    : model.pipelines;
+  const showPipelineSearch =
+    model.pipelines.length > 6 || normalizedPipelineQuery !== "";
+  const selectedPipeline =
+    model.pipelines.find((pipeline) => pipeline.selected) ?? model.pipelines[0];
+  const compactPipelineSelector =
+    model.pipelines.length > 0 &&
+    model.pipelines.length <= 3 &&
+    !normalizedPipelineQuery;
+
   return (
     <section aria-labelledby="dashboard-v2-pipelines-selector-title">
       <div className="border-base-content/10 flex items-center justify-between gap-2 border-b px-4 py-3">
         <div>
-          <h2
+          <div
             className="text-base-content/70 text-sm font-semibold uppercase"
             id="dashboard-v2-pipelines-selector-title"
           >
             Pipelines
-          </h2>
+          </div>
           <p className="text-base-content/50 mt-0.5 text-xs tabular-nums">
             {model.pipelines.length} configured
           </p>
         </div>
         <button
-          className="btn btn-xs btn-accent btn-outline"
+          aria-label="Add a new pipeline from the pipeline selector"
+          className="btn btn-xs btn-accent btn-outline dashboard-sturdy-control"
           onClick={actions.addPipeline}
           type="button"
         >
@@ -531,36 +716,131 @@ function DashboardV2PipelineSelector({
         </button>
       </div>
       {model.pipelines.length ? (
-        <ul className="max-h-52 w-full space-y-1 overflow-x-hidden overflow-y-auto p-2 md:max-h-none">
-          {model.pipelines.map((pipeline) => (
-            <li className="min-w-0" key={pipeline.id}>
-              <button
-                aria-current={pipeline.selected ? "page" : undefined}
-                className={`${pipeline.selected ? "bg-base-100 border-base-content/10" : "border-transparent"} hover:bg-base-100 flex w-full min-w-0 items-start gap-3 rounded-lg border px-3 py-2 text-left`}
-                onClick={() => actions.selectPipeline(pipeline.id)}
-                type="button"
-              >
-                <span
-                  aria-hidden="true"
-                  className={`${toneClasses[pipeline.statusTone]} mt-1 h-3 w-3 shrink-0 rounded-full border`}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-semibold">
-                    {pipeline.name}
+        <div>
+          {showPipelineSearch ? (
+            <div className="border-base-content/10 space-y-2 border-b p-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="input input-bordered input-sm flex min-h-10 min-w-0 flex-1 items-center gap-2">
+                  <span className="text-base-content/55 text-xs font-semibold uppercase">
+                    Find
                   </span>
-                  <span className="text-base-content/60 mt-1 block truncate text-xs">
-                    {pipeline.statusLabel} · {pipeline.runningOutputs}/
-                    {pipeline.totalOutputs} outputs
-                  </span>
-                  <span className="text-base-content/50 mt-1 flex flex-wrap gap-x-2 text-[0.6875rem] tabular-nums">
-                    <span>{pipeline.inputRate} in</span>
-                    <span>{pipeline.outputRate} out</span>
-                  </span>
+                  <input
+                    aria-label="Search pipelines"
+                    className="min-w-0 grow"
+                    onChange={(event) =>
+                      setPipelineQuery(event.currentTarget.value)
+                    }
+                    placeholder="name, state, rate"
+                    type="search"
+                    value={pipelineQuery}
+                  />
+                </label>
+                {normalizedPipelineQuery ? (
+                  <button
+                    aria-label="Clear pipeline selector search"
+                    className="btn btn-xs btn-ghost"
+                    onClick={clearPipelineSearch}
+                    type="button"
+                  >
+                    Clear search
+                  </button>
+                ) : null}
+              </div>
+              {normalizedPipelineQuery ? (
+                <p
+                  aria-live="polite"
+                  className="text-base-content/55 px-1 text-xs tabular-nums"
+                  role="status"
+                >
+                  {filteredPipelines.length}/{model.pipelines.length} pipelines
+                  shown · "{pipelineQuery.trim()}"
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          {compactPipelineSelector ? (
+            <div className="space-y-2 p-2">
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-base-content/55 text-xs font-semibold uppercase tracking-wide">
+                  Active pipeline
                 </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+                <select
+                  aria-label="Select pipeline"
+                  className="select select-sm w-full"
+                  onChange={(event) =>
+                    actions.selectPipeline(event.currentTarget.value)
+                  }
+                  value={selectedPipeline?.id ?? ""}
+                >
+                  {model.pipelines.map((pipeline) => (
+                    <option key={pipeline.id} value={pipeline.id}>
+                      {pipeline.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : filteredPipelines.length ? (
+            <ul className="max-h-52 w-full space-y-1 overflow-x-hidden overflow-y-auto p-2 md:max-h-none">
+              {filteredPipelines.map((pipeline) => {
+                const safePipelineId = pipeline.id.replace(
+                  /[^a-zA-Z0-9_-]/g,
+                  "-",
+                );
+                const detailId = `dashboard-v2-pipeline-selector-detail-${safePipelineId}`;
+                const rateId = `dashboard-v2-pipeline-selector-rate-${safePipelineId}`;
+                return (
+                  <li className="min-w-0" key={pipeline.id}>
+                    <button
+                      aria-describedby={`${detailId} ${rateId}`}
+                      aria-label={`Select pipeline ${pipeline.name}`}
+                      aria-current={pipeline.selected ? "page" : undefined}
+                      className={`${pipeline.selected ? "bg-base-100 border-base-content/10" : "border-transparent"} hover:bg-base-100 flex w-full min-w-0 items-start gap-3 rounded-lg border px-3 py-2 text-left`}
+                      onClick={() => actions.selectPipeline(pipeline.id)}
+                      type="button"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`${toneClasses[pipeline.statusTone]} mt-1 h-3 w-3 shrink-0 rounded-full border`}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold">
+                          {pipeline.name}
+                        </span>
+                        <span
+                          className="text-base-content/60 mt-1 block truncate text-xs"
+                          id={detailId}
+                        >
+                          {pipeline.statusLabel} · {pipeline.runningOutputs}/
+                          {pipeline.totalOutputs} outputs
+                        </span>
+                        <span
+                          className="text-base-content/50 mt-1 flex flex-wrap gap-x-2 text-[0.6875rem] tabular-nums"
+                          id={rateId}
+                        >
+                          <span>{pipeline.inputRate} in</span>
+                          <span>{pipeline.outputRate} out</span>
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <div className="border-base-content/10 m-2 rounded-lg border border-dashed px-3 py-4">
+              <p className="text-sm font-semibold">No pipelines match.</p>
+              <p
+                aria-live="polite"
+                className="text-base-content/60 mt-1 text-xs"
+                role="status"
+              >
+                No pipelines match "{pipelineQuery.trim()}". Clear search to
+                return to all pipelines.
+              </p>
+            </div>
+          )}
+        </div>
       ) : (
         <div className="text-base-content/60 px-4 py-5 text-sm">
           No pipelines configured.
@@ -577,6 +857,13 @@ function DashboardV2PipelineHeader({
   actions: DashboardV2PipelineHeaderActions;
   model: PipelineOperateHeaderModel;
 }): React.JSX.Element {
+  const fileIngestActionLabel = model.fileIngestControl
+    ? formatPipelineHeaderFileIngestActionLabel(model.fileIngestControl.label)
+    : "";
+  const recordingActionLabel = formatPipelineHeaderRecordingActionLabel(
+    model.recordingControl.label,
+  );
+
   return (
     <section
       aria-labelledby="dashboard-v2-pipeline-title"
@@ -604,6 +891,7 @@ function DashboardV2PipelineHeader({
         <div className="flex shrink-0 flex-wrap gap-2">
           {model.fileIngestControl ? (
             <button
+              aria-label={`${fileIngestActionLabel} for ${model.name}`}
               className={`btn btn-xs ${
                 model.fileIngestControl.danger ? "btn-error" : "btn-accent"
               } ${model.fileIngestControl.outlined ? "btn-outline" : ""}`}
@@ -616,6 +904,7 @@ function DashboardV2PipelineHeader({
             </button>
           ) : null}
           <button
+            aria-label={`${recordingActionLabel} for ${model.name}`}
             className={`btn btn-xs ${
               model.recordingControl.danger ? "btn-error" : "btn-accent"
             } ${model.recordingControl.outlined ? "btn-outline" : ""}`}
@@ -627,14 +916,16 @@ function DashboardV2PipelineHeader({
             {model.recordingControl.label}
           </button>
           <button
-            className="btn btn-xs btn-accent btn-outline"
+            aria-label={`Inspect graph for ${model.name}`}
+            className="btn btn-xs btn-accent btn-outline dashboard-sturdy-control"
             onClick={() => actions.inspectPipeline(model.id)}
             type="button"
           >
             Graph
           </button>
           <button
-            className="btn btn-xs btn-accent btn-outline"
+            aria-label={`Diagnose ${model.name}`}
+            className="btn btn-xs btn-accent btn-outline dashboard-sturdy-control"
             disabled={!model.canDiagnose}
             onClick={() => actions.diagnosePipeline(model.id)}
             title={model.diagnoseDisabledReason || ""}
@@ -643,6 +934,7 @@ function DashboardV2PipelineHeader({
             Diagnose
           </button>
           <button
+            aria-label={`Edit pipeline ${model.name}`}
             className="btn btn-xs btn-outline"
             disabled={!model.canEdit}
             onClick={() => actions.editPipeline(model.id)}
@@ -651,6 +943,74 @@ function DashboardV2PipelineHeader({
           >
             Edit
           </button>
+        </div>
+      </div>
+      {model.lifecycleMessages.length ? (
+        <div aria-live="polite" className="space-y-2">
+          {model.lifecycleMessages.map((message) => (
+            <div
+              className={`${toneClasses[message.tone]} rounded-lg border px-3 py-2 text-sm`}
+              key={message.id}
+              role="status"
+            >
+              <div className="font-semibold">{message.label}</div>
+              <div className="mt-0.5 text-xs font-normal text-base-content/75">
+                {message.detail}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function normalizePendingActionLabel(label: string): string {
+  return label.replace(/\.\.\.$/, "").trim();
+}
+
+function formatPipelineHeaderFileIngestActionLabel(label: string): string {
+  return normalizePendingActionLabel(label).replace(/\s+File$/, " file ingest");
+}
+
+function formatPipelineHeaderRecordingActionLabel(label: string): string {
+  const normalized = normalizePendingActionLabel(label);
+
+  if (normalized === "Record") {
+    return "Start recording";
+  }
+
+  return normalized.replace(/\s+Rec$/, " recording").replace(
+    /^(Starting|Stopping)$/,
+    "$1 recording",
+  );
+}
+
+function DashboardV2PipelineDetailsPlaceholderCard({
+  model,
+}: {
+  model: DashboardV2PipelineDetailsPlaceholder;
+}): React.JSX.Element {
+  return (
+    <section
+      aria-labelledby="dashboard-v2-pipeline-details-placeholder-title"
+      className="dashboard-section border-info/25 bg-info/5"
+    >
+      <div className="flex items-start gap-3 py-2">
+        <span
+          aria-hidden="true"
+          className="border-info/30 bg-info/10 mt-1 inline-flex h-3 w-3 shrink-0 rounded-full border"
+        />
+        <div>
+          <h1
+            className="text-base-content text-lg font-semibold leading-tight"
+            id="dashboard-v2-pipeline-details-placeholder-title"
+          >
+            {model.title}
+          </h1>
+          <p className="text-base-content/65 mt-1 max-w-2xl text-sm">
+            {model.message}
+          </p>
         </div>
       </div>
     </section>
@@ -666,11 +1026,35 @@ function DashboardV2PipelineInputStatus({
 }): React.JSX.Element {
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const [audioExpanded, setAudioExpanded] = useState(false);
+  const [audioQuery, setAudioQuery] = useState("");
+  const normalizedAudioQuery = audioQuery.trim().toLowerCase();
   const audioTrackOverflow =
     model.audioTracks.length > INPUT_AUDIO_TRACK_PREVIEW_LIMIT;
-  const visibleAudioTracks = audioExpanded
-    ? model.audioTracks
-    : model.audioTracks.slice(0, INPUT_AUDIO_TRACK_PREVIEW_LIMIT);
+  const filteredAudioTracks = normalizedAudioQuery
+    ? model.audioTracks.filter((track) =>
+        [
+          `track ${track.index + 1}`,
+          track.label,
+          track.identity,
+          track.codec,
+          track.sampleRate,
+          track.channels,
+          track.profile,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedAudioQuery),
+      )
+    : model.audioTracks;
+  const visibleAudioTracks = normalizedAudioQuery
+    ? filteredAudioTracks
+    : audioExpanded
+      ? model.audioTracks
+      : model.audioTracks.slice(0, INPUT_AUDIO_TRACK_PREVIEW_LIMIT);
+  const showAudioSearch = audioTrackOverflow || normalizedAudioQuery !== "";
+  const audioSummaryText = normalizedAudioQuery
+    ? `${filteredAudioTracks.length}/${model.audioTracks.length} audio tracks match "${audioQuery.trim()}"`
+    : `Showing ${visibleAudioTracks.length} of ${model.audioTracks.length} audio tracks`;
 
   useEffect(() => {
     const container = previewContainerRef.current;
@@ -686,6 +1070,7 @@ function DashboardV2PipelineInputStatus({
 
   useEffect(() => {
     setAudioExpanded(false);
+    setAudioQuery("");
   }, [model.id]);
 
   return (
@@ -785,12 +1170,42 @@ function DashboardV2PipelineInputStatus({
         </div>
       ))}
       <div className="mt-3">
-        <h3 className="text-base-content/60 text-[0.7rem] font-semibold uppercase tracking-wide">
-          Audio
-        </h3>
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <h3 className="text-base-content/60 text-[0.7rem] font-semibold uppercase tracking-wide">
+            Audio
+          </h3>
+          {showAudioSearch ? (
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <label className="input input-bordered input-xs flex min-h-8 min-w-48 items-center gap-2">
+                <span className="text-base-content/55 text-[0.65rem] font-semibold uppercase">
+                  Find
+                </span>
+                <input
+                  aria-label="Search audio tracks"
+                  className="min-w-0 grow"
+                  onChange={(event) => setAudioQuery(event.currentTarget.value)}
+                  placeholder="track, codec, language"
+                  type="search"
+                  value={audioQuery}
+                />
+              </label>
+              {normalizedAudioQuery ? (
+                <button
+                  aria-label="Clear audio track search"
+                  className="btn btn-xs btn-ghost"
+                  onClick={() => setAudioQuery("")}
+                  type="button"
+                >
+                  Clear search
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
         {model.audioTracks.length ? (
           <div className="border-base-content/10 divide-base-content/10 mt-1 divide-y border-y">
-            {visibleAudioTracks.map((track) => (
+            {visibleAudioTracks.length ? (
+              visibleAudioTracks.map((track) => (
               <div
                 className="border-base-content/10 grid gap-2 px-1 py-2.5 sm:grid-cols-[minmax(0,1.2fr)_repeat(4,minmax(0,.7fr))] sm:px-3"
                 key={track.key}
@@ -821,6 +1236,7 @@ function DashboardV2PipelineInputStatus({
                         }}
                       />
                       <button
+                        aria-label={`Save audio track ${track.label} for ${model.name}`}
                         className="btn btn-xs btn-accent"
                         onClick={() =>
                           actions.saveAudioTrack(model.id, track.key)
@@ -830,6 +1246,7 @@ function DashboardV2PipelineInputStatus({
                         Save
                       </button>
                       <button
+                        aria-label={`Cancel audio track edit for ${track.label}`}
                         className="btn btn-xs btn-ghost"
                         onClick={() =>
                           actions.cancelAudioTrackEdit(model.id, track.key)
@@ -876,22 +1293,38 @@ function DashboardV2PipelineInputStatus({
                   </div>
                 ))}
               </div>
-            ))}
-            {audioTrackOverflow ? (
+              ))
+            ) : (
+              <div className="px-1 py-3 text-sm text-base-content/60 sm:px-3">
+                No audio tracks match "{audioQuery.trim()}". Clear search to
+                show all.
+              </div>
+            )}
+            {audioTrackOverflow || normalizedAudioQuery ? (
               <div className="flex items-center justify-between gap-2 px-1 py-2.5 sm:px-3">
-                <p className="text-base-content/55 text-xs">
-                  Showing {visibleAudioTracks.length} of{" "}
-                  {model.audioTracks.length} audio tracks
-                </p>
-                <button
-                  className="btn btn-xs btn-outline"
-                  onClick={() => setAudioExpanded((expanded) => !expanded)}
-                  type="button"
+                <p
+                  aria-live="polite"
+                  className="text-base-content/55 text-xs"
+                  role="status"
                 >
-                  {audioExpanded
-                    ? "Show fewer"
-                    : `Show all ${model.audioTracks.length}`}
-                </button>
+                  {audioSummaryText}
+                </p>
+                {normalizedAudioQuery ? null : (
+                  <button
+                    aria-label={
+                      audioExpanded
+                        ? "Show fewer audio tracks"
+                        : `Show all ${model.audioTracks.length} audio tracks`
+                    }
+                    className="btn btn-xs btn-outline"
+                    onClick={() => setAudioExpanded((expanded) => !expanded)}
+                    type="button"
+                  >
+                    {audioExpanded
+                      ? "Show fewer"
+                      : `Show all ${model.audioTracks.length}`}
+                  </button>
+                )}
               </div>
             ) : null}
           </div>
@@ -911,6 +1344,7 @@ function DashboardV2PipelineInputStatus({
               </code>
             </div>
             <button
+              aria-label={`Copy stream key for ${model.name}`}
               className="btn btn-xs btn-accent btn-outline"
               onClick={() =>
                 void actions.copyStreamKey(model.liveSource!.pipelineId)
@@ -924,6 +1358,7 @@ function DashboardV2PipelineInputStatus({
             {model.liveSource.protocols.map((protocol) => (
               <button
                 aria-pressed={protocol.selected}
+                aria-label={`Select ${protocol.label} ingest URL for ${model.name}`}
                 className={`btn btn-xs ${protocol.selected ? "btn-accent" : "btn-outline"}`}
                 key={protocol.id}
                 onClick={() =>
@@ -946,7 +1381,7 @@ function DashboardV2PipelineInputStatus({
                   {protocol.urlLabel}
                 </code>
                 <button
-                  aria-label={`Copy ${protocol.label} ingest URL`}
+                  aria-label={`Copy ${protocol.label} ingest URL for ${model.name}`}
                   className="btn btn-xs btn-outline"
                   onClick={() =>
                     void actions.copyIngestUrl(
@@ -1009,6 +1444,7 @@ function DashboardV2PipelineOutputOverview({
   const [openActionsFor, setOpenActionsFor] = useState<string | null>(null);
   const [outputFilter, setOutputFilter] = useState<OutputFilter>("all");
   const [outputQuery, setOutputQuery] = useState("");
+  const actionButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const normalizedOutputQuery = outputQuery.trim().toLowerCase();
   const filteredCards = model.cards.filter(
     (output) =>
@@ -1017,6 +1453,31 @@ function DashboardV2PipelineOutputOverview({
   );
   const filtersActive = outputFilter !== "all" || normalizedOutputQuery !== "";
   const showOutputTools = model.cards.length > 4 || filtersActive;
+  const activeFilterLabel =
+    outputFilters.find((filter) => filter.id === outputFilter)?.label ?? "All";
+  const outputResultSummary = filtersActive
+    ? `${filteredCards.length}/${model.cards.length} shown · ${activeFilterLabel}${
+        normalizedOutputQuery ? ` · "${outputQuery.trim()}"` : ""
+      }`
+    : null;
+  const outputEmptyDetail =
+    outputFilter === "all"
+      ? `No output destinations match "${outputQuery.trim()}".`
+      : `No ${activeFilterLabel.toLowerCase()} output destinations match${
+          normalizedOutputQuery ? ` "${outputQuery.trim()}"` : ""
+        }.`;
+  const clearOutputFilters = (): void => {
+    setOutputFilter("all");
+    setOutputQuery("");
+  };
+  const closeActionsMenu = (outputId: string, restoreFocus = false): void => {
+    setOpenActionsFor(null);
+    if (restoreFocus) {
+      window.requestAnimationFrame(() =>
+        actionButtonRefs.current.get(outputId)?.focus(),
+      );
+    }
+  };
 
   return (
     <section
@@ -1025,17 +1486,18 @@ function DashboardV2PipelineOutputOverview({
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3
+          <h2
             className="text-base-content/70 text-xs font-semibold uppercase tracking-wide"
             id="dashboard-v2-output-overview-title"
           >
             Output overview
-          </h3>
+          </h2>
           <p className="text-base-content/55 mt-1 text-xs tabular-nums">
             {model.activeLabel} · {model.aggregateRate} aggregate
           </p>
         </div>
         <button
+          aria-label={`Add output for ${model.pipelineName}`}
           className="btn btn-sm btn-accent btn-outline"
           onClick={() => actions.addOutput(model.pipelineId)}
           type="button"
@@ -1065,9 +1527,9 @@ function DashboardV2PipelineOutputOverview({
       )}
       {model.attention.length ? (
         <div className="border-warning/30 mt-3 border-l-2 pl-3">
-          <h4 className="text-warning text-xs font-semibold uppercase">
+          <h3 className="text-warning text-xs font-semibold uppercase">
             Needs attention
-          </h4>
+          </h3>
           <div className="mt-2 space-y-2">
             {model.attention.map((output) => (
               <div
@@ -1096,12 +1558,16 @@ function DashboardV2PipelineOutputOverview({
         <div className="mt-3 space-y-2">
           <div className="space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h4 className="text-base-content/70 text-xs font-semibold uppercase">
+              <h3 className="text-base-content/70 text-xs font-semibold uppercase">
                 Output destinations
-              </h4>
+              </h3>
               {filtersActive ? (
-                <span className="text-base-content/55 text-xs tabular-nums">
-                  {filteredCards.length}/{model.cards.length} shown
+                <span
+                  aria-live="polite"
+                  className="text-base-content/55 text-xs tabular-nums"
+                  role="status"
+                >
+                  {outputResultSummary}
                 </span>
               ) : null}
             </div>
@@ -1123,25 +1589,44 @@ function DashboardV2PipelineOutputOverview({
                   />
                 </label>
                 <div
-                  aria-label="Filter output destinations by state"
-                  className="flex flex-wrap gap-1"
-                  role="group"
+                  className="flex flex-wrap items-center justify-between gap-2"
                 >
-                  {outputFilters.map((filter) => (
+                  <div
+                    aria-label="Filter output destinations by state"
+                    className="flex flex-wrap gap-1"
+                    role="group"
+                  >
+                    {outputFilters.map((filter) => (
+                      <button
+                        aria-label={
+                          filter.id === "all"
+                            ? "Show all output destinations"
+                            : `Show ${filter.label.toLowerCase()} output destinations`
+                        }
+                        aria-pressed={outputFilter === filter.id}
+                        className={`btn btn-sm min-h-9 min-w-11 ${
+                          outputFilter === filter.id
+                            ? "btn-accent"
+                            : "btn-outline btn-ghost"
+                        }`}
+                        key={filter.id}
+                        onClick={() => setOutputFilter(filter.id)}
+                        type="button"
+                      >
+                        {filter.label}
+                      </button>
+                    ))}
+                  </div>
+                  {filtersActive ? (
                     <button
-                      aria-pressed={outputFilter === filter.id}
-                      className={`btn btn-xs ${
-                        outputFilter === filter.id
-                          ? "btn-accent"
-                          : "btn-outline btn-ghost"
-                      }`}
-                      key={filter.id}
-                      onClick={() => setOutputFilter(filter.id)}
+                      aria-label="Clear output destination filters"
+                      className="btn btn-sm btn-ghost min-h-9"
+                      onClick={clearOutputFilters}
                       type="button"
                     >
-                      {filter.label}
+                      Clear output filters
                     </button>
-                  ))}
+                  ) : null}
                 </div>
               </>
             ) : null}
@@ -1157,9 +1642,9 @@ function DashboardV2PipelineOutputOverview({
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h5 className="min-w-0 truncate text-sm font-semibold">
+                    <h4 className="min-w-0 truncate text-sm font-semibold">
                       {output.name}
-                    </h5>
+                    </h4>
                     <StatusBadge showDetail={false} status={output.status} />
                   </div>
                   <p className="text-base-content/60 mt-1 text-xs tabular-nums">
@@ -1174,6 +1659,14 @@ function DashboardV2PipelineOutputOverview({
                   {detail ? (
                     <p className="text-base-content/55 mt-1 text-xs">
                       {detail}
+                    </p>
+                  ) : null}
+                  {output.controlError ? (
+                    <p
+                      className="text-error mt-1 text-xs font-medium"
+                      role="status"
+                    >
+                      Output request failed · {output.controlError}
                     </p>
                   ) : null}
                 </div>
@@ -1191,35 +1684,50 @@ function DashboardV2PipelineOutputOverview({
               </div>
               <div className="relative mt-2 flex justify-end">
                 <button
+                  aria-haspopup="menu"
                   aria-expanded={openActionsFor === output.id}
-                  aria-label={`More actions for ${output.name}`}
-                  className="btn btn-xs btn-ghost"
+                  aria-label={`More output actions for ${output.name}`}
+                  className="btn btn-sm btn-ghost min-h-9 min-w-11"
                   onClick={() =>
                     setOpenActionsFor((current) =>
                       current === output.id ? null : output.id,
                     )
                   }
+                  ref={(element) => {
+                    if (element) {
+                      actionButtonRefs.current.set(output.id, element);
+                    } else {
+                      actionButtonRefs.current.delete(output.id);
+                    }
+                  }}
                   type="button"
                 >
                   More
                 </button>
                 {openActionsFor === output.id ? (
                   <div
-                    aria-label={`More actions for ${output.name}`}
+                    aria-label={`More output actions for ${output.name}`}
                     className="bg-base-100 border-base-content/10 absolute right-0 top-7 z-20 w-36 rounded-lg border p-1 shadow-xl"
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.stopPropagation();
+                        closeActionsMenu(output.id, true);
+                      }
+                    }}
                     role="menu"
                   >
                     <button
                       aria-label={`History ${output.name}`}
-                      className="btn btn-xs btn-ghost w-full justify-start"
+                      className="btn btn-sm btn-ghost min-h-9 w-full justify-start"
                       onClick={() => {
-                        setOpenActionsFor(null);
+                        closeActionsMenu(output.id);
                         actions.openOutputHistory(
                           model.pipelineId,
                           output.id,
                           output.name,
                         );
                       }}
+                      role="menuitem"
                       type="button"
                     >
                       History
@@ -1227,11 +1735,12 @@ function DashboardV2PipelineOutputOverview({
                     {output.monitorAvailable ? (
                       <button
                         aria-label={`Monitor ${output.name}`}
-                        className="btn btn-xs btn-ghost w-full justify-start"
+                        className="btn btn-sm btn-ghost min-h-9 w-full justify-start"
                         onClick={() => {
-                          setOpenActionsFor(null);
+                          closeActionsMenu(output.id);
                           actions.monitorOutput(model.pipelineId, output.id);
                         }}
+                        role="menuitem"
                         type="button"
                       >
                         Monitor
@@ -1239,23 +1748,25 @@ function DashboardV2PipelineOutputOverview({
                     ) : null}
                     <button
                       aria-label={`Edit ${output.name}`}
-                      className="btn btn-xs btn-ghost w-full justify-start"
+                      className="btn btn-sm btn-ghost min-h-9 w-full justify-start"
                       onClick={() => {
-                        setOpenActionsFor(null);
+                        closeActionsMenu(output.id);
                         actions.editOutput(model.pipelineId, output.id);
                       }}
+                      role="menuitem"
                       type="button"
                     >
                       Edit
                     </button>
                     <button
                       aria-label={`Delete ${output.name}`}
-                      className="btn btn-xs btn-ghost text-error w-full justify-start"
+                      className="btn btn-sm btn-ghost text-error min-h-9 w-full justify-start"
                       disabled={output.deleteDisabled}
                       onClick={() => {
-                        setOpenActionsFor(null);
+                        closeActionsMenu(output.id);
                         void actions.deleteOutput(model.pipelineId, output.id);
                       }}
+                      role="menuitem"
                       type="button"
                     >
                       Delete
@@ -1269,15 +1780,17 @@ function DashboardV2PipelineOutputOverview({
           ) : (
             <div className="border-base-content/10 rounded-lg border border-dashed px-3 py-4">
               <p className="text-sm font-semibold">No outputs match.</p>
-              <p className="text-base-content/60 mt-1 text-xs">
-                Try clearing the search or switching back to All outputs.
+              <p
+                aria-live="polite"
+                className="text-base-content/60 mt-1 text-xs"
+                role="status"
+              >
+                {outputEmptyDetail} Clear filters to show all.
               </p>
               <button
+                aria-label="Clear no-result output destination filters"
                 className="btn btn-xs btn-ghost mt-3"
-                onClick={() => {
-                  setOutputFilter("all");
-                  setOutputQuery("");
-                }}
+                onClick={clearOutputFilters}
                 type="button"
               >
                 Clear filters
@@ -1290,11 +1803,16 @@ function DashboardV2PipelineOutputOverview({
                 {model.listCaption}
               </p>
               <button
+                aria-label={
+                  model.expanded
+                    ? `Show fewer output destinations for ${model.pipelineName}`
+                    : `Show all output destinations for ${model.pipelineName}`
+                }
                 className="btn btn-xs btn-ghost"
                 onClick={() => actions.toggleOutputList(model.pipelineId)}
                 type="button"
               >
-                {model.expanded ? "Show less" : "Show all"}
+                {outputExpansionLabel(model)}
               </button>
             </div>
           ) : null}
@@ -1366,12 +1884,15 @@ export function renderDashboardV2PipelineSelector(
 export function renderDashboardV2PipelineHeader(
   model: PipelineOperateHeaderModel | null,
   actions: DashboardV2PipelineHeaderActions,
+  placeholder: DashboardV2PipelineDetailsPlaceholder | null = null,
 ): void {
   headerRoot ??= createRoot(headerContainer);
-  headerContainer.hidden = model === null;
+  headerContainer.hidden = model === null && placeholder === null;
   headerRoot.render(
     model ? (
       <DashboardV2PipelineHeader actions={actions} model={model} />
+    ) : placeholder ? (
+      <DashboardV2PipelineDetailsPlaceholderCard model={placeholder} />
     ) : null,
   );
 }
@@ -1400,4 +1921,15 @@ export function renderDashboardV2PipelineOutputOverview(
       <DashboardV2PipelineOutputOverview actions={actions} model={model} />
     ) : null,
   );
+}
+
+export function clearDashboardV2PipelineOperate(): void {
+  selectorRoot?.render(null);
+  headerRoot?.render(null);
+  inputStatusRoot?.render(null);
+  outputOverviewRoot?.render(null);
+  selectorContainer.hidden = true;
+  headerContainer.hidden = true;
+  inputStatusContainer.hidden = true;
+  outputOverviewContainer.hidden = true;
 }

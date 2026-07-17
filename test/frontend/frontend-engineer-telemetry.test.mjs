@@ -78,8 +78,53 @@ test("telemetry renders zero/null ring values, escapes labels, and distinguishes
   assert.match(html, /Transcoder buffers[\s\S]*>0</);
   assert.doesNotMatch(html, /reader <x>|video <bad>|Pipe <bad>/);
   assert.match(html, /View video &lt;bad&gt; telemetry details/);
+  assert.match(html, /1 counter · raw values in Stage detail/);
+  assert.doesNotMatch(html, /packetsIn[\s\S]*0/);
   assert.match(html, /Kernel receive buffer ceiling/);
   assert.match(html, /25 MiB/);
+  assert.match(
+    html,
+    /Telemetry loaded · 0 ingests · 1 stage · 0 egresses · 1 reader · Pipe &lt;bad&gt;/,
+  );
+
+  const denseEgressHtml = renderEngineerTelemetryHtml(
+    {
+      generatedAt: "",
+      ingests: [],
+      stages: [],
+      egresses: [],
+      activeTranscoderBuffers: 0,
+    },
+    {
+      generatedAt: "",
+      pipelineId: "p1",
+      ingest: null,
+      sourceRing: {
+        fill: 0,
+        capacity: 0,
+        fillPercent: 0,
+        estimatedPktRatePerSec: 0,
+        bufferDepthSecs: 0,
+        payloadStats: {},
+        readers: [],
+      },
+      stages: [],
+      egresses: Array.from({ length: 10 }, (_, index) => ({
+        outputId: `out-${String(index + 1).padStart(2, "0")}`,
+        status: "running",
+        bytesOut: 1024,
+      })),
+    },
+    null,
+    null,
+    [{ id: "p1", name: "One" }],
+    "p1",
+    { loaded: true },
+  );
+  assert.match(denseEgressHtml, /8 egresses shown of 10/);
+  assert.match(denseEgressHtml, /Show all 10/);
+  assert.match(denseEgressHtml, /out-08/);
+  assert.doesNotMatch(denseEgressHtml, /out-09|out-10/);
 
   const retained = renderEngineerTelemetryHtml(
     {

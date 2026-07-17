@@ -18,6 +18,7 @@ import {
   isOutputRetrying,
   isOutputUnexpectedlyDown,
 } from "../core/output-status.js";
+import type { PipelineInspectCheckpointModel } from "./pipeline-inspect-view-model.js";
 
 interface PipelineInspectorDependencies {
   selectPipeline: (pipelineId: string) => void;
@@ -40,9 +41,23 @@ let summaryRequestSeq = 0;
 let summaryInFlight: Promise<void> | null = null;
 const pipelineSummaryCache = new Map<string, PipelineSummarySnapshot>();
 const pipelineResourceMapCache = new Map<string, ResourceMapSnapshot>();
+let inspectOutputSearchQuery = "";
+let inspectResourceDetailsExpanded = false;
+let inspectProbeDetailsExpanded = false;
+let inspectPresentationCallback:
+  | ((model: PipelineInspectCheckpointModel | null) => void)
+  | null = null;
 
 const RUNTIME_SCOPE_VALUE = "__runtime";
 const RESOURCE_MAP_TOP_N = 25;
+
+export function configurePipelineInspectCheckpointPresentation(options: {
+  readonly onPresentation?: (
+    model: PipelineInspectCheckpointModel | null,
+  ) => void;
+}): void {
+  inspectPresentationCallback = options.onPresentation ?? null;
+}
 
 type ScrollSnapshot = {
   windowX: number;
@@ -232,6 +247,35 @@ function outputStateLabel(out: OutputView): { label: string; cls: string } {
   return { label: "Down", cls: "badge-error" };
 }
 
+function inspectOutputSearchText(out: OutputView): string {
+  const stateLabel = outputStateLabel(out).label.toLowerCase();
+  const aliases = new Set<string>();
+  const status = (out.status || "").trim().toLowerCase();
+  const desiredState = (out.desiredState || "").trim().toLowerCase();
+  if (status) aliases.add(status);
+  if (desiredState) aliases.add(desiredState);
+  if (stateLabel) aliases.add(stateLabel);
+  if (stateLabel === "failed" || stateLabel === "down") {
+    aliases.add("down");
+  }
+  if (stateLabel === "running") aliases.add("live");
+  if (stateLabel === "stopped") {
+    aliases.add("off");
+    aliases.add("offline");
+  }
+  return [
+    out.name,
+    out.url,
+    outputViewEncodingLabel(out),
+    out.phase || "",
+    out.failurePhase || "",
+    out.lastError || "",
+    ...aliases,
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
 function titleCaseValue(value: string | null | undefined): string {
   const normalized = String(value || "").trim();
   if (!normalized) return "--";
@@ -250,9 +294,218 @@ function protocolValue(value: string | null | undefined): string {
   return normalized.length <= 5 ? normalized.toUpperCase() : titleCaseValue(normalized);
 }
 
+function pipelineInspectV2Active(): boolean {
+  const toggle = document.getElementById("dashboard-ui-v2-toggle");
+  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
+  try {
+    return new URLSearchParams(window.location.search).get("ui") === "v2";
+  } catch (_err) {
+    return false;
+  }
+}
+
+function normalizeInspectSearch(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function pluralize(
+  count: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function inspectInputLabel(pipe: PipelineView): string {
+  if (pipe.input.status === "on") return "input live";
+  if (pipe.input.status === "warning") return "input warning";
+  if (pipe.input.status === "error") return "input error";
+  return "input idle";
+}
+
+function inspectAttentionCount(pipe: PipelineView): number {
+  return pipe.outs.filter(
+    (output) =>
+      isOutputUnexpectedlyDown(output) ||
+      isOutputRetrying(output) ||
+      isOutputFlapping(output),
+  ).length;
+}
+
+function inspectSummaryText(
+  pipe: PipelineView | null,
+  invalidPipelineSelection = false,
+): string {
+  if (invalidPipelineSelection) return "Inspecting missing pipeline selection";
+  if (!pipe)
+    return `Inspecting whole runtime · ${pluralize(state.pipelines.length, "pipeline")}`;
+  return `Inspecting ${pipe.name} · ${inspectInputLabel(pipe)} · ${pluralize(pipe.outs.length, "output")} · ${pluralize(inspectAttentionCount(pipe), "attention item")}`;
+}
+
+function inspectFaultCandidates(pipe: PipelineView): OutputView[] {
+  return pipe.outs.filter(
+    (output) =>
+      isOutputUnexpectedlyDown(output) ||
+      isOutputRetrying(output) ||
+      isOutputFlapping(output),
+  );
+}
+
+function inspectProbeBlockers(pipe: PipelineView): string[] {
+  const blockers: string[] = [];
+  if (pipe.input.status !== "on")
+    blockers.push("Input must be online for active probes.");
+  if (!pipe.input.publisher?.protocol)
+    blockers.push("Publisher protocol is not known yet.");
+  return blockers;
+}
+
+function inspectSuggestedNextStep(pipe: PipelineView): string {
+  const retryingOutputs = pipe.outs.filter(isOutputRetrying);
+  const flappingOutputs = pipe.outs.filter(isOutputFlapping);
+  return pipe.input.status === "on"
+    ? retryingOutputs.length
+      ? "Inspect recent errors and retry backoff before forcing a restart."
+      : flappingOutputs.length
+        ? "Inspect recent sink failures before forcing a restart."
+        : "Run diagnostics, then inspect graph edges with zero packet output."
+    : "Start or reconnect the publisher before probing.";
+}
+
+function buildInspectCheckpointModel(
+  pipe: PipelineView | null,
+  invalidPipelineSelection = false,
+): PipelineInspectCheckpointModel | null {
+  if (invalidPipelineSelection) {
+    return {
+      pipelineId: null,
+      title: "Missing pipeline",
+      summary: "The selected pipeline is no longer available.",
+      statusLabel: "Missing",
+      statusTone: "error",
+      inputLabel: "No pipeline selected",
+      outputLabel: "0 outputs",
+      attentionLabel: "0 attention items",
+      graphLabel: "No graph",
+      focusLabel: "Select another pipeline to inspect diagnostics.",
+      nextStep: "Choose a valid pipeline from the selector.",
+      canOpenPipeline: false,
+      canRunDiagnostics: false,
+      diagnosticsDisabledReason: "Select a valid pipeline first.",
+      metrics: [],
+    };
+  }
+  if (!pipe) {
+    return {
+      pipelineId: null,
+      title: "Whole runtime",
+      summary: inspectSummaryText(null),
+      statusLabel: "Runtime",
+      statusTone: "neutral",
+      inputLabel: pluralize(state.pipelines.length, "pipeline"),
+      outputLabel: "Runtime resource map",
+      attentionLabel: "Select a pipeline for diagnostics",
+      graphLabel: graphInFlight ? "Loading resources" : "Runtime resources",
+      focusLabel: "Inspection focus · select a pipeline to inspect diagnostics.",
+      nextStep: "Select a pipeline to inspect graph edges and active probes.",
+      canOpenPipeline: false,
+      canRunDiagnostics: false,
+      diagnosticsDisabledReason: "Select a pipeline first.",
+      metrics: [
+        { label: "Pipelines", value: String(state.pipelines.length) },
+        {
+          label: "Graph",
+          value: graphInFlight ? "Loading" : "Runtime",
+        },
+      ],
+    };
+  }
+
+  const apiSummary = pipelineSummaryCache.get(pipe.id) || null;
+  const health = pipelineHealthLabel(pipe);
+  const graph = apiSummary?.graph;
+  const graphLabel = graph?.hasGraph
+    ? `${graph.activeNodes ?? 0}/${graph.nodes ?? 0} active`
+    : apiSummary
+      ? "not active"
+      : "loading";
+  const outputCountLabel =
+    Number.isFinite(apiSummary?.outputs?.running as number) &&
+    Number.isFinite(apiSummary?.outputs?.total as number)
+      ? `${apiSummary?.outputs?.running}/${apiSummary?.outputs?.total}`
+      : `${pipe.outs.filter(isOutputRunning).length}/${pipe.outs.length}`;
+  const blockers = inspectProbeBlockers(pipe);
+  const faultCandidates = inspectFaultCandidates(pipe);
+  const statusTone =
+    pipe.input.status === "error" || faultCandidates.some(isOutputUnexpectedlyDown)
+      ? "error"
+      : blockers.length || faultCandidates.length
+        ? "warning"
+        : health.label === "Healthy"
+          ? "success"
+          : "neutral";
+  const nextStep = inspectSuggestedNextStep(pipe);
+
+  return {
+    pipelineId: pipe.id,
+    title: pipe.name,
+    summary: inspectSummaryText(pipe),
+    statusLabel: health.label,
+    statusTone,
+    inputLabel: inspectInputLabel(pipe),
+    outputLabel: `${outputCountLabel} outputs running`,
+    attentionLabel: pluralize(faultCandidates.length, "fault candidate"),
+    graphLabel,
+    focusLabel: `Inspection focus · ${
+      blockers.length
+        ? `${pluralize(blockers.length, "blocker")} before active probes`
+        : "ready for active probes"
+    } · ${pluralize(faultCandidates.length, "fault candidate")} · ${nextStep}`,
+    nextStep,
+    canOpenPipeline: true,
+    canRunDiagnostics: pipe.input.status === "on",
+    diagnosticsDisabledReason:
+      pipe.input.status === "on" ? "" : "Input must be online for diagnostics.",
+    metrics: [
+      { label: "Input", value: titleCaseValue(pipe.input.status) },
+      {
+        label: "Publisher",
+        value: protocolValue(pipe.input.publisher?.protocol),
+      },
+      { label: "Graph", value: titleCaseValue(graphLabel) },
+      { label: "In", value: formatBitrate(pipe.stats.inputBitrateKbps) },
+      { label: "Out", value: formatBitrate(pipe.stats.outputBitrateKbps) },
+      {
+        label: "Alerts",
+        value: apiSummary ? String(apiSummary.alerts?.length ?? 0) : "Loading",
+      },
+    ],
+  };
+}
+
+function updateInspectRouteSummary(
+  pipe: PipelineView | null,
+  invalidPipelineSelection = false,
+): void {
+  const summary = document.getElementById("inspect-route-summary");
+  if (!summary) return;
+  summary.textContent = inspectSummaryText(pipe, invalidPipelineSelection);
+}
+
+function renderInspectCheckpointPresentation(
+  pipe: PipelineView | null,
+  invalidPipelineSelection = false,
+): void {
+  inspectPresentationCallback?.(
+    buildInspectCheckpointModel(pipe, invalidPipelineSelection),
+  );
+}
+
 export function renderPipelineInspector(): void {
   const pipe = selectedPipeline();
   const invalidPipelineSelection = hasInvalidPipelineSelection();
+  updateInspectRouteSummary(pipe, invalidPipelineSelection);
+  renderInspectCheckpointPresentation(pipe, invalidPipelineSelection);
   const stateKey = graphStateKey(pipe);
   const select = document.getElementById(
     "inspect-pipeline-select",
@@ -290,6 +543,11 @@ export function renderPipelineInspector(): void {
   ) as HTMLButtonElement | null;
   if (openBtn) {
     openBtn.disabled = !pipe;
+    openBtn.textContent = "Operate";
+    openBtn.setAttribute(
+      "aria-label",
+      pipe ? `Operate ${pipe.name}` : "Operate selected pipeline",
+    );
     openBtn.onclick = () => {
       if (pipe) dependencies.openOperateView(pipe.id);
     };
@@ -313,6 +571,10 @@ export function renderPipelineInspector(): void {
   ) as HTMLButtonElement | null;
   if (refreshBtn) {
     refreshBtn.textContent = graphAutoRefresh ? "Stop Refresh" : "Auto Refresh";
+    refreshBtn.setAttribute(
+      "aria-label",
+      graphAutoRefresh ? "Stop graph auto refresh" : "Start graph auto refresh",
+    );
     refreshBtn.classList.toggle("btn-accent", graphAutoRefresh);
     refreshBtn.classList.toggle("btn-outline", !graphAutoRefresh);
     refreshBtn.setAttribute(
@@ -330,6 +592,13 @@ export function renderPipelineInspector(): void {
   ) as HTMLButtonElement | null;
   if (diagnosticsBtn) {
     diagnosticsBtn.disabled = !pipe || pipe.input.status !== "on";
+    diagnosticsBtn.textContent = "Run Diagnostics";
+    diagnosticsBtn.setAttribute(
+      "aria-label",
+      pipe
+        ? `Run diagnostics for ${pipe.name}`
+        : "Run diagnostics for selected pipeline",
+    );
     diagnosticsBtn.onclick = () => {
       if (pipe) openDiagnosticsModal(pipe.id);
     };
@@ -367,6 +636,9 @@ export function resetPipelineInspectorSelection(
   pipelineId: string | null,
 ): void {
   forceRuntimeScope = pipelineId === null;
+  inspectOutputSearchQuery = "";
+  inspectResourceDetailsExpanded = false;
+  inspectProbeDetailsExpanded = false;
   runtimeScopeMaskedPipelineId =
     pipelineId === null ? getUrlParam("p") || graphPipelineId : null;
   graphRequestSeq++;
@@ -438,7 +710,15 @@ function renderSummary(
     ["Alerts", apiSummary ? String(alerts.length) : "Loading"],
   ];
   const outputPreviewLimit = 12;
-  const outputs = pipe.outs
+  const normalizedOutputSearch = normalizeInspectSearch(inspectOutputSearchQuery);
+  const filteredOutputs = normalizedOutputSearch
+    ? pipe.outs.filter((out) =>
+        inspectOutputSearchText(out).includes(normalizedOutputSearch),
+      )
+    : pipe.outs;
+  const showOutputSearch =
+    pipe.outs.length > 4 || normalizedOutputSearch !== "";
+  const outputs = filteredOutputs
     .slice(0, outputPreviewLimit)
     .map((out) => {
       const stateLabel = outputStateLabel(out);
@@ -452,7 +732,10 @@ function renderSummary(
             </div>`;
     })
     .join("");
-  const remainingOutputs = Math.max(0, pipe.outs.length - outputPreviewLimit);
+  const remainingOutputs = Math.max(
+    0,
+    filteredOutputs.length - outputPreviewLimit,
+  );
 
   container.innerHTML = `<div>
         <div class="mb-3 flex min-w-0 items-center justify-between gap-3">
@@ -471,16 +754,66 @@ function renderSummary(
         </dl>
         ${alertSummaryHtml(apiSummary ? alerts : null, pipe)}
         <div class="mt-3">
-            <div class="mb-1 flex items-center justify-between gap-2">
-                <div class="text-base-content/60 text-[0.68rem] font-semibold uppercase tracking-wide">Outputs</div>
-                <div class="text-base-content/50 text-sm tabular-nums">${escapeHtml(outputCountLabel)}</div>
+            <div class="mb-2 flex flex-wrap items-end justify-between gap-2">
+                <div>
+                    <div class="text-base-content/60 text-[0.68rem] font-semibold uppercase tracking-wide">Outputs</div>
+                    <div class="text-base-content/50 text-xs tabular-nums">${escapeHtml(outputCountLabel)}</div>
+                </div>
+                ${
+                  showOutputSearch
+                    ? `<div class="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2 sm:flex-none">
+                        <label class="input input-bordered input-sm flex min-h-10 min-w-0 max-w-xs flex-1 items-center gap-2 sm:w-72">
+                          <span class="text-base-content/55 text-xs font-semibold uppercase">Find</span>
+                          <input id="inspect-output-search" class="min-w-0 grow" type="search" aria-label="Search inspect outputs" placeholder="output, state, URL" value="${escapeHtml(inspectOutputSearchQuery)}">
+                        </label>
+                        <button id="inspect-output-clear-search-btn" type="button" class="btn btn-xs btn-ghost ${normalizedOutputSearch ? "" : "hidden"}">Clear output search</button>
+                      </div>`
+                    : ""
+                }
             </div>
-            <div class="border-base-content/10 bg-base-100/40 rounded-md border px-2">
-                ${outputs || '<div class="dashboard-muted py-2">No outputs configured.</div>'}
-                ${remainingOutputs ? `<div class="text-base-content/60 border-base-content/10 border-t py-2 text-xs">+${remainingOutputs} more outputs in Operate</div>` : ""}
+            ${
+              normalizedOutputSearch
+                ? `<p id="inspect-output-search-summary" class="text-base-content/55 mb-2 text-xs tabular-nums" role="status" aria-live="polite">${escapeHtml(String(filteredOutputs.length))}/${escapeHtml(String(pipe.outs.length))} inspect outputs match · "${escapeHtml(inspectOutputSearchQuery.trim())}"</p>`
+                : ""
+            }
+            <div id="inspect-output-preview-list" class="border-base-content/10 bg-base-100/40 rounded-md border px-2" aria-label="Inspect output preview">
+                ${
+                  outputs ||
+                  (normalizedOutputSearch
+                    ? `<div class="dashboard-muted py-2" role="status" aria-live="polite">No inspect outputs match "${escapeHtml(inspectOutputSearchQuery.trim())}". Clear output search to show all.</div>`
+                    : '<div class="dashboard-muted py-2">No outputs configured.</div>')
+                }
+                ${remainingOutputs ? `<div class="text-base-content/60 border-base-content/10 border-t py-2 text-xs">+${remainingOutputs} more matching outputs in Operate</div>` : ""}
             </div>
         </div>
     </div>`;
+  bindInspectOutputSearch(pipe);
+}
+
+function bindInspectOutputSearch(pipe: PipelineView): void {
+  const input = document.getElementById(
+    "inspect-output-search",
+  ) as HTMLInputElement | null;
+  if (input) {
+    input.oninput = () => {
+      inspectOutputSearchQuery = input.value;
+      renderSummary(pipe);
+      const nextInput = document.getElementById(
+        "inspect-output-search",
+      ) as HTMLInputElement | null;
+      nextInput?.focus();
+    };
+  }
+  document
+    .getElementById("inspect-output-clear-search-btn")
+    ?.addEventListener("click", () => {
+      inspectOutputSearchQuery = "";
+      renderSummary(pipe);
+      const nextInput = document.getElementById(
+        "inspect-output-search",
+      ) as HTMLInputElement | null;
+      nextInput?.focus();
+    });
 }
 
 function alertSummaryHtml(
@@ -547,7 +880,10 @@ function refreshPipelineSummary(pipelineId: string): void {
       if (!summary || requestSeq !== summaryRequestSeq) return;
       pipelineSummaryCache.set(pipelineId, summary);
       const pipe = selectedPipeline();
-      if (pipe?.id === pipelineId) renderSummary(pipe);
+      if (pipe?.id === pipelineId) {
+        renderSummary(pipe);
+        renderInspectCheckpointPresentation(pipe);
+      }
     })
     .catch(() => {})
     .finally(() => {
@@ -558,38 +894,79 @@ function refreshPipelineSummary(pipelineId: string): void {
 function renderDiagnostics(pipe: PipelineView | null): void {
   const container = document.getElementById("inspect-diagnostics-summary");
   if (!container) return;
+  const focusSummary = document.getElementById("inspect-focus-summary");
   if (!pipe) {
+    if (focusSummary) {
+      focusSummary.textContent =
+        "Inspection focus · select a pipeline to inspect diagnostics.";
+    }
     container.innerHTML =
       '<div class="text-base-content/60 text-sm">Select a pipeline to inspect diagnostics.</div>';
     return;
   }
 
-  const blockers: string[] = [];
-  if (pipe.input.status !== "on")
-    blockers.push("Input must be online for active probes.");
-  if (!pipe.input.publisher?.protocol)
-    blockers.push("Publisher protocol is not known yet.");
-  const downOutputs = pipe.outs.filter(isOutputUnexpectedlyDown);
-  const retryingOutputs = pipe.outs.filter(isOutputRetrying);
-  const flappingOutputs = pipe.outs.filter(isOutputFlapping);
-  const faultCandidates = [
-    ...downOutputs,
-    ...retryingOutputs,
-    ...flappingOutputs,
-  ];
+  const blockers = inspectProbeBlockers(pipe);
+  const faultCandidates = inspectFaultCandidates(pipe);
+  const suggestedNextStep = inspectSuggestedNextStep(pipe);
+  const blockerText = blockers.length
+    ? blockers.map(escapeHtml).join("<br>")
+    : "Ready for active diagnostics.";
+  const faultText = faultCandidates.length
+    ? faultCandidates.map((out) => escapeHtml(out.name)).join("<br>")
+    : "No unexpected output failures.";
+  if (focusSummary) {
+    focusSummary.textContent = `Inspection focus · ${blockers.length ? `${pluralize(blockers.length, "blocker")} before active probes` : "ready for active probes"} · ${pluralize(faultCandidates.length, "fault candidate")} · ${suggestedNextStep}`;
+  }
+
+  if (pipelineInspectV2Active()) {
+    const detailLabel = `${
+      inspectProbeDetailsExpanded ? "Hide" : "Show"
+    } probe details for ${pipe.name}`;
+    container.innerHTML = `<section class="border-base-content/10 bg-base-100/35 rounded-lg border p-3">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div class="dashboard-kicker">Probe plan</div>
+            <div class="mt-1 text-sm">${escapeHtml(suggestedNextStep)}</div>
+            <div class="text-base-content/55 mt-1 text-xs">${escapeHtml(pluralize(blockers.length, "blocker"))} · ${escapeHtml(pluralize(faultCandidates.length, "fault candidate"))}</div>
+          </div>
+          <button id="inspect-probe-details-toggle" type="button" class="btn btn-xs btn-outline" aria-label="${escapeHtml(detailLabel)}" aria-expanded="${inspectProbeDetailsExpanded ? "true" : "false"}">${inspectProbeDetailsExpanded ? "Hide probe details" : "Show probe details"}</button>
+        </div>
+        ${
+          inspectProbeDetailsExpanded
+            ? `<div class="mt-3 grid gap-3 md:grid-cols-2">
+                <div class="dashboard-stat-card-compact">
+                  <div class="dashboard-kicker">Probe Readiness</div>
+                  <div class="mt-2 text-sm">${blockerText}</div>
+                </div>
+                <div class="dashboard-stat-card-compact">
+                  <div class="dashboard-kicker">Fault Candidates</div>
+                  <div class="mt-2 text-sm">${faultText}</div>
+                </div>
+              </div>`
+            : ""
+        }
+      </section>`;
+    document
+      .getElementById("inspect-probe-details-toggle")
+      ?.addEventListener("click", () => {
+        inspectProbeDetailsExpanded = !inspectProbeDetailsExpanded;
+        renderDiagnostics(pipe);
+      });
+    return;
+  }
 
   container.innerHTML = `<div class="grid gap-3 md:grid-cols-3">
         <div class="dashboard-stat-card-compact">
             <div class="dashboard-kicker">Probe Readiness</div>
-            <div class="mt-2 text-sm">${blockers.length ? blockers.map(escapeHtml).join("<br>") : "Ready for active diagnostics."}</div>
+            <div class="mt-2 text-sm">${blockerText}</div>
         </div>
         <div class="dashboard-stat-card-compact">
             <div class="dashboard-kicker">Fault Candidates</div>
-            <div class="mt-2 text-sm">${faultCandidates.length ? faultCandidates.map((out) => escapeHtml(out.name)).join("<br>") : "No unexpected output failures."}</div>
+            <div class="mt-2 text-sm">${faultText}</div>
         </div>
         <div class="dashboard-stat-card-compact">
             <div class="dashboard-kicker">Suggested Next Step</div>
-            <div class="mt-2 text-sm">${pipe.input.status === "on" ? (retryingOutputs.length ? "Inspect recent errors and retry backoff before forcing a restart." : flappingOutputs.length ? "Inspect recent sink failures before forcing a restart." : "Run diagnostics, then inspect graph edges with zero packet output.") : "Start or reconnect the publisher before probing."}</div>
+            <div class="mt-2 text-sm">${suggestedNextStep}</div>
         </div>
     </div>`;
 }
@@ -610,10 +987,29 @@ function renderInspectorResourceDetails(
       '<div class="text-base-content/60 text-sm">Resource details are loading.</div>';
     return;
   }
+  const detailHtml = resourceDetailPanelHtml(resourceMap, pipe);
+  const resourceDetailsLabel = `${inspectResourceDetailsExpanded ? "Hide" : "Show"} resource details for ${pipe.name}`;
+  const resourceDetailPanel = !pipelineInspectV2Active()
+    ? detailHtml
+    : `<section class="border-base-content/10 bg-base-100/35 rounded-lg border p-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div class="text-sm font-semibold">Resource detail tables</div>
+          </div>
+          <button id="inspect-resource-details-toggle" type="button" class="btn btn-xs btn-outline" aria-label="${escapeHtml(resourceDetailsLabel)}" aria-expanded="${inspectResourceDetailsExpanded ? "true" : "false"}">${inspectResourceDetailsExpanded ? "Hide resource details" : "Show resource details"}</button>
+        </div>
+        ${inspectResourceDetailsExpanded ? `<div class="mt-3">${detailHtml}</div>` : ""}
+      </section>`;
   container.innerHTML = `<div class="space-y-3">
     ${resourceSummaryGroupsHtml(resourceMap)}
-    ${resourceDetailPanelHtml(resourceMap, pipe)}
+    ${resourceDetailPanel}
   </div>`;
+  document
+    .getElementById("inspect-resource-details-toggle")
+    ?.addEventListener("click", () => {
+      inspectResourceDetailsExpanded = !inspectResourceDetailsExpanded;
+      renderInspectorResourceDetails(pipe, resourceMap);
+    });
 }
 
 export async function refreshPipelineInspectorGraph(): Promise<void> {
@@ -719,6 +1115,7 @@ export async function refreshPipelineInspectorGraph(): Promise<void> {
       if (currentPipe?.id === requestPipelineId) {
         withPreservedScroll(container, () => renderSummary(currentPipe));
         renderInspectorResourceDetails(currentPipe, resourceMap);
+        renderInspectCheckpointPresentation(currentPipe);
       }
     }
     graphRenderedStateKey = requestStateKey;
@@ -838,10 +1235,13 @@ function resourceSummaryGroupHtml(
   subtitle: string,
   cards: ResourceSummaryCard[],
 ): string {
+  const subtitleHtml = pipelineInspectV2Active()
+    ? ""
+    : `<div class="text-base-content/55 text-xs">${escapeHtml(subtitle)}</div>`;
   return `<section class="dashboard-section bg-base-100/35 p-3">
     <div class="mb-2">
       <div class="text-sm font-semibold">${escapeHtml(title)}</div>
-      <div class="text-base-content/55 text-xs">${escapeHtml(subtitle)}</div>
+      ${subtitleHtml}
     </div>
     <div class="grid gap-2 sm:grid-cols-3 lg:grid-cols-1 2xl:grid-cols-3">
       ${cards

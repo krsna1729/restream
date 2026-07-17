@@ -38,10 +38,10 @@ states:
   - id: msr.live-pressure
     surface: overview-and-pipeline-operate
     fixture: live-msr
-    expected: 120 live outputs, 30 audio tracks, and the MSR output list remain navigable through bounded defaults, search/filter, and progressive disclosure.
+    expected: 120 live outputs, 30 audio tracks, long pipeline lists, and the MSR output list remain navigable through bounded defaults, search/filter, and progressive disclosure.
     proof:
       status: live
-      source: .local/artifacts/latest/msr.json and .local/artifacts/ui-v2-live-msr/crawl-results.json from test_harness msr on 2026-07-16
+      source: .local/artifacts/latest/msr.json and .local/artifacts/ui-v2-live-msr/crawl-results.json from test_harness msr on 2026-07-16; seeded Playwright/CDP proves Overview pipeline search counts plus local active/no-hit clear-search recovery, Overview activity burst search counts plus local active/no-hit clear-search recovery, v2 pipeline-selector search counts plus local active/no-hit clear-search recovery, Operate output and rail filter result counts plus local active/no-hit clear-filter recovery, Operate audio-track search counts plus local no-hit clear-search recovery for 30-track inputs, Inspect v2 checkpoint ownership, scope/input/output/attention counts, diagnostics focus guidance, lazy resource detail tables, output-preview search counts with local active/no-hit clear-search recovery, and status-aware Inspect output search aliases such as down/running/offline without hidden raw-status false positives, Monitor v2 checkpoint ownership, coverage/missing/search/lazy-preview counts, status-aware operator search terms such as down/flapping/running, local clear-search recovery, lazy generic web preview loading before iframe mount, lazy HLS output preview loading before managed video mount, and lazy per-card URL maintenance actions, Media v2 checkpoint ownership, search result counts split by Recordings and Source Files, section-specific no-result recovery copy, local clear-search recovery, bounded dense library sections with explicit Show all affordances, lazy row-level Download/Rename/Delete actions, v2-only dense DOM unmounting, and populated library remount after route return, Settings v2 checkpoint ownership, section/profile/security-attempt counts, auth-attempt search result counts plus section-specific no-result recovery copy, local clear-search recovery, bounded dense auth-attempt rows with an explicit Show all affordance, lazy v2 auth reset/account actions, v2 advanced Recording/SRT/Backend/Profile disclosures, lazy-mounted per-profile tuning controls, and v2-only unmounting of dense Settings DOM after route exit, Status v2 checkpoint ownership, process/activity search counts plus local clear-search recovery, query-specific no-result recovery copy, bounded dense process-log cards with an explicit Show all affordance, lazy v2 Toolchain/Native/SBOM detail tables, and lazy v2 export/SBOM actions, Incidents v2 checkpoint ownership, scoped alert/event counts, cross-feed search result counts plus section-specific no-result recovery copy, local clear-search recovery, bounded dense alert/event lists with explicit Show all affordances, and lazy v2 alert detail blocks, Telemetry v2 checkpoint ownership, scoped engine/pipeline counts, reader/stage/egress filter counts plus local clear-search recovery, section-specific no-result recovery copy, reversible stage-card detail disclosure, bounded dense stage and egress cards with explicit Show all affordances, and lazy v2 host-setting detail tables, primary workspace navigation exposes Incidents and Telemetry, workspace and pipeline tablists support Arrow/Home/End navigation and keep the active tab visible on narrow rails without page-wide overflow, a route-checkpoint matrix with route-specific CDP node budgets, hidden Pipeline Inspect/Monitor detail-shell unmounting on non-pipeline checkpoint routes plus restore on return, workspace ownership cues for v2-owned versus checkpoint routes, and no-result guidance are announced as status text without mislabeling filtered monitor cards as missing configuration, and v2 input ownership empties hidden legacy audio/preview hosts
       files:
         - docs/ui-redesign/operator-msr-live-review-2026-07-16.md
         - test/frontend/redesign/seed.spec.ts
@@ -68,20 +68,22 @@ states:
     surface: pipeline-operate
     expected: Starting, active, and stopping preserve intent and runtime state.
     proof:
-      status: partial
+      status: seeded
+      source: Playwright seeded v2 flow covers slow pending controls, failed recording context, retry-ready controls, and CDP node budget
       files:
         - test/frontend/dashboard-contract/pipeline-mutations.test.mjs
-      gap: Browser-visible pending and failed recording states need a scenario proof.
+        - test/frontend/redesign/seed.spec.ts
 
   - id: file-ingest.lifecycle
     surface: pipeline-operate
     expected: Starting, active, failed, and stopping states are operator-visible.
     proof:
-      status: partial
+      status: seeded
+      source: Playwright seeded v2 flow covers slow pending controls, failed file-ingest context, retry-ready controls, and CDP node budget
       files:
         - test/frontend/dashboard-contract/pipeline-mutations.test.mjs
         - test/frontend/frontend-pipeline-info-scenarios.test.mjs
-      gap: Browser-visible slow and failed start states need a scenario proof.
+        - test/frontend/redesign/seed.spec.ts
 
   - id: runtime.sse-reconnect
     surface: shared-runtime
@@ -111,6 +113,15 @@ states:
         - test/frontend/frontend-incidents.test.mjs
         - test/frontend/frontend-engineer-telemetry.test.mjs
 
+  - id: runtime.selected-pipeline-convergence
+    surface: pipeline-operate
+    expected: When the focused pipeline runtime details have not converged yet, v2 shows an explicit lightweight placeholder instead of a silent partial shell.
+    proof:
+      status: seeded
+      source: Playwright render proof with CDP Performance.getMetrics node budget
+      files:
+        - test/frontend/redesign/seed.spec.ts
+
   - id: hls.unavailable
     surface: pipeline-operate
     expected: Unsupported, unavailable, timeout, and playback failures differ.
@@ -131,20 +142,21 @@ states:
     surface: shared-runtime
     expected: A 401 returns the operator to the base-path-aware login flow.
     proof:
-      status: partial
+      status: seeded
+      source: Playwright seeded v2 flow proves a runtime 401 redirects to login with the full operator return path, browser DOM coverage proves successful login returns to that preserved location, and seeded Playwright/CDP proves the legacy-owned Status route announces its loaded build and process-activity summary as status text while separately announcing process-log/activity search hit and no-hit counts.
       files:
-        - test/frontend/frontend-api-contract.test.mjs
         - test/frontend/frontend-browser-dom.spec.ts
-      gap: Full dashboard expiry and return-to-location need an end-to-end proof.
+        - test/frontend/redesign/seed.spec.ts
 
   - id: mutation.slow-failed
     surface: pipeline-operate
     expected: Slow and failed mutations retain context and prevent duplicate action.
     proof:
-      status: partial
+      status: seeded
+      source: Playwright seeded v2 flows cover recording, file-ingest, and output pending/failure context with CDP node budgets
       files:
         - test/frontend/dashboard-contract/output-mutations.test.mjs
-      gap: Browser-visible timeout, error focus, and retry affordance need proof.
+        - test/frontend/redesign/seed.spec.ts
 
   - id: viewport.mobile-tablet-desktop
     surface: all
@@ -161,9 +173,11 @@ states:
     expected: Primary tasks work by keyboard with stable names, focus, and contrast.
     proof:
       status: partial
+      source: Playwright/CDP proves v2 Overview and Operate primary routes stay keyboard-reachable, expose a skip link into the active main tabpanel before dense chrome, keep bounded node counts, use one canonical history step from Overview into selected Pipeline Operate or Inspect, preserve the selected pipeline while moving Operate to Inspect to Monitor without duplicate active-tab history pushes, move focus to the active destination panel for content-driven Overview to Operate and Pipeline to Inspect jumps, keep v2 Operate inside the viewport across desktop/tablet/mobile breakpoints, keep active workspace and pipeline tabs visible on narrow rails, tolerate operator text zoom on narrow telemetry and monitor routes without page-wide horizontal overflow, expose named controls and landmarks with sequential Operate heading levels in the accessibility tree, keep chrome-only rail labels out of the content heading outline, pass serious/critical axe checks on v2 Operate, and keep output action menus menu/menuitem-accessible with Escape focus restoration
       files:
         - test/frontend/frontend-dom-invariants.test.mjs
         - test/frontend/frontend-browser-dom.spec.ts
         - test/frontend/redesign/visual-accessibility.spec.ts
+        - test/frontend/redesign/seed.spec.ts
         - test/frontend/redesign/snapshots/
-      gap: Retain manual keyboard, focus, contrast, zoom, and assistive-technology review beyond the seeded Overview.
+      gap: Retain manual assistive-technology review beyond seeded Overview and v2 Operate automated accessibility paths.

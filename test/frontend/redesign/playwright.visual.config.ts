@@ -4,7 +4,7 @@ const chromium = devices["Desktop Chrome"];
 
 export default defineConfig({
   testDir: ".",
-  testMatch: ["seed.spec.ts", "visual-accessibility.spec.ts"],
+  testMatch: ["seed*.spec.ts", "visual-accessibility.spec.ts"],
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

@@ -119,15 +119,28 @@ test("dashboard UI version toggle persists changes and updates the URL", async (
 
 test("compiled dashboard keeps the opt-in React seam in a bounded bundle", async () => {
   const appDir = path.join(resolveFrontendModulesDir(), "app");
-  const [defaultEntry, v2Entry] = await Promise.all([
-    readFile(path.join(appDir, "dashboard-entry.js")),
-    readFile(path.join(appDir, "dashboard-v2-entry.js")),
-  ]);
+  const [defaultEntry, v2Entry, checkpointsEntry, sharedRuntime] =
+    await Promise.all([
+      readFile(path.join(appDir, "dashboard-entry.js")),
+      readFile(path.join(appDir, "dashboard-v2-entry.js")),
+      readFile(path.join(appDir, "dashboard-v2-checkpoints-entry.js")),
+      readFile(path.join(appDir, "dashboard-v2-jsx-runtime.js")),
+    ]);
 
   assert.equal(defaultEntry.includes("dashboard-v2-overview"), false);
   assert.equal(v2Entry.includes("dashboard-v2-overview"), true);
+  assert.equal(
+    checkpointsEntry.includes("dashboard-v2-pipeline-inspect-root"),
+    true,
+  );
+  assert.equal(v2Entry.includes("dashboard-v2-pipeline-inspect-root"), false);
+  const sharedGzip = gzipSync(sharedRuntime).byteLength;
   assert.ok(
-    gzipSync(v2Entry).byteLength <= 75_000,
-    "the opt-in component seam must stay within its recorded gzip budget",
+    gzipSync(v2Entry).byteLength + sharedGzip <= 77_000,
+    "the opt-in Overview/Operate route payload must stay within its recorded gzip budget",
+  );
+  assert.ok(
+    gzipSync(checkpointsEntry).byteLength + sharedGzip <= 69_000,
+    "the opt-in checkpoint route payload must stay within its recorded gzip budget",
   );
 });

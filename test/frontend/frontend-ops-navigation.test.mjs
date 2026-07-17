@@ -9,8 +9,12 @@ test("operator navigation keeps primary tabs focused while retaining detail pane
   );
   assert.match(html, /id="incidents-mode-panel"/);
   assert.match(html, /id="telemetry-mode-panel"/);
-  assert.doesNotMatch(html, /data-dashboard-mode="incidents"/);
-  assert.doesNotMatch(html, /data-dashboard-mode="telemetry"/);
+  assert.match(html, /id="workspace-tab-incidents"[\s\S]*role="tab"/);
+  assert.match(html, /data-dashboard-mode="incidents"/);
+  assert.match(html, /aria-controls="incidents-mode-panel"/);
+  assert.match(html, /id="workspace-tab-telemetry"[\s\S]*role="tab"/);
+  assert.match(html, /data-dashboard-mode="telemetry"/);
+  assert.match(html, /aria-controls="telemetry-mode-panel"/);
   assert.doesNotMatch(html, /data-dashboard-mode="agent"/);
   assert.match(html, /<header class="navbar/);
   assert.match(html, /<main id="dashboard-main"/);

@@ -11,6 +11,13 @@
     <script type="module" src="js/app/dashboard-entry.js"></script>
   </head>
   <body class="bg-base-100 text-base-content flex h-screen flex-col">
+    <a
+      id="skip-to-dashboard-main"
+      href="#dashboard-main"
+      class="btn btn-sm btn-primary fixed left-3 top-3 z-50 -translate-y-20 opacity-0 shadow-lg transition focus:translate-y-0 focus:opacity-100"
+    >
+      Skip to main content
+    </a>
     <header class="navbar bg-base-100 min-h-16 shrink-0 flex-wrap gap-2">
       <!-- LEFT -->
       <div class="flex flex-1 items-center gap-3">
@@ -168,6 +175,30 @@
               Pipeline
             </button>
             <button
+              id="workspace-tab-incidents"
+              type="button"
+              class="btn btn-sm join-item btn-outline"
+              data-dashboard-mode="incidents"
+              role="tab"
+              aria-selected="false"
+              aria-controls="incidents-mode-panel"
+              tabindex="-1"
+            >
+              Incidents
+            </button>
+            <button
+              id="workspace-tab-telemetry"
+              type="button"
+              class="btn btn-sm join-item btn-outline"
+              data-dashboard-mode="telemetry"
+              role="tab"
+              aria-selected="false"
+              aria-controls="telemetry-mode-panel"
+              tabindex="-1"
+            >
+              Telemetry
+            </button>
+            <button
               id="workspace-tab-media"
               type="button"
               class="btn btn-sm join-item btn-outline"
@@ -208,6 +239,8 @@
         <div
           class="text-base-content/60 min-w-0 truncate text-sm"
           id="workspace-mode-summary"
+          role="status"
+          aria-live="polite"
         ></div>
         <label
           class="border-base-content/15 bg-base-200/60 text-base-content/75 ml-auto inline-flex min-h-9 items-center gap-2 rounded-full border px-3 text-xs font-medium"
@@ -1028,7 +1061,7 @@
       <form method="dialog" class="modal-backdrop"><button>close</button></form>
     </dialog>
 
-    <main id="dashboard-main" class="contents">
+    <main id="dashboard-main" class="contents" tabindex="-1">
       <section
         id="overview-mode-panel"
         role="tabpanel"
@@ -1042,18 +1075,28 @@
       <section
         id="incidents-mode-panel"
         role="tabpanel"
-        aria-label="Incidents"
+        aria-labelledby="workspace-tab-incidents"
         class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
       >
+        <div
+          id="dashboard-v2-incidents-root"
+          class="mx-auto max-w-7xl"
+          hidden
+        ></div>
         <div id="incidents-mode-content" class="mx-auto max-w-7xl"></div>
       </section>
 
       <section
         id="telemetry-mode-panel"
         role="tabpanel"
-        aria-label="Telemetry"
+        aria-labelledby="workspace-tab-telemetry"
         class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
       >
+        <div
+          id="dashboard-v2-telemetry-root"
+          class="mx-auto max-w-7xl"
+          hidden
+        ></div>
         <div id="telemetry-mode-content" class="mx-auto max-w-7xl"></div>
       </section>
 
@@ -1063,6 +1106,7 @@
         aria-labelledby="pipeline-workspace-tab-monitor"
         class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
       >
+        <div id="dashboard-v2-control-room-root" hidden></div>
         <div id="control-mode-content" class="mx-auto max-w-7xl"></div>
       </section>
 
@@ -1074,6 +1118,13 @@
       >
         <div class="mx-auto flex w-full flex-col gap-4">
           <h1 class="dashboard-title">Pipeline inspect</h1>
+          <p
+            id="inspect-route-summary"
+            class="text-base-content/60 text-sm"
+            role="status"
+            aria-live="polite"
+          ></p>
+          <div id="dashboard-v2-pipeline-inspect-root" hidden></div>
           <div
             class="border-base-content/10 bg-base-200 flex flex-wrap items-center gap-2 rounded-lg border p-3"
           >
@@ -1085,9 +1136,10 @@
             <button
               type="button"
               id="inspect-open-pipeline-btn"
-              class="btn btn-sm btn-outline"
+              class="btn btn-sm btn-outline min-h-10"
+              aria-label="Operate selected pipeline"
             >
-              Open
+              Operate
             </button>
           </div>
           <section
@@ -1149,6 +1201,12 @@
                   Run Diagnostics
                 </button>
               </div>
+              <p
+                id="inspect-focus-summary"
+                class="text-base-content/60 mb-3 text-sm"
+                role="status"
+                aria-live="polite"
+              ></p>
               <div id="inspect-diagnostics-summary"></div>
             </section>
           </div>
@@ -1161,6 +1219,11 @@
         aria-labelledby="workspace-tab-media"
         class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
       >
+        <div
+          id="dashboard-v2-media-root"
+          class="mx-auto max-w-7xl"
+          hidden
+        ></div>
         <div id="media-mode-content" class="mx-auto max-w-7xl"></div>
       </section>
 
@@ -1170,6 +1233,11 @@
         aria-labelledby="workspace-tab-settings"
         class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
       >
+        <div
+          id="dashboard-v2-settings-root"
+          class="w-full"
+          hidden
+        ></div>
         <div id="settings-mode-content" class="w-full"></div>
       </section>
 
@@ -1179,6 +1247,11 @@
         aria-labelledby="workspace-tab-status"
         class="hidden min-h-0 flex-1 overflow-auto px-4 py-3"
       >
+        <div
+          id="dashboard-v2-status-root"
+          class="mx-auto max-w-7xl"
+          hidden
+        ></div>
         <div id="status-mode-content" class="w-full"></div>
       </section>
 
@@ -1259,7 +1332,7 @@
                 >
                   Diagnose
                 </button>
-                <div class="dropdown dropdown-end">
+                <div class="dropdown dropdown-end" id="pipeline-header-legacy-actions">
                   <button
                     type="button"
                     tabindex="0"

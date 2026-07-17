@@ -116,6 +116,7 @@ function appendInspectDom(document) {
   appendRoot(document, "select", "inspect-pipeline-select");
   appendRoot(document, "button", "inspect-open-pipeline-btn");
   appendRoot(document, "div", "inspect-pipeline-summary");
+  appendRoot(document, "p", "inspect-focus-summary");
   appendRoot(document, "div", "inspect-diagnostics-summary");
   appendRoot(document, "div", "inspect-resource-details");
   appendRoot(document, "button", "inspect-refresh-graph-btn");
@@ -171,13 +172,35 @@ runCheck("renderSettingsPanel emits delegated actions without inline handlers", 
   const container = appendRoot(document, "div", "settings-mode-content");
 
   const settings = await loadCompiledFrontendModule("features/settings.js");
+  const { state } = await loadCompiledFrontendModule("core/state.js");
+  state.config = {
+    serverName: "Synthetic Restream",
+    transcodeProfiles: {
+      mobile: {
+        preset: "veryfast",
+        tune: "zerolatency",
+        crf: 26,
+        gop: 60,
+        bframes: 0,
+        bitrate: 0,
+        maxBitrate: 0,
+        width: 854,
+        height: 480,
+      },
+    },
+  };
   settings.renderSettingsPanel(container);
+  settings.loadTranscodeProfiles();
 
   assert.doesNotMatch(container.innerHTML, /\son[a-z]+\s*=/i);
   assert.match(container.innerHTML, /data-settings-action="save-server-name"/);
   assert.match(container.innerHTML, /data-settings-action="reset-rate-limits"/);
   assert.match(container.innerHTML, /aria-label="Current password"/);
   assert.match(container.innerHTML, /aria-label="Global SRT ingest mode"/);
+  assert.match(container.innerHTML, /id="settings-route-summary"/);
+  assert.match(container.innerHTML, /Search authentication attempts/);
+  assert.match(container.innerHTML, /id="auth-attempts-search-summary"/);
+  assert.match(container.innerHTML, /role="status"/);
 });
 
 runCheck(
@@ -1178,6 +1201,10 @@ runCheck("inspect summary keeps retry badges non-wrapping", async () => {
   assert.match(summaryHtml, /Output retrying/);
   assert.match(summaryHtml, /shrink-0/);
   assert.match(summaryHtml, /whitespace-nowrap/);
+  assert.equal(
+    document.getElementById("inspect-focus-summary").textContent,
+    "Inspection focus · 1 blocker before active probes · 1 fault candidate · Inspect recent errors and retry backoff before forcing a restart.",
+  );
   assert.equal(fetchCalls.length >= 1, true);
 });
 
