@@ -1302,6 +1302,100 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   expect(await getCdpNodeCount(page)).toBeLessThan(8_000);
 });
 
+test("seed: ui=v2 Incidents bounds dense alert and event lists until requested @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(page, "mixed-health", "/?mode=incidents&ui=v2", {
+    expectOverviewReady: false,
+    alertsResponse: () => ({
+      generatedAt: "2026-07-14T06:30:00Z",
+      alerts: Array.from({ length: 14 }, (_, index) => ({
+        id: `dense-alert-${index + 1}`,
+        severity: index % 5 === 0 ? "critical" : "warning",
+        scope: "output",
+        pipelineId: "pipe-retrying",
+        outputId: `out-dense-${String(index + 1).padStart(2, "0")}`,
+        title: `Dense alert ${index + 1}`,
+        cause: `Dense destination ${index + 1} entered retry backoff`,
+        evidence: [`dense ${index + 1} lifecycle sample`],
+        recommendedAction: "Inspect the destination endpoint.",
+        generatedAt: "2026-07-14T06:29:54Z",
+        firstSeen: "2026-07-14T06:29:54Z",
+        lastSeen: "2026-07-14T06:29:54Z",
+      })),
+    }),
+    eventsResponse: () => ({
+      generatedAt: "2026-07-14T06:30:00Z",
+      count: 20,
+      events: Array.from({ length: 20 }, (_, index) => ({
+        seq: 200 - index,
+        timestamp: "2026-07-14T06:29:54Z",
+        kind: `dense.event.${index + 1}`,
+        pipelineId: "pipe-retrying",
+        outputId: `out-dense-${String(index + 1).padStart(2, "0")}`,
+        error: `dense ${index + 1} lifecycle sample`,
+      })),
+    }),
+  });
+
+  const incidents = page.locator("#incidents-mode-panel");
+  const summary = incidents.locator("#incidents-route-summary");
+  await expect(summary).toHaveText(
+    "3 critical · 11 warning · 20 recent events · fleet",
+  );
+  await expect(incidents.locator("#incidents-search-results-summary")).toHaveText(
+    "14 alert groups · 20 events visible",
+  );
+  await expect(incidents.getByText("8 alert groups shown of 14")).toBeVisible();
+  await expect(
+    incidents.getByRole("heading", { name: "Dense alert 14" }),
+  ).toBeVisible();
+  await expect(
+    incidents.getByRole("heading", { name: "Dense alert 3" }),
+  ).toHaveCount(0);
+  const eventList = incidents.getByLabel("Incident lifecycle events");
+  await expect(eventList.getByText("12 events shown of 20")).toBeVisible();
+  await expect(eventList.getByText("dense.event.12")).toBeVisible();
+  await expect(eventList.getByText("dense.event.13")).toHaveCount(0);
+  const showAllAlerts = incidents.getByRole("button", { name: "Show all 14" });
+  const showAllEvents = eventList.getByRole("button", { name: "Show all 20" });
+  await expect(showAllAlerts).toHaveAttribute("aria-expanded", "false");
+  await expect(showAllEvents).toHaveAttribute("aria-expanded", "false");
+  expect(await getCdpNodeCount(page)).toBeLessThan(11_000);
+
+  await showAllAlerts.click();
+  await expect(incidents.locator("#incidents-alerts-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    incidents.getByRole("heading", { name: "Dense alert 14" }),
+  ).toBeVisible();
+  await showAllEvents.click();
+  await expect(eventList.locator("#incidents-events-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(eventList.getByText("dense.event.20")).toBeVisible();
+
+  const search = incidents.getByLabel("Search incidents and events");
+  await search.fill("dense 14");
+  await expect(incidents.locator("#incidents-search-results-summary")).toHaveText(
+    '1 alert group · 1 event match "dense 14"',
+  );
+  await expect(
+    incidents.getByRole("heading", { name: "Dense alert 14" }),
+  ).toBeVisible();
+  await expect(eventList.getByText("dense.event.14")).toBeVisible();
+  await expect(
+    incidents.getByRole("button", { name: /Show (all|fewer)/ }),
+  ).toHaveCount(0);
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1 alert group · 1 event match "dense 14"',
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(11_000);
+});
+
 test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop", async ({
   page,
 }) => {

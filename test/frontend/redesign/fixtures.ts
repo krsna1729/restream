@@ -13,6 +13,8 @@ export interface SeededDashboardOptions {
   outputControlDelayMs?: number;
   expectOverviewReady?: boolean;
   settingsResponse?: (settings: Record<string, unknown>) => unknown;
+  alertsResponse?: (alerts: Record<string, unknown>) => unknown;
+  eventsResponse?: (events: Record<string, unknown>) => unknown;
   pipelineTelemetryResponse?: (
     pipelineId: string,
     telemetry: Record<string, unknown>,
@@ -522,13 +524,19 @@ export async function openSeededDashboard(
         await fulfillJson(route, seededOverview(stateName));
         return;
       case "/api/v1/alerts":
-        await fulfillJson(route, seededAlerts(stateName));
+        {
+          const alerts = seededAlerts(stateName);
+          await fulfillJson(route, options.alertsResponse?.(alerts) ?? alerts);
+        }
         return;
       case "/api/v1/events":
-        await fulfillJson(
-          route,
-          seededLifecycleEvents(stateName, url.searchParams.get("pipeline_id")),
-        );
+        {
+          const events = seededLifecycleEvents(
+            stateName,
+            url.searchParams.get("pipeline_id"),
+          );
+          await fulfillJson(route, options.eventsResponse?.(events) ?? events);
+        }
         return;
       case "/api/v1/logs/stream":
         await route.fulfill({

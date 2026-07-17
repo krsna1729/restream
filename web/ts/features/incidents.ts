@@ -33,6 +33,8 @@ interface IncidentsViewOptions {
 
 const INCIDENT_REFRESH_MS = 5_000;
 const INCIDENT_EVENT_LIMIT = 60;
+const INCIDENT_ALERT_GROUP_VISIBLE_LIMIT = 8;
+const INCIDENT_EVENT_VISIBLE_LIMIT = 12;
 let selectedPipelineId = "";
 let lastFetchedAt = 0;
 let requestSequence = 0;
@@ -49,6 +51,8 @@ let snapshot: IncidentSnapshot = {
 };
 let viewOptions: IncidentsViewOptions | null = null;
 let incidentSearchQuery = "";
+let incidentAlertGroupsExpanded = false;
+let incidentEventsExpanded = false;
 
 function formatTime(value: string | undefined): string {
   const millis = Date.parse(value || "");
@@ -349,6 +353,23 @@ export function renderIncidentsHtml(
   const events = scopedEvents.filter(
     (event) => !search || eventSearchText(event).includes(search),
   );
+  const showAlertGroupToggle =
+    !search && alertGroups.length > INCIDENT_ALERT_GROUP_VISIBLE_LIMIT;
+  const visibleAlertGroups =
+    showAlertGroupToggle && !incidentAlertGroupsExpanded
+      ? alertGroups.slice(0, INCIDENT_ALERT_GROUP_VISIBLE_LIMIT)
+      : alertGroups;
+  const alertGroupCaption = showAlertGroupToggle
+    ? `${pluralize(visibleAlertGroups.length, "alert group")} shown of ${alertGroups.length}. Search to isolate an output or show all when auditing the full incident set.`
+    : "";
+  const showEventToggle = !search && events.length > INCIDENT_EVENT_VISIBLE_LIMIT;
+  const visibleEvents =
+    showEventToggle && !incidentEventsExpanded
+      ? events.slice(0, INCIDENT_EVENT_VISIBLE_LIMIT)
+      : events;
+  const eventCaption = showEventToggle
+    ? `${pluralize(visibleEvents.length, "event")} shown of ${events.length}. Search to isolate lifecycle evidence or show all when reviewing the full timeline.`
+    : "";
   const options = [
     `<option value="">All pipelines</option>`,
     ...pipelines.map(
@@ -394,8 +415,34 @@ export function renderIncidentsHtml(
       <div class="stat bg-base-200 rounded-lg"><div class="stat-title">Failed outputs (fleet)</div><div class="stat-value text-2xl">${overview?.failedOutputs ?? "—"}</div></div>
     </section>
     <div class="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,.65fr)]">
-      <section><h2 class="mb-3 font-semibold">Active alerts</h2><div class="space-y-3">${data.loaded && data.alerts && !alertGroups.length ? `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">${search ? `No alert matches for "${escapeHtml(searchQuery.trim())}".` : `No active alerts${pipelineId ? " for this pipeline" : ""}.`}</div>` : alertGroups.map(renderAlertGroup).join("")}</div></section>
-      <section class="border-base-content/10 bg-base-200 self-start rounded-lg border p-4"><h2 class="font-semibold">Recent lifecycle events</h2><ul class="mt-2">${data.loaded && data.events && !events.length ? `<li class="py-6 text-center text-sm text-base-content/60">${search ? `No event matches for "${escapeHtml(searchQuery.trim())}".` : "No recent lifecycle events."}</li>` : events.map(renderEvent).join("")}</ul></section>
+      <section>
+        <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 class="font-semibold">Active alerts</h2>
+            ${alertGroupCaption ? `<p class="text-base-content/60 mt-1 text-xs">${escapeHtml(alertGroupCaption)}</p>` : ""}
+          </div>
+          ${
+            showAlertGroupToggle
+              ? `<button id="incidents-alerts-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="${incidentAlertGroupsExpanded ? "true" : "false"}">${incidentAlertGroupsExpanded ? "Show fewer" : `Show all ${alertGroups.length}`}</button>`
+              : ""
+          }
+        </div>
+        <div class="space-y-3">${data.loaded && data.alerts && !alertGroups.length ? `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">${search ? `No alert matches for "${escapeHtml(searchQuery.trim())}".` : `No active alerts${pipelineId ? " for this pipeline" : ""}.`}</div>` : visibleAlertGroups.map(renderAlertGroup).join("")}</div>
+      </section>
+      <section class="border-base-content/10 bg-base-200 self-start rounded-lg border p-4" aria-label="Incident lifecycle events">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 class="font-semibold">Recent lifecycle events</h2>
+            ${eventCaption ? `<p class="text-base-content/60 mt-1 text-xs">${escapeHtml(eventCaption)}</p>` : ""}
+          </div>
+          ${
+            showEventToggle
+              ? `<button id="incidents-events-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="${incidentEventsExpanded ? "true" : "false"}">${incidentEventsExpanded ? "Show fewer" : `Show all ${events.length}`}</button>`
+              : ""
+          }
+        </div>
+        <ul class="mt-2">${data.loaded && data.events && !events.length ? `<li class="py-6 text-center text-sm text-base-content/60">${search ? `No event matches for "${escapeHtml(searchQuery.trim())}".` : "No recent lifecycle events."}</li>` : visibleEvents.map(renderEvent).join("")}</ul>
+      </section>
     </div>
   </div>`;
 }
@@ -413,6 +460,8 @@ function bindIncidentControls(): void {
   search?.addEventListener("input", () => {
     const cursor = search.selectionStart ?? search.value.length;
     incidentSearchQuery = search.value;
+    incidentAlertGroupsExpanded = false;
+    incidentEventsExpanded = false;
     paintIncidents();
     const nextSearch = document.getElementById(
       "incidents-search",
@@ -424,6 +473,8 @@ function bindIncidentControls(): void {
     .getElementById("incidents-clear-search-btn")
     ?.addEventListener("click", () => {
       incidentSearchQuery = "";
+      incidentAlertGroupsExpanded = false;
+      incidentEventsExpanded = false;
       paintIncidents();
       (
         document.getElementById("incidents-search") as HTMLInputElement | null
@@ -433,6 +484,18 @@ function bindIncidentControls(): void {
     .getElementById("incidents-refresh-btn")
     ?.addEventListener("click", () => {
       void refreshIncidents(true);
+    });
+  document
+    .getElementById("incidents-alerts-toggle")
+    ?.addEventListener("click", () => {
+      incidentAlertGroupsExpanded = !incidentAlertGroupsExpanded;
+      paintIncidents();
+    });
+  document
+    .getElementById("incidents-events-toggle")
+    ?.addEventListener("click", () => {
+      incidentEventsExpanded = !incidentEventsExpanded;
+      paintIncidents();
     });
   document
     .querySelectorAll<HTMLElement>("[data-open-incident-pipeline]")
@@ -447,6 +510,8 @@ function bindIncidentControls(): void {
 export function selectIncidentPipeline(pipelineId: string): void {
   if (pipelineId === selectedPipelineId) return;
   selectedPipelineId = pipelineId;
+  incidentAlertGroupsExpanded = false;
+  incidentEventsExpanded = false;
   // Lifecycle events are scope-specific. Do not paint the previous scope as a
   // successful empty result while the replacement snapshot is in flight.
   snapshot = { ...snapshot, events: null, loaded: false, unavailable: false };

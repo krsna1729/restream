@@ -181,6 +181,9 @@ operator can narrow a noisy incident feed by destination, pipeline, cause, or
 event wording without visually scanning both columns. Seeded Playwright/CDP
 coverage proves hit and no-hit summaries are visible and announced, and that a
 local Clear search action restores both columns without changing incident scope.
+Dense incident feeds now also use bounded alert and event lists with explicit
+`Show all` affordances. Search still matches the full fetched incident set, so
+the first view is triage-first while full audit mode stays one click away.
 
 Telemetry now has an equivalent engineer-facing checkpoint: before the dense
 counter grids, the legacy-owned route announces loaded/stale state, engine
