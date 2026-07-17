@@ -2392,8 +2392,16 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
       '1/4 telemetry items match "video" · 0 readers · 1 stage · 0 egresses',
     ),
   ).toBeVisible();
-  await expect(telemetry.getByText('No readers match "video".')).toBeVisible();
-  await expect(telemetry.getByText('No egresses match "video".')).toBeVisible();
+  await expect(
+    telemetry.getByText(
+      'No readers match "video". Clear search to return to the full telemetry set.',
+    ),
+  ).toBeVisible();
+  await expect(
+    telemetry.getByText(
+      'No egresses match "video". Clear search to return to the full telemetry set.',
+    ),
+  ).toBeVisible();
   await expect(
     telemetry.getByRole("button", { name: "View video telemetry details" }),
   ).toBeVisible();
@@ -2412,7 +2420,11 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   ).toBeVisible();
   const clearSearch = telemetry.getByRole("button", { name: "Clear search" });
   await expect(clearSearch).toBeVisible();
-  await expect(telemetry.getByText('No stages match "absent".')).toBeVisible();
+  await expect(
+    telemetry.getByText(
+      'No stages match "absent". Clear search to return to the full telemetry set.',
+    ),
+  ).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     '0/4 telemetry items match "absent" · 0 readers · 0 stages · 0 egresses',
   );

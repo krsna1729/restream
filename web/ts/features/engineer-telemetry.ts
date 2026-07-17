@@ -195,6 +195,11 @@ function normalizeTelemetrySearch(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function telemetryNoResultText(kind: string, query: string): string {
+  const trimmed = query.trim();
+  return `No ${kind} match "${trimmed}". Clear search to return to the full telemetry set.`;
+}
+
 function metricKeys(metrics: TelemetryMetrics | undefined): string {
   return Object.keys(metrics || {}).join(" ");
 }
@@ -509,7 +514,7 @@ export function renderEngineerTelemetryHtml(
         ? `<div class="grid gap-4 xl:grid-cols-[minmax(20rem,.75fr)_minmax(0,1.25fr)]">
       <div class="space-y-4">
         <section class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Source ring</h2>${ring ? `<div class="mt-3 grid grid-cols-2 gap-3 text-sm"><div><span class="text-base-content/60">Fill</span><div class="font-mono">${formatNumber(ring.fill)} / ${formatNumber(ring.capacity)} (${formatNumber(ring.fillPercent)}%)</div></div><div><span class="text-base-content/60">Depth</span><div class="font-mono">${formatNumber(ring.bufferDepthSecs)} s</div></div></div>` : `<p class="text-base-content/60 mt-3 text-sm">No active source ring.</p>`}</section>
-        <section class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Readers</h2><div class="mt-3 space-y-2">${filteredReaders.length ? filteredReaders.map((reader) => `<div class="bg-base-100 rounded-md p-3 text-sm"><div class="font-medium">${escapeHtml(reader.name)}</div><div class="text-base-content/60 mt-1 text-xs">Lag ${formatNumber(reader.lagSlots)} slots · ${formatNumber(reader.overflowCount)} overflows · packet age ${formatNumber(reader.packetAgeMs)} ms</div></div>`).join("") : `<p class="text-base-content/60 text-sm">${normalizedSearch ? `No readers match "${escapeHtml(searchQuery.trim())}".` : "No active readers."}</p>`}</div></section>
+        <section class="border-base-content/10 bg-base-200 rounded-lg border p-4"><h2 class="font-semibold">Readers</h2><div class="mt-3 space-y-2">${filteredReaders.length ? filteredReaders.map((reader) => `<div class="bg-base-100 rounded-md p-3 text-sm"><div class="font-medium">${escapeHtml(reader.name)}</div><div class="text-base-content/60 mt-1 text-xs">Lag ${formatNumber(reader.lagSlots)} slots · ${formatNumber(reader.overflowCount)} overflows · packet age ${formatNumber(reader.packetAgeMs)} ms</div></div>`).join("") : `<p class="text-base-content/60 text-sm">${normalizedSearch ? escapeHtml(telemetryNoResultText("readers", searchQuery)) : "No active readers."}</p>`}</div></section>
         <section class="border-base-content/10 bg-base-200 rounded-lg border p-4" aria-label="Telemetry egresses">
           <div class="flex flex-wrap items-start justify-between gap-2">
             <div>
@@ -522,14 +527,14 @@ export function renderEngineerTelemetryHtml(
                 : ""
             }
           </div>
-          <div class="mt-3 space-y-2">${visibleEgresses.length ? visibleEgresses.map((egress) => `<div class="bg-base-100 rounded-md p-3 text-sm"><div class="flex justify-between gap-2"><span class="font-medium">${escapeHtml(egress.outputId)}</span><span class="badge badge-sm">${escapeHtml(egress.status || egress.phase || "unknown")}</span></div><div class="text-base-content/60 mt-1 text-xs">${formatBytes(egress.bytesOut)} sent${egress.lastError ? ` · ${escapeHtml(egress.lastError)}` : ""}</div></div>`).join("") : `<p class="text-base-content/60 text-sm">${normalizedSearch ? `No egresses match "${escapeHtml(searchQuery.trim())}".` : "No active egresses."}</p>`}</div>
+          <div class="mt-3 space-y-2">${visibleEgresses.length ? visibleEgresses.map((egress) => `<div class="bg-base-100 rounded-md p-3 text-sm"><div class="flex justify-between gap-2"><span class="font-medium">${escapeHtml(egress.outputId)}</span><span class="badge badge-sm">${escapeHtml(egress.status || egress.phase || "unknown")}</span></div><div class="text-base-content/60 mt-1 text-xs">${formatBytes(egress.bytesOut)} sent${egress.lastError ? ` · ${escapeHtml(egress.lastError)}` : ""}</div></div>`).join("") : `<p class="text-base-content/60 text-sm">${normalizedSearch ? escapeHtml(telemetryNoResultText("egresses", searchQuery)) : "No active egresses."}</p>`}</div>
         </section>
       </div>
       <div class="space-y-4"><section aria-label="Telemetry processing stages"><div class="mb-3 flex flex-wrap items-start justify-between gap-2"><div><h2 class="font-semibold">Processing stages</h2>${stageCaption ? `<p class="text-base-content/60 mt-1 text-xs">${escapeHtml(stageCaption)}</p>` : ""}</div>${
         showStagesToggle
           ? `<button id="telemetry-stages-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="${telemetryStagesExpanded ? "true" : "false"}">${telemetryStagesExpanded ? "Show fewer" : `Show all ${filteredStages.length}`}</button>`
           : ""
-      }</div><div class="grid gap-3 md:grid-cols-2">${visibleStages.length ? visibleStages.map((item) => renderStage(pipelineId, item)).join("") : `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">${normalizedSearch ? `No stages match "${escapeHtml(searchQuery.trim())}".` : "No active stages."}</div>`}</div></section>
+      }</div><div class="grid gap-3 md:grid-cols-2">${visibleStages.length ? visibleStages.map((item) => renderStage(pipelineId, item)).join("") : `<div class="border-base-content/10 bg-base-200 rounded-lg border p-6 text-center text-sm">${normalizedSearch ? escapeHtml(telemetryNoResultText("stages", searchQuery)) : "No active stages."}</div>`}</div></section>
       <section id="stage-telemetry-detail" class="border-base-content/10 bg-base-200 rounded-lg border p-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h2 class="font-semibold">Stage detail</h2>
