@@ -507,38 +507,50 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
   const routes = [
     {
       href: "/?mode=overview&ui=v2",
+      maxVisibleControls: 22,
       readySelector: "#dashboard-v2-overview",
     },
     {
       href: "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+      maxVisibleControls: 34,
       readySelector: "#dashboard-v2-pipeline-header-root",
     },
     {
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
+      maxVisibleControls: 22,
       readySelector: "#inspect-route-summary",
     },
     {
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
+      maxVisibleControls: 30,
       readySelector: "#control-room-route-summary",
     },
     {
       href: "/?mode=media&ui=v2",
+      maxVisibleControls: 18,
       readySelector: "#media-library-results-summary",
     },
     {
       href: "/?mode=settings&ui=v2",
+      // Settings is still the densest legacy-owned v2 surface; keep a current
+      // ceiling so new controls cannot creep in unnoticed while the dedicated
+      // progressive-disclosure pass remains pending.
+      maxVisibleControls: 70,
       readySelector: "#settings-route-summary",
     },
     {
       href: "/?mode=status&ui=v2",
+      maxVisibleControls: 28,
       readySelector: "#status-route-summary",
     },
     {
       href: "/?mode=incidents&ui=v2",
+      maxVisibleControls: 20,
       readySelector: "#incidents-route-summary",
     },
     {
       href: "/?mode=telemetry&ui=v2",
+      maxVisibleControls: 18,
       readySelector: "#telemetry-route-summary",
     },
   ] as const;
@@ -563,7 +575,7 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
     );
     expect(blocking, route.href).toEqual([]);
 
-    const unnamedControls = await page.evaluate(() => {
+    const controls = await page.evaluate(() => {
       const selector = [
         "button",
         "a[href]",
@@ -607,13 +619,19 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
             "";
           return {
             id: element.id || null,
+            label,
             tag: element.tagName.toLowerCase(),
             type: element.getAttribute("type"),
-            label,
           };
-        })
-        .filter((control) => !control.label);
+        });
     });
+    expect(
+      controls.length,
+      `${route.href} visible controls: ${controls
+        .map((control) => control.label || control.id || control.tag)
+        .join(", ")}`,
+    ).toBeLessThanOrEqual(route.maxVisibleControls);
+    const unnamedControls = controls.filter((control) => !control.label);
     expect(unnamedControls, route.href).toEqual([]);
   }
 });
