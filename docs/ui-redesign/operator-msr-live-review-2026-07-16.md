@@ -67,7 +67,7 @@ Summary:
 | Pipeline / Inspect | legacy | 13,863 | Usable, but still visually/DOM-heavy compared with v2. |
 | Pipeline / Monitor | legacy | 17,052 | Usable, but a separate redesign pass is still needed. |
 | Media | v2 checkpoint + legacy library | 18,990 | First-glance recording/source and search state is v2; dense media actions remain legacy. |
-| Settings | legacy | 22,123 | Not redesigned in v2. |
+| Settings | v2 checkpoint + legacy form | 22,123 | First-glance config/auth security state is v2; dense admin controls remain legacy. |
 | Status | v2 checkpoint + legacy details | 25,700 | First-glance process/build state is v2; dense status sections remain legacy. |
 | Incidents | v2 checkpoint + legacy feed | 28,494 | First-glance incident state is v2; dense alert/event feed remains legacy. |
 | Telemetry | v2 checkpoint + legacy counters | 32,479 | First-glance telemetry state is v2; dense counter grids remain legacy. |
@@ -80,8 +80,8 @@ and verify stable accessible button names for output operations.
 
 The shared workspace summary now also announces the current ownership state:
 `UI v2 owned` for Overview and Pipeline Operate, `UI v2 checkpoint` for
-Pipeline Inspect, Pipeline Monitor, Media, Incidents, Telemetry, and Status,
-and `Legacy-owned checkpoint` for the remaining top-level legacy routes. Seeded Playwright/CDP
+Pipeline Inspect, Pipeline Monitor, Media, Settings, Incidents, Telemetry, and
+Status. Seeded Playwright/CDP
 coverage proves that cue is visible and exposed as status text while moving
 across the route journey.
 
@@ -231,19 +231,24 @@ Dense telemetry egress lists are also bounded by default with an explicit
 scan a few destinations first, search when isolating one destination, and only
 expand the full fan-out when comparison is intentional.
 
-Settings now gets the same guardrail for its dense admin form: the legacy-owned
-route announces server scope, section count, configured profile count, and
-current authentication-attempt count. Seeded Playwright/CDP coverage proves the
-summary is exposed as status text while the route stays outside the React seam.
+Settings now has the same lightweight operator checkpoint above the legacy admin
+form. The v2 strip answers the first operator question before the dense
+controls: which config surface is loaded, how many profiles exist, how many
+auth attempts are tracked, whether auth search is filtering, and whether any
+attempts are currently banned. Save/reset/logout/password/profile mutations
+remain legacy-owned below it.
 
 Settings now also has a local authentication-attempt search surface. The route
-summary remains the unfiltered settings truth, while the auth-attempt search
-summary announces hit and no-hit counts as status text. Seeded Playwright/CDP
-coverage proves operators can narrow by scope/IP/status, recover with a local
-Clear search action, and keep the authoritative settings counts.
+summary and v2 checkpoint remain the unfiltered settings truth, while the
+auth-attempt search summary announces hit and no-hit counts as status text.
+Seeded Playwright/CDP coverage proves operators can narrow by scope/IP/status,
+recover with a local Clear search action, and keep the authoritative settings
+counts.
 Dense authentication-attempt rows are now bounded by default with an explicit
 `Show all` affordance. Search still matches the full fetched security state,
 so an operator can scan the first few attempts before choosing full audit mode.
+Under `ui=v2`, leaving dense checkpoint routes now also unmounts their legacy
+detail DOM so later checkpoint routes do not inherit hidden route weight.
 
 Status process logs are now bounded by default with an explicit `Show all`
 affordance. The route still fetches the same recent history and search still
@@ -354,13 +359,14 @@ What changed from the live operator pass:
 Still not a full v2 redesign:
 
 - Inspect graph/resource details, the Monitor wall, the Incidents feed, the
-  Telemetry counter grids, Status detail sections, Media library details, and Settings are still
+  Telemetry counter grids, Status detail sections, Media library details, and Settings form details are still
   intentionally legacy-owned, now with lightweight route checkpoints where useful
-  rather than full v2 layouts. Inspect, Monitor, Media, Incidents, Telemetry,
-  and Status each have only their first v2-owned decision checkpoint.
-- Legacy-owned routes keep substantial hidden DOM mounted across navigation.
-  This is visible in CDP node growth and should be treated as a future
-  performance/accessibility cleanup, not as solved by the v2 seam.
+  rather than full v2 layouts. Inspect, Monitor, Media, Settings, Incidents,
+  Telemetry, and Status each have only their first v2-owned decision checkpoint.
+- Legacy-owned route details still have substantial active DOM when visible.
+  Under v2, dense checkpoint detail DOM is now unmounted on route exit, but
+  active detail-section redesign remains a future performance/accessibility
+  cleanup.
 
 ## Done-state interpretation
 
@@ -371,5 +377,5 @@ The remaining evolution should be sequenced as separate ownership passes:
 1. Complete Pipeline / Inspect v2 beyond the checkpoint strip.
 2. Complete Pipeline / Monitor v2 beyond the checkpoint strip.
 3. Incidents feed v2 and Telemetry counter-grid v2.
-4. Media library, Settings, and Status detail-section polish.
+4. Media library, Settings form, and Status detail-section polish.
 5. Hidden DOM / route unmount cleanup across legacy panels.

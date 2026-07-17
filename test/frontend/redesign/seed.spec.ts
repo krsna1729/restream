@@ -236,8 +236,16 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
       name: "Settings",
     }),
   ).toBeVisible();
+  await expect(
+    page.locator("#dashboard-v2-settings-root").getByRole("heading", {
+      name: "Settings",
+    }),
+  ).toBeVisible();
   await expect(page.locator("#settings-route-summary")).toHaveText(
     "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
+  );
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Server configuration",
   );
   expect(await getCdpStatusTexts(page)).toContain(
     "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
@@ -284,10 +292,21 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
-  expect(v2Requests).toEqual([]);
+  expect(
+    v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
+  ).toBe(true);
+  expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
+    false,
+  );
+  const requestsAfterSettings = v2Requests.length;
 
   await page.goto("/?mode=media&ui=v2");
   await expect(page.locator("#media-mode-panel")).toBeVisible();
+  await expect(page.locator("#dashboard-v2-settings-root")).toBeHidden();
+  const hiddenSettingsChildCount = await page
+    .locator("#settings-mode-content")
+    .evaluate((node) => node.childElementCount);
+  expect(hiddenSettingsChildCount).toBe(0);
   await expect(
     page.locator("#dashboard-v2-media-root").getByRole("heading", {
       name: "Media",
@@ -307,6 +326,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
     false,
   );
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterSettings);
   const requestsAfterMedia = v2Requests.length;
 
   await page.goto("/?mode=status&ui=v2");
@@ -434,11 +454,19 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   });
 
   const settings = page.locator("#settings-mode-content");
+  const checkpoint = page.locator("#dashboard-v2-settings-root");
   const authSearch = settings.getByLabel("Search authentication attempts");
   const authSearchSummary = settings.locator("#auth-attempts-search-summary");
+  await expect(checkpoint.getByRole("heading", { name: "Settings" })).toBeVisible();
   await expect(page.locator("#settings-route-summary")).toHaveText(
     "Synthetic Restream settings · 5 sections · 3 profiles · 12 auth attempts",
   );
+  await expect(
+    checkpoint.getByText(
+      "Synthetic Restream settings · 5 sections · 3 profiles · 12 auth attempts",
+    ),
+  ).toBeVisible();
+  await expect(checkpoint.getByText("Security: 3 banned attempts")).toBeVisible();
   await expect(authSearchSummary).toHaveText("8 auth attempts shown of 12");
   await expect(
     settings.getByRole("cell", { name: "203.0.113.10" }),
@@ -464,6 +492,7 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   await expect(authSearchSummary).toHaveText(
     '1/12 auth attempts match "203.0.113.21"',
   );
+  await expect(checkpoint.getByText("1/12 matched", { exact: true })).toBeVisible();
   await expect(
     settings.getByRole("cell", { name: "203.0.113.21" }),
   ).toBeVisible();
@@ -2525,6 +2554,7 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
     <div id="dashboard-v2-telemetry-root"></div>
     <div id="dashboard-v2-status-root"></div>
     <div id="dashboard-v2-media-root"></div>
+    <div id="dashboard-v2-settings-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -2737,6 +2767,7 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
     <div id="dashboard-v2-telemetry-root"></div>
     <div id="dashboard-v2-status-root"></div>
     <div id="dashboard-v2-media-root"></div>
+    <div id="dashboard-v2-settings-root"></div>
   `);
 
   const result = await page.evaluate(async () => {
@@ -2879,6 +2910,7 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
     <div id="dashboard-v2-telemetry-root"></div>
     <div id="dashboard-v2-status-root"></div>
     <div id="dashboard-v2-media-root"></div>
+    <div id="dashboard-v2-settings-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -3006,6 +3038,7 @@ test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", a
     <div id="dashboard-v2-telemetry-root"></div>
     <div id="dashboard-v2-status-root"></div>
     <div id="dashboard-v2-media-root"></div>
+    <div id="dashboard-v2-settings-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -3293,6 +3326,7 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
     <div id="dashboard-v2-telemetry-root"></div>
     <div id="dashboard-v2-status-root"></div>
     <div id="dashboard-v2-media-root"></div>
+    <div id="dashboard-v2-settings-root"></div>
   `);
 
   await page.evaluate(async () => {

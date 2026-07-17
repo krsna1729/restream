@@ -5,6 +5,7 @@ import type { ControlRoomCheckpointModel } from "../features/control-room-view-m
 import type { IncidentsCheckpointModel } from "../features/incidents-view-model.js";
 import type { MediaCheckpointModel } from "../features/media-view-model.js";
 import type { PipelineInspectCheckpointModel } from "../features/pipeline-inspect-view-model.js";
+import type { SettingsCheckpointModel } from "../features/settings-view-model.js";
 import type { StatusCheckpointModel } from "../features/status-view-model.js";
 import type { TelemetryCheckpointModel } from "../features/telemetry-view-model.js";
 import type {
@@ -12,6 +13,7 @@ import type {
   DashboardV2IncidentsActions,
   DashboardV2MediaActions,
   DashboardV2PipelineInspectActions,
+  DashboardV2SettingsActions,
   DashboardV2StatusActions,
   DashboardV2TelemetryActions,
 } from "./dashboard-v2-loader.js";
@@ -375,6 +377,42 @@ function DashboardV2MediaCheckpoint({
   );
 }
 
+function DashboardV2SettingsCheckpoint({
+  actions,
+  model,
+}: {
+  actions: DashboardV2SettingsActions;
+  model: SettingsCheckpointModel;
+}): React.JSX.Element {
+  return (
+    <DashboardV2CheckpointCard
+      actions={[
+        [
+          "Status",
+          actions.openStatus,
+          !model.canOpenStatus,
+        ],
+      ]}
+      className="border-warning/25 bg-warning/5 mb-4"
+      focusLabel={model.focusLabel}
+      focusTitle="Settings focus"
+      headingId="dashboard-v2-settings-title"
+      metrics={model.metrics}
+      nextStep={model.nextStep}
+      primaryCards={[
+        ["Sections", model.sectionLabel],
+        ["Profiles", model.profileLabel],
+        ["Authentication", model.authLabel],
+        ["Search", model.searchLabel],
+      ]}
+      statusLabel={model.statusLabel}
+      statusTone={model.statusTone}
+      summary={model.summary}
+      title={model.title}
+    />
+  );
+}
+
 const pipelineInspectContainer = document.getElementById(
   "dashboard-v2-pipeline-inspect-root",
 );
@@ -424,6 +462,13 @@ if (!mediaContainer) {
 }
 const mediaRootContainer: HTMLElement = mediaContainer;
 let mediaRoot: Root | null = null;
+
+const settingsContainer = document.getElementById("dashboard-v2-settings-root");
+if (!settingsContainer) {
+  throw new Error("Dashboard v2 settings root is missing");
+}
+const settingsRootContainer: HTMLElement = settingsContainer;
+let settingsRoot: Root | null = null;
 
 export function renderDashboardV2PipelineInspectCheckpoint(
   model: PipelineInspectCheckpointModel | null,
@@ -483,6 +528,19 @@ export function renderDashboardV2MediaCheckpoint(
   mediaRootContainer.hidden = model === null;
   mediaRoot.render(
     model ? <DashboardV2MediaCheckpoint actions={actions} model={model} /> : null,
+  );
+}
+
+export function renderDashboardV2SettingsCheckpoint(
+  model: SettingsCheckpointModel | null,
+  actions: DashboardV2SettingsActions,
+): void {
+  settingsRoot ??= createRoot(settingsRootContainer);
+  settingsRootContainer.hidden = model === null;
+  settingsRoot.render(
+    model ? (
+      <DashboardV2SettingsCheckpoint actions={actions} model={model} />
+    ) : null,
   );
 }
 

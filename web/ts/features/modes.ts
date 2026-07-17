@@ -686,6 +686,40 @@ function focusActivePanel(): void {
   panel.scrollIntoView({ block: "start" });
 }
 
+function dashboardV2ShellActive(): boolean {
+  const toggle = document.getElementById("dashboard-ui-v2-toggle");
+  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
+  try {
+    return new URLSearchParams(window.location.search).get("ui") === "v2";
+  } catch (_err) {
+    return false;
+  }
+}
+
+function unmountInactiveV2HeavyRoute(previousMode: DashboardMode | null): void {
+  if (
+    previousMode !== "incidents" &&
+    previousMode !== "telemetry" &&
+    previousMode !== "media" &&
+    previousMode !== "settings" &&
+    previousMode !== "status"
+  )
+    return;
+  if (previousMode === currentMode) return;
+  if (!dashboardV2ShellActive()) return;
+  const contentIdByMode: Partial<Record<DashboardMode, string>> = {
+    incidents: "incidents-mode-content",
+    telemetry: "telemetry-mode-content",
+    media: "media-mode-content",
+    settings: "settings-mode-content",
+    status: "status-mode-content",
+  };
+  const contentId = contentIdByMode[previousMode];
+  if (contentId) document.getElementById(contentId)?.replaceChildren();
+  if (previousMode === "settings") settingsMounted = false;
+  if (previousMode === "status") statusMounted = false;
+}
+
 function applyMode(
   mode: DashboardMode,
   pipelineView: PipelineWorkspaceView,
@@ -709,6 +743,7 @@ function applyMode(
   for (const [name, panel] of Object.entries(panels)) {
     panel?.classList.toggle("hidden", name !== mode);
   }
+  unmountInactiveV2HeavyRoute(previousMode);
   syncPipelineWorkspaceShell(mode, pipelineView);
 
   let activeModeButton: HTMLButtonElement | null = null;
@@ -753,7 +788,8 @@ function applyMode(
             mode === "incidents" ||
             mode === "telemetry" ||
             mode === "status" ||
-            mode === "media"
+            mode === "media" ||
+            mode === "settings"
           ? "UI v2 checkpoint"
         : mode === "pipeline"
           ? "Legacy checkpoint"

@@ -15,6 +15,7 @@ import type {
   RecordingSettings,
   SrtGlobalIngestConfig,
 } from "../types.js";
+import type { SettingsCheckpointModel } from "./settings-view-model.js";
 import { showErrorAlert } from "../core/utils.js";
 import { state } from "../core/state.js";
 import { withBasePath } from "../core/base-path.js";
@@ -25,6 +26,9 @@ let lastRateLimitAttemptCount = 0;
 let lastRateLimitAttempts: RateLimitAttempt[] = [];
 let rateLimitSearchQuery = "";
 let authAttemptsExpanded = false;
+let settingsCheckpointCallback:
+  | ((model: SettingsCheckpointModel | null) => void)
+  | null = null;
 
 // ── Load ──────────────────────────────────────────────
 
@@ -133,10 +137,84 @@ function settingsSummaryText(): string {
   return `${serverName} settings · ${pluralize(SETTINGS_SECTION_COUNT, "section")} · ${pluralize(countConfiguredProfiles(), "profile")} · ${pluralize(lastRateLimitAttemptCount, "auth attempt")}`;
 }
 
+function countBannedAuthAttempts(): number {
+  return lastRateLimitAttempts.filter((attempt) => attempt.banned).length;
+}
+
+function filteredAuthAttemptCount(): number {
+  const search = normalizeSettingsSearch(rateLimitSearchQuery);
+  if (!search) return lastRateLimitAttemptCount;
+  return lastRateLimitAttempts.filter((attempt) =>
+    rateLimitAttemptSearchText(attempt).includes(search),
+  ).length;
+}
+
+function currentAuthSearchLabel(): string {
+  const query = rateLimitSearchQuery.trim();
+  if (!query) return `${pluralize(lastRateLimitAttemptCount, "attempt")} visible`;
+  return `${filteredAuthAttemptCount()}/${lastRateLimitAttemptCount} matched`;
+}
+
+function buildSettingsCheckpointModel(): SettingsCheckpointModel {
+  const profileCount = countConfiguredProfiles();
+  const bannedCount = countBannedAuthAttempts();
+  const query = rateLimitSearchQuery.trim();
+  return {
+    authLabel: pluralize(lastRateLimitAttemptCount, "auth attempt"),
+    canOpenStatus: true,
+    focusLabel: query
+      ? `${filteredAuthAttemptCount()} authentication attempt${filteredAuthAttemptCount() === 1 ? "" : "s"} match "${query}". Clear search before changing global rate-limit settings.`
+      : bannedCount > 0
+        ? `${bannedCount} authentication attempt${bannedCount === 1 ? " is" : "s are"} currently banned; review the table before resetting global limits.`
+        : "Configuration sections stay grouped by operational concern; use the section rail before editing dense forms.",
+    metrics: [
+      { label: "Server", value: state.config?.serverName || "server" },
+      {
+        label: "Security",
+        value: bannedCount
+          ? pluralize(bannedCount, "banned attempt")
+          : "No bans",
+      },
+      {
+        label: "Ingest host",
+        value: state.config?.ingestHost || "default host",
+      },
+    ],
+    nextStep:
+      bannedCount > 0
+        ? "Review or reset the banned attempts, then open Status to confirm the service is healthy."
+        : "Edit the needed section, save, then open Status to confirm runtime health.",
+    profileLabel: pluralize(profileCount, "profile"),
+    searchLabel: currentAuthSearchLabel(),
+    sectionLabel: pluralize(SETTINGS_SECTION_COUNT, "section"),
+    securityLabel: bannedCount
+      ? pluralize(bannedCount, "banned attempt")
+      : "No bans",
+    statusLabel: query ? "Filtered" : bannedCount ? "Review" : "Loaded",
+    statusTone: query ? "warning" : bannedCount ? "warning" : "success",
+    summary: settingsSummaryText(),
+    title: "Settings",
+  };
+}
+
+function publishSettingsCheckpoint(): void {
+  settingsCheckpointCallback?.(buildSettingsCheckpointModel());
+}
+
+export function configureSettingsCheckpointPresentation(options: {
+  onPresentation?: (model: SettingsCheckpointModel | null) => void;
+}): void {
+  settingsCheckpointCallback = options.onPresentation || null;
+  if (settingsCheckpointCallback) {
+    settingsCheckpointCallback(buildSettingsCheckpointModel());
+  }
+}
+
 function updateSettingsSummary(): void {
   const summary = document.getElementById("settings-route-summary");
   if (!summary) return;
   summary.textContent = settingsSummaryText();
+  publishSettingsCheckpoint();
 }
 
 function normalizeSettingsSearch(value: string): string {
