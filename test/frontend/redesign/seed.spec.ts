@@ -1241,11 +1241,23 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
     inspectCheckpoint.getByText("1 fault candidate", { exact: true }),
   ).toBeVisible();
   await expect(
-    inspectCheckpoint.getByRole("button", { name: "Operate" }),
+    inspectCheckpoint.getByRole("button", { name: "Operate inspected pipeline" }),
   ).toBeEnabled();
   await expect(
-    inspectCheckpoint.getByRole("button", { name: "Diagnostics" }),
+    inspectCheckpoint.getByRole("button", {
+      name: "Run diagnostics for inspected pipeline",
+    }),
   ).toBeEnabled();
+  const inspectCheckpointButtonNames = await getCdpNamesByRole(page, "button");
+  expect(inspectCheckpointButtonNames).toEqual(
+    expect.arrayContaining([
+      "Operate inspected pipeline",
+      "Run diagnostics for inspected pipeline",
+    ]),
+  );
+  expect(inspectCheckpointButtonNames).not.toEqual(
+    expect.arrayContaining(["Operate", "Diagnostics"]),
+  );
   await expect(page.locator("#inspect-focus-summary")).toHaveText(
     "Inspection focus · 1 blocker before active probes · 1 fault candidate · Inspect recent errors and retry backoff before forcing a restart.",
   );

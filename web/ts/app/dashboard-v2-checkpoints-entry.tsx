@@ -28,6 +28,7 @@ type DashboardV2CheckpointAction = readonly [
   onClick: () => void,
   disabled?: boolean,
   title?: string,
+  ariaLabel?: string,
 ];
 
 interface DashboardV2CheckpointCardProps {
@@ -96,8 +97,9 @@ function DashboardV2CheckpointCard({
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
-          {actions.map(([label, onClick, disabled, title]) => (
+          {actions.map(([label, onClick, disabled, title, ariaLabel]) => (
             <button
+              aria-label={ariaLabel}
               className="btn btn-sm btn-accent btn-outline min-h-10"
               disabled={disabled}
               key={label}
@@ -164,6 +166,8 @@ function DashboardV2PipelineInspectCheckpoint({
             if (model.pipelineId) actions.openPipeline(model.pipelineId);
           },
           !model.canOpenPipeline || !canActOnPipeline,
+          undefined,
+          "Operate inspected pipeline",
         ],
         [
           "Diagnostics",
@@ -172,6 +176,7 @@ function DashboardV2PipelineInspectCheckpoint({
           },
           !model.canRunDiagnostics || !canActOnPipeline,
           model.diagnosticsDisabledReason,
+          "Run diagnostics for inspected pipeline",
         ],
       ]}
       className="border-info/25 bg-info/5"
@@ -211,6 +216,8 @@ function DashboardV2ControlRoomCheckpoint({
             if (model.pipelineId) actions.openPipeline(model.pipelineId);
           },
           !model.canOpenPipeline || !canActOnPipeline,
+          undefined,
+          "Operate monitored pipeline",
         ],
       ]}
       className="border-accent/25 bg-accent/5 mb-4"
@@ -247,6 +254,8 @@ function DashboardV2IncidentsCheckpoint({
           "Telemetry",
           actions.openTelemetry,
           !model.canOpenTelemetry,
+          undefined,
+          "Open telemetry from incidents",
         ],
       ]}
       className="border-error/25 bg-error/5 mb-4"
@@ -283,6 +292,8 @@ function DashboardV2TelemetryCheckpoint({
           "Status",
           actions.openStatus,
           !model.canOpenStatus,
+          undefined,
+          "Open status from telemetry",
         ],
       ]}
       className="border-secondary/25 bg-secondary/5 mb-4"
@@ -319,6 +330,8 @@ function DashboardV2StatusCheckpoint({
           "Telemetry",
           actions.openTelemetry,
           !model.canOpenTelemetry,
+          undefined,
+          "Open telemetry from status",
         ],
       ]}
       className="border-neutral/25 bg-base-200/50 mb-4"
@@ -355,6 +368,8 @@ function DashboardV2MediaCheckpoint({
           "Overview",
           actions.openOverview,
           !model.canOpenOverview,
+          undefined,
+          "Open overview from media",
         ],
       ]}
       className="border-primary/25 bg-primary/5 mb-4"
@@ -391,6 +406,8 @@ function DashboardV2SettingsCheckpoint({
           "Status",
           actions.openStatus,
           !model.canOpenStatus,
+          undefined,
+          "Open status from settings",
         ],
       ]}
       className="border-warning/25 bg-warning/5 mb-4"

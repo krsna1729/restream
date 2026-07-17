@@ -346,6 +346,18 @@ test("cdp: ui=v2 route heading outlines stay operator-clean @desktop", async ({
           }),
         );
       expect(actionButtons, route.href).not.toEqual([]);
+      expect(
+        actionButtons.map((button) => button.label),
+        route.href,
+      ).not.toEqual(
+        expect.arrayContaining([
+          "Diagnostics",
+          "Operate",
+          "Overview",
+          "Status",
+          "Telemetry",
+        ]),
+      );
       for (const button of actionButtons) {
         expect(
           button.height,
