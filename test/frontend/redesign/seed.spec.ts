@@ -742,6 +742,44 @@ test("seed: ui=v2 legacy-owned routes keep operator checkpoints visible and anno
   ).toBeVisible();
 });
 
+test("seed: ui=v2 unmounts inactive Operate surfaces outside Pipeline @desktop", async ({
+  page,
+}) => {
+  const operateRootChildCount = () =>
+    page.evaluate(() =>
+      [
+        "dashboard-v2-pipeline-selector-root",
+        "dashboard-v2-pipeline-header-root",
+        "dashboard-v2-pipeline-input-status-root",
+        "dashboard-v2-pipeline-output-overview-root",
+      ].reduce(
+        (sum, id) =>
+          sum + (document.getElementById(id)?.childElementCount ?? 0),
+        0,
+      ),
+    );
+
+  await openSeededDashboard(
+    page,
+    "mixed-health",
+    "/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2",
+    { expectOverviewReady: false },
+  );
+  await expect(page.locator("#dashboard-v2-pipeline-header-root")).toBeVisible();
+  expect(await operateRootChildCount()).toBeGreaterThan(0);
+
+  await page.goto("/?mode=media&ui=v2");
+  await expect(page.locator("#media-library-results-summary")).toBeVisible();
+  await expect.poll(operateRootChildCount).toBe(0);
+  await expect(page.locator("#dashboard-main")).not.toContainText(
+    "Start file ingest for Retrying Destination",
+  );
+
+  await page.goto("/?mode=pipeline&view=operate&p=pipe-retrying&ui=v2");
+  await expect(page.locator("#dashboard-v2-pipeline-header-root")).toBeVisible();
+  expect(await operateRootChildCount()).toBeGreaterThan(0);
+});
+
 test("seed: ui=v2 shell announces ownership while moving across routes @desktop", async ({
   page,
 }) => {

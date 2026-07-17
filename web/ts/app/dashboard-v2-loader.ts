@@ -149,6 +149,7 @@ interface DashboardV2Module {
     model: PipelineOutputOverviewModel | null,
     actions: DashboardV2PipelineOutputOverviewActions,
   ): void;
+  clearDashboardV2PipelineOperate(): void;
 }
 
 interface DashboardV2CheckpointsModule {
@@ -250,6 +251,7 @@ function hideDashboardV2Overview(): void {
 }
 
 function hideDashboardV2Pipeline(): void {
+  dashboardV2Module?.clearDashboardV2PipelineOperate();
   for (const id of DASHBOARD_V2_CONTAINER_IDS.slice(1, 5)) {
     setContainerHidden(id, true);
   }

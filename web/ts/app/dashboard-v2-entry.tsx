@@ -1877,3 +1877,14 @@ export function renderDashboardV2PipelineOutputOverview(
     ) : null,
   );
 }
+
+export function clearDashboardV2PipelineOperate(): void {
+  selectorRoot?.render(null);
+  headerRoot?.render(null);
+  inputStatusRoot?.render(null);
+  outputOverviewRoot?.render(null);
+  selectorContainer.hidden = true;
+  headerContainer.hidden = true;
+  inputStatusContainer.hidden = true;
+  outputOverviewContainer.hidden = true;
+}
