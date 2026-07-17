@@ -684,12 +684,12 @@ function DashboardV2PipelineSelector({
     <section aria-labelledby="dashboard-v2-pipelines-selector-title">
       <div className="border-base-content/10 flex items-center justify-between gap-2 border-b px-4 py-3">
         <div>
-          <h2
+          <div
             className="text-base-content/70 text-sm font-semibold uppercase"
             id="dashboard-v2-pipelines-selector-title"
           >
             Pipelines
-          </h2>
+          </div>
           <p className="text-base-content/50 mt-0.5 text-xs tabular-nums">
             {model.pipelines.length} configured
           </p>

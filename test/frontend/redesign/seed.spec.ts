@@ -499,9 +499,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
 
   await page.goto("/?mode=pipeline&view=operate&ui=v2");
   await expect(
-    page
-      .locator("#dashboard-v2-pipeline-selector-root")
-      .getByRole("heading", { name: "Pipelines" }),
+    page.locator("#dashboard-v2-pipeline-selector-root").getByText("Pipelines"),
   ).toBeVisible();
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterTelemetry);
   expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
@@ -1034,9 +1032,7 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
   const input = page.locator("#dashboard-v2-pipeline-input-status-root");
   const outputs = page.locator("#dashboard-v2-pipeline-output-overview-root");
   await expect(selector).toBeVisible();
-  await expect(
-    selector.getByRole("heading", { name: "Pipelines" }),
-  ).toBeVisible();
+  await expect(selector.getByText("Pipelines")).toBeVisible();
   await expect(
     header.getByRole("heading", { name: "Retrying Destination" }),
   ).toBeVisible();
@@ -2585,9 +2581,7 @@ test("seed: ui=v2 Operate stays inside the viewport across breakpoints", async (
   );
 
   await expect(
-    page.locator("#dashboard-v2-pipeline-selector-root").getByRole("heading", {
-      name: "Pipelines",
-    }),
+    page.locator("#dashboard-v2-pipeline-selector-root").getByText("Pipelines"),
   ).toBeVisible();
   await expect(
     page.locator("#dashboard-v2-pipeline-header-root").getByRole("heading", {
@@ -2627,9 +2621,7 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
     "#dashboard-v2-pipeline-output-overview-root",
   );
 
-  await expect(
-    pipelineSelector.getByRole("heading", { name: "Pipelines" }),
-  ).toBeVisible();
+  await expect(pipelineSelector.getByText("Pipelines")).toBeVisible();
   await expect(
     pipelineHeader.getByRole("heading", { name: "Transient Publisher Drop" }),
   ).toBeVisible();
@@ -2858,9 +2850,7 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(page.locator("#dashboard-grid")).toBeVisible();
   const pipelineSelector = page.locator("#dashboard-v2-pipeline-selector-root");
   await expect(pipelineSelector).toBeVisible();
-  await expect(
-    pipelineSelector.getByRole("heading", { name: "Pipelines" }),
-  ).toBeVisible();
+  await expect(pipelineSelector.getByText("Pipelines")).toBeVisible();
   await expect(page.locator("#pipeline-selector-legacy")).toBeHidden();
   expect(
     await page.locator("#pipelines").evaluate((node) => ({

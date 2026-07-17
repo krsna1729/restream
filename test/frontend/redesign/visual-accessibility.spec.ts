@@ -208,14 +208,15 @@ test("axe/cdp: ui=v2 Operate preserves contrast and semantic landmarks", async (
   );
   expect(blocking).toEqual([]);
 
-  expect(await getCdpNamesByRole(page, "heading")).toEqual(
+  const headingNames = await getCdpNamesByRole(page, "heading");
+  expect(headingNames).toEqual(
     expect.arrayContaining([
-      "PIPELINES",
       "Recovered Sink Flap",
       "INPUT AND PREVIEW",
       "OUTPUT OVERVIEW",
     ]),
   );
+  expect(headingNames).not.toContain("PIPELINES");
   expect(await getCdpNamesByRole(page, "button")).toEqual(
     expect.arrayContaining(["Graph", "Diagnose", "Show all 30"]),
   );
