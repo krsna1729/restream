@@ -597,6 +597,31 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   expect(buttonNames).not.toContain("Save");
   expect(buttonNames).not.toContain("Refresh");
   expect(buttonNames).not.toContain("Reset");
+  expect(await getCdpNamesByRole(page, "link")).toEqual(
+    expect.arrayContaining([
+      "Jump to server settings",
+      "Jump to recording settings",
+      "Jump to SRT settings",
+      "Jump to backend settings",
+      "Jump to transcode profile settings",
+    ]),
+  );
+  expect(await getCdpNamesByRole(page, "link")).not.toEqual(
+    expect.arrayContaining(["Server", "Recording", "SRT", "Backend", "Profiles"]),
+  );
+  expect(await getCdpNamesByRole(page, "heading")).toEqual(
+    expect.arrayContaining([
+      "Settings",
+      "Server",
+      "Recording",
+      "Dashboard Password",
+      "Ingest Security",
+      "Authentication Attempts",
+      "Global SRT Ingest",
+      "Transcoding Backend",
+      "Transcode Profiles",
+    ]),
+  );
   await expect(authSearch).toBeHidden();
   await settings.locator("#auth-attempts-section > summary").click();
   await expect(authSearch).toBeVisible();

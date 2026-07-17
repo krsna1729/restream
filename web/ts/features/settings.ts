@@ -116,11 +116,11 @@ function styleSettingsSection(section: HTMLElement | null, id: string): void {
 function settingsNavHtml(id = ""): string {
   return `<nav${id ? ` id="${id}"` : ""} class="dashboard-nav-strip w-full" aria-label="Settings sections">
       <div class="flex flex-wrap gap-2">
-          <a class="btn btn-sm btn-ghost" href="#server-settings-section">Server</a>
-          <a class="btn btn-sm btn-ghost" href="#recording-settings-section">Recording</a>
-          <a class="btn btn-sm btn-ghost" href="#srt-settings-section">SRT</a>
-          <a class="btn btn-sm btn-ghost" href="#backend-policy-section">Backend</a>
-          <a class="btn btn-sm btn-ghost" href="#transcode-profiles-section">Profiles</a>
+          <a class="btn btn-sm btn-ghost" href="#server-settings-section" aria-label="Jump to server settings">Server</a>
+          <a class="btn btn-sm btn-ghost" href="#recording-settings-section" aria-label="Jump to recording settings">Recording</a>
+          <a class="btn btn-sm btn-ghost" href="#srt-settings-section" aria-label="Jump to SRT settings">SRT</a>
+          <a class="btn btn-sm btn-ghost" href="#backend-policy-section" aria-label="Jump to backend settings">Backend</a>
+          <a class="btn btn-sm btn-ghost" href="#transcode-profiles-section" aria-label="Jump to transcode profile settings">Profiles</a>
       </div>
   </nav>`;
 }
@@ -185,7 +185,7 @@ function applySettingsV2Disclosure(container: HTMLElement): void {
     wrapper.dataset.settingsV2Disclosure = disclosure.id;
     wrapper.innerHTML = `<summary class="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
         <span>
-          <span class="text-sm font-semibold">${escapeHtml(disclosure.title)}</span>
+          <h2 class="text-sm font-semibold">${escapeHtml(disclosure.title)}</h2>
           <span class="text-base-content/60 mt-1 block text-xs">${escapeHtml(disclosure.summary)}</span>
         </span>
         <span class="btn btn-xs btn-outline pointer-events-none">Show settings</span>
