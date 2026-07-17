@@ -247,6 +247,12 @@ counts.
 Dense authentication-attempt rows are now bounded by default with an explicit
 `Show all` affordance. Search still matches the full fetched security state,
 so an operator can scan the first few attempts before choosing full audit mode.
+Under `ui=v2`, Settings also now treats low-frequency advanced configuration
+groups as disclosure sections. Recording retention, global SRT ingest policy,
+backend policy, and transcode profiles show compact summaries first; the actual
+forms stay available on demand. The security/auth-attempt surface stays open
+because it answers the common operator question: "is anything blocked right
+now?"
 Under `ui=v2`, leaving dense checkpoint routes now also unmounts their legacy
 detail DOM so later checkpoint routes do not inherit hidden route weight. Media
 resets its list render cache on that unmount path, so returning to the route
@@ -365,6 +371,9 @@ What changed from the live operator pass:
   detail shells while preserving their v2 checkpoint anchors, so route-specific
   CDP snapshots no longer include stale graph/control-room DOM from the previous
   operator workspace.
+- Settings now opens on the operational security surface and tucks advanced
+  Recording, SRT, Backend, and Profile forms behind explicit disclosure rows,
+  reducing the initial form wall without hiding the path to edits.
 - Shared auth expiry now preserves the full operator return path, including
   `ui=v2`, so a re-login can return to the interrupted v2 workflow instead of
   dumping the operator at the default Overview.
@@ -375,7 +384,7 @@ What changed from the live operator pass:
 Still not a full v2 redesign:
 
 - Inspect graph/resource details, the Monitor wall, the Incidents feed, the
-  Telemetry counter grids, some Status detail sections, Media library details, and Settings form details are still
+  Telemetry counter grids, some Status detail sections, Media library details, and some Settings form details are still
   intentionally legacy-owned, now with lightweight route checkpoints where useful
   rather than full v2 layouts. Inspect, Monitor, Media, Settings, Incidents,
   Telemetry, and Status each have only their first v2-owned decision checkpoint.

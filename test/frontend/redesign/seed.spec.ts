@@ -254,6 +254,16 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   const authSearch = settings.getByLabel("Search authentication attempts");
   const authSearchSummary = settings.locator("#auth-attempts-search-summary");
   await expect(authSearchSummary).toHaveText("1 auth attempt visible");
+  await expect(
+    settings.getByText("Default encryption policy for SRT publishers."),
+  ).toBeVisible();
+  await expect(settings.getByLabel("Global SRT ingest mode")).toBeHidden();
+  await settings.locator("#srt-settings-section summary").click();
+  await expect(settings.locator("#srt-settings-section")).toHaveAttribute(
+    "open",
+    "",
+  );
+  await expect(settings.getByLabel("Global SRT ingest mode")).toBeVisible();
 
   await authSearch.fill("dashboard");
   await expect(page.locator("#settings-route-summary")).toHaveText(

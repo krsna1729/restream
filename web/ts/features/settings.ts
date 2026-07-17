@@ -30,6 +30,12 @@ let settingsCheckpointCallback:
   | ((model: SettingsCheckpointModel | null) => void)
   | null = null;
 
+interface SettingsDisclosureConfig {
+  id: string;
+  title: string;
+  summary: string;
+}
+
 // ── Load ──────────────────────────────────────────────
 
 function needsFullSettingsConfig(): boolean {
@@ -115,6 +121,64 @@ function settingsNavHtml(id = ""): string {
           <a class="btn btn-sm btn-ghost" href="#transcode-profiles-section">Profiles</a>
       </div>
   </nav>`;
+}
+
+function settingsV2Active(): boolean {
+  const toggle = document.getElementById("dashboard-ui-v2-toggle");
+  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
+  try {
+    return new URLSearchParams(window.location.search).get("ui") === "v2";
+  } catch (_err) {
+    return false;
+  }
+}
+
+function applySettingsV2Disclosure(container: HTMLElement): void {
+  if (!settingsV2Active()) return;
+  const disclosures: SettingsDisclosureConfig[] = [
+    {
+      id: "recording-settings-section",
+      title: "Recording",
+      summary: "Retention policy for completed MPEG-TS to MP4 conversions.",
+    },
+    {
+      id: "srt-settings-section",
+      title: "Global SRT Ingest",
+      summary: "Default encryption policy for SRT publishers.",
+    },
+    {
+      id: "backend-policy-section",
+      title: "Transcoding Backend",
+      summary: "Backend selection for newly started transcoding stages.",
+    },
+    {
+      id: "transcode-profiles-section",
+      title: "Transcode Profiles",
+      summary: "Encoder presets used by HEVC/H.264 and resolution workflows.",
+    },
+  ];
+
+  for (const disclosure of disclosures) {
+    const body = container.querySelector<HTMLElement>(`#${disclosure.id}`);
+    if (!body || body.closest("[data-settings-v2-disclosure]")) continue;
+    const wrapper = document.createElement("details");
+    wrapper.id = disclosure.id;
+    wrapper.className =
+      "border-base-content/10 bg-base-100/60 rounded-lg border px-3 py-2";
+    wrapper.dataset.settingsV2Disclosure = disclosure.id;
+    wrapper.innerHTML = `<summary class="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
+        <span>
+          <span class="text-sm font-semibold">${escapeHtml(disclosure.title)}</span>
+          <span class="text-base-content/60 mt-1 block text-xs">${escapeHtml(disclosure.summary)}</span>
+        </span>
+        <span class="btn btn-xs btn-outline pointer-events-none">Show settings</span>
+      </summary>`;
+    body.removeAttribute("id");
+    body.classList.add("mt-3");
+    body.dataset.settingsV2DisclosureBody = disclosure.id;
+    body.replaceWith(wrapper);
+    wrapper.append(body);
+  }
 }
 
 function pluralize(
@@ -560,6 +624,7 @@ export function renderSettingsPanel(container: HTMLElement): void {
                 </div>
             </section>
         </div>`;
+  applySettingsV2Disclosure(container);
   bindSettingsPanelActions(container);
 }
 
