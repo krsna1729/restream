@@ -124,6 +124,7 @@ let controlRoomState: ControlRoomState = {
 const controlRoomMonitoringDrafts = new Map<string, string>();
 const controlRoomMonitoringSavePending = new Set<string>();
 const controlRoomCardWarnings = new Map<string, string>();
+const controlRoomCardActionsExpanded = new Set<string>();
 const youtubeMonitoringStatusCache = new Map<
   string,
   {
@@ -149,6 +150,16 @@ const controlRoomNameCollator = new Intl.Collator(undefined, {
   sensitivity: "base",
 });
 const YOUTUBE_MONITORING_STATUS_TTL_MS = 60_000;
+
+function controlRoomV2Active(): boolean {
+  const toggle = document.getElementById("dashboard-ui-v2-toggle");
+  if (toggle instanceof HTMLInputElement && toggle.checked) return true;
+  try {
+    return new URLSearchParams(window.location.search).get("ui") === "v2";
+  } catch (_err) {
+    return false;
+  }
+}
 
 export function configureControlRoomCheckpointPresentation(options: {
   readonly onPresentation?: (model: ControlRoomCheckpointModel | null) => void;
@@ -579,6 +590,7 @@ function ensureShell(container: HTMLElement): void {
     ) as HTMLSelectElement | null;
     if (!select) return;
     selectControlRoomPipeline(select.value || null);
+    controlRoomCardActionsExpanded.clear();
     renderControlRoom();
   });
 
@@ -589,6 +601,7 @@ function ensureShell(container: HTMLElement): void {
     if (!input) return;
     controlRoomState.searchQuery = input.value || "";
     controlRoomState.page = 0;
+    controlRoomCardActionsExpanded.clear();
     normalizeState();
     persistState();
     renderControlRoom();
@@ -602,12 +615,14 @@ function ensureShell(container: HTMLElement): void {
     const action = button.dataset.action;
     if (action === "control-room-prev-page") {
       controlRoomState.page = Math.max(0, controlRoomState.page - 1);
+      controlRoomCardActionsExpanded.clear();
       persistState();
       renderControlRoom();
       return;
     }
     if (action === "control-room-next-page") {
       controlRoomState.page += 1;
+      controlRoomCardActionsExpanded.clear();
       normalizeState();
       persistState();
       renderControlRoom();
@@ -616,6 +631,7 @@ function ensureShell(container: HTMLElement): void {
     if (action === "control-room-clear-search") {
       controlRoomState.searchQuery = "";
       controlRoomState.page = 0;
+      controlRoomCardActionsExpanded.clear();
       persistState();
       renderControlRoom();
       container
@@ -669,6 +685,17 @@ function ensureShell(container: HTMLElement): void {
       const cardId = button.closest<HTMLElement>("article")?.dataset.cardId;
       if (!cardId) return;
       controlRoomLoadedEmbedCards.add(cardId);
+      renderControlRoom();
+      return;
+    }
+    if (action === "control-room-toggle-card-actions") {
+      const cardId = button.closest<HTMLElement>("article")?.dataset.cardId;
+      if (!cardId) return;
+      if (controlRoomCardActionsExpanded.has(cardId)) {
+        controlRoomCardActionsExpanded.delete(cardId);
+      } else {
+        controlRoomCardActionsExpanded.add(cardId);
+      }
       renderControlRoom();
       return;
     }
@@ -773,6 +800,7 @@ function ensureShell(container: HTMLElement): void {
         page: 0,
         searchQuery: "",
       };
+      controlRoomCardActionsExpanded.clear();
       persistState();
       renderControlRoom();
     });
@@ -1474,6 +1502,7 @@ function syncCard(
   const previousId = article.dataset.cardId || "";
   if (previousId && previousId !== descriptor.id) {
     controlRoomCardWarnings.delete(previousId);
+    controlRoomCardActionsExpanded.delete(previousId);
     clearCardPlayerShell(
       article.querySelector<HTMLElement>(
         '[data-role="control-room-player-shell"]',
@@ -1559,6 +1588,12 @@ function syncCard(
       pendingMonitoringInputFocusOutputId = null;
     }
   } else {
+    const hasCardActions =
+      descriptor.editable || !!descriptor.copyUrl || !!descriptor.openUrl;
+    const cardActionsExpanded =
+      !controlRoomV2Active() ||
+      !hasCardActions ||
+      controlRoomCardActionsExpanded.has(descriptor.id);
     const editButton = descriptor.editable
       ? `
                 <button
@@ -1571,26 +1606,46 @@ function syncCard(
       : "";
     const copyDisabled = descriptor.copyUrl ? "" : " disabled";
     const openDisabled = descriptor.openUrl ? "" : " disabled";
-    details.innerHTML = `
-            <div class="min-w-0">
-                <div class="flex min-w-0 flex-wrap gap-1.5">
-                    ${editButton}
-                    <button
-                        type="button"
-                        class="btn btn-xs btn-outline"
-                        data-action="control-room-copy-url"
-                        data-url="${escapeHtml(descriptor.copyUrl || "")}"${copyDisabled}>
-                        Copy
-                    </button>
-                    <button
-                        type="button"
-                        class="btn btn-xs btn-outline"
-                        data-action="control-room-open-url"
-                        data-url="${escapeHtml(descriptor.openUrl || "")}"${openDisabled}>
-                        Open
-                    </button>
-                </div>
+    const actionButtons = `
+            <div class="flex min-w-0 flex-wrap gap-1.5">
+                ${editButton}
+                <button
+                    type="button"
+                    class="btn btn-xs btn-outline"
+                    data-action="control-room-copy-url"
+                    data-url="${escapeHtml(descriptor.copyUrl || "")}"${copyDisabled}>
+                    Copy
+                </button>
+                <button
+                    type="button"
+                    class="btn btn-xs btn-outline"
+                    data-action="control-room-open-url"
+                    data-url="${escapeHtml(descriptor.openUrl || "")}"${openDisabled}>
+                    Open
+                </button>
             </div>`;
+    if (controlRoomV2Active() && hasCardActions) {
+      details.innerHTML = `
+            <div class="min-w-0 space-y-2">
+                <button
+                    type="button"
+                    class="btn btn-xs btn-outline"
+                    data-action="control-room-toggle-card-actions"
+                    aria-expanded="${cardActionsExpanded ? "true" : "false"}">
+                    ${cardActionsExpanded ? "Hide monitor actions" : "Show monitor actions"}
+                </button>
+                ${
+                  cardActionsExpanded
+                    ? actionButtons
+                    : `<p class="text-base-content/55 text-xs">Preview/status stays visible; URL actions are tucked away until needed.</p>`
+                }
+            </div>`;
+    } else {
+      details.innerHTML = `
+            <div class="min-w-0">
+                ${actionButtons}
+            </div>`;
+    }
   }
 
   const warning = controlRoomCardWarnings.get(descriptor.id) || null;

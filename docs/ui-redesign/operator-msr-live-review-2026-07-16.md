@@ -159,8 +159,10 @@ resetting the whole room. That prevents the control room from implying a
 configured monitor disappeared just because the operator narrowed the list.
 Generic web monitor embeds are now lazy by default: the card exposes an
 explicit `Load preview` action before mounting the iframe, while direct
-Open/Copy actions remain available. That keeps the initial Monitor checkpoint
-lighter and makes cross-origin preview loading intentional.
+Open/Copy/Edit URL actions remain available behind an explicit per-card
+`Show monitor actions` disclosure. That keeps the initial Monitor checkpoint
+lighter, makes cross-origin preview loading intentional, and lets the wall read
+as live status first rather than URL maintenance first.
 Monitor now also has its first v2-owned checkpoint strip above the legacy wall.
 It turns that same control-room state into one scan layer: monitor coverage,
 missing URLs, active search narrowing, lazy web-preview count, and next operator
@@ -402,6 +404,10 @@ What changed from the live operator pass:
   the local pipeline HLS preview remains immediately available. This keeps the
   wall scan-first and avoids spending browser/media work on outputs the operator
   is not inspecting yet.
+- v2 Monitor cards now tuck per-card URL maintenance actions behind an explicit
+  `Show monitor actions` disclosure, so the wall opens with preview/status as
+  the dominant scan layer and exposes Edit/Copy/Open only when the operator asks
+  for them.
 
 Still not a full v2 redesign:
 

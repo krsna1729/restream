@@ -1381,6 +1381,38 @@ test("seed: ui=v2 Monitor lazily loads generic web previews @desktop", async ({
   await expect(
     monitor.getByRole("button", { name: "Load preview" }),
   ).toBeVisible();
+  const outputCard = monitor.locator("article").filter({
+    hasText: "SRT Sink Flap",
+  });
+  await expect(
+    outputCard.getByRole("button", { name: "Edit" }),
+  ).toBeHidden();
+  await expect(
+    outputCard.getByRole("button", { name: "Copy" }),
+  ).toBeHidden();
+  const showActions = outputCard.getByRole("button", {
+    name: "Show monitor actions",
+  });
+  await expect(showActions).toBeVisible();
+  await expect(showActions).toHaveAttribute("aria-expanded", "false");
+  await showActions.click();
+  await expect(
+    outputCard.getByRole("button", { name: "Edit" }),
+  ).toBeVisible();
+  await expect(
+    outputCard.getByRole("button", { name: "Copy" }),
+  ).toBeVisible();
+  await expect(
+    outputCard.getByRole("button", { name: "Open" }),
+  ).toBeVisible();
+  const hideActions = outputCard.getByRole("button", {
+    name: "Hide monitor actions",
+  });
+  await expect(hideActions).toHaveAttribute("aria-expanded", "true");
+  await hideActions.click();
+  await expect(
+    outputCard.getByRole("button", { name: "Edit" }),
+  ).toBeHidden();
   await expect(monitor.locator("iframe")).toHaveCount(0);
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
 
