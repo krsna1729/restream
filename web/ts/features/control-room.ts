@@ -337,8 +337,12 @@ function syncGlobalMuteButton(scope: ParentNode = document): void {
       "btn-disabled",
       muteToggleButton.disabled,
     );
-    muteToggleButton.textContent =
-      controlRoomMuteIntent === "mute" ? "Unmute All" : "Mute All";
+    const label = controlRoomMuteIntent === "mute" ? "Unmute All" : "Mute All";
+    muteToggleButton.textContent = label;
+    muteToggleButton.setAttribute(
+      "aria-label",
+      `${label} monitor previews`,
+    );
   }
 }
 
@@ -359,10 +363,15 @@ function syncGlobalPlaybackButton(scope: ParentNode = document): void {
       "btn-disabled",
       playbackToggleButton.disabled,
     );
-    playbackToggleButton.textContent =
+    const label =
       controlRoomPlaybackIntent === "play" || anyPlaying
         ? "Pause All"
         : "Play All";
+    playbackToggleButton.textContent = label;
+    playbackToggleButton.setAttribute(
+      "aria-label",
+      `${label} monitor previews`,
+    );
   }
 }
 
@@ -541,7 +550,7 @@ function ensureShell(container: HTMLElement): void {
                     <div class="flex flex-wrap items-center gap-2">
                         <button type="button" class="btn btn-sm btn-outline" data-action="control-room-toggle-playback-all">Play All</button>
                         <button type="button" class="btn btn-sm btn-outline" data-action="control-room-toggle-mute-all">Mute All</button>
-                        <button type="button" id="control-room-reset-btn" class="btn btn-sm btn-outline">Reset</button>
+                        <button type="button" id="control-room-reset-btn" class="btn btn-sm btn-outline" aria-label="Reset monitor wall">Reset</button>
                     </div>
                 </div>
                 <div class="mt-3 flex flex-wrap items-end gap-3">
@@ -554,9 +563,9 @@ function ensureShell(container: HTMLElement): void {
                         <input type="text" id="control-room-search-input" placeholder="Search outputs..." class="input input-sm input-bordered w-full" />
                     </label>
                     <div class="flex items-center gap-2">
-                        <button type="button" class="btn btn-sm btn-outline" data-action="control-room-prev-page">Prev</button>
+                        <button type="button" class="btn btn-sm btn-outline" data-action="control-room-prev-page" aria-label="Previous monitor page">Prev</button>
                         <span id="control-room-page-label" class="text-base-content/70 min-w-[6rem] text-center text-sm">Page 1 / 1</span>
-                        <button type="button" class="btn btn-sm btn-outline" data-action="control-room-next-page">Next</button>
+                        <button type="button" class="btn btn-sm btn-outline" data-action="control-room-next-page" aria-label="Next monitor page">Next</button>
                     </div>
                 </div>
                 <div class="text-base-content/60 mt-2 text-xs" id="control-room-summary" role="status" aria-live="polite"></div>

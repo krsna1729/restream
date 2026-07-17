@@ -1558,6 +1558,19 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   await expect(summary).toHaveText(
     "1/1 monitored · 0 missing monitoring URLs",
   );
+  const initialMonitorButtonNames = await getCdpNamesByRole(page, "button");
+  expect(initialMonitorButtonNames).toEqual(
+    expect.arrayContaining([
+      "Pause All monitor previews",
+      "Unmute All monitor previews",
+      "Reset monitor wall",
+      "Previous monitor page",
+      "Next monitor page",
+    ]),
+  );
+  expect(initialMonitorButtonNames).not.toContain("Play All");
+  expect(initialMonitorButtonNames).not.toContain("Pause All");
+  expect(initialMonitorButtonNames).not.toContain("Reset");
 
   await search.fill("retrying");
   await expect(summary).toHaveText(
@@ -1643,11 +1656,15 @@ test("seed: ui=v2 Monitor search understands operator status terms @desktop", as
   const buttonNames = await getCdpNamesByRole(page, "button");
   expect(buttonNames).toEqual(
     expect.arrayContaining([
+      "Pause All monitor previews",
+      "Reset monitor wall",
       "Show monitor actions for RTMP dead sink",
       "Show monitor actions for SRT dead sink",
     ]),
   );
   expect(buttonNames).not.toContain("Show monitor actions");
+  expect(buttonNames).not.toContain("Pause All");
+  expect(buttonNames).not.toContain("Reset");
 
   await search.fill("down");
   await expect(summary).toHaveText(
