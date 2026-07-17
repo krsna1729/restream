@@ -2280,18 +2280,34 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   ).toHaveCount(0);
   await expect(retryingAlert.getByText("Evidence")).toHaveCount(0);
   await expect(
-    retryingAlert.getByRole("button", { name: "Show alert details" }),
+    retryingAlert.getByRole("button", {
+      name: "Show alert details for Retrying output",
+    }),
   ).toHaveAttribute("aria-expanded", "false");
+  const initialIncidentButtonNames = await getCdpNamesByRole(page, "button");
+  expect(initialIncidentButtonNames).toEqual(
+    expect.arrayContaining([
+      "Show alert details for Retrying output",
+      "Open pipeline pipe-retrying",
+    ]),
+  );
+  expect(initialIncidentButtonNames).not.toContain("Show alert details");
+  expect(initialIncidentButtonNames).not.toContain("Open pipeline");
   await retryingAlert
-    .getByRole("button", { name: "Show alert details" })
+    .getByRole("button", { name: "Show alert details for Retrying output" })
     .click();
   await expect(
-    retryingAlert.getByRole("button", { name: "Hide alert details" }),
+    retryingAlert.getByRole("button", {
+      name: "Hide alert details for Retrying output",
+    }),
   ).toHaveAttribute("aria-expanded", "true");
   await expect(retryingAlert.getByText("Recommended action:")).toBeVisible();
   await expect(retryingAlert.getByText("Evidence")).toBeVisible();
+  expect(await getCdpNamesByRole(page, "button")).toContain(
+    "Hide alert details for Retrying output",
+  );
   await retryingAlert
-    .getByRole("button", { name: "Hide alert details" })
+    .getByRole("button", { name: "Hide alert details for Retrying output" })
     .click();
   await expect(
     retryingAlert.getByText("Recommended action:"),
@@ -2444,6 +2460,15 @@ test("seed: ui=v2 Incidents bounds dense alert and event lists until requested @
   const showAllEvents = eventList.getByRole("button", { name: "Show all 20" });
   await expect(showAllAlerts).toHaveAttribute("aria-expanded", "false");
   await expect(showAllEvents).toHaveAttribute("aria-expanded", "false");
+  const denseIncidentButtonNames = await getCdpNamesByRole(page, "button");
+  expect(denseIncidentButtonNames).toEqual(
+    expect.arrayContaining([
+      "Show alert details for Dense alert 14",
+      "Open pipeline pipe-retrying",
+    ]),
+  );
+  expect(denseIncidentButtonNames).not.toContain("Show alert details");
+  expect(denseIncidentButtonNames).not.toContain("Open pipeline");
   expect(await getCdpNodeCount(page)).toBeLessThan(11_000);
 
   await showAllAlerts.click();

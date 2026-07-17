@@ -251,6 +251,7 @@ function eventSearchText(event: LifecycleEvent): string {
 function renderAlert(alert: OperatorAlert): string {
   const detailKey = `alert:${alert.id}`;
   const detailExpanded = !incidentsV2Active() || incidentAlertDetailsExpanded.has(detailKey);
+  const detailLabel = `${detailExpanded ? "Hide" : "Show"} alert details for ${alert.title}`;
   const evidence = (alert.evidence || [])
     .map((item) => `<li>${escapeHtml(item)}</li>`)
     .join("");
@@ -265,7 +266,7 @@ function renderAlert(alert: OperatorAlert): string {
     <p class="mt-3 text-sm">${escapeHtml(alert.cause)}</p>
     ${
       incidentsV2Active()
-        ? `<button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>`
+        ? `<button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-label="${escapeHtml(detailLabel)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>`
         : ""
     }
     ${
@@ -276,7 +277,7 @@ function renderAlert(alert: OperatorAlert): string {
     }
     <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/60">
       <span>Last seen ${escapeHtml(formatTime(alert.lastSeen || alert.generatedAt))}</span>
-      ${alert.pipelineId ? `<button type="button" class="btn btn-xs btn-outline" data-open-incident-pipeline="${escapeHtml(alert.pipelineId)}">Open pipeline</button>` : ""}
+      ${alert.pipelineId ? `<button type="button" class="btn btn-xs btn-outline" data-open-incident-pipeline="${escapeHtml(alert.pipelineId)}" aria-label="Open pipeline ${escapeHtml(alert.pipelineId)}">Open pipeline</button>` : ""}
     </div>
   </article>`;
 }
@@ -290,6 +291,7 @@ function renderAlertGroup(group: AlertGroup): string {
     stageCount > 1 && group.title.includes("stage")
       ? group.title.replace("stage", "stages")
       : group.title;
+  const detailLabel = `${detailExpanded ? "Hide" : "Show"} alert details for ${title}`;
   const cause =
     stageCount > 1
       ? `${stageCount} upstream stages are not delivering packets to dependent outputs.`
@@ -342,7 +344,7 @@ function renderAlertGroup(group: AlertGroup): string {
     </div>
     ${
       incidentsV2Active()
-        ? `<button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>`
+        ? `<button type="button" class="btn btn-xs btn-outline mt-3" data-incident-alert-detail="${escapeHtml(detailKey)}" aria-label="${escapeHtml(detailLabel)}" aria-expanded="${detailExpanded ? "true" : "false"}">${detailExpanded ? "Hide alert details" : "Show alert details"}</button>`
         : ""
     }
     ${
@@ -353,7 +355,7 @@ function renderAlertGroup(group: AlertGroup): string {
     }
     <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/60">
       <span>Last seen ${escapeHtml(formatTime(group.lastSeen))}</span>
-      ${group.pipelineId ? `<button type="button" class="btn btn-xs btn-outline" data-open-incident-pipeline="${escapeHtml(group.pipelineId)}">Open pipeline</button>` : ""}
+      ${group.pipelineId ? `<button type="button" class="btn btn-xs btn-outline" data-open-incident-pipeline="${escapeHtml(group.pipelineId)}" aria-label="Open pipeline ${escapeHtml(group.pipelineId)}">Open pipeline</button>` : ""}
     </div>
   </article>`;
 }
