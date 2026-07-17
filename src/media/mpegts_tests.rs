@@ -1440,13 +1440,130 @@ fn find_h265_sps_extracts_sps_payload() {
 }
 
 #[test]
-fn parse_h265_sps_too_short_does_not_panic() {
-    // < 2 bytes → early return without panic
-    let mut meta = VideoMeta::default();
-    parse_h265_sps(&[], &mut meta);
-    assert_eq!(meta.width, 0);
-    parse_h265_sps(&[0x42], &mut meta);
-    assert_eq!(meta.width, 0);
+fn malformed_sps_bitstreams_fail_closed_without_partial_metadata() {
+    fn push_bits(bits: &mut Vec<bool>, value: u64, width: u32) {
+        for shift in (0..width).rev() {
+            bits.push((value >> shift) & 1 == 1);
+        }
+    }
+
+    fn push_ue(bits: &mut Vec<bool>, value: u32) {
+        let code_num = value as u64 + 1;
+        let width = u64::BITS - code_num.leading_zeros();
+        bits.extend(std::iter::repeat_n(false, (width - 1) as usize));
+        push_bits(bits, code_num, width);
+    }
+
+    fn pack_bits(bits: &[bool]) -> Vec<u8> {
+        bits.chunks(8)
+            .map(|chunk| {
+                chunk.iter().enumerate().fold(0u8, |byte, (index, bit)| {
+                    byte | (u8::from(*bit) << (7 - index))
+                })
+            })
+            .collect()
+    }
+
+    fn push_h265_profile_prefix(bits: &mut Vec<bool>) {
+        push_bits(bits, 0, 4); // sps_video_parameter_set_id
+        push_bits(bits, 0, 3); // sps_max_sub_layers_minus1
+        push_bits(bits, 1, 1); // sps_temporal_id_nesting_flag
+        push_bits(bits, 0, 2); // general_profile_space
+        push_bits(bits, 0, 1); // general_tier_flag
+        push_bits(bits, 1, 5); // general_profile_idc
+        push_bits(bits, 0, 32); // compatibility flags
+        push_bits(bits, 0, 48); // constraint flags
+        push_bits(bits, 90, 8); // general_level_idc
+        push_ue(bits, 0); // sps_seq_parameter_set_id
+        push_ue(bits, 1); // chroma_format_idc
+    }
+
+    let h264_exp_golomb_shift_overflow = [
+        0, 0, 0, 1, 0x67, // Annex B start code and H.264 SPS NAL header
+        100, 0, 31, // High profile, compatibility, level
+        0, 0, 0, 0, 0x80, // 32 zero prefix bits followed by the stop bit
+        0, 0, 0, 0, // 32 suffix bits
+    ];
+
+    let mut h265_bits = Vec::new();
+    push_h265_profile_prefix(&mut h265_bits);
+    push_ue(&mut h265_bits, 0); // pic_width_in_luma_samples
+    push_ue(&mut h265_bits, 0); // pic_height_in_luma_samples
+    push_bits(&mut h265_bits, 1, 1); // conformance_window_flag
+    push_ue(&mut h265_bits, 1); // conf_win_left_offset: larger than width
+    push_ue(&mut h265_bits, 0);
+    push_ue(&mut h265_bits, 0);
+    push_ue(&mut h265_bits, 0);
+    let mut h265_crop_underflow = vec![
+        0, 0, 0, 1, 0x42, 0x01, // Annex B start code and H.265 SPS NAL header
+    ];
+    h265_crop_underflow.extend(pack_bits(&h265_bits));
+
+    let mut h265_count_bits = Vec::new();
+    push_h265_profile_prefix(&mut h265_count_bits);
+    push_ue(&mut h265_count_bits, 1_920);
+    push_ue(&mut h265_count_bits, 1_080);
+    push_bits(&mut h265_count_bits, 0, 1); // conformance_window_flag
+    push_ue(&mut h265_count_bits, 0); // bit_depth_luma_minus8
+    push_ue(&mut h265_count_bits, 0); // bit_depth_chroma_minus8
+    push_ue(&mut h265_count_bits, 0); // log2_max_pic_order_cnt_lsb_minus4
+    push_bits(&mut h265_count_bits, 0, 1); // sub_layer_ordering_info_present
+    for _ in 0..9 {
+        push_ue(&mut h265_count_bits, 0);
+    }
+    push_bits(&mut h265_count_bits, 0, 4); // scaling, AMP, SAO, and PCM flags
+    push_ue(&mut h265_count_bits, 65); // num_short_term_ref_pic_sets
+    let mut h265_unbounded_count = vec![0, 0, 0, 1, 0x42, 0x01];
+    h265_unbounded_count.extend(pack_bits(&h265_count_bits));
+
+    let outcomes = [
+        (
+            "h264-exp-golomb-overflow",
+            StreamKind::H264,
+            h264_exp_golomb_shift_overflow.as_slice(),
+        ),
+        (
+            "h265-crop-underflow",
+            StreamKind::H265,
+            h265_crop_underflow.as_slice(),
+        ),
+        (
+            "h265-unbounded-short-term-rps-count",
+            StreamKind::H265,
+            h265_unbounded_count.as_slice(),
+        ),
+    ]
+    .into_iter()
+    .map(|(case, kind, bytes)| {
+        (
+            case,
+            std::panic::catch_unwind(|| probe_video(kind, 0x100, None, None, bytes)),
+        )
+    })
+    .collect::<Vec<_>>();
+
+    for (case, result) in outcomes {
+        assert!(result.is_ok(), "{case} panicked");
+        let meta = result.expect("probe result");
+        assert_eq!(meta.width, 0, "{case} published an invalid width");
+        assert_eq!(meta.height, 0, "{case} published an invalid height");
+        assert!(meta.profile.is_none(), "{case} published partial metadata");
+        assert!(meta.level.is_none(), "{case} published partial metadata");
+    }
+}
+
+#[test]
+fn h264_scaling_matrix_uses_4x4_list_length_before_dimensions() {
+    let payload = [
+        0, 0, 0, 1, 0x67, // Annex B start code and SPS NAL header
+        100, 0, 31, // High profile, compatibility, level
+        0xAD, 0xFF, 0xFF, 0x80, 0xF0, 0x50, 0x7E, 0x00,
+    ];
+
+    let meta = probe_video(StreamKind::H264, 0x100, None, None, &payload);
+
+    assert_eq!(meta.profile.as_deref(), Some("High"));
+    assert_eq!((meta.width, meta.height), (320, 240));
 }
 
 #[test]

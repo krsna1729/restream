@@ -126,7 +126,11 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   reader substitutes zero after exhaustion and permits a 32-zero
   Exp-Golomb prefix, leaving shift overflow, arithmetic underflow, and
   attacker-controlled loop-count assumptions unproved.
-- Status: open (Filed: 2026-07-17 by Q-002)
+- Status: done (Fail-closed SPS parsing: partial-metadata commit removed, bit
+  reader and Exp-Golomb decode return `Option` on exhaustion/overflow instead
+  of substituting zero, and H.265 syntax counts are bounded; also fixed a
+  latent H.264 scaling-list size-selection bug found in the same pass;
+  2026-07-18 by codex; Filed: 2026-07-17 by Q-002)
 
 ### Q-020 [resilience] [sonnet] Prove AVCC declared-length rejection consistently
 - Goal: `codec::parse_avcc_config`,

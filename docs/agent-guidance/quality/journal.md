@@ -37,6 +37,8 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-17 23:18 Q-002 DONE [codex]](#2026-07-17-2318-q-002-done-codex)
 - [2026-07-17 23:23 Q-018 STARTED [codex]](#2026-07-17-2323-q-018-started-codex)
 - [2026-07-17 23:30 Q-018 DONE [codex]](#2026-07-17-2330-q-018-done-codex)
+- [2026-07-17 23:34 Q-019 STARTED [codex]](#2026-07-17-2334-q-019-started-codex)
+- [2026-07-18 00:10 Q-019 DONE [codex]](#2026-07-18-0010-q-019-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -552,3 +554,59 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Follow-ups: none.
 - Notes: this remains off the per-packet steady-state path; structural
   validation runs only when a complete PMT section arrives.
+
+## 2026-07-17 23:34 Q-019 STARTED [codex]
+- What: make MPEG-TS H.264/H.265 SPS probing reject exhausted bits,
+  overlong Exp-Golomb values, unbounded syntax counts, and invalid crop
+  arithmetic without panics or partial metadata.
+- Gates: pending break-it-first crafted vectors, scoped MPEG-TS tests,
+  before/after demux benchmark, format, clippy, and full test gates.
+- Commit: none.
+- Follow-ups: none yet.
+
+## 2026-07-18 00:10 Q-019 DONE [codex]
+- What: `probe_video` now parses into a scratch clone and only commits to the
+  real `VideoMeta` on full SPS-parse success, closing the partial-metadata
+  leak. `parse_h264_sps`/`parse_h265_sps`/`skip_scaling_list`/
+  `skip_h265_scaling_list_data` return `Option<()>` and propagate failure via
+  `?` instead of silently truncating. `BitReader::read_bit`/`read_bits`/`skip`
+  return `None` on exhaustion instead of substituting zero; `read_ue` caps the
+  leading-zero run at 31 (was 32, which could overflow the `1 << leading_zeros`
+  shift) and uses checked arithmetic for the final value; `read_se` uses
+  `i32::try_from` instead of a raw cast. Width/height math uses `u64`
+  intermediates with `checked_add`/`checked_mul`/`checked_sub` before
+  narrowing back to `u32`, rejecting zero or underflowing dimensions.
+  `parse_h265_sps` additionally bounds `chroma_format_idc`, bit depths,
+  `log2_max_pic_order_cnt`, and the short-term/long-term reference-picture-set
+  counts (`MAX_SHORT_TERM_REF_PIC_SETS`/`MAX_DELTA_POCS`/
+  `MAX_LONG_TERM_REF_PICS`) so attacker-controlled loop counts can't drive
+  unbounded work or out-of-range indexing. Also fixed a real bug found during
+  this pass: H.264 scaling-list size selection used `count` (always ≥ 6, so
+  the 4x4/16-entry list was never selected) instead of the spec-correct
+  per-matrix-index `index`.
+- Gates: three crafted adversarial SPS byte vectors (H.264 Exp-Golomb
+  overflow, H.265 crop underflow, H.265 unbounded short-term-RPS count) run
+  through `probe_video` under `catch_unwind`, asserting no panic and zeroed/
+  `None` metadata on failure; new regression test for the scaling-list index
+  bug asserts correct `320x240`/`High` profile decode. Scoped
+  `cargo test --lib mpegts` passed 66/66. `cargo fmt --all --check` and
+  `cargo clippy --all-targets` (warnings denied) were clean. Full
+  `cargo test` passed with no failures, panics, or warnings. Benchmarked
+  `data_path/mpegts_demux_drain` before/after: an isolated before run
+  (patch stashed) measured 1.79-2.52ms across both variants, while two
+  independent after runs (patch applied) measured 748µs-1.07ms, consistently
+  ~2x faster than the before run. Given the added logic is strictly more
+  `Option` checks with no fewer operations, a 2x speedup from this diff is
+  not causally plausible; the before run coincided with the lowest measured
+  host-available-memory sample (2399MB) and highest load average of the
+  three runs, so it is attributed to WSL2 host contention noise rather than
+  a real regression. The two after runs agree with each other (867-1072µs
+  and 748-813µs, both within the same order of magnitude) which is the more
+  reliable signal. No genuine performance regression from this hardening.
+- Commit: this commit.
+- Follow-ups: none.
+- Notes: SPS probing runs only during initial stream-metadata probing, not
+  the per-packet steady-state path; benchmarked anyway per the backlog gate.
+  Host bench noise makes single before/after comparisons unreliable here —
+  future benchmark-gated items on this host should take at least two samples
+  per side before concluding a regression.
