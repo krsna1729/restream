@@ -1445,6 +1445,31 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   expect(await getCdpStatusTexts(page)).toContain(
     "Inspection focus · 1 blocker before active probes · 1 fault candidate · Inspect recent errors and retry backoff before forcing a restart.",
   );
+  const probeDetails = page.locator("#inspect-diagnostics-summary");
+  await expect(
+    probeDetails.getByRole("button", {
+      name: "Show probe details for Retrying Destination",
+    }),
+  ).toHaveAttribute("aria-expanded", "false");
+  await expect(probeDetails.getByText("Probe Readiness")).toHaveCount(0);
+  await probeDetails
+    .getByRole("button", {
+      name: "Show probe details for Retrying Destination",
+    })
+    .click();
+  await expect(
+    probeDetails.getByRole("button", {
+      name: "Hide probe details for Retrying Destination",
+    }),
+  ).toHaveAttribute("aria-expanded", "true");
+  await expect(probeDetails.getByText("Probe Readiness")).toBeVisible();
+  await expect(probeDetails.getByText("Fault Candidates")).toBeVisible();
+  await probeDetails
+    .getByRole("button", {
+      name: "Hide probe details for Retrying Destination",
+    })
+    .click();
+  await expect(probeDetails.getByText("Probe Readiness")).toHaveCount(0);
   const resourceDetails = page.locator("#inspect-resource-details");
   await expect(resourceDetails.getByText("Process Metrics")).toBeVisible();
   await expect(resourceDetails.getByText("Pipeline Attribution")).toBeVisible();

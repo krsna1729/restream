@@ -521,9 +521,9 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
     },
     {
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
-      maxVisibleDashboardElements: 220,
+      maxVisibleDashboardElements: 180,
       maxVisibleControls: 22,
-      maxVisibleTextChars: 2200,
+      maxVisibleTextChars: 1700,
       readySelector: "#inspect-route-summary",
     },
     {

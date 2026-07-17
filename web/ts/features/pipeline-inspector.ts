@@ -43,6 +43,7 @@ const pipelineSummaryCache = new Map<string, PipelineSummarySnapshot>();
 const pipelineResourceMapCache = new Map<string, ResourceMapSnapshot>();
 let inspectOutputSearchQuery = "";
 let inspectResourceDetailsExpanded = false;
+let inspectProbeDetailsExpanded = false;
 let inspectPresentationCallback:
   | ((model: PipelineInspectCheckpointModel | null) => void)
   | null = null;
@@ -637,6 +638,7 @@ export function resetPipelineInspectorSelection(
   forceRuntimeScope = pipelineId === null;
   inspectOutputSearchQuery = "";
   inspectResourceDetailsExpanded = false;
+  inspectProbeDetailsExpanded = false;
   runtimeScopeMaskedPipelineId =
     pipelineId === null ? getUrlParam("p") || graphPipelineId : null;
   graphRequestSeq++;
@@ -906,18 +908,61 @@ function renderDiagnostics(pipe: PipelineView | null): void {
   const blockers = inspectProbeBlockers(pipe);
   const faultCandidates = inspectFaultCandidates(pipe);
   const suggestedNextStep = inspectSuggestedNextStep(pipe);
+  const blockerText = blockers.length
+    ? blockers.map(escapeHtml).join("<br>")
+    : "Ready for active diagnostics.";
+  const faultText = faultCandidates.length
+    ? faultCandidates.map((out) => escapeHtml(out.name)).join("<br>")
+    : "No unexpected output failures.";
   if (focusSummary) {
     focusSummary.textContent = `Inspection focus · ${blockers.length ? `${pluralize(blockers.length, "blocker")} before active probes` : "ready for active probes"} · ${pluralize(faultCandidates.length, "fault candidate")} · ${suggestedNextStep}`;
+  }
+
+  if (pipelineInspectV2Active()) {
+    const detailLabel = `${
+      inspectProbeDetailsExpanded ? "Hide" : "Show"
+    } probe details for ${pipe.name}`;
+    container.innerHTML = `<section class="border-base-content/10 bg-base-100/35 rounded-lg border p-3">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div class="dashboard-kicker">Probe plan</div>
+            <div class="mt-1 text-sm">${escapeHtml(suggestedNextStep)}</div>
+            <div class="text-base-content/55 mt-1 text-xs">${escapeHtml(pluralize(blockers.length, "blocker"))} · ${escapeHtml(pluralize(faultCandidates.length, "fault candidate"))}</div>
+          </div>
+          <button id="inspect-probe-details-toggle" type="button" class="btn btn-xs btn-outline" aria-label="${escapeHtml(detailLabel)}" aria-expanded="${inspectProbeDetailsExpanded ? "true" : "false"}">${inspectProbeDetailsExpanded ? "Hide probe details" : "Show probe details"}</button>
+        </div>
+        ${
+          inspectProbeDetailsExpanded
+            ? `<div class="mt-3 grid gap-3 md:grid-cols-2">
+                <div class="dashboard-stat-card-compact">
+                  <div class="dashboard-kicker">Probe Readiness</div>
+                  <div class="mt-2 text-sm">${blockerText}</div>
+                </div>
+                <div class="dashboard-stat-card-compact">
+                  <div class="dashboard-kicker">Fault Candidates</div>
+                  <div class="mt-2 text-sm">${faultText}</div>
+                </div>
+              </div>`
+            : ""
+        }
+      </section>`;
+    document
+      .getElementById("inspect-probe-details-toggle")
+      ?.addEventListener("click", () => {
+        inspectProbeDetailsExpanded = !inspectProbeDetailsExpanded;
+        renderDiagnostics(pipe);
+      });
+    return;
   }
 
   container.innerHTML = `<div class="grid gap-3 md:grid-cols-3">
         <div class="dashboard-stat-card-compact">
             <div class="dashboard-kicker">Probe Readiness</div>
-            <div class="mt-2 text-sm">${blockers.length ? blockers.map(escapeHtml).join("<br>") : "Ready for active diagnostics."}</div>
+            <div class="mt-2 text-sm">${blockerText}</div>
         </div>
         <div class="dashboard-stat-card-compact">
             <div class="dashboard-kicker">Fault Candidates</div>
-            <div class="mt-2 text-sm">${faultCandidates.length ? faultCandidates.map((out) => escapeHtml(out.name)).join("<br>") : "No unexpected output failures."}</div>
+            <div class="mt-2 text-sm">${faultText}</div>
         </div>
         <div class="dashboard-stat-card-compact">
             <div class="dashboard-kicker">Suggested Next Step</div>
@@ -950,7 +995,6 @@ function renderInspectorResourceDetails(
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div>
             <div class="text-sm font-semibold">Resource detail tables</div>
-            <div class="text-base-content/55 text-xs">Worker tables, truncation limits, and attribution accuracy.</div>
           </div>
           <button id="inspect-resource-details-toggle" type="button" class="btn btn-xs btn-outline" aria-label="${escapeHtml(resourceDetailsLabel)}" aria-expanded="${inspectResourceDetailsExpanded ? "true" : "false"}">${inspectResourceDetailsExpanded ? "Hide resource details" : "Show resource details"}</button>
         </div>
@@ -1191,10 +1235,13 @@ function resourceSummaryGroupHtml(
   subtitle: string,
   cards: ResourceSummaryCard[],
 ): string {
+  const subtitleHtml = pipelineInspectV2Active()
+    ? ""
+    : `<div class="text-base-content/55 text-xs">${escapeHtml(subtitle)}</div>`;
   return `<section class="dashboard-section bg-base-100/35 p-3">
     <div class="mb-2">
       <div class="text-sm font-semibold">${escapeHtml(title)}</div>
-      <div class="text-base-content/55 text-xs">${escapeHtml(subtitle)}</div>
+      ${subtitleHtml}
     </div>
     <div class="grid gap-2 sm:grid-cols-3 lg:grid-cols-1 2xl:grid-cols-3">
       ${cards
