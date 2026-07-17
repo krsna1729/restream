@@ -1242,10 +1242,13 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
       "Select pipeline Healthy Program",
       "Select pipeline Retrying Destination",
       "Stop Healthy Output",
-      "More actions for Healthy Output",
+      "More output actions for Healthy Output",
       "Inspect graph for Healthy Program",
       "Diagnose Healthy Program",
     ]),
+  );
+  expect(await getCdpNamesByRole(page, "button")).not.toContain(
+    "More actions for Healthy Output",
   );
   expect(await getCdpNamesByRole(page, "button")).not.toEqual(
     expect.arrayContaining([
@@ -3321,7 +3324,7 @@ test("seed: ui=v2 surfaces harness-derived chaos recovery states @desktop", asyn
   const outputSearch = outputOverview.getByLabel("Search output destinations");
   const outputToolButtons = await outputOverview
     .locator(
-      'button[aria-pressed], button[aria-label^="More actions for"], button:has-text("Clear output filters")',
+      'button[aria-pressed], button[aria-label^="More output actions for"], button:has-text("Clear output filters")',
     )
     .evaluateAll((buttons) =>
       buttons.map((button) => {
@@ -3601,11 +3604,11 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(page.locator("#add-out-btn")).toBeHidden();
   const openRetryingOutputActions = async () => {
     await outputOverview
-      .getByRole("button", { name: "More actions for Retrying Output" })
+      .getByRole("button", { name: "More output actions for Retrying Output" })
       .click();
     await expect(
       outputOverview.getByRole("menu", {
-        name: "More actions for Retrying Output",
+        name: "More output actions for Retrying Output",
       }),
     ).toBeVisible();
   };
@@ -3656,11 +3659,11 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     outputOverview.getByRole("menuitem", { name: "Delete Retrying Output" }),
   ).toBeEnabled();
   await outputOverview
-    .getByRole("button", { name: "More actions for Retrying Output" })
+    .getByRole("button", { name: "More output actions for Retrying Output" })
     .click();
   await expect(
     outputOverview.getByRole("menu", {
-      name: "More actions for Retrying Output",
+      name: "More output actions for Retrying Output",
     }),
   ).toBeHidden();
   await startRetryingOutput.click();
@@ -4665,12 +4668,12 @@ test("ui=v2 output action menus are keyboard-dismissable @desktop", async ({
     "#dashboard-v2-pipeline-output-overview-root",
   );
   const more = outputOverview.getByRole("button", {
-    name: "More actions for Healthy Output",
+    name: "More output actions for Healthy Output",
   });
   await more.focus();
   await page.keyboard.press("Enter");
   const menu = outputOverview.getByRole("menu", {
-    name: "More actions for Healthy Output",
+    name: "More output actions for Healthy Output",
   });
   await expect(menu).toBeVisible();
   await expect(more).toHaveAttribute("aria-expanded", "true");
@@ -4678,9 +4681,16 @@ test("ui=v2 output action menus are keyboard-dismissable @desktop", async ({
   const cdp = await page.context().newCDPSession(page);
   const axTree = await cdp.send("Accessibility.getFullAXTree");
   const menuRoles = axTree.nodes
-    .filter((node) => node.name?.value === "More actions for Healthy Output")
+    .filter(
+      (node) => node.name?.value === "More output actions for Healthy Output",
+    )
     .map((node) => node.role?.value);
   expect(menuRoles).toContain("menu");
+  expect(
+    axTree.nodes.some(
+      (node) => node.name?.value === "More actions for Healthy Output",
+    ),
+  ).toBe(false);
   expect(
     axTree.nodes.some(
       (node) =>

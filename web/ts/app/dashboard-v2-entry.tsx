@@ -1658,7 +1658,7 @@ function DashboardV2PipelineOutputOverview({
                 <button
                   aria-haspopup="menu"
                   aria-expanded={openActionsFor === output.id}
-                  aria-label={`More actions for ${output.name}`}
+                  aria-label={`More output actions for ${output.name}`}
                   className="btn btn-sm btn-ghost min-h-9 min-w-11"
                   onClick={() =>
                     setOpenActionsFor((current) =>
@@ -1678,7 +1678,7 @@ function DashboardV2PipelineOutputOverview({
                 </button>
                 {openActionsFor === output.id ? (
                   <div
-                    aria-label={`More actions for ${output.name}`}
+                    aria-label={`More output actions for ${output.name}`}
                     className="bg-base-100 border-base-content/10 absolute right-0 top-7 z-20 w-36 rounded-lg border p-1 shadow-xl"
                     onKeyDown={(event) => {
                       if (event.key === "Escape") {
