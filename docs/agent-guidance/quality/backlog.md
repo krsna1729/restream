@@ -29,7 +29,65 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: cargo-llvm-cov is installed. The stale root `coverage.lcov` is from
   2026-06-24 and gitignored; a fresh map is the seed for invariant-coverage
   work per the proof-sweep skill.
-- Status: open (Filed: 2026-07-03 by bootstrap)
+- Status: done (Mapped at `5f1c10f4`; follow-ups Q-014 through Q-016 filed;
+  2026-07-17 by codex; Filed: 2026-07-03 by bootstrap)
+
+### Q-014 [proof] [sonnet] Bind or retire the zero-execution FFmpeg operation layer
+- Goal: `ffmpeg/operation.rs` and `ffmpeg/operation_compiler.rs` either become
+  part of an actual backend-owned execution path with a mutation-proven mapping
+  test, or are removed as unused indirection. Do not add incidental tests for
+  code that no production path consumes.
+- Files: `src/media/ffmpeg/operation.rs`,
+  `src/media/ffmpeg/operation_compiler.rs`, `src/media/ffmpeg/mod.rs`, and the
+  owning backend/test if the layer is retained.
+- Gates: focused backend/stage-runtime tests; `cargo fmt --all --check`;
+  standard clippy and test gates.
+- Context: Q-001 measured 0/6 and 0/60 covered lines respectively, and call-site
+  search found no consumer of `compile_operation`. The module comments claim
+  both backends consume this layer, so coverage-only tests would preserve a
+  false architectural assumption instead of proving runtime behavior.
+- Status: open (Filed: 2026-07-17 by Q-001)
+
+### Q-015 [proof] [sonnet] Prove adversarial SRT crypto option boundaries
+- Goal: deterministic mutation-proven coverage for plaintext versus encrypted
+  resolution, URL default key length, every supported key length, interior-NUL
+  passphrases, and FFI option failures through the existing error surface.
+- Files: `src/media/srt/crypto.rs`, `src/media/srt_tests.rs`.
+- Gates: `scripts/build/resource-limit.sh cargo test srt_crypto --lib`;
+  `cargo fmt --all --check`; standard clippy and test gates.
+- Context: Q-001 measured 13/80 covered lines (16.25%) in the crypto adapter.
+  Current higher-layer validation is strong, but the last conversion and FFI
+  boundary remains mostly unexecuted.
+- Status: open (Filed: 2026-07-17 by Q-001)
+
+### Q-016 [proof] [sonnet] Prove RTMP session fault transitions
+- Goal: the smallest deterministic component proof for malformed or truncated
+  RTMP session input asserts both the surfaced protocol error and complete
+  session/registration cleanup. Reuse the existing session harness and avoid a
+  duplicate live pipeline.
+- Files: `src/media/rtmp.rs`, `src/media/rtmp/tests.rs`.
+- Gates: `scripts/build/resource-limit.sh cargo test rtmp --lib`;
+  `cargo fmt --all --check`; standard clippy and test gates.
+- Context: Q-001 measured 221/1,301 covered lines (16.99%) despite strong FLV,
+  timestamp, and state-helper proofs. The remaining gap is concentrated in the
+  assembled session path where malformed input must not leak registrations or
+  crash the engine.
+- Status: open (Filed: 2026-07-17 by Q-001)
+
+### Q-017 [proof] [sonnet] Reject incomplete copied frontend dependency caches
+- Goal: worktree hydration must not report `node_modules` ready when any
+  dependency required by `npm run build:frontend` is absent; a synthetic stale
+  cache regression must fail the readiness check and a complete cache must
+  pass it.
+- Files: `scripts/agent/worktree.sh` and a focused script-level regression
+  check.
+- Gates: focused worktree dependency regression; `bash -n
+  scripts/agent/worktree.sh`; `npm run build:frontend`.
+- Context: Q-001 initially failed four API static-asset tests because generated
+  assets were absent. The repair then exposed a stale copied `node_modules`
+  tree that the helper called ready despite missing React packages, causing the
+  canonical frontend build to fail until `npm ci`.
+- Status: open (Filed: 2026-07-17 during Q-001)
 
 ### Q-002 [resilience] [haiku] Inventory crafted-bytes fault-injection coverage
 - Goal: a table (in the journal + filed items) of every demux/parse entry

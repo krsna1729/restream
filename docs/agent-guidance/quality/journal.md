@@ -29,6 +29,8 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-12 17:32 Q-012 TOKIO THREAD-NAME PROBE [codex]](#2026-07-12-1732-q-012-tokio-thread-name-probe-codex)
 - [2026-07-12 17:40 Q-012 TOKIO KEEPALIVE PROTOTYPE REJECTED [codex]](#2026-07-12-1740-q-012-tokio-keepalive-prototype-rejected-codex)
 - [2026-07-12 17:45 MSR FULL FINAL PASS [codex]](#2026-07-12-1745-msr-full-final-pass-codex)
+- [2026-07-17 22:23 Q-001 STARTED [codex]](#2026-07-17-2223-q-001-started-codex)
+- [2026-07-17 22:40 Q-001 DONE [codex]](#2026-07-17-2240-q-001-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -385,3 +387,72 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   outputs measured `2.339` CPUs, IPC `0.307`, cache misses `20.41%`,
   context switches `3.209 K/sec`, and migrations `388.668/sec` while MediaMTX
   remained `1200/1200` with bytes growing before and after the perf window.
+
+## 2026-07-17 22:23 Q-001 STARTED [codex]
+- What: establish a fresh per-module coverage map and file focused proof work
+  for the weakest media modules before adding adversarial regressions.
+- Gates: pending.
+- Commit: none.
+- Follow-ups: pending coverage evidence.
+
+## 2026-07-17 22:40 Q-001 DONE [codex]
+- What: measured the current Rust suite at `5f1c10f4`, separated live proof
+  gaps from zero-execution dead abstractions, and filed focused follow-ups.
+- Gates: `npm ci` and `npm run build:frontend` repaired the generated-asset
+  prerequisite; `scripts/build/resource-limit.sh cargo llvm-cov
+  --summary-only` passed 1,396 tests; `cargo fmt --all --check` passed;
+  `scripts/build/resource-limit.sh cargo clippy -- -D warnings` passed.
+- Commit: this commit.
+- Follow-ups: Q-014 through Q-017.
+- Notes: the first instrumented run found four API 404s sharing one missing
+  generated asset. The canonical frontend build initially failed because the
+  copied dependency cache lacked React while the worktree helper reported it
+  ready; `npm ci` repaired the environment and the clean rerun passed. Current
+  cargo-llvm-cov/Rust instrumentation emitted zero branch records, so the map
+  records line coverage and uses function/region coverage as the available
+  branch-risk signal instead of inventing branch percentages.
+
+### Top-level `src/` coverage map
+
+| Module | Lines covered | Line coverage |
+|---|---:|---:|
+| `alerts.rs` | 1,212 / 1,235 | 98.14% |
+| `api/` | 4,207 / 5,370 | 78.34% |
+| `api_runtime_views/` | 1,623 / 2,011 | 80.71% |
+| `api_view_models.rs` | 1,118 / 1,319 | 84.76% |
+| `application/` | 5,687 / 7,012 | 81.10% |
+| `bin/` | 4,693 / 20,525 | 22.86% |
+| `config.rs` | 771 / 780 | 98.85% |
+| `db/` | 1,369 / 1,457 | 93.96% |
+| `diag.rs` | 432 / 1,010 | 42.77% |
+| `domain/` | 1,341 / 1,462 | 91.72% |
+| `events.rs` | 293 / 319 | 91.85% |
+| `ffmpeg_extract.rs` | 124 / 187 | 66.31% |
+| `infrastructure/` | 704 / 745 | 94.50% |
+| `lib.rs` | 97 / 731 | 13.27% |
+| `logging.rs` | 75 / 274 | 27.37% |
+| `main.rs` | 4 / 42 | 9.52% |
+| `media/` | 17,902 / 22,099 | 81.01% |
+| `planner/` | 611 / 618 | 98.87% |
+| `runtime/` | 117 / 119 | 98.32% |
+| `runtime_info.rs` | 569 / 600 | 94.83% |
+| `secret_display.rs` | 67 / 80 | 83.75% |
+| `test_fixtures.rs` | 165 / 180 | 91.67% |
+
+### Risk-ranked weak `src/media/` files
+
+| File | Lines covered | Line coverage | Function coverage | Disposition |
+|---|---:|---:|---:|---|
+| `ffmpeg/operation.rs` | 0 / 6 | 0.00% | 0.00% | Q-014: bind to a real owner or remove |
+| `ffmpeg/operation_compiler.rs` | 0 / 60 | 0.00% | 0.00% | Q-014: same unused layer |
+| `srt/crypto.rs` | 13 / 80 | 16.25% | 50.00% | Q-015 adversarial boundary proof |
+| `rtmp.rs` | 221 / 1,301 | 16.99% | 52.54% | Q-016 session fault proof |
+| `ffmpeg/stage_plan.rs` | 17 / 67 | 25.37% | 60.00% | covered with Q-014 owner decision |
+| `rtmp/egress_transport.rs` | 57 / 191 | 29.84% | 40.91% | follow after RTMP session proof |
+| `srt_egress.rs` | 273 / 679 | 40.21% | 56.41% | live/FFI-heavy; inventory in Q-002 |
+| `srt.rs` | 411 / 992 | 41.43% | 53.33% | live/FFI-heavy; inventory in Q-002 |
+| `srt_monitor.rs` | 35 / 80 | 43.75% | 71.43% | lower uncovered-line impact |
+| `engine_snapshots.rs` | 107 / 156 | 68.59% | 76.47% | snapshot error branches |
+| `mpegts_probe.rs` | 420 / 576 | 72.92% | 89.29% | probe/reporting paths |
+- Aggregate workspace coverage: 43,181 / 68,175 lines (63.34%), 4,501 /
+  6,928 functions (64.97%), and 59,936 / 97,231 regions (61.64%).
