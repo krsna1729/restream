@@ -246,6 +246,35 @@ function outputStateLabel(out: OutputView): { label: string; cls: string } {
   return { label: "Down", cls: "badge-error" };
 }
 
+function inspectOutputSearchText(out: OutputView): string {
+  const stateLabel = outputStateLabel(out).label.toLowerCase();
+  const aliases = new Set<string>();
+  const status = (out.status || "").trim().toLowerCase();
+  const desiredState = (out.desiredState || "").trim().toLowerCase();
+  if (status) aliases.add(status);
+  if (desiredState) aliases.add(desiredState);
+  if (stateLabel) aliases.add(stateLabel);
+  if (stateLabel === "failed" || stateLabel === "down") {
+    aliases.add("down");
+  }
+  if (stateLabel === "running") aliases.add("live");
+  if (stateLabel === "stopped") {
+    aliases.add("off");
+    aliases.add("offline");
+  }
+  return [
+    out.name,
+    out.url,
+    outputViewEncodingLabel(out),
+    out.phase || "",
+    out.failurePhase || "",
+    out.lastError || "",
+    ...aliases,
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
 function titleCaseValue(value: string | null | undefined): string {
   const normalized = String(value || "").trim();
   if (!normalized) return "--";
@@ -666,17 +695,7 @@ function renderSummary(
   const normalizedOutputSearch = normalizeInspectSearch(inspectOutputSearchQuery);
   const filteredOutputs = normalizedOutputSearch
     ? pipe.outs.filter((out) =>
-        [
-          out.name,
-          out.url,
-          out.status,
-          out.desiredState,
-          outputStateLabel(out).label,
-          outputViewEncodingLabel(out),
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(normalizedOutputSearch),
+        inspectOutputSearchText(out).includes(normalizedOutputSearch),
       )
     : pipe.outs;
   const showOutputSearch =

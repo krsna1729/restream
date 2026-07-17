@@ -1300,6 +1300,76 @@ test("seed: ui=v2 Inspect output search narrows noisy sibling outputs @desktop",
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
 });
 
+test("seed: ui=v2 Inspect output search understands down aliases @desktop", async ({
+  page,
+}) => {
+  await openSeededDashboard(
+    page,
+    "chaos-recovery",
+    "/?mode=pipeline&view=inspect&p=pipe-stall&ui=v2",
+    {
+      expectOverviewReady: false,
+      runtimeResponse: (runtime) => {
+        const next = structuredClone(runtime);
+        const pipeline = (
+          next.health as Record<string, Record<string, unknown>>
+        ).pipelines?.["pipe-stall"] as
+          | { outputs?: Record<string, Record<string, unknown>> }
+          | undefined;
+        if (pipeline?.outputs?.["out-stall-healthy-05"]) {
+          Object.assign(pipeline.outputs["out-stall-healthy-05"], {
+            status: "failed",
+            rawStatus: "running",
+            phase: "failed",
+            failurePhase: "send",
+            lastError: "synthetic sink down",
+            retrying: false,
+            flapping: false,
+          });
+        }
+        return next;
+      },
+    },
+  );
+
+  const inspect = page.locator("#inspect-mode-panel");
+  const outputPreview = inspect.getByLabel("Inspect output preview");
+  await expect(page.locator("#inspect-route-summary")).toHaveText(
+    "Inspecting Stalled Sink Isolation · input live · 6 outputs · 2 attention items",
+  );
+  await expect(outputPreview.getByText("RTMP stalled sink")).toBeVisible();
+  await expect(outputPreview.getByText("Healthy sibling 05")).toBeVisible();
+
+  await inspect.getByLabel("Search inspect outputs").fill("down");
+  await expect(outputPreview.getByText("Healthy sibling 05")).toBeVisible();
+  await expect(outputPreview.getByText("RTMP stalled sink")).not.toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '1/6 inspect outputs match · "down"',
+  );
+
+  await inspect.getByLabel("Search inspect outputs").fill("running");
+  await expect(outputPreview.getByText("Healthy sibling 01")).toBeVisible();
+  await expect(outputPreview.getByText("Healthy sibling 05")).not.toBeVisible();
+  await expect(outputPreview.getByText("RTMP stalled sink")).not.toBeVisible();
+  expect(await getCdpStatusTexts(page)).toContain(
+    '4/6 inspect outputs match · "running"',
+  );
+
+  await inspect.getByLabel("Search inspect outputs").fill("offline");
+  await expect(
+    outputPreview.getByText(
+      'No inspect outputs match "offline". Clear output search to show all.',
+    ),
+  ).toBeVisible();
+  expect(await getCdpStatusTexts(page)).toEqual(
+    expect.arrayContaining([
+      '0/6 inspect outputs match · "offline"',
+      'No inspect outputs match "offline". Clear output search to show all.',
+    ]),
+  );
+  expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
+});
+
 test("seed: ui=v2 pipeline workspace tabs preserve one selected context @desktop", async ({
   page,
 }) => {
