@@ -11,6 +11,7 @@ import {
   getDocumentWidthOverflow,
   installPushStateCounter,
   resetPushStateCounter,
+  selectPipelineInV2Selector,
   tabUntilFocused,
 } from "./seed-helpers";
 
@@ -135,11 +136,14 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
       text: node.textContent?.trim() ?? "",
     })),
   ).toEqual({ childCount: 0, text: "" });
-  await expect(
-    pipelineSelector.getByRole("button", {
-      name: /Retrying Destination/,
-    }),
-  ).toHaveAttribute("aria-current", "page");
+  await selectPipelineInV2Selector(
+    pipelineSelector,
+    "pipe-retrying",
+    /Retrying Destination/,
+  );
+  await expect(pipelineSelector.getByLabel("Select pipeline")).toHaveValue(
+    "pipe-retrying",
+  );
   const pipelineHeader = page.locator("#dashboard-v2-pipeline-header-root");
   await expect(
     pipelineHeader.getByRole("heading", { name: "Retrying Destination" }),
@@ -332,9 +336,11 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   );
   await page.locator("#edit-out-modal").press("Escape");
 
-  await pipelineSelector
-    .getByRole("button", { name: /Healthy Program/ })
-    .click();
+  await selectPipelineInV2Selector(
+    pipelineSelector,
+    "pipe-healthy",
+    /Healthy Program/,
+  );
   await expect(page).toHaveURL(/p=pipe-healthy/);
   await expect(page.locator("#pipe-name")).toHaveText("Healthy Program");
   await expect(pipelineHeader).toBeVisible();

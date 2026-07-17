@@ -29,6 +29,25 @@ async function selectPipelineForWorkspace(
     await pipeline.click();
 }
 
+async function selectPipelineInV2Selector(
+    root: Locator,
+    pipelineId: string,
+    pipelineName: string,
+): Promise<void> {
+    await expect(root).toBeVisible();
+    const compactSelector = root.getByLabel('Select pipeline');
+    const pipelineButton = root.getByRole('button', { name: new RegExp(pipelineName) });
+    await expect
+        .poll(async () => (await compactSelector.count()) + (await pipelineButton.count()))
+        .toBeGreaterThan(0);
+    if ((await compactSelector.count()) > 0) {
+        await expect(compactSelector).toBeVisible();
+        await compactSelector.selectOption(pipelineId);
+        return;
+    }
+    await pipelineButton.click();
+}
+
 async function waitFor<T>(
     fn: () => Promise<T>,
     predicate: (value: T) => boolean,
@@ -733,9 +752,11 @@ test.describe.serial('HLS Player — live playback', () => {
         await page.goto('/?mode=pipeline&ui=v2');
 
         const pipelineSelector = page.locator('#dashboard-v2-pipeline-selector-root');
-        await pipelineSelector
-            .getByRole('button', { name: new RegExp(livePipelineName) })
-            .click();
+        await selectPipelineInV2Selector(
+            pipelineSelector,
+            livePipelineId,
+            livePipelineName,
+        );
 
         const inputStatus = page.locator('#dashboard-v2-pipeline-input-status-root');
         const previewPlayer = inputStatus.locator(
@@ -749,7 +770,7 @@ test.describe.serial('HLS Player — live playback', () => {
         );
         await expect(video).toBeAttached();
         await previewPlayer
-            .getByRole('button', { name: 'Play preview' })
+            .getByRole('button', { name: /Play (input )?preview/ })
             .click();
 
         if (await page.evaluate(() => !!window.Hls)) {
@@ -770,9 +791,11 @@ test.describe.serial('HLS Player — live playback', () => {
         await expectPreviewPlayback(video);
 
         const mountedVideo = await video.elementHandle();
-        await pipelineSelector
-            .getByRole('button', { name: new RegExp(standbyPipelineName) })
-            .click();
+        await selectPipelineInV2Selector(
+            pipelineSelector,
+            standbyPipelineId,
+            standbyPipelineName,
+        );
         await expect(previewPlayer).toHaveCount(0);
         expect(
             await mountedVideo?.evaluate(
@@ -833,7 +856,7 @@ test.describe.serial('HLS Player — live playback', () => {
     test('egress output lifecycle start and stop', async ({ page }) => {
         const ctx = await request.newContext({ baseURL: TEST_BASE_URL });
         await ctx.post('/api/v1/auth/login', { data: { password: 'admin' } });
-        
+
         const outputResp = await ctx.post(`/api/v1/pipelines/${livePipelineId}/outputs`, {
             data: {
                 name: 'E2E-Egress-Test',
@@ -899,7 +922,7 @@ test.describe.serial('HLS Player — live playback', () => {
     test('diagnostics modal auditing', async ({ page }) => {
         await selectPipelineForWorkspace(page, livePipelineName);
         await page.locator('#pipeline-workspace-tab-inspect').click();
-        
+
         const select = page.locator('#inspect-pipeline-select');
         await expect(select).toBeVisible();
         await select.selectOption({ value: livePipelineId });
@@ -931,7 +954,7 @@ test.describe.serial('HLS Player — live playback', () => {
         await expect(select).toBeVisible();
         await select.selectOption({ value: livePipelineId });
 
-        await expect(page.locator('text=Local HLS')).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Local HLS' })).toBeVisible();
 
         const managedVideo = page.locator('video[data-role="managed-hls-video"]');
         await expect(managedVideo).toBeAttached({ timeout: 10000 });

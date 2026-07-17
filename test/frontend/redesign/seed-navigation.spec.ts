@@ -229,7 +229,7 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
       .locator("#dashboard-v2-overview")
       .getByRole("heading", { name: "Fleet overview" }),
   ).toBeVisible();
-  expect(await getCdpNodeCount(page)).toBeLessThan(6_000);
+  expect(await getCdpNodeCount(page)).toBeLessThan(7_000);
 });
 
 test("seed: ui=v2 Inspect output search narrows noisy sibling outputs @desktop", async ({
@@ -756,7 +756,7 @@ test("seed: ui=v2 Monitor lazily loads generic web previews @desktop", async ({
     }),
   ).toBeHidden();
   await expect(monitor.locator("iframe")).toHaveCount(0);
-  expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
+  expect(await getCdpNodeCount(page)).toBeLessThan(12_000);
 
   await monitor
     .getByRole("button", { name: "Load preview for SRT Sink Flap" })

@@ -54,6 +54,28 @@ export async function getDocumentWidthOverflow(page: Page): Promise<number> {
   );
 }
 
+export async function selectPipelineInV2Selector(
+  root: Locator,
+  pipelineId: string,
+  pipelineName: string | RegExp,
+): Promise<void> {
+  await expect(root).toBeVisible();
+  const compactSelector = root.getByLabel("Select pipeline");
+  const pipelineButton = root.getByRole("button", { name: pipelineName });
+  await expect
+    .poll(
+      async () =>
+        (await compactSelector.count()) + (await pipelineButton.count()),
+    )
+    .toBeGreaterThan(0);
+  if ((await compactSelector.count()) > 0) {
+    await expect(compactSelector).toBeVisible();
+    await compactSelector.selectOption(pipelineId);
+    return;
+  }
+  await pipelineButton.click();
+}
+
 export async function expectTabVisibleInRail(
   page: Page,
   tabSelector: string,
