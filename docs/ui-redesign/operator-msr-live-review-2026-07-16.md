@@ -272,6 +272,11 @@ journey, those budgets are
 currently 6k / 8.5k / 10.5k / 13.5k / 16k / 18k / 21k nodes respectively. This
 does not make those screens full v2 yet, but it gives the redesign loop a
 stable regression tripwire before deeper ownership passes.
+That same route journey now proves that non-pipeline checkpoint routes do not
+carry hidden Pipeline Inspect or Monitor detail shells. The v2 checkpoint root
+anchors stay mounted for presentation, but the heavy detail DOM is removed until
+the operator returns to Inspect or Monitor, where the shell is restored before
+rendering.
 
 The seeded v2 Operate path also has a CDP layout proof across the configured
 desktop, tablet, and mobile browser projects. The stress fixture uses the
@@ -356,6 +361,10 @@ What changed from the live operator pass:
 - v2 Overview Restream Activity now adds burst search only once the feed is long
   enough to justify the extra control, with CDP-visible result counts and local
   Clear activity search recovery.
+- Non-pipeline v2 checkpoint routes now drop hidden Pipeline Inspect and Monitor
+  detail shells while preserving their v2 checkpoint anchors, so route-specific
+  CDP snapshots no longer include stale graph/control-room DOM from the previous
+  operator workspace.
 - Shared auth expiry now preserves the full operator return path, including
   `ui=v2`, so a re-login can return to the interrupted v2 workflow instead of
   dumping the operator at the default Overview.
@@ -371,10 +380,10 @@ Still not a full v2 redesign:
   rather than full v2 layouts. Inspect, Monitor, Media, Settings, Incidents,
   Telemetry, and Status each have only their first v2-owned decision checkpoint.
 - Legacy-owned route details still have substantial active DOM when visible.
-  Under v2, dense checkpoint detail DOM is now unmounted on route exit, but
-  active detail-section redesign remains a future performance/accessibility
-  cleanup. Seeded Playwright/CDP now also proves the Media route remounts with
-  populated rows after that cleanup.
+  Under v2, dense checkpoint detail DOM and inactive Pipeline workspace shells
+  are now unmounted on route exit, but active detail-section redesign remains a
+  future performance/accessibility cleanup. Seeded Playwright/CDP now also
+  proves the Media route remounts with populated rows after that cleanup.
 
 ## Done-state interpretation
 

@@ -587,7 +587,39 @@ test("seed: ui=v2 legacy-owned routes keep operator checkpoints visible and anno
     expect(await getCdpNodeCount(page), checkpoint.href).toBeLessThan(
       checkpoint.nodeBudget,
     );
+    if (!checkpoint.href.includes("mode=pipeline")) {
+      await expect(
+        page.locator(
+          "#inspect-mode-panel > :not(#dashboard-v2-pipeline-inspect-root)",
+        ),
+      ).toHaveCount(0);
+      await expect(
+        page.locator("#control-mode-panel > :not(#dashboard-v2-control-room-root)"),
+      ).toHaveCount(0);
+      await expect(page.locator("#inspect-mode-panel h1")).toHaveCount(0);
+      await expect(page.locator("#control-mode-panel h1")).toHaveCount(0);
+    }
   }
+
+  await page.goto("/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2");
+  await expect(page.locator("#inspect-route-summary")).toHaveText(
+    "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
+  );
+  await expect(
+    page.locator("#inspect-mode-panel").getByRole("heading", {
+      name: "Pipeline inspect",
+    }),
+  ).toBeVisible();
+
+  await page.goto("/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2");
+  await expect(page.locator("#control-room-route-summary")).toHaveText(
+    "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
+  );
+  await expect(
+    page.locator("#control-mode-panel").getByRole("heading", {
+      name: "Control Room",
+    }),
+  ).toBeVisible();
 });
 
 test("seed: ui=v2 shell announces ownership while moving across routes @desktop", async ({

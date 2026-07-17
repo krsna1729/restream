@@ -58,6 +58,8 @@ const runtimeDashboardModes = new Set<DashboardMode>(["overview", "pipeline"]);
 let currentMode: DashboardMode | null = null;
 let settingsMounted = false;
 let statusMounted = false;
+let inspectPanelShellHtml: string | null = null;
+let controlPanelShellHtml: string | null = null;
 type NavigationFocus = "preserve" | "panel";
 interface NavigationOptions {
   focus?: NavigationFocus;
@@ -697,6 +699,58 @@ function dashboardV2ShellActive(): boolean {
   }
 }
 
+function snapshotPanelShell(panelId: string): string | null {
+  const panel = document.getElementById(panelId);
+  return panel ? panel.innerHTML : null;
+}
+
+function clearPanelShellExcept(panelId: string, preservedChildIds: string[]): void {
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  const preserved = preservedChildIds
+    .map((id) => document.getElementById(id))
+    .filter((element): element is HTMLElement => Boolean(element));
+  panel.replaceChildren(...preserved);
+}
+
+function restorePanelShell(panelId: string, html: string | null): void {
+  if (html === null) return;
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  if (
+    panel.childElementCount > 1 ||
+    (panel.firstElementChild &&
+      !panel.firstElementChild.id.startsWith("dashboard-v2-"))
+  )
+    return;
+  panel.innerHTML = html;
+}
+
+function restorePipelineWorkspaceShell(view: PipelineWorkspaceView): void {
+  if (view === "inspect") {
+    restorePanelShell("inspect-mode-panel", inspectPanelShellHtml);
+  }
+  if (view === "monitor") {
+    restorePanelShell("control-mode-panel", controlPanelShellHtml);
+  }
+}
+
+function unmountInactiveV2PipelineWorkspace(
+  previousMode: DashboardMode | null,
+): void {
+  if (currentMode === "pipeline") return;
+  if (previousMode !== null && previousMode !== "pipeline") return;
+  if (!dashboardV2ShellActive()) return;
+  inspectPanelShellHtml ??= snapshotPanelShell("inspect-mode-panel");
+  controlPanelShellHtml ??= snapshotPanelShell("control-mode-panel");
+  clearPanelShellExcept("inspect-mode-panel", [
+    "dashboard-v2-pipeline-inspect-root",
+  ]);
+  clearPanelShellExcept("control-mode-panel", [
+    "dashboard-v2-control-room-root",
+  ]);
+}
+
 function unmountInactiveV2HeavyRoute(previousMode: DashboardMode | null): void {
   if (
     previousMode !== "incidents" &&
@@ -746,6 +800,7 @@ function applyMode(
     panel?.classList.toggle("hidden", name !== mode);
   }
   unmountInactiveV2HeavyRoute(previousMode);
+  unmountInactiveV2PipelineWorkspace(previousMode);
   syncPipelineWorkspaceShell(mode, pipelineView);
 
   let activeModeButton: HTMLButtonElement | null = null;
@@ -806,7 +861,10 @@ function applyMode(
   ) {
     void refreshDashboard();
   }
-  if (mode === "pipeline" && pipelineView === "monitor") renderControlRoom();
+  if (mode === "pipeline" && pipelineView === "monitor") {
+    restorePipelineWorkspaceShell(pipelineView);
+    renderControlRoom();
+  }
   const pipelineOptions = state.pipelines.map((pipeline) => ({
     id: pipeline.id,
     name: pipeline.name || pipeline.id,
@@ -933,6 +991,7 @@ export function renderDashboardModes(): void {
   dashboardModePresentationSync?.(location);
   if (location.mode === "overview") renderOverview();
   if (location.mode === "pipeline" && location.pipelineView === "inspect") {
+    restorePipelineWorkspaceShell(location.pipelineView);
     renderPipelineInspector();
   }
   applyMode(location.mode, location.pipelineView);
