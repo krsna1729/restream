@@ -49,6 +49,8 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 02:20 Q-014 DONE [codex]](#2026-07-18-0220-q-014-done-codex)
 - [2026-07-18 02:35 Q-015 STARTED [codex]](#2026-07-18-0235-q-015-started-codex)
 - [2026-07-18 03:20 Q-015 DONE [codex]](#2026-07-18-0320-q-015-done-codex)
+- [2026-07-18 03:25 Q-016 STARTED [codex]](#2026-07-18-0325-q-016-started-codex)
+- [2026-07-18 04:05 Q-016 DONE [codex]](#2026-07-18-0405-q-016-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -943,3 +945,78 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   connection-failure bug for bonded SRT egress with a passphrase or
   non-empty StreamID configured — worth flagging prominently for anyone
   grading this item, since the original framing undersold what was found.
+
+## 2026-07-18 03:25 Q-016 STARTED [codex]
+
+- Claimed Q-016 (prove RTMP session fault transitions) from the backlog.
+  Goal: the smallest deterministic component proof for malformed or
+  truncated RTMP session input, asserting both the surfaced protocol error
+  and complete session/registration cleanup, reusing the existing session
+  harness rather than a duplicate live pipeline.
+- Ruled out FLV-payload parsing as the target: `src/media/rtmp/flv.rs`'s
+  parsers are already defensively bounds-checked against malformed input
+  and covered by existing tests. Root-caused a deterministic single-byte
+  RTMP chunk-protocol fault instead, via the vendored `rml_rtmp` 0.8.0
+  source: a chunk basic header byte with a non-zero format on a chunk
+  stream id that has never received a type-0 header
+  (`ChunkDeserializationError::NoPreviousChunkOnStream`) is invalid per the
+  RTMP chunk spec and triggers on the very next read with no further bytes
+  needed — byte `0x45` (format `01`, csid `5`).
+
+## 2026-07-18 04:05 Q-016 DONE [codex]
+
+- Added two proofs to `src/media/rtmp/tests.rs`, both driving a real
+  `handle_rtmp_client` over a loopback `TcpListener`/`TcpStream` pair with a
+  real `rml_rtmp` `ClientSession` publish handshake (via a new
+  `drive_client_publish_handshake` helper) and a minimal
+  `AcceptAllAuthenticator` test-double for `PipelineAccessAuthenticator`
+  (no existing test-double existed for this trait):
+  `malformed_chunk_after_publish_surfaces_error_and_clears_ingest_registration`
+  (writes the single malformed chunk-header byte after a successful
+  publish) and
+  `truncated_chunk_then_disconnect_clears_ingest_registration_without_error`
+  (writes a lone valid type-0 basic-header byte, then closes the socket
+  mid-message, proving a partial chunk plus EOF is treated as an ordinary
+  disconnect, not a fault). Both assert on `engine.ingests.active` before
+  and after the fault, using the same idiom production code itself uses for
+  active-ingest membership.
+  Bug found (production code, not just a test gap): in
+  `handle_rtmp_client`'s main `tokio::select!` loop
+  (`src/media/rtmp.rs`), the `socket.read` arm used
+  `.map_err(|_| "...")?` on both the raw read result and
+  `session.handle_input(...)`. Both are early `?`-returns out of the whole
+  function, which skip the post-loop ingest-cleanup block entirely (that
+  block only runs when the loop exits via `break Some(...)`). Concretely:
+  any malformed RTMP chunk data arriving after a publisher had already
+  registered left that registration in `engine.ingests.active` forever —
+  a real ingest-slot leak on nothing more than one crafted byte from an
+  already-connected publisher, discoverable by the
+  `malformed_chunk_after_publish_...` test above before the fix (it failed
+  with the registration still present).
+  Fix: converted both `?`-early-returns in the `socket.read` arm to the
+  same `warn!` + `break Some((phase, reason, had_error=true))` pattern the
+  adjacent `handle_session_results` error arm already used, so every
+  mid-loop fault after registration now runs through the single existing
+  post-loop cleanup block. The read-error case also gets a new `"io"` phase
+  tag so it's distinguishable from a session-parse fault in disconnect
+  telemetry. No behavior change for the two paths that were already
+  correct: the pre-loop "leftover handshake bytes" error path (had its own
+  inline cleanup already) and the clean-EOF (`n == 0`) path.
+- Gates: `scripts/build/resource-limit.sh cargo test rtmp --lib` passed
+  92/92 (0 failed; includes the two new tests, both failing pre-fix and
+  passing post-fix). `cargo fmt --all --check` clean. `scripts/build/resource-limit.sh
+  cargo clippy --all-targets` (warnings denied) clean. Full
+  `scripts/build/resource-limit.sh cargo test` passed with no failures
+  (1074 lib tests + all integration suites + doctests). No hot-path
+  benchmark applies — the changed code is per-connection control flow in
+  the RTMP session loop's fault paths, not a per-packet loop.
+- Commit: this commit.
+- Follow-ups: none identified for RTMP session fault handling specifically.
+  Coverage for `src/media/rtmp.rs`'s assembled session path remains an area
+  future proof-tier backlog items could keep extending (e.g. faults during
+  the pre-registration connect/publish-request phase), but the specific gap
+  the backlog item named — malformed input leaking registrations after
+  publish — is now closed and regression-tested.
+- Notes: same pattern as Q-015 — a proof/coverage task surfaced a real
+  production bug (a resource leak, not a crash) that the adversarial sweep
+  goal explicitly asks to fix and regression-test in place.

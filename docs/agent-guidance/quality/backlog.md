@@ -88,7 +88,21 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   timestamp, and state-helper proofs. The remaining gap is concentrated in the
   assembled session path where malformed input must not leak registrations or
   crash the engine.
-- Status: open (Filed: 2026-07-17 by Q-001)
+- Status: done (2026-07-18 by codex). Found a real registration-leak bug, not
+  just a coverage gap: `handle_rtmp_client`'s main-loop `socket.read` arm
+  `?`-early-returned on both a raw read error and a `session.handle_input`
+  chunk-deserialization error, bypassing the post-loop ingest-cleanup block
+  entirely, so a single malformed RTMP chunk byte sent after a publisher
+  registered left that pipeline stuck in `engine.ingests.active` forever.
+  Fixed by routing both faults through the same `break Some((phase, reason,
+  true))` + post-loop-cleanup pattern the adjacent session-result-error arm
+  already used. Two new proofs added to `src/media/rtmp/tests.rs` drive a
+  real `handle_rtmp_client` over a loopback socket with a real `rml_rtmp`
+  client publish handshake: one injects the deterministic single-byte chunk
+  fault (`NoPreviousChunkOnStream`) after publish and asserts cleanup; one
+  sends a truncated valid chunk header then disconnects and asserts the
+  ordinary-EOF path still cleans up with no error. See journal for full root
+  cause and the byte-level trigger mechanism. Filed: 2026-07-17 by Q-001)
 
 ### Q-017 [proof] [sonnet] Reject incomplete copied frontend dependency caches
 - Goal: worktree hydration must not report `node_modules` ready when any
