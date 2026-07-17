@@ -173,7 +173,7 @@ function mediaFileRow(file: MediaFile): string {
   const playAction =
     canPlay && playUrl
       ? `<a href="${playUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-accent btn-outline shrink-0" aria-label="Play ${safeName}">Play</a>`
-      : `<button type="button" class="btn btn-xs btn-accent btn-outline shrink-0" disabled aria-label="Play ${safeName} unavailable" title="This file is not ready for native Chrome playback yet">Play</button>`;
+      : `<button type="button" class="btn btn-xs btn-accent btn-outline shrink-0" disabled aria-label="Play unavailable for ${safeName}" title="This file is not ready for native Chrome playback yet">Play</button>`;
   const conversionStatusBadge =
     file.conversionStatus === "converting"
       ? '<span class="badge badge-sm badge-warning">Converting</span>'

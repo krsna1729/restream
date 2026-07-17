@@ -2101,7 +2101,13 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
   ).toHaveAttribute("aria-expanded", "false");
   const initialMediaButtonNames = await getCdpNamesByRole(page, "button");
   expect(initialMediaButtonNames).toContain("Upload media file");
+  expect(initialMediaButtonNames).toContain(
+    "Play unavailable for synthetic-source.mp4",
+  );
   expect(initialMediaButtonNames).not.toContain("Upload media");
+  expect(initialMediaButtonNames).not.toContain(
+    "Play synthetic-source.mp4 unavailable",
+  );
   await expect(sourceRow.getByRole("button", { name: "Rename" })).toHaveCount(0);
   await expect(sourceRow.getByRole("button", { name: "Delete" })).toHaveCount(0);
   await sourceRow
