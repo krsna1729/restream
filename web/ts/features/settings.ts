@@ -1314,7 +1314,7 @@ function renderProfileRow(name: string, profile: TranscodeProfile): string {
     ? '<button class="btn btn-sm btn-ghost" disabled>Built-in</button>'
     : `<button class="btn btn-sm btn-error btn-outline js-profile-delete" data-name="${safeName}">Delete</button>`;
   return `
-        <div class="border-base-content/10 bg-base-100 space-y-3 rounded-lg border px-3 py-3" data-profile-name="${safeName}">
+        <div class="border-base-content/10 bg-base-100 space-y-3 rounded-lg border px-3 py-3" data-profile-name="${safeName}" data-profile-crf="${profile.crf}" data-profile-gop="${profile.gop}" data-profile-bframes="${profile.bframes}" data-profile-bitrate="${profile.bitrate}" data-profile-max-bitrate="${profile.maxBitrate}" data-profile-width="${profile.width}" data-profile-height="${profile.height}">
             <div class="flex flex-wrap items-end gap-2">
                 <fieldset class="fieldset">
                     <legend class="fieldset-legend">Name</legend>
@@ -1331,16 +1331,56 @@ function renderProfileRow(name: string, profile: TranscodeProfile): string {
                 ${tuningToggle}
                 ${deleteButton}
             </div>
-            <div class="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4 ${tuningExpanded ? "" : "hidden"}" data-profile-tuning="${safeName}">
-                <label class="flex items-center gap-2">CRF <input type="number" class="input input-xs w-full js-profile-crf" value="${profile.crf}" min="0" max="51" /></label>
-                <label class="flex items-center gap-2">GOP <input type="number" class="input input-xs w-full js-profile-gop" value="${profile.gop}" min="1" /></label>
-                <label class="flex items-center gap-2">B-frames <input type="number" class="input input-xs w-full js-profile-bframes" value="${profile.bframes}" min="0" /></label>
-                <label class="flex items-center gap-2">Bitrate <input type="number" class="input input-xs w-full js-profile-bitrate" value="${profile.bitrate}" placeholder="0=CRF" /></label>
-                <label class="flex items-center gap-2">Max <input type="number" class="input input-xs w-full js-profile-maxbitrate" value="${profile.maxBitrate}" placeholder="0=none" /></label>
-                <label class="flex items-center gap-2">Width <input type="number" class="input input-xs w-full js-profile-width" value="${profile.width}" placeholder="0=src" /></label>
-                <label class="flex items-center gap-2">Height <input type="number" class="input input-xs w-full js-profile-height" value="${profile.height}" placeholder="0=src" /></label>
-            </div>
+            <div data-profile-tuning="${safeName}">${tuningExpanded ? renderProfileTuningFields(profile) : ""}</div>
         </div>`;
+}
+
+function renderProfileTuningFields(profile: TranscodeProfile): string {
+  return `<div class="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+        <label class="flex items-center gap-2">CRF <input type="number" class="input input-xs w-full js-profile-crf" value="${profile.crf}" min="0" max="51" /></label>
+        <label class="flex items-center gap-2">GOP <input type="number" class="input input-xs w-full js-profile-gop" value="${profile.gop}" min="1" /></label>
+        <label class="flex items-center gap-2">B-frames <input type="number" class="input input-xs w-full js-profile-bframes" value="${profile.bframes}" min="0" /></label>
+        <label class="flex items-center gap-2">Bitrate <input type="number" class="input input-xs w-full js-profile-bitrate" value="${profile.bitrate}" placeholder="0=CRF" /></label>
+        <label class="flex items-center gap-2">Max <input type="number" class="input input-xs w-full js-profile-maxbitrate" value="${profile.maxBitrate}" placeholder="0=none" /></label>
+        <label class="flex items-center gap-2">Width <input type="number" class="input input-xs w-full js-profile-width" value="${profile.width}" placeholder="0=src" /></label>
+        <label class="flex items-center gap-2">Height <input type="number" class="input input-xs w-full js-profile-height" value="${profile.height}" placeholder="0=src" /></label>
+    </div>`;
+}
+
+function profileNumber(row: HTMLElement, selector: string, key: string): number {
+  const input = row.querySelector<HTMLInputElement>(selector);
+  const raw = input?.value ?? row.dataset[key] ?? "";
+  return Number(raw);
+}
+
+function profileFromRow(row: HTMLElement): TranscodeProfile {
+  return {
+    preset:
+      row.querySelector<HTMLSelectElement>(".js-profile-preset")?.value ||
+      "ultrafast",
+    tune:
+      row.querySelector<HTMLSelectElement>(".js-profile-tune")?.value ||
+      "zerolatency",
+    crf: profileNumber(row, ".js-profile-crf", "profileCrf") || 23,
+    gop: profileNumber(row, ".js-profile-gop", "profileGop") || 60,
+    bframes: profileNumber(row, ".js-profile-bframes", "profileBframes") || 0,
+    bitrate: profileNumber(row, ".js-profile-bitrate", "profileBitrate") || 0,
+    maxBitrate:
+      profileNumber(row, ".js-profile-maxbitrate", "profileMaxBitrate") || 0,
+    width: profileNumber(row, ".js-profile-width", "profileWidth") || 0,
+    height: profileNumber(row, ".js-profile-height", "profileHeight") || 0,
+  };
+}
+
+function syncProfileTuningDataset(row: HTMLElement): void {
+  const profile = profileFromRow(row);
+  row.dataset.profileCrf = String(profile.crf);
+  row.dataset.profileGop = String(profile.gop);
+  row.dataset.profileBframes = String(profile.bframes);
+  row.dataset.profileBitrate = String(profile.bitrate);
+  row.dataset.profileMaxBitrate = String(profile.maxBitrate);
+  row.dataset.profileWidth = String(profile.width);
+  row.dataset.profileHeight = String(profile.height);
 }
 
 function bindProfileTuningToggles(root: ParentNode): void {
@@ -1355,10 +1395,12 @@ function bindProfileTuningToggles(root: ParentNode): void {
         const expanded = !profileTuningRowsExpanded.has(name);
         if (expanded) {
           profileTuningRowsExpanded.add(name);
+          tuning.innerHTML = renderProfileTuningFields(profileFromRow(row));
         } else {
+          syncProfileTuningDataset(row);
           profileTuningRowsExpanded.delete(name);
+          tuning.innerHTML = "";
         }
-        tuning.classList.toggle("hidden", !expanded);
         btn.setAttribute("aria-expanded", expanded ? "true" : "false");
         btn.textContent = expanded ? "Hide tuning" : "Show tuning";
       });
@@ -1457,43 +1499,7 @@ export async function saveTranscodeProfiles(): Promise<void> {
       row.querySelector(".js-profile-name") as HTMLInputElement
     )?.value?.trim();
     if (!name) return;
-    profiles[name] = {
-      preset:
-        (row.querySelector(".js-profile-preset") as HTMLSelectElement)?.value ||
-        "ultrafast",
-      tune:
-        (row.querySelector(".js-profile-tune") as HTMLSelectElement)?.value ||
-        "zerolatency",
-      crf:
-        Number(
-          (row.querySelector(".js-profile-crf") as HTMLInputElement)?.value,
-        ) || 23,
-      gop:
-        Number(
-          (row.querySelector(".js-profile-gop") as HTMLInputElement)?.value,
-        ) || 60,
-      bframes:
-        Number(
-          (row.querySelector(".js-profile-bframes") as HTMLInputElement)?.value,
-        ) || 0,
-      bitrate:
-        Number(
-          (row.querySelector(".js-profile-bitrate") as HTMLInputElement)?.value,
-        ) || 0,
-      maxBitrate:
-        Number(
-          (row.querySelector(".js-profile-maxbitrate") as HTMLInputElement)
-            ?.value,
-        ) || 0,
-      width:
-        Number(
-          (row.querySelector(".js-profile-width") as HTMLInputElement)?.value,
-        ) || 0,
-      height:
-        Number(
-          (row.querySelector(".js-profile-height") as HTMLInputElement)?.value,
-        ) || 0,
-    };
+    profiles[name] = profileFromRow(row);
   });
   const result = await patchConfig({ transcodeProfiles: profiles });
   if (result) {

@@ -271,15 +271,39 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   );
   const h264Profile = settings.locator('[data-profile-name="h264"]');
   await expect(h264Profile.getByLabel("h264 preset")).toBeVisible();
-  await expect(h264Profile.locator(".js-profile-crf")).toBeHidden();
+  await expect(h264Profile.locator(".js-profile-crf")).toHaveCount(0);
+  const collapsedProfileNodes = await getCdpNodeCount(page);
   const showTuning = h264Profile.getByRole("button", { name: "Show tuning" });
   await expect(showTuning).toHaveAttribute("aria-expanded", "false");
   await showTuning.click();
   await expect(h264Profile.locator(".js-profile-crf")).toBeVisible();
+  expect(await getCdpNodeCount(page)).toBeGreaterThan(collapsedProfileNodes);
   const hideTuning = h264Profile.getByRole("button", { name: "Hide tuning" });
   await expect(hideTuning).toHaveAttribute("aria-expanded", "true");
   await hideTuning.click();
-  await expect(h264Profile.locator(".js-profile-crf")).toBeHidden();
+  await expect(h264Profile.locator(".js-profile-crf")).toHaveCount(0);
+  let savedProfilePatch: {
+    transcodeProfiles?: Record<string, { crf?: number; gop?: number }>;
+  } | null = null;
+  await page.route("**/api/v1/settings", async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.fallback();
+      return;
+    }
+    savedProfilePatch = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        transcodeProfiles: savedProfilePatch?.transcodeProfiles ?? {},
+      }),
+    });
+  });
+  await settings.getByRole("button", { name: "Save Profiles" }).click();
+  await expect
+    .poll(() => savedProfilePatch?.transcodeProfiles?.h264?.crf)
+    .toBe(23);
+  expect(savedProfilePatch?.transcodeProfiles?.h264?.gop).toBe(60);
 
   await authSearch.fill("dashboard");
   await expect(page.locator("#settings-route-summary")).toHaveText(
