@@ -213,7 +213,7 @@ test("seed: mixed-health Overview exposes upstream and output state @desktop", a
   );
 });
 
-test("seed: ui=v2 keeps legacy routes scoped while pipeline checkpoints own v2 strips @desktop", async ({
+test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 strips @desktop", async ({
   page,
 }) => {
   const v2Requests: string[] = [];
@@ -351,13 +351,27 @@ test("seed: ui=v2 keeps legacy routes scoped while pipeline checkpoints own v2 s
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterMonitor);
   const requestsAfterIncidents = v2Requests.length;
 
+  await page.goto("/?mode=telemetry&ui=v2");
+  await expect(page.locator("#telemetry-mode-panel")).toBeVisible();
+  await expect(page.locator("#dashboard-v2-incidents-root")).toBeHidden();
+  await expect(
+    page
+      .locator("#dashboard-v2-telemetry-root")
+      .getByRole("heading", { name: "Engineer telemetry" }),
+  ).toBeVisible();
+  await expect(page.locator("#workspace-mode-summary")).toHaveText(
+    "UI v2 checkpoint · Engine and pipeline counters",
+  );
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterIncidents);
+  const requestsAfterTelemetry = v2Requests.length;
+
   await page.goto("/?mode=pipeline&view=operate&ui=v2");
   await expect(
     page
       .locator("#dashboard-v2-pipeline-selector-root")
       .getByRole("heading", { name: "Pipelines" }),
   ).toBeVisible();
-  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterIncidents);
+  expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterTelemetry);
   expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
     true,
   );
@@ -513,7 +527,7 @@ test("seed: ui=v2 shell announces ownership while moving across routes @desktop"
     },
     {
       href: "/?mode=telemetry&ui=v2",
-      text: "Legacy-owned checkpoint · Engine and pipeline counters",
+      text: "UI v2 checkpoint · Engine and pipeline counters",
     },
     {
       href: "/?mode=status&ui=v2",
@@ -588,7 +602,7 @@ test("seed: ui=v2 shell tablists support arrow key navigation @desktop", async (
     "true",
   );
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "Legacy-owned checkpoint · Engine and pipeline counters",
+    "UI v2 checkpoint · Engine and pipeline counters",
   );
 
   await page.keyboard.press("End");
@@ -1654,13 +1668,22 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   });
 
   const telemetry = page.locator("#telemetry-mode-panel");
+  const checkpoint = telemetry.locator("#dashboard-v2-telemetry-root");
   const summary = telemetry.locator("#telemetry-route-summary");
   await expect(
-    telemetry.getByRole("heading", { name: "Engineer telemetry" }),
+    checkpoint.getByRole("heading", { name: "Engineer telemetry" }),
+  ).toBeVisible();
+  await expect(
+    telemetry
+      .locator("#telemetry-mode-content")
+      .getByRole("heading", { name: "Engineer telemetry" }),
   ).toBeVisible();
   await expect(summary).toHaveText(
     "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Healthy Program",
   );
+  await expect(checkpoint.getByText("Healthy Program", { exact: true })).toBeVisible();
+  await expect(checkpoint.getByText("2 stage counters", { exact: true })).toBeVisible();
+  await expect(checkpoint.getByText("1 egress", { exact: true })).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(
     "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Healthy Program",
   );
@@ -1671,6 +1694,9 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   await expect(summary).toHaveText(
     "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Retrying Destination",
   );
+  await expect(
+    checkpoint.getByText("Retrying Destination", { exact: true }),
+  ).toBeVisible();
   const search = telemetry.getByLabel("Search telemetry items");
   const searchSummary = telemetry.locator("#telemetry-search-results-summary");
   await expect(searchSummary).toHaveText(
@@ -1681,6 +1707,11 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   await expect(searchSummary).toHaveText(
     '1/4 telemetry items match "video" · 0 readers · 1 stage · 0 egresses',
   );
+  await expect(
+    checkpoint.getByText(
+      '1/4 telemetry items match "video" · 0 readers · 1 stage · 0 egresses',
+    ),
+  ).toBeVisible();
   await expect(telemetry.getByText('No readers match "video".')).toBeVisible();
   await expect(telemetry.getByText('No egresses match "video".')).toBeVisible();
   await expect(
@@ -1694,6 +1725,11 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   await expect(searchSummary).toHaveText(
     '0/4 telemetry items match "absent" · 0 readers · 0 stages · 0 egresses',
   );
+  await expect(
+    checkpoint.getByText(
+      '0/4 telemetry items match "absent" · 0 readers · 0 stages · 0 egresses',
+    ),
+  ).toBeVisible();
   const clearSearch = telemetry.getByRole("button", { name: "Clear search" });
   await expect(clearSearch).toBeVisible();
   await expect(telemetry.getByText('No stages match "absent".')).toBeVisible();
@@ -1706,6 +1742,9 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   await expect(searchSummary).toHaveText(
     "1 reader · 2 stages · 1 egress visible",
   );
+  await expect(
+    checkpoint.getByText("1 reader · 2 stages · 1 egress visible"),
+  ).toBeVisible();
   await expect(clearSearch).toBeHidden();
   await expect(telemetry.getByText("retrying-output-reader")).toBeVisible();
   await expect(
@@ -1746,12 +1785,17 @@ test("seed: ui=v2 Telemetry bounds dense egress lists until requested @desktop",
   });
 
   const telemetry = page.locator("#telemetry-mode-panel");
+  const checkpoint = telemetry.locator("#dashboard-v2-telemetry-root");
   await telemetry
     .getByLabel("Telemetry pipeline")
     .selectOption("pipe-retrying");
   await expect(telemetry.locator("#telemetry-route-summary")).toHaveText(
     "Telemetry loaded · 2 ingests · 2 stages · 12 egresses · 1 reader · Retrying Destination",
   );
+  await expect(checkpoint.getByText("12 egresses", { exact: true })).toBeVisible();
+  await expect(
+    checkpoint.getByText("1 reader · 2 stages · 12 egresses visible"),
+  ).toBeVisible();
   await expect(telemetry.locator("#telemetry-search-results-summary")).toHaveText(
     "1 reader · 2 stages · 12 egresses visible",
   );
@@ -1776,6 +1820,11 @@ test("seed: ui=v2 Telemetry bounds dense egress lists until requested @desktop",
   await expect(telemetry.locator("#telemetry-search-results-summary")).toHaveText(
     '1/15 telemetry items match "out-dense-12" · 0 readers · 0 stages · 1 egress',
   );
+  await expect(
+    checkpoint.getByText(
+      '1/15 telemetry items match "out-dense-12" · 0 readers · 0 stages · 1 egress',
+    ),
+  ).toBeVisible();
   await expect(egresses.getByText("out-dense-12")).toBeVisible();
   await expect(
     egresses.getByRole("button", { name: /Show (all|fewer)/ }),
@@ -2372,6 +2421,7 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
     <div id="dashboard-v2-pipeline-inspect-root"></div>
     <div id="dashboard-v2-control-room-root"></div>
     <div id="dashboard-v2-incidents-root"></div>
+    <div id="dashboard-v2-telemetry-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -2581,6 +2631,7 @@ test("ui=v2 output cards keep 125-output refreshes patch-only @desktop", async (
     <div id="dashboard-v2-pipeline-inspect-root"></div>
     <div id="dashboard-v2-control-room-root"></div>
     <div id="dashboard-v2-incidents-root"></div>
+    <div id="dashboard-v2-telemetry-root"></div>
   `);
 
   const result = await page.evaluate(async () => {
@@ -2720,6 +2771,7 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
     <div id="dashboard-v2-pipeline-inspect-root"></div>
     <div id="dashboard-v2-control-room-root"></div>
     <div id="dashboard-v2-incidents-root"></div>
+    <div id="dashboard-v2-telemetry-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -2844,6 +2896,7 @@ test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", a
     <div id="dashboard-v2-pipeline-inspect-root"></div>
     <div id="dashboard-v2-control-room-root"></div>
     <div id="dashboard-v2-incidents-root"></div>
+    <div id="dashboard-v2-telemetry-root"></div>
   `);
 
   await page.evaluate(async () => {
@@ -3128,6 +3181,7 @@ test("ui=v2 output destinations support search and state filters @desktop", asyn
     <div id="dashboard-v2-pipeline-inspect-root"></div>
     <div id="dashboard-v2-control-room-root"></div>
     <div id="dashboard-v2-incidents-root"></div>
+    <div id="dashboard-v2-telemetry-root"></div>
   `);
 
   await page.evaluate(async () => {

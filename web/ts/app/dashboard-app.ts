@@ -65,6 +65,7 @@ import {
   setControlRoomWorkspaceDependencies,
 } from "../features/control-room.js";
 import { configureIncidentsCheckpointPresentation } from "../features/incidents.js";
+import { configureTelemetryCheckpointPresentation } from "../features/engineer-telemetry.js";
 import { state } from "../core/state.js";
 import type { DashboardLocation } from "../core/pipeline-workspace.js";
 import { buildOverviewViewModel } from "../features/overview-view-model.js";
@@ -84,6 +85,7 @@ import {
   setDashboardV2PipelineInputStatusActions,
   setDashboardV2PipelineOutputOverviewActions,
   setDashboardV2PipelineSelectorActions,
+  setDashboardV2TelemetryActions,
   updateDashboardV2Overview,
   updateDashboardV2ControlRoomCheckpoint,
   updateDashboardV2IncidentsCheckpoint,
@@ -92,6 +94,7 @@ import {
   updateDashboardV2PipelineInputStatus,
   updateDashboardV2PipelineOutputOverview,
   updateDashboardV2PipelineSelector,
+  updateDashboardV2TelemetryCheckpoint,
 } from "./dashboard-v2-loader.js";
 
 let dashboardAppInitialized = false;
@@ -112,6 +115,7 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
     location.mode === "pipeline" &&
     location.pipelineView === "monitor";
   const incidentsV2Active = dashboardV2Enabled && location.mode === "incidents";
+  const telemetryV2Active = dashboardV2Enabled && location.mode === "telemetry";
 
   setDashboardV2PresentationScope({
     overviewActive: overviewV2Active,
@@ -119,6 +123,7 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
     pipelineInspectActive: pipelineInspectV2Active,
     controlRoomActive: controlRoomV2Active,
     incidentsActive: incidentsV2Active,
+    telemetryActive: telemetryV2Active,
   });
 
   configureOverviewPresentation({
@@ -177,6 +182,11 @@ function syncDashboardV2Presentation(location: DashboardLocation): void {
       ? updateDashboardV2IncidentsCheckpoint
       : undefined,
   });
+  configureTelemetryCheckpointPresentation({
+    onPresentation: telemetryV2Active
+      ? updateDashboardV2TelemetryCheckpoint
+      : undefined,
+  });
 }
 
 export function initDashboardApp(): void {
@@ -225,6 +235,9 @@ export function initDashboardApp(): void {
     });
     setDashboardV2IncidentsActions({
       openTelemetry: () => setDashboardMode("telemetry", { focus: "panel" }),
+    });
+    setDashboardV2TelemetryActions({
+      openStatus: () => setDashboardMode("status", { focus: "panel" }),
     });
     setDashboardV2PipelineInputStatusActions({
       cancelAudioTrackEdit: cancelPipelineAudioTrackEdit,

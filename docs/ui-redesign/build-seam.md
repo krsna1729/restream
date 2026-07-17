@@ -26,6 +26,7 @@
 - [Pipeline Inspect checkpoint](#pipeline-inspect-checkpoint)
 - [Pipeline Monitor checkpoint](#pipeline-monitor-checkpoint)
 - [Incidents checkpoint](#incidents-checkpoint)
+- [Telemetry checkpoint](#telemetry-checkpoint)
 - [Shared checkpoint card](#shared-checkpoint-card)
 - [Checkpoint bundle split](#checkpoint-bundle-split)
 
@@ -735,22 +736,41 @@ reacts to hit/no-hit incident search states, and scoped pipeline filtering keeps
 the checkpoint and legacy route summary aligned.
 
 The opt-in checkpoint bundle is deliberately separate from the full
-Overview/Operate bundle. In the Incidents checkpoint build, Vite reports
-`dashboard-v2-checkpoints-entry.js` at 6.40 kB raw / 1.78 kB gzip,
+Overview/Operate bundle. In the Telemetry checkpoint build, Vite reports
+`dashboard-v2-checkpoints-entry.js` at 7.36 kB raw / 1.90 kB gzip,
 `dashboard-v2-entry.js` at 55.63 kB raw / 9.86 kB gzip, and the shared React
 runtime chunk at 258.47 kB raw / 66.98 kB gzip. The smoke guard measures these
 bundles independently so additional non-Operate checkpoints do not force the
 main v2 UI path to load earlier than needed.
 
+## Telemetry checkpoint
+
+Telemetry now uses the same checkpoint seam before the dense engineer counter
+surfaces. The v2 strip summarizes loaded/stale state, selected pipeline scope,
+stage counter volume, egress count, active search result, reader count, and
+transcoder-buffer count. Its single follow-on action jumps to Status, which is
+the natural process-health companion when telemetry is stale or incomplete.
+
+The telemetry counter grids, stage detail fetch, local search input, and egress
+expansion remain legacy-owned. The checkpoint reads the existing telemetry
+snapshots and search state, then renders a compact operator orientation layer
+above the legacy page.
+
+Seeded Playwright/CDP coverage proves the Telemetry checkpoint appears under
+`ui=v2`, the route ownership cue changes to `UI v2 checkpoint`, the checkpoint
+reacts to pipeline switching and hit/no-hit telemetry search states, and dense
+egress list filtering keeps the checkpoint and legacy route summary aligned.
+
 ## Shared checkpoint card
 
-The Inspect, Monitor, and Incidents checkpoint strips now render through one shared React
+The Inspect, Monitor, Incidents, and Telemetry checkpoint strips now render through one shared React
 checkpoint component. This keeps the first-glance pattern consistent across
 checkpoint routes: title, status badge, action cluster, four scan metrics,
 optional compact metrics, and a focus/next-step block. Inspect and Monitor still
 adapt their own pure view models at the boundary, and Incidents adapts the
-existing legacy incident snapshot/search state. The shared component does not
-fetch, subscribe, mutate, or own route state.
+existing legacy incident snapshot/search state. Telemetry adapts the existing
+legacy counter snapshots/search state. The shared component does not fetch,
+subscribe, mutate, or own route state.
 
 The refactor is behavior-preserving but removes the duplicated checkpoint
 markup before adding more surfaces. The bundle now measures 319,332 raw bytes

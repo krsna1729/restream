@@ -70,7 +70,7 @@ Summary:
 | Settings | legacy | 22,123 | Not redesigned in v2. |
 | Status | legacy | 25,700 | Not redesigned in v2. |
 | Incidents | v2 checkpoint + legacy feed | 28,494 | First-glance incident state is v2; dense alert/event feed remains legacy. |
-| Telemetry | legacy | 32,479 | Not redesigned in v2. |
+| Telemetry | v2 checkpoint + legacy counters | 32,479 | First-glance telemetry state is v2; dense counter grids remain legacy. |
 
 The seeded browser proof now also exercises the owned v2 path by keyboard:
 Overview tabs to `Add Pipeline`, tabs to an attention pipeline `Operate`
@@ -80,7 +80,7 @@ and verify stable accessible button names for output operations.
 
 The shared workspace summary now also announces the current ownership state:
 `UI v2 owned` for Overview and Pipeline Operate, `UI v2 checkpoint` for
-Pipeline Inspect, Pipeline Monitor, and Incidents, and `Legacy-owned
+Pipeline Inspect, Pipeline Monitor, Incidents, and Telemetry, and `Legacy-owned
 checkpoint` for the remaining top-level legacy routes. Seeded Playwright/CDP
 coverage proves that cue is visible and exposed as status text while moving
 across the route journey.
@@ -202,10 +202,11 @@ Dense incident feeds now also use bounded alert and event lists with explicit
 the first view is triage-first while full audit mode stays one click away.
 
 Telemetry now has an equivalent engineer-facing checkpoint: before the dense
-counter grids, the legacy-owned route announces loaded/stale state, engine
-ingest count, scoped stage/egress/reader counts, and the active pipeline scope.
-Seeded Playwright/CDP coverage proves that summary updates on pipeline switch
-and is exposed as status text.
+counter grids, the v2 strip summarizes loaded/stale state, scoped pipeline,
+stage counter volume, egress count, active telemetry search result, reader
+count, and transcoder-buffer count. Seeded Playwright/CDP coverage proves that
+summary updates on pipeline switch and hit/no-hit search states, while the
+legacy route status remains exposed as status text.
 
 Telemetry stage cards now behave as a scan layer instead of a raw counter dump:
 each card shows stage state plus counter count, then sends the operator to the
@@ -344,11 +345,11 @@ What changed from the live operator pass:
 
 Still not a full v2 redesign:
 
-- Inspect graph/resource details, the Monitor wall, the Incidents feed, Media,
-  Settings, Status, and Telemetry are still intentionally legacy-owned, now with
-  lightweight route checkpoints where useful rather than full v2 layouts.
-  Inspect, Monitor, and Incidents each have only their first v2-owned decision
-  checkpoint.
+- Inspect graph/resource details, the Monitor wall, the Incidents feed, the
+  Telemetry counter grids, Media, Settings, and Status are still intentionally
+  legacy-owned, now with lightweight route checkpoints where useful rather than
+  full v2 layouts. Inspect, Monitor, Incidents, and Telemetry each have only
+  their first v2-owned decision checkpoint.
 - Legacy-owned routes keep substantial hidden DOM mounted across navigation.
   This is visible in CDP node growth and should be treated as a future
   performance/accessibility cleanup, not as solved by the v2 seam.
@@ -361,6 +362,6 @@ The remaining evolution should be sequenced as separate ownership passes:
 
 1. Complete Pipeline / Inspect v2 beyond the checkpoint strip.
 2. Complete Pipeline / Monitor v2 beyond the checkpoint strip.
-3. Incidents feed v2 and Telemetry v2.
+3. Incidents feed v2 and Telemetry counter-grid v2.
 4. Media, Settings, and Status polish.
 5. Hidden DOM / route unmount cleanup across legacy panels.

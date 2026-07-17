@@ -750,7 +750,8 @@ function applyMode(
         ? "UI v2 owned"
         : (mode === "pipeline" &&
               (pipelineView === "inspect" || pipelineView === "monitor")) ||
-            mode === "incidents"
+            mode === "incidents" ||
+            mode === "telemetry"
           ? "UI v2 checkpoint"
         : mode === "pipeline"
           ? "Legacy checkpoint"

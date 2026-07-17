@@ -13,6 +13,7 @@ import type {
   TelemetryMetrics,
   TelemetryStage,
 } from "../core/api.js";
+import type { TelemetryCheckpointModel } from "./telemetry-view-model.js";
 
 export interface TelemetryPipelineOption {
   id: string;
@@ -45,6 +46,20 @@ let stageUnavailable = false;
 let viewOptions: TelemetryViewOptions | null = null;
 let telemetrySearchQuery = "";
 let telemetryEgressExpanded = false;
+let telemetryCheckpointCallback:
+  | ((model: TelemetryCheckpointModel | null) => void)
+  | null = null;
+
+export function configureTelemetryCheckpointPresentation(options: {
+  readonly onPresentation?: (model: TelemetryCheckpointModel | null) => void;
+}): void {
+  telemetryCheckpointCallback = options.onPresentation ?? null;
+  if (!telemetryCheckpointCallback || !viewOptions?.active) {
+    telemetryCheckpointCallback?.(null);
+    return;
+  }
+  telemetryCheckpointCallback(buildTelemetryCheckpointModel());
+}
 
 function formatNumber(value: unknown): string {
   return typeof value === "number" && Number.isFinite(value)
@@ -235,6 +250,108 @@ function telemetrySummaryText(
   return `Telemetry ${state} · ${pluralize(ingests, "ingest")} · ${pluralize(stages, "stage")} · ${pluralize(egresses, "egress", "egresses")} · ${pluralize(readers, "reader")} · ${scope}`;
 }
 
+function telemetryStatusTone(): TelemetryCheckpointModel["statusTone"] {
+  if (!telemetryLoaded) return "neutral";
+  if (telemetryUnavailable || stageUnavailable) return "warning";
+  return "success";
+}
+
+function buildTelemetryCheckpointModel(): TelemetryCheckpointModel {
+  const pipelines = viewOptions?.pipelines || [];
+  const scope = telemetryScopeLabel(pipelines, selectedPipelineId);
+  const normalizedSearch = normalizeTelemetrySearch(telemetrySearchQuery);
+  const ring = pipelineSnapshot?.sourceRing;
+  const readers = ring?.readers || [];
+  const stages = pipelineSnapshot?.stages || [];
+  const egresses = pipelineSnapshot?.egresses || [];
+  const filteredReaders = readers.filter(
+    (reader) =>
+      !normalizedSearch || readerSearchText(reader).includes(normalizedSearch),
+  );
+  const filteredStages = stages.filter(
+    (item) =>
+      !normalizedSearch ||
+      stageSearchText(selectedPipelineId, item).includes(normalizedSearch),
+  );
+  const filteredEgresses = egresses.filter(
+    (egress) =>
+      !normalizedSearch || egressSearchText(egress).includes(normalizedSearch),
+  );
+  const searchLabel = telemetryLoaded
+    ? telemetrySearchSummaryText(
+        filteredReaders.length,
+        readers.length,
+        filteredStages.length,
+        stages.length,
+        filteredEgresses.length,
+        egresses.length,
+        telemetrySearchQuery.trim(),
+      )
+    : "Loading matches";
+  const summary = telemetrySummaryText(
+    engineSnapshot,
+    pipelineSnapshot,
+    pipelines,
+    selectedPipelineId,
+    {
+      loaded: telemetryLoaded,
+      unavailable: telemetryUnavailable,
+      stageUnavailable,
+    },
+  );
+  const stageCounterCount = stages.reduce(
+    (total, stage) => total + Object.keys(stage.metrics || {}).length,
+    0,
+  );
+  const statusLabel = !telemetryLoaded
+    ? "Loading"
+    : telemetryUnavailable
+      ? "Stale"
+      : stageUnavailable
+        ? "Stage stale"
+        : "Loaded";
+  const focusLabel = !telemetryLoaded
+    ? "Telemetry snapshots are loading. The dense counter surfaces below will populate once the first snapshot arrives."
+    : telemetryUnavailable
+      ? "Some telemetry is stale. Compare the counters below with Status before changing runtime configuration."
+      : normalizedSearch && filteredReaders.length + filteredStages.length + filteredEgresses.length === 0
+        ? "No telemetry item matches this search. Clear the filter to return to the full counter set."
+        : stageUnavailable
+          ? "The selected stage detail is stale or unavailable. Use the stage cards below to pick a currently active stage."
+          : "Telemetry is current for this scope. Use the dense cards below to validate the specific reader, stage, or egress path.";
+  const nextStep = !telemetryLoaded
+    ? "Wait for the snapshot or refresh manually."
+    : telemetryUnavailable || stageUnavailable
+      ? "Open Status to confirm process health, then refresh telemetry."
+      : normalizedSearch
+        ? "Clear search when the filtered counter is resolved."
+        : "Select a stage for detailed counters or search for the affected output.";
+
+  return {
+    canOpenStatus: true,
+    counterLabel: `${stageCounterCount.toLocaleString()} stage counters`,
+    egressLabel: pluralize(egresses.length, "egress", "egresses"),
+    focusLabel,
+    metrics: [
+      {
+        label: "Readers",
+        value: String(readers.length),
+      },
+      {
+        label: "Transcoder buffers",
+        value: String(engineSnapshot?.activeTranscoderBuffers ?? "—"),
+      },
+    ],
+    nextStep,
+    pipelineLabel: scope === "fleet" ? "Fleet" : scope,
+    searchLabel,
+    statusLabel,
+    statusTone: telemetryStatusTone(),
+    summary,
+    title: "Engineer telemetry",
+  };
+}
+
 export function renderEngineerTelemetryHtml(
   engine: EngineTelemetrySnapshot | null,
   pipeline: PipelineTelemetrySnapshot | null,
@@ -364,6 +481,7 @@ export function renderEngineerTelemetryHtml(
 function paintTelemetry(): void {
   const root = document.getElementById("telemetry-mode-content");
   if (!root || !viewOptions) return;
+  telemetryCheckpointCallback?.(buildTelemetryCheckpointModel());
   root.innerHTML = renderEngineerTelemetryHtml(
     engineSnapshot,
     pipelineSnapshot,
@@ -517,7 +635,10 @@ export function renderEngineerTelemetryMode(
   ) {
     selectTelemetryPipeline(options.pipelines[0]?.id || "");
   }
-  if (!options.active) return;
+  if (!options.active) {
+    telemetryCheckpointCallback?.(null);
+    return;
+  }
   paintTelemetry();
   void refreshEngineerTelemetry();
 }
