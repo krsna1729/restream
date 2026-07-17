@@ -2888,6 +2888,12 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   const initialTelemetryButtonNames = await getCdpNamesByRole(page, "button");
   expect(initialTelemetryButtonNames).toContain("Refresh telemetry data");
   expect(initialTelemetryButtonNames).not.toContain("Refresh");
+  expect(await getCdpNamesByRole(page, "combobox")).toContain(
+    "Filter telemetry by pipeline",
+  );
+  expect(await getCdpNamesByRole(page, "combobox")).not.toContain(
+    "Telemetry pipeline",
+  );
   await expect(hostSettings.getByText("Open file descriptors")).toHaveCount(0);
   await hostSettings
     .getByRole("button", { name: "Show telemetry host settings" })
@@ -2902,7 +2908,7 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   await expect(hostSettings.getByText("Open file descriptors")).toHaveCount(0);
 
   await telemetry
-    .getByLabel("Telemetry pipeline")
+    .getByLabel("Filter telemetry by pipeline")
     .selectOption("pipe-retrying");
   await expect(summary).toHaveText(
     "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Retrying Destination",
@@ -3057,7 +3063,7 @@ test("seed: ui=v2 Telemetry bounds dense stage and egress lists until requested 
   const telemetry = page.locator("#telemetry-mode-panel");
   const checkpoint = telemetry.locator("#dashboard-v2-telemetry-root");
   await telemetry
-    .getByLabel("Telemetry pipeline")
+    .getByLabel("Filter telemetry by pipeline")
     .selectOption("pipe-retrying");
   await expect(telemetry.locator("#telemetry-route-summary")).toHaveText(
     "Telemetry loaded · 2 ingests · 12 stages · 12 egresses · 1 reader · Retrying Destination",

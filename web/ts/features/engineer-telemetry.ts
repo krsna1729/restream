@@ -489,7 +489,7 @@ export function renderEngineerTelemetryHtml(
     status,
   );
   return `<div class="mx-auto max-w-7xl space-y-4">
-    <header class="flex flex-wrap items-end justify-between gap-3"><div><h1 class="text-lg font-semibold">Engineer telemetry</h1><p class="text-base-content/60 mt-1 text-sm">Point-in-time engine, ring, reader, stage, and egress counters.</p></div><div class="flex items-center gap-2"><select id="telemetry-pipeline-select" class="select select-sm" aria-label="Telemetry pipeline">${options || `<option value="">No pipelines</option>`}</select><button id="telemetry-refresh-btn" type="button" class="btn btn-sm btn-outline" aria-label="Refresh telemetry data">Refresh</button></div></header>
+    <header class="flex flex-wrap items-end justify-between gap-3"><div><h1 class="text-lg font-semibold">Engineer telemetry</h1><p class="text-base-content/60 mt-1 text-sm">Point-in-time engine, ring, reader, stage, and egress counters.</p></div><div class="flex items-center gap-2"><select id="telemetry-pipeline-select" class="select select-sm" aria-label="Filter telemetry by pipeline">${options || `<option value="">No pipelines</option>`}</select><button id="telemetry-refresh-btn" type="button" class="btn btn-sm btn-outline" aria-label="Refresh telemetry data">Refresh</button></div></header>
     <p id="telemetry-route-summary" class="text-base-content/60 text-sm" role="status" aria-live="polite">${escapeHtml(summaryText)}</p>
     <section class="border-base-content/10 bg-base-200 rounded-lg border p-3" aria-label="Telemetry filter">
       <div class="flex flex-wrap items-end gap-3">
