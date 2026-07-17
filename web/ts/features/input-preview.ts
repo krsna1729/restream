@@ -233,6 +233,8 @@ export function renderInputPreview(
   clearInputPreview(playerElem);
   const previewController = new AbortController();
   previewControllers.set(playerElem, previewController);
+  const previewActionLabel = (action: string): string =>
+    `${action} input preview for ${pipe.name || pipe.id}`;
 
   const shell = document.createElement("div");
   shell.style.position = "relative";
@@ -270,6 +272,7 @@ export function renderInputPreview(
   loadBtn.type = "button";
   loadBtn.className = "btn btn-sm btn-accent";
   loadBtn.textContent = "Play preview";
+  loadBtn.setAttribute("aria-label", previewActionLabel("Play"));
 
   const audioPicker = document.createElement("div");
   audioPicker.className = "relative text-xs";
@@ -442,11 +445,14 @@ export function renderInputPreview(
   function setOverlayButtonState({
     buttonText,
     buttonDisabled,
+    buttonLabel,
   }: {
     buttonText: string;
     buttonDisabled: boolean;
+    buttonLabel?: string;
   }): void {
     loadBtn.textContent = buttonText;
+    loadBtn.setAttribute("aria-label", buttonLabel || buttonText);
     loadBtn.disabled = !!buttonDisabled;
     loadBtn.classList.toggle("btn-disabled", !!buttonDisabled);
     if (buttonDisabled) {
@@ -478,6 +484,7 @@ export function renderInputPreview(
       setOverlayButtonState({
         buttonText: "Play preview",
         buttonDisabled: false,
+        buttonLabel: previewActionLabel("Play"),
       });
     });
   };
@@ -496,6 +503,7 @@ export function renderInputPreview(
     setOverlayButtonState({
       buttonText: "Play preview",
       buttonDisabled: false,
+      buttonLabel: previewActionLabel("Play"),
     });
   };
 
@@ -510,7 +518,11 @@ export function renderInputPreview(
     audioPicker.style.display = "none";
     closeAudioTrackPicker();
     setOverlayVisible(true);
-    setOverlayButtonState({ buttonText: "Loading...", buttonDisabled: true });
+    setOverlayButtonState({
+      buttonText: "Loading...",
+      buttonDisabled: true,
+      buttonLabel: previewActionLabel("Loading"),
+    });
     window.setTimeout(() => void primePreviewSource(), HLS_READY_RETRY_MS);
   };
 
@@ -600,7 +612,11 @@ export function renderInputPreview(
     video.dataset.previewLoaded = "true";
     video.controls = false;
     setOverlayVisible(true);
-    setOverlayButtonState({ buttonText: "Loading...", buttonDisabled: true });
+    setOverlayButtonState({
+      buttonText: "Loading...",
+      buttonDisabled: true,
+      buttonLabel: previewActionLabel("Loading"),
+    });
 
     const canUseHlsJs = Boolean(window.Hls && window.Hls.isSupported());
     const canNative = Boolean(
@@ -611,6 +627,7 @@ export function renderInputPreview(
       setOverlayButtonState({
         buttonText: "HLS not supported",
         buttonDisabled: false,
+        buttonLabel: previewActionLabel("HLS preview unsupported"),
       });
       return;
     }
@@ -630,6 +647,7 @@ export function renderInputPreview(
     setOverlayButtonState({
       buttonText: "HLS not supported",
       buttonDisabled: false,
+      buttonLabel: previewActionLabel("HLS preview unsupported"),
     });
   };
 

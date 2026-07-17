@@ -3712,8 +3712,13 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   );
   await expect(previewPlayer).toBeVisible();
   await expect(
-    previewPlayer.getByRole("button", { name: "Play preview" }),
+    previewPlayer.getByRole("button", {
+      name: "Play input preview for Healthy Program",
+    }),
   ).toBeVisible();
+  expect(await getCdpNamesByRole(page, "button")).not.toContain(
+    "Play preview",
+  );
   await expect(page.locator("#input-stats")).toBeHidden();
   await expect(
     page.locator("#pipeline-input-legacy-audio-heading"),
