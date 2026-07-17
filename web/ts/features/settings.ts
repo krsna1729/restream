@@ -36,6 +36,7 @@ interface SettingsDisclosureConfig {
   id: string;
   title: string;
   summary: string;
+  ariaLabel: string;
 }
 
 // ── Load ──────────────────────────────────────────────
@@ -142,36 +143,43 @@ function applySettingsV2Disclosure(container: HTMLElement): void {
       id: "recording-settings-section",
       title: "Recording",
       summary: "Retention policy for completed MPEG-TS to MP4 conversions.",
+      ariaLabel: "Recording settings",
     },
     {
       id: "dashboard-password-section",
       title: "Dashboard Password",
       summary: "Change the dashboard login password.",
+      ariaLabel: "Dashboard password settings",
     },
     {
       id: "ingest-security-section",
       title: "Ingest Security",
       summary: "Failure thresholds, ban window, and tracked IP limits.",
+      ariaLabel: "Ingest security settings",
     },
     {
       id: "auth-attempts-section",
       title: "Authentication Attempts",
       summary: "Recent login and publish failures with optional reset actions.",
+      ariaLabel: "Authentication attempt settings",
     },
     {
       id: "srt-settings-section",
       title: "Global SRT Ingest",
       summary: "Default encryption policy for SRT publishers.",
+      ariaLabel: "Global SRT ingest settings",
     },
     {
       id: "backend-policy-section",
       title: "Transcoding Backend",
       summary: "Backend selection for newly started transcoding stages.",
+      ariaLabel: "Transcoding backend settings",
     },
     {
       id: "transcode-profiles-section",
       title: "Transcode Profiles",
       summary: "Encoder presets used by HEVC/H.264 and resolution workflows.",
+      ariaLabel: "Transcode profile settings",
     },
   ];
 
@@ -183,7 +191,7 @@ function applySettingsV2Disclosure(container: HTMLElement): void {
     wrapper.className =
       "border-base-content/10 bg-base-100/60 rounded-lg border px-3 py-2";
     wrapper.dataset.settingsV2Disclosure = disclosure.id;
-    wrapper.innerHTML = `<summary class="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
+    wrapper.innerHTML = `<summary class="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2" aria-label="${escapeHtml(disclosure.ariaLabel)}">
         <span>
           <h2 class="text-sm font-semibold">${escapeHtml(disclosure.title)}</h2>
           <span class="text-base-content/60 mt-1 block text-xs">${escapeHtml(disclosure.summary)}</span>

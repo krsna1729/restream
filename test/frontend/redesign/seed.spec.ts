@@ -622,6 +622,15 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
       "Transcode Profiles",
     ]),
   );
+  await expect(
+    settings.locator("[data-settings-v2-disclosure] > summary[aria-label]"),
+  ).toHaveCount(7);
+  await expect(
+    settings.locator('summary[aria-label="Dashboard password settings"]'),
+  ).toBeVisible();
+  await expect(
+    settings.locator('summary[aria-label="Authentication attempt settings"]'),
+  ).toBeVisible();
   expect(await getCdpNamesByRole(page, "textbox")).toEqual(
     expect.arrayContaining(["Server name", "Ingest host"]),
   );
