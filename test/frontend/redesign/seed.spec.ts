@@ -1779,7 +1779,16 @@ test("seed: ui=v2 Media search announces filtered result counts @desktop", async
       '0/1 media files shown · 0 recordings · 0 source files matched · "missing"',
     ),
   ).toBeVisible();
-  await expect(media.getByText('No matches for "missing".')).toHaveCount(2);
+  await expect(
+    media.getByText(
+      'No recordings match "missing". Clear search to return to the full recording/source split.',
+    ),
+  ).toBeVisible();
+  await expect(
+    media.getByText(
+      'No source files match "missing". Clear search to return to the full recording/source split.',
+    ),
+  ).toBeVisible();
   const clearSearch = media.getByRole("button", { name: "Clear search" });
   await expect(clearSearch).toBeVisible();
   expect(await getCdpStatusTexts(page)).toContain(

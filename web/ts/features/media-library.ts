@@ -62,6 +62,11 @@ function sectionEmpty(label: string): string {
   return `<div class="dashboard-empty">No ${escapeHtml(label)}.</div>`;
 }
 
+function filteredSectionEmptyLabel(kind: "recordings" | "source files"): string {
+  const query = mediaSearchQuery.trim();
+  return `${kind} match "${query}". Clear search to return to the full recording/source split`;
+}
+
 function fileCountLabel(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
@@ -602,16 +607,14 @@ function renderMediaLibraryLists(files: MediaFile[], force: boolean): void {
       ? `${filteredTotal}/${files.length} media file${filteredTotal === 1 ? "" : "s"} shown · ${sectionSplit} matched · "${query}"`
       : `${fileCountLabel(files.length, "media file")} total · ${sectionSplit}`,
   );
-  const filteredEmptyLabel = normalizeSearchText(mediaSearchQuery)
-    ? `matches for "${mediaSearchQuery}"`
-    : "";
+  const isFiltered = normalizeSearchText(mediaSearchQuery) !== "";
   lastRecordingsSignature = updateSection(
     "media-recordings-list",
     "media-recordings-summary",
     "media-recordings-toggle",
     filteredRecordings,
     recordings,
-    filteredEmptyLabel || "recordings yet",
+    isFiltered ? filteredSectionEmptyLabel("recordings") : "recordings yet",
     force ? "" : lastRecordingsSignature,
     mediaRecordingsExpanded,
   );
@@ -621,7 +624,7 @@ function renderMediaLibraryLists(files: MediaFile[], force: boolean): void {
     "media-sources-toggle",
     filteredSources,
     sources,
-    filteredEmptyLabel || "source files",
+    isFiltered ? filteredSectionEmptyLabel("source files") : "source files",
     force ? "" : lastSourcesSignature,
     mediaSourcesExpanded,
   );
