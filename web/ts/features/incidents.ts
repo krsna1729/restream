@@ -573,7 +573,7 @@ export function renderIncidentsHtml(
   return `<div class="mx-auto max-w-7xl space-y-4">
     <header class="flex flex-wrap items-end justify-between gap-3">
       <div><h1 class="text-lg font-semibold">Incidents</h1><p class="text-base-content/60 mt-1 text-sm">Current alerts and recent lifecycle evidence from authoritative snapshots.</p></div>
-      <div class="flex items-center gap-2"><select id="incidents-pipeline-filter" class="select select-sm" aria-label="Filter incidents by pipeline">${options}</select><button id="incidents-refresh-btn" type="button" class="btn btn-sm btn-outline">Refresh</button></div>
+      <div class="flex items-center gap-2"><select id="incidents-pipeline-filter" class="select select-sm" aria-label="Filter incidents by pipeline">${options}</select><button id="incidents-refresh-btn" type="button" class="btn btn-sm btn-outline" aria-label="Refresh incident data">Refresh</button></div>
     </header>
     <p id="incidents-route-summary" class="text-base-content/60 text-sm" role="status" aria-live="polite">${escapeHtml(summaryText)}</p>
     <div class="flex flex-wrap items-end gap-3">
@@ -581,7 +581,7 @@ export function renderIncidentsHtml(
         <span class="label-text text-base-content/70">Search incidents and events</span>
         <input id="incidents-search" class="input input-sm input-bordered mt-1" type="search" value="${escapeHtml(searchQuery)}" placeholder="output, pipeline, cause, event…" autocomplete="off" />
       </label>
-      <button id="incidents-clear-search-btn" type="button" class="btn btn-sm btn-outline ${search ? "" : "hidden"}">Clear search</button>
+      <button id="incidents-clear-search-btn" type="button" class="btn btn-sm btn-outline ${search ? "" : "hidden"}" aria-label="Clear incident search">Clear search</button>
       <p id="incidents-search-results-summary" class="text-base-content/60 pb-1 text-sm" role="status" aria-live="polite">${escapeHtml(searchSummaryText)}</p>
     </div>
     ${availability}
@@ -600,7 +600,7 @@ export function renderIncidentsHtml(
           </div>
           ${
             showAlertGroupToggle
-              ? `<button id="incidents-alerts-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="${incidentAlertGroupsExpanded ? "true" : "false"}">${incidentAlertGroupsExpanded ? "Show fewer" : `Show all ${alertGroups.length}`}</button>`
+              ? `<button id="incidents-alerts-toggle" type="button" class="btn btn-xs btn-outline" aria-label="${incidentAlertGroupsExpanded ? "Show fewer incident alert groups" : `Show all ${alertGroups.length} incident alert groups`}" aria-expanded="${incidentAlertGroupsExpanded ? "true" : "false"}">${incidentAlertGroupsExpanded ? "Show fewer" : `Show all ${alertGroups.length}`}</button>`
               : ""
           }
         </div>
@@ -614,7 +614,7 @@ export function renderIncidentsHtml(
           </div>
           ${
             showEventToggle
-              ? `<button id="incidents-events-toggle" type="button" class="btn btn-xs btn-outline" aria-expanded="${incidentEventsExpanded ? "true" : "false"}">${incidentEventsExpanded ? "Show fewer" : `Show all ${events.length}`}</button>`
+              ? `<button id="incidents-events-toggle" type="button" class="btn btn-xs btn-outline" aria-label="${incidentEventsExpanded ? "Show fewer incident lifecycle events" : `Show all ${events.length} incident lifecycle events`}" aria-expanded="${incidentEventsExpanded ? "true" : "false"}">${incidentEventsExpanded ? "Show fewer" : `Show all ${events.length}`}</button>`
               : ""
           }
         </div>

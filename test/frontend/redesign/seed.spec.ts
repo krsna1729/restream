@@ -2335,10 +2335,12 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
   const initialIncidentButtonNames = await getCdpNamesByRole(page, "button");
   expect(initialIncidentButtonNames).toEqual(
     expect.arrayContaining([
+      "Refresh incident data",
       "Show alert details for Retrying output",
       "Open pipeline pipe-retrying",
     ]),
   );
+  expect(initialIncidentButtonNames).not.toContain("Refresh");
   expect(initialIncidentButtonNames).not.toContain("Show alert details");
   expect(initialIncidentButtonNames).not.toContain("Open pipeline");
   await retryingAlert
@@ -2395,8 +2397,13 @@ test("seed: ui=v2 Incidents announces scoped alert and event counts @desktop", a
       'No events match "healthy". Clear search to return to the full incident feed.',
     ),
   ).toBeVisible();
-  const clearSearch = incidents.getByRole("button", { name: "Clear search" });
+  const clearSearch = incidents.getByRole("button", {
+    name: "Clear incident search",
+  });
   await expect(clearSearch).toBeVisible();
+  const filteredIncidentButtonNames = await getCdpNamesByRole(page, "button");
+  expect(filteredIncidentButtonNames).toContain("Clear incident search");
+  expect(filteredIncidentButtonNames).not.toContain("Clear search");
   expect(await getCdpStatusTexts(page)).toContain(
     '0 alert groups · 0 events match "healthy"',
   );
@@ -2504,17 +2511,27 @@ test("seed: ui=v2 Incidents bounds dense alert and event lists until requested @
   await expect(eventList.getByText("12 events shown of 20")).toBeVisible();
   await expect(eventList.getByText("dense.event.12")).toBeVisible();
   await expect(eventList.getByText("dense.event.13")).toHaveCount(0);
-  const showAllAlerts = incidents.getByRole("button", { name: "Show all 14" });
-  const showAllEvents = eventList.getByRole("button", { name: "Show all 20" });
+  const showAllAlerts = incidents.getByRole("button", {
+    name: "Show all 14 incident alert groups",
+  });
+  const showAllEvents = eventList.getByRole("button", {
+    name: "Show all 20 incident lifecycle events",
+  });
   await expect(showAllAlerts).toHaveAttribute("aria-expanded", "false");
   await expect(showAllEvents).toHaveAttribute("aria-expanded", "false");
   const denseIncidentButtonNames = await getCdpNamesByRole(page, "button");
   expect(denseIncidentButtonNames).toEqual(
     expect.arrayContaining([
+      "Refresh incident data",
+      "Show all 14 incident alert groups",
+      "Show all 20 incident lifecycle events",
       "Show alert details for Dense alert 14",
       "Open pipeline pipe-retrying",
     ]),
   );
+  expect(denseIncidentButtonNames).not.toContain("Refresh");
+  expect(denseIncidentButtonNames).not.toContain("Show all 14");
+  expect(denseIncidentButtonNames).not.toContain("Show all 20");
   expect(denseIncidentButtonNames).not.toContain("Show alert details");
   expect(denseIncidentButtonNames).not.toContain("Open pipeline");
   expect(await getCdpNodeCount(page)).toBeLessThan(11_000);
@@ -2586,6 +2603,9 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
   await expect(
     hostSettings.getByRole("button", { name: "Show telemetry host settings" }),
   ).toHaveAttribute("aria-expanded", "false");
+  const initialTelemetryButtonNames = await getCdpNamesByRole(page, "button");
+  expect(initialTelemetryButtonNames).toContain("Refresh telemetry data");
+  expect(initialTelemetryButtonNames).not.toContain("Refresh");
   await expect(hostSettings.getByText("Open file descriptors")).toHaveCount(0);
   await hostSettings
     .getByRole("button", { name: "Show telemetry host settings" })
@@ -2658,8 +2678,13 @@ test("seed: ui=v2 Telemetry announces scoped engine and pipeline counts @desktop
       '0/4 telemetry items match "absent" · 0 readers · 0 stages · 0 egresses',
     ),
   ).toBeVisible();
-  const clearSearch = telemetry.getByRole("button", { name: "Clear search" });
+  const clearSearch = telemetry.getByRole("button", {
+    name: "Clear telemetry search",
+  });
   await expect(clearSearch).toBeVisible();
+  const filteredTelemetryButtonNames = await getCdpNamesByRole(page, "button");
+  expect(filteredTelemetryButtonNames).toContain("Clear telemetry search");
+  expect(filteredTelemetryButtonNames).not.toContain("Clear search");
   await expect(
     telemetry.getByText(
       'No stages match "absent". Clear search to return to the full telemetry set.',

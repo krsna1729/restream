@@ -489,7 +489,7 @@ export function renderEngineerTelemetryHtml(
     status,
   );
   return `<div class="mx-auto max-w-7xl space-y-4">
-    <header class="flex flex-wrap items-end justify-between gap-3"><div><h1 class="text-lg font-semibold">Engineer telemetry</h1><p class="text-base-content/60 mt-1 text-sm">Point-in-time engine, ring, reader, stage, and egress counters.</p></div><div class="flex items-center gap-2"><select id="telemetry-pipeline-select" class="select select-sm" aria-label="Telemetry pipeline">${options || `<option value="">No pipelines</option>`}</select><button id="telemetry-refresh-btn" type="button" class="btn btn-sm btn-outline">Refresh</button></div></header>
+    <header class="flex flex-wrap items-end justify-between gap-3"><div><h1 class="text-lg font-semibold">Engineer telemetry</h1><p class="text-base-content/60 mt-1 text-sm">Point-in-time engine, ring, reader, stage, and egress counters.</p></div><div class="flex items-center gap-2"><select id="telemetry-pipeline-select" class="select select-sm" aria-label="Telemetry pipeline">${options || `<option value="">No pipelines</option>`}</select><button id="telemetry-refresh-btn" type="button" class="btn btn-sm btn-outline" aria-label="Refresh telemetry data">Refresh</button></div></header>
     <p id="telemetry-route-summary" class="text-base-content/60 text-sm" role="status" aria-live="polite">${escapeHtml(summaryText)}</p>
     <section class="border-base-content/10 bg-base-200 rounded-lg border p-3" aria-label="Telemetry filter">
       <div class="flex flex-wrap items-end gap-3">
@@ -497,7 +497,7 @@ export function renderEngineerTelemetryHtml(
           <span class="text-base-content/70 mb-1 block text-xs font-semibold uppercase">Search telemetry items</span>
           <input id="telemetry-search" class="input input-sm input-bordered w-full" type="search" value="${escapeHtml(searchQuery)}" placeholder="reader, stage, egress, counter…" autocomplete="off" />
         </label>
-        <button id="telemetry-clear-search-btn" type="button" class="btn btn-sm btn-outline ${normalizedSearch ? "" : "hidden"}">Clear search</button>
+        <button id="telemetry-clear-search-btn" type="button" class="btn btn-sm btn-outline ${normalizedSearch ? "" : "hidden"}" aria-label="Clear telemetry search">Clear search</button>
       </div>
       <p id="telemetry-search-results-summary" class="text-base-content/60 mt-2 text-sm" role="status" aria-live="polite">${escapeHtml(searchSummaryText)}</p>
     </section>
