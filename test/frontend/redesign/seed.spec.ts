@@ -3771,9 +3771,18 @@ test("ui=v2 overview pipeline table supports large-fleet search @desktop", async
     '1/3 bursts shown · "restored"',
   );
   const clearActivitySearch = overview.getByRole("button", {
-    name: "Clear activity search",
+    name: "Clear restream activity search",
   });
   await expect(clearActivitySearch).toBeVisible();
+  const filteredActivityButtonNames = await getCdpNamesByRole(page, "button");
+  expect(filteredActivityButtonNames).toEqual(
+    expect.arrayContaining([
+      "Open restream status",
+      "Clear restream activity search",
+    ]),
+  );
+  expect(filteredActivityButtonNames).not.toContain("Open Status");
+  expect(filteredActivityButtonNames).not.toContain("Clear activity search");
   await clearActivitySearch.click();
   await expect(overview.getByLabel("Search restream activity")).toHaveValue("");
   await expect(overview.getByText("Output retry burst")).toBeVisible();

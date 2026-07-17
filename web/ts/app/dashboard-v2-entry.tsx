@@ -550,6 +550,7 @@ function DashboardV2Overview({
           </div>
           <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
             <button
+              aria-label="Open restream status"
               className="btn btn-sm btn-outline"
               onClick={actions.openStatus}
               type="button"
@@ -576,6 +577,7 @@ function DashboardV2Overview({
                   </label>
                   {normalizedActivityQuery ? (
                     <button
+                      aria-label="Clear restream activity search"
                       className="btn btn-xs btn-ghost"
                       onClick={clearActivitySearch}
                       type="button"
@@ -1758,6 +1760,11 @@ function DashboardV2PipelineOutputOverview({
                 {model.listCaption}
               </p>
               <button
+                aria-label={
+                  model.expanded
+                    ? `Show fewer output destinations for ${model.pipelineName}`
+                    : `Show all output destinations for ${model.pipelineName}`
+                }
                 className="btn btn-xs btn-ghost"
                 onClick={() => actions.toggleOutputList(model.pipelineId)}
                 type="button"
