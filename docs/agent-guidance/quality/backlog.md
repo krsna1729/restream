@@ -166,7 +166,13 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: Q-002 found a bounded corrupt-sync remainder regression but no
   direct proof for the separate 512 KiB PES accumulator or malformed
   adaptation/PES header recovery boundaries.
-- Status: open (Filed: 2026-07-17 by Q-002)
+- Status: done (all three concerns were already handled safely by existing
+  code — oversized adaptation fields are rejected before any state mutation,
+  overrunning PES header spans append zero bytes and reset cleanly, and the
+  512 KiB PES accumulator cap holds under a 6000-packet continuation flood
+  with correct recovery afterward; tests-only change adding three
+  hand-crafted-packet regressions; 2026-07-18 by codex; Filed: 2026-07-17 by
+  Q-002)
 
 ### Q-022 [resilience] [sonnet] Reject non-finite and overflowing file start times
 - Goal: `file_ingest::parse_start_time_ms` must reject `NaN`, infinities,

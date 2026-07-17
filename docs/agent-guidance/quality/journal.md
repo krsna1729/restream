@@ -41,6 +41,8 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 00:10 Q-019 DONE [codex]](#2026-07-18-0010-q-019-done-codex)
 - [2026-07-18 00:15 Q-020 STARTED [codex]](#2026-07-18-0015-q-020-started-codex)
 - [2026-07-18 00:45 Q-020 DONE [codex]](#2026-07-18-0045-q-020-done-codex)
+- [2026-07-18 00:50 Q-021 STARTED [codex]](#2026-07-18-0050-q-021-started-codex)
+- [2026-07-18 01:20 Q-021 DONE [codex]](#2026-07-18-0120-q-021-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -665,3 +667,78 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   framing — FLV-prefixed vs. bare AVCC bytes — and different module
   boundaries) rather than consolidated into a shared helper, per AGENTS.md's
   "add abstractions only when they remove real complexity."
+
+## 2026-07-18 00:50 Q-021 STARTED [codex]
+- What: prove `TsDemuxer::process_ts_packet` ignores oversized adaptation
+  fields and invalid PES header spans without corrupting demuxer state, and
+  that `MAX_PES_BUFFER` remains effective under a continuation-packet flood
+  while a later valid PES still demuxes. Files: `src/media/mpegts.rs`,
+  `src/media/mpegts_tests.rs`.
+- Gates: pending scoped `cargo test media::mpegts::tests --lib`, format,
+  clippy, full test gates.
+- Commit: none.
+- Follow-ups: none yet.
+
+## 2026-07-18 01:20 Q-021 DONE [codex]
+- What: traced all three resource-bound concerns in `process_ts_packet`
+  (`src/media/mpegts.rs`) by hand before writing any test, per this repo's
+  break-it-first convention:
+  - Oversized adaptation field: `payload_offset` is checked against
+    `TS_PACKET_SIZE` (line ~342) *before* PID dispatch, the continuity-
+    counter write, or any PES-accumulator mutation, so a malformed `af_len`
+    that overruns the packet already causes the packet to be dropped with
+    zero state mutation — not even the continuity counter is touched.
+  - Invalid/truncated PES header spans: every header field read
+    (`payload[0..3]`, `[4..6]`, `[7]`, `[8]`, `[9..14]`, `[14..19]`) is
+    guarded by an explicit `payload.len() >= N` check, and `data_start = 9 +
+    pes_header_len` is bounds-checked against `payload.len()` before any
+    elementary data is appended. A header with an absurd declared
+    `pes_header_len` (e.g. 255 with only 19 bytes available) parses PTS/DTS
+    fine but appends zero bytes; `has_timestamp` can end up `true` with an
+    empty `buf`, and `flush_pes`'s `buf.is_empty() || !has_timestamp` guard
+    resets it without emitting, so no spurious packet reaches output.
+  - `MAX_PES_BUFFER`: every append to `stream.pes.buf` (both the PUSI-branch
+    and the continuation-branch) is guarded by `buf.len() + new.len() <=
+    MAX_PES_BUFFER`, so the buffer plateaus within one TS-payload-size of the
+    cap and can never exceed it, regardless of how many further continuation
+    packets arrive.
+  All three held in all three cases: this was tests-only, no production code
+  changed (confirmed via `git status` after the gate run below — only
+  `src/media/mpegts_tests.rs` and `backlog.md` are modified). Added three
+  hand-crafted-packet regression tests calling the private
+  `TsDemuxer::process_ts_packet` directly (the test submodule already has
+  private-item access, matching the existing `try_build_probe_*` tests'
+  pattern of pre-seeding `demuxer.streams`/`pid_to_stream` by hand):
+  `process_ts_packet_ignores_oversized_adaptation_field_without_state_corruption`,
+  `process_ts_packet_rejects_pes_header_len_overrunning_payload`, and
+  `process_ts_packet_caps_pes_buffer_at_max_size_under_continuation_flood`
+  (the last floods ~6000 continuation packets, well past the ~2849 needed to
+  reach the 512 KiB cap, then proves a subsequent legitimate PES on the same
+  PID still demuxes correctly — both the capped-and-flushed prior PES and
+  the fresh one land as separate correct `MediaPacket`s). While constructing
+  the hand-crafted "recovery" PES packets, hit one test-fixture bug worth
+  noting for future adversarial packet-crafting: a single-TS-packet PES with
+  `pes_packet_len = 0` (unbounded, the standard video encoding) slurps the
+  *entire* remaining 184-byte TS payload region into the PES buffer,
+  including trailing 0xFF stuffing bytes past the real elementary data —
+  `pes_packet_len` is what bounds a PES's true length, not TS-packet
+  boundaries. Fixed by giving the "known-good recovery packet" test helper
+  an explicit non-zero `pes_packet_len` so `expected_payload_len` truncates
+  the stuffing away, and adding a second, separately-named unbounded-start
+  helper only for the buffer-flood test where unbounded framing is the
+  actual scenario under test.
+- Gates: `cargo test media::mpegts::tests --lib` passed 69/69 (66 pre-
+  existing + 3 new). `cargo fmt --all --check` and `cargo clippy
+  --all-targets` (warnings denied) were clean. Full `cargo test` passed with
+  no failures, panics, or warnings across all 18 test binaries + doctests.
+  No MPEG-TS demux/resync benchmark run, since no production code changed
+  (bench gate is conditional on production-code changes per the backlog
+  item).
+- Commit: this commit.
+- Follow-ups: none.
+- Notes: this is the second consecutive backlog item (after Q-020) where the
+  adversarial trace found the production code already correct and the real
+  gap was missing regression coverage — worth periodically checking whether
+  the backlog's remaining `[resilience]` items are converging on "prove
+  existing safety" rather than "fix a live bug," which would argue for
+  weighting future grooming toward other categories.
