@@ -753,34 +753,50 @@ function DashboardV2PipelineSelector({
           ) : null}
           {filteredPipelines.length ? (
             <ul className="max-h-52 w-full space-y-1 overflow-x-hidden overflow-y-auto p-2 md:max-h-none">
-              {filteredPipelines.map((pipeline) => (
-                <li className="min-w-0" key={pipeline.id}>
-                  <button
-                    aria-current={pipeline.selected ? "page" : undefined}
-                    className={`${pipeline.selected ? "bg-base-100 border-base-content/10" : "border-transparent"} hover:bg-base-100 flex w-full min-w-0 items-start gap-3 rounded-lg border px-3 py-2 text-left`}
-                    onClick={() => actions.selectPipeline(pipeline.id)}
-                    type="button"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={`${toneClasses[pipeline.statusTone]} mt-1 h-3 w-3 shrink-0 rounded-full border`}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold">
-                        {pipeline.name}
+              {filteredPipelines.map((pipeline) => {
+                const safePipelineId = pipeline.id.replace(
+                  /[^a-zA-Z0-9_-]/g,
+                  "-",
+                );
+                const detailId = `dashboard-v2-pipeline-selector-detail-${safePipelineId}`;
+                const rateId = `dashboard-v2-pipeline-selector-rate-${safePipelineId}`;
+                return (
+                  <li className="min-w-0" key={pipeline.id}>
+                    <button
+                      aria-describedby={`${detailId} ${rateId}`}
+                      aria-label={`Select pipeline ${pipeline.name}`}
+                      aria-current={pipeline.selected ? "page" : undefined}
+                      className={`${pipeline.selected ? "bg-base-100 border-base-content/10" : "border-transparent"} hover:bg-base-100 flex w-full min-w-0 items-start gap-3 rounded-lg border px-3 py-2 text-left`}
+                      onClick={() => actions.selectPipeline(pipeline.id)}
+                      type="button"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`${toneClasses[pipeline.statusTone]} mt-1 h-3 w-3 shrink-0 rounded-full border`}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold">
+                          {pipeline.name}
+                        </span>
+                        <span
+                          className="text-base-content/60 mt-1 block truncate text-xs"
+                          id={detailId}
+                        >
+                          {pipeline.statusLabel} · {pipeline.runningOutputs}/
+                          {pipeline.totalOutputs} outputs
+                        </span>
+                        <span
+                          className="text-base-content/50 mt-1 flex flex-wrap gap-x-2 text-[0.6875rem] tabular-nums"
+                          id={rateId}
+                        >
+                          <span>{pipeline.inputRate} in</span>
+                          <span>{pipeline.outputRate} out</span>
+                        </span>
                       </span>
-                      <span className="text-base-content/60 mt-1 block truncate text-xs">
-                        {pipeline.statusLabel} · {pipeline.runningOutputs}/
-                        {pipeline.totalOutputs} outputs
-                      </span>
-                      <span className="text-base-content/50 mt-1 flex flex-wrap gap-x-2 text-[0.6875rem] tabular-nums">
-                        <span>{pipeline.inputRate} in</span>
-                        <span>{pipeline.outputRate} out</span>
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              ))}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           ) : (
             <div className="border-base-content/10 m-2 rounded-lg border border-dashed px-3 py-4">

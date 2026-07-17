@@ -1159,9 +1159,11 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
   ).toBeVisible();
   expect(await getCdpNodeCount(page)).toBeLessThan(7_500);
 
-  await selector.getByRole("button", { name: /Healthy Program/ }).focus();
   await selector
-    .getByRole("button", { name: /Healthy Program/ })
+    .getByRole("button", { name: "Select pipeline Healthy Program" })
+    .focus();
+  await selector
+    .getByRole("button", { name: "Select pipeline Healthy Program" })
     .press("Enter");
   await expect(page).toHaveURL(/p=pipe-healthy/);
   await expect(
@@ -1172,6 +1174,8 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
   ).toBeVisible();
   expect(await getCdpNamesByRole(page, "button")).toEqual(
     expect.arrayContaining([
+      "Select pipeline Healthy Program",
+      "Select pipeline Retrying Destination",
       "Stop Healthy Output",
       "More actions for Healthy Output",
       "Inspect graph for Healthy Program",
@@ -1179,7 +1183,12 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
     ]),
   );
   expect(await getCdpNamesByRole(page, "button")).not.toEqual(
-    expect.arrayContaining(["Graph", "Diagnose"]),
+    expect.arrayContaining([
+      "Healthy ProgramLive · 1/1 outputs3.2 Mb/s in2.9 Mb/s out",
+      "Retrying DestinationOutput retrying · 0/1 outputs2.4 Mb/s in-- out",
+      "Graph",
+      "Diagnose",
+    ]),
   );
 
   await header
@@ -4150,13 +4159,13 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
   await expect(selector.getByLabel("Search pipelines")).toBeVisible();
   await selector.getByLabel("Search pipelines").fill("backup");
   await expect(
-    selector.getByRole("button", { name: /Ritual backup/ }),
+    selector.getByRole("button", { name: "Select pipeline Ritual backup" }),
   ).toBeVisible();
   await expect(
-    selector.getByRole("button", { name: /Ritual backup/ }),
+    selector.getByRole("button", { name: "Select pipeline Ritual backup" }),
   ).toHaveAttribute("aria-current", "page");
   await expect(
-    selector.getByRole("button", { name: /Main Program/ }),
+    selector.getByRole("button", { name: "Select pipeline Main Program" }),
   ).not.toBeVisible();
   const selectorClearSearch = selector.getByRole("button", {
     name: "Clear pipeline selector search",
@@ -4174,7 +4183,7 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
   await selectorClearSearch.click();
   await expect(selector.getByLabel("Search pipelines")).toHaveValue("");
   await expect(
-    selector.getByRole("button", { name: /Main Program/ }),
+    selector.getByRole("button", { name: "Select pipeline Main Program" }),
   ).toBeVisible();
   await expect(selectorClearSearch).toBeHidden();
 
@@ -4194,11 +4203,24 @@ test("ui=v2 pipeline selector supports search under long lists @desktop", async 
 
   await selectorClearSearch.click();
   await expect(
-    selector.getByRole("button", { name: /Main Program/ }),
+    selector.getByRole("button", { name: "Select pipeline Main Program" }),
   ).toBeVisible();
   await expect(
-    selector.getByRole("button", { name: /Ritual backup/ }),
+    selector.getByRole("button", { name: "Select pipeline Ritual backup" }),
   ).toBeVisible();
+  const unfilteredSelectorButtonNames = await getCdpNamesByRole(page, "button");
+  expect(unfilteredSelectorButtonNames).toEqual(
+    expect.arrayContaining([
+      "Select pipeline Main Program",
+      "Select pipeline Ritual backup",
+    ]),
+  );
+  expect(unfilteredSelectorButtonNames).not.toEqual(
+    expect.arrayContaining([
+      "Main ProgramLive · 8/8 outputs12.2 Mb/s in96.0 Mb/s out",
+      "Ritual backupStandby · 1/2 outputs3.0 Mb/s in1.5 Mb/s out",
+    ]),
+  );
 });
 
 test("ui=v2 pipeline details placeholder makes convergence explicit @desktop", async ({
