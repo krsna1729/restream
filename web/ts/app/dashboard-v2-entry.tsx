@@ -700,6 +700,7 @@ function DashboardV2PipelineSelector({
           </p>
         </div>
         <button
+          aria-label="Add a new pipeline from the pipeline selector"
           className="btn btn-xs btn-accent btn-outline"
           onClick={actions.addPipeline}
           type="button"
@@ -1190,6 +1191,7 @@ function DashboardV2PipelineInputStatus({
                         }}
                       />
                       <button
+                        aria-label={`Save audio track ${track.label} for ${model.name}`}
                         className="btn btn-xs btn-accent"
                         onClick={() =>
                           actions.saveAudioTrack(model.id, track.key)
@@ -1199,6 +1201,7 @@ function DashboardV2PipelineInputStatus({
                         Save
                       </button>
                       <button
+                        aria-label={`Cancel audio track edit for ${track.label}`}
                         className="btn btn-xs btn-ghost"
                         onClick={() =>
                           actions.cancelAudioTrackEdit(model.id, track.key)
@@ -1296,6 +1299,7 @@ function DashboardV2PipelineInputStatus({
               </code>
             </div>
             <button
+              aria-label={`Copy stream key for ${model.name}`}
               className="btn btn-xs btn-accent btn-outline"
               onClick={() =>
                 void actions.copyStreamKey(model.liveSource!.pipelineId)
@@ -1309,6 +1313,7 @@ function DashboardV2PipelineInputStatus({
             {model.liveSource.protocols.map((protocol) => (
               <button
                 aria-pressed={protocol.selected}
+                aria-label={`Select ${protocol.label} ingest URL for ${model.name}`}
                 className={`btn btn-xs ${protocol.selected ? "btn-accent" : "btn-outline"}`}
                 key={protocol.id}
                 onClick={() =>
@@ -1331,7 +1336,7 @@ function DashboardV2PipelineInputStatus({
                   {protocol.urlLabel}
                 </code>
                 <button
-                  aria-label={`Copy ${protocol.label} ingest URL`}
+                  aria-label={`Copy ${protocol.label} ingest URL for ${model.name}`}
                   className="btn btn-xs btn-outline"
                   onClick={() =>
                     void actions.copyIngestUrl(
@@ -1447,6 +1452,7 @@ function DashboardV2PipelineOutputOverview({
           </p>
         </div>
         <button
+          aria-label={`Add output for ${model.pipelineName}`}
           className="btn btn-sm btn-accent btn-outline"
           onClick={() => actions.addOutput(model.pipelineId)}
           type="button"
@@ -1737,6 +1743,7 @@ function DashboardV2PipelineOutputOverview({
                 {outputEmptyDetail} Clear filters to show all.
               </p>
               <button
+                aria-label="Clear output destination filters"
                 className="btn btn-xs btn-ghost mt-3"
                 onClick={clearOutputFilters}
                 type="button"

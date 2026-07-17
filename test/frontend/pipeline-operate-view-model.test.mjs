@@ -328,6 +328,7 @@ test("pipeline input status model projects publisher, preview, and media state",
 
   assert.deepEqual(live, {
     id: "live",
+    name: "live",
     status: { label: "Live input", tone: "success", detail: "Receiving media" },
     uptimeLabel: "1:02:03 uptime",
     publisherLabel: "RTMP",
@@ -464,6 +465,7 @@ test("pipeline output overview projects rollup and prioritized attention", async
 
   assert.deepEqual(model, {
     pipelineId: "live",
+    pipelineName: "live",
     activeLabel: "1/3 active",
     aggregateRate: "1.5 Mb/s",
     counts: [

@@ -82,6 +82,7 @@ export interface PipelineOperateLifecycleControlSnapshot {
 
 export interface PipelineOperateInputStatusModel {
   readonly id: string;
+  readonly name: string;
   readonly status: OverviewStatus;
   readonly uptimeLabel: string;
   readonly publisherLabel: string;
@@ -183,6 +184,7 @@ export interface PipelineOutputCardModel {
 
 export interface PipelineOutputOverviewModel {
   readonly pipelineId: string;
+  readonly pipelineName: string;
   readonly activeLabel: string;
   readonly aggregateRate: string;
   readonly counts: readonly PipelineOutputOverviewCount[];
@@ -617,6 +619,7 @@ export function buildPipelineOperateInputStatusModel(
 
   return {
     id: pipeline.id,
+    name: pipeline.name,
     status: inputStatus(pipeline),
     uptimeLabel: formatUptime(pipeline.input.time),
     publisherLabel,
@@ -782,6 +785,7 @@ export function buildPipelineOutputOverviewModel(
 
   return {
     pipelineId: pipeline.id,
+    pipelineName: pipeline.name,
     activeLabel: `${active}/${pipeline.outs.length} active`,
     aggregateRate: formatOverviewBitrate(aggregateKbps),
     counts,

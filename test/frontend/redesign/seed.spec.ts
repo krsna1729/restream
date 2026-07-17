@@ -3406,7 +3406,10 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
     .getByRole("button", { name: "Cancel" })
     .click();
   await outputOverview
-    .getByRole("button", { name: "Add Output", exact: true })
+    .getByRole("button", {
+      name: "Add output for Retrying Destination",
+      exact: true,
+    })
     .click();
   await expect(page.locator("#edit-out-modal")).toBeVisible();
   await expect(page.locator("#out-modal-title")).toHaveText(
@@ -3511,6 +3514,16 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await inputStatus
     .getByRole("button", { name: "Rename Program Audio" })
     .click();
+  const audioEditButtonNames = await getCdpNamesByRole(page, "button");
+  expect(audioEditButtonNames).toEqual(
+    expect.arrayContaining([
+      "Save audio track Program Audio for Healthy Program",
+      "Cancel audio track edit for Program Audio",
+    ]),
+  );
+  expect(audioEditButtonNames).not.toEqual(
+    expect.arrayContaining(["Save", "Cancel"]),
+  );
   await audioTrackName.fill("Discarded label");
   await audioTrackName.press("Escape");
   await expect(
@@ -3521,15 +3534,35 @@ test("seed: ui=v2 replaces Overview while delegating operator actions @desktop",
   await expect(page.locator("#ingest-url-section")).toBeHidden();
   await expect(inputStatus).toContainText("synthetic-healthy-st***12345");
   await inputStatus
-    .getByRole("button", { name: "SRT", exact: true })
+    .getByRole("button", {
+      name: "Select SRT ingest URL for Healthy Program",
+      exact: true,
+    })
     .click();
   await expect(
-    inputStatus.getByRole("button", { name: "SRT", exact: true }),
+    inputStatus.getByRole("button", {
+      name: "Select SRT ingest URL for Healthy Program",
+      exact: true,
+    }),
   ).toHaveAttribute("aria-pressed", "true");
   await expect(inputStatus).toContainText("srt://ingest.example.invalid:9000");
   await expect(
-    inputStatus.getByRole("button", { name: "Copy SRT ingest URL" }),
+    inputStatus.getByRole("button", {
+      name: "Copy SRT ingest URL for Healthy Program",
+    }),
   ).toBeVisible();
+  const healthyInputButtonNames = await getCdpNamesByRole(page, "button");
+  expect(healthyInputButtonNames).toEqual(
+    expect.arrayContaining([
+      "Copy stream key for Healthy Program",
+      "Select RTMP ingest URL for Healthy Program",
+      "Select SRT ingest URL for Healthy Program",
+      "Copy SRT ingest URL for Healthy Program",
+    ]),
+  );
+  expect(healthyInputButtonNames).not.toEqual(
+    expect.arrayContaining(["Copy Key", "RTMP", "SRT", "Copy SRT ingest URL"]),
+  );
   await expect(outputOverview).toContainText("Running");
   await expect(outputOverview).toContainText("No outputs need attention");
 
