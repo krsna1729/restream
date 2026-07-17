@@ -1732,7 +1732,7 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
     monitor.getByRole("heading", { name: "Monitor previews" }),
   ).toBeVisible();
   await expect(
-    monitor.getByRole("combobox", { name: "Monitor pipeline" }),
+    monitor.getByRole("combobox", { name: "Filter monitor by pipeline" }),
   ).toBeVisible();
   await expect(monitor.getByLabel("Search monitor outputs")).toBeVisible();
   await expect(routeSummary).toHaveText(
@@ -1763,6 +1763,9 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   expect(initialMonitorButtonNames).not.toContain("Pause All");
   expect(initialMonitorButtonNames).not.toContain("Reset");
   expect(await getCdpNamesByRole(page, "combobox")).toContain(
+    "Filter monitor by pipeline",
+  );
+  expect(await getCdpNamesByRole(page, "combobox")).not.toContain(
     "Monitor pipeline",
   );
   expect(await getCdpNamesByRole(page, "combobox")).not.toContain(
