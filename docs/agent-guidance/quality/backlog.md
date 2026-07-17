@@ -46,7 +46,15 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   search found no consumer of `compile_operation`. The module comments claim
   both backends consume this layer, so coverage-only tests would preserve a
   false architectural assumption instead of proving runtime behavior.
-- Status: open (Filed: 2026-07-17 by Q-001)
+- Status: done (retired: `operation.rs`/`operation_compiler.rs` had zero
+  consumers anywhere in `src/`, `test/`, `benches/`, and both FFmpeg
+  backends actually consume `FfmpegStagePlan` directly per
+  `ffmpeg/backend.rs`'s trait signatures — the module docs and
+  `docs/stage-boundary-proof-map.md` claiming a shared "compiled operation"
+  were architecturally false; deleted both files, removed their `pub mod`
+  lines from `ffmpeg/mod.rs`, and corrected the proof-map row to cite the
+  real `FfmpegStagePlan`-based proof in `stage_runtime.rs` and
+  `tests/transcoder.rs`; 2026-07-18 by codex; Filed: 2026-07-17 by Q-001)
 
 ### Q-015 [proof] [sonnet] Prove adversarial SRT crypto option boundaries
 - Goal: deterministic mutation-proven coverage for plaintext versus encrypted

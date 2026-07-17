@@ -45,6 +45,8 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 01:20 Q-021 DONE [codex]](#2026-07-18-0120-q-021-done-codex)
 - [2026-07-18 01:25 Q-022 STARTED [codex]](#2026-07-18-0125-q-022-started-codex)
 - [2026-07-18 01:55 Q-022 DONE [codex]](#2026-07-18-0155-q-022-done-codex)
+- [2026-07-18 02:00 Q-014 STARTED [codex]](#2026-07-18-0200-q-014-started-codex)
+- [2026-07-18 02:20 Q-014 DONE [codex]](#2026-07-18-0220-q-014-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -806,3 +808,62 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   i64::MAX`/`< i64::MIN` check inline in both branches would have been the
   kind of copy-paste AGENTS.md's "add abstractions only when they remove
   real complexity" argues against.
+
+## 2026-07-18 02:00 Q-014 STARTED [codex]
+- What: decide whether `src/media/ffmpeg/operation.rs` and
+  `src/media/ffmpeg/operation_compiler.rs` become part of an actual
+  backend-owned execution path or are retired as unused indirection.
+- Gates: pending focused backend/stage-runtime tests, format, clippy, full
+  test gates, `node scripts/check/docs.mjs`.
+- Commit: none.
+- Follow-ups: none yet.
+
+## 2026-07-18 02:20 Q-014 DONE [codex]
+- What: re-confirmed Q-001's measurement (0/6 and 0/60 covered lines) by
+  grepping `src/`, `test/`, and `benches/` for every symbol the two files
+  export (`compile_operation`, `FfmpegOperation`, `VideoEncoderSettings`,
+  `AudioOperation`, `VideoCodec`, `ffmpeg::operation::`,
+  `operation_compiler::`) — zero consumers anywhere outside the two files
+  themselves and the two now-removed `pub mod` declarations in
+  `src/media/ffmpeg/mod.rs`. Also checked the architectural claim the module
+  doc comments made ("Both the external-process and in-process backends
+  consume the same `FfmpegOperation`"): `src/media/ffmpeg/backend.rs`'s
+  trait methods take `plan: FfmpegStagePlan`, not `FfmpegOperation`, and
+  `src/media/transcoder.rs`/`src/media/external_transcoder.rs` both consume
+  `FfmpegStagePlan` directly. `docs/stage-boundary-proof-map.md`'s Input
+  pump -> backend row repeated the same false claim ("Shared
+  operation/compiler tests" as current proof), which doesn't exist —
+  `compile_operation` has no test that calls it because nothing calls it.
+  Retired rather than bound: the backlog goal explicitly said "Do not add
+  incidental tests for code that no production path consumes," and binding
+  would mean inventing a new integration point with no existing motivation
+  — `FfmpegStagePlan` is already the real backend-neutral contract and is
+  already proven at that boundary.
+  Fix (production code): deleted `src/media/ffmpeg/operation.rs` and
+  `src/media/ffmpeg/operation_compiler.rs`; removed their `pub mod` lines
+  from `src/media/ffmpeg/mod.rs`. Corrected
+  `docs/stage-boundary-proof-map.md`'s Input pump -> backend row to
+  describe the real current proof: `build_ffmpeg_stage_plan` unit tests in
+  `src/media/stage_runtime.rs` (including
+  `external_and_internal_stage_plan_share_operation`, which proves one
+  `FfmpegStagePlan` is constructed per `StageKind` and carries startup
+  policy for both backends) plus `tests/transcoder.rs` integration coverage
+  proving the external path (`build_stage_ffmpeg_args`) and internal path
+  (`run_ffmpeg_transcode_with_scale`) each produce correct output from that
+  plan.
+- Gates: `cargo test --lib media::ffmpeg` passed 15/15;
+  `cargo test --lib stage_runtime` passed 9/9 (including
+  `external_and_internal_stage_plan_share_operation`, unaffected by the
+  deletion since it only exercises `build_ffmpeg_stage_plan`). `cargo fmt
+  --all --check` and `cargo clippy --all-targets` (warnings denied) were
+  clean — no dangling references to the deleted module anywhere in the
+  tree. `node scripts/check/docs.mjs` passed (68 files). Full `cargo test`
+  passed with no failures. No hot-path benchmark applies — this removed
+  dead compile-time indirection, not runtime behavior.
+- Commit: this commit.
+- Follow-ups: none.
+- Notes: this is a retirement, not a fix — no behavior changed, since
+  nothing executed this code. The value is removing a doc/comment claim
+  that actively misdescribed the architecture (useful for the next agent
+  who might otherwise have "fixed" `compile_operation` instead of noticing
+  it was never called).
