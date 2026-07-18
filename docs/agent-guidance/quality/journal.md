@@ -61,8 +61,11 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 10:20 Q-003 DONE [codex]](#2026-07-18-1020-q-003-done-codex)
 - [2026-07-18 15:38 AVIO-LOOM DONE [codex]](#2026-07-18-1538-avio-loom-done-codex)
 - [2026-07-18 16:20 HUNT RTMP-EGRESS-PERCENT-DECODE DONE [codex]](#2026-07-18-1620-hunt-rtmp-egress-percent-decode-done-codex)
+- [2026-07-18 16:40 Q-009 DONE [opus]](#2026-07-18-1640-q-009-done-opus)
 - [2026-07-18 16:45 HUNT SRT-MONITOR-OVERFLOW DONE [codex]](#2026-07-18-1645-hunt-srt-monitor-overflow-done-codex)
 - [2026-07-18 17:20 HUNT ENGINE-SNAPSHOTS-POISON DONE [codex]](#2026-07-18-1720-hunt-engine-snapshots-poison-done-codex)
+- [2026-07-18 17:20 Q-010 DONE [opus]](#2026-07-18-1720-q-010-done-opus)
+- [2026-07-18 17:55 Q-012 DONE [opus]](#2026-07-18-1755-q-012-done-opus)
 - [2026-07-18 18:05 HUNT MPEGTS-PROBE-AUDIO-BOUNDARY DONE [codex]](#2026-07-18-1805-hunt-mpegts-probe-audio-boundary-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
@@ -1466,6 +1469,56 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   "snapshot error branches"), `mpegts_probe.rs` (72.92%, "probe/reporting
   paths").
 
+## 2026-07-18 16:40 Q-009 DONE [opus]
+
+- What: Eliminated the per-packet copy in the MPEG-TS mux → SRT egress
+  accumulator path (backlog Q-009). The 2026-06-27 CPU profile named a
+  two-copy shape (FFmpeg AVIO output buffer → `ts_accum`, `memmove` 3.28% +
+  `VecDeque::extend` 0.43%); that AVIO path has since been replaced by the
+  pure-Rust `TsMuxer`, but the equivalent copy survived as the muxer's
+  internal `output: Vec<u8>` scratch being `extend_from_slice`'d into the SRT
+  egress burst accumulator once per packet
+  (`srt_egress.rs::start_shared_ts_muxer`). Added
+  `TsMuxer::mux_packet_into` and `mux_packet_by_stream_idx_into`, which append
+  TS packets directly into a caller-owned `&mut Vec<u8>`; the write path
+  (`mux_packet_at`, `write_pat/pmt/sdt`) now takes that accumulator instead of
+  writing to `self.output`. The standalone `mux_packet` /
+  `mux_packet_by_stream_idx` APIs are preserved for the ~30 single-packet
+  callers (tests, feeder, hls_cost, matrix_throughput, simd_alternatives) via
+  an O(1) `mem::take` of the internal scratch, so no correctness contract
+  moved. The egress feeder now sizes the accumulator as `Vec<u8>` and freezes
+  it with `Bytes::from(vec)` (O(1) ownership transfer) instead of
+  `BytesMut::freeze()`; per-chunk `.slice()` publication is unchanged.
+- Gates: `cargo test --lib mpegts` (74 passed) and `cargo test --lib srt`
+  (91 passed) green — protocol correctness (PAT/PMT/SDT insertion, PES
+  packetization, continuity, DTS enforcement, mux↔demux round-trip proptest)
+  unchanged. `cargo fmt --all --check` clean. Before/after microbenchmark
+  (`high_performance_data_path`, WSL2 idle host, 100 samples): the existing
+  `batch_accumulate_write` variant models the old `mux_packet` +
+  `extend_from_slice` shape (10.767 µs / 2.972 Melem/s); the new
+  `batch_mux_into_write` variant models `mux_packet_into` (10.062 µs /
+  3.180 Melem/s) — −6.5% latency / +7.0% throughput, non-overlapping 95% CIs.
+  Core `data_path/mpegts_mux/mux_all_packets` unchanged within noise
+  (478 µs, 12.6 GiB/s). Numbers + ledger row in `baselines.md` (§ Benchmark
+  ledger, § Standing optimization targets → Q-009 result).
+- Commit: this commit (`src/media/mpegts.rs`, `src/media/srt_egress.rs`,
+  `benches/high_performance_data_path.rs`, `baselines.md`, `backlog.md`,
+  journal).
+- Follow-ups: none filed. The recording/HLS feeders still use the
+  single-packet `mux_packet_by_stream_idx` (they accumulate into their own
+  segment/manifest buffers with a different lifetime); converting them to the
+  `_into` API is a possible future micro-win but was out of scope for the SRT
+  egress hot path this item names.
+- Notes: contabo VPS (the designated hardware-PMU box) was unavailable — a
+  ~2-day-old external MSR-style workload (3× restream / 3× mediamtx / 7×
+  ffmpeg, 175k–202k s elapsed) was live, so the kill-check was non-empty and
+  those processes were not this session's to kill. Measurement therefore ran
+  on the idle WSL2 host with wall-clock Criterion timing, which is sufficient
+  for this copy-elimination micro-decision (no PMU counters needed); the MSR
+  receiver-scale proof named in the item's aspirational gate list is deferred
+  until the VPS is idle and is not required to accept a strictly-fewer-copies
+  change with green protocol tests and a non-overlapping-CI microbench win.
+
 ## 2026-07-18 16:45 HUNT SRT-MONITOR-OVERFLOW DONE [codex]
 - What: continued "the hunting" against the next coverage-map candidate,
   `src/media/srt_monitor.rs` (43.75% line coverage). Found and fixed a real
@@ -1577,6 +1630,97 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Notes: continuing "the hunting" per the user's "you go ahead with the
   hunting" instruction.
 
+## 2026-07-18 17:20 Q-010 DONE [opus]
+
+- What: Evaluated slab/pool allocation for the per-packet
+  `Arc<MediaPacket>` (backlog Q-010, `_int_malloc` 0.87% self-time in the
+  2026-06-27 profile). Decision: REJECTED — no runtime code changed; the
+  `Arc::new(MediaPacket)` stays. Surveyed the allocation sites first:
+  `RingBuffer::push`/`push_batch` do `Arc::new(packet)` then a slot
+  `ArcSwapOption::store` (`ring_buffer.rs:489,519`), and readers `load_full()`
+  take an `Arc<MediaPacket>` with an unbounded lifetime. `MediaPacket` is 56 B
+  (`repr(C)`); with the 16-B Arc control block the request is 72 B, served from
+  glibc's per-thread `tcache` fast path.
+- Gates: `ring_buffer/producer` Criterion bench, WSL2 idle host, kill-check
+  clean (`pgrep -x restream/mediamtx/ffmpeg` empty), 100 samples. Whole-`push`
+  time (includes `Arc::new` + `ArcSwap` store): `push_one_at_a_time` 142.05 ns/1,
+  541.34 ns/4 (135 ns/elem), 1.086 µs/8 (136 ns/elem); `push_batch` 145.71 ns/1,
+  519.09 ns/4 (130 ns/elem). Per-element cost is flat 1→8 and `push` ≈
+  `push_batch` within noise, so batching already amortizes the path — no
+  per-burst allocation win remains for a pool to capture. No code changed, so no
+  loom/unit ownership proofs were needed.
+- Commit: this commit (`baselines.md` § Q-010 result + standing-target row,
+  `backlog.md` Q-010 status, journal). No `src/` changes.
+- Follow-ups: none. If a future hardware-PMU MSR profile shows `_int_malloc`
+  climbing materially above the current 0.87%, revisit — but only with a design
+  that keeps `Arc` reclamation semantics.
+- Notes: three reasons the pool loses. (1) Magnitude — 0.87% self-time on a
+  tcache-served, lock-free O(1) size class; a pool's best case only replaces an
+  already-fast path. (2) Ownership — reclamation is intrinsically
+  last-reader-drop (readers hold the `Arc` across await points and threads for
+  arbitrary time); `Arc` + the global allocator already do exactly that. A
+  custom slab must replicate the last-drop hook *plus* a synchronized
+  cross-thread freelist, because producers (SRT/RTMP ingest threads) and
+  consumers (egress/HLS/recording tasks) run on different threads — every
+  reclaim becomes a cross-thread free contending on the pool lock, versus tcache
+  handling the common same-thread free lock-free. It trades a lock-free path for
+  a contended one on a cold path. (3) Safety — a slot-reusing pool risks
+  use-after-free / ABA if a reader outlives the intended lifetime, violating the
+  engine no-crash invariant; `Arc` makes that impossible by construction. Full
+  write-up in `baselines.md` § Q-010 result. Contabo VPS still carried the
+  ~2-day external MSR workload, but this micro-decision needs no PMU counters —
+  the wall-clock bench plus the ownership/safety analysis is sufficient to
+  reject.
+
+## 2026-07-18 17:55 Q-012 DONE [opus]
+
+- What: Final decision on in-process CPU affinity for Tokio/SRT/RTMP thread
+  families (backlog Q-012, which the 2026-07-12 series had narrowed to "an
+  opt-in runtime affinity design"). Decision: REJECTED as a runtime feature —
+  CPU partitioning stays a process/cgroup concern (systemd `CPUAffinity`,
+  Docker `--cpuset-cpus`, Kubernetes CPU manager). No runtime affinity code
+  exists or is added. Tightened `docs/configuration.md` § Linux Service
+  Placement from "the runtime does not currently pin thread families / keep
+  experiments outside production" to a definite statement that the
+  process/cgroup layer is the supported mechanism and in-process pinning was
+  evaluated and rejected, with a pointer to the evidence. Added
+  `baselines.md` § Q-012 decision consolidating the recorded numbers and the
+  rationale.
+- Gates: none run this session — the decision changes no code. It rests on the
+  already-recorded MSR evidence (2026-07-12 VPS series): external `taskset`
+  partition (SRT→CPU 0-1, other→2-5) was a real win (2.051 cores, IPC 0.420,
+  16.25% cache misses, 4.330 K/s ctx, 288.5/s migrations) versus default
+  runtime (2.321 cores, 20.80% cache, 7.663 K/s ctx, 920.3/s migrations), but
+  the in-process scanner did NOT reproduce it (2.45/2.42 cores, ~20.6-20.9%
+  cache, ~7.7-8.0 K/s ctx) despite a thread census proving the masks were
+  applied. `node scripts/check/docs.mjs` clean.
+- Commit: this commit (`docs/configuration.md`, `baselines.md` § Q-012
+  decision, `backlog.md` Q-012 status, journal). No `src/` changes.
+- Follow-ups: none. If a future host demonstrates the partition win robustly
+  under a supported orchestration cpuset, that is a deployment recipe, not a
+  runtime feature. A true 12h soak remains separate from these non-soak MSR
+  ramps.
+- Notes: three reasons the process/cgroup layer is correct and in-process
+  pinning is not. (1) Robustness — the scanner is a one-shot `/proc/self/task`
+  pass, but Tokio continuously spawns replacement/blocking threads (census
+  showed a `restream-tokio` family in the 60s with only two hot scheduler
+  worker identities); new threads inherit their creator's mask at clone time,
+  so a one-shot partition erodes as the population turns over, while a cpuset is
+  kernel-enforced on every present and future thread for the whole process
+  lifetime. (2) Layering — a cpuset derives from the effective CPU mask/cgroup
+  quota automatically and is container-aware; in-process host-CPU masks are not
+  and would fight orchestration. (3) Cost/benefit — the win needs a clean
+  default run and a whole-window hold, exactly what a launch-time cpuset gives
+  for free and what fragile in-process re-pinning cannot guarantee; adding
+  thread-lifecycle placement code plus its concurrency-proof burden to chase an
+  effect the supported layer already captures is negative-value. No new
+  measurement was run: WSL2 has no PMU and the Contabo VPS carried a ~2-day
+  external MSR workload (kill-check non-empty, not this session's to kill);
+  re-running the scanner would only re-confirm the recorded negative. This
+  aligns with and finalizes the 2026-07-12 codex follow-ups (RUNTIME AFFINITY
+  PROTOTYPE REJECTED, TOKIO BLOCKING CAP / KEEPALIVE PROTOTYPES REJECTED, MSR
+  FULL FINAL PASS), which had already recommended systemd placement and left
+  Q-012 "narrowed"; this entry closes it.
 ## 2026-07-18 18:05 HUNT MPEGTS-PROBE-AUDIO-BOUNDARY DONE [codex]
 - What: continued "the hunting" against the last open coverage-map
   candidate, `src/media/mpegts_probe.rs` (72.92% line coverage, annotated

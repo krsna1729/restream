@@ -126,9 +126,16 @@ sudo RESTREAM_CPU_AFFINITY=0-5 \
 ```
 
 Use systemd placement only after validating the CPU/NUMA set on the deployment
-host. MSR profiling showed thread-family partitioning can help, but the runtime
-does not currently pin individual thread families; keep fine-grained placement
-experiments outside production defaults until they have host-specific proof.
+host. Process/cgroup-level CPU placement (systemd `CPUAffinity`, Docker
+`--cpuset-cpus`, or a Kubernetes CPU manager policy) is the supported mechanism
+for CPU partitioning: the kernel enforces it over the whole process lifetime,
+including threads the runtime spawns later, and it is container-aware by
+construction. The runtime deliberately does not pin individual thread families
+itself. An in-process affinity scanner was prototyped and rejected — it did not
+reproduce the external-partition win even with masks proven applied, because it
+cannot hold a partition against the runtime's continuous thread turnover the way
+a process-level cpuset does (see
+`docs/agent-guidance/quality/baselines.md` § Q-012 decision).
 
 The runtime also exposes its resolved Tokio sizing in `/api/v1/engine/health`
 and the engineer telemetry host-settings table. `RESTREAM_TOKIO_WORKER_THREADS`
