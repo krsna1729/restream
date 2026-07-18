@@ -73,6 +73,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 22:05 HUNT STAGE-METRICS-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2205-hunt-stage-metrics-counter-boundaries-done-codex)
 - [2026-07-18 22:20 HUNT PIPE-METRICS-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2220-hunt-pipe-metrics-counter-boundaries-done-codex)
 - [2026-07-18 22:40 HUNT ENGINE-HLS-CONSUMER-IDLE-BOUNDARIES DONE [codex]](#2026-07-18-2240-hunt-engine-hls-consumer-idle-boundaries-done-codex)
+- [2026-07-18 23:05 HUNT SRT-QUALITY-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2305-hunt-srt-quality-counter-boundaries-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2130,3 +2131,39 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   caller is already safe.
 - Notes: `snapshots.rs` is ruled out (pure data-carrier, no logic).
   Continuing the open-ended scan for the next low-coverage candidate.
+
+## 2026-07-18 23:05 HUNT SRT-QUALITY-COUNTER-BOUNDARIES DONE [codex]
+
+- What: adversarial sweep on `src/media/srt_quality.rs`'s `counter_rate`
+  and `quality_from_stats`/`sender_quality_from_stats` logic. The 3
+  pre-existing `srt_rates_*` tests in `srt_tests.rs` only covered the
+  positive-delta path; the regression guard (`checked_sub` returning
+  `None` when a counter goes backward, e.g. across a reconnect that
+  reuses the same snapshot struct), the zero-elapsed-seconds guard
+  (`elapsed_seconds <= 0.0` short-circuiting before division), and the
+  `.max(0)` clamp on signed libsrt counters (guarding against libsrt's
+  `-1` "unknown" sentinel sign-extending into a near-`u64::MAX` value
+  when cast) were untested. Added 3 tests to the existing
+  `srt_tests.rs` sibling file (matching this module's established test
+  placement, not a new in-file module): counter regression yields
+  `None` instead of a wrapped/huge delta; zero elapsed seconds yields
+  `None` instead of inf/NaN; negative sentinel counters on
+  `SrtTraceBStats` clamp to `0` in the resulting `PublisherQuality`
+  instead of sign-extending.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::srt::tests` — 59/59 pass (56 pre-existing plus 3 new; the
+  correct module path, since `srt_tests.rs` is pulled in via `#[path =
+  "srt_tests.rs"] mod tests;` inside `srt.rs`, not a standalone
+  `srt_tests` target). `scripts/build/resource-limit.sh cargo clippy
+  --lib --benches -- -D warnings` — clean. `cargo fmt --all` + `--check`
+  — clean (fmt collapsed one new test's call onto fewer lines;
+  confirmed cosmetic via diff review, no semantic change). Test-only
+  change to non-hot-path quality-reporting arithmetic (not a per-packet
+  loop); did not broaden to `scripts/check/concurrency/contract.sh` or
+  full `cargo test`.
+- Commit: `da946c19` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. `counter_rate` and the `.max(0)` clamps
+  already guard correctly in production code; this hunt only closed
+  test-coverage gaps, no behavior change needed.
+- Notes: continuing the open-ended scan of `src/media/` for the next
+  low-coverage candidate.
