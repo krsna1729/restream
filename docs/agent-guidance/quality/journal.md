@@ -76,6 +76,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 23:05 HUNT SRT-QUALITY-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2305-hunt-srt-quality-counter-boundaries-done-codex)
 - [2026-07-18 23:30 HUNT SRT-MUXER-SHARD-POOL-BOUNDARIES DONE [codex]](#2026-07-18-2330-hunt-srt-muxer-shard-pool-boundaries-done-codex)
 - [2026-07-18 23:50 HUNT SRT-POLICY-FALLBACK-SEMANTICS DONE [codex]](#2026-07-18-2350-hunt-srt-policy-fallback-semantics-done-codex)
+- [2026-07-19 00:10 HUNT TRANSCODE-PROFILE-VALIDATION-BOUNDARIES DONE [codex]](#2026-07-19-0010-hunt-transcode-profile-validation-boundaries-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2258,3 +2259,70 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Notes: continuing the open-ended scan of `src/media/` for the next
   low-coverage candidate (`ts_chunk_ring.rs` 198 lines/2 tests looks like
   the next best ratio).
+
+## 2026-07-19 00:10 HUNT TRANSCODE-PROFILE-VALIDATION-BOUNDARIES DONE [codex]
+
+- What: `ts_chunk_ring.rs` was re-evaluated and deprioritized — its 4
+  existing tests already cover its own thin-wrapper logic, and the
+  substantive ring behavior lives in already-loom-tested
+  `ring_buffer.rs`. Re-ran a lines-per-test ranking across all
+  `src/media/*.rs` files, cross-referenced against `#[path]`/`mod tests`
+  siblings to filter out false positives (`engine.rs`, `srt.rs`,
+  `rtmp.rs`, `mpegts.rs`, `ring_buffer.rs`, `srt_egress.rs`,
+  `external_transcoder.rs` all have coverage via included sibling test
+  files), then cross-checked the remaining candidates
+  (`stage_registry_access.rs`, `snapshots.rs`, `ingest_auth.rs`) against
+  this journal and confirmed all three were already ruled out in an
+  earlier iteration (see the STAGE-METRICS and ENGINE-HLS entries above:
+  `ingest_auth.rs` is pure trait/type definitions with no branching,
+  `stage_registry_access.rs` is thin CRUD glue already covered
+  transitively via `engine_stage_tests.rs`, `snapshots.rs` is a pure data
+  carrier). With `src/media/` effectively exhausted of small, self-
+  contained, untested candidates, broadened the scan to the rest of
+  `src/` per the standing directive's open-ended scope. Found
+  `src/domain/transcode_profile.rs` (121 lines): `TranscodeProfile::
+  validate()` has real whitelist/range-boundary logic (preset and tune
+  exact-match whitelists, an inclusive `0..=51` crf range) with **zero**
+  dedicated tests anywhere in the codebase — the only prior reference was
+  a single `assert!(TranscodeProfile::default().validate().is_ok())`
+  line inside `media/profiles.rs`'s test module, which never exercised
+  the error paths at all. Added a `#[cfg(test)] mod tests` block
+  covering: every documented preset/tune value validates; an unknown
+  preset/tune is rejected; preset matching is exact-case (`"Ultrafast"`
+  capitalized is rejected, pinning that there is no case-insensitive
+  fallback); crf boundary inclusivity at 0 and 51; crf rejection just
+  outside the range and at `i32::MIN`/`i32::MAX` (proving the range
+  check itself never overflows/panics at the type's extremes); and a
+  pinning test that `validate()` does **not** bound `bitrate`,
+  `max_bitrate`, `gop`, `bframes`, `width`, or `height` at all — a
+  profile with negative bitrate, zero gop, and `u32::MAX` dimensions
+  still validates `Ok`, since those fields rely on a `0 = use
+  source/no limit` sentinel convention enforced by callers, not by this
+  type. Also added serde coverage: an empty `{}` object fills every
+  field from its documented default; a negative bitrate deserializes
+  without any validation being applied at parse time (validation is a
+  separate, opt-in step callers must call); and unknown JSON fields are
+  silently ignored rather than rejected (no `#[serde(deny_unknown_fields)]`).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  transcode_profile` — 15/15 pass (13 new plus 2 pre-existing
+  `application::transcode_profiles::tests` in the same filter,
+  unaffected). `scripts/build/resource-limit.sh cargo clippy --lib
+  --benches -- -D warnings` — clean. `cargo fmt --all` + `--check` —
+  clean (auto-reformatted the new block's multi-line `assert!` calls,
+  cosmetic only). Pure domain value-type module, not on the Inner Loop
+  table's lifecycle-sensitive file list and no production code changed —
+  did not broaden to `scripts/check/concurrency/contract.sh` or full
+  `cargo test`.
+- Commit: `51a69cf9` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. The lack of bitrate/gop/dimension bounds in
+  `validate()` is pinned as documented current behavior, not flagged as a
+  bug — callers depend on `0` as a sentinel and no caller currently
+  passes unchecked user input for those fields without an upstream
+  bound; a stricter `validate()` would be a deliberate API-contract
+  change, not an in-scope fix for a test sweep.
+- Notes: `src/media/` is now largely exhausted of small, self-contained,
+  untested candidates. Continuing the open-ended scan into `src/domain/`,
+  `src/application/`, and `src/api_runtime_views/`, which have not yet
+  been swept this session; `src/bin/test_harness/` is deliberately
+  excluded from this scan since it is harness tooling validated by its
+  own `correctness*`/live-mode gates, not application logic.
