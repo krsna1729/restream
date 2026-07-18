@@ -41,7 +41,13 @@ otherwise. A regression beyond threshold is filed, not silently absorbed.
 
 | Config | RSS | Ring payload | AVIO peak HWM | Blocked writes | Commit | Date |
 |---|---|---|---|---|---|---|
-| (seed via Q-006) | — | — | — | — | — | — |
+| baseline-empty | 75,960 KB | 0 KB | 0 KB | not measured by this harness mode | 39685ea3 | 2026-07-18 |
+| ingest-only h264-rtmp | 78,892 KB | 2,470 KB | 0 KB | not measured by this harness mode | 39685ea3 | 2026-07-18 |
+| ingest-only h265-srt | 80,752 KB | 2,190 KB | 0 KB | not measured by this harness mode | 39685ea3 | 2026-07-18 |
+| egress-growth-source-srt 10-per-group | 104,948 KB | 6,444 KB | 2,125 KB | not measured by this harness mode | 39685ea3 | 2026-07-18 |
+| egress-growth-transcode-dual-mixed 10-per-group | 700,156 KB | 6,390 KB | 35,728 KB | not measured by this harness mode | 39685ea3 | 2026-07-18 |
+
+Full 42-case breakdown: see [resource-sweep baseline — 2026-07-18](#resource-sweep-baseline-2026-07-18) below.
 
 ### Historical reference — 2026-06-27 memory-optimization pass
 
@@ -54,6 +60,76 @@ After ring/AVIO/TS sizing cuts (−205 MB RSS total across 15 scale cases,
 | h265-srt-multi 8M | 237 MB | 77 MB |
 | h264-srt-multi 8M | 137 MB | 71 MB |
 | h264-rtmp 8M | 116 MB | 35 MB |
+
+### Resource-sweep baseline — 2026-07-18
+
+First `resource-sweep` harness run recorded in this ledger (Q-006). Idle host,
+`scripts/build/bench-harness.sh` then
+`scripts/build/resource-limit.sh target/bench/test_harness resource-sweep`,
+serial, isolated lifecycle. Values are per-scenario peaks/averages across
+`sampleCount` samples; "Blocked writes" is not a field this harness mode
+measures (AVIO/ring blocked-write counters are covered separately by the
+`avio_throughput`/`ring_buffer` benches, seeded under Q-003).
+
+| Scenario | Label | Ingests | Outputs | RSS peak KB | RSS avg KB | Source ring peak KB | Transcoder ring peak KB | AVIO HWM peak KB | Total CPU avg % | Total CPU peak % |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline-empty | empty | 0 | 0 | 75,960 | 75,764.67 | 0 | 0 | 0 | 0.83 | 2.00 |
+| ingest-only | h264-rtmp | 1 | 0 | 78,892 | 76,979.33 | 2,470 | 0 | 0 | 1.16 | 1.99 |
+| ingest-only | h264-srt | 1 | 0 | 81,280 | 80,633.33 | 2,407 | 0 | 0 | 1.99 | 1.99 |
+| ingest-only | h265-srt | 1 | 0 | 80,752 | 80,221.33 | 2,190 | 0 | 0 | 1.99 | 2.98 |
+| ingest-only | mixed.live.srt.h264.a2.bf2 | 1 | 0 | 81,216 | 80,531.33 | 2,499 | 0 | 0 | 1.82 | 2.00 |
+| ingest-only | mixed.live.srt.h265.a2.bf2 | 1 | 0 | 80,916 | 80,304.67 | 2,277 | 0 | 0 | 1.82 | 2.00 |
+| ingest-growth-same | 1-pipelines | 1 | 0 | 81,280 | 80,708.67 | 2,407 | 0 | 0 | 1.66 | 1.99 |
+| ingest-growth-same | 3-pipelines | 3 | 0 | 91,316 | 89,784.67 | 9,894 | 0 | 0 | 3.47 | 3.97 |
+| ingest-growth-same | 5-pipelines | 5 | 0 | 106,380 | 103,914.67 | 21,296 | 0 | 0 | 5.29 | 5.94 |
+| ingest-growth-mixed | 1-pipelines | 1 | 0 | 78,888 | 78,112.67 | 2,470 | 0 | 0 | 1.32 | 1.99 |
+| ingest-growth-mixed | 3-pipelines | 3 | 0 | 86,048 | 85,025.33 | 7,467 | 0 | 0 | 3.14 | 3.99 |
+| ingest-growth-mixed | 5-pipelines | 5 | 0 | 97,416 | 95,434.00 | 17,466 | 0 | 0 | 4.30 | 4.96 |
+| egress-growth-source-same | 1-per-group | 1 | 1 | 81,992 | 81,399.33 | 2,520 | 0 | 0 | 1.99 | 2.99 |
+| egress-growth-source-same | 5-per-group | 1 | 5 | 87,100 | 85,862.67 | 4,757 | 0 | 0 | 2.81 | 2.97 |
+| egress-growth-source-same | 10-per-group | 1 | 10 | 90,488 | 89,846.67 | 6,386 | 0 | 0 | 3.14 | 3.96 |
+| egress-growth-source-srt | 1-per-group | 1 | 1 | 85,904 | 85,064.00 | 2,520 | 0 | 481 | 2.81 | 3.98 |
+| egress-growth-source-srt | 5-per-group | 1 | 5 | 94,732 | 93,877.33 | 4,757 | 0 | 951 | 4.96 | 5.95 |
+| egress-growth-source-srt | 10-per-group | 1 | 10 | 104,948 | 104,145.33 | 6,444 | 0 | 2,125 | 6.60 | 6.93 |
+| egress-growth-source-mixed | 1-per-group | 1 | 2 | 87,048 | 86,114.00 | 2,520 | 0 | 481 | 3.31 | 3.97 |
+| egress-growth-source-mixed | 5-per-group | 1 | 10 | 97,592 | 96,378.67 | 4,757 | 0 | 859 | 5.61 | 5.94 |
+| egress-growth-source-mixed | 10-per-group | 1 | 20 | 111,124 | 109,938.67 | 6,444 | 0 | 2,125 | 7.25 | 8.89 |
+| egress-growth-transcode-same | 1-per-group | 1 | 1 | 104,832 | 102,729.33 | 3,183 | 13,980 | 0 | 89.35 | 111.07 |
+| egress-growth-transcode-same | 5-per-group | 1 | 5 | 117,476 | 115,421.33 | 5,421 | 14,083 | 0 | 95.18 | 131.56 |
+| egress-growth-transcode-same | 10-per-group | 1 | 10 | 121,844 | 121,712.67 | 6,444 | 14,343 | 0 | 97.45 | 132.63 |
+| egress-growth-transcode-srt | 1-per-group | 1 | 1 | 121,568 | 117,742.00 | 3,183 | 13,980 | 501 | 89.39 | 112.03 |
+| egress-growth-transcode-srt | 5-per-group | 1 | 5 | 165,252 | 163,227.33 | 5,605 | 14,083 | 6,098 | 95.53 | 121.64 |
+| egress-growth-transcode-srt | 10-per-group | 1 | 10 | 196,476 | 194,098.67 | 6,401 | 14,343 | 12,260 | 121.07 | 143.28 |
+| egress-growth-transcode-mixed | 1-per-group | 1 | 2 | 121,416 | 118,409.33 | 3,183 | 13,980 | 429 | 89.51 | 110.04 |
+| egress-growth-transcode-mixed | 5-per-group | 1 | 10 | 159,956 | 158,027.33 | 5,421 | 14,083 | 6,015 | 103.57 | 132.54 |
+| egress-growth-transcode-mixed | 10-per-group | 1 | 20 | 206,220 | 205,658.00 | 6,401 | 14,343 | 13,260 | 126.06 | 165.60 |
+| egress-growth-source-plus-transcode-mixed | 1-per-group | 1 | 4 | 131,776 | 128,274.00 | 3,183 | 13,980 | 1,096 | 93.23 | 113.76 |
+| egress-growth-source-plus-transcode-mixed | 5-per-group | 1 | 20 | 167,592 | 166,189.33 | 5,605 | 14,083 | 6,577 | 105.76 | 137.91 |
+| egress-growth-source-plus-transcode-mixed | 10-per-group | 1 | 40 | 207,684 | 205,679.33 | 6,401 | 14,343 | 14,966 | 128.21 | 152.87 |
+| egress-growth-transcode-dual-mixed | 1-per-group | 1 | 4 | 213,868 | 201,726.67 | 3,183 | 43,099 | 1,027 | 229.15 | 303.62 |
+| egress-growth-transcode-dual-mixed | 5-per-group | 1 | 20 | 509,416 | 491,116.67 | 5,555 | 43,627 | 16,712 | 295.53 | 363.26 |
+| egress-growth-transcode-dual-mixed | 10-per-group | 1 | 40 | 700,156 | 684,176.67 | 6,390 | 43,965 | 35,728 | 347.47 | 444.26 |
+| egress-growth-source-plus-transcode-dual-mixed | 1-per-group | 1 | 6 | 211,236 | 204,526.00 | 3,183 | 43,099 | 1,150 | 237.18 | 300.81 |
+| egress-growth-source-plus-transcode-dual-mixed | 5-per-group | 1 | 30 | 521,144 | 505,920.67 | 6,103 | 43,627 | 16,472 | 301.78 | 358.17 |
+| egress-growth-source-plus-transcode-dual-mixed | 10-per-group | 1 | 60 | 766,752 | 743,404.00 | 6,394 | 43,308 | 32,087 | 344.22 | 412.62 |
+| egress-growth-hevc-bridge | 1-per-group | 1 | 1 | 110,816 | 109,116.67 | 2,723 | 21,816 | 0 | 143.96 | 180.10 |
+| egress-growth-hevc-bridge | 5-per-group | 1 | 5 | 132,020 | 129,086.67 | 4,972 | 21,747 | 0 | 150.49 | 186.52 |
+| egress-growth-hevc-bridge | 10-per-group | 1 | 10 | 136,100 | 135,663.33 | 6,296 | 21,874 | 0 | 154.50 | 202.32 |
+
+No negative results (ring overflows, AVIO stalls beyond expected transcode
+back-pressure, or unbounded growth) surfaced in this pass — RSS scales
+roughly linearly with output count within each scenario family, and the two
+highest-RSS scenarios (`egress-growth-transcode-dual-mixed`,
+`egress-growth-source-plus-transcode-dual-mixed`) are the dual-transcode
+cases, consistent with running two independent transcoder stages per group.
+Commit: 39685ea3. Artifacts:
+
+- `.local/artifacts/resource-sweep/resource-sweep-results.json`
+- `.local/artifacts/resource-sweep/resource-sweep-results.csv`
+- `.local/artifacts/resource-sweep/resource-sweep-samples.jsonl`
+- `.local/artifacts/resource-sweep/mediamtx.log`
+- `.local/artifacts/resource-sweep/restream.log`
+- `.local/artifacts/latest/resource-sweep.json`
 
 ### Internal video-preset rollout RSS baseline — 2026-07-10
 

@@ -56,6 +56,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 07:40 Q-004 DONE [codex]](#2026-07-18-0740-q-004-done-codex)
 - [2026-07-18 08:10 Q-005 DONE [codex]](#2026-07-18-0810-q-005-done-codex)
 - [2026-07-18 08:35 Q-007 DONE [codex]](#2026-07-18-0835-q-007-done-codex)
+- [2026-07-18 09:10 Q-006 DONE [codex]](#2026-07-18-0910-q-006-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1211,3 +1212,37 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   is itself the useful output (confidence that the map isn't overclaiming
   gate coverage), matching the "documented rejection is a valid
   completion" pattern already established for Q-010-style tasks.
+
+## 2026-07-18 09:10 Q-006 DONE [codex]
+- What: built `restream`+`test_harness` via
+  `scripts/build/bench-harness.sh`, confirmed the host idle
+  (`pgrep -x restream; pgrep -x mediamtx; pgrep -x ffmpeg` all empty), then
+  ran `scripts/build/resource-limit.sh target/bench/test_harness
+  resource-sweep` serially. The harness produced 42 scenario/label
+  aggregates spanning empty-baseline, single-ingest, ingest-growth (1/3/5
+  pipelines, same and mixed codec), and egress-growth families (source-only,
+  source+SRT, transcode, transcode+SRT, dual-transcode, dual-transcode+SRT,
+  HEVC bridge) at 1/5/10 outputs per group. Recorded all 42 rows plus a
+  5-row representative summary into
+  `docs/agent-guidance/quality/baselines.md` under a new "Resource-sweep
+  baseline — 2026-07-18" subsection (inserted before the existing
+  "Historical reference — 2026-06-27" section), and seeded the top-level
+  "Resource ledger" table's placeholder row with 5 of those cases. This
+  harness mode does not emit a "blocked writes" metric, so that column is
+  marked "not measured by this harness mode" rather than left blank or
+  invented.
+- Gates: `node scripts/check/docs.mjs` (Markdown touched) — pass.
+- Commit: this commit (baselines.md + journal + backlog doc update only).
+- Follow-ups: none. A future perf-sweep item could add a dedicated
+  blocked-write counter to `resource-sweep` mode if that signal becomes
+  needed; not filed speculatively since no current backlog item calls for
+  it.
+- Notes: RSS scales roughly linearly with output count within each scenario
+  family; the two dual-transcode scenarios are the clear top of the range
+  (up to ~766 MB RSS at 60 outputs), consistent with running two
+  independent transcoder stages per group rather than indicating a leak.
+  No ring overflows or unexpected AVIO stalls observed. This baseline
+  supersedes nothing from the 2026-06-27 pass (different measurement axis:
+  scale-by-output-count here vs. the fixed 15-case sizing-cut comparison
+  there) — both sections are kept per `baselines.md`'s "never overwrite
+  historical sections, add new dated rows" rule.

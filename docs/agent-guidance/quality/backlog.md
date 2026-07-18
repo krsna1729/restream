@@ -350,7 +350,11 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: the 2026-06-27 memory-optimization pass cut ~205 MB RSS across 15
   scale cases; without a refreshed baseline, regressions of that work are
   invisible.
-- Status: open (Filed: 2026-07-03 by bootstrap)
+- Status: done (2026-07-18) — ran `resource-sweep` on an idle host, recorded
+  all 42 scenario/label aggregates plus a 5-row top-level summary in
+  `baselines.md`; RSS scales roughly linearly with output count per
+  scenario family, no ring overflows or unexpected AVIO stalls; see journal
+  2026-07-18 09:10 Q-006 DONE.
 
 ### Q-007 [groom] [sonnet] Diff the stage proof map against the fast gate
 - Goal: every current rule claimed in `docs/stage-boundary-proof-map.md`
