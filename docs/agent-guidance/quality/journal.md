@@ -82,6 +82,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 01:20 HUNT STATUS-CPU-AFFINITY-OVERFLOW FIXED [codex]](#2026-07-19-0120-hunt-status-cpu-affinity-overflow-fixed-codex)
 - [2026-07-19 02:00 HUNT HLS-PREVIEW-CODEC-LEVEL-DEFAULT FIXED [codex]](#2026-07-19-0200-hunt-hls-preview-codec-level-default-fixed-codex)
 - [2026-07-19 02:20 HUNT INGEST-SECURITY-VALIDATE-BRANCHES DONE [codex]](#2026-07-19-0220-hunt-ingest-security-validate-branches-done-codex)
+- [2026-07-19 02:35 HUNT SETTINGS-BACKEND-POLICY-FALLBACK DONE [codex]](#2026-07-19-0235-hunt-settings-backend-policy-fallback-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2643,3 +2644,41 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   `crate::domain::transcode_profile`, already-hunted per the prior
   `TRANSCODE-PROFILE-VALIDATION-BOUNDARIES` entry, ruling out),
   `settings.rs` (140/2) — not yet ratio-scanned in depth.
+
+## 2026-07-19 02:35 HUNT SETTINGS-BACKEND-POLICY-FALLBACK DONE [codex]
+
+- Scope: `src/application/settings.rs` (140 lines, 2 existing tests).
+  `load_settings_snapshot` is thin cross-source orchestration delegating
+  to already-hunted/well-tested loaders (`load_recording_settings`,
+  `load_global_srt_ingest_config`, `crate::media::profiles::
+  current_effective`, `IngestSecurityService::get_config`), already
+  covered end-to-end by its one integration test. The undertested
+  surface was `load_backend_policy`'s own fallback chain
+  (`.ok().flatten().and_then(...).unwrap_or(default_policy)`): only the
+  "valid persisted JSON present" branch had a test; the "nothing
+  persisted," "persisted value isn't valid JSON," and "persisted JSON
+  parses but isn't the right shape" branches were all unexercised.
+- Finding: no bug — all three fallback branches correctly resolve to the
+  caller-supplied default, exactly as the `.ok()`/`.flatten()`/
+  `.and_then()` chain implies. Coverage gap, not a defect.
+- Added regression coverage (3 new tests): no meta row for the policy
+  key at all; a meta row present but containing invalid JSON syntax
+  (`"{not valid json"`); and a meta row present with syntactically valid
+  but wrong-shaped JSON (a JSON array instead of the expected object) —
+  all three assert the result equals the caller's `default_policy`
+  rather than partially applying or panicking.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib settings::`
+  — 10/10 pass (3 new plus 2 pre-existing in `application::settings`,
+  plus 5 unrelated pre-existing `api::settings` tests sharing the same
+  module-name filter). `scripts/build/resource-limit.sh cargo clippy
+  --lib --benches -- -D warnings` — clean. `cargo fmt --all` — no
+  changes beyond the new tests; `cargo fmt --all --check` — clean.
+- Commit: `df977f2d` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: continuing the open-ended scan. Remaining unswept areas in
+  `src/application/`, largest-first: `ingest.rs` (923/12),
+  `reconcile.rs` (648/12), `egress.rs` (549/7), `recording.rs` (470/8),
+  `srt_ingest.rs` (357/5). All files under ~200 lines in
+  `src/application/` have now been ratio-scanned and either hunted or
+  ruled out this session.
