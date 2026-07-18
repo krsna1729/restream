@@ -62,6 +62,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 15:38 AVIO-LOOM DONE [codex]](#2026-07-18-1538-avio-loom-done-codex)
 - [2026-07-18 16:20 HUNT RTMP-EGRESS-PERCENT-DECODE DONE [codex]](#2026-07-18-1620-hunt-rtmp-egress-percent-decode-done-codex)
 - [2026-07-18 16:45 HUNT SRT-MONITOR-OVERFLOW DONE [codex]](#2026-07-18-1645-hunt-srt-monitor-overflow-done-codex)
+- [2026-07-18 17:20 HUNT ENGINE-SNAPSHOTS-POISON DONE [codex]](#2026-07-18-1720-hunt-engine-snapshots-poison-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1514,3 +1515,63 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   list (still open, not yet investigated): `engine_snapshots.rs` (68.59%,
   "snapshot error branches"), `mpegts_probe.rs` (72.92%, "probe/reporting
   paths").
+
+## 2026-07-18 17:20 HUNT ENGINE-SNAPSHOTS-POISON DONE [codex]
+- What: continued "the hunting" against the next coverage-map candidate,
+  `src/media/engine_snapshots.rs` (68.59% line coverage, annotated "snapshot
+  error branches"). Read the file in full: it's mostly defensive plumbing
+  (`Option`/`HashMap` lookups) with no obvious bug surface, so rather than
+  write coverage-padding tests I looked for a genuine untested behavior.
+  Found one: `active_egress_diag_snapshots` reads `egress.phase`,
+  `.target_addr`, and `.last_error` — all `std::sync::Mutex` — via the
+  codebase's standard poison-recovery idiom
+  `.lock().unwrap_or_else(|e| e.into_inner())`, and
+  `active_ingest_diag_snapshot` does the same for `.keyframe_times`. None of
+  it had a dedicated regression test proving the recovery path actually
+  works for these fields. Two existing tests
+  (`stale_egress_error_cannot_poison_replacement_attempt`,
+  `stale_ingest_disconnect_cannot_poison_replacement_attempt`) use "poison"
+  in their names but — confirmed by reading their full bodies — test a
+  different concept (a superseded attempt ID clobbering a replacement's
+  state), not real mutex lock poisoning, so this was a genuine gap, not
+  already-covered ground.
+  Added `active_egress_diag_snapshots_recovers_from_poisoned_locks` in
+  `src/media/engine_tests.rs`, following the poison-test idiom established
+  in `src/media/avio.rs`'s and `src/media/ring_buffer_tests.rs`'s own test
+  modules (`EXPECTED_PANIC_HOOK_LOCK` + `ScopedSilentPanicHook` to suppress
+  the intentional panic's default backtrace noise). That idiom is defined
+  per-test-module in this codebase rather than shared, so a third copy was
+  added locally in `engine_tests.rs` rather than exporting the existing ones
+  out of `avio.rs`. The test registers a real egress attempt, clones its
+  `phase`/`target_addr`/`last_error` `Arc<Mutex<_>>` handles, poisons each
+  from a separate panicking `std::thread::spawn` (one of them also mutates
+  the guarded value before panicking, so the recovery path is observably
+  carrying the poisoned-in value forward, not silently resetting it), then
+  calls `active_egress_diag_snapshots` and asserts it returns the egress
+  with the correct recovered `target_addr` instead of panicking or dropping
+  the entry.
+  Outcome: this did not find a new bug — the poison-recovery idiom was
+  already correct everywhere it's used here, consistent with it being a
+  previously-fixed pattern (per `ring_buffer_tests.rs`'s
+  `reader_drop_cleans_up_on_poisoned_mutex` comment referencing an earlier
+  fix in `ring_buffer.rs`). This closes a real coverage/proof gap on
+  AGENTS.md's unconditional invariant ("No internal or external failure
+  path may crash the engine; isolate faults and surface errors") rather
+  than fixing a fresh defect, and is recorded as such rather than inflated
+  into a bug find.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  active_egress_diag_snapshots_recovers` — 1/1 pass.
+  `scripts/build/resource-limit.sh cargo test --lib media::engine::tests::`
+  — 121/121 pass. `cargo fmt --all --check` — clean.
+  `scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings` —
+  clean. Broadened to full `scripts/build/resource-limit.sh cargo test`
+  since the change touches a cross-cutting mutex-poison-recovery contract
+  used by multiple `engine.rs` snapshot paths, not one isolated file — 1108
+  lib tests + 135 + 109 + 21 + 14 + 18 + 23 + 4 + 2 + 10 + 14 integration
+  tests all passed, 0 failed.
+- Commit: this commit (`src/media/engine_tests.rs`, journal).
+- Follow-ups: none filed. `mpegts_probe.rs` (72.92%, "probe/reporting
+  paths") remains the next open candidate on the coverage-map lead list and
+  has not yet been investigated.
+- Notes: continuing "the hunting" per the user's "you go ahead with the
+  hunting" instruction.
