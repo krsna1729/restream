@@ -54,6 +54,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 04:10 Q-003 STARTED [codex]](#2026-07-18-0410-q-003-started-codex)
 - [2026-07-18 06:15 Q-003 AVIO-FIX DONE [codex]](#2026-07-18-0615-q-003-avio-fix-done-codex)
 - [2026-07-18 07:40 Q-004 DONE [codex]](#2026-07-18-0740-q-004-done-codex)
+- [2026-07-18 08:10 Q-005 DONE [codex]](#2026-07-18-0810-q-005-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1116,3 +1117,38 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   not just a coverage gap) that the adversarial sweep goal explicitly asks
   to fix and regression-test in place, rather than just filing it as a
   separate follow-up item.
+
+## 2026-07-18 08:10 Q-005 DONE [codex]
+- What: baselined all four live resilience-contract harness fault modes
+  serially on an idle host (`pgrep -x restream; pgrep -x mediamtx; pgrep -x
+  ffmpeg` confirmed empty before the run), built once via
+  `scripts/build/resource-limit.sh cargo build --profile bench --bin
+  test_harness` and run as `target/release/test_harness <mode>` per the
+  documented `bench`-profile-output quirk (AGENTS.md: `--profile bench`
+  populates `target/release/`, not `target/bench/`, unless run through
+  `scripts/build/bench-harness.sh`). Results, parsed from each mode's
+  `.local/artifacts/latest/<mode>.json`:
+  - `fault.resilience`: `passed: true`, 17/17 sub-tests passed.
+  - `fault.egress-retry`: `passed: true`, 4/4 sub-tests passed.
+  - `fault.output-stall`: `passed: true`, 2/2 sub-tests passed
+    (`rtmp-egress-sink-stalls`, `rtmp-stalled-sink-isolation-under-many-
+    outputs` — the latter's raw diagnostic snippet shows `"status":
+    "stalled"`, which is the asserted expected state of the isolated sink
+    under test, not a failure; its own `passed` field is `true`).
+  - `recovery`: `passed: true`, 7/7 sub-tests passed (`transient-rtmp-drop-
+    preserves-egress`, `transient-srt-drop-preserves-egress`, `rapid-srt-
+    replacement-preserves-egress`, `egress-retry-survives-transient-
+    ingest-gap`, `hls-put-timeout-recovers-after-restart`, `rtmp-sink-
+    flaps-surface-output-instability`, `srt-sink-flaps-surface-output-
+    instability`).
+  No failures or flakes found across any of the 30 total sub-tests in this
+  baseline run — nothing to file as a follow-up item per the goal's "any
+  failure or flake filed as its own item" clause.
+- Gates: the four `test_harness` fault/recovery modes themselves are the
+  gate for this item (measurement-only task, no source files modified).
+- Commit: this commit (journal + backlog doc update only).
+- Follow-ups: none — clean baseline across all four modes.
+- Notes: unlike Q-003/Q-004/Q-015/Q-016, this proof/measurement pass did
+  not surface a bug — the live resilience contract is green. Recorded here
+  as the known-good baseline the loop can now diff future runs against to
+  detect regressions.

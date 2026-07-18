@@ -334,7 +334,10 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   serially, idle host.
 - Context: these modes are the live resilience contract; the loop needs a
   known-green baseline before it can treat a failure as a regression signal.
-- Status: open (Filed: 2026-07-03 by bootstrap)
+- Status: done (2026-07-18) — all four modes green on an idle host:
+  `fault.resilience` 17/17, `fault.egress-retry` 4/4, `fault.output-stall`
+  2/2, `recovery` 7/7; no failures or flakes found, nothing to file; see
+  journal 2026-07-18 08:10 Q-005 DONE.
 
 ### Q-006 [efficiency] [sonnet] Seed the resource baseline table
 - Goal: RSS, ring payload, and AVIO high-water marks from a
