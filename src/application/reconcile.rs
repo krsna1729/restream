@@ -290,6 +290,66 @@ mod tests {
     }
 
     #[test]
+    fn start_action_is_not_applicable_when_already_active_or_not_desired_running() {
+        assert_eq!(
+            decide_output_start_action(
+                DesiredOutputState::Running,
+                true,
+                true,
+                None,
+                test_retry_policy(),
+            ),
+            OutputStartAction::NotApplicable
+        );
+        assert_eq!(
+            decide_output_start_action(
+                DesiredOutputState::Stopped,
+                false,
+                true,
+                None,
+                test_retry_policy(),
+            ),
+            OutputStartAction::NotApplicable
+        );
+    }
+
+    #[test]
+    fn start_action_starts_now_without_prior_failure() {
+        let action = decide_output_start_action(
+            DesiredOutputState::Running,
+            false,
+            true,
+            None,
+            test_retry_policy(),
+        );
+
+        assert_eq!(action, OutputStartAction::StartNow);
+    }
+
+    #[test]
+    fn start_action_starts_now_once_backoff_window_elapses() {
+        let action = decide_output_start_action(
+            DesiredOutputState::Running,
+            false,
+            true,
+            Some(OutputFailureWindow {
+                retries: 2,
+                elapsed_ms: 20_000,
+            }),
+            test_retry_policy(),
+        );
+
+        assert_eq!(action, OutputStartAction::StartNow);
+    }
+
+    #[test]
+    fn backoff_ms_clamps_retries_beyond_shift_limit() {
+        let policy = test_retry_policy();
+
+        assert_eq!(policy.backoff_ms(16), policy.backoff_ms(u32::MAX));
+    }
+
+    #[test]
     fn start_action_marks_failed_after_max_retries() {
         let action = decide_output_start_action(
             DesiredOutputState::Running,
@@ -327,6 +387,22 @@ mod tests {
         assert_eq!(
             decide_output_stop_action(DesiredOutputState::Stopped, true, true),
             OutputStopAction::StopRequested
+        );
+    }
+
+    #[test]
+    fn stop_action_keeps_running_by_default() {
+        assert_eq!(
+            decide_output_stop_action(DesiredOutputState::Running, false, false),
+            OutputStopAction::KeepRunning
+        );
+        assert_eq!(
+            decide_output_stop_action(DesiredOutputState::Running, true, true),
+            OutputStopAction::KeepRunning
+        );
+        assert_eq!(
+            decide_output_stop_action(DesiredOutputState::Stopped, false, true),
+            OutputStopAction::KeepRunning
         );
     }
 
@@ -643,6 +719,25 @@ mod tests {
             vec![RecordingCommand::Stop {
                 pipeline_id: "pipeline-1".to_string(),
             }]
+        );
+    }
+
+    #[tokio::test]
+    async fn recording_reconcile_plan_propagates_pipeline_store_error() {
+        let engine = MediaEngine::new();
+        let catalog = FakePipelineStore {
+            pipelines: Vec::new(),
+            error: Some("catalog unavailable"),
+        };
+        let store = FakeMetaStore {
+            values: Mutex::new(HashMap::new()),
+        };
+
+        let result = build_recording_reconcile_plan(&engine, &catalog, &store, 0).await;
+
+        assert_eq!(
+            result.err().map(|e| e.to_string()),
+            Some("catalog unavailable".to_string())
         );
     }
 }
