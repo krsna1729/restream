@@ -70,6 +70,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 20:45 HUNT FFMPEG-STAGE-PLAN-CODEC-DEFAULT DONE [codex]](#2026-07-18-2045-hunt-ffmpeg-stage-plan-codec-default-done-codex)
 - [2026-07-18 21:15 HUNT HLS-PREVIEW-GRAPH-CANCEL DONE [codex]](#2026-07-18-2115-hunt-hls-preview-graph-cancel-done-codex)
 - [2026-07-18 21:45 HUNT SRT-STREAM-ID-ADVERSARIAL DONE [codex]](#2026-07-18-2145-hunt-srt-stream-id-adversarial-done-codex)
+- [2026-07-18 22:05 HUNT STAGE-METRICS-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2205-hunt-stage-metrics-counter-boundaries-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1984,4 +1985,59 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   behavior and the double-strip-query-after-decode interaction are now
   pinned by tests; no fix is warranted without a protocol-compatibility
   decision from a human.
+- Notes: none.
+
+## 2026-07-18 22:05 HUNT STAGE-METRICS-COUNTER-BOUNDARIES DONE [codex]
+
+- What: swept the remaining low-coverage lead list
+  (`stage_registry_access.rs`, `engine_hls.rs`, `snapshots.rs`,
+  `stage_metrics.rs`, `pipe_metrics.rs`, `ingest_auth.rs`) for the next
+  hunt target. Ruled out two before writing anything: `ingest_auth.rs` is
+  a pure trait/type-definition file with zero branching logic, nothing to
+  adversarially test; `stage_registry_access.rs` is thin async CRUD glue
+  over engine registries whose one piece of real logic — SRT egress muxer
+  shard assignment/release — delegates to `SrtMuxerShardPool` in
+  `engine_registries.rs`, which `engine_stage_tests.rs` already covers
+  exhaustively, including a proptest model-based shard-lifecycle test.
+  Picked `src/media/stage_metrics.rs` (106 lines, zero dedicated tests):
+  lock-free `AtomicU64` throughput counters updated on the packet hot path
+  and read by the `/graph` operator-visibility endpoint. Despite being
+  hot-path code (no benchmark needed per Hot-Path Rules — plain atomic
+  `fetch_add`/`load`, no new allocation, logging, or syscalls added; tests
+  are `#[cfg(test)]`-gated and never compiled into the hot path itself).
+  Added a `#[cfg(test)] mod tests` block covering: zeroed-snapshot/
+  divide-by-zero guard (`avg_us_per_packet` must be `0.0`, not `NaN`, when
+  `packets_in == 0`); independent accumulation of `record_in`/
+  `record_out`; `record_in_batch` combining with individual `record_in`
+  calls; a `record_in_batch(0, bytes)` case proving the API has no
+  invariant tying packet count to byte count (zero-packet batches with
+  nonzero bytes are accepted, and the average-guard keys off
+  `packets_in`, not `bytes_in`); and `record_processing`'s contribution to
+  `avg_us_per_packet`.
+  Highest-value case: `counters_wrap_on_u64_overflow_without_panicking`,
+  pinning that `AtomicU64::fetch_add` wraps unconditionally on overflow
+  (unlike checked arithmetic, atomic fetch-add never panics, even in debug
+  builds) — seeded `packets_in`/`bytes_in` at `u64::MAX` via the public
+  atomic fields and confirmed `record_in` wraps to `0`/`9` rather than
+  aborting the stage. This is the resource-exhaustion/boundary-value
+  category from the standing sweep directive: a stage that has processed
+  `u64::MAX` packets (astronomically unlikely in practice, but the counter
+  type makes no other guarantee) must keep running, not panic the OS
+  thread it counts on.
+  Did not pursue `elapsed`-dependent branches (`uptime_secs`,
+  `packets_per_sec`'s zero-elapsed guard) — `start_instant` is a real
+  `std::time::Instant`, not a mockable clock, so forcing `elapsed == 0.0`
+  deterministically isn't possible without either a wall-clock sleep-based
+  flaky test or introducing a clock abstraction, and the guard clause
+  itself is trivial (single comparison, no parsing/adversarial-input
+  surface). Left `engine_hls.rs`, `snapshots.rs`, and `pipe_metrics.rs` on
+  the candidate list for the next iteration.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib stage_metrics`
+  — 6/6 new tests pass. `scripts/build/resource-limit.sh cargo clippy
+  --lib --benches -- -D warnings` — clean. `cargo fmt --all --check` —
+  clean. Pure counter-struct module, not on the Inner Loop table's
+  lifecycle-sensitive list and no production code changed — did not
+  broaden to `scripts/check/concurrency/contract.sh` or full `cargo test`.
+- Commit: `8d166d0d` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed.
 - Notes: none.
