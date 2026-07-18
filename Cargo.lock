@@ -2150,6 +2150,7 @@ dependencies = [
  "libsqlite3-sys",
  "loom",
  "memchr",
+ "percent-encoding",
  "pkg-config",
  "proptest",
  "pulp",

@@ -1225,6 +1225,135 @@ fn parse_rtmp_url_ipv4_unchanged() {
     assert!(!parts.tls);
 }
 
+// --- Adversarial: percent-encoded app/stream key must reach the
+// destination RTMP server decoded, not still escaped ---
+// (found via a "hunting" pass on egress_transport.rs — path_segments()
+// returns raw percent-encoded segments; forwarding them unescaped as the
+// AMF-level app/stream key would corrupt any push target whose key
+// contains a URL-reserved character.)
+
+#[test]
+fn parse_rtmp_url_percent_encoded_stream_key_slash() {
+    // %2F inside a single path segment must decode to a literal '/' in the
+    // stream key, not stay as the three-character escape.
+    let parts = parse_rtmp_url("rtmp://host/live/part1%2Fpart2").unwrap();
+    assert_eq!(parts.app, "live");
+    assert_eq!(parts.stream_key, "part1/part2");
+}
+
+#[test]
+fn parse_rtmp_url_percent_encoded_app_and_space() {
+    let parts = parse_rtmp_url("rtmp://host/my%20app/key%2Bvalue").unwrap();
+    assert_eq!(parts.app, "my app");
+    assert_eq!(parts.stream_key, "key+value");
+}
+
+#[test]
+fn parse_rtmp_url_invalid_percent_sequence_does_not_panic() {
+    // A stray '%' not followed by two hex digits is invalid percent-encoding;
+    // decoding must degrade gracefully (lossy) rather than panic.
+    let parts = parse_rtmp_url("rtmp://host/live/key%zz").unwrap();
+    assert_eq!(parts.stream_key, "key%zz");
+}
+
+#[test]
+fn parse_rtmp_url_trailing_slash_yields_trailing_slash_key() {
+    // Documents current behaviour: a trailing path separator becomes a
+    // trailing '/' in the stream key rather than being trimmed or rejected.
+    let parts = parse_rtmp_url("rtmp://host/live/key/").unwrap();
+    assert_eq!(parts.app, "live");
+    assert_eq!(parts.stream_key, "key/");
+}
+
+#[test]
+fn parse_rtmp_url_ignores_query_and_fragment() {
+    let parts = parse_rtmp_url("rtmp://host/live/key?token=abc#frag").unwrap();
+    assert_eq!(parts.app, "live");
+    assert_eq!(parts.stream_key, "key");
+}
+
+#[test]
+fn parse_rtmp_url_drops_embedded_userinfo() {
+    // Credentials embedded in the URL (rtmp://user:pass@host/...) must not
+    // leak into app/stream_key and must not change the resolved host.
+    let parts = parse_rtmp_url("rtmp://user:pass@host/live/key").unwrap();
+    assert_eq!(parts.host, "host");
+    assert_eq!(parts.app, "live");
+    assert_eq!(parts.stream_key, "key");
+}
+
+#[test]
+fn parse_rtmp_url_rejects_empty_authority() {
+    assert!(parse_rtmp_url("rtmp:///live/key").is_none());
+}
+
+#[test]
+fn parse_rtmp_url_rejects_out_of_range_port() {
+    assert!(parse_rtmp_url("rtmp://host:999999/live/key").is_none());
+}
+
+#[test]
+fn parse_rtmp_url_rejects_unterminated_ipv6_literal() {
+    assert!(parse_rtmp_url("rtmp://[::1/live/key").is_none());
+}
+
+#[test]
+fn parse_rtmp_url_case_insensitive_scheme() {
+    let parts = parse_rtmp_url("RTMP://host/live/key").unwrap();
+    assert!(!parts.tls);
+    let parts = parse_rtmp_url("RTMPS://host/live/key").unwrap();
+    assert!(parts.tls);
+}
+
+#[test]
+fn parse_rtmp_url_trims_surrounding_whitespace() {
+    let parts = parse_rtmp_url(" rtmp://host/live/key ").unwrap();
+    assert_eq!(parts.host, "host");
+    assert_eq!(parts.app, "live");
+    assert_eq!(parts.stream_key, "key");
+}
+
+// --- format_host_port: must bracket bare IPv6 literals for connect-string
+// use, but never double-bracket or mangle plain hostnames/IPv4 ---
+
+#[test]
+fn format_host_port_plain_hostname() {
+    assert_eq!(
+        super::egress_transport::format_host_port("example.com", 1935),
+        "example.com:1935"
+    );
+}
+
+#[test]
+fn format_host_port_ipv4_literal() {
+    assert_eq!(
+        super::egress_transport::format_host_port("192.168.1.1", 1935),
+        "192.168.1.1:1935"
+    );
+}
+
+#[test]
+fn format_host_port_bare_ipv6_gets_bracketed() {
+    // parse_rtmp_url strips brackets into `host`; format_host_port must
+    // re-add them so lookup_host doesn't misparse the embedded colons.
+    assert_eq!(
+        super::egress_transport::format_host_port("::1", 1935),
+        "[::1]:1935"
+    );
+    assert_eq!(
+        super::egress_transport::format_host_port("2001:db8::1", 443),
+        "[2001:db8::1]:443"
+    );
+}
+
+#[test]
+fn format_host_port_already_bracketed_is_not_double_wrapped() {
+    assert_eq!(
+        super::egress_transport::format_host_port("[::1]", 1935),
+        "[::1]:1935"
+    );
+}
+
 // --- FLV video meta: malformed / truncated / unknown codec ---
 
 #[test]

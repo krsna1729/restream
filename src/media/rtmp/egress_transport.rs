@@ -1,6 +1,7 @@
 use crate::domain::output_spec::OutputUrlScheme;
 use crate::media::engine::PublisherQuality;
 use crate::media::tcp_stats::collect_rtmp_sender_stats;
+use percent_encoding::percent_decode_str;
 use reqwest::Url;
 use std::io;
 use std::net::SocketAddr;
@@ -151,7 +152,7 @@ fn configure_rtmp_socket(socket: &TcpSocket, buffer_size: usize) {
     }
 }
 
-fn format_host_port(host: &str, port: u16) -> String {
+pub(super) fn format_host_port(host: &str, port: u16) -> String {
     if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]:{port}")
     } else {
@@ -246,12 +247,20 @@ pub(super) fn parse_rtmp_url(url: &str) -> Option<RtmpUrlParts> {
     if app.is_empty() || stream_key.is_empty() {
         return None;
     }
+    // Path segments are percent-encoded as parsed; decode them so an
+    // app/stream key containing URL-reserved characters (e.g. a stream key
+    // with a literal '/' encoded as %2F) reaches the destination RTMP
+    // server as the operator intended, not still escaped.
+    let app = percent_decode_str(app).decode_utf8_lossy().into_owned();
+    let stream_key = percent_decode_str(&stream_key)
+        .decode_utf8_lossy()
+        .into_owned();
 
     Some(RtmpUrlParts {
         host,
         port,
-        app: app.to_string(),
-        stream_key: stream_key.to_string(),
+        app,
+        stream_key,
         tls,
     })
 }

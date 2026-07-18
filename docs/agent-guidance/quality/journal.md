@@ -60,6 +60,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 09:40 Q-008 DONE [codex]](#2026-07-18-0940-q-008-done-codex)
 - [2026-07-18 10:20 Q-003 DONE [codex]](#2026-07-18-1020-q-003-done-codex)
 - [2026-07-18 15:38 AVIO-LOOM DONE [codex]](#2026-07-18-1538-avio-loom-done-codex)
+- [2026-07-18 16:20 HUNT RTMP-EGRESS-PERCENT-DECODE DONE [codex]](#2026-07-18-1620-hunt-rtmp-egress-percent-decode-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1398,3 +1399,66 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   add a should_panic-style deadlock negative control to any loom test in
   this repo: reproduce this failure mode first before assuming it'll behave
   like a normal catchable panic.
+
+## 2026-07-18 16:20 HUNT RTMP-EGRESS-PERCENT-DECODE DONE [codex]
+- What: open-ended adversarial sweep pass (not a numbered Q-item — the
+  sonnet-tier Q-backlog is exhausted; Q-009/Q-010/Q-012 are `[opus]` and
+  delegated to a separate agent/worktree) targeting
+  `src/media/rtmp/egress_transport.rs`, one of the coverage-map's flagged
+  weak files (`rtmp/egress_transport.rs` 29.84% line coverage, disposition
+  "follow after RTMP session proof" — Q-016 closed that dependency this
+  session). Found and fixed a real correctness bug in `parse_rtmp_url`:
+  `Url::path_segments()` returns segments percent-encoded as parsed, and the
+  function forwarded them straight through as the RTMP `app`/`stream_key`
+  fields sent to the destination server over the wire
+  (`session.request_connection(parts.app.clone())` /
+  `session.request_publishing(parts.stream_key.clone())` in
+  `src/media/rtmp.rs`). Any push target whose stream key legitimately
+  contains a URL-reserved character (e.g. `/`, encoded as `%2F` so the URL
+  parser doesn't treat it as a path separator) would reach the far end still
+  escaped — corrupting the key and breaking the push. Verified the actual
+  parsing behavior first via a throwaway probe test (`Url::parse` on a dozen
+  adversarial inputs — leading/trailing whitespace, mixed-case scheme, empty
+  authority, out-of-range port, unterminated IPv6 literal, embedded
+  userinfo, percent-encoded segments, trailing slash) before writing any
+  fix, so the new tests assert real crate behavior rather than assumptions.
+  Fix: percent-decode `app` and the joined `stream_key` with
+  `percent_encoding::percent_decode_str(..).decode_utf8_lossy()` (lossy, not
+  fallible — invalid percent-sequences or non-UTF8 bytes must degrade to
+  replacement characters, not panic or reject an otherwise-valid URL).
+  `percent-encoding` was already in `Cargo.lock` as a transitive dependency
+  of `url`; promoted it to a direct dependency (`Cargo.toml`) since the code
+  now calls it directly. Also promoted `format_host_port` (same file) from
+  private to `pub(super)` — it had zero test coverage and its bracket-vs-no-
+  bracket branching for IPv6 literals is exactly the kind of logic this
+  sweep exists to catch; testing it needed visibility beyond the file.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib rtmp` — 109/109
+  pass (12 new `parse_rtmp_url_*` cases: percent-decoded slash/space/plus,
+  invalid percent-sequence doesn't panic, trailing-slash behavior
+  documented, query/fragment stripped, userinfo dropped without leaking,
+  empty authority / out-of-range port / unterminated IPv6 all rejected
+  cleanly, case-insensitive scheme, whitespace trimmed; 4 new
+  `format_host_port_*` cases: plain hostname, IPv4 literal, bare IPv6 gets
+  bracketed, already-bracketed IPv6 not double-wrapped). `cargo fmt --all
+  --check` — clean. `scripts/build/resource-limit.sh cargo clippy --lib --
+  -D warnings` — clean. Broadened to full
+  `scripts/build/resource-limit.sh cargo test` since this changes
+  `Cargo.toml`/`Cargo.lock` (a shared-contract surface, not just one
+  module) — 1106 lib tests + all integration/doctest binaries, 0 failed.
+- Commit: this commit (`Cargo.toml`, `Cargo.lock`,
+  `src/media/rtmp/egress_transport.rs`, `src/media/rtmp/tests.rs`, journal).
+- Follow-ups: none filed. `rtmp/egress_transport.rs`'s remaining untested
+  surface (`connect_rtmp_egress_stream`, `connect_tcp_with_options`,
+  `rtmp_sender_quality`'s TCP-stats branch) needs a live socket/TLS
+  handshake or real `/proc` TCP info to exercise meaningfully — not a good
+  fit for a crafted-bytes unit test; would need the live harness
+  (`test_harness` correctness modes) or an explicit design note if picked
+  up later.
+- Notes: this is "the hunting" workstream per the user's explicit
+  instruction to continue open-ended adversarial sweep work beyond the
+  closed Q-backlog while a separate opus-tier agent handles
+  Q-009/Q-010/Q-012 in `.local/worktrees/perf-sweep-opus-20260718`. Next
+  candidates from the same coverage-map lead list (still open, not yet
+  investigated): `srt_monitor.rs` (43.75%), `engine_snapshots.rs` (68.59%,
+  "snapshot error branches"), `mpegts_probe.rs` (72.92%, "probe/reporting
+  paths").
