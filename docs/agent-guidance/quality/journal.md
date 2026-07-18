@@ -79,6 +79,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 00:10 HUNT TRANSCODE-PROFILE-VALIDATION-BOUNDARIES DONE [codex]](#2026-07-19-0010-hunt-transcode-profile-validation-boundaries-done-codex)
 - [2026-07-19 00:35 HUNT API-VIEW-MODELS-FORMATTING-HELPERS DONE [codex]](#2026-07-19-0035-hunt-api-view-models-formatting-helpers-done-codex)
 - [2026-07-19 01:00 HUNT RESOURCE-MAP-JSON-SHAPING-HELPERS DONE [codex]](#2026-07-19-0100-hunt-resource-map-json-shaping-helpers-done-codex)
+- [2026-07-19 01:20 HUNT STATUS-CPU-AFFINITY-OVERFLOW FIXED [codex]](#2026-07-19-0120-hunt-status-cpu-affinity-overflow-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2452,3 +2453,59 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   `hls_preview.rs`, `recording.rs`, `srt_ingest.rs`, `ingest_security.rs`,
   `models.rs`, `settings.rs`, `graph.rs`) and `src/api_runtime_views/`
   `status.rs` (833 lines/5 tests) worth a closer look next.
+
+## 2026-07-19 01:20 HUNT STATUS-CPU-AFFINITY-OVERFLOW FIXED [codex]
+
+- Scope: continued into `src/api_runtime_views/status.rs` (833 lines, 5
+  existing tests). Most of the file is `output_status`/`health_snapshot`/
+  `health_summary_snapshot`, thin async orchestration over live
+  `MediaEngine` registries (same shape as the already-ruled-out
+  `telemetry.rs`/`graph.rs`), already covered by two existing lock-ordering
+  regression tests. The file's genuinely undertested surface was its small
+  set of pure, synchronous JSON/parsing helpers: `parse_cpu_list_count`,
+  `parse_cgroup_cpu_max`, and `host_setting_json`.
+- Finding (real bug, not just a gap): `parse_cpu_list_count` computed a
+  CPU-range length as `end - start + 1` with plain (non-checked)
+  arithmetic. `end >= start` was already guaranteed by an earlier check, so
+  the subtraction itself was safe, but the trailing `+ 1` was not: for a
+  range ending at or near `u64::MAX` (e.g. `"0-18446744073709551615"`),
+  `u64::MAX + 1` overflows. Verified with a standalone repro compiled both
+  with and without `debug-assertions`: it panics ("attempt to add with
+  overflow") under debug-assertions — the mode `cargo test` builds in by
+  default — and silently wraps to `Some(0)` in release. In production this
+  parses the kernel-reported `Cpus_allowed_list` from `/proc/self/status`
+  during health-settings reporting, so real-world exploitability is low
+  (the kernel is very unlikely to report a range spanning 2^64 CPUs), but
+  the function has no other input validation boundary and must not panic
+  or silently corrupt its result on any string. Fixed by computing the
+  range length as `(end - start).checked_add(1)?` before folding it into
+  the running `checked_add` total, so an unrepresentable range length now
+  returns `None` (parse failure) instead of panicking or wrapping.
+- Added regression/adversarial coverage: a test pinning the fixed overflow
+  case (`"0-18446744073709551615"` → `None`, not a panic); empty-string and
+  single-element-range (`"5-5"` → `Some(1)`) cases that were previously
+  unexercised boundaries of the same parser; and three new tests for
+  `host_setting_json`'s status derivation — the `current >= required`
+  threshold is inclusive at exactly `required` (`"ok"` at the boundary,
+  `"warning"` one below it), a missing `current` reading reports a distinct
+  `"unknown"` status rather than being conflated with `"warning"` (checked
+  against `required = u64::MAX` to rule out any accidental comparison
+  against the sentinel), and a `None` detail passes through as JSON `null`
+  rather than being coerced to an empty string or omitted.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib status::` —
+  10/10 pass (5 new plus 5 pre-existing) both before and after `cargo fmt
+  --all`. `scripts/build/resource-limit.sh cargo clippy --lib --benches --
+  -D warnings` — clean. `scripts/check/api-contract.sh` — 109/109 contract
+  tests plus the `api-smoke` end-to-end script pass (run because the file
+  lives under `src/api_runtime_views/`, even though this change only
+  touched an internal helper and test-only code, not any public JSON
+  shape).
+- Commit: `51bd88a0` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — the overflow was fixed directly in this commit
+  since it was a small, local, off-hot-path arithmetic correction with an
+  obvious safe fix, not a design question needing a separate backlog item.
+- Notes: continuing the open-ended scan. Remaining unswept areas: most of
+  `src/application/` (`ingest.rs`, `reconcile.rs`, `egress.rs`,
+  `hls_preview.rs`, `recording.rs`, `srt_ingest.rs`, `ingest_security.rs`,
+  `models.rs`, `settings.rs`, `graph.rs`) — none of these have been ratio-
+  scanned yet with the corrected `#[(tokio::)?test]` counting method.
