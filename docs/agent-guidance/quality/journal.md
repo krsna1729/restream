@@ -86,6 +86,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 02:50 HUNT SRT-INGEST-APPCONFIG-FALLBACK DONE [codex]](#2026-07-19-0250-hunt-srt-ingest-appconfig-fallback-done-codex)
 - [2026-07-19 03:05 HUNT RECORDING-SETTINGS-FALLBACK-AND-SHORT-CIRCUIT DONE [codex]](#2026-07-19-0305-hunt-recording-settings-fallback-and-short-circuit-done-codex)
 - [2026-07-19 03:30 HUNT INGEST-AUTH-ASYMMETRY-AND-FILE-INGEST-GAPS DONE [codex]](#2026-07-19-0330-hunt-ingest-auth-asymmetry-and-file-ingest-gaps-done-codex)
+- [2026-07-19 03:55 HUNT RECONCILE-DECISION-BRANCH-COVERAGE DONE [codex]](#2026-07-19-0355-hunt-reconcile-decision-branch-coverage-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2834,3 +2835,49 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Notes: continuing the open-ended scan. Remaining unswept
   `src/application/` files: `reconcile.rs` (648/12), `egress.rs`
   (549/7).
+
+## 2026-07-19 03:55 HUNT RECONCILE-DECISION-BRANCH-COVERAGE DONE [codex]
+
+- Scope: `src/application/reconcile.rs` (648 lines, 12 existing tests)
+  — the pure decision functions (`decide_output_start_action`,
+  `decide_output_stop_action`, `decide_recording_action`,
+  `OutputRetryPolicy::backoff_ms`) plus the async
+  `build_recording_reconcile_plan` orchestrator.
+- Finding: no bug — six coverage gaps, all confirmed correct as
+  designed. `decide_output_start_action`'s `NotApplicable` short-circuit
+  (already-active or not desired-Running) had no test, nor did its
+  plain `StartNow` path with no prior failure, nor the boundary where
+  a `WaitRetry` window has fully elapsed and the action becomes
+  `StartNow` again. `decide_output_stop_action`'s catch-all
+  `KeepRunning` arm — the majority of its match's input space — had
+  zero test coverage; only the two non-default arms were exercised.
+  `OutputRetryPolicy::backoff_ms`'s `retries.min(16)` clamp was never
+  proven to actually cap extreme retry counts. Most notably,
+  `FakePipelineStore` already had an `error: Option<&'static str>`
+  field wired into `list_pipelines`, but no test ever set it to
+  `Some(_)` — the `PipelineStoreError` propagation path through
+  `build_recording_reconcile_plan` was completely unexercised despite
+  the fake being purpose-built for it.
+- Added regression coverage (6 new tests):
+  `start_action_is_not_applicable_when_already_active_or_not_desired_running`,
+  `start_action_starts_now_without_prior_failure`, and
+  `start_action_starts_now_once_backoff_window_elapses` cover the three
+  previously-untested branches of `decide_output_start_action`.
+  `stop_action_keeps_running_by_default` exercises all three inputs
+  that fall through to the `KeepRunning` default arm.
+  `backoff_ms_clamps_retries_beyond_shift_limit` asserts
+  `backoff_ms(16) == backoff_ms(u32::MAX)`, pinning the clamp.
+  `recording_reconcile_plan_propagates_pipeline_store_error` sets
+  `FakePipelineStore.error` and asserts the error message survives
+  through `build_recording_reconcile_plan`.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib reconcile::`
+  — 18/18 pass (6 new plus 12 pre-existing). `scripts/build/resource-limit.sh
+  cargo clippy --lib --benches -- -D warnings` — clean. `cargo fmt --all`
+  — no changes beyond the new tests; `cargo fmt --all --check` — clean.
+  `scripts/check/concurrency/fast.sh` — 135/135 pass (run per the
+  `staged-gate-router`-recommended follow-up for this file).
+- Commit: `ae7c42d3` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: continuing the open-ended scan. Remaining unswept
+  `src/application/` file: `egress.rs` (549/7).
