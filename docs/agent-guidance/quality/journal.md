@@ -84,6 +84,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 02:20 HUNT INGEST-SECURITY-VALIDATE-BRANCHES DONE [codex]](#2026-07-19-0220-hunt-ingest-security-validate-branches-done-codex)
 - [2026-07-19 02:35 HUNT SETTINGS-BACKEND-POLICY-FALLBACK DONE [codex]](#2026-07-19-0235-hunt-settings-backend-policy-fallback-done-codex)
 - [2026-07-19 02:50 HUNT SRT-INGEST-APPCONFIG-FALLBACK DONE [codex]](#2026-07-19-0250-hunt-srt-ingest-appconfig-fallback-done-codex)
+- [2026-07-19 03:05 HUNT RECORDING-SETTINGS-FALLBACK-AND-SHORT-CIRCUIT DONE [codex]](#2026-07-19-0305-hunt-recording-settings-fallback-and-short-circuit-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2731,3 +2732,44 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   `reconcile.rs` (648/12), `egress.rs` (549/7), `recording.rs` (470/8).
   All files under ~400 lines in `src/application/` have now been
   ratio-scanned and either hunted or ruled out this session.
+
+## 2026-07-19 03:05 HUNT RECORDING-SETTINGS-FALLBACK-AND-SHORT-CIRCUIT DONE [codex]
+
+- Scope: `src/application/recording.rs` (470 lines, 8 existing tests).
+  `recording_enabled_meta_key`, `load_recording_enabled`,
+  `load_recording_enabled_map`, and `save_recording_settings` were
+  already fully covered. `spawn_recording_task` and
+  `apply_recording_commands`'s start/stop dispatch are exercised by
+  live-`MediaEngine` lifecycle tests, matching the already-ruled-out
+  "thin async glue" pattern for their happy-path behavior. Two gaps
+  remained: `load_recording_settings`'s malformed-JSON fallback branch
+  had no test (only the "key missing" fallback case existed), and
+  `apply_recording_commands`'s `needs_settings` short-circuit — which
+  skips loading `RecordingSettings` entirely when the command batch
+  contains no `RecordingCommand::Start` — had no test proving the skip
+  actually happens rather than just being incidentally harmless.
+- Finding: no bug — `load_recording_settings` falls back to
+  `RecordingSettings::default()` on malformed JSON exactly like the
+  missing-key case, and `needs_settings` correctly avoids the
+  meta-store call for stop-only batches. Coverage gap, not a defect.
+- Added regression coverage (2 new tests):
+  `load_recording_settings_falls_back_to_default_on_malformed_json`
+  pins the malformed-JSON fallback. `apply_recording_commands_skips_settings_load_when_only_stopping`
+  uses a call-counting `MetaStore` fake (`get_meta` always errors and
+  increments an `AtomicUsize`) dispatched with a `Stop`-only command
+  list, asserting zero `get_meta` calls — proving the short-circuit
+  actually elides the load rather than merely tolerating a failed one.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib recording::`
+  — 39/39 pass (10 in `application::recording`: 2 new plus 8
+  pre-existing; remainder pre-existing `media::recording` tests sharing
+  the module-name filter). `scripts/build/resource-limit.sh cargo
+  clippy --lib --benches -- -D warnings` — clean. `cargo fmt --all` —
+  no changes beyond the new tests; `cargo fmt --all --check` — clean.
+  `scripts/check/concurrency/fast.sh` — 135/135 pass (run per the
+  Inner Loop table's lifecycle-file gate for `recording.rs`).
+- Commit: `4956018a` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: continuing the open-ended scan. Remaining unswept
+  `src/application/` files: `ingest.rs` (923/12), `reconcile.rs`
+  (648/12), `egress.rs` (549/7).
