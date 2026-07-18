@@ -1543,4 +1543,132 @@ mod tests {
         assert_eq!(response[0]["id"], "job-newest");
         assert_eq!(response[1]["id"], "job-other-output");
     }
+
+    #[test]
+    fn human_bytes_stays_in_bytes_below_1024() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn human_bytes_switches_to_kib_at_1024() {
+        assert_eq!(human_bytes(1024), "1.0 KiB");
+    }
+
+    #[test]
+    fn human_bytes_switches_to_mib_at_1048576() {
+        assert_eq!(human_bytes(1024 * 1024), "1.0 MiB");
+    }
+
+    #[test]
+    fn human_bytes_rounds_just_under_a_mib_boundary_to_a_misleading_1024_kib() {
+        // 1048575 bytes is one byte short of the MiB tier, so the tier
+        // selection (`bytes < 1024 * 1024`) picks KiB, but the KiB value
+        // itself rounds to 1024.0 at one decimal place -- rendering
+        // "1024.0 KiB" instead of bumping to "1.0 MiB". This is a real
+        // display quirk of the two-step threshold-then-round design, not a
+        // panic or data-loss bug, so it is pinned rather than "fixed" here.
+        assert_eq!(human_bytes(1024 * 1024 - 1), "1024.0 KiB");
+    }
+
+    #[test]
+    fn human_bytes_has_no_tier_above_mib_and_never_panics_at_u64_max() {
+        let rendered = human_bytes(u64::MAX);
+        assert!(rendered.ends_with(" MiB"));
+        assert!(!rendered.contains("GiB"));
+    }
+
+    #[test]
+    fn human_duration_ms_stays_in_ms_below_1000() {
+        assert_eq!(human_duration_ms(0), "0 ms");
+        assert_eq!(human_duration_ms(999), "999 ms");
+    }
+
+    #[test]
+    fn human_duration_ms_switches_to_seconds_at_1000() {
+        assert_eq!(human_duration_ms(1000), "1.0 s");
+    }
+
+    #[test]
+    fn human_duration_ms_switches_to_minutes_at_60000() {
+        assert_eq!(human_duration_ms(60_000), "1.0 min");
+    }
+
+    #[test]
+    fn human_duration_ms_rounds_just_under_a_minute_boundary_to_a_misleading_60_0_s() {
+        // Same threshold-then-round quirk as `human_bytes`: 59999ms is below
+        // the 60_000ms minute threshold, but rounds to "60.0 s" at one
+        // decimal place instead of bumping to the minutes tier.
+        assert_eq!(human_duration_ms(59_999), "60.0 s");
+    }
+
+    #[test]
+    fn human_duration_ms_has_no_tier_above_minutes_and_never_panics_at_u64_max() {
+        let rendered = human_duration_ms(u64::MAX);
+        assert!(rendered.ends_with(" min"));
+        assert!(!rendered.contains("hour"));
+    }
+
+    fn quality_with_srt_recv_buf(
+        recv: Option<i32>,
+        avail: Option<i32>,
+    ) -> crate::media::engine::PublisherQuality {
+        crate::media::engine::PublisherQuality {
+            srt_recv_buf_bytes: recv,
+            srt_recv_buf_avail_bytes: avail,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn srt_recv_buffer_occupancy_is_none_when_either_field_missing() {
+        assert_eq!(
+            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(None, Some(10))),
+            None
+        );
+        assert_eq!(
+            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(10), None)),
+            None
+        );
+        assert_eq!(
+            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(None, None)),
+            None
+        );
+    }
+
+    #[test]
+    fn srt_recv_buffer_occupancy_is_none_when_total_is_zero() {
+        assert_eq!(
+            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(0), Some(0))),
+            None
+        );
+    }
+
+    #[test]
+    fn srt_recv_buffer_occupancy_clamps_negative_fields_to_zero() {
+        // libsrt can report -1 for "unavailable"; clamp rather than
+        // underflow when casting to u64.
+        let result = srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(-1), Some(100)));
+        assert_eq!(result, Some((0, 100, 0.0)));
+
+        let both_negative =
+            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(-1), Some(-1)));
+        assert_eq!(both_negative, None, "both clamped to 0 means total is 0");
+    }
+
+    #[test]
+    fn srt_recv_buffer_occupancy_computes_percentage() {
+        let result = srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(250), Some(750)));
+        assert_eq!(result, Some((250, 1000, 25.0)));
+    }
+
+    #[test]
+    fn srt_recv_buffer_occupancy_does_not_overflow_at_i32_max() {
+        let result =
+            srt_recv_buffer_occupancy(&quality_with_srt_recv_buf(Some(i32::MAX), Some(i32::MAX)));
+        let (recv, total, pct) = result.expect("both non-negative and nonzero");
+        assert_eq!(recv, i32::MAX as u64);
+        assert_eq!(total, 2 * i32::MAX as u64);
+        assert!((pct - 50.0).abs() < f64::EPSILON);
+    }
 }
