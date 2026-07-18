@@ -59,6 +59,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 09:10 Q-006 DONE [codex]](#2026-07-18-0910-q-006-done-codex)
 - [2026-07-18 09:40 Q-008 DONE [codex]](#2026-07-18-0940-q-008-done-codex)
 - [2026-07-18 10:20 Q-003 DONE [codex]](#2026-07-18-1020-q-003-done-codex)
+- [2026-07-18 15:38 AVIO-LOOM DONE [codex]](#2026-07-18-1538-avio-loom-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1350,3 +1351,50 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   30.6–36.4 µs (~19%) across the three runs, making it a poor low-noise
   anchor; `pull_burst/8` was substituted as a stable, throughput-labeled
   alternative from the same suite.
+
+## 2026-07-18 15:38 AVIO-LOOM DONE [codex]
+- What: added a loom model to `tests/avio_loom.rs` proving the
+  arm-before-check `Notify` ordering that `f679a249`'s lost-wakeup fix
+  (`MemoryQueue::write`/`write_cancellable`/`write_batch` in
+  `src/media/avio.rs`) depends on. Loom has no built-in equivalent of
+  `tokio::sync::Notify`, so the model rebuilds only the piece of its
+  semantics that matters: `notify_waiters()` wakes only threads already
+  registered ("armed") when it runs. `thread::park`/`unpark` alone models
+  `notify_one`'s permit-persists-regardless-of-order semantics, not this —
+  an explicit `waiters: Mutex<Vec<thread::Thread>>` registration list
+  reintroduces the stricter ordering constraint. `ArmOrderQueue::write_fixed`
+  mirrors the post-fix code shape (arm, then check-under-lock, then park on
+  miss); `loom_fixed_write_survives_notify_race` asserts a single writer
+  contending with one `read_one()` always completes across every
+  interleaving loom explores.
+- Scope note: a matching negative-control test (`write_buggy`, arming after
+  the lock release, `#[should_panic(expected = "deadlock")]`) was written
+  and run first. It did drive loom into its own genuine deadlock detection,
+  but the panic during model unwind triggered a second panic inside loom's
+  internal `Arc`/thread cleanup ("panic in a destructor during cleanup" /
+  "thread caused non-unwinding panic. aborting."), which escalates to a
+  hard process `abort()` — uncatchable by `#[should_panic]` and fatal to
+  the whole `avio_loom` binary (it would have taken the other 4 passing
+  loom tests in the file down with it). Removed the buggy shape and its
+  test rather than fight loom's internal cleanup path; the historical bug
+  and its non-loom regression proof already live in
+  `write_wakeup_survives_lock_release_race` (`src/media/avio.rs`). Kept
+  only the positive invariant, documented via a comment on the module why
+  the negative control was dropped.
+- Gates: `scripts/harness/loom-target.sh avio_loom` — 5/5 tests pass, 0
+  failed, no abort (verified by reading the captured log directly, not just
+  the wrapper's exit code). `cargo fmt --all --check -- tests/avio_loom.rs`
+  — clean. Full `scripts/check/concurrency/contract.sh` (broadened since
+  `avio_loom` is one of the officially tracked loom targets in
+  `scripts/check/concurrency/common.sh`) — exit 0, every per-step log under
+  `.local/artifacts/concurrency-contract-logs/` quiet (steps only print on
+  failure; confirmed `loom-avio_loom.log` shows all 5 tests `ok`).
+- Commit: this commit (`tests/avio_loom.rs` + journal only).
+- Follow-ups: none filed. This closes task #9 from the standing sweep; the
+  Q-NNN backlog itself is exhausted at sonnet tier (only Q-009/Q-010/Q-012
+  remain, all `[opus]`).
+- Notes: the abort-during-cleanup behavior is a loom 0.7.2 rough edge, not
+  a bug in the model — worth remembering if a future session is tempted to
+  add a should_panic-style deadlock negative control to any loom test in
+  this repo: reproduce this failure mode first before assuming it'll behave
+  like a normal catchable panic.
