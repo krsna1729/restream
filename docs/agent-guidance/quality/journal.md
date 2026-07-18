@@ -69,6 +69,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 18:05 HUNT MPEGTS-PROBE-AUDIO-BOUNDARY DONE [codex]](#2026-07-18-1805-hunt-mpegts-probe-audio-boundary-done-codex)
 - [2026-07-18 20:45 HUNT FFMPEG-STAGE-PLAN-CODEC-DEFAULT DONE [codex]](#2026-07-18-2045-hunt-ffmpeg-stage-plan-codec-default-done-codex)
 - [2026-07-18 21:15 HUNT HLS-PREVIEW-GRAPH-CANCEL DONE [codex]](#2026-07-18-2115-hunt-hls-preview-graph-cancel-done-codex)
+- [2026-07-18 21:45 HUNT SRT-STREAM-ID-ADVERSARIAL DONE [codex]](#2026-07-18-2145-hunt-srt-stream-id-adversarial-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1910,9 +1911,77 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   non-lifecycle-signature-changing test addition (no production code
   touched) — did not broaden to full `cargo test` or
   `scripts/check/concurrency/contract.sh`.
-- Commit: pending on `codex/adversarial-hunt-round2-20260718`.
+- Commit: `25390121` on `codex/adversarial-hunt-round2-20260718`.
 - Follow-ups: none filed. The two independent `StageKey`s in play here
   (`StageKind::Preview` for the transcoder, `StageKind::hls()` for the
   segmenter) and the two separate stage-pool sweep mechanisms are
   intentional existing architecture, not a gap to close.
+- Notes: none.
+
+## 2026-07-18 21:45 HUNT SRT-STREAM-ID-ADVERSARIAL DONE [codex]
+
+- What: continued the hunt to `src/media/srt_stream_id.rs` (90 lines,
+  zero dedicated test module — coverage existed only indirectly, via
+  black-box happy-path cases in `srt_tests.rs`). This module parses
+  untrusted, client-supplied SRT handshake stream IDs
+  (`parse_srt_stream_id`, `normalize_srt_stream_key`, `percent_decode`,
+  `strip_query`) and is directly on the network-facing SRT connection path
+  (`srt.rs` uses the parsed mode to distinguish publisher vs. reader
+  connections); AGENTS.md's Media Rules explicitly names "Normalize SRT
+  Stream IDs before lookup" as a core invariant.
+  Read `srt_tests.rs` in full first to avoid duplicating existing coverage
+  (~17 cases across 4 tests already covered common-tool stream ID formats,
+  encoding normalization, and slash-preserving percent-decoding). Added a
+  `#[cfg(test)] mod tests` block directly in `srt_stream_id.rs` (matching
+  the sibling-file convention from the `stage_plan.rs` hunt) targeting
+  genuinely uncovered adversarial edges: `percent_decode` truncated/
+  malformed `%` escapes (trailing `%`, single hex digit, non-hex digits —
+  must fall back to literal, not panic or desync the scan position),
+  case-insensitive hex digits, single-layer-only decoding (`%2525` →
+  `%25`, not `%`), lossy UTF-8 fallback on invalid byte sequences from
+  `%FF` (must not panic), embedded NUL byte preservation; the two-pass
+  `strip_query` interaction in `normalize_srt_stream_key` where a
+  percent-encoded `?` (`%3F`) is only revealed after decoding and still
+  gets stripped by the second `strip_query` call, meaning a stream key can
+  never contain a literal `?` in any encoding; `parse_srt_stream_id`
+  whitespace/NUL-only-input handling, and the `#!::` bracket-format
+  parser's duplicate-key last-wins semantics, `=`-containing values,
+  malformed (no-`=`) parts being silently skipped, case-sensitive keys and
+  mode values, and an empty-rest `#!::` input.
+  The highest-value, most non-obvious finding (documented via a dedicated
+  test, not filed as a bug): any raw (non-`#!::`) stream ID containing a
+  colon has everything before the first colon discarded as a candidate
+  mode marker, *even when that prefix is not a recognized mode keyword* —
+  e.g. `"abc:def"` silently loses `"abc:"` and yields stream key `"def"`
+  under the default Publish mode, and `"Play:key"` (wrong case) likewise
+  loses `"Play:"` yet still defaults to Publish rather than Read. This is
+  existing, intentional-looking behavior (the split happens unconditionally
+  before the recognized-keyword check), not a bug to fix — but it was
+  completely unpinned, so a future refactor could silently change it
+  without any test noticing. Pinned it explicitly instead of filing a fix,
+  since changing SRT Stream ID parsing semantics is a protocol-compat
+  decision, not an adversarial-hunt scope call.
+  Caught one own-test-authoring bug during the red/green cycle: an initial
+  test asserted `"\0 \0 \0"` (NUL-space-NUL-space-NUL) parses to an empty
+  stream key, but `trim_matches('\0')` only strips NUL runs from the two
+  string *ends*, not interior occurrences, so the actual result is a
+  single interior NUL byte, not empty. Fixed by narrowing the empty-input
+  test to inputs that genuinely collapse (pure NUL runs, pure whitespace,
+  NUL-padded whitespace) and adding a separate test,
+  `parse_srt_stream_id_preserves_interior_nul_bytes`, that pins the
+  correct (interior-NUL-survives) behavior explicitly.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib srt_stream_id`
+  — 25/25 pass (21 new + 4 pre-existing `srt.rs`-level black-box tests in
+  the same filter unaffected). `scripts/build/resource-limit.sh cargo
+  clippy --lib --benches -- -D warnings` — clean. `cargo fmt --all` /
+  `--check` — clean. Single pure-function module, not listed among the
+  Inner Loop table's lifecycle-sensitive files (`engine.rs`, `srt.rs`,
+  `ts_chunk_ring.rs`, `avio.rs`, `recording.rs`, `file_ingest.rs`,
+  `external_transcoder.rs`) and no production code was touched — did not
+  broaden to `scripts/check/concurrency/contract.sh` or full `cargo test`.
+- Commit: `8dd9cb9f` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. The unrecognized-colon-prefix-still-stripped
+  behavior and the double-strip-query-after-decode interaction are now
+  pinned by tests; no fix is warranted without a protocol-compatibility
+  decision from a human.
 - Notes: none.
