@@ -290,8 +290,16 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
   A first in-process scanner prototype applied the intended masks but did not
   reproduce the CPU/cache/context-switch win, so do not add internal pinning
   without a stronger ownership-aware design and concurrency proof gates.
-- Status: open, narrowed to an opt-in runtime affinity design (Filed:
-  2026-07-12 by groom)
+- Status: done (Rejected as a runtime feature. CPU partitioning stays a
+  process/cgroup concern — systemd `CPUAffinity` / Docker `--cpuset-cpus` /
+  K8s CPU manager — per `docs/configuration.md` § Linux Service Placement. The
+  external `taskset` partition was a real win (2.051 cores, 16.25% cache misses,
+  4.330 K/s ctx vs default 2.321 / 20.80% / 7.663 K/s), but the in-process
+  scanner did not reproduce it despite masks proven applied; a one-shot scan
+  cannot hold a partition against Tokio's continuous thread turnover the way a
+  kernel-enforced cpuset does, and the cpuset is container-aware for free. No
+  runtime code added. See `baselines.md` § Q-012 decision. 2026-07-18 by opus;
+  Filed: 2026-07-12 by groom)
 
 ### Q-013 [efficiency] [sonnet] Test allocator arena limits for MSR memory plateau
 - Goal: a single-variable MSR run proves whether `MALLOC_ARENA_MAX` or an

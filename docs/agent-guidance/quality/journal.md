@@ -62,6 +62,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 15:38 AVIO-LOOM DONE [codex]](#2026-07-18-1538-avio-loom-done-codex)
 - [2026-07-18 16:40 Q-009 DONE [opus]](#2026-07-18-1640-q-009-done-opus)
 - [2026-07-18 17:20 Q-010 DONE [opus]](#2026-07-18-1720-q-010-done-opus)
+- [2026-07-18 17:55 Q-012 DONE [opus]](#2026-07-18-1755-q-012-done-opus)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1492,3 +1493,53 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   ~2-day external MSR workload, but this micro-decision needs no PMU counters —
   the wall-clock bench plus the ownership/safety analysis is sufficient to
   reject.
+
+## 2026-07-18 17:55 Q-012 DONE [opus]
+
+- What: Final decision on in-process CPU affinity for Tokio/SRT/RTMP thread
+  families (backlog Q-012, which the 2026-07-12 series had narrowed to "an
+  opt-in runtime affinity design"). Decision: REJECTED as a runtime feature —
+  CPU partitioning stays a process/cgroup concern (systemd `CPUAffinity`,
+  Docker `--cpuset-cpus`, Kubernetes CPU manager). No runtime affinity code
+  exists or is added. Tightened `docs/configuration.md` § Linux Service
+  Placement from "the runtime does not currently pin thread families / keep
+  experiments outside production" to a definite statement that the
+  process/cgroup layer is the supported mechanism and in-process pinning was
+  evaluated and rejected, with a pointer to the evidence. Added
+  `baselines.md` § Q-012 decision consolidating the recorded numbers and the
+  rationale.
+- Gates: none run this session — the decision changes no code. It rests on the
+  already-recorded MSR evidence (2026-07-12 VPS series): external `taskset`
+  partition (SRT→CPU 0-1, other→2-5) was a real win (2.051 cores, IPC 0.420,
+  16.25% cache misses, 4.330 K/s ctx, 288.5/s migrations) versus default
+  runtime (2.321 cores, 20.80% cache, 7.663 K/s ctx, 920.3/s migrations), but
+  the in-process scanner did NOT reproduce it (2.45/2.42 cores, ~20.6-20.9%
+  cache, ~7.7-8.0 K/s ctx) despite a thread census proving the masks were
+  applied. `node scripts/check/docs.mjs` clean.
+- Commit: this commit (`docs/configuration.md`, `baselines.md` § Q-012
+  decision, `backlog.md` Q-012 status, journal). No `src/` changes.
+- Follow-ups: none. If a future host demonstrates the partition win robustly
+  under a supported orchestration cpuset, that is a deployment recipe, not a
+  runtime feature. A true 12h soak remains separate from these non-soak MSR
+  ramps.
+- Notes: three reasons the process/cgroup layer is correct and in-process
+  pinning is not. (1) Robustness — the scanner is a one-shot `/proc/self/task`
+  pass, but Tokio continuously spawns replacement/blocking threads (census
+  showed a `restream-tokio` family in the 60s with only two hot scheduler
+  worker identities); new threads inherit their creator's mask at clone time,
+  so a one-shot partition erodes as the population turns over, while a cpuset is
+  kernel-enforced on every present and future thread for the whole process
+  lifetime. (2) Layering — a cpuset derives from the effective CPU mask/cgroup
+  quota automatically and is container-aware; in-process host-CPU masks are not
+  and would fight orchestration. (3) Cost/benefit — the win needs a clean
+  default run and a whole-window hold, exactly what a launch-time cpuset gives
+  for free and what fragile in-process re-pinning cannot guarantee; adding
+  thread-lifecycle placement code plus its concurrency-proof burden to chase an
+  effect the supported layer already captures is negative-value. No new
+  measurement was run: WSL2 has no PMU and the Contabo VPS carried a ~2-day
+  external MSR workload (kill-check non-empty, not this session's to kill);
+  re-running the scanner would only re-confirm the recorded negative. This
+  aligns with and finalizes the 2026-07-12 codex follow-ups (RUNTIME AFFINITY
+  PROTOTYPE REJECTED, TOKIO BLOCKING CAP / KEEPALIVE PROTOTYPES REJECTED, MSR
+  FULL FINAL PASS), which had already recommended systemd placement and left
+  Q-012 "narrowed"; this entry closes it.

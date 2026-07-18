@@ -593,6 +593,55 @@ no per-burst allocation win left for a pool to capture. Reasons to reject:
 
 A documented rejection is a valid completion for this item (backlog Q-010).
 
+### Q-012 decision — CPU affinity is a process/cgroup concern, not a runtime feature (2026-07-18)
+
+Decision: do not add in-process thread-family CPU pinning. CPU partitioning is
+supported at the process/cgroup layer only (systemd `CPUAffinity`, Docker
+`--cpuset-cpus`, Kubernetes CPU manager); the operator guidance lives in
+`docs/configuration.md` § Linux Service Placement. No runtime affinity code
+exists or is added. This closes Q-012, which the 2026-07-12 series had narrowed
+to "an opt-in runtime affinity design."
+
+Evidence already on record (2026-07-12 VPS/local MSR series, detailed in the
+Profiling-notes sections below and the journal Q-012 entries):
+
+| Config | CPU (cores) | IPC | Cache misses | Ctx switches | Migrations |
+|---|---|---|---|---|---|
+| Default runtime (clean MSR) | 2.321 | 0.336 | 20.80% | 7.663 K/s | 920.3/s |
+| External `taskset` partition (SRT→CPU 0-1, other→2-5) | 2.051 | 0.420 | 16.25% | 4.330 K/s | 288.5/s |
+| In-process scanner, same masks proven applied | 2.45 / 2.42 | — | ~20.6–20.9% | ~7.7–8.0 K/s | — |
+
+The external partition is a real win; the in-process scanner did not reproduce
+it *despite a thread census proving the masks were applied*. Related runtime
+knobs were also probed and rejected: Tokio blocking cap-32 (worse CPU/RSS),
+`restream-tokio` thread-name label (kept, neutral), and a Tokio keepalive knob
+(no thread-family shrink, worse CPU/RSS).
+
+Why the process/cgroup layer is correct and in-process pinning is not:
+
+1. Robustness — the scanner is a one-shot `/proc/self/task` pass, but the Tokio
+   runtime continuously spawns replacement/blocking threads (census showed a
+   `restream-tokio` family in the 60s over a run with only two hot scheduler
+   worker identities). New threads inherit their creator's mask at clone time,
+   so a one-shot partition erodes as the thread population turns over. A
+   process-level cpuset is enforced by the kernel on every present and future
+   thread for the whole process lifetime — no scanner can match that.
+2. Layering / container-awareness — a cpuset derives from the effective CPU
+   mask/cgroup quota automatically and is honored inside containers; in-process
+   host-CPU masks are not container-aware and would fight orchestration.
+3. Cost/benefit — the win depends on a clean default run (no allocator cap, no
+   worker override) and holding the partition for the whole window; that is
+   exactly what a launch-time cpuset provides for free, and exactly what
+   fragile in-process re-pinning cannot guarantee. Adding thread-lifecycle
+   placement code (with its concurrency-proof burden) to chase an effect the
+   supported layer already captures is negative-value.
+
+No new measurement was run for this decision: WSL2 has no PMU, and the Contabo
+VPS carried a ~2-day external MSR workload (kill-check non-empty, not this
+session's to kill). The decision rests on the recorded in-process-scanner
+negative plus the robustness/layering argument; re-running the scanner would
+only re-confirm the negative. A documented rejection is a valid completion.
+
 ## Profiling notes (VPS — hardware counters available)
 
 The Contabo VPS (KVM, AMD EPYC gen1) exposes the AMD vPMU: `cycles`,
