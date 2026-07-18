@@ -408,4 +408,122 @@ mod tests {
         let after_cleanup = pool.assign("out-3", 1, 1, 8);
         assert_eq!(after_cleanup.shard_index, 0);
     }
+
+    #[test]
+    fn assign_same_output_and_attempt_is_idempotent_and_does_not_double_occupy() {
+        let mut pool = SrtMuxerShardPool::default();
+
+        let first = pool.assign("out-1", 1, 4, 8);
+        let second = pool.assign("out-1", 1, 4, 8);
+
+        assert_eq!(first.shard_index, second.shard_index);
+        // Re-asserting the same (output, attempt) pair must not consume a
+        // second occupancy slot on the shard.
+        let (_, occupancy, _) = pool.test_snapshot();
+        assert_eq!(occupancy[first.shard_index], 1);
+        assert_eq!(second.shard_occupancy, 1);
+    }
+
+    #[test]
+    fn assign_overflow_boundary_uses_strict_greater_than_on_idempotent_path() {
+        // Fill a single shard to exactly max_outputs_per_shard, then
+        // re-assert the same (output, attempt) pair already on that shard.
+        // The idempotent-return branch reports `overflowed` only when
+        // occupancy is strictly greater than capacity, so sitting exactly
+        // at capacity must not be flagged as overflowed.
+        let mut pool = SrtMuxerShardPool::default();
+        pool.assign("out-1", 1, 1, 1);
+
+        let reassert = pool.assign("out-1", 1, 1, 1);
+        assert_eq!(reassert.shard_occupancy, 1);
+        assert!(!reassert.overflowed);
+    }
+
+    #[test]
+    fn assign_reconnect_with_new_attempt_id_frees_old_shard_immediately() {
+        // A publisher reconnect reuses the same output_id but gets a new
+        // attempt_id; the stale assignment must be released (not leaked)
+        // and the freed shard must be immediately reusable without going
+        // through the retiring-shard cleanup path.
+        let mut pool = SrtMuxerShardPool::default();
+        let first = pool.assign("out-1", 1, 1, 1);
+        assert_eq!(first.shard_index, 0);
+
+        let reconnected = pool.assign("out-1", 2, 1, 1);
+        assert_eq!(reconnected.shard_index, 0);
+        assert_eq!(reconnected.shard_occupancy, 1);
+
+        let (assignments, occupancy, retiring) = pool.test_snapshot();
+        assert_eq!(assignments.get("out-1").unwrap().attempt_id, 2);
+        assert_eq!(occupancy[0], 1);
+        assert!(retiring.is_empty());
+    }
+
+    #[test]
+    fn assign_least_occupied_shard_selection_prefers_first_tied_minimum() {
+        let mut pool = SrtMuxerShardPool::default();
+        let a = pool.assign("out-1", 1, 1, 3);
+        let b = pool.assign("out-2", 1, 1, 3);
+        let c = pool.assign("out-3", 1, 1, 3);
+
+        assert_eq!((a.shard_index, b.shard_index, c.shard_index), (0, 1, 2));
+    }
+
+    #[test]
+    fn assign_overflow_warns_only_once_when_shards_and_capacity_are_exhausted() {
+        let mut pool = SrtMuxerShardPool::default();
+        let first = pool.assign("out-1", 1, 1, 1);
+        assert!(!first.overflowed);
+
+        let second = pool.assign("out-2", 1, 1, 1);
+        assert!(second.overflowed);
+        assert!(second.should_warn_overflow);
+
+        let third = pool.assign("out-3", 1, 1, 1);
+        assert!(third.overflowed);
+        assert!(!third.should_warn_overflow);
+    }
+
+    #[test]
+    fn release_with_mismatched_attempt_id_is_a_stale_noop() {
+        // A cleanup task from a superseded attempt racing after a
+        // reconnect must not be able to release the current assignment.
+        let mut pool = SrtMuxerShardPool::default();
+        pool.assign("out-1", 1, 4, 8);
+
+        assert_eq!(pool.release("out-1", 999), None);
+
+        let (assignments, occupancy, _) = pool.test_snapshot();
+        assert_eq!(assignments.get("out-1").unwrap().attempt_id, 1);
+        assert_eq!(occupancy[0], 1);
+    }
+
+    #[test]
+    fn release_unknown_output_returns_none_without_panicking() {
+        let mut pool = SrtMuxerShardPool::default();
+        assert_eq!(pool.release("never-assigned", 1), None);
+    }
+
+    #[test]
+    fn finish_retiring_unknown_shard_is_a_noop() {
+        let mut pool = SrtMuxerShardPool::default();
+        // Must not panic even though shard 7 was never allocated, let
+        // alone marked retiring.
+        pool.finish_retiring(7);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    #[should_panic]
+    fn assign_panics_on_zero_max_shards_invariant() {
+        let mut pool = SrtMuxerShardPool::default();
+        pool.assign("out-1", 1, 4, 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn assign_panics_on_zero_max_outputs_per_shard_invariant() {
+        let mut pool = SrtMuxerShardPool::default();
+        pool.assign("out-1", 1, 0, 4);
+    }
 }
