@@ -81,6 +81,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 01:00 HUNT RESOURCE-MAP-JSON-SHAPING-HELPERS DONE [codex]](#2026-07-19-0100-hunt-resource-map-json-shaping-helpers-done-codex)
 - [2026-07-19 01:20 HUNT STATUS-CPU-AFFINITY-OVERFLOW FIXED [codex]](#2026-07-19-0120-hunt-status-cpu-affinity-overflow-fixed-codex)
 - [2026-07-19 02:00 HUNT HLS-PREVIEW-CODEC-LEVEL-DEFAULT FIXED [codex]](#2026-07-19-0200-hunt-hls-preview-codec-level-default-fixed-codex)
+- [2026-07-19 02:20 HUNT INGEST-SECURITY-VALIDATE-BRANCHES DONE [codex]](#2026-07-19-0220-hunt-ingest-security-validate-branches-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2588,3 +2589,57 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   `transcode_profiles.rs` (151/2, distinct from the already-hunted
   `src/domain/transcode_profile.rs`), `settings.rs` (140/2) — none
   ratio-scanned in depth yet beyond raw line/test counts.
+
+## 2026-07-19 02:20 HUNT INGEST-SECURITY-VALIDATE-BRANCHES DONE [codex]
+
+- Scope: checked `src/application/ingest_security.rs` (195 lines, 5
+  existing tests) and ruled it out — its own doc comment states it owns
+  only "JSON round-tripping" between `MetaStore` and the domain config,
+  with "validation semantics" living in `crate::domain::ingest_security`.
+  The 5 existing tests already cover the full state space for that thin
+  glue: valid-JSON load, malformed/store-error fallback to defaults,
+  normalize-on-load, save round-trip, and save-with-normalize. Same
+  pattern as the already-ruled-out `graph.rs`/`telemetry.rs`/`ports.rs`.
+  Moved to the real target named in that doc comment:
+  `src/domain/ingest_security.rs` (88 lines, 2 existing tests) — small,
+  but its `validate()` had only one of four field branches exercised
+  (`failure_limit`), no test that a valid config passes, no boundary
+  test at exactly `1`, and `normalize()`'s `.max(1)` clamp had no
+  `i64::MIN` case despite taking `i64` input from arbitrary
+  deserialized/API-supplied JSON.
+- Finding: no bug — `.max(1)` on `i64` cannot overflow (`i64::MIN.max(1)
+  == 1`), confirmed by the new `normalize_clamps_i64_min_without_overflow`
+  test. This is a coverage gap, not a defect.
+- Added regression/adversarial coverage (14 new tests, 2 pre-existing
+  kept): one `validate()` test per remaining field
+  (`failure_window_ms`/`ban_ms`/`tracked_ip_limit`, each pinning its own
+  distinct error string), a negative-value case for `failure_limit`
+  (previously only `0` was tested), a default-config-passes-validate
+  case, an all-fields-set-to-`1` boundary-passes case, an
+  all-fields-zero case pinning that the first field in declared order
+  wins (documents `validate`'s short-circuit order), an
+  already-valid-values-are-unchanged case for `normalize` (previously
+  only the clamping path was tested), an exactly-`1`-boundary
+  no-op case, the `i64::MIN` overflow-safety case above, and an
+  integration check that `normalize()` then `validate()` always
+  succeeds regardless of how invalid the input was
+  (`i64::MIN`/`0`/`-42`/`i64::MIN` all clamp to a config that validates
+  clean).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  ingest_security::` — 18/18 pass (16 new/expanded plus 2 pre-existing,
+  spanning both the `application::` and `domain::` modules of the same
+  name). `scripts/build/resource-limit.sh cargo clippy --lib --benches
+  -- -D warnings` — clean. `cargo fmt --all` — no changes beyond the new
+  tests; `cargo fmt --all --check` — clean.
+- Commit: `2387037a` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: continuing the open-ended scan. Remaining unswept areas in
+  `src/application/`: `ingest.rs` (923/12), `reconcile.rs` (648/12),
+  `egress.rs` (549/7), `recording.rs` (470/8), `srt_ingest.rs` (357/5),
+  `models.rs` (156/2, checked — `JobStatus` string round-trip already
+  fully covered, thin serde records otherwise, ruling out),
+  `transcode_profiles.rs` (151/2, checked — thin persistence glue over
+  `crate::domain::transcode_profile`, already-hunted per the prior
+  `TRANSCODE-PROFILE-VALIDATION-BOUNDARIES` entry, ruling out),
+  `settings.rs` (140/2) — not yet ratio-scanned in depth.
