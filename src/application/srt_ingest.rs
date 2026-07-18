@@ -354,4 +354,62 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn srt_global_config_from_appconfig_returns_none_without_passphrase() {
+        assert!(srt_global_config_from_appconfig(None, 16).is_none());
+    }
+
+    #[test]
+    fn srt_global_config_from_appconfig_treats_empty_passphrase_as_absent() {
+        assert!(srt_global_config_from_appconfig(Some(String::new()), 16).is_none());
+    }
+
+    #[test]
+    fn srt_global_config_from_appconfig_builds_encrypted_config_from_passphrase() {
+        let config = srt_global_config_from_appconfig(Some("app-pass-123".to_string()), 24)
+            .expect("passphrase present");
+
+        assert_eq!(config.mode, SrtGlobalIngestMode::Encrypted);
+        assert_eq!(config.passphrase.as_deref(), Some("app-pass-123"));
+        assert_eq!(config.pbkeylen, 24);
+    }
+
+    #[tokio::test]
+    async fn global_srt_ingest_config_falls_back_to_appconfig_passphrase_when_meta_store_empty() {
+        let store = FakeMetaStore { value: None };
+
+        let config =
+            load_global_srt_ingest_config(&store, Some("app-pass-123".to_string()), 24).await;
+
+        assert_eq!(config.mode, SrtGlobalIngestMode::Encrypted);
+        assert_eq!(config.passphrase.as_deref(), Some("app-pass-123"));
+        assert_eq!(config.pbkeylen, 24);
+    }
+
+    #[tokio::test]
+    async fn global_srt_ingest_config_falls_back_to_default_when_no_meta_and_no_passphrase() {
+        let store = FakeMetaStore { value: None };
+
+        let config = load_global_srt_ingest_config(&store, None, 16).await;
+
+        assert_eq!(config, SrtGlobalIngestConfig::default());
+    }
+
+    #[tokio::test]
+    async fn global_srt_ingest_config_prefers_meta_store_over_appconfig_passphrase() {
+        let store = FakeMetaStore {
+            value: Some(
+                serde_json::json!({
+                    "mode": "plaintext"
+                })
+                .to_string(),
+            ),
+        };
+
+        let config =
+            load_global_srt_ingest_config(&store, Some("app-pass-123".to_string()), 24).await;
+
+        assert_eq!(config.mode, SrtGlobalIngestMode::Plaintext);
+    }
 }
