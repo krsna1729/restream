@@ -85,6 +85,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 02:35 HUNT SETTINGS-BACKEND-POLICY-FALLBACK DONE [codex]](#2026-07-19-0235-hunt-settings-backend-policy-fallback-done-codex)
 - [2026-07-19 02:50 HUNT SRT-INGEST-APPCONFIG-FALLBACK DONE [codex]](#2026-07-19-0250-hunt-srt-ingest-appconfig-fallback-done-codex)
 - [2026-07-19 03:05 HUNT RECORDING-SETTINGS-FALLBACK-AND-SHORT-CIRCUIT DONE [codex]](#2026-07-19-0305-hunt-recording-settings-fallback-and-short-circuit-done-codex)
+- [2026-07-19 03:30 HUNT INGEST-AUTH-ASYMMETRY-AND-FILE-INGEST-GAPS DONE [codex]](#2026-07-19-0330-hunt-ingest-auth-asymmetry-and-file-ingest-gaps-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2773,3 +2774,63 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Notes: continuing the open-ended scan. Remaining unswept
   `src/application/` files: `ingest.rs` (923/12), `reconcile.rs`
   (648/12), `egress.rs` (549/7).
+
+## 2026-07-19 03:30 HUNT INGEST-AUTH-ASYMMETRY-AND-FILE-INGEST-GAPS DONE [codex]
+
+- Scope: `src/application/ingest.rs` (923 lines, 12 existing tests) —
+  the largest remaining unswept `src/application/` file. Covers
+  `PipelineStoreIngestAuthenticator`/`PipelineAccessAuthenticator`
+  dispatch on `PipelineAccessMode`, the shared
+  `authenticate_stream_key_for_scope` core auth logic, and the
+  file-ingest lifecycle helpers (`resolve_file_ingest_context`,
+  `load_pipeline_file_ingest_state`, `clear_stream_key_file_ingests`,
+  `persist_pipeline_file_ingest`, `remove_pipeline_file_ingest`).
+- Finding: no bug — five coverage gaps, all confirmed correct as
+  designed. (1) `authenticate_publish_stream_key` (RTMP) and
+  `authenticate_srt_stream_key` share `authenticate_stream_key_for_scope`
+  but pass different `clear_on_success` booleans (`false` vs `true`);
+  a successful RTMP publish auth intentionally does NOT clear a prior
+  failure count, while SRT auth does. Only the SRT (clearing) side had
+  a test; the RTMP (non-clearing) side was unproven, leaving the
+  asymmetry unguarded against an accidental future unification. (2)
+  `resolve_file_ingest_context`'s `ResolveFileIngestError::IngestLookup`
+  branch had no test. (3) `persist_pipeline_file_ingest`'s `None` arm
+  (create-new-ingest path) of its `match existing` had no test — only
+  the update-existing arm was covered. (4) The TOCTOU race where
+  `update_ingest` returns `Ok(None)` (target deleted between lookup and
+  update) had no test proving it surfaces as
+  `PersistFileIngestError::IngestWrite`. (5) `remove_pipeline_file_ingest`
+  had zero references anywhere in the test module — a completely
+  untested function despite its siblings all being covered.
+- Added regression coverage (5 new tests):
+  `publish_auth_success_does_not_clear_prior_failure_state` pins the
+  RTMP-vs-SRT `clear_on_success` asymmetry by recording an
+  `RtmpPublish` failure, succeeding an auth, then showing a second
+  failure still trips the ban (proving the first failure count
+  survived the success).
+  `resolve_file_ingest_context_surfaces_ingest_lookup_error` covers the
+  `IngestLookup` error branch.
+  `persist_pipeline_file_ingest_creates_new_ingest_when_none_exists`
+  covers the create-path arm, asserting `create_ingest` is called with
+  the `id_factory()`-generated ID.
+  `persist_pipeline_file_ingest_surfaces_race_when_update_target_disappears`
+  extends `FakeIngestWriter` with an `update_returns_none: bool` flag
+  to simulate the TOCTOU race and asserts `IngestWrite` is returned.
+  `remove_pipeline_file_ingest_deletes_all_ingests_and_clears_input_source`
+  is the first-ever test for `remove_pipeline_file_ingest`, asserting
+  both ingests tied to a stream key are deleted.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib ingest::` —
+  62/62 pass (15 in `application::ingest`: 7 new plus 8 pre-existing;
+  remainder pre-existing `application::srt_ingest`, `domain::srt_ingest`,
+  `media::file_ingest` tests sharing the module-name filter).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` — no changes beyond the new
+  tests; `cargo fmt --all --check` — clean. `scripts/check/concurrency/fast.sh`
+  — 135/135 pass (run per the `staged-gate-router`-recommended
+  follow-up for this file).
+- Commit: `1a2e66e0` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: continuing the open-ended scan. Remaining unswept
+  `src/application/` files: `reconcile.rs` (648/12), `egress.rs`
+  (549/7).
