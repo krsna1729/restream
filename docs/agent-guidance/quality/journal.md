@@ -75,6 +75,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 22:40 HUNT ENGINE-HLS-CONSUMER-IDLE-BOUNDARIES DONE [codex]](#2026-07-18-2240-hunt-engine-hls-consumer-idle-boundaries-done-codex)
 - [2026-07-18 23:05 HUNT SRT-QUALITY-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2305-hunt-srt-quality-counter-boundaries-done-codex)
 - [2026-07-18 23:30 HUNT SRT-MUXER-SHARD-POOL-BOUNDARIES DONE [codex]](#2026-07-18-2330-hunt-srt-muxer-shard-pool-boundaries-done-codex)
+- [2026-07-18 23:50 HUNT SRT-POLICY-FALLBACK-SEMANTICS DONE [codex]](#2026-07-18-2350-hunt-srt-policy-fallback-semantics-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2214,3 +2215,46 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   from configuration.
 - Notes: continuing the open-ended scan of `src/media/` for the next
   low-coverage candidate.
+
+## 2026-07-18 23:50 HUNT SRT-POLICY-FALLBACK-SEMANTICS DONE [codex]
+
+- What: adversarial hunt on `src/media/srt_policy.rs`'s
+  `build_policy_snapshot`, which had only one existing test (covering the
+  double-failure case where both the per-entry policy and the global
+  fallback fail to resolve). Reading `src/media/srt/config.rs` and
+  `src/domain/srt_ingest.rs::resolve()` surfaced a genuine, previously
+  undocumented asymmetry: a malformed `serialized_policy` JSON string and a
+  wholly absent (`None`) one are indistinguishable — both collapse to
+  `SrtPipelineIngestConfig::default()` (mode = Inherit) via
+  `parse_pipeline_srt_ingest_policy(...).unwrap_or_default()`, and Inherit
+  silently resolves through to whatever the global policy currently is,
+  with **no warning logged**. This differs from the separate `Err` branch
+  (a parseable-but-invalid policy that fails `.resolve(&global)`), which
+  does `warn!` before falling back. Added 6 tests: a corrupted persisted
+  policy and a genuinely-absent one both silently inherit the global
+  policy, pinning the no-warning-either-way behavior; a parseable-but-
+  invalid per-entry policy (short passphrase) successfully falls back to a
+  *valid* global (the fallback-succeeds branch, previously uncovered —
+  the existing test only exercised fallback-also-fails); duplicate
+  `stream_key` entries across two pipelines, confirming last-insert-wins
+  via `HashMap::insert` overwrite; an empty `entries` slice producing an
+  empty snapshot without panicking; and `replace()` atomically swapping
+  snapshots so stream keys absent from the new entry list stop resolving.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib srt_policy` —
+  6/6 pass (1 pre-existing plus 5 new). `scripts/build/resource-limit.sh
+  cargo clippy --lib --benches -- -D warnings` — clean. `cargo fmt --all`
+  + `--check` — clean. Test-only change to in-memory policy resolution
+  (no sockets, no syscalls); did not broaden to
+  `scripts/check/concurrency/contract.sh` or full `cargo test`.
+- Commit: `1e22f998` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed as a fix. The silent malformed-JSON-equals-absent
+  behavior is now pinned by test rather than changed — flagging that a
+  corrupted persisted policy for a pipeline that was meant to be
+  encrypted-only would silently downgrade to whatever the global mode is
+  (e.g. plaintext), with zero operator-visible diagnostic. Worth revisiting
+  as a real fix (log a warning on JSON parse failure, distinct from
+  absence) only as a deliberate follow-up, not as a side effect of this
+  test sweep.
+- Notes: continuing the open-ended scan of `src/media/` for the next
+  low-coverage candidate (`ts_chunk_ring.rs` 198 lines/2 tests looks like
+  the next best ratio).
