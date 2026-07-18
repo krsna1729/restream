@@ -71,6 +71,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 21:15 HUNT HLS-PREVIEW-GRAPH-CANCEL DONE [codex]](#2026-07-18-2115-hunt-hls-preview-graph-cancel-done-codex)
 - [2026-07-18 21:45 HUNT SRT-STREAM-ID-ADVERSARIAL DONE [codex]](#2026-07-18-2145-hunt-srt-stream-id-adversarial-done-codex)
 - [2026-07-18 22:05 HUNT STAGE-METRICS-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2205-hunt-stage-metrics-counter-boundaries-done-codex)
+- [2026-07-18 22:20 HUNT PIPE-METRICS-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2220-hunt-pipe-metrics-counter-boundaries-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2041,3 +2042,39 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Commit: `8d166d0d` on `codex/adversarial-hunt-round2-20260718`.
 - Follow-ups: none filed.
 - Notes: none.
+
+## 2026-07-18 22:20 HUNT PIPE-METRICS-COUNTER-BOUNDARIES DONE [codex]
+
+- What: continued the low-coverage sweep to `src/media/pipe_metrics.rs`
+  (67 lines, zero dedicated tests) — the last small candidate on the list
+  after `stage_metrics.rs`. `PipeMetrics` tracks external-transcoder pipe
+  back-pressure (stdin write stalls, stdout read idles) with lock-free
+  `AtomicU64` counters, structurally identical in shape to
+  `stage_metrics.rs`: a `snapshot()` that reads the atomics and computes
+  guarded averages. The averages here use `checked_div(...).unwrap_or(0)`
+  instead of an `if count > 0` branch, a different-looking but
+  equivalent-in-effect divide-by-zero guard worth pinning explicitly.
+  Added a `#[cfg(test)] mod tests` block covering: zeroed-snapshot guard
+  (`avg_stall_us`/`avg_idle_us` must be `0`, not a panic, when `stalls`/
+  `idles` are `0`); independent accumulation of `record_stall`/
+  `record_idle`; integer-division truncation for the average (29us over 3
+  stalls truncates to 9, not rounds to 10 — `checked_div` is integer
+  division, and the snapshot type is `u64`, not `f64`); and the same
+  atomic-overflow-wrap case as the `stage_metrics.rs` hunt
+  (`counters_wrap_on_u64_overflow_without_panicking`), with an added
+  assertion that the `checked_div` guard still fires correctly when
+  `stalls` wraps to `0` (avg must read `0`, not divide-by-zero panic or
+  stale garbage).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib pipe_metrics`
+  — 4 new tests plus 2 pre-existing cross-module tests
+  (`media::engine::tests::pipe_metrics_snapshot_correctness`,
+  `api_runtime_views::telemetry::tests::stage_telemetry_reads_pipe_metrics_from_stage_runtime`)
+  all pass (6/6). `scripts/build/resource-limit.sh cargo clippy --lib
+  --benches -- -D warnings` — clean. `cargo fmt --all --check` — clean.
+  Pure counter-struct module, not on the Inner Loop table's
+  lifecycle-sensitive list and no production code changed — did not
+  broaden to `scripts/check/concurrency/contract.sh` or full `cargo test`.
+- Commit: `68886a10` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed.
+- Notes: `engine_hls.rs` and `snapshots.rs` remain on the candidate list
+  for the next hunt iteration.
