@@ -472,6 +472,7 @@ mod tests {
         created: std::sync::Mutex<Vec<Ingest>>,
         deleted: std::sync::Mutex<Vec<String>>,
         fail: Option<&'static str>,
+        update_returns_none: bool,
     }
 
     impl IngestWriter for FakeIngestWriter {
@@ -517,6 +518,9 @@ mod tests {
             target_gop_seconds: u32,
         ) -> IngestUpdateFuture<'a> {
             Box::pin(async move {
+                if self.update_returns_none {
+                    return Ok(None);
+                }
                 self.create_ingest(
                     id,
                     filename,
@@ -663,6 +667,29 @@ mod tests {
         assert!(matches!(result, Err(IngestAuthError::LookupFailed(_))));
         assert!(security.is_ip_banned(ip).is_none());
         assert!(security.record_failure(ip));
+    }
+
+    #[tokio::test]
+    async fn publish_auth_success_does_not_clear_prior_failure_state() {
+        let lookup = FakePipelineStore::success("live");
+        let security = IngestSecurityService::new(test_security_config());
+        let ip = "10.0.0.9";
+
+        assert!(!security.record_failure_for(RateLimitScope::RtmpPublish, ip));
+
+        let pipeline = authenticate_publish_stream_key(&lookup, &security, "live", ip)
+            .await
+            .unwrap();
+        assert_eq!(pipeline.id, "pipeline-1");
+
+        // Unlike SRT auth, a successful RTMP publish auth does not clear the
+        // prior failure count: one more failure should still trip the ban.
+        assert!(security.record_failure_for(RateLimitScope::RtmpPublish, ip));
+        assert!(
+            security
+                .is_ip_banned_for(RateLimitScope::RtmpPublish, ip)
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -892,6 +919,7 @@ mod tests {
             created: std::sync::Mutex::new(Vec::new()),
             deleted: std::sync::Mutex::new(Vec::new()),
             fail: None,
+            update_returns_none: false,
         };
 
         let saved = persist_pipeline_file_ingest(
@@ -919,5 +947,179 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         assert_eq!(deleted, vec!["ingest-stale".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn resolve_file_ingest_context_surfaces_ingest_lookup_error() {
+        let ingest_lookup = FakeIngestLookup {
+            by_id: HashMap::new(),
+            by_stream_key: HashMap::new(),
+            error: Some("db unavailable"),
+        };
+        let pipeline_lookup = FakePipelineStore {
+            pipelines: HashMap::new(),
+            error: None,
+        };
+
+        let result =
+            resolve_file_ingest_context(&ingest_lookup, &pipeline_lookup, "ingest-1").await;
+
+        assert!(matches!(
+            result,
+            Err(ResolveFileIngestError::IngestLookup(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn persist_pipeline_file_ingest_creates_new_ingest_when_none_exists() {
+        let pipeline = Pipeline {
+            id: "pipeline-1".to_string(),
+            name: "Pipeline".to_string(),
+            stream_key: "stream-key".to_string(),
+            input_source: None,
+            srt_ingest_policy: None,
+        };
+        let ingest_lookup = FakeIngestLookup {
+            by_id: HashMap::new(),
+            by_stream_key: HashMap::new(),
+            error: None,
+        };
+        let pipeline_store = FakePipelineStore {
+            pipelines: HashMap::from([("stream-key".to_string(), pipeline.clone())]),
+            error: None,
+        };
+        let ingest_writer = FakeIngestWriter {
+            created: std::sync::Mutex::new(Vec::new()),
+            deleted: std::sync::Mutex::new(Vec::new()),
+            fail: None,
+            update_returns_none: false,
+        };
+
+        let saved = persist_pipeline_file_ingest(
+            &ingest_lookup,
+            &ingest_writer,
+            &pipeline_store,
+            &pipeline,
+            &FileIngestConfig {
+                filename: "new.mp4".to_string(),
+                loop_flag: true,
+                start_time: "00:00:00".to_string(),
+                live_optimized: true,
+                target_gop_seconds: 4,
+            },
+            || "generated-id".to_string(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(saved.id, "generated-id");
+        assert_eq!(saved.filename, "new.mp4");
+        let created = ingest_writer
+            .created
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].id, "generated-id");
+        let deleted = ingest_writer
+            .deleted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        assert!(deleted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn persist_pipeline_file_ingest_surfaces_race_when_update_target_disappears() {
+        let existing = FakeIngestLookup::ingest("ingest-current", "stream-key");
+        let pipeline = Pipeline {
+            id: "pipeline-1".to_string(),
+            name: "Pipeline".to_string(),
+            stream_key: "stream-key".to_string(),
+            input_source: None,
+            srt_ingest_policy: None,
+        };
+        let ingest_lookup = FakeIngestLookup {
+            by_id: HashMap::new(),
+            by_stream_key: HashMap::from([("stream-key".to_string(), vec![existing])]),
+            error: None,
+        };
+        let pipeline_store = FakePipelineStore {
+            pipelines: HashMap::from([("stream-key".to_string(), pipeline.clone())]),
+            error: None,
+        };
+        let ingest_writer = FakeIngestWriter {
+            created: std::sync::Mutex::new(Vec::new()),
+            deleted: std::sync::Mutex::new(Vec::new()),
+            fail: None,
+            update_returns_none: true,
+        };
+
+        let result = persist_pipeline_file_ingest(
+            &ingest_lookup,
+            &ingest_writer,
+            &pipeline_store,
+            &pipeline,
+            &FileIngestConfig {
+                filename: "updated.mp4".to_string(),
+                loop_flag: false,
+                start_time: "00:00:10".to_string(),
+                live_optimized: false,
+                target_gop_seconds: 2,
+            },
+            || "generated".to_string(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(PersistFileIngestError::IngestWrite(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn remove_pipeline_file_ingest_deletes_all_ingests_and_clears_input_source() {
+        let first = FakeIngestLookup::ingest("ingest-1", "stream-key");
+        let second = FakeIngestLookup::ingest("ingest-2", "stream-key");
+        let pipeline = Pipeline {
+            id: "pipeline-1".to_string(),
+            name: "Pipeline".to_string(),
+            stream_key: "stream-key".to_string(),
+            input_source: Some("file:clip.mp4".to_string()),
+            srt_ingest_policy: None,
+        };
+        let ingest_lookup = FakeIngestLookup {
+            by_id: HashMap::new(),
+            by_stream_key: HashMap::from([(
+                "stream-key".to_string(),
+                vec![first.clone(), second.clone()],
+            )]),
+            error: None,
+        };
+        let pipeline_store = FakePipelineStore {
+            pipelines: HashMap::from([("stream-key".to_string(), pipeline.clone())]),
+            error: None,
+        };
+        let ingest_writer = FakeIngestWriter {
+            created: std::sync::Mutex::new(Vec::new()),
+            deleted: std::sync::Mutex::new(Vec::new()),
+            fail: None,
+            update_returns_none: false,
+        };
+
+        remove_pipeline_file_ingest(&ingest_lookup, &ingest_writer, &pipeline_store, &pipeline)
+            .await
+            .unwrap();
+
+        let mut deleted = ingest_writer
+            .deleted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        deleted.sort();
+        assert_eq!(
+            deleted,
+            vec!["ingest-1".to_string(), "ingest-2".to_string()]
+        );
     }
 }
