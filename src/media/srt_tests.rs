@@ -221,6 +221,80 @@ fn srt_rates_report_current_loss_window() {
     assert_eq!(quality.packets_received_undecrypt_per_sec, Some(1.0));
 }
 
+// libsrt counters are cumulative for the life of the socket and can regress
+// (reset to a smaller value) across a reconnect that reuses the same
+// snapshot struct. `counter_rate`'s `checked_sub` must turn that into `None`
+// rather than underflowing `u64` into a near-`u64::MAX` "spike".
+#[test]
+fn srt_rates_report_none_when_counter_regresses_instead_of_wrapping() {
+    let sampled_at = Instant::now();
+    let previous = SrtCounterSnapshot {
+        packets_received_loss: 500,
+        packets_received_drop: 50,
+        packets_received_retrans: 900,
+        packets_received_undecrypt: 5,
+        sampled_at,
+    };
+    let mut stats: SrtTraceBStats = unsafe { std::mem::zeroed() };
+    stats.pkt_rcv_loss_total = 10;
+    stats.pkt_rcv_drop_total = 1;
+    stats.pkt_rcv_retrans = 0;
+    stats.pkt_rcv_undecrypt_total = 0;
+
+    let (quality, _) =
+        srt_quality_from_stats(&stats, Some(previous), sampled_at + Duration::from_secs(2));
+    assert_eq!(quality.packets_received_loss_per_sec, None);
+    assert_eq!(quality.packets_received_drop_per_sec, None);
+    assert_eq!(quality.packets_received_retrans_per_sec, None);
+    assert_eq!(quality.packets_received_undecrypt_per_sec, None);
+    // The absolute (non-rate) counters still reflect the post-reset value.
+    assert_eq!(quality.packets_received_loss, Some(10));
+}
+
+// Two samples that land on (or before) the same `Instant` must guard the
+// division in `counter_rate` rather than producing `inf`/`NaN` or a stale
+// rate carried over from a prior window.
+#[test]
+fn srt_rates_report_none_at_zero_elapsed_seconds() {
+    let sampled_at = Instant::now();
+    let previous = SrtCounterSnapshot {
+        packets_received_loss: 5,
+        packets_received_drop: 0,
+        packets_received_retrans: 0,
+        packets_received_undecrypt: 0,
+        sampled_at,
+    };
+    let mut stats: SrtTraceBStats = unsafe { std::mem::zeroed() };
+    stats.pkt_rcv_loss_total = 15;
+
+    let (quality, _) = srt_quality_from_stats(&stats, Some(previous), sampled_at);
+    assert_eq!(quality.packets_received_loss_per_sec, None);
+}
+
+// libsrt reports -1 (or other negative `c_int` values) as an "unknown"
+// sentinel on several counters. `.max(0) as u64`/`.max(0) as f64` must clamp
+// that to 0 before widening; without the clamp, casting a negative i32
+// straight to u64 would sign-extend into a near-`u64::MAX` garbage value.
+#[test]
+fn quality_from_stats_clamps_negative_sentinel_counters_to_zero() {
+    let mut stats: SrtTraceBStats = unsafe { std::mem::zeroed() };
+    stats.pkt_rcv_loss_total = -1;
+    stats.pkt_rcv_drop_total = -1;
+    stats.pkt_rcv_retrans = -1;
+    stats.pkt_rcv_undecrypt_total = -1;
+    stats.ms_rcv_tsb_pd_delay = -1;
+    stats.ms_rcv_buf = -1;
+
+    let (quality, snapshot) = srt_quality_from_stats(&stats, None, Instant::now());
+    assert_eq!(quality.packets_received_loss, Some(0));
+    assert_eq!(quality.packets_received_drop, Some(0));
+    assert_eq!(quality.packets_received_retrans, Some(0));
+    assert_eq!(quality.packets_received_undecrypt, Some(0));
+    assert_eq!(quality.ms_receive_tsb_pd_delay, Some(0.0));
+    assert_eq!(quality.ms_receive_buf, Some(0.0));
+    assert_eq!(snapshot.packets_received_loss, 0);
+}
+
 #[test]
 fn ts_accum_capacity_tracks_packet_size_without_fixed_64k_floor() {
     let packets = vec![
