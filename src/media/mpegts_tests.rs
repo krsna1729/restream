@@ -2104,6 +2104,48 @@ fn adts_probe() {
     assert_eq!(meta.channels, 1);
 }
 
+#[test]
+fn adts_probe_boundary_and_malformed_inputs() {
+    // Empty payload must not panic and must leave metadata at its unparsed default.
+    let meta = probe_audio(StreamKind::AacAdts, 0, 0x101, None, None, &[]);
+    assert_eq!(meta.sample_rate, 0);
+    assert_eq!(meta.channels, 0);
+    assert!(!audio_meta_complete(StreamKind::AacAdts, &meta));
+
+    // One byte short of the 7-byte ADTS fixed header: the length guard must
+    // reject it even though the sync word and rate/channel bits look valid.
+    let short = [0xFF, 0xF1, 0x4C, 0x40, 0x02, 0x1F];
+    let meta = probe_audio(StreamKind::AacAdts, 0, 0x101, None, None, &short);
+    assert_eq!(meta.sample_rate, 0);
+    assert_eq!(meta.channels, 0);
+    assert!(!audio_meta_complete(StreamKind::AacAdts, &meta));
+
+    // Sync word mismatch (second byte's top nibble isn't 0xF): must not be
+    // parsed as ADTS even with an otherwise 7+ byte payload.
+    let bad_sync = [0xFF, 0x00, 0x4C, 0x40, 0x02, 0x1F, 0xFC];
+    let meta = probe_audio(StreamKind::AacAdts, 0, 0x101, None, None, &bad_sync);
+    assert_eq!(meta.sample_rate, 0);
+    assert_eq!(meta.channels, 0);
+    assert_eq!(meta.profile, None);
+
+    // sample_rate_idx = 13 is reserved (only 0..=12 are defined rates): must
+    // leave sample_rate at 0 (incomplete), not panic or index out of bounds.
+    let reserved_rate = [0xFF, 0xF1, 0x34, 0x00, 0x02, 0x1F, 0xFC];
+    let meta = probe_audio(StreamKind::AacAdts, 0, 0x101, None, None, &reserved_rate);
+    assert_eq!(
+        meta.sample_rate, 0,
+        "reserved sample rate index must not map to a rate"
+    );
+    assert_eq!(meta.profile, Some("Main".to_string()));
+    assert!(!audio_meta_complete(StreamKind::AacAdts, &meta));
+
+    // channel_config == 7 is the "8 channels" special case per the ADTS spec.
+    let eight_channel = [0xFF, 0xF1, 0x4D, 0xC0, 0x02, 0x1F, 0xFC];
+    let meta = probe_audio(StreamKind::AacAdts, 0, 0x101, None, None, &eight_channel);
+    assert_eq!(meta.channels, 8, "channel_config 7 must map to 8 channels");
+    assert!(audio_meta_complete(StreamKind::AacAdts, &meta));
+}
+
 // --- Helpers shared by PMT version tests ---
 
 /// Build a 188-byte TS PAT packet pointing to PMT PID 0x1000.

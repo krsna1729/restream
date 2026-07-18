@@ -63,6 +63,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 16:20 HUNT RTMP-EGRESS-PERCENT-DECODE DONE [codex]](#2026-07-18-1620-hunt-rtmp-egress-percent-decode-done-codex)
 - [2026-07-18 16:45 HUNT SRT-MONITOR-OVERFLOW DONE [codex]](#2026-07-18-1645-hunt-srt-monitor-overflow-done-codex)
 - [2026-07-18 17:20 HUNT ENGINE-SNAPSHOTS-POISON DONE [codex]](#2026-07-18-1720-hunt-engine-snapshots-poison-done-codex)
+- [2026-07-18 18:05 HUNT MPEGTS-PROBE-AUDIO-BOUNDARY DONE [codex]](#2026-07-18-1805-hunt-mpegts-probe-audio-boundary-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1575,3 +1576,68 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   has not yet been investigated.
 - Notes: continuing "the hunting" per the user's "you go ahead with the
   hunting" instruction.
+
+## 2026-07-18 18:05 HUNT MPEGTS-PROBE-AUDIO-BOUNDARY DONE [codex]
+- What: continued "the hunting" against the last open coverage-map
+  candidate, `src/media/mpegts_probe.rs` (72.92% line coverage, annotated
+  "probe/reporting paths"). Read the file in full (812 lines): the H.264/H.265
+  SPS parsing paths are already heavily hardened from Q-019/task#10 — checked
+  arithmetic throughout, plus existing proptests in `mpegts_tests.rs`
+  (`probe_video_never_panics`,
+  `probe_video_h264_truncation_never_yields_partial_metadata`,
+  `probe_video_h265_truncation_never_yields_partial_metadata`) already prove
+  fail-closed behavior for random and truncated bitstreams. `h264_is_keyframe`
+  / `h265_is_keyframe` also already have dedicated empty-payload and
+  no-start-code edge-case tests.
+  `probe_audio` (ADTS header parsing, the other public probe function in the
+  file) was the exception: only one happy-path test (`adts_probe`) existed.
+  Reading the function found four branches with no dedicated test: the
+  `pes_payload.len() >= 7` length guard, the sync-word check
+  (`pes_payload[0] == 0xFF && (pes_payload[1] & 0xF0) == 0xF0`), the
+  `sample_rate_idx < SAMPLE_RATES.len()` bounds check (reserved indices
+  13/14/15 are representable in the 4-bit field but not in the 13-entry
+  table), and the `channels == 7 → 8` ADTS special-case remap. None of these
+  can currently panic (all indexing is guarded), but none had a regression
+  test proving the guard actually rejects the malformed/boundary input rather
+  than, say, silently parsing garbage or leaving a stale value from a
+  previous call.
+  Added `adts_probe_boundary_and_malformed_inputs` in `mpegts_tests.rs`,
+  covering: empty payload, a payload exactly one byte short of the 7-byte
+  minimum, a payload that fails the sync-word check despite being long
+  enough, a reserved `sample_rate_idx` of 13 (asserts `sample_rate` stays 0
+  and `audio_meta_complete` reports incomplete despite a valid `profile`),
+  and a `channel_config` of 7 (asserts it maps to 8 channels and
+  `audio_meta_complete` reports complete).
+  Outcome: no new bug — every guard already behaves correctly — but this
+  closes the last real gap on this file's public parsing surface: previously
+  only the happy path was pinned, so a regression in any of these four
+  guards (e.g. an off-by-one on the length check, or dropping the
+  channels==7 remap) would have shipped silently. Recorded honestly as a
+  coverage/proof-gap closure, not a bug fix, consistent with the discipline
+  used for `engine_snapshots.rs`.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib mpegts` — 75/75
+  pass (all mpegts module tests, including the new one). `cargo fmt --all
+  --check` — clean after one formatting fixup. `scripts/build/resource-limit.sh
+  cargo clippy --lib -- -D warnings` — clean. `node scripts/check/docs.mjs` —
+  clean. Ran full `scripts/build/resource-limit.sh cargo test --lib`: 1107
+  passed, 2 failed
+  (`external_transcoder::tests::chained_hevc_preview_stages_emit_live_h264_packets`,
+  `external_transcoder::tests::hevc_scaled_rtmp_audio_routes_emit_both_selected_tracks`).
+  Confirmed unrelated to this change — `git status` shows only
+  `src/media/mpegts_tests.rs` modified, and both failing tests spawn real
+  ffmpeg subprocesses under `--test-threads` parallelism; re-ran just
+  `external_transcoder::tests` with `--test-threads=1` and both passed
+  (20/20), confirming pre-existing resource-contention flakiness under full
+  parallel load, not a regression from this change. Did not broaden to a
+  concurrency proof gate — this change is a single-file boundary-value test
+  addition with no concurrency, lifecycle, or thread-hop surface.
+- Commit: this commit (`src/media/mpegts_tests.rs`, journal).
+- Follow-ups: none filed. Both previously-identified coverage-map lead-list
+  candidates (`engine_snapshots.rs`, `mpegts_probe.rs`) are now exhausted;
+  the next hunting step is to either re-derive a new coverage-map lead list
+  or continue open-ended hunting without one.
+- Notes: continuing "the hunting" per the user's "you go ahead with the
+  hunting" instruction. Also noted in passing: the delegated background
+  agent (workstream A, Q-009/Q-010/Q-012 on
+  `codex/perf-sweep-opus-20260718`) completed independently during this
+  hunt — not touched, per instructions.
