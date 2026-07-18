@@ -78,6 +78,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 23:50 HUNT SRT-POLICY-FALLBACK-SEMANTICS DONE [codex]](#2026-07-18-2350-hunt-srt-policy-fallback-semantics-done-codex)
 - [2026-07-19 00:10 HUNT TRANSCODE-PROFILE-VALIDATION-BOUNDARIES DONE [codex]](#2026-07-19-0010-hunt-transcode-profile-validation-boundaries-done-codex)
 - [2026-07-19 00:35 HUNT API-VIEW-MODELS-FORMATTING-HELPERS DONE [codex]](#2026-07-19-0035-hunt-api-view-models-formatting-helpers-done-codex)
+- [2026-07-19 01:00 HUNT RESOURCE-MAP-JSON-SHAPING-HELPERS DONE [codex]](#2026-07-19-0100-hunt-resource-map-json-shaping-helpers-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2385,3 +2386,69 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   ratios not yet deeply evaluated) and `src/api_runtime_views/` thin-ratio
   files (`status.rs` 833 lines/5 tests, `resource_map.rs` 736/1,
   `telemetry.rs` 403/3) worth a closer look next.
+
+## 2026-07-19 01:00 HUNT RESOURCE-MAP-JSON-SHAPING-HELPERS DONE [codex]
+
+- Scope: continued the open-ended scan into `src/api_runtime_views/`.
+  Re-checked `telemetry.rs` first: an earlier ratio scan undercounted it
+  (grepping only `#[test]` and missing `#[tokio::test]`) — it actually has
+  3 solid `#[tokio::test]` integration-style tests covering its async
+  `MediaEngine`-coupled functions, including a real regression case
+  (`telemetry_reads_runtime_stage_after_metrics_side_map_removed`). Ruled
+  it out as already adequately covered for its shape (thin async glue,
+  same category as the earlier-ruled-out `graph.rs`).
+- Finding: `src/api_runtime_views/resource_map.rs` (736 lines) had only one
+  `#[test]`, despite containing roughly 15 pure, synchronous functions that
+  shape the operator/agent-facing `GET .../resource-map` JSON from
+  untrusted-shaped `serde_json::Value` telemetry snapshots — field
+  extraction, group-key/label derivation, thread/hotspot merging, node
+  scoring, sorting/truncation, and per-node-kind builders. Added 16 new
+  `#[test]` functions to the existing `mod tests` block covering:
+  `ResourceMapOptions::new`'s `top_n` clamping at the low end (`Some(0)`
+  clamps up to 1, not an empty view) and high end (`Some(MAX_TOP_N +
+  1000)` clamps down, guarding against unbounded node allocation from a
+  malicious or buggy query parameter); `number_field` returning 0 (not
+  panicking or wrapping) for a missing key, a non-integer string, a
+  negative number, and a fractional number, plus round-tripping
+  `u64::MAX`; `group_key`/`group_label` defaulting cleanly on missing
+  `kind`/`execution`/`label` fields, including an all-whitespace egress
+  label (no first word, falls back to `"unknown"`) and an empty group key
+  (single empty split segment, falls through to the `other` arm without
+  panicking); `merge_thread_counts` accumulating counts across repeated
+  calls while silently skipping non-numeric thread-count entries;
+  `append_hotspots` deduplicating repeated hotspot strings while ignoring
+  non-string array entries; `queue_hotspots`' 75%-of-capacity threshold
+  boundary (`len*100 >= capacity*75`, inclusive at exactly 75%) and its
+  `capacity > 0` guard, which prevents a zero-capacity queue from
+  reporting `queue_high` even at `u64::MAX` length (the multiplication
+  would otherwise saturate to a false positive without the guard);
+  `execution_for_stage`'s full backend-string-to-execution-model mapping
+  including both case variants seen in the wild (`externalFfmpeg` /
+  `ExternalFfmpeg`) and its default-to-`shared` fallback for an unknown or
+  missing backend; `stage_backend_pid` rejecting a `backendPid` value that
+  does not fit in `u32` (e.g. `u64::MAX`) via `None` rather than silently
+  truncating it to a different, wrong pid; `node_score`'s cpu-dominates-
+  memory weighting (1% CPU outweighs just under 1 MiB of memory, by
+  design); `top_nodes` sorting descending by score with correct
+  truncation, including a truncate-to-zero case that must return empty
+  rather than panic; and `egress_node`/`source_ring_node`'s protocol- and
+  payload-driven branches (SRT egress is the only protocol treated as an
+  app-owned OS thread; a source ring only reports the `retained_payload`
+  hotspot when it actually holds bytes).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib resource_map`
+  — 17/17 pass (16 new plus 1 pre-existing, unaffected).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` + `--check` — clean (auto-wrapped
+  a few of the new multi-line `assert_eq!` calls, cosmetic only, re-ran
+  the test suite afterward to confirm no behavior changed). Test-only
+  change; the JSON shape of `resource_map`'s public output was not
+  touched, so did not run `scripts/check/api-contract.sh`.
+- Commit: `ef795dac` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. All observed defaults/clamps/guards are
+  existing, intentional-looking behavior; nothing found here rose to the
+  level of a bug.
+- Notes: continuing the open-ended scan. Remaining unswept areas: most of
+  `src/application/` (`ingest.rs`, `reconcile.rs`, `egress.rs`,
+  `hls_preview.rs`, `recording.rs`, `srt_ingest.rs`, `ingest_security.rs`,
+  `models.rs`, `settings.rs`, `graph.rs`) and `src/api_runtime_views/`
+  `status.rs` (833 lines/5 tests) worth a closer look next.
