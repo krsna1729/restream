@@ -271,3 +271,93 @@ impl MediaEngine {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hls_preview_registry_key_roundtrips_through_extraction() {
+        let key = hls_preview_registry_key("abc");
+        assert_eq!(key, "__preview__:abc");
+        assert_eq!(pipeline_id_from_hls_preview_registry_key(&key), Some("abc"));
+    }
+
+    #[test]
+    fn hls_preview_registry_key_roundtrips_for_empty_pipeline_id() {
+        let key = hls_preview_registry_key("");
+        assert_eq!(pipeline_id_from_hls_preview_registry_key(&key), Some(""));
+    }
+
+    #[test]
+    fn pipeline_id_from_hls_preview_registry_key_rejects_unprefixed_key() {
+        assert_eq!(pipeline_id_from_hls_preview_registry_key("abc"), None);
+        // The prefix must anchor at the start, not just appear somewhere.
+        assert_eq!(
+            pipeline_id_from_hls_preview_registry_key("notpreview__preview__:abc"),
+            None
+        );
+    }
+
+    // A pipeline id that itself contains the preview prefix as a literal
+    // substring only has the outer, registry-added prefix stripped: the
+    // extraction is not recursive, so the caller-supplied id survives intact.
+    #[test]
+    fn hls_preview_registry_key_roundtrips_when_pipeline_id_contains_prefix() {
+        let pipeline_id = "__preview__:foo";
+        let key = hls_preview_registry_key(pipeline_id);
+        assert_eq!(key, "__preview__:__preview__:foo");
+        assert_eq!(
+            pipeline_id_from_hls_preview_registry_key(&key),
+            Some(pipeline_id)
+        );
+    }
+
+    #[test]
+    fn is_idle_treats_never_touched_consumer_as_idle_at_zero_timeout() {
+        // last_access_ms starts at 0; a fresh consumer with no persistent
+        // outputs and a zero grace timeout must be considered idle
+        // immediately, with no implicit startup grace period.
+        let hc = HlsConsumers::new(CancellationToken::new());
+        assert!(hc.is_idle(0));
+    }
+
+    #[test]
+    fn is_idle_ignores_elapsed_time_while_persistent_consumers_exist() {
+        // A persistent (egress) consumer must veto idle shutdown outright,
+        // even though the heartbeat was never touched and the timeout is 0.
+        let hc = HlsConsumers::new(CancellationToken::new());
+        hc.add_persistent();
+        assert!(!hc.is_idle(0));
+    }
+
+    // `is_idle` compares `now_ms()` against `last_access_ms` with
+    // `saturating_sub`, not plain subtraction. If `last_access_ms` is ever
+    // ahead of `now_ms()` (state corruption, or clock skew across a
+    // hypothetical restart of `reference_instant`), plain subtraction on
+    // `u64` would panic in debug builds and wrap to a huge value in release,
+    // both of which would misreport a live consumer as idle or crash the
+    // engine. The guard must instead treat "reads as behind" as "not idle".
+    #[test]
+    fn is_idle_does_not_underflow_when_last_access_is_ahead_of_now() {
+        let hc = HlsConsumers::new(CancellationToken::new());
+        hc.last_access_ms.store(u64::MAX, Ordering::Relaxed);
+        assert!(!hc.is_idle(1000));
+    }
+
+    // `remove_persistent` has no guard against being called without a
+    // matching `add_persistent`: the counter is a bare `fetch_sub`, so it
+    // wraps to `u64::MAX` instead of saturating at 0. Because `is_idle`
+    // treats any nonzero `persistent` count as "never idle", a single
+    // mismatched remove call permanently pins the consumer as non-idle and
+    // leaks its segmenter/store. This test pins the current wrap-not-panic
+    // behavior so a future caller mismatch is visible as a stuck-non-idle
+    // regression rather than a silent resource leak.
+    #[test]
+    fn remove_persistent_without_add_wraps_and_permanently_blocks_idle_shutdown() {
+        let hc = HlsConsumers::new(CancellationToken::new());
+        hc.remove_persistent();
+        assert_eq!(hc.persistent.load(Ordering::Relaxed), u64::MAX);
+        assert!(!hc.is_idle(0));
+    }
+}
