@@ -51,6 +51,8 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 03:20 Q-015 DONE [codex]](#2026-07-18-0320-q-015-done-codex)
 - [2026-07-18 03:25 Q-016 STARTED [codex]](#2026-07-18-0325-q-016-started-codex)
 - [2026-07-18 04:05 Q-016 DONE [codex]](#2026-07-18-0405-q-016-done-codex)
+- [2026-07-18 04:10 Q-003 STARTED [codex]](#2026-07-18-0410-q-003-started-codex)
+- [2026-07-18 06:15 Q-003 AVIO-FIX DONE [codex]](#2026-07-18-0615-q-003-avio-fix-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1020,3 +1022,47 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Notes: same pattern as Q-015 — a proof/coverage task surfaced a real
   production bug (a resource leak, not a crash) that the adversarial sweep
   goal explicitly asks to fix and regression-test in place.
+
+## 2026-07-18 04:10 Q-003 STARTED [codex]
+- What: seed the Criterion benchmark baseline ledger in `baselines.md` with
+  medians for `ring_buffer`, `avio_throughput`, and
+  `high_performance_data_path`, each from three clean serial `cargo bench`
+  runs on an idle host.
+- Gates: pending — three serial `scripts/build/resource-limit.sh cargo
+  bench --bench <name>` runs per suite; host confirmed idle via
+  `pgrep -x restream; pgrep -x mediamtx; pgrep -x ffmpeg` (all empty)
+  immediately before starting.
+- Commit: none.
+- Follow-ups: pending bench results.
+
+## 2026-07-18 06:15 Q-003 AVIO-FIX DONE [codex]
+- What: the first `avio_throughput` bench run under Q-003 hung indefinitely
+  at 0% CPU on its first warmup iteration. Root-caused to a lost-wakeup race
+  in `MemoryQueue::write`/`write_cancellable`/`write_batch`
+  (`src/media/avio.rs`): each called `self.space_available.notified()` (a
+  fresh `Notified` future, which only observes notifications from the moment
+  it's created) *after* releasing the lock that guarded the capacity check.
+  A reader on another OS thread could drain the buffer and call
+  `notify_waiters()` in that gap, before the writer's future existed to
+  observe it — losing the wakeup and hanging the writer forever. Fixed by
+  arming `notified()` before the capacity check in all three write paths, so
+  it snapshots the notify generation before the lock is dropped.
+- Gates: new regression test
+  `write_wakeup_survives_lock_release_race` (multi-thread runtime writer +
+  tight-loop OS-thread reader, capacity crossed on nearly every write, 10s
+  timeout) fails (hangs to timeout) against pre-fix code and passes
+  post-fix. Full `media::avio` module: 19/19 passed, 0 failed. `cargo fmt
+  --all --check` clean. `scripts/check/concurrency/contract.sh` passed in
+  full (loom suites, proptests, live-harness fault/recovery scenarios, API
+  tests) with 0 failures across all logs in
+  `.local/artifacts/concurrency-contract-logs/`. `benches/avio_throughput.rs`
+  now completes normally instead of hanging.
+- Commit: this commit.
+- Follow-ups: none identified — the same lost-wakeup shape does not appear
+  elsewhere in `avio.rs`'s notify usage (reader-side and close-side
+  `notify_waiters()` callers don't hold a matching pre-armed `Notified`
+  future because they're not blocking-wait loops). Q-003 baseline-ledger
+  seeding resumes now that the bench suite runs cleanly.
+- Notes: same pattern as Q-015/Q-016 — a proof/benchmark task surfaced a
+  real production bug (a hang, not a crash) that the adversarial sweep goal
+  explicitly asks to fix and regression-test in place.

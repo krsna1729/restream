@@ -90,6 +90,13 @@ impl MemoryQueue {
     pub async fn write(&self, data: &[u8]) {
         let mut blocked_since = None;
         loop {
+            // Arm the `Notified` future *before* checking capacity: it snapshots
+            // the notify generation on creation, so a `notify_waiters()` racing
+            // in right after we drop the lock below is still observed. Creating
+            // it only after the check (the previous bug) left a gap where a
+            // reader could drain and notify before we started waiting, losing
+            // the wakeup and hanging the writer forever.
+            let notified = self.space_available.notified();
             {
                 let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 if inner.closed || inner.buf.len() < self.capacity {
@@ -100,7 +107,7 @@ impl MemoryQueue {
                 blocked_since = Some(Instant::now());
                 self.blocked_writes.fetch_add(1, Ordering::Relaxed);
             }
-            self.space_available.notified().await;
+            notified.await;
         }
         if let Some(start) = blocked_since {
             self.blocked_write_us
@@ -119,6 +126,10 @@ impl MemoryQueue {
     pub async fn write_cancellable(&self, data: &[u8], cancel: &CancellationToken) -> bool {
         let mut blocked_since = None;
         loop {
+            // See `write()` for why this future must be armed before the
+            // capacity check — it closes a lost-wakeup race against a
+            // concurrent `notify_waiters()`.
+            let notified = self.space_available.notified();
             {
                 let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 if inner.closed || inner.buf.len() < self.capacity {
@@ -130,7 +141,7 @@ impl MemoryQueue {
                 self.blocked_writes.fetch_add(1, Ordering::Relaxed);
             }
             tokio::select! {
-                _ = self.space_available.notified() => {}
+                _ = notified => {}
                 _ = cancel.cancelled() => {
                     if let Some(start) = blocked_since {
                         self.blocked_write_us
@@ -167,6 +178,10 @@ impl MemoryQueue {
 
         let mut blocked_since = None;
         loop {
+            // See `write()` for why this future must be armed before the
+            // capacity check — it closes a lost-wakeup race against a
+            // concurrent `notify_waiters()`.
+            let notified = self.space_available.notified();
             {
                 let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 if inner.closed || inner.buf.len() < self.capacity {
@@ -177,7 +192,7 @@ impl MemoryQueue {
                 blocked_since = Some(Instant::now());
                 self.blocked_writes.fetch_add(1, Ordering::Relaxed);
             }
-            self.space_available.notified().await;
+            notified.await;
         }
         if let Some(start) = blocked_since {
             self.blocked_write_us
@@ -848,6 +863,58 @@ mod tests {
         assert_eq!(n, 6);
         assert_eq!(&buf, b"wakeup");
         handle.join().unwrap();
+    }
+
+    // Regression: `write()` used to call `space_available.notified()` *after*
+    // releasing the capacity-check lock. A reader on another OS thread could
+    // drain the buffer and call `notify_waiters()` in that gap — before the
+    // writer's future existed to observe it — losing the wakeup and hanging
+    // the writer forever. Reproduced by benches/avio_throughput.rs, which hung
+    // indefinitely at 0% CPU on its first warmup iteration. This test mirrors
+    // that shape (multi-thread runtime writer + tight-loop reader on a real
+    // OS thread, capacity crossed on nearly every write) so the race window
+    // is exercised on essentially every iteration; a timeout catches a
+    // reintroduced lost wakeup instead of hanging the test suite.
+    #[test]
+    fn write_wakeup_survives_lock_release_race() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let chunk_size = 64;
+        let iterations = 500;
+        let queue = Arc::new(MemoryQueue::new_with_capacity(chunk_size));
+        let chunk = vec![0xABu8; chunk_size];
+
+        let w = queue.clone();
+        let c = chunk.clone();
+        let writer = runtime.spawn(async move {
+            for _ in 0..iterations {
+                w.write(&c).await;
+            }
+            w.close();
+        });
+
+        let reader_queue = queue.clone();
+        let reader = std::thread::spawn(move || {
+            let mut buf = vec![0u8; chunk_size];
+            let mut total = 0usize;
+            loop {
+                let n = reader_queue.read(&mut buf);
+                if n == 0 {
+                    break;
+                }
+                total += n;
+            }
+            total
+        });
+
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), writer)
+                .await
+                .expect("writer must not hang on a lost wakeup")
+                .expect("writer task must not panic");
+        });
+
+        let total = reader.join().unwrap();
+        assert_eq!(total, iterations * chunk_size);
     }
 
     proptest! {
