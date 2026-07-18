@@ -516,7 +516,7 @@ Interpretation:
 | 3.28% | `__memmove_avx_unaligned_erms` | AVIO buffer → `ts_accum` copy | Q-009 [opus] — addressed 2026-07-18 (see note) |
 | 2.60% | `pthread_mutex_lock` | SRT internal + MemoryQueue mutex | (unfiled) |
 | 1.18% | `__vdso_clock_gettime` | per-packet SRT latency tracking | (unfiled) |
-| 0.87% | `_int_malloc` | per-packet `Arc::new(MediaPacket)` | Q-010 [opus] |
+| 0.87% | `_int_malloc` | per-packet `Arc::new(MediaPacket)` | Q-010 [opus] — rejected 2026-07-18 (see note) |
 | 0.43% | `VecDeque::extend` | AVIO queue write (second copy) | Q-009 [opus] — addressed 2026-07-18 (see note) |
 
 ### Q-009 result — AVIO→TsMux copy elimination (2026-07-18)
@@ -545,6 +545,53 @@ non-empty, not this session's to kill):
 ([10.66, 10.89] vs [9.97, 10.16] µs). Core mux path unchanged within noise
 (`data_path/mpegts_mux/mux_all_packets` 478 µs, 12.6 GiB/s). `cargo test --lib
 mpegts` (74) and `--lib srt` (91) green.
+
+### Q-010 result — per-packet `Arc<MediaPacket>` pooling REJECTED (2026-07-18)
+
+Decision: do not add a slab/pool allocator for `MediaPacket`; the
+`Arc::new(MediaPacket)` allocation stays. No runtime code changed. Evidence:
+
+Bench shape — `RingBuffer` slots hold `ArcSwapOption<MediaPacket>`; `push` /
+`push_batch` do `Arc::new(packet)` then `.store()` (`ring_buffer.rs:489,519`),
+and readers `load_full()` obtain an `Arc<MediaPacket>` with an unbounded
+lifetime. `MediaPacket` is 56 B (`repr(C)`); with the 16-B Arc control block
+each allocation is a 72-B request, served from glibc's per-thread `tcache`
+(lock-free, O(1) fast path). The payload is a separately ref-counted `Bytes`,
+untouched by any packet pool.
+
+Microbenchmark (`ring_buffer/producer`, WSL2, idle host, kill-check clean,
+100 samples; the whole-`push` time below includes the `Arc::new` allocation
+plus the `ArcSwap` store):
+
+| Variant | Median (burst) | Per-element | Throughput |
+|---|---|---|---|
+| `push_one_at_a_time/1` | 142.05 ns | 142 ns | 7.04 Melem/s |
+| `push_batch/1` | 145.71 ns | 146 ns | 6.86 Melem/s |
+| `push_one_at_a_time/4` | 541.34 ns | 135 ns | 7.39 Melem/s |
+| `push_batch/4` | 519.09 ns | 130 ns | 7.71 Melem/s |
+| `push_one_at_a_time/8` | 1.086 µs | 136 ns | 7.37 Melem/s |
+
+Per-element push cost is flat (~130–145 ns) from burst 1→8 and `push` ≈
+`push_batch` within noise, so batching already amortizes the path and there is
+no per-burst allocation win left for a pool to capture. Reasons to reject:
+
+1. Magnitude — the profile put `_int_malloc` at 0.87% self-time; the request
+   is a tcache-served 72-B size class, already a lock-free O(1) fast path. A
+   pool's best case only replaces an already-fast path.
+2. Ownership — reclamation is intrinsically last-reader-drop: readers hold the
+   `Arc` across await points, threads, and arbitrary time. `Arc` + the global
+   allocator already implement exactly that (last `Arc` drop frees to tcache).
+   A custom slab must replicate the same last-drop hook *plus* a synchronized
+   cross-thread freelist, because producers (SRT/RTMP ingest threads) and
+   consumers (egress/HLS/recording tasks) run on different threads — every
+   reclaim becomes a cross-thread free contending on the pool lock, versus
+   tcache handling the common same-thread free lock-free. It trades a
+   lock-free path for a contended one on a path the profile says is cold.
+3. Safety — a slot-reusing pool risks use-after-free / ABA if any reader
+   outlives the intended lifetime, violating the "no failure path may crash the
+   engine" invariant. `Arc` makes that impossible by construction.
+
+A documented rejection is a valid completion for this item (backlog Q-010).
 
 ## Profiling notes (VPS — hardware counters available)
 

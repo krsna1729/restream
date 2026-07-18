@@ -419,7 +419,13 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: pooling changes ownership semantics on the hot path — correctness
   risk outweighs the win unless proven; a documented rejection is a valid
   completion.
-- Status: open (Filed: 2026-07-03 by bootstrap)
+- Status: done (Rejected. `ring_buffer/producer` bench shows ~135–145 ns/push
+  flat from burst 1→8 with `push` ≈ `push_batch`; the `Arc<MediaPacket>` is a
+  72-B tcache-served, lock-free O(1) allocation at 0.87% self-time. A pool would
+  replicate `Arc`'s last-reader-drop reclamation with a contended cross-thread
+  freelist and add use-after-free/ABA risk against the engine no-crash
+  invariant, for a cold path. No code changed. 2026-07-18 by opus; Filed:
+  2026-07-03 by bootstrap)
 
 ## Blocked
 

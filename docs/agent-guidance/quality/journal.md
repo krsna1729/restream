@@ -61,6 +61,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 10:20 Q-003 DONE [codex]](#2026-07-18-1020-q-003-done-codex)
 - [2026-07-18 15:38 AVIO-LOOM DONE [codex]](#2026-07-18-1538-avio-loom-done-codex)
 - [2026-07-18 16:40 Q-009 DONE [opus]](#2026-07-18-1640-q-009-done-opus)
+- [2026-07-18 17:20 Q-010 DONE [opus]](#2026-07-18-1720-q-010-done-opus)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1449,3 +1450,45 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   receiver-scale proof named in the item's aspirational gate list is deferred
   until the VPS is idle and is not required to accept a strictly-fewer-copies
   change with green protocol tests and a non-overlapping-CI microbench win.
+
+## 2026-07-18 17:20 Q-010 DONE [opus]
+
+- What: Evaluated slab/pool allocation for the per-packet
+  `Arc<MediaPacket>` (backlog Q-010, `_int_malloc` 0.87% self-time in the
+  2026-06-27 profile). Decision: REJECTED — no runtime code changed; the
+  `Arc::new(MediaPacket)` stays. Surveyed the allocation sites first:
+  `RingBuffer::push`/`push_batch` do `Arc::new(packet)` then a slot
+  `ArcSwapOption::store` (`ring_buffer.rs:489,519`), and readers `load_full()`
+  take an `Arc<MediaPacket>` with an unbounded lifetime. `MediaPacket` is 56 B
+  (`repr(C)`); with the 16-B Arc control block the request is 72 B, served from
+  glibc's per-thread `tcache` fast path.
+- Gates: `ring_buffer/producer` Criterion bench, WSL2 idle host, kill-check
+  clean (`pgrep -x restream/mediamtx/ffmpeg` empty), 100 samples. Whole-`push`
+  time (includes `Arc::new` + `ArcSwap` store): `push_one_at_a_time` 142.05 ns/1,
+  541.34 ns/4 (135 ns/elem), 1.086 µs/8 (136 ns/elem); `push_batch` 145.71 ns/1,
+  519.09 ns/4 (130 ns/elem). Per-element cost is flat 1→8 and `push` ≈
+  `push_batch` within noise, so batching already amortizes the path — no
+  per-burst allocation win remains for a pool to capture. No code changed, so no
+  loom/unit ownership proofs were needed.
+- Commit: this commit (`baselines.md` § Q-010 result + standing-target row,
+  `backlog.md` Q-010 status, journal). No `src/` changes.
+- Follow-ups: none. If a future hardware-PMU MSR profile shows `_int_malloc`
+  climbing materially above the current 0.87%, revisit — but only with a design
+  that keeps `Arc` reclamation semantics.
+- Notes: three reasons the pool loses. (1) Magnitude — 0.87% self-time on a
+  tcache-served, lock-free O(1) size class; a pool's best case only replaces an
+  already-fast path. (2) Ownership — reclamation is intrinsically
+  last-reader-drop (readers hold the `Arc` across await points and threads for
+  arbitrary time); `Arc` + the global allocator already do exactly that. A
+  custom slab must replicate the last-drop hook *plus* a synchronized
+  cross-thread freelist, because producers (SRT/RTMP ingest threads) and
+  consumers (egress/HLS/recording tasks) run on different threads — every
+  reclaim becomes a cross-thread free contending on the pool lock, versus tcache
+  handling the common same-thread free lock-free. It trades a lock-free path for
+  a contended one on a cold path. (3) Safety — a slot-reusing pool risks
+  use-after-free / ABA if a reader outlives the intended lifetime, violating the
+  engine no-crash invariant; `Arc` makes that impossible by construction. Full
+  write-up in `baselines.md` § Q-010 result. Contabo VPS still carried the
+  ~2-day external MSR workload, but this micro-decision needs no PMU counters —
+  the wall-clock bench plus the ownership/safety analysis is sufficient to
+  reject.
