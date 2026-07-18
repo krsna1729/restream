@@ -11,14 +11,11 @@ impl MediaEngine {
         self: &Arc<Self>,
         pipeline_id: &str,
     ) -> Arc<Fmp4HlsStore> {
-        let (store, already_running) = self.ensure_hls_preview_segmenter(pipeline_id).await;
+        let (store, already_running, cancel_token) =
+            self.ensure_hls_preview_segmenter(pipeline_id).await;
         if !already_running {
             let engine = self.clone();
             let pid = pipeline_id.to_string();
-            let cancel_token = self
-                .get_hls_preview_cancel_token(pipeline_id)
-                .await
-                .unwrap();
             let graph = match crate::media::hls::preview_graph::resolve_hls_preview_graph(
                 self.clone(),
                 pipeline_id,
@@ -87,6 +84,47 @@ mod tests {
                 .await
                 .is_some()
         );
+
+        engine.shutdown_hls_preview_segmenter(pipeline_id).await;
+    }
+
+    /// Regression test for a TOCTOU race: `ensure_hls_preview_runtime` used to
+    /// insert a consumer entry, drop the lock, then re-acquire it via
+    /// `get_hls_preview_cancel_token(...).await.unwrap()`. A concurrent
+    /// `shutdown_hls_preview_segmenter` call could remove the entry in that
+    /// window, turning the `unwrap()` into a panic. `ensure_hls_preview_segmenter`
+    /// now hands back the token it just inserted directly, so there is no
+    /// window for a concurrent shutdown to invalidate. Hammer ensure/shutdown
+    /// concurrently and confirm every task completes without panicking.
+    #[tokio::test]
+    async fn ensure_hls_preview_runtime_survives_concurrent_shutdown_race() {
+        let engine = Arc::new(MediaEngine::new());
+        let pipeline_id = "pipe-hls-preview-race";
+        engine
+            .try_register_ingest(pipeline_id, "stream-key", "rtmp")
+            .await
+            .unwrap();
+        let _ = engine.get_or_create_pipeline(pipeline_id).await;
+
+        let mut tasks = Vec::new();
+        for _ in 0..64 {
+            let ensure_engine = engine.clone();
+            let pid = pipeline_id.to_string();
+            tasks.push(tokio::spawn(async move {
+                let _ = ensure_engine.ensure_hls_preview_runtime(&pid).await;
+            }));
+
+            let shutdown_engine = engine.clone();
+            let pid = pipeline_id.to_string();
+            tasks.push(tokio::spawn(async move {
+                shutdown_engine.shutdown_hls_preview_segmenter(&pid).await;
+            }));
+        }
+
+        for task in tasks {
+            task.await
+                .expect("no task should panic under the ensure/shutdown race");
+        }
 
         engine.shutdown_hls_preview_segmenter(pipeline_id).await;
     }

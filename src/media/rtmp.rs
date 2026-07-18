@@ -413,7 +413,17 @@ async fn handle_rtmp_client(
     let disconnect_outcome = loop {
         tokio::select! {
             read_result = socket.read(&mut buffer) => {
-                let n = read_result.map_err(|_| "Read error in main loop")?;
+                let n = match read_result {
+                    Ok(n) => n,
+                    Err(_) => {
+                        warn!("read error in main loop for {}", client_addr_text);
+                        break Some((
+                            "io".to_string(),
+                            "Read error in main loop".to_string(),
+                            true,
+                        ));
+                    }
+                };
                 if n == 0 {
                     break Some((
                         "disconnect".to_string(),
@@ -422,9 +432,17 @@ async fn handle_rtmp_client(
                     ));
                 }
 
-                let results = session
-                    .handle_input(&buffer[..n])
-                    .map_err(|_| "Session parse error")?;
+                let results = match session.handle_input(&buffer[..n]) {
+                    Ok(results) => results,
+                    Err(_) => {
+                        warn!("session parse error for {}", client_addr_text);
+                        break Some((
+                            "session".to_string(),
+                            "Session parse error".to_string(),
+                            true,
+                        ));
+                    }
+                };
                 if let Err(e) = handle_session_results(
                     &mut session,
                     results,

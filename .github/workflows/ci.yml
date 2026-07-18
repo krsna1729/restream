@@ -35,6 +35,8 @@ jobs:
         run: cargo fmt --all --check
       - name: Check TypeScript types
         run: npx tsc -p tsconfig.json --noEmit
+      - name: Check agent worktree dependency readiness
+        run: ./scripts/check/agent-worktree-frontend-deps.sh
 
   lint:
     name: Rust lint

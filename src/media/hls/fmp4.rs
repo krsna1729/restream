@@ -1450,6 +1450,83 @@ mod tests {
     }
 
     #[test]
+    fn avcc_box_rejects_sps_ok_but_missing_pps_count_byte() {
+        // Truncate right after the valid SPS, before the mandatory numPPS
+        // byte. A partial SPS-only sample entry would be worse than none
+        // (playback can't decode without a PPS), so this must fail closed.
+        let mut header = high_profile_sequence_header();
+        header.truncate(38);
+        assert!(
+            build_h264_sample_entry_from_flv_sequence_header(&header, &test_video_meta()).is_none()
+        );
+    }
+
+    #[test]
+    fn avcc_box_rejects_sps_ok_but_pps_length_truncated() {
+        // numPPS = 1 is present but the PPS length/body never arrives.
+        let mut header = high_profile_sequence_header();
+        header.truncate(39);
+        assert!(
+            build_h264_sample_entry_from_flv_sequence_header(&header, &test_video_meta()).is_none()
+        );
+    }
+
+    #[test]
+    fn avcc_box_rejects_max_declared_sps_length_with_tiny_buffer() {
+        // Overwrite the declared SPS length (bytes 11..13) with 0xFFFF but
+        // keep only the original short buffer trailing it.
+        let mut header = high_profile_sequence_header();
+        header[11] = 0xFF;
+        header[12] = 0xFF;
+        header.truncate(15);
+        assert!(
+            build_h264_sample_entry_from_flv_sequence_header(&header, &test_video_meta()).is_none()
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn parse_avcc_box_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..128)) {
+            let _ = parse_avcc_box(&bytes);
+        }
+
+        #[test]
+        fn parse_avcc_box_truncation_always_fails_closed(
+            profile in any::<u8>(),
+            compat in any::<u8>(),
+            level in any::<u8>(),
+            length_size in any::<u8>(),
+            sps_bodies in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..16), 0..3),
+            pps_bodies in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..16), 0..3),
+        ) {
+            let mut data = vec![0u8, profile, compat, level, length_size];
+            data.push(0xE0 | (sps_bodies.len() as u8 & 0x1F));
+            for sps in &sps_bodies {
+                data.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+                data.extend_from_slice(sps);
+            }
+            data.push(pps_bodies.len() as u8);
+            for pps in &pps_bodies {
+                data.extend_from_slice(&(pps.len() as u16).to_be_bytes());
+                data.extend_from_slice(pps);
+            }
+
+            let parsed = parse_avcc_box(&data).expect("well-formed input must parse");
+            prop_assert_eq!(&parsed.sps_list, &sps_bodies);
+            prop_assert_eq!(&parsed.pps_list, &pps_bodies);
+
+            // Any strict prefix of a well-formed box must fail closed, never
+            // yielding a partial SPS/PPS list.
+            for cut in 0..data.len() {
+                prop_assert!(
+                    parse_avcc_box(&data[..cut]).is_none(),
+                    "truncated at {cut} produced Some(..)"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn packet_derived_h264_sample_entries_preserve_known_dimensions() {
         let packet = MediaPacket {
             media_type: MediaType::Video,

@@ -1,4 +1,4 @@
-use super::srt_crypto::{apply_srt_crypto_config, apply_srt_crypto_socket, srt_crypto_from_url};
+use super::srt_crypto::{apply_srt_crypto_socket, srt_crypto_from_url};
 use super::srt_url::parse_srt_egress_url;
 use super::*;
 use crate::secret_display::redact_url;
@@ -194,7 +194,7 @@ pub fn start_shared_ts_muxer(
         let mut video_conv_buf = Vec::<u8>::new();
         let mut audio_conv_buf = Vec::<u8>::new();
         // `chunk_ends` records (byte_offset_end, is_keyframe) for each muxed chunk so
-        // we can slice a single `BytesMut` into per-chunk `Bytes` after the inner loop.
+        // we can slice a single frozen `Bytes` into per-chunk `Bytes` after the inner loop.
         // This converts N malloc+memcpy calls (one per chunk) to 1 malloc per burst.
         let mut chunk_ends: Vec<(usize, bool)> = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
         let mut pull_packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
@@ -212,7 +212,7 @@ pub fn start_shared_ts_muxer(
                             // the actual media payloads. A fixed 64 KiB floor
                             // pins excessive memory in the retained TS ring
                             // when the muxer wakes for one small packet.
-                            let mut ts_accum = bytes::BytesMut::with_capacity(
+                            let mut ts_accum = Vec::<u8>::with_capacity(
                                 estimate_ts_accum_capacity(&pull_packets),
                             );
                             for pkt in &pull_packets {
@@ -271,23 +271,30 @@ pub fn start_shared_ts_muxer(
                                 };
 
                                 let (pts, dts) = dts_enforcer.enforce(stream_idx, pkt.pts, pkt.dts);
-                                let ts_bytes = muxer.mux_packet(
+                                // Mux directly into the burst accumulator: the muxer
+                                // appends TS packets to `ts_accum` with no intermediate
+                                // per-packet buffer or memmove into the accumulator.
+                                let before = ts_accum.len();
+                                muxer.mux_packet_into(
                                     pkt.media_type,
                                     pkt.track_index,
-                                    pts,
-                                    dts,
-                                    pkt.is_keyframe,
+                                    crate::media::mpegts::PacketMeta {
+                                        pts_ms: pts,
+                                        dts_ms: dts,
+                                        is_keyframe: pkt.is_keyframe,
+                                    },
                                     payload,
+                                    &mut ts_accum,
                                 );
-                                if !ts_bytes.is_empty() {
-                                    ts_accum.extend_from_slice(ts_bytes);
+                                if ts_accum.len() > before {
                                     chunk_ends.push((ts_accum.len(), pkt.is_keyframe));
                                 }
                             }
                             if !chunk_ends.is_empty() {
-                                // freeze() promotes ts_accum to a shared Arc-backed Bytes.
+                                // Bytes::from(Vec) is an O(1) ownership transfer of the
+                                // accumulator's allocation into a shared Arc-backed Bytes.
                                 // slice() below only bumps the refcount — no extra allocations.
-                                let frozen = ts_accum.freeze();
+                                let frozen = bytes::Bytes::from(ts_accum);
                                 let mut prev = 0usize;
                                 ts_ring_clone.push_batch(chunk_ends.drain(..).map(
                                     move |(end, is_kf)| {
@@ -511,11 +518,30 @@ pub async fn start_srt_egress(
                 return Err("failed to create bonding group".to_string());
             }
 
-            let streamid_c = if streamid.is_empty() {
-                None
-            } else {
-                match std::ffi::CString::new(streamid.as_str()) {
-                    Ok(c) => Some(c),
+            // Passphrase/PBKEYLEN/ENFORCEDENCRYPTION and StreamID are
+            // group-wide settings in libsrt bonding: they must be applied to
+            // the group socket itself via srt_setsockopt, not smuggled into
+            // a per-member SRT_SOCKOPT_CONFIG. libsrt's per-member config
+            // object rejects both option families outright (see
+            // SRT_SocketOptionObject::add in socketconfig.cpp, which has no
+            // case for SRTO_PASSPHRASE, SRTO_PBKEYLEN, or SRTO_STREAMID and
+            // falls through to `return false`), so applying them there
+            // always failed the connect attempt with a misleading "Success
+            // (0)" error (srt_config_add's failure path does not populate
+            // the thread-local last-error state that check_srt_option_result
+            // reads).
+            if let Some(crypto) = &url_crypto
+                && let Err(error) = apply_srt_crypto_socket(client_sock, crypto)
+            {
+                unsafe {
+                    srt_close(client_sock);
+                }
+                return Err(error);
+            }
+
+            if !streamid.is_empty() {
+                let streamid_c = match std::ffi::CString::new(streamid.as_str()) {
+                    Ok(c) => c,
                     Err(_) => {
                         error!("Stream ID contains null bytes");
                         // SAFETY: Valid group socket, clean up on invalid streamid.
@@ -524,50 +550,25 @@ pub async fn start_srt_egress(
                         }
                         return Err("stream ID contains null bytes".to_string());
                     }
+                };
+                // SAFETY: Sets SRTO_STREAMID on a valid group socket with a
+                // correctly-sized NUL-terminated C string.
+                unsafe {
+                    check_srt_option_result(
+                        "SRTO_STREAMID",
+                        srt_setsockopt(
+                            client_sock,
+                            0,
+                            SRTO_STREAMID,
+                            streamid_c.as_ptr() as *const c_void,
+                            streamid.len() as c_int,
+                        ),
+                    )
                 }
-            };
-            let config_needed = streamid_c.is_some() || url_crypto.is_some();
-            let config = if config_needed {
-                // SAFETY: srt_create_config allocates a per-member config.
-                // Ownership transfers to SRT on successful srt_connect_group;
-                // on failure config is freed via srt_delete_config below.
-                let config = unsafe { srt_create_config() };
-                if config.is_null() {
-                    unsafe {
-                        srt_close(client_sock);
-                    }
-                    return Err("failed to create bonded SRT member config".to_string());
-                }
-                if let Some(streamid_c) = &streamid_c {
-                    unsafe {
-                        check_srt_option_result(
-                            "SRTO_STREAMID",
-                            srt_config_add(
-                                config,
-                                SRTO_STREAMID,
-                                streamid_c.as_ptr() as *const c_void,
-                                streamid.len() as c_int,
-                            ),
-                        )
-                    }
-                    .inspect_err(|_| unsafe {
-                        srt_delete_config(config);
-                        srt_close(client_sock);
-                    })?;
-                }
-                if let Some(crypto) = &url_crypto
-                    && let Err(error) = unsafe { apply_srt_crypto_config(config, crypto) }
-                {
-                    unsafe {
-                        srt_delete_config(config);
-                        srt_close(client_sock);
-                    }
-                    return Err(error);
-                }
-                config
-            } else {
-                std::ptr::null_mut()
-            };
+                .inspect_err(|_| unsafe {
+                    srt_close(client_sock);
+                })?;
+            }
 
             let connect_error = {
                 let mut members: Vec<SrtGroupMemberConfig> = Vec::new();
@@ -584,15 +585,12 @@ pub async fn start_srt_egress(
                         )
                     };
                     member.weight = if i == 0 { 1 } else { 0 };
-                    if !config.is_null() {
-                        member.config = config;
-                    }
                     members.push(member);
                 }
 
                 // SAFETY: srt_connect_group opens all member connections.
                 // members is a correctly sized Vec of SrtGroupMemberConfig.
-                // On failure, client_sock and config are cleaned up.
+                // On failure, client_sock is cleaned up.
                 let conn_res = unsafe {
                     srt_connect_group(client_sock, members.as_mut_ptr(), members.len() as c_int)
                 };
@@ -605,14 +603,9 @@ pub async fn start_srt_egress(
                         "[srt-egress] Bonded connection failed: {}",
                         err.to_string_lossy()
                     );
-                    // SAFETY: Clean up group socket and per-member config
-                    // on connection failure. Order: close socket, then
-                    // free config (config must not outlive the socket).
+                    // SAFETY: Clean up group socket on connection failure.
                     unsafe {
                         srt_close(client_sock);
-                        if !config.is_null() {
-                            srt_delete_config(config);
-                        }
                     }
                     Some(message)
                 } else {
@@ -622,7 +615,6 @@ pub async fn start_srt_egress(
             if let Some(message) = connect_error {
                 return Err(message);
             }
-            // config ownership transfers to SRT on successful connect
 
             info!(
                 "[srt-egress] Bonded connection ({} links) to {}",

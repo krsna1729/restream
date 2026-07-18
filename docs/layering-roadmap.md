@@ -278,7 +278,7 @@ Still-useful next candidates:
 - more spawn/wiring orchestration from `lib.rs` into `application::reconcile`
 - remaining inline ingest-side DB lookups behind `application` ports
 
-### 2. Keep runtime views out of the engine core
+### 2. Keep runtime views out of the engine core — done (2026-07-18)
 
 Goal: `MediaEngine` should return typed state and snapshots, not primarily
 `serde_json::Value`.
@@ -287,6 +287,14 @@ Success condition:
 
 - engine code no longer needs to know UI/HTTP serialization details
 - JSON assembly happens at the edge
+
+`StageMetrics::snapshot()` and `PipeMetrics::snapshot()` (`src/media/`) now
+return typed `StageMetricsSnapshot` / `PipeMetricsSnapshot` structs instead of
+hand-built `serde_json::Value`. Callers in `src/api_runtime_views/` and
+`src/api_view_models.rs` convert to JSON at the edge via
+`serde_json::to_value(...)` (or implicitly through the `json!` macro). No
+`serde_json::Value` or `json!` usage remains in `src/media/` outside tests.
+See `docs/agent-guidance/quality/journal.md` Q-008.
 
 ### 3. Continue frontend composition cleanup
 
@@ -378,7 +386,7 @@ When choosing the next refactor in an active worktree:
 Best next low-risk code steps:
 
 1. Extend backend application ports where ingest/runtime still reaches into DB details directly.
-2. Continue converting engine JSON emitters into typed snapshots plus edge serializers.
+2. Engine JSON emitters in `src/media/` are now typed snapshots with edge serializers (see Refactor Order item 2); re-audit only if new `serde_json::Value` usage appears there.
 3. Keep moving dashboard composition concerns into `web/ts/app` only when that removes real cross-feature coupling.
 4. Split additional frontend feature modules only where one concept clearly owns the moved state and tests can prove behavior/performance stayed intact.
 

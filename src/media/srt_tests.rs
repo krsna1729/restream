@@ -392,35 +392,6 @@ fn egress_url_bond_only_no_streamid() {
 }
 
 #[test]
-fn bonded_egress_member_config_is_created_for_crypto_without_streamid() {
-    let source = include_str!("srt_egress.rs");
-    let bonded_branch = source
-        .split("if use_bonding {")
-        .nth(1)
-        .expect("bonded branch should exist")
-        .split("} else {\n            // SAFETY: srt_create_socket")
-        .next()
-        .expect("single-socket branch should follow bonded branch");
-    assert!(
-        bonded_branch.contains("let config_needed = streamid_c.is_some() || url_crypto.is_some();"),
-        "bonded SRT egress must allocate member config when either StreamID or crypto is present"
-    );
-    assert!(
-        bonded_branch.contains("failed to create bonded SRT member config"),
-        "bonded SRT egress must fail closed when member config allocation fails"
-    );
-    assert!(
-        bonded_branch
-            .contains("check_srt_option_result(\n                            \"SRTO_STREAMID\""),
-        "bonded SRT egress must check StreamID option errors"
-    );
-    assert!(
-        !bonded_branch.contains("if !streamid.is_empty() {\n                let streamid_c"),
-        "bonded SRT egress must not keep crypto application behind a non-empty StreamID branch"
-    );
-}
-
-#[test]
 fn sysctl_check_does_not_panic() {
     // Smoke test: runs on any Linux, should not panic even if paths don't exist
     check_sysctl_limits();
@@ -664,6 +635,167 @@ fn linked_libsrt_exposes_group_connect_when_required() {
 }
 
 #[test]
+fn linked_libsrt_accepts_every_supported_pbkeylen_via_socket_option() {
+    unsafe {
+        assert_eq!(srt_startup(), 0);
+    }
+
+    for pbkeylen in [16, 24, 32] {
+        let crypto = srt_crypto_from_url("s3cret-passphrase".to_string(), Some(pbkeylen))
+            .expect("non-empty passphrase must yield a crypto config");
+        let sock = unsafe { srt_create_socket() };
+        assert!(sock >= 0);
+
+        let result = apply_srt_crypto_socket(sock, &crypto);
+        unsafe {
+            srt_close(sock);
+        }
+        assert!(
+            result.is_ok(),
+            "pbkeylen={pbkeylen} should be accepted by libsrt via SRTO_PBKEYLEN: {result:?}"
+        );
+    }
+
+    unsafe {
+        srt_cleanup();
+    }
+}
+
+#[test]
+fn linked_libsrt_rejects_out_of_range_pbkeylen_via_socket_option() {
+    unsafe {
+        assert_eq!(srt_startup(), 0);
+    }
+
+    let crypto = srt_crypto_from_url("s3cret-passphrase".to_string(), Some(999))
+        .expect("non-empty passphrase must yield a crypto config");
+    let sock = unsafe { srt_create_socket() };
+    assert!(sock >= 0);
+
+    let result = apply_srt_crypto_socket(sock, &crypto);
+    unsafe {
+        srt_close(sock);
+        srt_cleanup();
+    }
+
+    let error =
+        result.expect_err("libsrt must reject an out-of-range SRTO_PBKEYLEN through the FFI");
+    assert!(
+        error.contains("SRTO_PBKEYLEN"),
+        "expected the FFI error surface to name the rejected option, got: {error}"
+    );
+}
+
+/// Documents a real libsrt bonding quirk that once caused a production bug:
+/// the per-member `SRT_SOCKOPT_CONFIG` object (`srt_create_config` /
+/// `srt_config_add`) silently rejects `SRTO_PASSPHRASE` and `SRTO_STREAMID`
+/// (see `SRT_SocketOptionObject::add` in libsrt's `socketconfig.cpp`, which
+/// has no case for either option and falls through to `return false`), and
+/// `srt_config_add`'s failure path never calls `CUDT::APIError`, so
+/// `check_srt_option_result` misreports the failure as "Success (0)". Bonded
+/// SRT egress applies these as group-wide socket options instead (see
+/// `linked_libsrt_group_socket_accepts_crypto_via_setsockopt` and
+/// `linked_libsrt_group_socket_accepts_streamid_via_setsockopt` below, and
+/// the production call sites in `srt_egress.rs`). If a future libsrt version
+/// starts accepting these through the per-member config, this test's
+/// failure is the signal that the workaround can be revisited.
+#[test]
+fn linked_libsrt_member_config_rejects_passphrase_and_streamid() {
+    unsafe {
+        assert_eq!(srt_startup(), 0);
+    }
+
+    let config = unsafe { srt_create_config() };
+    assert!(!config.is_null());
+
+    let passphrase_c = std::ffi::CString::new("s3cret-passphrase").unwrap();
+    let passphrase_result = unsafe {
+        srt_config_add(
+            config,
+            SRTO_PASSPHRASE,
+            passphrase_c.as_ptr() as *const c_void,
+            17,
+        )
+    };
+    let streamid_c = std::ffi::CString::new("probe").unwrap();
+    let streamid_result = unsafe {
+        srt_config_add(
+            config,
+            SRTO_STREAMID,
+            streamid_c.as_ptr() as *const c_void,
+            5,
+        )
+    };
+    unsafe {
+        srt_delete_config(config);
+        srt_cleanup();
+    }
+
+    assert_eq!(
+        passphrase_result, -1,
+        "libsrt's per-member config unexpectedly accepted SRTO_PASSPHRASE; \
+         the srt_egress.rs group-socket workaround may no longer be needed"
+    );
+    assert_eq!(
+        streamid_result, -1,
+        "libsrt's per-member config unexpectedly accepted SRTO_STREAMID; \
+         the srt_egress.rs group-socket workaround may no longer be needed"
+    );
+}
+
+#[test]
+fn linked_libsrt_group_socket_accepts_crypto_via_setsockopt() {
+    unsafe {
+        assert_eq!(srt_startup(), 0);
+    }
+    let group = unsafe { srt_create_group(SRT_GTYPE_BACKUP) };
+    assert!(group >= 0, "group={group}");
+
+    let crypto = srt_crypto_from_url("s3cret-passphrase".to_string(), Some(16))
+        .expect("non-empty passphrase must yield a crypto config");
+    let result = apply_srt_crypto_socket(group, &crypto);
+    unsafe {
+        srt_close(group);
+        srt_cleanup();
+    }
+    assert!(
+        result.is_ok(),
+        "bonded group sockets must accept crypto via SRTO_PASSPHRASE/SRTO_PBKEYLEN \
+         setsockopt: {result:?}"
+    );
+}
+
+#[test]
+fn linked_libsrt_group_socket_accepts_streamid_via_setsockopt() {
+    unsafe {
+        assert_eq!(srt_startup(), 0);
+    }
+    let group = unsafe { srt_create_group(SRT_GTYPE_BACKUP) };
+    assert!(group >= 0, "group={group}");
+    let streamid_c = std::ffi::CString::new("probe").unwrap();
+    let result = unsafe {
+        check_srt_option_result(
+            "SRTO_STREAMID",
+            srt_setsockopt(
+                group,
+                0,
+                SRTO_STREAMID,
+                streamid_c.as_ptr() as *const c_void,
+                5,
+            ),
+        )
+    };
+    unsafe {
+        srt_close(group);
+        srt_cleanup();
+    }
+    assert!(
+        result.is_ok(),
+        "bonded group sockets must accept StreamID via setsockopt: {result:?}"
+    );
+}
+
+#[test]
 fn reads_udp_socket_stats_for_listener_port() {
     // On a system without an SRT listener, this should return None
     // (port 10080 not bound). If it's bound, it returns Some.
@@ -673,6 +805,25 @@ fn reads_udp_socket_stats_for_listener_port() {
         assert!(rx_queue < u64::MAX);
         assert!(drops < u64::MAX);
     }
+}
+
+#[tokio::test]
+async fn monitor_listener_socket_extreme_capacity_does_not_panic() {
+    // effective_udp_recv_capacity near u64::MAX previously overflowed the
+    // `configured_buf * 3` threshold multiplication before the first .await,
+    // panicking the monitor task immediately on spawn.
+    let stats = Arc::new(crate::media::engine::ListenerSocketStats::default());
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        monitor_listener_socket(0, stats, u64::MAX),
+    )
+    .await;
+    // The function loops forever, so we expect the timeout to fire — the
+    // only thing under test is that it doesn't panic before then.
+    assert!(
+        result.is_err(),
+        "monitor_listener_socket should still be running (not panicked) when the timeout fires"
+    );
 }
 
 #[tokio::test]

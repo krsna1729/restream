@@ -167,6 +167,34 @@ fn parse_stream_descriptors(data: &[u8]) -> StreamDescriptors {
     descriptors
 }
 
+fn pmt_stream_loop_bounds(data: &[u8], end: usize) -> Option<(usize, usize)> {
+    let stream_loop_end = end.checked_sub(4)?; // trailing CRC32
+    if end > data.len() || stream_loop_end < 12 {
+        return None;
+    }
+
+    let program_info_len = ((data[10] as usize & 0x0F) << 8) | data[11] as usize;
+    let stream_loop_start = 12usize.checked_add(program_info_len)?;
+    if stream_loop_start > stream_loop_end {
+        return None;
+    }
+
+    let mut pos = stream_loop_start;
+    while pos < stream_loop_end {
+        let descriptor_start = pos.checked_add(5)?;
+        if descriptor_start > stream_loop_end {
+            return None;
+        }
+        let es_info_len = ((data[pos + 3] as usize & 0x0F) << 8) | data[pos + 4] as usize;
+        pos = descriptor_start.checked_add(es_info_len)?;
+        if pos > stream_loop_end {
+            return None;
+        }
+    }
+
+    Some((stream_loop_start, stream_loop_end))
+}
+
 /// Streaming MPEG-TS demuxer. Feed it chunks of TS data and drain packets.
 pub struct TsDemuxer {
     streams: Vec<StreamInfo>,
@@ -512,11 +540,11 @@ impl TsDemuxer {
         let data = &self.pmt_buf;
         let end = self.pmt_expected.min(data.len());
 
-        if data.len() < 12 {
+        let Some((mut pos, stream_loop_end)) = pmt_stream_loop_bounds(data, end) else {
             self.pmt_buf.clear();
             self.pmt_expected = 0;
             return;
-        }
+        };
 
         // Check PMT version_number (ISO 13818-1 table syntax: byte 5 bits 5–1).
         // Skip retransmissions of the same version; reset stream state on change.
@@ -542,20 +570,15 @@ impl TsDemuxer {
         self.video_track_count = 0;
         self.probe_payloads.clear();
 
-        let program_info_len = ((data[10] as usize & 0x0F) << 8) | data[11] as usize;
-        let mut pos = 12 + program_info_len;
-
         let mut has_video = false;
-        while pos + 5 <= end.saturating_sub(4) {
+        while pos < stream_loop_end {
             let stream_type = data[pos];
             let es_pid = ((data[pos + 1] as u16 & 0x1F) << 8) | data[pos + 2] as u16;
             let es_info_len = ((data[pos + 3] as usize & 0x0F) << 8) | data[pos + 4] as usize;
             let desc_start = pos + 5;
-            let desc_end = desc_start
-                .saturating_add(es_info_len)
-                .min(end.saturating_sub(4));
+            let desc_end = desc_start + es_info_len;
             let descriptors = parse_stream_descriptors(&data[desc_start..desc_end]);
-            pos += 5 + es_info_len;
+            pos = desc_end;
 
             if let Some(kind) = StreamKind::from_stream_type(stream_type) {
                 let track_index = match kind.media_type() {
@@ -794,6 +817,17 @@ pub enum TsSegmentView {
     Audio(u32),
 }
 
+/// Per-packet timing/keyframe metadata for the `mux_packet*` family, bundled
+/// so those functions stay under clippy's argument-count lint. `Copy` and
+/// stack-sized (three scalars) so passing it costs nothing extra on the
+/// mux hot path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PacketMeta {
+    pub pts_ms: i64,
+    pub dts_ms: i64,
+    pub is_keyframe: bool,
+}
+
 impl TsMuxer {
     /// Create a new muxer from stream metadata.
     ///
@@ -884,11 +918,48 @@ impl TsMuxer {
         is_keyframe: bool,
         payload: &[u8],
     ) -> &[u8] {
-        let Some(stream_idx) = self.stream_index(media_type, track_index) else {
-            self.output.clear();
-            return &self.output;
-        };
-        self.mux_packet_at(stream_idx, media_type, pts_ms, dts_ms, is_keyframe, payload)
+        // Borrow the internal scratch buffer out so `mux_packet_at` can append
+        // into it (a `&mut self` method cannot also hold `&mut self.output`).
+        // `mem::take` is O(1) — it swaps in an empty Vec and keeps the
+        // allocation on restore, so the buffer is reused across calls.
+        let mut out = std::mem::take(&mut self.output);
+        out.clear();
+        if let Some(stream_idx) = self.stream_index(media_type, track_index) {
+            self.mux_packet_at(
+                stream_idx,
+                media_type,
+                PacketMeta {
+                    pts_ms,
+                    dts_ms,
+                    is_keyframe,
+                },
+                payload,
+                &mut out,
+            );
+        }
+        self.output = out;
+        &self.output
+    }
+
+    /// Mux a MediaPacket directly into a caller-owned accumulator, appending
+    /// the produced TS packets to `out` with no intermediate copy.
+    ///
+    /// This is the zero-copy hot-path entry point: burst feeders accumulate a
+    /// whole `pull_burst` into one `out` buffer and freeze it once, instead of
+    /// muxing into the muxer's internal scratch and copying each packet's bytes
+    /// into the accumulator (the `mux_packet` + `extend_from_slice` shape). The
+    /// number of TS bytes appended is `out.len()` after the call minus before.
+    pub fn mux_packet_into(
+        &mut self,
+        media_type: MediaType,
+        track_index: u32,
+        meta: PacketMeta,
+        payload: &[u8],
+        out: &mut Vec<u8>,
+    ) {
+        if let Some(stream_idx) = self.stream_index(media_type, track_index) {
+            self.mux_packet_at(stream_idx, media_type, meta, payload, out);
+        }
     }
 
     /// Like [`mux_packet`](Self::mux_packet), but takes an already-resolved
@@ -909,26 +980,62 @@ impl TsMuxer {
         is_keyframe: bool,
         payload: &[u8],
     ) -> &[u8] {
-        if self.streams.get(stream_idx).map(|s| s.media_type) != Some(media_type) {
-            self.output.clear();
-            return &self.output;
+        let mut out = std::mem::take(&mut self.output);
+        out.clear();
+        if self.streams.get(stream_idx).map(|s| s.media_type) == Some(media_type) {
+            self.mux_packet_at(
+                stream_idx,
+                media_type,
+                PacketMeta {
+                    pts_ms,
+                    dts_ms,
+                    is_keyframe,
+                },
+                payload,
+                &mut out,
+            );
         }
-        self.mux_packet_at(stream_idx, media_type, pts_ms, dts_ms, is_keyframe, payload)
+        self.output = out;
+        &self.output
     }
 
+    /// Like [`mux_packet_into`](Self::mux_packet_into), but takes an
+    /// already-resolved stream index (see
+    /// [`mux_packet_by_stream_idx`](Self::mux_packet_by_stream_idx)).
+    pub fn mux_packet_by_stream_idx_into(
+        &mut self,
+        stream_idx: usize,
+        media_type: MediaType,
+        meta: PacketMeta,
+        payload: &[u8],
+        out: &mut Vec<u8>,
+    ) {
+        if self.streams.get(stream_idx).map(|s| s.media_type) == Some(media_type) {
+            self.mux_packet_at(stream_idx, media_type, meta, payload, out);
+        }
+    }
+
+    /// Append the TS packets for one media packet to `out`.
+    ///
+    /// `out` is the caller's accumulator (for the standalone `mux_packet` APIs
+    /// it is the muxer's own reusable scratch buffer, borrowed out via
+    /// `mem::take`); this method never clears it, so bytes accumulate across
+    /// calls for burst callers.
     fn mux_packet_at(
         &mut self,
         stream_idx: usize,
         media_type: MediaType,
-        pts_ms: i64,
-        dts_ms: i64,
-        is_keyframe: bool,
+        meta: PacketMeta,
         payload: &[u8],
-    ) -> &[u8] {
-        self.output.clear();
-
+        out: &mut Vec<u8>,
+    ) {
+        let PacketMeta {
+            pts_ms,
+            dts_ms,
+            is_keyframe,
+        } = meta;
         if payload.is_empty() {
-            return &self.output;
+            return;
         }
 
         let pid = self.streams[stream_idx].pid;
@@ -956,12 +1063,12 @@ impl TsMuxer {
         };
 
         if should_insert_tables {
-            self.write_pat();
-            self.write_pmt();
+            self.write_pat(out);
+            self.write_pmt(out);
             if !self.service_metadata.provider_name.is_empty()
                 || !self.service_metadata.service_name.is_empty()
             {
-                self.write_sdt();
+                self.write_sdt(out);
             }
             self.last_pat_pmt_dts = Some(dts_ms);
         }
@@ -995,8 +1102,7 @@ impl TsMuxer {
 
         let total_pes = hdr_len + payload.len();
         let ts_count = total_pes.div_ceil(184); // upper bound
-        self.output
-            .reserve(ts_count * TS_PACKET_SIZE + 2 * TS_PACKET_SIZE);
+        out.reserve(ts_count * TS_PACKET_SIZE + 2 * TS_PACKET_SIZE);
 
         // Packetize: walk two logical slices (pes_hdr, payload) without copying
         // them into a contiguous PES buffer.
@@ -1004,9 +1110,9 @@ impl TsMuxer {
         let mut first = true;
 
         while pes_offset < total_pes {
-            let base = self.output.len();
-            self.output.resize(base + TS_PACKET_SIZE, 0xFF);
-            let ts = &mut self.output[base..base + TS_PACKET_SIZE];
+            let base = out.len();
+            out.resize(base + TS_PACKET_SIZE, 0xFF);
+            let ts = &mut out[base..base + TS_PACKET_SIZE];
 
             ts[0] = TS_SYNC_BYTE;
             let pusi_bit: u8 = if first { 0x40 } else { 0x00 };
@@ -1077,11 +1183,9 @@ impl TsMuxer {
 
             first = false;
         }
-
-        &self.output
     }
 
-    fn write_pat(&mut self) {
+    fn write_pat(&mut self, out: &mut Vec<u8>) {
         let mut ts = [0xFFu8; TS_PACKET_SIZE];
         ts[0] = TS_SYNC_BYTE;
         ts[1] = 0x40; // PUSI, PID=0
@@ -1116,10 +1220,10 @@ impl TsMuxer {
         ts[19] = (crc >> 8) as u8;
         ts[20] = crc as u8;
 
-        self.output.extend_from_slice(&ts);
+        out.extend_from_slice(&ts);
     }
 
-    fn write_pmt(&mut self) {
+    fn write_pmt(&mut self, out: &mut Vec<u8>) {
         let stream_descriptors: Vec<Vec<u8>> = self
             .streams
             .iter()
@@ -1195,11 +1299,11 @@ impl TsMuxer {
             offset += n;
             first = false;
 
-            self.output.extend_from_slice(&ts);
+            out.extend_from_slice(&ts);
         }
     }
 
-    fn write_sdt(&mut self) {
+    fn write_sdt(&mut self, out: &mut Vec<u8>) {
         let provider = truncate_utf8_bytes(&self.service_metadata.provider_name, 48);
         let service = truncate_utf8_bytes(&self.service_metadata.service_name, 110);
         let descriptor_len = 3 + provider.len() + service.len();
@@ -1254,7 +1358,7 @@ impl TsMuxer {
         ts[crc_end + 2] = (crc >> 8) as u8;
         ts[crc_end + 3] = crc as u8;
 
-        self.output.extend_from_slice(&ts);
+        out.extend_from_slice(&ts);
     }
 
     fn packet_span_end_90k(&self, stream_idx: usize, dts_90k: i64, payload: &[u8]) -> i64 {

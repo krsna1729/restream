@@ -463,46 +463,44 @@ pub fn audio_for_rtmp_into(payload: &[u8], out: &mut Vec<u8>) {
 
 /// Parse AVCC decoder configuration record.
 /// Returns `(nalu_length_size, sps_pps_as_annexb)`.
+///
+/// Fails closed: if the SPS or PPS list is truncated at any point, the
+/// annexb output is empty rather than containing whatever prefix parsed
+/// before the truncation. A cached parameter set missing its PPS (or with a
+/// PPS but no SPS) is worse than caching nothing, since it would be
+/// prepended to keyframes as if it were complete.
 pub fn parse_avcc_config(data: &[u8]) -> (usize, Vec<u8>) {
     if data.len() < 8 {
         return (4, Vec::new());
     }
     let nalu_len_size = ((data[4] & 0x03) + 1) as usize;
+    let annexb = parse_avcc_sps_pps(data).unwrap_or_default();
+    (nalu_len_size, annexb)
+}
+
+fn parse_avcc_sps_pps(data: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let num_sps = (data[5] & 0x1F) as usize;
-    let mut pos = 6;
+    let mut pos = 6usize;
     for _ in 0..num_sps {
-        if pos + 2 > data.len() {
-            return (nalu_len_size, out);
-        }
-        let len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+        let len = u16::from_be_bytes([*data.get(pos)?, *data.get(pos + 1)?]) as usize;
         pos += 2;
-        if pos + len > data.len() {
-            return (nalu_len_size, out);
-        }
+        let sps = data.get(pos..pos + len)?;
         out.extend_from_slice(&[0, 0, 0, 1]);
-        out.extend_from_slice(&data[pos..pos + len]);
+        out.extend_from_slice(sps);
         pos += len;
     }
-    if pos >= data.len() {
-        return (nalu_len_size, out);
-    }
-    let num_pps = data[pos] as usize;
+    let num_pps = *data.get(pos)? as usize;
     pos += 1;
     for _ in 0..num_pps {
-        if pos + 2 > data.len() {
-            return (nalu_len_size, out);
-        }
-        let len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+        let len = u16::from_be_bytes([*data.get(pos)?, *data.get(pos + 1)?]) as usize;
         pos += 2;
-        if pos + len > data.len() {
-            return (nalu_len_size, out);
-        }
+        let pps = data.get(pos..pos + len)?;
         out.extend_from_slice(&[0, 0, 0, 1]);
-        out.extend_from_slice(&data[pos..pos + len]);
+        out.extend_from_slice(pps);
         pos += len;
     }
-    (nalu_len_size, out)
+    Some(out)
 }
 
 /// Convert AVCC-format NALUs to Annex B (start codes).
@@ -1208,7 +1206,7 @@ mod tests {
     fn parse_avcc_config_truncated_input() {
         assert_eq!(parse_avcc_config(&[]), (4, Vec::new()));
         assert_eq!(parse_avcc_config(&[1, 66, 0, 30]), (4, Vec::new()));
-        // nalu_len_size = 4, num_sps = 1, but no SPS length bytes
+        // Below the 8-byte header floor entirely; body loop never runs.
         assert_eq!(
             parse_avcc_config(&[1, 66, 0, 30, 0xFF, 0xE1]),
             (4, Vec::new())
@@ -1217,10 +1215,100 @@ mod tests {
 
     #[test]
     fn parse_avcc_config_zero_sps_pps() {
-        let config = [1, 66, 0, 30, 0xFF, 0x00, 0x00];
+        // 8 bytes: past the header floor, so this exercises the real
+        // num_sps/num_pps == 0 loop bodies rather than the length<8 gate.
+        let config = [1, 66, 0, 30, 0xFF, 0x00, 0x00, 0x00];
         let (nls, annexb) = parse_avcc_config(&config);
         assert_eq!(nls, 4);
         assert!(annexb.is_empty());
+    }
+
+    #[test]
+    fn parse_avcc_config_sps_ok_but_missing_pps_count_byte_yields_no_partial_state() {
+        // num_sps = 1, one valid 4-byte SPS, then the buffer ends before the
+        // mandatory numPPS byte. The old implementation returned the SPS
+        // alone; a decoder handed SPS with no PPS cannot decode either, so
+        // the parser must fail closed and cache nothing.
+        let config = [
+            1, 66, 0, 30, 0xFF, // header (nalu_len_size = 4)
+            0xE1, // num_sps = 1
+            0x00, 0x04, // SPS length = 4
+            0x67, 0x42, 0x00, 0x1E, // SPS body
+        ];
+        assert_eq!(parse_avcc_config(&config), (4, Vec::new()));
+    }
+
+    #[test]
+    fn parse_avcc_config_sps_ok_but_pps_length_truncated_yields_no_partial_state() {
+        // SPS parses cleanly, numPPS = 1, but the PPS length/body never
+        // arrives. Must not leak the SPS-only prefix.
+        let config = [
+            1, 66, 0, 30, 0xFF, // header
+            0xE1, // num_sps = 1
+            0x00, 0x04, // SPS length = 4
+            0x67, 0x42, 0x00, 0x1E, // SPS body
+            0x01, // num_pps = 1, then buffer ends
+        ];
+        assert_eq!(parse_avcc_config(&config), (4, Vec::new()));
+    }
+
+    #[test]
+    fn parse_avcc_config_max_declared_length_with_tiny_buffer_rejected() {
+        // SPS declares a length of 0xFFFF (max u16) but only 2 bytes of body
+        // actually follow; must reject without allocating for the declared
+        // length or panicking on the out-of-bounds slice.
+        let config = [
+            1, 66, 0, 30, 0xFF, // header
+            0xE1, // num_sps = 1
+            0xFF, 0xFF, // SPS length = 65535
+            0xAA, 0xBB, // only 2 bytes actually present
+        ];
+        assert_eq!(parse_avcc_config(&config), (4, Vec::new()));
+    }
+
+    proptest! {
+        #[test]
+        fn parse_avcc_config_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..128)) {
+            let _ = parse_avcc_config(&bytes);
+        }
+
+        #[test]
+        fn parse_avcc_config_truncation_always_fails_closed(
+            header in any::<u8>(),
+            sps_bodies in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..16), 0..3),
+            pps_bodies in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..16), 0..3),
+        ) {
+            let mut config = vec![1u8, 66, 0, 30, header];
+            config.push(0xE0 | (sps_bodies.len() as u8 & 0x1F));
+            for sps in &sps_bodies {
+                config.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+                config.extend_from_slice(sps);
+            }
+            config.push(pps_bodies.len() as u8);
+            for pps in &pps_bodies {
+                config.extend_from_slice(&(pps.len() as u16).to_be_bytes());
+                config.extend_from_slice(pps);
+            }
+
+            let mut expected = Vec::new();
+            for sps in &sps_bodies {
+                expected.extend_from_slice(&[0, 0, 0, 1]);
+                expected.extend_from_slice(sps);
+            }
+            for pps in &pps_bodies {
+                expected.extend_from_slice(&[0, 0, 0, 1]);
+                expected.extend_from_slice(pps);
+            }
+            let (_, full_annexb) = parse_avcc_config(&config);
+            prop_assert_eq!(full_annexb, expected);
+
+            // Any strict prefix of a well-formed buffer must fail closed
+            // (empty annexb), never a partial SPS/PPS prefix.
+            for cut in 0..config.len() {
+                let (_, partial) = parse_avcc_config(&config[..cut]);
+                prop_assert!(partial.is_empty(), "truncated at {cut} produced non-empty output");
+            }
+        }
     }
 
     #[test]

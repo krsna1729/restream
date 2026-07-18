@@ -20,9 +20,10 @@ reference points — do not overwrite them, add new dated rows.
 
 | Suite | Metric | Median | Noise ± | Commit | Date | Last verified |
 |---|---|---|---|---|---|---|
-| ring_buffer | (seed via Q-003) | — | — | — | — | — |
-| avio_throughput | (seed via Q-003) | — | — | — | — | — |
-| high_performance_data_path | (seed via Q-003) | — | — | — | — | — |
+| ring_buffer | `ring_buffer/consumer/pull_burst/8` | 1.951 µs (4.10 Melem/s) | ±0.4% | 52428c2b | 2026-07-18 | 2026-07-18 |
+| avio_throughput | `memory_queue/write_batch/with_len` | 467 ns (2.62 GiB/s) | ±2% | 52428c2b | 2026-07-18 | 2026-07-18 |
+| high_performance_data_path | `data_path/mpegts_demux_drain/reuse_then_consume` | 672 µs (9.26 GiB/s) | ±7% (see note) | 52428c2b | 2026-07-18 | 2026-07-18 |
+| high_performance_data_path | `data_path/burst_mux_write/batch_mux_into_write` (Q-009 after) | 10.06 µs (3.18 Melem/s) | ±1% | Q-009 | 2026-07-18 | 2026-07-18 |
 | matrix_throughput | — | — | — | — | — | — |
 | srt_ingest_latency | — | — | — | — | — | — |
 | transcoder_throughput | — | — | — | — | — | — |
@@ -37,11 +38,33 @@ reference points — do not overwrite them, add new dated rows.
 Default regression threshold: ±5% on throughput suites unless a row notes
 otherwise. A regression beyond threshold is filed, not silently absorbed.
 
+Seeded 2026-07-18 (Q-003): each of `ring_buffer`, `avio_throughput`, and
+`high_performance_data_path` runs dozens of Criterion groups per suite; the
+row above records one representative low-variance headline group per suite
+rather than every group, matching this table's one-row-per-suite shape.
+Three clean serial `scripts/build/resource-limit.sh cargo bench --profile
+bench --bench <name>` runs per suite on an idle host (`pgrep -x
+restream/mediamtx/ffmpeg` all empty); Median is the median of the three
+per-run medians, Noise ± is the spread across those three runs.
+`high_performance_data_path`'s `mpegts_demux_drain/reuse_then_consume`
+showed a monotonic warm-to-fast drift across the three runs (8.39 → 9.26 →
+9.66 GiB/s, ~15% top-to-bottom) rather than random jitter, likely CPU
+frequency/cache ramp-up across repeated process invocations on this WSL2
+host — noted here rather than silently averaged away, since it exceeds the
+±5% default threshold and a future perf-sweep comparison against this row
+should expect that much run-to-run spread on this suite specifically.
+
 ## Resource ledger (resource-sweep / scale runs)
 
 | Config | RSS | Ring payload | AVIO peak HWM | Blocked writes | Commit | Date |
 |---|---|---|---|---|---|---|
-| (seed via Q-006) | — | — | — | — | — | — |
+| baseline-empty | 75,960 KB | 0 KB | 0 KB | not measured by this harness mode | 39685ea3 | 2026-07-18 |
+| ingest-only h264-rtmp | 78,892 KB | 2,470 KB | 0 KB | not measured by this harness mode | 39685ea3 | 2026-07-18 |
+| ingest-only h265-srt | 80,752 KB | 2,190 KB | 0 KB | not measured by this harness mode | 39685ea3 | 2026-07-18 |
+| egress-growth-source-srt 10-per-group | 104,948 KB | 6,444 KB | 2,125 KB | not measured by this harness mode | 39685ea3 | 2026-07-18 |
+| egress-growth-transcode-dual-mixed 10-per-group | 700,156 KB | 6,390 KB | 35,728 KB | not measured by this harness mode | 39685ea3 | 2026-07-18 |
+
+Full 42-case breakdown: see [resource-sweep baseline — 2026-07-18](#resource-sweep-baseline-2026-07-18) below.
 
 ### Historical reference — 2026-06-27 memory-optimization pass
 
@@ -54,6 +77,76 @@ After ring/AVIO/TS sizing cuts (−205 MB RSS total across 15 scale cases,
 | h265-srt-multi 8M | 237 MB | 77 MB |
 | h264-srt-multi 8M | 137 MB | 71 MB |
 | h264-rtmp 8M | 116 MB | 35 MB |
+
+### Resource-sweep baseline — 2026-07-18
+
+First `resource-sweep` harness run recorded in this ledger (Q-006). Idle host,
+`scripts/build/bench-harness.sh` then
+`scripts/build/resource-limit.sh target/bench/test_harness resource-sweep`,
+serial, isolated lifecycle. Values are per-scenario peaks/averages across
+`sampleCount` samples; "Blocked writes" is not a field this harness mode
+measures (AVIO/ring blocked-write counters are covered separately by the
+`avio_throughput`/`ring_buffer` benches, seeded under Q-003).
+
+| Scenario | Label | Ingests | Outputs | RSS peak KB | RSS avg KB | Source ring peak KB | Transcoder ring peak KB | AVIO HWM peak KB | Total CPU avg % | Total CPU peak % |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline-empty | empty | 0 | 0 | 75,960 | 75,764.67 | 0 | 0 | 0 | 0.83 | 2.00 |
+| ingest-only | h264-rtmp | 1 | 0 | 78,892 | 76,979.33 | 2,470 | 0 | 0 | 1.16 | 1.99 |
+| ingest-only | h264-srt | 1 | 0 | 81,280 | 80,633.33 | 2,407 | 0 | 0 | 1.99 | 1.99 |
+| ingest-only | h265-srt | 1 | 0 | 80,752 | 80,221.33 | 2,190 | 0 | 0 | 1.99 | 2.98 |
+| ingest-only | mixed.live.srt.h264.a2.bf2 | 1 | 0 | 81,216 | 80,531.33 | 2,499 | 0 | 0 | 1.82 | 2.00 |
+| ingest-only | mixed.live.srt.h265.a2.bf2 | 1 | 0 | 80,916 | 80,304.67 | 2,277 | 0 | 0 | 1.82 | 2.00 |
+| ingest-growth-same | 1-pipelines | 1 | 0 | 81,280 | 80,708.67 | 2,407 | 0 | 0 | 1.66 | 1.99 |
+| ingest-growth-same | 3-pipelines | 3 | 0 | 91,316 | 89,784.67 | 9,894 | 0 | 0 | 3.47 | 3.97 |
+| ingest-growth-same | 5-pipelines | 5 | 0 | 106,380 | 103,914.67 | 21,296 | 0 | 0 | 5.29 | 5.94 |
+| ingest-growth-mixed | 1-pipelines | 1 | 0 | 78,888 | 78,112.67 | 2,470 | 0 | 0 | 1.32 | 1.99 |
+| ingest-growth-mixed | 3-pipelines | 3 | 0 | 86,048 | 85,025.33 | 7,467 | 0 | 0 | 3.14 | 3.99 |
+| ingest-growth-mixed | 5-pipelines | 5 | 0 | 97,416 | 95,434.00 | 17,466 | 0 | 0 | 4.30 | 4.96 |
+| egress-growth-source-same | 1-per-group | 1 | 1 | 81,992 | 81,399.33 | 2,520 | 0 | 0 | 1.99 | 2.99 |
+| egress-growth-source-same | 5-per-group | 1 | 5 | 87,100 | 85,862.67 | 4,757 | 0 | 0 | 2.81 | 2.97 |
+| egress-growth-source-same | 10-per-group | 1 | 10 | 90,488 | 89,846.67 | 6,386 | 0 | 0 | 3.14 | 3.96 |
+| egress-growth-source-srt | 1-per-group | 1 | 1 | 85,904 | 85,064.00 | 2,520 | 0 | 481 | 2.81 | 3.98 |
+| egress-growth-source-srt | 5-per-group | 1 | 5 | 94,732 | 93,877.33 | 4,757 | 0 | 951 | 4.96 | 5.95 |
+| egress-growth-source-srt | 10-per-group | 1 | 10 | 104,948 | 104,145.33 | 6,444 | 0 | 2,125 | 6.60 | 6.93 |
+| egress-growth-source-mixed | 1-per-group | 1 | 2 | 87,048 | 86,114.00 | 2,520 | 0 | 481 | 3.31 | 3.97 |
+| egress-growth-source-mixed | 5-per-group | 1 | 10 | 97,592 | 96,378.67 | 4,757 | 0 | 859 | 5.61 | 5.94 |
+| egress-growth-source-mixed | 10-per-group | 1 | 20 | 111,124 | 109,938.67 | 6,444 | 0 | 2,125 | 7.25 | 8.89 |
+| egress-growth-transcode-same | 1-per-group | 1 | 1 | 104,832 | 102,729.33 | 3,183 | 13,980 | 0 | 89.35 | 111.07 |
+| egress-growth-transcode-same | 5-per-group | 1 | 5 | 117,476 | 115,421.33 | 5,421 | 14,083 | 0 | 95.18 | 131.56 |
+| egress-growth-transcode-same | 10-per-group | 1 | 10 | 121,844 | 121,712.67 | 6,444 | 14,343 | 0 | 97.45 | 132.63 |
+| egress-growth-transcode-srt | 1-per-group | 1 | 1 | 121,568 | 117,742.00 | 3,183 | 13,980 | 501 | 89.39 | 112.03 |
+| egress-growth-transcode-srt | 5-per-group | 1 | 5 | 165,252 | 163,227.33 | 5,605 | 14,083 | 6,098 | 95.53 | 121.64 |
+| egress-growth-transcode-srt | 10-per-group | 1 | 10 | 196,476 | 194,098.67 | 6,401 | 14,343 | 12,260 | 121.07 | 143.28 |
+| egress-growth-transcode-mixed | 1-per-group | 1 | 2 | 121,416 | 118,409.33 | 3,183 | 13,980 | 429 | 89.51 | 110.04 |
+| egress-growth-transcode-mixed | 5-per-group | 1 | 10 | 159,956 | 158,027.33 | 5,421 | 14,083 | 6,015 | 103.57 | 132.54 |
+| egress-growth-transcode-mixed | 10-per-group | 1 | 20 | 206,220 | 205,658.00 | 6,401 | 14,343 | 13,260 | 126.06 | 165.60 |
+| egress-growth-source-plus-transcode-mixed | 1-per-group | 1 | 4 | 131,776 | 128,274.00 | 3,183 | 13,980 | 1,096 | 93.23 | 113.76 |
+| egress-growth-source-plus-transcode-mixed | 5-per-group | 1 | 20 | 167,592 | 166,189.33 | 5,605 | 14,083 | 6,577 | 105.76 | 137.91 |
+| egress-growth-source-plus-transcode-mixed | 10-per-group | 1 | 40 | 207,684 | 205,679.33 | 6,401 | 14,343 | 14,966 | 128.21 | 152.87 |
+| egress-growth-transcode-dual-mixed | 1-per-group | 1 | 4 | 213,868 | 201,726.67 | 3,183 | 43,099 | 1,027 | 229.15 | 303.62 |
+| egress-growth-transcode-dual-mixed | 5-per-group | 1 | 20 | 509,416 | 491,116.67 | 5,555 | 43,627 | 16,712 | 295.53 | 363.26 |
+| egress-growth-transcode-dual-mixed | 10-per-group | 1 | 40 | 700,156 | 684,176.67 | 6,390 | 43,965 | 35,728 | 347.47 | 444.26 |
+| egress-growth-source-plus-transcode-dual-mixed | 1-per-group | 1 | 6 | 211,236 | 204,526.00 | 3,183 | 43,099 | 1,150 | 237.18 | 300.81 |
+| egress-growth-source-plus-transcode-dual-mixed | 5-per-group | 1 | 30 | 521,144 | 505,920.67 | 6,103 | 43,627 | 16,472 | 301.78 | 358.17 |
+| egress-growth-source-plus-transcode-dual-mixed | 10-per-group | 1 | 60 | 766,752 | 743,404.00 | 6,394 | 43,308 | 32,087 | 344.22 | 412.62 |
+| egress-growth-hevc-bridge | 1-per-group | 1 | 1 | 110,816 | 109,116.67 | 2,723 | 21,816 | 0 | 143.96 | 180.10 |
+| egress-growth-hevc-bridge | 5-per-group | 1 | 5 | 132,020 | 129,086.67 | 4,972 | 21,747 | 0 | 150.49 | 186.52 |
+| egress-growth-hevc-bridge | 10-per-group | 1 | 10 | 136,100 | 135,663.33 | 6,296 | 21,874 | 0 | 154.50 | 202.32 |
+
+No negative results (ring overflows, AVIO stalls beyond expected transcode
+back-pressure, or unbounded growth) surfaced in this pass — RSS scales
+roughly linearly with output count within each scenario family, and the two
+highest-RSS scenarios (`egress-growth-transcode-dual-mixed`,
+`egress-growth-source-plus-transcode-dual-mixed`) are the dual-transcode
+cases, consistent with running two independent transcoder stages per group.
+Commit: 39685ea3. Artifacts:
+
+- `.local/artifacts/resource-sweep/resource-sweep-results.json`
+- `.local/artifacts/resource-sweep/resource-sweep-results.csv`
+- `.local/artifacts/resource-sweep/resource-sweep-samples.jsonl`
+- `.local/artifacts/resource-sweep/mediamtx.log`
+- `.local/artifacts/resource-sweep/restream.log`
+- `.local/artifacts/latest/resource-sweep.json`
 
 ### Internal video-preset rollout RSS baseline — 2026-07-10
 
@@ -420,11 +513,134 @@ Interpretation:
 
 | Self % | Symbol | Meaning | Backlog |
 |---|---|---|---|
-| 3.28% | `__memmove_avx_unaligned_erms` | AVIO buffer → `ts_accum` copy | Q-009 [opus] |
+| 3.28% | `__memmove_avx_unaligned_erms` | AVIO buffer → `ts_accum` copy | Q-009 [opus] — addressed 2026-07-18 (see note) |
 | 2.60% | `pthread_mutex_lock` | SRT internal + MemoryQueue mutex | (unfiled) |
 | 1.18% | `__vdso_clock_gettime` | per-packet SRT latency tracking | (unfiled) |
-| 0.87% | `_int_malloc` | per-packet `Arc::new(MediaPacket)` | Q-010 [opus] |
-| 0.43% | `VecDeque::extend` | AVIO queue write (second copy) | Q-009 [opus] |
+| 0.87% | `_int_malloc` | per-packet `Arc::new(MediaPacket)` | Q-010 [opus] — rejected 2026-07-18 (see note) |
+| 0.43% | `VecDeque::extend` | AVIO queue write (second copy) | Q-009 [opus] — addressed 2026-07-18 (see note) |
+
+### Q-009 result — AVIO→TsMux copy elimination (2026-07-18)
+
+The 2026-06-27 profile predates the pure-Rust `TsMuxer` rewrite; the two-copy
+shape it named (FFmpeg AVIO output buffer → `ts_accum`) now lives as the
+muxer's internal `output: Vec<u8>` scratch → per-packet `extend_from_slice`
+into the SRT egress burst accumulator (`srt_egress.rs::start_shared_ts_muxer`).
+Q-009 removes that copy: `TsMuxer::mux_packet_into` / `mux_packet_by_stream_idx_into`
+append TS packets directly into the caller's accumulator, and the egress feeder
+freezes the accumulator with an O(1) `Bytes::from(Vec)` ownership transfer
+instead of `BytesMut::freeze()`. The standalone `mux_packet` API is preserved
+(via `mem::take` of the internal scratch) for the ~30 remaining single-packet
+callers, so no correctness contract moved.
+
+Microbenchmark (`high_performance_data_path`, WSL2, idle host, 100 samples;
+contabo unavailable — a ~2-day external MSR workload was live, kill-check
+non-empty, not this session's to kill):
+
+| Variant | Median | Throughput |
+|---|---|---|
+| `batch_accumulate_write` (before: `mux_packet` + `extend_from_slice`) | 10.767 µs | 2.972 Melem/s |
+| `batch_mux_into_write` (after: `mux_packet_into`) | 10.062 µs | 3.180 Melem/s |
+
+−6.5% latency / +7.0% throughput per burst, non-overlapping 95% CIs
+([10.66, 10.89] vs [9.97, 10.16] µs). Core mux path unchanged within noise
+(`data_path/mpegts_mux/mux_all_packets` 478 µs, 12.6 GiB/s). `cargo test --lib
+mpegts` (74) and `--lib srt` (91) green.
+
+### Q-010 result — per-packet `Arc<MediaPacket>` pooling REJECTED (2026-07-18)
+
+Decision: do not add a slab/pool allocator for `MediaPacket`; the
+`Arc::new(MediaPacket)` allocation stays. No runtime code changed. Evidence:
+
+Bench shape — `RingBuffer` slots hold `ArcSwapOption<MediaPacket>`; `push` /
+`push_batch` do `Arc::new(packet)` then `.store()` (`ring_buffer.rs:489,519`),
+and readers `load_full()` obtain an `Arc<MediaPacket>` with an unbounded
+lifetime. `MediaPacket` is 56 B (`repr(C)`); with the 16-B Arc control block
+each allocation is a 72-B request, served from glibc's per-thread `tcache`
+(lock-free, O(1) fast path). The payload is a separately ref-counted `Bytes`,
+untouched by any packet pool.
+
+Microbenchmark (`ring_buffer/producer`, WSL2, idle host, kill-check clean,
+100 samples; the whole-`push` time below includes the `Arc::new` allocation
+plus the `ArcSwap` store):
+
+| Variant | Median (burst) | Per-element | Throughput |
+|---|---|---|---|
+| `push_one_at_a_time/1` | 142.05 ns | 142 ns | 7.04 Melem/s |
+| `push_batch/1` | 145.71 ns | 146 ns | 6.86 Melem/s |
+| `push_one_at_a_time/4` | 541.34 ns | 135 ns | 7.39 Melem/s |
+| `push_batch/4` | 519.09 ns | 130 ns | 7.71 Melem/s |
+| `push_one_at_a_time/8` | 1.086 µs | 136 ns | 7.37 Melem/s |
+
+Per-element push cost is flat (~130–145 ns) from burst 1→8 and `push` ≈
+`push_batch` within noise, so batching already amortizes the path and there is
+no per-burst allocation win left for a pool to capture. Reasons to reject:
+
+1. Magnitude — the profile put `_int_malloc` at 0.87% self-time; the request
+   is a tcache-served 72-B size class, already a lock-free O(1) fast path. A
+   pool's best case only replaces an already-fast path.
+2. Ownership — reclamation is intrinsically last-reader-drop: readers hold the
+   `Arc` across await points, threads, and arbitrary time. `Arc` + the global
+   allocator already implement exactly that (last `Arc` drop frees to tcache).
+   A custom slab must replicate the same last-drop hook *plus* a synchronized
+   cross-thread freelist, because producers (SRT/RTMP ingest threads) and
+   consumers (egress/HLS/recording tasks) run on different threads — every
+   reclaim becomes a cross-thread free contending on the pool lock, versus
+   tcache handling the common same-thread free lock-free. It trades a
+   lock-free path for a contended one on a path the profile says is cold.
+3. Safety — a slot-reusing pool risks use-after-free / ABA if any reader
+   outlives the intended lifetime, violating the "no failure path may crash the
+   engine" invariant. `Arc` makes that impossible by construction.
+
+A documented rejection is a valid completion for this item (backlog Q-010).
+
+### Q-012 decision — CPU affinity is a process/cgroup concern, not a runtime feature (2026-07-18)
+
+Decision: do not add in-process thread-family CPU pinning. CPU partitioning is
+supported at the process/cgroup layer only (systemd `CPUAffinity`, Docker
+`--cpuset-cpus`, Kubernetes CPU manager); the operator guidance lives in
+`docs/configuration.md` § Linux Service Placement. No runtime affinity code
+exists or is added. This closes Q-012, which the 2026-07-12 series had narrowed
+to "an opt-in runtime affinity design."
+
+Evidence already on record (2026-07-12 VPS/local MSR series, detailed in the
+Profiling-notes sections below and the journal Q-012 entries):
+
+| Config | CPU (cores) | IPC | Cache misses | Ctx switches | Migrations |
+|---|---|---|---|---|---|
+| Default runtime (clean MSR) | 2.321 | 0.336 | 20.80% | 7.663 K/s | 920.3/s |
+| External `taskset` partition (SRT→CPU 0-1, other→2-5) | 2.051 | 0.420 | 16.25% | 4.330 K/s | 288.5/s |
+| In-process scanner, same masks proven applied | 2.45 / 2.42 | — | ~20.6–20.9% | ~7.7–8.0 K/s | — |
+
+The external partition is a real win; the in-process scanner did not reproduce
+it *despite a thread census proving the masks were applied*. Related runtime
+knobs were also probed and rejected: Tokio blocking cap-32 (worse CPU/RSS),
+`restream-tokio` thread-name label (kept, neutral), and a Tokio keepalive knob
+(no thread-family shrink, worse CPU/RSS).
+
+Why the process/cgroup layer is correct and in-process pinning is not:
+
+1. Robustness — the scanner is a one-shot `/proc/self/task` pass, but the Tokio
+   runtime continuously spawns replacement/blocking threads (census showed a
+   `restream-tokio` family in the 60s over a run with only two hot scheduler
+   worker identities). New threads inherit their creator's mask at clone time,
+   so a one-shot partition erodes as the thread population turns over. A
+   process-level cpuset is enforced by the kernel on every present and future
+   thread for the whole process lifetime — no scanner can match that.
+2. Layering / container-awareness — a cpuset derives from the effective CPU
+   mask/cgroup quota automatically and is honored inside containers; in-process
+   host-CPU masks are not container-aware and would fight orchestration.
+3. Cost/benefit — the win depends on a clean default run (no allocator cap, no
+   worker override) and holding the partition for the whole window; that is
+   exactly what a launch-time cpuset provides for free, and exactly what
+   fragile in-process re-pinning cannot guarantee. Adding thread-lifecycle
+   placement code (with its concurrency-proof burden) to chase an effect the
+   supported layer already captures is negative-value.
+
+No new measurement was run for this decision: WSL2 has no PMU, and the Contabo
+VPS carried a ~2-day external MSR workload (kill-check non-empty, not this
+session's to kill). The decision rests on the recorded in-process-scanner
+negative plus the robustness/layering argument; re-running the scanner would
+only re-confirm the negative. A documented rejection is a valid completion.
 
 ## Profiling notes (VPS — hardware counters available)
 

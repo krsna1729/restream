@@ -1,6 +1,8 @@
 use super::flv::{BitReader, parse_sps_video_info, sps_dimensions};
 use super::*;
+use crate::domain::ingest_security::IngestSecurityConfig;
 use crate::media::engine::{AudioMeta, MediaEngine, VideoMeta};
+use crate::media::ingest_auth::{AuthenticatedPipeline, PipelineAccessFuture};
 use crate::media::ring_buffer::{MediaType, RingBuffer};
 use proptest::prelude::*;
 
@@ -23,6 +25,214 @@ async fn client_handshake_can_be_bounded_when_peer_is_silent() {
     assert!(result.is_err(), "silent peer should not complete handshake");
     cancel.cancel();
     peer.abort();
+}
+
+/// Accepts every stream key as the same fixed pipeline id. Session fault
+/// tests only care about what happens after a publisher is registered, not
+/// about exercising the real database-backed lookup.
+struct AcceptAllAuthenticator {
+    pipeline_id: String,
+}
+
+impl PipelineAccessAuthenticator for AcceptAllAuthenticator {
+    fn authenticate<'a>(
+        &'a self,
+        _mode: PipelineAccessMode,
+        _stream_key: &'a str,
+        _client_ip: &'a str,
+    ) -> PipelineAccessFuture<'a> {
+        Box::pin(async move {
+            Ok(AuthenticatedPipeline {
+                id: self.pipeline_id.clone(),
+            })
+        })
+    }
+}
+
+/// Drives a real `rml_rtmp` `ClientSession` through handshake, connect, and
+/// publish against `socket`, blocking until the server has accepted the
+/// publish request. This reuses the same client-session machinery
+/// `start_rtmp_egress` uses in production, so the resulting wire bytes are a
+/// genuine RTMP publish handshake rather than hand-rolled AMF.
+async fn drive_client_publish_handshake(socket: &mut TcpStream, stream_key: &str) {
+    let cancel = CancellationToken::new();
+    let remaining = perform_client_handshake(socket, &cancel)
+        .await
+        .expect("client handshake must succeed against handle_rtmp_client");
+
+    let mut config = ClientSessionConfig::new();
+    config.tc_url = Some("rtmp://127.0.0.1/live".to_string());
+    let (mut session, initial_results) =
+        ClientSession::new(config).expect("client session must initialize");
+    for res in initial_results {
+        if let ClientSessionResult::OutboundResponse(pkt) = res {
+            socket.write_all(&pkt.bytes).await.unwrap();
+        }
+    }
+
+    let conn_pkt = match session.request_connection("live".to_string()) {
+        Ok(ClientSessionResult::OutboundResponse(p)) => p,
+        other => panic!("expected connect request packet, got {other:?}"),
+    };
+    socket.write_all(&conn_pkt.bytes).await.unwrap();
+
+    let mut buffer = vec![0u8; 4096];
+    let mut pending = remaining;
+    loop {
+        let results = if !pending.is_empty() {
+            let taken = std::mem::take(&mut pending);
+            session.handle_input(&taken).unwrap()
+        } else {
+            let n = socket.read(&mut buffer).await.unwrap();
+            assert!(n > 0, "server closed the connection during publish setup");
+            session.handle_input(&buffer[..n]).unwrap()
+        };
+
+        let mut published = false;
+        for res in results {
+            match res {
+                ClientSessionResult::OutboundResponse(pkt) => {
+                    socket.write_all(&pkt.bytes).await.unwrap();
+                }
+                ClientSessionResult::RaisedEvent(ClientSessionEvent::ConnectionRequestAccepted) => {
+                    let pub_pkt = match session
+                        .request_publishing(stream_key.to_string(), PublishRequestType::Live)
+                    {
+                        Ok(ClientSessionResult::OutboundResponse(p)) => p,
+                        other => panic!("expected publish request packet, got {other:?}"),
+                    };
+                    socket.write_all(&pub_pkt.bytes).await.unwrap();
+                }
+                ClientSessionResult::RaisedEvent(ClientSessionEvent::PublishRequestAccepted) => {
+                    published = true;
+                }
+                _ => {}
+            }
+        }
+        if published {
+            break;
+        }
+    }
+}
+
+fn test_engine_and_security() -> (Arc<MediaEngine>, Arc<IngestSecurityService>) {
+    (
+        Arc::new(MediaEngine::new()),
+        Arc::new(IngestSecurityService::new(IngestSecurityConfig::default())),
+    )
+}
+
+/// A chunk with a non-zero format on a chunk stream id that has never seen a
+/// type-0 header is invalid per the RTMP chunk spec (rml_rtmp's
+/// `ChunkDeserializationError::NoPreviousChunkOnStream`). It is a single
+/// byte, so it deterministically faults on the very next read instead of
+/// stalling while the deserializer waits for more bytes.
+const MALFORMED_CHUNK_HEADER_BYTE: [u8; 1] = [0x45];
+
+#[tokio::test]
+async fn malformed_chunk_after_publish_surfaces_error_and_clears_ingest_registration() {
+    let (engine, security) = test_engine_and_security();
+    let pipeline_access: Arc<dyn PipelineAccessAuthenticator> = Arc::new(AcceptAllAuthenticator {
+        pipeline_id: "pipe-fault-malformed".to_string(),
+    });
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let engine_c = engine.clone();
+    let server = tokio::spawn(async move {
+        let (socket, client_addr) = listener.accept().await.unwrap();
+        handle_rtmp_client(socket, client_addr, pipeline_access, security, engine_c).await
+    });
+
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    drive_client_publish_handshake(&mut client, "any-key").await;
+
+    assert!(
+        engine
+            .ingests
+            .active
+            .read()
+            .await
+            .contains_key("pipe-fault-malformed"),
+        "publish must register an active ingest before the fault is injected"
+    );
+
+    client
+        .write_all(&MALFORMED_CHUNK_HEADER_BYTE)
+        .await
+        .unwrap();
+
+    let result = tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("handle_rtmp_client must not hang on malformed chunk input")
+        .expect("handle_rtmp_client task must not panic");
+
+    assert_eq!(result, Ok(()));
+    assert!(
+        !engine
+            .ingests
+            .active
+            .read()
+            .await
+            .contains_key("pipe-fault-malformed"),
+        "malformed input after publish must fully unregister the ingest"
+    );
+}
+
+#[tokio::test]
+async fn truncated_chunk_then_disconnect_clears_ingest_registration_without_error() {
+    let (engine, security) = test_engine_and_security();
+    let pipeline_access: Arc<dyn PipelineAccessAuthenticator> = Arc::new(AcceptAllAuthenticator {
+        pipeline_id: "pipe-fault-truncated".to_string(),
+    });
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let engine_c = engine.clone();
+    let server = tokio::spawn(async move {
+        let (socket, client_addr) = listener.accept().await.unwrap();
+        handle_rtmp_client(socket, client_addr, pipeline_access, security, engine_c).await
+    });
+
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    drive_client_publish_handshake(&mut client, "any-key").await;
+
+    assert!(
+        engine
+            .ingests
+            .active
+            .read()
+            .await
+            .contains_key("pipe-fault-truncated"),
+        "publish must register an active ingest before the fault is injected"
+    );
+
+    // A lone type-0 basic header byte on csid 3 is a valid start of a new
+    // chunk, but the deserializer needs 11 more bytes (timestamp, length,
+    // type, stream id) before it forms a message. Sending just this byte and
+    // then closing the socket simulates a mid-message truncation: the
+    // deserializer must keep buffering rather than erroring, and the
+    // resulting EOF must still be treated as an ordinary disconnect.
+    client.write_all(&[0x03]).await.unwrap();
+    drop(client);
+
+    let result = tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("handle_rtmp_client must not hang on a truncated chunk plus disconnect")
+        .expect("handle_rtmp_client task must not panic");
+
+    assert_eq!(result, Ok(()));
+    assert!(
+        !engine
+            .ingests
+            .active
+            .read()
+            .await
+            .contains_key("pipe-fault-truncated"),
+        "truncated input followed by disconnect must fully unregister the ingest"
+    );
 }
 
 #[test]
@@ -720,6 +930,94 @@ fn flv_avcc_config_annexb_parameter_sets_rejects_non_h264() {
 }
 
 #[test]
+fn flv_avcc_config_annexb_parameter_sets_rejects_sps_ok_pps_truncated() {
+    // SPS parses fully, numPPS = 1, but the PPS length/body never arrives.
+    // A partial SPS-only extraction would be worse than none (the decoder
+    // still can't decode without a PPS), so this must yield None.
+    #[rustfmt::skip]
+    let data: &[u8] = &[
+        0x17, 0x00, 0x00, 0x00, 0x00, // FLV header + AVC seq header + comp time
+        0x01, 0x64, 0x00, 0x1F, 0xFF, 0xE1, // AVCC header, numSPS=1
+        0x00, 0x04, // SPS length = 4
+        0x67, 0x64, 0x00, 0x1F, // SPS NAL
+        0x01, // numPPS = 1, then buffer ends
+    ];
+    assert!(flv_avcc_config_annexb_parameter_sets(data).is_none());
+}
+
+#[test]
+fn flv_avcc_config_annexb_parameter_sets_rejects_max_declared_length_tiny_buffer() {
+    // SPS declares a 0xFFFF-byte length but only 2 bytes actually follow.
+    #[rustfmt::skip]
+    let data: &[u8] = &[
+        0x17, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x64, 0x00, 0x1F, 0xFF, 0xE1, // AVCC header, numSPS=1
+        0xFF, 0xFF, // SPS length = 65535
+        0xAA, 0xBB, // only 2 bytes present
+    ];
+    assert!(flv_avcc_config_annexb_parameter_sets(data).is_none());
+}
+
+proptest! {
+    #[test]
+    fn flv_avcc_config_annexb_parameter_sets_never_panics(
+        bytes in prop::collection::vec(any::<u8>(), 0..128)
+    ) {
+        let _ = flv_avcc_config_annexb_parameter_sets(&bytes);
+    }
+
+    #[test]
+    fn flv_avcc_config_annexb_parameter_sets_truncation_fails_closed(
+        has_sps in any::<bool>(),
+        has_pps in any::<bool>(),
+        sps_rest in prop::collection::vec(any::<u8>(), 0..16),
+        pps_rest in prop::collection::vec(any::<u8>(), 0..16),
+    ) {
+        let mut avcc = vec![0x01u8, 0x64, 0x00, 0x1F, 0xFF];
+        avcc.push(0xE0 | (has_sps as u8));
+        let mut sps_body = Vec::new();
+        if has_sps {
+            sps_body.push(0x67);
+            sps_body.extend_from_slice(&sps_rest);
+            avcc.extend_from_slice(&(sps_body.len() as u16).to_be_bytes());
+            avcc.extend_from_slice(&sps_body);
+        }
+        avcc.push(has_pps as u8);
+        let mut pps_body = Vec::new();
+        if has_pps {
+            pps_body.push(0x68);
+            pps_body.extend_from_slice(&pps_rest);
+            avcc.extend_from_slice(&(pps_body.len() as u16).to_be_bytes());
+            avcc.extend_from_slice(&pps_body);
+        }
+
+        let mut data = vec![0x17u8, 0x00, 0x00, 0x00, 0x00];
+        data.extend_from_slice(&avcc);
+
+        let mut annexb = Vec::new();
+        if has_sps {
+            annexb.extend_from_slice(&[0, 0, 0, 1]);
+            annexb.extend_from_slice(&sps_body);
+        }
+        if has_pps {
+            annexb.extend_from_slice(&[0, 0, 0, 1]);
+            annexb.extend_from_slice(&pps_body);
+        }
+        let expected = crate::media::codec::annexb_parameter_sets(&annexb);
+
+        let actual = flv_avcc_config_annexb_parameter_sets(&data);
+        prop_assert_eq!(actual, expected);
+
+        // Any strict prefix of a well-formed record must fail closed, never
+        // yielding a partial SPS/PPS extraction.
+        for cut in 0..data.len() {
+            let partial = flv_avcc_config_annexb_parameter_sets(&data[..cut]);
+            prop_assert!(partial.is_none(), "truncated at {cut} produced Some(..)");
+        }
+    }
+}
+
+#[test]
 fn parse_flv_video_non_sequence_header() {
     // Keyframe + AVC, but packet type 1 (NALU, not sequence header)
     let data: &[u8] = &[0x17, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x65];
@@ -925,6 +1223,135 @@ fn parse_rtmp_url_ipv4_unchanged() {
     assert_eq!(parts.app, "live");
     assert_eq!(parts.stream_key, "key");
     assert!(!parts.tls);
+}
+
+// --- Adversarial: percent-encoded app/stream key must reach the
+// destination RTMP server decoded, not still escaped ---
+// (found via a "hunting" pass on egress_transport.rs — path_segments()
+// returns raw percent-encoded segments; forwarding them unescaped as the
+// AMF-level app/stream key would corrupt any push target whose key
+// contains a URL-reserved character.)
+
+#[test]
+fn parse_rtmp_url_percent_encoded_stream_key_slash() {
+    // %2F inside a single path segment must decode to a literal '/' in the
+    // stream key, not stay as the three-character escape.
+    let parts = parse_rtmp_url("rtmp://host/live/part1%2Fpart2").unwrap();
+    assert_eq!(parts.app, "live");
+    assert_eq!(parts.stream_key, "part1/part2");
+}
+
+#[test]
+fn parse_rtmp_url_percent_encoded_app_and_space() {
+    let parts = parse_rtmp_url("rtmp://host/my%20app/key%2Bvalue").unwrap();
+    assert_eq!(parts.app, "my app");
+    assert_eq!(parts.stream_key, "key+value");
+}
+
+#[test]
+fn parse_rtmp_url_invalid_percent_sequence_does_not_panic() {
+    // A stray '%' not followed by two hex digits is invalid percent-encoding;
+    // decoding must degrade gracefully (lossy) rather than panic.
+    let parts = parse_rtmp_url("rtmp://host/live/key%zz").unwrap();
+    assert_eq!(parts.stream_key, "key%zz");
+}
+
+#[test]
+fn parse_rtmp_url_trailing_slash_yields_trailing_slash_key() {
+    // Documents current behaviour: a trailing path separator becomes a
+    // trailing '/' in the stream key rather than being trimmed or rejected.
+    let parts = parse_rtmp_url("rtmp://host/live/key/").unwrap();
+    assert_eq!(parts.app, "live");
+    assert_eq!(parts.stream_key, "key/");
+}
+
+#[test]
+fn parse_rtmp_url_ignores_query_and_fragment() {
+    let parts = parse_rtmp_url("rtmp://host/live/key?token=abc#frag").unwrap();
+    assert_eq!(parts.app, "live");
+    assert_eq!(parts.stream_key, "key");
+}
+
+#[test]
+fn parse_rtmp_url_drops_embedded_userinfo() {
+    // Credentials embedded in the URL (rtmp://user:pass@host/...) must not
+    // leak into app/stream_key and must not change the resolved host.
+    let parts = parse_rtmp_url("rtmp://user:pass@host/live/key").unwrap();
+    assert_eq!(parts.host, "host");
+    assert_eq!(parts.app, "live");
+    assert_eq!(parts.stream_key, "key");
+}
+
+#[test]
+fn parse_rtmp_url_rejects_empty_authority() {
+    assert!(parse_rtmp_url("rtmp:///live/key").is_none());
+}
+
+#[test]
+fn parse_rtmp_url_rejects_out_of_range_port() {
+    assert!(parse_rtmp_url("rtmp://host:999999/live/key").is_none());
+}
+
+#[test]
+fn parse_rtmp_url_rejects_unterminated_ipv6_literal() {
+    assert!(parse_rtmp_url("rtmp://[::1/live/key").is_none());
+}
+
+#[test]
+fn parse_rtmp_url_case_insensitive_scheme() {
+    let parts = parse_rtmp_url("RTMP://host/live/key").unwrap();
+    assert!(!parts.tls);
+    let parts = parse_rtmp_url("RTMPS://host/live/key").unwrap();
+    assert!(parts.tls);
+}
+
+#[test]
+fn parse_rtmp_url_trims_surrounding_whitespace() {
+    let parts = parse_rtmp_url(" rtmp://host/live/key ").unwrap();
+    assert_eq!(parts.host, "host");
+    assert_eq!(parts.app, "live");
+    assert_eq!(parts.stream_key, "key");
+}
+
+// --- format_host_port: must bracket bare IPv6 literals for connect-string
+// use, but never double-bracket or mangle plain hostnames/IPv4 ---
+
+#[test]
+fn format_host_port_plain_hostname() {
+    assert_eq!(
+        super::egress_transport::format_host_port("example.com", 1935),
+        "example.com:1935"
+    );
+}
+
+#[test]
+fn format_host_port_ipv4_literal() {
+    assert_eq!(
+        super::egress_transport::format_host_port("192.168.1.1", 1935),
+        "192.168.1.1:1935"
+    );
+}
+
+#[test]
+fn format_host_port_bare_ipv6_gets_bracketed() {
+    // parse_rtmp_url strips brackets into `host`; format_host_port must
+    // re-add them so lookup_host doesn't misparse the embedded colons.
+    assert_eq!(
+        super::egress_transport::format_host_port("::1", 1935),
+        "[::1]:1935"
+    );
+    assert_eq!(
+        super::egress_transport::format_host_port("2001:db8::1", 443),
+        "[2001:db8::1]:443"
+    );
+}
+
+#[test]
+fn format_host_port_already_bracketed_is_not_double_wrapped() {
+    assert_eq!(
+        super::egress_transport::format_host_port("[::1]", 1935),
+        "[::1]:1935"
+    );
 }
 
 // --- FLV video meta: malformed / truncated / unknown codec ---

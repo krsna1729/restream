@@ -26,7 +26,7 @@ pub use crate::media::snapshots::{
     IngestDiagSnapshot, ListenerSocketStats, PublisherQuality, RingBufferDiagSnapshot,
     RtmpListenerStats, SrtListenerDiagSnapshot, VideoMeta,
 };
-pub use crate::media::stage_metrics::StageMetrics;
+pub use crate::media::stage_metrics::{StageMetrics, StageMetricsSnapshot};
 
 pub(crate) const EGRESS_PROGRESS_STALE_MS: u64 = 10_000;
 pub(crate) const INGEST_FLAP_WINDOW_MS: u64 = 30_000;
@@ -132,7 +132,7 @@ pub struct RecentEgressOutcome {
     pub first_failure_at_ms: u64,
     pub failure_count: u32,
     pub quality: PublisherQuality,
-    pub metrics: serde_json::Value,
+    pub metrics: StageMetricsSnapshot,
     pub ended_at_ms: u64,
 }
 

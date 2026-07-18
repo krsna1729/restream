@@ -11,6 +11,8 @@ use tokio::process::Command;
 
 #[path = "engine_lifecycle_tests.rs"]
 mod engine_lifecycle_tests;
+#[path = "engine_poison_recovery_tests.rs"]
+mod engine_poison_recovery_tests;
 #[path = "engine_stage_tests.rs"]
 mod engine_stage_tests;
 
@@ -47,32 +49,36 @@ fn pipe_metrics_snapshot_correctness() {
     let snap = pm.snapshot();
 
     // All counters start at zero; avg fields are also zero.
-    assert_eq!(snap["stalls"].as_u64().unwrap(), 0);
-    assert_eq!(snap["stallUs"].as_u64().unwrap(), 0);
-    assert_eq!(snap["avgStallUs"].as_u64().unwrap(), 0);
-    assert_eq!(snap["idles"].as_u64().unwrap(), 0);
-    assert_eq!(snap["idleUs"].as_u64().unwrap(), 0);
-    assert_eq!(snap["avgIdleUs"].as_u64().unwrap(), 0);
+    assert_eq!(snap.stalls, 0);
+    assert_eq!(snap.stall_us, 0);
+    assert_eq!(snap.avg_stall_us, 0);
+    assert_eq!(snap.idles, 0);
+    assert_eq!(snap.idle_us, 0);
+    assert_eq!(snap.avg_idle_us, 0);
 
     // Stdin stall accumulation and average.
     pm.record_stall(2_000);
     pm.record_stall(6_000);
     let snap = pm.snapshot();
-    assert_eq!(snap["stalls"].as_u64().unwrap(), 2);
-    assert_eq!(snap["stallUs"].as_u64().unwrap(), 8_000);
-    assert_eq!(snap["avgStallUs"].as_u64().unwrap(), 4_000);
+    assert_eq!(snap.stalls, 2);
+    assert_eq!(snap.stall_us, 8_000);
+    assert_eq!(snap.avg_stall_us, 4_000);
 
     // Stdout idle accumulation and average.
     pm.record_idle(3_000);
     let snap = pm.snapshot();
-    assert_eq!(snap["idles"].as_u64().unwrap(), 1);
-    assert_eq!(snap["idleUs"].as_u64().unwrap(), 3_000);
-    assert_eq!(snap["avgIdleUs"].as_u64().unwrap(), 3_000);
+    assert_eq!(snap.idles, 1);
+    assert_eq!(snap.idle_us, 3_000);
+    assert_eq!(snap.avg_idle_us, 3_000);
 
-    // StageMetrics snapshot no longer contains pipe fields.
+    // StageMetricsSnapshot is a fixed typed struct with no pipe-metrics
+    // fields, so the two counter families can no longer be conflated at the
+    // type level.
     let sm = StageMetrics::new();
+    sm.record_in(64);
     let ssnap = sm.snapshot();
-    assert!(ssnap.get("pipeMetrics").is_none());
+    assert_eq!(ssnap.packets_in, 1);
+    assert_eq!(ssnap.bytes_in, 64);
 }
 
 fn test_video_packet(pts: i64, dts: i64, keyframe: bool) -> MediaPacket {
@@ -485,7 +491,7 @@ async fn runtime_helpers_expose_registered_ingest_and_egress() {
 #[tokio::test]
 async fn hls_dependency_snapshot_reflects_store_and_consumer_state() {
     let engine = MediaEngine::new();
-    let (store, already_running) = engine
+    let (store, already_running, _cancel_token) = engine
         .ensure_hls_preview_segmenter("pipe-hls-snapshot")
         .await;
     assert!(!already_running);

@@ -59,7 +59,9 @@ pub(super) async fn monitor_listener_socket(
     // of accepting traffic until it drops packets at an understated percentage.
     let configured_buf = effective_udp_recv_capacity.max(1);
     let warn_threshold = configured_buf / 2; // 50%
-    let crit_threshold = (configured_buf * 3) / 4; // 75%
+    // saturating_mul: an extreme configured_buf must degrade to a very high
+    // (effectively unreachable) threshold, not crash the monitor task.
+    let crit_threshold = configured_buf.saturating_mul(3) / 4; // 75%
     let mut prev_drops = 0u64;
     let mut warned = false;
 
