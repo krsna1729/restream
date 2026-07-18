@@ -77,6 +77,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 23:30 HUNT SRT-MUXER-SHARD-POOL-BOUNDARIES DONE [codex]](#2026-07-18-2330-hunt-srt-muxer-shard-pool-boundaries-done-codex)
 - [2026-07-18 23:50 HUNT SRT-POLICY-FALLBACK-SEMANTICS DONE [codex]](#2026-07-18-2350-hunt-srt-policy-fallback-semantics-done-codex)
 - [2026-07-19 00:10 HUNT TRANSCODE-PROFILE-VALIDATION-BOUNDARIES DONE [codex]](#2026-07-19-0010-hunt-transcode-profile-validation-boundaries-done-codex)
+- [2026-07-19 00:35 HUNT API-VIEW-MODELS-FORMATTING-HELPERS DONE [codex]](#2026-07-19-0035-hunt-api-view-models-formatting-helpers-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2326,3 +2327,61 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   been swept this session; `src/bin/test_harness/` is deliberately
   excluded from this scan since it is harness tooling validated by its
   own `correctness*`/live-mode gates, not application logic.
+
+## 2026-07-19 00:35 HUNT API-VIEW-MODELS-FORMATTING-HELPERS DONE [codex]
+
+- Scope: continued the open-ended adversarial scan into
+  `src/api_view_models.rs`. Ruled out two other candidates first without
+  writing code: `src/api_runtime_views/graph.rs` (thin async orchestration
+  over live `MediaEngine` `RwLock`-guarded state; would need heavy engine
+  mocking to unit-test in isolation and its real logic is already exercised
+  transitively by existing integration coverage, same reasoning as the
+  earlier-ruled-out `stage_registry_access.rs`) and `src/application/ports.rs`
+  (pure trait/type-definition boilerplate with no branching logic, same
+  reasoning as the earlier-ruled-out `ingest_auth.rs`).
+- Finding: `human_bytes`, `human_duration_ms`, and
+  `srt_recv_buffer_occupancy` in `src/api_view_models.rs` are private pure
+  functions reachable from HTTP-facing JSON response bodies (via
+  `processing_graph_ingest_details` and related call sites) with zero test
+  coverage. Added 13 new `#[test]` functions to the existing `mod tests`
+  block covering: `human_bytes` byte/KiB/MiB tier boundaries at 1023/1024
+  and `1024*1024`, no-panic behavior at `u64::MAX` (confirming there is no
+  GiB/TiB tier — huge values just render as a large MiB number);
+  `human_duration_ms` ms/s/min tier boundaries at 999/1000 and 60_000,
+  no-panic behavior at `u64::MAX` (no hour tier); `srt_recv_buffer_occupancy`
+  returning `None` when either `Option<i32>` field is `None`, returning
+  `None` when both resolve to a total of 0 (div-by-zero guard), clamping
+  negative `i32` values (libsrt reports `-1` for "unavailable") to 0 via
+  `.max(0)` before the `u64` cast rather than underflowing, a normal
+  percentage computation, and an `i32::MAX` case proving the
+  `u64` intermediate cast avoids overflow that would occur if the
+  multiplication/sum stayed in `i32`.
+- Pinned quirk: both `human_bytes` and `human_duration_ms` select their
+  display tier with an `if raw_value < threshold` check on the *unrounded*
+  input, then independently format the *scaled* value at one decimal place.
+  A value one unit below the threshold can round up to look like it already
+  crossed it: `human_bytes(1024 * 1024 - 1)` renders `"1024.0 KiB"` instead
+  of bumping to MiB, and `human_duration_ms(59_999)` renders `"60.0 s"`
+  instead of bumping to minutes. Not a panic or data-loss bug — pinned with
+  an explanatory test comment rather than "fixed", per this session's
+  pin-don't-fix convention; changing the tier-selection logic to round-then-
+  compare would be a deliberate, human-reviewed behavior change to
+  operator-facing display text, out of scope for a test sweep.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib api_view_models`
+  — 30/30 pass (15 new plus 15 pre-existing in the same filter, unaffected).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` + `--check` — clean, no reformatting
+  needed. Test-only change to a module already on the frontend/backend
+  contract surface for its JSON-shaping functions, but no production code
+  or JSON shape changed — did not run `scripts/check/api-contract.sh`
+  since no wire-format behavior was touched, only new tests added.
+- Commit: `ec60433b` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. The tier-selection/rounding disagreement is
+  pinned as documented current display behavior, not flagged as a bug.
+- Notes: continuing the open-ended scan. Remaining unswept areas: most of
+  `src/application/` (`ingest.rs`, `reconcile.rs`, `egress.rs`,
+  `hls_preview.rs`, `recording.rs`, `srt_ingest.rs`, `ingest_security.rs`,
+  `models.rs`, `settings.rs`, `graph.rs` — most already have some tests,
+  ratios not yet deeply evaluated) and `src/api_runtime_views/` thin-ratio
+  files (`status.rs` 833 lines/5 tests, `resource_map.rs` 736/1,
+  `telemetry.rs` 403/3) worth a closer look next.
