@@ -247,7 +247,8 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: Criterion state in `target/criterion/` is scratch; the ledger is
   the durable regression guard perf-sweep Mode A depends on. Without it every
   future comparison is blind.
-- Status: in-progress (Claimed: 2026-07-18 by codex; Filed: 2026-07-03 by bootstrap)
+- Status: done (2026-07-18) — see `docs/agent-guidance/quality/journal.md`
+  Q-003 DONE (Claimed: 2026-07-18 by codex; Filed: 2026-07-03 by bootstrap)
 
 ### Q-011 [performance] [sonnet] Prove or reject RTMP video payload ownership transfer
 - Goal: a measured runtime decision on replacing RTMP Raw video

@@ -58,6 +58,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 08:35 Q-007 DONE [codex]](#2026-07-18-0835-q-007-done-codex)
 - [2026-07-18 09:10 Q-006 DONE [codex]](#2026-07-18-0910-q-006-done-codex)
 - [2026-07-18 09:40 Q-008 DONE [codex]](#2026-07-18-0940-q-008-done-codex)
+- [2026-07-18 10:20 Q-003 DONE [codex]](#2026-07-18-1020-q-003-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1307,3 +1308,45 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   pattern applied uniformly, not new indirection, so it stays within the
   layering-audit guidance to stop only when the next split would add more
   indirection than ownership clarity.
+
+## 2026-07-18 10:20 Q-003 DONE [codex]
+- What: seeded the `docs/agent-guidance/quality/baselines.md` Criterion
+  benchmark ledger for `ring_buffer`, `avio_throughput`, and
+  `high_performance_data_path` — the blocker (AVIO `MemoryQueue::write`
+  lost-wakeup race) was already fixed and journaled earlier this run.
+  Confirmed host idle (`pgrep -x restream/mediamtx/ffmpeg` all empty), then
+  ran three clean serial `scripts/build/resource-limit.sh cargo bench
+  --profile bench --bench <name>` invocations per suite (9 runs total).
+  Each suite runs dozens of Criterion groups; since the ledger table is one
+  row per suite, picked one representative low-variance headline group per
+  suite rather than every group: `ring_buffer/consumer/pull_burst/8`,
+  `memory_queue/write_batch/with_len`, and
+  `data_path/mpegts_demux_drain/reuse_then_consume`. Recorded median (median
+  of the three per-run medians) and noise (spread across the three runs)
+  for each, with commit `52428c2b` and today's date.
+- Gates: the ledger's own gate (three clean serial bench runs per suite on
+  an idle host) — no errors/panics across all 9 runs
+  (`grep -niE "error\[|panicked|error:"` on the combined log: 0 matches);
+  `node scripts/check/docs.mjs` (Markdown touched) — pass.
+- Commit: this commit (`baselines.md` + `backlog.md` + journal only).
+- Follow-ups: none filed. The other 10 bench suites listed in the ledger
+  table (`matrix_throughput`, `srt_ingest_latency`,
+  `transcoder_throughput`, `hls_cost`, `hls_fmp4_cost`, `stage_feeder`,
+  `stage_metrics`, `codec_conversions`, `simd_alternatives`,
+  `alert_tracker`) remain unseeded — Q-003's goal named only the three
+  suites now filled in, so seeding the rest is left for a future backlog
+  item rather than expanded silently here.
+- Notes: `high_performance_data_path`'s headline group showed a monotonic
+  warm-to-fast drift across the three runs (8.39 → 9.26 → 9.66 GiB/s, ~15%
+  top-to-bottom) rather than random jitter — most likely CPU
+  frequency/cache ramp-up across repeated process invocations on this WSL2
+  host. Recorded honestly as `±7% (see note)` in the table plus an inline
+  note explaining the drift, rather than silently averaging it away or
+  discarding the outlier runs, since this exceeds the ledger's own ±5%
+  default regression threshold and a future perf-sweep comparison needs to
+  know to expect that much spread on this specific suite. `ring_buffer`'s
+  contended `ring_buffer_push_500_readers` bench was considered as the
+  headline metric first but rejected for the ledger row: it swung
+  30.6–36.4 µs (~19%) across the three runs, making it a poor low-noise
+  anchor; `pull_burst/8` was substituted as a stable, throughput-labeled
+  alternative from the same suite.

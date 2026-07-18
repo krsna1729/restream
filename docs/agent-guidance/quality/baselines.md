@@ -20,9 +20,9 @@ reference points — do not overwrite them, add new dated rows.
 
 | Suite | Metric | Median | Noise ± | Commit | Date | Last verified |
 |---|---|---|---|---|---|---|
-| ring_buffer | (seed via Q-003) | — | — | — | — | — |
-| avio_throughput | (seed via Q-003) | — | — | — | — | — |
-| high_performance_data_path | (seed via Q-003) | — | — | — | — | — |
+| ring_buffer | `ring_buffer/consumer/pull_burst/8` | 1.951 µs (4.10 Melem/s) | ±0.4% | 52428c2b | 2026-07-18 | 2026-07-18 |
+| avio_throughput | `memory_queue/write_batch/with_len` | 467 ns (2.62 GiB/s) | ±2% | 52428c2b | 2026-07-18 | 2026-07-18 |
+| high_performance_data_path | `data_path/mpegts_demux_drain/reuse_then_consume` | 672 µs (9.26 GiB/s) | ±7% (see note) | 52428c2b | 2026-07-18 | 2026-07-18 |
 | matrix_throughput | — | — | — | — | — | — |
 | srt_ingest_latency | — | — | — | — | — | — |
 | transcoder_throughput | — | — | — | — | — | — |
@@ -36,6 +36,22 @@ reference points — do not overwrite them, add new dated rows.
 
 Default regression threshold: ±5% on throughput suites unless a row notes
 otherwise. A regression beyond threshold is filed, not silently absorbed.
+
+Seeded 2026-07-18 (Q-003): each of `ring_buffer`, `avio_throughput`, and
+`high_performance_data_path` runs dozens of Criterion groups per suite; the
+row above records one representative low-variance headline group per suite
+rather than every group, matching this table's one-row-per-suite shape.
+Three clean serial `scripts/build/resource-limit.sh cargo bench --profile
+bench --bench <name>` runs per suite on an idle host (`pgrep -x
+restream/mediamtx/ffmpeg` all empty); Median is the median of the three
+per-run medians, Noise ± is the spread across those three runs.
+`high_performance_data_path`'s `mpegts_demux_drain/reuse_then_consume`
+showed a monotonic warm-to-fast drift across the three runs (8.39 → 9.26 →
+9.66 GiB/s, ~15% top-to-bottom) rather than random jitter, likely CPU
+frequency/cache ramp-up across repeated process invocations on this WSL2
+host — noted here rather than silently averaged away, since it exceeds the
+±5% default threshold and a future perf-sweep comparison against this row
+should expect that much run-to-run spread on this suite specifically.
 
 ## Resource ledger (resource-sweep / scale runs)
 
