@@ -73,11 +73,11 @@ pub(crate) async fn engine_telemetry(engine: &MediaEngine) -> serde_json::Value 
         };
         let row = api_view_models::stage_telemetry_row_json(
             key,
-            metrics.snapshot(),
+            serde_json::to_value(metrics.snapshot()).unwrap_or_default(),
             runtimes
                 .get(key)
                 .and_then(|runtime| runtime.pipe_metrics.as_ref())
-                .map(|pm| pm.snapshot()),
+                .map(|pm| serde_json::to_value(pm.snapshot()).unwrap_or_default()),
             None,
             None,
             lifecycle_snapshots.get(key),
@@ -229,11 +229,11 @@ pub(crate) async fn pipeline_telemetry(
         };
         let mut val = api_view_models::stage_telemetry_row_json(
             key,
-            metrics.snapshot(),
+            serde_json::to_value(metrics.snapshot()).unwrap_or_default(),
             runtimes
                 .get(key)
                 .and_then(|runtime| runtime.pipe_metrics.as_ref())
-                .map(|pm| pm.snapshot()),
+                .map(|pm| serde_json::to_value(pm.snapshot()).unwrap_or_default()),
             None,
             None,
             lifecycle_snapshots.get(key),
@@ -287,7 +287,7 @@ pub(crate) async fn stage_telemetry_by_display(
     let metrics = stage_metrics_for(engine, &key).await?;
     let pipe = stage_pipe_metrics_for(engine, &key)
         .await
-        .map(|pm| pm.snapshot());
+        .map(|pm| serde_json::to_value(pm.snapshot()).unwrap_or_default());
 
     // Fetch lifecycle snapshot for detailed phase/capacity info.
     let lifecycle = engine.stage_runtime_snapshot(&key).await;
@@ -295,7 +295,7 @@ pub(crate) async fn stage_telemetry_by_display(
     Some(api_view_models::single_stage_telemetry_json(
         chrono::Utc::now().to_rfc3339(),
         &key,
-        metrics.snapshot(),
+        serde_json::to_value(metrics.snapshot()).unwrap_or_default(),
         pipe,
         lifecycle.as_ref(),
     ))

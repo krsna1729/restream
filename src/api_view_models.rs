@@ -1159,7 +1159,7 @@ mod tests {
             first_failure_at_ms: MediaEngine::now_epoch_ms() - 2_000,
             failure_count: 2,
             quality: Default::default(),
-            metrics: serde_json::json!({}),
+            metrics: Default::default(),
             ended_at_ms: MediaEngine::now_epoch_ms() - 1_000,
         };
 

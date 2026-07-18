@@ -7,6 +7,21 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+/// Typed snapshot of a [`StageMetrics`] counter set. JSON assembly (if
+/// needed) happens at the API/runtime-view edge, not here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageMetricsSnapshot {
+    pub packets_in: u64,
+    pub packets_out: u64,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub processing_us: u64,
+    pub avg_us_per_packet: f64,
+    pub uptime_secs: f64,
+    pub packets_per_sec: f64,
+}
+
 #[derive(Debug)]
 pub struct StageMetrics {
     pub packets_in: AtomicU64,
@@ -59,7 +74,7 @@ impl StageMetrics {
         self.processing_us.fetch_add(us, Ordering::Relaxed);
     }
 
-    pub fn snapshot(&self) -> serde_json::Value {
+    pub fn snapshot(&self) -> StageMetricsSnapshot {
         let pkts_in = self.packets_in.load(Ordering::Relaxed);
         let pkts_out = self.packets_out.load(Ordering::Relaxed);
         let bytes_in = self.bytes_in.load(Ordering::Relaxed);
@@ -73,15 +88,19 @@ impl StageMetrics {
             0.0
         };
 
-        serde_json::json!({
-            "packetsIn": pkts_in,
-            "packetsOut": pkts_out,
-            "bytesIn": bytes_in,
-            "bytesOut": bytes_out,
-            "processingUs": proc_us,
-            "avgUsPerPacket": avg_us_per_packet,
-            "uptimeSecs": elapsed,
-            "packetsPerSec": if elapsed > 0.0 { pkts_in as f64 / elapsed } else { 0.0 },
-        })
+        StageMetricsSnapshot {
+            packets_in: pkts_in,
+            packets_out: pkts_out,
+            bytes_in,
+            bytes_out,
+            processing_us: proc_us,
+            avg_us_per_packet,
+            uptime_secs: elapsed,
+            packets_per_sec: if elapsed > 0.0 {
+                pkts_in as f64 / elapsed
+            } else {
+                0.0
+            },
+        }
     }
 }

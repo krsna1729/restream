@@ -10,6 +10,19 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Typed snapshot of a [`PipeMetrics`] counter set. JSON assembly (if
+/// needed) happens at the API/runtime-view edge, not here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PipeMetricsSnapshot {
+    pub stalls: u64,
+    pub stall_us: u64,
+    pub avg_stall_us: u64,
+    pub idles: u64,
+    pub idle_us: u64,
+    pub avg_idle_us: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct PipeMetrics {
     /// Stdin writes that stalled: the kernel pipe buffer was full because
@@ -37,18 +50,18 @@ impl PipeMetrics {
         self.idle_us.fetch_add(us, Ordering::Relaxed);
     }
 
-    pub fn snapshot(&self) -> serde_json::Value {
+    pub fn snapshot(&self) -> PipeMetricsSnapshot {
         let stalls = self.stalls.load(Ordering::Relaxed);
         let stall_us = self.stall_us.load(Ordering::Relaxed);
         let idles = self.idles.load(Ordering::Relaxed);
         let idle_us = self.idle_us.load(Ordering::Relaxed);
-        serde_json::json!({
-            "stalls":     stalls,
-            "stallUs":    stall_us,
-            "avgStallUs": stall_us.checked_div(stalls).unwrap_or(0),
-            "idles":      idles,
-            "idleUs":     idle_us,
-            "avgIdleUs":  idle_us.checked_div(idles).unwrap_or(0),
-        })
+        PipeMetricsSnapshot {
+            stalls,
+            stall_us,
+            avg_stall_us: stall_us.checked_div(stalls).unwrap_or(0),
+            idles,
+            idle_us,
+            avg_idle_us: idle_us.checked_div(idles).unwrap_or(0),
+        }
     }
 }

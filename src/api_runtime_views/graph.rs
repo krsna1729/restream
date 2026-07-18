@@ -39,7 +39,7 @@ pub(crate) async fn processing_graph(
             .unwrap_or_else(|| "No ingest".to_string()),
         ingest.is_some(),
         ingest.map(api_view_models::processing_graph_ingest_details),
-        ingest.map(|ingest| ingest.metrics.snapshot()),
+        ingest.map(|ingest| serde_json::to_value(ingest.metrics.snapshot()).unwrap_or_default()),
     ));
 
     let demux_node_id = format!("{pipeline_id}_ingest_demux");
@@ -56,7 +56,7 @@ pub(crate) async fn processing_graph(
             .unwrap_or_else(|| "Demux/probe idle".to_string()),
         ingest.is_some(),
         ingest.map(api_view_models::processing_graph_demux_details),
-        ingest.map(|ingest| ingest.metrics.snapshot()),
+        ingest.map(|ingest| serde_json::to_value(ingest.metrics.snapshot()).unwrap_or_default()),
     ));
 
     let rb_node_id = format!("{pipeline_id}_source_rb");
@@ -166,7 +166,10 @@ pub(crate) async fn processing_graph(
             let stage_key_str = kind.to_string();
             let stage_id = kind.graph_node_id(pipeline_id);
             let queue_stats = runtime.input_queue.as_ref().map(|queue| queue.stats());
-            let pipe_stats = runtime.pipe_metrics.as_ref().map(|pipe| pipe.snapshot());
+            let pipe_stats = runtime
+                .pipe_metrics
+                .as_ref()
+                .map(|pipe| serde_json::to_value(pipe.snapshot()).unwrap_or_default());
             let mut node = api_view_models::processing_graph_stage_node(
                 stage_id.clone(),
                 kind.graph_type(),
@@ -174,7 +177,7 @@ pub(crate) async fn processing_graph(
                 stage_key_str.as_str(),
                 lifecycle_snapshots.get(key),
                 !runtime.cancel.is_cancelled(),
-                Some(runtime.metrics.snapshot()),
+                Some(serde_json::to_value(runtime.metrics.snapshot()).unwrap_or_default()),
                 queue_stats.map(|stats| serde_json::json!(stats)),
                 pipe_stats,
                 api_view_models::ring_payload_stats_json(ring),
@@ -248,7 +251,8 @@ pub(crate) async fn processing_graph(
             egress.map(|egress| {
                 api_view_models::processing_graph_egress_details(egress, ingest.is_some())
             }),
-            egress.map(|egress| egress.metrics.snapshot()),
+            egress
+                .map(|egress| serde_json::to_value(egress.metrics.snapshot()).unwrap_or_default()),
         ));
 
         let output_for_plan = [PlannedOutput::new(
@@ -332,7 +336,7 @@ pub(crate) async fn processing_graph(
             None,
             all_stage_metrics
                 .get(&rec_stage_key)
-                .map(|metrics| metrics.snapshot()),
+                .map(|metrics| serde_json::to_value(metrics.snapshot()).unwrap_or_default()),
         ));
         edges.push(api_view_models::processing_graph_edge(
             rb_node_id.clone(),
@@ -352,7 +356,7 @@ pub(crate) async fn processing_graph(
             None,
             all_stage_metrics
                 .get(&hls_stage_key)
-                .map(|metrics| metrics.snapshot()),
+                .map(|metrics| serde_json::to_value(metrics.snapshot()).unwrap_or_default()),
         ));
         edges.push(api_view_models::processing_graph_edge(
             rb_node_id,

@@ -57,6 +57,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 08:10 Q-005 DONE [codex]](#2026-07-18-0810-q-005-done-codex)
 - [2026-07-18 08:35 Q-007 DONE [codex]](#2026-07-18-0835-q-007-done-codex)
 - [2026-07-18 09:10 Q-006 DONE [codex]](#2026-07-18-0910-q-006-done-codex)
+- [2026-07-18 09:40 Q-008 DONE [codex]](#2026-07-18-0940-q-008-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1246,3 +1247,63 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   scale-by-output-count here vs. the fixed 15-case sizing-cut comparison
   there) — both sections are kept per `baselines.md`'s "never overwrite
   historical sections, add new dated rows" rule.
+
+## 2026-07-18 09:40 Q-008 DONE [codex]
+- What: completed `docs/layering-roadmap.md` Refactor Order item 2 ("Keep
+  runtime views out of the engine core"). `StageMetrics::snapshot()`
+  (`src/media/stage_metrics.rs`) and `PipeMetrics::snapshot()`
+  (`src/media/pipe_metrics.rs`) now return typed `StageMetricsSnapshot` /
+  `PipeMetricsSnapshot` structs (`#[derive(Serialize)]`,
+  `#[serde(rename_all = "camelCase")]` to preserve the existing wire field
+  names) instead of hand-building `serde_json::Value`. Updated every
+  consumer: call sites inside a `json!({...})` macro needed no change
+  (serde auto-converts the typed struct); call sites passing the snapshot
+  as a bare `Option<serde_json::Value>`/`serde_json::Value` argument
+  (`src/api_runtime_views/graph.rs`, `src/api_runtime_views/telemetry.rs`)
+  were converted at the edge via `serde_json::to_value(...).unwrap_or_default()`.
+  `src/api_view_models.rs`'s edge-assembly functions
+  (`processing_graph_stage_node`, the `*_telemetry_row_json`/
+  `single_stage_telemetry_json` family) already took typed
+  `Option<serde_json::Value>` parameters by design and needed no change.
+  Updated `src/media/engine_tests.rs`'s two snapshot tests
+  (`pipe_metrics_snapshot_correctness`,
+  the `StageMetrics` snapshot test) from JSON-index assertions to typed
+  struct-field assertions. Confirmed via
+  `grep -rln serde_json::Value src/media/` (excluding tests) and
+  `grep -rn serde_json::json! src/media/*.rs` (excluding tests) that no
+  `serde_json::Value`/`json!` usage remains anywhere in the engine core —
+  the roadmap item's success condition ("engine code no longer needs to
+  know UI/HTTP serialization details", "JSON assembly happens at the edge")
+  is now fully met, not partially. Marked the roadmap item done in place
+  and updated its "Immediate Next Steps" cross-reference (item 2) to note
+  the conversion is complete rather than still "continue converting".
+- Gates: `scripts/build/resource-limit.sh cargo build --profile bench
+  --tests --bins` (retried once after a SIGKILL/OOM on the first attempt —
+  no live pipeline process was found running; the retry succeeded cleanly,
+  consistent with AGENTS.md's documented WSL2 build-memory-pressure risk
+  rather than a real regression); full `scripts/build/resource-limit.sh
+  cargo test --profile bench` (justified over a scoped module filter
+  because the change crosses `src/media/`, `src/api_runtime_views/`, and
+  `src/api_view_models.rs` module boundaries per the Inner Loop table) —
+  all 13 test binaries pass, 0 failed, no warnings/panics in the log;
+  `cargo fmt --all --check` — clean; `./scripts/check/api-contract.sh`
+  (contract surface moved, JSON assembly relocated to the edge) — 109
+  contract tests plus the `api-smoke` end-to-end check pass, wire JSON
+  shape unchanged (camelCase field names preserved by
+  `#[serde(rename_all = "camelCase")]`); `node scripts/check/docs.mjs`
+  (Markdown touched) — pass.
+- Commit: this commit (7 Rust files + `layering-roadmap.md` + journal +
+  backlog doc update).
+- Follow-ups: none filed. Other engine-adjacent JSON emission (e.g.
+  protocol handlers, planner/media-backend parsing) is out of scope for
+  this roadmap step and already tracked separately in the roadmap's
+  "Current Shape" section.
+- Notes: treated `PipeMetrics::snapshot()` as in-scope alongside
+  `StageMetrics::snapshot()` even though the backlog item text only names
+  the latter explicitly — the roadmap's stated success condition is
+  binary (engine core knows about serialization, or it doesn't), so
+  converting only one of the two metrics-snapshot types in the engine core
+  would have left the goal formally unmet. This is the same mechanical
+  pattern applied uniformly, not new indirection, so it stays within the
+  layering-audit guidance to stop only when the next split would add more
+  indirection than ownership clarity.

@@ -384,7 +384,8 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: known cross-layer flows still open: planner→media backend parsing,
   runtime core emitting API-shaped JSON, protocol handlers reading raw SQL
   (`docs/layering-roadmap.md` § Current Shape).
-- Status: open (Filed: 2026-07-03 by bootstrap)
+- Status: done (2026-07-18) — see `docs/agent-guidance/quality/journal.md`
+  Q-008 DONE (Filed: 2026-07-03 by bootstrap)
 
 ### Q-009 [performance] [opus] Eliminate one copy in the AVIO→TsMux path
 - Goal: FFmpeg AVIO output written directly into a pre-sized `BytesMut`,
