@@ -72,6 +72,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 21:45 HUNT SRT-STREAM-ID-ADVERSARIAL DONE [codex]](#2026-07-18-2145-hunt-srt-stream-id-adversarial-done-codex)
 - [2026-07-18 22:05 HUNT STAGE-METRICS-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2205-hunt-stage-metrics-counter-boundaries-done-codex)
 - [2026-07-18 22:20 HUNT PIPE-METRICS-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2220-hunt-pipe-metrics-counter-boundaries-done-codex)
+- [2026-07-18 22:40 HUNT ENGINE-HLS-CONSUMER-IDLE-BOUNDARIES DONE [codex]](#2026-07-18-2240-hunt-engine-hls-consumer-idle-boundaries-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2078,3 +2079,54 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Follow-ups: none filed.
 - Notes: `engine_hls.rs` and `snapshots.rs` remain on the candidate list
   for the next hunt iteration.
+
+## 2026-07-18 22:40 HUNT ENGINE-HLS-CONSUMER-IDLE-BOUNDARIES DONE [codex]
+
+- What: `src/media/engine_hls.rs` had zero dedicated tests of its own;
+  `HlsConsumers::is_idle` only had one flaky-prone real-sleep test in
+  `engine_tests.rs`, and the preview registry key prefix functions
+  (`hls_preview_registry_key` / `pipeline_id_from_hls_preview_registry_key`)
+  had no coverage at all. Added a `#[cfg(test)]` module directly in
+  `engine_hls.rs` (matching the in-file test convention used for
+  `stage_metrics.rs`/`pipe_metrics.rs`/`srt_stream_id.rs`, since
+  `pipeline_id_from_hls_preview_registry_key` is module-private and
+  unreachable from `engine_tests.rs`) with 7 deterministic, sleep-free
+  tests: registry-key roundtrip (including the case where a pipeline id
+  itself contains the `__preview__:` prefix — extraction only strips one
+  outer layer, not recursively); rejection of a key where the prefix
+  appears mid-string instead of anchored at the start; `is_idle(0)`
+  reading idle immediately for a never-touched consumer (no implicit
+  startup grace period); a persistent consumer vetoing idle regardless of
+  timeout or touch history; and two state-corruption-shaped cases pinning
+  the `saturating_sub` guard in `is_idle` — `last_access_ms` artificially
+  ahead of `now_ms` must read not-idle rather than underflow/panic, and
+  `remove_persistent` called without a matching `add_persistent` wraps
+  the `persistent` counter to `u64::MAX` (confirmed via `fetch_sub` with
+  no floor) rather than panicking, which then permanently pins the
+  consumer as non-idle — a real resource-leak shape if a caller ever
+  mismatches add/remove (verified the one production call site in
+  `src/lib.rs` already guards this with a `hls_persistent_registered`
+  bool, so the wrap is pinned as documented defensive behavior, not
+  fixed in production code — consistent with how the atomic-overflow
+  wraps in the `stage_metrics.rs`/`pipe_metrics.rs` hunts were pinned
+  rather than changed).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib engine_hls`
+  — 8/8 pass (7 new plus the pre-existing
+  `hls_preview_registry_key_roundtrips_through_extraction`-adjacent
+  module compiles clean; the original `engine_tests.rs` sleep-based
+  `test_hls_consumers_monotonic_idle` is unchanged and still passes).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` + `--check` — clean. Test-only
+  change to non-hot-path lifecycle bookkeeping (tokio `RwLock`-guarded
+  consumer registry, not a per-packet loop); `engine_hls.rs` is not on
+  the Inner Loop table's lifecycle-sensitive file list, so did not
+  broaden to `scripts/check/concurrency/contract.sh` or full `cargo
+  test`.
+- Commit: `f096f3f6` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. The `remove_persistent` unguarded `fetch_sub`
+  is worth a defensive `saturating`/`checked` fix if a second call site
+  is ever added without the same `*_registered`-bool guard pattern used
+  in `src/lib.rs`; not filed as a backlog item since the only current
+  caller is already safe.
+- Notes: `snapshots.rs` is ruled out (pure data-carrier, no logic).
+  Continuing the open-ended scan for the next low-coverage candidate.
