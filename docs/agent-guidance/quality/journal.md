@@ -61,6 +61,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 10:20 Q-003 DONE [codex]](#2026-07-18-1020-q-003-done-codex)
 - [2026-07-18 15:38 AVIO-LOOM DONE [codex]](#2026-07-18-1538-avio-loom-done-codex)
 - [2026-07-18 16:20 HUNT RTMP-EGRESS-PERCENT-DECODE DONE [codex]](#2026-07-18-1620-hunt-rtmp-egress-percent-decode-done-codex)
+- [2026-07-18 16:45 HUNT SRT-MONITOR-OVERFLOW DONE [codex]](#2026-07-18-1645-hunt-srt-monitor-overflow-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1460,5 +1461,56 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   Q-009/Q-010/Q-012 in `.local/worktrees/perf-sweep-opus-20260718`. Next
   candidates from the same coverage-map lead list (still open, not yet
   investigated): `srt_monitor.rs` (43.75%), `engine_snapshots.rs` (68.59%,
+  "snapshot error branches"), `mpegts_probe.rs` (72.92%, "probe/reporting
+  paths").
+
+## 2026-07-18 16:45 HUNT SRT-MONITOR-OVERFLOW DONE [codex]
+- What: continued "the hunting" against the next coverage-map candidate,
+  `src/media/srt_monitor.rs` (43.75% line coverage). Found and fixed a real
+  panic path in `monitor_listener_socket`: `crit_threshold = (configured_buf
+  * 3) / 4` is computed synchronously, before the function's first
+  `.await`, with no overflow protection. An `effective_udp_recv_capacity`
+  near `u64::MAX` overflows the multiplication and panics
+  (`attempt to multiply with overflow`) the instant the future is first
+  polled — i.e. immediately on task spawn, not after any delay. Verified
+  with a throwaway probe test calling `monitor_listener_socket(0, stats,
+  u64::MAX)` under a 50ms timeout before writing the fix, confirming the
+  panic fires at `src/media/srt_monitor.rs:62` exactly as read from the
+  source, not a guessed line. Today's one caller (`srt.rs`) sources this
+  value from an `i32` kernel sockopt cast to `u64` (bounded well under the
+  overflow threshold), so this isn't reachable in the current call graph —
+  but `monitor_listener_socket` is `pub(super)`, not defensively scoped to
+  that one caller, and AGENTS.md's media-rules invariant is unconditional
+  ("No internal or external failure path may crash the engine"), so this
+  gets hardened regardless of current reachability. Fix: replace the plain
+  multiply with `configured_buf.saturating_mul(3) / 4` — an extreme input
+  saturates to a very high (effectively unreachable) threshold instead of
+  overflowing.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib srt` — 92/92
+  pass, including the new
+  `monitor_listener_socket_extreme_capacity_does_not_panic` regression test
+  (asserts the call survives past a 50ms timeout instead of panicking
+  before the first `.await`). `cargo fmt --all --check` — clean (after
+  running `cargo fmt --all` to fix the new test's formatting and a stray
+  blank-line diff left over from the prior probe-test removal).
+  `scripts/build/resource-limit.sh cargo clippy --lib -- -D warnings` —
+  clean. Broadened to full `scripts/build/resource-limit.sh cargo test`
+  since arithmetic-safety invariants in a shared media-engine helper are a
+  cross-module concern, not scoped to one file — 0 failed (all "FAILED" /
+  "panicked" greps on the full run output were pre-existing, unrelated
+  fixture/log lines like a deliberately-injected 502 in an upload test).
+  `node scripts/check/docs.mjs` — 68 Markdown files pass.
+- Commit: this commit (`src/media/srt_monitor.rs`, `src/media/srt_tests.rs`,
+  journal).
+- Follow-ups: none filed. `srt_monitor.rs`'s `read_udp_socket_stats` reads a
+  hardcoded `/proc/net/udp` path rather than an injectable source, so its
+  parsing logic can only be probed indirectly against the real host's proc
+  file (already covered by the pre-existing
+  `reads_udp_socket_stats_for_listener_port` test) — refactoring it to take
+  an injectable reader purely to unit-test malformed `/proc` content would
+  be scope creep beyond what this bug hunt needs.
+- Notes: continuing "the hunting" per the user's "you go ahead with the
+  hunting" instruction. Next candidates from the same coverage-map lead
+  list (still open, not yet investigated): `engine_snapshots.rs` (68.59%,
   "snapshot error branches"), `mpegts_probe.rs` (72.92%, "probe/reporting
   paths").

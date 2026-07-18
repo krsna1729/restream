@@ -808,6 +808,25 @@ fn reads_udp_socket_stats_for_listener_port() {
 }
 
 #[tokio::test]
+async fn monitor_listener_socket_extreme_capacity_does_not_panic() {
+    // effective_udp_recv_capacity near u64::MAX previously overflowed the
+    // `configured_buf * 3` threshold multiplication before the first .await,
+    // panicking the monitor task immediately on spawn.
+    let stats = Arc::new(crate::media::engine::ListenerSocketStats::default());
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        monitor_listener_socket(0, stats, u64::MAX),
+    )
+    .await;
+    // The function loops forever, so we expect the timeout to fire — the
+    // only thing under test is that it doesn't panic before then.
+    assert!(
+        result.is_err(),
+        "monitor_listener_socket should still be running (not panicked) when the timeout fires"
+    );
+}
+
+#[tokio::test]
 async fn start_srt_egress_handles_invalid_streamid_without_panic() {
     let ring_buffer = Arc::new(RingBuffer::new(16));
     let engine = Arc::new(crate::media::engine::MediaEngine::new());
