@@ -87,6 +87,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 03:05 HUNT RECORDING-SETTINGS-FALLBACK-AND-SHORT-CIRCUIT DONE [codex]](#2026-07-19-0305-hunt-recording-settings-fallback-and-short-circuit-done-codex)
 - [2026-07-19 03:30 HUNT INGEST-AUTH-ASYMMETRY-AND-FILE-INGEST-GAPS DONE [codex]](#2026-07-19-0330-hunt-ingest-auth-asymmetry-and-file-ingest-gaps-done-codex)
 - [2026-07-19 03:55 HUNT RECONCILE-DECISION-BRANCH-COVERAGE DONE [codex]](#2026-07-19-0355-hunt-reconcile-decision-branch-coverage-done-codex)
+- [2026-07-19 04:10 HUNT EGRESS-MALFORMED-URL-RESILIENCE DONE [codex]](#2026-07-19-0410-hunt-egress-malformed-url-resilience-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2881,3 +2882,48 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   code changed.
 - Notes: continuing the open-ended scan. Remaining unswept
   `src/application/` file: `egress.rs` (549/7).
+
+## 2026-07-19 04:10 HUNT EGRESS-MALFORMED-URL-RESILIENCE DONE [codex]
+
+- Scope: `src/application/egress.rs` (549 lines, 7 existing tests) —
+  the last unswept `src/application/` file by size. Unlike the prior
+  three files in this run, this one is dense, sophisticated
+  engine-integration coverage rather than thin glue: the existing 7
+  tests already exercise ring reuse, HEVC->H.264 codec-edge sharing,
+  audio-track-selection dedup, mixed-protocol codec pinning, codec-hint
+  precedence over ingest meta, HLS terminal-stage reporting, and one
+  full end-to-end packet-flow test through a real fixture. All of that
+  held up under review with no gaps.
+- Finding: no bug — one coverage gap. `prepare_output_ring` calls
+  `OutputUrlScheme::from_url` and `EgressProtocol::from_url`
+  (`src/domain/output_spec.rs`), both of which parse via
+  `url::Url::parse(..).ok()` and fall back to `Unknown` for any
+  unparseable string rather than panicking — but every existing test
+  used a well-formed `rtmp://`/`srt://`/`https://` URL, so that
+  fallback path was never exercised through `prepare_output_ring`
+  itself. Confirmed the malformed-input path is handled safely as
+  designed.
+- Added regression coverage (1 new test):
+  `prepare_output_ring_falls_back_gracefully_for_unrecognized_url_scheme`
+  passes an output with url `"not-a-valid-url"` and asserts the
+  function doesn't panic and produces the same source-passthrough
+  result as a normal unencoded output (`Unknown` scheme is neither
+  HLS-family nor RTMP, so no codec override or protocol segmenter
+  applies).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib egress::` —
+  9/9 pass (1 new plus 7 pre-existing `application::egress` tests, plus
+  1 pre-existing `media::srt::srt_egress` test sharing the module-name
+  filter). `scripts/build/resource-limit.sh cargo clippy --lib
+  --benches -- -D warnings` — clean. `cargo fmt --all` — no changes
+  beyond the new test; `cargo fmt --all --check` — clean. `egress.rs`
+  is not on the AGENTS.md lifecycle-file list and the
+  `staged-gate-router` did not recommend the concurrency fast-check for
+  this commit.
+- Commit: `b54baa74` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: this closes out the largest-first scan of `src/application/`
+  — all files in that directory have now been ratio-scanned and either
+  hunted or ruled out this session. Next: pick the next-largest
+  unswept directory (`src/media/` or `src/domain/`) for the following
+  hunt.
