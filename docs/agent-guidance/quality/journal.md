@@ -83,6 +83,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 02:00 HUNT HLS-PREVIEW-CODEC-LEVEL-DEFAULT FIXED [codex]](#2026-07-19-0200-hunt-hls-preview-codec-level-default-fixed-codex)
 - [2026-07-19 02:20 HUNT INGEST-SECURITY-VALIDATE-BRANCHES DONE [codex]](#2026-07-19-0220-hunt-ingest-security-validate-branches-done-codex)
 - [2026-07-19 02:35 HUNT SETTINGS-BACKEND-POLICY-FALLBACK DONE [codex]](#2026-07-19-0235-hunt-settings-backend-policy-fallback-done-codex)
+- [2026-07-19 02:50 HUNT SRT-INGEST-APPCONFIG-FALLBACK DONE [codex]](#2026-07-19-0250-hunt-srt-ingest-appconfig-fallback-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2682,3 +2683,51 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   `srt_ingest.rs` (357/5). All files under ~200 lines in
   `src/application/` have now been ratio-scanned and either hunted or
   ruled out this session.
+
+## 2026-07-19 02:50 HUNT SRT-INGEST-APPCONFIG-FALLBACK DONE [codex]
+
+- Scope: `src/application/srt_ingest.rs` (357 lines, 5 existing tests).
+  `load_policy_store`/`refresh_policy_store` are thin orchestration
+  wired together from `load_global_srt_ingest_config` plus catalog
+  lookups, already covered end-to-end by their own two integration
+  tests. `load_global_srt_ingest_config`'s meta-store-present and
+  fail-closed-vs-fail-open validation branches were also already
+  covered by 3 existing tests. The gap was the private
+  `srt_global_config_from_appconfig` helper (lines 76-89) and its
+  `.or_else(...)` integration at line 24: no existing test ever left
+  the fake meta store empty (`value: None`) or passed a non-`None`
+  `srt_passphrase` argument, so the entire app-config-derived fallback
+  path — used when no SRT ingest config has ever been persisted to the
+  meta store yet an operator has configured a global passphrase via
+  app config/CLI flags — was completely dead code as far as the test
+  suite was concerned.
+- Finding: no bug — the fallback and its priority ordering (meta store
+  wins when present, even over a non-empty app-config passphrase)
+  behave exactly as implied by the `.or_else()`/`.unwrap_or_default()`
+  chain. Coverage gap, not a defect.
+- Added regression coverage (6 new tests): 3 direct unit tests of
+  `srt_global_config_from_appconfig` (`None` passphrase → `None`;
+  empty-string passphrase → `None`, i.e. treated as absent rather than
+  a valid empty secret; a real passphrase → an `Encrypted` config
+  carrying the passphrase and `pbkeylen` through unchanged) plus 3
+  integration tests through `load_global_srt_ingest_config` (empty meta
+  store falls back to the app-config passphrase; empty meta store and
+  no app-config passphrase falls back to `SrtGlobalIngestConfig::
+  default()`; a present-but-plaintext meta-store value wins over a
+  simultaneously-supplied app-config passphrase, pinning the priority
+  order).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  srt_ingest::` — 16/16 pass (11 in `application::srt_ingest`, 6 new
+  plus 5 pre-existing; plus 5 unrelated pre-existing
+  `domain::srt_ingest` tests sharing the module-name filter).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` — no changes beyond the new
+  tests; `cargo fmt --all --check` — clean.
+- Commit: `58063998` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — pure test-coverage addition, no production
+  code changed.
+- Notes: continuing the open-ended scan. Remaining unswept areas in
+  `src/application/`, largest-first: `ingest.rs` (923/12),
+  `reconcile.rs` (648/12), `egress.rs` (549/7), `recording.rs` (470/8).
+  All files under ~400 lines in `src/application/` have now been
+  ratio-scanned and either hunted or ruled out this session.
