@@ -126,7 +126,8 @@ fn parse_cpu_list_count(list: &str) -> Option<u64> {
         if end < start {
             return None;
         }
-        count = count.checked_add(end - start + 1)?;
+        let range_len = (end - start).checked_add(1)?;
+        count = count.checked_add(range_len)?;
     }
     Some(count)
 }
@@ -743,6 +744,7 @@ mod tests {
 
     use crate::media::engine::MediaEngine;
 
+    use super::host_setting_json;
     #[cfg(target_os = "linux")]
     use super::{parse_cgroup_cpu_max, parse_cpu_list_count};
 
@@ -763,6 +765,25 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn cpu_list_count_handles_empty_input_and_single_element_ranges() {
+        assert_eq!(parse_cpu_list_count(""), Some(0));
+        assert_eq!(parse_cpu_list_count("5-5"), Some(1));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cpu_list_count_rejects_rather_than_panics_on_range_len_overflow() {
+        // A single range spanning from 0 to u64::MAX has a length of
+        // u64::MAX + 1, which does not fit in a u64. Regression test for a
+        // bug where `end - start + 1` computed this unchecked and panicked
+        // (debug) / silently wrapped to 0 (release) instead of returning
+        // None. This file's affinity-mask input normally comes from the
+        // kernel, but the parser must not panic on any string input.
+        assert_eq!(parse_cpu_list_count("0-18446744073709551615"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn cgroup_cpu_max_reports_unlimited_and_quota() {
         assert_eq!(
             parse_cgroup_cpu_max("max 100000"),
@@ -771,6 +792,31 @@ mod tests {
         let (raw, cpus) = parse_cgroup_cpu_max("250000 100000");
         assert_eq!(raw, "250000 100000");
         assert_eq!(cpus, Some(2.5));
+    }
+
+    #[test]
+    fn host_setting_json_status_boundary_is_inclusive_at_required() {
+        let at_required = host_setting_json("k", "label", Some(100), 100, "bytes", None);
+        assert_eq!(at_required["status"], "ok");
+        let one_below = host_setting_json("k", "label", Some(99), 100, "bytes", None);
+        assert_eq!(one_below["status"], "warning");
+    }
+
+    #[test]
+    fn host_setting_json_reports_unknown_status_when_current_is_absent() {
+        // A missing `current` reading (e.g. unreadable /proc/sys entry) must
+        // not be conflated with a below-threshold "warning": it is a
+        // distinct "unknown" status regardless of how large `required` is.
+        let value = host_setting_json("k", "label", None, u64::MAX, "bytes", None);
+        assert_eq!(value["status"], "unknown");
+        assert!(value["current"].is_null());
+        assert_eq!(value["required"], u64::MAX);
+    }
+
+    #[test]
+    fn host_setting_json_passes_through_none_detail_as_null() {
+        let value = host_setting_json("k", "label", Some(1), 1, "bytes", None);
+        assert!(value["detail"].is_null());
     }
 
     #[tokio::test]
