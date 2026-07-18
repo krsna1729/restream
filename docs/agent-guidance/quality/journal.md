@@ -80,6 +80,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 00:35 HUNT API-VIEW-MODELS-FORMATTING-HELPERS DONE [codex]](#2026-07-19-0035-hunt-api-view-models-formatting-helpers-done-codex)
 - [2026-07-19 01:00 HUNT RESOURCE-MAP-JSON-SHAPING-HELPERS DONE [codex]](#2026-07-19-0100-hunt-resource-map-json-shaping-helpers-done-codex)
 - [2026-07-19 01:20 HUNT STATUS-CPU-AFFINITY-OVERFLOW FIXED [codex]](#2026-07-19-0120-hunt-status-cpu-affinity-overflow-fixed-codex)
+- [2026-07-19 02:00 HUNT HLS-PREVIEW-CODEC-LEVEL-DEFAULT FIXED [codex]](#2026-07-19-0200-hunt-hls-preview-codec-level-default-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2509,3 +2510,81 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   `hls_preview.rs`, `recording.rs`, `srt_ingest.rs`, `ingest_security.rs`,
   `models.rs`, `settings.rs`, `graph.rs`) — none of these have been ratio-
   scanned yet with the corrected `#[(tokio::)?test]` counting method.
+
+## 2026-07-19 02:00 HUNT HLS-PREVIEW-CODEC-LEVEL-DEFAULT FIXED [codex]
+
+- Scope: checked `src/application/graph.rs` (106 lines, 1 existing test)
+  first and ruled it out — it is thin delegation
+  (`desired_pipeline_graphs`/`planned_output` route to
+  `crate::planner::graph_plan` based on one branch,
+  `OutputUrlScheme::from_url(&output.url).is_hls_family()`, already covered
+  by the file's one existing test) with no further hunt value. Moved on to
+  `src/application/hls_preview.rs` (516 lines, 2 existing tests, both
+  `#[tokio::test]`-level orchestration checks). Most of the file is thin
+  async glue over `Arc<MediaEngine>` (`ensure_hls_preview`,
+  `primary_playlist`, `*_segment`/`*_playlist` handlers — same
+  already-ruled-out shape as `telemetry.rs`/`graph.rs`/`status.rs`'s async
+  handlers), but it also holds ~20 pure, synchronous HLS playlist and
+  H.264/HEVC codec-string-building functions with zero direct unit
+  coverage: `quote_hls_attr`, `build_hls_master_playlist`,
+  `build_hls_audio_track_name`, `estimate_hls_master_bandwidth`,
+  `estimate_audio_bandwidth`, `build_hls_codec_list`,
+  `build_hls_video_codec`, `build_h264_codec_string`,
+  `estimate_h264_level_idc`, `parse_h264_level_idc`,
+  `build_hevc_codec_string`, `parse_h265_level_tenths`,
+  `build_hls_audio_codec`.
+- Finding (real bug, not just a gap): `build_hevc_codec_string`'s fallback
+  for a missing/unparseable `level` was `level_tenths.unwrap_or(120)`, but
+  `level_tenths` is in "major*10+minor" units (`parse_h265_level_tenths`
+  returns `40` for level "4.0"), and gets multiplied by 3 afterward to
+  produce the actual `general_level_idc` written into the codec string.
+  The `120` fallback was itself already expressed in
+  `general_level_idc`-ish units, so the `*3` ran a second time on it,
+  producing `L360` — past the HEVC spec's max level (6.2, `L186`) — for
+  any stream with a missing or malformed level string, instead of a sane
+  default around level 4.0 (`L120`). Cross-checked the two producers of
+  `VideoMeta.level` (`src/media/rtmp/flv.rs:42` and
+  `src/media/mpegts_probe.rs:441`, both format "major.minor" from a
+  decoder-reported `level_idc`) to confirm the unit `parse_h265_level_tenths`
+  expects and produces, then fixed the fallback to `40` (level 4.0),
+  matching those units.
+- Added adversarial/regression coverage (43 new tests): H.264/HEVC level
+  parsing (`None`/empty/whitespace input, missing-dot single-value levels,
+  extra dot segments, non-numeric parts, major overflowing `u8`, and the
+  `saturating_mul`/`saturating_add` boundary at `"99.9"` clamping to
+  `u8::MAX` instead of wrapping); `estimate_h264_level_idc`'s three-tier
+  boundary conditions (exact-`216_000`/`108_000` macroblocks-per-second
+  thresholds) and its zero-dimension/non-finite-fps guards; a dedicated
+  regression test for the `build_hevc_codec_string` fallback-unit bug
+  above (`level: None` and `level: Some("garbage")` both now producing
+  `L120`, not `L360`); `estimate_hls_master_bandwidth`'s non-finite/
+  non-positive video-bandwidth filtering, its `.max(1)` zero-bandwidth
+  floor (a `bw` that rounds down to `0` must still report `1`), and a
+  `saturating_add` overflow check at `f64::MAX`; `estimate_audio_bandwidth`'s
+  full codec/channel-tier lookup table plus case-insensitive codec
+  matching; `build_hls_codec_list`'s dedup behavior and empty-input `None`
+  case; `quote_hls_attr`'s escape-backslash-before-quote ordering (would
+  double-escape if reversed); `build_hls_audio_track_name`'s
+  title/language whitespace-trim fallback chain; and two
+  `build_hls_master_playlist` integration checks — a track title
+  containing an embedded `"` round-trips through `NAME=` correctly escaped
+  (an M3U8-injection angle for attacker-influenced stream metadata), and
+  `DEFAULT=YES` is set on exactly one audio track (ordinal 0) regardless
+  of track count.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib hls_preview::`
+  — 45/45 pass (43 new plus 2 pre-existing).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` — no changes beyond the new tests
+  (diff stat matched exactly); `cargo fmt --all --check` — clean.
+- Commit: `69319407` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed — the level-default bug was fixed directly in
+  this commit (a small, local, off-hot-path constant correction with an
+  obvious fix), consistent with the "fix real bugs directly" convention
+  used for the `status.rs` overflow fix earlier in this session.
+- Notes: continuing the open-ended scan. Remaining unswept areas in
+  `src/application/`: `ingest.rs` (923/12), `reconcile.rs` (648/12),
+  `egress.rs` (549/7), `recording.rs` (470/8), `srt_ingest.rs` (357/5),
+  `ingest_security.rs` (195/5), `models.rs` (156/2),
+  `transcode_profiles.rs` (151/2, distinct from the already-hunted
+  `src/domain/transcode_profile.rs`), `settings.rs` (140/2) — none
+  ratio-scanned in depth yet beyond raw line/test counts.
