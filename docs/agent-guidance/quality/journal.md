@@ -67,6 +67,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 17:20 Q-010 DONE [opus]](#2026-07-18-1720-q-010-done-opus)
 - [2026-07-18 17:55 Q-012 DONE [opus]](#2026-07-18-1755-q-012-done-opus)
 - [2026-07-18 18:05 HUNT MPEGTS-PROBE-AUDIO-BOUNDARY DONE [codex]](#2026-07-18-1805-hunt-mpegts-probe-audio-boundary-done-codex)
+- [2026-07-18 20:45 HUNT FFMPEG-STAGE-PLAN-CODEC-DEFAULT DONE [codex]](#2026-07-18-2045-hunt-ffmpeg-stage-plan-codec-default-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1785,3 +1786,72 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   agent (workstream A, Q-009/Q-010/Q-012 on
   `codex/perf-sweep-opus-20260718`) completed independently during this
   hunt — not touched, per instructions.
+
+## 2026-07-18 20:45 HUNT FFMPEG-STAGE-PLAN-CODEC-DEFAULT DONE [codex]
+
+- What: after PR #55 (combined perf-sweep + adversarial-hunt checkpoint)
+  merged, re-derived a fresh low-coverage lead list via `cargo llvm-cov
+  --summary-only --lib` since both prior coverage-map leads
+  (`engine_snapshots.rs`, `mpegts_probe.rs`) were exhausted and the formal
+  Q-001–Q-022 backlog is fully done. Evaluated two candidates:
+  `src/media/hls/preview_graph.rs` (~26% line coverage, async, requires a
+  full `MediaEngine` + `StageRuntimeManager` harness to test meaningfully)
+  and `src/media/ffmpeg/stage_plan.rs` (166 lines, ~25% line coverage, pure
+  synchronous planner code, zero dedicated test file). Picked the latter as
+  tractable and non-duplicative.
+  While reading `stage_plan.rs`, noticed the repo has *two* distinct
+  `VideoCodecKind` types with different semantics: `domain::output_spec::
+  VideoCodecKind` (3 variants incl. `Unknown`, tested) and `media::ffmpeg::
+  stage_plan::VideoCodecKind` (2 variants, no `Unknown`) — the latter's
+  `from_codec_name` silently defaults *any* unrecognized string (empty,
+  "vp9", "av1", ISOBMFF fourccs like "hvc1"/"hev1", homoglyphs, garbage) to
+  `H264` rather than erroring or having a third state. Traced every call
+  site (`stage_runtime.rs`, `ffmpeg_process.rs`) and confirmed the only
+  codec-hint strings that actually flow through this code path in practice
+  are the literals `"h264"`/`"hevc"` set at ingest — so the silent-default
+  behavior is unreachable with malformed input today, not a live bug, but
+  it was completely unpinned: nothing proved the exact-match/case-fold
+  contract, and a future caller passing an ISOBMFF fourcc or a raw ffprobe
+  codec string would silently mis-plan HEVC content as H264 passthrough
+  with no test to catch it.
+  Added a `#[cfg(test)] mod tests` block directly in `stage_plan.rs`
+  (matching the sibling-file convention in `stage_input.rs`/
+  `stage_output.rs`/`timeline.rs`, none of which use a separate test file):
+  `from_codec_name_matches_hevc_spellings_case_insensitively` (all six
+  case variants of "hevc"/"h265"/"h.265"), `from_codec_name_defaults_
+  unrecognized_inputs_to_h264` (empty string, valid-but-non-hevc codec
+  names, near-miss spellings with stray whitespace, ISOBMFF fourccs),
+  `from_codec_name_handles_malformed_and_extreme_input` (Cyrillic
+  homoglyph of "h", embedded NUL byte, a 64KB garbage string, and a string
+  that contains "hevc" as a substring but isn't an exact match — proving no
+  accidental substring matching), `as_str_round_trips_through_from_codec_
+  name`, and defaults assertions for both `FfmpegStagePlan::video_preset`
+  and `::hevc_to_h264` convenience constructors (startup/timeline policy
+  fields, `output_codec` override behavior).
+  Outcome: no bug found — recorded as a proof-gap closure on a previously
+  fully-untested pure function, consistent with the `mpegts_probe.rs` and
+  `engine_snapshots.rs` entries above. The domain-duplication observation
+  (two `VideoCodecKind` types) is left as-is; both are used correctly
+  within their own layers and collapsing them would be a layering change
+  outside this hunt's scope.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib stage_plan` —
+  7/7 new tests pass (1108 pre-existing filtered out, unaffected).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all --check` — clean.
+  `./scripts/check/source-audit.sh` — clean. Single-file, non-lifecycle,
+  non-concurrency pure-function test addition — did not broaden to full
+  `cargo test` or a concurrency proof gate.
+- Commit: `fcb5a755` on `codex/adversarial-hunt-round2-20260718` (branched
+  from `origin/master` post-#55-merge).
+- Follow-ups: none filed.
+- Notes: hit and fixed a worktree/branch-naming mixup mid-session — a
+  local branch `codex/adversarial-hunt-continued-20260718` created in a
+  prior turn ended up checked out in a *different* worktree (the main repo
+  checkout) than this session's actual working directory, so a first
+  attempt at this commit landed on the stale, already-squash-merged
+  `codex/adversarial-test-sweep-20260717` branch instead. Fixed by renaming
+  this worktree's local branch to `codex/adversarial-hunt-round2-20260718`,
+  resetting it to `origin/master`, and cherry-picking the one genuinely new
+  commit onto the clean base before pushing — no work was lost, and the
+  other worktree/branch was left untouched since it may be in use by
+  another agent session.
