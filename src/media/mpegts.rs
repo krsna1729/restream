@@ -817,6 +817,17 @@ pub enum TsSegmentView {
     Audio(u32),
 }
 
+/// Per-packet timing/keyframe metadata for the `mux_packet*` family, bundled
+/// so those functions stay under clippy's argument-count lint. `Copy` and
+/// stack-sized (three scalars) so passing it costs nothing extra on the
+/// mux hot path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PacketMeta {
+    pub pts_ms: i64,
+    pub dts_ms: i64,
+    pub is_keyframe: bool,
+}
+
 impl TsMuxer {
     /// Create a new muxer from stream metadata.
     ///
@@ -917,9 +928,11 @@ impl TsMuxer {
             self.mux_packet_at(
                 stream_idx,
                 media_type,
-                pts_ms,
-                dts_ms,
-                is_keyframe,
+                PacketMeta {
+                    pts_ms,
+                    dts_ms,
+                    is_keyframe,
+                },
                 payload,
                 &mut out,
             );
@@ -940,22 +953,12 @@ impl TsMuxer {
         &mut self,
         media_type: MediaType,
         track_index: u32,
-        pts_ms: i64,
-        dts_ms: i64,
-        is_keyframe: bool,
+        meta: PacketMeta,
         payload: &[u8],
         out: &mut Vec<u8>,
     ) {
         if let Some(stream_idx) = self.stream_index(media_type, track_index) {
-            self.mux_packet_at(
-                stream_idx,
-                media_type,
-                pts_ms,
-                dts_ms,
-                is_keyframe,
-                payload,
-                out,
-            );
+            self.mux_packet_at(stream_idx, media_type, meta, payload, out);
         }
     }
 
@@ -983,9 +986,11 @@ impl TsMuxer {
             self.mux_packet_at(
                 stream_idx,
                 media_type,
-                pts_ms,
-                dts_ms,
-                is_keyframe,
+                PacketMeta {
+                    pts_ms,
+                    dts_ms,
+                    is_keyframe,
+                },
                 payload,
                 &mut out,
             );
@@ -1001,22 +1006,12 @@ impl TsMuxer {
         &mut self,
         stream_idx: usize,
         media_type: MediaType,
-        pts_ms: i64,
-        dts_ms: i64,
-        is_keyframe: bool,
+        meta: PacketMeta,
         payload: &[u8],
         out: &mut Vec<u8>,
     ) {
         if self.streams.get(stream_idx).map(|s| s.media_type) == Some(media_type) {
-            self.mux_packet_at(
-                stream_idx,
-                media_type,
-                pts_ms,
-                dts_ms,
-                is_keyframe,
-                payload,
-                out,
-            );
+            self.mux_packet_at(stream_idx, media_type, meta, payload, out);
         }
     }
 
@@ -1030,12 +1025,15 @@ impl TsMuxer {
         &mut self,
         stream_idx: usize,
         media_type: MediaType,
-        pts_ms: i64,
-        dts_ms: i64,
-        is_keyframe: bool,
+        meta: PacketMeta,
         payload: &[u8],
         out: &mut Vec<u8>,
     ) {
+        let PacketMeta {
+            pts_ms,
+            dts_ms,
+            is_keyframe,
+        } = meta;
         if payload.is_empty() {
             return;
         }

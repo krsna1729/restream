@@ -4,7 +4,7 @@ use memchr::memchr;
 use restream::media::avio::MemoryQueue;
 use restream::media::engine::MediaEngine;
 use restream::media::engine::{AudioMeta, VideoMeta};
-use restream::media::mpegts::{TsDemuxer, TsMuxer};
+use restream::media::mpegts::{PacketMeta, TsDemuxer, TsMuxer};
 use restream::media::ring_buffer::{
     MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer, RingSlot,
 };
@@ -893,9 +893,11 @@ fn bench_burst_mux_write(c: &mut Criterion) {
                     muxer.mux_packet_into(
                         pkt.media_type,
                         pkt.track_index,
-                        pkt.pts,
-                        pkt.dts,
-                        pkt.is_keyframe,
+                        PacketMeta {
+                            pts_ms: pkt.pts,
+                            dts_ms: pkt.dts,
+                            is_keyframe: pkt.is_keyframe,
+                        },
                         &pkt.payload,
                         &mut ts_batch,
                     );

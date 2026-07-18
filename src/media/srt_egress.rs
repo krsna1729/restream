@@ -278,9 +278,11 @@ pub fn start_shared_ts_muxer(
                                 muxer.mux_packet_into(
                                     pkt.media_type,
                                     pkt.track_index,
-                                    pts,
-                                    dts,
-                                    pkt.is_keyframe,
+                                    crate::media::mpegts::PacketMeta {
+                                        pts_ms: pts,
+                                        dts_ms: dts,
+                                        is_keyframe: pkt.is_keyframe,
+                                    },
                                     payload,
                                     &mut ts_accum,
                                 );
