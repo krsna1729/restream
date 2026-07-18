@@ -485,7 +485,7 @@ async fn runtime_helpers_expose_registered_ingest_and_egress() {
 #[tokio::test]
 async fn hls_dependency_snapshot_reflects_store_and_consumer_state() {
     let engine = MediaEngine::new();
-    let (store, already_running) = engine
+    let (store, already_running, _cancel_token) = engine
         .ensure_hls_preview_segmenter("pipe-hls-snapshot")
         .await;
     assert!(!already_running);

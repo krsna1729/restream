@@ -741,7 +741,7 @@ async fn shutdown_hls_segmenter_removes_consumer_and_store() {
 #[tokio::test]
 async fn shutdown_hls_preview_segmenter_removes_consumer_and_store() {
     let engine = Arc::new(MediaEngine::new());
-    let (store, already_running) = engine
+    let (store, already_running, _cancel_token) = engine
         .ensure_hls_preview_segmenter("pipe-hls-preview-clean")
         .await;
     assert!(!already_running);

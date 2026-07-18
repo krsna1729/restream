@@ -86,21 +86,33 @@ impl MediaEngine {
     /// Ensure a browser-preview HLS segmenter is running for this pipeline.
     /// Preview segmenters are isolated from HLS egress so preview-only H.264
     /// conversion does not change upload/output behavior.
+    ///
+    /// Returns the cancel token for the (newly created or pre-existing)
+    /// consumer entry directly, rather than requiring a caller to re-acquire
+    /// the consumers lock afterward. A separate re-read would race a
+    /// concurrent `shutdown_hls_preview_segmenter` call, which can remove the
+    /// entry between the insert and the re-read.
     pub async fn ensure_hls_preview_segmenter(
         &self,
         pipeline_id: &str,
-    ) -> (Arc<Fmp4HlsStore>, bool) {
+    ) -> (Arc<Fmp4HlsStore>, bool, CancellationToken) {
         let preview_key = hls_preview_registry_key(pipeline_id);
         let mut consumers = self.hls.consumers.write().await;
         let already_running = consumers.contains_key(&preview_key);
-        if !already_running {
+        let cancel_token = if already_running {
+            consumers
+                .get(&preview_key)
+                .map(|c| c.cancel_token.clone())
+                .unwrap_or_else(CancellationToken::new)
+        } else {
             let token = CancellationToken::new();
-            consumers.insert(preview_key.clone(), HlsConsumers::new(token));
-        }
+            consumers.insert(preview_key.clone(), HlsConsumers::new(token.clone()));
+            token
+        };
         drop(consumers);
 
         let store = self.get_or_create_hls_preview_store(pipeline_id).await;
-        (store, already_running)
+        (store, already_running, cancel_token)
     }
 
     /// Touch the HLS consumer heartbeat (called on playlist/segment fetch).

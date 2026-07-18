@@ -3489,7 +3489,7 @@ async fn health_endpoint_exposes_probe_and_egress_fault_fields() {
     engine
         .record_egress_error(&oid, "send", "connection reset by peer")
         .await;
-    let (store, _) = engine.ensure_hls_preview_segmenter(&pid).await;
+    let (store, _, _) = engine.ensure_hls_preview_segmenter(&pid).await;
     engine.touch_hls_preview(&pid).await;
     store.put_video_init_segment(bytes::Bytes::from_static(b"init"));
     store.push_video_segment(0, 2.0, bytes::Bytes::from_static(b"segment"));
