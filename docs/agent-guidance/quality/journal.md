@@ -68,6 +68,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 17:55 Q-012 DONE [opus]](#2026-07-18-1755-q-012-done-opus)
 - [2026-07-18 18:05 HUNT MPEGTS-PROBE-AUDIO-BOUNDARY DONE [codex]](#2026-07-18-1805-hunt-mpegts-probe-audio-boundary-done-codex)
 - [2026-07-18 20:45 HUNT FFMPEG-STAGE-PLAN-CODEC-DEFAULT DONE [codex]](#2026-07-18-2045-hunt-ffmpeg-stage-plan-codec-default-done-codex)
+- [2026-07-18 21:15 HUNT HLS-PREVIEW-GRAPH-CANCEL DONE [codex]](#2026-07-18-2115-hunt-hls-preview-graph-cancel-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1855,3 +1856,63 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   commit onto the clean base before pushing — no work was lost, and the
   other worktree/branch was left untouched since it may be in use by
   another agent session.
+
+## 2026-07-18 21:15 HUNT HLS-PREVIEW-GRAPH-CANCEL DONE [codex]
+- What: investigated `src/media/hls/preview_graph.rs::resolve_hls_preview_graph`
+  (zero prior test coverage) for a suspected cancellation-ordering race: the
+  function checks `cancel.is_cancelled()` exactly once per loop iteration,
+  *after* resolving the codec but *before* branching into the work that
+  plans and spawns an HEVC→H.264 preview transcoder stage via
+  `StageRuntimeManager::ensure_stage`/`spawn_preview_stage` — with no further
+  cancellation check during that stage-creation work itself.
+  Traced the full lifecycle to determine whether a late cancellation in that
+  window can orphan a created-but-unwanted preview stage. Found:
+  `ensure_stage` (`src/media/stage_runtime.rs:71`) mints its own independent
+  `CancellationToken` for the stage runtime (not the caller's `cancel`
+  argument — `ensure_stage` doesn't even take one), so the preview stage's
+  lifecycle is never tied to the HLS segmenter's cancellation token in the
+  first place. The segmenter's own shutdown path
+  (`start_hls_fmp4_segmenter` in `fmp4.rs:334`, called with
+  `planned_stage_key: None` from `preview.rs`) tears down a *different*
+  stage key (`StageKind::hls()`), never the `StageKind::Preview` key the
+  graph resolver created — so per-segmenter cancellation was never going to
+  reap this stage. Instead, preview transcoder stages are pooled,
+  per-pipeline shared resources reaped by two independent, coarser-grained
+  mechanisms: `MediaEngine::cleanup_pipeline_stages` (eager sweep on
+  pipeline removal, `engine.rs:991`) and
+  `MediaEngine::sweep_unused_transcoder_stages` (periodic reconciler sweep
+  against the currently-planned key set, `engine.rs:1008`). A stage created
+  microseconds before a caller's cancellation fires is not leaked — it
+  becomes part of the shared pool and is pruned by the next reconciler pass
+  or pipeline teardown like any other stage the current plan no longer
+  wants.
+  Outcome: not a bug — the single-check-per-iteration pattern is consistent
+  with the architecture (stages are reconciled independently of any one
+  caller's lifetime, not synchronously owned by it). Closed the coverage
+  gap instead: added two direct regression tests for
+  `resolve_hls_preview_graph`'s two `None`-returning edge paths, which had
+  no direct test before (only indirectly exercised via `preview.rs`'s
+  higher-level `ensure_hls_preview_runtime` tests, which never await the
+  resolver's own completion). `returns_none_immediately_when_cancelled_
+  before_codec_resolves` pre-cancels the token on a pipeline with no
+  resolvable codec and asserts the paused clock never advances (proving the
+  cancellation check fires on the very first iteration, before the 100ms
+  poll sleep). `returns_none_after_deadline_when_codec_never_resolves`
+  leaves the token uncancelled on the same never-resolves pipeline and
+  asserts the paused clock advances at least the full 3s deadline before
+  returning `None`. Both use `#[tokio::test(start_paused = true)]` so the
+  real 3s deadline costs zero wall-clock time in the suite.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib preview_graph` —
+  2/2 new tests pass (4 pre-existing planner tests in the same filter
+  unaffected). `scripts/build/resource-limit.sh cargo clippy --lib
+  --benches -- -D warnings` — clean. `cargo fmt --all --check` — clean
+  (after `cargo fmt --all` reformatted one over-length line). Single-file,
+  non-lifecycle-signature-changing test addition (no production code
+  touched) — did not broaden to full `cargo test` or
+  `scripts/check/concurrency/contract.sh`.
+- Commit: pending on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed. The two independent `StageKey`s in play here
+  (`StageKind::Preview` for the transcoder, `StageKind::hls()` for the
+  segmenter) and the two separate stage-pool sweep mechanisms are
+  intentional existing architecture, not a gap to close.
+- Notes: none.

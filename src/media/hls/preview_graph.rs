@@ -122,3 +122,59 @@ async fn build_preview_video_meta(engine: &MediaEngine, pipeline_id: &str) -> Op
     preview_video.pixel_format = Some("yuv420p".to_string());
     Some(preview_video)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn engine_with_pipeline(pipeline_id: &str) -> Arc<MediaEngine> {
+        let engine = Arc::new(MediaEngine::new());
+        engine
+            .try_register_ingest(pipeline_id, "stream-key", "rtmp")
+            .await
+            .unwrap();
+        let _ = engine.get_or_create_pipeline(pipeline_id).await;
+        engine
+    }
+
+    // Regression/documentation test: `resolve_hls_preview_graph` checks
+    // `cancel.is_cancelled()` once per loop iteration, before doing any
+    // codec-resolution wait. A pre-cancelled token on a pipeline with no
+    // resolvable codec must short-circuit to `None` on the very first
+    // iteration rather than falling through to the 100ms poll sleep or the
+    // 3s deadline.
+    #[tokio::test(start_paused = true)]
+    async fn returns_none_immediately_when_cancelled_before_codec_resolves() {
+        let engine = engine_with_pipeline("pipe-preview-graph-cancel").await;
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let start = tokio::time::Instant::now();
+        let graph = resolve_hls_preview_graph(engine, "pipe-preview-graph-cancel", cancel).await;
+
+        assert!(graph.is_none(), "cancelled resolution must return None");
+        assert_eq!(
+            tokio::time::Instant::now(),
+            start,
+            "a pre-cancelled token must short-circuit before any deadline sleep"
+        );
+    }
+
+    // A pipeline whose codec never resolves (no ingest video codec and no
+    // ring codec hint) must give up after the 3s deadline rather than
+    // polling forever.
+    #[tokio::test(start_paused = true)]
+    async fn returns_none_after_deadline_when_codec_never_resolves() {
+        let engine = engine_with_pipeline("pipe-preview-graph-deadline").await;
+        let cancel = CancellationToken::new();
+
+        let start = tokio::time::Instant::now();
+        let graph = resolve_hls_preview_graph(engine, "pipe-preview-graph-deadline", cancel).await;
+
+        assert!(graph.is_none(), "an unresolved codec must time out to None");
+        assert!(
+            tokio::time::Instant::now() >= start + std::time::Duration::from_secs(3),
+            "must not return before the 3s resolution deadline"
+        );
+    }
+}
