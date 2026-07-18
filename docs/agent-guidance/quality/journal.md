@@ -74,6 +74,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 22:20 HUNT PIPE-METRICS-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2220-hunt-pipe-metrics-counter-boundaries-done-codex)
 - [2026-07-18 22:40 HUNT ENGINE-HLS-CONSUMER-IDLE-BOUNDARIES DONE [codex]](#2026-07-18-2240-hunt-engine-hls-consumer-idle-boundaries-done-codex)
 - [2026-07-18 23:05 HUNT SRT-QUALITY-COUNTER-BOUNDARIES DONE [codex]](#2026-07-18-2305-hunt-srt-quality-counter-boundaries-done-codex)
+- [2026-07-18 23:30 HUNT SRT-MUXER-SHARD-POOL-BOUNDARIES DONE [codex]](#2026-07-18-2330-hunt-srt-muxer-shard-pool-boundaries-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -2165,5 +2166,51 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Follow-ups: none filed. `counter_rate` and the `.max(0)` clamps
   already guard correctly in production code; this hunt only closed
   test-coverage gaps, no behavior change needed.
+- Notes: continuing the open-ended scan of `src/media/` for the next
+  low-coverage candidate.
+
+## 2026-07-18 23:30 HUNT SRT-MUXER-SHARD-POOL-BOUNDARIES DONE [codex]
+
+- What: adversarial sweep on `SrtMuxerShardPool` in
+  `src/media/engine_registries.rs` — the least-occupancy shard
+  load-balancer backing SRT egress muxer sharding. Only one test
+  existed (retiring-shard reuse gating). Added 9 tests covering:
+  idempotent re-assign of the same (output_id, attempt_id) pair does
+  not double-occupy its shard; the idempotent-return `overflowed` flag
+  uses strict `>` against capacity, so sitting exactly at capacity is
+  not flagged as overflowed (a real boundary in the existing code, not
+  a bug — pinned as documented behavior); a reconnect (same output_id,
+  new attempt_id) releases the stale assignment via the internal
+  `release_assignment(..., retire_empty_shard=false)` path and the
+  freed shard is immediately reusable without waiting on
+  `finish_retiring`; least-occupied shard selection is deterministic
+  under ties (`min_by_key` returns the first minimal element); the
+  overflow-warn flag fires exactly once across repeated overflow
+  assigns once both shard count and per-shard capacity are exhausted;
+  a stale `release` carrying a superseded `attempt_id` is a no-op that
+  cannot evict the current assignment (guards a cleanup-task-races-a-
+  reconnect scenario); releasing an unknown `output_id` and retiring an
+  unknown shard index are both no-ops rather than panics; and the
+  `max_shards`/`max_outputs_per_shard` `debug_assert` invariants are
+  enforced (`#[should_panic]`, debug/test-build only — noted as a
+  release-mode gap below).
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  engine_registries` — 11/11 pass (2 pre-existing plus 9 new).
+  `scripts/build/resource-limit.sh cargo clippy --lib --benches -- -D
+  warnings` — clean. `cargo fmt --all` + `--check` — clean. Test-only
+  change to in-memory load-balancing bookkeeping (no sockets, no
+  syscalls); did not broaden to `scripts/check/concurrency/contract.sh`
+  or full `cargo test`.
+- Commit: `0aac54e9` on `codex/adversarial-hunt-round2-20260718`.
+- Follow-ups: none filed as a fix. Noted but not changed: `assign`'s
+  final overflow-fallback arm (`push(0); 0`) is unreachable when the
+  `debug_assert!(max_shards > 0)` holds, but `debug_assert!` compiles
+  out in release builds — calling `assign` with `max_shards == 0` in a
+  release binary would silently create a shard despite the caller's
+  stated cap instead of panicking. No production call site currently
+  passes a non-constant/zero `max_shards`, so this is a latent
+  invalid-assumptions gap, not a live bug; worth a `debug_assert_eq!`
+  upgrade to a real guard only if a call site ever derives `max_shards`
+  from configuration.
 - Notes: continuing the open-ended scan of `src/media/` for the next
   low-coverage candidate.
