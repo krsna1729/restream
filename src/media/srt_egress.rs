@@ -194,7 +194,7 @@ pub fn start_shared_ts_muxer(
         let mut video_conv_buf = Vec::<u8>::new();
         let mut audio_conv_buf = Vec::<u8>::new();
         // `chunk_ends` records (byte_offset_end, is_keyframe) for each muxed chunk so
-        // we can slice a single `BytesMut` into per-chunk `Bytes` after the inner loop.
+        // we can slice a single frozen `Bytes` into per-chunk `Bytes` after the inner loop.
         // This converts N malloc+memcpy calls (one per chunk) to 1 malloc per burst.
         let mut chunk_ends: Vec<(usize, bool)> = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
         let mut pull_packets = Vec::with_capacity(MEDIA_PULL_BURST_PACKETS);
@@ -212,7 +212,7 @@ pub fn start_shared_ts_muxer(
                             // the actual media payloads. A fixed 64 KiB floor
                             // pins excessive memory in the retained TS ring
                             // when the muxer wakes for one small packet.
-                            let mut ts_accum = bytes::BytesMut::with_capacity(
+                            let mut ts_accum = Vec::<u8>::with_capacity(
                                 estimate_ts_accum_capacity(&pull_packets),
                             );
                             for pkt in &pull_packets {
@@ -271,23 +271,28 @@ pub fn start_shared_ts_muxer(
                                 };
 
                                 let (pts, dts) = dts_enforcer.enforce(stream_idx, pkt.pts, pkt.dts);
-                                let ts_bytes = muxer.mux_packet(
+                                // Mux directly into the burst accumulator: the muxer
+                                // appends TS packets to `ts_accum` with no intermediate
+                                // per-packet buffer or memmove into the accumulator.
+                                let before = ts_accum.len();
+                                muxer.mux_packet_into(
                                     pkt.media_type,
                                     pkt.track_index,
                                     pts,
                                     dts,
                                     pkt.is_keyframe,
                                     payload,
+                                    &mut ts_accum,
                                 );
-                                if !ts_bytes.is_empty() {
-                                    ts_accum.extend_from_slice(ts_bytes);
+                                if ts_accum.len() > before {
                                     chunk_ends.push((ts_accum.len(), pkt.is_keyframe));
                                 }
                             }
                             if !chunk_ends.is_empty() {
-                                // freeze() promotes ts_accum to a shared Arc-backed Bytes.
+                                // Bytes::from(Vec) is an O(1) ownership transfer of the
+                                // accumulator's allocation into a shared Arc-backed Bytes.
                                 // slice() below only bumps the refcount — no extra allocations.
-                                let frozen = ts_accum.freeze();
+                                let frozen = bytes::Bytes::from(ts_accum);
                                 let mut prev = 0usize;
                                 ts_ring_clone.push_batch(chunk_ends.drain(..).map(
                                     move |(end, is_kf)| {

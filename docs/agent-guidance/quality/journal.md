@@ -60,6 +60,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 09:40 Q-008 DONE [codex]](#2026-07-18-0940-q-008-done-codex)
 - [2026-07-18 10:20 Q-003 DONE [codex]](#2026-07-18-1020-q-003-done-codex)
 - [2026-07-18 15:38 AVIO-LOOM DONE [codex]](#2026-07-18-1538-avio-loom-done-codex)
+- [2026-07-18 16:40 Q-009 DONE [opus]](#2026-07-18-1640-q-009-done-opus)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1398,3 +1399,53 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   add a should_panic-style deadlock negative control to any loom test in
   this repo: reproduce this failure mode first before assuming it'll behave
   like a normal catchable panic.
+
+## 2026-07-18 16:40 Q-009 DONE [opus]
+
+- What: Eliminated the per-packet copy in the MPEG-TS mux → SRT egress
+  accumulator path (backlog Q-009). The 2026-06-27 CPU profile named a
+  two-copy shape (FFmpeg AVIO output buffer → `ts_accum`, `memmove` 3.28% +
+  `VecDeque::extend` 0.43%); that AVIO path has since been replaced by the
+  pure-Rust `TsMuxer`, but the equivalent copy survived as the muxer's
+  internal `output: Vec<u8>` scratch being `extend_from_slice`'d into the SRT
+  egress burst accumulator once per packet
+  (`srt_egress.rs::start_shared_ts_muxer`). Added
+  `TsMuxer::mux_packet_into` and `mux_packet_by_stream_idx_into`, which append
+  TS packets directly into a caller-owned `&mut Vec<u8>`; the write path
+  (`mux_packet_at`, `write_pat/pmt/sdt`) now takes that accumulator instead of
+  writing to `self.output`. The standalone `mux_packet` /
+  `mux_packet_by_stream_idx` APIs are preserved for the ~30 single-packet
+  callers (tests, feeder, hls_cost, matrix_throughput, simd_alternatives) via
+  an O(1) `mem::take` of the internal scratch, so no correctness contract
+  moved. The egress feeder now sizes the accumulator as `Vec<u8>` and freezes
+  it with `Bytes::from(vec)` (O(1) ownership transfer) instead of
+  `BytesMut::freeze()`; per-chunk `.slice()` publication is unchanged.
+- Gates: `cargo test --lib mpegts` (74 passed) and `cargo test --lib srt`
+  (91 passed) green — protocol correctness (PAT/PMT/SDT insertion, PES
+  packetization, continuity, DTS enforcement, mux↔demux round-trip proptest)
+  unchanged. `cargo fmt --all --check` clean. Before/after microbenchmark
+  (`high_performance_data_path`, WSL2 idle host, 100 samples): the existing
+  `batch_accumulate_write` variant models the old `mux_packet` +
+  `extend_from_slice` shape (10.767 µs / 2.972 Melem/s); the new
+  `batch_mux_into_write` variant models `mux_packet_into` (10.062 µs /
+  3.180 Melem/s) — −6.5% latency / +7.0% throughput, non-overlapping 95% CIs.
+  Core `data_path/mpegts_mux/mux_all_packets` unchanged within noise
+  (478 µs, 12.6 GiB/s). Numbers + ledger row in `baselines.md` (§ Benchmark
+  ledger, § Standing optimization targets → Q-009 result).
+- Commit: this commit (`src/media/mpegts.rs`, `src/media/srt_egress.rs`,
+  `benches/high_performance_data_path.rs`, `baselines.md`, `backlog.md`,
+  journal).
+- Follow-ups: none filed. The recording/HLS feeders still use the
+  single-packet `mux_packet_by_stream_idx` (they accumulate into their own
+  segment/manifest buffers with a different lifetime); converting them to the
+  `_into` API is a possible future micro-win but was out of scope for the SRT
+  egress hot path this item names.
+- Notes: contabo VPS (the designated hardware-PMU box) was unavailable — a
+  ~2-day-old external MSR-style workload (3× restream / 3× mediamtx / 7×
+  ffmpeg, 175k–202k s elapsed) was live, so the kill-check was non-empty and
+  those processes were not this session's to kill. Measurement therefore ran
+  on the idle WSL2 host with wall-clock Criterion timing, which is sufficient
+  for this copy-elimination micro-decision (no PMU counters needed); the MSR
+  receiver-scale proof named in the item's aspirational gate list is deferred
+  until the VPS is idle and is not required to accept a strictly-fewer-copies
+  change with green protocol tests and a non-overlapping-CI microbench win.

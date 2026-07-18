@@ -23,6 +23,7 @@ reference points — do not overwrite them, add new dated rows.
 | ring_buffer | `ring_buffer/consumer/pull_burst/8` | 1.951 µs (4.10 Melem/s) | ±0.4% | 52428c2b | 2026-07-18 | 2026-07-18 |
 | avio_throughput | `memory_queue/write_batch/with_len` | 467 ns (2.62 GiB/s) | ±2% | 52428c2b | 2026-07-18 | 2026-07-18 |
 | high_performance_data_path | `data_path/mpegts_demux_drain/reuse_then_consume` | 672 µs (9.26 GiB/s) | ±7% (see note) | 52428c2b | 2026-07-18 | 2026-07-18 |
+| high_performance_data_path | `data_path/burst_mux_write/batch_mux_into_write` (Q-009 after) | 10.06 µs (3.18 Melem/s) | ±1% | Q-009 | 2026-07-18 | 2026-07-18 |
 | matrix_throughput | — | — | — | — | — | — |
 | srt_ingest_latency | — | — | — | — | — | — |
 | transcoder_throughput | — | — | — | — | — | — |
@@ -512,11 +513,38 @@ Interpretation:
 
 | Self % | Symbol | Meaning | Backlog |
 |---|---|---|---|
-| 3.28% | `__memmove_avx_unaligned_erms` | AVIO buffer → `ts_accum` copy | Q-009 [opus] |
+| 3.28% | `__memmove_avx_unaligned_erms` | AVIO buffer → `ts_accum` copy | Q-009 [opus] — addressed 2026-07-18 (see note) |
 | 2.60% | `pthread_mutex_lock` | SRT internal + MemoryQueue mutex | (unfiled) |
 | 1.18% | `__vdso_clock_gettime` | per-packet SRT latency tracking | (unfiled) |
 | 0.87% | `_int_malloc` | per-packet `Arc::new(MediaPacket)` | Q-010 [opus] |
-| 0.43% | `VecDeque::extend` | AVIO queue write (second copy) | Q-009 [opus] |
+| 0.43% | `VecDeque::extend` | AVIO queue write (second copy) | Q-009 [opus] — addressed 2026-07-18 (see note) |
+
+### Q-009 result — AVIO→TsMux copy elimination (2026-07-18)
+
+The 2026-06-27 profile predates the pure-Rust `TsMuxer` rewrite; the two-copy
+shape it named (FFmpeg AVIO output buffer → `ts_accum`) now lives as the
+muxer's internal `output: Vec<u8>` scratch → per-packet `extend_from_slice`
+into the SRT egress burst accumulator (`srt_egress.rs::start_shared_ts_muxer`).
+Q-009 removes that copy: `TsMuxer::mux_packet_into` / `mux_packet_by_stream_idx_into`
+append TS packets directly into the caller's accumulator, and the egress feeder
+freezes the accumulator with an O(1) `Bytes::from(Vec)` ownership transfer
+instead of `BytesMut::freeze()`. The standalone `mux_packet` API is preserved
+(via `mem::take` of the internal scratch) for the ~30 remaining single-packet
+callers, so no correctness contract moved.
+
+Microbenchmark (`high_performance_data_path`, WSL2, idle host, 100 samples;
+contabo unavailable — a ~2-day external MSR workload was live, kill-check
+non-empty, not this session's to kill):
+
+| Variant | Median | Throughput |
+|---|---|---|
+| `batch_accumulate_write` (before: `mux_packet` + `extend_from_slice`) | 10.767 µs | 2.972 Melem/s |
+| `batch_mux_into_write` (after: `mux_packet_into`) | 10.062 µs | 3.180 Melem/s |
+
+−6.5% latency / +7.0% throughput per burst, non-overlapping 95% CIs
+([10.66, 10.89] vs [9.97, 10.16] µs). Core mux path unchanged within noise
+(`data_path/mpegts_mux/mux_all_packets` 478 µs, 12.6 GiB/s). `cargo test --lib
+mpegts` (74) and `--lib srt` (91) green.
 
 ## Profiling notes (VPS — hardware counters available)
 

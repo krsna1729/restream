@@ -399,7 +399,14 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Context: 2026-06-27 CPU profile: `memmove` 3.28% + `VecDeque::extend` 0.43%
   self-time from the two-copy path — the top standing optimization. Requires
   AVIO→TsMux interface redesign: opus tier, do not attempt below it.
-- Status: open (Filed: 2026-07-03 by bootstrap)
+- Status: done (`TsMuxer::mux_packet_into` appends TS bytes directly into the
+  SRT egress burst accumulator, removing the per-packet scratch→`ts_accum`
+  `extend_from_slice`; feeder freezes via O(1) `Bytes::from(Vec)`. −6.5%
+  latency / +7.0% throughput on the `burst_mux_write` microbench,
+  non-overlapping CIs; `cargo test --lib mpegts`/`srt` green. The named AVIO
+  path was already superseded by the pure-Rust muxer — the equivalent copy was
+  eliminated in that path instead. 2026-07-18 by opus; Filed: 2026-07-03 by
+  bootstrap)
 
 ### Q-010 [efficiency] [opus] Evaluate pooling for per-packet Arc<MediaPacket> allocation
 - Goal: a measured decision (implemented or explicitly rejected with numbers)

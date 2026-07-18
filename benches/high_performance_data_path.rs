@@ -874,6 +874,44 @@ fn bench_burst_mux_write(c: &mut Criterion) {
         });
     });
 
+    // --- AFTER (Q-009): mux directly into the accumulator, no per-packet
+    // scratch buffer and no memmove of each packet's TS bytes into ts_batch.
+    // This is the production shape after the AVIO→TsMux copy elimination.
+    group.bench_function("batch_mux_into_write", |b| {
+        b.iter_custom(|iterations| {
+            let q = std::sync::Arc::new(MemoryQueue::new());
+            let q_reader = q.clone();
+            let reader_handle = std::thread::spawn(move || {
+                let mut buf = vec![0u8; 65536];
+                while q_reader.read(&mut buf) > 0 {}
+            });
+            let mut muxer = TsMuxer::new(Some(&video_meta), &audio_tracks);
+            let mut ts_batch: Vec<u8> = Vec::with_capacity(burst * 1316);
+            let started = Instant::now();
+            for _ in 0..iterations {
+                for pkt in &packets {
+                    muxer.mux_packet_into(
+                        pkt.media_type,
+                        pkt.track_index,
+                        pkt.pts,
+                        pkt.dts,
+                        pkt.is_keyframe,
+                        &pkt.payload,
+                        &mut ts_batch,
+                    );
+                }
+                if !ts_batch.is_empty() {
+                    runtime.block_on(q.write(&ts_batch));
+                    ts_batch.clear();
+                }
+            }
+            let elapsed = started.elapsed();
+            q.close();
+            let _ = reader_handle.join();
+            elapsed
+        });
+    });
+
     group.finish();
 }
 
