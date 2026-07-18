@@ -1019,6 +1019,42 @@ mod tests {
         assert!(parse_start_time_ms("9223372036854775807:9223372036854775807:00").is_err());
     }
 
+    proptest::proptest! {
+        #[test]
+        fn parse_start_time_ms_never_panics_on_arbitrary_input(s in ".{0,64}") {
+            let _ = parse_start_time_ms(&s);
+        }
+
+        #[test]
+        fn parse_start_time_ms_plain_seconds_matches_seconds_to_ms(seconds in 0.0f64..1_000_000.0) {
+            // f64's Display/FromStr round-trip exactly, so parsing the
+            // printed value must agree with feeding `seconds` straight in.
+            let expected = super::seconds_to_ms(seconds);
+            let actual = parse_start_time_ms(&seconds.to_string());
+            proptest::prop_assert_eq!(actual, expected);
+        }
+
+        #[test]
+        fn parse_start_time_ms_rejects_negative_plain_seconds(seconds in -1_000_000.0f64..-0.0001) {
+            proptest::prop_assert!(parse_start_time_ms(&seconds.to_string()).is_err());
+        }
+
+        #[test]
+        fn parse_start_time_ms_colon_delimited_matches_total_seconds(
+            hours in 0i64..1000,
+            minutes in 0i64..60,
+            whole_seconds in 0i64..60,
+            millis in 0i64..1000,
+        ) {
+            let input = format!("{hours:02}:{minutes:02}:{whole_seconds:02}.{millis:03}");
+            let total_seconds =
+                (hours * 3600 + minutes * 60 + whole_seconds) as f64 + (millis as f64) / 1000.0;
+            let expected = super::seconds_to_ms(total_seconds);
+            let actual = parse_start_time_ms(&input);
+            proptest::prop_assert_eq!(actual, expected);
+        }
+    }
+
     #[test]
     fn pace_packet_does_not_sleep_for_timestamps_behind_the_anchor() {
         let cancel = tokio_util::sync::CancellationToken::new();

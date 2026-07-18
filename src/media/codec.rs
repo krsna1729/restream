@@ -1266,6 +1266,51 @@ mod tests {
         assert_eq!(parse_avcc_config(&config), (4, Vec::new()));
     }
 
+    proptest! {
+        #[test]
+        fn parse_avcc_config_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..128)) {
+            let _ = parse_avcc_config(&bytes);
+        }
+
+        #[test]
+        fn parse_avcc_config_truncation_always_fails_closed(
+            header in any::<u8>(),
+            sps_bodies in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..16), 0..3),
+            pps_bodies in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..16), 0..3),
+        ) {
+            let mut config = vec![1u8, 66, 0, 30, header];
+            config.push(0xE0 | (sps_bodies.len() as u8 & 0x1F));
+            for sps in &sps_bodies {
+                config.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+                config.extend_from_slice(sps);
+            }
+            config.push(pps_bodies.len() as u8);
+            for pps in &pps_bodies {
+                config.extend_from_slice(&(pps.len() as u16).to_be_bytes());
+                config.extend_from_slice(pps);
+            }
+
+            let mut expected = Vec::new();
+            for sps in &sps_bodies {
+                expected.extend_from_slice(&[0, 0, 0, 1]);
+                expected.extend_from_slice(sps);
+            }
+            for pps in &pps_bodies {
+                expected.extend_from_slice(&[0, 0, 0, 1]);
+                expected.extend_from_slice(pps);
+            }
+            let (_, full_annexb) = parse_avcc_config(&config);
+            prop_assert_eq!(full_annexb, expected);
+
+            // Any strict prefix of a well-formed buffer must fail closed
+            // (empty annexb), never a partial SPS/PPS prefix.
+            for cut in 0..config.len() {
+                let (_, partial) = parse_avcc_config(&config[..cut]);
+                prop_assert!(partial.is_empty(), "truncated at {cut} produced non-empty output");
+            }
+        }
+    }
+
     #[test]
     fn build_adts_header_all_sample_rates() {
         let rates = [

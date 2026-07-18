@@ -958,6 +958,65 @@ fn flv_avcc_config_annexb_parameter_sets_rejects_max_declared_length_tiny_buffer
     assert!(flv_avcc_config_annexb_parameter_sets(data).is_none());
 }
 
+proptest! {
+    #[test]
+    fn flv_avcc_config_annexb_parameter_sets_never_panics(
+        bytes in prop::collection::vec(any::<u8>(), 0..128)
+    ) {
+        let _ = flv_avcc_config_annexb_parameter_sets(&bytes);
+    }
+
+    #[test]
+    fn flv_avcc_config_annexb_parameter_sets_truncation_fails_closed(
+        has_sps in any::<bool>(),
+        has_pps in any::<bool>(),
+        sps_rest in prop::collection::vec(any::<u8>(), 0..16),
+        pps_rest in prop::collection::vec(any::<u8>(), 0..16),
+    ) {
+        let mut avcc = vec![0x01u8, 0x64, 0x00, 0x1F, 0xFF];
+        avcc.push(0xE0 | (has_sps as u8));
+        let mut sps_body = Vec::new();
+        if has_sps {
+            sps_body.push(0x67);
+            sps_body.extend_from_slice(&sps_rest);
+            avcc.extend_from_slice(&(sps_body.len() as u16).to_be_bytes());
+            avcc.extend_from_slice(&sps_body);
+        }
+        avcc.push(has_pps as u8);
+        let mut pps_body = Vec::new();
+        if has_pps {
+            pps_body.push(0x68);
+            pps_body.extend_from_slice(&pps_rest);
+            avcc.extend_from_slice(&(pps_body.len() as u16).to_be_bytes());
+            avcc.extend_from_slice(&pps_body);
+        }
+
+        let mut data = vec![0x17u8, 0x00, 0x00, 0x00, 0x00];
+        data.extend_from_slice(&avcc);
+
+        let mut annexb = Vec::new();
+        if has_sps {
+            annexb.extend_from_slice(&[0, 0, 0, 1]);
+            annexb.extend_from_slice(&sps_body);
+        }
+        if has_pps {
+            annexb.extend_from_slice(&[0, 0, 0, 1]);
+            annexb.extend_from_slice(&pps_body);
+        }
+        let expected = crate::media::codec::annexb_parameter_sets(&annexb);
+
+        let actual = flv_avcc_config_annexb_parameter_sets(&data);
+        prop_assert_eq!(actual, expected);
+
+        // Any strict prefix of a well-formed record must fail closed, never
+        // yielding a partial SPS/PPS extraction.
+        for cut in 0..data.len() {
+            let partial = flv_avcc_config_annexb_parameter_sets(&data[..cut]);
+            prop_assert!(partial.is_none(), "truncated at {cut} produced Some(..)");
+        }
+    }
+}
+
 #[test]
 fn parse_flv_video_non_sequence_header() {
     // Keyframe + AVC, but packet type 1 (NALU, not sequence header)

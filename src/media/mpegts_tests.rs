@@ -609,6 +609,48 @@ fn process_ts_packet_caps_pes_buffer_at_max_size_under_continuation_flood() {
     assert_eq!(packets[1].payload.as_ref(), &[0x00, 0x00, 0x00, 0x01, 0x41]);
 }
 
+proptest! {
+    #[test]
+    fn ts_demuxer_feed_never_panics_on_arbitrary_bytes(
+        chunks in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..512), 0..8),
+    ) {
+        let mut demuxer = TsDemuxer::new();
+        for chunk in &chunks {
+            demuxer.feed(chunk);
+        }
+        demuxer.flush();
+        let _ = demuxer.drain();
+    }
+
+    #[test]
+    fn ts_demuxer_feed_caps_pes_buffer_under_arbitrary_ts_packets(
+        packets in prop::collection::vec(
+            (any::<bool>(), 0u8..4, 0u8..16, prop::collection::vec(any::<u8>(), TS_PACKET_SIZE - 4)),
+            0..64,
+        ),
+    ) {
+        let mut demuxer = TsDemuxer::new();
+        install_single_h264_stream(&mut demuxer, 0x100);
+
+        let mut data = Vec::with_capacity(packets.len() * TS_PACKET_SIZE);
+        for (pusi, afc, cc, body) in &packets {
+            data.extend_from_slice(&ts_header_bytes(0x100, *pusi, *afc, *cc));
+            data.extend_from_slice(body);
+        }
+        demuxer.feed(&data);
+
+        prop_assert!(
+            demuxer.streams[0].pes.buf.len() <= MAX_PES_BUFFER,
+            "PES accumulator exceeded the {MAX_PES_BUFFER}-byte cap under arbitrary packet content"
+        );
+
+        demuxer.flush();
+        for packet in demuxer.drain() {
+            prop_assert!(packet.payload.len() <= MAX_PES_BUFFER);
+        }
+    }
+}
+
 #[test]
 fn mux_round_trip() {
     let video = VideoMeta {
@@ -1642,45 +1684,73 @@ fn find_h265_sps_extracts_sps_payload() {
     assert_eq!(sps.unwrap(), vec![0xAA, 0xBB, 0xCC]);
 }
 
+/// Appends `width` bits of `value` (MSB-first) to a bitstream under
+/// construction. Shared by SPS-bitstream builders below.
+fn push_bits(bits: &mut Vec<bool>, value: u64, width: u32) {
+    for shift in (0..width).rev() {
+        bits.push((value >> shift) & 1 == 1);
+    }
+}
+
+/// Appends an Exp-Golomb `ue(v)` encoding of `value`.
+fn push_ue(bits: &mut Vec<bool>, value: u32) {
+    let code_num = value as u64 + 1;
+    let width = u64::BITS - code_num.leading_zeros();
+    bits.extend(std::iter::repeat_n(false, (width - 1) as usize));
+    push_bits(bits, code_num, width);
+}
+
+/// Packs a bitstream into bytes, zero-padding the final byte.
+fn pack_bits(bits: &[bool]) -> Vec<u8> {
+    bits.chunks(8)
+        .map(|chunk| {
+            chunk.iter().enumerate().fold(0u8, |byte, (index, bit)| {
+                byte | (u8::from(*bit) << (7 - index))
+            })
+        })
+        .collect()
+}
+
+/// Inverse of `remove_emulation_prevention`: inserts a 0x03 byte after any
+/// `00 00` run followed by a byte <= 3, so a hand-built RBSP round-trips
+/// through the parser's emulation-prevention removal unchanged. Needed
+/// because a randomly chosen Exp-Golomb field can incidentally contain a
+/// `00 00 0x` sequence, which would otherwise either get silently eaten by
+/// `remove_emulation_prevention` (for `00 00 03`) or, worse, be mistaken by
+/// the Annex-B start-code scanner for a `00 00 01` NAL boundary and truncate
+/// the payload before it ever reaches the SPS parser.
+fn insert_emulation_prevention(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut zero_run = 0u32;
+    for &byte in data {
+        if zero_run >= 2 && byte <= 3 {
+            out.push(3);
+            zero_run = 0;
+        }
+        out.push(byte);
+        zero_run = if byte == 0 { zero_run + 1 } else { 0 };
+    }
+    out
+}
+
+/// Appends a well-formed H.265 `profile_tier_level` + SPS id + chroma format
+/// prefix (single sub-layer, Main profile, level 3.0, 4:2:0 chroma).
+fn push_h265_profile_prefix(bits: &mut Vec<bool>) {
+    push_bits(bits, 0, 4); // sps_video_parameter_set_id
+    push_bits(bits, 0, 3); // sps_max_sub_layers_minus1
+    push_bits(bits, 1, 1); // sps_temporal_id_nesting_flag
+    push_bits(bits, 0, 2); // general_profile_space
+    push_bits(bits, 0, 1); // general_tier_flag
+    push_bits(bits, 1, 5); // general_profile_idc
+    push_bits(bits, 0, 32); // compatibility flags
+    push_bits(bits, 0, 48); // constraint flags
+    push_bits(bits, 90, 8); // general_level_idc
+    push_ue(bits, 0); // sps_seq_parameter_set_id
+    push_ue(bits, 1); // chroma_format_idc
+}
+
 #[test]
 fn malformed_sps_bitstreams_fail_closed_without_partial_metadata() {
-    fn push_bits(bits: &mut Vec<bool>, value: u64, width: u32) {
-        for shift in (0..width).rev() {
-            bits.push((value >> shift) & 1 == 1);
-        }
-    }
-
-    fn push_ue(bits: &mut Vec<bool>, value: u32) {
-        let code_num = value as u64 + 1;
-        let width = u64::BITS - code_num.leading_zeros();
-        bits.extend(std::iter::repeat_n(false, (width - 1) as usize));
-        push_bits(bits, code_num, width);
-    }
-
-    fn pack_bits(bits: &[bool]) -> Vec<u8> {
-        bits.chunks(8)
-            .map(|chunk| {
-                chunk.iter().enumerate().fold(0u8, |byte, (index, bit)| {
-                    byte | (u8::from(*bit) << (7 - index))
-                })
-            })
-            .collect()
-    }
-
-    fn push_h265_profile_prefix(bits: &mut Vec<bool>) {
-        push_bits(bits, 0, 4); // sps_video_parameter_set_id
-        push_bits(bits, 0, 3); // sps_max_sub_layers_minus1
-        push_bits(bits, 1, 1); // sps_temporal_id_nesting_flag
-        push_bits(bits, 0, 2); // general_profile_space
-        push_bits(bits, 0, 1); // general_tier_flag
-        push_bits(bits, 1, 5); // general_profile_idc
-        push_bits(bits, 0, 32); // compatibility flags
-        push_bits(bits, 0, 48); // constraint flags
-        push_bits(bits, 90, 8); // general_level_idc
-        push_ue(bits, 0); // sps_seq_parameter_set_id
-        push_ue(bits, 1); // chroma_format_idc
-    }
-
     let h264_exp_golomb_shift_overflow = [
         0, 0, 0, 1, 0x67, // Annex B start code and H.264 SPS NAL header
         100, 0, 31, // High profile, compatibility, level
@@ -1767,6 +1837,132 @@ fn h264_scaling_matrix_uses_4x4_list_length_before_dimensions() {
 
     assert_eq!(meta.profile.as_deref(), Some("High"));
     assert_eq!((meta.width, meta.height), (320, 240));
+}
+
+proptest! {
+    #[test]
+    fn probe_video_never_panics(
+        h265 in any::<bool>(),
+        pes_payload in prop::collection::vec(any::<u8>(), 0..512),
+    ) {
+        let kind = if h265 { StreamKind::H265 } else { StreamKind::H264 };
+        let _ = probe_video(kind, 0x100, None, None, &pes_payload);
+    }
+
+    #[test]
+    fn probe_video_h264_truncation_never_yields_partial_metadata(
+        profile_idc in prop::sample::select(vec![66u8, 77, 88, 100, 110, 122, 244]),
+        level_idc in 0u8..255,
+        width_mbs_minus1 in 0u32..500,
+        height_map_units_minus1 in 0u32..500,
+    ) {
+        let mut bits = Vec::new();
+        push_ue(&mut bits, 0); // seq_parameter_set_id
+        if matches!(profile_idc, 100 | 110 | 122 | 244) {
+            push_ue(&mut bits, 1); // chroma_format_idc (4:2:0)
+            push_ue(&mut bits, 0); // bit_depth_luma_minus8
+            push_ue(&mut bits, 0); // bit_depth_chroma_minus8
+            push_bits(&mut bits, 0, 1); // qpprime_y_zero_transform_bypass_flag
+            push_bits(&mut bits, 0, 1); // seq_scaling_matrix_present_flag
+        }
+        push_ue(&mut bits, 0); // log2_max_frame_num_minus4
+        push_ue(&mut bits, 0); // pic_order_cnt_type
+        push_ue(&mut bits, 0); // log2_max_pic_order_cnt_lsb_minus4
+        push_ue(&mut bits, 0); // max_num_ref_frames
+        push_bits(&mut bits, 0, 1); // gaps_in_frame_num_allowed_flag
+        push_ue(&mut bits, width_mbs_minus1);
+        push_ue(&mut bits, height_map_units_minus1);
+        push_bits(&mut bits, 1, 1); // frame_mbs_only_flag
+        push_bits(&mut bits, 0, 1); // direct_8x8_inference_flag
+        push_bits(&mut bits, 0, 1); // frame_cropping_flag
+        push_bits(&mut bits, 0, 1); // vui_parameters_present_flag
+
+        let mut raw_sps = vec![profile_idc, 0, level_idc];
+        raw_sps.extend(pack_bits(&bits));
+
+        let mut payload = vec![0, 0, 0, 1, 0x67];
+        payload.extend(insert_emulation_prevention(&raw_sps));
+
+        let expected_width = (width_mbs_minus1 + 1) * 16;
+        let expected_height = (height_map_units_minus1 + 1) * 16;
+
+        let meta = probe_video(StreamKind::H264, 0x100, None, None, &payload);
+        prop_assert_eq!(meta.width, expected_width);
+        prop_assert_eq!(meta.height, expected_height);
+        prop_assert!(meta.profile.is_some());
+        prop_assert!(meta.level.is_some());
+
+        for cut in 0..payload.len() {
+            let partial = probe_video(StreamKind::H264, 0x100, None, None, &payload[..cut]);
+            let fully_default = partial.width == 0
+                && partial.height == 0
+                && partial.profile.is_none()
+                && partial.level.is_none();
+            prop_assert!(
+                fully_default,
+                "truncating at byte {cut} of {} must fail closed, got {partial:?}",
+                payload.len()
+            );
+        }
+    }
+
+    #[test]
+    fn probe_video_h265_truncation_never_yields_partial_metadata(
+        width in 16u32..4096,
+        height in 16u32..2160,
+    ) {
+        let mut bits = Vec::new();
+        push_h265_profile_prefix(&mut bits);
+        push_ue(&mut bits, width); // pic_width_in_luma_samples
+        push_ue(&mut bits, height); // pic_height_in_luma_samples
+        push_bits(&mut bits, 0, 1); // conformance_window_flag
+        push_ue(&mut bits, 0); // bit_depth_luma_minus8
+        push_ue(&mut bits, 0); // bit_depth_chroma_minus8
+        push_ue(&mut bits, 0); // log2_max_pic_order_cnt_lsb_minus4
+        push_bits(&mut bits, 1, 1); // sps_sub_layer_ordering_info_present_flag
+        push_ue(&mut bits, 0); // sps_max_dec_pic_buffering_minus1[0]
+        push_ue(&mut bits, 0); // sps_max_num_reorder_pics[0]
+        push_ue(&mut bits, 0); // sps_max_latency_increase_plus1[0]
+        push_ue(&mut bits, 0); // log2_min_luma_coding_block_size_minus3
+        push_ue(&mut bits, 0); // log2_diff_max_min_luma_coding_block_size
+        push_ue(&mut bits, 0); // log2_min_luma_transform_block_size_minus2
+        push_ue(&mut bits, 0); // log2_diff_max_min_luma_transform_block_size
+        push_ue(&mut bits, 0); // max_transform_hierarchy_depth_inter
+        push_ue(&mut bits, 0); // max_transform_hierarchy_depth_intra
+        push_bits(&mut bits, 0, 1); // scaling_list_enabled_flag
+        push_bits(&mut bits, 0, 1); // amp_enabled_flag
+        push_bits(&mut bits, 0, 1); // sample_adaptive_offset_enabled_flag
+        push_bits(&mut bits, 0, 1); // pcm_enabled_flag
+        push_ue(&mut bits, 0); // num_short_term_ref_pic_sets
+        push_bits(&mut bits, 0, 1); // long_term_ref_pics_present_flag
+        push_bits(&mut bits, 0, 1); // sps_temporal_mvp_enabled_flag
+        push_bits(&mut bits, 0, 1); // strong_intra_smoothing_enabled_flag
+        push_bits(&mut bits, 0, 1); // vui_parameters_present_flag
+
+        let mut raw_sps = vec![0x42u8, 0x01];
+        raw_sps.extend(pack_bits(&bits));
+
+        let mut payload = vec![0, 0, 0, 1];
+        payload.extend(insert_emulation_prevention(&raw_sps));
+
+        let meta = probe_video(StreamKind::H265, 0x100, None, None, &payload);
+        prop_assert_eq!(meta.width, width);
+        prop_assert_eq!(meta.height, height);
+        prop_assert!(meta.profile.is_some());
+
+        for cut in 0..payload.len() {
+            let partial = probe_video(StreamKind::H265, 0x100, None, None, &payload[..cut]);
+            let fully_default = partial.width == 0
+                && partial.height == 0
+                && partial.profile.is_none()
+                && partial.level.is_none();
+            prop_assert!(
+                fully_default,
+                "truncating at byte {cut} of {} must fail closed, got {partial:?}",
+                payload.len()
+            );
+        }
+    }
 }
 
 #[test]
