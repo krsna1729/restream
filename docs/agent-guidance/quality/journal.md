@@ -53,6 +53,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 04:05 Q-016 DONE [codex]](#2026-07-18-0405-q-016-done-codex)
 - [2026-07-18 04:10 Q-003 STARTED [codex]](#2026-07-18-0410-q-003-started-codex)
 - [2026-07-18 06:15 Q-003 AVIO-FIX DONE [codex]](#2026-07-18-0615-q-003-avio-fix-done-codex)
+- [2026-07-18 07:40 Q-004 DONE [codex]](#2026-07-18-0740-q-004-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1066,3 +1067,52 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Notes: same pattern as Q-015/Q-016 — a proof/benchmark task surfaced a
   real production bug (a hang, not a crash) that the adversarial sweep goal
   explicitly asks to fix and regression-test in place.
+
+## 2026-07-18 07:40 Q-004 DONE [codex]
+- What: classified every `.unwrap()`/`.expect(`/`panic!`/`unreachable!` in
+  non-test `src/media/` code as invariant-safe or fallible (delegated the
+  line-by-line grep classification to a subagent to keep main-context
+  tokens bounded). Confirmed invariant-safe: `file_ingest.rs:791` (guarded
+  five lines above by an `if anchor.is_none() { return; }` check),
+  `hls/fmp4.rs:659,797` (`Fmp4SegmentMuxer::new().expect(...)` — a
+  no-argument constructor; failure would be a static library fault, not
+  data-triggerable). Found one fallible panic site:
+  `src/media/hls/preview.rs:21`, `get_hls_preview_cancel_token(...).await
+  .unwrap()` inside `ensure_hls_preview_runtime`. It re-acquired the
+  `hls.consumers` lock after `ensure_hls_preview_segmenter` had already
+  dropped it, so a concurrent `shutdown_hls_preview_segmenter` call (from
+  the idle-timeout reconciler in `src/lib.rs` or the pipeline-delete
+  handler in `src/api/pipelines.rs`) could remove the just-inserted
+  consumer entry in that window and turn the `unwrap()` into a live panic.
+  Per the adversarial-sweep goal ("fix every failing test... add permanent
+  regression tests for each bug found"), fixed in place rather than just
+  filing a follow-up: `ensure_hls_preview_segmenter`
+  (`src/media/engine_hls.rs`) now returns the cancel token it just
+  inserted (or the pre-existing one) directly from the same lock
+  acquisition, eliminating the re-read and the race window structurally.
+  The structurally identical non-preview pair (`ensure_hls_segmenter` /
+  `get_hls_cancel_token`) was left as-is: its one caller
+  (`src/lib.rs:818-831`) already handles the `None` case gracefully with a
+  `warn!` and early return instead of unwrapping, so it has no reachable
+  panic site — no fix needed there.
+- Gates: new regression test
+  `ensure_hls_preview_runtime_survives_concurrent_shutdown_race`
+  (`src/media/hls/preview.rs`) spawns 64 interleaved
+  `ensure_hls_preview_runtime` / `shutdown_hls_preview_segmenter` tasks and
+  asserts every task joins without panicking. Full `scripts/build/
+  resource-limit.sh cargo test --profile bench --lib`: 1091/1091 passed, 0
+  failed. `cargo fmt --all --check` clean. `scripts/build/resource-limit.sh
+  cargo clippy --profile bench --all-targets` clean (warnings denied).
+  `scripts/check/concurrency/fast.sh` passed (135/135). No hot-path
+  benchmark applies — `ensure_hls_preview_segmenter` runs once per preview
+  session start, not per packet.
+- Commit: `f0aec2fe`.
+- Follow-ups: none identified. The non-preview `ensure_hls_segmenter` /
+  `get_hls_cancel_token` pair shares the same two-call lock shape but has
+  no unwrap-on-None caller today; if a future caller adds one without
+  checking `None`, it would reintroduce this exact bug shape.
+- Notes: same pattern as Q-003/Q-015/Q-016 — a proof-tier inventory task
+  surfaced a real concurrency bug (a live panic under a lifecycle race,
+  not just a coverage gap) that the adversarial sweep goal explicitly asks
+  to fix and regression-test in place, rather than just filing it as a
+  separate follow-up item.

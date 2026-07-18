@@ -317,7 +317,12 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Gates: none (inventory).
 - Context: proof-sweep discovery recipe; the engine no-crash contract makes
   every fallible panic path in the media runtime a latent broadcast outage.
-- Status: open (Filed: 2026-07-03 by bootstrap)
+- Status: done (2026-07-18) — inventory found one fallible panic site
+  (`src/media/hls/preview.rs:21`, a TOCTOU race on the HLS preview
+  consumer registry) and fixed it directly with a regression test rather
+  than filing a follow-up; see journal 2026-07-18 07:40 Q-004 DONE and
+  commit `f0aec2fe`. All other `.unwrap()`/`.expect(`/`panic!`/
+  `unreachable!` sites in non-test `src/media/` code were invariant-safe.
 
 ### Q-005 [resilience] [sonnet] Baseline the harness fault modes
 - Goal: current pass/fail state of `fault.resilience`, `fault.egress-retry`,
