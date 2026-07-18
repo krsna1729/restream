@@ -55,6 +55,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-18 06:15 Q-003 AVIO-FIX DONE [codex]](#2026-07-18-0615-q-003-avio-fix-done-codex)
 - [2026-07-18 07:40 Q-004 DONE [codex]](#2026-07-18-0740-q-004-done-codex)
 - [2026-07-18 08:10 Q-005 DONE [codex]](#2026-07-18-0810-q-005-done-codex)
+- [2026-07-18 08:35 Q-007 DONE [codex]](#2026-07-18-0835-q-007-done-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -1152,3 +1153,61 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   not surface a bug — the live resilience contract is green. Recorded here
   as the known-good baseline the loop can now diff future runs against to
   detect regressions.
+
+## 2026-07-18 08:35 Q-007 DONE [codex]
+- What: mapped every "Contract to prove" row in
+  `docs/stage-boundary-proof-map.md` (10 boundary rows) against the
+  enumerated checks in `scripts/check/concurrency/fast.sh` and
+  `scripts/check/concurrency/contract.sh` (both source the same
+  `run_common_concurrency_checks` helper in
+  `scripts/check/concurrency/common.sh`, which contract.sh supersets with
+  `history-grouping.sh`, `process-lifecycle-guards`, and the four live
+  `fault.*`/`recovery` harness modes). Two rows explicitly claim
+  mandatory-gate status in their own text: "Runtime admission -> registry"
+  (transcoder/TS-muxer replacement-race loom models) and "Cancel/teardown
+  -> observable cleanup" (which literally names `fast.sh` as the gate that
+  keeps its loom models and status/recovery contracts mandatory). Verified
+  both by name: `ts_muxer_stage_loom` and `transcoder_stage_loom` are two
+  of the five loom targets `common.sh` loops over
+  (`avio_loom, ring_migration_loom, ts_chunk_ring_loom, ts_muxer_stage_loom,
+  transcoder_stage_loom`), and the cancel/teardown row's status/recovery
+  contracts match `common.sh`'s `api-health`, `api-disconnect-*`,
+  `api-egress-*`, and `output-status-*` named test filters plus
+  `contract.sh`'s `fault.resilience`/`recovery` harness-mode runs. The
+  remaining 8 rows (planner->stage runtime, source ring->input pump, input
+  pump->backend, backend->normalizer, audio router, HLS segmenter,
+  recording writer, runtime snapshot->status) document proof that lives in
+  the general `--lib`/integration test suite rather than the concurrency
+  gate scripts — consistent with the Inner Loop routing table in
+  `AGENTS.md`, which reserves `fast.sh`/`contract.sh` specifically for
+  concurrency primitives, thread hops, and a named list of lifecycle files
+  (`engine.rs`, `srt.rs`, `ts_chunk_ring.rs`, `avio.rs`, `recording.rs`,
+  `file_ingest.rs`, `external_transcoder.rs`) and routes ordinary module
+  changes to a scoped `cargo test <module>` instead. Spot-checked that the
+  named tests these 8 rows cite actually exist and match by grepping for
+  representative names (`prop_source_stage_chunked_input_preserves_per_
+  stream_dts_order` in `tests/transcoder.rs`;
+  `loom_publish_model_never_exposes_segment_without_init` in
+  `src/media/hls/fmp4.rs`, a self-contained `loom::model` proof that runs
+  on every plain `cargo test --lib` since it models its own `ModelState`
+  rather than swapping production sync primitives, so it does not need the
+  `--cfg loom` gate the five `tests/*_loom.rs` targets use; recording
+  identity tests `media_recording_identity_uses_recording_id` /
+  `_rejects_metadata_less_filename_fallback` in
+  `src/bin/test_harness/mixed_playback.rs`, matching the `cargo test
+  media_recording_identity --bin test_harness` command cited in
+  `docs/regression-artifacts.md` by substring filter). No rule was found
+  claiming mandatory-gate coverage without actually having it, and no
+  cited test name was stale or missing.
+- Gates: none (grooming task; read-only analysis).
+- Commit: this commit (journal + backlog doc update only).
+- Follow-ups: none — no uncovered `[proof]`-tier rule identified. If a
+  future boundary row is added to the proof map with concurrency/race
+  content, apply the same "does it name `fast.sh`/`contract.sh`
+  explicitly, and if so is the named test actually in
+  `common.sh`" check used here.
+- Notes: unlike Q-004's panic-path inventory, this audit found the
+  proof-map/gate-script pairing already accurate — a clean grooming result
+  is itself the useful output (confidence that the map isn't overclaiming
+  gate coverage), matching the "documented rejection is a valid
+  completion" pattern already established for Q-010-style tasks.

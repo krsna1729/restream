@@ -361,7 +361,13 @@ Tiers: `haiku` (read-only audit) · `sonnet` (scoped code+test) · `opus`
 - Gates: none (grooming).
 - Context: the proof map is the maintained human-readable inventory; the gates
   are what actually bind. Drift between them is unproven confidence.
-- Status: open (Filed: 2026-07-03 by bootstrap)
+- Status: done (2026-07-18) — audited all 10 boundary rows against
+  `fast.sh`/`contract.sh`; the two rows that explicitly claim mandatory-gate
+  coverage (runtime admission->registry, cancel/teardown->cleanup) are
+  correctly enforced, and the other 8 rows document proof that intentionally
+  lives in the general test suite per the Inner Loop routing table, not a
+  gap. No stale or missing test names found. No new `[proof]` items filed;
+  see journal 2026-07-18 08:35 Q-007 DONE.
 
 ### Q-008 [modularity] [sonnet] Execute the topmost undone layering-roadmap step
 - Goal: the first not-yet-done step in `docs/layering-roadmap.md` completed at
