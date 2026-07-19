@@ -225,6 +225,7 @@ async fn run() -> Result<(), String> {
             "recovery" => recovery().await,
             "resource-sweep" => resource_sweep().await,
             "msr" => msr().await,
+            "msr.dashboard" => msr_dashboard().await,
             "bitrate-sweep" => bitrate_sweep().await,
             "branch-matrix" => branch_matrix().await,
             "backend-policy-matrix" => backend_policy_matrix().await,

@@ -368,33 +368,6 @@ impl MediaEngine {
         "running".to_string()
     }
 
-    pub(crate) fn sample_egress_bitrate_kbps(egress: &ActiveEgress) -> Option<f64> {
-        let bytes_sent = egress.bytes_sent.load(Ordering::Relaxed);
-        let prev = egress.prev_bytes_sent.load(Ordering::Relaxed);
-        let mut prev_time = egress
-            .prev_sample_time
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let elapsed = prev_time.elapsed().as_secs_f64();
-
-        if elapsed > 0.5 && bytes_sent > prev {
-            let delta = bytes_sent - prev;
-            let rate = (delta as f64 * 8.0) / (elapsed * 1000.0);
-            egress.prev_bytes_sent.store(bytes_sent, Ordering::Relaxed);
-            *prev_time = Instant::now();
-            *egress
-                .bitrate_kbps
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = Some(rate);
-            Some(rate)
-        } else {
-            *egress
-                .bitrate_kbps
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-        }
-    }
-
     pub(crate) fn sample_ingest_bitrate_kbps(ingest: &ActiveIngest) -> Option<f64> {
         let bytes_received = ingest.bytes_received.load(Ordering::Relaxed);
         let prev = ingest.prev_bytes_received.load(Ordering::Relaxed);

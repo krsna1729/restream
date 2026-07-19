@@ -80,6 +80,7 @@ const DASHBOARD_CONFIG_MODES = new Set([
 ]);
 const DASHBOARD_RUNTIME_STREAM_DEBOUNCE_MS = 200;
 const DASHBOARD_RUNTIME_MUTATION_FALLBACK_MS = 1500;
+const DASHBOARD_RUNTIME_REQUEST_TIMEOUT_MS = 1500;
 
 export function setDashboardHooks(hooks: Partial<DashboardHooks>): void {
   Object.assign(dashboardHooks, hooks || {});
@@ -176,6 +177,15 @@ function mergeMetricsSection<T extends Record<string, unknown>>(
 ): T | undefined {
   if (!previous && !next) return undefined;
   return { ...(previous || {}), ...(next || {}) } as T;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  return Promise.race([
+    promise,
+    new Promise<null>((resolve) => {
+      setTimeout(() => resolve(null), timeoutMs);
+    }),
+  ]);
 }
 
 function mergeSystemMetricsSnapshot(
@@ -430,11 +440,14 @@ async function fetchAndRerender(): Promise<void> {
       ? getConfig({ view: "dashboard" })
       : Promise.resolve(null),
     fetchHealth
-      ? getDashboardRuntimeSnapshot({
-          healthView: runtimeHealthView,
-          metricsView: runtimeMetricsView,
-          pipelineId: runtimePipelineId,
-        })
+      ? withTimeout(
+          getDashboardRuntimeSnapshot({
+            healthView: runtimeHealthView,
+            metricsView: runtimeMetricsView,
+            pipelineId: runtimePipelineId,
+          }),
+          DASHBOARD_RUNTIME_REQUEST_TIMEOUT_MS,
+        )
       : Promise.resolve(null),
     fetchHealth
       ? Promise.resolve(null)

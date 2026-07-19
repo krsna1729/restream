@@ -621,9 +621,8 @@ pub(crate) async fn health_summary_snapshot(
             let pipeline_id = egress.pipeline_id.clone();
             let bytes_sent = egress.bytes_sent.load(Ordering::Relaxed);
             *totals.entry(pipeline_id.clone()).or_default() += bytes_sent;
-            let bitrate_kbps = MediaEngine::sample_egress_bitrate_kbps(egress);
             let has_ingest = active_ingest_ids.contains(pipeline_id.as_str());
-            let status = MediaEngine::egress_effective_status(egress, has_ingest);
+            let status = MediaEngine::egress_effective_status_best_effort(egress, has_ingest);
             let retry_state = retry_egresses.get(output_id);
 
             outputs.entry(pipeline_id).or_default().insert(
@@ -636,7 +635,7 @@ pub(crate) async fn health_summary_snapshot(
                     },
                     "uptimeSecs": egress.start_instant.elapsed().as_secs_f64(),
                     "totalSize": bytes_sent,
-                    "bitrateKbps": bitrate_kbps,
+                    "bitrateKbps": serde_json::Value::Null,
                     "retrying": retry_state.is_some(),
                 }),
             );
