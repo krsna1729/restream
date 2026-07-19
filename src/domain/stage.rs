@@ -435,4 +435,117 @@ mod tests {
         assert_eq!(kind.graph_label(), "Audio: atrack:0");
         assert_eq!(*kind.upstream().unwrap(), StageKind::video_preset("720p"));
     }
+
+    #[test]
+    fn graph_node_id_sanitizes_display_separators_into_the_slug() {
+        let kind = StageKind::audio_route("atrack:0", StageKind::video_preset("720p"));
+        // Display renders this as "audio:atrack:0:from:video:720p"; the
+        // node-id slug must replace ':' (and '+', ',') so the id is safe to
+        // embed as a single graph-node token.
+        assert_eq!(
+            kind.graph_node_id("pipe"),
+            "pipe_audio_atrack_0_from_video_720p_stage"
+        );
+    }
+
+    #[test]
+    fn graph_type_matches_every_stage_kind() {
+        let cases: Vec<(StageKind, &str)> = vec![
+            (StageKind::source(), "source"),
+            (StageKind::hls(), "hls"),
+            (StageKind::hls_segmenter(StageKind::source()), "hls"),
+            (StageKind::recording(), "recording"),
+            (StageKind::video_preset("720p"), "transcoder"),
+            (
+                StageKind::audio_route("atrack:0", StageKind::source()),
+                "audio_filter",
+            ),
+            (
+                StageKind::codec_edge("hevc_to_h264", StageKind::source()),
+                "codec_edge",
+            ),
+            (StageKind::preview("720p", StageKind::source()), "preview"),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(kind.graph_type(), expected, "graph_type for {kind:?}");
+        }
+    }
+
+    #[test]
+    fn is_preview_and_is_video_preset_and_is_video_processing_are_mutually_precise() {
+        let preview = StageKind::preview("720p", StageKind::source());
+        assert!(preview.is_preview());
+        assert!(!preview.is_video_preset());
+        assert!(preview.is_video_processing());
+
+        let video_preset = StageKind::video_preset("720p");
+        assert!(!video_preset.is_preview());
+        assert!(video_preset.is_video_preset());
+        assert!(video_preset.is_video_processing());
+
+        let source = StageKind::source();
+        assert!(!source.is_preview());
+        assert!(!source.is_video_preset());
+        assert!(!source.is_video_processing());
+    }
+
+    #[test]
+    fn preset_name_and_video_output_codec_are_none_off_video_preset() {
+        let non_video = StageKind::audio_route("atrack:0", StageKind::source());
+        assert_eq!(non_video.preset_name(), None);
+        assert_eq!(non_video.video_output_codec(), None);
+
+        let bare_preset = StageKind::video_preset("720p");
+        assert_eq!(bare_preset.preset_name(), Some("720p"));
+        assert_eq!(bare_preset.video_output_codec(), None);
+
+        let with_codec = StageKind::video_preset_with_codec("720p", "h264");
+        assert_eq!(with_codec.preset_name(), Some("720p"));
+        assert_eq!(with_codec.video_output_codec(), Some("h264"));
+    }
+
+    #[test]
+    fn video_terminal_kind_falls_back_to_source_without_a_video_stage() {
+        let plan = EncodingStagePlan::from_encoding("pipe", "atrack:0");
+        assert_eq!(*plan.video_terminal_kind(), StageKind::source());
+
+        let plan_with_video = EncodingStagePlan::from_encoding("pipe", "720p+atrack:0");
+        assert_eq!(
+            *plan_with_video.video_terminal_kind(),
+            StageKind::video_preset("720p")
+        );
+    }
+
+    #[test]
+    fn audio_stage_from_upstream_is_none_without_an_audio_route() {
+        let plan = EncodingStagePlan::from_encoding("pipe", "720p");
+        assert!(
+            plan.audio_stage_from_upstream(StageKind::video_preset("720p"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn audio_stage_from_upstream_rewrites_the_upstream_kind() {
+        let plan = EncodingStagePlan::from_encoding("pipe", "720p+atrack:0");
+        let rewritten = plan
+            .audio_stage_from_upstream(StageKind::codec_edge(
+                "hevc_to_h264",
+                StageKind::video_preset("720p"),
+            ))
+            .expect("plan has an audio route");
+        assert_eq!(
+            rewritten.kind,
+            StageKind::audio_route(
+                "atrack:0",
+                StageKind::codec_edge("hevc_to_h264", StageKind::video_preset("720p"))
+            )
+        );
+    }
+
+    #[test]
+    fn encoding_stage_plan_pipeline_accessor_reports_the_constructing_pipeline() {
+        let plan = EncodingStagePlan::from_encoding("pipe-7", "720p");
+        assert_eq!(plan.pipeline().as_str(), "pipe-7");
+    }
 }
