@@ -280,6 +280,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn update_config_changes_take_effect_for_subsequent_calls() {
+        let svc = IngestSecurityService::new(IngestSecurityConfig {
+            failure_limit: 100,
+            failure_window_ms: 60_000,
+            ban_ms: 10_000,
+            tracked_ip_limit: 1000,
+        });
+        let ip = "203.0.113.70";
+
+        // Starting limit is high — one failure must not ban.
+        assert!(!svc.record_failure(ip));
+        assert!(svc.is_ip_banned(ip).is_none());
+
+        svc.update_config(IngestSecurityConfig {
+            failure_limit: 1,
+            failure_window_ms: 60_000,
+            ban_ms: 10_000,
+            tracked_ip_limit: 1000,
+        });
+        assert_eq!(svc.get_config().failure_limit, 1);
+
+        // Next failure is evaluated against the new, stricter limit.
+        assert!(svc.record_failure(ip));
+        assert!(svc.is_ip_banned(ip).is_some());
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_loopback_is_exempt() {
+        let service = IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG);
+        assert!(
+            service.is_ip_banned("::ffff:127.0.0.1").is_none(),
+            "IPv4-mapped IPv6 loopback must be treated as loopback"
+        );
+        assert!(!service.record_failure("::ffff:127.0.0.1"));
+    }
+
+    #[test]
+    fn malformed_ip_strings_are_treated_as_non_loopback_and_rate_limited() {
+        let cfg = IngestSecurityConfig {
+            failure_limit: 1,
+            failure_window_ms: 60_000,
+            ban_ms: 10_000,
+            tracked_ip_limit: 1000,
+        };
+        let svc = IngestSecurityService::new(cfg);
+        for ip in &["", "not-an-ip", "999.999.999.999"] {
+            assert!(
+                svc.record_failure(ip),
+                "malformed ip {ip:?} must fall back to non-loopback and be rate limited"
+            );
+            assert!(svc.is_ip_banned(ip).is_some(), "ip {ip:?} should be banned");
+        }
+    }
+
+    #[test]
     fn loopback_ips_are_not_rate_limited() {
         let service = IngestSecurityService::new(DEFAULT_INGEST_SECURITY_CONFIG);
 
