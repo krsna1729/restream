@@ -306,4 +306,109 @@ mod tests {
             Some("codec not found".to_string())
         );
     }
+
+    #[test]
+    fn guard_finish_transitions_to_stopped() {
+        let lc = Arc::new(StageLifecycle::new(StagePhase::Producing));
+        let guard = StageLifecycleGuard::new(lc.clone());
+        guard.finish();
+        assert_eq!(lc.current_phase(), StagePhase::Stopped);
+    }
+
+    #[test]
+    fn guard_drop_without_finish_transitions_to_stopped() {
+        let lc = Arc::new(StageLifecycle::new(StagePhase::Producing));
+        {
+            let _guard = StageLifecycleGuard::new(lc.clone());
+        }
+        assert_eq!(
+            lc.current_phase(),
+            StagePhase::Stopped,
+            "dropping the guard without calling finish() must still stop the stage"
+        );
+    }
+
+    #[test]
+    fn guard_drop_after_failed_does_not_regress_to_stopped() {
+        let lc = Arc::new(StageLifecycle::new(StagePhase::Producing));
+        {
+            let _guard = StageLifecycleGuard::new(lc.clone());
+            lc.record_error("backend crashed");
+        }
+        assert_eq!(
+            lc.current_phase(),
+            StagePhase::Failed,
+            "an unfinished guard must not overwrite a Failed phase on drop"
+        );
+    }
+
+    #[test]
+    fn guard_finish_forces_stopped_even_after_failed() {
+        // Unlike the implicit Drop path, an explicit finish() call
+        // unconditionally forces Stopped, even over a Failed phase.
+        let lc = Arc::new(StageLifecycle::new(StagePhase::Producing));
+        let guard = StageLifecycleGuard::new(lc.clone());
+        lc.record_error("backend crashed");
+        guard.finish();
+        assert_eq!(lc.current_phase(), StagePhase::Stopped);
+    }
+
+    #[test]
+    fn record_first_input_is_idempotent() {
+        let lc = StageLifecycle::new(StagePhase::BackendSpawned {
+            backend: StageBackendKind::InternalFfmpeg,
+            pid: None,
+        });
+        lc.record_first_input();
+        let first = lc.snapshot().first_input_at;
+
+        lc.transition(StagePhase::RunningNoOutputYet);
+        lc.record_first_input();
+        let second = lc.snapshot().first_input_at;
+
+        assert_eq!(first, second, "first_input_at must be set only once");
+        assert_eq!(
+            lc.current_phase(),
+            StagePhase::RunningNoOutputYet,
+            "a repeated record_first_input() must not re-force the FirstInput phase"
+        );
+    }
+
+    #[test]
+    fn record_first_output_is_idempotent() {
+        let lc = StageLifecycle::new(StagePhase::FirstInput);
+        lc.record_first_output();
+        let first = lc.snapshot().first_output_at;
+
+        lc.record_producing();
+        lc.record_first_output();
+        let second = lc.snapshot().first_output_at;
+
+        assert_eq!(first, second, "first_output_at must be set only once");
+        assert_eq!(
+            lc.current_phase(),
+            StagePhase::Producing,
+            "a repeated record_first_output() must not regress an already-Producing phase"
+        );
+    }
+
+    #[test]
+    fn record_producing_is_ignored_outside_allowed_phases() {
+        let lc = StageLifecycle::new(StagePhase::Registered);
+        lc.record_producing();
+        assert_eq!(
+            lc.current_phase(),
+            StagePhase::Registered,
+            "record_producing() must not force Producing from an unrelated phase"
+        );
+    }
+
+    #[test]
+    fn new_with_backend_and_current_backend_report_the_constructed_backend() {
+        let lc = StageLifecycle::new_with_backend(
+            StagePhase::Registered,
+            StageBackendKind::InternalFfmpeg,
+        );
+        assert_eq!(lc.current_backend(), StageBackendKind::InternalFfmpeg);
+    }
 }
