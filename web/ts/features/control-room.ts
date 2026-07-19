@@ -974,6 +974,11 @@ function refreshYouTubeCardWarning(
 ): void {
   void fetchYouTubeMonitoringStatus(monitoringUrl).then((status) => {
     if (!document.body.contains(shell)) return;
+    // The shell is a reused DOM node: by the time this fetch resolves it may
+    // have been reassigned to a different output/URL. Only apply the result
+    // if the shell is still showing the media this fetch was started for,
+    // otherwise a slow stale response can overwrite a newer card's status.
+    if (shell.dataset.mediaKey !== monitoringUrl) return;
     setCardWarning(shell, getYouTubeMonitoringWarning(status));
   });
 }
@@ -1992,4 +1997,4 @@ export function openControlRoomForOutput(outputId: string): void {
   renderControlRoom();
 }
 
-export { renderControlRoom };
+export { renderControlRoom, refreshYouTubeCardWarning };

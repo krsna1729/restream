@@ -100,6 +100,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 HUNT FMP4-FLUSH-BUFFER-LEAK-ON-DTS-REWIND FIXED [codex]](#2026-07-19-hunt-fmp4-flush-buffer-leak-on-dts-rewind-fixed-codex)
 - [2026-07-19 HUNT RECORDING-REGISTER-START-RACE FIXED [codex]](#2026-07-19-hunt-recording-register-start-race-fixed-codex)
 - [2026-07-19 HUNT SERVER-PORT-ZERO-SILENT-EPHEMERAL-BIND FIXED [codex]](#2026-07-19-hunt-server-port-zero-silent-ephemeral-bind-fixed-codex)
+- [2026-07-20 HUNT CONTROL-ROOM-YOUTUBE-WARNING-STALE-FETCH-RACE FIXED [codex]](#2026-07-20-hunt-control-room-youtube-warning-stale-fetch-race-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3663,3 +3664,49 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   unvalidated as `i32`) but found it already covered — the SRT ingest
   loader always calls `.validate()` right after construction, which
   normalizes/rejects bad values with a `warn!` fallback to plaintext.
+
+## 2026-07-20 HUNT CONTROL-ROOM-YOUTUBE-WARNING-STALE-FETCH-RACE FIXED [codex]
+
+- What: first frontend pass this hunt run, `web/ts/features/control-room.ts`
+  — the control room's per-card YouTube live-status warning refresh.
+- Finding: `refreshYouTubeCardWarning(shell, monitoringUrl)` kicks off an
+  async `fetchYouTubeMonitoringStatus` call per card and, on resolution,
+  unconditionally called `setCardWarning(shell, ...)`. Card DOM shells are
+  reused across renders (`ensureCardElements` recycles `article` nodes by
+  grid position, not by output identity), so a shell showing card A can be
+  reassigned to card B while A's status fetch is still in flight. If A's
+  fetch resolves after B's shell reassignment, its stale result overwrites
+  whatever warning B's own (possibly already-resolved) fetch had correctly
+  set — the reused shell is not guarded against out-of-order network
+  resolution. `setCardWarning` re-derives the card id from
+  `shell.closest("article")` at call time, so nothing at write time
+  distinguishes a stale write from a current one.
+- Fix: added a guard in `refreshYouTubeCardWarning`'s `.then()`: drop the
+  result if `shell.dataset.mediaKey !== monitoringUrl`. `syncCard` always
+  writes `shell.dataset.mediaKey` synchronously (via `syncCardMedia`) in the
+  same call that starts a new `refreshYouTubeCardWarning`, before any fetch
+  can resolve, so the mediaKey reliably reflects whichever card currently
+  owns the shell by the time a `.then()` callback runs — a fetch whose
+  captured `monitoringUrl` no longer matches is provably stale.
+- Added `YouTube monitor warning refresh ignores a stale response after the
+  shell is reassigned` in `test/frontend/frontend-pipeline-workspace.test.mjs`.
+  The fake DOM test harness can't exercise the full `renderControlRoom()`
+  grid (its `innerHTML` setter stores a string rather than parsing it into
+  queryable child elements, so `ensureShell`'s templated grid never
+  materializes), so the test builds a minimal real shell/article pair by
+  hand and calls `refreshYouTubeCardWarning` directly — which required
+  exporting that one previously-private function for test use. A
+  controllable `fetch` mock lets card B's fetch resolve first (live, no
+  warning) and card A's stale fetch resolve after the shell has moved to B
+  (not live, would add a warning); asserts no warning badge appears.
+  Verified failing (stale warning badge appeared) against the pre-fix
+  unconditional `setCardWarning` call and passing post-fix.
+- Gates: `npm run test:frontend` — 59/59 pass. `node scripts/check/docs.mjs`
+  — clean.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed.
+- Notes: thirteenth genuine bug found this hunt run, and the first from the
+  frontend TypeScript pass (previous hunts this run were backend/Rust
+  only). Worth a look in a future pass: whether the fake DOM harness should
+  gain real `innerHTML` parsing so `renderControlRoom()`'s card grid can be
+  exercised end-to-end instead of only through hand-built DOM fragments.
