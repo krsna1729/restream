@@ -692,4 +692,90 @@ mod tests {
             "non-MPEG-TS garbage input must surface an error, not panic or hang"
         );
     }
+
+    /// A pipeline cancelled before the stage thread reads its first packet
+    /// must bail out of the demux loop immediately rather than decoding and
+    /// encoding a queue's worth of already-buffered valid input: cancellation
+    /// is a bounded-work guarantee, not just an eventual-stop signal.
+    #[test]
+    fn exits_immediately_without_encoding_when_cancelled_before_first_packet() {
+        let fixture_bytes = canonical_hevc_ts_bytes();
+
+        let input_queue = Arc::new(MemoryQueue::new());
+        input_queue.write_sync(&fixture_bytes);
+        input_queue.close();
+
+        let output_ring = Arc::new(RingBuffer::new(16_384));
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        run_ffmpeg_h264_stage(
+            input_queue,
+            output_ring.clone(),
+            cancel,
+            "test-precancelled-h264",
+        )
+        .unwrap_or_else(|e| panic!("pre-cancelled stage must exit cleanly, not error: {e}"));
+
+        let mut reader = Reader::new("test_precancelled_h264_output".to_string(), output_ring);
+        assert!(
+            reader
+                .pull()
+                .unwrap_or_else(|e| panic!("reader pull failed: {e}"))
+                .is_none(),
+            "a pre-cancelled stage must not decode or emit any packets"
+        );
+    }
+
+    /// A stream that stops mid-packet (a dropped connection, not a clean
+    /// close) is a different fault shape than pure garbage bytes: the demuxer
+    /// sees a well-formed prefix before EOF cuts it off. The stage must
+    /// finish without panicking or hanging, whether it surfaces an error or
+    /// returns whatever it decoded before truncation.
+    #[test]
+    fn tolerates_input_truncated_mid_stream_without_panic_or_hang() {
+        ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Quiet);
+        let fixture_bytes = canonical_hevc_ts_bytes();
+        // Cut off partway through the fixture, deliberately not aligned to a
+        // 188-byte TS packet boundary, to mimic a connection dropped
+        // mid-packet rather than a clean stream shutdown.
+        let truncated = &fixture_bytes[..fixture_bytes.len() / 5 + 37];
+
+        let input_queue = Arc::new(MemoryQueue::new());
+        input_queue.write_sync(truncated);
+        input_queue.close();
+
+        let output_ring = Arc::new(RingBuffer::new(16_384));
+        let cancel = CancellationToken::new();
+
+        let result = run_ffmpeg_h264_stage(
+            input_queue,
+            output_ring.clone(),
+            cancel,
+            "test-truncated-mid-stream-h264",
+        );
+
+        // No panic and no hang (the test itself would time out) is the core
+        // guarantee. If decoding produced output before the cutoff, every
+        // packet must still uphold the same shape invariants as a clean run.
+        if result.is_ok() {
+            let mut reader = Reader::new("test_truncated_h264_tc_output".to_string(), output_ring);
+            let mut packets = Vec::new();
+            while let Ok(Some(packet)) = reader.pull() {
+                packets.push(packet);
+            }
+            assert!(
+                packets
+                    .iter()
+                    .filter(|packet| packet.media_type == MediaType::Video)
+                    .all(|packet| {
+                        packet.track_index == 0
+                            && packet.format == PayloadFormat::Raw
+                            && !packet.payload.is_empty()
+                    }),
+                "any video packets emitted before truncation must remain \
+                 well-formed raw track-0 packets"
+            );
+        }
+    }
 }
