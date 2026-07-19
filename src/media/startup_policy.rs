@@ -354,6 +354,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn extreme_observed_bitrate_saturates_instead_of_overflowing_or_panicking() {
+        // A corrupted or adversarial probe measurement could report an
+        // absurd bitrate; the saturating arithmetic chain must still land
+        // on the global cap rather than wrapping or panicking on overflow.
+        for bitrate_bps in [u64::MAX, u64::MAX / 2, u64::MAX - 1] {
+            assert_eq!(
+                ext_stage_probe_budget_for(ExtStageProbeContext {
+                    codec: VideoCodecKind::H264,
+                    include_audio: true,
+                    audio_track_count: 1,
+                    passthrough: false,
+                    observed_bitrate_bps: Some(bitrate_bps),
+                }),
+                (1_000_000, EXT_STAGE_PROBE_SIZE_BYTES_MAX),
+                "bitrate_bps={bitrate_bps}"
+            );
+        }
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(128))]
 
