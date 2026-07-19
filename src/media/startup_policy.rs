@@ -180,6 +180,14 @@ mod tests {
     }
 
     #[test]
+    fn internal_transcoder_preroll_matches_the_shared_default() {
+        assert_eq!(
+            internal_transcoder_keyframe_preroll_packets(),
+            DEFAULT_KEYFRAME_PREROLL_PACKETS
+        );
+    }
+
+    #[test]
     fn ext_stage_probe_budget_prefers_hevc_budget_for_hevc_inputs() {
         assert_eq!(
             ext_stage_probe_budget(VideoCodecKind::H264),
