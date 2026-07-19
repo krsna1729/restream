@@ -37,6 +37,20 @@ fn promoted_input_waits_for_keyframe_before_forwarding() {
     assert_eq!(gate.state(), InputForwardState::Active);
 }
 
+#[test]
+fn promoted_input_can_activate_from_a_buffered_gop() {
+    let gate = InputPacketGate::standby();
+    gate.arm_for_promotion();
+
+    let activation = gate
+        .try_enter(InputPacketBoundary::ReplayReady)
+        .expect("buffered GOP activates promoted input");
+
+    assert!(activation.activated());
+    drop(activation);
+    assert_eq!(gate.state(), InputForwardState::Active);
+}
+
 #[tokio::test]
 async fn demotion_rejects_new_packets_after_existing_writer_drains() {
     let gate = InputPacketGate::active();
@@ -66,15 +80,29 @@ fn promoted_timeline_starts_after_previous_writer_and_preserves_composition_offs
     assert_eq!(last_forwarded.load(Ordering::Acquire), 8_001);
 }
 
+#[test]
+fn repeated_promotion_rebases_an_initialized_timestamp_mapper() {
+    let last_forwarded = AtomicI64::new(8_000);
+    let mut mapper = InputTimestampMapper::default();
+    let mut first_active_packet = packet(120, 40);
+    mapper.map_packet(&mut first_active_packet, false, &last_forwarded);
+
+    let mut promoted_again = packet(200, -20);
+    mapper.map_packet(&mut promoted_again, true, &last_forwarded);
+
+    assert_eq!(promoted_again.dts, 8_001);
+    assert_eq!(promoted_again.pts - promoted_again.dts, -20);
+}
+
 proptest! {
     #[test]
     fn gate_matches_sequential_selection_model(
-        operations in prop::collection::vec((0u8..4, any::<bool>()), 1..128)
+        operations in prop::collection::vec((0u8..4, 0u8..3), 1..128)
     ) {
         let gate = InputPacketGate::standby();
         let mut expected = InputForwardState::Standby;
 
-        for (operation, keyframe) in operations {
+        for (operation, boundary_kind) in operations {
             match operation {
                 0 => {
                     gate.arm_for_promotion();
@@ -89,15 +117,17 @@ proptest! {
                     expected = InputForwardState::Active;
                 }
                 3 => {
-                    let boundary = if keyframe {
-                        InputPacketBoundary::VideoKeyframe
-                    } else {
-                        InputPacketBoundary::Other
+                    let boundary = match boundary_kind {
+                        0 => InputPacketBoundary::Other,
+                        1 => InputPacketBoundary::VideoKeyframe,
+                        _ => InputPacketBoundary::ReplayReady,
                     };
                     let entered = gate.try_enter(boundary).is_some();
                     let expected_entered = match expected {
                         InputForwardState::Standby => false,
-                        InputForwardState::AwaitingKeyframe if keyframe => {
+                        InputForwardState::AwaitingKeyframe
+                            if boundary != InputPacketBoundary::Other =>
+                        {
                             expected = InputForwardState::Active;
                             true
                         }

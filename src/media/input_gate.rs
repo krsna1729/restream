@@ -28,6 +28,7 @@ impl InputForwardState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputPacketBoundary {
     VideoKeyframe,
+    ReplayReady,
     Other,
 }
 
@@ -77,7 +78,7 @@ impl InputPacketGate {
             let activated = match state {
                 state if state == STANDBY as usize => return None,
                 state if state == AWAITING_KEYFRAME as usize => {
-                    if boundary != InputPacketBoundary::VideoKeyframe {
+                    if boundary == InputPacketBoundary::Other {
                         return None;
                     }
                     true
@@ -156,7 +157,7 @@ impl InputTimestampMapper {
         activated: bool,
         last_forwarded_dts: &AtomicI64,
     ) {
-        if !self.initialized {
+        if activated || !self.initialized {
             self.offset_ms = if activated {
                 let previous = last_forwarded_dts.load(Ordering::Acquire);
                 if previous == i64::MIN {

@@ -36,6 +36,7 @@ pub mod stage_lifecycle;
 pub mod stage_metrics;
 pub mod stage_registry_access;
 pub mod stage_runtime;
+pub mod standby_gop;
 pub mod startup_policy;
 
 pub mod ffmpeg;
