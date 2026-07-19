@@ -107,17 +107,12 @@ impl VideoCodecKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RtmpOutputMode {
+    #[default]
     Legacy,
     Enhanced,
-}
-
-impl Default for RtmpOutputMode {
-    fn default() -> Self {
-        Self::Legacy
-    }
 }
 
 impl RtmpOutputMode {
@@ -137,20 +132,15 @@ impl RtmpOutputMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum OutputProtocolConfig {
+    #[default]
     Auto,
     Rtmp {
         #[serde(default)]
         mode: RtmpOutputMode,
     },
-}
-
-impl Default for OutputProtocolConfig {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl OutputProtocolConfig {

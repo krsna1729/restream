@@ -807,7 +807,7 @@ fn planned_candidate_stage_kinds(pipeline_id: &str, change: &ProposedChange) -> 
             .output_id
             .clone()
             .unwrap_or_else(|| "agent-preview-output".to_string()),
-        config,
+        config.clone(),
         change.url.clone().unwrap_or_default(),
     );
     let policy = BackendPolicy::default();
