@@ -577,4 +577,31 @@ mod tests {
         assert!(stats.tcp_skmem_rmem_max.unwrap_or(0) > 0);
         assert!(stats.tcp_skmem_wmem_max.unwrap_or(0) > 0);
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn field_available_boundary_is_inclusive() {
+        // A field is "available" only when the kernel returned at least
+        // offset + size_of::<T> bytes; one byte short must be rejected.
+        assert!(field_available::<u32>(8, 4));
+        assert!(!field_available::<u32>(7, 4));
+        assert!(field_available::<u32>(100, 4));
+        assert!(!field_available::<u32>(0, 0));
+        assert!(field_available::<u32>(4, 0));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn zero_returned_len_yields_no_fields() {
+        // An older/odd kernel that reports back a shorter-than-expected
+        // TCP_INFO (or a syscall that nominally succeeds but writes
+        // nothing) must not be misread as zeroed real data.
+        let info = LinuxTcpInfo {
+            tcpi_rtt: 12_000,
+            tcpi_bytes_received: 1_234_567,
+            ..LinuxTcpInfo::default()
+        };
+        let stats = stats_from_tcp_info(&info, 0);
+        assert_eq!(stats, TcpReceiverStats::default());
+    }
 }
