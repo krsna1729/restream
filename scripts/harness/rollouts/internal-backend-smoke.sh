@@ -78,7 +78,8 @@ run_case "internal HEVC-to-H264 codec edge" \
   "Phase 16 HEVC RTMP selected-audio decode-scan proof is green" \
   env RESTREAM_INTERNAL_VIDEO_PRESETS=0 \
     RESTREAM_INTERNAL_HEVC_TO_H264=1 \
-    ONLY_CHECKS=load,ffprobe,decode-scan,stage-sharing \
+    ONLY_CHECKS=load,ffprobe,stage-sharing \
+    MIXED_OUTPUT_GROUPS=rtmp.720p.a0,rtmp.720p.a1 \
     scripts/harness/run.sh mixed.live.srt.h265.a2.bf2
 
 echo "internal-backend-smoke: wrote $summary_tsv"

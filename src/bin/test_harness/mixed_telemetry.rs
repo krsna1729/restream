@@ -247,6 +247,7 @@ pub(crate) async fn verify_mixed_graph_stage_sharing(
     cfg: &str,
     pipeline_id: &str,
     case: MixedInputCase,
+    output_cases: &[MixedOutputCase],
     resume: &mut MixedResume,
 ) -> Result<(), String> {
     if !env.check_selected("stage-sharing") {
@@ -257,7 +258,7 @@ pub(crate) async fn verify_mixed_graph_stage_sharing(
         return Ok(());
     }
     let started = Instant::now();
-    let expected = expected_mixed_stage_count(case);
+    let expected = expected_mixed_stage_count_for_outputs(case, output_cases);
     let graph_path = format!("/api/v1/pipelines/{pipeline_id}/graph");
     // A stage-sharing-only run creates outputs but does not necessarily attach
     // every protocol reader. Audio-route stages are cheap and may be lazy until
@@ -300,7 +301,7 @@ pub(crate) async fn verify_mixed_graph_stage_sharing(
             "audioUpperBound": expected.audio,
             "exactCounts": ["video", "codecEdge"],
             "nPerGroup": env.n_per_group,
-            "outputMatrix": mixed_output_matrix_json(mixed_output_cases_for_input(case)),
+            "outputMatrix": mixed_output_matrix_json(output_cases),
             "graph": graph,
         })),
     )?;

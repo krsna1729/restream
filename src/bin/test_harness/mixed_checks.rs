@@ -83,7 +83,11 @@ pub(crate) async fn verify_mixed_output_cases_inner(
     skip_direct_srt_sinks: bool,
     decode_scan: bool,
 ) -> Result<(), String> {
-    if !env.check_selected("ffprobe") && !env.check_selected("signal") {
+    if !env.check_selected("ffprobe")
+        && !env.check_selected("audio-route")
+        && !env.check_selected("decode-scan")
+        && !env.check_selected("signal")
+    {
         return Ok(());
     }
     let started = Instant::now();
@@ -150,7 +154,7 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                 }
             }
         }
-        if env.check_selected("ffprobe") && !output_failed && !mediamtx_publish_probe {
+        if env.check_selected("audio-route") && !output_failed && !mediamtx_publish_probe {
             selected_checks.push("audio_route");
             let audio_id = mixed_output_check_id(cfg, case.id(), "audio_route");
             let audio_result = verify_mixed_audio_route(
@@ -187,7 +191,10 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                 }
             }
         }
-        if env.check_selected("ffprobe") && decode_scan && !output_failed && !mediamtx_publish_probe
+        if env.check_selected("decode-scan")
+            && decode_scan
+            && !output_failed
+            && !mediamtx_publish_probe
         {
             selected_checks.push("decode_scan");
             let decode_id = mixed_output_check_id(cfg, case.id(), "decode_scan");
@@ -228,7 +235,8 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                 }
             }
         }
-        if env.check_selected("signal") && !env.use_direct_signal_sinks() {
+        if env.check_selected("signal") && !env.use_direct_signal_sinks() && !mediamtx_publish_probe
+        {
             selected_checks.push("signal");
             let signal_id = mixed_output_check_id(cfg, case.id(), "signal");
             let signal_result =

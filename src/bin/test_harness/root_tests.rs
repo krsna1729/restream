@@ -1653,6 +1653,27 @@ fn sweep_output_kind_centralizes_urls_and_multi_audio_encoding() {
 }
 
 #[test]
+fn internal_backend_smoke_filters_hevc_codec_edge_output_groups() {
+    let source = include_str!("../../../scripts/harness/rollouts/internal-backend-smoke.sh");
+
+    assert!(source.contains("RESTREAM_INTERNAL_HEVC_TO_H264=1"));
+    assert!(source.contains("ONLY_CHECKS=load,ffprobe,stage-sharing"));
+    assert!(source.contains("MIXED_OUTPUT_GROUPS=rtmp.720p.a0,rtmp.720p.a1"));
+}
+
+#[test]
+fn mixed_signal_skips_rtmp_hevc_publish_probe_rows() {
+    let source = include_str!("mixed_checks.rs");
+
+    assert!(source.contains(
+        "let mediamtx_publish_probe = matches!(case.protocol(), MixedOutputProtocol::Rtmp)"
+    ));
+    assert!(source.contains("env.check_selected(\"audio-route\")"));
+    assert!(source.contains("env.check_selected(\"decode-scan\")"));
+    assert!(source.contains("&& !mediamtx_publish_probe"));
+}
+
+#[test]
 fn backend_policy_matrix_is_separate_from_symmetric_mixed_matrix() {
     let matrix_spec = mode_spec("mixed.matrix").expect("mixed.matrix must be listed");
     let policy_spec =

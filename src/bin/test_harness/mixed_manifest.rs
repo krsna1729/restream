@@ -3,9 +3,11 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-#[cfg(test)]
 use restream::domain::output_spec::OutputConfig;
 use restream::domain::output_spec::RtmpOutputMode;
+use restream::domain::stage::StageKind;
+use restream::planner::backend_policy::BackendPolicy;
+use restream::planner::graph_plan::{PlannedOutput, plan_pipeline_graph};
 use restream::test_fixtures::AvMarkerBframeMode;
 use serde::Deserialize;
 
@@ -901,32 +903,53 @@ pub(crate) struct MixedStageCount {
 }
 
 pub(crate) fn expected_mixed_stage_count(case: MixedInputCase) -> MixedStageCount {
-    match (case.codec(), case.is_multi_track()) {
-        // H.265 multi deliberately has more audio routes than H.264 multi:
-        // SRT selected-track outputs preserve HEVC while RTMP selected-track
-        // outputs select audio after either the shared H.264 compatibility edge
-        // or the Enhanced RTMP source edge.
-        (MixedVideoCodec::H265, true) => MixedStageCount {
-            video: 2,
-            audio: 10,
-            codec_edge: 2,
-        },
-        (MixedVideoCodec::H265, false) => MixedStageCount {
-            video: 2,
-            audio: 0,
-            codec_edge: 2,
-        },
-        (_, true) => MixedStageCount {
-            video: 2,
-            audio: 6,
-            codec_edge: 0,
-        },
-        (_, false) => MixedStageCount {
-            video: 2,
-            audio: 0,
-            codec_edge: 0,
-        },
+    expected_mixed_stage_count_for_outputs(case, mixed_output_cases_for_input(case))
+}
+
+pub(crate) fn expected_mixed_stage_count_for_outputs(
+    case: MixedInputCase,
+    output_cases: &[MixedOutputCase],
+) -> MixedStageCount {
+    let outputs = output_cases
+        .iter()
+        .map(|output_case| {
+            let url = match output_case.protocol() {
+                MixedOutputProtocol::Rtmp => "rtmp://example/live/out",
+                MixedOutputProtocol::Srt => "srt://example:9000?streamid=publish:out",
+            };
+            PlannedOutput::new(
+                output_case.id().to_string(),
+                output_case.output_config(),
+                url,
+            )
+        })
+        .collect::<Vec<_>>();
+    let plan = plan_pipeline_graph(
+        "pipe",
+        Some(case.expected_video_codec()),
+        &outputs,
+        false,
+        &BackendPolicy::default(),
+    );
+
+    let mut counts = MixedStageCount {
+        video: 0,
+        audio: 0,
+        codec_edge: 0,
+    };
+    for stage in plan.stages {
+        match stage.kind {
+            StageKind::VideoPreset { .. } => counts.video += 1,
+            StageKind::AudioRoute { .. } => counts.audio += 1,
+            StageKind::CodecEdge { .. } => counts.codec_edge += 1,
+            StageKind::Source
+            | StageKind::Hls
+            | StageKind::HlsSegmenter { .. }
+            | StageKind::Recording
+            | StageKind::Preview { .. } => {}
+        }
     }
+    counts
 }
 
 /// Output transport protocol axis for mixed-matrix output rows.
@@ -979,7 +1002,6 @@ impl MixedOutputCase {
         matches!(self.protocol, MixedOutputProtocol::Rtmp).then(|| self.rtmp_mode.as_str())
     }
 
-    #[cfg(test)]
     pub(crate) fn output_config(&self) -> OutputConfig {
         let mut config = super::output_config_from_harness_label(&self.encoding);
         if matches!(self.protocol, MixedOutputProtocol::Rtmp) {
@@ -1163,6 +1185,29 @@ mod tests {
                 case.scenario_id()
             );
         }
+    }
+
+    #[test]
+    fn mixed_selected_output_stage_count_follows_selected_rows() {
+        let case = mixed_input_cases()
+            .iter()
+            .copied()
+            .find(|case| case.scenario_id() == "mixed.live.srt.h265.a2.bf2")
+            .expect("srt h265 multi-track mixed case");
+        let selected = multi_track_mixed_output_cases()
+            .iter()
+            .filter(|row| matches!(row.id(), "rtmp.720p.a0" | "rtmp.720p.a1"))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            expected_mixed_stage_count_for_outputs(case, &selected),
+            MixedStageCount {
+                video: 1,
+                audio: 2,
+                codec_edge: 1,
+            }
+        );
     }
 
     #[test]
