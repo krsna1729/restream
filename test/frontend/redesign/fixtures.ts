@@ -25,6 +25,9 @@ export interface SeededDashboardOptions {
     pipelineId: string,
     telemetry: Record<string, unknown>,
   ) => unknown;
+  pipelineInputsResponse?: (
+    pipelineId: string,
+  ) => { inputs: Array<Record<string, unknown>>; selectedInputId: string };
   logsResponse?: (logs: Record<string, unknown>[]) => unknown;
   runtimeResponse?: (
     runtime: Record<string, unknown>,
@@ -342,6 +345,7 @@ export async function openSeededDashboard(
     string,
     { enabled: boolean; active: boolean }
   >();
+  const controlledInputs = new Map<string, Array<Record<string, unknown>>>();
   await login(page);
 
   await page.addInitScript((uiVersion: string | null) => {
@@ -357,6 +361,47 @@ export async function openSeededDashboard(
 
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
+    const promoteInputMatch = url.pathname.match(
+      /^\/api\/v1\/pipelines\/([^/]+)\/inputs\/([^/]+)\/promote$/,
+    );
+    if (route.request().method() === "POST" && promoteInputMatch) {
+      const [, encodedPipelineId, encodedInputId] = promoteInputMatch;
+      const pipelineId = decodeURIComponent(encodedPipelineId);
+      const inputId = decodeURIComponent(encodedInputId);
+      const inputs = controlledInputs.get(pipelineId) ?? [];
+      for (const input of inputs) {
+        const selected = input.id === inputId;
+        input.selected = selected;
+        const runtime = input.runtime as Record<string, unknown> | undefined;
+        if (runtime?.connected) {
+          runtime.forwardingState = selected ? "active" : "standby";
+        }
+      }
+      const input = inputs.find((candidate) => candidate.id === inputId);
+      if (!input) {
+        throw new Error(`Unknown seeded pipeline input: ${url.pathname}`);
+      }
+      await fulfillJson(route, { input, connected: true });
+      return;
+    }
+    const pipelineInputsMatch = url.pathname.match(
+      /^\/api\/v1\/pipelines\/([^/]+)\/inputs$/,
+    );
+    if (route.request().method() === "GET" && pipelineInputsMatch) {
+      const pipelineId = decodeURIComponent(pipelineInputsMatch[1]);
+      let inputs = controlledInputs.get(pipelineId);
+      if (!inputs) {
+        const response = options.pipelineInputsResponse?.(pipelineId);
+        inputs = structuredClone(response?.inputs ?? []);
+        controlledInputs.set(pipelineId, inputs);
+      }
+      await fulfillJson(route, {
+        inputs,
+        selectedInputId:
+          inputs.find((input) => input.selected)?.id ?? null,
+      });
+      return;
+    }
     const recordingControlMatch = url.pathname.match(
       /^\/api\/v1\/pipelines\/([^/]+)\/recording\/(start|stop)$/,
     );
