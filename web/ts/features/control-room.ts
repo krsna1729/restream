@@ -5,12 +5,7 @@ import {
   showCopiedNotification,
   showErrorAlert,
 } from "../core/utils.js";
-import {
-  getPipelineInputs,
-  getYoutubeMonitoringStatus,
-  promotePipelineInput,
-  updateOutput,
-} from "../core/api.js";
+import { getYoutubeMonitoringStatus, updateOutput } from "../core/api.js";
 import type { YoutubeMonitoringStatus } from "../core/api.js";
 import { state } from "../core/state.js";
 import {
@@ -18,10 +13,7 @@ import {
   getManagedHlsController,
   renderManagedHlsPlayer,
 } from "./hls-player.js";
-import {
-  buildInputPreviewUrl,
-  buildPipelineInputPreviewUrl,
-} from "./input-preview.js";
+import { buildInputPreviewUrl } from "./input-preview.js";
 import { upsertDashboardOutputConfig } from "./dashboard.js";
 import type { OutputView, PipelineInput, PipelineView } from "../types.js";
 import { normalizeOutputConfig } from "../core/output-config.js";
@@ -41,9 +33,11 @@ import type {
   YouTubePlayerApi,
 } from "./control-room-types.js";
 import {
-  pipelineInputStatusLabel,
-  pipelineInputSubtitle,
-} from "./pipeline-inputs-view-model.js";
+  buildControlRoomInputCard,
+  controlRoomInputs,
+  isControlRoomInputPromotionPending,
+  promoteControlRoomInput,
+} from "./control-room-inputs.js";
 
 declare global {
   interface Window {
@@ -91,12 +85,6 @@ const controlRoomMediaControllers = new WeakMap<
   ControlRoomMediaController
 >();
 const controlRoomLoadedEmbedCards = new Set<string>();
-const controlRoomInputPromotionPending = new Set<string>();
-const controlRoomInputCache = new Map<
-  string,
-  { expiresAt: number; inputs: PipelineInput[] }
->();
-const controlRoomInputRequests = new Set<string>();
 let pendingMonitoringInputFocusOutputId: string | null = null;
 let youtubeIframeApiPromise: Promise<YouTubeApiNamespace> | null = null;
 let controlRoomPlaybackIntent: "play" | "pause" = "play";
@@ -108,7 +96,6 @@ const controlRoomNameCollator = new Intl.Collator(undefined, {
   sensitivity: "base",
 });
 const YOUTUBE_MONITORING_STATUS_TTL_MS = 60_000;
-const CONTROL_ROOM_INPUT_STATUS_TTL_MS = 2_000;
 
 function controlRoomV2Active(): boolean {
   const toggle = document.getElementById("dashboard-ui-v2-toggle");
@@ -410,33 +397,6 @@ function buildOutputCard(
   };
 }
 
-function buildPipelineInputCard(
-  input: PipelineInput,
-): ControlRoomCardDescriptor {
-  const previewUrl = buildPipelineInputPreviewUrl(input.id);
-  return {
-    id: `input:${input.id}`,
-    title: input.label,
-    subtitle: pipelineInputSubtitle(input),
-    mediaUrl: input.enabled && input.runtime.connected ? previewUrl : null,
-    loadOnDemand: true,
-    emptyMessage: input.enabled
-      ? input.runtime.connected
-        ? "Waiting for preview segments."
-        : "Input is offline."
-      : "Input is disabled.",
-    openUrl: previewUrl,
-    copyUrl: previewUrl,
-    editable: false,
-    outputId: null,
-    pipelineId: input.pipelineId,
-    monitoringUrl: previewUrl,
-    statusLabel: pipelineInputStatusLabel(input),
-    promoteInputId:
-      input.enabled && !input.selected ? input.id : null,
-  };
-}
-
 function buildEmptyCard(message: string): ControlRoomCardDescriptor {
   return {
     id: `empty:${message}`,
@@ -506,7 +466,7 @@ function buildCardDescriptors(
   }
 
   const descriptors: ControlRoomCardDescriptor[] = pipelineInputs
-    ? pipelineInputs.map(buildPipelineInputCard)
+    ? pipelineInputs.map(buildControlRoomInputCard)
     : [buildLocalCard(selectedPipeline)];
   const allMonitoringOutputs = listMonitoringOutputsForPipeline(
     selectedPipeline.id,
@@ -531,29 +491,6 @@ function buildCardDescriptors(
 
   descriptors.push(...pageOutputs.map(buildOutputCard));
   return descriptors;
-}
-
-function refreshControlRoomInputs(pipelineId: string): void {
-  const cached = controlRoomInputCache.get(pipelineId);
-  if (
-    controlRoomInputRequests.has(pipelineId) ||
-    (cached && cached.expiresAt > Date.now())
-  ) {
-    return;
-  }
-  controlRoomInputRequests.add(pipelineId);
-  void getPipelineInputs(pipelineId)
-    .then((response) => {
-      if (!response) return;
-      controlRoomInputCache.set(pipelineId, {
-        expiresAt: Date.now() + CONTROL_ROOM_INPUT_STATUS_TTL_MS,
-        inputs: response.inputs,
-      });
-    })
-    .finally(() => {
-      controlRoomInputRequests.delete(pipelineId);
-      if (controlRoomState.pipelineId === pipelineId) renderControlRoom();
-    });
 }
 
 function ensureShell(container: HTMLElement): void {
@@ -712,19 +649,8 @@ function ensureShell(container: HTMLElement): void {
     if (action === "control-room-promote-input") {
       const pipelineId = button.dataset.pipelineId || "";
       const inputId = button.dataset.inputId || "";
-      if (!pipelineId || !inputId || controlRoomInputPromotionPending.has(inputId)) {
-        return;
-      }
-      controlRoomInputPromotionPending.add(inputId);
-      renderControlRoom();
-      try {
-        const response = await promotePipelineInput(pipelineId, inputId);
-        if (response) controlRoomInputCache.delete(pipelineId);
-      } finally {
-        controlRoomInputPromotionPending.delete(inputId);
-        refreshControlRoomInputs(pipelineId);
-        renderControlRoom();
-      }
+      if (!pipelineId || !inputId) return;
+      await promoteControlRoomInput(pipelineId, inputId, renderControlRoom);
       return;
     }
     if (action === "control-room-toggle-card-actions") {
@@ -1673,7 +1599,7 @@ function syncCard(
       : "";
     const promotionPending =
       !!descriptor.promoteInputId &&
-      controlRoomInputPromotionPending.has(descriptor.promoteInputId);
+      isControlRoomInputPromotionPending(descriptor.promoteInputId);
     const promoteButton = descriptor.promoteInputId
       ? `
                 <button
@@ -1931,9 +1857,8 @@ function renderControlRoom(): void {
   const pipelines = listPipelines();
   const selectedPipeline =
     pipelines.find((pipe) => pipe.id === controlRoomState.pipelineId) || null;
-  if (selectedPipeline) refreshControlRoomInputs(selectedPipeline.id);
   const pipelineInputs = selectedPipeline
-    ? controlRoomInputCache.get(selectedPipeline.id)?.inputs ?? null
+    ? controlRoomInputs(selectedPipeline.id, renderControlRoom)
     : null;
 
   renderPipelineSelect(container, pipelines);

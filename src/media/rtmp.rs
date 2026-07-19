@@ -44,6 +44,7 @@ use bytes::Bytes;
 
 mod egress_transport;
 mod flv;
+mod ingest_packets;
 mod timestamps;
 
 #[cfg(test)]
@@ -55,6 +56,7 @@ use flv::{
     FlvVideoPacketKind, classify_flv_video_packet, flv_avcc_config_annexb_parameter_sets,
     flv_video_composition_time_ms, parse_flv_audio_meta, parse_flv_video_meta,
 };
+use ingest_packets::push_promotion_headers;
 use timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
 
 const RTMP_EGRESS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -67,35 +69,6 @@ struct RtmpIngestHandle {
     ingest_metrics: Arc<StageMetrics>,
     last_progress_ms: Arc<AtomicU64>,
     timestamp_mapper: InputTimestampMapper,
-}
-
-fn push_rtmp_promotion_headers(
-    ring: &RingBuffer,
-    (video, audio): (Option<Bytes>, Option<Bytes>),
-    timestamp: i64,
-) {
-    if let Some(payload) = video {
-        ring.push(MediaPacket {
-            media_type: MediaType::Video,
-            track_index: 0,
-            pts: timestamp,
-            dts: timestamp,
-            is_keyframe: false,
-            format: PayloadFormat::Flv,
-            payload,
-        });
-    }
-    if let Some(payload) = audio {
-        ring.push(MediaPacket {
-            media_type: MediaType::Audio,
-            track_index: 0,
-            pts: timestamp,
-            dts: timestamp,
-            is_keyframe: false,
-            format: PayloadFormat::Flv,
-            payload,
-        });
-    }
 }
 
 /// RTMP Ingest Server
@@ -822,7 +795,7 @@ async fn handle_session_results(
                                     &active.registration.last_forwarded_dts,
                                 );
                                 if lease.activated() {
-                                    push_rtmp_promotion_headers(
+                                    push_promotion_headers(
                                         &active.ring,
                                         promotion_headers,
                                         packet.dts.saturating_sub(1),

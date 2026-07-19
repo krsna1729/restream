@@ -7,6 +7,7 @@
 pub mod avio;
 pub mod codec;
 pub mod engine;
+mod engine_egress;
 pub mod engine_hls;
 pub mod engine_registries;
 mod engine_snapshots;

@@ -58,7 +58,7 @@ use crate::domain::srt_ingest::ResolvedSrtIngestConfig;
 use crate::domain::state::EgressPhase;
 use crate::media::engine::{EgressRegistration, MediaEngine, PublisherQuality};
 use crate::media::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessMode};
-use crate::media::input_gate::{InputPacketBoundary, InputTimestampMapper};
+use crate::media::input_gate::InputTimestampMapper;
 use crate::media::ring_buffer::{MediaPacket, MediaType, Reader, RingBuffer};
 use crate::media::security::RateLimitScope;
 use crate::media::startup_policy;
@@ -74,6 +74,8 @@ use crate::secret_display::redact_secret;
 #[path = "srt_policy.rs"]
 mod srt_policy;
 pub use srt_policy::{SrtIngestPolicyEntry, SrtIngestPolicyStore};
+#[path = "srt/ingest_packets.rs"]
+mod ingest_packets;
 
 // Raw SRT Types & FFI Bindings
 pub type SRTSOCKET = c_int;
@@ -1654,67 +1656,13 @@ impl SrtServer {
             // Feed into demuxer and push completed packets to ring buffer
             demuxer.feed(&buf[..n as usize]);
             if demuxer.drain_into(&mut packets) > 0 {
-                if let Some(preview_ring) = registration.preview_ring.load_full() {
-                    for packet in &packets {
-                        if packet.media_type == crate::media::ring_buffer::MediaType::Video
-                            && let Some(parameter_sets) =
-                                crate::media::codec::annexb_parameter_sets(&packet.payload)
-                        {
-                            preview_ring.set_video_parameter_sets(parameter_sets);
-                        }
-                    }
-                    preview_ring.push_batch(packets.iter().cloned());
-                }
-                let first_keyframe = packets.iter().position(|packet| {
-                    packet.media_type == crate::media::ring_buffer::MediaType::Video
-                        && packet.is_keyframe
-                });
-                let boundary = if first_keyframe.is_some() {
-                    InputPacketBoundary::VideoKeyframe
-                } else {
-                    InputPacketBoundary::Other
-                };
-                if let Some(lease) = registration.gate.try_enter(boundary) {
-                    if lease.activated()
-                        && let Some(first_keyframe) = first_keyframe
-                    {
-                        packets.drain(..first_keyframe);
-                    }
-                    for packet in &mut packets {
-                        timestamp_mapper.map_packet(
-                            packet,
-                            lease.activated(),
-                            &registration.last_forwarded_dts,
-                        );
-                    }
-                    for pkt in &packets {
-                        if pkt.media_type == crate::media::ring_buffer::MediaType::Video
-                            && let Some(parameter_sets) =
-                                crate::media::codec::annexb_parameter_sets(&pkt.payload)
-                        {
-                            ring_buffer.set_video_parameter_sets(parameter_sets);
-                        }
-                        if pkt.media_type == crate::media::ring_buffer::MediaType::Video
-                            && pkt.is_keyframe
-                            && let Some(ref kf_times) = cached_keyframe_times
-                        {
-                            let mut times = kf_times.lock().unwrap_or_else(|e| e.into_inner());
-                            times.push(pkt.pts);
-                            if times.len() > 30 {
-                                times.remove(0);
-                            }
-                        }
-                    }
-                    if let Some(last) = packets.iter().max_by_key(|packet| packet.dts) {
-                        InputTimestampMapper::record_forwarded(
-                            last,
-                            &registration.last_forwarded_dts,
-                        );
-                    }
-                    ring_buffer.push_drained_batch_capped(&mut packets);
-                } else {
-                    packets.clear();
-                }
+                ingest_packets::forward_ingest_packets(
+                    &mut packets,
+                    &ring_buffer,
+                    &registration,
+                    &mut timestamp_mapper,
+                    cached_keyframe_times.as_ref(),
+                );
             }
 
             // Send probe metadata once ready
@@ -1807,52 +1755,13 @@ impl SrtServer {
         // Flush any remaining PES data
         demuxer.flush();
         if demuxer.drain_into(&mut packets) > 0 {
-            if let Some(preview_ring) = registration.preview_ring.load_full() {
-                for packet in &packets {
-                    if packet.media_type == crate::media::ring_buffer::MediaType::Video
-                        && let Some(parameter_sets) =
-                            crate::media::codec::annexb_parameter_sets(&packet.payload)
-                    {
-                        preview_ring.set_video_parameter_sets(parameter_sets);
-                    }
-                }
-                preview_ring.push_batch(packets.iter().cloned());
-            }
-            let first_keyframe = packets.iter().position(|packet| {
-                packet.media_type == crate::media::ring_buffer::MediaType::Video
-                    && packet.is_keyframe
-            });
-            let boundary = if first_keyframe.is_some() {
-                InputPacketBoundary::VideoKeyframe
-            } else {
-                InputPacketBoundary::Other
-            };
-            if let Some(lease) = registration.gate.try_enter(boundary) {
-                if lease.activated()
-                    && let Some(first_keyframe) = first_keyframe
-                {
-                    packets.drain(..first_keyframe);
-                }
-                for packet in &mut packets {
-                    timestamp_mapper.map_packet(
-                        packet,
-                        lease.activated(),
-                        &registration.last_forwarded_dts,
-                    );
-                }
-                for pkt in &packets {
-                    if pkt.media_type == crate::media::ring_buffer::MediaType::Video
-                        && let Some(parameter_sets) =
-                            crate::media::codec::annexb_parameter_sets(&pkt.payload)
-                    {
-                        ring_buffer.set_video_parameter_sets(parameter_sets);
-                    }
-                }
-                if let Some(last) = packets.iter().max_by_key(|packet| packet.dts) {
-                    InputTimestampMapper::record_forwarded(last, &registration.last_forwarded_dts);
-                }
-                ring_buffer.push_drained_batch_capped(&mut packets);
-            }
+            ingest_packets::forward_ingest_packets(
+                &mut packets,
+                &ring_buffer,
+                &registration,
+                &mut timestamp_mapper,
+                None,
+            );
         }
 
         info!("Ingest stream finished for pipeline: {}", pipeline.id);
