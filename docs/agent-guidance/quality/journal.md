@@ -94,6 +94,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 HUNT CODEC-RAW-PARAMETER-SET-DUPLICATION FIXED [codex]](#2026-07-19-hunt-codec-raw-parameter-set-duplication-fixed-codex)
 - [2026-07-19 HUNT CODEC-FLV-SEQUENCE-HEADER-CACHE-WIPE FIXED [codex]](#2026-07-19-hunt-codec-flv-sequence-header-cache-wipe-fixed-codex)
 - [2026-07-19 HUNT RING-BUFFER-DTS-ENFORCER-OVERFLOW FIXED [codex]](#2026-07-19-hunt-ring-buffer-dts-enforcer-overflow-fixed-codex)
+- [2026-07-19 HUNT SRT-MUXER-SHARD-RETIRING-REUSE FIXED [codex]](#2026-07-19-hunt-srt-muxer-shard-retiring-reuse-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3315,3 +3316,64 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   `profiles.rs`, `snapshots.rs`, `srt.rs`, `stage_registry_access.rs`,
   `startup_policy.rs`, `tcp_stats.rs`, `timing.rs`, `ts_chunk_ring.rs`).
 - Notes: sixth genuine bug found this hunt run.
+
+## 2026-07-19 HUNT SRT-MUXER-SHARD-RETIRING-REUSE FIXED [codex]
+
+- What: adversarial hunt on `src/media/engine_registries.rs`, focused on
+  `SrtMuxerShardPool` — the shard-assignment pool backing SRT egress
+  muxer sharing (`assign_srt_egress_muxer_stage` /
+  `release_srt_egress_muxer_stage` in `stage_registry_access.rs`).
+  Traced a suspected TOCTOU between shard assignment and the async
+  teardown a shard goes through when its last output releases, and
+  confirmed it by direct source reading of `SrtMuxerShardPool::assign`.
+- Finding: `assign`'s overflow-fallback branch (only reachable once the
+  pool is already at `max_shards` capacity) first tries
+  `.filter(!retiring).min_by_key(...)` over shard occupancy, but when
+  that yields `None` — trivially true whenever every existing shard
+  happens to be retiring, which is the common case under the default
+  single-shard config (`max_shards: 1`) — an `.or_else(...)` fell back
+  to a global min-occupancy search over *all* shards, retiring ones
+  included, and could return a retiring shard's index. A brand-new SRT
+  egress output could then be assigned to the exact shard whose backing
+  `TsChunkRing`/muxer stage was concurrently being cancelled by a
+  racing `release_srt_egress_muxer_stage` call — the output gets wired
+  to a muxer that is mid-teardown or already gone. The only existing
+  test touching the retiring-shard invariant
+  (`retiring_empty_srt_muxer_shard_is_not_reused_until_cleanup_finishes`)
+  used `max_shards: 8`, which never reaches the buggy overflow branch,
+  so the path was untested.
+- Fix: removed the `.or_else` fallback that searched retiring shards.
+  The overflow branch now only ever picks a non-retiring shard; if none
+  exists, it grows a new shard past `max_shards` instead of reusing a
+  shard mid-teardown — a bounded, temporary overflow is strictly safer
+  than racing a live async cancellation.
+- Added one permanent regression test,
+  `assign_overflow_does_not_reuse_a_still_retiring_shard`, in
+  `src/media/engine_registries.rs` immediately after
+  `retiring_empty_srt_muxer_shard_is_not_reused_until_cleanup_finishes`.
+  With `max_shards: 1, max_outputs_per_shard: 1`: assigns `out-1`
+  (shard 0), releases it (shard 0 becomes empty and retiring), then
+  asserts a subsequent `assign("out-2", ...)` does not land on shard 0
+  and that shard 0's occupancy/retiring state is untouched. The test
+  failed pre-fix (`out-2` landed on shard 0) and passes after the fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::engine_registries` — 12/12 pass (new test included).
+  `scripts/build/resource-limit.sh cargo test --lib` — full backend
+  suite, 1463/1463 pass. `cargo fmt --all` + `cargo fmt --all --check`
+  — clean. `scripts/build/resource-limit.sh cargo clippy --lib --tests
+  -- -D warnings` — clean. `scripts/check/source-audit.sh` — passed. No
+  benchmark re-run: this is shard-assignment bookkeeping under a
+  `TokioRwLock`, not a hot packet-loop path — the change touches
+  `Vec`/`HashSet` scans over a handful of shards on egress
+  connect/disconnect, not per-packet code.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression test. The related `get_or_create_stage_metrics` /
+  `get_or_create_non_ring_stage_runtime` possible metrics-registry
+  split in `stage_registry_access.rs` (two independent
+  `Arc<StageMetrics>` for the same `StageKey` depending on call order)
+  was investigated in the same pass but not yet confirmed reachable;
+  still open for a follow-up hunt pass on that file.
+- Notes: seventh genuine bug found this hunt run; found via a
+  background research agent's investigation, independently verified by
+  direct source reading before acting on it.
