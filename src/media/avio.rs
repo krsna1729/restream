@@ -687,6 +687,67 @@ mod tests {
         assert_eq!(queue.read_nonblocking(&mut buf), 0);
     }
 
+    #[test]
+    fn write_sync_after_close_is_noop() {
+        let queue = MemoryQueue::new();
+        queue.close();
+        queue.write_sync(b"should not appear");
+        let mut buf = [0u8; 32];
+        assert_eq!(queue.read_nonblocking(&mut buf), 0);
+    }
+
+    #[tokio::test]
+    async fn cancellable_write_succeeds_immediately_when_capacity_available() {
+        let queue = MemoryQueue::new_with_capacity(64);
+        let cancel = CancellationToken::new();
+        assert!(queue.write_cancellable(b"hello", &cancel).await);
+        let mut buf = [0u8; 5];
+        assert_eq!(queue.read_nonblocking(&mut buf), 5);
+        assert_eq!(&buf, b"hello");
+    }
+
+    #[tokio::test]
+    async fn zero_capacity_queue_blocks_write_forever_until_cancelled() {
+        // buf.len() < capacity is `0 < 0` on an empty zero-capacity queue —
+        // always false, so write()/write_cancellable() can never observe
+        // room and must block until cancelled or closed rather than looping
+        // forever on a false "space available" wakeup.
+        let queue = Arc::new(MemoryQueue::new_with_capacity(0));
+        let cancel = CancellationToken::new();
+        let q = queue.clone();
+        let c = cancel.clone();
+        let handle = tokio::spawn(async move { q.write_cancellable(b"x", &c).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            !handle.is_finished(),
+            "a zero-capacity queue must never accept a normal write"
+        );
+
+        cancel.cancel();
+        assert!(
+            !handle.await.unwrap(),
+            "cancellation must still unblock a permanently-full write"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_batch_can_exceed_capacity_in_a_single_atomic_call() {
+        // write_batch only checks that the buffer currently has *some* room
+        // before writing the whole batch — it does not split a batch across
+        // the capacity boundary. This locks in that intentional atomicity so
+        // a future refactor doesn't silently start truncating or blocking
+        // mid-batch instead.
+        let queue = MemoryQueue::new_with_capacity(4);
+        let written = queue.write_batch([b"12345678".as_slice()]).await;
+        assert_eq!(written, 8);
+        assert_eq!(
+            queue.len(),
+            8,
+            "a single batch write is not capped at capacity"
+        );
+    }
+
     #[tokio::test]
     async fn write_batch_after_close_returns_zero() {
         let queue = MemoryQueue::new();
@@ -707,6 +768,57 @@ mod tests {
         queue.close();
         let mut buf = [0u8; 16];
         assert_eq!(queue.read(&mut buf), 0);
+    }
+
+    /// Builds a `VecDeque` that is deliberately wrapped (occupies both ends of
+    /// its physical allocation) so `as_slices()` returns two non-empty parts.
+    /// `read`/`read_nonblocking` stitch front+back manually; a bug in that
+    /// stitching only shows up once the ring has actually wrapped, which a
+    /// queue built purely through the public API isn't guaranteed to trigger.
+    fn wrapped_ring_of(head: &[u8], tail: &[u8]) -> VecDeque<u8> {
+        let mut ring = VecDeque::with_capacity(head.len() + tail.len());
+        for _ in 0..tail.len() {
+            ring.push_back(0u8);
+        }
+        for _ in 0..tail.len() {
+            ring.pop_front();
+        }
+        ring.extend(head.iter().copied());
+        ring.extend(tail.iter().copied());
+        let (front, back) = ring.as_slices();
+        assert!(
+            !front.is_empty() && !back.is_empty(),
+            "test setup must actually wrap the ring, or the split-slice path goes unexercised"
+        );
+        ring
+    }
+
+    #[test]
+    fn read_stitches_front_and_back_slices_across_a_wrapped_ring() {
+        let queue = MemoryQueue::new_with_capacity(64);
+        {
+            let mut inner = queue.inner.lock().unwrap();
+            inner.buf = wrapped_ring_of(&[0u8; 4], b"abcd");
+        }
+        let mut out = [0u8; 8];
+        let n = queue.read(&mut out);
+        assert_eq!(n, 8);
+        assert_eq!(&out[..4], &[0u8; 4]);
+        assert_eq!(&out[4..], b"abcd");
+    }
+
+    #[test]
+    fn read_nonblocking_stitches_front_and_back_slices_across_a_wrapped_ring() {
+        let queue = MemoryQueue::new_with_capacity(64);
+        {
+            let mut inner = queue.inner.lock().unwrap();
+            inner.buf = wrapped_ring_of(&[0u8; 4], b"wxyz");
+        }
+        let mut out = [0u8; 8];
+        let n = queue.read_nonblocking(&mut out);
+        assert_eq!(n, 8);
+        assert_eq!(&out[..4], &[0u8; 4]);
+        assert_eq!(&out[4..], b"wxyz");
     }
 
     #[test]
