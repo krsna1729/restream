@@ -3368,12 +3368,17 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   connect/disconnect, not per-packet code.
 - Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
 - Follow-ups: none filed — fix is scoped and covered by the new
-  regression test. The related `get_or_create_stage_metrics` /
-  `get_or_create_non_ring_stage_runtime` possible metrics-registry
-  split in `stage_registry_access.rs` (two independent
-  `Arc<StageMetrics>` for the same `StageKey` depending on call order)
-  was investigated in the same pass but not yet confirmed reachable;
-  still open for a follow-up hunt pass on that file.
+  regression test. Also closed out a suspected `get_or_create_stage_metrics`
+  / `get_or_create_non_ring_stage_runtime` metrics-registry split in
+  `stage_registry_access.rs` flagged during the same file review: traced
+  every call site (`transcoder.rs::start_audio_router`,
+  `stage_runtime.rs::ensure_stage`, `hls/fmp4.rs`, `recording/mod.rs`,
+  `hls/mod.rs`) and confirmed no caller invokes both functions for the
+  same `StageKey` — `ensure_stage` reuses the exact `Arc<StageMetrics>`
+  from `get_or_create_stage_metrics` when inserting its `StageRuntime`,
+  and the `get_or_create_non_ring_stage_runtime` callers never call
+  `get_or_create_stage_metrics` first. Not reachable today; no fix
+  filed per the no-speculative-hardening norm.
 - Notes: seventh genuine bug found this hunt run; found via a
   background research agent's investigation, independently verified by
   direct source reading before acting on it.
