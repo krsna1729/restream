@@ -10,6 +10,7 @@ For the performance optimization plan and benchmark results, see
 ## Contents
 
 - [Current shape](#current-shape)
+- [Multi-input selection](#multi-input-selection)
 - [Transcoder stages](#transcoder-stages)
 - [Protocol and codec boundaries](#protocol-and-codec-boundaries)
 - [Resolution presets](#resolution-presets)
@@ -28,8 +29,8 @@ For the performance optimization plan and benchmark results, see
 ```mermaid
 flowchart TD
     subgraph INGESTS["Ingest"]
-        RI["RTMP ingest\nFLV payload"]
-        SI["SRT ingest\nMPEG-TS"]
+        RI["RTMP input sessions\nFLV payload"]
+        SI["SRT input sessions\nMPEG-TS"]
     end
 
     subgraph DEMUX["Ingest demux (inline, async)"]
@@ -37,6 +38,7 @@ flowchart TD
         SD["TsDemuxer\nRaw packets"]
     end
 
+    GATE{"Selected input gate"}
     SR[("source_ring\nSPMC RingBuffer 4096\nMediaPacket · Flv ∣ Raw")]
 
     subgraph PASSTHROUGH["Passthrough — encoding = source"]
@@ -62,8 +64,9 @@ flowchart TD
         OR --> TOUT_S
     end
 
-    RI --> RD --> SR
-    SI --> SD --> SR
+    RI --> RD --> GATE
+    SI --> SD --> GATE
+    GATE -->|"selected only"| SR
 
     SR -->|"Flv · source · RTMP"| PT1
     SR -->|"Flv · source · SRT/HLS"| PT2
@@ -71,6 +74,26 @@ flowchart TD
     SR -->|"Raw · source · SRT/HLS"| PT4
     SR -->|"any format · 720p"| TIN
 ```
+
+## Multi-input selection
+
+A pipeline supports one primary and up to three backup input records. Each
+record has a separate stream key and independent RTMP/SRT session. Unselected
+connected sessions stay warm through socket receive, parsing, demux/probe,
+metadata, transport metrics, and input-scoped HLS preview generation. Their
+program packets are discarded at `InputPacketGate`, before the shared source
+ring and all transforms.
+
+Explicit promotion demotes and drains the old gate, then arms the target gate.
+Non-keyframe packets continue to be discarded until the target publishes a
+video keyframe. `InputTimestampMapper` offsets the promoted session so its first
+forwarded DTS follows the prior writer's last DTS, with PTS/DTS composition
+offset preserved. The gate stores forwarding state and in-flight lease count in
+one atomic word; loom covers the no-overlapping-writers invariant.
+
+This is connected standby, not bonded ingest. Each publisher remains an
+independent source and the operator chooses one. Libsrt socket groups remain the
+only bonded SRT path.
 
 ## Transcoder stages
 

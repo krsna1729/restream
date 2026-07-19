@@ -90,7 +90,9 @@ Query params:
 }
 ```
 
-Each pipeline in this response also includes generated RTMP and SRT ingest URLs.
+Each pipeline in this response includes the selected input's RTMP and SRT
+ingest URLs. Use the pipeline-input endpoint to enumerate every configured
+input and its credential.
 
 ### `PATCH /api/v1/settings`
 
@@ -125,8 +127,9 @@ Invalid values return `400 Bad Request` with a descriptive error.
 
 ### `GET /api/v1/stream-keys`
 
-Returns configured pipeline stream keys and native ingest URLs. The endpoint
-does not enumerate unused or future credentials:
+Returns the selected stream key and native ingest URLs for each configured
+pipeline. Use `GET /api/v1/pipelines/:pipelineId/inputs` when a client needs
+all primary and backup credentials:
 
 ```json
 [
@@ -141,7 +144,9 @@ does not enumerate unused or future credentials:
 ]
 ```
 
-There are no create/update/delete stream-key routes in the Rust router.
+Input credentials are managed through the pipeline-input routes. Stream keys
+remain opaque random values with an `sk_` prefix; they do not encode pipeline,
+input, role, or protocol information.
 
 ### `GET /audio-caps`
 
@@ -155,6 +160,11 @@ Returns the frontend's platform/protocol audio capability matrix.
 | `POST` | `/api/v1/pipelines` | Create a pipeline |
 | `PATCH` | `/api/v1/pipelines/:id` | Replace editable pipeline fields |
 | `DELETE` | `/api/v1/pipelines/:id` | Delete a pipeline |
+| `GET` | `/api/v1/pipelines/:pipelineId/inputs` | List configured inputs and runtime state |
+| `POST` | `/api/v1/pipelines/:pipelineId/inputs` | Add a backup input |
+| `PATCH` | `/api/v1/pipelines/:pipelineId/inputs/:inputId` | Rename or enable/disable an input |
+| `DELETE` | `/api/v1/pipelines/:pipelineId/inputs/:inputId` | Delete an unselected backup input |
+| `POST` | `/api/v1/pipelines/:pipelineId/inputs/:inputId/promote` | Select and promote an input |
 
 Create/update body:
 
@@ -174,8 +184,8 @@ Create/update body:
 ```
 
 `name` is required for both create and update because the current update handler
-uses the same payload type. If `streamKey` is omitted on create, the first unused
-built-in key is selected.
+uses the same payload type. If `streamKey` is omitted on create, an opaque
+random primary-input key is generated.
 
 `inputSource` is persisted for operator metadata only; it does not pull remote
 media or transform the active native ingest path.
@@ -198,6 +208,39 @@ Deletion cancels configured output tasks, the active ingest, and any
 file-ingest FFmpeg subprocesses whose `streamKey` matches the pipeline's
 stream key before removing the pipeline row. Shared transcoder, HLS, and
 recording cleanup still follows their existing task lifecycle.
+
+### Pipeline inputs
+
+A pipeline starts with one primary input and accepts up to four configured
+inputs. Additional inputs are explicit backup rows, each with its own opaque
+stream key and RTMP/SRT URL. Exactly one enabled input is selected. Role records
+how the input was created; promoting a backup changes selection without
+rewriting its role.
+
+Create body:
+
+```json
+{ "label": "Venue encoder B" }
+```
+
+Patch body:
+
+```json
+{ "label": "Venue encoder B", "enabled": true }
+```
+
+List and mutation responses expose each input's `id`, `label`, `streamKey`,
+`role`, `enabled`, `selected`, `ingestUrls`, `previewUrl`, and `runtime`.
+Runtime includes `connected`, `forwardingState`, protocol, uptime, bytes,
+remote address, media metadata, and transport quality. A connected unselected
+input reports `forwardingState: "standby"`; a promoted input may briefly report
+`"awaitingKeyframe"` before becoming `"active"`.
+
+Promotion returns the normalized input plus `connected`. When the target is
+already connected, the current writer is demoted and drained before the target
+begins forwarding at its next video keyframe. Promotion of an idle configured
+input changes selection and returns `connected: false`; its next publisher
+session becomes the selected source.
 
 ## Outputs
 
@@ -985,6 +1028,13 @@ does not include development-only or benchmark dependencies.
 | `GET` | `/hls/:pipelineId/audio/:trackIndex/index.m3u8` | Audio-only media playlist |
 | `GET` | `/hls/:pipelineId/audio/:trackIndex/init.mp4` | Audio init segment |
 | `GET` | `/hls/:pipelineId/audio/:trackIndex/seg<N>.m4s` | Audio media segment |
+| `GET` | `/hls/inputs/:inputId/master.m3u8` | Input-scoped master playlist |
+| `GET` | `/hls/inputs/:inputId/video/index.m3u8` | Input-scoped video playlist |
+| `GET` | `/hls/inputs/:inputId/video/init.mp4` | Input-scoped video init segment |
+| `GET` | `/hls/inputs/:inputId/video/seg<N>.m4s` | Input-scoped video media segment |
+| `GET` | `/hls/inputs/:inputId/audio/:trackIndex/index.m3u8` | Input-scoped audio playlist |
+| `GET` | `/hls/inputs/:inputId/audio/:trackIndex/init.mp4` | Input-scoped audio init segment |
+| `GET` | `/hls/inputs/:inputId/audio/:trackIndex/seg<N>.m4s` | Input-scoped audio media segment |
 
 Responses:
 
@@ -994,7 +1044,9 @@ Responses:
 - `404`: no active store, no completed segments, or evicted segment
 - `400`: invalid segment filename
 
-These routes require the dashboard session cookie.
+These routes require the dashboard session cookie. Input-scoped stores are
+created for connected inputs independently of selection, allowing an operator
+to inspect a warm standby without forwarding it into pipeline outputs.
 
 All HLS routes respond with `Access-Control-Allow-Origin: *` and allow `GET`,
 `OPTIONS`, `Content-Type`, and `Range` so browser-based players on other

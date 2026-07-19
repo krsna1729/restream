@@ -62,6 +62,22 @@
       "workflow": "fault-recovery-transient"
     }
   ],
+  "inputPromotion": [
+    {
+      "testName": "rtmp-connected-standby-promotion",
+      "pipeline": "fault-rtmp-input-promotion",
+      "outputName": "rtmp-input-promotion-sink",
+      "sinkStream": "fault-rtmp-input-promotion-sink",
+      "protocol": "rtmp"
+    },
+    {
+      "testName": "srt-connected-standby-promotion",
+      "pipeline": "fault-srt-input-promotion",
+      "outputName": "srt-input-promotion-sink",
+      "sinkStream": "fault-srt-input-promotion-sink",
+      "protocol": "srt"
+    }
+  ],
   "ingestLifecycle": [
     {
       "testName": "file-ingest-stop",
