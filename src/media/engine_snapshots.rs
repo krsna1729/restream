@@ -11,6 +11,20 @@ use super::engine::{
     ActiveEgress, EGRESS_PROGRESS_STALE_MS, MediaEngine, hls_preview_registry_key,
 };
 
+/// Locks without blocking, still recovering the guarded value from a
+/// poisoned mutex instead of discarding it — diagnostics reads must not
+/// stall behind a held lock, but a poison shouldn't hide the last known
+/// value either.
+fn try_lock_recover_poisoned<T>(
+    mutex: &std::sync::Mutex<T>,
+) -> Option<std::sync::MutexGuard<'_, T>> {
+    match mutex.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
 impl MediaEngine {
     pub(crate) fn egress_effective_status_best_effort(
         egress: &ActiveEgress,
@@ -163,22 +177,14 @@ impl MediaEngine {
                 pipeline_id: egress.pipeline_id.clone(),
                 protocol: egress.protocol.clone(),
                 status: MediaEngine::egress_effective_status_best_effort(egress, true),
-                phase: egress
-                    .phase
-                    .try_lock()
+                phase: try_lock_recover_poisoned(&egress.phase)
                     .map(|phase| phase.to_string())
-                    .unwrap_or_else(|_| "busy".to_string()),
-                target_addr: egress
-                    .target_addr
-                    .try_lock()
-                    .ok()
+                    .unwrap_or_else(|| "busy".to_string()),
+                target_addr: try_lock_recover_poisoned(&egress.target_addr)
                     .and_then(|target_addr| target_addr.clone()),
                 bytes_sent: egress.bytes_sent.load(Ordering::Relaxed),
                 last_progress_ms: egress.last_progress_ms.load(Ordering::Relaxed),
-                last_error: egress
-                    .last_error
-                    .try_lock()
-                    .ok()
+                last_error: try_lock_recover_poisoned(&egress.last_error)
                     .and_then(|last_error| last_error.clone()),
             })
             .collect()
