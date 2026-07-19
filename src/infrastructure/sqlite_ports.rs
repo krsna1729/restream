@@ -407,6 +407,19 @@ impl IngestWriter for SqliteIngestLookup {
         })
     }
 
+    fn update_ingest_filename<'a>(
+        &'a self,
+        id: &'a str,
+        filename: &'a str,
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move {
+            crate::db::update_ingest_filename(&self.pool, id, filename)
+                .await
+                .map(|record| record.map(ingest_model))
+                .map_err(|err| IngestWriteError::new(err.to_string()))
+        })
+    }
+
     fn delete_ingest<'a>(&'a self, id: &'a str) -> IngestDeleteFuture<'a> {
         Box::pin(async move {
             crate::db::delete_ingest(&self.pool, id)

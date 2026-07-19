@@ -109,6 +109,14 @@ impl IngestWriter for NoopIngestWriter {
         Box::pin(async move { Err(IngestWriteError::new("unexpected update")) })
     }
 
+    fn update_ingest_filename<'a>(
+        &'a self,
+        _id: &'a str,
+        _filename: &'a str,
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move { Err(IngestWriteError::new("unexpected update")) })
+    }
+
     fn delete_ingest<'a>(&'a self, _id: &'a str) -> IngestDeleteFuture<'a> {
         Box::pin(async move { Ok(false) })
     }

@@ -176,6 +176,27 @@ impl IngestWriter for RenameRollbackIngestStore {
         })
     }
 
+    fn update_ingest_filename<'a>(
+        &'a self,
+        id: &'a str,
+        filename: &'a str,
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move {
+            if id == self.fail_id && filename == self.fail_filename {
+                return Err(IngestWriteError::new("injected update failure"));
+            }
+            let mut ingests = self
+                .ingests
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let Some(ingest) = ingests.iter_mut().find(|ingest| ingest.id == id) else {
+                return Ok(None);
+            };
+            ingest.filename = filename.to_string();
+            Ok(Some(ingest.clone()))
+        })
+    }
+
     fn delete_ingest<'a>(&'a self, _id: &'a str) -> IngestDeleteFuture<'a> {
         Box::pin(async move { Ok(false) })
     }
@@ -458,6 +479,195 @@ async fn rename_media_file_rolls_back_prior_ingest_updates_on_later_failure() {
     assert_eq!(restored[1].start_time, second.start_time);
     assert_eq!(restored[1].live_optimized, second.live_optimized);
     assert_eq!(restored[1].target_gop_seconds, second.target_gop_seconds);
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+struct ConcurrentWriteIngestStore {
+    ingests: Mutex<Vec<Ingest>>,
+    concurrent_stream_key: String,
+}
+
+impl ConcurrentWriteIngestStore {
+    fn new(ingest: Ingest, concurrent_stream_key: &str) -> Self {
+        Self {
+            ingests: Mutex::new(vec![ingest]),
+            concurrent_stream_key: concurrent_stream_key.to_string(),
+        }
+    }
+
+    fn snapshot(&self) -> Vec<Ingest> {
+        self.ingests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+}
+
+impl IngestLookup for ConcurrentWriteIngestStore {
+    fn get_ingest<'a>(&'a self, id: &'a str) -> IngestLookupFuture<'a> {
+        Box::pin(async move { Ok(self.snapshot().into_iter().find(|ingest| ingest.id == id)) })
+    }
+
+    fn get_ingest_by_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestLookupFuture<'a> {
+        Box::pin(async move {
+            Ok(self
+                .snapshot()
+                .into_iter()
+                .find(|ingest| ingest.stream_key == stream_key))
+        })
+    }
+
+    fn list_ingests<'a>(&'a self) -> IngestCatalogFuture<'a> {
+        Box::pin(async move { Ok(self.snapshot()) })
+    }
+
+    fn list_ingests_for_filename<'a>(&'a self, filename: &'a str) -> IngestCatalogFuture<'a> {
+        Box::pin(async move {
+            // Snapshot what a caller of this lookup sees, then simulate a
+            // concurrent request rotating the stream key in the window
+            // between this snapshot and whatever the caller does with it.
+            let snapshot = self
+                .snapshot()
+                .into_iter()
+                .filter(|ingest| ingest.filename == filename)
+                .collect::<Vec<_>>();
+            let mut ingests = self
+                .ingests
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            for ingest in ingests.iter_mut() {
+                ingest.stream_key = self.concurrent_stream_key.clone();
+            }
+            drop(ingests);
+            Ok(snapshot)
+        })
+    }
+
+    fn list_ingests_for_stream_key<'a>(&'a self, stream_key: &'a str) -> IngestCatalogFuture<'a> {
+        Box::pin(async move {
+            Ok(self
+                .snapshot()
+                .into_iter()
+                .filter(|ingest| ingest.stream_key == stream_key)
+                .collect())
+        })
+    }
+}
+
+impl IngestWriter for ConcurrentWriteIngestStore {
+    fn create_ingest<'a>(
+        &'a self,
+        _id: &'a str,
+        _filename: &'a str,
+        _stream_key: &'a str,
+        _loop_flag: bool,
+        _start_time: &'a str,
+        _live_optimized: bool,
+        _target_gop_seconds: u32,
+    ) -> IngestWriteFuture<'a> {
+        Box::pin(async move { Err(IngestWriteError::new("not implemented")) })
+    }
+
+    fn update_ingest<'a>(
+        &'a self,
+        id: &'a str,
+        filename: &'a str,
+        stream_key: &'a str,
+        loop_flag: bool,
+        start_time: &'a str,
+        live_optimized: bool,
+        target_gop_seconds: u32,
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move {
+            let mut ingests = self
+                .ingests
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let Some(ingest) = ingests.iter_mut().find(|ingest| ingest.id == id) else {
+                return Ok(None);
+            };
+            ingest.filename = filename.to_string();
+            ingest.stream_key = stream_key.to_string();
+            ingest.loop_flag = loop_flag;
+            ingest.start_time = start_time.to_string();
+            ingest.live_optimized = live_optimized;
+            ingest.target_gop_seconds = target_gop_seconds;
+            Ok(Some(ingest.clone()))
+        })
+    }
+
+    fn update_ingest_filename<'a>(
+        &'a self,
+        id: &'a str,
+        filename: &'a str,
+    ) -> IngestUpdateFuture<'a> {
+        Box::pin(async move {
+            let mut ingests = self
+                .ingests
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let Some(ingest) = ingests.iter_mut().find(|ingest| ingest.id == id) else {
+                return Ok(None);
+            };
+            ingest.filename = filename.to_string();
+            Ok(Some(ingest.clone()))
+        })
+    }
+
+    fn delete_ingest<'a>(&'a self, _id: &'a str) -> IngestDeleteFuture<'a> {
+        Box::pin(async move { Ok(false) })
+    }
+}
+
+#[tokio::test]
+async fn rename_media_file_does_not_revert_concurrent_ingest_field_changes() {
+    // Regression test: rename_media_file fetches an Ingest snapshot via
+    // list_for_filename, then updates the renamed ingest from that
+    // snapshot. If that update wrote every field back from the stale
+    // snapshot (as it did before this fix, via the shared full-row
+    // update_ingest), a concurrent stream-key rotation landing in the
+    // window between the snapshot and the write would be silently
+    // reverted -- reviving a possibly-leaked stream key.
+    let old_name = "source.ts";
+    let new_name = "renamed.ts";
+    let ingest = Ingest {
+        id: "ing-1".to_string(),
+        filename: old_name.to_string(),
+        stream_key: "sk-original".to_string(),
+        loop_flag: true,
+        start_time: "00:00:01".to_string(),
+        live_optimized: true,
+        target_gop_seconds: 2,
+    };
+    let ingest_store = Arc::new(ConcurrentWriteIngestStore::new(ingest, "sk-rotated"));
+    let pool = crate::db::create_pool("sqlite::memory:").await.unwrap();
+    let service = MediaLibraryService::with_stores(
+        Arc::new(SqliteMetaStore::new(pool.clone())),
+        Arc::new(SqliteMetaStore::new(pool.clone())),
+        Arc::new(SqliteRecordingStore::new(pool.clone())),
+        sqlite_pipeline_service(&pool),
+        IngestService::with_ports(ingest_store.clone(), ingest_store.clone()),
+    );
+    let temp_dir = tempfile_dir("media-rename-concurrent-write");
+    let source = temp_dir.join(old_name);
+    let destination = temp_dir.join(new_name);
+    std::fs::write(&source, b"source").unwrap();
+
+    let updated = service
+        .rename_media_file(
+            old_name,
+            new_name,
+            &std::fs::canonicalize(&source).unwrap(),
+            &destination,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(updated, 1);
+    let after = ingest_store.snapshot();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].filename, new_name);
+    assert_eq!(after[0].stream_key, "sk-rotated");
     let _ = std::fs::remove_dir_all(temp_dir);
 }
 

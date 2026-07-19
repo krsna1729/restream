@@ -560,15 +560,7 @@ impl MediaLibraryService {
         for ingest in &ingests {
             if let Err(error) = self
                 .ingest_service
-                .update_ingest(
-                    &ingest.id,
-                    new_name,
-                    &ingest.stream_key,
-                    ingest.loop_flag,
-                    &ingest.start_time,
-                    ingest.live_optimized,
-                    ingest.target_gop_seconds,
-                )
+                .update_ingest_filename(&ingest.id, new_name)
                 .await
             {
                 rollback_ingest_updates(&self.ingest_service, updated_ingests).await;
@@ -600,15 +592,7 @@ fn recording_fields(recording_meta: Option<&MediaRecordingMetadata>) -> Recordin
 async fn rollback_ingest_updates(ingest_service: &IngestService, updated_ingests: Vec<Ingest>) {
     for ingest in updated_ingests.into_iter().rev() {
         let _ = ingest_service
-            .update_ingest(
-                &ingest.id,
-                &ingest.filename,
-                &ingest.stream_key,
-                ingest.loop_flag,
-                &ingest.start_time,
-                ingest.live_optimized,
-                ingest.target_gop_seconds,
-            )
+            .update_ingest_filename(&ingest.id, &ingest.filename)
             .await;
     }
 }

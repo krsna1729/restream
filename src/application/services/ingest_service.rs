@@ -106,6 +106,19 @@ impl IngestService {
             .ok_or_else(|| Self::ingest_not_found(id))
     }
 
+    /// Renames one persisted ingest's backing filename without disturbing its
+    /// other fields (stream key, loop flag, start time, live-optimization,
+    /// GOP target), so a concurrent change to those fields between a caller's
+    /// snapshot fetch and this call is not silently reverted. Normalizes a
+    /// missing row into the service layer's stable not-found error.
+    pub async fn update_ingest_filename(&self, id: &str, filename: &str) -> ServiceResult<Ingest> {
+        self.writer
+            .update_ingest_filename(id, filename)
+            .await
+            .map_err(|e| ServiceError::internal(format!("update ingest filename: {e}")))?
+            .ok_or_else(|| Self::ingest_not_found(id))
+    }
+
     /// Lists all ingest records that point at one media-library filename.
     pub async fn list_for_filename(&self, filename: &str) -> ServiceResult<Vec<Ingest>> {
         self.lookup
@@ -250,6 +263,21 @@ mod tests {
                 ingest.start_time = start_time.to_string();
                 ingest.live_optimized = live_optimized;
                 ingest.target_gop_seconds = target_gop_seconds;
+                Ok(Some(ingest.clone()))
+            })
+        }
+
+        fn update_ingest_filename<'a>(
+            &'a self,
+            id: &'a str,
+            filename: &'a str,
+        ) -> IngestUpdateFuture<'a> {
+            Box::pin(async move {
+                let mut ingests = self.ingests.lock().unwrap();
+                let Some(ingest) = ingests.iter_mut().find(|ingest| ingest.id == id) else {
+                    return Ok(None);
+                };
+                ingest.filename = filename.to_string();
                 Ok(Some(ingest.clone()))
             })
         }

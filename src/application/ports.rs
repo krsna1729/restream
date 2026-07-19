@@ -354,6 +354,18 @@ pub trait IngestWriter: Send + Sync {
         live_optimized: bool,
         target_gop_seconds: u32,
     ) -> IngestUpdateFuture<'a>;
+    /// Updates only `filename`, leaving `stream_key`, `loop_flag`, `start_time`,
+    /// `live_optimized`, and `target_gop_seconds` untouched. Callers that only
+    /// intend to rename an ingest's backing file (media-library rename and its
+    /// rollback) must use this instead of `update_ingest`: that method requires
+    /// the full field set and overwrites every column from whatever `Ingest`
+    /// snapshot the caller holds, silently reverting any of those fields if
+    /// they were changed by a concurrent request after the snapshot was taken.
+    fn update_ingest_filename<'a>(
+        &'a self,
+        id: &'a str,
+        filename: &'a str,
+    ) -> IngestUpdateFuture<'a>;
     fn delete_ingest<'a>(&'a self, id: &'a str) -> IngestDeleteFuture<'a>;
 }
 
