@@ -1368,6 +1368,44 @@ mod tests {
         assert_eq!(pts_ms - pts_ms_1h, -3_600_000);
     }
 
+    // Adversarial hunt: run_ffmpeg_transcode_with_scale_with_normalizer (the
+    // decode->scale->encode path) used to fall back to an unwrap-or-zero
+    // default on the encoder's output pts, instead of skipping None-pts
+    // packets like the passthrough path does — an inconsistency between two
+    // code paths in the same file where only one was hardened against the M7
+    // backward-jump bug. Both encoder-output loops now skip on a None pts,
+    // matching run_ffmpeg_transcoder_stage_with_normalizer exactly. This test
+    // documents that the same formula/consequence reasoning as
+    // pts_zero_would_produce_zero_ms_timestamp applies to the scale-encode
+    // path: a real FFmpeg pipeline can't be made to emit AV_NOPTS_VALUE from a
+    // unit test, but skip-vs-default is the only difference that matters, and
+    // both loops must agree on it.
+    #[test]
+    fn scale_encode_path_skips_none_pts_like_passthrough_path() {
+        let source = std::fs::read_to_string(file!()).expect("read own source");
+        // Build search needles from fragments that never appear contiguously
+        // in this test's own source text, so counting matches in the whole
+        // file (including this test) can't pick up the needle argument
+        // itself as a false positive.
+        let skip_needle = format!("{}{}", "let Some(pts_ms) = enc_pkt.p", "ts() else {");
+        let fallback_needle = format!("{}{}", "enc_pkt.pts().unwrap_o", "r(0)");
+
+        let occurrences = source.matches(&skip_needle).count();
+        assert_eq!(
+            occurrences, 2,
+            "run_ffmpeg_transcode_with_scale_with_normalizer must skip None-pts \
+             packets identically in both the main receive loop and the EOF \
+             flush loop — a zero-default fallback in either would reintroduce \
+             the M7 backward-jump bug for the scale-encode path"
+        );
+        assert!(
+            !source.contains(&fallback_needle),
+            "defaulting encoder-output pts to 0 on AV_NOPTS_VALUE produces a \
+             massive backward timestamp jump on a long-running stream; \
+             None-pts packets must be skipped instead"
+        );
+    }
+
     // M6: ts_batch must be cleared at the top of each burst arm so stale bytes
     // never accumulate across iterations. Verify the invariant by simulating
     // the burst pattern: partial batch from one burst must not appear in the next.
@@ -1845,7 +1883,12 @@ fn run_ffmpeg_transcode_with_scale_with_normalizer(
             }
 
             while enc.receive_packet(&mut enc_pkt).is_ok() {
-                let pts_ms = enc_pkt.pts().unwrap_or(0);
+                // Skip packets with AV_NOPTS_VALUE — same M7 rationale as the
+                // passthrough path: defaulting to 0 on a long-running stream
+                // would cause a massive backward jump through DtsEnforcer.
+                let Some(pts_ms) = enc_pkt.pts() else {
+                    continue;
+                };
                 let dts_ms = enc_pkt.dts().unwrap_or(pts_ms);
                 // enc_pkt is reused across iterations; clone() calls av_packet_ref (refcount
                 // bump only, no data copy) so the ring buffer holds the AVBufferRef alive.
@@ -1866,7 +1909,10 @@ fn run_ffmpeg_transcode_with_scale_with_normalizer(
     if let Some(enc) = encoder.as_mut() {
         let _ = enc.send_eof();
         while enc.receive_packet(&mut enc_pkt).is_ok() {
-            let pts_ms = enc_pkt.pts().unwrap_or(0);
+            // Same M7 rationale as above: skip rather than default to 0.
+            let Some(pts_ms) = enc_pkt.pts() else {
+                continue;
+            };
             let dts_ms = enc_pkt.dts().unwrap_or(pts_ms);
             let output_packet = MediaPacket {
                 media_type: MediaType::Video,

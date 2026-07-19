@@ -90,6 +90,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 04:10 HUNT EGRESS-MALFORMED-URL-RESILIENCE DONE [codex]](#2026-07-19-0410-hunt-egress-malformed-url-resilience-done-codex)
 - [2026-07-19 06:33 HUNT SECURITY-EVICTION-BAN-BYPASS FIXED [codex]](#2026-07-19-0633-hunt-security-eviction-ban-bypass-fixed-codex)
 - [2026-07-19 HUNT STAGE-LIFECYCLE-STALE-SPAWN-METADATA FIXED [codex]](#2026-07-19-hunt-stage-lifecycle-stale-spawn-metadata-fixed-codex)
+- [2026-07-19 HUNT TRANSCODER-SCALE-PATH-PTS-DEFAULT FIXED [codex]](#2026-07-19-hunt-transcoder-scale-path-pts-default-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3072,3 +3073,71 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - Notes: second genuine bug found this hunt run (after the
   `security.rs` eviction-bypass finding on round 2), hence the journal
   entry.
+
+## 2026-07-19 HUNT TRANSCODER-SCALE-PATH-PTS-DEFAULT FIXED [codex]
+- What: hunt target `src/media/transcoder.rs` (1840 lines pre-fix,
+  largest genuinely-unswept file in `src/media/` after `engine.rs`;
+  re-verified zero prior journal mentions via a looser filename grep
+  after the exact-backtick-match ranking method turned out unreliable
+  — it had falsely shown 0 mentions for `stage_lifecycle.rs`, which
+  had literally just been hunted in this same run).
+- Finding: real bug, timestamp-corruption class, same family as the
+  already-fixed and already-tested M7 issue in this file. The
+  passthrough demux path (`run_ffmpeg_transcoder_stage_with_normalizer`)
+  correctly skips encoder/demux packets with `AV_NOPTS_VALUE`
+  (`pts() == None`) rather than defaulting to 0, because on a
+  long-running stream a 0 substitution produces a massive backward
+  timestamp jump (e.g. -3,600,000ms after 1 hour) that corrupts
+  `DtsEnforcer` downstream — this is exactly what the existing
+  `pts_zero_would_produce_zero_ms_timestamp` test documents. But the
+  sibling decode-scale-encode path
+  (`run_ffmpeg_transcode_with_scale_with_normalizer`) was never
+  hardened the same way: both of its encoder-output receive loops
+  (the steady-state loop and the EOF flush loop) used
+  `enc_pkt.pts().unwrap_or(0)`, silently emitting a `pts=0` packet
+  instead of skipping whenever the encoder produced a packet without
+  a pts — an inconsistency between two code paths in the same file
+  where only one had been hardened against the same failure mode.
+- Fix: replaced both `unwrap_or(0)` fallbacks with
+  `let Some(pts_ms) = enc_pkt.pts() else { continue };`, matching the
+  passthrough path's skip behavior exactly. `dts_ms` still falls back
+  to `pts_ms` via `enc_pkt.dts().unwrap_or(pts_ms)`, unchanged — that
+  fallback is fine because it only runs once `pts_ms` is already known
+  valid.
+- Added one permanent regression test:
+  `scale_encode_path_skips_none_pts_like_passthrough_path` in
+  `src/media/transcoder.rs`'s `#[cfg(test)]` module. A live FFmpeg
+  pipeline can't be made to emit `AV_NOPTS_VALUE` from a unit test (no
+  checked-in fixture naturally produces a decoder frame lacking a
+  pts), so — following the same precedent as
+  `pts_zero_would_produce_zero_ms_timestamp` in this exact file — the
+  test asserts the fix's *shape* directly: it scans this file's own
+  source for the skip pattern (needle built from non-adjacent string
+  fragments so the test's own source can't self-match) and asserts it
+  appears exactly twice (once per encoder-output loop), and separately
+  asserts the zero-default fallback pattern is absent. This fails
+  against the pre-fix code (0 skip occurrences, fallback present) and
+  passes after.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::transcoder` — 25/25 pass (1 new plus 24 pre-existing, no
+  regressions to the existing pts/audio-routing/audio-router coverage).
+  `scripts/build/resource-limit.sh cargo test --test transcoder` —
+  14/14 integration tests pass unchanged, including the real-pipeline
+  `internal_transcode_builtin_video_presets_produce_video` and
+  `internal_scale_stage_chunked_remux_input_preserves_video_timestamp_order`
+  tests that exercise the fixed function against real FFmpeg encodes.
+  `cargo fmt --all --check` — clean. `scripts/build/resource-limit.sh
+  cargo clippy --lib --tests -- -D warnings` — clean.
+  `scripts/check/source-audit.sh` — passed. No benchmark re-run: the
+  fix only changes which rare edge-case packets are skipped vs.
+  defaulted (a `None`-pts branch that real fixtures never hit), and
+  does not change the per-packet allocation, locking, or channel-send
+  pattern on the hot path.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression test. `codec.rs` (1594 lines) and `feeder.rs` (913 lines)
+  remain as the other confirmed genuinely-unswept `src/media/` files
+  from this hunt run's re-ranking.
+- Notes: third genuine bug found this hunt run (after the
+  `security.rs` eviction-bypass finding on round 2 and the
+  `stage_lifecycle.rs` stale-spawn-metadata finding earlier this run).
