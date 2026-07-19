@@ -225,4 +225,38 @@ mod tests {
             Some(ResolvedSrtIngestConfig::Plaintext)
         );
     }
+
+    #[test]
+    fn global_config_returns_the_stored_global_policy() {
+        let global = SrtGlobalIngestConfig {
+            mode: SrtGlobalIngestMode::Encrypted,
+            passphrase: Some("global-pass-123".to_string()),
+            pbkeylen: 32,
+        };
+        let store = SrtIngestPolicyStore::new(global.clone(), &[]);
+        assert_eq!(store.global_config(), global);
+    }
+
+    #[test]
+    fn poisoned_lock_recovers_instead_of_panicking() {
+        let store =
+            SrtIngestPolicyStore::new(SrtGlobalIngestConfig::default(), &[policy_entry(None)]);
+
+        // Simulate a panic on another writer while it holds the lock; the
+        // guard's Drop marks the RwLock poisoned on unwind.
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = store.inner.write().unwrap();
+            panic!("simulated writer panic while holding the lock");
+        }));
+        assert!(poison_result.is_err());
+
+        // Both reads and writes must recover via into_inner() rather than
+        // propagating the poison as a panic.
+        assert_eq!(
+            store.resolved_policy("stream-one"),
+            Some(ResolvedSrtIngestConfig::Plaintext)
+        );
+        store.replace(SrtGlobalIngestConfig::default(), &[]);
+        assert_eq!(store.resolved_policy("stream-one"), None);
+    }
 }
