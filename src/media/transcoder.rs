@@ -604,6 +604,97 @@ mod tests {
         assert_eq!(output_tracks[0].track_index, 0); // re-indexed from 2 to 0
     }
 
+    #[test]
+    fn apply_routing_remap_selects_and_zeroes_track_index() {
+        let tracks = vec![generated_audio_track(0), generated_audio_track(1)];
+        let routing = AudioRouting::Remap {
+            track: 1,
+            left: 0,
+            right: 1,
+        };
+        let result = apply_audio_routing(&routing, &tracks);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].track_index, 0);
+        assert_eq!(result[0].pid, Some(0x101));
+    }
+
+    #[test]
+    fn apply_routing_remap_out_of_range_track_yields_no_tracks() {
+        let tracks = vec![generated_audio_track(0)];
+        let routing = AudioRouting::Remap {
+            track: 5,
+            left: 0,
+            right: 1,
+        };
+        assert!(apply_audio_routing(&routing, &tracks).is_empty());
+    }
+
+    #[test]
+    fn apply_routing_downmix_selects_track_and_forces_stereo() {
+        let mut mono_track = generated_audio_track(0);
+        mono_track.channels = 1;
+        mono_track.channel_layout = Some("mono".to_string());
+        let tracks = vec![mono_track, generated_audio_track(1)];
+        let routing = AudioRouting::Downmix { track: 1 };
+        let result = apply_audio_routing(&routing, &tracks);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].track_index, 0);
+        assert_eq!(result[0].channels, 2);
+        assert_eq!(result[0].channel_layout, Some("stereo".to_string()));
+    }
+
+    #[test]
+    fn apply_routing_downmix_out_of_range_track_yields_no_tracks() {
+        let tracks = vec![generated_audio_track(0)];
+        let routing = AudioRouting::Downmix { track: 3 };
+        assert!(apply_audio_routing(&routing, &tracks).is_empty());
+    }
+
+    #[test]
+    fn route_audio_packet_remap_matches_configured_track_and_zeroes_index() {
+        let routing = AudioRouting::Remap {
+            track: 2,
+            left: 0,
+            right: 1,
+        };
+        let pkt = generated_router_packet(false, 2, 42);
+        let routed = route_audio_packet(&routing, &pkt).expect("matching track must route");
+        assert_eq!(routed.track_index, 0);
+        assert_eq!(routed.pts, 42);
+    }
+
+    #[test]
+    fn route_audio_packet_remap_drops_non_matching_audio_track() {
+        let routing = AudioRouting::Remap {
+            track: 2,
+            left: 0,
+            right: 1,
+        };
+        let pkt = generated_router_packet(false, 0, 42);
+        assert!(route_audio_packet(&routing, &pkt).is_none());
+    }
+
+    #[test]
+    fn route_audio_packet_remap_passes_video_through_untouched() {
+        let routing = AudioRouting::Remap {
+            track: 2,
+            left: 0,
+            right: 1,
+        };
+        let pkt = generated_router_packet(true, 7, 42);
+        let routed = route_audio_packet(&routing, &pkt).expect("video always passes through");
+        assert_eq!(routed.track_index, 7);
+    }
+
+    #[test]
+    fn route_audio_packet_downmix_always_passes_the_packet_through() {
+        let routing = AudioRouting::Downmix { track: 1 };
+        let audio_pkt = generated_router_packet(false, 1, 10);
+        let video_pkt = generated_router_packet(true, 0, 10);
+        assert!(route_audio_packet(&routing, &audio_pkt).is_some());
+        assert!(route_audio_packet(&routing, &video_pkt).is_some());
+    }
+
     fn generated_audio_track(index: usize) -> AudioMeta {
         AudioMeta {
             codec: "aac".to_string(),
