@@ -1,4 +1,4 @@
-name: Scheduled security scans
+name: Security
 
 on:
   schedule:

@@ -1,4 +1,4 @@
-name: Release certification
+name: Release
 
 on:
   push:
