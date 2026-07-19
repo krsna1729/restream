@@ -37,7 +37,7 @@ pub use pipeline_input_repo::{
 };
 pub use pipeline_repo::{
     PipelineRecord, create_pipeline, delete_pipeline, get_pipeline, get_pipeline_by_stream_key,
-    list_pipelines, update_pipeline,
+    list_pipelines, update_pipeline, update_pipeline_input_source,
 };
 pub use recording_repo::{
     RecordingRow, create_recording, delete_recording, finalize_recording, get_recording,
