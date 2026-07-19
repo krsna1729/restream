@@ -60,6 +60,10 @@ let settingsMounted = false;
 let statusMounted = false;
 let inspectPanelShellHtml: string | null = null;
 let controlPanelShellHtml: string | null = null;
+const dashboardV2RouteChromeObservers = new WeakMap<
+  HTMLElement,
+  MutationObserver
+>();
 let lastPipelineWorkspaceHref: string | null = null;
 type NavigationFocus = "preserve" | "panel";
 interface NavigationOptions {
@@ -67,6 +71,77 @@ interface NavigationOptions {
 }
 type StatusTone = "success" | "warning" | "error" | "neutral" | "info";
 type SummaryCounts = ReturnType<typeof buildOverviewViewModel>["counts"];
+type DashboardV2RouteBodyMode =
+  | "pipeline-inspect"
+  | "pipeline-monitor"
+  | "incidents"
+  | "telemetry"
+  | "media"
+  | "settings"
+  | "status";
+
+interface DashboardV2RouteBodyConfig {
+  readonly bodyId: string;
+  readonly mode: DashboardV2RouteBodyMode;
+  readonly panelId: string;
+  readonly rootId: string;
+  readonly slotId: string;
+}
+
+const DASHBOARD_V2_ROUTE_BODIES: readonly DashboardV2RouteBodyConfig[] = [
+  {
+    bodyId: "inspect-mode-content",
+    mode: "pipeline-inspect",
+    panelId: "inspect-mode-panel",
+    rootId: "dashboard-v2-pipeline-inspect-root",
+    slotId: "dashboard-v2-pipeline-inspect-body-slot",
+  },
+  {
+    bodyId: "control-mode-content",
+    mode: "pipeline-monitor",
+    panelId: "control-mode-panel",
+    rootId: "dashboard-v2-control-room-root",
+    slotId: "dashboard-v2-control-room-body-slot",
+  },
+  {
+    bodyId: "incidents-mode-content",
+    mode: "incidents",
+    panelId: "incidents-mode-panel",
+    rootId: "dashboard-v2-incidents-root",
+    slotId: "dashboard-v2-incidents-body-slot",
+  },
+  {
+    bodyId: "telemetry-mode-content",
+    mode: "telemetry",
+    panelId: "telemetry-mode-panel",
+    rootId: "dashboard-v2-telemetry-root",
+    slotId: "dashboard-v2-telemetry-body-slot",
+  },
+  {
+    bodyId: "media-mode-content",
+    mode: "media",
+    panelId: "media-mode-panel",
+    rootId: "dashboard-v2-media-root",
+    slotId: "dashboard-v2-media-body-slot",
+  },
+  {
+    bodyId: "settings-mode-content",
+    mode: "settings",
+    panelId: "settings-mode-panel",
+    rootId: "dashboard-v2-settings-root",
+    slotId: "dashboard-v2-settings-body-slot",
+  },
+  {
+    bodyId: "status-mode-content",
+    mode: "status",
+    panelId: "status-mode-panel",
+    rootId: "dashboard-v2-status-root",
+    slotId: "dashboard-v2-status-body-slot",
+  },
+] as const;
+
+const DASHBOARD_V2_ROUTE_OWNERSHIP_RETRY_LIMIT = 20;
+const DASHBOARD_V2_ROUTE_OWNERSHIP_RETRY_MS = 50;
 
 const OVERVIEW_HISTORY_LIMIT = 28;
 const OVERVIEW_ACTIVITY_LIMIT = 6;
@@ -700,6 +775,137 @@ function dashboardV2ShellActive(): boolean {
   }
 }
 
+function dashboardV2RouteBodyMode(
+  mode: DashboardMode,
+  pipelineView: PipelineWorkspaceView,
+): DashboardV2RouteBodyMode | null {
+  if (mode === "pipeline" && pipelineView === "inspect")
+    return "pipeline-inspect";
+  if (mode === "pipeline" && pipelineView === "monitor")
+    return "pipeline-monitor";
+  if (
+    mode === "incidents" ||
+    mode === "telemetry" ||
+    mode === "media" ||
+    mode === "settings" ||
+    mode === "status"
+  ) {
+    return mode;
+  }
+  return null;
+}
+
+function appendRouteBodyToPanel(config: DashboardV2RouteBodyConfig): void {
+  const body = document.getElementById(config.bodyId);
+  const panel = document.getElementById(config.panelId);
+  if (!body || !panel || body.parentElement === panel) return;
+  panel.appendChild(body);
+}
+
+function slotRouteBodyIntoV2Root(config: DashboardV2RouteBodyConfig): boolean {
+  const body = document.getElementById(config.bodyId);
+  const root = document.getElementById(config.rootId);
+  const panel = document.getElementById(config.panelId);
+  if (!body || !root || !panel) return false;
+  if (root.parentElement !== panel) panel.prepend(root);
+  const slot = root.querySelector<HTMLElement>(
+    `[data-dashboard-v2-route-body-slot="${config.slotId}"]`,
+  );
+  if (!slot) return false;
+  if (body.parentElement !== slot) slot.appendChild(body);
+  return true;
+}
+
+function setRouteChromeSuppressed(body: HTMLElement, suppressed: boolean): void {
+  body
+    .querySelectorAll<HTMLElement>(
+      [
+        ":scope > .dashboard-page-shell > .flex:first-child h1",
+        ":scope > .dashboard-page-shell > .flex:first-child p",
+        ":scope > .dashboard-page-shell > p[role='status']",
+        ":scope > .flex:first-child h1",
+        ":scope > .flex:first-child p",
+        ":scope > :first-child > header:first-child h1",
+        ":scope > :first-child > header:first-child p",
+        ":scope > :first-child > p[role='status']:first-of-type",
+        ":scope > h1:first-child",
+        ":scope > p[role='status']:first-of-type",
+      ].join(","),
+    )
+    .forEach((element) => {
+      element.hidden = suppressed;
+      if (suppressed) {
+        element.setAttribute("aria-hidden", "true");
+      } else {
+        element.removeAttribute("aria-hidden");
+      }
+    });
+}
+
+function syncRouteChromeSuppressionObserver(
+  body: HTMLElement,
+  active: boolean,
+): void {
+  const observer = dashboardV2RouteChromeObservers.get(body);
+  if (!active) {
+    observer?.disconnect();
+    dashboardV2RouteChromeObservers.delete(body);
+    return;
+  }
+  if (observer) return;
+  const nextObserver = new MutationObserver(() => {
+    setRouteChromeSuppressed(body, true);
+  });
+  nextObserver.observe(body, { childList: true, subtree: true });
+  dashboardV2RouteChromeObservers.set(body, nextObserver);
+}
+
+function scheduleDashboardV2RouteBodyOwnershipSync(
+  config: DashboardV2RouteBodyConfig,
+  attempt = 0,
+): void {
+  window.setTimeout(() => {
+    const location = resolveDashboardLocation(window.location.href);
+    if (
+      dashboardV2RouteBodyMode(location.mode, location.pipelineView) ===
+      config.mode
+    ) {
+      const slotted = slotRouteBodyIntoV2Root(config);
+      const body = document.getElementById(config.bodyId);
+      if (body) {
+        setRouteChromeSuppressed(body, true);
+        syncRouteChromeSuppressionObserver(body, true);
+      }
+      if (!slotted && attempt < DASHBOARD_V2_ROUTE_OWNERSHIP_RETRY_LIMIT) {
+        scheduleDashboardV2RouteBodyOwnershipSync(config, attempt + 1);
+      }
+    }
+  }, DASHBOARD_V2_ROUTE_OWNERSHIP_RETRY_MS);
+}
+
+function syncDashboardV2RouteBodyOwnership(
+  mode: DashboardMode,
+  pipelineView: PipelineWorkspaceView,
+): void {
+  const activeMode = dashboardV2ShellActive()
+    ? dashboardV2RouteBodyMode(mode, pipelineView)
+    : null;
+  for (const config of DASHBOARD_V2_ROUTE_BODIES) {
+    const body = document.getElementById(config.bodyId);
+    const active = activeMode === config.mode;
+    if (active) {
+      const slotted = slotRouteBodyIntoV2Root(config);
+      if (!slotted) scheduleDashboardV2RouteBodyOwnershipSync(config);
+    } else {
+      appendRouteBodyToPanel(config);
+    }
+    if (body) {
+      setRouteChromeSuppressed(body, active);
+      syncRouteChromeSuppressionObserver(body, active);
+    }
+  }
+}
+
 function rememberPipelineWorkspaceLocation(href = window.location.href): void {
   try {
     const location = resolveDashboardLocation(href);
@@ -723,15 +929,6 @@ function restoredPipelineWorkspaceUrl(): URL | null {
 function snapshotPanelShell(panelId: string): string | null {
   const panel = document.getElementById(panelId);
   return panel ? panel.innerHTML : null;
-}
-
-function clearPanelShellExcept(panelId: string, preservedChildIds: string[]): void {
-  const panel = document.getElementById(panelId);
-  if (!panel) return;
-  const preserved = preservedChildIds
-    .map((id) => document.getElementById(id))
-    .filter((element): element is HTMLElement => Boolean(element));
-  panel.replaceChildren(...preserved);
 }
 
 function restorePanelShell(panelId: string, html: string | null): void {
@@ -764,12 +961,6 @@ function unmountInactiveV2PipelineWorkspace(
   if (!dashboardV2ShellActive()) return;
   inspectPanelShellHtml ??= snapshotPanelShell("inspect-mode-panel");
   controlPanelShellHtml ??= snapshotPanelShell("control-mode-panel");
-  clearPanelShellExcept("inspect-mode-panel", [
-    "dashboard-v2-pipeline-inspect-root",
-  ]);
-  clearPanelShellExcept("control-mode-panel", [
-    "dashboard-v2-control-room-root",
-  ]);
 }
 
 function unmountInactiveV2HeavyRoute(previousMode: DashboardMode | null): void {
@@ -858,20 +1049,7 @@ function applyMode(
                 : mode === "settings"
                   ? "Server configuration"
                   : "Runtime status";
-    const ownership =
-      mode === "overview" || (mode === "pipeline" && pipelineView === "operate")
-        ? "UI v2 owned"
-        : (mode === "pipeline" &&
-              (pipelineView === "inspect" || pipelineView === "monitor")) ||
-            mode === "incidents" ||
-            mode === "telemetry" ||
-            mode === "status" ||
-            mode === "media" ||
-            mode === "settings"
-          ? "UI v2 checkpoint"
-        : mode === "pipeline"
-          ? "Legacy checkpoint"
-          : "Legacy-owned checkpoint";
+    const ownership = dashboardV2ShellActive() ? "UI v2 owned" : "Legacy owned";
     summary.textContent = `${ownership} · ${taskSummary}`;
   }
   if (
@@ -913,6 +1091,7 @@ function applyMode(
   }
   if (mode === "settings") renderSettingsMode();
   if (mode === "status") renderStatusMode();
+  syncDashboardV2RouteBodyOwnership(mode, pipelineView);
   syncDashboardPolling();
 }
 
@@ -1073,6 +1252,10 @@ export function initDashboardModes(): void {
     ) {
       syncPipelineInspectorVisibility();
     }
+  });
+  document.addEventListener("dashboard:v2-route-rendered", () => {
+    const location = resolveDashboardLocation(window.location.href);
+    syncDashboardV2RouteBodyOwnership(location.mode, location.pipelineView);
   });
   window.setDashboardMode = setDashboardMode;
   refreshActiveMode();

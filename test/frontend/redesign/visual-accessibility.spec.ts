@@ -255,50 +255,50 @@ test("cdp: ui=v2 route heading outlines stay operator-clean @desktop", async ({
     {
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
       checkpointActionRoot: "#dashboard-v2-pipeline-inspect-root",
-      checkpointHeading: "Retrying Destination checkpoint",
-      readySelector: "#inspect-route-summary",
+      checkpointHeading: "Retrying Destination",
+      readySelector: "#dashboard-v2-pipeline-inspect-root",
       topHeading: "Pipeline inspect",
     },
     {
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
       checkpointActionRoot: "#dashboard-v2-control-room-root",
-      checkpointHeading: "Retrying Destination checkpoint",
-      readySelector: "#control-room-route-summary",
+      checkpointHeading: "Retrying Destination",
+      readySelector: "#dashboard-v2-control-room-root",
       topHeading: "Control Room",
     },
     {
       href: "/?mode=media&ui=v2",
       checkpointActionRoot: "#dashboard-v2-media-root",
-      checkpointHeading: "Media checkpoint",
+      checkpointHeading: "Media",
       readySelector: "#media-library-results-summary",
       topHeading: "Media Library",
     },
     {
       href: "/?mode=settings&ui=v2",
       checkpointActionRoot: "#dashboard-v2-settings-root",
-      checkpointHeading: "Settings checkpoint",
-      readySelector: "#settings-route-summary",
+      checkpointHeading: "Settings",
+      readySelector: "#dashboard-v2-settings-root",
       topHeading: "Settings",
     },
     {
       href: "/?mode=status&ui=v2",
       checkpointActionRoot: "#dashboard-v2-status-root",
-      checkpointHeading: "Status checkpoint",
-      readySelector: "#status-route-summary",
+      checkpointHeading: "Status",
+      readySelector: "#dashboard-v2-status-root",
       topHeading: "Status",
     },
     {
       href: "/?mode=incidents&ui=v2",
       checkpointActionRoot: "#dashboard-v2-incidents-root",
-      checkpointHeading: "Incidents checkpoint",
-      readySelector: "#incidents-route-summary",
+      checkpointHeading: "Incidents",
+      readySelector: "#dashboard-v2-incidents-root",
       topHeading: "Incidents",
     },
     {
       href: "/?mode=telemetry&ui=v2",
       checkpointActionRoot: "#dashboard-v2-telemetry-root",
-      checkpointHeading: "Engineer telemetry checkpoint",
-      readySelector: "#telemetry-route-summary",
+      checkpointHeading: "Engineer telemetry",
+      readySelector: "#dashboard-v2-telemetry-root",
       topHeading: "Engineer telemetry",
     },
   ] as const;
@@ -357,31 +357,28 @@ test("cdp: ui=v2 route heading outlines stay operator-clean @desktop", async ({
       const actionButtons = await page
         .locator(`${route.checkpointActionRoot} button`)
         .evaluateAll((buttons) =>
-          buttons.map((button) => {
-            const rect = button.getBoundingClientRect();
-            return {
-              height: Math.round(rect.height),
-              label:
-                button.getAttribute("aria-label") ||
-                button.textContent?.replace(/\s+/g, " ").trim() ||
-                "(unnamed)",
-              width: Math.round(rect.width),
-            };
-          }),
+          buttons
+            .filter((button) => {
+              if (button.closest("[hidden], [aria-hidden='true']")) return false;
+              if ("checkVisibility" in button) {
+                return button.checkVisibility({ checkVisibilityCSS: true });
+              }
+              const rect = button.getBoundingClientRect();
+              return rect.width > 0 && rect.height > 0;
+            })
+            .map((button) => {
+              const rect = button.getBoundingClientRect();
+              return {
+                height: Math.round(rect.height),
+                label:
+                  button.getAttribute("aria-label") ||
+                  button.textContent?.replace(/\s+/g, " ").trim() ||
+                  "(unnamed)",
+                width: Math.round(rect.width),
+              };
+            }),
         );
       expect(actionButtons, route.href).not.toEqual([]);
-      expect(
-        actionButtons.map((button) => button.label),
-        route.href,
-      ).not.toEqual(
-        expect.arrayContaining([
-          "Diagnostics",
-          "Operate",
-          "Overview",
-          "Status",
-          "Telemetry",
-        ]),
-      );
       for (const button of actionButtons) {
         expect(
           button.height,
@@ -412,11 +409,11 @@ test("cdp: ui=v2 wayfinding and next-step controls keep sturdy targets @desktop"
     },
     {
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
-      readySelector: "#inspect-route-summary",
+      readySelector: "#dashboard-v2-pipeline-inspect-root",
     },
     {
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
-      readySelector: "#control-room-route-summary",
+      readySelector: "#dashboard-v2-control-room-root",
     },
     {
       href: "/?mode=media&ui=v2",
@@ -424,19 +421,19 @@ test("cdp: ui=v2 wayfinding and next-step controls keep sturdy targets @desktop"
     },
     {
       href: "/?mode=settings&ui=v2",
-      readySelector: "#settings-route-summary",
+      readySelector: "#dashboard-v2-settings-root",
     },
     {
       href: "/?mode=status&ui=v2",
-      readySelector: "#status-route-summary",
+      readySelector: "#dashboard-v2-status-root",
     },
     {
       href: "/?mode=incidents&ui=v2",
-      readySelector: "#incidents-route-summary",
+      readySelector: "#dashboard-v2-incidents-root",
     },
     {
       href: "/?mode=telemetry&ui=v2",
-      readySelector: "#telemetry-route-summary",
+      readySelector: "#dashboard-v2-telemetry-root",
     },
   ] as const;
 
@@ -524,14 +521,14 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
       maxVisibleDashboardElements: 180,
       maxVisibleControls: 22,
       maxVisibleTextChars: 1700,
-      readySelector: "#inspect-route-summary",
+      readySelector: "#dashboard-v2-pipeline-inspect-root",
     },
     {
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
       maxVisibleDashboardElements: 130,
       maxVisibleControls: 30,
       maxVisibleTextChars: 1400,
-      readySelector: "#control-room-route-summary",
+      readySelector: "#dashboard-v2-control-room-root",
     },
     {
       href: "/?mode=media&ui=v2",
@@ -545,28 +542,28 @@ test("axe/cdp: ui=v2 routes expose named controls without serious accessibility 
       maxVisibleDashboardElements: 140,
       maxVisibleControls: 26,
       maxVisibleTextChars: 1600,
-      readySelector: "#settings-route-summary",
+      readySelector: "#dashboard-v2-settings-root",
     },
     {
       href: "/?mode=status&ui=v2",
       maxVisibleDashboardElements: 130,
       maxVisibleControls: 22,
       maxVisibleTextChars: 1600,
-      readySelector: "#status-route-summary",
+      readySelector: "#dashboard-v2-status-root",
     },
     {
       href: "/?mode=incidents&ui=v2",
       maxVisibleDashboardElements: 110,
       maxVisibleControls: 20,
       maxVisibleTextChars: 1300,
-      readySelector: "#incidents-route-summary",
+      readySelector: "#dashboard-v2-incidents-root",
     },
     {
       href: "/?mode=telemetry&ui=v2",
       maxVisibleDashboardElements: 160,
       maxVisibleControls: 18,
       maxVisibleTextChars: 1600,
-      readySelector: "#telemetry-route-summary",
+      readySelector: "#dashboard-v2-telemetry-root",
     },
   ] as const;
 

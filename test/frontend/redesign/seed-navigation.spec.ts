@@ -100,14 +100,12 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   await expect(page).toHaveURL(/p=pipe-retrying/);
   await expect(page.locator("#inspect-mode-panel")).toBeVisible();
   await expect(
-    page.locator("#inspect-mode-panel").getByRole("heading", {
-      name: "Pipeline inspect",
-    }),
+    page.locator("#dashboard-v2-pipeline-inspect-root"),
   ).toBeVisible();
   await expect(page.locator("#inspect-pipeline-select")).toHaveValue(
     "pipe-retrying",
   );
-  await expect(page.locator("#inspect-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-pipeline-inspect-root")).toContainText(
     "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
   );
   await expect(
@@ -126,7 +124,7 @@ test("seed: ui=v2 overview Inspect is one predictable history step @desktop", as
   await expect(
     inspectCheckpoint.locator("#dashboard-v2-pipeline-inspect-title"),
   ).toBeVisible();
-  await expect(inspectCheckpoint.getByText("Output retrying")).toBeVisible();
+  await expect(inspectCheckpoint.getByText("Output retrying").first()).toBeVisible();
   await expect(
     inspectCheckpoint.getByText("1 fault candidate", { exact: true }),
   ).toBeVisible();
@@ -243,7 +241,7 @@ test("seed: ui=v2 Inspect output search narrows noisy sibling outputs @desktop",
   );
 
   const inspect = page.locator("#inspect-mode-panel");
-  await expect(page.locator("#inspect-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-pipeline-inspect-root")).toContainText(
     "Inspecting Stalled Sink Isolation · input live · 6 outputs · 1 attention item",
   );
   await expect(inspect.getByLabel("Search inspect outputs")).toBeVisible();
@@ -314,7 +312,7 @@ test("seed: ui=v2 Inspect output search understands down aliases @desktop", asyn
 
   const inspect = page.locator("#inspect-mode-panel");
   const outputPreview = inspect.getByLabel("Inspect output preview");
-  await expect(page.locator("#inspect-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-pipeline-inspect-root")).toContainText(
     "Inspecting Stalled Sink Isolation · input live · 6 outputs · 2 attention items",
   );
   await expect(outputPreview.getByText("RTMP stalled sink")).toBeVisible();
@@ -423,7 +421,7 @@ test("seed: ui=v2 top-level Pipeline tab restores last workspace context @deskto
   await expect(page.locator("#control-room-pipeline-select")).toHaveValue(
     "pipe-retrying",
   );
-  await expect(page.locator("#control-room-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-control-room-root")).toContainText(
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );
 
@@ -433,7 +431,7 @@ test("seed: ui=v2 top-level Pipeline tab restores last workspace context @deskto
     "aria-selected",
     "true",
   );
-  await expect(page.locator("#incidents-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-incidents-root")).toContainText(
     "0 critical · 1 warning · 1 recent event · fleet",
   );
 
@@ -453,10 +451,10 @@ test("seed: ui=v2 top-level Pipeline tab restores last workspace context @deskto
     "pipe-retrying",
   );
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 checkpoint · Pipeline monitoring wall",
+    "UI v2 owned · Pipeline monitoring wall",
   );
   expect(await getCdpStatusTexts(page)).toContain(
-    "UI v2 checkpoint · Pipeline monitoring wall",
+    "UI v2 owned · Pipeline monitoring wall",
   );
 
   await page.goBack();
@@ -521,11 +519,8 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   const monitor = page.locator("#control-mode-panel");
   const checkpoint = page.locator("#dashboard-v2-control-room-root");
   const search = monitor.locator("#control-room-search-input");
-  const routeSummary = monitor.locator("#control-room-route-summary");
   const summary = monitor.locator("#control-room-summary");
-  await expect(
-    monitor.getByRole("heading", { name: "Control Room" }),
-  ).toBeVisible();
+  await expect(checkpoint.locator("#dashboard-v2-control-room-title")).toBeVisible();
   await expect(
     monitor.getByRole("heading", { name: "Monitor controls" }),
   ).toBeVisible();
@@ -536,7 +531,7 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
     monitor.getByRole("combobox", { name: "Filter monitor by pipeline" }),
   ).toBeVisible();
   await expect(monitor.getByLabel("Search monitor outputs")).toBeVisible();
-  await expect(routeSummary).toHaveText(
+  await expect(checkpoint).toContainText(
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );
   expect(await getCdpStatusTexts(page)).toContain(
@@ -545,7 +540,9 @@ test("seed: ui=v2 Monitor search does not mislabel filtered outputs as missing @
   await expect(
     checkpoint.locator("#dashboard-v2-control-room-title"),
   ).toBeVisible();
-  await expect(checkpoint.getByText("1/1 monitored")).toBeVisible();
+  await expect(
+    checkpoint.getByText("1/1 monitored", { exact: true }),
+  ).toBeVisible();
   await expect(checkpoint.getByText("No active search")).toBeVisible();
   await expect(summary).toHaveText("1/1 monitored · 0 missing monitoring URLs");
   const initialMonitorButtonNames = await getCdpNamesByRole(page, "button");
@@ -742,7 +739,7 @@ test("seed: ui=v2 Monitor search understands operator status terms @desktop", as
   const checkpoint = page.locator("#dashboard-v2-control-room-root");
   const search = monitor.locator("#control-room-search-input");
   const summary = monitor.locator("#control-room-summary");
-  await expect(monitor.locator("#control-room-route-summary")).toHaveText(
+  await expect(checkpoint).toContainText(
     "Monitoring Retry Budget Exhausted · 2 outputs · 2 monitors · 0 missing URLs",
   );
   await expect(checkpoint.getByText("2 monitors down")).toBeVisible();
@@ -812,7 +809,7 @@ test("seed: ui=v2 Monitor lazily loads generic web previews @desktop", async ({
 
   const monitor = page.locator("#control-mode-panel");
   const checkpoint = page.locator("#dashboard-v2-control-room-root");
-  await expect(monitor.locator("#control-room-route-summary")).toHaveText(
+  await expect(checkpoint).toContainText(
     "Monitoring Recovered Sink Flap · 1 output · 1 monitor · 0 missing URLs",
   );
   await expect(
@@ -916,7 +913,7 @@ test("seed: ui=v2 Monitor lazily loads HLS output previews @desktop", async ({
   );
 
   const monitor = page.locator("#control-mode-panel");
-  await expect(monitor.locator("#control-room-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-control-room-root")).toContainText(
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );
   await expect(

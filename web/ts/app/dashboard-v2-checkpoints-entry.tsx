@@ -33,6 +33,7 @@ type DashboardV2CheckpointAction = readonly [
 
 interface DashboardV2CheckpointCardProps {
   readonly actions: readonly DashboardV2CheckpointAction[];
+  readonly bodySlotId: string;
   readonly className?: string;
   readonly focusLabel: string;
   readonly focusTitle: string;
@@ -58,6 +59,7 @@ function toneBadgeClass(tone: string): string {
 
 function DashboardV2CheckpointCard({
   actions,
+  bodySlotId,
   className = "",
   focusLabel,
   focusTitle,
@@ -79,7 +81,6 @@ function DashboardV2CheckpointCard({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h1
-              aria-label={`${title} checkpoint`}
               className="text-base-content text-lg font-semibold leading-tight"
               id={headingId}
             >
@@ -146,6 +147,10 @@ function DashboardV2CheckpointCard({
           Next: {nextStep}
         </p>
       </div>
+      <div
+        className="mt-4 min-w-0"
+        data-dashboard-v2-route-body-slot={bodySlotId}
+      />
     </section>
   );
 }
@@ -180,6 +185,7 @@ function DashboardV2PipelineInspectCheckpoint({
           "Run diagnostics for inspected pipeline",
         ],
       ]}
+      bodySlotId="dashboard-v2-pipeline-inspect-body-slot"
       className="border-info/25 bg-info/5"
       focusLabel={model.focusLabel}
       focusTitle="Inspection focus"
@@ -221,6 +227,7 @@ function DashboardV2ControlRoomCheckpoint({
           "Operate monitored pipeline",
         ],
       ]}
+      bodySlotId="dashboard-v2-control-room-body-slot"
       className="border-accent/25 bg-accent/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Monitor focus"
@@ -259,6 +266,7 @@ function DashboardV2IncidentsCheckpoint({
           "Open telemetry from incidents",
         ],
       ]}
+      bodySlotId="dashboard-v2-incidents-body-slot"
       className="border-error/25 bg-error/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Incident focus"
@@ -297,6 +305,7 @@ function DashboardV2TelemetryCheckpoint({
           "Open status from telemetry",
         ],
       ]}
+      bodySlotId="dashboard-v2-telemetry-body-slot"
       className="border-secondary/25 bg-secondary/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Telemetry focus"
@@ -335,6 +344,7 @@ function DashboardV2StatusCheckpoint({
           "Open telemetry from status",
         ],
       ]}
+      bodySlotId="dashboard-v2-status-body-slot"
       className="border-neutral/25 bg-base-200/50 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Status focus"
@@ -373,6 +383,7 @@ function DashboardV2MediaCheckpoint({
           "Open overview from media",
         ],
       ]}
+      bodySlotId="dashboard-v2-media-body-slot"
       className="border-primary/25 bg-primary/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Media focus"
@@ -411,6 +422,7 @@ function DashboardV2SettingsCheckpoint({
           "Open status from settings",
         ],
       ]}
+      bodySlotId="dashboard-v2-settings-body-slot"
       className="border-warning/25 bg-warning/5 mb-4"
       focusLabel={model.focusLabel}
       focusTitle="Settings focus"
@@ -488,6 +500,20 @@ if (!settingsContainer) {
 const settingsRootContainer: HTMLElement = settingsContainer;
 let settingsRoot: Root | null = null;
 
+function announceDashboardV2RouteRender(rootId: string): void {
+  const dispatch = () => {
+    document.dispatchEvent(
+      new CustomEvent("dashboard:v2-route-rendered", {
+        detail: { rootId },
+      }),
+    );
+  };
+  queueMicrotask(dispatch);
+  window.requestAnimationFrame(dispatch);
+  window.setTimeout(dispatch, 0);
+  window.setTimeout(dispatch, 50);
+}
+
 export function renderDashboardV2PipelineInspectCheckpoint(
   model: PipelineInspectCheckpointModel | null,
   actions: DashboardV2PipelineInspectActions,
@@ -499,6 +525,7 @@ export function renderDashboardV2PipelineInspectCheckpoint(
       <DashboardV2PipelineInspectCheckpoint actions={actions} model={model} />
     ) : null,
   );
+  announceDashboardV2RouteRender("dashboard-v2-pipeline-inspect-root");
 }
 
 export function renderDashboardV2IncidentsCheckpoint(
@@ -512,6 +539,7 @@ export function renderDashboardV2IncidentsCheckpoint(
       <DashboardV2IncidentsCheckpoint actions={actions} model={model} />
     ) : null,
   );
+  announceDashboardV2RouteRender("dashboard-v2-incidents-root");
 }
 
 export function renderDashboardV2TelemetryCheckpoint(
@@ -525,6 +553,7 @@ export function renderDashboardV2TelemetryCheckpoint(
       <DashboardV2TelemetryCheckpoint actions={actions} model={model} />
     ) : null,
   );
+  announceDashboardV2RouteRender("dashboard-v2-telemetry-root");
 }
 
 export function renderDashboardV2StatusCheckpoint(
@@ -536,6 +565,7 @@ export function renderDashboardV2StatusCheckpoint(
   statusRoot.render(
     model ? <DashboardV2StatusCheckpoint actions={actions} model={model} /> : null,
   );
+  announceDashboardV2RouteRender("dashboard-v2-status-root");
 }
 
 export function renderDashboardV2MediaCheckpoint(
@@ -547,6 +577,7 @@ export function renderDashboardV2MediaCheckpoint(
   mediaRoot.render(
     model ? <DashboardV2MediaCheckpoint actions={actions} model={model} /> : null,
   );
+  announceDashboardV2RouteRender("dashboard-v2-media-root");
 }
 
 export function renderDashboardV2SettingsCheckpoint(
@@ -560,6 +591,7 @@ export function renderDashboardV2SettingsCheckpoint(
       <DashboardV2SettingsCheckpoint actions={actions} model={model} />
     ) : null,
   );
+  announceDashboardV2RouteRender("dashboard-v2-settings-root");
 }
 
 export function renderDashboardV2ControlRoomCheckpoint(
@@ -573,4 +605,5 @@ export function renderDashboardV2ControlRoomCheckpoint(
       <DashboardV2ControlRoomCheckpoint actions={actions} model={model} />
     ) : null,
   );
+  announceDashboardV2RouteRender("dashboard-v2-control-room-root");
 }

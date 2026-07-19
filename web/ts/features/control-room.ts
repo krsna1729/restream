@@ -341,7 +341,7 @@ function buildLocalCard(pipe: PipelineView): ControlRoomCardDescriptor {
     id: `local:${pipe.id}`,
     title: "Local HLS",
     mediaUrl: inputLive ? localPreviewUrl : null,
-    loadOnDemand: false,
+    loadOnDemand: true,
     emptyMessage:
       pipe.input.status === "on"
         ? pipe.input.flapping

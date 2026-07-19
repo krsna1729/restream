@@ -81,6 +81,25 @@
     min-width: 2.75rem !important;
   }
 
+  [data-dashboard-v2-route-body-slot] .btn {
+    min-height: 2.25rem;
+  }
+
+  #dashboard-v2-root .btn-accent.btn-outline,
+  #dashboard-grid .btn-accent.btn-outline,
+  [data-dashboard-v2-route-body-slot] .btn-accent.btn-outline {
+    --dashboard-v2-outline-accent: color-mix(
+      in oklab,
+      var(--color-accent) 42%,
+      var(--color-base-content)
+    );
+    --btn-color: var(--dashboard-v2-outline-accent);
+    --btn-fg: var(--dashboard-v2-outline-accent);
+    --btn-rest-fg: var(--dashboard-v2-outline-accent);
+    border-color: var(--dashboard-v2-outline-accent);
+    color: var(--dashboard-v2-outline-accent);
+  }
+
   #skip-to-dashboard-main,
   #workspace-mode-bar [role="tab"],
   #pipeline-workspace-view-bar [role="tab"] {
@@ -105,6 +124,17 @@
     color: color-mix(
       in oklab,
       var(--color-base-content) 72%,
+      transparent
+    );
+  }
+
+  [data-dashboard-v2-route-body-slot] .text-base-content\/50,
+  [data-dashboard-v2-route-body-slot] .text-base-content\/55,
+  [data-dashboard-v2-route-body-slot] .text-base-content\/60,
+  [data-dashboard-v2-route-body-slot] .text-base-content\/70 {
+    color: color-mix(
+      in oklab,
+      var(--color-base-content) 82%,
       transparent
     );
   }

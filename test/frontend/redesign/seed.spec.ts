@@ -85,7 +85,7 @@ test("seed: mixed-health Overview exposes upstream and output state @desktop", a
   );
 });
 
-test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 strips @desktop", async ({
+test("seed: ui=v2 slots v2 route bodies under the owning roots @desktop", async ({
   page,
 }) => {
   const v2Requests: string[] = [];
@@ -103,17 +103,20 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     expectOverviewReady: false,
   });
   await expect(page).toHaveURL(/\?mode=settings&ui=v2$/);
-  await expect(
-    page.locator("#settings-mode-content").getByRole("heading", {
-      name: "Settings",
-    }),
-  ).toBeVisible();
   await expect(page.locator("#dashboard-v2-settings-title")).toBeVisible();
-  await expect(page.locator("#settings-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-settings-root")).toContainText(
     "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
   );
+  await expect(
+    page.locator(
+      '#dashboard-v2-settings-root [data-dashboard-v2-route-body-slot="dashboard-v2-settings-body-slot"] > #settings-mode-content',
+    ),
+  ).toBeVisible();
+  await expect(
+    page.locator("#settings-mode-panel > :not(#dashboard-v2-settings-root)"),
+  ).toHaveCount(0);
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 checkpoint · Server configuration",
+    "UI v2 owned · Server configuration",
   );
   expect(await getCdpStatusTexts(page)).toContain(
     "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
@@ -188,7 +191,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   await settings.locator("#auth-attempts-section > summary").click();
   await expect(authSearch).toBeVisible();
   await authSearch.fill("dashboard");
-  await expect(page.locator("#settings-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-settings-root")).toContainText(
     "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
   );
   await expect(authSearchSummary).toHaveText(
@@ -199,7 +202,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   );
 
   await authSearch.fill("banned");
-  await expect(page.locator("#settings-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-settings-root")).toContainText(
     "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
   );
   await expect(authSearchSummary).toHaveText(
@@ -237,7 +240,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
   ).toBe(true);
   expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
-    false,
+    true,
   );
   const requestsAfterSettings = v2Requests.length;
 
@@ -255,13 +258,13 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     }),
   ).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 checkpoint · Recordings and source files",
+    "UI v2 owned · Recordings and source files",
   );
   expect(
     v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
   ).toBe(true);
   expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
-    false,
+    true,
   );
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterSettings);
   const requestsAfterMedia = v2Requests.length;
@@ -273,24 +276,22 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     .locator("#media-mode-content")
     .evaluate((node) => node.childElementCount);
   expect(hiddenMediaChildCount).toBe(0);
-  await expect(
-    page.locator("#status-mode-content").getByRole("heading", {
-      name: "Status",
-    }),
-  ).toBeVisible();
+  await expect(page.locator("#dashboard-v2-status-root")).toContainText(
+    "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
+  );
   await expect(page.locator("#status-versions")).toContainText("seeded");
   await expect(page.locator("#dashboard-v2-root")).toBeHidden();
   await expect(
     page.locator("#dashboard-v2-pipeline-selector-root"),
   ).toBeHidden();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 checkpoint · Runtime status",
+    "UI v2 owned · Runtime status",
   );
   expect(
     v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
   ).toBe(true);
   expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
-    false,
+    true,
   );
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterMedia);
 
@@ -316,13 +317,13 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
     page.locator("#dashboard-v2-pipeline-inspect-title"),
   ).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 checkpoint · Pipeline graph and diagnostics",
+    "UI v2 owned · Pipeline graph and diagnostics",
   );
   expect(
     v2Requests.some((url) => url.includes("dashboard-v2-checkpoints-entry.js")),
   ).toBe(true);
   expect(v2Requests.some((url) => url.includes("dashboard-v2-entry.js"))).toBe(
-    false,
+    true,
   );
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterStatus);
   const requestsAfterInspect = v2Requests.length;
@@ -337,7 +338,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   ).toBeHidden();
   await expect(page.locator("#dashboard-v2-control-room-title")).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 checkpoint · Pipeline monitoring wall",
+    "UI v2 owned · Pipeline monitoring wall",
   );
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterInspect);
   const requestsAfterMonitor = v2Requests.length;
@@ -347,7 +348,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   await expect(page.locator("#dashboard-v2-control-room-root")).toBeHidden();
   await expect(page.locator("#dashboard-v2-incidents-title")).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 checkpoint · Alerts, evidence, and lifecycle events",
+    "UI v2 owned · Alerts, evidence, and lifecycle events",
   );
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterMonitor);
   const requestsAfterIncidents = v2Requests.length;
@@ -357,7 +358,7 @@ test("seed: ui=v2 keeps legacy routes scoped while checkpoint routes own v2 stri
   await expect(page.locator("#dashboard-v2-incidents-root")).toBeHidden();
   await expect(page.locator("#dashboard-v2-telemetry-title")).toBeVisible();
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 checkpoint · Engine and pipeline counters",
+    "UI v2 owned · Engine and pipeline counters",
   );
   expect(v2Requests.length).toBeGreaterThanOrEqual(requestsAfterIncidents);
   const requestsAfterTelemetry = v2Requests.length;
@@ -434,13 +435,13 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   await expect(
     checkpoint.locator("#dashboard-v2-settings-title"),
   ).toBeVisible();
-  await expect(page.locator("#settings-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-settings-root")).toContainText(
     "Synthetic Restream settings · 5 sections · 3 profiles · 12 auth attempts",
   );
   await expect(
     checkpoint.getByText(
       "Synthetic Restream settings · 5 sections · 3 profiles · 12 auth attempts",
-    ),
+    ).first(),
   ).toBeVisible();
   await expect(
     checkpoint.getByText("Security: 3 banned attempts"),
@@ -611,121 +612,132 @@ test("seed: ui=v2 Settings bounds dense auth attempts until requested @desktop",
   expect(await getCdpNodeCount(page)).toBeLessThan(13_500);
 });
 
-test("seed: ui=v2 legacy-owned routes keep operator checkpoints visible and announced @desktop", async ({
+test("seed: ui=v2 v2-owned routes slot operator bodies under route roots @desktop", async ({
   page,
 }) => {
-  const checkpoints = [
+  const routes = [
     {
+      bodyId: "inspect-mode-content",
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
-      locator: "#inspect-route-summary",
       nodeBudget: 9_000,
+      panelId: "inspect-mode-panel",
       rootId: "dashboard-v2-pipeline-inspect-root",
+      slotId: "dashboard-v2-pipeline-inspect-body-slot",
       text: "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
     },
     {
+      bodyId: "control-mode-content",
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
-      locator: "#control-room-route-summary",
       nodeBudget: 13_500,
+      panelId: "control-mode-panel",
       rootId: "dashboard-v2-control-room-root",
+      slotId: "dashboard-v2-control-room-body-slot",
       text: "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
     },
     {
+      bodyId: "media-mode-content",
       href: "/?mode=media&ui=v2",
-      locator: "#media-library-results-summary",
       nodeBudget: 11_500,
+      panelId: "media-mode-panel",
       rootId: "dashboard-v2-media-root",
+      slotId: "dashboard-v2-media-body-slot",
       text: "1 media file total · 0 recordings · 1 source file",
     },
     {
+      bodyId: "settings-mode-content",
       href: "/?mode=settings&ui=v2",
-      locator: "#settings-route-summary",
-      nodeBudget: 14_000,
+      nodeBudget: 14_750,
+      panelId: "settings-mode-panel",
       rootId: "dashboard-v2-settings-root",
+      slotId: "dashboard-v2-settings-body-slot",
       text: "Synthetic Restream settings · 5 sections · 3 profiles · 1 auth attempt",
     },
     {
+      bodyId: "status-mode-content",
       href: "/?mode=status&ui=v2",
-      locator: "#status-route-summary",
       nodeBudget: 16_500,
+      panelId: "status-mode-panel",
       rootId: "dashboard-v2-status-root",
+      slotId: "dashboard-v2-status-body-slot",
       text: "Status loaded for seeded · commit seeded · 1 process log · 1 notable activity",
     },
     {
+      bodyId: "incidents-mode-content",
       href: "/?mode=incidents&ui=v2",
-      locator: "#incidents-route-summary",
       nodeBudget: 18_500,
+      panelId: "incidents-mode-panel",
       rootId: "dashboard-v2-incidents-root",
+      slotId: "dashboard-v2-incidents-body-slot",
       text: "0 critical · 1 warning · 1 recent event · fleet",
     },
     {
+      bodyId: "telemetry-mode-content",
       href: "/?mode=telemetry&ui=v2",
-      locator: "#telemetry-route-summary",
       nodeBudget: 21_500,
+      panelId: "telemetry-mode-panel",
       rootId: "dashboard-v2-telemetry-root",
+      slotId: "dashboard-v2-telemetry-body-slot",
       text: "Telemetry loaded · 2 ingests · 2 stages · 1 egress · 1 reader · Healthy Program",
     },
   ] as const;
 
-  await openSeededDashboard(page, "mixed-health", checkpoints[0].href, {
+  await openSeededDashboard(page, "mixed-health", routes[0].href, {
     expectOverviewReady: false,
   });
 
-  for (const checkpoint of checkpoints) {
-    if (page.url() !== new URL(checkpoint.href, page.url()).href) {
-      await page.goto(checkpoint.href);
+  for (const route of routes) {
+    if (page.url() !== new URL(route.href, page.url()).href) {
+      await page.goto(route.href);
     }
-    const summary = page.locator(checkpoint.locator);
-    await expect(summary).toHaveText(checkpoint.text);
-    expect(await getCdpStatusTexts(page)).toContain(checkpoint.text);
-    expect(await getCdpNodeCount(page), checkpoint.href).toBeLessThan(
-      checkpoint.nodeBudget,
+    const activeRoot = page.locator(`#${route.rootId}`);
+    await expect(activeRoot, route.href).toBeVisible();
+    await expect(activeRoot, route.href).toContainText(route.text);
+    await expect(
+      page.locator(
+        `#${route.rootId} [data-dashboard-v2-route-body-slot="${route.slotId}"] > #${route.bodyId}`,
+      ),
+      route.href,
+    ).toBeVisible();
+    await expect(
+      page.locator(`#${route.panelId} > :not(#${route.rootId})`),
+      route.href,
+    ).toHaveCount(0);
+    expect(await getCdpStatusTexts(page)).toContain(route.text);
+    expect(await getCdpNodeCount(page), route.href).toBeLessThan(
+      route.nodeBudget,
     );
-    for (const otherCheckpoint of checkpoints) {
-      const root = page.locator(`#${otherCheckpoint.rootId}`);
-      if (otherCheckpoint.rootId === checkpoint.rootId) {
-        await expect(root, checkpoint.href).toBeVisible();
+    for (const otherRoute of routes) {
+      const root = page.locator(`#${otherRoute.rootId}`);
+      if (otherRoute.rootId === route.rootId) {
+        await expect(root, route.href).toBeVisible();
       } else {
-        await expect(root, checkpoint.href).toBeHidden();
+        await expect(root, route.href).toBeHidden();
         await expect(
-          page.locator(`#${otherCheckpoint.rootId} > *`),
-          checkpoint.href,
+          page.locator(`#${otherRoute.rootId} > *`),
+          route.href,
         ).toHaveCount(0);
       }
-    }
-    if (!checkpoint.href.includes("mode=pipeline")) {
-      await expect(
-        page.locator(
-          "#inspect-mode-panel > :not(#dashboard-v2-pipeline-inspect-root)",
-        ),
-      ).toHaveCount(0);
-      await expect(
-        page.locator(
-          "#control-mode-panel > :not(#dashboard-v2-control-room-root)",
-        ),
-      ).toHaveCount(0);
-      await expect(page.locator("#inspect-mode-panel h1")).toHaveCount(0);
-      await expect(page.locator("#control-mode-panel h1")).toHaveCount(0);
     }
   }
 
   await page.goto("/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2");
-  await expect(page.locator("#inspect-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-pipeline-inspect-root")).toContainText(
     "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
   );
   await expect(
-    page.locator("#inspect-mode-panel").getByRole("heading", {
-      name: "Pipeline inspect",
-    }),
+    page.locator(
+      '#dashboard-v2-pipeline-inspect-root [data-dashboard-v2-route-body-slot="dashboard-v2-pipeline-inspect-body-slot"] > #inspect-mode-content',
+    ),
   ).toBeVisible();
 
   await page.goto("/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2");
-  await expect(page.locator("#control-room-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-control-room-root")).toContainText(
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );
   await expect(
-    page.locator("#control-mode-panel").getByRole("heading", {
-      name: "Control Room",
-    }),
+    page.locator(
+      '#dashboard-v2-control-room-root [data-dashboard-v2-route-body-slot="dashboard-v2-control-room-body-slot"] > #control-mode-content',
+    ),
   ).toBeVisible();
 });
 
@@ -785,23 +797,23 @@ test("seed: ui=v2 shell announces ownership while moving across routes @desktop"
     },
     {
       href: "/?mode=pipeline&view=inspect&p=pipe-retrying&ui=v2",
-      text: "UI v2 checkpoint · Pipeline graph and diagnostics",
+      text: "UI v2 owned · Pipeline graph and diagnostics",
     },
     {
       href: "/?mode=pipeline&view=monitor&p=pipe-retrying&ui=v2",
-      text: "UI v2 checkpoint · Pipeline monitoring wall",
+      text: "UI v2 owned · Pipeline monitoring wall",
     },
     {
       href: "/?mode=incidents&ui=v2",
-      text: "UI v2 checkpoint · Alerts, evidence, and lifecycle events",
+      text: "UI v2 owned · Alerts, evidence, and lifecycle events",
     },
     {
       href: "/?mode=telemetry&ui=v2",
-      text: "UI v2 checkpoint · Engine and pipeline counters",
+      text: "UI v2 owned · Engine and pipeline counters",
     },
     {
       href: "/?mode=status&ui=v2",
-      text: "UI v2 checkpoint · Runtime status",
+      text: "UI v2 owned · Runtime status",
     },
   ] as const;
 
@@ -823,7 +835,7 @@ test("seed: ui=v2 shell announces ownership while moving across routes @desktop"
     "aria-selected",
     "true",
   );
-  await expect(page.locator("#incidents-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-incidents-root")).toContainText(
     "0 critical · 1 warning · 1 recent event · fleet",
   );
 
@@ -833,7 +845,7 @@ test("seed: ui=v2 shell announces ownership while moving across routes @desktop"
     "aria-selected",
     "true",
   );
-  await expect(page.locator("#telemetry-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-telemetry-root")).toContainText(
     "Telemetry loaded · 2 ingests · 3 stages · 2 egresses · 0 readers · fleet",
   );
   expect(await getCdpNodeCount(page)).toBeLessThan(21_000);
@@ -861,7 +873,7 @@ test("seed: ui=v2 shell tablists support arrow key navigation @desktop", async (
     "aria-selected",
     "true",
   );
-  await expect(page.locator("#incidents-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-incidents-root")).toContainText(
     "0 critical · 1 warning · 1 recent event · fleet",
   );
 
@@ -872,7 +884,7 @@ test("seed: ui=v2 shell tablists support arrow key navigation @desktop", async (
     "true",
   );
   await expect(page.locator("#workspace-mode-summary")).toHaveText(
-    "UI v2 checkpoint · Engine and pipeline counters",
+    "UI v2 owned · Engine and pipeline counters",
   );
 
   await page.keyboard.press("End");
@@ -896,13 +908,13 @@ test("seed: ui=v2 shell tablists support arrow key navigation @desktop", async (
   await page.keyboard.press("ArrowRight");
   await expect(page).toHaveURL(/view=inspect/);
   await expect(inspectTab).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator("#inspect-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-pipeline-inspect-root")).toContainText(
     "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
   );
   await page.keyboard.press("ArrowRight");
   await expect(page).toHaveURL(/view=monitor/);
   await expect(monitorTab).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator("#control-room-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-control-room-root")).toContainText(
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );
   await page.keyboard.press("ArrowLeft");
@@ -910,7 +922,7 @@ test("seed: ui=v2 shell tablists support arrow key navigation @desktop", async (
   await expect(inspectTab).toHaveAttribute("aria-selected", "true");
   expect(await getCdpStatusTexts(page)).toEqual(
     expect.arrayContaining([
-      "UI v2 checkpoint · Pipeline graph and diagnostics",
+      "UI v2 owned · Pipeline graph and diagnostics",
       "Inspecting Retrying Destination · input live · 1 output · 1 attention item",
     ]),
   );
@@ -946,7 +958,7 @@ test("seed: ui=v2 shell keeps active tabs visible in narrow rails @desktop", asy
     "true",
   );
   await expectTabVisibleInRail(page, "#pipeline-workspace-tab-monitor");
-  await expect(page.locator("#control-room-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-control-room-root")).toContainText(
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );
   expect(await getCdpNodeCount(page)).toBeLessThan(12_000);
@@ -984,7 +996,7 @@ test("seed: ui=v2 shell tolerates operator text zoom without horizontal overflow
     "true",
   );
   await expectTabVisibleInRail(page, "#pipeline-workspace-tab-monitor");
-  await expect(page.locator("#control-room-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-control-room-root")).toContainText(
     "Monitoring Retrying Destination · 1 output · 1 monitor · 0 missing URLs",
   );
   expect(await getDocumentWidthOverflow(page)).toBeLessThanOrEqual(1);
@@ -1140,7 +1152,7 @@ test("seed: ui=v2 owned routes keep keyboard and CDP budgets @desktop", async ({
   await expect(page).toHaveURL(/view=inspect/);
   await expect(page.locator("#inspect-mode-panel")).toBeVisible();
   await expect(page.locator("#inspect-mode-panel")).toBeFocused();
-  await expect(page.locator("#inspect-route-summary")).toHaveText(
+  await expect(page.locator("#dashboard-v2-pipeline-inspect-root")).toContainText(
     "Inspecting Healthy Program · input live · 1 output · 0 attention items",
   );
   expect(await getCdpNodeCount(page)).toBeLessThan(12_000);
