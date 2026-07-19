@@ -58,14 +58,6 @@ pub fn recording_keyframe_preroll_packets() -> usize {
     DEFAULT_KEYFRAME_PREROLL_PACKETS
 }
 
-pub fn ext_stage_keyframe_preroll_packets() -> usize {
-    DEFAULT_KEYFRAME_PREROLL_PACKETS
-}
-
-pub fn internal_transcoder_keyframe_preroll_packets() -> usize {
-    DEFAULT_KEYFRAME_PREROLL_PACKETS
-}
-
 pub fn srt_egress_keyframe_preroll_packets(encoding: &str) -> usize {
     let spec = OutputEncodingSpec::parse(encoding);
     match spec.video() {
@@ -180,14 +172,6 @@ mod tests {
     }
 
     #[test]
-    fn internal_transcoder_preroll_matches_the_shared_default() {
-        assert_eq!(
-            internal_transcoder_keyframe_preroll_packets(),
-            DEFAULT_KEYFRAME_PREROLL_PACKETS
-        );
-    }
-
-    #[test]
     fn ext_stage_probe_budget_prefers_hevc_budget_for_hevc_inputs() {
         assert_eq!(
             ext_stage_probe_budget(VideoCodecKind::H264),
@@ -296,14 +280,6 @@ mod tests {
                 observed_bitrate_bps: None,
             }),
             (1_000_000, EXT_STAGE_PROBE_SIZE_BYTES_MAX)
-        );
-    }
-
-    #[test]
-    fn external_stage_preroll_keeps_buffered_join_window() {
-        assert_eq!(
-            ext_stage_keyframe_preroll_packets(),
-            DEFAULT_KEYFRAME_PREROLL_PACKETS
         );
     }
 
