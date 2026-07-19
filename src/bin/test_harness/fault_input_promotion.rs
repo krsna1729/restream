@@ -1,5 +1,8 @@
 use super::*;
 
+const LONG_GOP_PREVIEW_TIMEOUT: Duration = Duration::from_secs(30);
+const BUFFERED_PROMOTION_DEADLINE: Duration = Duration::from_secs(5);
+
 pub(crate) struct HarnessInput {
     pub(crate) id: String,
     pub(crate) stream_key: String,
@@ -118,7 +121,7 @@ pub(crate) async fn run_input_promotion_case(
         Duration::from_secs(20),
     )
     .await?;
-    wait_for_input_preview(api, &backup.id, Duration::from_secs(20)).await?;
+    wait_for_input_preview(api, &backup.id, LONG_GOP_PREVIEW_TIMEOUT).await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     start_output(api, &pipeline_id, &output_id).await?;
@@ -135,7 +138,7 @@ pub(crate) async fn run_input_promotion_case(
         .await?;
 
     let promotion_started = Instant::now();
-    let deadline = promotion_started + Duration::from_secs(5);
+    let deadline = promotion_started + BUFFERED_PROMOTION_DEADLINE;
     let mut progressed = false;
     let mut saw_retrying = false;
     let mut saw_missing = false;

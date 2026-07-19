@@ -79,6 +79,27 @@ impl HlsConsumers {
 }
 
 impl MediaEngine {
+    pub(crate) async fn get_input_sequence_headers(
+        &self,
+        input_id: &str,
+    ) -> (Option<bytes::Bytes>, Option<bytes::Bytes>) {
+        let ingest = self.ingests.sessions.read().await.get(input_id).cloned();
+        let Some(ingest) = ingest else {
+            return (None, None);
+        };
+        let video = ingest
+            .video_sequence_header
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let audio = ingest
+            .audio_sequence_header
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        (video, audio)
+    }
+
     pub async fn ensure_hls_segmenter(&self, pipeline_id: &str) -> (Arc<HlsStore>, bool) {
         let mut consumers = self.hls.consumers.write().await;
         let already_running = consumers.contains_key(pipeline_id);
