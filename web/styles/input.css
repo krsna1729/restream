@@ -29,7 +29,7 @@
   }
 
   .dashboard-section {
-    @apply border-base-content/10 bg-base-200/85 rounded-xl border shadow-none;
+    @apply border-base-content/10 bg-base-200/85 min-w-0 rounded-xl border shadow-none;
   }
 
   .dashboard-section-header {
@@ -49,7 +49,7 @@
   }
 
   .dashboard-card {
-    @apply border-base-content/10 bg-base-100/80 rounded-lg border;
+    @apply border-base-content/10 bg-base-100/80 min-w-0 rounded-lg border;
   }
 
   .dashboard-stat-card {

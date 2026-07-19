@@ -426,7 +426,7 @@ export function resolveDashboardUiVersion(
     return urlVersion;
   }
   if (urlUiVersion !== null) return "v1";
-  return readDashboardUiVersionPreference(storage) ?? "v1";
+  return readDashboardUiVersionPreference(storage) ?? "v2";
 }
 
 export function dashboardUiVersionUrl(

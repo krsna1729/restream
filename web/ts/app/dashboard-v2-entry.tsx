@@ -333,7 +333,7 @@ function DashboardV2Overview({
                   className="dashboard-card p-3"
                   key={item.pipelineId}
                 >
-                  <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="flex min-w-0 flex-col items-start gap-3 sm:flex-row sm:justify-between">
                     <div className="min-w-0">
                       <h3 className="truncate font-semibold">
                         {item.pipelineName}
@@ -375,7 +375,7 @@ function DashboardV2Overview({
         </Panel>
 
         <Panel className="p-3" labelledBy="dashboard-v2-signals-title">
-          <div className="mb-3 flex items-center justify-between gap-3 px-1">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3 px-1">
             <div>
               <h2
                 className="dashboard-section-title"
@@ -392,7 +392,7 @@ function DashboardV2Overview({
               {model.counts.pipelines === 1 ? "" : "s"}
             </span>
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid gap-2 sm:grid-cols-2">
             {model.metrics.map((metric) => (
               <MetricCard key={metric.key} metric={metric} />
             ))}
@@ -455,7 +455,69 @@ function DashboardV2Overview({
             </div>
           ) : null}
         </div>
-        <div className="overflow-x-auto">
+        <div className="space-y-2 p-4 md:hidden">
+          {model.pipelines.length ? (
+            filteredPipelineRows.length ? (
+              filteredPipelineRows.map((pipeline) => (
+                <article className="dashboard-card p-3" key={pipeline.id}>
+                  <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+                    <button
+                      aria-label={`Open pipeline ${pipeline.name}`}
+                      className="group min-w-0 text-left"
+                      onClick={() => actions.openPipeline(pipeline.id)}
+                      type="button"
+                    >
+                      <span className="group-hover:text-accent block truncate font-semibold">
+                        {pipeline.name}
+                      </span>
+                    </button>
+                    <StatusBadge status={pipeline.health} />
+                  </div>
+                  <dl className="mt-3 grid gap-2">
+                    {([
+                      ["Input", pipeline.input],
+                      ["Outputs", pipeline.outputs],
+                      ["Input rate", pipeline.inputRate],
+                      ["Output rate", pipeline.outputRate],
+                      ["Recording", pipeline.recording],
+                    ] satisfies ReadonlyArray<
+                      readonly [string, OverviewStatus]
+                    >).map(([label, status]) => (
+                      <div
+                        className="flex min-w-0 items-center justify-between gap-2"
+                        key={label}
+                      >
+                        <dt className="text-base-content/60 text-xs font-semibold uppercase">
+                          {label}
+                        </dt>
+                        <dd className="min-w-0">
+                          <StatusBadge status={status} />
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </article>
+              ))
+            ) : (
+              <div className="dashboard-empty">
+                <p className="font-semibold">No pipelines match.</p>
+                <p
+                  aria-live="polite"
+                  className="text-base-content/60 mt-1 text-sm"
+                  role="status"
+                >
+                  No overview pipelines match "{pipelineTableQuery.trim()}".
+                  Clear search to show all.
+                </p>
+              </div>
+            )
+          ) : (
+            <p className="text-base-content/70 text-sm">
+              No pipelines configured.
+            </p>
+          )}
+        </div>
+        <div className="hidden overflow-x-auto md:block">
           <table className="table table-sm">
             <thead className="text-base-content/70 bg-base-100/50 text-xs uppercase">
               <tr>
@@ -562,9 +624,9 @@ function DashboardV2Overview({
               Open Status
             </button>
             {showActivitySearch ? (
-              <div className="w-full max-w-sm space-y-2 sm:w-80">
+              <div className="w-full max-w-sm min-w-0 space-y-2 sm:w-80">
                 <div className="flex flex-wrap items-center gap-2">
-                  <label className="input input-bordered input-sm flex min-h-10 min-w-0 flex-1 items-center gap-2">
+                  <label className="input input-bordered input-sm flex min-h-10 w-full min-w-0 items-center gap-2 sm:flex-1">
                     <span className="text-base-content/55 text-xs font-semibold uppercase">
                       Find
                     </span>
@@ -582,7 +644,7 @@ function DashboardV2Overview({
                   {normalizedActivityQuery ? (
                     <button
                       aria-label="Clear restream activity search"
-                      className="btn btn-xs btn-ghost"
+                      className="btn btn-xs btn-ghost w-full justify-start sm:w-auto"
                       onClick={clearActivitySearch}
                       type="button"
                     >
@@ -622,6 +684,9 @@ function DashboardV2Overview({
                     <h3 className="font-semibold">{item.headline}</h3>
                     <p className="text-base-content/70 mt-1 text-sm">
                       {item.summary}
+                    </p>
+                    <p className="text-base-content/60 mt-1 text-xs tabular-nums">
+                      {item.evidence}
                     </p>
                   </div>
                   <span className={`${toneClasses[item.tone]} badge border`}>

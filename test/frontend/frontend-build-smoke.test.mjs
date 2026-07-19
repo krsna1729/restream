@@ -22,6 +22,11 @@ function makeStorage() {
   };
 }
 
+async function flushAsyncWork() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 test("compiled dashboard bootstrap remains idempotent", async () => {
   const { document, window } = installFakeDom();
   window.location.href = "http://localhost/?mode=pipeline";
@@ -29,12 +34,24 @@ test("compiled dashboard bootstrap remains idempotent", async () => {
   const dashboardGrid = document.createElement("div");
   dashboardGrid.id = "dashboard-grid";
   document.body.appendChild(dashboardGrid);
+  for (const id of [
+    "dashboard-v2-root",
+    "dashboard-v2-pipeline-selector-root",
+    "dashboard-v2-pipeline-header-root",
+    "dashboard-v2-pipeline-input-status-root",
+    "dashboard-v2-pipeline-output-overview-root",
+  ]) {
+    const container = document.createElement("div");
+    container.id = id;
+    document.body.appendChild(container);
+  }
 
   const app = await loadCompiledFrontendModule("app/dashboard-app.js");
 
   app.initDashboardApp();
   const firstSetDashboardMode = window.setDashboardMode;
   app.initDashboardApp();
+  await flushAsyncWork();
 
   assert.equal(typeof firstSetDashboardMode, "function");
   assert.equal(window.setDashboardMode, firstSetDashboardMode);
@@ -47,7 +64,7 @@ test("dashboard v2 loader resolves URL overrides and saved preference", async ()
 
   assert.equal(
     loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
-    false,
+    true,
   );
   assert.equal(
     loader.dashboardV2ExperimentEnabled("?mode=overview&ui=v2", storage),
@@ -93,31 +110,31 @@ test("dashboard UI version toggle persists changes and updates the URL", async (
     storage,
   });
 
-  assert.equal(toggle.checked, false);
-  toggle.checked = true;
-  toggle.dispatchEvent({ type: "change" });
-
-  assert.equal(reloads, 1);
-  assert.equal(replacedUrl, "http://localhost/?mode=overview&ui=v2");
-  assert.equal(
-    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
-    true,
-  );
-
-  window.location.href = replacedUrl;
-  replacedUrl = "";
+  assert.equal(toggle.checked, true);
   toggle.checked = false;
   toggle.dispatchEvent({ type: "change" });
 
-  assert.equal(reloads, 2);
+  assert.equal(reloads, 1);
   assert.equal(replacedUrl, "http://localhost/?mode=overview");
   assert.equal(
     loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
     false,
   );
+
+  window.location.href = replacedUrl;
+  replacedUrl = "";
+  toggle.checked = true;
+  toggle.dispatchEvent({ type: "change" });
+
+  assert.equal(reloads, 2);
+  assert.equal(replacedUrl, "http://localhost/?mode=overview&ui=v2");
+  assert.equal(
+    loader.dashboardV2ExperimentEnabled("?mode=overview", storage),
+    true,
+  );
 });
 
-test("compiled dashboard keeps the opt-in React seam in a bounded bundle", async () => {
+test("compiled dashboard keeps the default React seam in a bounded bundle", async () => {
   const appDir = path.join(resolveFrontendModulesDir(), "app");
   const [defaultEntry, v2Entry, checkpointsEntry, sharedRuntime] =
     await Promise.all([
@@ -136,8 +153,8 @@ test("compiled dashboard keeps the opt-in React seam in a bounded bundle", async
   assert.equal(v2Entry.includes("dashboard-v2-pipeline-inspect-root"), false);
   const sharedGzip = gzipSync(sharedRuntime).byteLength;
   assert.ok(
-    gzipSync(v2Entry).byteLength + sharedGzip <= 77_000,
-    "the opt-in Overview/Operate route payload must stay within its recorded gzip budget",
+    gzipSync(v2Entry).byteLength + sharedGzip <= 77_250,
+    "the default Overview/Operate route payload must stay within its recorded gzip budget",
   );
   assert.ok(
     gzipSync(checkpointsEntry).byteLength + sharedGzip <= 69_000,
