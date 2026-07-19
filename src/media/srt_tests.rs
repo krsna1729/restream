@@ -681,6 +681,76 @@ fn maps_srt_sender_quality_from_bistats() {
     assert_eq!(snapshot.packets_sent_retrans, 5);
 }
 
+// Mirrors `srt_rates_report_none_when_counter_regresses_instead_of_wrapping`
+// for the sender-side wrapper: it shares `counter_rate`'s `checked_sub`, but
+// only had happy-path coverage before this test.
+#[test]
+fn srt_sender_rates_report_none_when_counter_regresses_instead_of_wrapping() {
+    let sampled_at = Instant::now();
+    let previous = SrtSenderCounterSnapshot {
+        packets_sent_loss: 500,
+        packets_sent_drop: 50,
+        packets_sent_retrans: 900,
+        sampled_at,
+    };
+    let stats = SrtTraceBStats {
+        pkt_snd_loss_total: 10,
+        pkt_snd_drop_total: 1,
+        pkt_retrans_total: 0,
+        ..unsafe { std::mem::zeroed() }
+    };
+
+    let (quality, _) =
+        srt_sender_quality_from_stats(&stats, Some(previous), sampled_at + Duration::from_secs(2));
+    assert_eq!(quality.packets_sent_loss_per_sec, None);
+    assert_eq!(quality.packets_sent_drop_per_sec, None);
+    assert_eq!(quality.packets_sent_retrans_per_sec, None);
+    // The absolute (non-rate) counters still reflect the post-reset value.
+    assert_eq!(quality.packets_sent_loss, Some(10));
+}
+
+// Mirrors `srt_rates_report_none_at_zero_elapsed_seconds` for the sender side.
+#[test]
+fn srt_sender_rates_report_none_at_zero_elapsed_seconds() {
+    let sampled_at = Instant::now();
+    let previous = SrtSenderCounterSnapshot {
+        packets_sent_loss: 5,
+        packets_sent_drop: 0,
+        packets_sent_retrans: 0,
+        sampled_at,
+    };
+    let stats = SrtTraceBStats {
+        pkt_snd_loss_total: 15,
+        ..unsafe { std::mem::zeroed() }
+    };
+
+    let (quality, _) = srt_sender_quality_from_stats(&stats, Some(previous), sampled_at);
+    assert_eq!(quality.packets_sent_loss_per_sec, None);
+}
+
+// Mirrors `quality_from_stats_clamps_negative_sentinel_counters_to_zero` for
+// the sender side: libsrt's -1 "unknown" sentinel must clamp to 0 before
+// widening rather than sign-extending into a near-`u64::MAX` garbage value.
+#[test]
+fn sender_quality_from_stats_clamps_negative_sentinel_counters_to_zero() {
+    let stats = SrtTraceBStats {
+        pkt_snd_loss_total: -1,
+        pkt_snd_drop_total: -1,
+        pkt_retrans_total: -1,
+        ms_snd_tsb_pd_delay: -1,
+        ms_snd_buf: -1,
+        ..unsafe { std::mem::zeroed() }
+    };
+
+    let (quality, snapshot) = srt_sender_quality_from_stats(&stats, None, Instant::now());
+    assert_eq!(quality.packets_sent_loss, Some(0));
+    assert_eq!(quality.packets_sent_drop, Some(0));
+    assert_eq!(quality.packets_sent_retrans, Some(0));
+    assert_eq!(quality.ms_send_tsb_pd_delay, Some(0.0));
+    assert_eq!(quality.ms_send_buf, Some(0.0));
+    assert_eq!(snapshot.packets_sent_loss, 0);
+}
+
 #[test]
 fn linked_libsrt_exposes_group_connect_when_required() {
     unsafe {
