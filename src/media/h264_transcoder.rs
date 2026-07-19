@@ -635,4 +635,61 @@ mod tests {
             "HEVC->H.264 stage should emit a keyframe"
         );
     }
+
+    #[test]
+    fn ffmpeg_error_classification_distinguishes_again_from_eof() {
+        let again = ffmpeg_next::Error::Other {
+            errno: ffmpeg_next::error::EAGAIN,
+        };
+        assert!(ffmpeg_error_is_again(again));
+        assert!(!ffmpeg_error_is_eof(again));
+
+        assert!(ffmpeg_error_is_eof(ffmpeg_next::Error::Eof));
+        assert!(!ffmpeg_error_is_again(ffmpeg_next::Error::Eof));
+
+        // An unrelated errno wrapped in `Other` must not be misclassified as
+        // either retry-signal.
+        let unrelated = ffmpeg_next::Error::Other {
+            errno: ffmpeg_next::error::EINVAL,
+        };
+        assert!(!ffmpeg_error_is_again(unrelated));
+        assert!(!ffmpeg_error_is_eof(unrelated));
+    }
+
+    #[test]
+    fn errors_out_instead_of_panicking_on_empty_input() {
+        ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Quiet);
+        let input_queue = Arc::new(MemoryQueue::new());
+        input_queue.close();
+
+        let output_ring = Arc::new(RingBuffer::new(16_384));
+        let cancel = CancellationToken::new();
+
+        let result =
+            run_ffmpeg_h264_stage(input_queue, output_ring, cancel, "test-empty-input-h264");
+
+        assert!(
+            result.is_err(),
+            "an empty, immediately-closed input queue must surface an error, not panic or hang"
+        );
+    }
+
+    #[test]
+    fn errors_out_instead_of_panicking_on_garbage_input() {
+        ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Quiet);
+        let input_queue = Arc::new(MemoryQueue::new());
+        input_queue.write_sync(&[0xFFu8; 4096]);
+        input_queue.close();
+
+        let output_ring = Arc::new(RingBuffer::new(16_384));
+        let cancel = CancellationToken::new();
+
+        let result =
+            run_ffmpeg_h264_stage(input_queue, output_ring, cancel, "test-garbage-input-h264");
+
+        assert!(
+            result.is_err(),
+            "non-MPEG-TS garbage input must surface an error, not panic or hang"
+        );
+    }
 }
