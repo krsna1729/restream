@@ -386,11 +386,13 @@ fn spawn_msr_publisher(
     env: &ResourceSweepEnv,
     stream_key: &str,
     profile: MsrRunProfile,
+    standby: bool,
 ) -> Result<Child, String> {
     let fixture = profile.fixture()?;
+    let role = if standby { "-standby" } else { "" };
     let log_path = env
         .work_dir
-        .join(format!("publisher-{}.log", profile.output_prefix()));
+        .join(format!("publisher-{}{}.log", profile.output_prefix(), role));
     let url = append_srt_crypto(
         harness_srt_ffmpeg_url(env.restream_srt, stream_key, HarnessSrtMode::Publish, None),
         &env.srt_crypto,
@@ -830,6 +832,7 @@ pub(crate) async fn msr_dashboard() -> Result<Value, String> {
         &env.resource,
         MsrRunProfile::Canonical.stream_key(),
         MsrRunProfile::Canonical,
+        false,
     )?;
     wait_for_api_input_live(&stack.api, &hero_pipeline.id, Duration::from_secs(60)).await?;
     let hero_outputs = seed_msr_dashboard_hero_outputs(
@@ -1173,8 +1176,19 @@ async fn run_msr_phase(
     let stream_key = profile.stream_key();
     let pipeline_id =
         create_resource_pipeline(&stack.api, profile.pipeline_name(), stream_key).await?;
-    let mut publisher = spawn_msr_publisher(&env, stream_key, profile)?;
+    let mut publisher = spawn_msr_publisher(&env, stream_key, profile, false)?;
     wait_for_api_input_live(&stack.api, &pipeline_id, Duration::from_secs(60)).await?;
+    let standby_input = create_backup_input(&stack.api, &pipeline_id).await?;
+    let mut standby_publisher =
+        spawn_msr_publisher(&env, &standby_input.stream_key, profile, true)?;
+    wait_for_input_state(
+        &stack.api,
+        &pipeline_id,
+        &standby_input.id,
+        "standby",
+        Duration::from_secs(60),
+    )
+    .await?;
 
     let max_outputs = *checkpoints
         .last()
@@ -1312,6 +1326,11 @@ async fn run_msr_phase(
         "profile": profile.label(),
         "plan": plan_json.clone(),
         "executedOutputs": output_ids.len(),
+        "bufferedStandby": {
+            "inputId": standby_input.id,
+            "connected": true,
+            "forwardingState": "standby",
+        },
         "artifacts": {
             "summaryJson": env.summary_json.clone(),
             "summaryCsv": env.summary_csv.clone(),
@@ -1333,9 +1352,11 @@ async fn run_msr_phase(
     if env.no_cleanup {
         println!("MSR no-cleanup: leaving the live stack running");
         std::mem::forget(publisher);
+        std::mem::forget(standby_publisher);
         std::mem::forget(stack);
     } else {
         stop_child(&mut publisher).await;
+        stop_child(&mut standby_publisher).await;
         delete_resource_pipeline(&stack.api, &pipeline_id).await;
         stop_child(&mut stack.restream).await;
         stop_child(&mut stack.mediamtx).await;

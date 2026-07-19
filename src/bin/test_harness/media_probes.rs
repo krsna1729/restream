@@ -162,6 +162,57 @@ pub(crate) async fn spawn_publisher(
     )
 }
 
+pub(crate) async fn spawn_long_gop_publisher(
+    path: &Path,
+    url: &str,
+    format: &str,
+) -> Result<Child, String> {
+    let ffmpeg_threads = std::env::var("HARNESS_FFMPEG_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(2)
+        .max(1);
+    let mut command = command_with_optional_cgroup("ffmpeg", "publisher");
+    command
+        .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-threads"])
+        .arg(ffmpeg_threads.to_string())
+        .args(["-re", "-stream_loop", "-1", "-i"])
+        .arg(path)
+        .args([
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0?",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-g",
+            "300",
+            "-keyint_min",
+            "300",
+            "-sc_threshold",
+            "0",
+            "-bf",
+            "0",
+            "-c:a",
+            "copy",
+        ]);
+    if format == "mpegts" {
+        command.args(["-mpegts_flags", "+resend_headers"]);
+    }
+    command
+        .args(["-f", format])
+        .arg(url)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| error.to_string())
+}
+
 /// Probe a live stream URL without buffering its contents into the harness.
 pub(crate) async fn ffprobe(url: &str) -> Result<Value, String> {
     // kill_on_drop(true) ensures the subprocess is killed when the timeout

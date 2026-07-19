@@ -96,15 +96,19 @@ telemetry are the appropriate source for a running process.
 Each pipeline owns up to four independently authenticated input sessions. Every
 input has one opaque stream key and can connect through RTMP or SRT. Connected
 standbys still perform socket receive, protocol parsing, demux/probe, metadata
-collection, and input-scoped HLS preview generation. Their packets stop at an
-atomic selection gate before the pipeline's shared source ring, so downstream
-outputs and transforms remain single-source.
+collection, and on-demand input-scoped HLS preview generation. Each RTMP/SRT
+standby retains only its newest complete compressed GOP, bounded by bytes and
+packet count. Nothing reaches the shared source ring, outputs, or transforms
+until selection, so downstream media work remains single-source.
 
 Promotion is serialized per pipeline. The current gate rejects new packets and
 drains its existing packet lease before the target gate is armed. The promoted
-input waits for a video keyframe, then maps its timeline immediately after the
-last forwarded DTS while preserving composition offset. This keeps the shared
-ring single-writer and prevents timestamp regression across the handoff.
+network input replays its retained GOP from the cached keyframe on the next
+packet arrival. If it has no complete cached GOP, promotion falls back to its
+next video keyframe. The replay receives one timestamp offset so its first DTS
+follows the prior writer's last DTS while preserving every packet's composition
+offset. This keeps the shared ring single-writer and prevents timestamp
+regression across repeated handoffs.
 
 ## Packet and container boundaries
 

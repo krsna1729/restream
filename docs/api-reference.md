@@ -238,9 +238,10 @@ input reports `forwardingState: "standby"`; a promoted input may briefly report
 
 Promotion returns the normalized input plus `connected`. When the target is
 already connected, the current writer is demoted and drained before the target
-begins forwarding at its next video keyframe. Promotion of an idle configured
-input changes selection and returns `connected: false`; its next publisher
-session becomes the selected source.
+replays its latest complete compressed GOP on its next packet arrival. If no
+complete GOP is cached, it waits for its next video keyframe. Promotion of an
+idle configured input changes selection and returns `connected: false`; its
+next publisher session becomes the selected source.
 
 ## Outputs
 

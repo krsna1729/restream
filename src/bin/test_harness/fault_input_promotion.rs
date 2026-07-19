@@ -1,11 +1,14 @@
 use super::*;
 
-struct HarnessInput {
-    id: String,
-    stream_key: String,
+pub(crate) struct HarnessInput {
+    pub(crate) id: String,
+    pub(crate) stream_key: String,
 }
 
-async fn create_backup_input(api: &RampApi, pipeline_id: &str) -> Result<HarnessInput, String> {
+pub(crate) async fn create_backup_input(
+    api: &RampApi,
+    pipeline_id: &str,
+) -> Result<HarnessInput, String> {
     let response = api
         .post_json(
             &format!("/api/v1/pipelines/{pipeline_id}/inputs"),
@@ -25,7 +28,7 @@ async fn create_backup_input(api: &RampApi, pipeline_id: &str) -> Result<Harness
     })
 }
 
-async fn wait_for_input_state(
+pub(crate) async fn wait_for_input_state(
     api: &RampApi,
     pipeline_id: &str,
     input_id: &str,
@@ -101,11 +104,10 @@ pub(crate) async fn run_input_promotion_case(
     )
     .await?;
     wait_for_api_input_live(api, &pipeline_id, timeout).await?;
-    let mut standby = spawn_publisher(
+    let mut standby = spawn_long_gop_publisher(
         fixture,
         &case.protocol.publish_url(ports, &backup.stream_key),
         case.protocol.ffmpeg_format(),
-        case.protocol.map_all_streams(),
     )
     .await?;
     let standby_before = wait_for_input_state(
@@ -117,6 +119,7 @@ pub(crate) async fn run_input_promotion_case(
     )
     .await?;
     wait_for_input_preview(api, &backup.id, Duration::from_secs(20)).await?;
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
     start_output(api, &pipeline_id, &output_id).await?;
     let warm = wait_for_sink_video_above(&metrics, RECOVERY_WARM_VIDEO_MIN - 1, timeout).await;
@@ -131,7 +134,8 @@ pub(crate) async fn run_input_promotion_case(
         ))
         .await?;
 
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let promotion_started = Instant::now();
+    let deadline = promotion_started + Duration::from_secs(5);
     let mut progressed = false;
     let mut saw_retrying = false;
     let mut saw_missing = false;
@@ -164,6 +168,7 @@ pub(crate) async fn run_input_promotion_case(
         .await?;
     let final_status = api.get_output_status(&pipeline_id, &output_id).await.ok();
     let final_connections = metrics.connections.load(Ordering::Relaxed);
+    let promotion_elapsed_ms = promotion_started.elapsed().as_millis() as u64;
     let passed = warm
         && standby_before["runtime"]["forwardingState"] == "standby"
         && promotion["connected"] == true
@@ -201,6 +206,8 @@ pub(crate) async fn run_input_promotion_case(
         "standbyPreviewReady": true,
         "baselineVideo": baseline_video,
         "progressed": progressed,
+        "promotionElapsedMs": promotion_elapsed_ms,
+        "promotionDeadlineMs": 5_000,
         "baselineConnections": baseline_connections,
         "finalConnections": final_connections,
         "sawRetrying": saw_retrying,

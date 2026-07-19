@@ -86,6 +86,40 @@ pub(crate) async fn spawn_mixed_live_publisher(
     )
 }
 
+pub(crate) async fn spawn_mixed_standby_publisher(
+    env: &MixedEnv,
+    case: MixedInputCase,
+    stream_key: &str,
+) -> Result<Child, String> {
+    let log_path = env
+        .work_dir
+        .join(format!("{}.standby.publisher.log", case.scenario_id()));
+    let fixture = mixed_input_fixture(case)?;
+    let (url, format, selection) = match case.protocol() {
+        MixedInputProtocol::Rtmp => (
+            format!("rtmp://127.0.0.1:{}/live/{stream_key}", env.restream_rtmp),
+            "flv",
+            PublishTrackSelection::PrimaryAv,
+        ),
+        MixedInputProtocol::Srt => (
+            harness_srt_ffmpeg_url(env.restream_srt, stream_key, HarnessSrtMode::Publish, None),
+            "mpegts",
+            if case.is_multi_track() {
+                PublishTrackSelection::AllStreams
+            } else {
+                PublishTrackSelection::PrimaryAv
+            },
+        ),
+        MixedInputProtocol::File => {
+            return Err(format!(
+                "{} uses file ingest and cannot spawn a standby publisher",
+                case.scenario_id()
+            ));
+        }
+    };
+    spawn_publisher_with_selection(&fixture, &url, format, selection, Some(&log_path))
+}
+
 pub(crate) async fn spawn_mixed_srt_multi_publisher(
     env: &MixedEnv,
     case: MixedInputCase,

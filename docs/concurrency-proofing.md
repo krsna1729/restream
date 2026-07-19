@@ -36,9 +36,10 @@ Use the narrowest proof that can actually catch the bug:
    - Current loom targets:
      - `avio_loom`
      - `ring_migration_loom`
+     - `input_selection_loom`
      - `ts_chunk_ring_loom`
      - `ts_muxer_stage_loom`
-    - `transcoder_stage_loom`
+     - `transcoder_stage_loom`
 
 3. Property tests
    - Use when ordering, permutations, or randomized lifecycle sequences matter.
@@ -103,10 +104,15 @@ bash ./scripts/check/concurrency/contract.sh
 ```
 
 The fast gate runs the loom targets, focused API tests, and harness unit tests.
+For multi-input promotion it also runs the sequential gate property model and
+the bounded standby-GOP property test.
 The full gate also builds the binaries and runs the live `fault.resilience`,
 `fault.egress-retry`, `fault.output-stall`, and `recovery` harness modes.
 `fault.egress-retry` owns the retry-budget exhaustion contract for RTMP and SRT
 dead sinks.
+`fault.resilience` includes RTMP and SRT connected-standby promotions with a
+10-second publisher GOP and a five-second progress deadline, proving cached
+replay rather than eventual next-keyframe recovery.
 `fault.output-stall` owns the stalled-output contract for connected-but-not-
 draining RTMP sinks. `recovery` is the focused reconnect/grace/retry contract
 so we can target that behavior directly without depending on the broader

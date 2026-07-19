@@ -238,6 +238,9 @@ Unit coverage includes:
 - Internal decode/scale/encode coverage for the built-in video profiles
 - Ring buffer push/pull ordering, overflow fast-forward to keyframe,
   multi-reader isolation, fill/capacity reporting, burst APIs
+- Multi-input gate state/property/loom coverage plus bounded latest-GOP
+  retention, overflow invalidation, replay ordering, and repeated timestamp
+  rebasing
 - DTS monotonicity enforcement (equal, decreasing, PTS < DTS correction,
   per-stream independence, B-frame composition-time preservation)
 - Engine lifecycle: ingest/egress register/unregister/cancel, idempotent
@@ -300,6 +303,10 @@ live-pipeline processes are running.
 Choose the narrowest catalog mode that crosses the changed boundary:
 
 - protocol or codec behavior — one matching mixed RTMP/SRT scenario;
+- multi-input standby cost — `msr-smoke` in nightly or a selected
+  `mixed.fast-breadth` RTMP/SRT sentinel;
+- multi-input promotion — `fault.resilience`, whose RTMP/SRT cases use a
+  10-second GOP and require cached replay progress within five seconds;
 - teardown or recovery — the matching fault workflow;
 - HLS, recording, or file ingest — a scenario whose resolved plan includes the
   relevant sink and checks;

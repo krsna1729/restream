@@ -104,6 +104,12 @@ while IFS=$'\t' read -r kind value; do
         resource)
             RESOURCE_SWEEP_SCENARIOS="$value" run_mode resource-sweep
             ;;
+        msr-smoke)
+            MSR_OUTPUT_COUNTS=1 \
+            MSR_FFPROBE_SAMPLE_COUNT=1 \
+            MSR_SINK_SAMPLE_SECS=1 \
+            run_mode "$value"
+            ;;
         *)
             echo "harness-shard: invalid plan row for $shard: $kind $value" >&2
             exit 1
