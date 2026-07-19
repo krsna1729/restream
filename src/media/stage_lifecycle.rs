@@ -102,12 +102,12 @@ impl StageLifecycle {
 
     pub fn transition(&self, phase: StagePhase) {
         let mut inner = self.inner.lock().expect("stage lifecycle lock poisoned");
-        if let Some(backend) = backend_kind_from_phase(&phase) {
-            inner.backend = backend;
-        }
-        if let Some(pid) = backend_pid_from_phase(&phase) {
-            inner.backend_pid = Some(pid);
-        }
+        // A stale StartingBackend/BackendSpawned event racing in after the
+        // stage has already progressed past first input must be ignored
+        // wholesale: not just the phase, but also the backend kind and pid
+        // it carries, otherwise the snapshot ends up with a phase that says
+        // "still running the original backend" alongside metadata for a
+        // spawn attempt that was never actually adopted.
         if inner.first_input_at.is_some()
             && matches!(
                 phase,
@@ -119,6 +119,12 @@ impl StageLifecycle {
             )
         {
             return;
+        }
+        if let Some(backend) = backend_kind_from_phase(&phase) {
+            inner.backend = backend;
+        }
+        if let Some(pid) = backend_pid_from_phase(&phase) {
+            inner.backend_pid = Some(pid);
         }
         inner.phase = phase;
         inner.phase_started_at = Some(Instant::now());
@@ -351,6 +357,38 @@ mod tests {
         lc.record_error("backend crashed");
         guard.finish();
         assert_eq!(lc.current_phase(), StagePhase::Stopped);
+    }
+
+    #[test]
+    fn stale_backend_spawned_transition_does_not_corrupt_backend_metadata() {
+        // A stale BackendSpawned event arriving after FirstInput (e.g. from
+        // a duplicate or racing spawn attempt) must be ignored wholesale:
+        // the phase update is already known to be suppressed, and the
+        // backend kind / pid it carries must be suppressed along with it,
+        // not silently adopted while the phase stays put.
+        let lc = StageLifecycle::new(StagePhase::BackendSpawned {
+            backend: StageBackendKind::ExternalFfmpeg,
+            pid: Some(111),
+        });
+        lc.record_first_input();
+
+        lc.transition(StagePhase::BackendSpawned {
+            backend: StageBackendKind::InternalFfmpeg,
+            pid: Some(222),
+        });
+
+        let snapshot = lc.snapshot();
+        assert_eq!(snapshot.phase, StagePhase::FirstInput);
+        assert_eq!(
+            snapshot.backend_pid,
+            Some(111),
+            "a suppressed BackendSpawned transition must not silently overwrite the pid"
+        );
+        assert_eq!(
+            snapshot.backend,
+            StageBackendKind::ExternalFfmpeg,
+            "a suppressed BackendSpawned transition must not silently overwrite the backend kind"
+        );
     }
 
     #[test]

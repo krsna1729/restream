@@ -89,6 +89,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 03:55 HUNT RECONCILE-DECISION-BRANCH-COVERAGE DONE [codex]](#2026-07-19-0355-hunt-reconcile-decision-branch-coverage-done-codex)
 - [2026-07-19 04:10 HUNT EGRESS-MALFORMED-URL-RESILIENCE DONE [codex]](#2026-07-19-0410-hunt-egress-malformed-url-resilience-done-codex)
 - [2026-07-19 06:33 HUNT SECURITY-EVICTION-BAN-BYPASS FIXED [codex]](#2026-07-19-0633-hunt-security-eviction-ban-bypass-fixed-codex)
+- [2026-07-19 HUNT STAGE-LIFECYCLE-STALE-SPAWN-METADATA FIXED [codex]](#2026-07-19-hunt-stage-lifecycle-stale-spawn-metadata-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3006,3 +3007,68 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   journal entry — per this session's practice of journaling real
   findings and skipping journal entries for routine test-coverage
   additions.
+
+## 2026-07-19 HUNT STAGE-LIFECYCLE-STALE-SPAWN-METADATA FIXED [codex]
+
+- Scope: `src/media/stage_lifecycle.rs` — `StageLifecycle::transition`,
+  the single mutation point for a stage's tracked phase, backend kind,
+  and backend pid. Zero prior journal mentions; picked as the next
+  target after three consecutive routine-coverage hunts
+  (`h264_transcoder.rs`, `tcp_stats.rs`, `file_analysis.rs`) turned up
+  no bugs.
+- Finding: real bug, state-corruption class. `transition()` had an
+  existing guard that suppresses the *phase* field when a stale
+  `StartingBackend`/`BackendSpawned` event arrives after
+  `first_input_at` is already set and the stage has moved on to
+  `FirstInput`/`FirstOutput`/`Producing` — intended to stop a
+  late/duplicate spawn notification from regressing operator-visible
+  progress. But the function updated `inner.backend` and
+  `inner.backend_pid` *before* evaluating that guard, unconditionally,
+  on every call. So a suppressed transition still silently overwrote
+  the backend kind and pid while leaving the phase untouched,
+  producing an inconsistent snapshot: phase says "still running the
+  original backend" while `backend`/`backend_pid` reflect a spawn
+  attempt that was never actually adopted into the visible phase.
+  Traced a plausible real trigger: `get_or_create_stage_lifecycle_with_backend`
+  (`stage_registry_access.rs`) reuses the same `StageLifecycle` Arc
+  across a stage's restarts, and `run_external_ffmpeg_backend`
+  (`external_transcoder.rs`) always calls `transition(BackendSpawned
+  {..})` after a successful subprocess spawn — if a stale/duplicate
+  spawn task's notification races in after a newer instance has
+  already reached `FirstInput`, the metadata corruption is directly
+  observable in operator diagnostics via `snapshot()`.
+- Fix: reordered `transition()` to evaluate the stale-event guard
+  first and `return` before touching `inner.backend` /
+  `inner.backend_pid`, so a suppressed transition is now fully
+  suppressed — phase, backend, and pid all stay put together, or all
+  update together. No change to the guard's condition itself, only to
+  what it protects.
+- Added one permanent regression test:
+  `stale_backend_spawned_transition_does_not_corrupt_backend_metadata`
+  — constructs a lifecycle already `BackendSpawned{ExternalFfmpeg,
+  pid: 111}`, records first input, then feeds a second
+  `BackendSpawned{InternalFfmpeg, pid: 222}` transition and asserts
+  both `backend` and `backend_pid` still read the original values
+  alongside the still-suppressed `FirstInput` phase. This test fails
+  against the pre-fix code and passes after.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  stage_lifecycle::` — 14/14 pass (1 new plus 13 pre-existing,
+  including the existing `backend_spawned_transition_does_not_regress_after_first_input`
+  and `backend_pid_survives_runtime_phase_progression`, confirming no
+  regression to the intended phase-suppression or pid-persistence
+  behavior). `cargo fmt --all --check` — clean. `scripts/build/resource-limit.sh
+  cargo clippy --lib --tests -- -D warnings` — clean.
+  `scripts/check/concurrency/fast.sh` — 135/135 pass (this file backs
+  lifecycle state read by `engine.rs`/`stage_runtime.rs`, so the
+  broader concurrency gate was run even though the fix itself only
+  reorders statements inside an already-locked critical section — no
+  new lock, no new thread-hop). `scripts/check/source-audit.sh` —
+  passed.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — the fix is scoped and fully covered by the
+  new regression test; the sibling file `startup_policy.rs` (409
+  lines, also zero prior journal mentions) is the next unswept
+  candidate for this hunt run.
+- Notes: second genuine bug found this hunt run (after the
+  `security.rs` eviction-bypass finding on round 2), hence the journal
+  entry.
