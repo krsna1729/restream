@@ -79,8 +79,8 @@ pub(super) fn raw_packet_starts_with_hevc_parameter_set(payload: &[u8]) -> bool 
     };
     first_nalu
         .first()
-        .map(|byte| matches!((byte >> 1) & 0x3F, 32..=34))
-        .unwrap_or(false)
+        .is_some_and(|byte| matches!((byte >> 1) & 0x3F, 32..=34))
+        && codec::build_hevc_enhanced_rtmp_sequence_header(payload).is_some()
 }
 
 pub(super) fn hevc_sequence_header_for_keyframe(

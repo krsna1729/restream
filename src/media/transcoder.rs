@@ -11,7 +11,7 @@ use crate::media::engine::AudioMeta;
 use crate::media::ffmpeg::backend::{BackendError, StageRunContext};
 use crate::media::ffmpeg::stage_input::StageInputPump;
 use crate::media::ffmpeg::stage_output::{StageOutputNormalizer, StageOutputSink};
-use crate::media::ffmpeg::stage_plan::FfmpegStagePlan;
+use crate::media::ffmpeg::stage_plan::{FfmpegStagePlan, VideoCodecKind};
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
 
 use crate::media::stage_metrics::StageMetrics;
@@ -302,6 +302,7 @@ async fn run_internal_video_stage(
     mut input_pump: crate::media::ffmpeg::stage_input::StageInputPump,
     output_normalizer: StageOutputNormalizer,
     needs_scale: bool,
+    output_codec: VideoCodecKind,
 ) {
     let input_queue = Arc::new(crate::media::avio::MemoryQueue::new_with_capacity(
         engine.config.avio_capacity,
@@ -324,6 +325,7 @@ async fn run_internal_video_stage(
     // directly to the output RingBuffer (no output mux/demux round-trip).
     let input_queue_clone = input_queue.clone();
     let preset_clone = preset.clone();
+    let output_codec_clone = output_codec.clone();
     let cancel_token_clone = cancel_token.clone();
     let cancel_on_exit = cancel_token.clone();
     let pipeline_id_clone = pipeline_id.clone();
@@ -335,6 +337,7 @@ async fn run_internal_video_stage(
                 run_ffmpeg_transcode_with_scale_with_normalizer(
                     input_queue_clone,
                     video_preset,
+                    output_codec_clone,
                     cancel_token_clone,
                     StageOutputSink::Existing(Box::new(output_normalizer)),
                 )
@@ -429,6 +432,7 @@ pub async fn run_internal_ffmpeg_backend(
             input_pump,
             output_normalizer,
             needs_scale,
+            plan.output_codec,
         )
         .await;
     }
@@ -1388,6 +1392,29 @@ mod tests {
         ts_batch.extend_from_slice(burst2);
         assert_eq!(&ts_batch[..], burst2, "burst2 must not contain burst1 data");
     }
+
+    #[test]
+    fn internal_video_preset_uses_planned_output_codec() {
+        use crate::domain::stage::{StageKey, StageKind};
+        use crate::media::ffmpeg::stage_plan::{StageInputSpec, VideoCodecKind};
+
+        let plan = FfmpegStagePlan::video_preset(
+            StageKey::new("pipe-1", StageKind::video_preset("720p")),
+            "pipe-1",
+            "720p",
+            StageInputSpec {
+                codec_hint: VideoCodecKind::Hevc,
+                video_meta: None,
+                audio_tracks: Vec::new(),
+            },
+            VideoCodecKind::H264,
+        );
+
+        assert_eq!(
+            internal_video_encoder_id_for_plan(&plan),
+            ffmpeg_next::codec::Id::H264
+        );
+    }
 }
 
 /// Execute the FFmpeg-backed processing stage used by `start_transcoder`.
@@ -1545,14 +1572,43 @@ fn run_ffmpeg_transcode_with_scale_with_metrics(
     run_ffmpeg_transcode_with_scale_with_normalizer(
         in_queue,
         video_preset,
+        VideoCodecKind::H264,
         token,
         StageOutputSink::from_ring(out_ring, metrics),
     )
 }
 
+fn internal_video_encoder_id(output_codec: &VideoCodecKind) -> ffmpeg_next::codec::Id {
+    match output_codec {
+        VideoCodecKind::H264 => ffmpeg_next::codec::Id::H264,
+        VideoCodecKind::Hevc => ffmpeg_next::codec::Id::HEVC,
+    }
+}
+
+fn internal_video_encoder(
+    output_codec: &VideoCodecKind,
+) -> Result<ffmpeg_next::Codec, &'static str> {
+    match internal_video_encoder_id(output_codec) {
+        ffmpeg_next::codec::Id::H264 => {
+            ffmpeg_next::codec::encoder::find(ffmpeg_next::codec::Id::H264)
+                .ok_or("no H.264 encoder")
+        }
+        ffmpeg_next::codec::Id::HEVC => ffmpeg_next::codec::encoder::find_by_name("libx265")
+            .or_else(|| ffmpeg_next::codec::encoder::find(ffmpeg_next::codec::Id::HEVC))
+            .ok_or("no HEVC/H.265 encoder"),
+        _ => Err("Unsupported video codec for internal transcoding"),
+    }
+}
+
+#[cfg(test)]
+fn internal_video_encoder_id_for_plan(plan: &FfmpegStagePlan) -> ffmpeg_next::codec::Id {
+    internal_video_encoder_id(&plan.output_codec)
+}
+
 fn run_ffmpeg_transcode_with_scale_with_normalizer(
     in_queue: Arc<crate::media::avio::MemoryQueue>,
     video_preset: &str,
+    output_codec: VideoCodecKind,
     token: CancellationToken,
     output_sink: StageOutputSink,
 ) -> Result<(), &'static str> {
@@ -1594,7 +1650,6 @@ fn run_ffmpeg_transcode_with_scale_with_normalizer(
         .stream(video_idx)
         .ok_or("no video stream")?
         .parameters();
-    let codec_id = dec_params.id();
     let dec_ctx = ffmpeg_next::codec::Context::from_parameters(dec_params)
         .map_err(|_| "decoder context error")?;
     let mut decoder = dec_ctx
@@ -1609,16 +1664,7 @@ fn run_ffmpeg_transcode_with_scale_with_normalizer(
     let target_h = profile.height;
     let skip_scaling = target_w == 0;
 
-    let enc_codec = match codec_id {
-        ffmpeg_next::codec::Id::H264 => {
-            ffmpeg_next::codec::encoder::find(ffmpeg_next::codec::Id::H264)
-                .ok_or("no H.264 encoder")?
-        }
-        ffmpeg_next::codec::Id::HEVC => ffmpeg_next::codec::encoder::find_by_name("libx265")
-            .or_else(|| ffmpeg_next::codec::encoder::find(ffmpeg_next::codec::Id::HEVC))
-            .ok_or("no HEVC/H.265 encoder")?,
-        _ => return Err("Unsupported video codec for internal transcoding"),
-    };
+    let enc_codec = internal_video_encoder(&output_codec)?;
 
     let stream_count = 1 + audio_track_counter as usize;
     let mut normalizer = output_sink.into_normalizer(stream_count);
