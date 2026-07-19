@@ -666,7 +666,39 @@ fn audio_stage_op_from_routing(routing: &AudioRouting) -> Option<AudioStageOp> {
 mod tests {
     use super::*;
     use crate::domain::stage::StageKind;
+    use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat};
+    use bytes::Bytes;
     use std::sync::Arc;
+
+    fn ready_video_meta(codec: &str) -> VideoMeta {
+        VideoMeta {
+            codec: codec.to_string(),
+            width: 1280,
+            height: 720,
+            fps: 30.0,
+            bw: None,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+            level: None,
+            pixel_format: None,
+        }
+    }
+
+    fn ready_audio_meta(channels: u32) -> AudioMeta {
+        AudioMeta {
+            codec: "aac".to_string(),
+            sample_rate: 48_000,
+            channels,
+            channel_layout: None,
+            track_index: 0,
+            pid: None,
+            language: None,
+            title: None,
+            profile: None,
+        }
+    }
 
     #[tokio::test]
     async fn ensure_stage_creates_ring_and_returns_existing_on_reuse() {
@@ -856,5 +888,255 @@ mod tests {
                 backend: StageBackendKind::ExternalFfmpeg,
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn wait_for_stage_metadata_returns_none_immediately_when_already_cancelled() {
+        let engine = Arc::new(MediaEngine::new());
+        let source = Arc::new(RingBuffer::new(16));
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        // No ingest is registered for this pipeline at all, so a buggy loop
+        // that checked cancellation only after touching ingest state would
+        // hang forever instead of returning promptly.
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            wait_for_stage_metadata(&engine, "pipe-cancel", &source, true, false, None, &cancel),
+        )
+        .await
+        .expect("must not hang waiting on a pre-cancelled token");
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn wait_for_stage_metadata_resolves_once_ingest_metadata_becomes_ready() {
+        let engine = Arc::new(MediaEngine::new());
+        let source = Arc::new(RingBuffer::new(16));
+        let cancel = CancellationToken::new();
+        let pipeline_id = "pipe-race";
+
+        engine
+            .try_register_ingest_attempt(pipeline_id, "key", "rtmp")
+            .await
+            .expect("first registration for a fresh pipeline id must succeed");
+
+        let engine_clone = engine.clone();
+        let source_clone = source.clone();
+        let cancel_clone = cancel.clone();
+        let waiter = tokio::spawn(async move {
+            wait_for_stage_metadata(
+                &engine_clone,
+                pipeline_id,
+                &source_clone,
+                true,
+                false,
+                Some("h264"),
+                &cancel_clone,
+            )
+            .await
+        });
+
+        // Give the poll loop several 25ms iterations to prove it keeps
+        // waiting on the empty ingest record instead of resolving early.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert!(
+            !waiter.is_finished(),
+            "must keep waiting while no video metadata has been reported yet"
+        );
+
+        engine
+            .update_ingest_meta(
+                pipeline_id,
+                Some(ready_video_meta("h264")),
+                Some(ready_audio_meta(2)),
+                None,
+            )
+            .await;
+
+        let result = tokio::time::timeout(std::time::Duration::from_millis(500), waiter)
+            .await
+            .expect("must resolve soon after metadata becomes available")
+            .expect("waiter task must not panic");
+
+        let (resolved_video, resolved_audio) = result.expect("metadata must resolve to Some");
+        assert_eq!(resolved_video.codec, "h264");
+        assert_eq!(resolved_audio.len(), 1);
+        assert_eq!(resolved_audio[0].channels, 2);
+    }
+
+    #[tokio::test]
+    async fn wait_for_stage_metadata_eager_parameter_sets_waits_for_ring_data() {
+        let engine = Arc::new(MediaEngine::new());
+        let source = Arc::new(RingBuffer::new(16));
+        let cancel = CancellationToken::new();
+        let pipeline_id = "pipe-eager";
+
+        engine
+            .try_register_ingest_attempt(pipeline_id, "key", "srt")
+            .await
+            .expect("first registration for a fresh pipeline id must succeed");
+        engine
+            .update_ingest_meta(pipeline_id, Some(ready_video_meta("h264")), None, None)
+            .await;
+
+        let engine_clone = engine.clone();
+        let source_clone = source.clone();
+        let cancel_clone = cancel.clone();
+        let waiter = tokio::spawn(async move {
+            wait_for_stage_metadata(
+                &engine_clone,
+                pipeline_id,
+                &source_clone,
+                false,
+                true,
+                Some("h264"),
+                &cancel_clone,
+            )
+            .await
+        });
+
+        // Ready video dimensions alone must not satisfy the eager
+        // raw-parameter-set gate for a parameter-set codec: no ring
+        // parameter sets, no engine sequence header, and no ring packets
+        // yet.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert!(
+            !waiter.is_finished(),
+            "h264 must wait for parameter sets, a sequence header, or a ring packet"
+        );
+
+        source.push(MediaPacket {
+            media_type: MediaType::Video,
+            format: PayloadFormat::Raw,
+            is_keyframe: true,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            payload: Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x67]),
+        });
+
+        let result = tokio::time::timeout(std::time::Duration::from_millis(500), waiter)
+            .await
+            .expect("must resolve once the ring reports at least one packet")
+            .expect("waiter task must not panic");
+
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn wait_for_stage_metadata_gates_on_audio_track_readiness() {
+        let engine = Arc::new(MediaEngine::new());
+        let source = Arc::new(RingBuffer::new(16));
+        let cancel = CancellationToken::new();
+        let pipeline_id = "pipe-audio-gate";
+
+        engine
+            .try_register_ingest_attempt(pipeline_id, "key", "rtmp")
+            .await
+            .expect("first registration for a fresh pipeline id must succeed");
+        engine
+            .update_ingest_meta(
+                pipeline_id,
+                Some(ready_video_meta("h264")),
+                Some(ready_audio_meta(0)),
+                None,
+            )
+            .await;
+
+        let engine_clone = engine.clone();
+        let source_clone = source.clone();
+        let cancel_clone = cancel.clone();
+        let waiter = tokio::spawn(async move {
+            wait_for_stage_metadata(
+                &engine_clone,
+                pipeline_id,
+                &source_clone,
+                true,
+                false,
+                Some("h264"),
+                &cancel_clone,
+            )
+            .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert!(
+            !waiter.is_finished(),
+            "an audio track reporting zero channels must not be considered ready"
+        );
+
+        engine
+            .update_ingest_meta(pipeline_id, None, Some(ready_audio_meta(2)), None)
+            .await;
+
+        let result = tokio::time::timeout(std::time::Duration::from_millis(500), waiter)
+            .await
+            .expect("must resolve once the audio track reports real channels")
+            .expect("waiter task must not panic");
+
+        let (_, resolved_audio) = result.expect("metadata must resolve to Some");
+        assert_eq!(resolved_audio.len(), 1);
+        assert_eq!(resolved_audio[0].channels, 2);
+    }
+
+    #[tokio::test]
+    async fn wait_for_stage_metadata_backfills_bandwidth_from_observed_ring_bitrate() {
+        let engine = Arc::new(MediaEngine::new());
+        let source = Arc::new(RingBuffer::new(16));
+        let cancel = CancellationToken::new();
+        let pipeline_id = "pipe-bw";
+
+        engine
+            .try_register_ingest_attempt(pipeline_id, "key", "rtmp")
+            .await
+            .expect("first registration for a fresh pipeline id must succeed");
+        engine
+            .update_ingest_meta(pipeline_id, Some(ready_video_meta("h264")), None, None)
+            .await;
+
+        // Two packets spanning >= the estimator's 250ms minimum observation
+        // window so `observed_payload_bitrate_bps` returns Some.
+        source.push(MediaPacket {
+            media_type: MediaType::Video,
+            format: PayloadFormat::Raw,
+            is_keyframe: true,
+            track_index: 0,
+            pts: 0,
+            dts: 0,
+            payload: Bytes::from(vec![0u8; 1000]),
+        });
+        source.push(MediaPacket {
+            media_type: MediaType::Video,
+            format: PayloadFormat::Raw,
+            is_keyframe: false,
+            track_index: 0,
+            pts: 300,
+            dts: 300,
+            payload: Bytes::from(vec![0u8; 1000]),
+        });
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            wait_for_stage_metadata(
+                &engine,
+                pipeline_id,
+                &source,
+                false,
+                false,
+                Some("h264"),
+                &cancel,
+            ),
+        )
+        .await
+        .expect("must resolve promptly once video metadata is ready")
+        .expect("metadata must resolve to Some");
+
+        let (resolved_video, _) = result;
+        let observed = source
+            .observed_payload_bitrate_bps()
+            .expect("ring must report an observed bitrate for this fixture");
+        assert_eq!(resolved_video.bw, Some(observed as f64));
     }
 }
