@@ -195,4 +195,61 @@ mod tests {
 
         assert_eq!(wait_task.await.unwrap(), TsChunkWaitResult::Cancelled);
     }
+
+    // The `select!` in `wait_for_data_or_cancelled` only ever had its
+    // `Cancelled` arm exercised in this file; nothing asserted that a chunk
+    // arriving first resolves the `Data` arm instead.
+    #[tokio::test]
+    async fn wait_for_data_unblocks_with_data_when_chunk_arrives_before_cancel() {
+        let cancel = CancellationToken::new();
+        let ts_ring = TsChunkRing::new(16, cancel.clone());
+        let mut reader = TsChunkReader::new("reader".to_string(), &ts_ring);
+
+        let wait_task = tokio::spawn(async move {
+            let result = reader.wait_for_data_or_cancelled().await;
+            (result, reader)
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        ts_ring.push(Bytes::from_static(b"chunk"), true);
+
+        let (result, mut reader) = wait_task.await.unwrap();
+        assert_eq!(result, TsChunkWaitResult::Data);
+
+        let mut out = Vec::new();
+        assert_eq!(reader.pull_burst(&mut out, 10).unwrap(), 1);
+        assert!(!cancel.is_cancelled());
+    }
+
+    #[test]
+    fn push_batch_returns_the_number_of_packets_pushed() {
+        let cancel = CancellationToken::new();
+        let ts_ring = TsChunkRing::new(16, cancel);
+
+        assert_eq!(ts_ring.push_batch(std::iter::empty()), 0);
+        assert_eq!(
+            ts_ring.push_batch(vec![
+                (Bytes::from_static(b"a"), false),
+                (Bytes::from_static(b"b"), false),
+                (Bytes::from_static(b"c"), true),
+            ]),
+            3
+        );
+    }
+
+    #[test]
+    fn pull_burst_with_zero_max_packets_pulls_nothing() {
+        let cancel = CancellationToken::new();
+        let ts_ring = TsChunkRing::new(16, cancel);
+        ts_ring.push(Bytes::from_static(b"chunk"), true);
+
+        let mut reader = TsChunkReader::new("reader".to_string(), &ts_ring);
+        let mut out = Vec::new();
+        assert_eq!(reader.pull_burst(&mut out, 0).unwrap(), 0);
+        assert!(out.is_empty());
+
+        // The chunk must still be available on a subsequent pull rather than
+        // having been silently consumed by the zero-limit call.
+        assert_eq!(reader.pull_burst(&mut out, 10).unwrap(), 1);
+    }
 }
