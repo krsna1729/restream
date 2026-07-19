@@ -21,6 +21,7 @@ struct MediaMtxPathStats {
     bytes_received: u64,
     readers: usize,
     track_count: usize,
+    track_codecs: Vec<String>,
     inbound_frame_errors: u64,
 }
 
@@ -58,6 +59,7 @@ fn parse_mediamtx_path_page(value: &Value) -> MediaMtxPathPage {
                 bytes_received: item["bytesReceived"].as_u64().unwrap_or(0),
                 readers,
                 track_count: media_mtx_track_count(item),
+                track_codecs: media_mtx_track_codecs(item),
                 inbound_frame_errors: sum_named_u64(item, "inboundFramesInError"),
             },
         );
@@ -75,6 +77,24 @@ fn media_mtx_track_count(item: &Value) -> usize {
         .map(Vec::len)
         .or_else(|| item["tracks"].as_object().map(serde_json::Map::len))
         .unwrap_or(0)
+}
+
+fn media_mtx_track_codecs(item: &Value) -> Vec<String> {
+    if let Some(tracks) = item["tracks2"].as_array() {
+        let codecs = tracks
+            .iter()
+            .filter_map(|track| track["codec"].as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+        if !codecs.is_empty() {
+            return codecs;
+        }
+    }
+    item["tracks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|track| track.as_str().map(str::to_string))
+        .collect()
 }
 
 fn sum_named_u64(value: &Value, key: &str) -> u64 {
@@ -310,6 +330,38 @@ pub(crate) async fn verify_mediamtx_path_health(
     }
 }
 
+pub(crate) async fn verify_mediamtx_path_codec_health(
+    mtx_api: u16,
+    expected_path: &str,
+    expected_codec: &str,
+    sample_secs: u64,
+) -> Result<MediaMtxPathHealth, String> {
+    let expected_paths = vec![expected_path.to_string()];
+    let health = verify_mediamtx_path_health(
+        mtx_api,
+        &expected_paths,
+        sample_secs,
+        Duration::from_secs(30),
+    )
+    .await?;
+    let after = fetch_mediamtx_path_snapshot(mtx_api).await?;
+    let stats = after
+        .paths
+        .get(expected_path)
+        .ok_or_else(|| format!("MediaMTX path {expected_path} disappeared after health sample"))?;
+    if !stats
+        .track_codecs
+        .iter()
+        .any(|codec| codec.eq_ignore_ascii_case(expected_codec))
+    {
+        return Err(format!(
+            "MediaMTX path {expected_path} expected codec {expected_codec}, got [{}]",
+            stats.track_codecs.join(", ")
+        ));
+    }
+    Ok(health)
+}
+
 pub(crate) fn mediamtx_path_health_json(
     scenario: &str,
     label: &str,
@@ -377,6 +429,25 @@ mod tests {
         assert_eq!(page.item_count, Some(120));
         assert_eq!(page.page_count, Some(2));
         assert!(page.snapshot.paths.contains_key("live/a"));
+    }
+
+    #[test]
+    fn parses_mediamtx_track_codecs_from_tracks2() {
+        let snapshot = parse_mediamtx_path_snapshot(&json!({
+            "items": [{
+                "name": "live/hevc",
+                "ready": true,
+                "bytesReceived": 200,
+                "tracks": ["H265", "MPEG-4 Audio"],
+                "tracks2": [
+                    {"codec": "H265", "codecProps": {"width": 1920, "height": 1080}},
+                    {"codec": "MPEG-4 Audio", "codecProps": {"sampleRate": 48000}}
+                ]
+            }]
+        }));
+
+        let stats = snapshot.paths.get("live/hevc").unwrap();
+        assert_eq!(stats.track_codecs, ["H265", "MPEG-4 Audio"]);
     }
 
     #[test]

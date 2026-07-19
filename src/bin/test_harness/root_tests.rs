@@ -915,12 +915,54 @@ fn mixed_fast_breadth_is_small_but_axis_rich() {
         .iter()
         .map(|case| mixed_output_cases_for_input(*case).len())
         .sum();
-    assert_eq!(selected_cells, 63);
-    assert_eq!(total_cells, 180);
+    assert_eq!(selected_cells, 81);
+    assert_eq!(total_cells, 232);
     assert!(
         selected_cells < total_cells / 2,
         "fast breadth should stay quick enough to run before the exhaustive matrix"
     );
+    assert!(
+        cases.iter().any(|case| {
+            case.codec() == MixedVideoCodec::H265
+                && mixed_output_cases_for_input(*case).iter().any(|output| {
+                    output.protocol() == MixedOutputProtocol::Rtmp
+                        && output.rtmp_mode() == RtmpOutputMode::Enhanced
+                        && output.expected_video_codec_for_input(*case) == "hevc"
+                })
+        }),
+        "fast breadth must cover Enhanced RTMP HEVC source egress"
+    );
+    for encoding_prefix in ["720p", "1080p"] {
+        assert!(
+            cases.iter().any(|case| {
+                case.codec() == MixedVideoCodec::H265
+                    && mixed_output_cases_for_input(*case).iter().any(|output| {
+                        output.protocol() == MixedOutputProtocol::Rtmp
+                            && output.rtmp_mode() == RtmpOutputMode::Enhanced
+                            && output.encoding().starts_with(encoding_prefix)
+                            && output.expected_video_codec_for_input(*case) == "hevc"
+                    })
+            }),
+            "fast breadth must cover Enhanced RTMP HEVC {encoding_prefix} profile egress"
+        );
+    }
+    for input_protocol in [MixedInputProtocol::Rtmp, MixedInputProtocol::Srt] {
+        for encoding_prefix in ["720p", "1080p"] {
+            assert!(
+                cases.iter().any(|case| {
+                    case.protocol() == input_protocol
+                        && case.codec() == MixedVideoCodec::H264
+                        && mixed_output_cases_for_input(*case).iter().any(|output| {
+                            output.protocol() == MixedOutputProtocol::Rtmp
+                                && output.rtmp_mode() == RtmpOutputMode::Enhanced
+                                && output.encoding().starts_with(encoding_prefix)
+                                && output.expected_video_codec_for_input(*case) == "h264"
+                        })
+                }),
+                "fast breadth must cover Enhanced RTMP H.264 {encoding_prefix} profile egress from {input_protocol:?} input"
+            );
+        }
+    }
 }
 
 #[test]
@@ -1286,7 +1328,7 @@ fn mixed_scenario_plan_expands_without_signal_cost() {
     assert_eq!(plans.len(), 18);
     assert_eq!(
         plans.iter().map(|plan| plan.output_cells()).sum::<usize>(),
-        180
+        232
     );
     assert_eq!(
         plans
@@ -1596,6 +1638,18 @@ fn sweep_output_kind_centralizes_urls_and_multi_audio_encoding() {
         SweepOutputKind::SrtSourceDownmix.encoding(true),
         "source+downmix:0"
     );
+    assert_eq!(
+        SweepOutputKind::RtmpSource.rtmp_mode(),
+        RtmpOutputMode::Enhanced
+    );
+    assert_eq!(
+        SweepOutputKind::RtmpSourceDownmix.rtmp_mode(),
+        RtmpOutputMode::Enhanced
+    );
+    assert_eq!(
+        SweepOutputKind::Rtmp720p.rtmp_mode(),
+        RtmpOutputMode::Legacy
+    );
 }
 
 #[test]
@@ -1779,6 +1833,8 @@ fn single_track_output_matrix_exercises_all_protocol_encoding_pairs() {
         vec![
             ("rtmp", "source"),
             ("rtmp", "720p"),
+            ("rtmp", "720p"),
+            ("rtmp", "1080p"),
             ("rtmp", "1080p"),
             ("srt", "source"),
             ("srt", "720p"),
@@ -1789,6 +1845,17 @@ fn single_track_output_matrix_exercises_all_protocol_encoding_pairs() {
         single_track_mixed_output_cases()
             .iter()
             .all(|case| case.expected_audio_tracks() == 1)
+    );
+    let rtmp_source = single_track_mixed_output_cases()
+        .iter()
+        .find(|case| case.id() == "rtmp.src.a0")
+        .expect("single-track RTMP source row should exist");
+    assert_eq!(rtmp_source.rtmp_mode(), RtmpOutputMode::Enhanced);
+    assert_eq!(
+        rtmp_source.expected_video_codec_for_input(
+            mixed_input_case_for_command("mixed.live.srt.h265.a1.bf2").unwrap()
+        ),
+        "hevc"
     );
 }
 
@@ -1801,7 +1868,9 @@ fn single_track_output_matrix_reports_same_rows_it_executes() {
         vec![
             "rtmp.src.a0",
             "rtmp.720p.a0",
+            "rtmp.720p-enh.a0",
             "rtmp.1080p.a0",
+            "rtmp.1080p-enh.a0",
             "srt.src.a0",
             "srt.720p.a0",
             "srt.1080p.a0",
@@ -1821,9 +1890,13 @@ fn multi_track_output_matrix_exercises_rtmp_subsets_and_srt_all_plus_subsets() {
             "rtmp.src.a0",
             "rtmp.src.a1",
             "rtmp.720p.a0",
+            "rtmp.720p-enh.a0",
             "rtmp.720p.a1",
+            "rtmp.720p-enh.a1",
             "rtmp.1080p.a0",
+            "rtmp.1080p-enh.a0",
             "rtmp.1080p.a1",
+            "rtmp.1080p-enh.a1",
             "srt.src.all",
             "srt.src.a0",
             "srt.src.a1",
@@ -1839,7 +1912,7 @@ fn multi_track_output_matrix_exercises_rtmp_subsets_and_srt_all_plus_subsets() {
         .iter()
         .filter(|case| case.protocol() == MixedOutputProtocol::Rtmp)
         .collect();
-    assert_eq!(rtmp_cases.len(), 6);
+    assert_eq!(rtmp_cases.len(), 10);
     assert!(
         rtmp_cases
             .iter()
@@ -1849,6 +1922,20 @@ fn multi_track_output_matrix_exercises_rtmp_subsets_and_srt_all_plus_subsets() {
         rtmp_cases
             .iter()
             .all(|case| case.selected_audio_track().is_some())
+    );
+    assert!(
+        rtmp_cases
+            .iter()
+            .filter(|case| case.encoding().starts_with("source+"))
+            .all(|case| case.rtmp_mode() == RtmpOutputMode::Enhanced),
+        "multi-track RTMP source rows should exercise Enhanced RTMP"
+    );
+    assert!(
+        rtmp_cases
+            .iter()
+            .filter(|case| !case.encoding().starts_with("source+"))
+            .any(|case| case.rtmp_mode() == RtmpOutputMode::Enhanced),
+        "multi-track RTMP scaled rows should exercise Enhanced RTMP"
     );
 
     let srt_all_cases: Vec<_> = multi_track_mixed_output_cases()

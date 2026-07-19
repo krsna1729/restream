@@ -9,10 +9,29 @@ pub(crate) async fn create_output(
     url: &str,
     encoding: &str,
 ) -> Result<String, String> {
+    create_output_with_rtmp_mode(
+        api,
+        pipeline_id,
+        name,
+        url,
+        encoding,
+        RtmpOutputMode::Legacy,
+    )
+    .await
+}
+
+pub(crate) async fn create_output_with_rtmp_mode(
+    api: &RampApi,
+    pipeline_id: &str,
+    name: &str,
+    url: &str,
+    encoding: &str,
+    rtmp_mode: RtmpOutputMode,
+) -> Result<String, String> {
     let output = api
         .post_json(
             &format!("/api/v1/pipelines/{pipeline_id}/outputs"),
-            output_create_payload(name, url, encoding),
+            output_create_payload_with_rtmp_mode(name, url, encoding, rtmp_mode),
         )
         .await?;
     output["output"]["id"]

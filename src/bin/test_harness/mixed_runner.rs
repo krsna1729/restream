@@ -106,7 +106,7 @@ pub(super) use mixed_telemetry::{
     record_mixed_rss_delta, snapshot_mixed, verify_mixed_graph_stage_sharing,
     verify_optional_mixed_adaptive_ring,
 };
-pub(super) use output_helpers::{create_output, start_output};
+pub(super) use output_helpers::{create_output, create_output_with_rtmp_mode, start_output};
 
 /// Runtime configuration and artifact paths for one mixed-matrix scenario.
 #[derive(Clone)]
@@ -579,6 +579,7 @@ pub(super) async fn run_mixed_anchor_config(
         duplicate_index: 1,
         protocol: "hls".to_string(),
         encoding: "source".to_string(),
+        rtmp_mode: None,
         selected_audio_track: None,
         publish_url: format!("hls://{cfg}-preview"),
         read_url: None,
@@ -701,6 +702,8 @@ pub(super) async fn run_mixed_anchor_config(
                     env.mtx_hls
                 ),
                 expected: "1920x1080",
+                expected_video_codec: None,
+                mediamtx_api: None,
                 cookie: None,
                 cell: None,
             },
@@ -719,6 +722,8 @@ pub(super) async fn run_mixed_anchor_config(
                     env.restream_http
                 ),
                 expected: "1920x1080",
+                expected_video_codec: None,
+                mediamtx_api: None,
                 cookie: api.cookie.as_deref(),
                 cell: None,
             },
@@ -776,6 +781,7 @@ pub(super) async fn run_mixed_anchor_config(
                     duplicate_index: 1,
                     protocol: "http".to_string(),
                     encoding: "source".to_string(),
+                    rtmp_mode: None,
                     selected_audio_track: None,
                     publish_url: format!(
                         "http://127.0.0.1:{put_port}/upload?cid=probe-{cfg}&copy=0&file=out.m3u8"
@@ -1379,6 +1385,7 @@ mod tests {
             duplicate_index: 1,
             protocol: "rtmp".to_string(),
             encoding: "source".to_string(),
+            rtmp_mode: Some(RtmpOutputMode::Legacy.as_str().to_string()),
             selected_audio_track: None,
             publish_url: "rtmp://127.0.0.1:1935/live/out".to_string(),
             read_url: None,

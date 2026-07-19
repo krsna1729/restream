@@ -530,11 +530,50 @@ pub(crate) fn stop_generalized_sink_server(server: GeneralizedSinkServer) {
     }
 }
 
+pub(crate) fn output_config_from_harness_label(label: &str) -> OutputConfig {
+    let mut parts = label.trim().splitn(2, '+');
+    let first = parts.next().unwrap_or("source");
+    let second = parts.next().filter(|value| !value.is_empty());
+    let (video, audio_operation) = if is_audio_operation(first) {
+        (OutputVideoConfig::Source, Some(first))
+    } else {
+        let video = match first {
+            "" | "source" => OutputVideoConfig::Source,
+            "custom" => OutputVideoConfig::Custom,
+            preset => OutputVideoConfig::Preset {
+                preset: preset.to_string(),
+            },
+        };
+        (video, second)
+    };
+
+    OutputConfig {
+        video,
+        audio: audio_operation
+            .map(parse_audio_operation)
+            .unwrap_or(AudioRouting::Passthrough),
+        ..OutputConfig::default()
+    }
+}
+
 pub(crate) fn output_create_payload(name: &str, url: &str, encoding: &str) -> Value {
+    output_create_payload_with_rtmp_mode(name, url, encoding, RtmpOutputMode::Legacy)
+}
+
+pub(crate) fn output_create_payload_with_rtmp_mode(
+    name: &str,
+    url: &str,
+    encoding: &str,
+    rtmp_mode: RtmpOutputMode,
+) -> Value {
+    let mut config = output_config_from_harness_label(encoding);
+    if OutputUrlScheme::from_url(url).is_rtmp_family() {
+        config = config.with_rtmp_mode(rtmp_mode);
+    }
     json!({
         "name": name,
         "url": url,
-        "config": OutputConfig::parse(encoding),
+        "config": config,
     })
 }
 

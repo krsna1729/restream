@@ -17,6 +17,8 @@ pub(crate) struct HarnessOutputCell {
     pub(crate) duplicate_index: usize,
     pub(crate) protocol: String,
     pub(crate) encoding: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) rtmp_mode: Option<String>,
     pub(crate) selected_audio_track: Option<usize>,
     pub(crate) publish_url: String,
     pub(crate) read_url: Option<String>,
@@ -123,6 +125,7 @@ mod tests {
             duplicate_index: 1,
             protocol: "rtmp".to_string(),
             encoding: "source".to_string(),
+            rtmp_mode: Some("legacy".to_string()),
             selected_audio_track: None,
             publish_url: "rtmp://127.0.0.1/live/out".to_string(),
             read_url: None,

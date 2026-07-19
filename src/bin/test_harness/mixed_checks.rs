@@ -48,6 +48,8 @@ pub(crate) async fn verify_mixed_output_dimensions(
         return Ok(());
     }
     let index = env.probe_duplicate_index();
+    let input_case = mixed_input_case_for_command(cfg)
+        .ok_or_else(|| format!("{cfg} is not a known mixed input case"))?;
     for case in cases {
         let url = mixed_output_read_url(env, cfg, case, index);
         verify_mixed_stream(
@@ -59,6 +61,9 @@ pub(crate) async fn verify_mixed_output_dimensions(
                 label: &format!("{} out{index}", case.id()),
                 url: &url,
                 expected: case.expected_dimensions(),
+                expected_video_codec: Some(case.expected_video_codec_for_input(input_case)),
+                mediamtx_api: matches!(case.protocol(), MixedOutputProtocol::Rtmp)
+                    .then_some(env.mtx_api),
                 cookie: None,
                 cell: env.output_cell(case.id(), index),
             },
@@ -84,6 +89,8 @@ pub(crate) async fn verify_mixed_output_cases_inner(
     let started = Instant::now();
     let index = env.probe_duplicate_index();
     let mut failures = Vec::new();
+    let input_case = mixed_input_case_for_command(cfg)
+        .ok_or_else(|| format!("{cfg} is not a known mixed input case"))?;
     for case in cases {
         let cell_started_at = Utc::now();
         let cell_started = Instant::now();
@@ -98,6 +105,8 @@ pub(crate) async fn verify_mixed_output_cases_inner(
         let url = mixed_output_read_url(env, cfg, case, index);
         let label = format!("{} out{index}", case.id());
         let cell = env.output_cell(case.id(), index);
+        let mediamtx_publish_probe = matches!(case.protocol(), MixedOutputProtocol::Rtmp)
+            && case.expected_video_codec_for_input(input_case) == "hevc";
         let mut output_failed = false;
         if env.check_selected("ffprobe") {
             selected_checks.push("ffprobe");
@@ -111,6 +120,9 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                     label: &label,
                     url: &url,
                     expected: case.expected_dimensions(),
+                    expected_video_codec: Some(case.expected_video_codec_for_input(input_case)),
+                    mediamtx_api: matches!(case.protocol(), MixedOutputProtocol::Rtmp)
+                        .then_some(env.mtx_api),
                     cookie: None,
                     cell: cell.clone(),
                 },
@@ -138,7 +150,7 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                 }
             }
         }
-        if env.check_selected("ffprobe") && !output_failed {
+        if env.check_selected("ffprobe") && !output_failed && !mediamtx_publish_probe {
             selected_checks.push("audio_route");
             let audio_id = mixed_output_check_id(cfg, case.id(), "audio_route");
             let audio_result = verify_mixed_audio_route(
@@ -175,7 +187,8 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                 }
             }
         }
-        if env.check_selected("ffprobe") && decode_scan && !output_failed {
+        if env.check_selected("ffprobe") && decode_scan && !output_failed && !mediamtx_publish_probe
+        {
             selected_checks.push("decode_scan");
             let decode_id = mixed_output_check_id(cfg, case.id(), "decode_scan");
             let decode_result = verify_mixed_decode_scan(
@@ -187,6 +200,8 @@ pub(crate) async fn verify_mixed_output_cases_inner(
                     label: &label,
                     url: &url,
                     expected: case.expected_dimensions(),
+                    expected_video_codec: None,
+                    mediamtx_api: None,
                     cookie: None,
                     cell,
                 },

@@ -1,6 +1,7 @@
 //! ffprobe/ffmpeg decode-scan helpers for mixed output verification.
 
 use super::*;
+use crate::mediamtx_probe::{mediamtx_path_health_json, verify_mediamtx_path_codec_health};
 
 pub(crate) fn ffprobe_compact_video_dimensions(log: &str) -> Option<String> {
     ffprobe_compact_stream_lines(log).find_map(|line| {
@@ -75,6 +76,19 @@ fn ffprobe_compact_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     })
 }
 
+fn ffprobe_video_codec_name(probe: &Value) -> Option<String> {
+    probe["streams"]
+        .as_array()?
+        .iter()
+        .find(|stream| stream["codec_type"] == "video")?["codec_name"]
+        .as_str()
+        .map(str::to_string)
+}
+
+fn video_codec_matches(actual: &str, expected: &str) -> bool {
+    actual == expected || (actual == "h265" && expected == "hevc")
+}
+
 /// Inputs for one ffprobe-based mixed output assertion.
 pub(crate) struct MixedProbeSpec<'a> {
     pub(crate) cfg: &'a str,
@@ -82,8 +96,19 @@ pub(crate) struct MixedProbeSpec<'a> {
     pub(crate) label: &'a str,
     pub(crate) url: &'a str,
     pub(crate) expected: &'a str,
+    pub(crate) expected_video_codec: Option<&'a str>,
+    pub(crate) mediamtx_api: Option<u16>,
     pub(crate) cookie: Option<&'a str>,
     pub(crate) cell: Option<HarnessOutputCell>,
+}
+
+fn mediamtx_path_from_rtmp_url(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    match parsed.scheme() {
+        "rtmp" | "rtmps" => {}
+        _ => return None,
+    }
+    Some(parsed.path().trim_start_matches('/').to_string())
 }
 
 pub(crate) async fn verify_mixed_stream(
@@ -96,49 +121,128 @@ pub(crate) async fn verify_mixed_stream(
         return Ok(());
     }
     let started = Instant::now();
+    if spec.expected_video_codec == Some("hevc")
+        && let Some(mtx_api) = spec.mediamtx_api
+        && let Some(path) = mediamtx_path_from_rtmp_url(spec.url)
+    {
+        let health = verify_mediamtx_path_codec_health(mtx_api, &path, "H265", 2).await?;
+        emit_mixed_result(
+            env,
+            spec.cfg,
+            &spec.id,
+            "pass",
+            started.elapsed(),
+            Some(json!({
+                "label": spec.label,
+                "expected": spec.expected,
+                "expectedVideoCodec": "hevc",
+                "probe": "mediamtx-path",
+                "path": path,
+                "url": spec.url,
+                "mediamtx": mediamtx_path_health_json(spec.cfg, spec.label, &health),
+            })),
+        )?;
+        log_mixed_ok(
+            env,
+            &format!("mediamtx: {} -> H265 publisher path ready", spec.label),
+        )?;
+        return Ok(());
+    }
     let mut last = String::new();
+    let mut last_codec = String::new();
     let mut last_error = String::new();
     for _attempt in 1..=30 {
-        match probe_dims_ramp_with_cookie(spec.url, spec.cookie).await {
-            Ok(dimensions) if dimensions == spec.expected => {
-                emit_mixed_result(
-                    env,
-                    spec.cfg,
-                    &spec.id,
-                    "pass",
-                    started.elapsed(),
-                    Some(json!({
-                        "label": spec.label,
-                        "expected": spec.expected,
-                        "got": dimensions,
-                        "url": spec.url,
-                    })),
-                )?;
-                log_mixed_ok(env, &format!("ffprobe: {} -> {dimensions}", spec.label))?;
-                return Ok(());
-            }
-            Ok(dimensions) => {
-                if !dimensions.is_empty() {
-                    last = dimensions;
+        if let Some(expected_codec) = spec.expected_video_codec {
+            match ffprobe(spec.url).await {
+                Ok(probe) => {
+                    let dimensions = video_dimensions(&probe).unwrap_or_default();
+                    let codec = ffprobe_video_codec_name(&probe).unwrap_or_default();
+                    if dimensions == spec.expected && video_codec_matches(&codec, expected_codec) {
+                        emit_mixed_result(
+                            env,
+                            spec.cfg,
+                            &spec.id,
+                            "pass",
+                            started.elapsed(),
+                            Some(json!({
+                                "label": spec.label,
+                                "expected": spec.expected,
+                                "expectedVideoCodec": expected_codec,
+                                "got": dimensions,
+                                "videoCodec": codec,
+                                "url": spec.url,
+                            })),
+                        )?;
+                        log_mixed_ok(
+                            env,
+                            &format!("ffprobe: {} -> {dimensions} {codec}", spec.label),
+                        )?;
+                        return Ok(());
+                    }
+                    if !dimensions.is_empty() {
+                        last = dimensions;
+                    }
+                    if !codec.is_empty() {
+                        last_codec = codec;
+                    }
+                }
+                Err(error) => {
+                    last_error = error.clone();
                 }
             }
-            Err(error) => {
-                last_error = error.clone();
+        } else {
+            match probe_dims_ramp_with_cookie(spec.url, spec.cookie).await {
+                Ok(dimensions) if dimensions == spec.expected => {
+                    emit_mixed_result(
+                        env,
+                        spec.cfg,
+                        &spec.id,
+                        "pass",
+                        started.elapsed(),
+                        Some(json!({
+                            "label": spec.label,
+                            "expected": spec.expected,
+                            "got": dimensions,
+                            "url": spec.url,
+                        })),
+                    )?;
+                    log_mixed_ok(env, &format!("ffprobe: {} -> {dimensions}", spec.label))?;
+                    return Ok(());
+                }
+                Ok(dimensions) => {
+                    if !dimensions.is_empty() {
+                        last = dimensions;
+                    }
+                }
+                Err(error) => {
+                    last_error = error.clone();
+                }
             }
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
     let api_snapshot = mixed_probe_failure_snapshot(api, spec.cell.as_ref()).await;
-    let message = format!(
-        "ffprobe: {} - expected {}, got '{}'",
-        spec.label,
-        spec.expected,
-        if last.is_empty() {
-            "<no output>"
-        } else {
-            &last
-        }
-    );
+    let got_dimensions = if last.is_empty() {
+        "<no output>"
+    } else {
+        &last
+    };
+    let got_codec = if last_codec.is_empty() {
+        "<no codec>"
+    } else {
+        &last_codec
+    };
+    let message = if let Some(expected_codec) = spec.expected_video_codec {
+        format!(
+            "ffprobe: {} - expected {} {}, got '{}' {}",
+            spec.label, spec.expected, expected_codec, got_dimensions, got_codec
+        )
+    } else {
+        format!(
+            "ffprobe: {} - expected {}, got '{}'",
+            spec.label, spec.expected, got_dimensions
+        )
+    };
     emit_mixed_result(
         env,
         spec.cfg,
@@ -149,7 +253,9 @@ pub(crate) async fn verify_mixed_stream(
             "message": message,
             "label": spec.label,
             "expected": spec.expected,
+            "expectedVideoCodec": spec.expected_video_codec,
             "got": last,
+            "videoCodec": last_codec,
             "url": spec.url,
             "ffprobe_stderr": last_error,
             "apiSnapshot": api_snapshot,
@@ -524,6 +630,7 @@ mod tests {
             duplicate_index: 1,
             protocol: "rtmp".to_string(),
             encoding: "source".to_string(),
+            rtmp_mode: Some(RtmpOutputMode::Legacy.as_str().to_string()),
             selected_audio_track: None,
             publish_url: "rtmp://127.0.0.1/live/out".to_string(),
             read_url: None,

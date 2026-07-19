@@ -3,6 +3,9 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+#[cfg(test)]
+use restream::domain::output_spec::OutputConfig;
+use restream::domain::output_spec::RtmpOutputMode;
 use restream::test_fixtures::AvMarkerBframeMode;
 use serde::Deserialize;
 
@@ -567,6 +570,8 @@ pub(crate) struct MixedDslOutputCase<'a> {
     pub(crate) id: &'a str,
     pub(crate) protocol: &'a str,
     pub(crate) encoding: &'a str,
+    #[serde(rename = "rtmpMode", default)]
+    pub(crate) rtmp_mode: RtmpOutputMode,
     #[serde(rename = "expectedDimensions")]
     pub(crate) expected_dimensions: &'a str,
     #[serde(rename = "expectedAudioTracks")]
@@ -577,12 +582,21 @@ pub(crate) struct MixedDslOutputCase<'a> {
 
 impl MixedDslOutputCase<'_> {
     pub(crate) fn to_output_case(&self) -> Result<MixedOutputCase, String> {
+        let protocol = MixedOutputProtocol::from_name(self.protocol)
+            .ok_or_else(|| format!("{} has unknown output protocol {}", self.id, self.protocol))?;
+        if !matches!(protocol, MixedOutputProtocol::Rtmp)
+            && !matches!(self.rtmp_mode, RtmpOutputMode::Legacy)
+        {
+            return Err(format!(
+                "{} sets rtmpMode for non-RTMP output protocol {}",
+                self.id, self.protocol
+            ));
+        }
         Ok(MixedOutputCase {
             id: self.id.to_string(),
-            protocol: MixedOutputProtocol::from_name(self.protocol).ok_or_else(|| {
-                format!("{} has unknown output protocol {}", self.id, self.protocol)
-            })?,
+            protocol,
             encoding: self.encoding.to_string(),
+            rtmp_mode: self.rtmp_mode,
             expected_dimensions: self.expected_dimensions.to_string(),
             expected_audio_tracks: self.expected_audio_tracks,
             selected_audio_track: self.selected_audio_track,
@@ -890,18 +904,17 @@ pub(crate) fn expected_mixed_stage_count(case: MixedInputCase) -> MixedStageCoun
     match (case.codec(), case.is_multi_track()) {
         // H.265 multi deliberately has more audio routes than H.264 multi:
         // SRT selected-track outputs preserve HEVC while RTMP selected-track
-        // outputs select audio after the shared H.264 compatibility edge.
-        // The important expensive-stage invariant is codec_edge=3, one per
-        // video shape (source, 720p, 1080p), not one per selected audio track.
+        // outputs select audio after either the shared H.264 compatibility edge
+        // or the Enhanced RTMP source edge.
         (MixedVideoCodec::H265, true) => MixedStageCount {
             video: 2,
-            audio: 12,
-            codec_edge: 3,
+            audio: 10,
+            codec_edge: 2,
         },
         (MixedVideoCodec::H265, false) => MixedStageCount {
             video: 2,
             audio: 0,
-            codec_edge: 3,
+            codec_edge: 2,
         },
         (_, true) => MixedStageCount {
             video: 2,
@@ -939,6 +952,7 @@ pub(crate) struct MixedOutputCase {
     id: String,
     protocol: MixedOutputProtocol,
     encoding: String,
+    rtmp_mode: RtmpOutputMode,
     expected_dimensions: String,
     expected_audio_tracks: usize,
     selected_audio_track: Option<usize>,
@@ -955,6 +969,33 @@ impl MixedOutputCase {
 
     pub(crate) fn encoding(&self) -> &str {
         &self.encoding
+    }
+
+    pub(crate) const fn rtmp_mode(&self) -> RtmpOutputMode {
+        self.rtmp_mode
+    }
+
+    pub(crate) fn rtmp_mode_name(&self) -> Option<&'static str> {
+        matches!(self.protocol, MixedOutputProtocol::Rtmp).then(|| self.rtmp_mode.as_str())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn output_config(&self) -> OutputConfig {
+        let mut config = super::output_config_from_harness_label(&self.encoding);
+        if matches!(self.protocol, MixedOutputProtocol::Rtmp) {
+            config = config.with_rtmp_mode(self.rtmp_mode);
+        }
+        config
+    }
+
+    pub(crate) fn expected_video_codec_for_input(&self, input: MixedInputCase) -> &'static str {
+        match self.protocol {
+            MixedOutputProtocol::Srt => input.expected_video_codec(),
+            MixedOutputProtocol::Rtmp if self.rtmp_mode == RtmpOutputMode::Enhanced => {
+                input.expected_video_codec()
+            }
+            MixedOutputProtocol::Rtmp => "h264",
+        }
     }
 
     pub(crate) fn expected_dimensions(&self) -> &str {
@@ -1068,7 +1109,7 @@ mod tests {
                     };
                     PlannedOutput::new(
                         format!("{}-{duplicate}", output_case.id()),
-                        output_case.encoding(),
+                        output_case.output_config(),
                         url,
                     )
                 })
