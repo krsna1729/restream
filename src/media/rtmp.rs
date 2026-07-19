@@ -34,9 +34,10 @@ use crate::media::engine::{
 use crate::media::ingest_auth::{
     PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode,
 };
-use crate::media::input_gate::{InputPacketBoundary, InputTimestampMapper};
+use crate::media::input_gate::{InputForwardState, InputPacketBoundary, InputTimestampMapper};
 use crate::media::ring_buffer::{MediaPacket, MediaType, PayloadFormat, Reader, RingBuffer};
 use crate::media::security::IngestSecurityService;
+use crate::media::standby_gop::StandbyGopCache;
 use crate::media::startup_policy;
 use crate::media::tcp_stats::collect_rtmp_receiver_stats;
 use crate::secret_display::{redact_secret, redact_url};
@@ -56,7 +57,7 @@ use flv::{
     FlvVideoPacketKind, classify_flv_video_packet, flv_avcc_config_annexb_parameter_sets,
     flv_video_composition_time_ms, parse_flv_audio_meta, parse_flv_video_meta,
 };
-use ingest_packets::push_promotion_headers;
+use ingest_packets::try_promote_cached_rtmp;
 use timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
 
 const RTMP_EGRESS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -69,6 +70,7 @@ struct RtmpIngestHandle {
     ingest_metrics: Arc<StageMetrics>,
     last_progress_ms: Arc<AtomicU64>,
     timestamp_mapper: InputTimestampMapper,
+    standby_gop: StandbyGopCache,
 }
 
 /// RTMP Ingest Server
@@ -679,6 +681,7 @@ async fn handle_session_results(
                             ingest_metrics,
                             last_progress_ms,
                             timestamp_mapper: InputTimestampMapper::default(),
+                            standby_gop: StandbyGopCache::default(),
                         });
                         set_tcp_socket_buffers(socket, engine.config.rtmp_stream_buffer_bytes);
 
@@ -760,13 +763,6 @@ async fn handle_session_results(
                                     .await;
                             }
 
-                            let promotion_headers = if is_keyframe {
-                                engine
-                                    .get_ingest_session_sequence_headers(&active.registration)
-                                    .await
-                            } else {
-                                (None, None)
-                            };
                             let mut packet = MediaPacket {
                                 media_type: MediaType::Video,
                                 track_index: 0,
@@ -788,30 +784,32 @@ async fn handle_session_results(
                                 }
                                 preview_ring.push(packet.clone());
                             }
-                            if let Some(lease) = active.registration.gate.try_enter(boundary) {
+                            if active.registration.gate.state() == InputForwardState::Active {
+                                let Some(lease) = active.registration.gate.try_enter(boundary)
+                                else {
+                                    continue;
+                                };
                                 active.timestamp_mapper.map_packet(
                                     &mut packet,
-                                    lease.activated(),
+                                    false,
                                     &active.registration.last_forwarded_dts,
                                 );
-                                if lease.activated() {
-                                    push_promotion_headers(
-                                        &active.ring,
-                                        promotion_headers,
-                                        packet.dts.saturating_sub(1),
-                                    );
-                                }
                                 if let Some(parameter_sets) = parameter_sets {
                                     active.ring.set_video_parameter_sets(parameter_sets);
                                 }
-                                if is_keyframe {
-                                    engine.record_keyframe(pipeline_id, packet.pts).await;
-                                }
+                                let keyframe_pts = is_keyframe.then_some(packet.pts);
                                 InputTimestampMapper::record_forwarded(
                                     &packet,
                                     &active.registration.last_forwarded_dts,
                                 );
                                 active.ring.push(packet);
+                                drop(lease);
+                                if let Some(pts) = keyframe_pts {
+                                    engine.record_keyframe(pipeline_id, pts).await;
+                                }
+                            } else {
+                                active.standby_gop.push(packet);
+                                try_promote_cached_rtmp(engine, active).await;
                             }
                         }
                     }
@@ -891,11 +889,14 @@ async fn handle_session_results(
                             {
                                 preview_ring.push(packet.clone());
                             }
-                            if let Some(_lease) = active
-                                .registration
-                                .gate
-                                .try_enter(InputPacketBoundary::Other)
-                            {
+                            if active.registration.gate.state() == InputForwardState::Active {
+                                let Some(lease) = active
+                                    .registration
+                                    .gate
+                                    .try_enter(InputPacketBoundary::Other)
+                                else {
+                                    continue;
+                                };
                                 active.timestamp_mapper.map_packet(
                                     &mut packet,
                                     false,
@@ -906,6 +907,10 @@ async fn handle_session_results(
                                     &active.registration.last_forwarded_dts,
                                 );
                                 active.ring.push(packet);
+                                drop(lease);
+                            } else {
+                                active.standby_gop.push(packet);
+                                try_promote_cached_rtmp(engine, active).await;
                             }
                         }
                     }

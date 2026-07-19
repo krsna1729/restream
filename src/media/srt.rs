@@ -61,6 +61,7 @@ use crate::media::ingest_auth::{PipelineAccessAuthenticator, PipelineAccessMode}
 use crate::media::input_gate::InputTimestampMapper;
 use crate::media::ring_buffer::{MediaPacket, MediaType, Reader, RingBuffer};
 use crate::media::security::RateLimitScope;
+use crate::media::standby_gop::StandbyGopCache;
 use crate::media::startup_policy;
 use crate::media::ts_chunk_ring::{TsChunkReader, TsChunkRing};
 use crate::media::{MEDIA_PULL_BURST_PACKETS, MEDIA_TS_BATCH_TARGET_BYTES};
@@ -1424,6 +1425,7 @@ impl SrtServer {
         // Pure-Rust MPEG-TS demuxer — no FFmpeg thread or MemoryQueue needed
         let mut demuxer = crate::media::mpegts::TsDemuxer::new();
         let mut timestamp_mapper = InputTimestampMapper::default();
+        let mut standby_gop = StandbyGopCache::default();
         let mut packets = Vec::with_capacity(16);
         let mut probe_sent = false;
         let mut disconnect_phase: Option<String> = None;
@@ -1661,6 +1663,7 @@ impl SrtServer {
                     &ring_buffer,
                     &registration,
                     &mut timestamp_mapper,
+                    &mut standby_gop,
                     cached_keyframe_times.as_ref(),
                 );
             }
@@ -1760,6 +1763,7 @@ impl SrtServer {
                 &ring_buffer,
                 &registration,
                 &mut timestamp_mapper,
+                &mut standby_gop,
                 None,
             );
         }
