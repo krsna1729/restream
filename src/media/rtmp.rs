@@ -7,13 +7,13 @@
 //! Egress: connects to an RTMP target URL and forwards packets from the
 //! `RingBuffer` via a `Reader`. Cancellation via `CancellationToken`.
 
-use crate::domain::output_spec::{RtmpOutputMode, VideoCodecKind};
+use crate::domain::output_spec::RtmpOutputMode;
 use crate::domain::state::EgressPhase;
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
     ClientSession, ClientSessionConfig, ClientSessionEvent, ClientSessionResult,
     PublishRequestType, ServerSession, ServerSessionConfig, ServerSessionEvent,
-    ServerSessionResult, StreamMetadata,
+    ServerSessionResult,
 };
 use rml_rtmp::time::RtmpTimestamp;
 use std::net::SocketAddr;
@@ -30,7 +30,6 @@ use crate::media::MEDIA_PULL_BURST_PACKETS;
 use crate::media::codec;
 use crate::media::engine::{
     AudioMeta, EgressRegistration, IngestRegistration, MediaEngine, PublisherQuality, StageMetrics,
-    VideoMeta,
 };
 use crate::media::ingest_auth::{
     PipelineAccessAuthenticator, PipelineAccessError, PipelineAccessMode,
@@ -44,6 +43,7 @@ use crate::media::tcp_stats::collect_rtmp_receiver_stats;
 use crate::secret_display::{redact_secret, redact_url};
 use bytes::Bytes;
 
+mod egress_metadata;
 mod egress_transport;
 mod enhanced;
 mod flv;
@@ -54,6 +54,12 @@ mod timestamps;
 #[path = "rtmp/tests.rs"]
 mod tests;
 
+#[cfg(test)]
+use egress_metadata::RTMP_METADATA_VIDEO_CODEC_ID_HEVC;
+use egress_metadata::{
+    output_ring_video_codec_kind, resolved_output_audio_tracks, rtmp_publish_metadata,
+    validate_rtmp_output_audio_tracks,
+};
 use egress_transport::{connect_rtmp_egress_stream, parse_rtmp_url, rtmp_sender_quality};
 use enhanced::{
     cache_hevc_parameter_sets, enhanced_rtmp_connect_packet, hevc_sequence_header_for_keyframe,
@@ -67,8 +73,6 @@ use ingest_packets::try_promote_cached_rtmp;
 use timestamps::{RtmpTimestampGuard, refreshed_video_sequence_header_timestamp};
 
 const RTMP_EGRESS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-const RTMP_METADATA_VIDEO_CODEC_ID_AVC: u32 = 7;
-const RTMP_METADATA_VIDEO_CODEC_ID_HEVC: u32 = u32::from_be_bytes(*b"hvc1");
 
 struct RtmpIngestHandle {
     pipeline_id: String,
@@ -1787,116 +1791,6 @@ pub async fn start_rtmp_egress(
                 }
             }
         }
-    }
-}
-
-async fn resolved_output_audio_tracks(
-    engine: &MediaEngine,
-    pipeline_id: &str,
-    ring_buffer: &Arc<RingBuffer>,
-) -> Vec<AudioMeta> {
-    if let Some(tracks) = ring_buffer.audio_tracks()
-        && !tracks.is_empty()
-    {
-        return tracks.to_vec();
-    }
-
-    engine
-        .with_active_ingest(pipeline_id, |ingest| {
-            let metadata = ingest.metadata();
-            let tracks = ingest
-                .audio_tracks
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if !tracks.is_empty() {
-                tracks.as_ref().clone()
-            } else {
-                metadata.audio.into_iter().collect()
-            }
-        })
-        .await
-        .unwrap_or_default()
-}
-
-async fn output_ring_video_codec_kind(
-    engine: &MediaEngine,
-    pipeline_id: &str,
-    output_ring: &RingBuffer,
-) -> VideoCodecKind {
-    let output_codec = output_ring.codec_hint_str();
-    if !output_codec.is_empty() {
-        return VideoCodecKind::from_codec_name(output_codec);
-    }
-
-    engine
-        .with_active_ingest(pipeline_id, |ingest| {
-            ingest
-                .video
-                .as_ref()
-                .map(|video| VideoCodecKind::from_codec_name(&video.codec))
-        })
-        .await
-        .flatten()
-        .unwrap_or(VideoCodecKind::Unknown)
-}
-
-fn validate_rtmp_output_audio_tracks(audio_tracks: &[AudioMeta]) -> Result<(), String> {
-    if audio_tracks.len() > 1 {
-        return Err(format!(
-            "RTMP output supports exactly one audio track, but this output resolved to {} tracks. Choose subset, downmix, or remap audio routing.",
-            audio_tracks.len()
-        ));
-    }
-    Ok(())
-}
-
-async fn rtmp_publish_metadata(
-    engine: &MediaEngine,
-    pipeline_id: &str,
-    output_ring: &Arc<RingBuffer>,
-    output_audio_track: Option<&AudioMeta>,
-) -> Option<StreamMetadata> {
-    let video = engine
-        .with_active_ingest(pipeline_id, |ingest| ingest.metadata().video)
-        .await
-        .flatten();
-    let mut metadata = StreamMetadata::new();
-
-    if let Some(video) = video {
-        let codec = rtmp_output_video_codec(&video, output_ring);
-        metadata.video_codec_id = if codec.eq_ignore_ascii_case("h264") {
-            Some(RTMP_METADATA_VIDEO_CODEC_ID_AVC)
-        } else if VideoCodecKind::from_codec_name(codec).is_hevc() {
-            Some(RTMP_METADATA_VIDEO_CODEC_ID_HEVC)
-        } else {
-            None
-        };
-        metadata.video_width = (video.width > 0).then_some(video.width);
-        metadata.video_height = (video.height > 0).then_some(video.height);
-        metadata.video_frame_rate = (video.fps > 0.0).then_some(video.fps as f32);
-    }
-
-    if let Some(track) = output_audio_track
-        && track.codec.eq_ignore_ascii_case("aac")
-    {
-        metadata.audio_codec_id = Some(10);
-        metadata.audio_sample_rate = Some(track.sample_rate);
-        metadata.audio_channels = Some(track.channels);
-        metadata.audio_is_stereo = Some(track.channels >= 2);
-    }
-
-    (metadata.video_codec_id.is_some() || metadata.audio_codec_id.is_some()).then_some(metadata)
-}
-
-fn rtmp_output_video_codec<'a>(
-    ingest_video: &'a VideoMeta,
-    output_ring: &'a RingBuffer,
-) -> &'a str {
-    let output_codec = output_ring.codec_hint_str();
-    if output_codec.is_empty() {
-        ingest_video.codec.as_str()
-    } else {
-        output_codec
     }
 }
 

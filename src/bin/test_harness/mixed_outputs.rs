@@ -134,6 +134,7 @@ pub(crate) fn mixed_output_matrix_json(cases: &[MixedOutputCase]) -> Vec<Value> 
                         MixedVideoCodec::H264,
                         MixedInputAudioLayout::A1,
                         MixedInputReorder::Bf0,
+                        false,
                     )),
                     "h265": case.expected_video_codec_for_input(MixedInputCase::new(
                         "mixed.asset.file.h265.a1.bf0",
@@ -141,6 +142,7 @@ pub(crate) fn mixed_output_matrix_json(cases: &[MixedOutputCase]) -> Vec<Value> 
                         MixedVideoCodec::H265,
                         MixedInputAudioLayout::A1,
                         MixedInputReorder::Bf0,
+                        false,
                     )),
                 },
                 "expectedAudioTracks": case.expected_audio_tracks(),
