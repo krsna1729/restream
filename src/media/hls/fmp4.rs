@@ -1124,6 +1124,13 @@ impl<'a> H264BitReader<'a> {
         let mut leading_zero_bits = 0usize;
         while self.read_bits(1)? == 0 {
             leading_zero_bits += 1;
+            // ue(v) codes wider than 32 bits cannot occur in any field this
+            // reader parses; a run this long only happens on malformed input
+            // (or past the end of the buffer) and would otherwise overflow
+            // the `1u32 << leading_zero_bits` below. Fail closed instead.
+            if leading_zero_bits >= 32 {
+                return None;
+            }
         }
         let suffix = if leading_zero_bits == 0 {
             0
@@ -1520,6 +1527,44 @@ mod tests {
         header.truncate(15);
         assert!(
             build_h264_sample_entry_from_flv_sequence_header(&header, &test_video_meta()).is_none()
+        );
+    }
+
+    #[test]
+    fn sps_exp_golomb_run_of_32_zero_bits_fails_closed_instead_of_panicking() {
+        // seq_parameter_set_id is the first ue(v) field read from the SPS,
+        // before the profile_idc early-return check. A run of 32 leading
+        // zero bits there used to overflow `1u32 << leading_zero_bits` in
+        // H264BitReader::read_exp_golomb (checked-shift panic in debug
+        // builds, silent wraparound to a wrong value in release builds).
+        let malformed_sps: Vec<u8> = vec![
+            0x67, 0x64, 0x00, 0x1F, // nal header, profile_idc, constraints, level_idc
+            0x00, 0x00, 0x00, 0x00, // 32 leading zero bits for seq_parameter_set_id's ue(v)
+            0x80, 0xFF, 0xFF, 0xFF,
+            0xFF, // terminating 1 bit + enough bits for the ue(v) suffix
+        ];
+        let mut header = vec![
+            0x17, 0x00, 0x00, 0x00, 0x00, // FLV video header + AVC sequence header
+            0x01, // configurationVersion
+            0x64, // profile
+            0x00, // profile compatibility
+            0x1F, // level
+            0xFF, // lengthSizeMinusOne = 3
+            0xE1, // num SPS = 1
+        ];
+        header.extend_from_slice(&(malformed_sps.len() as u16).to_be_bytes());
+        header.extend_from_slice(&malformed_sps);
+        header.push(0); // num PPS = 0
+
+        let sample_entry =
+            build_h264_sample_entry_from_flv_sequence_header(&header, &test_video_meta())
+                .expect("SPS/PPS list itself is well-formed and must still parse");
+        let SampleEntry::Avc1(avc1) = sample_entry else {
+            panic!("expected Avc1 sample entry");
+        };
+        assert!(
+            avc1.avcc_box.chroma_format.is_none(),
+            "malformed exp-golomb run must fail closed (no profile fields), not panic or wrap"
         );
     }
 

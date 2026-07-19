@@ -96,6 +96,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 HUNT RING-BUFFER-DTS-ENFORCER-OVERFLOW FIXED [codex]](#2026-07-19-hunt-ring-buffer-dts-enforcer-overflow-fixed-codex)
 - [2026-07-19 HUNT SRT-MUXER-SHARD-RETIRING-REUSE FIXED [codex]](#2026-07-19-hunt-srt-muxer-shard-retiring-reuse-fixed-codex)
 - [2026-07-19 HUNT EGRESS-RETRY-STATE-TOCTOU FIXED [codex]](#2026-07-19-hunt-egress-retry-state-toctou-fixed-codex)
+- [2026-07-19 HUNT SPS-EXP-GOLOMB-OVERFLOW FIXED [codex]](#2026-07-19-hunt-sps-exp-golomb-overflow-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3441,5 +3442,66 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   found; worth a quick independent look in a future sweep, not urgent.
 - Notes: eighth genuine bug found this hunt run; found via a
   background research agent's investigation, independently verified by
+  direct source reading and a failing-then-passing regression test
+  before acting on it.
+
+## 2026-07-19 HUNT SPS-EXP-GOLOMB-OVERFLOW FIXED [codex]
+
+- What: adversarial hunt on `src/media/hls/fmp4.rs`'s hand-rolled
+  H.264 SPS bit reader (`H264BitReader::read_exp_golomb`), part of a
+  broader Explore-agent sweep across parsing/timestamp files
+  (`url.rs`, `security.rs`, `srt_stream_id.rs`, `timestamps.rs`,
+  `hls_fmp4.rs`, `writer.rs`, `upload.rs`, `operation_compiler.rs`,
+  `quality.rs`, `profiles.rs`, others) that settled on this as the
+  strongest finding.
+- Finding: `read_exp_golomb` counts leading zero bits in an unbounded
+  loop, then uses the count as a left-shift amount on a `u32`
+  (`1u32 << leading_zero_bits`). A crafted SPS with a run of 32
+  consecutive zero bits in its first Exp-Golomb field
+  (`seq_parameter_set_id`) drives `leading_zero_bits` to 32, causing a
+  checked-shift panic (`attempt to shift left with overflow`, this
+  repo's dev/test profile has `overflow-checks` on by default) or
+  silent value corruption in a build without overflow checks. This
+  field is read before the `profile_idc` early-return check in
+  `parse_h264_sps_avcc_fields`, so the overflow is reachable for any
+  profile, not just constrained ones. Both `parse_avcc_box` (FLV/RTMP
+  sequence-header path, `build_h264_sample_entry_from_flv_sequence_header`)
+  and the Raw/SRT video-packet path
+  (`build_h264_sample_entry_from_video_packet`) reach this parser with
+  attacker-controlled bytes from an untrusted publisher — a remote
+  panic in the media pipeline from a single malformed keyframe.
+- Fix: bound the zero-counting loop in `read_exp_golomb` — once
+  `leading_zero_bits` reaches 32, return `None` instead of continuing,
+  matching this parser's existing fail-closed convention (`parse_avcc_box`
+  already leaves the SPS profile fields `None` on any inner parse
+  failure rather than propagating an error for the whole box).
+- Added one permanent regression test,
+  `sps_exp_golomb_run_of_32_zero_bits_fails_closed_instead_of_panicking`,
+  in `src/media/hls/fmp4.rs`, building a full FLV AVC sequence header
+  around a crafted SPS with a 32-zero-bit run followed by a
+  terminating `1` bit and enough trailing bits to reach the shift
+  (a shorter payload that runs out of data before the terminating bit
+  exits `read_exp_golomb` via a different path and doesn't exercise
+  the shift at all — confirmed by first writing an under-length
+  payload, observing it passed even pre-fix, and re-deriving the
+  minimum byte layout needed to actually reach the overflow line).
+  Verified failing (panicking) against the pre-fix code and passing
+  after the fix. The two existing `parse_avcc_box` proptests use
+  uniform-random bytes and don't reliably hit a run this long
+  (~2⁻³² probability), which is why they hadn't already caught this.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::hls::fmp4::tests` — 21/21 pass (new test included).
+  `scripts/build/resource-limit.sh cargo test` — full suite including
+  integration tests and doctests, all green. `cargo fmt --all` +
+  `cargo fmt --all --check` — clean. `scripts/build/resource-limit.sh
+  cargo clippy --lib --tests -- -D warnings` — clean. No concurrency
+  gate: this is a pure parsing function with no lifecycle or
+  concurrency surface. No benchmark re-run: SPS parsing runs once per
+  sequence-header change, not per packet.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression test.
+- Notes: ninth genuine bug found this hunt run; found via a
+  background Explore agent's investigation, independently verified by
   direct source reading and a failing-then-passing regression test
   before acting on it.
