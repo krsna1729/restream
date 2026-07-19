@@ -1109,7 +1109,7 @@ impl DtsEnforcer {
         if let Some(prev) = self.last_dts.get(stream_idx)
             && dts <= *prev
         {
-            dts = *prev + 1;
+            dts = prev.saturating_add(1);
         }
         let pts = if pts < dts { dts } else { pts };
         if let Some(slot) = self.last_dts.get_mut(stream_idx) {

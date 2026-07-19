@@ -93,6 +93,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 HUNT TRANSCODER-SCALE-PATH-PTS-DEFAULT FIXED [codex]](#2026-07-19-hunt-transcoder-scale-path-pts-default-fixed-codex)
 - [2026-07-19 HUNT CODEC-RAW-PARAMETER-SET-DUPLICATION FIXED [codex]](#2026-07-19-hunt-codec-raw-parameter-set-duplication-fixed-codex)
 - [2026-07-19 HUNT CODEC-FLV-SEQUENCE-HEADER-CACHE-WIPE FIXED [codex]](#2026-07-19-hunt-codec-flv-sequence-header-cache-wipe-fixed-codex)
+- [2026-07-19 HUNT RING-BUFFER-DTS-ENFORCER-OVERFLOW FIXED [codex]](#2026-07-19-hunt-ring-buffer-dts-enforcer-overflow-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3260,3 +3261,57 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   stale-spawn-metadata finding, the `transcoder.rs` scale-path
   PTS-default finding, and the `codec.rs` Raw-path parameter-set
   duplication finding, all earlier this run).
+
+## 2026-07-19 HUNT RING-BUFFER-DTS-ENFORCER-OVERFLOW FIXED [codex]
+
+- What: adversarial hunt on `src/media/ring_buffer.rs`. Reviewed the
+  lock-free SPMC ring's push/pull/overflow/migration paths in depth
+  (happens-before reasoning for the `ArcSwapOption` + `write_idx`
+  Release/Acquire protocol, the `Reader::pull`/`pull_burst` double-check
+  pattern, the TOCTOU-safe `Notify` subscription order in
+  `wait_for_data`) and found the SPMC design itself sound — no bugs
+  there. The bug is in the standalone `DtsEnforcer::enforce` helper at
+  the bottom of the same file.
+- Finding: `enforce`'s collision-bump path computed `dts = *prev + 1` on
+  a plain `i64` with no overflow guard. If `last_dts[stream_idx]` ever
+  reaches `i64::MAX` (a corrupted/adversarial stream, or any
+  long-running stream whose timestamps accumulate without bound), that
+  add overflows: it panics in debug/test builds (this crate's `dev`
+  profile has no `overflow-checks` override, so it inherits Cargo's
+  default of `true`) and silently wraps to `i64::MIN` in release builds
+  (default `false`). The release-mode outcome is the worse of the two —
+  a massive backward DTS jump from the one function whose entire job is
+  guaranteeing forward-only DTS. `DtsEnforcer` is reachable from
+  `srt_egress.rs`, `feeder.rs`, and `ffmpeg/timeline.rs`, so this isn't a
+  cold path.
+- Fix: changed `dts = *prev + 1` to `dts = prev.saturating_add(1)`, so
+  the enforcer clamps at `i64::MAX` instead of overflowing — trading an
+  unreachable-in-practice edge case for a value that is still monotonic
+  non-decreasing (the documented contract) rather than corrupted.
+- Added one permanent regression test,
+  `dts_enforcer_bump_at_i64_max_does_not_overflow`, in
+  `src/media/ring_buffer_tests.rs` immediately before the existing
+  `dts_enforcer_fault_injection_negative_pts_dts` test. It drives
+  `last_dts` to `i64::MAX` and asserts a second call at the same DTS
+  saturates at `i64::MAX` (via `assert_eq!`, not `>=`, since clippy's
+  `absurd_extreme_comparisons` lint correctly flags `dts >= i64::MAX` as
+  tautological for an `i64`) instead of panicking or wrapping negative.
+  The test failed pre-fix with a real `attempt to add with overflow`
+  panic and passes after the fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib
+  media::ring_buffer` and the single new test both green.
+  `scripts/build/resource-limit.sh cargo test --lib` — full backend
+  suite, 1462/1462 pass. `cargo fmt --all` + `cargo fmt --all --check` —
+  clean. `scripts/build/resource-limit.sh cargo clippy --lib --tests --
+  -D warnings` — clean. `scripts/check/source-audit.sh` — passed. No
+  benchmark re-run: `saturating_add` vs. unchecked `+` on a single `i64`
+  per call is not a measurable hot-path cost, and this function is not
+  in the packet-copy/mux inner loop itself.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression test. No further issues found in `ring_buffer.rs`; next
+  hunt target to be picked from the broader re-ranking (`engine.rs`,
+  `file_analysis.rs`, `h264_transcoder.rs`, `ingest_auth.rs`,
+  `profiles.rs`, `snapshots.rs`, `srt.rs`, `stage_registry_access.rs`,
+  `startup_policy.rs`, `tcp_stats.rs`, `timing.rs`, `ts_chunk_ring.rs`).
+- Notes: sixth genuine bug found this hunt run.
