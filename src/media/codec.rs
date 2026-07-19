@@ -59,10 +59,15 @@ pub fn video_for_ts<'a>(
                 return None;
             }
             if payload[1] == 0 {
-                // Sequence header — cache SPS/PPS Annex B for inline injection
+                // Sequence header — cache SPS/PPS Annex B for inline injection.
+                // A malformed/truncated header parses to an empty Vec; only
+                // overwrite the cache on success so a bad header can't wipe out
+                // a previously cached, still-valid parameter set.
                 let (nls, annexb) = parse_avcc_config(&payload[5..]);
                 *nalu_len_size = nls;
-                *sps_pps_cache = annexb;
+                if !annexb.is_empty() {
+                    *sps_pps_cache = annexb;
+                }
                 // Don't emit a standalone packet; SPS/PPS will be prepended to IDR frames
                 None
             } else {
@@ -186,10 +191,15 @@ pub fn video_for_ts_into<'a>(
                 return None;
             }
             if payload[1] == 0 {
-                // Sequence header — update SPS/PPS cache, no frame to emit
+                // Sequence header — update SPS/PPS cache, no frame to emit.
+                // A malformed/truncated header parses to an empty Vec; only
+                // overwrite the cache on success (see the Raw-format sibling
+                // above for the matching fail-closed pattern).
                 let (nls, annexb) = parse_avcc_config(&payload[5..]);
                 *nalu_len_size = nls;
-                *sps_pps_cache = annexb;
+                if !annexb.is_empty() {
+                    *sps_pps_cache = annexb;
+                }
                 None
             } else {
                 let is_keyframe = (payload[0] & 0xF0) == 0x10;
@@ -1555,6 +1565,74 @@ mod tests {
         assert!(video_for_ts(&flv_seq, PayloadFormat::Flv, &mut nls, &mut cache).is_none());
         // nal_size may be updated
         assert_eq!(nls, 4);
+    }
+
+    // Adversarial hunt: a reconnecting RTMP publisher can send a malformed or
+    // truncated sequence header (e.g. declares a SPS length but never
+    // supplies the SPS bytes). `parse_avcc_config` correctly fails closed and
+    // returns an empty Vec for this — but both `video_for_ts` and
+    // `video_for_ts_into` unconditionally assigned that empty result to
+    // `*sps_pps_cache`, wiping out a previously cached, still-valid set of
+    // parameter sets. Every keyframe muxed after the malformed header (until
+    // a valid one eventually arrives) would then be missing SPS/PPS and fail
+    // to decode.
+    #[test]
+    fn video_for_ts_flv_malformed_sequence_header_does_not_wipe_existing_cache() {
+        let mut nls = 4;
+        let mut cache = vec![
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+            0xCE, 0x38, 0x80,
+        ];
+        let original_cache = cache.clone();
+        let malformed_seq_hdr = [
+            0x17, 0x00, 0x00, 0x00, 0x00, // FLV header: keyframe, seq header
+            1, 66, 0, 30, 0xFF, // AVCC version/profile/compat/level, len_size=4
+            0xE1, 0x00, 0x05, // num_sps=1, sps_len=5 — but no SPS bytes follow
+        ];
+
+        assert!(
+            video_for_ts(&malformed_seq_hdr, PayloadFormat::Flv, &mut nls, &mut cache).is_none(),
+            "a sequence header packet never emits a standalone TS payload"
+        );
+        assert_eq!(
+            cache, original_cache,
+            "a malformed sequence header must not destroy a previously cached, \
+             still-valid set of parameter sets — the stream should keep \
+             decoding with the last known-good SPS/PPS until a valid \
+             replacement arrives"
+        );
+    }
+
+    #[test]
+    fn video_for_ts_into_flv_malformed_sequence_header_does_not_wipe_existing_cache() {
+        let mut nls = 4;
+        let mut cache = vec![
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E, 0xAB, 0x00, 0x00, 0x00, 0x01, 0x68,
+            0xCE, 0x38, 0x80,
+        ];
+        let original_cache = cache.clone();
+        let mut buf = Vec::new();
+        let malformed_seq_hdr = [
+            0x17, 0x00, 0x00, 0x00, 0x00, // FLV header: keyframe, seq header
+            1, 66, 0, 30, 0xFF, // AVCC version/profile/compat/level, len_size=4
+            0xE1, 0x00, 0x05, // num_sps=1, sps_len=5 — but no SPS bytes follow
+        ];
+
+        assert!(
+            video_for_ts_into(
+                &malformed_seq_hdr,
+                PayloadFormat::Flv,
+                &mut nls,
+                &mut cache,
+                &mut buf
+            )
+            .is_none(),
+            "a sequence header packet never emits a standalone TS payload"
+        );
+        assert_eq!(
+            cache, original_cache,
+            "zero-allocation variant must not destroy the cache either"
+        );
     }
 
     #[test]

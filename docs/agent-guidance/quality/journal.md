@@ -92,6 +92,7 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
 - [2026-07-19 HUNT STAGE-LIFECYCLE-STALE-SPAWN-METADATA FIXED [codex]](#2026-07-19-hunt-stage-lifecycle-stale-spawn-metadata-fixed-codex)
 - [2026-07-19 HUNT TRANSCODER-SCALE-PATH-PTS-DEFAULT FIXED [codex]](#2026-07-19-hunt-transcoder-scale-path-pts-default-fixed-codex)
 - [2026-07-19 HUNT CODEC-RAW-PARAMETER-SET-DUPLICATION FIXED [codex]](#2026-07-19-hunt-codec-raw-parameter-set-duplication-fixed-codex)
+- [2026-07-19 HUNT CODEC-FLV-SEQUENCE-HEADER-CACHE-WIPE FIXED [codex]](#2026-07-19-hunt-codec-flv-sequence-header-cache-wipe-fixed-codex)
 
 ## 2026-07-03 00:00 BOOTSTRAP DONE [opus]
 - What: quality-loop system created — skills (quality-loop, proof-sweep,
@@ -3203,3 +3204,59 @@ trail — the journal plus `git log --grep "quality("` is the full audit record.
   `stage_lifecycle.rs` stale-spawn-metadata finding, and the
   `transcoder.rs` scale-path PTS-default finding, both earlier this
   run).
+
+## 2026-07-19 HUNT CODEC-FLV-SEQUENCE-HEADER-CACHE-WIPE FIXED [codex]
+- What: continued hunt target `src/media/feeder.rs` (913 lines), the
+  file named as the follow-up in the `CODEC-RAW-PARAMETER-SET-DUPLICATION`
+  entry above. Manual analysis of `feeder.rs` itself (stream-index
+  invariants, startup-suppression logic, bounds safety, idempotency of
+  parameter-set-priming APIs) found no additional bugs beyond its 18
+  existing tests, but tracing its calls into `src/media/codec.rs` surfaced
+  a second, distinct genuine bug in the FLV sequence-header path.
+- Finding: `video_for_ts` and `video_for_ts_into`'s `PayloadFormat::Flv`
+  sequence-header branches unconditionally assigned
+  `*sps_pps_cache = annexb` with the result of `parse_avcc_config`, even
+  when that result is an empty `Vec` — which `parse_avcc_config` returns
+  both for a genuinely-empty sequence header and for a malformed/truncated
+  one (its bounds checks fail closed to `None` internally and it converts
+  that to an empty `Vec` via `.unwrap_or_default()`). A reconnecting RTMP
+  publisher sending a corrupted or truncated sequence header (e.g.
+  declaring a SPS length but never supplying the SPS bytes) would silently
+  wipe out a previously cached, still-valid SPS/PPS set. Every keyframe
+  muxed after the malformed header — until a new valid one eventually
+  arrived — would then be missing SPS/PPS and fail to decode. The sibling
+  `PayloadFormat::Raw` path was already protected against exactly this via
+  `refresh_annexb_parameter_set_cache`'s "only update the cache on
+  success" pattern; the FLV path never got the equivalent treatment.
+- Fix: both branches now only overwrite `*sps_pps_cache` when the parsed
+  `annexb` is non-empty, leaving the previous cache untouched on a
+  failed/truncated parse — mirroring the Raw path's fail-closed behavior.
+  `*nalu_len_size` is still updated unconditionally in both cases (it has
+  a documented default and isn't part of the vulnerability).
+- Added two permanent regression tests:
+  `video_for_ts_flv_malformed_sequence_header_does_not_wipe_existing_cache`
+  and
+  `video_for_ts_into_flv_malformed_sequence_header_does_not_wipe_existing_cache`
+  in `src/media/codec.rs`'s `#[cfg(test)]` module, immediately after the
+  existing `video_for_ts_flv_sequence_header_returns_none` test. Both seed
+  a valid cached SPS/PPS set, feed a sequence header that declares a SPS
+  length but omits the SPS bytes, and assert the cache is byte-for-byte
+  unchanged afterward. Both failed against the pre-fix code (empty `[]`
+  overwriting the seeded cache) and pass after the fix.
+- Gates: `scripts/build/resource-limit.sh cargo test --lib media::codec`
+  — 58/58 pass (2 new plus 56 pre-existing). `scripts/build/resource-limit.sh
+  cargo test --lib` — full backend suite, 1461/1461 pass. `cargo fmt --all`
+  + `cargo fmt --all --check` — clean. `scripts/build/resource-limit.sh
+  cargo clippy --lib --tests -- -D warnings` — clean.
+  `scripts/check/source-audit.sh` — passed. No benchmark re-run: the fix
+  only adds a cheap `is_empty()` guard around an assignment on the
+  sequence-header (control) path, not the per-packet hot path.
+- Commit: (this commit) on `codex/adversarial-hunt-round3-20260719`.
+- Follow-ups: none filed — fix is scoped and covered by the new
+  regression tests. No further leads identified in `feeder.rs` itself;
+  next hunt target to be picked from the broader re-ranking.
+- Notes: fifth genuine bug found this hunt run (after the `security.rs`
+  eviction-bypass finding on round 2, the `stage_lifecycle.rs`
+  stale-spawn-metadata finding, the `transcoder.rs` scale-path
+  PTS-default finding, and the `codec.rs` Raw-path parameter-set
+  duplication finding, all earlier this run).
