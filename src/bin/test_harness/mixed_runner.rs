@@ -1215,7 +1215,10 @@ pub(super) async fn run_mixed_file_config(
 ) -> Result<Value, String> {
     let cfg = case.scenario_id();
     let n = env.n_per_group;
-    let output_cases = mixed_output_cases_for_input(case);
+    let output_cases = selected_mixed_output_cases(
+        mixed_output_cases_for_input(case),
+        env.output_groups.as_deref(),
+    )?;
     let total = n * output_cases.len();
 
     let fixture = mixed_input_fixture(case)?;
@@ -1274,7 +1277,7 @@ pub(super) async fn run_mixed_file_config(
             &pipeline_id,
             restream_pid,
             cfg,
-            output_cases,
+            &output_cases,
             &mut ffmpeg_srt_sinks,
             &mut next_ffmpeg_srt_sink,
             &mut ffmpeg_signal_sinks,
@@ -1289,14 +1292,14 @@ pub(super) async fn run_mixed_file_config(
             &pipeline_id,
             restream_pid,
             cfg,
-            output_cases,
+            &output_cases,
             &mut ffmpeg_signal_sinks,
             &mut next_ffmpeg_signal_sink,
             &mut output_ids,
         )
         .await?;
     }
-    verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, output_cases, resume)
+    verify_mixed_graph_stage_sharing(env, api, cfg, &pipeline_id, case, &output_cases, resume)
         .await?;
     if !ffmpeg_signal_sinks.is_empty() {
         finish_ffmpeg_signal_sinks(env, &mut ffmpeg_signal_sinks, resume).await?;
@@ -1324,7 +1327,7 @@ pub(super) async fn run_mixed_file_config(
         env,
         api,
         cfg,
-        output_cases,
+        &output_cases,
         resume,
         case.is_multi_track(),
         true,
@@ -1377,7 +1380,7 @@ pub(super) async fn run_mixed_file_config(
         "codec": case.codec_name(),
         "trackLayout": case.track_layout_name(),
         "outputCount": total,
-        "outputMatrix": mixed_output_matrix_json(output_cases),
+        "outputMatrix": mixed_output_matrix_json(&output_cases),
         "recording": recording,
         "artifacts": {
             "outputsJson": env.outputs_json_path(),

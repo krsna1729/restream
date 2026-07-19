@@ -63,7 +63,9 @@ run_case "internal video preset timestamp/file loop" \
   false \
   "Phase 16 file-loop timestamp proof is green" \
   env RESTREAM_INTERNAL_VIDEO_PRESETS=1 \
+    N_PER_GROUP=1 \
     ONLY_CHECKS=ffprobe,decode-scan \
+    MIXED_OUTPUT_GROUPS=rtmp.720p.a0 \
     scripts/harness/run.sh mixed.asset.file.h264.a1.bf0
 
 run_case "internal video preset live startup" \

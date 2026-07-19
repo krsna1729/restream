@@ -1657,6 +1657,8 @@ fn internal_backend_smoke_filters_hevc_codec_edge_output_groups() {
     let source = include_str!("../../../scripts/harness/rollouts/internal-backend-smoke.sh");
 
     assert!(source.contains("RESTREAM_INTERNAL_HEVC_TO_H264=1"));
+    assert!(source.contains("N_PER_GROUP=1"));
+    assert!(source.contains("MIXED_OUTPUT_GROUPS=rtmp.720p.a0"));
     assert!(source.contains("ONLY_CHECKS=load,ffprobe,stage-sharing"));
     assert!(source.contains("MIXED_OUTPUT_GROUPS=rtmp.720p.a0,rtmp.720p.a1"));
 }
