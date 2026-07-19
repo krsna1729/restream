@@ -12,6 +12,7 @@ import type {
   PipelineOperateSelectorModel,
   PipelineOutputOverviewModel,
 } from "../features/pipeline-operate-view-model.js";
+import type { PipelineInputsPanelActions } from "../features/pipeline-inputs-contract.js";
 
 const DASHBOARD_V2_BUNDLE = "./dashboard-v2-entry.js";
 const DASHBOARD_V2_CHECKPOINTS_BUNDLE = "./dashboard-v2-checkpoints-entry.js";
@@ -59,7 +60,8 @@ export interface DashboardV2PipelineDetailsPlaceholder {
   readonly message: string;
 }
 
-export interface DashboardV2PipelineInputStatusActions {
+export interface DashboardV2PipelineInputStatusActions
+  extends PipelineInputsPanelActions {
   readonly cancelAudioTrackEdit: (pipelineId: string, key: string) => void;
   readonly clearPreview: (container: HTMLElement) => void;
   readonly copyIngestUrl: (

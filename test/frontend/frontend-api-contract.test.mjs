@@ -131,6 +131,14 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
   });
   await api.getHealth({ view: "summary" });
   await api.getSystemMetrics({ view: "summary" });
+  await api.getPipelineInputs("pipe /1");
+  await api.createPipelineInput("pipe /1", "Encoder B");
+  await api.updatePipelineInput("pipe /1", "input /1", {
+    label: "Encoder C",
+    enabled: false,
+  });
+  await api.promotePipelineInput("pipe /1", "input /1");
+  await api.deletePipelineInput("pipe /1", "input /1");
   await api.updatePipeline("pipe-1", {
     name: "Updated",
     fileIngest: {
@@ -171,6 +179,14 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
       ],
       ["GET", "/api/v1/engine/health?view=summary"],
       ["GET", "/metrics/system?view=summary"],
+      ["GET", "/api/v1/pipelines/pipe%20%2F1/inputs"],
+      ["POST", "/api/v1/pipelines/pipe%20%2F1/inputs"],
+      ["PATCH", "/api/v1/pipelines/pipe%20%2F1/inputs/input%20%2F1"],
+      [
+        "POST",
+        "/api/v1/pipelines/pipe%20%2F1/inputs/input%20%2F1/promote",
+      ],
+      ["DELETE", "/api/v1/pipelines/pipe%20%2F1/inputs/input%20%2F1"],
       ["PATCH", "/api/v1/pipelines/pipe-1"],
       ["PATCH", "/api/v1/pipelines/pipe-1/outputs/out-1"],
       ["GET", "/api/v1/logs?pipeline_id=pipe-1&limit=25"],
@@ -193,7 +209,17 @@ test("frontend API helpers call the canonical v1 routes and methods", async () =
       ["POST", "/api/v1/auth/logout"],
     ],
   );
-  assert.deepEqual(requests[7].body, {
+  assert.deepEqual(requests[8].body, { label: "Encoder B" });
+  assert.deepEqual(requests[9].body, {
+    label: "Encoder C",
+    enabled: false,
+  });
+  const pipelineUpdate = requests.find(
+    (request) =>
+      request.method === "PATCH" &&
+      request.url === "/api/v1/pipelines/pipe-1",
+  );
+  assert.deepEqual(pipelineUpdate?.body, {
     name: "Updated",
     fileIngest: {
       filename: "clip.ts",

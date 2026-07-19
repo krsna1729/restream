@@ -40,6 +40,45 @@ export interface IngestUrls {
   srt: string | null;
 }
 
+export interface PipelineInputRuntime {
+  connected: boolean;
+  forwardingState: "standby" | "awaiting_keyframe" | "active" | null;
+  protocol: string | null;
+  uptimeSeconds: number | null;
+  bytesReceived: number;
+  remoteAddr: string | null;
+  video: VideoTrack | null;
+  audio: AudioTrack | null;
+  quality: PublisherQuality | null;
+}
+
+export interface PipelineInput {
+  id: string;
+  pipelineId: string;
+  label: string;
+  streamKey: string;
+  role: "primary" | "backup";
+  enabled: boolean;
+  selected: boolean;
+  ingestUrls: IngestUrls;
+  previewUrl: string;
+  runtime: PipelineInputRuntime;
+}
+
+export interface PipelineInputsResponse {
+  inputs: PipelineInput[];
+  selectedInputId: string | null;
+}
+
+export interface PipelineInputMutationResponse {
+  input: PipelineInput;
+}
+
+export interface PipelineInputPromotionResponse
+  extends PipelineInputMutationResponse {
+  connected: boolean;
+}
+
 export interface SrtGlobalIngestConfig {
   mode: "plaintext" | "encrypted";
   passphrase?: string | null;

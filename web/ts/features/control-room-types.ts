@@ -23,6 +23,7 @@ export interface ControlRoomOutputOption {
 export interface ControlRoomCardDescriptor {
   id: string;
   title: string;
+  subtitle?: string | null;
   mediaUrl: string | null;
   loadOnDemand: boolean;
   emptyMessage: string;
@@ -33,6 +34,7 @@ export interface ControlRoomCardDescriptor {
   pipelineId: string | null;
   monitoringUrl: string | null;
   statusLabel?: string | null;
+  promoteInputId?: string | null;
 }
 
 export type MonitoringEmbedKind =

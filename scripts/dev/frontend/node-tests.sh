@@ -40,6 +40,7 @@ TEST_FILES=(
   test/frontend/overview-activity-render.test.mjs
   test/frontend/overview-view-model.test.mjs
   test/frontend/pipeline-operate-view-model.test.mjs
+  test/frontend/pipeline-inputs-view-model.test.mjs
   test/frontend/frontend-chaos-scenarios.test.mjs
   test/frontend/frontend-output-scenarios.test.mjs
   test/frontend/frontend-pipeline-info-scenarios.test.mjs

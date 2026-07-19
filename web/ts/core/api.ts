@@ -14,6 +14,9 @@ import type {
   SrtPipelineIngestConfig,
   DashboardRuntimeSnapshot,
   DiagnosticsReport,
+  PipelineInputMutationResponse,
+  PipelineInputPromotionResponse,
+  PipelineInputsResponse,
   SystemMetrics,
   StreamKey,
 } from "../types.js";
@@ -605,6 +608,55 @@ async function createPipeline(
   });
 }
 
+async function getPipelineInputs(
+  pipeId: string,
+): Promise<PipelineInputsResponse | null> {
+  return apiRequest<PipelineInputsResponse>(
+    `/api/v1/pipelines/${encodeURIComponent(pipeId)}/inputs`,
+  );
+}
+
+async function createPipelineInput(
+  pipeId: string,
+  label: string,
+): Promise<PipelineInputMutationResponse | null> {
+  return apiRequest<PipelineInputMutationResponse>(
+    `/api/v1/pipelines/${encodeURIComponent(pipeId)}/inputs`,
+    { method: "POST", body: { label } },
+  );
+}
+
+async function updatePipelineInput(
+  pipeId: string,
+  inputId: string,
+  data: { label?: string; enabled?: boolean },
+): Promise<PipelineInputMutationResponse | null> {
+  return apiRequest<PipelineInputMutationResponse>(
+    `/api/v1/pipelines/${encodeURIComponent(pipeId)}/inputs/${encodeURIComponent(inputId)}`,
+    { method: "PATCH", body: data },
+  );
+}
+
+async function deletePipelineInput(
+  pipeId: string,
+  inputId: string,
+): Promise<{ deleted: boolean } | null> {
+  return apiRequest<{ deleted: boolean }>(
+    `/api/v1/pipelines/${encodeURIComponent(pipeId)}/inputs/${encodeURIComponent(inputId)}`,
+    { method: "DELETE" },
+  );
+}
+
+async function promotePipelineInput(
+  pipeId: string,
+  inputId: string,
+): Promise<PipelineInputPromotionResponse | null> {
+  return apiRequest<PipelineInputPromotionResponse>(
+    `/api/v1/pipelines/${encodeURIComponent(pipeId)}/inputs/${encodeURIComponent(inputId)}/promote`,
+    { method: "POST" },
+  );
+}
+
 async function updatePipeline(
   pipeId: string,
   data: unknown,
@@ -1153,6 +1205,11 @@ export {
   runPipelineDiagnostics,
   buildLogsStreamUrl,
   createPipeline,
+  getPipelineInputs,
+  createPipelineInput,
+  updatePipelineInput,
+  deletePipelineInput,
+  promotePipelineInput,
   updatePipeline,
   deletePipeline,
   createOutput,
